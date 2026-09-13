@@ -105,12 +105,11 @@ kglite-cli = { path = "../kglite-cli" }
 # (default-on). A diagnostic variant drops it via `--no-default-features`.
 kglite-mcp-server = { path = "../kglite-mcp-server", default-features = false, optional = true }
 
-# 0.10.25: dropped the `mcp-methods` (and its `anyhow`) dependency. They
-# backed the `kglite._mcp_internal` bridge (pyo3 wrappers in the former
-# `src/mcp_tools.rs`) used only by the Python MCP server, which was retired
-# this release — the MCP server is now the standalone `kglite-mcp-server`
-# Rust binary (which depends on mcp-methods on its own). The wheel no longer
-# links mcp-methods or its transitive deps.
+# 0.10.25 dropped this crate's direct `mcp-methods` (and `anyhow`) dependency.
+# They backed the retired `kglite._mcp_internal` PyO3 bridge in the former
+# `src/mcp_tools.rs`. The default wheel still links `mcp-methods` transitively
+# through its default-on, in-process `kglite-mcp-server` dependency above;
+# diagnostic builds can omit that server with `--no-default-features`.
 
 serde_json = "1.0.150"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
