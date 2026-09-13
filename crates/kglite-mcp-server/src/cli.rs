@@ -13,6 +13,19 @@ use mcp_methods::server::{Manifest, WorkspaceKind};
 
 use crate::*;
 
+/// Resolve a path written in a manifest against the addressed manifest's
+/// directory. `PathBuf::join` preserves absolute inputs by replacing the base.
+pub(crate) fn manifest_relative_path(
+    manifest: &Manifest,
+    raw: impl AsRef<std::path::Path>,
+) -> PathBuf {
+    manifest
+        .yaml_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(raw)
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "kglite-mcp-server",
@@ -244,14 +257,11 @@ pub(crate) fn promote_local_workspace(mode: Mode, manifest: Option<&Manifest>) -
     let raw_root = wcfg.root.as_ref().ok_or_else(|| {
         anyhow::anyhow!("manifest.workspace.kind=local is missing required `root`")
     })?;
-    let base = m
-        .yaml_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-    let resolved = base.join(raw_root).canonicalize().with_context(|| {
-        format!("workspace.root {raw_root:?} resolves to a path that does not exist")
-    })?;
+    let resolved = manifest_relative_path(m, raw_root)
+        .canonicalize()
+        .with_context(|| {
+            format!("workspace.root {raw_root:?} resolves to a path that does not exist")
+        })?;
     Ok(Mode::LocalWorkspace {
         root: resolved,
         watch: wcfg.watch,

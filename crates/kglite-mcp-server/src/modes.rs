@@ -40,7 +40,8 @@ pub(crate) fn apply_workspace_boundaries(
     };
     let mut ws = ws;
     if let Some(boundary) = cfg.sandbox_root.as_deref() {
-        let path = PathBuf::from(boundary);
+        let path =
+            manifest_relative_path(manifest.expect("manifest present when cfg is"), boundary);
         ws = ws
             .with_sandbox_root(&path)
             .with_context(|| format!("workspace.sandbox_root is not usable: {boundary}"))?;
@@ -410,6 +411,10 @@ mod workspace_boundary_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "modes/workspace_boundary_paths_tests.rs"]
+mod workspace_boundary_tests_paths;
 
 /// A manifest-declared source root that no longer exists must not take the
 /// server down.
