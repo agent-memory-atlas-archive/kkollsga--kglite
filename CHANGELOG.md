@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.17.5] - 2026-09-14
+
 ### Fixed
 
 - Relative MCP workspace sandbox paths now resolve from the manifest directory,
