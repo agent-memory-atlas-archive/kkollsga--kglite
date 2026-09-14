@@ -281,15 +281,28 @@ async fn discovery_names_controls_and_expansion_around_domain_collisions() {
     client.cancel().await.expect("stop client");
 }
 
+/// The lock must resolve exactly the version this crate's manifest pins:
+/// a `cargo update` that is not committed, or a pin bump without one, would
+/// silently test a different response contract than the one shipped.
 #[test]
-fn cargo_lock_resolves_the_response_contract_release() {
+fn cargo_lock_resolves_the_pinned_mcp_methods_release() {
+    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("crate manifest");
+    let pinned = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("mcp-methods = { version = \""))
+        .and_then(|rest| rest.split('"').next())
+        .expect("mcp-methods pin in Cargo.toml");
     let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
         .expect("workspace Cargo.lock");
     let package = lock
         .split("[[package]]")
         .find(|entry| entry.contains("name = \"mcp-methods\""))
         .expect("mcp-methods lock entry");
-    assert!(package.contains("version = \"0.4.9\""), "{package}");
+    assert!(
+        package.contains(&format!("version = \"{pinned}\"")),
+        "pin {pinned} vs lock entry:{package}"
+    );
 }
 
 /// Model the Phase 4/5 adapter without persisting framework-private records:

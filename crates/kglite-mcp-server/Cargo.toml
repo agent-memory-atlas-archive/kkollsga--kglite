@@ -64,7 +64,10 @@ path = "src/main.rs"
 # 0.4.9 is the response-contract floor: final dispatch budgets builtin, typed
 # and custom routes, advertises collision-safe larger/full controls, and
 # retains expandable results without replaying their handlers.
-mcp-methods = { version = "0.4.9", default-features = false, features = ["server"] }
+# 0.4.10 filters filesystem access events before the watcher debounce, so a
+# source *read* (the tools' own `read_source`, an editor open) no longer
+# replaces a built graph on Linux; only real mutations rebuild.
+mcp-methods = { version = "0.4.10", default-features = false, features = ["server"] }
 
 # kglite (pure-Rust core) — no pyo3 in the resulting binary, no
 # libpython link. The 0.10.1 lift moved KnowledgeGraph +

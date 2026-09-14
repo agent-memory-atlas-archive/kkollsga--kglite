@@ -13,6 +13,10 @@ before upgrading.
 
 - Relative MCP workspace sandbox paths now resolve from the manifest directory,
   including when the server starts from another working directory.
+- The MCP workspace watcher no longer replaces a built graph when a source
+  file is only read (the server's own `read_source`, an editor open); only
+  real mutations trigger a rebuild. Linux delivered access events into the
+  debouncer indistinguishably from writes (mcp-methods 0.4.10).
 
 ## [0.17.4] - 2026-09-13
 
