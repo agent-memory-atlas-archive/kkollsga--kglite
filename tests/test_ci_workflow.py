@@ -2025,6 +2025,19 @@ def test_ci_stable_toolchain_is_pinned() -> None:
     text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert 'RUST_STABLE: "' in text, "workflow-level RUST_STABLE pin missing"
     assert "dtolnay/rust-toolchain@stable" not in text, "a job floats on @stable instead of the RUST_STABLE pin"
+    # `env` is per workflow file. scheduled.yml referenced the pin without
+    # defining it after the 2026-08-26 split, and both stable jobs failed at
+    # toolchain install ("'toolchain' is a required input") on every weekly
+    # run until 2026-09-14. Any workflow that reads the pin must define it,
+    # and at the same version, or local `check-toolchain-pin` (ci.yml only)
+    # silently stops covering it.
+    ci_pin = CI.get("env", {}).get("RUST_STABLE")
+    assert ci_pin, "ci.yml env.RUST_STABLE unreadable"
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        if "env.RUST_STABLE" not in path.read_text(encoding="utf-8"):
+            continue
+        pin = yaml.safe_load(path.read_text(encoding="utf-8")).get("env", {}).get("RUST_STABLE")
+        assert pin == ci_pin, f"{path.name} reads env.RUST_STABLE but defines {pin!r}; ci.yml pins {ci_pin!r}"
 
 
 def test_dedup_gates_are_consistent() -> None:
