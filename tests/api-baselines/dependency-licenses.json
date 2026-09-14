@@ -59,7 +59,7 @@
     ],
     [
       "aws-lc-sys",
-      "0.42.0",
+      "0.45.0",
       "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)",
       "runtime TLS cryptography implementation"
     ],
