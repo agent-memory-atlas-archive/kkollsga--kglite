@@ -25,10 +25,6 @@ graphs the skill queries:
 $ codingest skill install
 ```
 
-An earlier `kglite skill install` placed a CLI-managed copy of the skill;
-`codingest skill install` removes that managed copy as part of installing its
-own. An unmanaged copy is left untouched.
-
 ## Use
 
 Run one query and exit:
@@ -128,6 +124,7 @@ Non-interactive commands:
 - `write --write-scope A,B --git-sha <sha> --modified-by <actor>` — restrict writes and stamp provenance on `auto_timestamp` types
 - `ready-set <graph.kgl> --done <predicate> [--relationship DEPENDS_ON] [--node-type T]` — print `CALL ready_set(...)`
 - `describe <graph.kgl> [--types T] [--cypher] [--connections]` — print the XML `describe()` document for agents
+- `skill <graph.kgl> [name] [--format table|csv|json]` — list the skills the graph carries, or print one body raw
 - `session <graph.kgl>` — process JSONL requests against one in-memory graph (`query`, `write`, `describe`, `save`, `help`, `exit`); `{"op":"help"}` returns the op table
 - `export-text <graph.kgl>` — print the deterministic text projection used by git textconv
 - `diff <a.kgl> <b.kgl>` — compare two graph text projections

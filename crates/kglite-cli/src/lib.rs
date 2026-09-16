@@ -204,8 +204,23 @@ enum Command {
         #[arg(long)]
         node_type: Option<String>,
         /// Output format.
-        #[arg(long, value_enum, default_value_t = ReadySetFormat::Table)]
-        format: ReadySetFormat,
+        #[arg(long, value_enum, default_value_t = RowFormat::Table)]
+        format: RowFormat,
+    },
+    /// List the skills a graph carries, or print one skill's body.
+    ///
+    /// A skill is markdown methodology stored inside the `.kgl` itself, which
+    /// an MCP server serves to an agent at boot. With no name this lists what
+    /// the graph carries; with one it prints that body raw, so it can be piped
+    /// or redirected to a file.
+    Skill {
+        /// Path to the `.kgl` file.
+        graph: PathBuf,
+        /// Skill name. Omit to list every skill the graph carries.
+        name: Option<String>,
+        /// Output format for the listing. A body is always printed raw.
+        #[arg(long, value_enum, default_value_t = RowFormat::Table)]
+        format: RowFormat,
     },
     /// Print the XML graph description used by agents for structure discovery.
     Describe {
@@ -354,20 +369,23 @@ enum OutputFormat {
     Agent,
 }
 
+/// Row output for the read commands that cannot produce an agent envelope —
+/// `ready-set` and the `skill` listing are row sets, not query results with
+/// retained evidence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-enum ReadySetFormat {
+enum RowFormat {
     #[default]
     Table,
     Csv,
     Json,
 }
 
-impl From<ReadySetFormat> for Mode {
-    fn from(value: ReadySetFormat) -> Self {
+impl From<RowFormat> for Mode {
+    fn from(value: RowFormat) -> Self {
         match value {
-            ReadySetFormat::Table => Mode::Table,
-            ReadySetFormat::Csv => Mode::Csv,
-            ReadySetFormat::Json => Mode::Json,
+            RowFormat::Table => Mode::Table,
+            RowFormat::Csv => Mode::Csv,
+            RowFormat::Json => Mode::Json,
         }
     }
 }
@@ -499,6 +517,11 @@ fn dispatch(command: &Command) -> Result<()> {
             node_type.as_deref(),
             (*format).into(),
         ),
+        Command::Skill {
+            graph,
+            name,
+            format,
+        } => run_skill(graph, name.as_deref(), (*format).into()),
         Command::Describe {
             graph,
             types,
@@ -861,6 +884,57 @@ fn run_write(
         &outcome,
         format::stdout_cell_cap(),
     ))?;
+    Ok(())
+}
+
+/// `kglite skill` — the offline half of the graph-carried skills layer: what
+/// an MCP server would serve from this file, read without starting one.
+///
+/// Read-only, like `describe`: no writer lease is taken, so this is safe to
+/// run against a graph another process owns. Skill *writing* is Python's
+/// (`set_skill`) or Cypher's, per one verb per format boundary.
+fn run_skill(path: &Path, name: Option<&str>, mode: Mode) -> Result<()> {
+    match name {
+        Some(name) => print_skill_body(path, name),
+        None => list_skills(path, mode),
+    }
+}
+
+/// The catalogue, through the ordinary query path so `--format` works the same
+/// way it does everywhere else.
+///
+/// The warning sink is silenced because the planner reports an unmatched label
+/// on a graph that carries no skill: for a dedicated verb "this graph has no
+/// skills" is the answer, not a diagnostic about the query behind it.
+fn list_skills(path: &Path, mode: Mode) -> Result<()> {
+    kglite::api::cypher::with_query_warning_sink(
+        kglite::api::cypher::QueryWarningSink::Silent,
+        || {
+            run_query(
+                path,
+                "MATCH (s:KgliteSkill) \
+                 RETURN s.name AS name, s.description AS description ORDER BY name",
+                mode,
+                false,
+                None,
+            )
+        },
+    )
+}
+
+/// One body, byte for byte — this is the markdown an agent host would be
+/// handed, not a rendering of it.
+fn print_skill_body(path: &Path, name: &str) -> Result<()> {
+    let graph = load_graph(path)?;
+    let skill = kglite::api::skills::get(&graph, name).map_err(|error| match error {
+        kglite::api::KgError::NodeNotFound { .. } => anyhow::anyhow!(
+            "{} carries no skill named {name:?} — run `kglite skill {}` to list the ones it does",
+            path.display(),
+            path.display()
+        ),
+        other => anyhow::anyhow!("failed to read skill {name:?}: {other}"),
+    })?;
+    exec::write_stdout_raw(&skill.body)?;
     Ok(())
 }
 

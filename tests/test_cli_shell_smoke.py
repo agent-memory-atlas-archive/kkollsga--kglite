@@ -283,6 +283,73 @@ def test_describe_subcommand(tmp_path):
     assert "<cypher" in cypher
 
 
+class TestSkillSubcommand:
+    """`kglite skill` is the offline read of the graph-carried skills layer:
+    what an MCP server would serve from this file, without starting one."""
+
+    BODY = "# Wells\n\nStart from `(:Well)`.\n"
+
+    @pytest.fixture
+    def graph(self, tmp_path):
+        import kglite
+
+        path = tmp_path / "skills.kgl"
+        g = kglite.KnowledgeGraph()
+        g.cypher("CREATE (:Well {id: 'w1'})")
+        g.set_skill("wells", "How to query wells.", body=self.BODY)
+        g.set_skill("areas", "How to query areas.", body="# Areas\n")
+        g.save(str(path))
+        return path
+
+    def test_no_name_lists_every_skill_by_name(self, graph):
+        out = _run_args("skill", str(graph))
+        assert "wells" in out and "areas" in out
+        assert "How to query wells." in out
+        assert out.index("areas") < out.index("wells"), f"sorted by name: {out}"
+
+    def test_the_listing_renders_as_json(self, graph):
+        import json
+
+        rows = json.loads(_run_args("skill", str(graph), "--format", "json"))
+        assert rows == [
+            {"name": "areas", "description": "How to query areas."},
+            {"name": "wells", "description": "How to query wells."},
+        ]
+
+    def test_a_name_prints_the_body_byte_for_byte(self, graph):
+        """The body is markdown a caller redirects into a file, so the CLI
+        must not reformat it or append to it."""
+        proc = _run_args_proc("skill", str(graph), "wells")
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == self.BODY
+
+    def test_an_unknown_name_fails_and_names_both(self, graph):
+        proc = _run_args_proc("skill", str(graph), "nope")
+        assert proc.returncode != 0
+        assert "nope" in proc.stderr and str(graph) in proc.stderr
+
+    def test_a_graph_without_skills_lists_nothing_without_complaining(self, tmp_path):
+        """An empty answer is the answer: the planner's unmatched-label warning
+        is about the query behind the verb, not about anything the caller did."""
+        import kglite
+
+        path = tmp_path / "plain.kgl"
+        g = kglite.KnowledgeGraph()
+        g.cypher("CREATE (:Well {id: 'w1'})")
+        g.save(str(path))
+
+        proc = _run_args_proc("skill", str(path))
+        assert proc.returncode == 0, proc.stderr
+        assert "(0 rows)" in proc.stdout
+        assert proc.stderr == "", proc.stderr
+
+    def test_the_describe_document_indexes_the_same_skills(self, graph):
+        out = _run_args("describe", str(graph))
+        assert '<skills count="2"' in out, out
+        assert 'name="wells"' in out
+        assert "kglite skill GRAPH name" in out
+
+
 def test_session_keeps_graph_loaded_between_requests(tmp_path):
     import json
 

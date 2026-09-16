@@ -32,6 +32,16 @@ before upgrading.
   count, body bytes and skipped records. Skills are read **once, at boot**:
   `reload_graph` and `load_graph` cannot change what `prompts/list` or the tool
   descriptions serve, so a newly written skill needs a server restart.
+- `kglite skill <graph>` lists the skills a graph carries (`--format
+  table|csv|json`) and `kglite skill <graph> <name>` prints one body raw, so an
+  operator can check what an MCP server would serve without starting one. Both
+  are read-only and take no writer lease; writing skills stays in the Python
+  API.
+- `describe()` now indexes the skills a graph carries in a `<skills count="N">`
+  element — name, one-line description and the call that fetches the body —
+  across Python, `kglite describe` and MCP `graph_overview()`. A graph with no
+  skills renders no element, so nothing about an ordinary graph's description
+  changes.
 - Bare `graph_overview()` now ends with a `<skills count="N">` index of the
   methodology this server serves, one `name — description` line per active
   skill, in every mode. Like the operator prefix and the recipe-catalog hint it
@@ -40,6 +50,9 @@ before upgrading.
 
 ### Changed
 
+- The CLI docs no longer describe migrating from the retired
+  `kglite skill install`; installing the code-review Agent Skill has been
+  codingest's since 0.11.x, and `kglite skill` is now an unrelated read verb.
 - `graph_has_node_type:` skill predicates and the downstream
   `ServerExtensions` `has_node_type()` re-export now answer `false` for the
   system labels (`KgliteSkill`, `KgliteRecipe`) whatever the graph holds —

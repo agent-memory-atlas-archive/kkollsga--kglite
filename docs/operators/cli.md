@@ -33,11 +33,7 @@ code graphs it queries:
 codingest skill install
 ```
 
-A copy installed by the earlier `kglite skill install` is migrated
-automatically: `codingest skill install` removes the CLI-managed legacy
-directory when it installs its own, and leaves an unmanaged copy alone.
-
-The skill still drives this CLI for querying. Build a working-tree graph, or a
+The skill drives this CLI for querying. Build a working-tree graph, or a
 graph that spans a committed base and head revision:
 
 ```bash
@@ -127,7 +123,23 @@ kglite describe app.kgl --connections
 
 `describe` returns the same XML schema document exposed by the Python API
 and MCP server, including focused views for labels, Cypher support, and
-connection types.
+connection types. When the graph carries skills, the document lists them in a
+`<skills>` element.
+
+Read the skills a graph carries:
+
+```bash
+kglite skill app.kgl                  # name + description of each skill
+kglite skill app.kgl --format json
+kglite skill app.kgl wells            # the body, raw markdown on stdout
+kglite skill app.kgl wells > wells.md
+```
+
+A skill is markdown methodology stored inside the `.kgl` itself, which an MCP
+server serves to an agent at boot — `kglite skill` is the offline check on what
+that server would serve. Read-only: it takes no writer lease, so it is safe
+against a graph another process owns. Writing skills is the Python API's
+(`set_skill`, `import_skills`).
 
 ## Agent Sessions
 

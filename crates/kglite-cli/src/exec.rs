@@ -109,13 +109,18 @@ pub fn outcome_rows_json(outcome: &ExecuteOutcome) -> serde_json::Value {
 
 /// Write CLI output, treating a closed downstream pipe as successful exit.
 pub fn write_stdout(text: &str) -> io::Result<()> {
+    write_stdout_raw(text)?;
+    write_stdout_raw("\n")
+}
+
+/// Write CLI output verbatim, with no trailing newline added.
+///
+/// For output whose bytes are the contract — a skill body is stored markdown a
+/// caller may redirect into a file, so [`write_stdout`]'s convenience newline
+/// would be an edit to the content.
+pub fn write_stdout_raw(text: &str) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     match stdout.write_all(text.as_bytes()) {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
-        Err(e) => return Err(e),
-    }
-    match stdout.write_all(b"\n") {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => Err(e),
