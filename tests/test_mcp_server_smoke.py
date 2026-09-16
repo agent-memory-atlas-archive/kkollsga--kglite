@@ -3579,6 +3579,36 @@ class TestSelftest:
         assert "recipe catalog tools" in out
         assert "list_recipe_queries + run_recipe_query present" in out
 
+    def test_a_graph_carried_catalogue_selftests_green(self, tmp_path: Path):
+        """The catalog has more than one source since 0.17.6. A `.kgl` that
+        carries `KgliteRecipe` records registers both routes with nothing in
+        `extensions.cypher_recipes` — and the check used to read only the
+        manifest, so it called a correctly configured server "recipe routes
+        registered without a non-empty catalog" and exited 1."""
+        kgl = tmp_path / "selftest_recipes.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_recipe(
+            "wells",
+            "count",
+            "Count the wells in this graph.",
+            "MATCH (w:Well) RETURN count(w) AS graph_answer",
+            parameters=NO_PARAMETERS,
+            recipe_description="Asking this graph about wells.",
+        )
+        g.save(str(kgl))
+        manifest = tmp_path / "graph_recipes_mcp.yaml"
+        manifest.write_text("name: Graph Recipes\nskills: true\n", encoding="utf-8")
+
+        rc, out = _run_selftest(["--graph", str(kgl), "--mcp-config", str(manifest)])
+
+        assert rc == 0, out
+        assert "Selftest PASSED" in out
+        # The probe counts what the child actually serves, so the line proves
+        # the merged catalog was read rather than the manifest's absent one.
+        assert "1 recipe(s), 1 quer(ies) served" in out, out
+        assert "without a non-empty catalog" not in out, out
+
 
 # ── Cleanup safety: ensure no orphaned binaries ───────────────────────────
 

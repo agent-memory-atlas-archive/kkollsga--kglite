@@ -408,12 +408,24 @@ fn check_graph_tools(names: &[String], checks: &mut Vec<(&'static str, Check)>) 
 /// A non-empty recipe catalog is a two-route ownership unit. Probe the live
 /// registry rather than trusting that successful manifest parsing implies both
 /// tools were installed.
+///
+/// **The catalog has more than one source, so the manifest cannot decide this
+/// check.** Since 0.17.6 a `.kgl` carries its own `KgliteRecipe` records, and a
+/// producer registers one through `ServerExtensions::with_recipes`; both merge
+/// under the manifest's and both register the routes on their own. Deciding
+/// "was a catalog configured?" from `extensions.cypher_recipes` therefore read
+/// a graph-served deployment as *routes without a catalog* and failed a
+/// correctly configured server. The harness speaks MCP to a child process and
+/// has no reach into the merged catalog, so it asks the only party that knows:
+/// it calls `list_recipe_queries` and counts what comes back. That is the same
+/// live-probe rule the route check already follows, one layer down.
 fn check_recipe_tools(
+    rpc: &mut Rpc,
     manifest: Option<&Manifest>,
     names: &[String],
     checks: &mut Vec<(&'static str, Check)>,
 ) {
-    let recipe_catalog_configured = manifest
+    let manifest_catalog_declared = manifest
         .and_then(|manifest| manifest.extensions.get("cypher_recipes"))
         .and_then(Value::as_object)
         .is_some_and(|catalog| !catalog.is_empty());
@@ -421,36 +433,72 @@ fn check_recipe_tools(
         registered(names, "list_recipe_queries"),
         registered(names, "run_recipe_query"),
     );
-    if recipe_catalog_configured {
-        if recipe_tools == (true, true) {
-            checks.push((
-                "recipe catalog tools",
-                Check::Pass("list_recipe_queries + run_recipe_query present".into()),
-            ));
-        } else {
-            checks.push((
-                "recipe catalog tools",
-                Check::Fail(format!(
-                    "configured catalog is missing {}{}",
-                    if recipe_tools.0 {
-                        ""
-                    } else {
-                        "list_recipe_queries "
-                    },
-                    if recipe_tools.1 {
-                        ""
-                    } else {
-                        "run_recipe_query"
-                    },
-                )),
-            ));
-        }
-    } else if recipe_tools != (false, false) {
-        checks.push((
-            "recipe catalog tools",
-            Check::Fail("recipe routes registered without a non-empty catalog".into()),
+    let check = match recipe_tools {
+        (true, true) => probe_recipe_catalog(rpc),
+        (false, false) if manifest_catalog_declared => Check::Fail(
+            "configured catalog registered neither list_recipe_queries nor run_recipe_query".into(),
+        ),
+        // Neither route and nothing declared: the overwhelmingly common
+        // deployment, and not a line worth printing.
+        (false, false) => return,
+        // Half the pair, from any source. `register_recipe_query_routes` adds
+        // both or neither, so this is a later gate (an allowlist, an override)
+        // having split an ownership unit.
+        (list, _) => Check::Fail(format!(
+            "half-registered catalog: {} is present without {}",
+            if list {
+                "list_recipe_queries"
+            } else {
+                "run_recipe_query"
+            },
+            if list {
+                "run_recipe_query"
+            } else {
+                "list_recipe_queries"
+            },
+        )),
+    };
+    checks.push(("recipe catalog tools", check));
+}
+
+/// Ask the child what its merged catalog actually holds.
+///
+/// The positive contract is a non-empty `recipes` array: the routes exist iff
+/// the catalog is non-empty (`register_recipe_query_routes` returns early on an
+/// empty one), so a registered pair that lists nothing is the contradiction
+/// this check is for — whichever layer produced it.
+fn probe_recipe_catalog(rpc: &mut Rpc) -> Check {
+    let result = match rpc.request(
+        "tools/call",
+        json!({"name": "list_recipe_queries", "arguments": {}}),
+    ) {
+        Ok(result) => result,
+        Err(e) => return Check::Fail(truncate(&e.to_string(), 200)),
+    };
+    let text = match successful_call_text(&result) {
+        Ok(text) => text,
+        Err(e) => return Check::Fail(e),
+    };
+    let recipes = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|payload| payload.get("recipes").and_then(Value::as_array).cloned());
+    let Some(recipes) = recipes else {
+        return Check::Fail(format!(
+            "list_recipe_queries returned no `recipes` array: {}",
+            snippet(&text)
         ));
+    };
+    if recipes.is_empty() {
+        return Check::Fail("recipe routes registered without a non-empty catalog".into());
     }
+    let queries: u64 = recipes
+        .iter()
+        .filter_map(|recipe| recipe.get("query_count").and_then(Value::as_u64))
+        .sum();
+    Check::Pass(format!(
+        "list_recipe_queries + run_recipe_query present; {} recipe(s), {queries} quer(ies) served",
+        recipes.len(),
+    ))
 }
 
 /// 2b. declared source roots — informational, never a hard failure.
@@ -730,7 +778,7 @@ pub fn run_selftest(cli: &Cli, argv: &[OsString]) -> Result<()> {
         .unwrap_or_default();
 
     check_graph_tools(&names, &mut checks);
-    check_recipe_tools(manifest.as_ref(), &names, &mut checks);
+    check_recipe_tools(&mut rpc, manifest.as_ref(), &names, &mut checks);
     check_declared_source_roots(manifest.as_ref(), &mut checks);
     check_skills(&mut rpc, manifest.as_ref(), &mut checks);
     check_github_tools(&names, &mut checks);
