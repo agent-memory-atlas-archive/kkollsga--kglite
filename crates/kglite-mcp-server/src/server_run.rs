@@ -549,16 +549,34 @@ fn boot_builtins(
     }
 }
 
-fn register_kglite_tools(
-    server: &mut McpServer,
-    graph_state: &GraphState,
-    manifest: Option<&mcp_methods::server::Manifest>,
+/// Everything the kglite route block needs beyond the server it registers on.
+///
+/// A struct rather than a parameter list because the set grows with every boot
+/// knob the overview decorations learn to carry, and each one that arrived as a
+/// positional argument made the three call sites harder to read than the wiring
+/// they describe.
+struct KgliteToolParams<'a> {
+    graph_state: &'a GraphState,
+    manifest: Option<&'a mcp_methods::server::Manifest>,
     builtins: tools::Builtins,
+    /// Dimensions of the catalogue actually served — the manifest's, merged
+    /// with whatever the graph carried.
     recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
     csv_http: Arc<csv_http::CsvHttpState>,
     source_roots_provider: Option<mcp_methods::server::source::SourceRootsProvider>,
     skills_index: tools::SkillsIndexSlot,
-) -> Result<()> {
+}
+
+fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -> Result<()> {
+    let KgliteToolParams {
+        graph_state,
+        manifest,
+        builtins,
+        recipe_catalog_summary,
+        csv_http,
+        source_roots_provider,
+        skills_index,
+    } = params;
     tools::register(
         server,
         graph_state.clone(),
@@ -801,13 +819,15 @@ pub(crate) async fn run_async(
     let skills_index = tools::SkillsIndexSlot::default();
     register_kglite_tools(
         &mut server,
-        &graph_state,
-        manifest.as_ref(),
-        builtins,
-        recipe_catalog_summary,
-        csv_http.clone(),
-        source_roots_provider,
-        skills_index.clone(),
+        KgliteToolParams {
+            graph_state: &graph_state,
+            manifest: manifest.as_ref(),
+            builtins,
+            recipe_catalog_summary,
+            csv_http: csv_http.clone(),
+            source_roots_provider,
+            skills_index: skills_index.clone(),
+        },
     )?;
     if matches!(mode, Mode::Graph { .. }) {
         // `reload_graph` is graph-mode-only: it re-reads *the* served file, an
