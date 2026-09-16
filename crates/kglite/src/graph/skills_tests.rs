@@ -220,8 +220,19 @@ fn a_bundled_skill_file_parses_into_its_declared_shape() {
     assert!(parsed.body.starts_with("# `cypher_query` methodology"));
     assert_eq!(
         parsed.delivery,
+        Delivery::Eager,
+        "cypher_query is the one bundled skill that declares the eager tier"
+    );
+    // The absent-key default is asserted on a document of our own, not on the
+    // bundled file: that file's `delivery:` is a product decision and moved
+    // once already (it was absent until the lazy-delivery landing), which
+    // would silently take the default's only coverage with it.
+    assert_eq!(
+        parse_markdown("---\nname: \"d\"\ndescription: \"d\"\n---\n\nbody")
+            .unwrap()
+            .delivery,
         Delivery::Lazy,
-        "a file with no delivery key takes the default"
+        "a document with no delivery key takes the default"
     );
 }
 
