@@ -78,27 +78,30 @@ operator extension (documented here so you don't go looking for a hook):
 
 ## Where skills come from (the layers)
 
-Skills load from four layers. There is **one skill per `name`**, and on a
+Skills load from six layers. There is **one skill per `name`**, and on a
 collision the **higher** layer wins, so you override a lower one by shipping a
 skill of the same `name`:
 
 1. **bundled defaults** (lowest) — KGLite's compiled skills plus the framework defaults. The KGLite set is registered explicitly from `crates/kglite-mcp-server/skills/`; operators do not need to rebuild it.
-2. **graph-carried** — `KgliteSkill` nodes inside the served `.kgl`. See the next section.
-3. **operator-declared paths** — directories listed in `skills:`, in declaration order. Earlier paths win collisions with later paths.
-4. **project layer** (highest) — a `<basename>.skills/` directory next to the manifest. For `my_graph_mcp.yaml` this is `my_graph_mcp.skills/`. The basename is the manifest's, not the graph's. This layer is optional when absent; a declared path that is absent is a boot error.
+2. **producer** — the embedder's own layer, registered once per server with `ServerExtensions::with_skills`. Provenance renders as `owned:producer`. See [Skills registered by the producer](#skills-registered-by-the-producer).
+3. **graph-carried** — `KgliteSkill` nodes inside the served `.kgl`. Provenance `owned:graph`. See [Skills carried in the graph](#skills-carried-in-the-graph).
+4. **manifest inline** — skill mappings written straight into the `skills:` list. KGLite adds nothing of its own here; the framework underneath supports it.
+5. **operator-declared paths** — directories listed in `skills:`, in declaration order. Earlier paths win collisions with later paths.
+6. **project layer** (highest) — a `<basename>.skills/` directory next to the manifest. For `my_graph_mcp.yaml` this is `my_graph_mcp.skills/`. The basename is the manifest's, not the graph's. This layer is optional when absent; a declared path that is absent is a boot error.
 
-The bundled and graph-carried layers surface only when the `skills:` list
-contains `true`; the two file layers are operator-declared and surface whenever
-the list is walked. So a graph skill named `cypher_query` **replaces** the
-bundled `cypher_query` methodology — that is the documented way to override
-framework guidance with something graph-specific — while an operator's pack or
-`<basename>.skills/` file of that name still beats the graph. The operator is
-always the last word.
+The ordering is one rule: **closer to the operator wins.** The three lowest
+layers are the binary's and the data's; the three highest are the operator's
+files. So a graph skill named `cypher_query` **replaces** the bundled
+`cypher_query` methodology — that is the documented way to override framework
+guidance with something graph-specific — a producer skill of that name sits
+between the two, and an operator's pack or `<basename>.skills/` file beats all
+of them. The operator is always the last word.
 
-(mcp-methods, the framework underneath, also supports a fifth layer — inline
-skill mappings written straight into the `skills:` list — which sits between
-the graph and the declared directories. KGLite does not add anything of its own
-there.)
+The bundled, producer and graph-carried layers surface only when skills are
+switched on for the deployment; the file layers are operator-declared and
+surface whenever the list is walked. A manifest turns skills on with `skills:
+true` (see the next section) — and a producer turns them on by registering a
+layer, which is the only way a manifest-less deployment serves any.
 
 ## The `skills:` manifest value
 
@@ -106,8 +109,8 @@ there.)
 
 | Value | Meaning |
 |---|---|
-| absent / `false` / `null` | Skills **off**. No injection, `prompts/list` empty. |
-| `true` | On: bundled defaults, the served graph's own skills, and the `<basename>.skills/` project layer. |
+| absent / `false` / `null` | Skills **off**. No injection, `prompts/list` empty. *(Exception: a producer layer reads an absent `skills:` as silence rather than refusal — see below.)* |
+| `true` | On: bundled defaults, the producer layer, the served graph's own skills, and the `<basename>.skills/` project layer. |
 | `"./path"` | On, and also load skills from `./path` (relative to the manifest). |
 | `[true, "./a", "./b"]` | List form: `true` = the bundled/default set, each string = an extra path. Use to combine the defaults with one or more operator packs. |
 
@@ -121,6 +124,57 @@ when absent.
 `kglite-mcp-server --selftest` prints the number of skills the session actually
 serves, so an opted-in deployment that resolved nothing is visible without
 reading `prompts/list` by hand.
+
+## Skills registered by the producer
+
+A skill does not have to belong to a graph either. A binary that **builds** its
+graphs — a workspace-mode code indexer, a domain ingester — emits the same node
+and edge shapes every time, so the methodology for querying them is a property
+of the server, not of each artefact it produces. `ServerExtensions::with_skills`
+registers that layer once, at boot, in **every** mode:
+
+```rust
+use kglite_mcp_server::{run_with_extensions, Delivery, ServerExtensions, SkillRecord};
+
+let extensions = ServerExtensions::new().with_skills([SkillRecord {
+    name: "code_graph_shapes".to_string(),
+    description: "TRIGGER for any structural question about an indexed repository.".to_string(),
+    body: "Every graph this server builds carries `:Function` and `:Class` nodes keyed by \
+           their qualified name.\n".to_string(),
+    references_tools: vec!["cypher_query".to_string()],
+    delivery: Delivery::Lazy,
+}]);
+run_with_extensions(std::env::args_os(), extensions)?;
+```
+
+`SkillRecord` and `Delivery` are re-exported from `kglite_mcp_server`, so an
+embedder needs no direct `kglite` dependency to describe its methodology. See
+{doc}`/rust/building-on-kglite` for the full embedder surface.
+
+**It is its own opt-in.** Owned layers surface only when skills are enabled,
+and the server enables none without a manifest — which is exactly the shape a
+producer binary ships in. So calling `with_skills` turns them on, and the
+manifest still overrules:
+
+| Manifest | Result |
+|---|---|
+| none at all | bundled set + producer layer |
+| present, no `skills:` key | bundled set + producer layer — silence is not a refusal |
+| `skills: false` / `skills: null` | everything off, producer included; the boot line reports how many records it silenced |
+| any explicit `skills:` value | used exactly as written, so a list without `true` leaves the producer layer off along with the bundled one |
+
+Without a producer layer an unset `skills:` still means off, so no existing
+deployment gains a skill surface by upgrading.
+
+**Always active.** `SkillRecord` carries no `applies_when:` predicate — nothing
+in the layer depends on the shape of the active graph, so it resolves once and
+stays correct through every root swap.
+
+**Validated at boot, and a bad record costs the boot.** These records are the
+embedder's own code, not data a `CREATE` could have written, so one that fails
+validation fails the boot naming itself, rather than being skipped the way a
+graph record is. The boot summary adds a `producer skills: N served (B B), M
+active as owned:producer` line beside the graph one.
 
 ## Skills carried in the graph
 
@@ -235,14 +289,29 @@ Frontmatter is YAML between `---` fences. Unknown top-level metadata is ignored 
 `applies_when` keeps a skill silent on graphs it doesn't apply to (e.g. a
 code-graph skill stays off a legal/finance domain graph). Predicates are
 AND-combined; an absent predicate is "satisfied". They are evaluated at server
-boot, after the graph and tool catalogue are ready — and again whenever a
-`--graph` or `--watch` server swaps the graph it serves with `reload_graph`,
-`load_graph` or `create_graph`, which re-resolves the whole registry against
-the new graph. Mutating the graph **in place** does not re-evaluate anything:
-prompt registration and the injected tool descriptions keep the answer they had
-until the next swap or restart. Neither does the per-call freshness re-read
-that notices the served file changed on disk — call `reload_graph` to pick up
-a rebuilt file's skills.
+boot, after the graph and tool catalogue are ready, and again whenever the
+graph the server serves changes identity:
+
+- a `--graph` or `--watch` server swapping it with `reload_graph`,
+  `load_graph` or `create_graph`;
+- a workspace server activating a root with `set_root_dir` or
+  `repo_management`. This one matters because a workspace mode has **no graph
+  at boot** — every `graph_has_node_type:` predicate is false there until the
+  first activation, which is why the bundled `code_graph_analysis`,
+  `code_graph_views` and `read_code_source` skills only appear once a root has
+  been built.
+
+Either way the whole registry is re-resolved against the new graph and the
+client is sent `tools/list_changed`.
+
+Mutating the graph **in place** does not re-evaluate anything: prompt
+registration and the injected tool descriptions keep the answer they had until
+the next swap or restart. Neither does the per-call freshness re-read that
+notices the served file changed on disk, nor the watcher's lazy rebuild of an
+already-activated root — both replace a graph with one built from the same
+source, so the node types the last resolution saw are the node types it still
+sees. Call `reload_graph`, or re-activate the root, to pick up a rebuilt
+file's skills.
 
 | Predicate | True when |
 |---|---|

@@ -9,6 +9,63 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- `ServerExtensions::with_skills` — a binary embedding the MCP server can
+  register its own skill layer, once per server, applying to every graph it
+  serves in **every** mode. A producer that builds its graphs emits the same
+  shapes every time, so the methodology for querying them belongs to the
+  binary; graph-carried skills cannot express that, because they are read in
+  `--graph` / `--watch` modes only. The layer sits between the bundled set and
+  the graph's — `bundled < producer < graph < inline < declared dirs <
+  <basename>.skills/`, closer to the operator wins — and renders as
+  `owned:producer`. It is its own opt-in: with no manifest, or one that never
+  mentions `skills:`, the server serves the bundled set plus this layer, while
+  an explicit `skills: false`/`null` silences everything including it and an
+  explicit list is used exactly as written. Without producer records an unset
+  `skills:` still means off, so no existing deployment gains a skill surface.
+  `SkillRecord` carries no `applies_when:`, so the layer is always active; a
+  record that fails validation fails the boot naming itself, because it is the
+  embedder's code rather than graph data.
+- `ServerExtensions::with_recipes` — the same for a Cypher recipe catalogue,
+  merged `producer < graph < manifest` per `(recipe, name)` and per group
+  description. The two route names are fixed and mode-blind, so a producer
+  catalogue alone gives a manifest-less workspace server `list_recipe_queries`
+  and `run_recipe_query`. A producer query that does not compile fails the
+  boot. The boot summary and `--selftest` gain `producer skills:` /
+  `producer recipes:` lines beside the graph-carried ones.
+- `SkillRecord`, `Delivery` and `RecipeCatalog` are re-exported from
+  `kglite_mcp_server`, so an embedder describes its methodology without a
+  direct `kglite` dependency.
+
+### Fixed
+
+- Predicate-gated bundled skills were dead in every workspace deployment. A
+  `--workspace` / `workspace.kind: local` server has no graph when the prompt
+  plane freezes at `initialize`, so `code_graph_analysis`, `code_graph_views`
+  and `read_code_source` — all gated on `graph_has_node_type: [Function,
+  Class]` — resolved false at boot, and nothing ever re-evaluated them. Every
+  such server advertised code-graph methodology it could not serve, for the
+  life of the process. They now activate on the first `set_root_dir` /
+  `repo_management` that builds a code graph.
+- `--selftest` no longer reports "recipe routes registered without a non-empty
+  catalog" for a server whose catalogue comes from the served graph or from
+  the embedding binary: the check now reads the catalogue actually served
+  rather than the manifest's.
+- An `extensions.tools_allow` deployment no longer refuses to boot because of
+  a recipe catalogue the operator never declared. Only a *manifest* catalogue
+  arms the refusal that requires the two recipe routes to be allow-listed; a
+  graph-carried or producer catalogue leaves the operator's allowlist alone.
+
+### Changed
+
+- The skill layer is re-resolved after a workspace root activation, not only
+  after a graph swap: `set_root_dir` and `repo_management` re-run the whole
+  registry against the graph they just published and send
+  `tools/list_changed`. The per-call freshness re-read and the watcher's lazy
+  rebuild still do not, as documented — both rebuild from the same source, so
+  the node types the last resolution saw are the ones it still sees.
+
 ## [0.17.6] - 2026-09-16
 
 ### Added

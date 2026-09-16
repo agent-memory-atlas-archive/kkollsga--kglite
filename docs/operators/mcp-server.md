@@ -18,7 +18,10 @@ The default is read-only and registers `ping`, `graph_overview`, and
 `cypher_query`. A manifest can add source-root tools, parameterized Cypher,
 skills, value codecs, an embedder, and CSV-over-localhost export. A served
 `.kgl` can also carry its own skills and recipe queries, which an opted-in
-server merges with the manifest's; see the
+server merges with the manifest's, and a binary that *embeds* this server can
+register a third set of its own (`ServerExtensions::with_skills` /
+`with_recipes`) that applies to every graph it serves. The manifest outranks
+both; see the
 [MCP servers guide](../python/guides/mcp-servers.md) and
 [Authoring MCP skills](../python/guides/mcp-skills.md). Point MCP clients at
 the absolute executable path to avoid an older PATH-shadowing installation.

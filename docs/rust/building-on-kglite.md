@@ -46,7 +46,7 @@ stability posture; kglite's CI locks against accidental drift on all of them.
 | Seam | What it is | Stability |
 |---|---|---|
 | **Engine facade** — `kglite::api::*` | The curated Rust surface: `DirGraph`, `Value`, `session::*`, `io::{save_graph, load_file}`, error types, `code_entities`. | Exact-baseline-locked in CI (cargo-public-api, pinned nightly). Additive within a minor line; deliberate breaks ship on a MINOR bump with a migration guide. See the [API reference](api-reference.md). |
-| **MCP server library** — `kglite-mcp-server` | `run`, `run_with_embedder_factory`, `run_with_extensions`, `WorkspaceGraphHooks`, `WorkspaceGraphRequest`, `WorkspaceGraphResult`, `WorkspaceGraphRelevance`, `ServerExtensions` (`with_workspace_graph`, `with_domain_tools`, `read_only`), `DomainToolRegistry`, `DomainGraphState`, `DomainGraphContext`. The seams a producer/domain MCP server builds on. | Public-API baseline + hook/registrar-semantics unit tests. Same MINOR-break posture as the engine facade. |
+| **MCP server library** — `kglite-mcp-server` | `run`, `run_with_embedder_factory`, `run_with_extensions`, `WorkspaceGraphHooks`, `WorkspaceGraphRequest`, `WorkspaceGraphResult`, `WorkspaceGraphRelevance`, `ServerExtensions` (`with_workspace_graph`, `with_domain_tools`, `with_skills`, `with_recipes`, `read_only`), `DomainToolRegistry`, `DomainGraphState`, `DomainGraphContext`, and the re-exported `SkillRecord` / `Delivery` / `RecipeCatalog`. The seams a producer/domain MCP server builds on. | Public-API baseline + hook/registrar-semantics unit tests. Same MINOR-break posture as the engine facade. |
 | **`.kgl` file format** | The persisted graph format that handoff and all persistence use. | Writes RGF v6/Postcard; reads v6 and v5. v4/bincode and older containers are refused with a clear 0.13.4 conversion or rebuild message. A v6 file cannot be read by kglite 0.15.14 or earlier. |
 | **Python top-level** — `kglite.*` | `kglite.load`, `kglite.from_blueprint`, `kglite.from_records`, `KnowledgeGraph` methods. The P3 entry points and the P1 handoff target. | Contract-tested + stubtest against `kglite/__init__.pyi`. |
 | **C ABI** — `include/kglite.h` | The `extern "C"` surface for non-Rust bindings. | cbindgen header-drift check in CI; see the [C ABI guide](c-abi.md). |
@@ -233,6 +233,81 @@ typed it learns why it did nothing.
 Read-only is already the default; this is the *pin*, which is a different
 statement. Reach for it only when your binary's contract requires the served
 graph to be immutable — not merely to avoid setting the flag.
+
+### Registering the producer's own methodology
+
+A producer that builds its graphs emits the same shapes every time, so the
+methodology for querying them — and the named queries that answer with it — is
+a property of the binary, not of each artefact. Graph-carried `KgliteSkill`
+records cannot carry it: they are read in `--graph` / `--watch` modes only,
+because a workspace mode has no graph when the prompt plane freezes. Two
+builders register it once per server, and both apply in **every** mode:
+
+```rust
+use kglite_mcp_server::{
+    run_with_extensions, Delivery, RecipeCatalog, ServerExtensions, SkillRecord,
+};
+
+fn main() -> anyhow::Result<()> {
+    let catalog = RecipeCatalog::from_manifest_value(Some(&serde_json::json!({
+        "code": {
+            "description": "Queries for the shapes this builder emits.",
+            "queries": {
+                "callers": {
+                    "description": "Functions with a direct CALLS edge to the target.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"qualified_name": {"type": "string"}},
+                        "required": ["qualified_name"],
+                        "additionalProperties": false
+                    },
+                    "cypher": "MATCH (c:Function)-[:CALLS]->(t:Function) \
+                               WHERE t.qualified_name = $qualified_name \
+                               RETURN c.qualified_name AS qualified_name"
+                }
+            }
+        }
+    })))?;
+    let extensions = ServerExtensions::new()
+        .with_skills([SkillRecord {
+            name: "code_graph_shapes".to_string(),
+            description: "TRIGGER for any structural question about an indexed repository."
+                .to_string(),
+            body: "Every graph this server builds carries `:Function` and `:Class` \
+                   nodes keyed by their qualified name.\n"
+                .to_string(),
+            references_tools: vec!["cypher_query".to_string()],
+            delivery: Delivery::Lazy,
+        }])
+        .with_recipes(catalog);
+    run_with_extensions(std::env::args_os(), extensions)
+}
+```
+
+`SkillRecord`, `Delivery` and `RecipeCatalog` are re-exported from
+`kglite_mcp_server`, so an embedder needs no direct `kglite` dependency to
+describe its methodology — the same reason the workspace-graph types are.
+
+- **Precedence:** `bundled < producer < graph-carried < manifest inline <
+  operator `skills:` dirs < `<basename>.skills/`` for skills, and `producer <
+  graph < manifest` for recipes. One rule, both subsystems: closer to the
+  operator wins.
+- **`with_skills` is its own opt-in.** Owned layers surface only when skills
+  are enabled and the server enables none without a manifest, which is the
+  shape a producer binary ships in. With no manifest, or one that never
+  mentions `skills:`, the server serves the bundled set plus this layer; an
+  **explicit** `skills: false`/`null` silences everything including it, and an
+  explicit list is used exactly as written.
+- **Producer records are code, so a bad one fails the boot** naming itself,
+  where a malformed graph record is skipped with a warning.
+- **`SkillRecord` carries no `applies_when:`**, so a producer skill is always
+  active and needs no re-resolution. The *bundled* predicate-gated skills do:
+  in a workspace mode they are suppressed at boot (no graph yet) and revived
+  by the first `set_root_dir` / `repo_management` that publishes one, which
+  also sends `tools/list_changed`.
+
+See {doc}`/python/guides/mcp-skills` for the authoring rules and
+{doc}`/python/guides/mcp-servers` for the recipe document shape.
 
 ### Domain-tool composition
 

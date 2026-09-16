@@ -618,6 +618,66 @@ and every query is validated read-only before it is served.
 [`examples/code_review_graph_skills.py`](https://github.com/kkollsga/kglite/blob/main/examples/code_review_graph_skills.py)
 builds a graph carrying three recipes and the skill that names them.
 
+#### Recipes registered by the producer
+
+A third source, for a binary that embeds the server and builds its own graphs:
+`ServerExtensions::with_recipes` registers one catalogue per server, in
+**every** mode. The queries belong to the shapes the builder emits, so they
+apply to every graph the server goes on to serve — including a workspace
+deployment that has no graph at boot and no manifest at all.
+
+```rust
+use kglite_mcp_server::{run_with_extensions, RecipeCatalog, ServerExtensions};
+
+let catalog = RecipeCatalog::from_manifest_value(Some(&serde_json::json!({
+    "code": {
+        "description": "Queries for the shapes this builder emits.",
+        "queries": {
+            "callers": {
+                "description": "Functions with a direct CALLS edge to the target.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"qualified_name": {"type": "string"}},
+                    "required": ["qualified_name"],
+                    "additionalProperties": false
+                },
+                "cypher": "MATCH (c:Function)-[:CALLS]->(t:Function) \
+                           WHERE t.qualified_name = $qualified_name \
+                           RETURN c.qualified_name AS qualified_name"
+            }
+        }
+    }
+})))?;
+run_with_extensions(
+    std::env::args_os(),
+    ServerExtensions::new().with_recipes(catalog),
+)?;
+```
+
+`RecipeCatalog` is re-exported from `kglite_mcp_server`, and the document shape
+is the same `extensions.cypher_recipes` JSON a manifest carries, so a producer
+can ship the catalogue as an asset and load it with one call.
+
+- **Merge order is `producer < graph < manifest`**, per `(recipe, name)` and
+  per group description; queries only one layer carries are all served. Same
+  rule as everywhere else: closer to the operator wins.
+- **Registered in every mode.** The two route names are fixed and mode-blind,
+  so a producer catalogue alone gives a manifest-less workspace server
+  `list_recipe_queries` and `run_recipe_query`.
+- **A producer query that does not compile fails the boot**, like a manifest
+  one: it is the embedder's code, not graph data.
+- **An operator allowlist is unaffected by a catalogue they did not declare.**
+  `extensions.tools_allow` refuses a boot that hides the recipe routes from a
+  catalogue the *manifest* declares — the operator wrote the queries and the
+  allowlist, and the contradiction is theirs to fix. A graph-carried or
+  producer catalogue never arms that refusal: the operator did not ask for
+  those routes, so an allowlist that omits them is a choice, not a mistake.
+- **`--selftest` counts the routes against the catalogue actually served**, so
+  a graph-carried or producer catalogue no longer reports "recipe routes
+  registered without a non-empty catalog".
+- The boot summary adds a `producer recipes: N served` line beside the graph
+  one.
+
 ### `extensions.embedder` — semantic search inside Cypher
 
 Wire bge-m3 (or any fastembed-catalog model) so `text_score()` works
@@ -845,8 +905,12 @@ fn main() -> anyhow::Result<()> {
 
 `ServerExtensions` also carries `read_only()`, which pins the server read-only
 regardless of `--writable` or `extensions.writable: true` — the guarantee an
-embedder that owns argv but not the manifest cannot otherwise make. See
-{doc}`../../rust/building-on-kglite`.
+embedder that owns argv but not the manifest cannot otherwise make, and the
+two *methodology* builders: `with_skills` for the binary's own skill layer
+(see {doc}`mcp-skills`) and `with_recipes` for its own Cypher catalogue (see
+[Recipes registered by the producer](#recipes-registered-by-the-producer)).
+Both apply to every graph the server serves, in every mode, and both lose to
+the operator. See {doc}`../../rust/building-on-kglite`.
 
 The registry rejects names already owned by KGLite or manifest tools. Use
 `DomainGraphState::with_context` when the result needs both graph data and its
