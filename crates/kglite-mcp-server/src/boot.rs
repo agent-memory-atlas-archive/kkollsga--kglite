@@ -243,12 +243,14 @@ pub(crate) fn declare_unresolved_source_roots(
     options
 }
 
-/// What the served `.kgl` contributed to this boot — the two layers a graph can
-/// carry about itself. One parameter rather than two so a third layer is a
-/// field here instead of another argument on every caller.
-pub(crate) struct GraphCarried<'a> {
-    pub(crate) skills: &'a crate::skills::GraphSkillStats,
-    pub(crate) recipes: &'a crate::recipe_queries::GraphRecipeStats,
+/// What the layers under the operator's own contributed to this boot: the two
+/// a served `.kgl` can carry about itself, and the embedding binary's. One
+/// parameter rather than one argument each, so a further layer is a field here
+/// instead of another argument on every caller.
+pub(crate) struct ServedLayers<'a> {
+    pub(crate) producer_skills: &'a crate::skills::ProducerSkillStats,
+    pub(crate) graph_skills: &'a crate::skills::GraphSkillStats,
+    pub(crate) graph_recipes: &'a crate::recipe_queries::GraphRecipeStats,
 }
 
 pub(crate) fn print_boot_summary(
@@ -258,7 +260,7 @@ pub(crate) fn print_boot_summary(
     env_file_loaded: Option<&std::path::Path>,
     csv_http: &crate::csv_http::CsvHttpState,
     source_roots: Option<&SourceRootStatus>,
-    graph_carried: GraphCarried<'_>,
+    served_layers: ServedLayers<'_>,
 ) {
     let label = match mode {
         Mode::Graph { path } => format!("graph [{}]", path.display()),
@@ -305,18 +307,21 @@ pub(crate) fn print_boot_summary(
             format!("source tools: unavailable (unresolved: {missing})")
         });
     }
-    // Only when the graph carried skill records: their byte total is the one
-    // bound on text this deployment injects into every `tools/list`, and a
-    // skipped record names itself nowhere else an operator reads. `--selftest`
-    // mirrors the child's stderr, so this line reaches that surface too —
+    // Only when a layer contributed records: their byte total is the one bound
+    // on text this deployment injects into every `tools/list`, and a skipped or
+    // silenced record names itself nowhere else an operator reads. `--selftest`
+    // mirrors the child's stderr, so these lines reach that surface too —
     // `prompts/list`, which the selftest check queries, carries names and
     // descriptions only and cannot attribute a skill to its source.
-    if let Some(summary) = graph_carried.skills.summary() {
+    if let Some(summary) = served_layers.producer_skills.summary() {
+        parts.push(summary);
+    }
+    if let Some(summary) = served_layers.graph_skills.summary() {
         parts.push(summary);
     }
     // Same reasoning one layer over: a skipped query names itself nowhere else
     // an operator reads, and `--selftest` mirrors this stderr line.
-    if let Some(summary) = graph_carried.recipes.summary() {
+    if let Some(summary) = served_layers.graph_recipes.summary() {
         parts.push(summary);
     }
     eprintln!("kglite-mcp-server: {}", parts.join("; "));

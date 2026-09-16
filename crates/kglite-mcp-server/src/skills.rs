@@ -9,15 +9,25 @@ use kglite::api::skills::{self as graph_skills, SkillRecord};
 use mcp_methods::server::{
     notify_skills_changed, serve_prompts, ActiveSkill, BundledSkill, Manifest, McpServer,
     OwnedSkill, PredicateClause, ResolvedRegistry, ServerOptions, SkillError,
-    SkillPredicateEvaluator, SkillProvenance, SkillRegistry, SkillReloader,
+    SkillPredicateEvaluator, SkillProvenance, SkillRegistry, SkillReloader, SkillSource,
+    SkillsSource,
 };
 
 use crate::tools::{read_lock, write_lock, GraphState, PeerSlot, SkillsIndexSlot};
 use crate::*;
 
-/// The label this binary gives its owned skill layer, rendered by
-/// mcp-methods as `owned:graph` wherever provenance is shown.
+/// The label this binary gives the served graph's owned skill layer, rendered
+/// by mcp-methods as `owned:graph` wherever provenance is shown.
 pub(crate) const GRAPH_LAYER_LABEL: &str = "graph";
+
+/// The label for the embedding binary's own layer
+/// ([`ServerExtensions::with_skills`]), rendered as `owned:producer`.
+///
+/// Two owned layers, ordered by how close they are to the operator: the
+/// producer describes the shapes its builder always emits, the graph describes
+/// itself, and a graph wins a name collision because it is the more specific
+/// statement. Both lose to the operator's own files.
+pub(crate) const PRODUCER_LAYER_LABEL: &str = "producer";
 
 /// Client-side tool-discovery steer, folded into workspace-mode
 /// `instructions` so every `--workspace` / `workspace.kind: local`
@@ -36,22 +46,30 @@ path is unavailable.";
 
 pub(crate) const RECIPE_QUERIES_SKILL: &str = include_str!("../skills/recipe_queries.md");
 
-/// Compose the skill registry for a manifest-backed deployment.
+/// Compose the skill registry for this deployment.
 ///
 /// Bundled methodology for KGLite's custom tools, the optional recipe catalog,
-/// framework defaults and the graph's own `KgliteSkill` records are composed
-/// with the operator-side project layer and any operator-declared domain skill
-/// packs. The predicate evaluator gates `read_code_source` on
-/// `graph_has_node_type: [Function, Class]` so it stays out of prompts/list
-/// when the active graph isn't a code-tree (legal-corpus / o&g / etc.
-/// deployments).
+/// framework defaults, the embedder's own producer layer and the graph's own
+/// `KgliteSkill` records are composed with the operator-side project layer and
+/// any operator-declared domain skill packs. The predicate evaluator gates
+/// `read_code_source` on `graph_has_node_type: [Function, Class]` so it stays
+/// out of prompts/list when the active graph isn't a code-tree (legal-corpus /
+/// o&g / etc. deployments).
+///
+/// `manifest` is `None` for a deployment that has no manifest at all — legal
+/// since the producer layer became its own opt-in (see [`skills_source`]);
+/// without one there is no declared root layer and no project directory to
+/// auto-detect, so the composition is the binary's own layers alone.
 ///
 /// Separate from [`install_skills`] because the composition is re-run against
 /// whatever graph is active *now* whenever the served graph is swapped — see
 /// [`SkillRefresher`]. Boot and reload therefore build the registry the same
-/// way rather than drifting apart.
+/// way rather than drifting apart. The producer layer arrives pre-rendered
+/// because it is validated once, at boot, where a bad record can still fail
+/// the boot; a refresh must never be able to fail on it.
 fn compose_registry(
-    manifest: &Manifest,
+    manifest: Option<&Manifest>,
+    producer_layer: &[OwnedSkill],
     mode: &Mode,
     graph_state: &GraphState,
     recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
@@ -97,28 +115,106 @@ fn compose_registry(
     let registry =
         add_recipe_query_skill(registry, recipe_catalog_summary).merge_framework_defaults();
 
-    // The graph layer is an *owned* layer (mcp-methods 0.4.11), which the
-    // framework slots between the compile-time bundled skills — this crate's
-    // and its own — and the operator's file layers. So a graph skill beats a
-    // bundled one of the same name (the documented override) while a declared
-    // pack or `<basename>.skills/` still beats the graph. Pinned by
-    // `graph_layer_beats_bundled_and_loses_to_the_project_layer`.
+    // Two *owned* layers (mcp-methods 0.4.11), which the framework slots
+    // between the compile-time bundled skills — this crate's and its own — and
+    // the operator's file layers. Later `add_layer` calls override earlier
+    // ones, so the producer goes in first and the graph second: a graph skill
+    // beats a producer skill beats a bundled one of the same name, while a
+    // declared pack or `<basename>.skills/` still beats both. Pinned by
+    // `graph_layer_beats_bundled_and_loses_to_the_project_layer` and
+    // `the_producer_layer_sits_between_bundled_and_the_graph`.
+    let registry = registry.add_layer(
+        producer_layer.to_vec(),
+        SkillProvenance::Owned(PRODUCER_LAYER_LABEL.to_string()),
+    );
     let (graph_layer, graph_stats) = graph_skill_layer(read_graph_skills(mode, graph_state));
     let registry = registry.add_layer(
         graph_layer,
         SkillProvenance::Owned(GRAPH_LAYER_LABEL.to_string()),
     );
 
-    let registry_result = registry
-        .auto_detect_project_layer(&manifest.yaml_path)
-        .layer_dirs(&manifest.skills, &manifest.yaml_path)
-        .and_then(|r| {
-            r.with_predicate_evaluator(KglitePredicateEvaluator {
-                state: graph_state.clone(),
-            })
-            .finalise()
-        });
+    let (source, yaml_path) = skills_source(manifest, !producer_layer.is_empty());
+    let registry = match manifest {
+        // `<basename>.skills/` is an operator directory sitting next to their
+        // YAML, so it is detected whenever there is a YAML to sit next to —
+        // including a manifest that never declared `skills:` and had the
+        // producer turn them on. Dropping it there would let a producer skill
+        // shadow a file the operator wrote, which is the one thing every layer
+        // rule in this program exists to prevent.
+        Some(manifest) => registry.auto_detect_project_layer(&manifest.yaml_path),
+        None => registry,
+    };
+    let registry_result = registry.layer_dirs(&source, yaml_path).and_then(|r| {
+        r.with_predicate_evaluator(KglitePredicateEvaluator {
+            state: graph_state.clone(),
+        })
+        .finalise()
+    });
     (registry_result, graph_stats)
+}
+
+/// The `skills:` declaration this composition obeys, and the path its relative
+/// entries resolve against.
+///
+/// Without a producer layer this is simply the manifest's own declaration — an
+/// operator who never wrote `skills:` gets no skills, exactly as before.
+///
+/// `has_producer` is what changes it, and only in the undeclared case.
+/// `Manifest.skills` is `SkillsSource::Disabled` for both "the operator wrote
+/// `skills: false`" and "the operator never mentioned skills", and
+/// [`ServerExtensions::with_skills`] has to tell those apart: a refusal is the
+/// operator's last word and silences everything, while silence is not a
+/// refusal. So a producer deployment whose manifest never mentions `skills:` —
+/// and a manifest-less one, which has no `skills:` to mention — is composed as
+/// if it read `skills: true`: the binary's own layers, and nothing the operator
+/// did not write.
+///
+/// The path is only ever used to resolve a declared *directory*, and the
+/// synthesised source declares none; `Path::new(".")` stands in for the
+/// manifest that is not there.
+fn skills_source(
+    manifest: Option<&Manifest>,
+    has_producer: bool,
+) -> (SkillsSource, &std::path::Path) {
+    match manifest {
+        Some(manifest) if !has_producer || manifest_declares_skills(manifest) => {
+            (manifest.skills.clone(), manifest.yaml_path.as_path())
+        }
+        Some(manifest) => (bundled_only(), manifest.yaml_path.as_path()),
+        None => (bundled_only(), std::path::Path::new(".")),
+    }
+}
+
+/// The `skills: true` source: switch on the layers this binary already holds,
+/// declare no directory of the operator's own.
+fn bundled_only() -> SkillsSource {
+    SkillsSource::Sources(vec![SkillSource::Bundled])
+}
+
+/// Does the manifest YAML carry a top-level `skills:` key at all?
+///
+/// mcp-methods parses both "absent" and "`skills: false`" into
+/// `SkillsSource::Disabled`, and exposes no "was it declared?" flag, so the
+/// only remaining primitive is the file. Read at boot, once.
+///
+/// A top-level block-mapping key is the sole YAML construct that can begin a
+/// line at column 0 with `skills:` — nested keys are indented, block-scalar
+/// content is indented, and a comment starts with `#` — so a mention inside
+/// `instructions:` cannot be mistaken for a declaration. The construct this
+/// does miss is a whole-document *flow* mapping (`{name: x, skills: false}`),
+/// which would be read as undeclared and let the producer layer surface
+/// against the operator's wish; no manifest in this project, its tests or
+/// mcp-methods' own examples is written that way, and an unreadable file is
+/// likewise treated as undeclared because the manifest that failed to load is
+/// not the one that will be served.
+fn manifest_declares_skills(manifest: &Manifest) -> bool {
+    let Ok(text) = std::fs::read_to_string(&manifest.yaml_path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        line.strip_prefix("skills")
+            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+    })
 }
 
 /// Compose, serve and index the skill registry at boot.
@@ -128,27 +224,237 @@ fn compose_registry(
 /// the message; see [`report_registry_failure`].
 ///
 /// Fills `skills_index` with the bare-`graph_overview` index of everything
-/// this session actually serves, and returns what the graph layer contributed
-/// so the boot summary can name it.
+/// this session actually serves, and returns what the two owned layers
+/// contributed so the boot summary can name them.
 pub(crate) fn install_skills(
     server: &mut McpServer,
-    manifest: &Manifest,
+    manifest: Option<&Manifest>,
+    producer: &ProducerSkills,
     mode: &Mode,
     graph_state: &GraphState,
     recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
     skills_index: &SkillsIndexSlot,
-) -> Result<GraphSkillStats> {
-    let (registry_result, mut graph_stats) =
-        compose_registry(manifest, mode, graph_state, recipe_catalog_summary);
+) -> Result<SkillLayerStats> {
+    let (registry_result, graph) = compose_registry(
+        manifest,
+        &producer.layer,
+        mode,
+        graph_state,
+        recipe_catalog_summary,
+    );
+    let mut stats = SkillLayerStats {
+        graph,
+        producer: producer.stats.clone(),
+    };
     match registry_result {
         Ok(registry) => {
             log_parse_warnings(&registry);
             let active = serve_prompts(&registry, server);
-            graph_stats.attribute(&active);
+            stats.graph.attribute(&active);
+            stats.producer.attribute(&active);
             *write_lock(skills_index) = render_skills_index(&active);
-            Ok(graph_stats)
+            Ok(stats)
         }
-        Err(e) => report_registry_failure(e, &manifest.yaml_path).map(|()| graph_stats),
+        Err(e) => {
+            report_registry_failure(e, manifest.map(|m| m.yaml_path.as_path())).map(|()| stats)
+        }
+    }
+}
+
+/// Everything the skill plane is assembled from at boot.
+///
+/// A struct rather than a parameter list for the same reason `KgliteToolParams`
+/// is one: the set is the boot wiring and grows with it.
+pub(crate) struct SkillBootParams<'a> {
+    /// The embedder's records, straight off [`ServerExtensions::with_skills`]
+    /// and not yet validated — validating them here is what lets a bad one
+    /// fail the boot.
+    pub(crate) producer_records: Vec<SkillRecord>,
+    pub(crate) manifest: Option<&'a Manifest>,
+    pub(crate) mode: &'a Mode,
+    pub(crate) graph_state: &'a GraphState,
+    pub(crate) recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
+    pub(crate) skills_index: &'a SkillsIndexSlot,
+    pub(crate) refresher: &'a SkillRefresher,
+    pub(crate) peer: &'a PeerSlot,
+}
+
+/// Build, serve and arm the whole skill plane.
+///
+/// **Two ways in.** A manifest is one — the `skills:` declaration lives there,
+/// and an operator who wrote `skills: false` gets exactly that. The other is
+/// the embedder: [`ServerExtensions::with_skills`] is its own opt-in, so a
+/// manifest-less producer deployment serves the bundled set plus its own layer
+/// rather than nothing at all. Neither present: no skills, which is what a
+/// plain bare server has always served.
+pub(crate) fn boot_skills(
+    server: &mut McpServer,
+    params: SkillBootParams<'_>,
+) -> Result<SkillLayerStats> {
+    let SkillBootParams {
+        producer_records,
+        manifest,
+        mode,
+        graph_state,
+        recipe_catalog_summary,
+        skills_index,
+        refresher,
+        peer,
+    } = params;
+    // Before anything the embedder cannot fix later: a malformed record is a
+    // bug in the binary, and a boot that refuses naming it is a better report
+    // than a server serving a silently incomplete methodology.
+    let producer = ProducerSkills::build(&producer_records)?;
+    let enabled = manifest.is_some() || !producer.is_empty();
+    if !enabled {
+        return Ok(SkillLayerStats::default());
+    }
+    let stats = install_skills(
+        server,
+        manifest,
+        &producer,
+        mode,
+        graph_state,
+        recipe_catalog_summary,
+        skills_index,
+    )?;
+    if stats.producer.served > 0 && stats.producer.active == Some(0) {
+        // The one outcome an embedder cannot see from the outside: its records
+        // validated, were handed over, and nothing surfaced. Named here because
+        // the boot line reports the count without the cause.
+        tracing::info!(
+            skills = stats.producer.served,
+            "producer skills served none — the manifest's `skills:` declaration excludes the \
+             binary's own layers (`skills: false`, or a list without `true`), or a graph or \
+             operator layer took every name"
+        );
+    }
+    // After `install_skills`, because the reloader's captured `ServerOptions`
+    // snapshot must be the final one and the composition it re-runs is the one
+    // that just ran.
+    refresher.arm(RefreshInputs {
+        reloader: server.skill_reloader(),
+        manifest,
+        producer: &producer,
+        mode,
+        graph_state,
+        recipe_catalog_summary,
+        skills_index,
+        peer,
+    });
+    Ok(stats)
+}
+
+/// What this boot's two owned layers contributed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SkillLayerStats {
+    pub(crate) graph: GraphSkillStats,
+    pub(crate) producer: ProducerSkillStats,
+}
+
+/// The embedder's skill layer: validated, rendered and counted once, at boot.
+///
+/// Held as rendered [`OwnedSkill`] bodies rather than as `SkillRecord`s
+/// because every later consumer — the boot composition and every
+/// [`SkillRefresher`] rebuild — wants the same bytes, and because validation
+/// belongs where it can still fail the boot. A producer record is the
+/// embedder's code, not graph data: a fault in it is a bug in the binary, and
+/// the honest report is a refusal that names the record rather than a warning
+/// nobody reads.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProducerSkills {
+    layer: Vec<OwnedSkill>,
+    stats: ProducerSkillStats,
+}
+
+impl ProducerSkills {
+    /// Validate and render the records [`ServerExtensions::with_skills`]
+    /// collected. An invalid record fails the boot, naming itself.
+    pub(crate) fn build(records: &[SkillRecord]) -> Result<Self> {
+        let mut layer = Vec::with_capacity(records.len());
+        let mut stats = ProducerSkillStats::default();
+        for record in records {
+            if let Err(error) = graph_skills::validate(record) {
+                bail!(
+                    "producer skill {:?} (ServerExtensions::with_skills) is invalid: {error}",
+                    record.name
+                );
+            }
+            let rendered = graph_skills::render_markdown(record);
+            // Second gate, as the graph layer does: the registry parses this
+            // blob's frontmatter, and proving it reads here names the record
+            // instead of surfacing as an anonymous `ParseWarning` later.
+            if let Err(error) = mcp_methods::server::skills::parse_skill(
+                &rendered,
+                std::path::Path::new("<producer>"),
+            ) {
+                bail!(
+                    "producer skill {:?} (ServerExtensions::with_skills) is invalid: {error}",
+                    record.name
+                );
+            }
+            stats.served += 1;
+            stats.body_bytes += record.body.len();
+            layer.push(OwnedSkill {
+                name: record.name.clone(),
+                body: rendered,
+            });
+        }
+        Ok(Self { layer, stats })
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.layer.is_empty()
+    }
+
+    fn layer(&self) -> Vec<OwnedSkill> {
+        self.layer.clone()
+    }
+}
+
+/// What the embedder's own skill layer contributed to this boot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProducerSkillStats {
+    /// Records handed to the registry. No `skipped` twin: an invalid producer
+    /// record never reaches this struct, it fails the boot.
+    pub(crate) served: usize,
+    /// Sum of their body bytes — the same bound the graph layer's line reports,
+    /// for the same reason: this is text injected into every `tools/list`.
+    pub(crate) body_bytes: usize,
+    /// How many reached the **active** set under `owned:producer`. `Some(0)`
+    /// with `served > 0` is the operator having declared `skills: false`, or a
+    /// closer layer having taken every name.
+    pub(crate) active: Option<usize>,
+}
+
+impl ProducerSkillStats {
+    fn attribute(&mut self, active: &[ActiveSkill]) {
+        self.active = Some(
+            active
+                .iter()
+                .filter(|skill| {
+                    matches!(&skill.provenance,
+                        SkillProvenance::Owned(label) if label == PRODUCER_LAYER_LABEL)
+                })
+                .count(),
+        );
+    }
+
+    /// Boot-summary fragment, or `None` when the embedder contributed nothing.
+    pub(crate) fn summary(&self) -> Option<String> {
+        if self.served == 0 {
+            return None;
+        }
+        let mut text = format!(
+            "producer skills: {} served ({} B)",
+            self.served, self.body_bytes
+        );
+        if let Some(active) = self.active {
+            text.push_str(&format!(
+                ", {active} active as owned:{PRODUCER_LAYER_LABEL}"
+            ));
+        }
+        Some(text)
     }
 }
 
@@ -361,7 +667,8 @@ pub(crate) struct SkillRefresher {
 
 struct RefreshInner {
     reloader: SkillReloader,
-    manifest: Manifest,
+    manifest: Option<Manifest>,
+    producer_layer: Vec<OwnedSkill>,
     mode: Mode,
     graph_state: GraphState,
     recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
@@ -377,7 +684,10 @@ struct RefreshInner {
 /// as a positional sequence.
 pub(crate) struct RefreshInputs<'a> {
     pub(crate) reloader: SkillReloader,
-    pub(crate) manifest: &'a Manifest,
+    pub(crate) manifest: Option<&'a Manifest>,
+    /// The rendered producer layer, carried so a rebuild recomposes the same
+    /// registry without re-validating records that already passed at boot.
+    pub(crate) producer: &'a ProducerSkills,
     pub(crate) mode: &'a Mode,
     pub(crate) graph_state: &'a GraphState,
     /// Dimensions of the catalogue actually served, carried so a rebuild
@@ -393,6 +703,7 @@ impl SkillRefresher {
         let RefreshInputs {
             reloader,
             manifest,
+            producer,
             mode,
             graph_state,
             recipe_catalog_summary,
@@ -404,7 +715,8 @@ impl SkillRefresher {
         }
         *write_lock(&self.inner) = Some(Box::new(RefreshInner {
             reloader,
-            manifest: manifest.clone(),
+            manifest: manifest.cloned(),
+            producer_layer: producer.layer(),
             mode: mode.clone(),
             graph_state: graph_state.clone(),
             recipe_catalog_summary,
@@ -426,7 +738,8 @@ impl SkillRefresher {
             return;
         };
         let (registry_result, stats) = compose_registry(
-            &inner.manifest,
+            inner.manifest.as_ref(),
+            &inner.producer_layer,
             &inner.mode,
             &inner.graph_state,
             inner.recipe_catalog_summary,
@@ -522,13 +835,18 @@ fn skill_summary(description: &str) -> String {
 /// a warning: those are content faults in files that do exist, they name
 /// themselves in the log, and taking a deployment down for one of them is a
 /// worse trade than serving it without skills.
-fn report_registry_failure(error: SkillError, yaml_path: &std::path::Path) -> Result<()> {
+fn report_registry_failure(error: SkillError, yaml_path: Option<&std::path::Path>) -> Result<()> {
     match error {
+        // `PathNotFound` can only come from a manifest `skills:` entry, so the
+        // path is always there when this arm is reached; the fallback exists
+        // because the type cannot say so.
         SkillError::PathNotFound { .. } => bail!(
             "{error}. Declared by `skills:` in {}. Create the directory, or drop the entry \
              — a skills path that is not there disables every skill in the session, \
              bundled ones included.",
-            yaml_path.display()
+            yaml_path
+                .unwrap_or(std::path::Path::new("<no manifest>"))
+                .display()
         ),
         other => {
             tracing::warn!(error = %other, "skills registry build failed; skills disabled for this session");
@@ -623,7 +941,7 @@ mod registry_failure_tests {
             resolved: PathBuf::from("/srv/deploy/domain"),
         };
 
-        let message = report_registry_failure(error, Path::new("/srv/deploy/graph_mcp.yaml"))
+        let message = report_registry_failure(error, Some(Path::new("/srv/deploy/graph_mcp.yaml")))
             .expect_err("a declared pack that is not there must fail boot")
             .to_string();
 
@@ -640,7 +958,9 @@ mod registry_failure_tests {
             path: PathBuf::from("/srv/deploy/domain/broken.md"),
         };
 
-        assert!(report_registry_failure(error, Path::new("/srv/deploy/graph_mcp.yaml")).is_ok());
+        assert!(
+            report_registry_failure(error, Some(Path::new("/srv/deploy/graph_mcp.yaml"))).is_ok()
+        );
     }
 }
 
@@ -980,14 +1300,14 @@ mod bundled_skill_body_tests {
 }
 
 #[cfg(test)]
-mod graph_skill_tests {
+mod skill_layer_tests {
     use super::*;
 
     use std::path::Path;
 
     use kglite::api::skills::Delivery;
     use kglite::api::storage::StorageMode;
-    use mcp_methods::server::{serve_prompts, McpServer, ServerOptions, SkillSource, SkillsSource};
+    use mcp_methods::server::{serve_prompts, McpServer, ServerOptions};
     use schemars::JsonSchema;
     use serde::Deserialize;
 
@@ -1722,5 +2042,298 @@ mod graph_skill_tests {
         let cut = skill_summary(&long);
         assert!(cut.ends_with('…'), "{cut}");
         assert!(cut.len() <= 164, "{}", cut.len());
+    }
+    // ── The producer layer (`ServerExtensions::with_skills`) ───────────────
+
+    /// A manifest loaded through the real loader, because
+    /// [`manifest_declares_skills`] reads the file back and a struct literal
+    /// would have no file to read.
+    fn manifest_file(dir: &Path, body: &str) -> Manifest {
+        let path = dir.join("producer_mcp.yaml");
+        std::fs::write(&path, body).expect("write manifest");
+        mcp_methods::server::load_manifest(&path).expect("manifest loads")
+    }
+
+    /// The production composition with a producer layer in it.
+    fn compose_with_producer(
+        manifest: Option<&Manifest>,
+        producer: &[SkillRecord],
+        mode: &Mode,
+        state: &GraphState,
+    ) -> (ResolvedRegistry, ProducerSkills) {
+        let producer = ProducerSkills::build(producer).expect("valid producer records");
+        let (result, _) = compose_registry(manifest, &producer.layer, mode, state, None);
+        (result.expect("resolve registry"), producer)
+    }
+
+    fn producer_record() -> SkillRecord {
+        SkillRecord {
+            delivery: Delivery::Eager,
+            ..record(
+                "cypher_query",
+                "How this builder's graphs are shaped.",
+                "PRODUCER BODY\n",
+                &["cypher_query"],
+            )
+        }
+    }
+
+    /// The whole point of the layer: it belongs to the *binary*, not to any one
+    /// graph, so the two workspace modes — where no graph exists when the
+    /// prompt plane freezes, and where the graph layer is therefore always
+    /// empty — must carry it exactly as `--graph` does.
+    #[test]
+    fn the_producer_layer_is_served_in_every_mode() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = manifest_file(temp.path(), "name: Producer\nskills: true\n");
+        let state = GraphState::new(None);
+
+        for mode in [
+            Mode::Graph {
+                path: temp.path().join("g.kgl"),
+            },
+            Mode::Watch {
+                dir: temp.path().to_path_buf(),
+            },
+            Mode::LocalWorkspace {
+                root: temp.path().to_path_buf(),
+                watch: false,
+            },
+            Mode::Workspace {
+                dir: temp.path().to_path_buf(),
+            },
+        ] {
+            let (registry, producer) =
+                compose_with_producer(Some(&manifest), &[producer_record()], &mode, &state);
+            assert_eq!(producer.stats.served, 1, "{mode:?}");
+            let served = served_with_tools(&registry, &["cypher_query"]);
+            assert!(
+                served.description("cypher_query").contains("PRODUCER BODY"),
+                "{mode:?}: {}",
+                served.description("cypher_query")
+            );
+        }
+    }
+
+    /// The exact codingest shape: `run_with_extensions` with a workspace-graph
+    /// producer and no manifest anywhere. Before `with_skills` was its own
+    /// opt-in this deployment served no skills at all, so the layer would have
+    /// shipped inert for the binary that asked for it.
+    #[test]
+    fn a_manifest_less_boot_serves_the_bundled_set_and_the_producer_layer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = GraphState::new(None);
+        let mode = Mode::LocalWorkspace {
+            root: temp.path().to_path_buf(),
+            watch: false,
+        };
+
+        let (registry, _) = compose_with_producer(
+            None,
+            &[record(
+                "codingest_review",
+                "How to review code in this graph.",
+                "Start from `Function`.\n",
+                &["cypher_query"],
+            )],
+            &mode,
+            &state,
+        );
+
+        let served = served_with_tools(&registry, &["cypher_query", "graph_overview"]);
+        assert!(
+            served.prompts.iter().any(|p| p == "codingest_review"),
+            "{:?}",
+            served.prompts
+        );
+        // The bundled set comes with it — the synthesised source is the `true`
+        // marker, which switches on every layer this binary holds.
+        assert!(
+            served.prompts.iter().any(|p| p == "cypher_query"),
+            "{:?}",
+            served.prompts
+        );
+    }
+
+    /// The operator's last word. `skills: false` is a refusal, and a refusal
+    /// silences the producer's layer with everything else — unlike a manifest
+    /// that simply never mentioned skills.
+    #[test]
+    fn an_explicit_skills_false_silences_the_producer_layer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = GraphState::new(None);
+        let mode = Mode::Bare;
+
+        let refused = manifest_file(temp.path(), "name: Producer\nskills: false\n");
+        let (registry, producer) =
+            compose_with_producer(Some(&refused), &[producer_record()], &mode, &state);
+        let mut stats = producer.stats.clone();
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        stats.attribute(&served.active);
+        assert!(served.prompts.is_empty(), "{:?}", served.prompts);
+        assert_eq!(stats.served, 1, "the records were still handed over");
+        assert_eq!(stats.active, Some(0), "and none of them surfaced");
+        assert!(
+            stats
+                .summary()
+                .is_some_and(|line| line.contains("0 active as owned:producer")),
+            "{:?}",
+            stats.summary()
+        );
+
+        // Control: the same manifest without the `skills:` line. Silence is not
+        // a refusal, so here the producer turns skills on.
+        let silent = manifest_file(temp.path(), "name: Producer\n");
+        let (registry, _) =
+            compose_with_producer(Some(&silent), &[producer_record()], &mode, &state);
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        assert!(
+            served.prompts.iter().any(|p| p == "cypher_query"),
+            "{:?}",
+            served.prompts
+        );
+    }
+
+    /// Without a producer layer an undeclared `skills:` keeps meaning "off" —
+    /// the opt-in belongs to `with_skills`, and every manifest that never
+    /// mentioned skills must keep serving none.
+    #[test]
+    fn an_undeclared_skills_key_stays_off_without_a_producer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = manifest_file(temp.path(), "name: Quiet\n");
+        let state = GraphState::new(None);
+
+        let (registry, _) = compose_with_producer(Some(&manifest), &[], &Mode::Bare, &state);
+
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        assert!(served.prompts.is_empty(), "{:?}", served.prompts);
+    }
+
+    /// **Precedence pin (D2).** `bundled < producer < graph < project layer`,
+    /// asserted on one name so each step is the *observable* difference between
+    /// two bodies. A regression here is invisible otherwise: the layers would
+    /// silently reorder and every override would resolve to the wrong body with
+    /// the build still green.
+    #[test]
+    fn the_producer_layer_sits_between_bundled_and_the_graph() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = manifest_file(temp.path(), "name: Layers\nskills: true\n");
+        let mode = Mode::Graph {
+            path: temp.path().join("skills.kgl"),
+        };
+
+        // 1. producer beats bundled.
+        let empty = GraphState::new(None);
+        let (registry, _) =
+            compose_with_producer(Some(&manifest), &[producer_record()], &mode, &empty);
+        let resolved = registry.get("cypher_query").expect("cypher_query");
+        assert!(resolved.body.contains("PRODUCER BODY"), "{}", resolved.body);
+        assert!(
+            !resolved.body.contains("200 data rows"),
+            "the bundled cypher_query body must not survive a producer override"
+        );
+
+        // 2. the graph beats the producer.
+        let state = state_with_skill(
+            temp.path(),
+            &SkillRecord {
+                delivery: Delivery::Eager,
+                ..record(
+                    "cypher_query",
+                    "This graph's own correction.",
+                    "GRAPH BODY\n",
+                    &["cypher_query"],
+                )
+            },
+        );
+        let (registry, _) =
+            compose_with_producer(Some(&manifest), &[producer_record()], &mode, &state);
+        let resolved = registry.get("cypher_query").expect("cypher_query");
+        assert!(resolved.body.contains("GRAPH BODY"), "{}", resolved.body);
+        assert!(
+            !resolved.body.contains("PRODUCER BODY"),
+            "{}",
+            resolved.body
+        );
+
+        // 3. the operator's file beats both.
+        let project = temp.path().join("producer_mcp.skills");
+        std::fs::create_dir(&project).expect("project layer");
+        std::fs::write(
+            project.join("cypher_query.md"),
+            "---\nname: cypher_query\ndescription: The operator's own.\ndelivery: eager\n---\n\nFILE BODY\n",
+        )
+        .expect("write project skill");
+        let (registry, _) =
+            compose_with_producer(Some(&manifest), &[producer_record()], &mode, &state);
+        let resolved = registry.get("cypher_query").expect("cypher_query");
+        assert!(resolved.body.contains("FILE BODY"), "{}", resolved.body);
+    }
+
+    /// A producer record is the embedder's own code, not graph data, so the
+    /// honest report for a bad one is a refusal that names it — not the
+    /// skip-and-warn a hand-written `CREATE` gets.
+    #[test]
+    fn an_invalid_producer_record_fails_the_boot_and_names_it() {
+        let error = ProducerSkills::build(&[record(
+            "has spaces",
+            "A name the registry cannot key on.",
+            "Body.\n",
+            &[],
+        )])
+        .expect_err("an invalid producer record must fail the boot");
+        let message = error.to_string();
+        assert!(message.contains("has spaces"), "{message}");
+        assert!(message.contains("with_skills"), "{message}");
+
+        // Control: the sibling shape loads, so the refusal is about the record
+        // and not about producer layers in general.
+        ProducerSkills::build(&[record("fine", "A fine skill.", "Body.\n", &[])])
+            .expect("a valid record builds");
+    }
+
+    /// Provenance is what makes the layer's contribution reportable at all —
+    /// the boot line, and the index an agent reads out of `graph_overview`.
+    #[test]
+    fn the_producer_layer_is_attributed_and_appears_in_the_overview_index() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = manifest_file(temp.path(), "name: Producer\nskills: true\n");
+        let state = GraphState::new(None);
+
+        let (registry, producer) = compose_with_producer(
+            Some(&manifest),
+            &[record(
+                "builder_methodology",
+                "How this builder's graphs are shaped.",
+                "Body.\n",
+                &["cypher_query"],
+            )],
+            &Mode::Bare,
+            &state,
+        );
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        let mut stats = producer.stats.clone();
+        stats.attribute(&served.active);
+
+        assert!(
+            served
+                .active
+                .iter()
+                .any(|skill| skill.name == "builder_methodology"
+                    && matches!(&skill.provenance, SkillProvenance::Owned(label)
+                    if label == PRODUCER_LAYER_LABEL)),
+            "{:?}",
+            served.active
+        );
+        assert_eq!(stats.active, Some(1));
+        let summary = stats.summary().expect("a contributed layer reports itself");
+        assert!(summary.contains("producer skills: 1 served"), "{summary}");
+        assert!(summary.contains("1 active as owned:producer"), "{summary}");
+
+        let index = render_skills_index(&served.active).expect("a non-empty index");
+        assert!(index.contains("builder_methodology"), "{index}");
+
+        // Control: no producer records, no line.
+        assert_eq!(ProducerSkillStats::default().summary(), None);
     }
 }

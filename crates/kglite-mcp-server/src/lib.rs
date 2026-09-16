@@ -72,11 +72,16 @@ pub use crate::embedder::PyEmbedderFactory;
 pub use crate::extensions::{
     DomainGraphContext, DomainGraphState, DomainToolRegistrar, DomainToolRegistry, ServerExtensions,
 };
+// The record types [`ServerExtensions::with_skills`] takes, re-exported so an
+// embedder needs no direct `kglite` dependency to describe its methodology —
+// the same reason the workspace-graph types below are re-exported rather than
+// reached through `crate::tools`.
 pub use crate::tools::{
     WorkspaceGraphBuildFn, WorkspaceGraphChanges, WorkspaceGraphHooks, WorkspaceGraphMode,
     WorkspaceGraphRelevance, WorkspaceGraphRelevanceFn, WorkspaceGraphRequest,
     WorkspaceGraphResult,
 };
+pub use kglite::api::skills::{Delivery, SkillRecord};
 
 /// Run the MCP server to completion over stdio.
 ///

@@ -351,9 +351,19 @@ fn registered(names: &[String], name: &str) -> bool {
     names.iter().any(|x| x == name)
 }
 
-/// 1. initialize. Returns `false` when the handshake failed — there is nothing
-///    more to probe against a child that never came up.
-fn check_initialize(rpc: &mut Rpc, checks: &mut Vec<(&'static str, Check)>) -> Result<bool> {
+/// 1. initialize.
+///
+/// `None` means the handshake failed — there is nothing more to probe against
+/// a child that never came up. `Some(prompts_advertised)` carries the one thing
+/// on the wire that says whether this child serves *any* skills: the manifest
+/// cannot answer it, since `ServerExtensions::with_skills` turns skills on with
+/// no `skills:` declaration anywhere, and capabilities are frozen at
+/// `initialize`, so what was advertised there is exactly what the session
+/// serves.
+fn check_initialize(
+    rpc: &mut Rpc,
+    checks: &mut Vec<(&'static str, Check)>,
+) -> Result<Option<bool>> {
     let init = rpc.request(
         "initialize",
         json!({
@@ -374,11 +384,15 @@ fn check_initialize(rpc: &mut Rpc, checks: &mut Vec<(&'static str, Check)>) -> R
                 "server initializes",
                 Check::Pass(format!("serverInfo.name = {name}")),
             ));
-            Ok(true)
+            let prompts_advertised = result
+                .get("capabilities")
+                .and_then(|caps| caps.get("prompts"))
+                .is_some_and(|prompts| !prompts.is_null());
+            Ok(Some(prompts_advertised))
         }
         Err(e) => {
             checks.push(("server initializes", Check::Fail(e.to_string())));
-            Ok(false)
+            Ok(None)
         }
     }
 }
@@ -580,9 +594,16 @@ fn check_declared_source_roots(
 fn check_skills(
     rpc: &mut Rpc,
     manifest: Option<&Manifest>,
+    prompts_advertised: bool,
     checks: &mut Vec<(&'static str, Check)>,
 ) {
-    if !manifest.is_some_and(|m| matches!(m.skills, SkillsSource::Sources(_))) {
+    // Either the operator declared skills — in which case "0 served" is a
+    // finding worth a line — or the child advertised the prompts capability,
+    // which is the only signal a producer layer (`with_skills`, no manifest
+    // declaration needed) leaves on the wire. Neither: this deployment has no
+    // skill surface and there is nothing to report.
+    let declared = manifest.is_some_and(|m| matches!(m.skills, SkillsSource::Sources(_)));
+    if !declared && !prompts_advertised {
         return;
     }
     let names = match rpc.request("prompts/list", json!({})) {
@@ -762,9 +783,9 @@ pub fn run_selftest(cli: &Cli, argv: &[OsString]) -> Result<()> {
     let mut rpc = Rpc::spawn(&child_args)?;
     let mut checks: Vec<(&str, Check)> = Vec::new();
 
-    if !check_initialize(&mut rpc, &mut checks)? {
+    let Some(prompts_advertised) = check_initialize(&mut rpc, &mut checks)? else {
         return report(checks);
-    }
+    };
 
     let tools = rpc.request("tools/list", json!({}))?;
     let names: Vec<String> = tools
@@ -780,7 +801,7 @@ pub fn run_selftest(cli: &Cli, argv: &[OsString]) -> Result<()> {
     check_graph_tools(&names, &mut checks);
     check_recipe_tools(&mut rpc, manifest.as_ref(), &names, &mut checks);
     check_declared_source_roots(manifest.as_ref(), &mut checks);
-    check_skills(&mut rpc, manifest.as_ref(), &mut checks);
+    check_skills(&mut rpc, manifest.as_ref(), prompts_advertised, &mut checks);
     check_github_tools(&names, &mut checks);
 
     let local_activated = check_local_activation(&mut rpc, cli, &mode, &names, &mut checks)?;

@@ -859,6 +859,7 @@ pub(crate) async fn run_async(
         workspace_graph,
         domain_tools,
         read_only: read_only_pin,
+        producer_skills,
     } = extensions;
     let BootedGraph {
         mode,
@@ -968,34 +969,19 @@ pub(crate) async fn run_async(
 
     let _watch_handle = spawn_mode_watcher(&mode, &graph_state)?;
 
-    // Bare-mode (no manifest) deployments get no skills — the `skills:`
-    // declaration lives in the manifest.
-    let graph_skills = match manifest.as_ref() {
-        Some(m) => install_skills(
-            &mut server,
-            m,
-            &mode,
-            &graph_state,
-            recipe_catalog_summary,
-            &skills_index,
-        )?,
-        None => crate::skills::GraphSkillStats::default(),
-    };
-    // After `install_skills`, because the reloader's captured `ServerOptions`
-    // snapshot must be the final one and the composition it re-runs is the one
-    // that just ran. Manifest-less (bare) deployments serve no skills at all,
-    // so there is nothing to rebuild and the refresher stays unarmed.
-    if let Some(m) = manifest.as_ref() {
-        skill_refresher.arm(crate::skills::RefreshInputs {
-            reloader: server.skill_reloader(),
-            manifest: m,
+    let skill_stats = crate::skills::boot_skills(
+        &mut server,
+        crate::skills::SkillBootParams {
+            producer_records: producer_skills,
+            manifest: manifest.as_ref(),
             mode: &mode,
             graph_state: &graph_state,
             recipe_catalog_summary,
             skills_index: &skills_index,
+            refresher: &skill_refresher,
             peer: &peer_slot,
-        });
-    }
+        },
+    )?;
 
     print_boot_summary(
         &mode,
@@ -1004,9 +990,10 @@ pub(crate) async fn run_async(
         env_file_loaded.as_deref(),
         &csv_http,
         source_root_status.as_ref(),
-        crate::boot::GraphCarried {
-            skills: &graph_skills,
-            recipes: &graph_recipes,
+        crate::boot::ServedLayers {
+            producer_skills: &skill_stats.producer,
+            graph_skills: &skill_stats.graph,
+            graph_recipes: &graph_recipes,
         },
     );
 

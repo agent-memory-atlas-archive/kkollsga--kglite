@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use kglite::api::skills::SkillRecord;
 use mcp_methods::server::{Manifest, McpServer};
 
 use crate::tools::GraphState;
@@ -190,6 +191,7 @@ pub struct ServerExtensions {
     pub(crate) workspace_graph: Option<WorkspaceGraphHooks>,
     pub(crate) domain_tools: Option<Box<DomainToolRegistrar>>,
     pub(crate) read_only: bool,
+    pub(crate) producer_skills: Vec<SkillRecord>,
 }
 
 impl ServerExtensions {
@@ -218,6 +220,49 @@ impl ServerExtensions {
     /// Inject an external producer for workspace build/watch paths.
     pub fn with_workspace_graph(mut self, hooks: WorkspaceGraphHooks) -> Self {
         self.workspace_graph = Some(hooks);
+        self
+    }
+
+    /// Contribute the embedder's own skill layer — the methodology that is a
+    /// property of *what this binary builds*, not of any one graph it serves.
+    ///
+    /// A producer that assembles graphs itself (a workspace-mode builder, a
+    /// domain ingester) emits the same node and edge shapes every time, so the
+    /// methodology for querying them belongs to the server rather than to each
+    /// artefact. Graph-carried `KgliteSkill` records cannot express that: they
+    /// are read in `--graph` / `--watch` modes only, because the workspace
+    /// modes have no graph when the prompt plane is frozen. This layer is
+    /// installed in **every** mode, at boot, and applies to every graph the
+    /// server goes on to serve.
+    ///
+    /// **Precedence.** `bundled < producer < graph-carried < manifest inline <
+    /// operator `skills:` dirs < `<basename>.skills/``. Closer to the operator
+    /// wins: a `.kgl` can correct a producer skill of the same name, and the
+    /// operator's own files beat both.
+    ///
+    /// **This is its own opt-in.** Owned layers surface only when skills are
+    /// enabled, and KGLite serves none without a manifest. Calling this turns
+    /// them on: with no manifest, or with one that never mentions `skills:`,
+    /// the server serves the bundled set plus this layer. An **explicit**
+    /// manifest `skills: false` (or `null`) still turns everything off,
+    /// producer layer included — the operator has the last word, and the boot
+    /// summary says how many records it silenced. An explicit `skills:` list
+    /// is used exactly as written, so a list without the `true` marker leaves
+    /// this layer off along with the bundled one.
+    ///
+    /// **Always active, validated at boot.** [`SkillRecord`] carries no
+    /// `applies_when:` predicate, so nothing here depends on the shape of the
+    /// active graph and nothing needs re-resolving after a root swap. The
+    /// records are the embedder's own code, not graph data, so a record that
+    /// fails `kglite::api::skills::validate` **fails the boot** and names
+    /// itself — unlike a malformed graph record, which is skipped.
+    ///
+    /// Provenance renders as `owned:producer`.
+    ///
+    /// Repeated calls accumulate; within the layer a later record of the same
+    /// name replaces an earlier one.
+    pub fn with_skills(mut self, skills: impl IntoIterator<Item = SkillRecord>) -> Self {
+        self.producer_skills.extend(skills);
         self
     }
 
