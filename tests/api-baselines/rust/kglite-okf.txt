@@ -2249,6 +2249,63 @@ pub fn kglite::api::session::execute_mut(graph: &mut kglite::api::DirGraph, quer
 pub fn kglite::api::session::execute_read(graph: &kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::session::resolve_noderef_value<'v>(graph: &kglite::api::storage::GraphBackend, value: &'v kglite::datatypes::values::Value) -> alloc::borrow::Cow<'v, kglite::datatypes::values::Value>
 pub fn kglite::api::session::resolve_noderefs(graph: &kglite::api::storage::GraphBackend, rows: &mut [alloc::vec::Vec<kglite::datatypes::values::Value>])
+pub mod kglite::api::skills
+pub enum kglite::api::skills::Delivery
+pub kglite::api::skills::Delivery::Eager
+pub kglite::api::skills::Delivery::Lazy
+impl kglite::api::skills::Delivery
+pub fn kglite::api::skills::Delivery::as_str(self) -> &'static str
+pub fn kglite::api::skills::Delivery::parse(text: &str) -> core::result::Result<Self, kglite::error::KgError>
+impl core::clone::Clone for kglite::api::skills::Delivery
+pub fn kglite::api::skills::Delivery::clone(&self) -> kglite::api::skills::Delivery
+impl core::cmp::Eq for kglite::api::skills::Delivery
+impl core::cmp::PartialEq for kglite::api::skills::Delivery
+pub fn kglite::api::skills::Delivery::eq(&self, other: &kglite::api::skills::Delivery) -> bool
+impl core::default::Default for kglite::api::skills::Delivery
+pub fn kglite::api::skills::Delivery::default() -> kglite::api::skills::Delivery
+impl core::fmt::Debug for kglite::api::skills::Delivery
+pub fn kglite::api::skills::Delivery::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::skills::Delivery
+impl core::marker::StructuralPartialEq for kglite::api::skills::Delivery
+pub enum kglite::api::skills::SetOutcome
+pub kglite::api::skills::SetOutcome::Created
+pub kglite::api::skills::SetOutcome::Updated
+impl core::clone::Clone for kglite::api::skills::SetOutcome
+pub fn kglite::api::skills::SetOutcome::clone(&self) -> kglite::api::skills::SetOutcome
+impl core::cmp::Eq for kglite::api::skills::SetOutcome
+impl core::cmp::PartialEq for kglite::api::skills::SetOutcome
+pub fn kglite::api::skills::SetOutcome::eq(&self, other: &kglite::api::skills::SetOutcome) -> bool
+impl core::fmt::Debug for kglite::api::skills::SetOutcome
+pub fn kglite::api::skills::SetOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::skills::SetOutcome
+impl core::marker::StructuralPartialEq for kglite::api::skills::SetOutcome
+pub struct kglite::api::skills::SkillRecord
+pub kglite::api::skills::SkillRecord::body: alloc::string::String
+pub kglite::api::skills::SkillRecord::delivery: kglite::api::skills::Delivery
+pub kglite::api::skills::SkillRecord::description: alloc::string::String
+pub kglite::api::skills::SkillRecord::name: alloc::string::String
+pub kglite::api::skills::SkillRecord::references_tools: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for kglite::api::skills::SkillRecord
+pub fn kglite::api::skills::SkillRecord::clone(&self) -> kglite::api::skills::SkillRecord
+impl core::cmp::Eq for kglite::api::skills::SkillRecord
+impl core::cmp::PartialEq for kglite::api::skills::SkillRecord
+pub fn kglite::api::skills::SkillRecord::eq(&self, other: &kglite::api::skills::SkillRecord) -> bool
+impl core::default::Default for kglite::api::skills::SkillRecord
+pub fn kglite::api::skills::SkillRecord::default() -> kglite::api::skills::SkillRecord
+impl core::fmt::Debug for kglite::api::skills::SkillRecord
+pub fn kglite::api::skills::SkillRecord::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::skills::SkillRecord
+pub const kglite::api::skills::MAX_BODY_BYTES: usize
+pub const kglite::api::skills::SKILL_LABEL: &str
+pub fn kglite::api::skills::delete(graph: &mut kglite::api::DirGraph, name: &str) -> core::result::Result<bool, kglite::error::KgError>
+pub fn kglite::api::skills::export_dir(graph: &kglite::api::DirGraph, dir: &std::path::Path) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
+pub fn kglite::api::skills::get(graph: &kglite::api::DirGraph, name: &str) -> core::result::Result<kglite::api::skills::SkillRecord, kglite::error::KgError>
+pub fn kglite::api::skills::import_path(graph: &mut kglite::api::DirGraph, path: &std::path::Path) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
+pub fn kglite::api::skills::list(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::skills::SkillRecord>
+pub fn kglite::api::skills::parse_markdown(text: &str) -> core::result::Result<kglite::api::skills::SkillRecord, kglite::error::KgError>
+pub fn kglite::api::skills::render_markdown(record: &kglite::api::skills::SkillRecord) -> alloc::string::String
+pub fn kglite::api::skills::set(graph: &mut kglite::api::DirGraph, record: &kglite::api::skills::SkillRecord) -> core::result::Result<kglite::api::skills::SetOutcome, kglite::error::KgError>
+pub fn kglite::api::skills::validate(record: &kglite::api::skills::SkillRecord) -> core::result::Result<(), kglite::error::KgError>
 pub mod kglite::api::storage
 pub enum kglite::api::storage::GraphBackend
 pub kglite::api::storage::GraphBackend::Disk(alloc::boxed::Box<kglite::api::storage::DiskGraph>)
@@ -3256,6 +3313,7 @@ pub kglite::api::DirGraph::wkt_cache: alloc::sync::Arc<std::sync::poison::rwlock
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::_get_connection(&self, index: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::DirGraph::_get_connection_mut(&mut self, index: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&mut kglite::api::EdgeData>
+pub fn kglite::api::DirGraph::all_node_types(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn kglite::api::DirGraph::begin_read_pass(&self) -> core::option::Option<kglite::api::DiskQueryGuard>
 pub fn kglite::api::DirGraph::build_connection_types_cache(&mut self)
 pub fn kglite::api::DirGraph::build_id_index(&mut self, node_type: &str)
@@ -3985,6 +4043,7 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::api::TemporalConfig
 pub fn kglite::api::TemporalConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const kglite::api::CANONICAL_NODE_COLUMNS: [&str; 3]
 pub const kglite::api::MAX_ONTOLOGY_CLASSES: usize
+pub const kglite::api::SYSTEM_LABELS: &[&str]
 pub trait kglite::api::Embedder: core::marker::Send + core::marker::Sync
 pub fn kglite::api::Embedder::dimension(&self) -> usize
 pub fn kglite::api::Embedder::embed(&self, texts: &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, alloc::string::String>
@@ -4331,6 +4390,7 @@ pub fn kglite::api::explore_markdown(dir: &kglite::api::DirGraph, query: &str, o
 pub fn kglite::api::graphgen(cfg: &kglite::graphgen::GraphGenConfig, out_dir: &std::path::Path) -> core::io::error::Result<kglite::graphgen::GraphGenStats>
 pub fn kglite::api::infer_selection_node_type(selection: &kglite::api::CowSelection, dir: &alloc::sync::Arc<kglite::api::DirGraph>) -> core::option::Option<alloc::string::String>
 pub fn kglite::api::is_canonical_node_column(key: &str) -> bool
+pub fn kglite::api::is_system_label(label: &str) -> bool
 pub fn kglite::api::make_dir_graph_mut(arc: &mut alloc::sync::Arc<kglite::api::DirGraph>) -> &mut kglite::api::DirGraph
 pub fn kglite::api::make_dir_graph_mut_preserving_lineage(arc: &mut alloc::sync::Arc<kglite::api::DirGraph>) -> &mut kglite::api::DirGraph
 pub fn kglite::api::ontology_from_json(json: &str) -> core::result::Result<kglite::api::OntologyStore, alloc::string::String>

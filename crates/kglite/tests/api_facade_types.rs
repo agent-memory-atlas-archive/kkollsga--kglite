@@ -224,3 +224,43 @@ fn filter_conditions_are_constructible_through_the_facade() {
         "the 41-year-old's only KNOWS edge is inbound from the 30-year-old"
     );
 }
+
+/// Graph-carried skills reach a Rust downstream only through the facade — the
+/// record type, the delivery enum, the upsert outcome and the two constants all
+/// have to be nameable, or a consumer re-derives the node shape by hand and the
+/// two spellings drift.
+#[test]
+fn skill_records_are_nameable_and_round_trip_through_the_facade() {
+    use kglite::api::skills::{
+        delete, get, list, render_markdown, set, validate, Delivery, SetOutcome, SkillRecord,
+        MAX_BODY_BYTES, SKILL_LABEL,
+    };
+
+    let mut graph = two_person_graph();
+    let record = SkillRecord {
+        name: "people".to_string(),
+        description: "how to query Person".to_string(),
+        body: "MATCH (p:Person) RETURN p".to_string(),
+        references_tools: vec!["cypher_query".to_string()],
+        delivery: Delivery::Eager,
+    };
+    validate(&record).expect("a well-formed record validates");
+    assert!(record.body.len() < MAX_BODY_BYTES);
+
+    let outcome: SetOutcome = set(&mut graph, &record).expect("upsert");
+    assert_eq!(outcome, SetOutcome::Created);
+
+    let listed: Vec<SkillRecord> = list(&graph);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].delivery, Delivery::Eager);
+
+    let stored: SkillRecord = get(&graph, "people").expect("read back");
+    assert_eq!(stored, record);
+    assert!(render_markdown(&stored).contains("name: \"people\""));
+
+    assert!(
+        !graph.get_node_types().contains(&SKILL_LABEL.to_string()),
+        "the skill label stays out of the type enumeration"
+    );
+    assert!(delete(&mut graph, "people").expect("delete"));
+}

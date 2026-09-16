@@ -9,6 +9,13 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- `kglite::api::skills` — graph-carried skills: markdown methodology stored as
+  nodes of the `KgliteSkill` system label, with list/get/upsert/delete,
+  validation, and SKILL.md import/export. The label is hidden from every node
+  type enumeration while staying reachable from Cypher.
+
 ### Fixed
 
 - `describe()` no longer emits a duplicate `id`/`title` attribute on a sample

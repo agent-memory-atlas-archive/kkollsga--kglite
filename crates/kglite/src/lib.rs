@@ -400,6 +400,23 @@ pub mod api {
         };
     }
 
+    /// Graph-carried skills — the markdown methodology a graph carries about
+    /// how to be used, stored as nodes of the `KgliteSkill` system label.
+    ///
+    /// Lives in core rather than in a binding because every binding asks the
+    /// same questions of it: the node shape, the validation rules a
+    /// hand-written `CREATE` cannot enforce, and the frontmatter dialect an
+    /// agent host expects. `parse_markdown` / `import_path` need a YAML parser
+    /// and so exist only with the `okf` feature; rendering and export do not.
+    pub mod skills {
+        pub use crate::graph::skills::{
+            delete, export_dir, get, list, render_markdown, set, validate, Delivery, SetOutcome,
+            SkillRecord, MAX_BODY_BYTES, SKILL_LABEL,
+        };
+        #[cfg(feature = "okf")]
+        pub use crate::graph::skills::{import_path, parse_markdown};
+    }
+
     /// Graph algorithms — pathfinding, components, centrality, community
     /// detection. The typed, direct-call surface: each takes `&DirGraph` +
     /// plain params and returns a result struct, for bindings that want

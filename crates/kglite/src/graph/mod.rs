@@ -32,6 +32,7 @@ pub mod property_types;
 pub mod schema;
 pub mod schema_json;
 pub mod session;
+pub mod skills;
 pub mod storage;
 pub mod tables;
 pub mod text_indexes;
