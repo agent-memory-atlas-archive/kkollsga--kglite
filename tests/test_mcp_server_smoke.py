@@ -157,6 +157,10 @@ class McpClient:
         self.proc = proc
         self._next_id = 0
         self._pending_responses: dict[int, dict[str, Any]] = {}
+        # Server-initiated notifications seen while waiting for a response.
+        # `tools/list_changed` is the only one this suite asserts on, and it
+        # arrives unsolicited between an id-bearing request and its reply.
+        self.notifications: list[dict[str, Any]] = []
         # Drain stderr in the background so the subprocess buffer doesn't fill up
         # if the server logs verbosely. We don't assert against stderr — just
         # collect it for diagnostics on failure.
@@ -204,6 +208,8 @@ class McpClient:
             # Preserve concurrent responses until their caller asks for that id.
             if isinstance(msg.get("id"), int):
                 self._pending_responses[msg["id"]] = msg
+            elif "method" in msg:
+                self.notifications.append(msg)
         raise TimeoutError(f"Timed out waiting for response id={expected_id}")
 
     def initialize(self) -> dict[str, Any]:
@@ -2057,7 +2063,11 @@ class TestYamlManifest:
         catalog = '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" run-tool="run_recipe_query"/>'
         assert catalog in text, text
         assert text.index(catalog) < text.index("<skills count="), text
-        assert text.endswith("</skills>"), text
+        # The decorations are the tail of the *body*; the framework's own
+        # unfetched-skill nudge (mcp-methods 0.4.11) is appended after it.
+        body, _, nudge = text.partition("</skills>")
+        assert "<skills count=" in body, text
+        assert 'skill("graph_overview")' in nudge, text
 
     def test_present_catalog_exposes_recipe_prompt_and_injects_referenced_tools(self, graph_with_manifest: Path):
         client = _spawn(["--graph", str(graph_with_manifest)])
@@ -2070,8 +2080,12 @@ class TestYamlManifest:
         assert "recipe_queries" in prompts
         for name in ("list_recipe_queries", "run_recipe_query", "cypher_query"):
             assert "mcp-skill:recipe_queries" in tools[name], name
+        # Lazy tier (mcp-methods 0.4.11): the routing line lands in every
+        # referenced tool, the body is fetched with `skill("recipe_queries")`.
         injected = " ".join(tools["run_recipe_query"].split())
-        assert "fall back to raw `cypher_query`" in injected
+        assert "boot-validated named Cypher recipes" in injected, injected
+        assert 'skill("recipe_queries")' in injected, injected
+        assert "fall back to raw `cypher_query`" not in injected, injected
 
     def test_absent_and_empty_catalogs_expose_no_recipe_skill(self, graph_with_manifest: Path):
         for label, catalog_yaml in (
@@ -2358,16 +2372,24 @@ class TestExploreAndSkills:
             client.shutdown()
         assert "Entry points" in text and "hub" in text
 
-    def test_explore_skill_injected_into_tool_description(self, code_graph_fixture):
-        """skills: true → the bundled `explore` skill body is injected into the
-        explore tool's description (serve_prompts auto-inject)."""
+    def test_explore_skill_routes_into_its_tool_description_without_the_body(self, code_graph_fixture):
+        """skills: true → the bundled `explore` skill's routing is injected into
+        the explore tool's description, and its body is not: `explore` is lazy
+        (the mcp-methods 0.4.11 default), so the body arrives via
+        `skill("explore")`."""
         kgl = code_graph_fixture
         client = _spawn(["--graph", str(kgl), "--mcp-config", str(kgl.parent / "demo_mcp.yaml")])
         try:
             tools = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            body = _text_content(client.call_tool("skill", {"name": "explore"}))
         finally:
             client.shutdown()
-        assert "## Methodology" in tools["explore"], tools["explore"][:200]
+        assert "mcp-skill:explore" in tools["explore"], tools["explore"][:400]
+        assert "## When to use" in tools["explore"], tools["explore"][:400]
+        assert 'skill("explore")' in tools["explore"], tools["explore"][:400]
+        assert "## Source-budget cap" not in tools["explore"], tools["explore"][:400]
+        # Not merely withheld — reachable, whole, on request.
+        assert "## Source-budget cap" in body, body[-400:]
 
     def test_cross_tool_skills_inject_via_references_tools(self, code_graph_fixture):
         """code_graph_analysis / code_graph_views are cross-tool skills (named
@@ -2389,9 +2411,14 @@ class TestExploreAndSkills:
         assert "mcp-skill:code_graph_views" in tools["cypher_query"]
         assert "is_benchmark" in tools["cypher_query"]
 
-    def test_predicate_activation_is_boot_scoped_on_prompts_and_tool_descriptions(
+    def test_load_graph_re_resolves_predicates_on_prompts_and_tool_descriptions(
         self, graph_fixture: Path, tmp_path: Path
     ):
+        """A graph swap re-runs the whole skill resolution against the new
+        graph, so an `applies_when: graph_has_node_type:` gate that was false
+        at boot becomes true — and the one that was true stops being served.
+        Until mcp-methods 0.4.11 the prompt plane was frozen at `serve` and
+        this test asserted the staleness instead."""
         task_graph = tmp_path / "task.kgl"
         graph = kglite.KnowledgeGraph()
         graph.add_nodes(pd.DataFrame({"id": [1], "title": ["Task"]}), "Task", "id", "title")
@@ -2433,12 +2460,17 @@ class TestExploreAndSkills:
 
         assert not _is_error(loaded), _text_content(loaded)
         assert "1" in task_count, task_count
-        assert "person_boot" in prompts_before
-        assert "task_late" not in prompts_before
-        assert prompts_after == prompts_before
-        assert "PERSON-BOOT-MARKER" in description_before
-        assert "TASK-LATE-MARKER" not in description_before
-        assert description_after == description_before
+        assert prompts_before == {"person_boot"}, sorted(prompts_before)
+        assert prompts_after == {"task_late"}, sorted(prompts_after)
+        # The tool description follows the prompt plane: both file-layer skills
+        # are lazy, so what moves is the routing line, not the body.
+        assert "Person boot route." in description_before, description_before[:400]
+        assert "Task late route." not in description_before, description_before[:400]
+        assert "Task late route." in description_after, description_after[:400]
+        assert "Person boot route." not in description_after, description_after[:400]
+        assert "notifications/tools/list_changed" in [n.get("method") for n in client.notifications], (
+            client.notifications
+        )
 
     def test_unknown_skill_predicate_fails_closed_with_visible_warning(self, code_graph_fixture, tmp_path: Path):
         pack = tmp_path / "pack"
@@ -2474,9 +2506,12 @@ class TestExploreAndSkills:
         assert "always_gate" in prompts
         assert "recognized_false" not in prompts
         assert "typo_gate" not in prompts
-        assert "Always marker." in tools["cypher_query"]
-        assert "False marker." not in tools["cypher_query"]
-        assert "Typo marker." not in tools["cypher_query"]
+        # Lazy delivery: what a suppressed skill must not leak is its routing
+        # line, which is all an active one contributes to a description.
+        assert "Always active control." in tools["cypher_query"]
+        assert "False control." not in tools["cypher_query"]
+        assert "Must fail closed." not in tools["cypher_query"]
+        assert "Always marker." not in tools["cypher_query"]
         assert "unknown field" in warning
         assert str(pack / "typo_gate.md") in warning.replace("/./", "/")
 
@@ -2521,13 +2556,128 @@ class TestGraphCarriedSkills:
         # `references_tools` is a list property that had to survive the .kgl
         # round-trip for the injection to land on cypher_query at all.
         assert "mcp-skill:wells" in tools["cypher_query"], tools["cypher_query"][:400]
-        assert "GRAPH-SKILL-MARKER" in tools["cypher_query"]
+        # Lazy is the default tier (mcp-methods 0.4.11): the routing text and a
+        # pointer at the loader, never the body.
+        assert 'skill("wells")' in tools["cypher_query"], tools["cypher_query"][:600]
+        assert "GRAPH-SKILL-MARKER" not in tools["cypher_query"], tools["cypher_query"][:600]
+        assert "skill" in tools, sorted(tools)
         # The bare overview carries the index; a drill-down does not.
         assert "<skills count=" in overview, overview
-        assert "wells \u2014 Well-domain methodology for this graph." in overview, overview
+        assert "wells [lazy] \u2014 Well-domain methodology for this graph." in overview, overview
         assert "<skills count=" not in focused, focused
         # The system label stays out of the graph's own type listing.
         assert "KgliteSkill" not in overview, overview
+
+    def test_the_lazy_flow_nudges_once_then_hands_over_the_body(self, tmp_path: Path):
+        """End-to-end lazy delivery: the agent is told the skill exists on its
+        first call to the tool that advertises it, fetches the body with
+        `skill(name)`, and is not told again.
+
+        The nudge is asserted on `graph_overview`, not `cypher_query`, and the
+        difference is an **upstream gap, not a choice**: mcp-methods composes
+        the footer inside its own typed-tool dispatch, and `cypher_query` is
+        the one kglite tool registered as a raw `ToolRoute` (it needs a custom
+        output schema). The framework exposes no way for a raw route to ask
+        for the notice, so a lazy skill targeting only `cypher_query` never
+        nudges. The two negative assertions below pin that gap: when upstream
+        closes it they go red, which is the signal to delete them."""
+        kgl = tmp_path / "nudged.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_skill(
+            "wells",
+            "Well-domain methodology for this graph.",
+            body="# Wells\n\nGRAPH-SKILL-MARKER: match on `Well`.\n",
+            references_tools=["graph_overview", "cypher_query"],
+        )
+        g.save(str(kgl))
+        manifest = tmp_path / "lazy_mcp.yaml"
+        manifest.write_text("name: Lazy\nskills: true\n", encoding="utf-8")
+
+        client = _spawn(["--graph", str(kgl), "--mcp-config", str(manifest)])
+        try:
+            first = _text_content(client.call_tool("graph_overview", {}))
+            raw_route = _text_content(client.call_tool("cypher_query", {"query": "MATCH (w:Well) RETURN w.id AS id"}))
+            loaded = _text_content(client.call_tool("skill", {"name": "wells"}))
+            second = _text_content(client.call_tool("graph_overview", {}))
+        finally:
+            client.shutdown()
+
+        assert 'skill("wells")' in first, first[-600:]
+        assert "not been loaded" in first, first[-600:]
+        # The loader returns the body verbatim — that is the whole point of the
+        # tier: the methodology is reachable, just not prepaid.
+        assert "GRAPH-SKILL-MARKER" in loaded, loaded[:600]
+        # Silent for `wells` on the second call. `graph_overview` carries its
+        # own bundled lazy skill too, which is still unfetched and still
+        # nudges — assert the skill by name, not the shared footer wording.
+        assert 'skill("wells")' not in second, second[-600:]
+        # The pinned upstream gap.
+        assert 'skill("wells")' not in raw_route, raw_route[-600:]
+
+    def test_an_eager_graph_skill_ships_its_body_and_never_nudges(self, tmp_path: Path):
+        kgl = tmp_path / "eager.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_skill(
+            "wells",
+            "Well-domain methodology for this graph.",
+            body="# Wells\n\nEAGER-SKILL-MARKER: match on `Well`.\n",
+            references_tools=["cypher_query"],
+            delivery="eager",
+        )
+        g.save(str(kgl))
+        manifest = tmp_path / "eager_mcp.yaml"
+        manifest.write_text("name: Eager\nskills: true\n", encoding="utf-8")
+
+        client = _spawn(["--graph", str(kgl), "--mcp-config", str(manifest)])
+        try:
+            tools = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            result = _text_content(client.call_tool("cypher_query", {"query": "MATCH (w:Well) RETURN w.id AS id"}))
+            overview = _text_content(client.call_tool("graph_overview", {}))
+        finally:
+            client.shutdown()
+
+        assert "EAGER-SKILL-MARKER" in tools["cypher_query"], tools["cypher_query"][:600]
+        assert 'skill("wells")' not in tools["cypher_query"], tools["cypher_query"][:600]
+        assert "not been loaded" not in result, result[-600:]
+        assert "wells [eager] \u2014 " in overview, overview
+
+    def test_reload_graph_swaps_the_skill_layer_and_announces_it(self, skill_graph: Path):
+        """The skills a `--graph` server serves describe the file it serves. A
+        `reload_graph` that left the previous graph's methodology injected
+        would point agents at a graph that is no longer there."""
+        manifest = skill_graph.parent / "reload_mcp.yaml"
+        manifest.write_text("name: Reload\nskills: true\n", encoding="utf-8")
+        client = _spawn(["--graph", str(skill_graph), "--mcp-config", str(manifest)])
+        try:
+            before = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            # Rewrite the served file with a different skill, through the same
+            # public API an external rebuilder would use.
+            g = kglite.open(str(skill_graph))
+            g.delete_skill("wells")
+            g.set_skill(
+                "cores",
+                "Core-sample methodology for this graph.",
+                body="# Cores\n\nRELOADED-SKILL-MARKER\n",
+                references_tools=["cypher_query"],
+            )
+            g.save(str(skill_graph))
+            del g
+            reloaded = _text_content(client.call_tool("reload_graph", {}))
+            after = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            overview = _text_content(client.call_tool("graph_overview", {}))
+            notified = [n.get("method") for n in client.notifications]
+        finally:
+            client.shutdown()
+
+        assert "Reloaded" in reloaded, reloaded
+        assert "mcp-skill:wells" in before["cypher_query"]
+        assert "mcp-skill:cores" in after["cypher_query"], after["cypher_query"][:600]
+        assert "mcp-skill:wells" not in after["cypher_query"], after["cypher_query"][:600]
+        assert "cores [lazy] \u2014 " in overview, overview
+        assert "wells [lazy]" not in overview, overview
+        assert "notifications/tools/list_changed" in notified, notified
 
     def test_without_the_skills_opt_in_the_graph_layer_is_silent(self, skill_graph: Path):
         manifest = skill_graph.parent / "unskilled_mcp.yaml"
@@ -2544,6 +2694,8 @@ class TestGraphCarriedSkills:
         assert "mcp-skill:wells" not in tools["cypher_query"]
         assert "GRAPH-SKILL-MARKER" not in tools["cypher_query"]
         assert "<skills count=" not in overview, overview
+        # No skills means no loader — the zero-skills boot path grows no tools.
+        assert "skill" not in tools, sorted(tools)
 
     def test_a_graph_skill_named_after_a_bundled_one_replaces_it(self, tmp_path: Path):
         kgl = tmp_path / "override.kgl"
@@ -2565,7 +2717,11 @@ class TestGraphCarriedSkills:
         finally:
             client.shutdown()
 
-        assert "OVERRIDE-MARKER" in description, description[:400]
+        # A graph skill defaults to lazy, so what the description carries is
+        # the override's *routing*, and the body it replaced is gone with it.
+        assert "This graph's own Cypher methodology." in description, description[:400]
+        assert 'skill("cypher_query")' in description, description[:400]
+        assert "OVERRIDE-MARKER" not in description, description[:400]
         # The bundled cypher_query body is gone — that is the documented
         # override, not a merge.
         assert "200 data rows" not in description, description[:400]
@@ -2627,11 +2783,14 @@ class TestGraphCarriedSkills:
 
         assert "good" in prompts, sorted(prompts)
         assert "blank" not in prompts, sorted(prompts)
-        assert "GOOD-MARKER" in tools["cypher_query"]
+        assert "mcp-skill:good" in tools["cypher_query"], tools["cypher_query"][:600]
         # Bundled skills survive a bad sibling — one malformed blob reaching
         # the registry would take every skill in the session with it.
         assert "mcp-skill:graph_overview" in tools["graph_overview"]
         assert "1 served" in boot and "1 skipped: blank:" in boot, boot
+        # The boot line attributes the layer now that provenance survives
+        # resolution (mcp-methods 0.4.11).
+        assert "1 active as owned:graph" in boot, boot
 
     def test_a_workspace_mode_server_reads_no_graph_layer_and_still_indexes(self, tmp_path: Path):
         project = tmp_path / "ws"
@@ -2653,6 +2812,7 @@ class TestGraphCarriedSkills:
         # Bundled/file skills still resolve, and the index still renders.
         assert "cypher_query" in prompts, sorted(prompts)
         assert "<skills count=" in overview, overview
+        assert "cypher_query [eager] \u2014 " in overview, overview
 
 
 # ── Test: graph-carried recipes (KgliteRecipe nodes inside the .kgl) ──────

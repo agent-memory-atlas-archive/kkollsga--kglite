@@ -49,6 +49,7 @@ fn kglite_server_with_csv(
         builtins,
         OverviewDecorations::default(),
         csv,
+        crate::skills::SkillRefresher::default(),
     );
     crate::boot::apply_response_preview(server)
 }
@@ -406,6 +407,7 @@ async fn navigation_targets_compose_with_the_advertised_collision_safe_action() 
         Builtins::default(),
         OverviewDecorations::default(),
         Arc::default(),
+        crate::skills::SkillRefresher::default(),
     );
     let client = boot(crate::boot::apply_response_preview(server)).await;
     let bounded = call_client(
@@ -802,7 +804,11 @@ async fn no_active_graph_is_an_error_on_every_graph_route() {
     }
 
     let mut server = McpServer::new(Default::default());
-    register_graph_mode_tools(&mut server, GraphState::default());
+    register_graph_mode_tools(
+        &mut server,
+        GraphState::default(),
+        crate::skills::SkillRefresher::default(),
+    );
     let result = call(server, "reload_graph", json!({})).await;
     assert_error(&result, &format!("reload_graph error: {NO_GRAPH}"));
 }
@@ -838,7 +844,7 @@ async fn reload_graph_failure_is_an_error_envelope() {
     let state = state_with_active(active);
 
     let mut server = McpServer::new(Default::default());
-    register_graph_mode_tools(&mut server, state);
+    register_graph_mode_tools(&mut server, state, crate::skills::SkillRefresher::default());
     let result = call(server, "reload_graph", json!({})).await;
 
     let text = text_of(&result);
@@ -940,6 +946,7 @@ async fn a_failed_bare_overview_keeps_its_discovery_decorations() {
             skills: Default::default(),
         },
         Arc::default(),
+        crate::skills::SkillRefresher::default(),
     );
 
     let result = call(server, "graph_overview", json!({})).await;
@@ -1101,7 +1108,11 @@ async fn reload_graph_refuses_to_discard_unsaved_changes_silently() {
     let (state, _path) = dirty_state(temp.path());
 
     let mut server = McpServer::new(Default::default());
-    register_graph_mode_tools(&mut server, state.clone());
+    register_graph_mode_tools(
+        &mut server,
+        state.clone(),
+        crate::skills::SkillRefresher::default(),
+    );
     let result = call(server, "reload_graph", json!({})).await;
 
     assert_error(&result, &refused_while_dirty("reload_graph"));
@@ -1124,7 +1135,11 @@ async fn reload_graph_with_the_flag_discards_and_re_reads() {
     );
 
     let mut server = McpServer::new(Default::default());
-    register_graph_mode_tools(&mut server, state.clone());
+    register_graph_mode_tools(
+        &mut server,
+        state.clone(),
+        crate::skills::SkillRefresher::default(),
+    );
     let result = call(server, "reload_graph", json!({ "discard_unsaved": true })).await;
 
     let text = assert_success(&result);

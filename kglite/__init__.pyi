@@ -5323,9 +5323,17 @@ class KnowledgeGraph:
     # ``bundled < graph-carried < declared directories < <graph>.skills/``.
     # A graph skill named after a bundled one (``cypher_query``) therefore
     # replaces it — that is the documented way to override framework guidance.
-    # The server reads the layer **once, at boot**: writing a skill into a
-    # graph a server already has open needs a server restart (or a
-    # ``reload_graph``) before an agent sees it.
+    # The server reads the layer at boot and re-reads it whenever the served
+    # graph is swapped, so writing a skill into a graph file an MCP server
+    # already has open reaches agents on the next ``reload_graph`` /
+    # ``load_graph``, without a restart.
+    #
+    # ``delivery`` picks how much of the skill a tool description carries.
+    # ``"lazy"`` (the default) advertises the name and description and leaves
+    # the body to be fetched with the server's ``skill(name)`` tool on demand;
+    # ``"eager"`` inlines the whole body into every referenced tool's
+    # description at resolution time. Reach for ``"eager"`` only when the body
+    # has to shape the *first* call's arguments.
 
     def list_skills(self) -> list[dict[str, Any]]:
         """List the skills stored in this graph, sorted by name.

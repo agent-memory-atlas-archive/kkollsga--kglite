@@ -2,17 +2,22 @@
 //! the conditionally bundled recipe-query skill, and the graph-aware
 //! predicate evaluator that gates skills on the active graph's shape.
 
-use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Result};
 use kglite::api::skills::{self as graph_skills, SkillRecord};
 use mcp_methods::server::{
-    serve_prompts, BundledSkill, Manifest, McpServer, PredicateClause, ResolvedRegistry,
-    ServerOptions, SkillError, SkillPredicateEvaluator, SkillRegistry,
+    notify_skills_changed, serve_prompts, ActiveSkill, BundledSkill, Manifest, McpServer,
+    OwnedSkill, PredicateClause, ResolvedRegistry, ServerOptions, SkillError,
+    SkillPredicateEvaluator, SkillProvenance, SkillRegistry, SkillReloader,
 };
 
-use crate::tools::{GraphState, SkillsIndexSlot};
+use crate::tools::{read_lock, write_lock, GraphState, PeerSlot, SkillsIndexSlot};
 use crate::*;
+
+/// The label this binary gives its owned skill layer, rendered by
+/// mcp-methods as `owned:graph` wherever provenance is shown.
+pub(crate) const GRAPH_LAYER_LABEL: &str = "graph";
 
 /// Client-side tool-discovery steer, folded into workspace-mode
 /// `instructions` so every `--workspace` / `workspace.kind: local`
@@ -31,7 +36,7 @@ path is unavailable.";
 
 pub(crate) const RECIPE_QUERIES_SKILL: &str = include_str!("../skills/recipe_queries.md");
 
-/// Compose and serve the skill registry for a manifest-backed deployment.
+/// Compose the skill registry for a manifest-backed deployment.
 ///
 /// Bundled methodology for KGLite's custom tools, the optional recipe catalog,
 /// framework defaults and the graph's own `KgliteSkill` records are composed
@@ -39,21 +44,18 @@ pub(crate) const RECIPE_QUERIES_SKILL: &str = include_str!("../skills/recipe_que
 /// packs. The predicate evaluator gates `read_code_source` on
 /// `graph_has_node_type: [Function, Class]` so it stays out of prompts/list
 /// when the active graph isn't a code-tree (legal-corpus / o&g / etc.
-/// deployments). A registry that fails to build disables skills for the
-/// session rather than failing boot — except for the one failure an operator
-/// can fix by reading the message; see [`report_registry_failure`].
+/// deployments).
 ///
-/// Fills `skills_index` with the bare-`graph_overview` index of everything
-/// this session actually serves, and returns what the graph layer contributed
-/// so the boot summary can name it.
-pub(crate) fn install_skills(
-    server: &mut McpServer,
+/// Separate from [`install_skills`] because the composition is re-run against
+/// whatever graph is active *now* whenever the served graph is swapped — see
+/// [`SkillRefresher`]. Boot and reload therefore build the registry the same
+/// way rather than drifting apart.
+fn compose_registry(
     manifest: &Manifest,
     mode: &Mode,
     graph_state: &GraphState,
     recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
-    skills_index: &SkillsIndexSlot,
-) -> Result<GraphSkillStats> {
+) -> (Result<ResolvedRegistry, SkillError>, GraphSkillStats) {
     // Skill `.md` bodies live at `crates/kglite-mcp-server/skills/` — the
     // single canonical home. `cargo publish` only packages files inside
     // the crate dir, so they must live here (not behind a
@@ -92,19 +94,20 @@ pub(crate) fn install_skills(
             name: "code_graph_views",
             body: include_str!("../skills/code_graph_views.md"),
         });
-    let mut registry =
+    let registry =
         add_recipe_query_skill(registry, recipe_catalog_summary).merge_framework_defaults();
 
-    // The graph layer sits between the compile-time bundled skills (this
-    // crate's and the framework's) and the operator's file layers: `finalise`
-    // resolves the bundled vector last-wins, so appending here makes a graph
-    // skill beat a bundled one of the same name (the documented override)
-    // while a declared pack or `<basename>.skills/` still beats the graph.
-    // Pinned by `graph_layer_beats_bundled_and_loses_to_the_project_layer`.
+    // The graph layer is an *owned* layer (mcp-methods 0.4.11), which the
+    // framework slots between the compile-time bundled skills — this crate's
+    // and its own — and the operator's file layers. So a graph skill beats a
+    // bundled one of the same name (the documented override) while a declared
+    // pack or `<basename>.skills/` still beats the graph. Pinned by
+    // `graph_layer_beats_bundled_and_loses_to_the_project_layer`.
     let (graph_layer, graph_stats) = graph_skill_layer(read_graph_skills(mode, graph_state));
-    for skill in graph_layer {
-        registry = registry.add_bundled(skill);
-    }
+    let registry = registry.add_layer(
+        graph_layer,
+        SkillProvenance::Owned(GRAPH_LAYER_LABEL.to_string()),
+    );
 
     let registry_result = registry
         .auto_detect_project_layer(&manifest.yaml_path)
@@ -115,14 +118,55 @@ pub(crate) fn install_skills(
             })
             .finalise()
         });
+    (registry_result, graph_stats)
+}
+
+/// Compose, serve and index the skill registry at boot.
+///
+/// A registry that fails to build disables skills for the session rather than
+/// failing boot — except for the one failure an operator can fix by reading
+/// the message; see [`report_registry_failure`].
+///
+/// Fills `skills_index` with the bare-`graph_overview` index of everything
+/// this session actually serves, and returns what the graph layer contributed
+/// so the boot summary can name it.
+pub(crate) fn install_skills(
+    server: &mut McpServer,
+    manifest: &Manifest,
+    mode: &Mode,
+    graph_state: &GraphState,
+    recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
+    skills_index: &SkillsIndexSlot,
+) -> Result<GraphSkillStats> {
+    let (registry_result, mut graph_stats) =
+        compose_registry(manifest, mode, graph_state, recipe_catalog_summary);
     match registry_result {
         Ok(registry) => {
-            serve_prompts(&registry, server);
-            let index = render_skills_index(&registry, server, &manifest.extensions);
-            *crate::tools::write_lock(skills_index) = index;
+            log_parse_warnings(&registry);
+            let active = serve_prompts(&registry, server);
+            graph_stats.attribute(&active);
+            *write_lock(skills_index) = render_skills_index(&active);
             Ok(graph_stats)
         }
         Err(e) => report_registry_failure(e, &manifest.yaml_path).map(|()| graph_stats),
+    }
+}
+
+/// Surface the registry's own per-entry complaints.
+///
+/// Owned-layer entries that the framework refuses — a body over its 16 KiB
+/// hard limit, frontmatter whose `name` disagrees with the record's — are
+/// `ParseWarning`s rather than errors, so nothing else in the session says the
+/// skill is missing. [`graph_skill_layer`] catches the same classes first and
+/// reports them on the boot line; this is the second net, and it also covers
+/// the operator's file layers.
+fn log_parse_warnings(registry: &ResolvedRegistry) {
+    for warning in registry.parse_warnings() {
+        tracing::warn!(
+            path = %warning.path.display(),
+            error = %warning.error,
+            "skill entry skipped"
+        );
     }
 }
 
@@ -137,9 +181,30 @@ pub(crate) struct GraphSkillStats {
     pub(crate) body_bytes: usize,
     /// One `name: reason` per record that was skipped, in graph order.
     pub(crate) skipped: Vec<String>,
+    /// How many of the served records reached the **active** set under the
+    /// `owned:graph` provenance — i.e. won their name against every other
+    /// layer and passed `applies_when:`. `None` until the registry has been
+    /// resolved and served; `Some(n)` with `n < served` means an operator file
+    /// or an `applies_when:` gate took the difference.
+    pub(crate) active: Option<usize>,
 }
 
 impl GraphSkillStats {
+    /// Read the post-activation truth back out of the resolved set.
+    ///
+    /// [`graph_skill_layer`] only knows what was *handed* to the registry;
+    /// which of those the agent can actually reach is settled by resolution,
+    /// and mcp-methods 0.4.11's `ActiveSkill::provenance` is what makes the
+    /// graph's contribution distinguishable from the bundled and file layers.
+    fn attribute(&mut self, active: &[ActiveSkill]) {
+        self.active = Some(
+            active
+                .iter()
+                .filter(|skill| is_graph_provenance(&skill.provenance))
+                .count(),
+        );
+    }
+
     /// Boot-summary fragment, or `None` when the graph carried nothing —
     /// silence is the right report for the overwhelmingly common case.
     pub(crate) fn summary(&self) -> Option<String> {
@@ -150,6 +215,9 @@ impl GraphSkillStats {
             "graph skills: {} served ({} B)",
             self.served, self.body_bytes
         );
+        if let Some(active) = self.active {
+            text.push_str(&format!(", {active} active as owned:{GRAPH_LAYER_LABEL}"));
+        }
         if !self.skipped.is_empty() {
             text.push_str(&format!(
                 ", {} skipped: {}",
@@ -159,6 +227,11 @@ impl GraphSkillStats {
         }
         Some(text)
     }
+}
+
+/// Whether a resolved skill came from this binary's graph layer.
+fn is_graph_provenance(provenance: &SkillProvenance) -> bool {
+    matches!(provenance, SkillProvenance::Owned(label) if label == GRAPH_LAYER_LABEL)
 }
 
 /// Read the active graph's `KgliteSkill` records, bodies included.
@@ -184,15 +257,15 @@ fn read_graph_skills(mode: &Mode, graph_state: &GraphState) -> Vec<SkillRecord> 
         .unwrap_or_default()
 }
 
-/// Turn skill records into the bundled entries `add_bundled` takes.
+/// Turn skill records into the [`OwnedSkill`] entries `add_layer` takes.
 ///
 /// Validation is **per record**: anything a hand-written `CREATE` could put in
 /// the graph that the registry would choke on is dropped here with a warning
-/// naming the skill and the rule, and its siblings still load. One malformed
-/// body reaching `finalise` would fail the whole build, and
-/// [`report_registry_failure`] turns that into a session with *every* skill
-/// silently gone — bundled ones included.
-fn graph_skill_layer(records: Vec<SkillRecord>) -> (Vec<BundledSkill>, GraphSkillStats) {
+/// naming the skill and the rule, and its siblings still load. The framework
+/// would demote the same faults to `ParseWarning`s in the owned layer, but it
+/// reports them by *path*, and a graph record has none — a skipped record must
+/// name itself on the boot line, which is where an operator looks.
+fn graph_skill_layer(records: Vec<SkillRecord>) -> (Vec<OwnedSkill>, GraphSkillStats) {
     let mut layer = Vec::with_capacity(records.len());
     let mut stats = GraphSkillStats::default();
     for record in records {
@@ -214,57 +287,184 @@ fn graph_skill_layer(records: Vec<SkillRecord>) -> (Vec<BundledSkill>, GraphSkil
         }
         stats.served += 1;
         stats.body_bytes += record.body.len();
-        // `Box::leak` is the mcp-methods 0.4.10 stopgap: `add_bundled` takes
-        // `&'static str`, and 0.4.11's `Registry::add_layer` takes owned
-        // strings. Pinning 0.4.11 deletes these two leaks and this comment.
-        // Bounded: once per boot, one allocation per validated skill.
-        layer.push(BundledSkill {
-            name: Box::leak(record.name.into_boxed_str()),
-            body: Box::leak(rendered.into_boxed_str()),
+        layer.push(OwnedSkill {
+            name: record.name,
+            body: rendered,
         });
     }
     (layer, stats)
 }
 
-/// Render the bare-`graph_overview` skills index: one `name — summary` line
-/// per skill this session actually serves, sorted by name.
+/// Render the bare-`graph_overview` skills index: one
+/// `name [tier] — summary` line per skill this session actually serves,
+/// sorted by name.
 ///
-/// "Actually serves" is [`ResolvedRegistry::activation_for`] against the same
-/// state `serve_prompts` used — the closed tool surface and the manifest's
-/// `extensions:` — so a skill suppressed by its `applies_when:` gate is absent
-/// from the index for the same reason it is absent from `prompts/list`.
-/// `None` when nothing is active, which leaves the overview byte-identical to
-/// a deployment that never opted in.
-fn render_skills_index(
-    registry: &ResolvedRegistry,
-    server: &mut McpServer,
-    extensions: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    let registered: HashSet<String> = server
-        .tool_router_mut()
-        .list_all()
+/// Built from the active set mcp-methods 0.4.11 returns from `serve_prompts`
+/// (and keeps behind `McpServer::active_skills`), not from a second
+/// activation pass of our own: a skill is listed here for exactly the reason
+/// it is in `prompts/list`, and the two cannot answer differently.
+///
+/// The tier is load-bearing for the reader. A `[lazy]` skill's body is *not*
+/// in its target tools' descriptions, so an agent that reads this index has to
+/// know the line is an invitation to call `skill(name)` and not a summary of
+/// something it already has. `None` when nothing is active, which leaves the
+/// overview byte-identical to a deployment that never opted in.
+fn render_skills_index(active: &[ActiveSkill]) -> Option<String> {
+    let lines: Vec<String> = active
         .iter()
-        .map(|tool| tool.name.to_string())
-        .collect();
-    let lines: Vec<String> = registry
-        .skill_names()
-        .iter()
-        .filter_map(|name| registry.get(name).map(|skill| (name, skill)))
-        .filter(|(_, skill)| {
-            registry
-                .activation_for(skill, &registered, extensions)
-                .active
+        .map(|skill| {
+            format!(
+                "{} [{}] \u{2014} {}",
+                skill.name,
+                skill.delivery,
+                skill_summary(&skill.description)
+            )
         })
-        .map(|(name, skill)| format!("{name} \u{2014} {}", skill_summary(skill.description())))
         .collect();
     if lines.is_empty() {
         return None;
     }
     Some(format!(
-        "<skills count=\"{}\" get-via=\"prompts/get\">\n{}\n</skills>",
+        "<skills count=\"{}\" get-via=\"skill(name)\">\n{}\n</skills>",
         lines.len(),
         lines.join("\n")
     ))
+}
+
+/// Rebuilds the skill layer against whatever graph is active *now*.
+///
+/// A graph swap (`reload_graph`, `load_graph`, `create_graph`) replaces the
+/// data the graph layer was read from, so the skills resolved at boot describe
+/// a graph the server no longer serves. mcp-methods 0.4.11 is the first cut
+/// that can fix that after `serve`: [`SkillReloader::reinject_skills`] strips
+/// the previous injection and re-runs the pass from `&self`.
+///
+/// Armed **after** `install_skills` — the composition it re-runs needs the
+/// closed tool surface — and only in the two modes whose graph layer is read
+/// at boot (see [`read_graph_skills`]); elsewhere a rebuild would recompose a
+/// byte-identical registry and spend a `tools/list_changed` on nothing.
+/// The recipe catalogue is deliberately *not* rebuilt: its routes are fixed
+/// tool names settled before the allowlist, and the catalogue is documented
+/// immutable after boot.
+///
+/// **One swap path does not refresh: the per-call freshness re-read**
+/// (`GraphState::ensure_graph_fresh`, which re-opens the served file when the
+/// bytes on disk change under a `--graph` server). It runs from inside the
+/// graph's own write path, where re-reading the skill records would take the
+/// read lock the swap still holds. A server whose file is rebuilt externally
+/// therefore keeps the skills it booted with until something calls
+/// `reload_graph`.
+#[derive(Clone, Default)]
+pub(crate) struct SkillRefresher {
+    inner: Arc<RwLock<Option<Box<RefreshInner>>>>,
+}
+
+struct RefreshInner {
+    reloader: SkillReloader,
+    manifest: Manifest,
+    mode: Mode,
+    graph_state: GraphState,
+    recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
+    skills_index: SkillsIndexSlot,
+    peer: PeerSlot,
+}
+
+impl SkillRefresher {
+    /// Fill the slot the graph-swap handlers already hold a clone of.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn arm(
+        &self,
+        reloader: SkillReloader,
+        manifest: &Manifest,
+        mode: &Mode,
+        graph_state: &GraphState,
+        recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
+        skills_index: &SkillsIndexSlot,
+        peer: &PeerSlot,
+    ) {
+        if !matches!(mode, Mode::Graph { .. } | Mode::Watch { .. }) {
+            return;
+        }
+        *write_lock(&self.inner) = Some(Box::new(RefreshInner {
+            reloader,
+            manifest: manifest.clone(),
+            mode: mode.clone(),
+            graph_state: graph_state.clone(),
+            recipe_catalog_summary,
+            skills_index: skills_index.clone(),
+            peer: peer.clone(),
+        }));
+    }
+
+    /// Re-resolve and re-inject. Called from a graph-swap tool handler after
+    /// the swap has succeeded; a no-op on an unarmed refresher, which is every
+    /// mode that contributes no graph layer.
+    ///
+    /// Failures are logged, never returned: the swap the caller performed did
+    /// succeed, and turning a stale skill layer into a failed `reload_graph`
+    /// would be a worse answer than a warning in the log.
+    pub(crate) fn refresh(&self) {
+        let guard = read_lock(&self.inner);
+        let Some(inner) = guard.as_deref() else {
+            return;
+        };
+        let (registry_result, stats) = compose_registry(
+            &inner.manifest,
+            &inner.mode,
+            &inner.graph_state,
+            inner.recipe_catalog_summary,
+        );
+        let registry = match registry_result {
+            Ok(registry) => registry,
+            Err(error) => {
+                tracing::warn!(%error, "skill layer not rebuilt after the graph swap");
+                return;
+            }
+        };
+        log_parse_warnings(&registry);
+        let active = match inner.reloader.reinject_skills(&registry) {
+            Ok(active) => active,
+            Err(refusal) => {
+                tracing::warn!("{refusal}");
+                return;
+            }
+        };
+        *write_lock(&inner.skills_index) = render_skills_index(&active);
+        tracing::info!(
+            skills = active.len(),
+            graph_skills = stats.served,
+            "skill layer rebuilt after the graph swap"
+        );
+        notify_peer(&inner.peer);
+    }
+}
+
+/// Send `tools/list_changed` + `prompts/list_changed` for a rebuilt layer.
+///
+/// The peer is the one thing `reinject_skills` cannot do for us: it stores no
+/// peers, and a dynamically registered tool handler is a plain
+/// `Fn(Args) -> Result<String, String>` with no `RequestContext` in reach. So
+/// the peer is captured from the `RunningService` `serve` returns and
+/// published into [`PeerSlot`], which this reads. The notification itself is
+/// `async`, and the handler is not, so it goes onto the ambient runtime — the
+/// handler is dispatched from one. A client that never sees the notification
+/// keeps serving its cached `tools/list` until it re-lists, which is why this
+/// logs rather than failing quietly.
+fn notify_peer(peer: &PeerSlot) {
+    let Some(peer) = read_lock(peer).clone() else {
+        tracing::warn!("skills rebuilt before the client connected; tools/list_changed not sent");
+        return;
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                if let Err(error) = notify_skills_changed(&peer).await {
+                    tracing::warn!(%error, "tools/list_changed notification failed");
+                }
+            });
+        }
+        Err(_) => tracing::warn!("no async runtime in reach; tools/list_changed not sent"),
+    }
 }
 
 /// The one line an agent reads about a skill in the overview index: the
@@ -689,6 +889,61 @@ mod bundled_skill_body_tests {
         assert!(body.contains("openCypher"));
     }
 
+    /// **Delivery tiers are a shipped contract, not a preference.** Since
+    /// mcp-methods 0.4.11 an absent `delivery:` key means `lazy`: the body
+    /// stays out of `tools/list` and reaches the agent through `skill(name)`.
+    /// `cypher_query` is the one exception — its body shapes the first call's
+    /// `query` argument, which is what the eager tier is reserved for. Every
+    /// other bundled skill here routes a call the agent can already make, so
+    /// marking one eager silently puts its whole body back into every
+    /// deployment's tool list; this is the test that goes red instead.
+    #[test]
+    fn only_the_cypher_skill_ships_on_the_eager_tier() {
+        let eager = "delivery: eager";
+        assert!(
+            include_str!("../skills/cypher_query.md").contains(eager),
+            "cypher_query must stay eager — its body shapes the first query"
+        );
+        for (name, body) in [
+            (
+                "graph_overview",
+                include_str!("../skills/graph_overview.md"),
+            ),
+            ("save_graph", include_str!("../skills/save_graph.md")),
+            (
+                "read_code_source",
+                include_str!("../skills/read_code_source.md"),
+            ),
+            ("explore", include_str!("../skills/explore.md")),
+            (
+                "code_graph_analysis",
+                include_str!("../skills/code_graph_analysis.md"),
+            ),
+            (
+                "code_graph_views",
+                include_str!("../skills/code_graph_views.md"),
+            ),
+            (
+                "recipe_queries",
+                include_str!("../skills/recipe_queries.md"),
+            ),
+        ] {
+            let frontmatter = body.split("\n---").next().unwrap_or_default();
+            assert!(
+                !frontmatter.contains(eager),
+                "{name} declares `delivery: eager`: that returns its whole body to \
+                 every tool description. Argue the first-call-parameter case here first."
+            );
+            let declared = frontmatter
+                .lines()
+                .find(|line| line.starts_with("delivery:"));
+            assert!(
+                declared.is_none_or(|line| line.trim_end() == "delivery: lazy"),
+                "{name} declares an unrecognised delivery tier: {declared:?}"
+            );
+        }
+    }
+
     /// The bundled examples are copied into live tool descriptions, where an
     /// invalid call shape sends agents to the wrong route without a compiler
     /// error. Keep the examples aligned with the registered zero-argument save
@@ -745,13 +1000,12 @@ mod graph_skill_tests {
         manifest: &Path,
     ) -> (ResolvedRegistry, GraphSkillStats) {
         let (layer, stats) = graph_skill_layer(records);
-        let mut registry = SkillRegistry::new().add_bundled(BundledSkill {
-            name: "cypher_query",
-            body: include_str!("../skills/cypher_query.md"),
-        });
-        for skill in layer {
-            registry = registry.add_bundled(skill);
-        }
+        let registry = SkillRegistry::new()
+            .add_bundled(BundledSkill {
+                name: "cypher_query",
+                body: include_str!("../skills/cypher_query.md"),
+            })
+            .add_layer(layer, SkillProvenance::Owned(GRAPH_LAYER_LABEL.to_string()));
         let resolved = registry
             .auto_detect_project_layer(manifest)
             .layer_dirs(source, manifest)
@@ -761,15 +1015,40 @@ mod graph_skill_tests {
         (resolved, stats)
     }
 
-    fn served_with_tools(
-        registry: &ResolvedRegistry,
-        tools: &[&'static str],
-    ) -> (Vec<String>, std::collections::HashMap<String, String>) {
+    /// A booted server with `tools` registered and `registry` served.
+    struct Served {
+        prompts: Vec<String>,
+        descriptions: std::collections::HashMap<String, String>,
+        active: Vec<ActiveSkill>,
+        server: McpServer,
+    }
+
+    impl Served {
+        fn description(&self, tool: &str) -> &str {
+            self.descriptions
+                .get(tool)
+                .map(String::as_str)
+                .unwrap_or_default()
+        }
+
+        /// Tool names the client would see in `tools/list` — `list_all` skips
+        /// disabled routes, which is what an allowlist leaves behind.
+        fn listed_tools(&mut self) -> Vec<String> {
+            self.server
+                .tool_router_mut()
+                .list_all()
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect()
+        }
+    }
+
+    fn served_with_tools(registry: &ResolvedRegistry, tools: &[&'static str]) -> Served {
         let mut server = McpServer::new(ServerOptions::default());
         for name in tools {
             server.register_typed_tool::<EmptyArgs, _>(name, "base", |_| "ok".to_string());
         }
-        serve_prompts(registry, &mut server);
+        let active = serve_prompts(registry, &mut server);
         let prompts = server
             .prompt_router_mut()
             .list_all()
@@ -787,7 +1066,12 @@ mod graph_skill_tests {
                 )
             })
             .collect();
-        (prompts, descriptions)
+        Served {
+            prompts,
+            descriptions,
+            active,
+            server,
+        }
     }
 
     #[test]
@@ -812,11 +1096,117 @@ mod graph_skill_tests {
         assert_eq!(stats.body_bytes, "# Wells\n\nMatch on `Well`.\n".len());
         assert!(stats.skipped.is_empty());
 
-        let (prompts, tools) = served_with_tools(&registry, &["cypher_query"]);
-        assert!(prompts.iter().any(|name| name == "wells"), "{prompts:?}");
-        let description = &tools["cypher_query"];
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        assert!(
+            served.prompts.iter().any(|name| name == "wells"),
+            "{:?}",
+            served.prompts
+        );
+        let description = served.description("cypher_query");
         assert!(description.contains("mcp-skill:wells"), "{description}");
         assert!(description.contains("Match on `Well`."), "{description}");
+        // No nudge is possible for an eager skill — the body is already there.
+        assert!(!description.contains("skill(\"wells\")"), "{description}");
+    }
+
+    /// The default tier since mcp-methods 0.4.11: the routing text and a
+    /// pointer at the loader land in the target tool's description, and the
+    /// body does not. A `tools/list` that shipped every graph skill's body was
+    /// the cost this change exists to remove, so the absent body is the
+    /// assertion that matters.
+    #[test]
+    fn a_lazy_graph_skill_points_at_the_loader_instead_of_injecting_its_body() {
+        let (registry, stats) = resolve(
+            vec![record(
+                "wells",
+                "Well methodology.",
+                "# Wells\n\nGRAPH-BODY-MARKER\n",
+                &["cypher_query"],
+            )],
+            &bundled_source(),
+            Path::new("graph_mcp.yaml"),
+        );
+        assert_eq!(stats.served, 1);
+
+        let mut served = served_with_tools(&registry, &["cypher_query"]);
+        let description = served.description("cypher_query").to_string();
+        assert!(description.contains("mcp-skill:wells"), "{description}");
+        assert!(description.contains("## When to use"), "{description}");
+        assert!(description.contains("Well methodology."), "{description}");
+        assert!(description.contains("skill(\"wells\")"), "{description}");
+        assert!(
+            !description.contains("GRAPH-BODY-MARKER"),
+            "a lazy skill must not ship its body in a tool description: {description}"
+        );
+        // The pointer has somewhere to point.
+        assert!(
+            served
+                .listed_tools()
+                .iter()
+                .any(|name| name == mcp_methods::server::SKILL_TOOL_NAME),
+            "{:?}",
+            served.listed_tools()
+        );
+        assert_eq!(
+            served.active.iter().map(|s| s.delivery).collect::<Vec<_>>(),
+            [
+                mcp_methods::server::Delivery::Eager,
+                mcp_methods::server::Delivery::Lazy
+            ],
+            "cypher_query ships eager; the graph skill defaults to lazy"
+        );
+    }
+
+    /// The loader is the framework's, not ours, and it only exists when there
+    /// are skills to load. A registry the opt-in suppressed must not grow one.
+    #[test]
+    fn the_skill_loader_appears_only_when_skills_resolve() {
+        let (registry, _) = resolve(
+            vec![record("wells", "Well methodology.", "Body.\n", &[])],
+            &SkillsSource::Disabled,
+            Path::new("graph_mcp.yaml"),
+        );
+        let mut served = served_with_tools(&registry, &["cypher_query"]);
+        assert!(
+            !served
+                .listed_tools()
+                .iter()
+                .any(|name| name == mcp_methods::server::SKILL_TOOL_NAME),
+            "{:?}",
+            served.listed_tools()
+        );
+    }
+
+    /// `install_skills` never registers a route called `skill`: a downstream
+    /// tool of that name makes the framework abandon lazy delivery for the
+    /// whole session and inject every body eagerly, with a warning nobody
+    /// reads. This walks the real registration path rather than grepping.
+    #[test]
+    fn this_binary_registers_no_tool_named_skill() {
+        let mut server = McpServer::new(ServerOptions::default());
+        crate::tools::register(
+            &mut server,
+            GraphState::new(None),
+            crate::tools::Builtins {
+                writable: true,
+                save_graph: true,
+                ..Default::default()
+            },
+            crate::tools::OverviewDecorations::default(),
+            Arc::new(crate::csv_http::CsvHttpState::Off),
+            SkillRefresher::default(),
+        );
+        crate::tools::register_graph_mode_tools(
+            &mut server,
+            GraphState::new(None),
+            SkillRefresher::default(),
+        );
+        assert!(
+            !server
+                .tool_router_mut()
+                .has_route(mcp_methods::server::SKILL_TOOL_NAME),
+            "a kglite route named `skill` would disable lazy delivery framework-wide"
+        );
     }
 
     #[test]
@@ -853,17 +1243,19 @@ mod graph_skill_tests {
         // not by the reader — but nothing it produced is served.
         assert_eq!(stats.served, 1);
         assert!(registry.is_empty(), "{:?}", registry.skill_names());
-        let (prompts, _) = served_with_tools(&registry, &["cypher_query"]);
-        assert!(prompts.is_empty(), "{prompts:?}");
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        assert!(served.prompts.is_empty(), "{:?}", served.prompts);
     }
 
-    /// **Precedence pin (D8).** mcp-methods' `finalise` resolves the bundled
-    /// vector with `HashMap::insert`, i.e. *last* wins, while its own doc
-    /// comment promises "downstream-first". The graph layer is appended after
-    /// every compile-time bundled skill precisely because of the code, not the
-    /// comment. If upstream ever "fixes" `finalise` to match its comment, the
-    /// graph layer silently sinks below bundled and every graph override stops
-    /// working with a green build — this test is what goes red instead.
+    /// **Precedence pin (D8).** The order
+    /// `bundled < owned < inline < declared dirs < <basename>.skills/` is an
+    /// mcp-methods 0.4.11 contract, documented on `Registry::add_layer`, and
+    /// no longer an inference from how `finalise` happens to dedupe — the
+    /// stopgap this pin was written against is gone with the `Box::leak` it
+    /// rode on. It stays because a regression of that contract is invisible
+    /// from here: the graph layer would silently sink below bundled, every
+    /// graph override would stop working, and the build would stay green.
+    /// This is what goes red instead.
     #[test]
     fn graph_layer_beats_bundled_and_loses_to_the_project_layer() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -938,6 +1330,7 @@ mod graph_skill_tests {
             served: 2,
             body_bytes: 640,
             skipped: vec!["blank: bad".to_string()],
+            active: None,
         };
         let summary = stats.summary().expect("summary");
         assert!(
@@ -945,6 +1338,55 @@ mod graph_skill_tests {
             "{summary}"
         );
         assert!(summary.contains("1 skipped: blank: bad"), "{summary}");
+        assert!(
+            !summary.contains("active as"),
+            "nothing resolved yet — the line must not claim an active count: {summary}"
+        );
+    }
+
+    /// `served` counts what the layer *handed over*; `active` is what won
+    /// resolution and is reachable. An operator file that overrides a graph
+    /// skill takes the difference, and 0.4.11's `ActiveSkill::provenance` is
+    /// the first thing that can tell them apart.
+    #[test]
+    fn the_boot_summary_attributes_the_graph_layer_from_the_active_set() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest = temp.path().join("graph_mcp.yaml");
+        let project = temp.path().join("graph_mcp.skills");
+        std::fs::create_dir(&project).expect("project layer");
+        std::fs::write(
+            project.join("wells.md"),
+            "---\nname: wells\ndescription: Operator override.\n\
+             references_tools: [\"cypher_query\"]\n---\n\nFILE BODY\n",
+        )
+        .expect("write project skill");
+
+        let (registry, mut stats) = resolve(
+            vec![
+                record("wells", "Well methodology.", "Body.\n", &["cypher_query"]),
+                record("cores", "Core methodology.", "Body.\n", &["cypher_query"]),
+            ],
+            &bundled_source(),
+            &manifest,
+        );
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        stats.attribute(&served.active);
+
+        assert_eq!(stats.served, 2);
+        assert_eq!(
+            stats.active,
+            Some(1),
+            "the operator's `wells.md` outranks the graph's: {:?}",
+            served.active
+        );
+        let summary = stats.summary().expect("summary");
+        assert!(summary.contains("1 active as owned:graph"), "{summary}");
+        assert!(
+            served.active.iter().any(|skill| skill.name == "wells"
+                && matches!(skill.provenance, SkillProvenance::Project)),
+            "{:?}",
+            served.active
+        );
     }
 
     // ── Reading the layer out of a live graph ──────────────────────────────
@@ -1051,6 +1493,118 @@ mod graph_skill_tests {
         );
     }
 
+    // ── Rebuilding the layer after a graph swap ────────────────────────────
+
+    /// `reload_graph` / `load_graph` / `create_graph` replace the data the
+    /// graph layer was read from, so the skills injected at boot describe a
+    /// graph the server no longer serves. Before mcp-methods 0.4.11 there was
+    /// no way to fix that after `serve` and the staleness was documented; this
+    /// pins the rebuild that replaced the documentation.
+    #[test]
+    fn a_rebuild_swaps_the_old_graphs_skills_for_the_new_ones() {
+        let (before, _) = resolve(
+            vec![record(
+                "wells",
+                "Well methodology.",
+                "Body.\n",
+                &["cypher_query"],
+            )],
+            &bundled_source(),
+            Path::new("graph_mcp.yaml"),
+        );
+        let served = served_with_tools(&before, &["cypher_query"]);
+        assert!(served
+            .description("cypher_query")
+            .contains("mcp-skill:wells"));
+        let index = render_skills_index(&served.active).expect("an index");
+        assert!(index.contains("wells [lazy]"), "{index}");
+
+        let (after, _) = resolve(
+            vec![record(
+                "cores",
+                "Core methodology.",
+                "Body.\n",
+                &["cypher_query"],
+            )],
+            &bundled_source(),
+            Path::new("graph_mcp.yaml"),
+        );
+        let mut server = served.server;
+        let active = server.reinject_skills(&after).expect("rebuild");
+
+        let router = server.tool_router_mut();
+        let description = router
+            .get("cypher_query")
+            .and_then(|tool| tool.description.as_deref())
+            .expect("cypher_query description")
+            .to_string();
+        drop(router);
+        assert!(
+            !description.contains("mcp-skill:wells"),
+            "the replaced graph's skill must be stripped: {description}"
+        );
+        assert!(description.contains("mcp-skill:cores"), "{description}");
+        // And the index the bare overview serves moves with it — an index
+        // still naming `wells` would point `skill("wells")` at a refusal.
+        let index = render_skills_index(&active).expect("an index");
+        assert!(index.contains("cores [lazy]"), "{index}");
+        assert!(!index.contains("wells"), "{index}");
+    }
+
+    /// `extensions.tools_allow` closes the tool surface before
+    /// `install_skills` runs, so the framework's `skill` loader is registered
+    /// after the allowlist has been applied and is never matched against it.
+    /// That exemption is correct and deliberate: the loader is a read-only
+    /// fetch of methodology this deployment already chose to serve, and an
+    /// allowlist that hid it would leave every lazy skill's
+    /// `skill("<name>")` pointer aimed at a tool the agent cannot call. This
+    /// pins the ordering — a future `install_skills` that ran *before* the
+    /// allowlist would silently strip the loader.
+    #[test]
+    fn the_skill_loader_survives_a_tools_allow_that_does_not_name_it() {
+        let (registry, _) = resolve(
+            vec![record(
+                "wells",
+                "Well methodology.",
+                "Body.\n",
+                &["cypher_query"],
+            )],
+            &bundled_source(),
+            Path::new("graph_mcp.yaml"),
+        );
+        let mut server = McpServer::new(ServerOptions::default());
+        server.register_typed_tool::<EmptyArgs, _>("cypher_query", "base", |_| "ok".to_string());
+        server.register_typed_tool::<EmptyArgs, _>("unwanted", "base", |_| "ok".to_string());
+        crate::tools_allow::apply_tool_allowlist(
+            &mut server,
+            &["cypher_query".to_string()],
+            /* recipes_configured */ false,
+        )
+        .expect("apply allowlist");
+        serve_prompts(&registry, &mut server);
+
+        let listed: Vec<String> = server
+            .tool_router_mut()
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert!(
+            listed.iter().any(|name| name == "cypher_query"),
+            "{listed:?}"
+        );
+        assert!(
+            !listed.iter().any(|name| name == "unwanted"),
+            "the allowlist must still close the surface: {listed:?}"
+        );
+        assert!(
+            listed
+                .iter()
+                .any(|name| name == mcp_methods::server::SKILL_TOOL_NAME),
+            "the lazy-skill loader must survive the allowlist: {listed:?}"
+        );
+    }
+
     // ── The overview index ─────────────────────────────────────────────────
 
     #[test]
@@ -1073,14 +1627,20 @@ mod graph_skill_tests {
             &bundled_source(),
             Path::new("graph_mcp.yaml"),
         );
-        let mut server = McpServer::new(ServerOptions::default());
-        server.register_typed_tool::<EmptyArgs, _>("cypher_query", "base", |_| "ok".to_string());
-        let index =
-            render_skills_index(&registry, &mut server, &serde_json::Map::new()).expect("an index");
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        let index = render_skills_index(&served.active).expect("an index");
 
         assert!(index.starts_with("<skills count=\"3\""), "{index}");
         assert!(index.ends_with("</skills>"), "{index}");
-        assert!(index.contains("wells — Well methodology."), "{index}");
+        // The tier, not just the name: a `[lazy]` line is an instruction to
+        // call `skill(name)`, and an agent that cannot tell the two apart
+        // either re-fetches what it has or never fetches what it needs.
+        assert!(
+            index.contains("wells [lazy] — Well methodology."),
+            "{index}"
+        );
+        assert!(index.contains("cypher_query [eager] — "), "{index}");
+        assert!(index.contains("get-via=\"skill(name)\""), "{index}");
         assert!(
             !index.contains("second sentence"),
             "only the first sentence belongs in the index: {index}"
@@ -1088,7 +1648,7 @@ mod graph_skill_tests {
         let names: Vec<&str> = index
             .lines()
             .filter(|line| line.contains(" — "))
-            .map(|line| line.split(" — ").next().unwrap_or_default())
+            .map(|line| line.split(" [").next().unwrap_or_default())
             .collect();
         assert_eq!(names, ["cypher_query", "gated", "wells"]);
     }
@@ -1115,9 +1675,8 @@ mod graph_skill_tests {
             registry.get("needs_route").is_some(),
             "the gated skill must be resolved — the index filters it, not the registry"
         );
-        let mut server = McpServer::new(ServerOptions::default());
-        let index =
-            render_skills_index(&registry, &mut server, &serde_json::Map::new()).expect("an index");
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        let index = render_skills_index(&served.active).expect("an index");
         assert!(index.contains("wells"), "{index}");
         assert!(
             !index.contains("needs_route"),
@@ -1133,11 +1692,8 @@ mod graph_skill_tests {
             &SkillsSource::Disabled,
             Path::new("graph_mcp.yaml"),
         );
-        let mut server = McpServer::new(ServerOptions::default());
-        assert_eq!(
-            render_skills_index(&registry, &mut server, &serde_json::Map::new()),
-            None
-        );
+        let served = served_with_tools(&registry, &[]);
+        assert_eq!(render_skills_index(&served.active), None);
     }
 
     #[test]

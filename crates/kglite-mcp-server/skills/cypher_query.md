@@ -9,6 +9,12 @@ references_tools:
 references_arguments:
   - cypher_query.query
 auto_inject_hint: true
+# The one bundled skill on the eager tier. Cypher has to be written correctly
+# before there is any result to learn from, so this body shapes the very first
+# call's `query` argument — the exact case mcp-methods 0.4.11 reserves `eager`
+# for. Every other bundled skill here is lazy (the default) and is fetched with
+# `skill(name)` when its routing line matches.
+delivery: eager
 ---
 
 # `cypher_query` methodology

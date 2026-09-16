@@ -89,7 +89,7 @@ fn the_skills_index_renders_after_the_catalog_and_only_when_bare() {
         skills: Default::default(),
     };
     *write_lock(&decorations.skills) = Some(
-        "<skills count=\"1\" get-via=\"prompts/get\">\nwells \u{2014} Wells.\n</skills>"
+        "<skills count=\"1\" get-via=\"skill(name)\">\nwells [lazy] \u{2014} Wells.\n</skills>"
             .to_string(),
     );
 
@@ -98,7 +98,7 @@ fn the_skills_index_renders_after_the_catalog_and_only_when_bare() {
         rendered,
         "<schema/>\n\
          <query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>\n\
-         <skills count=\"1\" get-via=\"prompts/get\">\nwells \u{2014} Wells.\n</skills>"
+         <skills count=\"1\" get-via=\"skill(name)\">\nwells [lazy] \u{2014} Wells.\n</skills>"
     );
     assert_eq!(
         decorations.render("<schema/>".to_string(), false),

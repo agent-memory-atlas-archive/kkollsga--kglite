@@ -567,6 +567,9 @@ struct KgliteToolParams<'a> {
     csv_http: Arc<csv_http::CsvHttpState>,
     source_roots_provider: Option<mcp_methods::server::source::SourceRootsProvider>,
     skills_index: tools::SkillsIndexSlot,
+    /// Armed after `install_skills`; the graph-swap handlers hold a clone from
+    /// registration time and drive the post-swap skill rebuild through it.
+    skill_refresher: crate::skills::SkillRefresher,
 }
 
 fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -> Result<()> {
@@ -578,6 +581,7 @@ fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -
         csv_http,
         source_roots_provider,
         skills_index,
+        skill_refresher,
     } = params;
     tools::register(
         server,
@@ -589,6 +593,7 @@ fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -
             skills: skills_index,
         },
         csv_http,
+        skill_refresher,
     );
     code_source::register(server, graph_state.clone(), source_roots_provider.clone())
         .context("read_code_source registration failed")?;
@@ -829,6 +834,11 @@ pub(crate) async fn run_async(
     // Built here and filled by `install_skills` below: the overview route
     // closes over the decorations long before the skill set is known.
     let skills_index = tools::SkillsIndexSlot::default();
+    // Same late-fill shape as `skills_index`, for the same reason: the swap
+    // handlers below are registered long before `install_skills` can hand them
+    // anything to rebuild.
+    let skill_refresher = crate::skills::SkillRefresher::default();
+    let peer_slot = tools::PeerSlot::default();
     register_kglite_tools(
         &mut server,
         KgliteToolParams {
@@ -839,13 +849,14 @@ pub(crate) async fn run_async(
             csv_http: csv_http.clone(),
             source_roots_provider,
             skills_index: skills_index.clone(),
+            skill_refresher: skill_refresher.clone(),
         },
     )?;
     if matches!(mode, Mode::Graph { .. }) {
         // `reload_graph` is graph-mode-only: it re-reads *the* served file, an
         // identity no other mode has. Registered from here rather than inside
         // `tools::register`, because the mode is not otherwise visible there.
-        tools::register_graph_mode_tools(&mut server, graph_state.clone());
+        tools::register_graph_mode_tools(&mut server, graph_state.clone(), skill_refresher.clone());
     }
     if gate_code_tools {
         // Disable, never skip registration: an unregistered name is absent from
@@ -900,6 +911,21 @@ pub(crate) async fn run_async(
         )?,
         None => crate::skills::GraphSkillStats::default(),
     };
+    // After `install_skills`, because the reloader's captured `ServerOptions`
+    // snapshot must be the final one and the composition it re-runs is the one
+    // that just ran. Manifest-less (bare) deployments serve no skills at all,
+    // so there is nothing to rebuild and the refresher stays unarmed.
+    if let Some(m) = manifest.as_ref() {
+        skill_refresher.arm(
+            server.skill_reloader(),
+            m,
+            &mode,
+            &graph_state,
+            recipe_catalog_summary,
+            &skills_index,
+            &peer_slot,
+        );
+    }
 
     print_boot_summary(
         &mode,
@@ -925,6 +951,10 @@ pub(crate) async fn run_async(
         ))
         .await
         .context("failed to start MCP service over stdio")?;
+    // The one handle on the connected client anything downstream can reach:
+    // dynamically registered tool handlers get no `RequestContext`, so a
+    // post-swap `tools/list_changed` has to be announced through this.
+    *tools::write_lock(&peer_slot) = Some(service.peer().clone());
     service.waiting().await?;
     Ok(())
 }

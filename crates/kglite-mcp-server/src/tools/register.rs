@@ -126,6 +126,14 @@ const SAVE_GRAPH_DESCRIPTION_READ_ONLY: &str =
 /// final tool surface the closed router describes.
 pub(crate) type SkillsIndexSlot = Arc<RwLock<Option<String>>>;
 
+/// The connected client's peer handle, published once `serve` has returned it.
+///
+/// A slot for the same reason [`SkillsIndexSlot`] is one, inverted in time: a
+/// tool handler needs the peer to announce a rebuilt tool list, and the peer
+/// only exists *after* every handler has been registered. Empty until then,
+/// and empty forever on a transport that never connects.
+pub(crate) type PeerSlot = Arc<RwLock<Option<rmcp::service::Peer<rmcp::RoleServer>>>>;
+
 /// MCP-layer additions to the bare `graph_overview` response.
 ///
 /// These describe the deployment, not the active graph, so they are captured
@@ -135,16 +143,15 @@ pub(crate) type SkillsIndexSlot = Arc<RwLock<Option<String>>>;
 pub(crate) struct OverviewDecorations {
     pub(crate) prefix: Option<String>,
     pub(crate) catalog: Option<CatalogSummary>,
-    /// Index of the skills this session actually serves, filled once by
-    /// `install_skills`.
+    /// Index of the skills this session actually serves, filled by
+    /// `install_skills` at boot and **refreshed on every graph swap** by
+    /// [`crate::skills::SkillRefresher`].
     ///
-    /// **Written at boot and never refreshed** — deliberately, not a gap. The
-    /// index lists what `prompts/list` serves, and that set is frozen at boot:
-    /// tool handlers hold no router access, so nothing can register, drop or
-    /// re-describe a prompt once the server is running (the same wall
-    /// documented on `code_tools_are_dead`). Re-rendering it after a
-    /// `reload_graph` / `load_graph` would advertise skills the session cannot
-    /// serve, which is worse than leaving it alone.
+    /// Refreshing it is only honest because mcp-methods 0.4.11 can rebuild the
+    /// prompt plane after `serve`: before that the served set was frozen at
+    /// boot and re-rendering the index would have advertised skills the
+    /// session could not serve. The tool *descriptions* move with it now, so
+    /// the index and `prompts/list` still agree.
     pub(crate) skills: SkillsIndexSlot,
 }
 
@@ -234,7 +241,11 @@ pub(crate) fn prepare_overview(
 /// Registered for read-only servers too — a read-only deployment is precisely
 /// the one whose graph is rebuilt by *someone else*, so it needs the refresh
 /// affordance most.
-pub fn register_graph_mode_tools(server: &mut McpServer, state: GraphState) {
+pub fn register_graph_mode_tools(
+    server: &mut McpServer,
+    state: GraphState,
+    skills: crate::skills::SkillRefresher,
+) {
     server.register_typed_tool_fallible::<ReloadGraphArgs, _>(
         "reload_graph",
         "Re-read the served graph file from disk, replacing the in-memory graph — use this \
@@ -254,6 +265,10 @@ pub fn register_graph_mode_tools(server: &mut McpServer, state: GraphState) {
                 Err(refusal) => Err(refusal),
                 Ok(()) => match state.open_or_create(&path, None) {
                     Ok(_) => {
+                        // The reloaded file carries its own `KgliteSkill`
+                        // records; the ones injected at boot describe the graph
+                        // that was just replaced.
+                        skills.refresh();
                         let path = path.display();
                         let load = state
                             .load_count()
@@ -397,8 +412,13 @@ fn cypher_description(csv_enabled: bool, writable: bool, pin: Option<&[String]>)
 /// read-only deployment they would offer a mutation the rest of the surface
 /// refuses. They reuse the existing `GraphState` swap methods, which take the
 /// write lock internally, so a swap cannot race a query in flight.
-fn register_graph_lifecycle_tools(server: &mut McpServer, state: GraphState) {
+fn register_graph_lifecycle_tools(
+    server: &mut McpServer,
+    state: GraphState,
+    skills: crate::skills::SkillRefresher,
+) {
     let s = state.clone();
+    let refresher = skills.clone();
     server.register_typed_tool_fallible::<LoadGraphArgs, _>(
         "load_graph",
         "Load a .kgl file as the new active graph (replaces the current one). Refused \
@@ -407,15 +427,19 @@ fn register_graph_lifecycle_tools(server: &mut McpServer, state: GraphState) {
         move |args| {
             refuse_swap_while_dirty(&s, "load_graph")?;
             match s.load_kgl(Path::new(&args.path)) {
-                Ok(()) => Ok(match s.schema() {
-                    Some((n, e)) => format!("Loaded {} ({n} nodes, {e} edges).", args.path),
-                    None => format!("Loaded {}.", args.path),
-                }),
+                Ok(()) => {
+                    refresher.refresh();
+                    Ok(match s.schema() {
+                        Some((n, e)) => format!("Loaded {} ({n} nodes, {e} edges).", args.path),
+                        None => format!("Loaded {}.", args.path),
+                    })
+                }
                 Err(e) => Err(format!("load_graph error: {e}")),
             }
         },
     );
     let s = state.clone();
+    let refresher = skills;
     server.register_typed_tool_fallible::<CreateGraphArgs, _>(
         "create_graph",
         "Create a fresh, empty graph bound to a path (its save_graph target) and \
@@ -429,7 +453,12 @@ fn register_graph_lifecycle_tools(server: &mut McpServer, state: GraphState) {
                 .as_ref()
                 .map_or(StorageMode::Memory, StorageArg::mode);
             match s.create_in_mode(Path::new(&args.path), mode) {
-                Ok(()) => Ok(format!("Created empty graph at {} (active).", args.path)),
+                Ok(()) => {
+                    // An empty graph carries no skills, so this is what drops
+                    // the previous graph's from the surface.
+                    refresher.refresh();
+                    Ok(format!("Created empty graph at {} (active).", args.path))
+                }
                 Err(e) => Err(format!("create_graph error: {e}")),
             }
         },
@@ -452,6 +481,7 @@ pub fn register(
     builtins: Builtins,
     overview_decorations: OverviewDecorations,
     csv_http: Arc<crate::csv_http::CsvHttpState>,
+    skills: crate::skills::SkillRefresher,
 ) {
     let s = state.clone();
     let csv = csv_http.clone();
@@ -563,6 +593,6 @@ pub fn register(
     }
 
     if builtins.writable {
-        register_graph_lifecycle_tools(server, state);
+        register_graph_lifecycle_tools(server, state, skills);
     }
 }

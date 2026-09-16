@@ -523,11 +523,12 @@ fn check_declared_source_roots(
 /// configuration choice and has no `prompts/list` to ask.
 ///
 /// The count includes graph-carried skills but cannot **attribute** them, and
-/// reports no byte total: `prompts/list` returns names and descriptions only,
-/// and every compile-time and graph-carried skill shares one
-/// `SkillProvenance::Bundled`, which 0.4.10 exposes nowhere on the wire. The
-/// graph layer's own count, byte total and skipped records are on the child's
-/// boot-summary line, which this harness mirrors to stderr.
+/// reports no byte total: this harness speaks MCP to a child process, and
+/// `prompts/list` carries names and descriptions only. Provenance and delivery
+/// tier exist on the server side (mcp-methods 0.4.11 `ActiveSkill`) but not on
+/// the wire, so the graph layer's count, byte total, `owned:graph` attribution
+/// and skipped records reach the operator on the child's boot-summary line,
+/// which this harness mirrors to stderr.
 fn check_skills(
     rpc: &mut Rpc,
     manifest: Option<&Manifest>,

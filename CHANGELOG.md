@@ -29,9 +29,13 @@ before upgrading.
   servers only, since the workspace modes have no graph when skills are
   installed. A record that fails validation is skipped with a warning naming it
   and the rule; its siblings still load. The boot summary reports the layer's
-  count, body bytes and skipped records. Skills are read **once, at boot**:
-  `reload_graph` and `load_graph` cannot change what `prompts/list` or the tool
-  descriptions serve, so a newly written skill needs a server restart.
+  count, body bytes, how many reached the active set as `owned:graph`, and any
+  skipped records. `reload_graph`, `load_graph` and `create_graph` re-resolve
+  the whole skill layer against the graph they just swapped in and tell the
+  client its tool list changed, so a graph rebuilt on disk serves its new
+  methodology on the next reload rather than at the next restart. (Graph
+  recipes are still boot-only: their routes are fixed tool names and the
+  merged catalogue is immutable for the session.)
 - `kglite skill <graph>` lists the skills a graph carries (`--format
   table|csv|json`) and `kglite skill <graph> <name>` prints one body raw, so an
   operator can check what an MCP server would serve without starting one. Both
@@ -44,10 +48,11 @@ before upgrading.
   keeps its own index instead: it reports what the server actually serves,
   which is the merged layers, not this graph's records.
 - Bare `graph_overview()` now ends with a `<skills count="N">` index of the
-  methodology this server serves, one `name — description` line per active
-  skill, in every mode. Like the operator prefix and the recipe-catalog hint it
-  is a bare-call decoration; drill-downs are unchanged. It is rendered at boot
-  for the same reason the skills themselves are.
+  methodology this server serves, one `name [tier] — description` line per
+  active skill, in every mode. Like the operator prefix and the recipe-catalog
+  hint it is a bare-call decoration; drill-downs are unchanged. It is refreshed
+  whenever the served graph is swapped, so it never advertises a skill the
+  session has stopped serving.
 - Graph-carried recipes: a graph can also store the named, parameterised,
   read-only Cypher an agent host serves by name, so a `.kgl` that ships a skill
   can ship the exact queries that skill names. `list_recipes()`,
@@ -80,6 +85,23 @@ before upgrading.
 
 ### Changed
 
+- **MCP skills are delivered lazily by default** (mcp-methods 0.4.11). A skill
+  now contributes only its routing — the `## When to use` block and one line
+  naming `skill("<name>")` — to the description of every tool it references,
+  instead of its whole body. A new framework tool, `skill(name)`, returns the
+  body verbatim on request, and the first call in a session to a tool with an
+  unfetched skill carries one footer line naming it. Tool descriptions shrink
+  accordingly: a deployment with several methodology skills was paying tens of
+  kilobytes of `tools/list` for bodies the agent might never need. The bundled
+  `cypher_query` skill stays on the **eager** tier — its body shapes the first
+  query the agent writes, before there is any result to learn from — and every
+  other bundled and graph-carried skill is lazy unless it says
+  `delivery: eager`. Operators who want the old shape set that key per skill.
+- The MCP server's graph skills now travel on mcp-methods' owned-body layer
+  rather than as synthesised bundled entries, so they report their own
+  provenance (`owned:graph`) and the layer order
+  (`bundled < graph < operator packs < <manifest>.skills/`) is an upstream
+  contract rather than an inference from how collisions happen to resolve.
 - The CLI docs no longer describe migrating from the retired
   `kglite skill install`; installing the code-review Agent Skill has been
   codingest's since 0.11.x, and `kglite skill` is now an unrelated read verb.
