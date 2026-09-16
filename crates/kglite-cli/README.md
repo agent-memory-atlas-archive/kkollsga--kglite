@@ -123,8 +123,8 @@ Non-interactive commands:
 - `write <graph.kgl> <cypher> [--format table|csv|json] [--save]` — run a write-capable Cypher statement
 - `write --write-scope A,B --git-sha <sha> --modified-by <actor>` — restrict writes and stamp provenance on `auto_timestamp` types
 - `ready-set <graph.kgl> --done <predicate> [--relationship DEPENDS_ON] [--node-type T]` — print `CALL ready_set(...)`
-- `describe <graph.kgl> [--types T] [--cypher] [--connections]` — print the XML `describe()` document for agents
-- `skill <graph.kgl> [name] [--format table|csv|json]` — list the skills the graph carries, or print one body raw
+- `describe <graph.kgl> [--types T] [--cypher] [--connections]` — print the XML `describe()` document for agents, including `<skills>` and `<recipes>` indexes when the graph carries them
+- `skill <graph.kgl> [name] [--format table|csv|json]` — list the skills the graph carries (sorted, `--format` honoured), or print one body raw on stdout. Read-only, no writer lease. Exits non-zero when the named skill is absent; a graph with no skills lists zero rows and exits 0. Skills and recipe queries are written from Python (`set_skill` / `set_recipe`), not here
 - `session <graph.kgl>` — process JSONL requests against one in-memory graph (`query`, `write`, `describe`, `save`, `help`, `exit`); `{"op":"help"}` returns the op table
 - `export-text <graph.kgl>` — print the deterministic text projection used by git textconv
 - `diff <a.kgl> <b.kgl>` — compare two graph text projections

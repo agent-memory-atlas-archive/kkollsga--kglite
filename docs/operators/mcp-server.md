@@ -16,9 +16,12 @@ kglite-mcp-server --selftest --graph /data/graph.kgl
 
 The default is read-only and registers `ping`, `graph_overview`, and
 `cypher_query`. A manifest can add source-root tools, parameterized Cypher,
-skills, value codecs, an embedder, and CSV-over-localhost export. Point MCP
-clients at the absolute executable path to avoid an older PATH-shadowing
-installation.
+skills, value codecs, an embedder, and CSV-over-localhost export. A served
+`.kgl` can also carry its own skills and recipe queries, which an opted-in
+server merges with the manifest's; see the
+[MCP servers guide](../python/guides/mcp-servers.md) and
+[Authoring MCP skills](../python/guides/mcp-skills.md). Point MCP clients at
+the absolute executable path to avoid an older PATH-shadowing installation.
 
 ## Pinning the tool surface
 
@@ -66,6 +69,12 @@ Details worth knowing before writing one:
 - A manifest that configures `extensions.cypher_recipes` must list
   `list_recipe_queries` and `run_recipe_query`; omitting them is refused at boot
   rather than serving a catalog no agent can reach.
+- **The `skill` loader is exempt.** With skills on, the framework registers
+  `skill(name)` after the allowlist has been applied, so it is served whether or
+  not the list names it. That is deliberate: it is a read-only fetch of
+  methodology the deployment already chose to serve, and hiding it would leave
+  every lazy skill's `skill("<name>")` pointer aimed at a tool the agent cannot
+  call. Turn skills off if you do not want it.
 - A malformed value (not a list, or an element that is not a string) fails boot
   instead of being ignored — an allowlist that silently fails open is worse than
   none.
@@ -141,6 +150,12 @@ What that costs, and where it stops:
   bare `stat`. A **legacy flat directory** (CSR files at the root, no `CURRENT`)
   is not refreshed: its files are rewritten in place, so there is no pointer to
   compare and `reload_graph` remains its refresh path.
+- **The automatic re-read does not refresh skills.** It runs from inside the
+  graph's own write path, where re-reading the graph's `KgliteSkill` records
+  would take a lock the swap still holds. A server whose file is rebuilt
+  externally keeps the skill layer it booted with until something calls
+  `reload_graph` — which does re-resolve it, and tells the client its tool list
+  changed. Graph-carried recipe queries are fixed for the session either way.
 - **`extensions.graph_watch` is retired.** The key is still parsed — a
   non-boolean value still fails boot — but any boolean now only logs a
   retirement warning and arms nothing, because the refresh it used to opt into

@@ -2,6 +2,14 @@
 
 Short, copy-paste examples for common tasks.
 
+```{note}
+"Recipe" means two different things in KGLite. This page is snippets to copy
+into your own code. A **recipe query** is something else: a named,
+parameterised, read-only Cypher statement stored in a manifest or in the graph
+and served to an agent as `run_recipe_query`. For those see the
+`extensions.cypher_recipes` section of {doc}`mcp-servers`.
+```
+
 ## Upsert with MERGE
 
 ```python

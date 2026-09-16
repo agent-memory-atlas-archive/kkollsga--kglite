@@ -1,15 +1,17 @@
 # Authoring MCP skills
 
-A **skill** is a markdown file that teaches an agent how and when to use a tool.
-At boot the MCP server injects each active skill into the description of the
+A **skill** is markdown that teaches an agent how and when to use a tool. At
+boot the MCP server attaches each active skill to the description of the
 tool(s) it applies to, so the methodology travels with the tool — no
-hand-rolled `instructions:` block required.
+hand-rolled `instructions:` block required. A skill is usually a file next to
+the manifest, but it can also be **carried inside the graph** as a
+`KgliteSkill` node, so a `.kgl` explains how to query itself.
 
 This guide is the operator-facing spec for the skill surface: the three text
-channels and when to use each, where skills live, the frontmatter schema (and
-which keys are load-bearing), how gating works, and the size limits. For
-manifests in general (tools, embedders, source roots) see
-{doc}`mcp-servers`.
+channels and when to use each, where skills live, how a body reaches the agent
+(routing eagerly, body on demand), the frontmatter schema, how gating works,
+and the size limits. For manifests in general (tools, embedders, source roots)
+see {doc}`mcp-servers`.
 
 ## TL;DR
 
@@ -19,7 +21,13 @@ manifests in general (tools, embedders, source roots) see
 3. Give it frontmatter — at minimum `name`, plus `references_tools` (which
    tools it rides on) and usually `applies_when` (when it should be silent).
 4. Put the **routing heuristic** in `description` (one paragraph: when to reach
-   for this tool vs a sibling) and the **how-to** in the markdown body.
+   for this tool vs a sibling) and the **how-to** in the markdown body. The
+   routing ships in the tool description; the body is fetched on demand with
+   the `skill(name)` tool.
+
+No files to ship alongside the graph? Store the same skill in the `.kgl`
+itself with `graph.set_skill(...)` — see
+[Skills carried in the graph](#skills-carried-in-the-graph).
 
 ```yaml
 # my_graph_mcp.yaml
@@ -53,7 +61,7 @@ lifecycles; putting text in the wrong one is the usual mistake.
 |---|---|---|---|
 | **Init instructions** | `instructions:` | Once, in the MCP `initialize` handshake. Ages out of a long session's context. | One-time orientation that doesn't need to re-surface. Keep it short. |
 | **Overview preamble** | `overview_prefix:` | Prepended to every **bare** `graph_overview()` call — re-surfaces each time. | A sticky reminder tied to schema discovery. |
-| **Skills** | `skills:` + skill files | Injected into the **tool description** of every tool a skill applies to. Re-read whenever the agent inspects tools (`tools/list`). Gated per-graph by `applies_when`. | Per-tool and cross-tool methodology + routing. **This is where most guidance belongs.** |
+| **Skills** | `skills:` + skill files or `KgliteSkill` nodes | The **routing** (`description`) rides the **tool description** of every tool the skill applies to, re-read whenever the agent inspects tools (`tools/list`). The **body** is handed over when the agent calls `skill(name)`. Gated per-graph by `applies_when`. | Per-tool and cross-tool methodology + routing. **This is where most guidance belongs.** |
 
 Rule of thumb: if the guidance is *about how to use a tool*, it's a skill. If
 it's *one-time setup context*, it's `instructions:`. If it's *a reminder that
@@ -70,12 +78,27 @@ operator extension (documented here so you don't go looking for a hook):
 
 ## Where skills come from (the layers)
 
-Skills load from three layers. On a name collision the **higher** layer wins, so
-you can override a bundled skill by shipping one of the same `name`:
+Skills load from four layers. There is **one skill per `name`**, and on a
+collision the **higher** layer wins, so you override a lower one by shipping a
+skill of the same `name`:
 
 1. **bundled defaults** (lowest) — KGLite's compiled skills plus the framework defaults. The KGLite set is registered explicitly from `crates/kglite-mcp-server/skills/`; operators do not need to rebuild it.
-2. **operator-declared paths** — directories listed in `skills:`, in declaration order. Earlier paths win collisions with later paths.
-3. **project layer** (highest) — a `<basename>.skills/` directory next to the manifest. For `my_graph_mcp.yaml` this is `my_graph_mcp.skills/`. The basename is the manifest's, not the graph's. This layer is optional when absent; a declared path that is absent is a boot error.
+2. **graph-carried** — `KgliteSkill` nodes inside the served `.kgl`. See the next section.
+3. **operator-declared paths** — directories listed in `skills:`, in declaration order. Earlier paths win collisions with later paths.
+4. **project layer** (highest) — a `<basename>.skills/` directory next to the manifest. For `my_graph_mcp.yaml` this is `my_graph_mcp.skills/`. The basename is the manifest's, not the graph's. This layer is optional when absent; a declared path that is absent is a boot error.
+
+The bundled and graph-carried layers surface only when the `skills:` list
+contains `true`; the two file layers are operator-declared and surface whenever
+the list is walked. So a graph skill named `cypher_query` **replaces** the
+bundled `cypher_query` methodology — that is the documented way to override
+framework guidance with something graph-specific — while an operator's pack or
+`<basename>.skills/` file of that name still beats the graph. The operator is
+always the last word.
+
+(mcp-methods, the framework underneath, also supports a fifth layer — inline
+skill mappings written straight into the `skills:` list — which sits between
+the graph and the declared directories. KGLite does not add anything of its own
+there.)
 
 ## The `skills:` manifest value
 
@@ -84,7 +107,7 @@ you can override a bundled skill by shipping one of the same `name`:
 | Value | Meaning |
 |---|---|
 | absent / `false` / `null` | Skills **off**. No injection, `prompts/list` empty. |
-| `true` | On: bundled defaults + the `<basename>.skills/` project layer. |
+| `true` | On: bundled defaults, the served graph's own skills, and the `<basename>.skills/` project layer. |
 | `"./path"` | On, and also load skills from `./path` (relative to the manifest). |
 | `[true, "./a", "./b"]` | List form: `true` = the bundled/default set, each string = an extra path. Use to combine the defaults with one or more operator packs. |
 
@@ -99,6 +122,100 @@ when absent.
 serves, so an opted-in deployment that resolved nothing is visible without
 reading `prompts/list` by hand.
 
+## Skills carried in the graph
+
+A skill does not have to be a file. A `.kgl` can carry its own methodology as
+nodes under the `KgliteSkill` system label, so a graph you hand to someone
+arrives knowing how to explain itself — no skills directory to ship alongside
+it, no manifest beyond `skills: true`.
+
+```python
+graph.set_skill(
+    "wells",
+    "TRIGGER for any question about wells, their operators or their depths.",
+    body=methodology_markdown,
+    references_tools=["cypher_query"],
+)
+graph.save("field.kgl")
+```
+
+`kglite-mcp-server --graph field.kgl` with `skills: true` in the manifest now
+serves `wells` alongside its bundled methodology.
+
+### The node
+
+| Property | Type | Meaning |
+|---|---|---|
+| `name` | string | The key. One node per name; also the filename stem on export. A single path-safe token — no whitespace, `/`, `\\`, `:` or `.` traversal. |
+| `description` | string | The routing heuristic, required. With lazy delivery this is all an agent sees before deciding to fetch the body. |
+| `body` | string | The methodology, as markdown. At most 16,384 bytes. |
+| `references_tools` | list of strings | Tools this skill attaches to, beyond its name match. |
+| `delivery` | string | `"lazy"` (default) or `"eager"` — see [Delivery](#delivery-routing-now-body-on-demand). |
+
+`KgliteSkill` is a **system label**: conventional, not enforced, and hidden
+from every surface that enumerates node types. `node_types()`, `schema()`,
+`describe()` and the Cypher `db.labels()` procedure all omit it, and the counts
+printed beside those listings omit it too — so storing a skill never changes
+what the graph reports itself to be about. It stays an ordinary node to Cypher:
+`MATCH (s:KgliteSkill) RETURN s.name` works, `MATCH (n) RETURN count(n)` counts
+it, and saves, exports and diffs carry it. `KgliteRecipe`, the label
+graph-carried recipe queries use, behaves the same way — see
+{doc}`mcp-servers`.
+
+### Managing them
+
+Six methods on `KnowledgeGraph`, all validating what a hand-written `CREATE`
+could not:
+
+| Call | Does |
+|---|---|
+| `list_skills()` | Every skill, sorted by name, bodies omitted. |
+| `get_skill(name)` | One skill, body included. |
+| `set_skill(name, description, body=..., references_tools=..., delivery=...)` | Create or replace. |
+| `delete_skill(name)` | Remove one; `False` when there was nothing to remove. |
+| `import_skills(path)` | Read one `.md` file, or every `.md` in a directory (non-recursive, sorted). |
+| `export_skills(path)` | Write every skill to a directory as `<name>.md`. |
+
+Import and export speak the same SKILL.md frontmatter dialect an MCP skills
+directory serves — `name`, `description`, `references_tools`, `delivery`,
+then the body — so an existing skills folder imports unchanged and an exported
+directory can be hand-edited and imported back. Frontmatter keys the graph has
+no property for (`applies_when`, `auto_inject_hint`, `applies_to`) are ignored
+on import; a graph skill is not gated by a predicate.
+
+`kglite skill <graph>` lists what a graph carries and `kglite skill <graph>
+<name>` prints one body raw, so you can check what a server would serve without
+starting one. See {doc}`/operators/cli`.
+
+### What the server does with them
+
+- **Opt-in.** The layer surfaces only when the manifest's `skills:` contains
+  `true`. A graph is *data*, and data that can rewrite tool descriptions
+  without an operator saying so is a supply-chain surface.
+- **`--graph` and `--watch` modes only.** Those are the two whose graph is open
+  by the time skills are installed. The workspace modes build their graph on
+  first activation, long after the prompt plane is frozen, and the source-root
+  and bare modes have no graph at all; there, the layer contributes nothing.
+- **Validated per node, and one bad node costs only itself.** Every record is
+  held to the same rules `set_skill` applies — non-empty `name` and
+  `description`, `references_tools` a list of strings, `delivery` one of the
+  two tiers, body within 16 KiB. A record that fails (a hand-written `CREATE`
+  can store anything) is skipped with a warning naming the skill and the rule;
+  its siblings still load.
+- **Named on the boot summary.** A graph that contributed anything adds a line
+  like `graph skills: 3 served (9412 B), 2 active as owned:graph, 1 skipped:
+  wells: description must not be empty` to stderr. `--selftest` mirrors that
+  stderr, and separately reports how many skills the session serves in total —
+  it speaks MCP to a child process, and `prompts/list` carries names and
+  descriptions only, so attribution and byte totals reach you on the boot line,
+  not from the check.
+- **Re-resolved on a graph swap.** `reload_graph`, `load_graph` and
+  `create_graph` rebuild the whole skill layer against the graph they just
+  swapped in and send `tools/list_changed`, so a `.kgl` rebuilt by another
+  process serves its new methodology on the next reload rather than at the next
+  restart. This is where skills differ from graph-carried recipes, whose
+  catalogue is fixed for the session.
+
 ## Frontmatter schema
 
 Frontmatter is YAML between `---` fences. Unknown top-level metadata is ignored for compatibility, but unknown keys inside `applies_when` are rejected so a misspelled gate cannot activate a skill.
@@ -108,7 +225,8 @@ Frontmatter is YAML between `---` fences. Unknown top-level metadata is ignored 
 | `name` | string | **yes** | Skill identity. Also the tool it injects into by name match (so a skill named `cypher_query` rides the `cypher_query` tool). For a cross-tool skill, use a topic name that is *not* a tool name and rely on `references_tools`. |
 | `description` | string | **yes** | The **routing heuristic** — TRIGGER/SKIP guidance. Injected into the tool description under a `## When to use` header (and sent to `prompts/list`). Keep it to a paragraph; it is never truncated. |
 | `body` | (the markdown after the frontmatter) | no | The **methodology**. Injected under `## Methodology`, capped (see limits). |
-| `references_tools` | list of strings | no | Extra tools this skill injects into, beyond its name match. **Load-bearing.** A `code_graph_analysis` skill with `references_tools: [cypher_query, graph_overview, explore]` rides all three. |
+| `references_tools` | list of strings | no | Extra tools this skill injects into, beyond its name match. **Load-bearing.** A `code_graph_analysis` skill with `references_tools: [cypher_query, graph_overview, explore]` rides all three. A skill that declares targets and whose every target is unregistered in this mode is dropped entirely — from `prompts/list`, from `skill()` and from the overview index. |
+| `delivery` | `lazy` \| `eager` (default `lazy`) | no | How much of the skill a tool description carries — see [Delivery](#delivery-routing-now-body-on-demand). |
 | `auto_inject_hint` | bool (default `true`) | no | `false` keeps the skill out of tool descriptions (it still appears in `prompts/list`). Use to ship a skill for prompt-only clients without bloating `tools/list`. |
 | `applies_when` | mapping | no | Gating predicate — see below. Absent = always active. |
 
@@ -116,10 +234,15 @@ Frontmatter is YAML between `---` fences. Unknown top-level metadata is ignored 
 
 `applies_when` keeps a skill silent on graphs it doesn't apply to (e.g. a
 code-graph skill stays off a legal/finance domain graph). Predicates are
-AND-combined; an absent predicate is "satisfied". They are evaluated once at
-server boot, after the graph and tool catalogue are ready. Mutating or replacing
-the graph does not refresh prompt registration or injected tool descriptions;
-restart the server to evaluate the new graph state.
+AND-combined; an absent predicate is "satisfied". They are evaluated at server
+boot, after the graph and tool catalogue are ready — and again whenever a
+`--graph` or `--watch` server swaps the graph it serves with `reload_graph`,
+`load_graph` or `create_graph`, which re-resolves the whole registry against
+the new graph. Mutating the graph **in place** does not re-evaluate anything:
+prompt registration and the injected tool descriptions keep the answer they had
+until the next swap or restart. Neither does the per-call freshness re-read
+that notices the served file changed on disk — call `reload_graph` to pick up
+a rebuilt file's skills.
 
 | Predicate | True when |
 |---|---|
@@ -132,6 +255,15 @@ restart the server to evaluate the new graph state.
 applies_when:
   graph_has_node_type: [Function, Class]   # code graphs only
 ```
+
+`graph_has_node_type:` answers `false` for the system labels `KgliteSkill` and
+`KgliteRecipe` whatever the graph holds, because those labels are hidden from
+every type enumeration and an agent could never discover the shape being gated
+on.
+
+A **graph-carried** skill carries no `applies_when` at all: the node has no
+property for one, and an import drops the key. Gate those by what you store in
+the graph, not by a predicate.
 
 ### Load-bearing vs decorative keys
 
@@ -150,9 +282,10 @@ skill is skipped with a path-and-error warning.
 
 ## How a skill reaches the agent
 
-For each active skill with `auto_inject_hint: true`, its routing + methodology
-are appended to the description of every tool it attaches to — its name-match
-tool **and** every tool in `references_tools`:
+For each active skill with `auto_inject_hint: true`, a block is appended to the
+description of every tool it attaches to — its name-match tool **and** every
+tool in `references_tools`. On the default **lazy** tier the block is routing
+plus a pointer:
 
 ```text
 <the tool's own description>
@@ -163,14 +296,78 @@ tool **and** every tool in `references_tools`:
 
 <the skill's `description`>
 
-## Methodology
-
-<the skill's body>
+Load the full methodology with skill("find_papers") before first use.
 ```
 
+On the **eager** tier the pointer is replaced by the body itself, under a
+`## Methodology` heading.
+
 A tool can carry several skills (its own + any that reference it); each is
-injected once. This rides `tools/list`, which **every** MCP client exposes to
+appended once. This rides `tools/list`, which **every** MCP client exposes to
 the agent.
+
+## Delivery: routing now, body on demand
+
+Skills are delivered **lazily by default** (mcp-methods 0.4.11). The routing `description` still travels eagerly — it is small, it is
+what the agent reads to decide whether the body is worth having, and it is
+exempt from the body's size caps. The body does not: a `skill` tool, registered
+whenever skills are on, returns it verbatim on request.
+
+Why: a skill body used to be copied into every tool it referenced, at
+`tools/list` time, before any tool was used. One methodology skill across five
+tools was five copies. A plain domain deployment paid roughly 15–22 KB of
+description text up front and a code-graph deployment with recipes roughly
+60 KB — for bodies the agent might never need.
+
+**The `skill` tool.** `skill(name)` returns that skill's body, whole: it is
+exempt from the response budget, so a body is never handed back as a truncated
+preview (it is capped at 16 KiB at load, which is what makes the exemption
+safe). An unknown or inactive name is refused with the list of active skills.
+What a session has loaded is remembered for as long as the session keeps making
+tool calls; a new session — or one that has made no tool call for ten minutes —
+starts empty.
+
+**The nudge.** The first call in a session to a tool that advertises a lazy
+skill the agent has not fetched gets one extra footer line naming it
+(`Skill "wells" applies to this tool and has not been loaded this session —
+call skill("wells")`). It is silent afterwards, and comes back only if the
+skill's body changed under the agent or the session went quiet past that
+ten-minute window.
+
+```{warning}
+**The nudge does not fire for `cypher_query`.** The footer is composed inside
+the framework's typed-tool dispatch, and `cypher_query` is the one KGLite tool
+registered as a raw route (it needs a custom output schema), which the
+framework offers no way to opt in. A lazy skill that targets *only*
+`cypher_query` therefore never nudges — the pointer in the tool description is
+the agent's only cue. This is a known upstream limitation in mcp-methods
+0.4.11, reported and pinned by a test that goes red when it is fixed. Until
+then, give a `cypher_query` skill a second target (`graph_overview` is the
+usual one) if you want the reminder.
+```
+
+**When to choose `eager`.** Only when the body has to shape the **first**
+call's arguments — there is no result to learn from, so a pointer arrives too
+late. The bundled `cypher_query` skill is the one KGLite ships eager, for
+exactly that reason: Cypher has to be written correctly before it returns
+anything. Every other bundled skill, and every graph-carried skill that does
+not say otherwise, is lazy.
+
+Bare `graph_overview()` ends with an index of what this server serves, one line
+per active skill with its tier, so an agent that has not inspected `tools/list`
+can still see what is on offer:
+
+```xml
+<skills count="2" get-via="skill(name)">
+cypher_query [eager] — Run Cypher against the active knowledge graph.
+wells [lazy] — TRIGGER for any question about wells.
+</skills>
+```
+
+The tier is load-bearing for the reader: a `[lazy]` line is an invitation to
+call `skill(name)`, not a summary of something already in hand. The index is
+refreshed on every graph swap, so it never advertises a skill the session has
+stopped serving. Focused `graph_overview(...)` calls omit it.
 
 ```{warning}
 Do **not** rely on `prompts/get` for agentic retrieval. Skills are also
@@ -183,9 +380,15 @@ is a fallback for the rare custom integration that surfaces prompts.
 
 ## Size limits
 
-- A complete skill file above **16,384 bytes** is rejected; it is not truncated. The limit includes frontmatter, `description`, and markdown body.
+- A complete skill file above **16,384 bytes** is rejected; it is not truncated. The limit includes frontmatter, `description`, and markdown body. `set_skill` applies the same 16 KiB ceiling to a graph-carried `body`, and refuses rather than truncating.
 - Files above the **4,096-byte** soft target still load, with a warning.
 - The resolved session total has a **65,536-byte** soft limit that warns without dropping skills.
+
+Lazy delivery changes what those numbers cost, not what they are. A skill's
+body counts against the ceilings whichever tier it is on, but only an **eager**
+body is paid for in `tools/list`, once per tool it attaches to; a lazy body is
+paid for once, by the agent that asks for it. Sizing a body for the tool plane
+is therefore an `eager`-only concern.
 
 Keep each file focused. If it exceeds the hard limit, split the methodology into independently routed skills.
 
@@ -213,3 +416,22 @@ applies_when:
 On a code graph it rides all five tool descriptions; on a domain graph
 (no `Function`/`Class`) it is silent. That is the whole point of skills over
 `instructions:`: gated, per-tool, re-surfacing, and zero hand-maintenance.
+
+## Worked example: a graph that ships its own skill and queries
+
+**A skill that names an operation should ship the operation.** A methodology
+that says "find a function's callers" is worth much more when the exact,
+parameter-checked query is in the same file, reachable as
+`run_recipe_query("code_review", "callers_page", ...)` — the agent does not
+have to rewrite Cypher the graph's author already got right. Graph-carried
+recipes are the other half of this feature; see
+the `extensions.cypher_recipes` section of {doc}`mcp-servers`.
+
+[`examples/code_review_graph_skills.py`](https://github.com/kkollsga/kglite/blob/main/examples/code_review_graph_skills.py)
+builds a small code graph, writes three `code_review` recipes and one
+`code_review` skill that names them, saves the `.kgl`, and prints what an MCP
+server would then serve. Run it and point `kglite-mcp-server --graph` at the
+file it writes, with `skills: true` in the manifest, to see the whole surface:
+`list_recipe_queries` / `run_recipe_query` registered from the graph alone,
+`code_review [lazy]` in the bare overview index, and the body arriving on
+`skill("code_review")`.

@@ -3695,6 +3695,45 @@ Query by the string form via `{nid: 'Q42'}` (or by the integer via `{id: 42}`)
 — `{id: 'Q42'}` does **not** match (ids are integers). `n.id → 42`,
 `n.nid → 'Q42'`, in every mode.
 
+### System labels (`KgliteSkill`, `KgliteRecipe`)
+
+Two labels are reserved for content a graph carries **about itself** rather
+than about its subject: `KgliteSkill` holds markdown methodology for an agent,
+and `KgliteRecipe` holds one named, parameterised, read-only query the graph
+publishes for reuse. Both are written and read from Python (`set_skill` /
+`set_recipe` and their `list` / `get` / `delete` / `import` / `export`
+siblings); the guides are
+[Authoring MCP skills](https://kglite.readthedocs.io/en/latest/python/guides/mcp-skills.html)
+and the `extensions.cypher_recipes` section of the
+[MCP servers guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html).
+
+To Cypher they are **ordinary nodes**:
+
+```cypher
+MATCH (s:KgliteSkill) RETURN s.name, s.description ORDER BY s.name
+MATCH (r:KgliteRecipe {recipe: 'code_review'}) RETURN r.name, r.parameters.type
+CREATE (:KgliteSkill {name: 'wells', description: 'How to ask about wells.', body: '# Wells'})
+MATCH (s:KgliteSkill {name: 'wells'}) DETACH DELETE s
+```
+
+They are also **hidden from every surface that enumerates node types**, and the
+counts printed beside those listings are filtered to match, so storing a skill
+never changes what the graph reports itself to be about:
+
+| Surface | Sees a `KgliteSkill` node? |
+|---|---|
+| `MATCH (n) RETURN count(n)` | **yes** — it is a node |
+| `MATCH (s:KgliteSkill)` and every other label-anchored pattern | **yes** |
+| `CALL db.labels()` | no |
+| `node_types()`, `schema()`, `describe()`, `graph_overview()` | no |
+| `save` / `load`, export-text, export-sqlite, diffs, digests | **yes** — it is data and it travels |
+
+The convention is **not enforced**: nothing stops a `CREATE` from putting an
+arbitrary shape under either label, which is exactly why the Python writers
+validate and why an MCP server re-validates each record at boot and skips the
+ones that fail. Nothing stops you using the labels for something else either —
+but they will be invisible to schema discovery, so don't.
+
 ## Selected syntax summary
 
 This compact table is a non-exhaustive orientation aid. The versioned,

@@ -192,9 +192,9 @@ tools:                                               # inline parameterised Cyph
       RETURN i.label LIMIT 5
 ```
 
-`skills: true` composes three layers of per-tool methodology (kglite-bundled
-defaults, your project's `<basename>.skills/*.md` overrides, and
-operator-declared domain packs), so no fork is required for most customisation.
+`skills: true` composes four layers of per-tool methodology (kglite-bundled defaults,
+skills the served `.kgl` carries about itself, operator-declared domain packs, and your
+project's `<basename>.skills/*.md` overrides), so a graph can ship its own guidance.
 **→ [MCP server guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html).**
 
 ## Use cases

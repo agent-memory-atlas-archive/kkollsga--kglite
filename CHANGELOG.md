@@ -25,7 +25,7 @@ before upgrading.
   its own bundled methodology: a skill named after a bundled one replaces it,
   while an operator's `skills:` pack or `<manifest>.skills/` directory still
   wins over the graph. The layer is opt-in — with no `skills:` in the manifest
-  a graph's skills are never read — and applies to `--graph` and `--watch`
+  a graph's skills are never served — and applies to `--graph` and `--watch`
   servers only, since the workspace modes have no graph when skills are
   installed. A record that fails validation is skipped with a warning naming it
   and the rule; its siblings still load. The boot summary reports the layer's
@@ -97,6 +97,10 @@ before upgrading.
   query the agent writes, before there is any result to learn from — and every
   other bundled and graph-carried skill is lazy unless it says
   `delivery: eager`. Operators who want the old shape set that key per skill.
+- `extensions.tools_allow` no longer needs to name the `skill` loader, and
+  cannot hide it: with skills on it is registered after the allowlist is
+  applied, because an allowlist that hid it would aim every lazy skill's
+  `skill("<name>")` pointer at a tool the agent cannot call.
 - The MCP server's graph skills now travel on mcp-methods' owned-body layer
   rather than as synthesised bundled entries, so they report their own
   provenance (`owned:graph`) and the layer order

@@ -13,7 +13,7 @@ three, in this order:
 | {doc}`inline-records` | Build directly from JSON/dicts with `from_records`, including explicit missing-endpoint policy. |
 | {doc}`cypher` | The query surface — MATCH/WHERE/RETURN, aggregations, subqueries, mutations. Every other guide leans on this one. |
 | {doc}`mcp-servers` | Ship the graph to Claude / Cursor / any MCP-capable agent. The bundled `kglite-mcp-server` CLI + the YAML manifest for adding custom tools without forking. |
-| {doc}`mcp-skills` | Teach agents *how and when* to use each tool with bundled/operator **skills** — methodology that injects into tool descriptions, gated per-graph. Use this instead of hand-rolling `instructions:`. |
+| {doc}`mcp-skills` | Teach agents *how and when* to use each tool with bundled, operator-authored or **graph-carried skills** — routing that rides tool descriptions, bodies fetched on demand with `skill(name)`, gated per-graph. Also: storing skills and recipe queries inside the `.kgl` so a graph explains itself. Use this instead of hand-rolling `instructions:`. |
 
 ## Add as needed
 
@@ -43,7 +43,7 @@ Domain-specific surfaces — pull them in when your data has the shape:
 | {doc}`import-export` | Round-trip with Neo4j, JSON, N-Triples; CSV bulk export; SQLite export as the no-lock-in exit. |
 | {doc}`schema-migrations` | Your graph is long-lived state whose shape changes over time. The user-schema version stamp, ordered Cypher migration scripts + `kglite migrate`, and the recreate-the-node pattern for type changes. |
 | {doc}`ai-agents` | `describe()` XML schema for system prompts. Read this if you're building agent stacks beyond MCP. |
-| {doc}`recipes` | Short snippets for "how do I do X" patterns that span multiple guides. |
+| {doc}`recipes` | Short snippets for "how do I do X" patterns that span multiple guides. (Not *recipe queries* — those are the agent-facing catalogue in {doc}`mcp-servers`.) |
 
 ## If you want to know *why*
 

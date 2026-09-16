@@ -123,23 +123,39 @@ kglite describe app.kgl --connections
 
 `describe` returns the same XML schema document exposed by the Python API
 and MCP server, including focused views for labels, Cypher support, and
-connection types. When the graph carries skills, the document lists them in a
-`<skills>` element.
+connection types. When the graph carries skills or recipe queries, the document
+indexes them in `<skills>` and `<recipes>` elements — name, one-line
+description, and the call that reads the full text. A graph carrying neither
+renders neither element, so nothing about an ordinary graph's description
+changes.
 
 Read the skills a graph carries:
 
 ```bash
 kglite skill app.kgl                  # name + description of each skill
-kglite skill app.kgl --format json
+kglite skill app.kgl --format json    # or csv; the listing honours --format
 kglite skill app.kgl wells            # the body, raw markdown on stdout
 kglite skill app.kgl wells > wells.md
 ```
 
+With no name the command lists every skill by name and description, sorted, in
+the `--format` you ask for (`table` by default, plus `csv` and `json`). With a
+name it prints that skill's body byte for byte — no reformatting, nothing
+appended — so it can be piped or redirected. A graph carrying no skills lists
+zero rows and exits **0**; a name the graph does not carry is an error naming
+both the name and the graph, and exits **non-zero**. A body is always raw;
+`--format` applies to the listing only.
+
 A skill is markdown methodology stored inside the `.kgl` itself, which an MCP
-server serves to an agent at boot — `kglite skill` is the offline check on what
-that server would serve. Read-only: it takes no writer lease, so it is safe
-against a graph another process owns. Writing skills is the Python API's
-(`set_skill`, `import_skills`).
+server serves to an agent — `kglite skill` is the offline check on what that
+server would serve. (The server merges the graph's skills with its own bundled
+and operator layers, and re-reads the graph's on every `reload_graph`, so the
+two can differ; see
+[Authoring MCP skills](../python/guides/mcp-skills.md).) Read-only: it takes no
+writer lease, so it is safe against a graph another process owns. Writing
+skills is the Python API's (`set_skill`, `import_skills`), as is writing recipe
+queries (`set_recipe`, `import_recipes`) — there is no `kglite recipe`
+subcommand, because a CLI user writes Cypher.
 
 ## Agent Sessions
 

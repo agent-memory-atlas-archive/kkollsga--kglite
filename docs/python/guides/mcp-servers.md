@@ -492,7 +492,10 @@ extensions:
 The full three-query code-review example, including its resolve-first domain
 skill, is
 [`examples/local_code_review_mcp.yaml`](https://github.com/kkollsga/kglite/blob/main/examples/local_code_review_mcp.yaml).
-Catalogs are immutable after boot. KGLite parses every stored query, requires
+Catalogs are immutable after boot — including the graph-carried half below, so
+a recipe added to the graph is served after a restart, not on the next
+`reload_graph`. (Skills differ: they *are* re-resolved on a graph swap.)
+KGLite parses every stored query, requires
 an exact match between `$parameters`, root `properties`, and `required`, and
 rejects mutations, `EXPLAIN`, `PROFILE`, `FORMAT CSV`, and `LOAD CSV`.
 Supported schema keywords are deliberately limited to `type`, `properties`,
@@ -556,6 +559,64 @@ entity kinds, different relationships, deeper/unbounded paths, or any question
 that does not exactly match a stored operation. Use `FORMAT CSV` through raw
 Cypher (optionally with `extensions.csv_http_server`) for large exports;
 recipe queries intentionally reject CSV mode.
+
+#### Recipes carried in the graph
+
+The manifest is not the only source. A `.kgl` can store the same queries as
+nodes under the `KgliteRecipe` system label, so a graph that ships a skill can
+ship the exact queries that skill names — the agent runs
+`run_recipe_query("code_review", "callers_page", {...})` instead of rewriting
+Cypher the graph's author already got right.
+
+```python
+graph.set_recipe(
+    "code_review",
+    "callers_page",
+    "Functions with a direct CALLS edge to the target.",
+    "MATCH (c:Function)-[:CALLS]->(t:Function) WHERE t.qualified_name = $qualified_name "
+    "RETURN c.qualified_name AS qualified_name ORDER BY qualified_name LIMIT 25",
+    {"type": "object", "properties": {"qualified_name": {"type": "string"}},
+     "required": ["qualified_name"], "additionalProperties": False},
+    "Exact Function-scoped operations for an initial code review.",
+)
+graph.save("code.kgl")
+```
+
+`list_recipes()`, `get_recipe()`, `set_recipe()`, `delete_recipe()`,
+`import_recipes()` and `export_recipes()` manage the catalogue from Python;
+every write is held to exactly the rules above, so a query that would be
+skipped at boot is refused when you store it. `parameters` is a native nested
+map, not a JSON string — `r.parameters.type` reads from Cypher. Import and
+export use this same `extensions.cypher_recipes` document shape, as JSON.
+`describe()` lists the groups in a `<recipes count="N">` element.
+
+At boot, a server in `--graph` or `--watch` mode compiles the served graph's
+catalogue and merges it **under** the manifest's:
+
+- The **manifest wins** per `(recipe, name)` and per group description.
+  Everything the graph alone carries is kept. The operator must be able to
+  correct or replace a query the graph ships without rebuilding the graph.
+- A graph with recipes therefore gets `list_recipe_queries` /
+  `run_recipe_query`, the bundled `recipe_queries` methodology and the
+  `<query-catalog/>` overview hint **with no catalogue in the manifest at
+  all** — the hint's `recipes=` / `queries=` counts are the merged totals.
+- A manifest query that does not compile still **fails the boot**. A graph
+  record that does not is **skipped with a warning** naming it and the rule,
+  and its siblings still serve. Graph content is data; it may have been written
+  by a raw `CREATE` that bypassed validation entirely.
+- **Graph and watch modes only**, for the same reason skills give: the other
+  modes have no graph open when the routes are registered, and the catalogue is
+  immutable afterwards.
+- The boot summary reports what the graph contributed —
+  `graph recipes: 3 served, 1 overridden by the manifest, 1 skipped: …`.
+
+Unlike skills, the graph recipe layer has **no `skills:`-style opt-in**: a
+served graph's recipes are read whenever the mode has a graph. They cannot
+change a tool's description or add a tool name — the two route names are fixed
+and every query is validated read-only before it is served.
+
+[`examples/code_review_graph_skills.py`](https://github.com/kkollsga/kglite/blob/main/examples/code_review_graph_skills.py)
+builds a graph carrying three recipes and the skill that names them.
 
 ### `extensions.embedder` — semantic search inside Cypher
 
@@ -628,15 +689,28 @@ listed.
 
 ### `skills:` — teach agents how to use the tools
 
-`skills: true` turns on the **skill system**: bundled and operator-authored
-markdown that injects per-tool and cross-tool methodology (and TRIGGER/SKIP
-routing) directly into tool descriptions, gated per-graph. Reach for this
-instead of stuffing everything into `instructions:` — skills re-surface in
+`skills: true` turns on the **skill system**: bundled, graph-carried and
+operator-authored markdown that attaches per-tool and cross-tool methodology
+(and TRIGGER/SKIP routing) to tool descriptions, gated per-graph. Reach for
+this instead of stuffing everything into `instructions:` — skills re-surface in
 `tools/list`, attach to specific tools, and stay silent on graphs they don't
-fit. Drop files into a `<basename>.skills/` directory beside the manifest.
+fit. Drop files into a `<basename>.skills/` directory beside the manifest, or
+store them in the graph itself with `graph.set_skill(...)`.
 
-The full authoring spec — frontmatter schema, `applies_when` gating, the
-three text channels, size limits — is its own guide: {doc}`mcp-skills`.
+Delivery is **lazy** by default: the routing rides the tool description and the
+body is fetched with the `skill(name)` tool, which appears in `tools/list`
+whenever skills are on. The bundled `cypher_query` skill is the exception and
+ships eager, because its body shapes the first query written.
+
+The layer order is `bundled < graph-carried < declared dirs <
+<basename>.skills/`, one skill per name, higher wins. The bundled and
+graph-carried layers surface only when `skills:` contains `true`; a graph's
+skills are read in `--graph` and `--watch` modes only, and re-read whenever
+`reload_graph` / `load_graph` / `create_graph` swaps the served graph.
+
+The full authoring spec — frontmatter schema, `delivery`, `applies_when`
+gating, the graph-carried node shape, the three text channels, size limits — is
+its own guide: {doc}`mcp-skills`.
 
 ### Common boot errors
 
@@ -650,6 +724,8 @@ startup with a non-zero exit code. The recurring ones:
 | `WARN … declared source_root does not resolve …` plus `source tools: unavailable (unresolved: "./data" → /abs/.../data)` — or `source tools: 2 root(s) serving, unresolved: …` — in the boot summary | The path is relative-to-yaml; it didn't land on a real directory. **The server still boots and serves its graph tools**; other declared roots keep serving, and only the named one is dropped. | Check the path; create the directory; or use `source_roots:` if you have multiple. Then restart. |
 | `ERROR: --mcp-config path does not exist: <path>` | Explicit `--mcp-config` value points at a missing file. | Check the path. Sibling auto-detect is `<basename>_mcp.yaml`. |
 | `Error: skill path "./pack" (resolved to /abs/.../pack) does not exist or is not a directory` | A `skills:` entry names a directory that isn't there. One bad entry fails the whole registry build, so tolerating it would serve the deployment with **every** skill gone — bundled ones included — while the graph tools answered normally. | Create the directory, or drop the entry. The auto-detected `<basename>.skills/` layer is separate and stays optional. |
+| `WARN graph-carried skill skipped` on stderr, plus `graph skills: … skipped: <name>: <rule>` in the boot summary | A `KgliteSkill` node in the served graph failed validation — usually written by a raw `CREATE` that bypassed `set_skill`. **Not a boot error**: graph content is data, one bad node must not take the rest down. Its siblings still load. | Fix the node (`set_skill` applies the same rules and refuses instead of storing), or delete it. |
+| `WARN graph-carried recipe query skipped` on stderr, plus `graph recipes: … skipped: <recipe>/<name>: <rule>` in the boot summary | A `KgliteRecipe` node's Cypher does not compile or is not read-only. Same rule as above, and deliberately the *opposite* of the manifest catalogue's, which fails the boot: an operator typo is theirs to fix and they are looking at the file. | Fix or delete the node; `set_recipe` refuses the same content instead of storing it. |
 | `ERROR: extensions.value_codecs ... is not bijective` | A `map` codec has two keys mapping to the same value, so encode is ambiguous. | Make the `map:` one-to-one. |
 | `ERROR: value_codecs[i].match ... is not a valid regex` | A `regex` codec's `match` doesn't compile. | Fix the regex (anchor it for a full match). |
 
@@ -1154,7 +1230,7 @@ the discriminator for `--graph` / `--workspace` / `--watch` /
 > you adopt client roots.
 | `builtins.temp_cleanup: on_overview` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `extensions.embedder` | ✓ | ✓ (per active repo) | ✓ | — (no graph) | — |
-| `extensions.cypher_recipes` | ✓ | ✓ (per active repo) | ✓ | registers discovery/run tools, but execution needs an active graph | registers discovery/run tools, but execution needs an active graph |
+| `extensions.cypher_recipes` | ✓ (merged with the graph's own `KgliteRecipe` records) | ✓ (per active repo) | ✓ (merged, as `--graph`) | registers discovery/run tools, but execution needs an active graph | registers discovery/run tools, but execution needs an active graph |
 | `extensions.csv_http_server` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `extensions.value_codecs` | ✓ | ✓ | ✓ | — (no graph) | — |
 | `extensions.<other>` (passthrough) | parsed, opaque to framework | parsed, opaque | parsed, opaque | parsed, opaque | parsed, opaque |
@@ -1189,7 +1265,7 @@ will my agent see?"
 | `set_root_dir` | `workspace.kind: local` only | **Unbounded unless `workspace.sandbox_root` is set** (kglite 0.15.5+, mcp-methods 0.4.3+). Without that key a swap may point the server at any readable directory; `workspace.root` is the *starting* root, not a boundary. |
 | `github_issues` / `github_api` | `builtins.github: true` in the manifest **and** `GITHUB_TOKEN` (or `GH_TOKEN`) reachable at boot | Opt-in is required as of mcp-methods 0.4.5 — an ambient token no longer registers anything on its own. Token loaded from process env, walk-up `.env`, or explicit `env_file:`. Tools are registered together; never one without the other. |
 | Manifest `tools[].cypher` entries | the manifest declares them AND the mode supports cypher (anything but `--source-root` and bare) | Tool names cannot collide with the built-ins above. |
-| `list_recipe_queries` / `run_recipe_query` | `extensions.cypher_recipes` is a non-empty valid catalog | Both fixed names register together. Listing works without a graph; running requires an active, fresh graph. |
+| `list_recipe_queries` / `run_recipe_query` | the **merged** catalog is non-empty — `extensions.cypher_recipes`, the served graph's own `KgliteRecipe` records (`--graph` / `--watch` only), or both | Both fixed names register together. Listing works without a graph; running requires an active, fresh graph. |
 
 ### Tool response formats
 
@@ -1263,8 +1339,9 @@ as a test failure on the next CI run.
 A mapping from recipe identifier to `{description, queries}`. Each query is a
 mapping with exactly `description`, `parameters`, and `cypher`. Identifiers
 match `^[A-Za-z_][A-Za-z0-9_]*$`; descriptions and Cypher must contain a
-non-whitespace character; every recipe has at least one query. An absent or
-empty catalog disables both recipe tools.
+non-whitespace character; every recipe has at least one query. Both recipe
+tools are disabled only when the catalog is empty *after* the served graph's
+own records are merged under it.
 
 `parameters` uses the strict closed root schema described in the grouped,
 structured read-query section above. Catalog validation happens at server
