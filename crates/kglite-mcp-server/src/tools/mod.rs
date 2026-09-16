@@ -11,6 +11,7 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+mod activation_refresh;
 mod active_graph;
 mod args;
 mod cypher_exec;
@@ -28,6 +29,7 @@ mod write_refusals;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use activation_refresh::*;
 pub(crate) use active_graph::*;
 pub(crate) use args::*;
 pub(crate) use cypher_exec::*;

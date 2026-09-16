@@ -639,27 +639,37 @@ fn render_skills_index(active: &[ActiveSkill]) -> Option<String> {
 
 /// Rebuilds the skill layer against whatever graph is active *now*.
 ///
-/// A graph swap (`reload_graph`, `load_graph`, `create_graph`) replaces the
-/// data the graph layer was read from, so the skills resolved at boot describe
-/// a graph the server no longer serves. mcp-methods 0.4.11 is the first cut
-/// that can fix that after `serve`: [`SkillReloader::reinject_skills`] strips
-/// the previous injection and re-runs the pass from `&self`.
+/// Two things go stale when the served graph changes. A graph swap
+/// (`reload_graph`, `load_graph`, `create_graph`) replaces the data the graph
+/// layer was **read** from, so the skills resolved at boot describe a graph
+/// the server no longer serves. A workspace root activation (`set_root_dir`,
+/// `repo_management`) publishes the first graph there has ever been, so every
+/// `applies_when: graph_has_node_type:` predicate that resolved false against
+/// no graph at boot has to be **re-evaluated**. mcp-methods 0.4.11 is the
+/// first cut that can fix either after `serve`:
+/// [`SkillReloader::reinject_skills`] strips the previous injection and
+/// re-runs the pass from `&self`.
 ///
 /// Armed **after** `install_skills` — the composition it re-runs needs the
-/// closed tool surface — and only in the two modes whose graph layer is read
-/// at boot (see [`read_graph_skills`]); elsewhere a rebuild would recompose a
-/// byte-identical registry and spend a `tools/list_changed` on nothing.
-/// The recipe catalogue is deliberately *not* rebuilt: its routes are fixed
-/// tool names settled before the allowlist, and the catalogue is documented
-/// immutable after boot.
+/// closed tool surface — in the four modes whose graph can change after boot:
+/// graph and watch, whose graph layer is read at boot and is replaced by a
+/// swap, and the two workspace modes, whose graph does not exist at boot at
+/// all. In source-root and bare modes there is no graph either way, so a
+/// rebuild would recompose a byte-identical registry and spend a
+/// `tools/list_changed` on nothing. The recipe catalogue is deliberately
+/// *not* rebuilt: its routes are fixed tool names settled before the
+/// allowlist, and the catalogue is documented immutable after boot.
 ///
-/// **One swap path does not refresh: the per-call freshness re-read**
+/// **Two swap paths do not refresh.** The per-call freshness re-read
 /// (`GraphState::ensure_graph_fresh`, which re-opens the served file when the
-/// bytes on disk change under a `--graph` server). It runs from inside the
+/// bytes on disk change under a `--graph` server) runs from inside the
 /// graph's own write path, where re-reading the skill records would take the
-/// read lock the swap still holds. A server whose file is rebuilt externally
-/// therefore keeps the skills it booted with until something calls
-/// `reload_graph`.
+/// read lock the swap still holds. The watcher's lazy workspace rebuild
+/// (`GraphState::ensure_workspace_graph_fresh`) is the same shape from the
+/// same caller. A server whose graph is replaced by either therefore keeps
+/// the skills it booted with until something calls `reload_graph` or
+/// re-activates a root — which is harmless for both, because a rebuild of the
+/// *same* root emits the same node types the last resolution already saw.
 #[derive(Clone, Default)]
 pub(crate) struct SkillRefresher {
     inner: Arc<RwLock<Option<Box<RefreshInner>>>>,
@@ -710,7 +720,13 @@ impl SkillRefresher {
             skills_index,
             peer,
         } = inputs;
-        if !matches!(mode, Mode::Graph { .. } | Mode::Watch { .. }) {
+        if !matches!(
+            mode,
+            Mode::Graph { .. }
+                | Mode::Watch { .. }
+                | Mode::LocalWorkspace { .. }
+                | Mode::Workspace { .. }
+        ) {
             return;
         }
         *write_lock(&self.inner) = Some(Box::new(RefreshInner {
@@ -725,9 +741,20 @@ impl SkillRefresher {
         }));
     }
 
-    /// Re-resolve and re-inject. Called from a graph-swap tool handler after
-    /// the swap has succeeded; a no-op on an unarmed refresher, which is every
-    /// mode that contributes no graph layer.
+    /// Re-resolve and re-inject. Called from a tool handler that has just
+    /// changed which graph is served — a graph swap, or a workspace root
+    /// activation — **after** that call has returned, with every lock it took
+    /// released. A no-op on an unarmed refresher.
+    ///
+    /// The call site matters and is not interchangeable. Running this from
+    /// inside `GraphState::commit_workspace_graph` self-deadlocks: the
+    /// recomposition reads the active graph through `with_kg`, and the commit
+    /// holds that same `RwLock` for writing. Running it at the tail of the
+    /// activation commit closure instead takes the framework's skill lock
+    /// while mcp-methods still holds the activation and `root_swap` write
+    /// locks, inverting the order against every tool handler that reaches a
+    /// `Workspace` accessor. Outside the whole activation, in the handler, is
+    /// the only site that holds neither.
     ///
     /// Failures are logged, never returned: the swap the caller performed did
     /// succeed, and turning a stale skill layer into a failed `reload_graph`
@@ -747,7 +774,7 @@ impl SkillRefresher {
         let registry = match registry_result {
             Ok(registry) => registry,
             Err(error) => {
-                tracing::warn!(%error, "skill layer not rebuilt after the graph swap");
+                tracing::warn!(%error, "skill layer not rebuilt after the graph change");
                 return;
             }
         };
@@ -763,7 +790,7 @@ impl SkillRefresher {
         tracing::info!(
             skills = active.len(),
             graph_skills = stats.served,
-            "skill layer rebuilt after the graph swap"
+            "skill layer rebuilt after the graph change"
         );
         notify_peer(&inner.peer);
     }
@@ -2337,3 +2364,7 @@ mod skill_layer_tests {
         assert_eq!(ProducerSkillStats::default().summary(), None);
     }
 }
+
+#[cfg(test)]
+#[path = "skills_activation_tests.rs"]
+mod skills_activation_tests;

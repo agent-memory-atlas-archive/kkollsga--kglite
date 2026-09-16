@@ -941,6 +941,14 @@ pub(crate) async fn run_async(
         // `tools::register`, because the mode is not otherwise visible there.
         tools::register_graph_mode_tools(&mut server, graph_state.clone(), skill_refresher.clone());
     }
+    if matches!(mode, Mode::Workspace { .. } | Mode::LocalWorkspace { .. }) {
+        // The workspace counterpart of `reload_graph`'s refresh: the graph a
+        // predicate resolves against does not exist until a root is
+        // activated, and the framework owns those two tool handlers. Before
+        // `register_extension_tools`, whose tail settles the final route
+        // names.
+        tools::refresh_skills_after_activation(&mut server, skill_refresher.clone());
+    }
     if gate_code_tools {
         // Disable, never skip registration: an unregistered name is absent from
         // `router.map`, and `apply_bundled_tool_overrides` hard-errors on any

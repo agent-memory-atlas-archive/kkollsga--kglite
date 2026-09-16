@@ -20,12 +20,19 @@ const ROOT_ENV: &str = "KGLITE_WATCH_COMPOSITION_ROOT";
 /// producer that contributes nothing but the graph builder.
 const METHODOLOGY_ENV: &str = "KGLITE_WATCH_COMPOSITION_METHODOLOGY";
 const PRODUCER_SKILL: &str = "fixture_methodology";
+/// The bundled skill gated on `graph_has_node_type: [Function, Class]`.
+const GATED_SKILL: &str = "code_graph_analysis";
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const DEBOUNCE_SETTLE: Duration = Duration::from_millis(900);
 
 fn producer_hooks() -> WorkspaceGraphHooks {
+    // Only the methodology run emits `:Function`, the node type the bundled
+    // `code_graph_analysis` skill gates on — the watch test measures a
+    // producer that contributes nothing but the builder, and its node count
+    // is an assertion there.
+    let code_graph = std::env::var_os(METHODOLOGY_ENV).is_some();
     WorkspaceGraphHooks {
-        build: Box::new(|request| {
+        build: Box::new(move |request| {
             let source = request.root().join("fixture.rs");
             let contents = std::fs::read_to_string(&source)
                 .map_err(|error| format!("read {}: {error}", source.display()))?;
@@ -40,6 +47,15 @@ fn producer_hooks() -> WorkspaceGraphHooks {
                 &options,
             )
             .map_err(|error| error.to_string())?;
+            if code_graph {
+                let empty = HashMap::new();
+                execute_mut(
+                    &mut graph,
+                    "CREATE (:Function {id: 'fixture::initial'})",
+                    &ExecuteOptions::eager(&empty),
+                )
+                .map_err(|error| error.to_string())?;
+            }
             Ok(WorkspaceGraphResult::new(Arc::new(graph)))
         }),
         is_relevant: Box::new(|change| {
@@ -113,6 +129,10 @@ struct ServerChild {
     responses: mpsc::Receiver<std::io::Result<String>>,
     stderr: mpsc::Receiver<std::io::Result<Vec<u8>>>,
     next_id: u64,
+    /// `method` of every notification frame read while waiting for a
+    /// response. The server sends `tools/list_changed` from a spawned task,
+    /// so it can land before or after the reply to the call that caused it.
+    notifications: Vec<String>,
 }
 
 impl ServerChild {
@@ -159,6 +179,7 @@ impl ServerChild {
             responses,
             stderr: stderr_rx,
             next_id: 1,
+            notifications: Vec::new(),
         }
     }
 
@@ -186,9 +207,42 @@ impl ServerChild {
             }
             let frame: serde_json::Value = serde_json::from_str(&line)
                 .unwrap_or_else(|error| panic!("invalid frame {line:?}: {error}"));
+            self.record_notification(&frame);
             if frame["id"] == id {
                 assert!(frame.get("error").is_none(), "{method} failed: {frame}");
                 return frame["result"].clone();
+            }
+        }
+    }
+
+    /// Keep an id-less frame's `method`, so a later assertion can ask whether
+    /// the server ever announced a change.
+    fn record_notification(&mut self, frame: &serde_json::Value) {
+        if frame.get("id").is_none() {
+            if let Some(method) = frame["method"].as_str() {
+                self.notifications.push(method.to_string());
+            }
+        }
+    }
+
+    /// Wait for a notification the server sends off the request path.
+    fn saw_notification(&mut self, method: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.notifications.iter().any(|seen| seen == method) {
+                return true;
+            }
+            let Ok(Ok(line)) = self
+                .responses
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            else {
+                return false;
+            };
+            if !line.starts_with('{') {
+                continue;
+            }
+            if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) {
+                self.record_notification(&frame);
             }
         }
     }
@@ -325,6 +379,16 @@ fn source_reads_retain_graph_only_state_and_real_edits_rebuild() {
     );
 }
 
+/// Skill names the client would see in `prompts/list`.
+fn prompt_names(server: &mut ServerChild) -> Vec<String> {
+    server.request("prompts/list", serde_json::json!({}))["prompts"]
+        .as_array()
+        .expect("prompts")
+        .iter()
+        .filter_map(|prompt| prompt["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
 /// The producer-methodology contract, end to end through a real MCP handshake:
 /// an embedder that registers skills and a recipe catalogue once per server
 /// serves both for every graph it builds, in a workspace mode, with **no
@@ -332,6 +396,10 @@ fn source_reads_retain_graph_only_state_and_real_edits_rebuild() {
 /// `src/` composes a registry or a catalogue directly; only this one proves the
 /// wiring survives `run_with_extensions`, `initialize` and the frozen
 /// capability set.
+///
+/// It also covers the other direction: a *bundled* skill gated on the graph's
+/// shape is suppressed at boot here and revived by the first `set_root_dir`,
+/// with a `tools/list_changed` telling the client to re-list.
 #[test]
 fn a_producer_registers_its_methodology_for_every_graph_it_serves() {
     let fixture = tempfile::tempdir().expect("methodology fixture");
@@ -385,6 +453,16 @@ fn a_producer_registers_its_methodology_for_every_graph_it_serves() {
         "skill: {body}"
     );
 
+    // The other half of "no graph at boot": every bundled skill gated on
+    // `graph_has_node_type:` is suppressed here, because the predicate was
+    // evaluated against nothing. Until 0.17.7 nothing ever asked again, so in
+    // a producer deployment these three were dead for the life of the server.
+    let suppressed = prompt_names(&mut server);
+    assert!(
+        !suppressed.iter().any(|name| name == GATED_SKILL),
+        "a code-graph skill cannot be active before a code graph exists: {suppressed:?}"
+    );
+
     // No graph at boot in a workspace mode: the catalogue was registered before
     // one existed, and runs against whatever `set_root_dir` activates.
     let activated = server.call(
@@ -392,8 +470,21 @@ fn a_producer_registers_its_methodology_for_every_graph_it_serves() {
         serde_json::json!({"path": fixture.path().to_string_lossy()}),
     );
     assert!(
-        activated.contains("Graph ready: 1 nodes"),
+        activated.contains("Graph ready: 2 nodes"),
         "activation: {activated}"
+    );
+
+    // And the activation re-resolves the skill plane: the predicate is true
+    // now, the client is told the lists moved, and the skill is served.
+    assert!(
+        server.saw_notification("notifications/tools/list_changed", RPC_TIMEOUT),
+        "the client was never told the tool list changed: {:?}",
+        server.notifications
+    );
+    let revived = prompt_names(&mut server);
+    assert!(
+        revived.iter().any(|name| name == GATED_SKILL),
+        "the first activated root must revive the code-graph skills: {revived:?}"
     );
     let rows = server.call(
         "run_recipe_query",
