@@ -2655,6 +2655,142 @@ class TestGraphCarriedSkills:
         assert "<skills count=" in overview, overview
 
 
+# ── Test: graph-carried recipes (KgliteRecipe nodes inside the .kgl) ──────
+
+
+NO_PARAMETERS = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+class TestGraphCarriedRecipes:
+    """A `.kgl` can carry its own query catalogue as `KgliteRecipe` nodes,
+    written through `g.set_recipe(...)`. The server compiles them at boot in
+    --graph mode and merges them *under* the manifest's
+    `extensions.cypher_recipes`: the manifest is the surface an operator can
+    edit, so it wins per `(recipe, name)`, and everything the graph alone
+    carries is served."""
+
+    @pytest.fixture
+    def recipe_graph(self, tmp_path: Path) -> Path:
+        kgl = tmp_path / "recipes.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_recipe(
+            "wells",
+            "count",
+            "Count the wells in this graph.",
+            "MATCH (w:Well) RETURN count(w) AS graph_answer",
+            parameters=NO_PARAMETERS,
+            recipe_description="Asking this graph about wells.",
+        )
+        g.save(str(kgl))
+        return kgl
+
+    def test_a_graph_recipe_is_served_with_no_manifest_catalogue(self, recipe_graph: Path):
+        manifest = recipe_graph.parent / "graph_only_mcp.yaml"
+        manifest.write_text("name: Recipes\nskills: true\n", encoding="utf-8")
+        client = _spawn(["--graph", str(recipe_graph), "--mcp-config", str(manifest)])
+        try:
+            tools = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            prompts = {p["name"] for p in client.list_prompts()}
+            ran = _text_content(
+                client.call_tool("run_recipe_query", {"recipe": "wells", "query": "count", "variables": {}})
+            )
+            overview = _text_content(client.call_tool("graph_overview", {}))
+            boot = _wait_for_stderr(client, "graph recipes:")
+        finally:
+            client.shutdown()
+
+        assert "run_recipe_query" in tools, sorted(tools)
+        assert "list_recipe_queries" in tools, sorted(tools)
+        assert '"graph_answer"' in ran, ran
+        assert "[[1]]" in ran.replace(" ", ""), ran
+        # The catalogue is non-empty, so the bundled methodology and the
+        # overview hint both activate — neither knows the source was a graph.
+        assert "recipe_queries" in prompts, sorted(prompts)
+        assert '<query-catalog recipes="1" queries="1"' in overview, overview
+        assert "KgliteRecipe" not in overview, overview
+        assert "graph recipes: 1 served" in boot, boot
+
+    def test_the_manifest_wins_for_a_key_the_graph_also_carries(self, recipe_graph: Path):
+        manifest = recipe_graph.parent / "override_mcp.yaml"
+        manifest.write_text(
+            "name: Override\n"
+            "skills: true\n"
+            "extensions:\n"
+            "  cypher_recipes:\n"
+            "    wells:\n"
+            "      description: The operator's own wells group.\n"
+            "      queries:\n"
+            "        count:\n"
+            "          description: Count the wells, the operator's way.\n"
+            "          parameters:\n"
+            "            type: object\n"
+            "            properties: {}\n"
+            "            required: []\n"
+            "            additionalProperties: false\n"
+            "          cypher: MATCH (w:Well) RETURN count(w) AS manifest_answer\n",
+            encoding="utf-8",
+        )
+        client = _spawn(["--graph", str(recipe_graph), "--mcp-config", str(manifest)])
+        try:
+            ran = _text_content(
+                client.call_tool("run_recipe_query", {"recipe": "wells", "query": "count", "variables": {}})
+            )
+            listed = _text_content(client.call_tool("list_recipe_queries", {"recipe": "wells"}))
+            boot = _wait_for_stderr(client, "graph recipes:")
+        finally:
+            client.shutdown()
+
+        # The result column is the observable difference between the two
+        # stored statements — the manifest's ran.
+        assert '"manifest_answer"' in ran, ran
+        assert '"graph_answer"' not in ran, ran
+        assert "The operator's own wells group." in listed, listed
+        assert "graph recipes: 0 served, 1 overridden by the manifest" in boot, boot
+
+    def test_an_invalid_record_is_skipped_while_its_sibling_serves(self, tmp_path: Path):
+        kgl = tmp_path / "mixed_recipes.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_recipe(
+            "wells",
+            "good",
+            "Count the wells.",
+            "MATCH (w:Well) RETURN count(w) AS graph_answer",
+            parameters=NO_PARAMETERS,
+            recipe_description="Asking this graph about wells.",
+        )
+        # Raw Cypher bypasses `set_recipe`'s validation — this is exactly the
+        # node shape the boot reader has to survive. A mutation is the fault
+        # that matters most: it is the one a catalogue must never serve.
+        g.cypher(
+            "CREATE (r:KgliteRecipe {recipe: 'wells', name: 'broken', "
+            "description: 'Broken.', parameters: {type: 'object', properties: {}, "
+            "required: [], additionalProperties: false}, "
+            "cypher: 'CREATE (:Well {id: 99})', "
+            "recipe_description: 'Asking this graph about wells.'})"
+        )
+        g.save(str(kgl))
+        manifest = tmp_path / "mixed_recipes_mcp.yaml"
+        manifest.write_text("name: Mixed recipes\nskills: true\n", encoding="utf-8")
+
+        client = _spawn(["--graph", str(kgl), "--mcp-config", str(manifest)])
+        try:
+            listed = _text_content(client.call_tool("list_recipe_queries", {"recipe": "wells"}))
+            boot = _wait_for_stderr(client, "graph recipes:")
+        finally:
+            client.shutdown()
+
+        assert '"good"' in listed, listed
+        assert '"broken"' not in listed, listed
+        assert "1 served" in boot and "1 skipped: wells/broken:" in boot, boot
+
+
 # ── Test: code-tool gating on non-code graphs ─────────────────────────────
 
 

@@ -52,16 +52,18 @@ fn unknown_extension_keys(manifest: Option<&mcp_methods::server::Manifest>) -> V
 /// Recipe definitions are configuration, not per-call input, so the
 /// deliberately small schema subset is checked here and later route handlers
 /// share one immutable catalog.
+/// The manifest's catalogue alone. The graph's own records are merged under it
+/// later ([`recipe_queries::merge_graph_recipes`]), once the graph is open.
 fn boot_recipe_catalog(
     manifest: Option<&mcp_methods::server::Manifest>,
-) -> Result<Arc<recipe_queries::RecipeCatalog>> {
-    let catalog = Arc::new(match manifest {
+) -> Result<recipe_queries::RecipeCatalog> {
+    let catalog = match manifest {
         Some(manifest) => recipe_queries::RecipeCatalog::from_manifest_value(
             manifest.extensions.get("cypher_recipes"),
         )
         .context("extensions.cypher_recipes parse failed")?,
         None => recipe_queries::RecipeCatalog::default(),
-    });
+    };
     if let Some(summary) = catalog.discovery_summary() {
         tracing::info!(
             recipes = summary.recipe_count,
@@ -656,7 +658,7 @@ fn bind_manifest_embedder(
 
 /// The `extensions:` knobs the rest of boot is wired from.
 struct BootExtensions {
-    recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
+    recipe_catalog: recipe_queries::RecipeCatalog,
     tools_allow: Option<Vec<String>>,
     mutations_enabled: bool,
     write_scope: Option<Vec<String>>,
@@ -742,7 +744,6 @@ pub(crate) async fn run_async(
         write_scope,
         parallel,
     } = boot_extensions(manifest.as_ref(), &cli, read_only_pin)?;
-    let recipe_catalog_summary = recipe_catalog.discovery_summary();
 
     // Manifest `workspace.kind: local` wins over CLI flags — promote before
     // mode-specific binding so the rest of boot sees `Mode::LocalWorkspace`.
@@ -786,6 +787,17 @@ pub(crate) async fn run_async(
 
     let (options, source_root_status) =
         bind_mode(&mode, &cli, manifest.as_ref(), &graph_state, options)?;
+
+    // Only now: `bind_mode` has performed the boot open, so the graph's own
+    // catalogue exists to merge under the manifest's. Everything downstream —
+    // the routes, the bundled `recipe_queries` skill, the overview hint, the
+    // allowlist's recipe exemption, the raw-stdio route pointers — reads the
+    // merged catalogue, so a graph that carries recipes serves them whether or
+    // not the manifest declared any.
+    let (recipe_catalog, graph_recipes) =
+        recipe_queries::merge_graph_recipes(&mode, &graph_state, recipe_catalog);
+    let recipe_catalog = Arc::new(recipe_catalog);
+    let recipe_catalog_summary = recipe_catalog.discovery_summary();
 
     let options = apply_result_decorations(options, &graph_state, source_root_status.as_ref());
 
@@ -896,7 +908,10 @@ pub(crate) async fn run_async(
         env_file_loaded.as_deref(),
         &csv_http,
         source_root_status.as_ref(),
-        &graph_skills,
+        crate::boot::GraphCarried {
+            skills: &graph_skills,
+            recipes: &graph_recipes,
+        },
     );
 
     let service = server

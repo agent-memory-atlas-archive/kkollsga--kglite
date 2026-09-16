@@ -4,10 +4,12 @@
 //! the read-only Cypher rules — lives in [`kglite::api::recipes`], because a
 //! Python caller and a boot-time graph reader validate a stored query by
 //! exactly the same rules. What stays here is the delivery: route
-//! registration, the wire types, the result envelope and the structured error
-//! payload an agent sees.
+//! registration, the wire types, the result envelope, the structured error
+//! payload an agent sees, and the boot-time merge of the graph's own records
+//! under the manifest's catalogue.
 
 mod errors;
+mod graph_layer;
 mod result;
 mod routes;
 mod wire;
@@ -18,6 +20,7 @@ mod catalog_tests;
 mod result_tests;
 
 pub(crate) use errors::RecipeErrorEnvelope;
+pub(crate) use graph_layer::{merge_graph_recipes, GraphRecipeStats};
 pub(crate) use kglite::api::recipes::{
     query_conversion_error, CatalogSummary, RecipeCatalog, RecipeQueryDefinition,
     VariableIssueKind, VariablesValidationError, RECIPE_RESULT_ROW_LIMIT,

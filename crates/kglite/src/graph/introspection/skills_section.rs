@@ -14,6 +14,7 @@
 //! [`fetch_call`].
 
 use crate::graph::introspection::DescribeSurface;
+use crate::graph::recipes;
 use crate::graph::schema::DirGraph;
 use crate::graph::skills;
 
@@ -22,6 +23,7 @@ use super::describe::xml_escape;
 /// Write every agent-guidance section a description carries, in order.
 pub(crate) fn write_agent_guidance(xml: &mut String, graph: &DirGraph, surface: DescribeSurface) {
     write_skills(xml, graph, surface);
+    write_recipes(xml, graph, surface);
 }
 
 /// Write `<skills>`, or nothing when the graph carries none — an empty element
@@ -49,6 +51,63 @@ fn write_skills(xml: &mut String, graph: &DirGraph, surface: DescribeSurface) {
         ));
     }
     xml.push_str("  </skills>\n");
+}
+
+/// Write `<recipes>`, one child per group rather than per query: a catalogue
+/// is read by an agent choosing a group, and a graph can carry dozens of
+/// queries whose names mean nothing without their schemas. Absent when the
+/// graph carries none, and on the MCP surface, which has its own
+/// `<query-catalog/>` hint over the catalogue it actually merged and serves.
+fn write_recipes(xml: &mut String, graph: &DirGraph, surface: DescribeSurface) {
+    let Some(fetch) = recipe_fetch_call(surface) else {
+        return;
+    };
+    let records = recipes::list(graph);
+    if records.is_empty() {
+        return;
+    }
+    // `list` is sorted by `(recipe, name)`, so a group's members are
+    // contiguous and its first record carries the description the catalogue
+    // would serve — the same rule `catalogue_from_graph` applies.
+    let mut groups: Vec<(&str, &str, usize)> = Vec::new();
+    for record in &records {
+        match groups.last_mut() {
+            Some((name, _, count)) if *name == record.recipe => *count += 1,
+            _ => groups.push((&record.recipe, &record.recipe_description, 1)),
+        }
+    }
+    xml.push_str(&format!(
+        "  <recipes count=\"{}\" hint=\"Named read-only queries this graph carries for itself. Read one with {}; an MCP server serves them as run_recipe_query.\">\n",
+        groups.len(),
+        xml_escape(&fetch),
+    ));
+    for (name, description, queries) in groups {
+        xml.push_str(&format!(
+            "    <recipe name=\"{}\" queries=\"{queries}\" description=\"{}\"/>\n",
+            xml_escape(name),
+            xml_escape(&summary(description)),
+        ));
+    }
+    xml.push_str("  </recipes>\n");
+}
+
+/// How this surface reads one stored query, or `None` for a surface that does
+/// not serve this graph's recipes.
+///
+/// There is no `kglite recipe` subcommand — a CLI user writes Cypher — so the
+/// CLI is pointed at the label itself, which is the honest answer rather than
+/// a verb that does not exist. The MCP server answers `None` for the same
+/// reason it does for skills: its overview already reports the catalogue it
+/// merged, and that catalogue is not this graph's records.
+fn recipe_fetch_call(surface: DescribeSurface) -> Option<String> {
+    match surface {
+        DescribeSurface::Python => Some("get_recipe('recipe', 'name')".to_string()),
+        DescribeSurface::Cli => Some(
+            "kglite query GRAPH \"MATCH (r:KgliteRecipe) RETURN r.recipe, r.name, r.cypher\""
+                .to_string(),
+        ),
+        DescribeSurface::Mcp => None,
+    }
 }
 
 /// How this surface fetches one skill body, or `None` for a surface that does

@@ -243,6 +243,14 @@ pub(crate) fn declare_unresolved_source_roots(
     options
 }
 
+/// What the served `.kgl` contributed to this boot — the two layers a graph can
+/// carry about itself. One parameter rather than two so a third layer is a
+/// field here instead of another argument on every caller.
+pub(crate) struct GraphCarried<'a> {
+    pub(crate) skills: &'a crate::skills::GraphSkillStats,
+    pub(crate) recipes: &'a crate::recipe_queries::GraphRecipeStats,
+}
+
 pub(crate) fn print_boot_summary(
     mode: &Mode,
     manifest: Option<&Manifest>,
@@ -250,7 +258,7 @@ pub(crate) fn print_boot_summary(
     env_file_loaded: Option<&std::path::Path>,
     csv_http: &crate::csv_http::CsvHttpState,
     source_roots: Option<&SourceRootStatus>,
-    graph_skills: &crate::skills::GraphSkillStats,
+    graph_carried: GraphCarried<'_>,
 ) {
     let label = match mode {
         Mode::Graph { path } => format!("graph [{}]", path.display()),
@@ -303,7 +311,12 @@ pub(crate) fn print_boot_summary(
     // mirrors the child's stderr, so this line reaches that surface too —
     // `prompts/list`, which the selftest check queries, carries names and
     // descriptions only and cannot attribute a skill to its source.
-    if let Some(summary) = graph_skills.summary() {
+    if let Some(summary) = graph_carried.skills.summary() {
+        parts.push(summary);
+    }
+    // Same reasoning one layer over: a skipped query names itself nowhere else
+    // an operator reads, and `--selftest` mirrors this stderr line.
+    if let Some(summary) = graph_carried.recipes.summary() {
         parts.push(summary);
     }
     eprintln!("kglite-mcp-server: {}", parts.join("; "));

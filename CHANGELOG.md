@@ -48,6 +48,35 @@ before upgrading.
   skill, in every mode. Like the operator prefix and the recipe-catalog hint it
   is a bare-call decoration; drill-downs are unchanged. It is rendered at boot
   for the same reason the skills themselves are.
+- Graph-carried recipes: a graph can also store the named, parameterised,
+  read-only Cypher an agent host serves by name, so a `.kgl` that ships a skill
+  can ship the exact queries that skill names. `list_recipes()`,
+  `get_recipe()`, `set_recipe()`, `delete_recipe()`, `import_recipes()` and
+  `export_recipes()` manage them from Python, and `kglite::api::recipes` from
+  Rust — the catalogue model and its validation moved into core from the MCP
+  server, so every caller holds a stored query to the same rules: the Cypher
+  must parse and be read-only, and the parameter schema must be a closed JSON
+  Schema matching its `$parameters` exactly. Each query is a node under the
+  `KgliteRecipe` system label, keyed `(recipe, name)` and hidden from type
+  enumerations like `KgliteSkill`; `parameters` is stored as a native nested
+  map, so `r.parameters.type` reads from Cypher. Import and export use the
+  `extensions.cypher_recipes` document shape, as JSON.
+- An MCP server in `--graph` or `--watch` mode compiles the served graph's
+  recipes at boot and merges them **under** the manifest's
+  `extensions.cypher_recipes`: the manifest wins per `(recipe, name)` and per
+  group description, and everything the graph alone carries is served. A graph
+  with recipes therefore gets `list_recipe_queries` / `run_recipe_query`, the
+  bundled `recipe_queries` methodology and the `<query-catalog/>` overview hint
+  with no catalogue in the manifest at all. A manifest query that does not
+  compile still fails the boot; a graph record that does not is skipped with a
+  warning naming it and the rule, and its siblings still serve. The boot
+  summary reports what the graph contributed. Like skills, the catalogue is
+  read once, at boot.
+- `describe()` now lists a graph's recipe catalogue in a `<recipes count="N">`
+  element — one entry per group with its query count and description — in
+  Python and `kglite describe`. MCP `graph_overview()` keeps its own
+  `<query-catalog/>` hint instead, which reports the catalogue the server
+  merged rather than this graph's records.
 
 ### Changed
 
