@@ -101,7 +101,7 @@
     {
       "path": "crates/kglite/src/graph/introspection/describe.rs",
       "qualified_name": "crate::write_type_detail",
-      "lines": 342,
+      "lines": 350,
       "branches": 40,
       "nesting": 5
     },
