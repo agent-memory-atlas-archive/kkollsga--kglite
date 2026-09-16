@@ -648,6 +648,14 @@
           "kind": "method",
           "signature": "(self, /)"
         },
+        "delete_recipe": {
+          "kind": "method",
+          "signature": "(self, /, recipe, name)"
+        },
+        "delete_skill": {
+          "kind": "method",
+          "signature": "(self, /, name)"
+        },
         "dematerialize_ontology": {
           "kind": "method",
           "signature": "(self, /)"
@@ -740,6 +748,14 @@
           "kind": "method",
           "signature": "(self, /, path, node_types=None)"
         },
+        "export_recipes": {
+          "kind": "method",
+          "signature": "(self, /, path)"
+        },
+        "export_skills": {
+          "kind": "method",
+          "signature": "(self, /, path)"
+        },
         "export_string": {
           "kind": "method",
           "signature": "(self, /, format=None, selection_only=None)"
@@ -771,6 +787,14 @@
         "get_properties": {
           "kind": "method",
           "signature": "(self, /, properties, limit=None, indices=None, flatten_single_parent=None)"
+        },
+        "get_recipe": {
+          "kind": "method",
+          "signature": "(self, /, recipe, name)"
+        },
+        "get_skill": {
+          "kind": "method",
+          "signature": "(self, /, name)"
         },
         "get_table_property": {
           "kind": "method",
@@ -805,6 +829,14 @@
           "signature": "(self, /)"
         },
         "import_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, path)"
+        },
+        "import_recipes": {
+          "kind": "method",
+          "signature": "(self, /, path)"
+        },
+        "import_skills": {
           "kind": "method",
           "signature": "(self, /, path)"
         },
@@ -861,6 +893,14 @@
           "signature": "(self, /)"
         },
         "list_indexes": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "list_recipes": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "list_skills": {
           "kind": "method",
           "signature": "(self, /)"
         },
@@ -1060,9 +1100,17 @@
           "kind": "method",
           "signature": "(self, /, node_type, parent_type)"
         },
+        "set_recipe": {
+          "kind": "method",
+          "signature": "(self, /, recipe, name, description, cypher, parameters=None, recipe_description=None)"
+        },
         "set_schema_version": {
           "kind": "method",
           "signature": "(self, /, version)"
+        },
+        "set_skill": {
+          "kind": "method",
+          "signature": "(self, /, name, description, body='', references_tools=None, delivery='lazy')"
         },
         "set_spatial": {
           "kind": "method",

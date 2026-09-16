@@ -267,7 +267,7 @@ def test_import_reads_a_manifest_shaped_json_catalogue(g):
 
 
 def test_import_reads_a_bare_catalogue_mapping(g, tmp_path):
-    bare = json.loads(CODE_REVIEW.read_text())["extensions"]["cypher_recipes"]
+    bare = json.loads(CODE_REVIEW.read_text(encoding="utf-8"))["extensions"]["cypher_recipes"]
     path = tmp_path / "bare.json"
     path.write_text(json.dumps(bare), encoding="utf-8")
 
@@ -285,7 +285,7 @@ def test_import_of_yaml_says_json_only(g):
 
 
 def test_an_invalid_document_writes_nothing_and_names_the_query(g, tmp_path):
-    broken = json.loads(CODE_REVIEW.read_text())
+    broken = json.loads(CODE_REVIEW.read_text(encoding="utf-8"))
     queries = broken["extensions"]["cypher_recipes"]["code_review"]["queries"]
     queries["resolve_function"]["cypher"] = "CREATE (:Function {qualified_name: $qualified_name})"
     path = tmp_path / "broken.json"
@@ -301,7 +301,7 @@ def test_export_then_import_into_a_fresh_graph_is_identical(g, tmp_path):
     out = tmp_path / "recipes.json"
 
     assert g.export_recipes(str(out)) is None
-    assert set(json.loads(out.read_text())) == {"code_review"}
+    assert set(json.loads(out.read_text(encoding="utf-8"))) == {"code_review"}
 
     fresh = KnowledgeGraph()
     fresh.import_recipes(str(out))
