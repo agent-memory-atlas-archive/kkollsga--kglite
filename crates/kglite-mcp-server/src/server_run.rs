@@ -916,15 +916,15 @@ pub(crate) async fn run_async(
     // that just ran. Manifest-less (bare) deployments serve no skills at all,
     // so there is nothing to rebuild and the refresher stays unarmed.
     if let Some(m) = manifest.as_ref() {
-        skill_refresher.arm(
-            server.skill_reloader(),
-            m,
-            &mode,
-            &graph_state,
+        skill_refresher.arm(crate::skills::RefreshInputs {
+            reloader: server.skill_reloader(),
+            manifest: m,
+            mode: &mode,
+            graph_state: &graph_state,
             recipe_catalog_summary,
-            &skills_index,
-            &peer_slot,
-        );
+            skills_index: &skills_index,
+            peer: &peer_slot,
+        });
     }
 
     print_boot_summary(

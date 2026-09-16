@@ -369,19 +369,36 @@ struct RefreshInner {
     peer: PeerSlot,
 }
 
+/// The boot state [`SkillRefresher::arm`] captures for a later rebuild.
+///
+/// A struct rather than a parameter list for the same reason
+/// `KgliteToolParams` is one: the set is the boot wiring, it grows with it,
+/// and named fields at the single call site read as that wiring rather than
+/// as a positional sequence.
+pub(crate) struct RefreshInputs<'a> {
+    pub(crate) reloader: SkillReloader,
+    pub(crate) manifest: &'a Manifest,
+    pub(crate) mode: &'a Mode,
+    pub(crate) graph_state: &'a GraphState,
+    /// Dimensions of the catalogue actually served, carried so a rebuild
+    /// re-renders the same overview hint the boot pass did.
+    pub(crate) recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
+    pub(crate) skills_index: &'a SkillsIndexSlot,
+    pub(crate) peer: &'a PeerSlot,
+}
+
 impl SkillRefresher {
     /// Fill the slot the graph-swap handlers already hold a clone of.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn arm(
-        &self,
-        reloader: SkillReloader,
-        manifest: &Manifest,
-        mode: &Mode,
-        graph_state: &GraphState,
-        recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
-        skills_index: &SkillsIndexSlot,
-        peer: &PeerSlot,
-    ) {
+    pub(crate) fn arm(&self, inputs: RefreshInputs<'_>) {
+        let RefreshInputs {
+            reloader,
+            manifest,
+            mode,
+            graph_state,
+            recipe_catalog_summary,
+            skills_index,
+            peer,
+        } = inputs;
         if !matches!(mode, Mode::Graph { .. } | Mode::Watch { .. }) {
             return;
         }
