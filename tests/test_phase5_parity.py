@@ -98,7 +98,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: (run on each platform; the script writes whichever entry matches the
 #: current host).
 BINARY_SIZE_BASELINES = {
-    "darwin": 24_186_992,  # 0.17.6 darwin baseline
+    "darwin": 24_203_584,  # 0.17.7 darwin baseline
     "linux": 28_810_000,  # estimate: the post-code_tree Linux estimate (30.2 MB)
     # scaled by the same −4.6% the macOS loader removal measured. Both
     # removals deliberately recaptured DOWNWARD so the +10% budget guards
@@ -517,6 +517,19 @@ def test_binary_size_regression():
                       this aggregate artifact measurement does not isolate their
                       individual contributions.
 
+
+      - 0.17.7:       24,203,584 bytes — +16,592 bytes (+0.07%) over 0.17.6.
+                      The producer methodology layer in `kglite-mcp-server`,
+                      which the default extension links: `ServerExtensions`
+                      gains two builders and two stored fields
+                      (`with_skills`/`with_recipes`), `skills.rs` gains the
+                      producer layer plus the extracted `boot_skills`, a new
+                      `tools/activation_refresh.rs` wraps `set_root_dir` /
+                      `repo_management` to re-resolve the registry, and three
+                      types are re-exported from the crate root. No engine
+                      code changed, which is why the delta is four orders of
+                      magnitude smaller than 0.17.6's.
+
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
     drilldown, run `cargo bloat --release --crates --filter kglite`.
@@ -548,7 +561,7 @@ def test_binary_size_regression():
     gate = int(baseline * 1.10)
     assert size <= gate, (
         f"{bin_path.name} = {size:,} bytes > gate {gate:,} "
-        f"(+10% over 0.17.6 {platform_key} baseline {baseline:,}). "
+        f"(+10% over 0.17.7 {platform_key} baseline {baseline:,}). "
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )

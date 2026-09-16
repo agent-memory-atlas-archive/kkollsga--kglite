@@ -78,11 +78,17 @@
       "sha256": "568b70b9d5388ddb6a9de4d8985e71bcd0f745a442d8654cfc065532819edb57",
       "status": "rejected"
     },
-    "current.json": {
-      "evidence": "Release 0.17.6, 2026-09-16: capture inflated by external load, not code. Diff origin/main..HEAD touches no perf-sensitive path (skills/recipes api modules, describe sections, CLI subcommand, MCP skill layer; the dir_graph/mod.rs change is a system-label filter in the get_node_types enumeration). Run 1 (refresh capture, load avg 7.42, an unrelated CommandLineTools Python 3.9 process pinned at 99.7% CPU) vs accepted 0_17_4: near-uniform +1..+16% on min across all 37 cells INCLUDING every control - untyped_edge_count_1m +13.5%, hop1_deg3_memory +11.3%, cypher_match +11.0%, traversal +7.3% - while medians stayed flat at +1..+5%. Run 2 (bench-check repeat, load avg 2.70, same external process) collapsed the offset on exactly those controls: traversal +0.9%, untyped_edge_count_1m +3.7%, hop1_deg3_memory +3.3%, cypher_match +1.8%; whole-set worst +12.9% (test_bench_save_kgl), gate passes at +20%. A control that moves with machine load is instrument drift per CLAUDE.md perf protocol item 8; the two runs agree on that diagnosis. bench-anchor OK, worst +12.5% against +30%, and it independently warned the dispersion shifted -5.6% between captures. Reference stays 0_17_4.json. Mac16,10 (M4, 16 GiB).",
+    "0_17_7.json": {
+      "evidence": "Release 0.17.7, 2026-09-16: two complete 37-cell release captures (100 minimum rounds, 20 warmups) agree closely: repeat median min delta -0.46%, worst +2.48%, best -4.22%, zero heavy-tail cells (no min sits 30% below its own median in either run). Against accepted 0_17_4.json, run 1 spans -2.4%..+4.8% and run 2 -2.6%..+3.0%; controls agree across runs -- cypher_match -0.0%/-0.0%, traversal +0.9%/-0.9%, hop1_deg3_memory +3.3%/+2.4%, untyped_edge_count_1m +3.7%/+2.3%, cypher_where +4.8%/+1.7% (its known heavy tail). Mac16,10 (M4, 16 GiB), Darwin 25.6.0, up 14 days; ordinary desktop load, run 1 at 3.66/2.52/2.41 and run 2 at 2.64/2.99/2.68, top consumers WindowServer 16-18%, iTerm2 ~5%, iLifeSlideshows 14% (run 1 only), several idle claude sessions; no runaway process and no simultaneous native build during either measurement -- the maturin release build completed before pytest started in both. The diff is confined to crates/kglite-mcp-server and touches no engine or perf-sensitive path. This is the quiet window the 0.17.5 and 0.17.6 rejections were owed; the reference advances from 0_17_4.json.",
       "platform": "Darwin/arm64",
-      "sha256": "568b70b9d5388ddb6a9de4d8985e71bcd0f745a442d8654cfc065532819edb57",
-      "status": "rejected"
+      "sha256": "5453340f1195c9394cbe92fdc2221b72a4969a73ba5043a0ee30145beb6a52f1",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release 0.17.7, 2026-09-16: two complete 37-cell release captures (100 minimum rounds, 20 warmups) agree closely: repeat median min delta -0.46%, worst +2.48%, best -4.22%, zero heavy-tail cells (no min sits 30% below its own median in either run). Against accepted 0_17_4.json, run 1 spans -2.4%..+4.8% and run 2 -2.6%..+3.0%; controls agree across runs -- cypher_match -0.0%/-0.0%, traversal +0.9%/-0.9%, hop1_deg3_memory +3.3%/+2.4%, untyped_edge_count_1m +3.7%/+2.3%, cypher_where +4.8%/+1.7% (its known heavy tail). Mac16,10 (M4, 16 GiB), Darwin 25.6.0, up 14 days; ordinary desktop load, run 1 at 3.66/2.52/2.41 and run 2 at 2.64/2.99/2.68, top consumers WindowServer 16-18%, iTerm2 ~5%, iLifeSlideshows 14% (run 1 only), several idle claude sessions; no runaway process and no simultaneous native build during either measurement -- the maturin release build completed before pytest started in both. The diff is confined to crates/kglite-mcp-server and touches no engine or perf-sensitive path. This is the quiet window the 0.17.5 and 0.17.6 rejections were owed; the reference advances from 0_17_4.json.",
+      "platform": "Darwin/arm64",
+      "sha256": "5453340f1195c9394cbe92fdc2221b72a4969a73ba5043a0ee30145beb6a52f1",
+      "status": "accepted"
     },
     "current.linux.json": {
       "evidence": "reference_0_16_23.linux.json plus one cell: the harness gained test_bench_hop1_deg3_memory mid-cycle (859d874d, deep-scan program) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement \u2014 kglite 0.13.2 run unmodified on macOS/M4 2026-09-08 (15.405 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the eleven existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",
@@ -104,7 +110,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_17_4.json",
+    "Darwin/arm64": "0_17_7.json",
     "Linux/x86_64": "reference_0_17_0_cells.linux.json"
   },
   "schema_version": 1

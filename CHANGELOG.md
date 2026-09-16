@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.17.7] - 2026-09-16
+
 ### Added
 
 - `ServerExtensions::with_skills` — a binary embedding the MCP server can
