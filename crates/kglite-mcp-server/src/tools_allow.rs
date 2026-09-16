@@ -63,7 +63,7 @@ pub(crate) fn apply_tool_allowlist(
         .iter()
         .map(String::as_str)
         .collect::<std::collections::HashSet<_>>();
-    let router = server.tool_router_mut();
+    let mut router = server.tool_router_mut();
 
     if recipes_configured {
         for fixed in [

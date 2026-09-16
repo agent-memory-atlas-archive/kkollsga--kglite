@@ -56,7 +56,7 @@ pub(crate) fn apply_bundled_tool_overrides(
         }
     }
 
-    let router = server.tool_router_mut();
+    let mut router = server.tool_router_mut();
     let mut applicable = Vec::with_capacity(overrides.len());
     for override_ in overrides {
         if router.map.contains_key(override_.name.as_str()) {
@@ -191,10 +191,8 @@ mod bundled_override_tests {
         apply_bundled_tool_overrides(&mut server, &manifest).expect("apply override");
 
         assert!(!server.tool_router_mut().has_route("ping"));
-        let renamed = server
-            .tool_router_mut()
-            .get("domain_ping")
-            .expect("renamed route");
+        let router = server.tool_router_mut();
+        let renamed = router.get("domain_ping").expect("renamed route");
         assert_eq!(renamed.description.as_deref(), Some("Domain health check."));
     }
 

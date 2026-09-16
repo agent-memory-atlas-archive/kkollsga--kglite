@@ -11,7 +11,8 @@ pub(crate) fn protect_query_route(
     name: &str,
     pointer: &'static [&'static str],
 ) {
-    let Some(route) = server.tool_router_mut().map.get_mut(name) else {
+    let mut router = server.tool_router_mut();
+    let Some(route) = router.map.get_mut(name) else {
         return;
     };
     let original = route.call.clone();

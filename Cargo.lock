@@ -2261,9 +2261,9 @@ dependencies = [
 
 [[package]]
 name = "mcp-methods"
-version = "0.4.10"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec834792e81f06d1e61e52d75f2fc7f0ee2d6dc21a489cf8709e34620881487"
+checksum = "31c5a17334897b67053e843235be8c66610d0c6684c845bea30e70ecff9dd204"
 dependencies = [
  "anyhow",
  "clap",
@@ -3757,7 +3757,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

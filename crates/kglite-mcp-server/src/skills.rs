@@ -634,8 +634,8 @@ mod recipe_skill_tests {
             recipe_queries::RUN_RECIPE_QUERY_TOOL,
             "cypher_query",
         ] {
-            let description = with_routes
-                .tool_router_mut()
+            let router = with_routes.tool_router_mut();
+            let description = router
                 .get(name)
                 .and_then(|tool| tool.description.as_deref())
                 .expect("tool description");
@@ -792,13 +792,19 @@ mod graph_skill_tests {
 
     #[test]
     fn a_graph_skill_reaches_prompts_and_the_tool_it_references() {
+        // `delivery: eager` because this test asserts the *body* lands in the
+        // target tool's description, which only the eager tier does since
+        // mcp-methods 0.4.11 made lazy the default.
         let (registry, stats) = resolve(
-            vec![record(
-                "wells",
-                "Well methodology.",
-                "# Wells\n\nMatch on `Well`.\n",
-                &["cypher_query"],
-            )],
+            vec![SkillRecord {
+                delivery: Delivery::Eager,
+                ..record(
+                    "wells",
+                    "Well methodology.",
+                    "# Wells\n\nMatch on `Well`.\n",
+                    &["cypher_query"],
+                )
+            }],
             &bundled_source(),
             Path::new("graph_mcp.yaml"),
         );
