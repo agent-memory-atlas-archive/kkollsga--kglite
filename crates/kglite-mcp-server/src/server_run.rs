@@ -727,28 +727,46 @@ fn boot_extensions(
     })
 }
 
-pub(crate) async fn run_async(
-    cli: Cli,
-    py_embedder_factory: Option<PyEmbedderFactory>,
-    extensions: ServerExtensions,
-) -> Result<()> {
-    let ServerExtensions {
-        workspace_graph,
-        domain_tools,
-        read_only: read_only_pin,
-    } = extensions;
-    init_tracing();
-    let mode = pick_mode(&cli);
-    validate_mode_paths(&mode, &cli)?;
+/// Everything boot settles before the MCP server exists.
+///
+/// The seam is the server itself: every step here reads argv, the manifest or
+/// the graph file and produces state the tool surface is then assembled from,
+/// and none of it touches [`McpServer`]. Returned as a struct for the same
+/// reason [`BootExtensions`] is one — the set is the boot's output, and a
+/// twelve-value tuple names nothing.
+struct BootedGraph {
+    mode: Mode,
+    manifest: Option<mcp_methods::server::Manifest>,
+    options: ServerOptions,
+    graph_state: GraphState,
+    /// The manifest catalogue with the graph's own merged under it.
+    recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
+    recipe_catalog_summary: Option<recipe_queries::CatalogSummary>,
+    graph_recipes: recipe_queries::GraphRecipeStats,
+    source_root_status: Option<SourceRootStatus>,
+    env_file_loaded: Option<PathBuf>,
+    tools_allow: Option<Vec<String>>,
+    mutations_enabled: bool,
+    write_scope: Option<Vec<String>>,
+}
 
-    let manifest = load_manifest(&cli, &mode).context("manifest load failed")?;
+fn boot_graph(
+    cli: &Cli,
+    workspace_graph: Option<WorkspaceGraphHooks>,
+    read_only_pin: bool,
+) -> Result<BootedGraph> {
+    init_tracing();
+    let mode = pick_mode(cli);
+    validate_mode_paths(&mode, cli)?;
+
+    let manifest = load_manifest(cli, &mode).context("manifest load failed")?;
     let BootExtensions {
         recipe_catalog,
         tools_allow,
         mutations_enabled,
         write_scope,
         parallel,
-    } = boot_extensions(manifest.as_ref(), &cli, read_only_pin)?;
+    } = boot_extensions(manifest.as_ref(), cli, read_only_pin)?;
 
     // Manifest `workspace.kind: local` wins over CLI flags — promote before
     // mode-specific binding so the rest of boot sees `Mode::LocalWorkspace`.
@@ -782,7 +800,7 @@ pub(crate) async fn run_async(
         // the very next line — a policy set later would arrive after the lease
         // decision it governs. Both read the same `owns_graph_file`.
         .with_writer_lease_policy(writer_lease_policy(manifest.as_ref(), mutations_enabled))
-        .with_lease_label(Some(boot_lease_label(&cli)));
+        .with_lease_label(Some(boot_lease_label(cli)));
 
     // Bound before `bind_mode`, whose boot open publishes the first graph —
     // the ontology rides the same pre-publication seam as the embedder.
@@ -791,7 +809,7 @@ pub(crate) async fn run_async(
     }
 
     let (options, source_root_status) =
-        bind_mode(&mode, &cli, manifest.as_ref(), &graph_state, options)?;
+        bind_mode(&mode, cli, manifest.as_ref(), &graph_state, options)?;
 
     // Only now: `bind_mode` has performed the boot open, so the graph's own
     // catalogue exists to merge under the manifest's. Everything downstream —
@@ -805,6 +823,46 @@ pub(crate) async fn run_async(
     let recipe_catalog_summary = recipe_catalog.discovery_summary();
 
     let options = apply_result_decorations(options, &graph_state, source_root_status.as_ref());
+    Ok(BootedGraph {
+        mode,
+        manifest,
+        options,
+        graph_state,
+        recipe_catalog,
+        recipe_catalog_summary,
+        graph_recipes,
+        source_root_status,
+        env_file_loaded,
+        tools_allow,
+        mutations_enabled,
+        write_scope,
+    })
+}
+
+pub(crate) async fn run_async(
+    cli: Cli,
+    py_embedder_factory: Option<PyEmbedderFactory>,
+    extensions: ServerExtensions,
+) -> Result<()> {
+    let ServerExtensions {
+        workspace_graph,
+        domain_tools,
+        read_only: read_only_pin,
+    } = extensions;
+    let BootedGraph {
+        mode,
+        manifest,
+        options,
+        graph_state,
+        recipe_catalog,
+        recipe_catalog_summary,
+        graph_recipes,
+        source_root_status,
+        env_file_loaded,
+        tools_allow,
+        mutations_enabled,
+        write_scope,
+    } = boot_graph(&cli, workspace_graph, read_only_pin)?;
 
     // Snapshot the dynamic source-roots provider before `options` moves into
     // the McpServer. `read_code_source` queries it on every call, so
