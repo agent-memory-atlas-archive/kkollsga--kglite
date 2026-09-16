@@ -273,10 +273,9 @@ pub(super) fn compute_join_candidates(
     max_candidates: usize,
     max_sample: usize,
 ) -> Vec<JoinCandidate> {
-    let mut core_types: Vec<&str> = graph
-        .type_indices
-        .keys()
-        .filter(|nt| !graph.parent_types.contains_key(*nt))
+    let mut core_types: Vec<&str> = super::visible_types(graph)
+        .filter(|(nt, _)| !graph.parent_types.contains_key(*nt))
+        .map(|(nt, _)| nt)
         .collect();
     core_types.sort();
 
@@ -792,22 +791,14 @@ pub fn compute_schema(graph: &DirGraph) -> SchemaOverview {
     // Arena guard: disk-backed node/edge reads materialize into the query
     // arena (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
-    let mut node_types: Vec<(String, NodeTypeOverview)> = graph
-        .type_indices
-        .iter()
-        .map(|(nt, indices)| {
+    let mut node_types: Vec<(String, NodeTypeOverview)> = super::visible_types(graph)
+        .map(|(nt, count)| {
             let properties = graph
                 .node_type_metadata
                 .get(nt)
                 .cloned()
                 .unwrap_or_default();
-            (
-                nt.to_string(),
-                NodeTypeOverview {
-                    count: indices.len(),
-                    properties,
-                },
-            )
+            (nt.to_string(), NodeTypeOverview { count, properties })
         })
         .collect();
     node_types.sort_by(|a, b| a.0.cmp(&b.0));
@@ -849,7 +840,7 @@ pub fn compute_schema(graph: &DirGraph) -> SchemaOverview {
         node_types,
         connection_types,
         indexes,
-        node_count: graph.graph.node_count(),
+        node_count: super::visible_node_count(graph),
         edge_count: graph.graph.edge_count(),
     }
 }

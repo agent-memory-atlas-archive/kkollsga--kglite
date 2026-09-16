@@ -285,7 +285,7 @@ impl NodeRules {
         for key in graph.list_unique_constraints() {
             rules.entry(key.0.clone()).or_default().unique.push(key);
         }
-        for node_type in graph.get_node_types() {
+        for node_type in graph.all_node_types() {
             if graph.primary_key_for(&node_type) == Some("id") {
                 rules
                     .entry(node_type.clone())

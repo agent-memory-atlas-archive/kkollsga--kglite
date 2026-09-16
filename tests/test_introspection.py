@@ -1445,3 +1445,73 @@ class TestDescribeTokenBudget:
         assert hint.startswith("The supported Cypher dialect includes MATCH, WHERE/FILTER")
         assert "KGLite also exposes separately documented extensions." in hint
         assert "Standard openCypher is supported" not in hint
+
+
+# ── System labels (KgliteSkill) ────────────────────────────────────────────
+
+
+CREATE_SKILL = (
+    "CREATE (:KgliteSkill {name: 'cypher_query', description: 'how to query', "
+    "body: '# Body', references_tools: ['cypher_query'], delivery: 'lazy'})"
+)
+
+
+class TestSystemLabelHiding:
+    """`KgliteSkill` is engine machinery: hidden from every listing, but
+    ordinary data to Cypher, to save/load and to exports."""
+
+    @pytest.fixture
+    def skilled_graph(self, small_graph):
+        small_graph.cypher(CREATE_SKILL)
+        return small_graph
+
+    def test_node_types_omits_the_system_label(self, skilled_graph):
+        assert "KgliteSkill" not in skilled_graph.node_types
+        assert "Person" in skilled_graph.node_types
+
+    def test_node_type_counts_omits_the_system_label(self, skilled_graph):
+        assert "KgliteSkill" not in skilled_graph.node_type_counts()
+
+    def test_schema_omits_the_system_label_and_its_nodes(self, small_graph):
+        before = small_graph.schema()
+        small_graph.cypher(CREATE_SKILL)
+        after = small_graph.schema()
+        assert "KgliteSkill" not in after["node_types"]
+        assert after["node_count"] == before["node_count"]
+
+    def test_describe_is_unchanged_by_a_skill_node(self, small_graph):
+        before = small_graph.describe()
+        small_graph.cypher(CREATE_SKILL)
+        assert small_graph.describe() == before
+
+    def test_describe_type_count_and_tier_are_unchanged(self, small_graph):
+        # 15 core types is the Small/Medium boundary — a 16th *visible* type
+        # flips the describe tier, so the invisible one must not.
+        for i in range(15):
+            small_graph.cypher(f"CREATE (:T{i} {{id: {i}}})")
+        before = ET.fromstring(small_graph.describe())
+        assert before.find("types").attrib["count"] == "16"
+        small_graph.cypher(CREATE_SKILL)
+        after = ET.fromstring(small_graph.describe())
+        assert after.find("types").attrib["count"] == "16"
+        assert "KgliteSkill" not in after.find("types").text
+        assert after.attrib["nodes"] == before.attrib["nodes"]
+
+    def test_cypher_still_sees_the_skill_node(self, skilled_graph):
+        total = skilled_graph.cypher("MATCH (n) RETURN count(n) AS c").to_dicts()[0]["c"]
+        assert total == 4, "a hidden label is still a node"
+        rows = skilled_graph.cypher("MATCH (s:KgliteSkill) RETURN s.name AS name").to_dicts()
+        assert [r["name"] for r in rows] == ["cypher_query"]
+
+    def test_export_text_carries_the_skill_node(self, skilled_graph):
+        assert "KgliteSkill" in skilled_graph.to_text()
+
+    def test_kgl_round_trip_keeps_the_skill_and_its_list_property(self, skilled_graph, tmp_path):
+        path = tmp_path / "skills.kgl"
+        skilled_graph.save(str(path))
+        reloaded = kglite.load(str(path))
+        rows = reloaded.cypher(
+            "MATCH (s:KgliteSkill) RETURN s.references_tools AS tools, s.delivery AS delivery"
+        ).to_dicts()
+        assert rows == [{"tools": ["cypher_query"], "delivery": "lazy"}]
+        assert "KgliteSkill" not in reloaded.node_types

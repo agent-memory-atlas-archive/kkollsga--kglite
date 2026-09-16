@@ -177,7 +177,7 @@ pub(super) fn children_counts(parent_types: &HashMap<String, String>) -> HashMap
 pub fn compute_type_capabilities(graph: &DirGraph) -> HashMap<String, TypeCapabilities> {
     let mut caps: HashMap<String, TypeCapabilities> = HashMap::new();
 
-    for node_type in graph.type_indices.keys() {
+    for (node_type, _) in super::visible_types(graph) {
         let mut tc = TypeCapabilities {
             has_timeseries: false,
             has_location: false,

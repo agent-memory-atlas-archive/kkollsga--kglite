@@ -1861,7 +1861,7 @@ impl KnowledgeGraph {
         self.check_durable_owner()?;
         let result_dict = PyDict::new(py);
         let loaded_types: std::collections::HashSet<String> = if filter_to_loaded {
-            self.inner.get_node_types().into_iter().collect()
+            self.inner.all_node_types().into_iter().collect()
         } else {
             std::collections::HashSet::new()
         };

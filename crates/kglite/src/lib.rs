@@ -98,6 +98,12 @@ pub mod api {
         ontology_from_json, ontology_from_value, CardinalityDecl, ClassDecl, Enforcement,
         ManagedLabelState, OntologyStore, RelationshipDecl, MAX_ONTOLOGY_CLASSES,
     };
+    /// Node-type names the engine owns. Core hides them from every
+    /// enumerating surface it renders (`node_types()`, `db.labels()`,
+    /// `schema()`, `describe()`); a binding needs the predicate for the
+    /// enumerations it builds itself — the wheel's `node_type_counts()`, the
+    /// MCP server's `graph_has_node_type` guard.
+    pub use crate::graph::schema::{is_system_label, SYSTEM_LABELS};
     /// Core schema data types — the node and edge records (`NodeData` /
     /// `EdgeData`), the projected `NodeInfo`, geo/temporal validity configs
     /// (`SpatialConfig` / `TemporalConfig`), and the declarative

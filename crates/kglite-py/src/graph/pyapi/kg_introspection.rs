@@ -585,6 +585,10 @@ impl KnowledgeGraph {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             for (node_type, indices) in self.inner.type_indices.iter() {
+                // A listing, so it hides what `node_types()` hides.
+                if kglite_core::api::is_system_label(node_type) {
+                    continue;
+                }
                 dict.set_item(node_type, indices.len())?;
             }
             Ok(dict.into())

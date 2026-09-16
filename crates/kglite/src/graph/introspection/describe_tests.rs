@@ -536,3 +536,148 @@ mod surface_hint_tests {
         }
     }
 }
+
+/// A system label (`schema::SYSTEM_LABELS`) is ordinary data to Cypher but is
+/// hidden from every enumerating surface. The counts rendered beside a listing
+/// are part of the listing: a graph that gains a skill node must describe
+/// byte-identically, or an invisible type has visibly moved the document.
+#[cfg(test)]
+mod system_label_tests {
+    use super::*;
+    use crate::datatypes::values::Value;
+    use crate::graph::introspection::schema_overview::compute_schema;
+    use crate::graph::introspection::{graph_scale, GraphScale};
+    use crate::graph::schema::{EdgeData, NodeData};
+    use crate::graph::storage::GraphWrite;
+    use std::collections::HashMap;
+
+    fn push_node(graph: &mut DirGraph, node_type: &str, id: u32, props: &[(&str, Value)]) {
+        let node = NodeData::new(
+            Value::UniqueId(id),
+            Value::String(format!("{node_type}-{id}")),
+            node_type.to_string(),
+            props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect::<HashMap<_, _>>(),
+            &mut graph.interner,
+        );
+        let idx = graph.graph.add_node(node);
+        graph
+            .type_indices
+            .entry_or_default(node_type.to_string())
+            .push(idx);
+    }
+
+    fn person_graph() -> DirGraph {
+        let mut graph = DirGraph::new();
+        for id in [1u32, 2] {
+            push_node(&mut graph, "Person", id, &[("age", Value::Int64(30))]);
+        }
+        graph
+    }
+
+    fn with_skill() -> DirGraph {
+        let mut graph = person_graph();
+        push_node(
+            &mut graph,
+            "KgliteSkill",
+            9,
+            &[
+                ("name", Value::String("cypher_query".into())),
+                ("description", Value::String("how to query".into())),
+                ("body", Value::String("# Body".into())),
+                (
+                    "references_tools",
+                    Value::List(vec![Value::String("cypher_query".into())]),
+                ),
+                ("delivery", Value::String("lazy".into())),
+            ],
+        );
+        graph
+    }
+
+    fn describe(graph: &DirGraph) -> String {
+        compute_description(graph, &DescribeRequest::new(DescribeSurface::Python)).unwrap()
+    }
+
+    #[test]
+    fn node_type_enumeration_omits_a_system_label() {
+        let graph = with_skill();
+        assert!(
+            !graph.get_node_types().contains(&"KgliteSkill".to_string()),
+            "got: {:?}",
+            graph.get_node_types()
+        );
+        assert!(graph.get_node_types().contains(&"Person".to_string()));
+        assert!(
+            graph.has_node_type("KgliteSkill"),
+            "the internal predicate stays honest — four write-path guards depend on it"
+        );
+    }
+
+    #[test]
+    fn describe_is_byte_identical_with_and_without_a_skill_node() {
+        assert_eq!(describe(&person_graph()), describe(&with_skill()));
+    }
+
+    #[test]
+    fn schema_overview_omits_a_system_label_and_its_nodes() {
+        let plain = compute_schema(&person_graph());
+        let skilled = compute_schema(&with_skill());
+        assert!(!skilled.node_types.iter().any(|(nt, _)| nt == "KgliteSkill"));
+        assert_eq!(
+            skilled.node_count, plain.node_count,
+            "the total beside the listing must move with the listing"
+        );
+    }
+
+    #[test]
+    fn graph_scale_ignores_system_labels() {
+        // 15 core types is the Small/Medium boundary: a 16th *visible* type
+        // flips the tier, so an invisible one must not.
+        let mut graph = DirGraph::new();
+        for i in 0..15u32 {
+            push_node(&mut graph, &format!("T{i}"), i, &[]);
+        }
+        assert_eq!(graph_scale(&graph), GraphScale::Small);
+        push_node(&mut graph, "KgliteSkill", 99, &[]);
+        assert_eq!(graph_scale(&graph), GraphScale::Small);
+    }
+
+    #[test]
+    fn a_skill_node_is_never_reported_as_a_disconnected_type() {
+        // Exploration hints need >= 2 types and >= 1 edge to render at all.
+        let mut graph = DirGraph::new();
+        push_node(&mut graph, "Person", 1, &[]);
+        push_node(&mut graph, "Person", 2, &[]);
+        push_node(&mut graph, "Company", 3, &[]);
+        let (a, b) = (
+            graph
+                .type_indices
+                .get("Person")
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap(),
+            graph
+                .type_indices
+                .get("Company")
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap(),
+        );
+        graph.graph.add_edge(
+            a,
+            b,
+            EdgeData::new("WORKS_AT".to_string(), HashMap::new(), &mut graph.interner),
+        );
+        push_node(&mut graph, "KgliteSkill", 9, &[]);
+        let rendered = describe(&graph);
+        assert!(
+            !rendered.contains("KgliteSkill"),
+            "hidden type advertised as disconnected: {rendered}"
+        );
+    }
+}

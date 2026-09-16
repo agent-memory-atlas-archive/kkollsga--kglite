@@ -23,6 +23,7 @@ pub mod topics;
 
 use crate::datatypes::values::Value;
 use crate::graph::schema::DirGraph;
+use crate::graph::storage::GraphRead;
 use std::collections::HashMap;
 
 pub use connectivity::{
@@ -138,12 +139,36 @@ pub enum GraphScale {
     Extreme,
 }
 
+/// Node types a description enumerates: every live type except the system
+/// labels ([`crate::graph::schema::SYSTEM_LABELS`]), paired with its live-node
+/// count. Every listing *and* every count rendered beside one comes from here,
+/// so an invisible type can never move a visible number.
+pub(crate) fn visible_types(graph: &DirGraph) -> impl Iterator<Item = (&str, usize)> + '_ {
+    graph
+        .type_indices
+        .iter()
+        .filter(|(nt, _)| !crate::graph::schema::is_system_label(nt))
+        .map(|(nt, indices)| (nt, indices.len()))
+}
+
+/// The whole-graph node count minus the members of every system label.
+/// Subtractive rather than a sum over [`visible_types`] so the number stays
+/// byte-identical to `node_count()` on the overwhelmingly common graph that
+/// carries no system-labelled node at all.
+pub(crate) fn visible_node_count(graph: &DirGraph) -> usize {
+    let hidden: usize = graph
+        .type_indices
+        .iter()
+        .filter(|(nt, _)| crate::graph::schema::is_system_label(nt))
+        .map(|(_, indices)| indices.len())
+        .sum();
+    graph.graph.node_count().saturating_sub(hidden)
+}
+
 /// Classify graph scale by core type count (excluding supporting types).
 pub fn graph_scale(graph: &DirGraph) -> GraphScale {
-    let core_count = graph
-        .type_indices
-        .keys()
-        .filter(|nt| !graph.parent_types.contains_key(*nt))
+    let core_count = visible_types(graph)
+        .filter(|(nt, _)| !graph.parent_types.contains_key(*nt))
         .count();
     match core_count {
         0..=15 => GraphScale::Small,

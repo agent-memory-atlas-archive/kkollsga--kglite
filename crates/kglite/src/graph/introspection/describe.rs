@@ -28,8 +28,8 @@ use super::topics::{
     write_cypher_overview, write_cypher_topics, write_fluent_overview, write_fluent_topics,
 };
 use super::{
-    graph_scale, ConnectionDetail, ConnectionTypeStats, CypherDetail, DescribeSurface,
-    FluentDetail, GraphScale, NeighborsSchema, PropertyStatInfo,
+    graph_scale, visible_node_count, visible_types, ConnectionDetail, ConnectionTypeStats,
+    CypherDetail, DescribeSurface, FluentDetail, GraphScale, NeighborsSchema, PropertyStatInfo,
 };
 
 // ── Describe: shared XML writers ────────────────────────────────────────────
@@ -856,14 +856,12 @@ fn write_extensions(xml: &mut String, graph: &DirGraph, surface: DescribeSurface
 /// Write `<exploration_hints>` — disconnected types and join candidates.
 /// Skipped for graphs with < 2 types or 0 edges (all disconnected = not useful).
 fn write_exploration_hints(xml: &mut String, graph: &DirGraph, conn_stats: &[ConnectionTypeStats]) {
-    let type_count = graph.type_indices.len();
+    let type_count = visible_types(graph).count();
     let edge_count = graph.graph.edge_count();
 
     // Join-candidate search is O(types²) — infeasible above 200 core types.
-    let core_count = graph
-        .type_indices
-        .keys()
-        .filter(|nt| !graph.parent_types.contains_key(*nt))
+    let core_count = visible_types(graph)
+        .filter(|(nt, _)| !graph.parent_types.contains_key(*nt))
         .count();
     if type_count < 2 || edge_count == 0 || core_count > 200 {
         return;
@@ -872,11 +870,8 @@ fn write_exploration_hints(xml: &mut String, graph: &DirGraph, conn_stats: &[Con
     let connected_types = compute_connected_types(conn_stats);
     let connected_pairs = compute_connected_type_pairs(conn_stats);
 
-    let mut disconnected: Vec<(&str, usize)> = graph
-        .type_indices
-        .iter()
+    let mut disconnected: Vec<(&str, usize)> = visible_types(graph)
         .filter(|(nt, _)| !graph.parent_types.contains_key(*nt) && !connected_types.contains(*nt))
-        .map(|(nt, indices)| (nt, indices.len()))
         .collect();
     disconnected.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     disconnected.truncate(10);
@@ -1512,7 +1507,7 @@ fn build_inventory_capped(
     xml.push_str(&format!(
         "<graph kglite_version=\"{}\" nodes=\"{}\" edges=\"{}\">\n",
         env!("CARGO_PKG_VERSION"),
-        graph.graph.node_count(),
+        visible_node_count(graph),
         graph.graph.edge_count()
     ));
 
@@ -1522,17 +1517,15 @@ fn build_inventory_capped(
     write_read_only_notice(&mut xml, graph);
     write_user_schema_version(&mut xml, graph);
 
-    let mut entries: Vec<(String, usize, usize)> = graph
-        .type_indices
-        .iter()
+    let mut entries: Vec<(String, usize, usize)> = visible_types(graph)
         .filter(|(nt, _)| !has_tiers || !graph.parent_types.contains_key(*nt))
-        .map(|(nt, indices)| {
+        .map(|(nt, count)| {
             let prop_count = graph
                 .node_type_metadata
                 .get(nt)
                 .map(|m| m.len())
                 .unwrap_or(0);
-            (nt.to_string(), indices.len(), prop_count)
+            (nt.to_string(), count, prop_count)
         })
         .collect();
     entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -1609,9 +1602,9 @@ fn build_inventory_capped(
 fn build_extreme_inventory(graph: &DirGraph, surface: DescribeSurface) -> String {
     let mut xml = String::with_capacity(4096);
 
-    let node_count = graph.graph.node_count();
+    let node_count = visible_node_count(graph);
     let edge_count = graph.graph.edge_count();
-    let type_count = graph.type_indices.len();
+    let type_count = visible_types(graph).count();
     let conn_type_count = graph.connection_type_metadata.len();
 
     xml.push_str(&format!(
@@ -1629,11 +1622,7 @@ fn build_extreme_inventory(graph: &DirGraph, surface: DescribeSurface) -> String
     write_read_only_notice(&mut xml, graph);
     write_user_schema_version(&mut xml, graph);
 
-    let mut type_entries: Vec<(&str, usize)> = graph
-        .type_indices
-        .iter()
-        .map(|(nt, indices)| (nt, indices.len()))
-        .collect();
+    let mut type_entries: Vec<(&str, usize)> = visible_types(graph).collect();
     type_entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
 
     let mut by_size: HashMap<&str, usize> = HashMap::new();
@@ -1763,7 +1752,7 @@ fn build_inventory_with_detail(
     xml.push_str(&format!(
         "<graph kglite_version=\"{}\" nodes=\"{}\" edges=\"{}\">\n",
         env!("CARGO_PKG_VERSION"),
-        graph.graph.node_count(),
+        visible_node_count(graph),
         graph.graph.edge_count()
     ));
 
@@ -1774,10 +1763,9 @@ fn build_inventory_with_detail(
     write_user_schema_version(&mut xml, graph);
 
     let has_tiers = !graph.parent_types.is_empty();
-    let mut type_names: Vec<&str> = graph
-        .type_indices
-        .keys()
-        .filter(|nt| !has_tiers || !graph.parent_types.contains_key(*nt))
+    let mut type_names: Vec<&str> = visible_types(graph)
+        .filter(|(nt, _)| !has_tiers || !graph.parent_types.contains_key(*nt))
+        .map(|(nt, _)| nt)
         .collect();
     type_names.sort();
 
@@ -1826,7 +1814,7 @@ fn build_focused_detail(
             // (`vessel` for `Vessel`) would otherwise leave the caller with
             // nothing but an instruction to go searching for a name they
             // already have almost right.
-            let mut names: Vec<&str> = graph.type_indices.keys().collect();
+            let mut names: Vec<&str> = visible_types(graph).map(|(nt, _)| nt).collect();
             names.sort_unstable();
             let hint = crate::graph::mutation::validation::did_you_mean(t, &names);
             let total = names.len();
@@ -1901,14 +1889,11 @@ fn build_type_search_results(graph: &DirGraph, pattern: &str, surface: DescribeS
 
     // Case-insensitive substring match without per-type allocation.
     let pattern_bytes = pattern_lower.as_bytes();
-    let mut matches: Vec<(&str, usize)> = graph
-        .type_indices
-        .iter()
+    let mut matches: Vec<(&str, usize)> = visible_types(graph)
         .filter(|(nt, _)| {
             !graph.parent_types.contains_key(*nt)
                 && contains_case_insensitive(nt.as_bytes(), pattern_bytes)
         })
-        .map(|(nt, indices)| (nt, indices.len()))
         .collect();
     matches.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
 
@@ -1928,11 +1913,8 @@ fn build_type_search_results(graph: &DirGraph, pattern: &str, surface: DescribeS
 
     if matches.is_empty() {
         xml.push_str("  <no_matches/>\n");
-        let mut all_types: Vec<(&str, usize)> = graph
-            .type_indices
-            .iter()
+        let mut all_types: Vec<(&str, usize)> = visible_types(graph)
             .filter(|(nt, _)| !graph.parent_types.contains_key(*nt))
-            .map(|(nt, indices)| (nt, indices.len()))
             .collect();
         all_types.sort_by_key(|t| std::cmp::Reverse(t.1));
         if !all_types.is_empty() {

@@ -529,3 +529,17 @@ def test_bulk_loaded_edge_properties_are_typed():
     rows = g.cypher("CALL db.schema.relTypeProperties() YIELD propertyName, propertyTypes").to_dicts()
     types = {r["propertyName"]: r["propertyTypes"] for r in rows}
     assert types == {"since": ["Long"], "tag": ["String"], "w": ["Double"]}
+
+
+def test_db_labels_omits_system_labels(small_graph):
+    """`db.labels()` is a listing, so it hides what `node_types()` hides —
+    the same posture `keys()` already takes for reserved provenance keys.
+    The label stays reachable: `MATCH (s:KgliteSkill)` still returns rows."""
+    small_graph.cypher(
+        "CREATE (:KgliteSkill {name: 's', description: 'd', body: 'b', "
+        "references_tools: ['cypher_query'], delivery: 'lazy'})"
+    )
+    labels = {r["label"] for r in small_graph.cypher("CALL db.labels() YIELD label RETURN label")}
+    assert "KgliteSkill" not in labels
+    assert {"Person", "Company"} <= labels
+    assert small_graph.cypher("MATCH (s:KgliteSkill) RETURN count(s) AS c").to_dicts()[0]["c"] == 1

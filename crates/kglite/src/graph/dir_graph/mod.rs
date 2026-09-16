@@ -1373,8 +1373,11 @@ impl DirGraph {
         self.type_indices.contains_key(node_type) || self.node_type_metadata.contains_key(node_type)
     }
 
-    /// Get all node types that exist in the graph.
-    pub fn get_node_types(&self) -> Vec<String> {
+    /// Every node type in the graph, system labels included — the honest
+    /// enumeration, for write-path machinery that must see what is actually
+    /// stored (WAL-replay constraint rules, ingest filters). User-facing
+    /// listings want [`Self::get_node_types`].
+    pub fn all_node_types(&self) -> Vec<String> {
         let mut types: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for node_type in self.type_indices.keys() {
@@ -1387,6 +1390,15 @@ impl DirGraph {
         }
 
         types.into_iter().collect()
+    }
+
+    /// The node types a caller is meant to see — [`Self::all_node_types`] minus
+    /// [`crate::graph::schema::SYSTEM_LABELS`]. Backs `node_types()` and
+    /// `db.labels()`; a system-labelled node stays reachable by Cypher.
+    pub fn get_node_types(&self) -> Vec<String> {
+        let mut types = self.all_node_types();
+        types.retain(|nt| !crate::graph::schema::is_system_label(nt));
+        types
     }
 
     /// Resolve a property name through field aliases.
