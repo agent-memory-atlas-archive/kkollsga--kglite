@@ -21,6 +21,30 @@ before upgrading.
   `db.labels()`, so adding one never changes what the graph reports about
   itself. Import and export use the SKILL.md frontmatter dialect an MCP skills
   directory already serves.
+- The MCP server reads a served graph's skills at boot and layers them above
+  its own bundled methodology: a skill named after a bundled one replaces it,
+  while an operator's `skills:` pack or `<manifest>.skills/` directory still
+  wins over the graph. The layer is opt-in — with no `skills:` in the manifest
+  a graph's skills are never read — and applies to `--graph` and `--watch`
+  servers only, since the workspace modes have no graph when skills are
+  installed. A record that fails validation is skipped with a warning naming it
+  and the rule; its siblings still load. The boot summary reports the layer's
+  count, body bytes and skipped records. Skills are read **once, at boot**:
+  `reload_graph` and `load_graph` cannot change what `prompts/list` or the tool
+  descriptions serve, so a newly written skill needs a server restart.
+- Bare `graph_overview()` now ends with a `<skills count="N">` index of the
+  methodology this server serves, one `name — description` line per active
+  skill, in every mode. Like the operator prefix and the recipe-catalog hint it
+  is a bare-call decoration; drill-downs are unchanged. It is rendered at boot
+  for the same reason the skills themselves are.
+
+### Changed
+
+- `graph_has_node_type:` skill predicates and the downstream
+  `ServerExtensions` `has_node_type()` re-export now answer `false` for the
+  system labels (`KgliteSkill`, `KgliteRecipe`) whatever the graph holds —
+  those labels are hidden from every type enumeration, so a gate keyed on one
+  was gating on a shape no agent can discover.
 
 ### Fixed
 

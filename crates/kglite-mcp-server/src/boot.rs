@@ -250,6 +250,7 @@ pub(crate) fn print_boot_summary(
     env_file_loaded: Option<&std::path::Path>,
     csv_http: &crate::csv_http::CsvHttpState,
     source_roots: Option<&SourceRootStatus>,
+    graph_skills: &crate::skills::GraphSkillStats,
 ) {
     let label = match mode {
         Mode::Graph { path } => format!("graph [{}]", path.display()),
@@ -295,6 +296,15 @@ pub(crate) fn print_boot_summary(
         } else {
             format!("source tools: unavailable (unresolved: {missing})")
         });
+    }
+    // Only when the graph carried skill records: their byte total is the one
+    // bound on text this deployment injects into every `tools/list`, and a
+    // skipped record names itself nowhere else an operator reads. `--selftest`
+    // mirrors the child's stderr, so this line reaches that surface too —
+    // `prompts/list`, which the selftest check queries, carries names and
+    // descriptions only and cannot attribute a skill to its source.
+    if let Some(summary) = graph_skills.summary() {
+        parts.push(summary);
     }
     eprintln!("kglite-mcp-server: {}", parts.join("; "));
 }

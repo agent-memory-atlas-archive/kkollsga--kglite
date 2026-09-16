@@ -2051,9 +2051,13 @@ class TestYamlManifest:
             client.shutdown()
 
         assert text.startswith("smoke overview prefix\nNo active graph.")
-        assert text.endswith(
-            '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" run-tool="run_recipe_query"/>'
-        )
+        # Both discovery decorations survive a no-graph boot, in order: the
+        # catalog hint (tools) then the skills index (prompts), which this
+        # manifest opts into with `skills:`.
+        catalog = '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" run-tool="run_recipe_query"/>'
+        assert catalog in text, text
+        assert text.index(catalog) < text.index("<skills count="), text
+        assert text.endswith("</skills>"), text
 
     def test_present_catalog_exposes_recipe_prompt_and_injects_referenced_tools(self, graph_with_manifest: Path):
         client = _spawn(["--graph", str(graph_with_manifest)])
@@ -2475,6 +2479,180 @@ class TestExploreAndSkills:
         assert "Typo marker." not in tools["cypher_query"]
         assert "unknown field" in warning
         assert str(pack / "typo_gate.md") in warning.replace("/./", "/")
+
+
+# ── Test: graph-carried skills (KgliteSkill nodes inside the .kgl) ────────
+
+
+class TestGraphCarriedSkills:
+    """A `.kgl` can carry its own methodology as `KgliteSkill` nodes, written
+    through `g.set_skill(...)`. The server reads them at boot in --graph mode
+    and layers them above its bundled skills — but only when the manifest opts
+    in with `skills:`, because a graph is *data* and data that can rewrite tool
+    descriptions without an operator saying so is a supply-chain surface."""
+
+    @pytest.fixture
+    def skill_graph(self, tmp_path: Path) -> Path:
+        kgl = tmp_path / "skilled.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_skill(
+            "wells",
+            "Well-domain methodology for this graph.",
+            body="# Wells\n\nGRAPH-SKILL-MARKER: match on `Well`.\n",
+            references_tools=["cypher_query"],
+        )
+        g.save(str(kgl))
+        return kgl
+
+    def test_a_graph_skill_reaches_prompts_and_its_referenced_tool(self, skill_graph: Path):
+        manifest = skill_graph.parent / "skilled_mcp.yaml"
+        manifest.write_text("name: Skilled\nskills: true\n", encoding="utf-8")
+        client = _spawn(["--graph", str(skill_graph), "--mcp-config", str(manifest)])
+        try:
+            prompts = {p["name"] for p in client.list_prompts()}
+            tools = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            overview = _text_content(client.call_tool("graph_overview", {}))
+            focused = _text_content(client.call_tool("graph_overview", {"types": ["Well"]}))
+        finally:
+            client.shutdown()
+
+        assert "wells" in prompts, sorted(prompts)
+        # `references_tools` is a list property that had to survive the .kgl
+        # round-trip for the injection to land on cypher_query at all.
+        assert "mcp-skill:wells" in tools["cypher_query"], tools["cypher_query"][:400]
+        assert "GRAPH-SKILL-MARKER" in tools["cypher_query"]
+        # The bare overview carries the index; a drill-down does not.
+        assert "<skills count=" in overview, overview
+        assert "wells \u2014 Well-domain methodology for this graph." in overview, overview
+        assert "<skills count=" not in focused, focused
+        # The system label stays out of the graph's own type listing.
+        assert "KgliteSkill" not in overview, overview
+
+    def test_without_the_skills_opt_in_the_graph_layer_is_silent(self, skill_graph: Path):
+        manifest = skill_graph.parent / "unskilled_mcp.yaml"
+        manifest.write_text("name: Unskilled\n", encoding="utf-8")
+        client = _spawn(["--graph", str(skill_graph), "--mcp-config", str(manifest)])
+        try:
+            prompts = {p["name"] for p in client.list_prompts()}
+            tools = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            overview = _text_content(client.call_tool("graph_overview", {}))
+        finally:
+            client.shutdown()
+
+        assert prompts == set(), sorted(prompts)
+        assert "mcp-skill:wells" not in tools["cypher_query"]
+        assert "GRAPH-SKILL-MARKER" not in tools["cypher_query"]
+        assert "<skills count=" not in overview, overview
+
+    def test_a_graph_skill_named_after_a_bundled_one_replaces_it(self, tmp_path: Path):
+        kgl = tmp_path / "override.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_skill(
+            "cypher_query",
+            "This graph's own Cypher methodology.",
+            body="OVERRIDE-MARKER\n",
+            references_tools=["cypher_query"],
+        )
+        g.save(str(kgl))
+        manifest = tmp_path / "override_mcp.yaml"
+        manifest.write_text("name: Override\nskills: true\n", encoding="utf-8")
+
+        client = _spawn(["--graph", str(kgl), "--mcp-config", str(manifest)])
+        try:
+            description = next(t.get("description") or "" for t in client.list_tools() if t["name"] == "cypher_query")
+        finally:
+            client.shutdown()
+
+        assert "OVERRIDE-MARKER" in description, description[:400]
+        # The bundled cypher_query body is gone — that is the documented
+        # override, not a merge.
+        assert "200 data rows" not in description, description[:400]
+
+    def test_a_predicate_on_the_skill_label_never_activates(self, skill_graph: Path, tmp_path: Path):
+        pack = tmp_path / "label-pack"
+        pack.mkdir()
+        (pack / "on_skill.md").write_text(
+            "---\nname: on_skill\ndescription: Gated on the skill label.\n"
+            "references_tools: [cypher_query]\napplies_when:\n"
+            "  graph_has_node_type: [KgliteSkill]\n---\nSKILL-LABEL-MARKER\n",
+            encoding="utf-8",
+        )
+        (pack / "on_well.md").write_text(
+            "---\nname: on_well\ndescription: Gated on an ordinary label.\n"
+            "references_tools: [cypher_query]\napplies_when:\n"
+            "  graph_has_node_type: [Well]\n---\nWELL-LABEL-MARKER\n",
+            encoding="utf-8",
+        )
+        manifest = tmp_path / "label_mcp.yaml"
+        manifest.write_text("name: Labels\nskills:\n  - ./label-pack\n", encoding="utf-8")
+
+        client = _spawn(["--graph", str(skill_graph), "--mcp-config", str(manifest)])
+        try:
+            prompts = {p["name"] for p in client.list_prompts()}
+        finally:
+            client.shutdown()
+
+        assert "on_well" in prompts, sorted(prompts)
+        assert "on_skill" not in prompts, sorted(prompts)
+
+    def test_a_malformed_skill_node_is_skipped_while_its_siblings_load(self, tmp_path: Path):
+        kgl = tmp_path / "mixed.kgl"
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["A"]}), "Well", "id", "title")
+        g.set_skill(
+            "good",
+            "Good methodology.",
+            body="GOOD-MARKER\n",
+            references_tools=["cypher_query"],
+        )
+        # Raw Cypher bypasses `set_skill`'s validation — this is exactly the
+        # node shape the boot reader has to survive.
+        g.cypher(
+            "CREATE (s:KgliteSkill {name: 'blank', description: '', body: 'x', "
+            "references_tools: ['cypher_query'], delivery: 'lazy'})"
+        )
+        g.save(str(kgl))
+        manifest = tmp_path / "mixed_mcp.yaml"
+        manifest.write_text("name: Mixed\nskills: true\n", encoding="utf-8")
+
+        client = _spawn(["--graph", str(kgl), "--mcp-config", str(manifest)])
+        try:
+            prompts = {p["name"] for p in client.list_prompts()}
+            tools = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            boot = _wait_for_stderr(client, "graph skills:")
+        finally:
+            client.shutdown()
+
+        assert "good" in prompts, sorted(prompts)
+        assert "blank" not in prompts, sorted(prompts)
+        assert "GOOD-MARKER" in tools["cypher_query"]
+        # Bundled skills survive a bad sibling — one malformed blob reaching
+        # the registry would take every skill in the session with it.
+        assert "mcp-skill:graph_overview" in tools["graph_overview"]
+        assert "1 served" in boot and "1 skipped: blank:" in boot, boot
+
+    def test_a_workspace_mode_server_reads_no_graph_layer_and_still_indexes(self, tmp_path: Path):
+        project = tmp_path / "ws"
+        project.mkdir()
+        (project / "mod.py").write_text("def hub():\n    return 1\n", encoding="utf-8")
+        manifest = project / "ws_mcp.yaml"
+        manifest.write_text(
+            "name: Workspace\nskills: true\nworkspace:\n  kind: local\n  root: .\n",
+            encoding="utf-8",
+        )
+        client = _spawn(["--mcp-config", str(manifest)], cwd=project)
+        try:
+            prompts = {p["name"] for p in client.list_prompts()}
+            overview = _text_content(client.call_tool("graph_overview", {}))
+        finally:
+            client.shutdown()
+
+        assert "wells" not in prompts
+        # Bundled/file skills still resolve, and the index still renders.
+        assert "cypher_query" in prompts, sorted(prompts)
+        assert "<skills count=" in overview, overview
 
 
 # ── Test: code-tool gating on non-code graphs ─────────────────────────────

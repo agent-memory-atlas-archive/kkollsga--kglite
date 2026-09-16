@@ -58,6 +58,11 @@ impl DomainGraphState {
     }
 
     /// Whether the active graph declares at least one node of this type.
+    ///
+    /// A `kglite::api::is_system_label` name (`KgliteSkill`, `KgliteRecipe`)
+    /// answers `false` regardless of what the graph holds — those labels are
+    /// hidden from every type enumeration, so a downstream gate keyed on one
+    /// would be gating on a shape no agent can discover.
     pub fn has_node_type(&self, node_type: &str) -> bool {
         self.inner.has_node_type(node_type)
     }

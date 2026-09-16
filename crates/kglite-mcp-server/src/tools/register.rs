@@ -4,7 +4,7 @@
 
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use kglite::api::storage::StorageMode;
 use mcp_methods::server::McpServer;
@@ -117,7 +117,16 @@ const SAVE_GRAPH_DESCRIPTION_READ_ONLY: &str =
      the file untouched, so other servers reading the same graph are not made to re-read \
      it. force=true is refused on this server, which is not write-enabled.";
 
-/// Immutable MCP-layer additions to the bare `graph_overview` response.
+/// The bare-overview skills index, shared between the route closure that
+/// renders it and the boot step that computes it.
+///
+/// A slot rather than a value because [`OverviewDecorations`] is built inside
+/// `register_kglite_tools` and moved into the `graph_overview` closure, while
+/// the index can only be computed after `install_skills` — which needs the
+/// final tool surface the closed router describes.
+pub(crate) type SkillsIndexSlot = Arc<RwLock<Option<String>>>;
+
+/// MCP-layer additions to the bare `graph_overview` response.
 ///
 /// These describe the deployment, not the active graph, so they are captured
 /// by the route at boot instead of entering [`GraphState`] or core
@@ -126,6 +135,17 @@ const SAVE_GRAPH_DESCRIPTION_READ_ONLY: &str =
 pub(crate) struct OverviewDecorations {
     pub(crate) prefix: Option<String>,
     pub(crate) catalog: Option<CatalogSummary>,
+    /// Index of the skills this session actually serves, filled once by
+    /// `install_skills`.
+    ///
+    /// **Written at boot and never refreshed** — deliberately, not a gap. The
+    /// index lists what `prompts/list` serves, and that set is frozen at boot:
+    /// tool handlers hold no router access, so nothing can register, drop or
+    /// re-describe a prompt once the server is running (the same wall
+    /// documented on `code_tools_are_dead`). Re-rendering it after a
+    /// `reload_graph` / `load_graph` would advertise skills the session cannot
+    /// serve, which is worse than leaving it alone.
+    pub(crate) skills: SkillsIndexSlot,
 }
 
 impl OverviewDecorations {
@@ -148,6 +168,9 @@ impl OverviewDecorations {
                     summary.recipe_count, summary.query_count
                 ),
             );
+        }
+        if let Some(index) = read_lock(&self.skills).as_deref() {
+            append_overview_section(&mut rendered, index);
         }
         rendered
     }

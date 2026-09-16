@@ -557,6 +557,7 @@ fn register_kglite_tools(
     recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
     csv_http: Arc<csv_http::CsvHttpState>,
     source_roots_provider: Option<mcp_methods::server::source::SourceRootsProvider>,
+    skills_index: tools::SkillsIndexSlot,
 ) -> Result<()> {
     tools::register(
         server,
@@ -565,6 +566,7 @@ fn register_kglite_tools(
         tools::OverviewDecorations {
             prefix: manifest.and_then(|manifest| manifest.overview_prefix.clone()),
             catalog: recipe_catalog_summary,
+            skills: skills_index,
         },
         csv_http,
     );
@@ -794,6 +796,9 @@ pub(crate) async fn run_async(
     //
     // Read before `builtins` moves into `register_kglite_tools` below.
     let gate_code_tools = code_tools_are_dead(&mode, &builtins, &graph_state);
+    // Built here and filled by `install_skills` below: the overview route
+    // closes over the decorations long before the skill set is known.
+    let skills_index = tools::SkillsIndexSlot::default();
     register_kglite_tools(
         &mut server,
         &graph_state,
@@ -802,6 +807,7 @@ pub(crate) async fn run_async(
         recipe_catalog_summary,
         csv_http.clone(),
         source_roots_provider,
+        skills_index.clone(),
     )?;
     if matches!(mode, Mode::Graph { .. }) {
         // `reload_graph` is graph-mode-only: it re-reads *the* served file, an
@@ -851,9 +857,17 @@ pub(crate) async fn run_async(
 
     // Bare-mode (no manifest) deployments get no skills — the `skills:`
     // declaration lives in the manifest.
-    if let Some(m) = manifest.as_ref() {
-        install_skills(&mut server, m, &graph_state, recipe_catalog_summary)?;
-    }
+    let graph_skills = match manifest.as_ref() {
+        Some(m) => install_skills(
+            &mut server,
+            m,
+            &mode,
+            &graph_state,
+            recipe_catalog_summary,
+            &skills_index,
+        )?,
+        None => crate::skills::GraphSkillStats::default(),
+    };
 
     print_boot_summary(
         &mode,
@@ -862,6 +876,7 @@ pub(crate) async fn run_async(
         env_file_loaded.as_deref(),
         &csv_http,
         source_root_status.as_ref(),
+        &graph_skills,
     );
 
     let service = server

@@ -521,6 +521,13 @@ fn check_declared_source_roots(
 ///
 /// Only manifests that opt in produce a line; `skills:` absent or `false` is a
 /// configuration choice and has no `prompts/list` to ask.
+///
+/// The count includes graph-carried skills but cannot **attribute** them, and
+/// reports no byte total: `prompts/list` returns names and descriptions only,
+/// and every compile-time and graph-carried skill shares one
+/// `SkillProvenance::Bundled`, which 0.4.10 exposes nowhere on the wire. The
+/// graph layer's own count, byte total and skipped records are on the child's
+/// boot-summary line, which this harness mirrors to stderr.
 fn check_skills(
     rpc: &mut Rpc,
     manifest: Option<&Manifest>,

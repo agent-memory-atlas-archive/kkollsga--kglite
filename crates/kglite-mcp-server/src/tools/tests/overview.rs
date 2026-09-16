@@ -37,6 +37,7 @@ fn overview_decorations_render_prefix_body_and_catalog_in_order() {
     let decorations = OverviewDecorations {
         prefix: Some("operator prefix\n".to_string()),
         catalog: Some(catalog_summary()),
+        skills: Default::default(),
     };
     let body = "<active_graph/>\n<schema/>".to_string();
 
@@ -61,6 +62,7 @@ fn overview_decorations_render_prefix_body_and_catalog_in_order() {
         OverviewDecorations {
             prefix: Some("prefix only".to_string()),
             catalog: None,
+            skills: Default::default(),
         }
         .render("body".to_string(), true),
         "prefix only\nbody"
@@ -69,9 +71,50 @@ fn overview_decorations_render_prefix_body_and_catalog_in_order() {
         OverviewDecorations {
             prefix: None,
             catalog: Some(catalog_summary()),
+            skills: Default::default(),
         }
         .render("body".to_string(), true),
         "body\n<query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>"
+    );
+}
+
+/// The skills index is a bare-overview decoration like the prefix and the
+/// catalog hint: an agent choosing its first call needs to know what
+/// methodology this deployment serves; a drill-down does not.
+#[test]
+fn the_skills_index_renders_after_the_catalog_and_only_when_bare() {
+    let decorations = OverviewDecorations {
+        prefix: None,
+        catalog: Some(catalog_summary()),
+        skills: Default::default(),
+    };
+    *write_lock(&decorations.skills) = Some(
+        "<skills count=\"1\" get-via=\"prompts/get\">\nwells \u{2014} Wells.\n</skills>"
+            .to_string(),
+    );
+
+    let rendered = decorations.render("<schema/>".to_string(), true);
+    assert_eq!(
+        rendered,
+        "<schema/>\n\
+         <query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>\n\
+         <skills count=\"1\" get-via=\"prompts/get\">\nwells \u{2014} Wells.\n</skills>"
+    );
+    assert_eq!(
+        decorations.render("<schema/>".to_string(), false),
+        "<schema/>",
+        "a focused overview carries no index"
+    );
+
+    let unfilled = OverviewDecorations {
+        prefix: None,
+        catalog: None,
+        skills: Default::default(),
+    };
+    assert_eq!(
+        unfilled.render("<schema/>".to_string(), true),
+        "<schema/>",
+        "a deployment that serves no skill must render byte-identically to one that never had the slot"
     );
 }
 
@@ -80,6 +123,7 @@ fn bare_overview_decorations_include_no_active_graph_body() {
     let decorations = OverviewDecorations {
         prefix: Some("operator prefix".to_string()),
         catalog: Some(catalog_summary()),
+        skills: Default::default(),
     };
     let rendered = decorations.render(NO_GRAPH.to_string(), true);
 

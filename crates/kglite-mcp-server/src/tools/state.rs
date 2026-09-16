@@ -702,7 +702,20 @@ impl GraphState {
     /// type. Returns `false` when no graph is active. Backs the
     /// `graph_has_node_type:` predicate for skill `applies_when:`
     /// gating (0.9.31 / mcp-methods 0.3.36).
+    ///
+    /// **A system label (`kglite::api::is_system_label`) always answers
+    /// `false`**, whatever the graph holds. Those labels are hidden from every
+    /// type enumeration core serves, so a predicate that could activate on one
+    /// would let a skill gate on a shape no agent can see — and, for
+    /// `KgliteSkill` itself, let graph-carried skills gate on their own
+    /// presence, which is true exactly when the layer already loaded them.
+    /// `DirGraph::has_node_type` stays honest: its other callers are internal
+    /// correctness guards (text-index maintenance, persistence) that must
+    /// still see the label.
     pub fn has_node_type(&self, node_type: &str) -> bool {
+        if kglite::api::is_system_label(node_type) {
+            return false;
+        }
         let guard = read_lock(&self.inner);
         guard
             .as_ref()
