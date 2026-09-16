@@ -5498,6 +5498,220 @@ class KnowledgeGraph:
         ...
 
     # ====================================================================
+    # Recipes — graph-carried Cypher catalogue
+    # ====================================================================
+    #
+    # A recipe query is one named, parameterised, read-only Cypher statement
+    # the graph carries about itself, stored as an ordinary node under the
+    # ``KgliteRecipe`` system label. Queries are grouped: ``recipe`` names the
+    # group, ``name`` names the query inside it, and the pair is the key.
+    #
+    # ``KgliteRecipe`` is hidden from every surface that enumerates node types,
+    # exactly as ``KgliteSkill`` is — :meth:`KnowledgeGraph.node_types`,
+    # :meth:`KnowledgeGraph.schema`, :meth:`KnowledgeGraph.describe` and the
+    # Cypher ``db.labels()`` procedure all omit it, while
+    # ``MATCH (r:KgliteRecipe) RETURN r.name`` works and ``MATCH (n)`` counts it.
+    #
+    # Every stored query is held to the rules an MCP host applies before it will
+    # serve one: the Cypher must parse and must be read-only (no ``CREATE`` /
+    # ``MERGE`` / ``SET`` / ``DELETE``, no ``EXPLAIN``, ``PROFILE``,
+    # ``FORMAT CSV`` or ``LOAD CSV``, and no literal ``LIMIT 200``, which is
+    # reserved for the server's own result cap), and ``parameters`` must be a
+    # closed JSON Schema whose properties match the Cypher ``$parameters``
+    # exactly. A query that would be skipped at boot is refused here instead.
+    #
+    # Served over MCP, the graph's catalogue is merged **under** the manifest's
+    # ``extensions.cypher_recipes``: the manifest wins per ``(recipe, name)``
+    # and per group description, and anything only the graph has is kept. The
+    # server reads the layer once, at boot.
+
+    def list_recipes(self) -> list[dict[str, Any]]:
+        """List every recipe query in this graph, sorted by recipe then name.
+
+        Records are complete — a recipe query is one statement, so there is no
+        abridged listing the way there is for skills.
+
+        Returns:
+            One dict per query with ``recipe``, ``name``, ``description``,
+            ``parameters`` (the JSON Schema, as a nested dict), ``cypher`` and
+            ``recipe_description`` keys. Empty when the graph carries none.
+
+        Example:
+            ```python
+            keys = [(q["recipe"], q["name"]) for q in graph.list_recipes()]
+            ```
+        """
+        ...
+
+    def get_recipe(self, recipe: str, name: str) -> dict[str, Any]:
+        """Read one recipe query by its group and name.
+
+        Args:
+            recipe: The group id.
+            name: The query id inside that group.
+
+        Returns:
+            A dict with the same six keys :meth:`list_recipes` returns.
+
+        Raises:
+            NodeNotFoundError: No query is stored under that pair.
+
+        Example:
+            ```python
+            cypher = graph.get_recipe("code_review", "callers")["cypher"]
+            ```
+        """
+        ...
+
+    def set_recipe(
+        self,
+        recipe: str,
+        name: str,
+        description: str,
+        cypher: str,
+        parameters: dict[str, Any] | None = None,
+        recipe_description: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a recipe query, or replace the one stored under the same key.
+
+        The write routes through Cypher ``MERGE``, so the schema lock, write
+        scope, declared shapes, constraint checks, WAL and CDC all apply, and
+        there is at most one node per ``(recipe, name)`` however often this is
+        called.
+
+        Args:
+            recipe: The group id. A catalogue identifier: it must match
+                ``^[A-Za-z_][A-Za-z0-9_]*$``, because it keys the MCP request.
+            name: The query id inside the group, with the same identifier rule.
+            description: What this query answers — what an agent reads before
+                calling it. Required.
+            cypher: The stored statement. Must parse and must be read-only.
+            parameters: The JSON Schema for the statement's ``$parameters``, as
+                a nested dict. The root must be ``{"type": "object",
+                "properties": {...}, "required": [...],
+                "additionalProperties": False}``, its properties must match the
+                ``$parameters`` the Cypher references exactly, and ``required``
+                must list all of them. Only the keywords ``type``,
+                ``properties``, ``required``, ``items``, ``enum``, ``minimum``,
+                ``maximum``, ``minItems``, ``maxItems``,
+                ``additionalProperties`` and ``description`` compile. Omit it
+                for a statement with no parameters and the empty closed schema
+                is stored.
+            recipe_description: What the group is for. Required for the first
+                query in a group; a later one inherits the description already
+                stored for that group when this is omitted. Every member node
+                carries a copy, and the catalogue serves the one on the first
+                query in name order.
+
+        Returns:
+            The query as stored — the same six keys as :meth:`get_recipe`, plus
+            ``created``, which is ``True`` when this call made a new query and
+            ``False`` when it replaced one.
+
+        Raises:
+            ArgumentError: A ``recipe`` or ``name`` that is not a catalogue
+                identifier, an empty ``description``, ``cypher`` or group
+                description, Cypher that does not parse or is not read-only,
+                a parameter schema using a keyword outside the closed set, or a
+                schema that does not match the Cypher ``$parameters``. The
+                message names the rule that was broken. Also raised when the
+                graph is in read-only mode (see
+                :meth:`KnowledgeGraph.read_only`).
+            CypherExecutionError: The graph is schema-locked and does not
+                declare a ``KgliteRecipe`` node type. The write goes through
+                Cypher ``MERGE``, so the lock refuses it the same way it
+                refuses a hand-written ``CREATE``.
+
+        Example:
+            ```python
+            props = {"limit": {"type": "integer"}}
+            schema = {"type": "object", "properties": props, "required": ["limit"], "additionalProperties": False}
+            cypher = "MATCH (w:Well) RETURN w.title ORDER BY w.depth DESC LIMIT $limit"
+            graph.set_recipe("wells", "deepest", "Deepest wells.", cypher, schema, "About wells.")
+            ```
+        """
+        ...
+
+    def delete_recipe(self, recipe: str, name: str) -> bool:
+        """Remove one recipe query from the graph.
+
+        Args:
+            recipe: The group id.
+            name: The query id inside that group.
+
+        Returns:
+            ``True`` when a query was removed, ``False`` when there was nothing
+            stored under that pair.
+
+        Raises:
+            ArgumentError: The graph is in read-only mode.
+
+        Example:
+            ```python
+            graph.delete_recipe("wells", "deepest")
+            ```
+        """
+        ...
+
+    def import_recipes(self, path: str) -> list[str]:
+        """Import a catalogue document, replacing same-keyed queries.
+
+        ``path`` must be a ``.json`` file. **JSON only** — the wheel links no
+        general YAML reader, so a YAML catalogue is converted first (an MCP
+        server reads its own manifest and never goes through this method). The
+        document is either a whole MCP manifest, in which case the catalogue is
+        read from its ``extensions.cypher_recipes`` key, or that mapping on its
+        own: ``{"<recipe>": {"description": ..., "queries": {"<name>":
+        {"description": ..., "parameters": {...}, "cypher": ...}}}}``.
+
+        The whole document compiles before anything is written, so a file with
+        one bad query leaves the graph untouched.
+
+        Args:
+            path: A ``.json`` manifest or catalogue file.
+
+        Returns:
+            The keys written, as ``"<recipe>/<name>"`` strings in catalogue
+            order. Neither half can contain a slash, so the pair is unambiguous.
+
+        Raises:
+            FileError: ``path`` does not exist.
+            FileFormatError: ``path`` is not ``.json``, or its JSON is
+                unparseable.
+            ArgumentError: A query in the document is invalid — the message
+                names the recipe, the query and the rule. Also raised when the
+                graph is in read-only mode.
+
+        Example:
+            ```python
+            graph.import_recipes("recipes.json")
+            graph.save("graph.kgl")  # the recipes travel with the data
+            ```
+        """
+        ...
+
+    def export_recipes(self, path: str) -> None:
+        """Write every recipe query to ``path`` as one JSON catalogue document.
+
+        The document is the ``extensions.cypher_recipes`` mapping
+        :meth:`import_recipes` reads, pretty-printed. Every stored query is
+        written, including one that no longer compiles, so a broken catalogue
+        can be exported, repaired and imported back rather than retyped.
+
+        Args:
+            path: Destination file. Overwritten when it exists.
+
+        Raises:
+            FileIoError: The file could not be written.
+
+        Example:
+            ```python
+            graph.export_recipes("recipes.json")
+            ```
+        """
+        ...
+
+    # ====================================================================
     # Graph Algorithms — Path Finding & Connectivity
     # ====================================================================
 

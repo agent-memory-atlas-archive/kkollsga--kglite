@@ -17,6 +17,7 @@ pub mod kg_mutation;
 pub(crate) mod lifecycle;
 pub mod networkx;
 pub(crate) mod query_defaults;
+pub mod recipes;
 pub mod result_table;
 pub mod result_view;
 pub mod session;

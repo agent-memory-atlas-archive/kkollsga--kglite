@@ -1,0 +1,62 @@
+{
+  "extensions": {
+    "cypher_recipes": {
+      "code_review": {
+        "description": "Exact Function-scoped operations for an initial code review.",
+        "queries": {
+          "resolve_function": {
+            "description": "Resolve Function nodes with exactly the supplied qualified_name.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "qualified_name": {
+                  "type": "string",
+                  "description": "Fully qualified Function name."
+                }
+              },
+              "required": [
+                "qualified_name"
+              ],
+              "additionalProperties": false
+            },
+            "cypher": "MATCH (target:Function)\nWHERE target.qualified_name = $qualified_name\nRETURN target.qualified_name AS qualified_name,\n       target.file_path AS file_path,\n       target.line_number AS line_number\nORDER BY qualified_name, file_path, line_number\n"
+          },
+          "direct_callers": {
+            "description": "Return Function nodes with a direct Function-to-Function CALLS edge to the target Function.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "qualified_name": {
+                  "type": "string",
+                  "description": "Fully qualified target Function name."
+                }
+              },
+              "required": [
+                "qualified_name"
+              ],
+              "additionalProperties": false
+            },
+            "cypher": "MATCH (caller:Function)-[:CALLS]->(target:Function)\nWHERE target.qualified_name = $qualified_name\nRETURN DISTINCT caller.qualified_name AS qualified_name,\n                caller.file_path AS file_path,\n                caller.line_number AS line_number\nORDER BY qualified_name, file_path, line_number\n"
+          },
+          "affected_tests": {
+            "description": "Return test Function nodes reaching the target Function through CALLS paths of length 1..5; this is not comprehensive impact analysis.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "qualified_name": {
+                  "type": "string",
+                  "description": "Fully qualified target Function name."
+                }
+              },
+              "required": [
+                "qualified_name"
+              ],
+              "additionalProperties": false
+            },
+            "cypher": "MATCH (test:Function)-[:CALLS*1..5]->(target:Function)\nWHERE target.qualified_name = $qualified_name\n  AND test.is_test = true\nRETURN DISTINCT test.qualified_name AS qualified_name,\n                test.file_path AS file_path,\n                test.line_number AS line_number\nORDER BY qualified_name, file_path, line_number\n"
+          }
+        }
+      }
+    }
+  }
+}

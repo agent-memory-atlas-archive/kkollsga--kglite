@@ -972,6 +972,14 @@ pub(super) fn write_fluent_overview(xml: &mut String, surface: DescribeSurface) 
     xml.push_str("    <method sig=\"import_skills(path) / export_skills(path)\">Exchange SKILL.md files (frontmatter + body) with a file or directory.</method>\n");
     xml.push_str("  </group>\n");
 
+    xml.push_str("  <group name=\"recipes\">\n");
+    xml.push_str("    <method sig=\"list_recipes()\">Named, parameterised, read-only Cypher this graph carries for itself, keyed (recipe, name). Stored under the KgliteRecipe system label, which every node-type listing hides.</method>\n");
+    xml.push_str("    <method sig=\"get_recipe(recipe, name)\">One stored query with its schema and Cypher.</method>\n");
+    xml.push_str("    <method sig=\"set_recipe(recipe, name, description, cypher, parameters=None, recipe_description=None)\">Store a query. Refused unless the Cypher is read-only and the parameter schema matches its $parameters exactly.</method>\n");
+    xml.push_str("    <method sig=\"delete_recipe(recipe, name)\">Remove a query; False when there was none.</method>\n");
+    xml.push_str("    <method sig=\"import_recipes(path) / export_recipes(path)\">Exchange a JSON catalogue document (the MCP extensions.cypher_recipes shape) with a file.</method>\n");
+    xml.push_str("  </group>\n");
+
     xml.push_str("  <group name=\"transactions\">\n");
     xml.push_str(
         "    <method sig=\"begin()\">Read-write transaction (context manager).</method>\n",
