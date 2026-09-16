@@ -746,12 +746,14 @@ struct BootedGraph {
     manifest: Option<mcp_methods::server::Manifest>,
     options: ServerOptions,
     graph_state: GraphState,
-    /// The manifest catalogue with the graph's own merged under it.
+    /// The manifest catalogue with the graph's own, and the embedding binary's
+    /// under that, merged beneath it.
     recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
     recipe_catalog_summary: Option<recipe_queries::CatalogSummary>,
     /// See [`BootExtensions::manifest_recipes_declared`].
     manifest_recipes_declared: bool,
     graph_recipes: recipe_queries::GraphRecipeStats,
+    producer_recipes: recipe_queries::ProducerRecipeStats,
     source_root_status: Option<SourceRootStatus>,
     env_file_loaded: Option<PathBuf>,
     tools_allow: Option<Vec<String>>,
@@ -762,6 +764,7 @@ struct BootedGraph {
 fn boot_graph(
     cli: &Cli,
     workspace_graph: Option<WorkspaceGraphHooks>,
+    producer_recipes: Option<recipe_queries::RecipeCatalog>,
     read_only_pin: bool,
 ) -> Result<BootedGraph> {
     init_tracing();
@@ -822,13 +825,19 @@ fn boot_graph(
         bind_mode(&mode, cli, manifest.as_ref(), &graph_state, options)?;
 
     // Only now: `bind_mode` has performed the boot open, so the graph's own
-    // catalogue exists to merge under the manifest's. Everything downstream —
-    // the routes, the bundled `recipe_queries` skill, the overview hint, the
-    // allowlist's recipe exemption, the raw-stdio route pointers — reads the
-    // merged catalogue, so a graph that carries recipes serves them whether or
-    // not the manifest declared any.
-    let (recipe_catalog, graph_recipes) =
-        recipe_queries::merge_graph_recipes(&mode, &graph_state, recipe_catalog);
+    // catalogue exists to merge between the manifest's and the embedder's.
+    // Everything downstream — the routes, the bundled `recipe_queries` skill,
+    // the overview hint, the raw-stdio route pointers — reads the merged
+    // catalogue, so a graph or a producer that carries recipes serves them
+    // whether or not the manifest declared any. The one deliberate exception
+    // is the allowlist's recipe refusal, which reads `manifest_recipes_declared`
+    // because only the operator's own catalogue can contradict their list.
+    let (recipe_catalog, producer_recipes, graph_recipes) = recipe_queries::merge_recipe_layers(
+        &mode,
+        &graph_state,
+        producer_recipes.unwrap_or_default(),
+        recipe_catalog,
+    );
     let recipe_catalog = Arc::new(recipe_catalog);
     let recipe_catalog_summary = recipe_catalog.discovery_summary();
 
@@ -842,6 +851,7 @@ fn boot_graph(
         recipe_catalog_summary,
         manifest_recipes_declared,
         graph_recipes,
+        producer_recipes,
         source_root_status,
         env_file_loaded,
         tools_allow,
@@ -860,6 +870,7 @@ pub(crate) async fn run_async(
         domain_tools,
         read_only: read_only_pin,
         producer_skills,
+        producer_recipes,
     } = extensions;
     let BootedGraph {
         mode,
@@ -870,12 +881,13 @@ pub(crate) async fn run_async(
         recipe_catalog_summary,
         manifest_recipes_declared,
         graph_recipes,
+        producer_recipes: producer_recipe_stats,
         source_root_status,
         env_file_loaded,
         tools_allow,
         mutations_enabled,
         write_scope,
-    } = boot_graph(&cli, workspace_graph, read_only_pin)?;
+    } = boot_graph(&cli, workspace_graph, producer_recipes, read_only_pin)?;
 
     // Snapshot the dynamic source-roots provider before `options` moves into
     // the McpServer. `read_code_source` queries it on every call, so
@@ -992,6 +1004,7 @@ pub(crate) async fn run_async(
         source_root_status.as_ref(),
         crate::boot::ServedLayers {
             producer_skills: &skill_stats.producer,
+            producer_recipes: &producer_recipe_stats,
             graph_skills: &skill_stats.graph,
             graph_recipes: &graph_recipes,
         },

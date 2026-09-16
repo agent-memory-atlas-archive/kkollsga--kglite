@@ -20,7 +20,7 @@ mod catalog_tests;
 mod result_tests;
 
 pub(crate) use errors::RecipeErrorEnvelope;
-pub(crate) use graph_layer::{merge_graph_recipes, GraphRecipeStats};
+pub(crate) use graph_layer::{merge_recipe_layers, GraphRecipeStats, ProducerRecipeStats};
 pub(crate) use kglite::api::recipes::{
     query_conversion_error, CatalogSummary, RecipeCatalog, RecipeQueryDefinition,
     VariableIssueKind, VariablesValidationError, RECIPE_RESULT_ROW_LIMIT,

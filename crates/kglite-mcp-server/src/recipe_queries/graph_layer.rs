@@ -1,17 +1,24 @@
-//! The graph-carried layer of the served recipe catalogue.
+//! The layers of the served recipe catalogue that sit under the manifest's.
 //!
 //! A `.kgl` can ship the exact queries its skills name, so an operator who
 //! serves such a graph gets the catalogue without copying Cypher into a
-//! manifest. The manifest still wins: it is the one source the operator can
-//! edit, and a deployment must be able to correct or replace a query the graph
-//! ships without rebuilding the graph.
+//! manifest; an embedding binary can ship the queries its own schema makes
+//! answerable ([`ServerExtensions::with_recipes`]), which apply to every graph
+//! it serves. The manifest still wins over both: it is the one source the
+//! operator can edit, and a deployment must be able to correct or replace a
+//! query without rebuilding the graph or the binary. Between the two lower
+//! layers the graph wins, for the same reason — it is the more specific
+//! statement, and the one closer to what is actually being served.
 //!
-//! Two sources, two failure rules, deliberately different. A manifest query
-//! that does not compile fails the boot — an operator typo is theirs to fix,
-//! and they are looking at the file. A graph record that does not compile is
-//! skipped with a warning: graph content is data, it may have been written by
-//! a `CREATE` that bypassed validation entirely, and one bad node must not take
-//! the rest of the catalogue — or the deployment — down with it.
+//! Three sources, and the failure rules are deliberately not the same. A
+//! manifest query that does not compile fails the boot — an operator typo is
+//! theirs to fix, and they are looking at the file; a producer catalogue is
+//! code and cannot even be constructed without compiling
+//! (`RecipeCatalog::from_manifest_value` refuses it), so it fails the same way.
+//! A graph record that does not compile is skipped with a warning: graph
+//! content is data, it may have been written by a `CREATE` that bypassed
+//! validation entirely, and one bad node must not take the rest of the
+//! catalogue — or the deployment — down with it.
 
 use kglite::api::recipes::{self, RecipeCatalog, RecipeWarning};
 
@@ -73,13 +80,55 @@ fn read_graph_catalogue(
         .unwrap_or_default()
 }
 
-/// Lay the manifest catalogue over the graph's own and report what the graph
-/// contributed.
-pub(crate) fn merge_graph_recipes(
+/// What the embedding binary's catalogue contributed to this boot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProducerRecipeStats {
+    /// Compiled producer queries the merged catalogue serves as the binary
+    /// wrote them.
+    pub(crate) served: usize,
+    /// Compiled producer queries a closer layer — the graph or the manifest —
+    /// defines under the same `(recipe, name)` and therefore replaces.
+    pub(crate) overridden: usize,
+}
+
+impl ProducerRecipeStats {
+    /// Boot-summary fragment, or `None` when the binary carried no queries.
+    /// No `skipped` twin: a producer catalogue that does not compile cannot be
+    /// built, so nothing reaches here to skip.
+    pub(crate) fn summary(&self) -> Option<String> {
+        if self.served == 0 && self.overridden == 0 {
+            return None;
+        }
+        let mut text = format!("producer recipes: {} served", self.served);
+        if self.overridden > 0 {
+            text.push_str(&format!(
+                ", {} overridden by the graph or the manifest",
+                self.overridden
+            ));
+        }
+        Some(text)
+    }
+}
+
+/// Is this exact `(recipe, name)` defined in `catalog`?
+fn defines(catalog: &RecipeCatalog, recipe: &str, name: &str) -> bool {
+    catalog
+        .get(recipe)
+        .is_some_and(|group| group.get(name).is_some())
+}
+
+/// Compose the three catalogue layers — `producer < graph < manifest` — and
+/// report what each of the two lower ones contributed.
+///
+/// `recipes::merge(lower, higher)` composes associatively, so folding the
+/// producer under the graph and the manifest over the pair is the same
+/// catalogue however the sources were built.
+pub(crate) fn merge_recipe_layers(
     mode: &Mode,
     graph_state: &GraphState,
+    producer: RecipeCatalog,
     manifest: RecipeCatalog,
-) -> (RecipeCatalog, GraphRecipeStats) {
+) -> (RecipeCatalog, ProducerRecipeStats, GraphRecipeStats) {
     let (graph, warnings) = read_graph_catalogue(mode, graph_state);
     let mut stats = GraphRecipeStats::default();
     for warning in warnings {
@@ -96,17 +145,27 @@ pub(crate) fn merge_graph_recipes(
     }
     for group in graph.recipes() {
         for query in group.queries() {
-            let replaced = manifest
-                .get(&group.name)
-                .is_some_and(|manifest_group| manifest_group.get(&query.name).is_some());
-            if replaced {
+            if defines(&manifest, &group.name, &query.name) {
                 stats.overridden += 1;
             } else {
                 stats.served += 1;
             }
         }
     }
-    (recipes::merge(graph, manifest), stats)
+    let mut producer_stats = ProducerRecipeStats::default();
+    for group in producer.recipes() {
+        for query in group.queries() {
+            if defines(&graph, &group.name, &query.name)
+                || defines(&manifest, &group.name, &query.name)
+            {
+                producer_stats.overridden += 1;
+            } else {
+                producer_stats.served += 1;
+            }
+        }
+    }
+    let merged = recipes::merge(recipes::merge(producer, graph), manifest);
+    (merged, producer_stats, stats)
 }
 
 #[cfg(test)]

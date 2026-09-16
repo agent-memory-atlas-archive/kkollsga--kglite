@@ -1,4 +1,5 @@
-//! Tests for the graph-carried recipe layer and its merge under the manifest.
+//! Tests for the two recipe layers under the manifest's — the graph's own
+//! records and the embedding binary's catalogue — and their merge.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -59,6 +60,25 @@ fn graph_mode(dir: &Path) -> Mode {
     Mode::Graph {
         path: dir.join("recipes.kgl"),
     }
+}
+
+/// The two-layer merge these tests were written against, with the producer
+/// layer empty. The assertion is the point: an empty producer layer must
+/// contribute nothing, so every graph-vs-manifest expectation below still
+/// measures what it always did.
+fn merge_graph_recipes(
+    mode: &Mode,
+    state: &GraphState,
+    manifest: RecipeCatalog,
+) -> (RecipeCatalog, GraphRecipeStats) {
+    let (catalogue, producer, graph) =
+        merge_recipe_layers(mode, state, RecipeCatalog::default(), manifest);
+    assert_eq!(
+        producer,
+        ProducerRecipeStats::default(),
+        "an absent producer catalogue must contribute nothing"
+    );
+    (catalogue, graph)
 }
 
 fn manifest_catalogue(raw: serde_json::Value) -> RecipeCatalog {
@@ -334,6 +354,206 @@ fn the_boot_summary_names_the_graph_layer_only_when_there_is_one() {
     );
     assert!(
         summary.contains("1 skipped: wells/broken: cypher must be read-only"),
+        "{summary}"
+    );
+}
+
+// ── The producer layer (`ServerExtensions::with_recipes`) ──────────────────
+
+/// A catalogue the embedding binary shipped, in the shape
+/// `extensions.cypher_recipes` takes — the exact route
+/// `ServerExtensions::with_recipes` documents.
+fn producer_catalogue(raw: serde_json::Value) -> RecipeCatalog {
+    RecipeCatalog::from_manifest_value(Some(&raw)).expect("a valid producer catalogue")
+}
+
+fn one_query(recipe: &str, name: &str, cypher: &str, group_description: &str) -> serde_json::Value {
+    json!({
+        recipe: {
+            "description": group_description,
+            "queries": {
+                name: {
+                    "description": format!("Query {name}."),
+                    "parameters": serde_json::from_str::<serde_json::Value>(NO_PARAMETERS).unwrap(),
+                    "cypher": cypher
+                }
+            }
+        }
+    })
+}
+
+/// The deployment the builder exists for: a workspace-mode producer, no
+/// manifest and no graph at boot. The graph layer is empty in these modes by
+/// design, so the producer's is the only catalogue there is — and it has to be
+/// enough to register the routes.
+#[test]
+fn a_producer_only_catalogue_registers_the_routes_in_the_workspace_modes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    // A graph exists in the slot but the mode keeps it out of the catalogue —
+    // the same state a workspace server reaches after its first activation.
+    let state = state_with(
+        temp.path(),
+        &[record("wells", "count", "RETURN 'graph' AS source")],
+        &[],
+    );
+
+    for mode in [
+        Mode::LocalWorkspace {
+            root: temp.path().to_path_buf(),
+            watch: false,
+        },
+        Mode::Workspace {
+            dir: temp.path().to_path_buf(),
+        },
+    ] {
+        let (catalogue, producer, graph) = merge_recipe_layers(
+            &mode,
+            &state,
+            producer_catalogue(one_query(
+                "review",
+                "hotspots",
+                "RETURN 'producer' AS source",
+                "Reviewing this builder's graphs.",
+            )),
+            RecipeCatalog::default(),
+        );
+        assert_eq!(producer.served, 1, "{mode:?}");
+        assert_eq!(producer.overridden, 0, "{mode:?}");
+        assert_eq!(graph, GraphRecipeStats::default(), "{mode:?}");
+        let summary = catalogue
+            .discovery_summary()
+            .expect("a producer catalogue is a catalogue");
+        assert_eq!(
+            (summary.recipe_count, summary.query_count),
+            (1, 1),
+            "{mode:?}"
+        );
+
+        let catalogue = Arc::new(catalogue);
+        let mut server = McpServer::new(ServerOptions::default());
+        let registered =
+            register_recipe_query_routes(&mut server, state.clone(), catalogue.clone())
+                .expect("routes");
+        assert_eq!(registered, 2, "{mode:?}");
+
+        // And it runs against whatever graph the server activated later —
+        // nothing about the catalogue is tied to the graph it was built beside.
+        let result = run_recipe_query(
+            &state,
+            &catalogue,
+            RunRecipeQueryArgs {
+                recipe: "review".into(),
+                query: "hotspots".into(),
+                variables: serde_json::Map::new(),
+                include_cypher: false,
+            },
+        )
+        .into_call_tool_result();
+        assert_ne!(result.is_error, Some(true), "{mode:?}: {result:?}");
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["result"]["rows"],
+            json!([["producer"]]),
+            "{mode:?}"
+        );
+    }
+}
+
+/// **Precedence pin (D6).** `producer < graph < manifest`, per `(recipe, name)`
+/// *and* per group description, asserted on one key at a time so each step is
+/// an observable difference between two stored statements. Everything only one
+/// layer carries survives: overriding a query must never delete its siblings.
+#[test]
+fn the_three_catalogue_layers_compose_producer_under_graph_under_manifest() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state = state_with(
+        temp.path(),
+        &[
+            record("wells", "count", "RETURN 'graph' AS source"),
+            record("wells", "depth", "RETURN 'graph-only' AS source"),
+        ],
+        &[],
+    );
+    let mut producer = producer_catalogue(one_query(
+        "wells",
+        "count",
+        "RETURN 'producer' AS source",
+        "The producer's own wells group.",
+    ));
+    producer = recipes::merge(
+        producer,
+        producer_catalogue(one_query(
+            "wells",
+            "spud",
+            "RETURN 'producer-only' AS source",
+            "The producer's own wells group.",
+        )),
+    );
+    let manifest = manifest_catalogue(one_query(
+        "wells",
+        "depth",
+        "RETURN 'manifest' AS source",
+        "The operator's wells group.",
+    ));
+
+    let (catalogue, producer_stats, graph_stats) =
+        merge_recipe_layers(&graph_mode(temp.path()), &state, producer, manifest);
+
+    // The graph beats the producer on `count`; the manifest beats the graph on
+    // `depth`; `spud` is the producer's alone and survives both.
+    assert_eq!(
+        query_cypher(&catalogue, "wells", "count"),
+        "RETURN 'graph' AS source"
+    );
+    assert_eq!(
+        query_cypher(&catalogue, "wells", "depth"),
+        "RETURN 'manifest' AS source"
+    );
+    assert_eq!(
+        query_cypher(&catalogue, "wells", "spud"),
+        "RETURN 'producer-only' AS source"
+    );
+    // Group description: the closest layer that declared the group wins.
+    assert_eq!(
+        catalogue.get("wells").expect("wells").description,
+        "The operator's wells group."
+    );
+
+    assert_eq!(producer_stats.served, 1, "only `spud` is served as written");
+    assert_eq!(producer_stats.overridden, 1, "`count` lost to the graph");
+    assert_eq!(graph_stats.served, 1, "only `count` is served as written");
+    assert_eq!(graph_stats.overridden, 1, "`depth` lost to the manifest");
+
+    // The overview hint and the bundled `recipe_queries` skill read this one
+    // summary, so it has to count every layer's surviving queries.
+    let summary = catalogue.discovery_summary().expect("a merged catalogue");
+    assert_eq!((summary.recipe_count, summary.query_count), (1, 3));
+}
+
+#[test]
+fn the_boot_summary_names_the_producer_layer_only_when_there_is_one() {
+    assert_eq!(ProducerRecipeStats::default().summary(), None);
+
+    let plain = ProducerRecipeStats {
+        served: 3,
+        overridden: 0,
+    };
+    assert_eq!(
+        plain.summary().as_deref(),
+        Some("producer recipes: 3 served")
+    );
+
+    let overridden = ProducerRecipeStats {
+        served: 2,
+        overridden: 1,
+    };
+    let summary = overridden.summary().expect("summary");
+    assert!(
+        summary.starts_with("producer recipes: 2 served"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("1 overridden by the graph or the manifest"),
         "{summary}"
     );
 }

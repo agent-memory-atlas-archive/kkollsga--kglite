@@ -10,11 +10,16 @@ use std::time::{Duration, Instant};
 use kglite::api::session::{execute_mut, ExecuteOptions};
 use kglite::api::storage::{new_dir_graph_in_mode, StorageMode};
 use kglite_mcp_server::{
-    run_with_extensions, ServerExtensions, WorkspaceGraphHooks, WorkspaceGraphResult,
+    run_with_extensions, Delivery, RecipeCatalog, ServerExtensions, SkillRecord,
+    WorkspaceGraphHooks, WorkspaceGraphResult,
 };
 
 const CHILD_ENV: &str = "KGLITE_WATCH_COMPOSITION_CHILD";
 const ROOT_ENV: &str = "KGLITE_WATCH_COMPOSITION_ROOT";
+/// Set by the methodology test only, so the watch test keeps measuring a
+/// producer that contributes nothing but the graph builder.
+const METHODOLOGY_ENV: &str = "KGLITE_WATCH_COMPOSITION_METHODOLOGY";
+const PRODUCER_SKILL: &str = "fixture_methodology";
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const DEBOUNCE_SETTLE: Duration = Duration::from_millis(900);
 
@@ -46,13 +51,50 @@ fn producer_hooks() -> WorkspaceGraphHooks {
     }
 }
 
+/// What a producer registers once per server: the methodology for the shapes
+/// its builder always emits, and the queries that answer them. Neither is in
+/// the manifest and neither is in any graph — this is the codingest shape.
+fn producer_methodology(extensions: ServerExtensions) -> ServerExtensions {
+    let catalog = RecipeCatalog::from_manifest_value(Some(&serde_json::json!({
+        "fixture": {
+            "description": "Queries for the shapes this builder emits.",
+            "queries": {
+                "sources": {
+                    "description": "Every source file in the active graph.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": false
+                    },
+                    "cypher": "MATCH (s:Source) RETURN s.id AS id"
+                }
+            }
+        }
+    })))
+    .expect("a valid producer catalogue");
+    extensions
+        .with_skills([SkillRecord {
+            name: PRODUCER_SKILL.to_string(),
+            description: "How this builder's graphs are shaped.".to_string(),
+            body: "Every graph this server serves carries `:Source` nodes keyed by `id`.\n"
+                .to_string(),
+            references_tools: vec!["cypher_query".to_string()],
+            delivery: Delivery::Lazy,
+        }])
+        .with_recipes(catalog)
+}
+
 #[test]
 fn producer_server_child() {
     if std::env::var_os(CHILD_ENV).is_none() {
         return;
     }
     let root = std::env::var_os(ROOT_ENV).expect("child root");
-    let extensions = ServerExtensions::default().with_workspace_graph(producer_hooks());
+    let mut extensions = ServerExtensions::default().with_workspace_graph(producer_hooks());
+    if std::env::var_os(METHODOLOGY_ENV).is_some() {
+        extensions = producer_methodology(extensions);
+    }
     let manifest = std::path::PathBuf::from(root).join("manifest.yaml");
     run_with_extensions(
         [
@@ -75,7 +117,15 @@ struct ServerChild {
 
 impl ServerChild {
     fn spawn(root: &std::path::Path) -> Self {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        Self::spawn_with(root, false)
+    }
+
+    fn spawn_with(root: &std::path::Path, methodology: bool) -> Self {
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        if methodology {
+            command.env(METHODOLOGY_ENV, "1");
+        }
+        let mut child = command
             .args(["--exact", "producer_server_child", "--nocapture"])
             .env(CHILD_ENV, "1")
             .env(ROOT_ENV, root)
@@ -272,5 +322,92 @@ fn source_reads_retain_graph_only_state_and_real_edits_rebuild() {
     assert!(
         stderr.contains("watch: file change debounced"),
         "missing mutation event log: {stderr}"
+    );
+}
+
+/// The producer-methodology contract, end to end through a real MCP handshake:
+/// an embedder that registers skills and a recipe catalogue once per server
+/// serves both for every graph it builds, in a workspace mode, with **no
+/// manifest `skills:` declaration and no graph at boot**. Every unit test under
+/// `src/` composes a registry or a catalogue directly; only this one proves the
+/// wiring survives `run_with_extensions`, `initialize` and the frozen
+/// capability set.
+#[test]
+fn a_producer_registers_its_methodology_for_every_graph_it_serves() {
+    let fixture = tempfile::tempdir().expect("methodology fixture");
+    std::fs::write(fixture.path().join("fixture.rs"), "fn initial() {}\n").expect("source");
+    // Deliberately no `skills:` key: the producer's own opt-in is what has to
+    // turn the skill plane on here.
+    std::fs::write(
+        fixture.path().join("manifest.yaml"),
+        "name: Producer methodology\nworkspace:\n  kind: local\n  root: .\n  sandbox_root: .\n",
+    )
+    .expect("manifest");
+
+    let mut server = ServerChild::spawn_with(fixture.path(), true);
+    server.initialize();
+
+    let tools = server.request("tools/list", serde_json::json!({}));
+    let listed: Vec<String> = tools["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+        .collect();
+    // The lazy-skill loader exists because a skill does; the recipe routes
+    // exist because a catalogue does. Both come from the producer alone.
+    assert!(listed.iter().any(|name| name == "skill"), "{listed:?}");
+    assert!(
+        listed.iter().any(|name| name == "run_recipe_query"),
+        "{listed:?}"
+    );
+    assert!(
+        listed.iter().any(|name| name == "list_recipe_queries"),
+        "{listed:?}"
+    );
+
+    let cypher_description = tools["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == "cypher_query")
+        .and_then(|tool| tool["description"].as_str())
+        .expect("cypher_query description")
+        .to_string();
+    assert!(
+        cypher_description.contains(&format!("<!-- mcp-skill:{PRODUCER_SKILL} -->")),
+        "producer skill not injected into cypher_query: {cypher_description}"
+    );
+
+    let body = server.call("skill", serde_json::json!({"name": PRODUCER_SKILL}));
+    assert!(
+        body.contains(":Source` nodes keyed by `id`"),
+        "skill: {body}"
+    );
+
+    // No graph at boot in a workspace mode: the catalogue was registered before
+    // one existed, and runs against whatever `set_root_dir` activates.
+    let activated = server.call(
+        "set_root_dir",
+        serde_json::json!({"path": fixture.path().to_string_lossy()}),
+    );
+    assert!(
+        activated.contains("Graph ready: 1 nodes"),
+        "activation: {activated}"
+    );
+    let rows = server.call(
+        "run_recipe_query",
+        serde_json::json!({"recipe": "fixture", "query": "sources", "variables": {}}),
+    );
+    assert!(rows.contains("fixture.rs"), "recipe rows: {rows}");
+
+    let stderr = server.stop();
+    assert!(
+        stderr.contains("producer skills: 1 served"),
+        "boot summary missing the producer skills line: {stderr}"
+    );
+    assert!(
+        stderr.contains("producer recipes: 1 served"),
+        "boot summary missing the producer recipes line: {stderr}"
     );
 }

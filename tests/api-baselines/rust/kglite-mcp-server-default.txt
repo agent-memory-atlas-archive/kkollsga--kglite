@@ -1,5 +1,6 @@
 pub mod kglite_mcp_server
 pub use kglite_mcp_server::Delivery
+pub use kglite_mcp_server::RecipeCatalog
 pub use kglite_mcp_server::SkillRecord
 #[non_exhaustive] pub enum kglite_mcp_server::WorkspaceGraphChanges
 pub kglite_mcp_server::WorkspaceGraphChanges::Changed(alloc::vec::Vec<std::path::PathBuf>)
@@ -53,6 +54,7 @@ impl kglite_mcp_server::ServerExtensions
 pub fn kglite_mcp_server::ServerExtensions::new() -> Self
 pub fn kglite_mcp_server::ServerExtensions::read_only(self) -> Self
 pub fn kglite_mcp_server::ServerExtensions::with_domain_tools<F>(self, registrar: F) -> Self where F: for<'a> core::ops::function::Fn(&mut kglite_mcp_server::DomainToolRegistry<'a>) -> anyhow::Result<()> + core::marker::Send + core::marker::Sync + 'static
+pub fn kglite_mcp_server::ServerExtensions::with_recipes(self, catalog: kglite::graph::recipes::RecipeCatalog) -> Self
 pub fn kglite_mcp_server::ServerExtensions::with_skills(self, skills: impl core::iter::traits::collect::IntoIterator<Item = kglite::graph::skills::SkillRecord>) -> Self
 pub fn kglite_mcp_server::ServerExtensions::with_workspace_graph(self, hooks: kglite_mcp_server::WorkspaceGraphHooks) -> Self
 impl core::default::Default for kglite_mcp_server::ServerExtensions

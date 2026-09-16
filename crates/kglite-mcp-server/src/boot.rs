@@ -249,6 +249,7 @@ pub(crate) fn declare_unresolved_source_roots(
 /// instead of another argument on every caller.
 pub(crate) struct ServedLayers<'a> {
     pub(crate) producer_skills: &'a crate::skills::ProducerSkillStats,
+    pub(crate) producer_recipes: &'a crate::recipe_queries::ProducerRecipeStats,
     pub(crate) graph_skills: &'a crate::skills::GraphSkillStats,
     pub(crate) graph_recipes: &'a crate::recipe_queries::GraphRecipeStats,
 }
@@ -314,6 +315,9 @@ pub(crate) fn print_boot_summary(
     // `prompts/list`, which the selftest check queries, carries names and
     // descriptions only and cannot attribute a skill to its source.
     if let Some(summary) = served_layers.producer_skills.summary() {
+        parts.push(summary);
+    }
+    if let Some(summary) = served_layers.producer_recipes.summary() {
         parts.push(summary);
     }
     if let Some(summary) = served_layers.graph_skills.summary() {

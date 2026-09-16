@@ -81,6 +81,7 @@ pub use crate::tools::{
     WorkspaceGraphRelevance, WorkspaceGraphRelevanceFn, WorkspaceGraphRequest,
     WorkspaceGraphResult,
 };
+pub use kglite::api::recipes::RecipeCatalog;
 pub use kglite::api::skills::{Delivery, SkillRecord};
 
 /// Run the MCP server to completion over stdio.

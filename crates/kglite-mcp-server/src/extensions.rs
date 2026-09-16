@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use kglite::api::recipes::RecipeCatalog;
 use kglite::api::skills::SkillRecord;
 use mcp_methods::server::{Manifest, McpServer};
 
@@ -192,6 +193,7 @@ pub struct ServerExtensions {
     pub(crate) domain_tools: Option<Box<DomainToolRegistrar>>,
     pub(crate) read_only: bool,
     pub(crate) producer_skills: Vec<SkillRecord>,
+    pub(crate) producer_recipes: Option<RecipeCatalog>,
 }
 
 impl ServerExtensions {
@@ -263,6 +265,38 @@ impl ServerExtensions {
     /// name replaces an earlier one.
     pub fn with_skills(mut self, skills: impl IntoIterator<Item = SkillRecord>) -> Self {
         self.producer_skills.extend(skills);
+        self
+    }
+
+    /// Contribute the embedder's own Cypher recipe catalogue — the named,
+    /// parameterised queries its schema makes answerable, served by name
+    /// instead of handed out as raw Cypher.
+    ///
+    /// The same argument as [`with_skills`](Self::with_skills), one layer
+    /// over: the queries belong to the shapes the builder emits, so they apply
+    /// to every graph this server serves. Registered in **every** mode —
+    /// `register_recipe_query_routes` is mode-blind, so a producer catalogue
+    /// alone gives a manifest-less workspace deployment both fixed routes.
+    ///
+    /// **Merged, `producer < graph < manifest`**, per `(recipe, name)` and per
+    /// group description: a `.kgl` can correct a producer query, and the
+    /// manifest — the one file an operator can edit — corrects both. Queries
+    /// only one layer carries are all served.
+    ///
+    /// Boot-only, like every catalogue: the two route names are fixed and are
+    /// settled before the tool allowlist, so the catalogue is immutable for
+    /// the session.
+    ///
+    /// Build one with `kglite::api::recipes::RecipeCatalog::from_manifest_value`
+    /// over the same JSON document `extensions.cypher_recipes` takes, or
+    /// `RecipeCatalog::insert_query` per query. A catalogue that does not
+    /// compile cannot reach here — `from_manifest_value` refuses it — which is
+    /// the producer equivalent of the manifest's boot-failing rule, and the
+    /// opposite of a graph record's skip-and-warn.
+    ///
+    /// Repeated calls replace; merge before calling if you have two sources.
+    pub fn with_recipes(mut self, catalog: RecipeCatalog) -> Self {
+        self.producer_recipes = Some(catalog);
         self
     }
 
