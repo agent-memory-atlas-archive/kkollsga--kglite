@@ -417,6 +417,22 @@ pub mod api {
         pub use crate::graph::skills::{import_path, parse_markdown};
     }
 
+    /// Cypher recipe catalogues — named, parameterised, read-only stored
+    /// queries an agent host serves by name instead of handing out raw Cypher.
+    ///
+    /// Lives in core rather than in the MCP server because the rules are the
+    /// same wherever a recipe is written: the closed JSON-Schema subset, the
+    /// exact `$parameter` ↔ `properties` match, and the read-only parse gate.
+    /// The server keeps the routes, the wire types and the result envelope.
+    pub mod recipes {
+        pub use crate::graph::recipes::{
+            query_conversion_error, validate_identifier, CatalogResult, CatalogSummary,
+            ParameterSchema, RecipeCatalog, RecipeCatalogError, RecipeDefinition,
+            RecipeQueryDefinition, VariableIssue, VariableIssueKind, VariablesValidationError,
+            RECIPE_RESULT_ROW_LIMIT,
+        };
+    }
+
     /// Graph algorithms — pathfinding, components, centrality, community
     /// detection. The typed, direct-call surface: each takes `&DirGraph` +
     /// plain params and returns a result struct, for bindings that want

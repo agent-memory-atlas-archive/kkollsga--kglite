@@ -1,0 +1,165 @@
+use super::*;
+use serde_json::json;
+
+fn query(parameters: Value, cypher: &str) -> Value {
+    json!({
+        "description": "A stored read operation.",
+        "parameters": parameters,
+        "cypher": cypher,
+    })
+}
+
+fn catalog(query_value: Value) -> Value {
+    json!({
+        "code_review": {
+            "description": "Code review operations.",
+            "queries": {"direct_callers": query_value}
+        }
+    })
+}
+
+fn string_parameter() -> Value {
+    json!({
+        "type": "object",
+        "properties": {"qualified_name": {"type": "string"}},
+        "required": ["qualified_name"],
+        "additionalProperties": false
+    })
+}
+
+#[test]
+fn absent_and_empty_catalogs_are_disabled() {
+    let absent = RecipeCatalog::from_manifest_value(None).unwrap();
+    assert!(absent.is_empty());
+    assert_eq!(absent.discovery_summary(), None);
+
+    let empty = RecipeCatalog::from_manifest_value(Some(&json!({}))).unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(empty.discovery_summary(), None);
+}
+
+#[test]
+fn catalog_is_immutable_and_summarized_deterministically() {
+    let raw = catalog(query(
+        string_parameter(),
+        "MATCH (n:Function) WHERE n.qualified_name = $qualified_name RETURN n.name",
+    ));
+    let parsed = RecipeCatalog::from_manifest_value(Some(&raw)).unwrap();
+    assert_eq!(
+        parsed.discovery_summary(),
+        Some(CatalogSummary {
+            recipe_count: 1,
+            query_count: 1
+        })
+    );
+    let recipe = parsed.get("code_review").unwrap();
+    assert_eq!(recipe.name, "code_review");
+    assert_eq!(recipe.queries().len(), 1);
+    assert_eq!(recipe.get("direct_callers").unwrap().name, "direct_callers");
+    assert_eq!(parsed.recipes().len(), 1);
+}
+
+#[test]
+fn rejects_invalid_identifiers_empty_fields_and_unknown_config() {
+    let invalid_identifier = json!({
+        "bad-name": {
+            "description": "Recipe.",
+            "queries": {"q": query(json!({
+                "type": "object", "properties": {}, "required": [],
+                "additionalProperties": false
+            }), "RETURN 1")}
+        }
+    });
+    assert!(
+        RecipeCatalog::from_manifest_value(Some(&invalid_identifier))
+            .unwrap_err()
+            .to_string()
+            .contains("identifier")
+    );
+
+    let empty = json!({"r": {"description": " ", "queries": {}}});
+    let error = RecipeCatalog::from_manifest_value(Some(&empty)).unwrap_err();
+    assert!(format!("{error:#}").contains("description"));
+
+    let unknown = json!({"r": {"description": "R", "queries": {}, "workflow": []}});
+    let error = RecipeCatalog::from_manifest_value(Some(&unknown)).unwrap_err();
+    assert!(format!("{error:#}").contains("unsupported recipe keys"));
+}
+
+#[test]
+fn requires_exact_parameter_property_and_required_sets() {
+    let missing_property = catalog(query(
+        json!({
+            "type": "object", "properties": {}, "required": [],
+            "additionalProperties": false
+        }),
+        "RETURN $qualified_name",
+    ));
+    let error = RecipeCatalog::from_manifest_value(Some(&missing_property)).unwrap_err();
+    assert!(format!("{error:#}").contains("parameter properties"));
+
+    let optional_property = catalog(query(
+        json!({
+            "type": "object",
+            "properties": {"qualified_name": {"type": "string"}},
+            "required": [],
+            "additionalProperties": false
+        }),
+        "RETURN $qualified_name",
+    ));
+    let error = RecipeCatalog::from_manifest_value(Some(&optional_property)).unwrap_err();
+    assert!(format!("{error:#}").contains("required must list every"));
+}
+
+#[test]
+fn tokenizer_ignores_parameter_lookalikes_in_strings_and_comments() {
+    let raw = catalog(query(
+        string_parameter(),
+        "// $comment\nRETURN '$literal' AS text, $qualified_name AS name",
+    ));
+    RecipeCatalog::from_manifest_value(Some(&raw)).unwrap();
+}
+
+#[test]
+fn rejects_mutations_and_banned_read_modes() {
+    let no_parameters = json!({
+        "type": "object", "properties": {}, "required": [],
+        "additionalProperties": false
+    });
+    let cases = [
+        ("CREATE (:Thing)", "read-only"),
+        ("EXPLAIN RETURN 1", "EXPLAIN"),
+        ("PROFILE RETURN 1", "PROFILE"),
+        ("RETURN 1 FORMAT CSV", "FORMAT CSV"),
+        ("LOAD CSV FROM 'rows.csv' AS row RETURN row", "LOAD CSV"),
+    ];
+    for (cypher, expected) in cases {
+        let raw = catalog(query(no_parameters.clone(), cypher));
+        let error = RecipeCatalog::from_manifest_value(Some(&raw)).unwrap_err();
+        let chain = format!("{error:#}");
+        assert!(chain.contains(expected), "{cypher:?}: {chain}");
+    }
+}
+
+#[test]
+fn third_party_queries_without_order_by_remain_valid() {
+    let raw = catalog(query(
+        string_parameter(),
+        "MATCH (n) WHERE n.name = $qualified_name RETURN n.name",
+    ));
+    RecipeCatalog::from_manifest_value(Some(&raw)).unwrap();
+}
+
+#[test]
+fn payload_cap_limit_is_rejected_but_other_semantic_limits_are_valid() {
+    let no_parameters = json!({
+        "type": "object", "properties": {}, "required": [],
+        "additionalProperties": false
+    });
+    let cap = catalog(query(no_parameters.clone(), "RETURN 1 LIMIT 200"));
+    let error = RecipeCatalog::from_manifest_value(Some(&cap)).unwrap_err();
+    assert!(format!("{error:#}").contains("reserved for the recipe result payload cap"));
+
+    let semantic = catalog(query(no_parameters, "RETURN 1 LIMIT 20"));
+    RecipeCatalog::from_manifest_value(Some(&semantic)).unwrap();
+}

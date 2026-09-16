@@ -8,13 +8,14 @@ use kglite::api::cypher::CypherResult;
 use serde_json::Value;
 
 use super::errors::RecipeErrorEnvelope;
-use super::validation::query_conversion_error;
 use super::wire::{
     ListRecipeQueriesArgs, ListRecipeQueriesOutput, ListRecipeQueriesSuccess, RecipeQueryResult,
     RecipeQuerySummary, RecipeSummary, RunRecipeQueryArgs, RunRecipeQueryOutput,
     RunRecipeQuerySuccess,
 };
-use super::{RecipeCatalog, RecipeQueryDefinition, RECIPE_RESULT_ROW_LIMIT};
+use super::{
+    query_conversion_error, RecipeCatalog, RecipeQueryDefinition, RECIPE_RESULT_ROW_LIMIT,
+};
 use crate::tools::{CypherRunError, GraphState, StrictCypherReadError};
 
 pub(crate) fn list_recipe_queries(
