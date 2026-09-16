@@ -1479,10 +1479,25 @@ class TestSystemLabelHiding:
         assert "KgliteSkill" not in after["node_types"]
         assert after["node_count"] == before["node_count"]
 
-    def test_describe_is_unchanged_by_a_skill_node(self, small_graph):
+    def test_describe_gains_only_the_skills_index_from_a_skill_node(self, small_graph):
         before = small_graph.describe()
         small_graph.cypher(CREATE_SKILL)
-        assert small_graph.describe() == before
+        after = small_graph.describe()
+        head, rest = after.split("  <skills ", 1)
+        index, tail = rest.split("  </skills>\n", 1)
+        assert head + tail == before, "a skill node changed the description as data"
+        assert 'name="cypher_query"' in index
+
+    def test_describe_indexes_the_skills_the_graph_carries(self, small_graph):
+        """The label is hidden from every type listing, so this index is the
+        only route from a description to the methodology the graph ships."""
+        assert "<skills" not in small_graph.describe(), "no skills, no element"
+        small_graph.cypher(CREATE_SKILL)
+        skills = ET.fromstring(small_graph.describe()).find("skills")
+        assert skills.attrib["count"] == "1"
+        assert [s.attrib["name"] for s in skills] == ["cypher_query"]
+        assert skills[0].attrib["description"] == "how to query"
+        assert "get_skill('name')" in skills.attrib["hint"]
 
     def test_describe_type_count_and_tier_are_unchanged(self, small_graph):
         # 15 core types is the Small/Medium boundary — a 16th *visible* type

@@ -24,6 +24,7 @@ use super::schema_overview::{
     compute_connection_type_stats, compute_join_candidates, compute_property_stats, compute_sample,
     is_null_value, value_display_compact, value_type_name,
 };
+use super::skills_section::write_agent_guidance;
 use super::topics::{
     write_cypher_overview, write_cypher_topics, write_fluent_overview, write_fluent_topics,
 };
@@ -1593,6 +1594,7 @@ fn build_inventory_capped(
     let conn_stats = compute_connection_type_stats(graph);
     write_connection_map(&mut xml, graph, &conn_stats, surface);
     write_extensions(&mut xml, graph, surface);
+    write_agent_guidance(&mut xml, graph, surface);
     write_exploration_hints(&mut xml, graph, &conn_stats);
 
     xml.push_str(&format!(
@@ -1743,6 +1745,7 @@ fn build_extreme_inventory(graph: &DirGraph, surface: DescribeSurface) -> String
         "    {}        — connection detail: per-pair counts, properties, samples</search_hint>\n",
         surface.call("connections=['P31']", "--connection-types P31")
     ));
+    write_agent_guidance(&mut xml, graph, surface);
     xml.push_str("</graph>");
     xml
 }
@@ -1802,6 +1805,7 @@ fn build_inventory_with_detail(
     let conn_stats = compute_connection_type_stats(graph);
     write_connection_map(&mut xml, graph, &conn_stats, surface);
     write_extensions(&mut xml, graph, surface);
+    write_agent_guidance(&mut xml, graph, surface);
     write_exploration_hints(&mut xml, graph, &conn_stats);
 
     xml.push_str("</graph>");

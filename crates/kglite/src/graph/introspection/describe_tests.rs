@@ -642,9 +642,17 @@ mod system_label_tests {
         }
     }
 
+    /// A skill node is invisible to the description *as data* — it adds no
+    /// type, no count and no sample. The one thing it adds is the `<skills>`
+    /// index, so the two documents differ by exactly that block and nothing
+    /// else.
     #[test]
-    fn describe_is_byte_identical_with_and_without_a_skill_node() {
-        assert_eq!(describe(&person_graph()), describe(&with_skill()));
+    fn a_skill_node_changes_describe_only_by_the_skills_index() {
+        let skilled = describe(&with_skill());
+        let (before, rest) = skilled.split_once("  <skills ").expect("a skills index");
+        let (index, after) = rest.split_once("  </skills>\n").expect("a closed index");
+        assert!(index.contains("name=\"cypher_query\""), "got: {index}");
+        assert_eq!(format!("{before}{after}"), describe(&person_graph()));
     }
 
     #[test]

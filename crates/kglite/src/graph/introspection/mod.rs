@@ -8,6 +8,7 @@
 //! - [`connectivity`] — type connectivity triples + neighbors_from_triples
 //! - [`schema_overview`] — schema / property / neighbors / sample / join candidates
 //! - [`describe`] — XML describe() entry point + inventory builders + XML writers
+//! - [`skills_section`] — the agent-guidance sections of a description
 //! - [`topics`] — tier-3 Cypher + Fluent topic detail writers
 //! - [`bug_report`] / [`debugging`] / [`reporting`] — bug-report writer, debug
 //!   dumps, structured mutation reports
@@ -19,6 +20,7 @@ pub mod debugging;
 pub mod describe;
 pub mod reporting;
 pub mod schema_overview;
+pub(crate) mod skills_section;
 pub mod topics;
 
 use crate::datatypes::values::Value;
