@@ -38,10 +38,11 @@ before upgrading.
   are read-only and take no writer lease; writing skills stays in the Python
   API.
 - `describe()` now indexes the skills a graph carries in a `<skills count="N">`
-  element — name, one-line description and the call that fetches the body —
-  across Python, `kglite describe` and MCP `graph_overview()`. A graph with no
-  skills renders no element, so nothing about an ordinary graph's description
-  changes.
+  element — name, one-line description and the call that fetches the body — in
+  Python and `kglite describe`. A graph with no skills renders no element, so
+  nothing about an ordinary graph's description changes. MCP `graph_overview()`
+  keeps its own index instead: it reports what the server actually serves,
+  which is the merged layers, not this graph's records.
 - Bare `graph_overview()` now ends with a `<skills count="N">` index of the
   methodology this server serves, one `name — description` line per active
   skill, in every mode. Like the operator prefix and the recipe-catalog hint it

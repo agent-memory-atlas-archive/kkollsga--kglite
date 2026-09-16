@@ -112,7 +112,6 @@ fn each_surface_is_told_its_own_fetch_call() {
     for (surface, expected) in [
         (DescribeSurface::Python, "get_skill('name')"),
         (DescribeSurface::Cli, "kglite skill GRAPH name"),
-        (DescribeSurface::Mcp, "prompts/get name"),
     ] {
         let described =
             compute_description(&graph, &DescribeRequest::new(surface)).expect("a description");
@@ -121,6 +120,20 @@ fn each_surface_is_told_its_own_fetch_call() {
             "{surface:?} was not told {expected}: {described}"
         );
     }
+}
+
+/// The MCP server renders its own skills index from the registry it serves —
+/// the graph layer under the operator's files, gated on the manifest opt-in.
+/// A second index straight from the graph would contradict it, and on a server
+/// that never opted in it would advertise skills nothing serves.
+#[test]
+fn the_mcp_surface_gets_no_index_from_the_graph() {
+    let mut graph = graph_with_types(2);
+    add_skill(&mut graph, 100, "wells", "How to query wells.");
+    let described = compute_description(&graph, &DescribeRequest::new(DescribeSurface::Mcp))
+        .expect("a description");
+    assert!(!described.contains("<skills"), "got: {described}");
+    assert!(!described.contains("wells"), "got: {described}");
 }
 
 /// The section lands inside an XML attribute, so a description carrying markup

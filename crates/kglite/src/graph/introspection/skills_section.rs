@@ -9,7 +9,9 @@
 //! A skill's label is hidden from every type enumeration, so this index is the
 //! only route a reader has from a description to the methodology the graph
 //! ships. It stays a catalogue: name, one-line summary, and the call that
-//! fetches the body, which can run to 16 KiB.
+//! fetches the body, which can run to 16 KiB. The MCP surface is the exception
+//! — it serves a merged registry rather than this graph's records; see
+//! [`fetch_call`].
 
 use crate::graph::introspection::DescribeSurface;
 use crate::graph::schema::DirGraph;
@@ -24,8 +26,12 @@ pub(crate) fn write_agent_guidance(xml: &mut String, graph: &DirGraph, surface: 
 
 /// Write `<skills>`, or nothing when the graph carries none — an empty element
 /// would tell a reader the feature exists and this graph opted out, which is
-/// not what an ordinary graph is saying.
+/// not what an ordinary graph is saying. Also nothing on a surface that serves
+/// skills from somewhere other than this graph; see [`fetch_call`].
 fn write_skills(xml: &mut String, graph: &DirGraph, surface: DescribeSurface) {
+    let Some(fetch) = fetch_call(surface, "name") else {
+        return;
+    };
     let skills = skills::list(graph);
     if skills.is_empty() {
         return;
@@ -33,7 +39,7 @@ fn write_skills(xml: &mut String, graph: &DirGraph, surface: DescribeSurface) {
     xml.push_str(&format!(
         "  <skills count=\"{}\" hint=\"Methodology this graph carries for working with itself. Read one with {}.\">\n",
         skills.len(),
-        xml_escape(&fetch_call(surface, "name")),
+        xml_escape(&fetch),
     ));
     for skill in &skills {
         xml.push_str(&format!(
@@ -45,16 +51,24 @@ fn write_skills(xml: &mut String, graph: &DirGraph, surface: DescribeSurface) {
     xml.push_str("  </skills>\n");
 }
 
-/// How this surface fetches one skill body.
+/// How this surface fetches one skill body, or `None` for a surface that does
+/// not serve this graph's skills.
 ///
 /// [`DescribeSurface::call`] renders "call describe again" hints and hard-codes
-/// that verb, so it cannot spell this one. The MCP answer is not a tool at all:
-/// a skill reaches an agent host through the prompt surface.
-fn fetch_call(surface: DescribeSurface, name: &str) -> String {
+/// that verb, so it cannot spell this one.
+///
+/// The MCP server answers `None` because it appends its own skills index to the
+/// bare overview, rendered from the registry it actually serves: the graph
+/// layer merged under the operator's files, gated on the manifest opt-in, with
+/// invalid records dropped. A second index straight from the graph would
+/// disagree with it on every one of those — on a server that never opted in it
+/// would advertise skills nothing serves, and point at a `prompts/get` that
+/// returns nothing.
+fn fetch_call(surface: DescribeSurface, name: &str) -> Option<String> {
     match surface {
-        DescribeSurface::Python => format!("get_skill('{name}')"),
-        DescribeSurface::Cli => format!("kglite skill GRAPH {name}"),
-        DescribeSurface::Mcp => format!("prompts/get {name}"),
+        DescribeSurface::Python => Some(format!("get_skill('{name}')")),
+        DescribeSurface::Cli => Some(format!("kglite skill GRAPH {name}")),
+        DescribeSurface::Mcp => None,
     }
 }
 
