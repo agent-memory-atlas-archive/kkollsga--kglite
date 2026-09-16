@@ -54,10 +54,22 @@ use crate::*;
 /// then omits the two fixed recipe routes is contradictory, and is rejected for
 /// the same reason those routes cannot be hidden or renamed — the catalog's
 /// discovery/run pair is one owned unit.
+///
+/// **That refusal is armed by the manifest's own catalog only** — hence
+/// `manifest_recipes_declared` rather than "a catalog is served". The served
+/// catalog has other layers under the manifest's: the graph's `KgliteRecipe`
+/// records (0.17.6) and a producer's `ServerExtensions::with_recipes`. Neither
+/// is something the operator wrote, so neither can make their allowlist
+/// contradict itself: a deployment that pinned its tool surface long before it
+/// was handed a recipe-carrying `.kgl` kept booting and simply did not serve
+/// the two routes — which is exactly what an allowlist means. Arming the
+/// refusal from the merged catalog instead turned that into a boot failure
+/// telling the operator to "drop extensions.cypher_recipes", a key they never
+/// wrote.
 pub(crate) fn apply_tool_allowlist(
     server: &mut McpServer,
     allow: &[String],
-    recipes_configured: bool,
+    manifest_recipes_declared: bool,
 ) -> Result<()> {
     let allowed = allow
         .iter()
@@ -65,7 +77,7 @@ pub(crate) fn apply_tool_allowlist(
         .collect::<std::collections::HashSet<_>>();
     let mut router = server.tool_router_mut();
 
-    if recipes_configured {
+    if manifest_recipes_declared {
         for fixed in [
             recipe_queries::LIST_RECIPE_QUERIES_TOOL,
             recipe_queries::RUN_RECIPE_QUERY_TOOL,
@@ -262,6 +274,40 @@ mod tools_allow_tests {
         let mut server = server_with(&[]);
         apply_tool_allowlist(&mut server, &allow(&["ping"]), false)
             .expect("without a recipe catalog there is nothing to protect");
+    }
+
+    /// The other half of that contract, and the one that regressed: the routes
+    /// are registered from a catalog the *operator* never declared — the
+    /// graph's own `KgliteRecipe` records, or a producer's `with_recipes`.
+    /// An allowlist written before that graph existed cannot be contradicting
+    /// itself, so the pair is dropped like any other unnamed route instead of
+    /// refusing the boot with advice to remove a manifest key nobody wrote.
+    #[test]
+    fn a_catalog_the_operator_never_declared_is_dropped_not_refused() {
+        let mut server = server_with_recipes();
+        // Both routes registered: without this the assertions below would hold
+        // for a server that never had a catalog at all.
+        assert!(server
+            .tool_router_mut()
+            .has_route(recipe_queries::LIST_RECIPE_QUERIES_TOOL));
+
+        apply_tool_allowlist(
+            &mut server,
+            &allow(&["ping", "cypher_query"]),
+            /* manifest_recipes_declared */ false,
+        )
+        .expect("a graph- or producer-sourced catalog must not refuse an existing allowlist");
+
+        let router = server.tool_router_mut();
+        for fixed in [
+            recipe_queries::LIST_RECIPE_QUERIES_TOOL,
+            recipe_queries::RUN_RECIPE_QUERY_TOOL,
+        ] {
+            assert!(
+                router.is_disabled(fixed),
+                "{fixed} must be disabled by the allowlist, not kept"
+            );
+        }
     }
 
     /// Overrides run first, so the list is written against the names an agent

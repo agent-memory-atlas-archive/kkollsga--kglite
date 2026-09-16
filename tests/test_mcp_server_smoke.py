@@ -2950,6 +2950,30 @@ class TestGraphCarriedRecipes:
         assert '"broken"' not in listed, listed
         assert "1 served" in boot and "1 skipped: wells/broken:" in boot, boot
 
+    def test_an_operator_allowlist_survives_a_graph_that_carries_recipes(self, recipe_graph: Path):
+        """`extensions.tools_allow` pins the final tool surface. A deployment
+        that pinned it before it was ever handed a recipe-carrying `.kgl`
+        refused to boot — the refusal that protects an operator's *own*
+        `cypher_recipes` from being half-hidden was armed by the merged
+        catalogue, so the graph's records triggered it and the error told the
+        operator to drop a manifest key they had never written."""
+        manifest = recipe_graph.parent / "allowlisted_mcp.yaml"
+        manifest.write_text(
+            "name: Allowlisted\nextensions:\n  tools_allow:\n    - cypher_query\n    - graph_overview\n",
+            encoding="utf-8",
+        )
+        client = _spawn(["--graph", str(recipe_graph), "--mcp-config", str(manifest)])
+        try:
+            tools = {t["name"] for t in client.list_tools()}
+        finally:
+            client.shutdown()
+
+        assert "cypher_query" in tools, sorted(tools)
+        # The ceiling holds: the routes the catalogue registered are dropped,
+        # which is what the allowlist asked for — not a boot failure.
+        assert "run_recipe_query" not in tools, sorted(tools)
+        assert "list_recipe_queries" not in tools, sorted(tools)
+
 
 # ── Test: code-tool gating on non-code graphs ─────────────────────────────
 

@@ -664,6 +664,11 @@ fn bind_manifest_embedder(
 /// The `extensions:` knobs the rest of boot is wired from.
 struct BootExtensions {
     recipe_catalog: recipe_queries::RecipeCatalog,
+    /// Whether the *manifest* declared a non-empty catalog, carried separately
+    /// because `recipe_catalog` is about to be merged with layers the operator
+    /// did not write. Only this answer arms the allowlist's recipe-route
+    /// refusal — see [`apply_tool_allowlist`].
+    manifest_recipes_declared: bool,
     tools_allow: Option<Vec<String>>,
     mutations_enabled: bool,
     write_scope: Option<Vec<String>>,
@@ -693,6 +698,7 @@ fn boot_extensions(
         );
     }
     let recipe_catalog = boot_recipe_catalog(manifest)?;
+    let manifest_recipes_declared = !recipe_catalog.is_empty();
     if boot_graph_watch(manifest)?.is_some() {
         tracing::warn!(
             "extensions.graph_watch is retired — a --graph server now refreshes automatically \
@@ -720,6 +726,7 @@ fn boot_extensions(
     }
     Ok(BootExtensions {
         recipe_catalog,
+        manifest_recipes_declared,
         tools_allow,
         mutations_enabled,
         write_scope,
@@ -742,6 +749,8 @@ struct BootedGraph {
     /// The manifest catalogue with the graph's own merged under it.
     recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
     recipe_catalog_summary: Option<recipe_queries::CatalogSummary>,
+    /// See [`BootExtensions::manifest_recipes_declared`].
+    manifest_recipes_declared: bool,
     graph_recipes: recipe_queries::GraphRecipeStats,
     source_root_status: Option<SourceRootStatus>,
     env_file_loaded: Option<PathBuf>,
@@ -762,6 +771,7 @@ fn boot_graph(
     let manifest = load_manifest(cli, &mode).context("manifest load failed")?;
     let BootExtensions {
         recipe_catalog,
+        manifest_recipes_declared,
         tools_allow,
         mutations_enabled,
         write_scope,
@@ -830,6 +840,7 @@ fn boot_graph(
         graph_state,
         recipe_catalog,
         recipe_catalog_summary,
+        manifest_recipes_declared,
         graph_recipes,
         source_root_status,
         env_file_loaded,
@@ -856,6 +867,7 @@ pub(crate) async fn run_async(
         graph_state,
         recipe_catalog,
         recipe_catalog_summary,
+        manifest_recipes_declared,
         graph_recipes,
         source_root_status,
         env_file_loaded,
@@ -950,7 +962,7 @@ pub(crate) async fn run_async(
     // match against pre-rename names the agent never sees. Before skills, so a
     // `tool_registered:` predicate sees the closed surface.
     if let Some(allow) = tools_allow.as_deref() {
-        apply_tool_allowlist(&mut server, allow, recipe_catalog_summary.is_some())
+        apply_tool_allowlist(&mut server, allow, manifest_recipes_declared)
             .context("extensions.tools_allow could not be applied")?;
     }
 
