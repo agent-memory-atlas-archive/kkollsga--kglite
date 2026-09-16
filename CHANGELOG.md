@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.17.6] - 2026-09-16
+
 ### Added
 
 - Graph-carried skills: a graph can now store the markdown methodology for

@@ -98,7 +98,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: (run on each platform; the script writes whichever entry matches the
 #: current host).
 BINARY_SIZE_BASELINES = {
-    "darwin": 23_789_568,  # 0.17.5 darwin baseline
+    "darwin": 24_186_992,  # 0.17.6 darwin baseline
     "linux": 28_810_000,  # estimate: the post-code_tree Linux estimate (30.2 MB)
     # scaled by the same −4.6% the macOS loader removal measured. Both
     # removals deliberately recaptured DOWNWARD so the +10% budget guards
@@ -500,6 +500,23 @@ def test_binary_size_regression():
 
       - 0.17.5:       23,789,568 bytes — **unchanged** from the prior baseline; this release moved no code size.
 
+
+      - 0.17.6:       24,186,992 bytes (≈23.1 MB). +397,424 bytes (+1.67%)
+                      over 0.17.5. The measured artifact is the wheel cdylib, so
+                      the CLI `skill` subcommand is outside it; what grew is
+                      engine-side: `kglite::api::recipes` — the catalogue model,
+                      the JSON-schema keyword allowlist and the validation pass
+                      (the `$param` ↔ `properties`/`required` match and the
+                      read-only Cypher parse gate), lifted out of
+                      kglite-mcp-server so the wheel carries them for the first
+                      time — plus `kglite::api::skills` (records, frontmatter
+                      render/parse, import/export), the graph-carried
+                      `KgliteSkill`/`KgliteRecipe` record layers, the describe
+                      skills/recipes section, and the two new pyapi modules
+                      backing twelve Python methods. No dependency was added;
+                      this aggregate artifact measurement does not isolate their
+                      individual contributions.
+
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
     drilldown, run `cargo bloat --release --crates --filter kglite`.
@@ -531,7 +548,7 @@ def test_binary_size_regression():
     gate = int(baseline * 1.10)
     assert size <= gate, (
         f"{bin_path.name} = {size:,} bytes > gate {gate:,} "
-        f"(+10% over 0.17.5 {platform_key} baseline {baseline:,}). "
+        f"(+10% over 0.17.6 {platform_key} baseline {baseline:,}). "
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )
