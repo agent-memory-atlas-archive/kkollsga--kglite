@@ -20,6 +20,7 @@ pub(crate) mod query_defaults;
 pub mod result_table;
 pub mod result_view;
 pub mod session;
+pub mod skills;
 pub mod spatial;
 pub mod tables;
 pub mod timeseries;

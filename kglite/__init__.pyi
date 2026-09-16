@@ -10,6 +10,7 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    Sequence,
     Union,
     overload,
     runtime_checkable,
@@ -5297,6 +5298,203 @@ class KnowledgeGraph:
 
     def schema_definition(self) -> Optional[dict[str, Any]]:
         """Get the current schema definition as a dict, or ``None``."""
+        ...
+
+    # ====================================================================
+    # Skills — graph-carried agent methodology
+    # ====================================================================
+    #
+    # A skill is a markdown methodology the graph carries about itself: how to
+    # query it, which tool to reach for, what the labels mean. It is stored as
+    # an ordinary node under the ``KgliteSkill`` system label, so it travels
+    # inside the ``.kgl`` file and an MCP server can read it at boot instead of
+    # the operator wiring a skills directory.
+    #
+    # ``KgliteSkill`` is *hidden from every surface that enumerates node
+    # types*: :meth:`KnowledgeGraph.node_types`, :meth:`KnowledgeGraph.schema`,
+    # :meth:`KnowledgeGraph.describe` and the Cypher ``db.labels()`` procedure
+    # all omit it, and the counts printed beside those listings omit it too, so
+    # adding a skill never changes what the graph claims to be about. It stays
+    # an ordinary node to Cypher: ``MATCH (s:KgliteSkill) RETURN s.name`` works,
+    # ``MATCH (n) RETURN count(n)`` counts it, and exports carry it.
+    #
+    # Served over MCP, graph-carried skills are one layer among several. Later
+    # layers win per skill name:
+    # ``bundled < graph-carried < declared directories < <graph>.skills/``.
+    # A graph skill named after a bundled one (``cypher_query``) therefore
+    # replaces it — that is the documented way to override framework guidance.
+    # The server reads the layer **once, at boot**: writing a skill into a
+    # graph a server already has open needs a server restart (or a
+    # ``reload_graph``) before an agent sees it.
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        """List the skills stored in this graph, sorted by name.
+
+        Bodies are omitted — a body can run to 16 KiB and a listing that
+        carried them would hand back far more than a catalogue needs. Use
+        :meth:`get_skill` for the one you want to read.
+
+        Returns:
+            One dict per skill with ``name``, ``description``,
+            ``references_tools`` (list of str) and ``delivery`` keys. There is
+            no ``body`` key; the list is empty when the graph carries no
+            skills.
+
+        Example:
+            ```python
+            names = [skill["name"] for skill in graph.list_skills()]
+            ```
+        """
+        ...
+
+    def get_skill(self, name: str) -> dict[str, Any]:
+        """Read one skill, body included.
+
+        Args:
+            name: The skill's name, as reported by :meth:`list_skills`.
+
+        Returns:
+            A dict with ``name``, ``description``, ``body``,
+            ``references_tools`` and ``delivery``.
+
+        Raises:
+            NodeNotFoundError: No skill by that name exists in this graph.
+
+        Example:
+            ```python
+            body = graph.get_skill("cypher_query")["body"]
+            ```
+        """
+        ...
+
+    def set_skill(
+        self,
+        name: str,
+        description: str,
+        body: str = "",
+        references_tools: Sequence[str] | None = None,
+        delivery: str = "lazy",
+    ) -> dict[str, Any]:
+        """Create a skill, or replace the one already stored under ``name``.
+
+        The write routes through Cypher ``MERGE``, so the schema lock, write
+        scope, declared shapes, constraint checks, WAL and CDC all apply, and
+        there is at most one node per name however often this is called.
+
+        Args:
+            name: The skill's key, and its filename stem on export. A single
+                path-safe token: no whitespace, ``/``, ``\\``, ``:`` or ``.``
+                traversal.
+            description: One or two sentences saying when to reach for this
+                skill. Required — with lazy delivery it is all an agent sees
+                before deciding to ask for the body.
+            body: The methodology itself, as markdown. At most 16384 bytes,
+                the same ceiling a skill loaded from a file gets.
+            references_tools: Tool names this skill is about. Stored as a list
+                property; an MCP host uses it to attach the skill to those
+                tools.
+            delivery: ``"lazy"`` (default) advertises only the name and
+                description and hands over the body when the agent asks for it;
+                ``"eager"`` inlines the body at boot.
+
+        Returns:
+            The skill as stored — the same keys as :meth:`get_skill`, plus
+            ``created``, which is ``True`` when this call made a new skill and
+            ``False`` when it replaced an existing one.
+
+        Raises:
+            ArgumentError: Empty or unsafe ``name``, empty ``description``,
+                a ``body`` over the 16 KiB ceiling, a ``delivery`` other than
+                ``"eager"`` or ``"lazy"``, or the graph is in read-only mode
+                (see :meth:`KnowledgeGraph.read_only`).
+            CypherExecutionError: The graph is schema-locked and does not
+                declare a ``KgliteSkill`` node type. The write goes through
+                Cypher ``MERGE``, so the lock refuses it the same way it
+                refuses a hand-written ``CREATE``. Unlock the schema, or
+                declare the type, before storing skills.
+
+        Example:
+            ```python
+            graph.set_skill("wells", "Asking this graph about wells.", body=methodology)
+            ```
+        """
+        ...
+
+    def delete_skill(self, name: str) -> bool:
+        """Remove a skill from the graph.
+
+        Args:
+            name: The skill to remove.
+
+        Returns:
+            ``True`` when a skill was removed, ``False`` when there was nothing
+            stored under that name.
+
+        Raises:
+            ArgumentError: The graph is in read-only mode.
+
+        Example:
+            ```python
+            graph.delete_skill("wells")
+            ```
+        """
+        ...
+
+    def import_skills(self, path: str) -> list[str]:
+        """Import SKILL.md files into the graph, replacing same-named skills.
+
+        ``path`` is either one ``.md`` file or a directory; a directory is read
+        non-recursively, in sorted order, and only its ``.md`` entries are
+        considered. Each file is YAML frontmatter (``name``, ``description``,
+        ``references_tools``, ``delivery``) followed by the body — the dialect
+        :meth:`export_skills` writes, and the one an MCP skills directory uses,
+        so an existing skills folder imports unchanged. Frontmatter keys the
+        graph has no property for are ignored.
+
+        Args:
+            path: A ``.md`` file, or a directory containing them.
+
+        Returns:
+            The names imported, in the order they were read.
+
+        Raises:
+            FileError: ``path`` does not exist.
+            FileFormatError: A file's frontmatter is unparseable or fails
+                validation; the name of the offending file is in the message.
+            FileIoError: A file could not be read.
+            ArgumentError: The graph is in read-only mode.
+
+        Example:
+            ```python
+            graph.import_skills("skills/")
+            graph.save("graph.kgl")  # the skills travel with the data
+            ```
+        """
+        ...
+
+    def export_skills(self, path: str) -> list[str]:
+        """Write every skill to a directory as ``<name>.md``.
+
+        The directory is created when it does not exist. Each file is written
+        in the frontmatter dialect :meth:`import_skills` reads and an MCP
+        skills directory serves, so an exported directory can be edited by hand
+        and imported back.
+
+        Args:
+            path: Destination directory.
+
+        Returns:
+            The names written, sorted.
+
+        Raises:
+            FileIoError: The directory could not be created or a file could not
+                be written.
+
+        Example:
+            ```python
+            graph.export_skills("skills/")
+            ```
+        """
         ...
 
     # ====================================================================

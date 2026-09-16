@@ -964,6 +964,14 @@ pub(super) fn write_fluent_overview(xml: &mut String, surface: DescribeSurface) 
     xml.push_str("    <method sig=\"create_composite_index(node_type, [prop1, prop2])\">Multi-column index.</method>\n");
     xml.push_str("  </group>\n");
 
+    xml.push_str("  <group name=\"skills\">\n");
+    xml.push_str("    <method sig=\"list_skills()\">Markdown methodology this graph carries about itself, name + description only. Stored under the KgliteSkill system label, which every node-type listing hides.</method>\n");
+    xml.push_str("    <method sig=\"get_skill(name)\">One skill with its body.</method>\n");
+    xml.push_str("    <method sig=\"set_skill(name, description, body='', references_tools=None, delivery='lazy')\">Create or replace a skill. delivery='lazy' advertises name+description and serves the body on request; 'eager' inlines it.</method>\n");
+    xml.push_str("    <method sig=\"delete_skill(name)\">Remove a skill; False when there was none.</method>\n");
+    xml.push_str("    <method sig=\"import_skills(path) / export_skills(path)\">Exchange SKILL.md files (frontmatter + body) with a file or directory.</method>\n");
+    xml.push_str("  </group>\n");
+
     xml.push_str("  <group name=\"transactions\">\n");
     xml.push_str(
         "    <method sig=\"begin()\">Read-write transaction (context manager).</method>\n",

@@ -11,10 +11,16 @@ before upgrading.
 
 ### Added
 
-- `kglite::api::skills` — graph-carried skills: markdown methodology stored as
-  nodes of the `KgliteSkill` system label, with list/get/upsert/delete,
-  validation, and SKILL.md import/export. The label is hidden from every node
-  type enumeration while staying reachable from Cypher.
+- Graph-carried skills: a graph can now store the markdown methodology for
+  using it alongside its data, so a `.kgl` file tells an agent how to query it.
+  `list_skills()`, `get_skill()`, `set_skill()`, `delete_skill()`,
+  `import_skills()` and `export_skills()` manage them from Python, and
+  `kglite::api::skills` from Rust. Skills are ordinary nodes under the
+  `KgliteSkill` system label — reachable from Cypher and persisted in the
+  `.kgl`, but hidden from `node_types()`, `schema()`, `describe()` and
+  `db.labels()`, so adding one never changes what the graph reports about
+  itself. Import and export use the SKILL.md frontmatter dialect an MCP skills
+  directory already serves.
 
 ### Fixed
 
