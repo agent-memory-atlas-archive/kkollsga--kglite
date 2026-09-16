@@ -23,6 +23,12 @@
 //! YAML parser, which is why the parsing half only exists with the `okf`
 //! feature on.
 
+// Every entry point below reports through `KgError`, which carries structured
+// query context and so trips `result_large_err` uniformly. Boxing it would
+// diverge from every other core api surface a binding calls, so the allowance
+// is module-scoped once rather than repeated on each function.
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -260,26 +266,27 @@ pub fn set(graph: &mut DirGraph, record: &SkillRecord) -> Result<SetOutcome, KgE
 
     let existed = get(graph, &record.name).is_ok();
 
-    let mut props: Vec<(crate::datatypes::PropKey, Value)> = Vec::with_capacity(4);
-    props.push((
-        "description".into(),
-        Value::String(record.description.clone()),
-    ));
-    props.push(("body".into(), Value::String(record.body.clone())));
-    props.push((
-        "references_tools".into(),
-        Value::List(
-            record
-                .references_tools
-                .iter()
-                .map(|t| Value::String(t.clone()))
-                .collect(),
+    let props: Vec<(crate::datatypes::PropKey, Value)> = vec![
+        ("body".into(), Value::String(record.body.clone())),
+        (
+            "delivery".into(),
+            Value::String(record.delivery.as_str().to_string()),
         ),
-    ));
-    props.push((
-        "delivery".into(),
-        Value::String(record.delivery.as_str().to_string()),
-    ));
+        (
+            "description".into(),
+            Value::String(record.description.clone()),
+        ),
+        (
+            "references_tools".into(),
+            Value::List(
+                record
+                    .references_tools
+                    .iter()
+                    .map(|t| Value::String(t.clone()))
+                    .collect(),
+            ),
+        ),
+    ];
 
     let mut params: HashMap<String, Value> = HashMap::new();
     params.insert("name".to_string(), Value::String(record.name.clone()));

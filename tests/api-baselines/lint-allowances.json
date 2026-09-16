@@ -497,6 +497,10 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/skills.rs::module::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/storage/backend.rs::fn:new:pub fn new() -> Self::clippy::new_without_default",
       "classification": "api-shape"
     },
