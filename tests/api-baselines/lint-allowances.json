@@ -461,6 +461,10 @@
       "classification": "test"
     },
     {
+      "identity": "crates/kglite/src/graph/recipes/records.rs::module::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/schema.rs::fn:is_reserved_provenance_key:pub fn is_reserved_provenance_key(key: &str) -> bool::unused_imports",
       "classification": "boundary"
     },

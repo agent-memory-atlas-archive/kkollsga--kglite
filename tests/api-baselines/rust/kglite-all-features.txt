@@ -2163,6 +2163,18 @@ pub fn kglite::api::param::kglite_value_to_csv_text(v: &kglite::datatypes::value
 pub fn kglite::api::param::kglite_value_to_json(v: &kglite::datatypes::values::Value) -> serde_json::value::Value
 pub fn kglite::api::param::validate_json_query_numbers_at(source: &str, pointer: &[&str]) -> core::result::Result<(), kglite::param::JsonQueryParameterError>
 pub mod kglite::api::recipes
+pub enum kglite::api::recipes::SetOutcome
+pub kglite::api::recipes::SetOutcome::Created
+pub kglite::api::recipes::SetOutcome::Updated
+impl core::clone::Clone for kglite::api::recipes::SetOutcome
+pub fn kglite::api::recipes::SetOutcome::clone(&self) -> kglite::api::recipes::SetOutcome
+impl core::cmp::Eq for kglite::api::recipes::SetOutcome
+impl core::cmp::PartialEq for kglite::api::recipes::SetOutcome
+pub fn kglite::api::recipes::SetOutcome::eq(&self, other: &kglite::api::recipes::SetOutcome) -> bool
+impl core::fmt::Debug for kglite::api::recipes::SetOutcome
+pub fn kglite::api::recipes::SetOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::recipes::SetOutcome
+impl core::marker::StructuralPartialEq for kglite::api::recipes::SetOutcome
 pub enum kglite::api::recipes::VariableIssueKind
 pub kglite::api::recipes::VariableIssueKind::Enum
 pub kglite::api::recipes::VariableIssueKind::IntegerRange
@@ -2212,6 +2224,7 @@ impl kglite::api::recipes::RecipeCatalog
 pub fn kglite::api::recipes::RecipeCatalog::discovery_summary(&self) -> core::option::Option<kglite::api::recipes::CatalogSummary>
 pub fn kglite::api::recipes::RecipeCatalog::from_manifest_value(raw: core::option::Option<&serde_json::value::Value>) -> kglite::api::recipes::CatalogResult<Self>
 pub fn kglite::api::recipes::RecipeCatalog::get(&self, name: &str) -> core::option::Option<&kglite::api::recipes::RecipeDefinition>
+pub fn kglite::api::recipes::RecipeCatalog::insert_query(&mut self, recipe: &str, recipe_description: &str, query: kglite::api::recipes::RecipeQueryDefinition)
 pub fn kglite::api::recipes::RecipeCatalog::is_empty(&self) -> bool
 pub fn kglite::api::recipes::RecipeCatalog::recipes(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &kglite::api::recipes::RecipeDefinition>
 pub fn kglite::api::recipes::RecipeCatalog::summary(&self) -> kglite::api::recipes::CatalogSummary
@@ -2259,6 +2272,36 @@ impl core::clone::Clone for kglite::api::recipes::RecipeQueryDefinition
 pub fn kglite::api::recipes::RecipeQueryDefinition::clone(&self) -> kglite::api::recipes::RecipeQueryDefinition
 impl core::fmt::Debug for kglite::api::recipes::RecipeQueryDefinition
 pub fn kglite::api::recipes::RecipeQueryDefinition::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::recipes::RecipeRecord
+pub kglite::api::recipes::RecipeRecord::cypher: alloc::string::String
+pub kglite::api::recipes::RecipeRecord::description: alloc::string::String
+pub kglite::api::recipes::RecipeRecord::name: alloc::string::String
+pub kglite::api::recipes::RecipeRecord::parameters: serde_json::value::Value
+pub kglite::api::recipes::RecipeRecord::recipe: alloc::string::String
+pub kglite::api::recipes::RecipeRecord::recipe_description: alloc::string::String
+impl core::clone::Clone for kglite::api::recipes::RecipeRecord
+pub fn kglite::api::recipes::RecipeRecord::clone(&self) -> kglite::api::recipes::RecipeRecord
+impl core::cmp::PartialEq for kglite::api::recipes::RecipeRecord
+pub fn kglite::api::recipes::RecipeRecord::eq(&self, other: &kglite::api::recipes::RecipeRecord) -> bool
+impl core::default::Default for kglite::api::recipes::RecipeRecord
+pub fn kglite::api::recipes::RecipeRecord::default() -> kglite::api::recipes::RecipeRecord
+impl core::fmt::Debug for kglite::api::recipes::RecipeRecord
+pub fn kglite::api::recipes::RecipeRecord::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::recipes::RecipeRecord
+pub struct kglite::api::recipes::RecipeWarning
+pub kglite::api::recipes::RecipeWarning::name: alloc::string::String
+pub kglite::api::recipes::RecipeWarning::reason: alloc::string::String
+pub kglite::api::recipes::RecipeWarning::recipe: alloc::string::String
+impl core::clone::Clone for kglite::api::recipes::RecipeWarning
+pub fn kglite::api::recipes::RecipeWarning::clone(&self) -> kglite::api::recipes::RecipeWarning
+impl core::cmp::Eq for kglite::api::recipes::RecipeWarning
+impl core::cmp::PartialEq for kglite::api::recipes::RecipeWarning
+pub fn kglite::api::recipes::RecipeWarning::eq(&self, other: &kglite::api::recipes::RecipeWarning) -> bool
+impl core::fmt::Debug for kglite::api::recipes::RecipeWarning
+pub fn kglite::api::recipes::RecipeWarning::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::recipes::RecipeWarning
+pub fn kglite::api::recipes::RecipeWarning::fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::recipes::RecipeWarning
 pub struct kglite::api::recipes::VariableIssue
 pub kglite::api::recipes::VariableIssue::kind: kglite::api::recipes::VariableIssueKind
 pub kglite::api::recipes::VariableIssue::message: alloc::string::String
@@ -2284,8 +2327,20 @@ pub fn kglite::api::recipes::VariablesValidationError::fmt(&self, f: &mut core::
 impl core::fmt::Display for kglite::api::recipes::VariablesValidationError
 pub fn kglite::api::recipes::VariablesValidationError::fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::recipes::VariablesValidationError
+pub const kglite::api::recipes::RECIPE_LABEL: &str
 pub const kglite::api::recipes::RECIPE_RESULT_ROW_LIMIT: usize
+pub fn kglite::api::recipes::catalogue_from_graph(graph: &kglite::api::DirGraph) -> (kglite::api::recipes::RecipeCatalog, alloc::vec::Vec<kglite::api::recipes::RecipeWarning>)
+pub fn kglite::api::recipes::delete(graph: &mut kglite::api::DirGraph, recipe: &str, name: &str) -> core::result::Result<bool, kglite::error::KgError>
+pub fn kglite::api::recipes::export_path(graph: &kglite::api::DirGraph, path: &std::path::Path) -> core::result::Result<(), kglite::error::KgError>
+pub fn kglite::api::recipes::export_value(graph: &kglite::api::DirGraph) -> serde_json::value::Value
+pub fn kglite::api::recipes::get(graph: &kglite::api::DirGraph, recipe: &str, name: &str) -> core::result::Result<kglite::api::recipes::RecipeRecord, kglite::error::KgError>
+pub fn kglite::api::recipes::import_path(graph: &mut kglite::api::DirGraph, path: &std::path::Path) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, kglite::error::KgError>
+pub fn kglite::api::recipes::import_value(graph: &mut kglite::api::DirGraph, document: &serde_json::value::Value) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, kglite::error::KgError>
+pub fn kglite::api::recipes::list(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::recipes::RecipeRecord>
+pub fn kglite::api::recipes::merge(graph: kglite::api::recipes::RecipeCatalog, manifest: kglite::api::recipes::RecipeCatalog) -> kglite::api::recipes::RecipeCatalog
 pub fn kglite::api::recipes::query_conversion_error(error: kglite::param::JsonQueryParameterError) -> kglite::api::recipes::VariablesValidationError
+pub fn kglite::api::recipes::set(graph: &mut kglite::api::DirGraph, record: &kglite::api::recipes::RecipeRecord) -> core::result::Result<kglite::api::recipes::SetOutcome, kglite::error::KgError>
+pub fn kglite::api::recipes::validate(record: &kglite::api::recipes::RecipeRecord) -> core::result::Result<(), kglite::error::KgError>
 pub fn kglite::api::recipes::validate_identifier(identifier: &str, label: &str) -> kglite::api::recipes::CatalogResult<()>
 pub type kglite::api::recipes::CatalogResult<T> = core::result::Result<T, kglite::api::recipes::RecipeCatalogError>
 pub mod kglite::api::session

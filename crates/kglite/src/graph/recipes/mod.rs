@@ -15,6 +15,7 @@
 //! compiles the whole thing or fails, so a route handler holding a
 //! [`RecipeCatalog`] never has to re-check a query it is about to run.
 
+mod records;
 mod schema;
 mod validation;
 
@@ -25,6 +26,10 @@ use serde_json::{Map, Value};
 
 use crate::graph::languages::cypher;
 
+pub use records::{
+    catalogue_from_graph, delete, export_path, export_value, get, import_path, import_value, list,
+    set, validate, RecipeRecord, RecipeWarning, SetOutcome, RECIPE_LABEL,
+};
 pub use schema::ParameterSchema;
 pub use validation::{
     query_conversion_error, VariableIssue, VariableIssueKind, VariablesValidationError,
@@ -156,6 +161,52 @@ impl RecipeCatalog {
     pub fn get(&self, name: &str) -> Option<&RecipeDefinition> {
         self.recipes.get(name)
     }
+
+    /// Add one already-compiled query, creating its group with
+    /// `recipe_description` if the group is new.
+    ///
+    /// An existing group **keeps** the description it was first given, so the
+    /// caller decides which one wins by the order it feeds records in;
+    /// `catalogue_from_graph` feeds them in name order, which is where D14's
+    /// "first node in name order" rule comes from. A second query with a name
+    /// already in the group replaces it.
+    pub fn insert_query(
+        &mut self,
+        recipe: &str,
+        recipe_description: &str,
+        query: RecipeQueryDefinition,
+    ) {
+        let group = self
+            .recipes
+            .entry(recipe.to_string())
+            .or_insert_with(|| RecipeDefinition {
+                name: recipe.to_string(),
+                description: recipe_description.to_string(),
+                queries: BTreeMap::new(),
+            });
+        group.queries.insert(query.name.clone(), query);
+    }
+}
+
+/// Lay a manifest catalogue over a graph-carried one.
+///
+/// The manifest wins per `(recipe, name)` and per group description; a group
+/// or query only the graph has is kept. Both sides are ordered maps, so the
+/// result is the same whatever order the two were built in.
+pub fn merge(graph: RecipeCatalog, manifest: RecipeCatalog) -> RecipeCatalog {
+    let mut merged = graph;
+    for (name, group) in manifest.recipes {
+        match merged.recipes.get_mut(&name) {
+            Some(existing) => {
+                existing.description = group.description;
+                existing.queries.extend(group.queries);
+            }
+            None => {
+                merged.recipes.insert(name, group);
+            }
+        }
+    }
+    merged
 }
 
 /// One named group of related query operations.

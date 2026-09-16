@@ -57,7 +57,7 @@ impl ValueType {
             "number" => Ok(Self::Number),
             "integer" => Ok(Self::Integer),
             "string" => Ok(Self::String),
-            other => return Err(invalid(format!("unsupported JSON Schema type {other:?}"))),
+            other => Err(invalid(format!("unsupported JSON Schema type {other:?}"))),
         }
     }
 
@@ -481,9 +481,9 @@ fn validate_numeric_bound(
     {
         return Err(invalid(format!("{path} must be a finite 64-bit float")));
     }
-    return Err(invalid(format!(
+    Err(invalid(format!(
         "{path} integer is outside KGLite's exact signed 64-bit range"
-    )));
+    )))
 }
 
 #[cfg(test)]

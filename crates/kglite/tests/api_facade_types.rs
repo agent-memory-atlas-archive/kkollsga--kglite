@@ -264,3 +264,55 @@ fn skill_records_are_nameable_and_round_trip_through_the_facade() {
     );
     assert!(delete(&mut graph, "people").expect("delete"));
 }
+
+/// Graph-carried recipes reach a Rust downstream only through the facade: the
+/// record, the catalogue it compiles into, the merge rule and the warning type
+/// all have to be nameable, or a consumer re-derives the node shape and the
+/// validation rules by hand.
+#[test]
+fn recipe_records_compile_into_a_catalogue_through_the_facade() {
+    use kglite::api::recipes::{
+        catalogue_from_graph, delete, get, list, merge, set, validate, RecipeCatalog, RecipeRecord,
+        RecipeWarning, SetOutcome, RECIPE_LABEL,
+    };
+
+    let mut graph = two_person_graph();
+    let record = RecipeRecord {
+        recipe: "people".to_string(),
+        name: "by_age".to_string(),
+        description: "Everyone at least this old.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {"floor": {"type": "integer", "minimum": 0}},
+            "required": ["floor"],
+            "additionalProperties": false
+        }),
+        cypher: "MATCH (p:Person) WHERE p.age >= $floor RETURN p.name ORDER BY p.name".to_string(),
+        recipe_description: "Questions about people.".to_string(),
+    };
+    validate(&record).expect("a well-formed record validates");
+
+    let outcome: SetOutcome = set(&mut graph, &record).expect("upsert");
+    assert_eq!(outcome, SetOutcome::Created);
+
+    let listed: Vec<RecipeRecord> = list(&graph);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(get(&graph, "people", "by_age").expect("read back"), record);
+
+    let (catalogue, warnings): (RecipeCatalog, Vec<RecipeWarning>) = catalogue_from_graph(&graph);
+    assert!(warnings.is_empty());
+    assert_eq!(catalogue.summary().query_count, 1);
+    assert_eq!(
+        merge(catalogue, RecipeCatalog::default())
+            .get("people")
+            .expect("group")
+            .description,
+        "Questions about people."
+    );
+
+    assert!(
+        !graph.get_node_types().contains(&RECIPE_LABEL.to_string()),
+        "the recipe label stays out of the type enumeration"
+    );
+    assert!(delete(&mut graph, "people", "by_age").expect("delete"));
+}

@@ -426,7 +426,12 @@ pub mod api {
     /// The server keeps the routes, the wire types and the result envelope.
     pub mod recipes {
         pub use crate::graph::recipes::{
-            query_conversion_error, validate_identifier, CatalogResult, CatalogSummary,
+            catalogue_from_graph, delete, export_path, export_value, get, import_path,
+            import_value, list, set, validate, RecipeRecord, RecipeWarning, SetOutcome,
+            RECIPE_LABEL,
+        };
+        pub use crate::graph::recipes::{
+            merge, query_conversion_error, validate_identifier, CatalogResult, CatalogSummary,
             ParameterSchema, RecipeCatalog, RecipeCatalogError, RecipeDefinition,
             RecipeQueryDefinition, VariableIssue, VariableIssueKind, VariablesValidationError,
             RECIPE_RESULT_ROW_LIMIT,
