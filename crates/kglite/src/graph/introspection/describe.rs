@@ -1446,9 +1446,17 @@ fn write_type_detail(
                 for (k, v) in sorted_props.iter().map(|(k, v)| (k.as_str(), v)) {
                     // Skip nulls, `false` booleans and provenance keys so the
                     // 4-property preview is not crowded by the other frontends'
-                    // uniformly-false flags.
+                    // uniformly-false flags. `id`/`title` are already rendered
+                    // above from the canonical projection, and a node type
+                    // whose id/title field is aliased to some other column can
+                    // still store a property spelled `id` or `title`: emitting
+                    // it here is a duplicate XML attribute, which no parser
+                    // accepts. (`to_text` drops the same two keys for the same
+                    // reason.)
                     if is_null_value(v)
                         || matches!(v, Value::Boolean(false))
+                        || k == "id"
+                        || k == "title"
                         || crate::graph::schema::is_reserved_provenance_key(k)
                     {
                         continue;

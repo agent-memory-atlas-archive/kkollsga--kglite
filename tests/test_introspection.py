@@ -1515,3 +1515,22 @@ class TestSystemLabelHiding:
         ).to_dicts()
         assert rows == [{"tools": ["cypher_query"], "delivery": "lazy"}]
         assert "KgliteSkill" not in reloaded.node_types
+
+
+def test_describe_samples_parse_when_a_property_is_spelled_id_or_title(tmp_path):
+    """A node type whose id/title fields are aliased to other columns can still
+    store properties literally named ``id``/``title``. Emitting those beside the
+    canonical attributes produced ``<node id=".." title=".." id=".." title=".."/>``
+    — a duplicate XML attribute, which no parser accepts."""
+    g = kglite.KnowledgeGraph()
+    g.add_nodes(
+        pd.DataFrame({"code": ["c1"], "id": ["i1"], "name": ["Nan"], "title": ["Ann"], "city": ["Oslo"]}),
+        "Doc",
+        "code",
+        "name",
+    )
+    root = ET.fromstring(g.describe())  # raises on a duplicate attribute
+    sample = root.find("types/type/samples/node")
+    assert sample.attrib["id"] == "c1"
+    assert sample.attrib["title"] == "Nan"
+    assert sample.attrib["city"] == "Oslo"

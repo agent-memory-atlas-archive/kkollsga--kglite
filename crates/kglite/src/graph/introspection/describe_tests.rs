@@ -681,3 +681,92 @@ mod system_label_tests {
         );
     }
 }
+
+/// A sample node renders `id` and `title` as attributes from the canonical
+/// projection. A stored property spelled the same way used to be appended a
+/// second time, producing a duplicate XML attribute — a document no parser
+/// accepts.
+#[cfg(test)]
+mod sample_attribute_collision_tests {
+    use super::*;
+    use crate::datatypes::values::{ColumnData, ColumnType, DataFrame};
+    use crate::graph::mutation::maintain::add_nodes;
+
+    fn doc_graph(id_field: &str, title_field: &str) -> DirGraph {
+        let mut graph = DirGraph::new();
+        let mut df = DataFrame::new(Vec::new());
+        for (name, value) in [
+            ("code", "c1"),
+            ("id", "i1"),
+            ("name", "Nan"),
+            ("title", "Ann"),
+            ("city", "Oslo"),
+        ] {
+            df.add_column(
+                name.to_string(),
+                ColumnType::String,
+                ColumnData::String(vec![Some(value.to_string())]),
+            )
+            .expect("column");
+        }
+        add_nodes(
+            &mut graph,
+            df,
+            "Doc".to_string(),
+            id_field.to_string(),
+            Some(title_field.to_string()),
+            None,
+        )
+        .expect("add nodes");
+        graph
+    }
+
+    fn sample_line(graph: &DirGraph) -> String {
+        let rendered =
+            compute_description(graph, &DescribeRequest::new(DescribeSurface::Python)).unwrap();
+        rendered
+            .lines()
+            .find(|l| l.contains("<node "))
+            .unwrap_or_else(|| panic!("no sample rendered in: {rendered}"))
+            .to_string()
+    }
+
+    fn attribute_names(line: &str) -> Vec<&str> {
+        line.split(' ')
+            .filter_map(|tok| tok.split_once('='))
+            .map(|(k, _)| k)
+            .collect()
+    }
+
+    #[test]
+    fn a_stored_title_property_does_not_duplicate_the_title_attribute() {
+        let line = sample_line(&doc_graph("code", "name"));
+        let names = attribute_names(&line);
+        assert_eq!(
+            names.iter().filter(|n| **n == "title").count(),
+            1,
+            "duplicate attribute in: {line}"
+        );
+        assert!(line.contains("title=\"Nan\""), "got: {line}");
+    }
+
+    #[test]
+    fn a_stored_id_property_does_not_duplicate_the_id_attribute() {
+        let line = sample_line(&doc_graph("code", "title"));
+        let names = attribute_names(&line);
+        assert_eq!(
+            names.iter().filter(|n| **n == "id").count(),
+            1,
+            "duplicate attribute in: {line}"
+        );
+        assert!(line.contains("id=\"c1\""), "got: {line}");
+    }
+
+    /// The collision is only between the two identity attributes and stored
+    /// keys spelled the same; every other property still reaches the preview.
+    #[test]
+    fn other_properties_still_render() {
+        let line = sample_line(&doc_graph("code", "name"));
+        assert!(line.contains("city=\"Oslo\""), "got: {line}");
+    }
+}

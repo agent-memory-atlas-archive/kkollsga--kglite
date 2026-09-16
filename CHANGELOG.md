@@ -9,6 +9,12 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- `describe()` no longer emits a duplicate `id`/`title` attribute on a sample
+  node whose type stores a property literally named `id` or `title`, which
+  made the rendered XML unparseable.
+
 ## [0.17.5] - 2026-09-14
 
 ### Fixed
