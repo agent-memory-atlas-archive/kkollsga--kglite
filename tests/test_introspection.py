@@ -1534,3 +1534,16 @@ def test_describe_samples_parse_when_a_property_is_spelled_id_or_title(tmp_path)
     assert sample.attrib["id"] == "c1"
     assert sample.attrib["title"] == "Nan"
     assert sample.attrib["city"] == "Oslo"
+
+
+@pytest.mark.parametrize("label", ["KgliteSkill", "KgliteRecipe"])
+def test_every_reserved_system_label_is_hidden(small_graph, label):
+    """Both engine-owned labels hide from the listings and stay queryable."""
+    small_graph.cypher(f"CREATE (:{label} {{name: 'x'}})")
+    assert label not in small_graph.node_types
+    assert label not in small_graph.node_type_counts()
+    assert label not in small_graph.schema()["node_types"]
+    assert label not in small_graph.describe()
+    labels = {r["label"] for r in small_graph.cypher("CALL db.labels() YIELD label RETURN label")}
+    assert label not in labels
+    assert small_graph.cypher(f"MATCH (s:{label}) RETURN count(s) AS c").to_dicts()[0]["c"] == 1

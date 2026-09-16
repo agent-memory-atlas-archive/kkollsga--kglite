@@ -616,6 +616,32 @@ mod system_label_tests {
         );
     }
 
+    /// Every reserved label, not just the one the fixtures use. The membership
+    /// assertion is what makes the loop non-vacuous: dropping a name from
+    /// `SYSTEM_LABELS` fails here rather than quietly shrinking the loop.
+    #[test]
+    fn every_system_label_is_hidden_from_the_enumeration() {
+        use crate::graph::schema::SYSTEM_LABELS;
+        for expected in ["KgliteSkill", "KgliteRecipe"] {
+            assert!(
+                SYSTEM_LABELS.contains(&expected),
+                "{expected} is not reserved"
+            );
+        }
+        for label in SYSTEM_LABELS {
+            let mut graph = person_graph();
+            push_node(&mut graph, label, 9, &[("name", Value::String("x".into()))]);
+            assert!(
+                !graph.get_node_types().contains(&label.to_string()),
+                "{label} leaked into the type enumeration"
+            );
+            assert!(
+                !describe(&graph).contains(label),
+                "{label} leaked into describe()"
+            );
+        }
+    }
+
     #[test]
     fn describe_is_byte_identical_with_and_without_a_skill_node() {
         assert_eq!(describe(&person_graph()), describe(&with_skill()));

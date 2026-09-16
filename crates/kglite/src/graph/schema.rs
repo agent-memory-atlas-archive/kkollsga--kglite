@@ -33,9 +33,10 @@ pub fn is_reserved_provenance_key(key: &str) -> bool {
     RESERVED_PROVENANCE_KEYS.contains(&key)
 }
 
-/// Node-type names the engine owns. A system-labelled node is ordinary data to
-/// Cypher (`MATCH (s:KgliteSkill)` returns it, `MATCH (n) RETURN count(n)`
-/// counts it, exports and digests carry it), but is **hidden from every
+/// Node-type names the engine owns — graph-carried skills and recipes. A
+/// system-labelled node is ordinary data to Cypher (`MATCH (s:KgliteSkill)`
+/// returns it, `MATCH (n) RETURN count(n)` counts it, exports and digests
+/// carry it), but is **hidden from every
 /// surface that enumerates node types** — `node_types()`, `db.labels()`,
 /// `schema()`, `describe()` — so the label reads as engine machinery rather
 /// than as part of the user's model. Same posture as
@@ -46,7 +47,7 @@ pub fn is_reserved_provenance_key(key: &str) -> bool {
 /// Conventional, not enforced: `CREATE (:KgliteSkill {...})` is accepted like
 /// any other label. Counts that accompany a listing filter with it, or a
 /// rendered document contradicts itself.
-pub const SYSTEM_LABELS: &[&str] = &["KgliteSkill"];
+pub const SYSTEM_LABELS: &[&str] = &["KgliteSkill", "KgliteRecipe"];
 
 #[inline]
 pub fn is_system_label(label: &str) -> bool {
