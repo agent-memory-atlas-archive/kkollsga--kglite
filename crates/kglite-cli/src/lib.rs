@@ -426,103 +426,92 @@ where
     T: Into<OsString> + Clone,
 {
     let cli = Cli::parse_from(args);
-
     validate_agent_cli(&cli)?;
+    match &cli.command {
+        Some(command) => dispatch(command),
+        None => run_repl(cli.graph.as_deref()),
+    }
+}
 
-    if let Some(Command::Query {
-        graph,
-        query,
-        format,
-        parallel,
-        timeout_ms,
-        response_max_bytes,
-        response_full,
-    }) = &cli.command
-    {
-        if *format == OutputFormat::Agent {
-            run_agent_query(
-                graph,
-                query,
-                *parallel,
-                *timeout_ms,
-                agent_response::AgentOptions {
-                    max_bytes: *response_max_bytes,
-                    full: *response_full,
-                },
-            )?;
-        } else {
-            run_query(graph, query, (*format).into(), *parallel, *timeout_ms)?;
-        }
-        return Ok(());
-    }
-    if let Some(Command::Write {
-        graph,
-        query,
-        format,
-        save,
-        write_scope,
-        git_sha,
-        modified_by,
-        timeout_ms,
-        response_max_bytes,
-        response_full,
-    }) = &cli.command
-    {
-        let options = exec::QueryOptions {
-            write_scope: exec::parse_write_scope(write_scope.as_deref()),
-            git_sha: git_sha.clone(),
-            modified_by: modified_by.clone(),
-            timeout_ms: *timeout_ms,
-            ..exec::QueryOptions::default()
-        };
-        if *format == OutputFormat::Agent {
-            run_agent_write(
-                graph,
-                query,
-                *save,
-                options,
-                agent_response::AgentOptions {
-                    max_bytes: *response_max_bytes,
-                    full: *response_full,
-                },
-            )?;
-        } else {
-            run_write(graph, query, (*format).into(), *save, options)?;
-        }
-        return Ok(());
-    }
-    if let Some(Command::ReadySet {
-        graph,
-        relationship,
-        done,
-        node_type,
-        format,
-    }) = &cli.command
-    {
-        run_ready_set(
+/// Route one parsed subcommand to its handler.
+///
+/// Each arm only destructures and forwards: anything longer than a couple of
+/// lines lives in a named `run_*`, so this stays a routing table rather than a
+/// second implementation of every command.
+fn dispatch(command: &Command) -> Result<()> {
+    match command {
+        Command::Query {
+            graph,
+            query,
+            format,
+            parallel,
+            timeout_ms,
+            response_max_bytes,
+            response_full,
+        } => run_query_command(
+            graph,
+            query,
+            *format,
+            (*parallel, *timeout_ms),
+            agent_response::AgentOptions {
+                max_bytes: *response_max_bytes,
+                full: *response_full,
+            },
+        ),
+        Command::Write {
+            graph,
+            query,
+            format,
+            save,
+            write_scope,
+            git_sha,
+            modified_by,
+            timeout_ms,
+            response_max_bytes,
+            response_full,
+        } => run_write_command(
+            graph,
+            query,
+            *format,
+            *save,
+            exec::QueryOptions {
+                write_scope: exec::parse_write_scope(write_scope.as_deref()),
+                git_sha: git_sha.clone(),
+                modified_by: modified_by.clone(),
+                timeout_ms: *timeout_ms,
+                ..exec::QueryOptions::default()
+            },
+            agent_response::AgentOptions {
+                max_bytes: *response_max_bytes,
+                full: *response_full,
+            },
+        ),
+        Command::ReadySet {
+            graph,
+            relationship,
+            done,
+            node_type,
+            format,
+        } => run_ready_set(
             graph,
             relationship,
             done,
             node_type.as_deref(),
             (*format).into(),
-        )?;
-        return Ok(());
-    }
-    if let Some(Command::Describe {
-        graph,
-        types,
-        type_search,
-        connections,
-        connection_types,
-        cypher,
-        cypher_topics,
-        fluent,
-        fluent_topics,
-        max_pairs,
-        sample_truncate,
-    }) = &cli.command
-    {
-        run_describe(
+        ),
+        Command::Describe {
+            graph,
+            types,
+            type_search,
+            connections,
+            connection_types,
+            cypher,
+            cypher_topics,
+            fluent,
+            fluent_topics,
+            max_pairs,
+            sample_truncate,
+        } => run_describe(
             graph,
             DescribeOptions {
                 types: parse_csv(types.as_deref()),
@@ -533,68 +522,95 @@ where
                 max_pairs: *max_pairs,
                 sample_truncate: Some(*sample_truncate),
             },
-        )?;
-        return Ok(());
-    }
-    if let Some(Command::Session {
-        graph,
-        format,
-        save_on_exit,
-        write_scope,
-        git_sha,
-        modified_by,
-    }) = &cli.command
-    {
-        run_session(
+        ),
+        Command::Session {
+            graph,
+            format,
+            save_on_exit,
+            write_scope,
+            git_sha,
+            modified_by,
+        } => run_session(
             graph,
             *format,
             *save_on_exit,
             write_scope.as_deref(),
             git_sha.clone(),
             modified_by.clone(),
-        )?;
-        return Ok(());
-    }
-    if let Some(Command::ExportText { file }) = &cli.command {
-        print!("{}", open_text(file)?);
-        return Ok(());
-    }
-    if let Some(Command::Diff { a, b }) = &cli.command {
-        let (ta, tb) = (open_text(a)?, open_text(b)?);
-        let a_lines: std::collections::BTreeSet<&str> =
-            ta.lines().filter(|l| !l.trim().is_empty()).collect();
-        let b_lines: std::collections::BTreeSet<&str> =
-            tb.lines().filter(|l| !l.trim().is_empty()).collect();
-        for l in a_lines.difference(&b_lines) {
-            println!("-{}", l.trim_start());
+        ),
+        Command::ExportText { file } => {
+            print!("{}", open_text(file)?);
+            Ok(())
         }
-        for l in b_lines.difference(&a_lines) {
-            println!("+{}", l.trim_start());
-        }
-        return Ok(());
-    }
-    if let Some(Command::ExportSqlite { graph, output }) = &cli.command {
-        return run_export_sqlite(graph, output.as_deref());
-    }
-    if let Some(Command::Migrate {
-        graph,
-        directory,
-        dry_run,
-    }) = &cli.command
-    {
-        return migrate::run(graph, directory, *dry_run);
-    }
-    if let Some(Command::SchemaVersion { graph, set }) = &cli.command {
-        return match set {
+        Command::Diff { a, b } => run_diff(a, b),
+        Command::ExportSqlite { graph, output } => run_export_sqlite(graph, output.as_deref()),
+        Command::Migrate {
+            graph,
+            directory,
+            dry_run,
+        } => migrate::run(graph, directory, *dry_run),
+        Command::SchemaVersion { graph, set } => match set {
             Some(version) => migrate::set_version(graph, *version),
             None => migrate::print_version(graph),
-        };
+        },
+        Command::Response(command) => run_response(command),
     }
-    if let Some(Command::Response(command)) = &cli.command {
-        return run_response(command);
-    }
+}
 
-    let (graph, ownership) = match &cli.graph {
+/// `kglite query` — the agent envelope and the row renderers are different
+/// output contracts over the same read, chosen by `--format`.
+fn run_query_command(
+    graph: &Path,
+    query: &str,
+    format: OutputFormat,
+    execution: (bool, Option<u64>),
+    response: agent_response::AgentOptions,
+) -> Result<()> {
+    let (parallel, timeout_ms) = execution;
+    if format == OutputFormat::Agent {
+        run_agent_query(graph, query, parallel, timeout_ms, response)
+    } else {
+        run_query(graph, query, format.into(), parallel, timeout_ms)
+    }
+}
+
+/// `kglite write` — same split as [`run_query_command`], over the write path.
+fn run_write_command(
+    graph: &Path,
+    query: &str,
+    format: OutputFormat,
+    save: bool,
+    options: exec::QueryOptions,
+    response: agent_response::AgentOptions,
+) -> Result<()> {
+    if format == OutputFormat::Agent {
+        run_agent_write(graph, query, save, options, response)
+    } else {
+        run_write(graph, query, format.into(), save, options)
+    }
+}
+
+/// `kglite diff` — a set difference over the deterministic text projection, so
+/// a property change shows as a `-`/`+` pair rather than a moved line.
+fn run_diff(a: &Path, b: &Path) -> Result<()> {
+    let (ta, tb) = (open_text(a)?, open_text(b)?);
+    let a_lines: std::collections::BTreeSet<&str> =
+        ta.lines().filter(|l| !l.trim().is_empty()).collect();
+    let b_lines: std::collections::BTreeSet<&str> =
+        tb.lines().filter(|l| !l.trim().is_empty()).collect();
+    for l in a_lines.difference(&b_lines) {
+        println!("-{}", l.trim_start());
+    }
+    for l in b_lines.difference(&a_lines) {
+        println!("+{}", l.trim_start());
+    }
+    Ok(())
+}
+
+/// No subcommand: open the positional graph (or a fresh in-memory one) and
+/// hand it to the interactive shell.
+fn run_repl(path: Option<&Path>) -> Result<()> {
+    let (graph, ownership) = match path {
         Some(path) => {
             let p = path.to_string_lossy().to_string();
             let opened = open_or_create_graph(path, Some(StorageMode::Memory))
@@ -605,7 +621,13 @@ where
             // A path that did not exist is not this session's file yet: `.save`
             // with no argument still asks for one, as it always has.
             let ownership = (opened.disposition == OpenDisposition::Opened).then(|| {
-                WriteOwnership::new(path.clone(), opened.identity, &opened.graph, None, false)
+                WriteOwnership::new(
+                    path.to_path_buf(),
+                    opened.identity,
+                    &opened.graph,
+                    None,
+                    false,
+                )
             });
             (opened.graph, ownership)
         }
