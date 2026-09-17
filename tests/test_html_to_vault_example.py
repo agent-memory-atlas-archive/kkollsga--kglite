@@ -57,13 +57,14 @@ EXPECTED_EDGES = Counter(
 )
 
 
-def convert(out: Path) -> subprocess.CompletedProcess:
+def convert(out: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,
             str(SCRIPT),
             str(FIXTURE),
             str(out),
+            *extra,
             "--toc",
             str(FIXTURE / "toc.json"),
             "--default-label",
@@ -188,6 +189,18 @@ def test_a_range_index_is_declared_as_the_mapping_the_schema_asks_for(vault):
     assert "- {range: toc_depth}" in config
     graph = okf.build(str(vault), dialect="obsidian")
     assert [i["property"] for i in graph.list_indexes()] == ["domain"]
+
+
+def test_a_meta_map_entry_that_is_not_a_mapping_is_named(tmp_path):
+    # The table is hand-written, so a `"key": "value"` where a mapping belongs is
+    # the likely typo; it used to reach `.items()` and die with an AttributeError
+    # naming neither the file nor the key.
+    table = tmp_path / "meta.json"
+    table.write_text('{"domain": "Geology"}', encoding="utf-8")
+    done = convert(tmp_path / "vault", "--meta-map", str(table))
+    assert done.returncode != 0
+    assert "domain" in done.stdout + done.stderr
+    assert "AttributeError" not in done.stdout + done.stderr
 
 
 def test_a_hub_key_the_source_spells_as_one_value_is_written_as_a_list(vault):

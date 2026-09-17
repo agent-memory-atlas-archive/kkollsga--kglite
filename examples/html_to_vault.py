@@ -618,6 +618,8 @@ def main(argv: list[str] | None = None) -> int:
     table = dict(META_NORMALIZERS)
     if args.meta_map:
         for key, mapping in json.loads(args.meta_map.read_text(encoding="utf-8")).items():
+            if not isinstance(mapping, dict):
+                raise SystemExit(f'--meta-map: "{key}" must map value spellings to their fold, got {mapping!r}')
             table[normalize_key(key)] = {k.lower(): v for k, v in mapping.items()}
 
     toc = load_toc(args.toc) if args.toc else {}
