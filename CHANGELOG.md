@@ -44,7 +44,25 @@ before upgrading.
   property keeps reporting only the frontmatter. `![[Note]]` is an `EMBEDS`
   edge (`![[image.png]]` stays an attachment, and still mints nothing), and
   every link target that resolves to no note is counted and named in the build
-  report. The `"okf"` and `"loose"` dialects are unchanged.
+  report.
+
+  **Layout and hubs** (`VAULT.md` §2.3, §2.4, §5.3, §5.5, §7) complete the read
+  side. `index.md` and `log.md` are **ordinary notes** in a vault, where the
+  `"okf"` and `"loose"` dialects reserve them. A **folder note** — `X.md`
+  beside `X/`, or `X/X.md` — takes the directory's place: no `Folder` node is
+  created for `X/` and the notes inside are joined to the note by `CHILD_OF`
+  (the type and direction are configurable), which is how a table-of-contents
+  hierarchy is expressed on disk; the note is labelled from where its folder
+  sits, so both spellings label alike, and declaring both for one directory is
+  a reported error. A `parent:` repeating an edge the layout already made is
+  one edge, not two. **Hubs** are now declared rather than hard-coded: any
+  frontmatter list key can mint shared nodes (`keywords:` → `Keyword` joined by
+  `HAS_KEYWORD`), the built-in `tags` → `Tag` hub being one of them, and every
+  hub node now carries a `title` — the id itself, or, for a `case_insensitive`
+  hub, the casing the vault used most often. A **heading map** retypes links
+  under a named heading, overriding the built-in heading ladder
+  (`"Related topics"` → `RELATED_TO` rather than `RELATED`). The `"okf"` and
+  `"loose"` dialects are unchanged by all of it.
 
 ### Changed
 

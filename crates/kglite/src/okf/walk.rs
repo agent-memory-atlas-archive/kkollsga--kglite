@@ -4,8 +4,9 @@
 //! Reserved filenames (`index.md`, `log.md`) are not concepts *while the
 //! profile says so*: `index.md` is captured per directory (it describes the
 //! directory — it enriches the `Folder` node in the builder) and `log.md` is
-//! dropped. Hidden directories (`.git`, `.obsidian`, …) are pruned, mirroring
-//! codingest's `walk_filter`.
+//! dropped. The vault profile reserves neither (VAULT.md §2.4). Hidden
+//! directories (`.git`, `.obsidian`, …) are pruned, mirroring codingest's
+//! `walk_filter`.
 
 use crate::okf::model::BuildOptions;
 use std::collections::HashMap;
@@ -42,7 +43,7 @@ fn is_ignored_dir(name: &str) -> bool {
 /// True if a directory at bundle-relative path `rel` (basename `name`) matches a
 /// caller `skip_dirs` entry: bare name → match at any depth; entry with `/` →
 /// anchored relative-path prefix (the dir and its subtree).
-fn matches_skip(rel: &str, name: &str, skip_dirs: &[String]) -> bool {
+fn matches_skip(rel: &str, name: &str, skip_dirs: &[&str]) -> bool {
     skip_dirs.iter().any(|raw| {
         let entry = raw.trim_matches('/');
         if entry.is_empty() {
@@ -56,11 +57,19 @@ fn matches_skip(rel: &str, name: &str, skip_dirs: &[String]) -> bool {
 }
 
 /// Walk `root`, returning concept `.md` files plus per-directory `index.md`
-/// files. `opts.skip_dirs` prunes matching directories (and their subtrees);
-/// `opts.profile` decides which filenames are reserved. Errors only on an
+/// files. `opts.skip_dirs` and `opts.profile.skip_dirs` both prune matching
+/// directories (and their subtrees) — the caller's list and the vault's own
+/// declaration (VAULT.md §2.4) are unioned, never one overriding the other;
+/// `opts.profile` also decides which filenames are reserved. Errors only on an
 /// unreadable root.
 pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> {
-    let skip_dirs = opts.skip_dirs.as_slice();
+    let skip_dirs: Vec<&str> = opts
+        .skip_dirs
+        .iter()
+        .chain(opts.profile.skip_dirs.iter())
+        .map(String::as_str)
+        .collect();
+    let skip_dirs = skip_dirs.as_slice();
     if !root.exists() {
         return Err(format!(
             "OKF bundle path does not exist: {}",

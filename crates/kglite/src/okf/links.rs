@@ -45,22 +45,38 @@ fn only_wikilink_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\s*\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\s*$").unwrap())
 }
 
-/// Map a section heading to a connection type, or `None` to fall through.
-fn conn_from_heading(heading: &str) -> Option<&'static str> {
-    let h = heading.to_ascii_lowercase();
-    if h.contains("citation") {
-        Some("CITES")
-    } else if h.contains("join") {
-        Some("JOINS_WITH")
-    } else if h.contains("reference") {
-        Some("REFERENCES")
-    } else if h.contains("related") {
-        Some("RELATED")
-    } else if h.contains("depend") {
-        Some("DEPENDS_ON")
-    } else {
-        None
+/// Map a section heading to a connection type, or `None` to fall through
+/// (VAULT.md §5.3, rungs 2 and 3).
+///
+/// A [`Profile::heading_edges`] entry is tried first and matches the **whole**
+/// heading, case-insensitively — which is the point of declaring one: the
+/// built-in ladder below matches a *substring*, so a corpus whose "Related
+/// topics" sections mean `RELATED_TO` cannot get there by adding a rung, only
+/// by overriding one. The map is a handful of entries, so a linear scan beats
+/// lowercasing the heading to probe a map.
+pub(crate) fn conn_from_heading(heading: &str, profile: &Profile) -> Option<String> {
+    if let Some((_, edge)) = profile
+        .heading_edges
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(heading))
+    {
+        return Some(edge.clone());
     }
+    let h = heading.to_ascii_lowercase();
+    let built_in = if h.contains("citation") {
+        "CITES"
+    } else if h.contains("join") {
+        "JOINS_WITH"
+    } else if h.contains("reference") {
+        "REFERENCES"
+    } else if h.contains("related") {
+        "RELATED"
+    } else if h.contains("depend") {
+        "DEPENDS_ON"
+    } else {
+        return None;
+    };
+    Some(built_in.to_string())
 }
 
 /// The text of an ATX heading line (already left-trimmed), or `None` when the
@@ -139,7 +155,9 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
             scan_tags(raw, &mut out.tags);
         }
 
-        let heading_conn = current_heading.as_deref().and_then(conn_from_heading);
+        let heading_conn = current_heading
+            .as_deref()
+            .and_then(|h| conn_from_heading(h, profile));
         let section = current_heading.as_deref().filter(|h| !h.is_empty());
 
         for cap in link_re().captures_iter(raw) {
@@ -152,7 +170,7 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
             let conn = cap
                 .get(2)
                 .and_then(|t| conn_from_title(t.as_str()))
-                .or_else(|| heading_conn.map(|c| c.to_string()))
+                .or_else(|| heading_conn.clone())
                 .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string());
             let props = edge_props(profile, section, fragment_of(dest));
             if is_external_url(dest) {
@@ -209,7 +227,7 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
                     EMBEDS_CONN_TYPE.to_string()
                 } else {
                     heading_conn
-                        .map(|c| c.to_string())
+                        .clone()
                         .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string())
                 };
                 push_unique(

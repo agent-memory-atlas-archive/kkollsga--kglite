@@ -84,12 +84,39 @@ pub(crate) fn parse_concepts_reported(
     // Stable order for reproducible builds / tests — and for a deterministic
     // collision pass, which reads the docs in this order.
     docs.sort_by(|a, b| a.concept_id.cmp(&b.concept_id));
-    let findings = resolve_ids(&mut docs, opts);
+    let mut findings = resolve_ids(&mut docs, opts);
+    findings.warnings.extend(hub_key_edge_warnings(&docs));
     if !findings.errors.is_empty() {
         // Ids changed under the fallback; restore the ordering invariant.
         docs.sort_by(|a, b| a.concept_id.cmp(&b.concept_id));
     }
     (docs, findings)
+}
+
+/// One warning per hub key that some note spent on the typed-edge rule
+/// (VAULT.md §4.3 beats §7's `hubs:`), naming how many notes and the first of
+/// them. Per *key*, not per note: the clash is a property of the vault's
+/// declaration, and a corpus whose `keywords:` are all wikilinks would
+/// otherwise bury the report under one copy per file.
+fn hub_key_edge_warnings(docs: &[ConceptDoc]) -> Vec<String> {
+    let mut by_key: BTreeMap<&str, (usize, &str)> = BTreeMap::new();
+    for d in docs {
+        for key in &d.hub_key_edges {
+            let entry = by_key
+                .entry(key.as_str())
+                .or_insert((0, d.file_path.as_str()));
+            entry.0 += 1;
+        }
+    }
+    by_key
+        .into_iter()
+        .map(|(key, (count, first))| {
+            format!(
+                "hub key `{key}` holds wikilinks in {count} note(s) (first: {first}); \
+                 the typed-edge rule wins and they join no hub"
+            )
+        })
+        .collect()
 }
 
 /// The path-relative id a note falls back to: its vault-relative path minus
@@ -230,7 +257,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         .flatten();
     let folder = profile
         .folder_label
-        .then(|| top_folder(doc_path).map(str::to_string))
+        .then(|| top_folder(label_path(doc_path, profile)).map(str::to_string))
         .flatten();
     let ladder = match profile.label_from {
         LabelFrom::Type => [declared, meta_type, profile.default_label.clone(), folder],
@@ -261,7 +288,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
 
     // Wikilink-valued keys become edges, not properties (VAULT.md §4.3) —
     // before `props` is built, because the rule *removes* the key.
-    let fm_links = frontmatter_edges(&mut fm, profile);
+    let (fm_links, hub_key_edges) = frontmatter_edges(&mut fm, profile);
 
     let props: Vec<(String, Value)> = fm
         .into_iter()
@@ -290,6 +317,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         props,
         links: all_links,
         inline_tags: extracted.tags,
+        hub_key_edges,
         body,
     }))
 }
@@ -303,10 +331,18 @@ const NON_EDGE_KEYS: [&str; 3] = ["aliases", "tags", model::SKIP_KEY];
 /// Drain the frontmatter keys whose value is a wikilink string, or a list of
 /// nothing but wikilink strings, into edges (VAULT.md §4.3). The raw property
 /// is not kept: storing both would duplicate it on export.
-fn frontmatter_edges(fm: &mut BTreeMap<String, Value>, profile: &Profile) -> Vec<Link> {
+///
+/// Returns the edges and the [`Profile::hubs`] keys among them — a key that is
+/// both a hub and wikilink-valued goes to the typed-edge rule, and the caller
+/// reports the clash rather than leaving the hub silently short.
+fn frontmatter_edges(
+    fm: &mut BTreeMap<String, Value>,
+    profile: &Profile,
+) -> (Vec<Link>, Vec<String>) {
     let mut out = Vec::new();
+    let mut hub_keys = Vec::new();
     if !profile.frontmatter_edges {
-        return out;
+        return (out, hub_keys);
     }
     // `parent:` is the reserved key that follows the rule with the folder
     // note's edge type and direction, so a cross-listed note contributes the
@@ -340,11 +376,31 @@ fn frontmatter_edges(fm: &mut BTreeMap<String, Value>, profile: &Profile) -> Vec
         if conn_type.is_empty() {
             continue;
         }
+        if profile.hubs.contains_key(&key) {
+            hub_keys.push(key);
+        }
         for target in links::wikilink_targets(&value).expect("filtered on Some above") {
             out.push(Link::plain(target, conn_type.clone(), false));
         }
     }
-    out
+    (out, hub_keys)
+}
+
+/// The path a note is labelled from (VAULT.md §2.1 rung 3, §2.3).
+///
+/// A folder note stands in for its directory, so `X/X.md` is labelled from
+/// where `X/` sits — its parent — and both spellings of a folder note give one
+/// label. The `X.md`-beside-`X/` spelling already lives there, so only this one
+/// needs moving, and it is detectable from the path alone: no directory listing
+/// tells you anything the stem and its parent do not.
+fn label_path<'a>(doc_path: &'a str, profile: &Profile) -> &'a str {
+    if profile.folder_notes {
+        let dir = parent_dir(doc_path);
+        if !dir.is_empty() && stem(doc_path) == stem(dir) {
+            return dir;
+        }
+    }
+    doc_path
 }
 
 /// Coerce a frontmatter scalar to a display string for label/title use.

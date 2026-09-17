@@ -67,7 +67,22 @@ Geology/
 ```
 
 This is how a table-of-contents hierarchy is expressed on disk. Further
-parents are declared with `parent:` (§4.3).
+parents are declared with `parent:` (§4.3); a `parent:` naming the folder note
+the layout already joined this note to is the same relationship, and one edge.
+
+A folder note is **labelled from where its folder sits**, not from inside it:
+`X/X.md` takes the label rung 3 (§2.1) gives its directory's *parent*, so both
+spellings of one folder note produce the same label. `Geology.md` and
+`Geology/Geology.md` at the vault root are therefore both `Note`, not
+`Geology`.
+
+The folder-note edge joins **notes**. A plain subdirectory below a folder note
+keeps its `Folder` node and its `CONTAINS` edge from the note — the note stands
+in for a directory, so it contains what that directory contained.
+
+Declaring **both** spellings for one directory is an error (§9): two notes
+cannot both stand for `X/`. `X.md` is the one used, so the build still produces
+a hierarchy.
 
 ### 2.4 Ignored paths
 
@@ -215,7 +230,8 @@ relative to the linking note. A trailing `.md` is stripped first.
 For a body link, the edge type is the first that applies:
 
 1. an explicit link title that looks like a type — `[x](y.md "JOINS_WITH")`
-2. an entry in `heading_edges:` matching the enclosing heading text exactly
+2. an entry in `heading_edges:` matching the enclosing heading text in full,
+   case-insensitively
 3. the built-in heading ladder, matched case-insensitively as a substring of
    the enclosing heading: *citation* → `CITES`, *join* → `JOINS_WITH`,
    *reference* → `REFERENCES`, *related* → `RELATED`, *depend* → `DEPENDS_ON`
@@ -238,7 +254,10 @@ from frontmatter (§4.3) carry neither property.
 
 ### 5.5 Tags
 
-Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`:
+Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`. Tag
+identity is **case-sensitive** — `#Seismic` and `#seismic` are two tags — and a
+vault that wants them folded redeclares the hub in `vault.yaml` with
+`case_insensitive: true` (§7), which is the same mechanism any other hub uses:
 
 - `tags:` in frontmatter, which also stays a list property on the note
 - inline `#tag` in the body
@@ -298,13 +317,17 @@ wrong shape, is an error.
 | `body` | string | Property name for the prose. Default `body`. |
 | `skip_dirs` | list of strings | Extra directories to prune (§2.4). |
 | `folder_notes` | `{edge, direction}` | `edge` default `CHILD_OF`; `direction` is `child_to_parent` (default) or `parent_to_child`. |
-| `hubs` | `{<frontmatter key>: {label, edge, case_insensitive}}` | Turn a list-valued key into hub nodes. `case_insensitive: true` folds the id and displays the most frequent casing as the title. |
+| `hubs` | `{<frontmatter key>: {label, edge, case_insensitive}}` | Turn a list-valued key into hub nodes. `case_insensitive: true` folds the id to lowercase and titles the node with the casing the vault used most often, ties settled alphabetically; otherwise the title is the id. The built-in `tags` hub is `{label: Tag, edge: TAGGED, case_insensitive: false}` and can be redeclared like any other. |
 | `heading_edges` | `{<heading text>: EDGE_TYPE}` | Merged over the built-in ladder (§5.3). |
 | `types` | `{<Label>: {<property>: <type>}}` | Declared property types: `string`, `int`, `float`, `bool`, `date`, `datetime`, `list`. Overrides inference. |
 | `indexes` | `{<Label>: [ <prop> \| {range: <prop>} \| {composite: [<prop>, …]} ]}` | Equality, range and composite index declarations. |
 | `text_indexes` | `{<Label>: [<prop>]}` | BM25 lexical indexes. |
 | `ontology` | mapping | Passed verbatim to the ontology declaration API — same document `define_ontology` accepts; see the [ontology guide](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html). |
 | `embed` | `{<Label>: <prop>}` | Which text property to embed per label. Reported as a build target; the vectors are computed when an embedder is bound. |
+
+A hub reads a key's **list** entries; a scalar joins no hub. A key that is
+both a hub and wikilink-valued goes to the typed-edge rule instead (§4.3) —
+that rule wins, and the clash is a warning (§9) rather than a silent empty hub.
 
 A complete example — a vendor help corpus of ~7k articles:
 
@@ -392,14 +415,16 @@ Findings are classified, and the classification is the contract:
 
 **Errors** — a vault with any of these does not meet this spec: unparseable
 frontmatter; misuse of a reserved key (§4.1), such as a non-string `id:` or a
-scalar `tags:`; id collisions (§3); `.kglite/vault.yaml` schema errors,
-including an unknown `kglite_vault` version; an absolute path, or a path
-escaping the vault root, in a link or attachment reference.
+scalar `tags:`; id collisions (§3); two folder notes for one directory (§2.3);
+`.kglite/vault.yaml` schema errors, including an unknown `kglite_vault`
+version; an absolute path, or a path escaping the vault root, in a link or
+attachment reference.
 
 **Warnings** — legitimate in a real vault, worth seeing: dangling links
-(stubs), missing attachments, case-insensitive collisions, and alias clashes
-(an `aliases:` entry that is another note's filename stem, or that two notes
-both claim — the link resolves to exactly one of them).
+(stubs), missing attachments, case-insensitive collisions, alias clashes (an
+`aliases:` entry that is another note's filename stem, or that two notes both
+claim — the link resolves to exactly one of them), and a declared hub key
+whose value is a wikilink, which the typed-edge rule takes instead (§7).
 
 `kglite okf check` exits non-zero when any error is present. `--strict`
 promotes every warning to an error — the setting a converter's own test suite

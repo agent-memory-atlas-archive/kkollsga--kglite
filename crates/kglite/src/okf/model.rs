@@ -76,6 +76,24 @@ pub enum FolderNoteDirection {
     ParentToChild,
 }
 
+/// One hub declared in `hubs:` (VAULT.md §5.5, §7): a frontmatter list key
+/// whose entries become shared nodes every note carrying them links to.
+///
+/// The built-in `tags` hub is one of these, so a vault that renames it or adds
+/// `keywords:` alongside it is configuration rather than a second code path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubSpec {
+    /// Label of the synthesized hub nodes (`Tag`, `Keyword`, …).
+    pub label: String,
+    /// Edge type from the note to the hub node (`TAGGED`, `HAS_KEYWORD`, …).
+    pub edge: String,
+    /// Fold the hub's identity to lowercase, so `Faults` and `faults` are one
+    /// node. The node id is then the folded form and its `title` is the
+    /// casing the vault used most often — ties settled alphabetically, so the
+    /// title never depends on which note was read first.
+    pub case_insensitive: bool,
+}
+
 /// The conventions a dialect brings, as data rather than as `match` arms.
 ///
 /// A dialect name selects a `Profile`, and behaviour reads the profile's
@@ -148,11 +166,32 @@ pub struct Profile {
     /// Read by [`crate::okf::build::Resolver`]: a note's `aliases:` entries
     /// answer link resolution, between the stem and slug rungs (VAULT.md §5.2).
     pub alias_resolution: bool,
-    /// Read by `crate::okf::parse_file`: the edge type a reserved `parent:`
-    /// emits, which P4 also gives the folder layout (VAULT.md §2.3, §4.3).
+    /// Read by `crate::okf::parse_file` and
+    /// [`crate::okf::build::push_containment`]: the edge type a reserved
+    /// `parent:` emits, and the one the folder layout joins a folder note's
+    /// children by — one type, so a cross-listed note contributes exactly the
+    /// edges the layout would have (VAULT.md §2.3, §4.3).
     pub folder_note_edge: String,
     /// Read by `crate::okf::parse_file`: which way that edge points.
     pub folder_note_direction: FolderNoteDirection,
+    /// Read by [`crate::okf::build::build_folders`]: `X.md` beside `X/`, or
+    /// `X/X.md`, is that directory's **folder note** — it replaces the
+    /// directory's `Folder` node and the notes inside are joined to it by
+    /// [`Profile::folder_note_edge`] instead of `CONTAINS` (VAULT.md §2.3).
+    pub folder_notes: bool,
+    /// Read by [`crate::okf::build::build_hubs`]: frontmatter key → the hub its
+    /// list entries join (VAULT.md §5.5, §7). Every dialect declares `tags` →
+    /// `Tag`/`TAGGED` here; a vault adds its own in `.kglite/vault.yaml`.
+    pub hubs: BTreeMap<String, HubSpec>,
+    /// Read by [`crate::okf::links::conn_from_heading`]: heading text → edge
+    /// type, merged *over* the built-in heading ladder and matched on the
+    /// whole heading, case-insensitively (VAULT.md §5.3).
+    pub heading_edges: BTreeMap<String, String>,
+    /// Read by [`crate::okf::walk::discover`]: extra directories to prune,
+    /// unioned with [`BuildOptions::skip_dirs`]. The profile's copy is what
+    /// `.kglite/vault.yaml` declares; the options' copy is what the caller
+    /// passed. Same gitignore-style matching for both.
+    pub skip_dirs: Vec<String>,
     /// Read by `crate::okf::parse_file`: retype a frontmatter string that is
     /// an ISO `YYYY-MM-DD` date or an RFC 3339 timestamp as the matching
     /// temporal `Value`. Top-level scalars only — a list element keeps the
@@ -183,6 +222,10 @@ impl Default for Profile {
             alias_resolution: false,
             folder_note_edge: FOLDER_NOTE_CONN_TYPE.to_string(),
             folder_note_direction: FolderNoteDirection::ChildToParent,
+            folder_notes: false,
+            hubs: default_hubs(),
+            heading_edges: BTreeMap::new(),
+            skip_dirs: Vec::new(),
             infer_temporal: false,
         }
     }
@@ -207,6 +250,9 @@ impl Profile {
             inline_tags: true,
             frontmatter_edges: true,
             alias_resolution: true,
+            folder_notes: true,
+            index_as_folder_metadata: false,
+            skip_log_files: false,
             infer_temporal: true,
             ..Profile::default()
         }
@@ -225,6 +271,23 @@ impl Profile {
             ..base
         }
     }
+}
+
+/// The one hub every dialect has: `tags:` → `Tag` nodes joined by `TAGGED`.
+///
+/// Case-**sensitive**, because tag identity has always been the string the
+/// frontmatter spelled; folding it would silently merge two existing `Tag`
+/// nodes in every bundle already built. A vault that wants folding declares
+/// the hub again in `.kglite/vault.yaml` with `case_insensitive: true`.
+fn default_hubs() -> BTreeMap<String, HubSpec> {
+    BTreeMap::from([(
+        "tags".to_string(),
+        HubSpec {
+            label: TAG_LABEL.to_string(),
+            edge: TAGGED_CONN_TYPE.to_string(),
+            case_insensitive: false,
+        },
+    )])
 }
 
 /// Options controlling a bundle build.
@@ -308,6 +371,8 @@ pub struct BuildReport {
     /// Link targets that matched no concept and vivified as `_provisional`
     /// stubs.
     pub dangling: usize,
+    /// Directories whose `Folder` node a folder note replaced (VAULT.md §2.3).
+    pub folder_notes: usize,
     /// Problems that leave the build's output untrustworthy — a caller that
     /// gates on the report fails on a non-empty list.
     pub errors: Vec<String>,
@@ -377,6 +442,11 @@ pub struct ConceptDoc {
     /// §5.5). They join the `tags` frontmatter list at the `Tag` hub and
     /// nowhere else — the `tags` property still reports only the frontmatter.
     pub inline_tags: Vec<String>,
+    /// Hub keys (VAULT.md §7 `hubs:`) this note spent on the typed-edge rule
+    /// instead: a `keywords:` holding nothing but wikilinks is edges, and its
+    /// hub gets nothing from this note. Drained into the build report's
+    /// warnings, which is the only place the clash is visible.
+    pub hub_key_edges: Vec<String>,
     /// Body markdown — `Some` only when `with_body` was requested.
     pub body: Option<String>,
 }

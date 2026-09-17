@@ -78,6 +78,12 @@ def build(
               as ``tags:`` (fenced code, inline code spans and URL or wikilink
               fragments are skipped), while the ``tags`` property keeps
               reporting only what the frontmatter said.
+            * **Reserved filenames**: ``index.md`` and ``log.md`` are ordinary
+              notes here, not folder metadata and not skipped.
+            * **Folder notes**: ``X.md`` beside ``X/``, or ``X/X.md``, takes
+              that directory's place — no ``Folder`` node is created for it and
+              the notes inside are joined to the note by ``CHILD_OF``.
+            * **Hubs**: every hub node carries a ``title`` alongside its id.
         require_frontmatter: When ``True``, only ``.md`` files with a YAML
             frontmatter block are ingested — the discriminator between
             *structured* knowledge (OKF concepts, Claude memories) and plain

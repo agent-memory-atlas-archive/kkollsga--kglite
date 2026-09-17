@@ -17,10 +17,10 @@ use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::mutation::maintain;
 use crate::graph::DirGraph;
 use crate::okf::model::{
-    BuildOptions, BuildReport, ConceptDoc, Link, CONTAINS_CONN_TYPE, DEFAULT_LABEL, FOLDER_LABEL,
-    SOURCE_LABEL, TAGGED_CONN_TYPE, TAG_LABEL,
+    BuildOptions, BuildReport, ConceptDoc, FolderNoteDirection, Link, Profile, CONTAINS_CONN_TYPE,
+    DEFAULT_LABEL, FOLDER_LABEL, SOURCE_LABEL,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -62,8 +62,16 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     }
     build_nodes(&mut graph, &docs, opts, &mut report)?;
     build_aux_nodes(&mut graph, &docs, &mut report)?;
-    build_folders(&mut graph, &docs, &walked.index_files, &mut report)?;
-    build_edges(&mut graph, &docs, opts, &mut report)?;
+    // Hub and folder edges are collected rather than emitted, because they
+    // meet the link edges in one group map: a note's `parent:` and the folder
+    // layout can name the same relationship, and two `emit_groups` calls
+    // cannot see each other's rows to fold them into one edge.
+    let mut groups = build_hubs(&mut graph, &docs, &opts.profile, &mut report)?;
+    merge_groups(
+        &mut groups,
+        build_folders(&mut graph, &docs, &walked.index_files, opts, &mut report)?,
+    );
+    build_edges(&mut graph, &docs, opts, groups, &mut report)?;
     Ok(BuildOutput {
         graph: Arc::new(graph),
         report,
@@ -105,6 +113,15 @@ fn emit_groups(
         .collect();
     let fresh: BTreeSet<String> = fresh.into_iter().map(str::to_string).collect();
     for ((conn, src_label, tgt_label), edges) in groups {
+        // The same relationship can be written twice — a `parent:` naming the
+        // folder note the layout already joined this note to (VAULT.md §2.3,
+        // §4.3). Identical rows are one edge; rows differing in an edge
+        // property are not identical and stay two (§5.4).
+        let mut seen: HashSet<EdgeRow> = HashSet::new();
+        let edges: Vec<EdgeRow> = edges
+            .into_iter()
+            .filter(|r| seen.insert(r.clone()))
+            .collect();
         *report.edges_by_type.entry(conn.clone()).or_default() += edges.len();
         // One frame per group, so its columns are the union of the property
         // keys any row in it carries; a row missing one gets Null, which
@@ -154,17 +171,148 @@ fn emit_groups(
     Ok(())
 }
 
+/// Fold one group map into another, concatenating the rows of shared keys.
+fn merge_groups(into: &mut EdgeGroups, from: EdgeGroups) {
+    for (key, rows) in from {
+        into.entry(key).or_default().extend(rows);
+    }
+}
+
+/// What holds a note or a subfolder: the `Folder` node standing for its
+/// directory, or the folder note that replaced it (VAULT.md §2.3).
+enum Container<'a> {
+    Folder(String),
+    Note(&'a ConceptDoc),
+}
+
+/// Which directories a folder note replaced. Empty unless
+/// [`Profile::folder_notes`] is set, which is what keeps `okf` and `loose`
+/// on the pure-`Folder` hierarchy they have always had.
+#[derive(Default)]
+struct FolderLayout<'a> {
+    /// Directory path → the note standing in for its `Folder` node.
+    note_of_dir: BTreeMap<String, &'a ConceptDoc>,
+    /// A folder note's `doc_path` → the directory it owns. The note is not
+    /// held by that directory but by the directory's *parent*: it took the
+    /// folder's place, so it hangs where the folder hung.
+    dir_of_note: BTreeMap<&'a str, String>,
+}
+
+impl<'a> FolderLayout<'a> {
+    /// What holds the children of `dir` — `None` at the vault root, which has
+    /// neither a `Folder` node nor a folder note.
+    fn owner(&self, dir: &str) -> Option<Container<'a>> {
+        if dir.is_empty() {
+            None
+        } else if let Some(note) = self.note_of_dir.get(dir) {
+            Some(Container::Note(note))
+        } else {
+            Some(Container::Folder(dir.to_string()))
+        }
+    }
+}
+
+/// Match each directory with its folder note: `X.md` beside `X/`, or `X/X.md`
+/// (VAULT.md §2.3). Declaring both is an error — one directory cannot have two
+/// notes standing for it — and `X.md` wins so the build still produces a graph.
+fn folder_layout<'a>(
+    by_path: &BTreeMap<&'a str, &'a ConceptDoc>,
+    dirs: &BTreeSet<String>,
+    report: &mut BuildReport,
+) -> FolderLayout<'a> {
+    let mut layout = FolderLayout::default();
+    for dir in dirs {
+        let base = dir.rsplit('/').next().unwrap_or(dir);
+        let beside = by_path.get(dir.as_str()).copied();
+        let inside = by_path.get(format!("{dir}/{base}").as_str()).copied();
+        if beside.is_some() && inside.is_some() {
+            report.errors.push(format!(
+                "folder note declared twice for `{dir}/`: `{dir}.md` and `{dir}/{base}.md`; `{dir}.md` is used"
+            ));
+        }
+        if let Some(note) = beside.or(inside) {
+            layout.note_of_dir.insert(dir.clone(), note);
+            layout.dir_of_note.insert(doc_path(note), dir.clone());
+        }
+    }
+    layout
+}
+
+/// One containment row: the folder-note edge when a note holds a note, and
+/// `CONTAINS` whenever a `Folder` node is either endpoint — a folder note
+/// standing in for a directory still *contains* the plain subfolders under it
+/// (VAULT.md §2.2, §2.3).
+fn push_containment(
+    groups: &mut EdgeGroups,
+    container: &Container<'_>,
+    child_label: &str,
+    child_id: &str,
+    child_is_note: bool,
+    profile: &Profile,
+) {
+    let (conn, src_label, src_id, tgt_label, tgt_id) = match container {
+        Container::Note(parent) if child_is_note => {
+            let down = profile.folder_note_direction == FolderNoteDirection::ParentToChild;
+            let (s, si, t, ti) = if down {
+                (
+                    parent.label.as_str(),
+                    parent.concept_id.as_str(),
+                    child_label,
+                    child_id,
+                )
+            } else {
+                (
+                    child_label,
+                    child_id,
+                    parent.label.as_str(),
+                    parent.concept_id.as_str(),
+                )
+            };
+            (profile.folder_note_edge.as_str(), s, si, t, ti)
+        }
+        Container::Note(parent) => (
+            CONTAINS_CONN_TYPE,
+            parent.label.as_str(),
+            parent.concept_id.as_str(),
+            child_label,
+            child_id,
+        ),
+        Container::Folder(dir) => (
+            CONTAINS_CONN_TYPE,
+            FOLDER_LABEL,
+            dir.as_str(),
+            child_label,
+            child_id,
+        ),
+    };
+    groups
+        .entry((
+            conn.to_string(),
+            src_label.to_string(),
+            tgt_label.to_string(),
+        ))
+        .or_default()
+        .push((src_id.to_string(), tgt_id.to_string(), Vec::new()));
+}
+
 /// Materialize the directory hierarchy as `Folder` nodes:
 /// `(:Folder)-[:CONTAINS]->(:Concept)` and `(:Folder)-[:CONTAINS]->(:Folder)`.
 /// A directory's `index.md` enriches its Folder node's title/description (so the
 /// reserved file is recovered as structure rather than discarded). Co-located
 /// concepts gain a 2-hop hub, capturing the taxonomic meaning of the layout.
-fn build_folders(
+///
+/// Under [`Profile::folder_notes`] a directory with a folder note gets no
+/// `Folder` node at all: the note takes its place in the hierarchy, and the
+/// notes inside it are joined by the profile's folder-note edge instead
+/// (VAULT.md §2.3). The containment rows are returned rather than emitted —
+/// see the note in [`build`].
+fn build_folders<'a>(
     graph: &mut DirGraph,
-    docs: &[ConceptDoc],
+    docs: &'a [ConceptDoc],
     index_files: &HashMap<String, PathBuf>,
+    opts: &BuildOptions,
     report: &mut BuildReport,
-) -> Result<(), String> {
+) -> Result<EdgeGroups, String> {
     // Every directory holding a concept, plus all ancestor directories.
     let mut dirs: BTreeSet<String> = BTreeSet::new();
     for d in docs {
@@ -176,70 +324,75 @@ fn build_folders(
         }
     }
     if dirs.is_empty() {
-        return Ok(());
+        return Ok(BTreeMap::new());
     }
-    count_nodes(report, FOLDER_LABEL, dirs.len());
+    let profile = &opts.profile;
+    let by_path: BTreeMap<&'a str, &'a ConceptDoc> =
+        docs.iter().map(|d| (doc_path(d), d)).collect();
+    let layout = if profile.folder_notes {
+        folder_layout(&by_path, &dirs, report)
+    } else {
+        FolderLayout::default()
+    };
+    report.folder_notes = layout.note_of_dir.len();
+    let folder_dirs: Vec<&str> = dirs
+        .iter()
+        .map(String::as_str)
+        .filter(|d| !layout.note_of_dir.contains_key(*d))
+        .collect();
+    count_nodes(report, FOLDER_LABEL, folder_dirs.len());
 
     // Folder nodes (id = dir path; title/description from index.md if present).
-    let mut rows: Vec<Vec<Value>> = Vec::with_capacity(dirs.len());
-    for dir in &dirs {
-        let (title, desc) = index_files
-            .get(dir)
-            .map(|p| folder_meta(p))
-            .unwrap_or((None, None));
-        let title = title.unwrap_or_else(|| dir.rsplit('/').next().unwrap_or(dir).to_string());
-        rows.push(vec![
-            Value::String(dir.clone()),
-            Value::String(title),
-            desc.map(Value::String).unwrap_or(Value::Null),
-        ]);
-    }
-    let df = DataFrame::from_cypher_rows(
-        vec![
+    if !folder_dirs.is_empty() {
+        let mut rows: Vec<Vec<Value>> = Vec::with_capacity(folder_dirs.len());
+        for dir in &folder_dirs {
+            let (title, desc) = index_files
+                .get(*dir)
+                .map(|p| folder_meta(p))
+                .unwrap_or((None, None));
+            let title = title.unwrap_or_else(|| dir.rsplit('/').next().unwrap_or(dir).to_string());
+            rows.push(vec![
+                Value::String((*dir).to_string()),
+                Value::String(title),
+                desc.map(Value::String).unwrap_or(Value::Null),
+            ]);
+        }
+        let df = DataFrame::from_cypher_rows(
+            vec![
+                "id".to_string(),
+                "title".to_string(),
+                "description".to_string(),
+            ],
+            rows,
+        )?;
+        maintain::add_nodes(
+            graph,
+            df,
+            FOLDER_LABEL.to_string(),
             "id".to_string(),
-            "title".to_string(),
-            "description".to_string(),
-        ],
-        rows,
-    )?;
-    maintain::add_nodes(
-        graph,
-        df,
-        FOLDER_LABEL.to_string(),
-        "id".to_string(),
-        Some("title".to_string()),
-        Some("update".to_string()),
-    )?;
+            Some("title".to_string()),
+            Some("update".to_string()),
+        )?;
+    }
 
-    // CONTAINS edges: folder → immediate child concepts and subfolders.
+    // Containment: every note and every surviving `Folder` hangs off whatever
+    // holds its directory.
     let mut groups: EdgeGroups = BTreeMap::new();
     for d in docs {
-        let dir = super::parent_dir(doc_path(d));
-        if !dir.is_empty() {
-            groups
-                .entry((
-                    CONTAINS_CONN_TYPE.to_string(),
-                    FOLDER_LABEL.to_string(),
-                    d.label.clone(),
-                ))
-                .or_default()
-                .push((dir.to_string(), d.concept_id.clone(), Vec::new()));
+        let dir = match layout.dir_of_note.get(doc_path(d)) {
+            Some(owned) => super::parent_dir(owned),
+            None => super::parent_dir(doc_path(d)),
+        };
+        if let Some(c) = layout.owner(dir) {
+            push_containment(&mut groups, &c, &d.label, &d.concept_id, true, profile);
         }
     }
-    for dir in &dirs {
-        let parent = super::parent_dir(dir);
-        if !parent.is_empty() {
-            groups
-                .entry((
-                    CONTAINS_CONN_TYPE.to_string(),
-                    FOLDER_LABEL.to_string(),
-                    FOLDER_LABEL.to_string(),
-                ))
-                .or_default()
-                .push((parent.to_string(), dir.clone(), Vec::new()));
+    for dir in &folder_dirs {
+        if let Some(c) = layout.owner(super::parent_dir(dir)) {
+            push_containment(&mut groups, &c, FOLDER_LABEL, dir, false, profile);
         }
     }
-    emit_groups(graph, groups, report)
+    Ok(groups)
 }
 
 /// Extract a `(title, description)` for a Folder node from its `index.md`:
@@ -269,31 +422,104 @@ fn folder_meta(path: &Path) -> (Option<String>, Option<String>) {
     (title.filter(|s| !s.is_empty()), desc)
 }
 
-/// Synthesize `Tag` and `Source` nodes from the concepts' tags and external
-/// links. Added before edges so the `TAGGED` / `CITES` connections find real
-/// endpoints instead of vivifying provisional stubs.
+/// Synthesize `Source` nodes from the concepts' external links. Added before
+/// edges so the `CITES` connections find real endpoints instead of vivifying
+/// provisional stubs. Hub nodes get the same treatment in [`build_hubs`].
 fn build_aux_nodes(
     graph: &mut DirGraph,
     docs: &[ConceptDoc],
     report: &mut BuildReport,
 ) -> Result<(), String> {
-    let mut tags: BTreeSet<&str> = BTreeSet::new();
     let mut sources: BTreeSet<&str> = BTreeSet::new();
     for d in docs {
-        for t in doc_tags(d) {
-            tags.insert(t);
-        }
         for l in &d.links {
             if l.is_external {
                 sources.insert(l.target.as_str());
             }
         }
     }
-    count_nodes(report, TAG_LABEL, tags.len());
     count_nodes(report, SOURCE_LABEL, sources.len());
-    add_id_nodes(graph, TAG_LABEL, &tags)?;
     add_id_nodes(graph, SOURCE_LABEL, &sources)?;
     Ok(())
+}
+
+/// Synthesize each declared hub's nodes and return its membership rows
+/// (VAULT.md §5.5, §7).
+///
+/// One hub per [`Profile::hubs`] entry, so the `Tag` hub every dialect has and
+/// a vault's `keywords:` are the same code. Nodes are added here — before the
+/// edges are emitted — so membership never vivifies a `_provisional` stub.
+fn build_hubs(
+    graph: &mut DirGraph,
+    docs: &[ConceptDoc],
+    profile: &Profile,
+    report: &mut BuildReport,
+) -> Result<EdgeGroups, String> {
+    let mut groups: EdgeGroups = BTreeMap::new();
+    for (key, spec) in &profile.hubs {
+        // id → the original spellings that folded onto it, with their counts.
+        let mut spellings: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+        let mut members: Vec<(&ConceptDoc, String)> = Vec::new();
+        for d in docs {
+            for raw in hub_values(d, key) {
+                let id = if spec.case_insensitive {
+                    raw.to_lowercase()
+                } else {
+                    raw.to_string()
+                };
+                *spellings
+                    .entry(id.clone())
+                    .or_default()
+                    .entry(raw)
+                    .or_default() += 1;
+                // Naming one tag twice, or once in each casing under a folding
+                // hub, is one relationship — and one row, folded by the
+                // dedupe in `emit_groups` rather than a second one here.
+                members.push((d, id));
+            }
+        }
+        if spellings.is_empty() {
+            continue;
+        }
+        count_nodes(report, &spec.label, spellings.len());
+        let rows: Vec<Vec<Value>> = spellings
+            .iter()
+            .map(|(id, counts)| {
+                vec![
+                    Value::String(id.clone()),
+                    Value::String(hub_title(id, counts)),
+                ]
+            })
+            .collect();
+        let df = DataFrame::from_cypher_rows(vec!["id".to_string(), "title".to_string()], rows)?;
+        maintain::add_nodes(
+            graph,
+            df,
+            spec.label.clone(),
+            "id".to_string(),
+            Some("title".to_string()),
+            Some("update".to_string()),
+        )?;
+        for (d, id) in members {
+            groups
+                .entry((spec.edge.clone(), d.label.clone(), spec.label.clone()))
+                .or_default()
+                .push((d.concept_id.clone(), id, Vec::new()));
+        }
+    }
+    Ok(groups)
+}
+
+/// The display title of a hub node: the spelling the vault used most often,
+/// alphabetically first among equals so the title never depends on which note
+/// happened to be read first. A case-sensitive hub has exactly one spelling
+/// per id, which makes this the id itself.
+fn hub_title(id: &str, counts: &BTreeMap<&str, usize>) -> String {
+    counts
+        .iter()
+        .min_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)))
+        .map(|(spelling, _)| (*spelling).to_string())
+        .unwrap_or_else(|| id.to_string())
 }
 
 /// Bulk-add bare nodes whose id is their title (Tag names, Source URLs).
@@ -317,15 +543,19 @@ fn add_id_nodes(graph: &mut DirGraph, label: &str, ids: &BTreeSet<&str>) -> Resu
     Ok(())
 }
 
-/// The tags a concept joins the hub by: its `tags` frontmatter list, then the
-/// inline `#tag`s the vault profile found in its body, minus the ones already
-/// named by the frontmatter (VAULT.md §5.5). One `TAGGED` edge per distinct
-/// tag — writing a tag in both places is one membership, not two.
-fn doc_tags(d: &ConceptDoc) -> Vec<&str> {
-    let mut tags: Vec<&str> = d
+/// The entries a concept joins a hub by: the string elements of its `key`
+/// frontmatter **list**, in order. A scalar is not a list and joins nothing —
+/// VAULT.md §7 defines a hub over a list-valued key, and §9 classes a scalar
+/// `tags:` as a reserved-key error rather than a one-entry list.
+///
+/// The `tags` key additionally takes the inline `#tag`s the vault profile
+/// found in the body (VAULT.md §5.5): the inline syntax names that hub and no
+/// other, and the `tags` *property* still reports only the frontmatter.
+fn hub_values<'a>(d: &'a ConceptDoc, key: &str) -> Vec<&'a str> {
+    let mut vals: Vec<&str> = d
         .props
         .iter()
-        .filter(|(k, _)| k == "tags")
+        .filter(|(k, _)| k == key)
         .flat_map(|(_, v)| match v {
             Value::List(items) => items
                 .iter()
@@ -337,12 +567,14 @@ fn doc_tags(d: &ConceptDoc) -> Vec<&str> {
             _ => Vec::new(),
         })
         .collect();
-    for t in &d.inline_tags {
-        if !tags.contains(&t.as_str()) {
-            tags.push(t.as_str());
+    if key == "tags" {
+        for t in &d.inline_tags {
+            if !vals.contains(&t.as_str()) {
+                vals.push(t.as_str());
+            }
         }
     }
-    tags
+    vals
 }
 
 /// A concept's `aliases:` entries — the names it also answers to in link
@@ -451,18 +683,19 @@ pub(crate) fn column_value(v: &Value, native: bool) -> Value {
     }
 }
 
-/// Build the concept-level edges: semantic links (typed via the ladder; internal
-/// → concept, external → Source) and tag membership. Directory `CONTAINS` edges
-/// are built in [`build_folders`].
+/// Build the concept-level edges — semantic links, typed via the ladder
+/// (internal → concept, external → Source) — and emit them together with the
+/// containment and hub rows `groups` arrives carrying, so a relationship two
+/// of those sources agree on is one edge.
 fn build_edges(
     graph: &mut DirGraph,
     docs: &[ConceptDoc],
     opts: &BuildOptions,
+    mut groups: EdgeGroups,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     let (resolver, alias_warnings) = Resolver::new(docs, &opts.profile);
     report.warnings.extend(alias_warnings);
-    let mut groups: EdgeGroups = BTreeMap::new();
     // Dangling internal-link targets — concepts referenced but not present.
     let mut dangling: BTreeSet<String> = BTreeSet::new();
 
@@ -530,20 +763,6 @@ fn build_edges(
             None,
             Some("preserve".to_string()),
         )?;
-    }
-
-    // Tag membership: concept → Tag.
-    for d in docs {
-        for tag in doc_tags(d) {
-            groups
-                .entry((
-                    TAGGED_CONN_TYPE.to_string(),
-                    d.label.clone(),
-                    TAG_LABEL.to_string(),
-                ))
-                .or_default()
-                .push((d.concept_id.clone(), tag.to_string(), Vec::new()));
-        }
     }
 
     emit_groups(graph, groups, report)
@@ -710,7 +929,9 @@ mod tests {
     use super::*;
     use crate::graph::schema::InternedKey;
     use crate::graph::storage::GraphRead;
-    use crate::okf::model::{EMBEDS_CONN_TYPE, FOLDER_NOTE_CONN_TYPE};
+    use crate::okf::model::{
+        HubSpec, EMBEDS_CONN_TYPE, FOLDER_NOTE_CONN_TYPE, TAGGED_CONN_TYPE, TAG_LABEL,
+    };
     use std::collections::BTreeMap;
     use std::fs;
     use tempfile::tempdir;
@@ -971,18 +1192,22 @@ mod tests {
         let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
         let r = build(&root, &opts).unwrap().report;
 
-        assert_eq!(r.files_scanned, 11);
-        assert_eq!(r.concepts, 11, "a note needs no frontmatter in a vault");
+        assert_eq!(r.files_scanned, 13);
+        assert_eq!(r.concepts, 13, "a note needs no frontmatter in a vault");
         assert_eq!(r.dangling, 1, "`[[Missing]]`, named by a `depends_on:`");
+        assert_eq!(r.folder_notes, 1, "`projects.md` stands in for `projects/`");
         assert_eq!(
             r.nodes_by_label,
             BTreeMap::from([
-                ("Note".to_string(), 1),       // welcome.md, at the root
+                // welcome.md and projects.md, both at the root — a folder note
+                // is labelled from where its *folder* sits (VAULT.md §2.3)
+                ("Note".to_string(), 2),
                 ("Initiative".to_string(), 2), // atlas.md and seismic.md, from `type:`
                 ("projects".to_string(), 2),
-                ("notes".to_string(), 5),
+                ("notes".to_string(), 6),
                 ("archive".to_string(), 1),
-                (FOLDER_LABEL.to_string(), 4),
+                // notes, notes/deep, archive — `projects/` has a folder note
+                (FOLDER_LABEL.to_string(), 3),
                 (TAG_LABEL.to_string(), 3), // seismic, plus two inline `#tag`s
                 (DEFAULT_LABEL.to_string(), 1), // the `[[Missing]]` stub
             ])
@@ -990,11 +1215,14 @@ mod tests {
         assert_eq!(
             r.edges_by_type,
             BTreeMap::from([
-                (CONTAINS_CONN_TYPE.to_string(), 11),
+                (CONTAINS_CONN_TYPE.to_string(), 8),
                 ("LINKS_TO".to_string(), 6),
+                ("RELATED".to_string(), 1), // the `## Related topics` heading
                 (EMBEDS_CONN_TYPE.to_string(), 1), // `![[old]]`
-                (FOLDER_NOTE_CONN_TYPE.to_string(), 1), // `parent: "[[atlas]]"`
-                ("DEPENDS_ON".to_string(), 2),     // the wikilink-valued key
+                // four notes under the `projects` folder note, plus the
+                // reserved `parent: "[[atlas]]"`
+                (FOLDER_NOTE_CONN_TYPE.to_string(), 5),
+                ("DEPENDS_ON".to_string(), 2), // the wikilink-valued key
                 (TAGGED_CONN_TYPE.to_string(), 4),
             ])
         );
@@ -1121,6 +1349,448 @@ mod tests {
         .unwrap()
     }
 
+    /// A vault build whose profile the caller adjusts first — how a
+    /// `.kglite/vault.yaml` reaches the builder: as profile overrides.
+    fn vault_build_with(dir: &Path, tune: impl FnOnce(&mut Profile)) -> BuildOutput {
+        let mut opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        tune(&mut opts.profile);
+        build(dir, &opts).unwrap()
+    }
+
+    /// `(id, title)` of every node carrying `label`, sorted by id.
+    fn nodes_with_titles(g: &DirGraph, label: &str) -> Vec<(String, String)> {
+        let display = |v: Value| match v {
+            Value::String(s) => s,
+            other => format!("{other:?}"),
+        };
+        let mut out: Vec<(String, String)> = g
+            .graph
+            .node_indices()
+            .filter_map(|n| {
+                let nd = g.node_view(n)?;
+                (nd.node_type_str(&g.interner) == label).then(|| {
+                    (
+                        display(nd.id().into_owned()),
+                        display(nd.title().into_owned()),
+                    )
+                })
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The label of each note, by id.
+    fn labels_by_id(g: &DirGraph) -> BTreeMap<String, String> {
+        g.graph
+            .node_indices()
+            .filter_map(|n| {
+                let nd = g.node_view(n)?;
+                match nd.id().into_owned() {
+                    Value::String(id) => Some((id, nd.node_type_str(&g.interner).to_string())),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn vault_reads_index_and_log_as_ordinary_notes() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "notes/index.md",
+            "---\ntitle: Index\n---\nA note.",
+        );
+        write(
+            dir.path(),
+            "notes/log.md",
+            "---\ntitle: Log\n---\nA journal.",
+        );
+        write(dir.path(), "notes/a.md", "---\ntype: Note\n---\nA note.");
+        let vault = vault_build(dir.path());
+        assert_eq!(vault.report.files_scanned, 3);
+        assert_eq!(
+            labels_by_id(&vault.graph)
+                .into_keys()
+                .collect::<Vec<String>>(),
+            vec![
+                "a".to_string(),
+                "index".to_string(),
+                "log".to_string(),
+                "notes".to_string()
+            ],
+            "both reserved names are notes of their own (VAULT.md §2.4)"
+        );
+
+        // …and the okf dialect still diverts one and drops the other.
+        let okf = build(
+            dir.path(),
+            &BuildOptions::for_dialect(crate::okf::Dialect::Okf),
+        )
+        .unwrap();
+        assert_eq!(okf.report.files_scanned, 1, "index.md and log.md reserved");
+        assert_eq!(
+            nodes_with_titles(&okf.graph, FOLDER_LABEL),
+            vec![("notes".to_string(), "notes".to_string())],
+            "index.md became this folder's metadata"
+        );
+    }
+
+    #[test]
+    fn a_folder_note_inside_its_folder_replaces_it() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects/projects.md", "The folder note.");
+        write(dir.path(), "projects/alpha.md", "A project.");
+        let out = vault_build(dir.path());
+        assert_eq!(out.report.folder_notes, 1);
+        assert_eq!(
+            count_label(&out.graph, FOLDER_LABEL),
+            0,
+            "the note took the Folder node's place"
+        );
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![(
+                "alpha".into(),
+                FOLDER_NOTE_CONN_TYPE.into(),
+                "projects".into(),
+                vec![]
+            )]
+        );
+
+        // The other spelling is the same folder note, so it must label the
+        // same way: from where the *folder* sits, not from inside it.
+        let beside = tempdir().unwrap();
+        write(beside.path(), "projects.md", "The folder note.");
+        write(beside.path(), "projects/alpha.md", "A project.");
+        let other = vault_build(beside.path());
+        assert_eq!(labels_by_id(&out.graph), labels_by_id(&other.graph));
+        assert_eq!(
+            labels_by_id(&out.graph).get("projects").map(String::as_str),
+            Some("Note"),
+            "a root folder's note is labelled from the root, not from its own folder"
+        );
+    }
+
+    #[test]
+    fn a_plain_subfolder_under_a_folder_note_keeps_contains() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects.md", "The folder note.");
+        write(dir.path(), "projects/alpha.md", "A project.");
+        write(dir.path(), "projects/sub/deep.md", "Deeper.");
+        let out = vault_build(dir.path());
+        assert_eq!(
+            nodes_with_titles(&out.graph, FOLDER_LABEL),
+            vec![("projects/sub".to_string(), "sub".to_string())],
+            "`sub/` has no folder note of its own, so it keeps its Folder node"
+        );
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![
+                // the folder-note edge joins notes …
+                (
+                    "alpha".into(),
+                    FOLDER_NOTE_CONN_TYPE.into(),
+                    "projects".into(),
+                    vec![]
+                ),
+                // … and the note still *contains* the plain subfolder, which
+                // in turn contains its own notes (VAULT.md §2.2, §2.3)
+                (
+                    "projects".into(),
+                    CONTAINS_CONN_TYPE.into(),
+                    "projects/sub".into(),
+                    vec![]
+                ),
+                (
+                    "projects/sub".into(),
+                    CONTAINS_CONN_TYPE.into(),
+                    "deep".into(),
+                    vec![]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn declaring_a_folder_note_twice_is_an_error() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects.md", "Beside the folder.");
+        write(dir.path(), "projects/projects.md", "And inside it.");
+        write(dir.path(), "projects/alpha.md", "A project.");
+        let out = vault_build(dir.path());
+        let clash = out
+            .report
+            .errors
+            .iter()
+            .find(|e| e.contains("folder note declared twice"))
+            .unwrap_or_else(|| panic!("{:?}", out.report.errors));
+        assert!(
+            clash.contains("`projects.md`") && clash.contains("`projects/projects.md`"),
+            "{clash}"
+        );
+        // One of them has to win, and the build still produces a hierarchy.
+        assert_eq!(out.report.folder_notes, 1);
+    }
+
+    #[test]
+    fn the_folder_note_edge_can_point_down_instead() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects.md", "The folder note.");
+        write(dir.path(), "projects/alpha.md", "A project.");
+        let down = vault_build_with(dir.path(), |p| {
+            p.folder_note_direction = FolderNoteDirection::ParentToChild;
+        });
+        assert_eq!(
+            edges_of(&down.graph),
+            vec![(
+                "projects".into(),
+                FOLDER_NOTE_CONN_TYPE.into(),
+                "alpha".into(),
+                vec![]
+            )],
+            "the same edge type, read from the parent's end"
+        );
+    }
+
+    #[test]
+    fn a_parent_key_repeating_the_layout_is_one_edge() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects.md", "The folder note.");
+        write(
+            dir.path(),
+            "projects/alpha.md",
+            "---\nparent: \"[[projects]]\"\n---\nAlso says so itself.",
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![(
+                "alpha".into(),
+                FOLDER_NOTE_CONN_TYPE.into(),
+                "projects".into(),
+                vec![]
+            )],
+            "the layout and the `parent:` key name one relationship"
+        );
+        assert_eq!(
+            out.report.edges_by_type.get(FOLDER_NOTE_CONN_TYPE),
+            Some(&1),
+            "and the report counts what the graph holds"
+        );
+    }
+
+    /// A hub over `keywords:`, the shape `.kglite/vault.yaml` declares.
+    fn keyword_hub(case_insensitive: bool) -> (String, HubSpec) {
+        (
+            "keywords".to_string(),
+            HubSpec {
+                label: "Keyword".to_string(),
+                edge: "HAS_KEYWORD".to_string(),
+                case_insensitive,
+            },
+        )
+    }
+
+    fn keyword_vault() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.md",
+            "---\nkeywords: [Faults, faults, Horizons]\n---\nOne note.",
+        );
+        write(
+            dir.path(),
+            "b.md",
+            "---\nkeywords: [faults, horizons]\n---\nAnother.",
+        );
+        dir
+    }
+
+    #[test]
+    fn a_folding_hub_titles_itself_with_the_commonest_casing() {
+        let dir = keyword_vault();
+        let out = vault_build_with(dir.path(), |p| {
+            p.hubs.extend([keyword_hub(true)]);
+        });
+        assert_eq!(
+            nodes_with_titles(&out.graph, "Keyword"),
+            vec![
+                // `faults` twice against `Faults` once
+                ("faults".to_string(), "faults".to_string()),
+                // one each — the tie is settled alphabetically, never by which
+                // note was read first
+                ("horizons".to_string(), "Horizons".to_string()),
+            ]
+        );
+        let members: Vec<EdgeFacts> = edges_of(&out.graph)
+            .into_iter()
+            .filter(|(_, c, _, _)| c == "HAS_KEYWORD")
+            .collect();
+        assert_eq!(
+            members,
+            vec![
+                ("a".into(), "HAS_KEYWORD".into(), "faults".into(), vec![]),
+                ("a".into(), "HAS_KEYWORD".into(), "horizons".into(), vec![]),
+                ("b".into(), "HAS_KEYWORD".into(), "faults".into(), vec![]),
+                ("b".into(), "HAS_KEYWORD".into(), "horizons".into(), vec![]),
+            ],
+            "`Faults` and `faults` in one note are one membership"
+        );
+    }
+
+    #[test]
+    fn a_case_sensitive_hub_keeps_every_spelling_apart() {
+        let dir = keyword_vault();
+        let out = vault_build_with(dir.path(), |p| {
+            p.hubs.extend([keyword_hub(false)]);
+        });
+        assert_eq!(
+            nodes_with_titles(&out.graph, "Keyword"),
+            vec![
+                ("Faults".to_string(), "Faults".to_string()),
+                ("Horizons".to_string(), "Horizons".to_string()),
+                ("faults".to_string(), "faults".to_string()),
+                ("horizons".to_string(), "horizons".to_string()),
+            ],
+            "without folding, the title is the id"
+        );
+        assert_eq!(out.report.edges_by_type.get("HAS_KEYWORD"), Some(&5));
+    }
+
+    #[test]
+    fn the_tag_hub_is_case_sensitive_in_every_dialect() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "a.md", "---\ntags: [Seismic, seismic]\n---\nx");
+        let out = vault_build(dir.path());
+        assert_eq!(
+            nodes_with_titles(&out.graph, TAG_LABEL),
+            vec![
+                ("Seismic".to_string(), "Seismic".to_string()),
+                ("seismic".to_string(), "seismic".to_string()),
+            ],
+            "folding tag identity would silently merge nodes in every bundle \
+             already built; a vault that wants it declares the hub again"
+        );
+        assert_eq!(out.report.edges_by_type.get(TAGGED_CONN_TYPE), Some(&2));
+    }
+
+    #[test]
+    fn a_wikilink_valued_hub_key_goes_to_the_typed_edge_rule() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "faults.md", "A target.");
+        write(
+            dir.path(),
+            "a.md",
+            "---\nkeywords:\n  - \"[[faults]]\"\n---\nx",
+        );
+        let out = vault_build_with(dir.path(), |p| {
+            p.hubs.extend([keyword_hub(true)]);
+        });
+        assert_eq!(
+            count_label(&out.graph, "Keyword"),
+            0,
+            "the typed-edge rule wins, so the hub gets nothing"
+        );
+        assert_eq!(out.report.edges_by_type.get("KEYWORDS"), Some(&1));
+        let warning = out
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.contains("hub key `keywords`"))
+            .unwrap_or_else(|| panic!("{:?}", out.report.warnings));
+        assert!(warning.contains("a.md"), "{warning}");
+    }
+
+    #[test]
+    fn heading_edges_beat_the_built_in_ladder_whatever_the_casing() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "b.md", "leaf");
+        write(
+            dir.path(),
+            "a.md",
+            "## Related Topics\n\n[[b]]\n\n## References\n\n[[b]]",
+        );
+        let plain = vault_build(dir.path());
+        let types: BTreeSet<String> = plain
+            .report
+            .edges_by_type
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            types.contains("RELATED") && types.contains("REFERENCES"),
+            "the built-in ladder types both sections: {types:?}"
+        );
+
+        let declared = vault_build_with(dir.path(), |p| {
+            // Declared in a different casing than the heading is written in.
+            p.heading_edges
+                .insert("related topics".to_string(), "RELATED_TO".to_string());
+        });
+        assert_eq!(
+            declared.report.edges_by_type.get("RELATED_TO"),
+            Some(&1),
+            "the map wins over the ladder"
+        );
+        assert_eq!(declared.report.edges_by_type.get("RELATED"), None);
+        assert_eq!(
+            declared.report.edges_by_type.get("REFERENCES"),
+            Some(&1),
+            "and a heading the map does not name keeps its ladder rung"
+        );
+    }
+
+    #[test]
+    fn the_profile_prunes_directories_too() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "keep/a.md", "kept");
+        write(dir.path(), "drafts/b.md", "pruned");
+        let out = vault_build_with(dir.path(), |p| {
+            p.skip_dirs.push("drafts".to_string());
+        });
+        assert_eq!(out.report.files_scanned, 1);
+        assert_eq!(
+            labels_by_id(&out.graph).keys().cloned().collect::<Vec<_>>(),
+            vec!["a".to_string(), "keep".to_string()],
+            "the note and its Folder, and nothing from `drafts/`"
+        );
+    }
+
+    #[test]
+    fn golden_vault_bundle_under_a_declared_hub_and_heading_map() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/okf/golden/vault");
+        let mut opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        opts.profile.hubs.extend([keyword_hub(true)]);
+        opts.profile
+            .heading_edges
+            .insert("Related topics".to_string(), "RELATED_TO".to_string());
+        let out = build(&root, &opts).unwrap();
+
+        assert_eq!(
+            nodes_with_titles(&out.graph, "Keyword"),
+            vec![
+                // `faults` in atlas.md and seismic.md against `Faults` once
+                ("faults".to_string(), "faults".to_string()),
+                // `horizons` once, `Horizons` once — alphabetical
+                ("horizons".to_string(), "Horizons".to_string()),
+            ]
+        );
+        assert_eq!(
+            out.report.edges_by_type.get("HAS_KEYWORD"),
+            Some(&4),
+            "two notes × two keywords, with seismic's two casings folded"
+        );
+        assert_eq!(out.report.edges_by_type.get("RELATED_TO"), Some(&1));
+        assert_eq!(
+            out.report.edges_by_type.get("RELATED"),
+            None,
+            "the declared map replaced the ladder's rung"
+        );
+    }
+
     #[test]
     fn vault_body_link_edges_carry_section_and_anchor() {
         let dir = tempdir().unwrap();
@@ -1199,12 +1869,10 @@ mod tests {
             .collect();
         assert_eq!(
             targets,
-            vec![
-                "mtg-1".to_string(),
-                "target".to_string(),
-                "target".to_string()
-            ],
-            "the vault-relative and note-relative spellings both reach that note"
+            vec!["mtg-1".to_string(), "target".to_string()],
+            "both spellings reach that note, and land on one edge: they sit in \
+             the same section with no anchor, so VAULT.md §5.4 makes them one \
+             relationship"
         );
     }
 

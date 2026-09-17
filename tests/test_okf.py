@@ -212,12 +212,14 @@ class TestOkfObsidianDialect:
 class TestVaultGoldenBundle:
     """The Obsidian vault dialect over the committed ``golden/vault`` bundle.
 
-    Eleven notes across three top-level folders plus one root note, carrying a
-    ``type:`` override, an ``id:`` override, a stem-collision pair, a
+    Thirteen notes across three top-level folders plus two root notes,
+    carrying a ``type:`` override, an ``id:`` override, a stem-collision pair, a
     case-collision pair, a native list and an ISO date — plus the link
     semantics of VAULT.md §5: ``aliases:``, a ``#section`` anchor, wikilink-
     valued frontmatter keys (``depends_on:`` and the reserved ``parent:``),
-    inline ``#tags``, an ``![[embed]]`` and one dangling link. The build
+    inline ``#tags``, an ``![[embed]]`` and one dangling link; and VAULT.md
+    §2.3–2.4: ``projects.md`` is the folder note for ``projects/`` and
+    ``notes/index.md`` is an ordinary note. The build
     *report* for the same bundle (the collision findings, the dangling
     warning) is asserted in Rust, at
     ``okf::build::tests::golden_vault_bundle_report`` — the report has no
@@ -232,12 +234,14 @@ class TestVaultGoldenBundle:
         # so a lowercase directory gives a lowercase label.
         assert _labels(self.build()) == Counter(
             {
-                "notes": 5,
-                "Folder": 4,
+                "notes": 6,
+                "Folder": 3,  # `projects/` has a folder note, so it has no Folder node
                 "Tag": 3,
                 "projects": 2,
                 "Initiative": 2,
-                "Note": 1,
+                # welcome.md, and projects.md — a folder note is labelled from
+                # where its folder sits, which here is the root
+                "Note": 2,
                 "archive": 1,
                 "Concept": 1,  # the `[[Missing]]` stub, labelled as every dialect labels one
             }
@@ -246,12 +250,15 @@ class TestVaultGoldenBundle:
     def test_edge_types(self):
         assert _edge_types(self.build()) == Counter(
             {
-                "CONTAINS": 11,
+                "CONTAINS": 8,
                 "LINKS_TO": 6,
+                # four notes under the `projects` folder note, plus the reserved
+                # `parent:` key on seismic.md
+                "CHILD_OF": 5,
                 "TAGGED": 4,
                 "DEPENDS_ON": 2,  # `depends_on:` names two wikilinks
-                "CHILD_OF": 1,  # the reserved `parent:` key
                 "EMBEDS": 1,  # `![[old]]`
+                "RELATED": 1,  # `## Related topics`, via the built-in heading ladder
             }
         )
 
@@ -264,11 +271,13 @@ class TestVaultGoldenBundle:
             "Missing",  # the dangling `[[Missing]]` stub keeps its raw name
             "Roadmap",  # case-collision pair: ids are left alone
             "atlas",
+            "index",  # `index.md` is an ordinary note in a vault
             "links",
             "mtg-2026-01",  # declared `id:` wins over the stem `meeting`
             "nested",  # a stem, three folders deep
             "notes/alpha",  # stem collision → path-relative fallback
             "old",
+            "projects",  # the folder note for `projects/`
             "projects/alpha",
             "roadmap",
             "seismic",
@@ -327,12 +336,10 @@ class TestVaultGoldenBundle:
         g = self.build()
         rows = g.cypher("MATCH (f:Folder)-[:CONTAINS]->(c) RETURN f.id AS f, c.concept_id AS c, c.id AS fid").to_list()
         pairs = {(r["f"], r["c"] if r["c"] is not None else r["fid"]) for r in rows}
+        # `projects/` has a folder note, so no Folder CONTAINS its notes.
         assert pairs == {
-            ("projects", "seismic"),
             ("notes", "links"),
-            ("projects", "projects/alpha"),
-            ("projects", "Roadmap"),
-            ("projects", "atlas"),
+            ("notes", "index"),
             ("notes", "notes/alpha"),
             ("notes", "roadmap"),
             ("notes", "mtg-2026-01"),
@@ -385,10 +392,13 @@ class TestVaultGoldenBundle:
             for r in g.cypher("MATCH (a {concept_id:'seismic'})-[:DEPENDS_ON]->(b) RETURN b.concept_id AS b").to_list()
         )
         assert deps == ["Missing", "atlas"]
-        # `parent:` emits the folder note's edge type and direction, not `PARENT`.
-        assert g.cypher("MATCH (a {concept_id:'seismic'})-[:CHILD_OF]->(b) RETURN b.concept_id AS b").to_list() == [
-            {"b": "atlas"}
-        ]
+        # `parent:` emits the folder note's edge type and direction, not
+        # `PARENT` — alongside the one the folder layout gives the same note.
+        parents = sorted(
+            r["b"]
+            for r in g.cypher("MATCH (a {concept_id:'seismic'})-[:CHILD_OF]->(b) RETURN b.concept_id AS b").to_list()
+        )
+        assert parents == ["atlas", "projects"]
         rows = g.cypher(
             "MATCH (n {concept_id:'seismic'}) RETURN n.depends_on AS d, n.parent AS p, n.reviewers AS r, n.aliases AS a"
         ).to_list()
@@ -418,6 +428,44 @@ class TestVaultGoldenBundle:
         ]
         # …and the `tags` property still reports only what the frontmatter said.
         assert g.cypher("MATCH (n {concept_id:'seismic'}) RETURN n.tags AS t").to_list() == [{"t": ["seismic"]}]
+
+    def test_the_folder_note_took_the_folders_place(self):
+        g = self.build()
+        # No `Folder` node for `projects/` at all …
+        assert g.cypher("MATCH (f:Folder) RETURN f.id AS f ORDER BY f").to_list() == [
+            {"f": "archive"},
+            {"f": "notes"},
+            {"f": "notes/deep"},
+        ]
+        # … and its notes hang off the note instead, by the declared edge.
+        children = sorted(
+            r["c"]
+            for r in g.cypher("MATCH (c)-[:CHILD_OF]->(p {concept_id:'projects'}) RETURN c.concept_id AS c").to_list()
+        )
+        assert children == ["Roadmap", "atlas", "projects/alpha", "seismic"]
+        # The folder note itself is at the root, so no Folder contains it.
+        assert (
+            g.cypher("MATCH (:Folder)-[:CONTAINS]->(n {concept_id:'projects'}) RETURN count(*) AS c").to_list()[0]["c"]
+            == 0
+        )
+
+    def test_index_md_is_an_ordinary_note_in_a_vault(self):
+        g = self.build()
+        rows = g.cypher("MATCH (n {concept_id:'index'}) RETURN labels(n)[0] AS l, n.title AS t").to_list()
+        assert rows == [{"l": "notes", "t": "Notes index"}]
+        # The `okf` dialect still diverts it to the folder's metadata.
+        j = okf.build(str(VAULT_BUNDLE), require_frontmatter=False)
+        assert j.cypher("MATCH (n {concept_id:'notes/index'}) RETURN count(n) AS c").to_list()[0]["c"] == 0
+
+    def test_hub_nodes_carry_a_title(self):
+        g = self.build()
+        rows = g.cypher("MATCH (t:Tag) RETURN t.id AS id, t.title AS title ORDER BY id").to_list()
+        # The built-in tag hub is case-sensitive, so each title is its id.
+        assert rows == [
+            {"id": "field-work", "title": "field-work"},
+            {"id": "geoscience", "title": "geoscience"},
+            {"id": "seismic", "title": "seismic"},
+        ]
 
     def test_build_is_deterministic(self):
         a, b = self.build(), self.build()
