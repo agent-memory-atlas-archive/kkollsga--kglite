@@ -229,7 +229,7 @@ class TestVaultGoldenBundle:
     edge below is the *declared* vault's. The build *report* for the same
     bundle (the collision findings, the dangling warning, the declaration
     counters, the embed targets) is asserted in Rust, at
-    ``okf::build::tests::golden_vault_bundle_report`` — the report has no
+    ``okf::build::build_tests::golden_vault_bundle_report`` — the report has no
     Python surface yet.
     """
 

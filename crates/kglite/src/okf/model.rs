@@ -163,23 +163,23 @@ pub struct Profile {
     /// wikilink string — or a list of nothing but wikilink strings — becomes
     /// edges typed `UPPER_SNAKE(key)` instead of a property (VAULT.md §4.3).
     pub frontmatter_edges: bool,
-    /// Read by [`crate::okf::build::Resolver`]: a note's `aliases:` entries
+    /// Read by [`crate::okf::build::resolver::Resolver`]: a note's `aliases:` entries
     /// answer link resolution, between the stem and slug rungs (VAULT.md §5.2).
     pub alias_resolution: bool,
     /// Read by `crate::okf::parse_file` and
-    /// [`crate::okf::build::push_containment`]: the edge type a reserved
+    /// [`crate::okf::build::folders::push_containment`]: the edge type a reserved
     /// `parent:` emits, and the one the folder layout joins a folder note's
     /// children by — one type, so a cross-listed note contributes exactly the
     /// edges the layout would have (VAULT.md §2.3, §4.3).
     pub folder_note_edge: String,
     /// Read by `crate::okf::parse_file`: which way that edge points.
     pub folder_note_direction: FolderNoteDirection,
-    /// Read by [`crate::okf::build::build_folders`]: `X.md` beside `X/`, or
+    /// Read by [`crate::okf::build::folders::build_folders`]: `X.md` beside `X/`, or
     /// `X/X.md`, is that directory's **folder note** — it replaces the
     /// directory's `Folder` node and the notes inside are joined to it by
     /// [`Profile::folder_note_edge`] instead of `CONTAINS` (VAULT.md §2.3).
     pub folder_notes: bool,
-    /// Read by [`crate::okf::build::build_hubs`]: frontmatter key → the hub its
+    /// Read by [`crate::okf::build::hubs::build_hubs`]: frontmatter key → the hub its
     /// list entries join (VAULT.md §5.5, §7). Every dialect declares `tags` →
     /// `Tag`/`TAGGED` here; a vault adds its own in `.kglite/vault.yaml`.
     pub hubs: BTreeMap<String, HubSpec>,
@@ -187,7 +187,7 @@ pub struct Profile {
     /// type, merged *over* the built-in heading ladder and matched on the
     /// whole heading, case-insensitively (VAULT.md §5.3).
     pub heading_edges: BTreeMap<String, String>,
-    /// Read by [`crate::okf::build::build_nodes`]: the property name a note's
+    /// Read by [`crate::okf::build::nodes::build_nodes`]: the property name a note's
     /// prose is stored under when `with_body` is set (VAULT.md §7 `body:`).
     /// `body` everywhere unless `.kglite/vault.yaml` renames it — a vault
     /// whose notes already carry a frontmatter `body:` key needs the prose
@@ -205,7 +205,7 @@ pub struct Profile {
     pub infer_temporal: bool,
     /// Read by [`crate::okf::links::extract`],
     /// [`crate::okf::walk::discover`] and
-    /// [`crate::okf::build::build_attachments`]: an `![alt](x.png)` or
+    /// [`crate::okf::build::attachments::build_attachments`]: an `![alt](x.png)` or
     /// `![[x.png]]` reference becomes an `Image` / `Attachment` node
     /// (VAULT.md §6). Off for `okf`/`loose`, which keep dropping the
     /// reference — and which therefore never pay the walk's `stat` per
@@ -464,7 +464,7 @@ impl Link {
 ///
 /// Resolution needs the whole file list, which the parser does not have — so
 /// extraction records the reference as written and
-/// [`crate::okf::build::build_attachments`] walks the ladder (§6.2).
+/// [`crate::okf::build::attachments::build_attachments`] walks the ladder (§6.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentRef {
     /// The target exactly as written, minus any `#fragment` / `?query`.
