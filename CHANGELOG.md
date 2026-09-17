@@ -58,16 +58,18 @@ before upgrading.
   degrade silently.
 
   **Attachments** (`VAULT.md` §6) are the other half of what a note's body
-  says. `![alt](img/x.png)` and `![[x.png]]` resolve note-relative →
-  vault-root-relative → by unique filename anywhere in the vault (an ambiguous
-  bare filename resolves to nothing and is reported), and each distinct file
+  says. `![alt](img/x.png)`, `![[x.png]]` and a **plain** `[text](x.pdf)` link
+  naming a non-`.md` file all resolve note-relative → vault-root-relative → by
+  unique filename anywhere in the vault (an ambiguous bare filename resolves to
+  nothing and is reported), and each distinct file
   becomes one node keyed by its vault-relative `path` — `Image` for the four
   types the bundled MCP server delivers (PNG, JPEG, GIF, WebP), `Attachment`
   for everything else, both carrying `mime`, `size_bytes` and `mtime`. **The
   bytes are never read**: the metadata comes from `stat`, so build cost is
   independent of image volume. The note reaches the file by `HAS_IMAGE` /
-  `HAS_ATTACHMENT` carrying `alt`, `section` and a per-kind `ordinal`, and an
-  `Image` also carries a `text` of the distinct alt texts and the titles of the
+  `HAS_ATTACHMENT` carrying `alt` (an `![…]` reference's alt text, or a plain
+  link's link text), `section` and a per-kind `ordinal`, and an `Image` also
+  carries a `text` of the distinct alt texts and the titles of the
   notes using it, so captions stay text-searchable. A reference matching no
   file becomes a `missing: true` stub, counted and named in the build report.
 
@@ -213,9 +215,13 @@ before upgrading.
 
 - `import_recipes()` now reads a `.md` recipe file or a directory of them
   alongside a `.json` catalogue. One query per file: frontmatter `recipe`,
-  `name`, `description`, optional `recipe_description` (inherited from the
-  group when omitted) and optional `parameters` (the JSON Schema, as a nested
-  map), with the statement in the body's single ```` ```cypher ```` fence.
+  `name`, `description`, optional `recipe_description` and optional
+  `parameters` (the JSON Schema, as a nested map), with the statement in the
+  body's single ```` ```cypher ```` fence. A file that omits
+  `recipe_description` inherits the group's from **any** sibling that declares
+  it — the whole directory is read before any file is stored, so it does not
+  matter which one carries it — and a directory whose group no file describes
+  is refused once, naming the group.
   A `.yaml` catalogue is still refused by name. Available in Rust as
   `kglite::api::recipes::{parse_markdown, set_from_markdown}`.
 - `examples/html_to_vault.py` — a reference HTML-to-vault converter following

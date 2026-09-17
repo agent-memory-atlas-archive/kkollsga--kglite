@@ -236,6 +236,41 @@ fn declaring_a_folder_note_twice_is_an_error() {
     assert_eq!(out.report.folder_notes, 1);
 }
 
+/// The two spellings are `X.md` and `X/X.md`, and nothing else — an
+/// `index.md` is an ordinary note in this dialect (§2.4), so `X/index.md`
+/// never stands for `X/`. The P16 usability probe read a "folder note
+/// declared twice" error as coming from `api/rmsapi/index.md` beside
+/// `api/rmsapi/rmsapi/index.md`; that pair produces an **id collision**
+/// (both stems are `index`, §3) and no folder note at all, which is what
+/// this pins.
+#[test]
+fn an_index_note_is_never_a_folder_note() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "api/rmsapi/index.md", "The package page.");
+    write(dir.path(), "api/rmsapi/rmsapi/index.md", "The module page.");
+    write(dir.path(), "api/rmsapi/rmsapi/leaf.md", "A leaf.");
+    let out = vault_build(dir.path());
+    assert_eq!(out.report.folder_notes, 0);
+    assert!(
+        !out.report
+            .errors
+            .iter()
+            .any(|e| e.contains("folder note declared twice")),
+        "{:?}",
+        out.report.errors
+    );
+    assert!(
+        out.report
+            .errors
+            .iter()
+            .any(|e| e.contains("id collision") && e.contains("`index`")),
+        "the two `index.md` stems collide instead: {:?}",
+        out.report.errors
+    );
+    // Every directory therefore keeps its own `Folder` node.
+    assert_eq!(count_label(&out.graph, FOLDER_LABEL), 3);
+}
+
 #[test]
 fn the_folder_note_edge_can_point_down_instead() {
     let dir = tempdir().unwrap();

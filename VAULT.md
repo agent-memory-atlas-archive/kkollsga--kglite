@@ -65,8 +65,13 @@ being written. `--strict` fails on warnings too (§9).
 3. The format version is `kglite_vault:` in `.kglite/vault.yaml`. The current
    version is `1`, and so is a vault with no such file or key. Any other value
    is an error.
-4. Never interpreted: HTML, canvas files, Dataview inline fields
+4. Never interpreted: HTML **tags**, canvas files, Dataview inline fields
    (`key:: value`), Logseq properties, and heading-level splitting of a note.
+   An `<a href>` is not a link and an `<img src>` is not an attachment
+   reference. A line holding HTML is still prose, though: the markdown link and
+   image syntax written *inside* an HTML block is scanned exactly as it is
+   anywhere else (§5.1). Nothing here is a block-level exemption — the reader
+   has no HTML parser to give it one.
 
 ## 2. Directory layout and labels
 
@@ -117,6 +122,25 @@ spellings of one folder note produce the same label. `Geology.md` and
 `Geology/Geology.md` at the vault root are therefore both `Note`, not
 `Geology`.
 
+That last sentence catches converters out, so here it is as a tree. A corpus
+split into two top-level sections writes
+
+```
+Api.md                # the folder note for Api/
+Api/
+  rmsapi.md           # (:Api)
+Software.md           # the folder note for Software/
+Software/
+  panels.md           # (:Software)
+```
+
+and gets `:Api` and `:Software` on the notes *inside* the sections, but `Note`
+on `Api.md` and `Software.md` themselves: they sit at the vault root, which has
+no top-level folder for rung 3 to read. The ladder is doing what it says, and
+the fix is one line per root — `type: Api` in `Api.md`. `default_label:` is not
+the fix, because rung 2 sits ahead of rung 3 and would relabel every note in
+the vault.
+
 The folder-note edge joins **notes**. A plain subdirectory below a folder note
 keeps its `Folder` node and its `CONTAINS` edge from the note — the note stands
 in for a directory, so it contains what that directory contained.
@@ -124,6 +148,19 @@ in for a directory, so it contains what that directory contained.
 Declaring **both** spellings for one directory is an error (§9): two notes
 cannot both stand for `X/`. `X.md` is the one used, so the build still produces
 a hierarchy.
+
+Those two are the *only* folder-note spellings. `X/index.md` is not one —
+`index.md` is an ordinary note in this dialect (§2.4) — so a tree whose section
+pages are all called `index.md` gets no folder notes at all, and any two of them
+collide on the stem `index` (§3) instead.
+
+A generated tree hits the both-spellings error without meaning to, because
+`X/X.md` is a name a converter writes for its own reasons. A Python API mirror
+lays out `api/rmsapi.md` for the package and `api/rmsapi/` for its members —
+and one of those members is the module `rmsapi` itself, so it writes
+`api/rmsapi/rmsapi.md`. Both files now claim `api/rmsapi/`, the second by
+accident. Rename the member page (`api/rmsapi/rmsapi_module.md`); an `id:`
+will not settle it, because the layout reads paths, not ids.
 
 ### 2.4 Ignored paths
 
@@ -243,14 +280,22 @@ folder layout would have.
 | `[[Note#Heading]]`, `[[Note#^block-id]]` | Link to `Note`, `anchor` = the fragment. |
 | `[[Label/Name]]` | Folder-qualified — use when a stem is ambiguous. |
 | `[text](path.md)`, `[text](path.md "EDGE_TYPE")` | Path link, resolved relative to the linking note; the title is an explicit edge type. |
+| `[text](path.md#Heading)` | Same link, `anchor` = the fragment — a path link carries one exactly as a wikilink does, and it is never part of the target. |
+| `[text](file.ext)` | A plain link to a non-`.md` file is an attachment reference (§6), with the link text as its `alt`. |
+| `[text](#fragment)`, `[text](sub/dir/)`, `[text](mailto:…)` | An in-page anchor, a directory link and any other URI scheme name no node: silent no-ops. |
 | `![[Note]]` | Embed → an `EMBEDS` edge. |
 | `![[image.png]]`, `![alt](img/x.png)` | Attachment (§6), never a note link. |
 | `https://…` | An external `Source` node keyed by the URL. |
 
-Links inside fenced code blocks (``` or `~~~`) are ignored. A **heading line
-is scanned like any other line**: `## Overview ![map](img/x.png)` states a
-picture and `## See also [[Alice]]` states a link, and §5.4 says which section
-they carry.
+**A fenced code block (``` or `~~~`) is the only region that is not scanned.**
+Indented four-space code is **not** exempt, and neither is an HTML block: the
+reader takes one line at a time and owns no block parser, so a CommonMark
+indented-code rule would also swallow every list continuation line, which is
+where a converter writes most of its links. Fence whatever must not be read —
+and write `\[\[` for a literal `[[`, which is the escape Obsidian uses. A
+**heading line is scanned like any other line**: `## Overview ![map](img/x.png)`
+states a picture and `## See also [[Alice]]` states a link, and §5.4 says which
+section they carry.
 
 A **markdown-style** target — the `(…)` half of `[text](…)` and `![alt](…)` —
 is percent-decoded before it is resolved, because that is the spelling a tool
@@ -316,8 +361,9 @@ from frontmatter (§4.3) carry neither property.
 
 ### 5.5 Tags
 
-Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`. Tag
-identity is **case-sensitive** — `#Seismic` and `#seismic` are two tags — and a
+Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`. A hub node
+holds its text in `id`, not in the `concept_id` a note uses — §7's table names
+the id property of every kind of node. Tag identity is **case-sensitive** — `#Seismic` and `#seismic` are two tags — and a
 vault that wants them folded redeclares the hub in `vault.yaml` with
 `case_insensitive: true` (§7), which is the same mechanism any other hub uses:
 
@@ -339,13 +385,20 @@ are counted in the build report and are never exported as files (§10).
 
 ## 6. Attachments
 
-1. **Accepted syntax:** `![alt](rel/path.png)`, `![[image.png]]` and
-   `![[image.png|alt]]`. The body keeps the original syntax verbatim. An
-   `http(s)` target is somebody else's file: it is not in the vault, no `stat`
-   describes it, and it becomes no node. The `![alt](…)` spelling is
+1. **Accepted syntax:** `![alt](rel/path.png)`, `![[image.png]]`,
+   `![[image.png|alt]]` — and `[text](rel/path.pdf)`, a **plain** link naming a
+   non-`.md` file, whose link text is its `alt`. The leading `!` says how a
+   renderer displays the file, not whether the vault holds it, so both
+   spellings are the same reference here and make the same node and the same
+   edge; a vault of 48 `[download](tool.zip)` links would otherwise produce
+   nothing at all. The body keeps the original syntax verbatim. A target
+   carrying a URI scheme — `http(s)`, `mailto:`, anything else — is somebody
+   else's file: it is not in the vault, no `stat` describes it, and it becomes
+   no node. So do an in-page `[text](#fragment)` anchor and a directory link,
+   which name nothing to resolve. The `![alt](…)` and `[text](…)` spellings are
    percent-decoded before resolution and the `![[…]]` one is not, exactly as
-   §5.1 reads the two syntaxes; a reference naming an absolute or escaping
-   path is a §9 error.
+   §5.1 reads the two syntaxes; a reference naming an absolute or escaping path
+   is a §9 error.
 2. **Resolution ladder:** note-relative → vault-root-relative → a unique
    filename anywhere in the vault. The stored value is always the
    **vault-relative** resolved path, so every consumer resolves from one root.
@@ -363,8 +416,8 @@ are counted in the build report and are never exported as files (§10).
    alt texts and the titles of the notes using it, newline-separated in
    first-use order, so captions stay text-searchable.
 4. **Edges:** `HAS_IMAGE` or `HAS_ATTACHMENT` from the note, with edge
-   properties `alt` (the alt text, when there is one), `section` (enclosing
-   heading) and `ordinal`. Two references to one file from one note are **two
+   properties `alt` (the alt text of an `![…]` reference or the link text of a
+   plain one, when there is one), `section` (enclosing heading) and `ordinal`. Two references to one file from one note are **two
    edges** when they differ in `section` or `alt` and one when they do not —
    §5.4's rule, applied to attachments. `ordinal` numbers the edges a note
    emits of each kind, 0-based in body order, so a folded repeat consumes no
@@ -434,6 +487,26 @@ still holds what a human typed. A declaration no note matches is a warning too.
 `indexes:`, `text_indexes:` and `embed:` name a label or property the vault may
 not carry yet; each is a **warning**, never an error, and the rest are still
 installed.
+
+**Which property holds the id.** Every declaration above names a property, and
+the id property is not the same word for every kind of node. Declaring
+`indexes: {Topic: [concept_id]}` for a hub installs an index over a property no
+hub node carries and warns "indexed no value" — that warning is the only thing
+that says so, hence this table:
+
+| Node | Id property |
+|---|---|
+| A note, whatever its label | `concept_id` |
+| A `Concept` stub for an unresolved link (§5.6) | `concept_id` |
+| A hub node — `Tag` and every `hubs:` entry (§5.5) | `id` |
+| A `Source` node for an external URL (§5.1) | `id` |
+| A `Folder` node (§2.2) | `id`, holding the vault-relative directory path |
+| An `Image` or `Attachment`, present or missing (§6.3) | `path` |
+
+A note's id is `concept_id` because it is a **name** every link in the vault
+resolves to (§3), and it is the one property `types:` never retypes. The
+synthesized nodes are keyed by what they already are — a tag's own text, a URL,
+a directory, a file path — and say so.
 
 A complete example — a vendor help corpus of ~7k articles:
 
@@ -511,10 +584,27 @@ wrong, there is simply less of it than the author intended.
   ```
   ````
 
-  The statement must parse and must be read-only. A file that fails validation
-  is skipped, as above. A `parameters:` map is read **nested**, not flattened
-  into dotted keys, so a schema's `properties.id.type` keeps its three levels.
-  A file that omits `recipe_description` inherits the group's from a sibling.
+  The statement must parse and must be read-only, and it must not spell the
+  literal `LIMIT 200`. That number is the **recipe result payload cap**: an
+  agent host refuses a recipe result of more than 200 rows outright, naming the
+  count, so a caller always learns that an answer was incomplete. A stored
+  `LIMIT 200` would cap the result at exactly the threshold, that refusal could
+  never fire, and a truncated answer would read as a whole one.
+
+  The rule is **equality with the cap, not a ceiling**, and it is checked
+  against literals only. `LIMIT 50` and `LIMIT 201` are both accepted — 201 is
+  simply a query that will be refused on the day it really returns 201 rows —
+  and `LIMIT $rows` is never refused, whatever the caller passes. A query that
+  wants everything under the cap writes `LIMIT 199`.
+
+  A file that fails validation is skipped, as above. A `parameters:` map is
+  read **nested**, not flattened into dotted keys, so a schema's
+  `properties.id.type` keeps its three levels. A file that omits
+  `recipe_description` inherits the group's from **any** sibling that declares
+  it: the whole directory is read before any file is stored, so which file
+  carries the declaration is free, and the group needs exactly one. A group no
+  file describes is every member's own failure — each is skipped with its own
+  warning, because there is nothing to inherit.
 
 ## 9. Build report and validation
 
@@ -700,7 +790,8 @@ What a converter must emit, in order:
 
 1. **One `.md` file per source document**, UTF-8, under a directory tree that
    mirrors the hierarchy you want. Use the folder-note layout (§2.3):
-   `X.md` beside `X/`.
+   `X.md` beside `X/`. A folder note at the **vault root** has no folder above
+   it to take a label from, so give each one a `type:` (§2.3).
 2. **A stable `id:`** whenever the source has a durable identifier (a GUID, an
    accession number). Without one the filename stem is the id — fine for a
    hand-kept vault, fragile for a generated one.
@@ -715,6 +806,8 @@ What a converter must emit, in order:
 7. **Images as note-relative or vault-relative references**, and **copy the
    files into the vault** — a reference that resolved in the source tree does
    not after you reorganise the output. Convert to PNG, JPEG, GIF or WebP (§6).
+   A download link is the same thing without the `!`: `[the handbook](x.pdf)`
+   is an `Attachment` reference, and the file has to be in the vault too.
 8. **`.kglite/vault.yaml`** with `kglite_vault: 1`, your `default_label`,
    `folder_notes`, `hubs`, `heading_edges`, `types`, `indexes`, `text_indexes`
    and `embed` (§7). It replaces the graph-building script: everything

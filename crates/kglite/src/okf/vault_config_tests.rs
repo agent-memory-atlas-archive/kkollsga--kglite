@@ -626,6 +626,45 @@ fn an_index_on_a_label_or_property_the_vault_lacks_warns() {
         .any(|w| w.contains("`Note.absent`") && w.contains("indexed no value")));
 }
 
+/// A note's id property is `concept_id` and a hub node's is `id` (VAULT.md
+/// §7). The P16 usability probe declared `indexes: {Topic: [concept_id]}` for
+/// a hub and got "indexed no value" — the index installs, over a property
+/// nothing carries. Both halves are pinned, because the warning is the only
+/// thing that tells an author they named the wrong one.
+#[test]
+fn a_hub_is_indexed_on_id_and_a_note_on_concept_id() {
+    let dir = vault_with(
+        Some(
+            "kglite_vault: 1\nhubs:\n  topics: {label: Topic, edge: ON_TOPIC}\n\
+             indexes:\n  Topic: [id]\n  Note: [concept_id]\n",
+        ),
+        &[("a.md", "---\ntopics: [seismic]\n---\nprose")],
+    );
+    let out = build_vault(&dir);
+    assert_eq!(out.report.indexes_declared, 2);
+    assert!(out.graph.has_index("Topic", "id"));
+    assert!(out.graph.has_index("Note", "concept_id"));
+    assert!(out.report.warnings.is_empty(), "{:?}", out.report.warnings);
+
+    // …and naming the note's id property on a hub indexes nothing.
+    let swapped = vault_with(
+        Some(
+            "kglite_vault: 1\nhubs:\n  topics: {label: Topic, edge: ON_TOPIC}\n\
+             indexes:\n  Topic: [concept_id]\n",
+        ),
+        &[("a.md", "---\ntopics: [seismic]\n---\nprose")],
+    );
+    let out = build_vault(&swapped);
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`Topic.concept_id`") && w.contains("indexed no value")),
+        "{:?}",
+        out.report.warnings
+    );
+}
+
 #[test]
 fn a_malformed_index_entry_is_a_config_error() {
     assert!(parse("kglite_vault: 1\nindexes: {Note: title}\n")

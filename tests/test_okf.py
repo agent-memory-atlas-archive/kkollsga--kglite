@@ -284,8 +284,10 @@ class TestVaultGoldenBundle:
                 # heading line; seismic.md re-reaches faults.png from another
                 # folder by its bare filename
                 "HAS_IMAGE": 4,
-                # index.md → handbook.pdf, links.md → the absent appendix
-                "HAS_ATTACHMENT": 2,
+                # index.md → handbook.pdf, links.md → the absent appendix,
+                # and links.md → handbook.pdf again through a plain
+                # `[text](…)` link, which §6.1 reads as a reference too
+                "HAS_ATTACHMENT": 3,
             }
         )
 

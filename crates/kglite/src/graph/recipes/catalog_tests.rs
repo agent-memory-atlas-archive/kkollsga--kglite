@@ -160,6 +160,14 @@ fn payload_cap_limit_is_rejected_but_other_semantic_limits_are_valid() {
     let error = RecipeCatalog::from_manifest_value(Some(&cap)).unwrap_err();
     assert!(format!("{error:#}").contains("reserved for the recipe result payload cap"));
 
-    let semantic = catalog(query(no_parameters, "RETURN 1 LIMIT 20"));
+    let semantic = catalog(query(no_parameters.clone(), "RETURN 1 LIMIT 20"));
     RecipeCatalog::from_manifest_value(Some(&semantic)).unwrap();
+
+    // The rule is equality with the cap, not a ceiling: a query asking for
+    // more than the cap is accepted and the server reports the overflow,
+    // which is the half VAULT.md §8 now spells out because the P16 probe
+    // read the refusal of 200 as "no LIMIT may exceed 200" and rewrote its
+    // queries.
+    let above = catalog(query(no_parameters, "RETURN 1 LIMIT 201"));
+    RecipeCatalog::from_manifest_value(Some(&above)).unwrap();
 }
