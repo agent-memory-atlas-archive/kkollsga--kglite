@@ -157,6 +157,35 @@ skills is the Python API's (`set_skill`, `import_skills`), as is writing recipe
 queries (`set_recipe`, `import_recipes`) — there is no `kglite recipe`
 subcommand, because a CLI user writes Cypher.
 
+## Vault Directories
+
+`kglite okf` reads a **vault** — a directory of frontmatter-markdown notes in
+the format `VAULT.md` specifies — without Python. `check` reports what a build
+would find and sets the exit code; `build` keeps the result as a `.kgl`:
+
+```bash
+kglite okf check vault/                       # counts, then errors, then warnings
+kglite okf check vault/ --strict              # warnings fail too
+kglite okf check vault/ --json                # the same report, machine-readable
+kglite okf build vault/ -o vault.kgl          # build and save
+```
+
+`check` runs the same read `build` runs and throws the graph away, so it
+reports what a build does rather than a second opinion about it. It exits **0**
+when the report carries no error and **non-zero** otherwise; `--strict` counts
+warnings as errors too, which is what a converter's own test suite wants. The
+classification is `VAULT.md` §9: an id collision or a reference climbing out of
+the vault is an error, a dangling link or a missing attachment is a warning.
+`--json` prints `{ok, strict, counts, errors, warnings}` with the same keys the
+Python `okf.validate()` report carries.
+
+`build` writes the graph to `-o` and prints the same report on **stderr**,
+leaving stdout for the path it wrote. `--dialect` takes `obsidian` (the
+default), `okf` or `loose`; an unrecognised spelling is refused rather than
+quietly read as something else. Everything else about a vault — declaring
+indexes, hubs and embed targets in `.kglite/vault.yaml`, carrying skills and
+recipes in `.kglite/` — happens in the vault itself, not in flags.
+
 ## Agent Sessions
 
 For byte-bounded output with executable retrieval commands, use explicit

@@ -123,6 +123,16 @@ before upgrading.
   parse raises from `build` and is the report's single error here, so a broken
   vault and a faulty one read the same way.
 
+- `kglite okf check <dir>` and `kglite okf build <dir> -o <file.kgl>` — the
+  vault format from the CLI, with no Python. `check` runs the same read the
+  build runs and prints the `VAULT.md` §9 report (counts, then errors, then
+  warnings), exiting non-zero on any error; `--strict` counts warnings too and
+  `--json` prints `{ok, strict, counts, errors, warnings}` with the same keys
+  the Python report carries. `build` writes the graph and puts its report on
+  stderr, leaving stdout for the path written. `--dialect` takes `obsidian`
+  (default), `okf` or `loose`, and refuses anything else rather than quietly
+  reading the directory as something it is not.
+
 - `import_recipes()` now reads a `.md` recipe file or a directory of them
   alongside a `.json` catalogue. One query per file: frontmatter `recipe`,
   `name`, `description`, optional `recipe_description` (inherited from the

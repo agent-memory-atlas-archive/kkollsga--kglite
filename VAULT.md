@@ -12,6 +12,47 @@ Everything below is normative for the `"obsidian"` dialect. The `"okf"` and
 `"loose"` dialects are a different contract and are unchanged by this document;
 where they differ, this spec says so.
 
+## Quick reference for authors
+
+A minimal valid note, `Geology/Faults.md`:
+
+```markdown
+---
+title: Fault interpretation
+depends_on: "[[Horizons]]"
+---
+Picked on the 2024 survey. See [[Horizons]] for the surfaces.
+
+![Fault map](img/faults.png)
+```
+
+A minimal `.kglite/vault.yaml` (optional — a vault without one is still valid):
+
+```yaml
+kglite_vault: 1
+default_label: Note
+```
+
+Five rules decide what a hand-written note becomes:
+
+1. **The folder is the label.** `Geology/Faults.md` is a `:Geology` node unless
+   its frontmatter says `type:` (§2.1).
+2. **The filename stem is the id, and the link target.** `Faults.md` is reached
+   as `[[Faults]]` from anywhere in the vault; a `id:` in frontmatter overrides
+   it (§3).
+3. **A wikilink-valued key is an edge, not a property.**
+   `depends_on: "[[Horizons]]"` makes a `DEPENDS_ON` edge and stores nothing
+   (§4.3).
+4. **Images are note-relative and live in the vault.** `![alt](img/x.png)`
+   becomes an `Image` node — copy the file in; a path out of the vault is an
+   error (§6).
+5. **The body is prose.** It is stored whole and searched; nothing in it is
+   rewritten, split or reformatted (§4.2).
+
+Then run `kglite okf check <dir>`. **Errors** mean the vault does not meet this
+spec; **warnings** — a dangling link, a missing image — are normal in a vault
+being written. `--strict` fails on warnings too (§9).
+
 ## 1. Scope and versioning
 
 1. A **vault** is a directory tree of UTF-8 markdown files. The files are

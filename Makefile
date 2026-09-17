@@ -45,7 +45,7 @@ check-free-space:
 		echo "free space: WARNING — $${free_gb} GB on the build volume (< $(FREE_WARN_GB) GB). Run 'make prune-target' soon."; \
 	fi
 
-.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline docs-facts check-docs-facts neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest
+.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface docs-facts check-docs-facts neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest
 
 ## Build and install the package into the local .venv
 dev: | check-free-space
@@ -170,6 +170,14 @@ semver-check:
 refresh-release-constants:
 	$(ACTIVATE) && maturin develop --release --quiet
 	$(ACTIVATE) && python scripts/refresh_release_constants.py
+
+## Refresh the byte-exact `kglite --help` golden from the built binary.
+## Needs a current `cargo build -p kglite-cli` first: the capture runs the
+## binary, and the same function `tests/test_cli_interface_contract.py`
+## compares with, so a refresh cannot record something the test does not read.
+refresh-cli-interface: | check-free-space
+	cargo build -p kglite-cli
+	$(ACTIVATE) && python scripts/interface_contracts.py --write-cli-interface
 
 ## Refresh every feature-profiled Rust public-API baseline. Toolchain, tool
 ## version, feature classifications, and output paths are single-sourced in

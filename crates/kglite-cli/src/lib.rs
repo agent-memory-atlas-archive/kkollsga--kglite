@@ -12,6 +12,7 @@ mod exec;
 mod format;
 mod helper;
 mod migrate;
+mod okf;
 mod repl;
 
 use std::collections::HashMap;
@@ -331,6 +332,9 @@ enum Command {
     /// Retrieve or purge retained agent-response evidence.
     #[command(subcommand)]
     Response(ResponseCommand),
+    /// Check or build a vault directory (the `VAULT.md` markdown format).
+    #[command(subcommand)]
+    Okf(okf::OkfCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -577,6 +581,7 @@ fn dispatch(command: &Command) -> Result<()> {
             None => migrate::print_version(graph),
         },
         Command::Response(command) => run_response(command),
+        Command::Okf(command) => okf::run(command),
     }
 }
 
