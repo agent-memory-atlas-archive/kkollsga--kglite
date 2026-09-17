@@ -660,28 +660,56 @@ pub(crate) fn import_carried(root: &Path, graph: &mut DirGraph, report: &mut Bui
             )),
         }
     }
-    for file in markdown_files(&base.join(RECIPES_DIR)) {
-        match read_and_set_recipe(graph, &file) {
-            Ok(()) => report.recipes_imported += 1,
-            Err(reason) => report.warnings.push(format!(
-                "`.kglite/recipes/{}` was skipped: {reason}",
-                file_name(&file)
-            )),
+    import_carried_recipes(&base.join(RECIPES_DIR), graph, report);
+}
+
+/// `.kglite/recipes/*.md`, with §8's group-description inheritance resolved
+/// across the **whole directory** before any file is stored.
+///
+/// A group's description is written once, by whichever sibling says it. Doing
+/// that per file as it was read made it depend on filename order: the P16
+/// usability probe wrote it in one of six siblings and the five sorting ahead
+/// of it were skipped for "expected a non-empty group description". A file
+/// that fails for any other reason is still skipped alone, with its own
+/// warning, and its siblings load.
+fn import_carried_recipes(dir: &Path, graph: &mut DirGraph, report: &mut BuildReport) {
+    let mut parsed: Vec<(PathBuf, crate::graph::recipes::RecipeRecord)> = Vec::new();
+    for file in markdown_files(dir) {
+        match std::fs::read_to_string(&file)
+            .map_err(|e| e.to_string())
+            .and_then(|text| {
+                crate::graph::recipes::parse_markdown(&text).map_err(|e| e.to_string())
+            }) {
+            Ok(record) => parsed.push((file, record)),
+            Err(reason) => report.warnings.push(skipped_recipe(&file, &reason)),
         }
     }
+    let mut records: Vec<_> = parsed.iter().map(|(_, record)| record.clone()).collect();
+    crate::graph::recipes::inherit_group_descriptions(&mut records, graph);
+    // A group nothing described leaves every member without one, and each is
+    // refused by `set`'s own validation — so the warning still names the file
+    // the author has to edit, which is §8's contract for carried content.
+    for ((file, _), record) in parsed.iter().zip(records) {
+        match crate::graph::recipes::set(graph, &record) {
+            Ok(_) => report.recipes_imported += 1,
+            Err(error) => report
+                .warnings
+                .push(skipped_recipe(file, &error.to_string())),
+        }
+    }
+}
+
+fn skipped_recipe(file: &Path, reason: &str) -> String {
+    format!(
+        "`.kglite/recipes/{}` was skipped: {reason}",
+        file_name(file)
+    )
 }
 
 fn read_and_set_skill(graph: &mut DirGraph, file: &Path) -> Result<(), String> {
     let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let record = crate::graph::skills::parse_markdown(&text).map_err(|e| e.to_string())?;
     crate::graph::skills::set(graph, &record)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
-fn read_and_set_recipe(graph: &mut DirGraph, file: &Path) -> Result<(), String> {
-    let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
-    crate::graph::recipes::set_from_markdown(graph, &text)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

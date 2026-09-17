@@ -487,6 +487,72 @@ fn import_and_export_round_trip_through_json_files() {
 /// catalogue is refused here rather than read approximately. (The `.md`
 /// dialect escapes that: its schema goes through the non-flattening
 /// `frontmatter::parse_yaml`.)
+/// The markdown file VAULT.md §8 documents, with `recipe_description`
+/// optional.
+#[cfg(feature = "okf")]
+fn markdown_file(recipe: &str, name: &str, group_description: Option<&str>) -> String {
+    let group = group_description
+        .map(|text| format!("recipe_description: {text}\n"))
+        .unwrap_or_default();
+    format!(
+        "---\nrecipe: {recipe}\nname: {name}\ndescription: what {name} answers\n{group}---\n\n\
+         ```cypher\nMATCH (n) RETURN n.name AS name\n```\n"
+    )
+}
+
+/// VAULT.md §8's inheritance, and it is **order-independent**: the whole
+/// directory is read before any record is filled, so a group described in its
+/// alphabetically last file works exactly like one described in its first.
+/// Resolving per file as it was read is what skipped five of the P16 probe's
+/// six siblings.
+#[cfg(feature = "okf")]
+#[test]
+fn a_directory_import_inherits_the_group_description_from_any_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("a_borrows.md"),
+        markdown_file("help", "children_of", None),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("z_declares.md"),
+        markdown_file("help", "parents_of", Some("Navigating the help hierarchy.")),
+    )
+    .unwrap();
+
+    let mut g = graph();
+    let written = import_path(&mut g, dir.path()).expect("import");
+    assert_eq!(written.len(), 2);
+    assert_eq!(
+        get(&g, "help", "children_of").unwrap().recipe_description,
+        "Navigating the help hierarchy.",
+        "inherited from the sibling that declares it, whatever the read order"
+    );
+}
+
+/// A group no file describes cannot be filled from anywhere, so the import is
+/// refused **once, naming the group** rather than once per member file: the
+/// author has one thing to write, not five.
+#[cfg(feature = "okf")]
+#[test]
+fn a_directory_import_names_the_group_no_file_describes() {
+    let dir = tempfile::tempdir().unwrap();
+    for (file, name) in [("a.md", "children_of"), ("b.md", "parents_of")] {
+        std::fs::write(dir.path().join(file), markdown_file("help", name, None)).unwrap();
+    }
+    let error = import_path(&mut graph(), dir.path()).expect_err("must refuse");
+    let message = error.to_string();
+    assert!(
+        message.contains("`help`") && message.contains("recipe_description"),
+        "{message}"
+    );
+    assert_eq!(
+        message.matches("`help`").count(),
+        1,
+        "one error for the group, not one per file: {message}"
+    );
+}
+
 #[test]
 fn a_yaml_path_is_refused_by_name() {
     let dir = tempfile::tempdir().unwrap();

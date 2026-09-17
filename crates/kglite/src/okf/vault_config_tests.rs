@@ -783,6 +783,53 @@ fn skills_and_recipes_under_kglite_reach_the_graph() {
     assert!(out.graph.has_node_type("KgliteRecipe"));
 }
 
+/// VAULT.md §8: "A file that omits `recipe_description` inherits the group's
+/// from a sibling." Resolving that per file as it was read made it depend on
+/// filename order — the P16 usability probe wrote the description in one of
+/// six siblings and the five sorting before it were skipped for "expected a
+/// non-empty group description". The declaring file here sorts **last**.
+#[test]
+fn a_recipe_inherits_its_group_description_from_any_sibling() {
+    let borrower = RECIPE
+        .replace("name: by_title", "name: by_id")
+        .replace("recipe_description: Reading the vault.\n", "");
+    let dir = carrying(
+        &[],
+        &[
+            ("a_borrows.md", borrower.as_str()),
+            ("z_declares.md", RECIPE),
+        ],
+    );
+    let out = build_vault(&dir);
+    assert!(out.report.warnings.is_empty(), "{:?}", out.report.warnings);
+    assert_eq!(out.report.recipes_imported, 2);
+    assert_eq!(
+        crate::graph::recipes::get(&out.graph, "vault", "by_id")
+            .unwrap()
+            .recipe_description,
+        "Reading the vault.",
+        "inherited from the sibling that declares it, whatever the read order"
+    );
+}
+
+/// The other half: a group **nothing** describes is still every member's own
+/// failure, warned per file and skipped, because §8's posture for carried
+/// content is skip-with-warning rather than a failed build.
+#[test]
+fn a_recipe_group_no_sibling_describes_is_skipped_with_a_warning() {
+    let bare = RECIPE.replace("recipe_description: Reading the vault.\n", "");
+    let dir = carrying(&[], &[("only.md", bare.as_str())]);
+    let out = build_vault(&dir);
+    assert_eq!(out.report.recipes_imported, 0);
+    assert_eq!(out.report.warnings.len(), 1, "{:?}", out.report.warnings);
+    assert!(
+        out.report.warnings[0].contains("only.md")
+            && out.report.warnings[0].contains("group description"),
+        "{}",
+        out.report.warnings[0]
+    );
+}
+
 #[test]
 fn a_file_that_fails_validation_is_skipped_and_its_siblings_load() {
     let dir = carrying(

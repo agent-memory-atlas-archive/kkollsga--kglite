@@ -501,23 +501,79 @@ fn empty_schema() -> Json {
     Json::Object(schema)
 }
 
+/// Fill each record's omitted `recipe_description` from its group (VAULT.md
+/// §8), and return the groups nothing described — in first-seen order, once
+/// each.
+///
+/// **The whole batch is read before any record is filled**, so the
+/// inheritance does not depend on the order the files arrived in: a group
+/// whose description is written in its alphabetically last file resolves
+/// exactly like one that writes it in the first. Resolving per record as it
+/// was read is what skipped five of the P16 probe's six sibling files for
+/// "expected a non-empty group description" — the sixth declared it and
+/// sorted last.
+///
+/// A group already stored in `graph` is the fallback, which is what lets a
+/// second import add one query to a group the graph already carries.
+///
+/// A record left without a description is **not** failed here: the callers
+/// differ on what that costs — a directory import refuses the whole batch,
+/// and a vault build skips the file with a warning (§8) — so each applies its
+/// own posture to the groups this returns.
+#[cfg(feature = "okf")]
+pub(crate) fn inherit_group_descriptions(
+    records: &mut [RecipeRecord],
+    graph: &DirGraph,
+) -> Vec<String> {
+    let mut declared: HashMap<String, String> = HashMap::new();
+    for record in records.iter() {
+        if !record.recipe_description.trim().is_empty() {
+            declared
+                .entry(record.recipe.clone())
+                .or_insert_with(|| record.recipe_description.clone());
+        }
+    }
+    if records
+        .iter()
+        .any(|record| record.recipe_description.trim().is_empty())
+    {
+        for stored in list(graph) {
+            if !stored.recipe_description.trim().is_empty() {
+                declared
+                    .entry(stored.recipe)
+                    .or_insert(stored.recipe_description);
+            }
+        }
+    }
+
+    let mut undescribed: Vec<String> = Vec::new();
+    for record in records.iter_mut() {
+        if !record.recipe_description.trim().is_empty() {
+            continue;
+        }
+        match declared.get(&record.recipe) {
+            Some(description) => record.recipe_description = description.clone(),
+            None if !undescribed.contains(&record.recipe) => {
+                undescribed.push(record.recipe.clone())
+            }
+            None => {}
+        }
+    }
+    undescribed
+}
+
 /// [`parse_markdown`] then [`set`], inheriting an omitted group description
 /// from a query already stored under the same `recipe`.
 ///
 /// The inheritance is the wheel's `set_recipe` rule, in core because a vault's
-/// `.kglite/recipes/` is a directory of sibling files and only the first one
-/// alphabetically has to spell the group out.
+/// `.kglite/recipes/` is a directory of sibling files and only one of them has
+/// to spell the group out. One file is its own batch, so the graph is the only
+/// place [`inherit_group_descriptions`] can read it from here.
 #[cfg(feature = "okf")]
 pub fn set_from_markdown(graph: &mut DirGraph, text: &str) -> Result<RecipeRecord, KgError> {
-    let mut record = parse_markdown(text)?;
-    if record.recipe_description.trim().is_empty() {
-        if let Some(stored) = list(graph)
-            .into_iter()
-            .find(|stored| stored.recipe == record.recipe)
-        {
-            record.recipe_description = stored.recipe_description;
-        }
-    }
+    let mut records = [parse_markdown(text)?];
+    inherit_group_descriptions(&mut records, graph);
+    let [record] = records;
     set(graph, &record)?;
     Ok(record)
 }
@@ -625,8 +681,9 @@ fn import_markdown_dir(
             .filter_map(|entry| entry.ok().map(|e| e.path()))
             .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "md"))
             .collect();
-        // Sorted, so the group-description inheritance below — and therefore
-        // what is stored — does not depend on directory order.
+        // Sorted, so the order the records are written in — and therefore
+        // which file a duplicate `(recipe, name)` ends up as — does not
+        // depend on directory order.
         found.sort();
         found
     } else {
@@ -634,34 +691,30 @@ fn import_markdown_dir(
     };
 
     // Parsed and validated in full before anything is written. The group
-    // descriptions a later file inherits come from the batch itself, so a
+    // descriptions the files inherit come from the batch itself, so a
     // directory installs the same way whether or not the graph already holds
     // the group.
     let mut records: Vec<RecipeRecord> = Vec::with_capacity(files.len());
     for file in &files {
         let text = std::fs::read_to_string(file).map_err(KgError::FileIo)?;
-        let mut record = parse_markdown(&text).map_err(|err| KgError::FileFormat {
+        records.push(parse_markdown(&text).map_err(|err| KgError::FileFormat {
+            path: file.clone(),
+            message: err.to_string(),
+        })?);
+    }
+    // One error per undescribed *group*, not per member file: the author has
+    // one `recipe_description` to write however many queries the group holds.
+    if let Some(group) = inherit_group_descriptions(&mut records, graph).first() {
+        return Err(KgError::Argument(format!(
+            "no file in recipe group `{group}` declares a `recipe_description`; \
+             one of them must carry it and the rest inherit it (VAULT.md §8)"
+        )));
+    }
+    for (file, record) in files.iter().zip(&records) {
+        validate(record).map_err(|err| KgError::FileFormat {
             path: file.clone(),
             message: err.to_string(),
         })?;
-        if record.recipe_description.trim().is_empty() {
-            let inherited = records
-                .iter()
-                .find(|earlier| earlier.recipe == record.recipe)
-                .map(|earlier| earlier.recipe_description.clone())
-                .or_else(|| {
-                    list(graph)
-                        .into_iter()
-                        .find(|stored| stored.recipe == record.recipe)
-                        .map(|stored| stored.recipe_description)
-                });
-            record.recipe_description = inherited.unwrap_or_default();
-        }
-        validate(&record).map_err(|err| KgError::FileFormat {
-            path: file.clone(),
-            message: err.to_string(),
-        })?;
-        records.push(record);
     }
 
     let mut written = Vec::with_capacity(records.len());

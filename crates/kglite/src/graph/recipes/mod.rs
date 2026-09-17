@@ -27,6 +27,8 @@ use serde_json::{Map, Value};
 use crate::graph::languages::cypher;
 
 #[cfg(feature = "okf")]
+pub(crate) use records::inherit_group_descriptions;
+#[cfg(feature = "okf")]
 pub use records::render_markdown;
 pub use records::{
     catalogue_from_graph, delete, export_path, export_value, get, import_path, import_value, list,
