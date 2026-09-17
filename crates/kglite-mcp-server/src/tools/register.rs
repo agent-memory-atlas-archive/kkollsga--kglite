@@ -289,6 +289,57 @@ pub fn register_graph_mode_tools(
     );
 }
 
+/// Register the tools that only make sense when this binary builds the graph
+/// from a directory it watches (`--vault`, and `--watch` with an injected
+/// producer): currently `rebuild_graph`.
+///
+/// `reload_graph`'s counterpart, and deliberately not the same route: a
+/// producer-backed graph has no served file to re-read, and the two failure
+/// modes an agent hits are different — a stale `.kgl` on disk versus a watcher
+/// that never saw an edit (a network mount, an editor that writes through a
+/// temp file, a change made before the server booted).
+pub fn register_vault_mode_tools(
+    server: &mut McpServer,
+    state: GraphState,
+    skills: crate::skills::SkillRefresher,
+    root: std::path::PathBuf,
+    last_report: crate::vault::VaultReportSlot,
+) {
+    server.register_typed_tool_fallible::<RebuildGraphArgs, _>(
+        "rebuild_graph",
+        "Rebuild the served graph from the vault directory now, and report what the build \
+         saw — use it after editing notes if queries still return the old content (the \
+         watcher normally rebuilds on the next tool call by itself), or after editing \
+         `.kglite/vault.yaml`, `.kglite/skills/` or `.kglite/recipes/`. Takes no arguments: \
+         the directory is the one this server was started on. The reply is the build report \
+         — notes scanned, nodes by label, edges by type, and any errors or warnings such as \
+         dangling links or missing images. If the build fails the previous graph stays \
+         active and the error is returned.",
+        move |_args| {
+            state
+                .build_workspace_graph(&root, None)
+                .map_err(|e| format!("rebuild_graph error: {e}"))?;
+            // The rebuilt graph carries its own `KgliteSkill` records — the
+            // ones resolved at boot describe the vault as it was. Same reason
+            // `reload_graph` refreshes, and the same placement: after the
+            // build call has returned every lock it took.
+            skills.refresh();
+            let report = last_report
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|report| report.render());
+            Ok(match report {
+                Some(text) => text,
+                // Unreachable in practice (the build just succeeded, and a
+                // success always fills the slot), and still not an `expect`:
+                // an agent that asked for a rebuild got one.
+                None => "Rebuilt the vault graph.".to_string(),
+            })
+        },
+    );
+}
+
 /// Settle what an incoming `reload_graph` does about unsaved changes, before
 /// the re-read that would silently drop them.
 ///

@@ -99,6 +99,13 @@ fn compose_registry(
             name: "explore",
             body: include_str!("../skills/explore.md"),
         })
+        // Gated on `tool_registered: rebuild_graph`, which is registered in
+        // vault mode and nowhere else — the format rules are noise on a server
+        // that does not build its graph from markdown the agent can edit.
+        .add_bundled(BundledSkill {
+            name: "vault_authoring",
+            body: include_str!("../skills/vault_authoring.md"),
+        })
         // Cross-tool skills: named after no tool, they attach via
         // `references_tools` and lead with the `description` routing —
         // both rely on the serve_prompts injection added in mcp-methods
@@ -305,7 +312,18 @@ pub(crate) fn boot_skills(
     // bug in the binary, and a boot that refuses naming it is a better report
     // than a server serving a silently incomplete methodology.
     let producer = ProducerSkills::build(&producer_records)?;
-    let enabled = manifest.is_some() || !producer.is_empty();
+    // A manifest, an embedder's own records — or a vault. The first two are
+    // the long-standing rule ("an operator who never wrote `skills:` gets no
+    // skills"), and a vault is the case that rule was never written for: the
+    // common `--vault DIR` invocation carries no manifest at all, and the
+    // skills it would serve are not the operator's files but content *inside
+    // the served directory* — the same standing as an embedder's producer
+    // layer, which is why it switches the plane on the same way.
+    //
+    // Deliberately only `Vault`. A manifest-less `--graph` server whose `.kgl`
+    // carries `KgliteSkill` records is the same shape and stays off, because
+    // turning it on would change what existing deployments serve.
+    let enabled = manifest.is_some() || !producer.is_empty() || matches!(mode, Mode::Vault { .. });
     if !enabled {
         return Ok(SkillLayerStats::default());
     }
@@ -542,14 +560,17 @@ fn is_graph_provenance(provenance: &SkillProvenance) -> bool {
 
 /// Read the active graph's `KgliteSkill` records, bodies included.
 ///
-/// **Graph and watch modes only.** Those are the two modes whose graph is
+/// **Graph, watch and vault modes only.** Those are the modes whose graph is
 /// already open when skills are installed (`bind_mode` opens it at boot); the
 /// workspace modes build their graph on first activation, long after the
 /// prompt plane is frozen, and the source-root and bare modes have no graph at
 /// all. Returning nothing there is the honest answer rather than a layer that
 /// works in a third of the deployments.
-fn read_graph_skills(mode: &Mode, graph_state: &GraphState) -> Vec<SkillRecord> {
-    if !matches!(mode, Mode::Graph { .. } | Mode::Watch { .. }) {
+pub(crate) fn read_graph_skills(mode: &Mode, graph_state: &GraphState) -> Vec<SkillRecord> {
+    if !matches!(
+        mode,
+        Mode::Graph { .. } | Mode::Watch { .. } | Mode::Vault { .. }
+    ) {
         return Vec::new();
     }
     graph_state
@@ -651,25 +672,28 @@ fn render_skills_index(active: &[ActiveSkill]) -> Option<String> {
 /// re-runs the pass from `&self`.
 ///
 /// Armed **after** `install_skills` — the composition it re-runs needs the
-/// closed tool surface — in the four modes whose graph can change after boot:
-/// graph and watch, whose graph layer is read at boot and is replaced by a
-/// swap, and the two workspace modes, whose graph does not exist at boot at
-/// all. In source-root and bare modes there is no graph either way, so a
+/// closed tool surface — in the five modes whose graph can change after boot:
+/// graph, watch and vault, whose graph layer is read at boot and is replaced
+/// by a swap, and the two workspace modes, whose graph does not exist at boot
+/// at all. In source-root and bare modes there is no graph either way, so a
 /// rebuild would recompose a byte-identical registry and spend a
 /// `tools/list_changed` on nothing. The recipe catalogue is deliberately
 /// *not* rebuilt: its routes are fixed tool names settled before the
 /// allowlist, and the catalogue is documented immutable after boot.
 ///
-/// **Two swap paths do not refresh.** The per-call freshness re-read
+/// **One swap path does not refresh.** The per-call freshness re-read
 /// (`GraphState::ensure_graph_fresh`, which re-opens the served file when the
 /// bytes on disk change under a `--graph` server) runs from inside the
 /// graph's own write path, where re-reading the skill records would take the
-/// read lock the swap still holds. The watcher's lazy workspace rebuild
-/// (`GraphState::ensure_workspace_graph_fresh`) is the same shape from the
-/// same caller. A server whose graph is replaced by either therefore keeps
-/// the skills it booted with until something calls `reload_graph` or
-/// re-activates a root — which is harmless for both, because a rebuild of the
-/// *same* root emits the same node types the last resolution already saw.
+/// read lock the swap still holds; a `--graph` server whose file is rewritten
+/// under it therefore keeps the skills it booted with until something calls
+/// `reload_graph`.
+///
+/// The watcher's lazy workspace rebuild used to be in the same list, and was
+/// a real defect once a vault could carry `.kglite/skills/*.md`: editing a
+/// skill rebuilt the graph and served the old skill set until restart. It now
+/// refreshes through `GraphState::after_rebuild`, which
+/// `ensure_workspace_graph_fresh` fires outside every lock the rebuild took.
 #[derive(Clone, Default)]
 pub(crate) struct SkillRefresher {
     inner: Arc<RwLock<Option<Box<RefreshInner>>>>,
@@ -724,6 +748,7 @@ impl SkillRefresher {
             mode,
             Mode::Graph { .. }
                 | Mode::Watch { .. }
+                | Mode::Vault { .. }
                 | Mode::LocalWorkspace { .. }
                 | Mode::Workspace { .. }
         ) {
@@ -1770,7 +1795,7 @@ mod skill_layer_tests {
     }
 
     #[test]
-    fn the_graph_layer_is_read_in_graph_and_watch_modes_only() {
+    fn the_graph_layer_is_read_in_graph_watch_and_vault_modes_only() {
         let temp = tempfile::tempdir().expect("tempdir");
         let state = state_with_skill(
             temp.path(),
@@ -1782,6 +1807,12 @@ mod skill_layer_tests {
                 path: temp.path().join("skills.kgl"),
             },
             Mode::Watch {
+                dir: temp.path().to_path_buf(),
+            },
+            // Vault mode carries `.kglite/skills/*.md` into the graph at
+            // build time; missing it here is one of the three silent
+            // failures the alias exists to prevent.
+            Mode::Vault {
                 dir: temp.path().to_path_buf(),
             },
         ] {

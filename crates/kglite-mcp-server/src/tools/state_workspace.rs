@@ -86,7 +86,17 @@ impl GraphState {
         if self.workspace_mode.is_none() {
             return;
         }
+        if self.rebuild_workspace_graph_once() {
+            // Outside the rebuild gate and every lock it took, on purpose: the
+            // callback re-resolves the skill registry against the graph that
+            // was just installed, which reads it. Only on an actual install —
+            // a no-op freshness check has changed nothing to re-resolve.
+            self.notify_after_rebuild();
+        }
+    }
 
+    /// The rebuild itself. Returns whether a new graph was installed.
+    fn rebuild_workspace_graph_once(&self) -> bool {
         // `pending_rebuild` is empty while an owner prepares off-lock. Keep
         // later freshness callers behind that owner until it has installed
         // the new graph or published a typed failure snapshot.
@@ -100,7 +110,7 @@ impl GraphState {
             }
         };
         let Some(pending_rebuild) = pending_rebuild else {
-            return;
+            return false;
         };
         let target = pending_rebuild.target.clone();
         tracing::info!(
@@ -116,6 +126,7 @@ impl GraphState {
             Ok(prepared) => match self.commit_workspace_rebuild(prepared, &pending_rebuild) {
                 WorkspaceRebuildCommit::Installed => {
                     *write_lock(&self.rebuild_status) = RebuildStatus::default();
+                    return true;
                 }
                 WorkspaceRebuildCommit::RequeuedCompatible => {
                     tracing::debug!(
@@ -160,6 +171,7 @@ impl GraphState {
                 }
             },
         }
+        false
     }
 
     /// Snapshot the failed rebuild for the currently installed workspace

@@ -759,6 +759,9 @@ struct BootedGraph {
     tools_allow: Option<Vec<String>>,
     mutations_enabled: bool,
     write_scope: Option<Vec<String>>,
+    /// `Some` only in `--vault` mode: where the first-party producer leaves
+    /// the report `rebuild_graph` renders.
+    vault_report: Option<crate::vault::VaultReportSlot>,
 }
 
 fn boot_graph(
@@ -766,6 +769,7 @@ fn boot_graph(
     workspace_graph: Option<WorkspaceGraphHooks>,
     producer_recipes: Option<recipe_queries::RecipeCatalog>,
     read_only_pin: bool,
+    py_embedder_factory: Option<&PyEmbedderFactory>,
 ) -> Result<BootedGraph> {
     init_tracing();
     let mode = pick_mode(cli);
@@ -804,22 +808,43 @@ fn boot_graph(
     // guidance by default, without every deployment copy-pasting it.
     let options = apply_discovery_steer(&mode, options);
 
+    // `--vault`'s producer is this binary's own (decision D5): built here and
+    // installed on the state directly, not injected through
+    // `ServerExtensions`, because the closure has to hold state the public
+    // request type does not carry — the previous graph, for the embedding
+    // carry, and the embedder slot. Refuse the collision rather than letting
+    // whichever write lands last decide what the server is.
     let graph_state = GraphState::new(workspace_graph_mode(&mode))
         .with_value_codecs(boot_value_codecs(manifest.as_ref())?)
         .with_parallel(parallel)
-        .with_workspace_graph(workspace_graph.map(Arc::new))
         // Declared here rather than from `builtins` (built below, after the
-        // csv_http boot it needs) because `bind_mode` performs the boot open on
-        // the very next line — a policy set later would arrive after the lease
+        // csv_http boot it needs) because `bind_mode` performs the boot open
+        // a few lines down — a policy set later would arrive after the lease
         // decision it governs. Both read the same `owns_graph_file`.
         .with_writer_lease_policy(writer_lease_policy(manifest.as_ref(), mutations_enabled))
         .with_lease_label(Some(boot_lease_label(cli)));
+
+    // The state's own embedder slot is what the vault producer reads, at build
+    // time — so a rebuild uses whatever the manifest bound, and the boot build
+    // sees it too (bound just below, before `bind_mode`).
+    let (workspace_graph, vault_report) =
+        crate::vault::vault_producer(&mode, workspace_graph, &graph_state.embedder)
+            .map_err(|e| anyhow::anyhow!(e))?;
+    let graph_state = graph_state.with_workspace_graph(workspace_graph.map(Arc::new));
 
     // Bound before `bind_mode`, whose boot open publishes the first graph —
     // the ontology rides the same pre-publication seam as the embedder.
     if let Some(bound) = boot_ontology(manifest.as_ref(), &manifest_base_dir(manifest.as_ref()))? {
         graph_state.bind_ontology(bound);
     }
+    // And the embedder with it, for the same reason plus one more: in vault
+    // mode `bind_mode`'s boot build is where `.kglite/vault.yaml`'s `embed:`
+    // targets are computed, and an embedder bound after it would leave the
+    // booted graph vectorless until the first rebuild. Every install path
+    // re-applies it (`apply_bound_embedder`), so binding earlier changes
+    // nothing for the other modes except that a malformed `extensions.embedder`
+    // now fails before a graph is opened rather than after.
+    bind_manifest_embedder(manifest.as_ref(), py_embedder_factory, &graph_state)?;
 
     let (options, source_root_status) =
         bind_mode(&mode, cli, manifest.as_ref(), &graph_state, options)?;
@@ -857,6 +882,7 @@ fn boot_graph(
         tools_allow,
         mutations_enabled,
         write_scope,
+        vault_report,
     })
 }
 
@@ -887,7 +913,14 @@ pub(crate) async fn run_async(
         tools_allow,
         mutations_enabled,
         write_scope,
-    } = boot_graph(&cli, workspace_graph, producer_recipes, read_only_pin)?;
+        vault_report,
+    } = boot_graph(
+        &cli,
+        workspace_graph,
+        producer_recipes,
+        read_only_pin,
+        py_embedder_factory.as_ref(),
+    )?;
 
     // Snapshot the dynamic source-roots provider before `options` moves into
     // the McpServer. `read_code_source` queries it on every call, so
@@ -941,6 +974,19 @@ pub(crate) async fn run_async(
         // `tools::register`, because the mode is not otherwise visible there.
         tools::register_graph_mode_tools(&mut server, graph_state.clone(), skill_refresher.clone());
     }
+    if let Mode::Vault { dir } = &mode {
+        // `rebuild_graph` is the producer-backed counterpart of
+        // `reload_graph`: registered where a directory, not a file, is the
+        // source of truth. Vault mode only — `--watch`'s producer is an
+        // injected one whose report this binary cannot render.
+        tools::register_vault_mode_tools(
+            &mut server,
+            graph_state.clone(),
+            skill_refresher.clone(),
+            dir.canonicalize().unwrap_or_else(|_| dir.clone()),
+            vault_report.clone().unwrap_or_default(),
+        );
+    }
     if matches!(mode, Mode::Workspace { .. } | Mode::LocalWorkspace { .. }) {
         // The workspace counterpart of `reload_graph`'s refresh: the graph a
         // predicate resolves against does not exist until a root is
@@ -959,12 +1005,6 @@ pub(crate) async fn run_async(
         server.tool_router_mut().disable_route("explore");
         server.tool_router_mut().disable_route("read_code_source");
     }
-    bind_manifest_embedder(
-        manifest.as_ref(),
-        py_embedder_factory.as_ref(),
-        &graph_state,
-    )?;
-
     // Register YAML Cypher tools, then downstream domain routes. Keeping this
     // before skill finalisation makes every route visible to predicates.
     register_extension_tools(
@@ -988,6 +1028,15 @@ pub(crate) async fn run_async(
     }
 
     let _watch_handle = spawn_mode_watcher(&mode, &graph_state)?;
+
+    // The lazy watcher rebuild's own skill refresh. Armed after
+    // `boot_skills` below would be too late for the first rebuild and too
+    // early here only in the sense that the refresher is still unarmed — which
+    // `SkillRefresher::refresh` treats as the no-op it is.
+    {
+        let refresher = skill_refresher.clone();
+        graph_state.set_after_rebuild(Arc::new(move || refresher.refresh()));
+    }
 
     let skill_stats = crate::skills::boot_skills(
         &mut server,

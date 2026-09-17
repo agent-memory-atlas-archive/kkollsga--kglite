@@ -25,6 +25,9 @@
 //!   requires injected [`WorkspaceGraphHooks`] (for example from `codingest-mcp`).
 //! - `--watch DIR` — file-watcher mode. With an injected producer, changes
 //!   rebuild and atomically swap the active graph.
+//! - `--vault DIR` — a directory of frontmatter-markdown notes (`VAULT.md`),
+//!   built by this binary's own producer and rebuilt as the files change. No
+//!   injected producer, and no `.kgl` to keep in step.
 //! - `--source-root DIR` — generic file-tree mode (no graph).
 //! - bare — framework + manifest tools only.
 
@@ -51,6 +54,7 @@ mod skills;
 mod tools;
 mod tools_allow;
 mod value_codecs;
+mod vault;
 mod watcher;
 
 #[cfg(test)]

@@ -164,6 +164,57 @@ What that costs, and where it stops:
   retirement warning and arms nothing, because the refresh it used to opt into
   is unconditional. Remove it from the manifest.
 
+## Serving a markdown vault (`--vault`)
+
+```bash
+kglite-mcp-server --vault /notes/handbook
+```
+
+`--vault DIR` serves a directory of frontmatter-markdown notes — the format
+[`VAULT.md`](../reference/vault-format.md) specifies — as a knowledge graph
+built from the files themselves. There is no `.kgl` to produce or keep in step:
+the notes are canonical, the graph is a derived view, and the server rebuilds
+it as the files change. A manifest is optional; the common invocation is the
+one above.
+
+What boot does, in order: build the graph from `DIR` (a 7 000-note vault takes
+well under a second), bind `DIR` as the source root so `read_source` / `grep` /
+`list_source` serve the notes as files too, register `rebuild_graph`, and
+install the vault's own skills and recipe queries.
+
+- **`.kglite/vault.yaml`** configures the build — profile overrides, declared
+  property types, indexes, text indexes, an ontology, and `embed:` targets. It
+  is re-read on every rebuild, so it is the one piece of state a rebuild
+  re-applies. A file that will not parse **fails the build**: the previously
+  built graph keeps serving and the error names the file. It never degrades to
+  an empty graph.
+- **`.kglite/skills/*.md` and `.kglite/recipes/*.md`** become the graph's own
+  agent guidance, re-read on every rebuild. Editing one is the whole update
+  procedure — the served skill set is re-resolved after the rebuild that picked
+  it up. A file that fails validation is skipped with a warning naming it; its
+  siblings still load.
+- **Rebuilds are lazy.** The watcher tags the graph dirty (debounced 500 ms
+  upstream) and the rebuild happens on the next tool call, so fifty saves cost
+  one rebuild. A path inside a hidden directory other than `.kglite/` is
+  ignored, which is what keeps `.obsidian/` and `.git/` churn from rebuilding
+  anything.
+- **`rebuild_graph`** forces a rebuild now and returns the build report —
+  notes scanned, nodes by label, edges by type, and the errors and warnings
+  `kglite okf check` would print. It is the vault counterpart of
+  `reload_graph`, which is not registered here: a producer-backed graph has no
+  served file to re-read.
+- **Vectors are carried, not recomputed.** With `extensions.embedder` (and
+  `trust.allow_embedder: true`) bound, each `embed:` target declared in
+  `vault.yaml` is embedded at boot and after each rebuild — but only for notes
+  whose text actually changed. A note that keeps its label and id keeps its
+  vector across a rebuild; a note moved to another folder is relabelled, so it
+  is re-embedded. Without a bound embedder the vault still serves, and a
+  declared `embed:` target logs a warning at boot rather than failing.
+- **`--vault` and an injected producer are mutually exclusive.** A binary that
+  embeds this server and injects `WorkspaceGraphHooks` is refused at boot with
+  a message naming `--watch` as the mode for its own producer — only one
+  producer can own the graph.
+
 ## Writable workbench
 
 ```bash
@@ -386,7 +437,7 @@ source_roots: [/srv/project]
 To scope it, name the narrower directory; to move it, name a different one; to
 serve no files from a wide graph directory, keep the graph in a directory of its
 own, or drop the source tools from `extensions.tools_allow` (above), which is
-the closed-by-default surface. `--source-root`/`--watch` mode has no auto-bind
+the closed-by-default surface. `--source-root`/`--watch`/`--vault` mode has no auto-bind
 question: the directory is the argument.
 
 ### Pinning the write scope

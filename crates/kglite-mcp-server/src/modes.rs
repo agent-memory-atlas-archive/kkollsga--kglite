@@ -238,10 +238,10 @@ pub(crate) fn bind_mode(
                 options = options.with_static_source_roots(roots);
             }
         }
-        Mode::SourceRoot { dir } | Mode::Watch { dir } => {
+        Mode::SourceRoot { dir } | Mode::Watch { dir } | Mode::Vault { dir } => {
             let canon = dir.canonicalize()?;
             options = options.with_static_source_roots(vec![canon.to_string_lossy().into_owned()]);
-            if matches!(mode, Mode::Watch { .. }) {
+            if matches!(mode, Mode::Watch { .. } | Mode::Vault { .. }) {
                 graph_state
                     .build_workspace_graph(&canon, None)
                     .context("initial workspace graph build failed")?;

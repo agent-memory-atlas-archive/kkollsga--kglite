@@ -64,15 +64,18 @@ impl GraphRecipeStats {
 
 /// Read the active graph's own catalogue, plus the records it refused.
 ///
-/// **Graph and watch modes only**, for the reason `read_graph_skills` gives:
-/// those are the two modes whose graph is open by the time the catalogue is
+/// **Graph, watch and vault modes only**, for the reason `read_graph_skills`
+/// gives: those are the modes whose graph is open by the time the catalogue is
 /// built. The workspace modes build theirs on first activation, long after the
 /// routes are registered, and the catalogue is immutable after boot.
 fn read_graph_catalogue(
     mode: &Mode,
     graph_state: &GraphState,
 ) -> (RecipeCatalog, Vec<RecipeWarning>) {
-    if !matches!(mode, Mode::Graph { .. } | Mode::Watch { .. }) {
+    if !matches!(
+        mode,
+        Mode::Graph { .. } | Mode::Watch { .. } | Mode::Vault { .. }
+    ) {
         return (RecipeCatalog::default(), Vec::new());
     }
     graph_state

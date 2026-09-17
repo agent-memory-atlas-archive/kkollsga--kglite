@@ -159,6 +159,27 @@ before upgrading.
 - `kglite okf export <dir.kgl> <dir> [--force] [--source-root DIR]` — the same
   writer from the CLI, printing the export report.
 
+- `kglite-mcp-server --vault DIR` — serve a markdown vault over MCP. The
+  producer is built into the binary (`okf` is now a default feature of
+  `kglite-mcp-server`, so `cargo install` ships a working `--vault`), so there
+  is no `.kgl` to build and no embedding binary to supply one: boot builds the
+  graph from the directory, binds it as the source root, and the watcher's
+  existing dirty-tag plus lazy rebuild keeps it current — fifty saves cost one
+  rebuild, on the next tool call. `.kglite/vault.yaml` is re-applied on every
+  rebuild and a broken one fails the build, leaving the previous graph serving
+  rather than emptying it; `.kglite/skills/*.md` and `.kglite/recipes/*.md` are
+  served as the graph's own agent guidance, and the skill registry is now
+  re-resolved after a rebuild, so editing a carried skill is the whole update
+  procedure. A new `rebuild_graph` tool (vault mode only — there is no served
+  file for `reload_graph` to re-read) forces a rebuild and returns the build
+  report. With `extensions.embedder` bound under `trust.allow_embedder`, each
+  `embed:` target declared in `vault.yaml` is embedded at boot and after each
+  rebuild, and unchanged notes keep the vectors they were carried, so a rebuild
+  re-embeds only what was edited. A bundled `vault_authoring` skill carries the
+  format rules to an agent editing a served vault. `--vault` with an injected
+  `WorkspaceGraphHooks` producer is refused at boot: only one producer can own
+  the graph.
+
 - `import_recipes()` now reads a `.md` recipe file or a directory of them
   alongside a `.json` catalogue. One query per file: frontmatter `recipe`,
   `name`, `description`, optional `recipe_description` (inherited from the

@@ -129,7 +129,26 @@ pub struct GraphState {
     /// it rather than a bare pid. Server-config, set once at boot via
     /// [`with_lease_label`](Self::with_lease_label).
     pub(crate) lease_label: Option<Arc<str>>,
+    /// Run after a lazy workspace rebuild has installed a new graph — and only
+    /// then, never after a no-op freshness check.
+    ///
+    /// Boot fills it with the skill refresher, which is the whole reason it
+    /// exists: a `--vault` rebuild can change the `KgliteSkill` records the
+    /// registry resolved at boot (`.kglite/skills/*.md` is a build input), and
+    /// nothing was re-resolving them. A callback slot rather than a
+    /// `SkillRefresher` field because the refresher holds a `GraphState` of its
+    /// own, and because it makes "did a rebuild install anything?" testable
+    /// without composing a registry.
+    ///
+    /// Interior mutability for the same reason as `embedder`: the tool
+    /// closures clone this state before the refresher exists.
+    pub(crate) after_rebuild: Arc<RwLock<Option<AfterRebuildHook>>>,
 }
+
+/// What [`GraphState::after_rebuild`] holds: a callback taking nothing and
+/// returning nothing, because the only thing it needs — which graph is served
+/// — it reads from the state it closed over.
+pub(crate) type AfterRebuildHook = Arc<dyn Fn() + Send + Sync>;
 
 /// The manifest-declared ontology plus its boot-time materialization flag.
 #[derive(Clone)]
@@ -182,6 +201,28 @@ impl GraphState {
     pub fn with_lease_label(mut self, label: Option<String>) -> Self {
         self.lease_label = label.map(Arc::from);
         self
+    }
+
+    /// Install the post-rebuild callback (see [`Self::after_rebuild`]).
+    ///
+    /// Interior mutability, not a builder: the callback closes over boot state
+    /// — the skill refresher — that does not exist until long after the tool
+    /// closures have cloned this state.
+    pub(crate) fn set_after_rebuild(&self, hook: AfterRebuildHook) {
+        *write_lock(&self.after_rebuild) = Some(hook);
+    }
+
+    /// Run the post-rebuild callback, if one is installed.
+    ///
+    /// Called with **no** graph, pending or rebuild-gate lock held: the
+    /// refresher it usually carries re-reads the active graph, which would
+    /// deadlock against the swap that just happened (the reasoning is spelled
+    /// out on `SkillRefresher::refresh`).
+    pub(crate) fn notify_after_rebuild(&self) {
+        let hook = read_lock(&self.after_rebuild).as_ref().map(Arc::clone);
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     /// Whether opening `path` carries write ownership of it.

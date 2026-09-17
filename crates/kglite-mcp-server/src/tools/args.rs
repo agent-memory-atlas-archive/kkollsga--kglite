@@ -131,6 +131,12 @@ pub(crate) struct ReloadGraphArgs {
     pub discard_unsaved: bool,
 }
 
+/// `rebuild_graph` takes no arguments — the root, the dialect and the
+/// `.kglite/vault.yaml` are all boot facts, and the whole point of the tool is
+/// that an agent cannot aim it somewhere else.
+#[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+pub(crate) struct RebuildGraphArgs {}
+
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum StorageArg {

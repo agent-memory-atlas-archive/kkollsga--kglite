@@ -293,7 +293,7 @@ fn an_invalid_record_is_skipped_while_its_sibling_serves() {
 /// is the honest answer rather than a layer that works in a third of the
 /// deployments.
 #[test]
-fn only_graph_and_watch_modes_contribute_a_layer() {
+fn only_graph_watch_and_vault_modes_contribute_a_layer() {
     let temp = tempfile::tempdir().expect("tempdir");
     let state = state_with(
         temp.path(),
@@ -304,6 +304,11 @@ fn only_graph_and_watch_modes_contribute_a_layer() {
     for mode in [
         graph_mode(temp.path()),
         Mode::Watch {
+            dir: temp.path().to_path_buf(),
+        },
+        // `.kglite/recipes/*.md` reaches the graph the same way the vault's
+        // skills do, and loses the same way if this arm is missed.
+        Mode::Vault {
             dir: temp.path().to_path_buf(),
         },
     ] {

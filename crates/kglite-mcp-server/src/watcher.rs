@@ -41,7 +41,7 @@ pub(crate) fn mode_change_handler(
     graph_state: &GraphState,
 ) -> Option<watch::ChangeHandler> {
     match mode {
-        Mode::Watch { .. } => {
+        Mode::Watch { .. } | Mode::Vault { .. } => {
             let gs = graph_state.clone();
             Some(Arc::new(move |paths| {
                 let Some(target) = gs.workspace_target_receipt() else {
@@ -81,7 +81,7 @@ pub(crate) fn mode_change_handler(
 /// for every mode that watches nothing.
 pub(crate) fn resolved_mode_watch_root(mode: &Mode) -> Result<Option<PathBuf>> {
     let root = match mode {
-        Mode::Watch { dir } => dir,
+        Mode::Watch { dir } | Mode::Vault { dir } => dir,
         Mode::LocalWorkspace {
             root, watch: true, ..
         } => root,

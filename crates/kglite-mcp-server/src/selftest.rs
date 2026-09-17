@@ -818,6 +818,7 @@ fn mode_label(mode: &Mode) -> &'static str {
         Mode::Workspace { .. } => "github-workspace",
         Mode::LocalWorkspace { .. } => "local-workspace",
         Mode::Watch { .. } => "watch",
+        Mode::Vault { .. } => "vault",
         Mode::Bare => "bare",
     }
 }

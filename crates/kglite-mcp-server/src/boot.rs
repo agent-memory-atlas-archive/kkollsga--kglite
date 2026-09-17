@@ -273,6 +273,7 @@ pub(crate) fn print_boot_summary(
             if *watch { " +watch" } else { "" }
         ),
         Mode::Watch { dir } => format!("watch [{}]", dir.display()),
+        Mode::Vault { dir } => format!("vault [{}]", dir.display()),
         Mode::Bare => "bare".to_string(),
     };
     let mut parts = vec![format!("mode: {label}")];

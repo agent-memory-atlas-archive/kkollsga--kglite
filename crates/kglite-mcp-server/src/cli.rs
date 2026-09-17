@@ -37,7 +37,7 @@ pub(crate) struct Cli {
     /// not exist is an error unless `--storage` is given, in which case a
     /// fresh, empty graph is created (build-and-serve via the mutation tools,
     /// then `save_graph`).
-    #[arg(long, conflicts_with_all = ["workspace", "watch", "source_root"])]
+    #[arg(long, conflicts_with_all = ["workspace", "watch", "source_root", "vault"])]
     pub(crate) graph: Option<PathBuf>,
 
     /// Storage mode (`memory`, `mapped`, or `disk`), applied whether or not
@@ -51,16 +51,25 @@ pub(crate) struct Cli {
     pub(crate) storage: Option<String>,
 
     /// Source-root mode (no graph).
-    #[arg(long = "source-root", conflicts_with_all = ["graph", "workspace", "watch"])]
+    #[arg(long = "source-root", conflicts_with_all = ["graph", "workspace", "watch", "vault"])]
     pub(crate) source_root: Option<PathBuf>,
 
     /// Workspace mode: clone GitHub repos and build workspace graphs.
-    #[arg(long, conflicts_with_all = ["graph", "source_root", "watch"])]
+    #[arg(long, conflicts_with_all = ["graph", "source_root", "watch", "vault"])]
     pub(crate) workspace: Option<PathBuf>,
 
     /// Watch mode: rebuild the workspace graph on file changes.
-    #[arg(long, conflicts_with_all = ["graph", "source_root", "workspace"])]
+    #[arg(long, conflicts_with_all = ["graph", "source_root", "workspace", "vault"])]
     pub(crate) watch: Option<PathBuf>,
+
+    /// Vault mode: serve a directory of frontmatter-markdown notes (the
+    /// format `VAULT.md` specifies) as a knowledge graph, rebuilt from the
+    /// files whenever they change. Unlike `--watch`, the producer is built
+    /// in — no embedding binary is required. `.kglite/vault.yaml` configures
+    /// the build; `.kglite/skills/` and `.kglite/recipes/` are served as the
+    /// graph's own agent guidance.
+    #[arg(long, conflicts_with_all = ["graph", "source_root", "workspace", "watch"])]
+    pub(crate) vault: Option<PathBuf>,
 
     /// Enable the write-mode "agent graph workbench" (single-graph mode):
     /// `cypher_query` accepts mutations (optionally `write_scope`-restricted)
@@ -155,6 +164,16 @@ pub(crate) enum Mode {
     Watch {
         dir: PathBuf,
     },
+    /// `--vault DIR`. Structurally identical to [`Mode::Watch`] — eager boot
+    /// build, static source root, watcher over the root, dirty-tag plus lazy
+    /// rebuild — and deliberately aliased onto its arm everywhere, because a
+    /// parallel lifecycle is exactly what would drift. What the separate
+    /// variant buys is the three things that are *not* the same: the boot
+    /// banner, the first-party okf producer boot installs for it (`--watch`
+    /// has none), and the `rebuild_graph` route.
+    Vault {
+        dir: PathBuf,
+    },
     Bare,
 }
 
@@ -167,6 +186,8 @@ pub(crate) fn pick_mode(cli: &Cli) -> Mode {
         Mode::Workspace { dir: d.clone() }
     } else if let Some(d) = &cli.watch {
         Mode::Watch { dir: d.clone() }
+    } else if let Some(d) = &cli.vault {
+        Mode::Vault { dir: d.clone() }
     } else {
         Mode::Bare
     }
@@ -179,6 +200,7 @@ pub(crate) fn fallback_name(mode: &Mode) -> &'static str {
         Mode::Workspace { .. } => "KGLite (workspace)",
         Mode::LocalWorkspace { .. } => "KGLite (local-workspace)",
         Mode::Watch { .. } => "KGLite (watch)",
+        Mode::Vault { .. } => "KGLite (vault)",
         Mode::Bare => "KGLite",
     }
 }
@@ -187,7 +209,12 @@ pub(crate) fn workspace_graph_mode(mode: &Mode) -> Option<WorkspaceGraphMode> {
     match mode {
         Mode::Workspace { .. } => Some(WorkspaceGraphMode::Workspace),
         Mode::LocalWorkspace { .. } => Some(WorkspaceGraphMode::LocalWorkspace),
-        Mode::Watch { .. } => Some(WorkspaceGraphMode::Watch),
+        // `WorkspaceGraphMode` is the *producer's* view of the request, and
+        // the vault producer is constructed knowing its own root — it has
+        // nothing to learn from a `Vault` discriminant that a `Watch` one does
+        // not already tell it. Aliasing keeps the public enum (and every
+        // downstream match on it) unchanged.
+        Mode::Watch { .. } | Mode::Vault { .. } => Some(WorkspaceGraphMode::Watch),
         _ => None,
     }
 }
@@ -195,7 +222,9 @@ pub(crate) fn workspace_graph_mode(mode: &Mode) -> Option<WorkspaceGraphMode> {
 pub(crate) fn default_manifest_path(mode: &Mode) -> Option<PathBuf> {
     match mode {
         Mode::Graph { path } => find_sibling_manifest(path),
-        Mode::Workspace { dir } | Mode::Watch { dir } => find_workspace_manifest(dir),
+        Mode::Workspace { dir } | Mode::Watch { dir } | Mode::Vault { dir } => {
+            find_workspace_manifest(dir)
+        }
         Mode::LocalWorkspace { root, .. } => find_workspace_manifest(root),
         Mode::SourceRoot { .. } | Mode::Bare => None,
     }
@@ -231,7 +260,7 @@ pub(crate) fn validate_mode_paths(mode: &Mode, cli: &Cli) -> Result<()> {
         // `open_or_create_graph` in bind_mode; checking here would introduce a
         // second TOCTOU decision.
     }
-    if let Mode::SourceRoot { dir } | Mode::Watch { dir } = mode {
+    if let Mode::SourceRoot { dir } | Mode::Watch { dir } | Mode::Vault { dir } = mode {
         if !dir.is_dir() {
             anyhow::bail!(
                 "path does not exist or is not a directory: {}",
@@ -292,7 +321,10 @@ pub(crate) fn resolve_env_start_dir(mode: &Mode) -> PathBuf {
             .ok()
             .and_then(|p| p.parent().map(PathBuf::from))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
-        Mode::SourceRoot { dir } | Mode::Workspace { dir } | Mode::Watch { dir } => dir.clone(),
+        Mode::SourceRoot { dir }
+        | Mode::Workspace { dir }
+        | Mode::Watch { dir }
+        | Mode::Vault { dir } => dir.clone(),
         Mode::LocalWorkspace { root, .. } => root.clone(),
         Mode::Bare => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     }
