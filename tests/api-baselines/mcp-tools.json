@@ -98,6 +98,53 @@
       }
     },
     {
+      "name": "fetch_images",
+      "description": "Fetch image files as image content blocks. Takes vault-relative paths or `Image` node ids \u2014 query `Image` nodes with `cypher_query` first and fetch only the ones you need. At most 4 per call, 4 MiB each, 12 MiB total; png, jpeg, gif and webp only. Over-cap or non-image items are refused with the reason named, never resized or truncated.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "items": {
+            "description": "Vault-relative image paths or `Image` node ids (identical under the vault model), e.g. 'img/faults.png'. Absolute paths and `..` segments are refused.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Lower the per-image byte cap for this call. Cannot raise the server's configured cap.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "graph_overview",
       "description": "Inspect and explore the active graph's schema \u2014 start here to understand a codebase or dataset: node types, properties, connections, sample values, and a per-type example query (anchored on each type's real identifier property). With no args returns the inventory; pass types=[...] / connections=true|[...] / cypher=true|[...] for drill-down.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
       "inputSchema": {
@@ -692,6 +739,53 @@
         },
         "required": [
           "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fetch_images",
+      "description": "Fetch image files as image content blocks. Takes vault-relative paths or `Image` node ids \u2014 query `Image` nodes with `cypher_query` first and fetch only the ones you need. At most 4 per call, 4 MiB each, 12 MiB total; png, jpeg, gif and webp only. Over-cap or non-image items are refused with the reason named, never resized or truncated.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "items": {
+            "description": "Vault-relative image paths or `Image` node ids (identical under the vault model), e.g. 'img/faults.png'. Absolute paths and `..` segments are refused.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Lower the per-image byte cap for this call. Cannot raise the server's configured cap.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       }
@@ -1488,6 +1582,53 @@
       }
     },
     {
+      "name": "fetch_images",
+      "description": "Fetch image files as image content blocks. Takes vault-relative paths or `Image` node ids \u2014 query `Image` nodes with `cypher_query` first and fetch only the ones you need. At most 4 per call, 4 MiB each, 12 MiB total; png, jpeg, gif and webp only. Over-cap or non-image items are refused with the reason named, never resized or truncated.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "items": {
+            "description": "Vault-relative image paths or `Image` node ids (identical under the vault model), e.g. 'img/faults.png'. Absolute paths and `..` segments are refused.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Lower the per-image byte cap for this call. Cannot raise the server's configured cap.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "graph_overview",
       "description": "Inspect and explore the active graph's schema \u2014 start here to understand a codebase or dataset: node types, properties, connections, sample values, and a per-type example query (anchored on each type's real identifier property). With no args returns the inventory; pass types=[...] / connections=true|[...] / cypher=true|[...] for drill-down.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
       "inputSchema": {
@@ -2197,6 +2338,53 @@
       }
     },
     {
+      "name": "fetch_images",
+      "description": "Fetch image files as image content blocks. Takes vault-relative paths or `Image` node ids \u2014 query `Image` nodes with `cypher_query` first and fetch only the ones you need. At most 4 per call, 4 MiB each, 12 MiB total; png, jpeg, gif and webp only. Over-cap or non-image items are refused with the reason named, never resized or truncated.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "items": {
+            "description": "Vault-relative image paths or `Image` node ids (identical under the vault model), e.g. 'img/faults.png'. Absolute paths and `..` segments are refused.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Lower the per-image byte cap for this call. Cannot raise the server's configured cap.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "graph_overview",
       "description": "Inspect and explore the active graph's schema \u2014 start here to understand a codebase or dataset: node types, properties, connections, sample values, and a per-type example query (anchored on each type's real identifier property). With no args returns the inventory; pass types=[...] / connections=true|[...] / cypher=true|[...] for drill-down.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
       "inputSchema": {
@@ -2765,6 +2953,53 @@
         },
         "required": [
           "result_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fetch_images",
+      "description": "Fetch image files as image content blocks. Takes vault-relative paths or `Image` node ids \u2014 query `Image` nodes with `cypher_query` first and fetch only the ones you need. At most 4 per call, 4 MiB each, 12 MiB total; png, jpeg, gif and webp only. Over-cap or non-image items are refused with the reason named, never resized or truncated.\nResponses default to 16384 serialized bytes. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "items": {
+            "description": "Vault-relative image paths or `Image` node ids (identical under the vault model), e.g. 'img/faults.png'. Absolute paths and `..` segments are refused.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Lower the per-image byte cap for this call. Cannot raise the server's configured cap.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       }

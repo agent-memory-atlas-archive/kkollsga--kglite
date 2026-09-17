@@ -215,6 +215,56 @@ install the vault's own skills and recipe queries.
   a message naming `--watch` as the mode for its own producer — only one
   producer can own the graph.
 
+## Serving images (`fetch_images`)
+
+Every `![…](…)` reference in a note becomes an `Image` node whose id is its
+vault-relative path. `fetch_images` is the only route that returns the bytes,
+and only for the paths an agent names:
+
+```json
+{"items": ["img/faults.png", "img/section-map.png"], "max_bytes": 1048576}
+```
+
+The reply is one image content block per delivered file plus one text block
+listing each item as delivered (path, MIME, byte count) or refused (path,
+reason). A call where some items are refused still succeeds; one where every
+item is refused is an error carrying the same list.
+
+- **The sandbox is the source tools'.** Paths resolve through the same
+  `source_root` binding `read_source` uses, so nothing outside the served
+  directory is reachable. Absolute paths, `~`, `file:` URLs and `..` segments
+  are refused before resolution, so the message names the contract rather than
+  reporting a miss.
+- **Registered everywhere, enabled where a root exists.** `--graph` auto-binds
+  the graph's parent directory (below), so an ordinary `--graph` server serves
+  images sitting beside the `.kgl` with no configuration. A server that binds
+  no root at all — `kglite-mcp-server` with no mode flag, or a manifest whose
+  declared `source_roots` do not resolve — carries the route disabled and logs
+  the reason at boot ("no source root: images are served from the vault root or
+  `source_root`"), so an operator sees why and a manifest that overrides the
+  tool still resolves.
+- **png, jpeg, gif and webp only.** Every other type, SVG and PDF included, is
+  refused with its MIME named. Those files remain queryable as `Attachment`
+  nodes; only their contents are unavailable. Convert diagrams to PNG when
+  building the vault.
+- **Caps, never resizing.** Defaults are 4 images per call, 4 MiB per image and
+  12 MiB per call; an over-cap item is refused with its byte count named. The
+  call's own `max_bytes` can only lower the per-image ceiling. Override the
+  defaults in the manifest:
+
+```yaml
+extensions:
+  fetch_images:
+    max_items: 2
+    max_bytes_per_image: 1048576
+    max_total_bytes: 2097152
+```
+
+  All three keys are optional and must be positive integers; anything else
+  fails the boot rather than falling back to a cap you did not choose.
+- **One stderr line per delivered image** (path and byte count) — this route
+  moves more bytes per call than any other.
+
 ## Writable workbench
 
 ```bash

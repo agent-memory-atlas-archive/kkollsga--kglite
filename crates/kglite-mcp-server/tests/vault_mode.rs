@@ -9,6 +9,7 @@
 //! for a filesystem event. The watcher's own leg is covered by the unit tests
 //! in `src/vault_tests.rs`, which drive the dirty-tag entry point directly.
 
+use base64::Engine as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -118,6 +119,20 @@ impl Server {
             serde_json::json!({"name": name, "arguments": {}}),
         );
         Self::text_of(&response, name)
+    }
+
+    /// The raw `result` of a tool call with arguments — the caller inspects
+    /// the content blocks itself, which a `String` return would have thrown
+    /// away.
+    fn call_raw(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        let response = self.request(
+            "tools/call",
+            serde_json::json!({"name": name, "arguments": arguments}),
+        );
+        response
+            .get("result")
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} failed: {response}"))
     }
 
     fn text_of(response: &serde_json::Value, what: &str) -> String {
@@ -376,5 +391,195 @@ fn an_edited_carried_skill_is_served_after_a_rebuild() {
     assert!(
         !after.iter().any(|name| name == "vault_overview"),
         "and the replaced one must be gone: {after:?}"
+    );
+}
+
+/// Bytes that are recognisably not text and do not compress to nothing:
+/// 40 000 bytes, big enough that their base64 is well past the mcp-methods
+/// response budget (16 384 by default) and so the *only* way this survives
+/// the round trip is the non-text exemption.
+fn large_png_bytes() -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let mut state: u32 = 0x1234_5678;
+    while bytes.len() < 40_000 {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        bytes.push((state >> 24) as u8);
+    }
+    bytes
+}
+
+fn image_blocks(result: &serde_json::Value) -> Vec<(String, String)> {
+    result["content"]
+        .as_array()
+        .expect("content blocks")
+        .iter()
+        .filter(|block| block["type"] == "image")
+        .map(|block| {
+            (
+                block["mimeType"].as_str().expect("mimeType").to_string(),
+                block["data"].as_str().expect("data").to_string(),
+            )
+        })
+        .collect()
+}
+
+fn summary_text(result: &serde_json::Value) -> String {
+    result["content"]
+        .as_array()
+        .expect("content blocks")
+        .iter()
+        .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// **This test requires mcp-methods ≥ 0.4.12 and is expected red until the
+/// dependency bump lands.** The budget exemption for results carrying non-text
+/// content blocks is `054fb5c` on mcp-methods' `feat/binary-content-budget-exemption`
+/// branch, unpublished at the time of writing; against the pinned 0.4.11 this
+/// test fails exactly the way P13a predicted — the image block is replaced by a
+/// truncated JSON text preview. It is deliberately **not** `#[ignore]`d: a red
+/// test naming its cause is the contract, and an ignored one would go green by
+/// disappearing.
+///
+/// Everything else about `fetch_images` is covered by the unit tests in
+/// `src/fetch_images_tests.rs`, which do not cross the protocol boundary. What
+/// only this test can see is whether the bytes survive the *server's* response
+/// pipeline.
+#[test]
+fn fetch_images_delivers_image_blocks_through_the_real_response_budget() {
+    let vault = golden_vault_copy();
+    let large = large_png_bytes();
+    std::fs::write(vault.path().join("img/large.png"), &large).expect("write large png");
+    let mut server = Server::boot(&["--vault", &vault.path().to_string_lossy()]);
+
+    let tools = server.tool_names();
+    assert!(
+        tools.iter().any(|name| name == "fetch_images"),
+        "a vault has a source root, so the route is enabled: {tools:?}"
+    );
+
+    // The id comes from the graph, not from the test's own idea of it: under
+    // the vault model an `Image` id *is* its vault-relative path, and this is
+    // the assertion that keeps the two the same string.
+    let ids = server.call_raw(
+        "cypher_query",
+        serde_json::json!({"query": "MATCH (i:Image) WHERE i.id = 'img/faults.png' RETURN i.id AS id"}),
+    );
+    let image_id = ids["structuredContent"]["rows"][0][0]
+        .as_str()
+        .unwrap_or_else(|| panic!("the fixture's Image node: {ids}"))
+        .to_string();
+    assert_eq!(image_id, "img/faults.png");
+
+    let result = server.call_raw(
+        "fetch_images",
+        serde_json::json!({"items": [image_id, "img/large.png"]}),
+    );
+    assert_ne!(
+        result.get("isError"),
+        Some(&serde_json::Value::Bool(true)),
+        "both items are deliverable: {result}"
+    );
+
+    let blocks = image_blocks(&result);
+    assert_eq!(
+        blocks.len(),
+        2,
+        "one image block per delivered item — a text-only result here is the \
+         response budget replacing them with a preview (mcp-methods < 0.4.12): {result}"
+    );
+    assert_eq!(blocks[0].0, "image/png");
+    assert_eq!(blocks[1].0, "image/png");
+
+    let on_disk = std::fs::read(vault.path().join("img/faults.png")).expect("fixture png");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&blocks[0].1)
+        .expect("valid base64");
+    assert_eq!(decoded, on_disk, "the fixture image's exact bytes");
+    let decoded_large = base64::engine::general_purpose::STANDARD
+        .decode(&blocks[1].1)
+        .expect("valid base64");
+    assert_eq!(
+        decoded_large, large,
+        "and the 40 000-byte one, whole — this is the byte count the budget would have cut"
+    );
+
+    let summary = summary_text(&result);
+    assert!(summary.contains("2 delivered, 0 refused"), "{summary}");
+}
+
+/// The refusals an operator will actually hit, over the wire: a non-image
+/// attachment and a file past the per-image cap. Neither needs the budget
+/// exemption — both results are text — so this stays green on 0.4.11 and is
+/// the reason a red [`fetch_images_delivers_image_blocks_through_the_real_response_budget`]
+/// is a dependency verdict rather than a broken tool.
+#[test]
+fn fetch_images_refuses_a_pdf_by_type_and_an_oversized_file_by_byte_count() {
+    let vault = golden_vault_copy();
+    // 5 MiB, past the 4 MiB per-image default, with a deliverable extension so
+    // the size check is what stops it.
+    std::fs::write(
+        vault.path().join("img/huge.png"),
+        vec![0u8; 5 * 1024 * 1024],
+    )
+    .expect("write huge png");
+    let mut server = Server::boot(&["--vault", &vault.path().to_string_lossy()]);
+
+    let pdf = server.call_raw(
+        "fetch_images",
+        serde_json::json!({"items": ["img/handbook.pdf"]}),
+    );
+    assert_eq!(
+        pdf.get("isError"),
+        Some(&serde_json::Value::Bool(true)),
+        "nothing was delivered: {pdf}"
+    );
+    assert!(
+        summary_text(&pdf).contains("`application/pdf` is not delivered"),
+        "the refusal names the type: {pdf}"
+    );
+
+    let mixed = server.call_raw(
+        "fetch_images",
+        serde_json::json!({"items": ["img/huge.png", "img/faults.png"]}),
+    );
+    let summary = summary_text(&mixed);
+    assert!(
+        summary.contains(&format!(
+            "- refused `img/huge.png`: {} bytes exceeds the per-image cap of {} bytes",
+            5 * 1024 * 1024,
+            4 * 1024 * 1024
+        )),
+        "the byte count is named, and it is never resized: {summary}"
+    );
+    assert!(
+        summary.contains("1 delivered, 1 refused"),
+        "a partial success is still a success: {summary}"
+    );
+
+    // Absolute addressing is refused before the sandbox is asked, so the error
+    // names the contract rather than reporting a miss.
+    let absolute = server.call_raw(
+        "fetch_images",
+        serde_json::json!({"items": [vault.path().join("img/faults.png").to_string_lossy()]}),
+    );
+    assert!(
+        summary_text(&absolute).contains("absolute paths are refused"),
+        "{absolute}"
+    );
+}
+
+/// The skill only reaches an agent if it is both bundled and gated on a route
+/// this mode registers — the `applies_when` half is invisible from the tool
+/// list alone.
+#[test]
+fn the_fetch_images_skill_is_served_where_the_route_is() {
+    let vault = golden_vault_copy();
+    let mut server = Server::boot(&["--vault", &vault.path().to_string_lossy()]);
+    let prompts = server.prompt_names();
+    assert!(
+        prompts.iter().any(|name| name == "fetch_images"),
+        "the bundled skill is active wherever the route is enabled: {prompts:?}"
     );
 }

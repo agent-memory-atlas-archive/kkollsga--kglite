@@ -2067,6 +2067,7 @@ name = "kglite-mcp-server"
 version = "0.17.7"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "clap",

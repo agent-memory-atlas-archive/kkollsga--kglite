@@ -190,6 +190,24 @@ before upgrading.
   `WorkspaceGraphHooks` producer is refused at boot: only one producer can own
   the graph.
 
+- `fetch_images` — a `kglite-mcp-server` tool that returns image files as
+  image content blocks, so an agent can look at a diagram a note references
+  instead of reading its alt text. Takes vault-relative paths or `Image` node
+  ids (the same string) and returns one image block per delivered file plus a
+  text block listing what was delivered and what was refused. Paths resolve
+  through the same sandbox `read_source` uses; absolute paths, `~`, `file:`
+  URLs and `..` segments are refused before resolution. png, jpeg, gif and
+  webp are delivered; every other type, SVG and PDF included, is refused with
+  its MIME named. Caps default to 4 images per call, 4 MiB per image and
+  12 MiB per call (`extensions.fetch_images: { max_items,
+  max_bytes_per_image, max_total_bytes }`); an over-cap item is refused with
+  its byte count named and is never resized or truncated, and a call's own
+  `max_bytes` can only lower the per-image ceiling. The route is registered in
+  every mode and disabled where no source root can serve the bytes. A bundled
+  `fetch_images` skill tells an agent to query `Image` nodes first and fetch
+  only what it needs. **Requires mcp-methods 0.4.12**: below that the response
+  budget replaces the image blocks with a truncated text preview.
+
 - `import_recipes()` now reads a `.md` recipe file or a directory of them
   alongside a `.json` catalogue. One query per file: frontmatter `recipe`,
   `name`, `description`, optional `recipe_description` (inherited from the

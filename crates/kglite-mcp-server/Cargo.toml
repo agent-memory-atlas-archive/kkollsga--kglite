@@ -114,6 +114,10 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # prints "failed: {e}", 1.0.47 prints "failed: BOOM" (1.0.46 is yanked).
 # 1.0.20 also matters (anyhow::Error::msg, used by mcp-methods) and
 # 1.0.5 (Context for Option, used by kglite-cli); 1.0.47 covers all.
+# `fetch_images` returns image content blocks, which the MCP wire format
+# carries base64-encoded. 0.22 is already resolved in the workspace lock
+# (rmcp's own dependency), so this adds no package to the tree.
+base64 = "0.22"
 anyhow = "1.0.47"
 clap = { version = "4.3", features = ["derive"] }
 

@@ -106,6 +106,14 @@ fn compose_registry(
             name: "vault_authoring",
             body: include_str!("../skills/vault_authoring.md"),
         })
+        // Gated on `tool_registered: fetch_images`, which every mode
+        // registers but only a mode with a source root leaves enabled — a
+        // disabled route is absent from the router's visible set, so the
+        // predicate is false exactly where the bytes are unreachable.
+        .add_bundled(BundledSkill {
+            name: "fetch_images",
+            body: include_str!("../skills/fetch_images.md"),
+        })
         // Cross-tool skills: named after no tool, they attach via
         // `references_tools` and lead with the `description` routing —
         // both rely on the serve_prompts injection added in mcp-methods

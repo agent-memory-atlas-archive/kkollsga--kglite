@@ -29,6 +29,7 @@ const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "csv_http_server",
     "embedder",
     "writable",
+    "fetch_images",
 ];
 
 /// Manifest `extensions:` keys this build does not read, for the boot warning.
@@ -337,6 +338,19 @@ fn query_pool_width() -> (usize, bool) {
 /// dropped key: an allowlist that silently fails open is worse than no
 /// allowlist, and "parsed and then ignored" is this crate's recurring defect
 /// shape (`temp_cleanup`).
+/// `extensions.fetch_images: { max_items, max_bytes_per_image, max_total_bytes }`.
+///
+/// Absent block = the defaults (4 images, 4 MiB each, 12 MiB total). Read at
+/// registration rather than in [`boot_graph`] because the caps are the route's
+/// own, and the route is where a malformed block should stop the boot.
+fn boot_fetch_image_caps(
+    manifest: Option<&mcp_methods::server::Manifest>,
+) -> Result<fetch_images::ImageCaps> {
+    fetch_images::ImageCaps::from_manifest_value(
+        manifest.and_then(|m| m.extensions.get("fetch_images")),
+    )
+}
+
 fn boot_tools_allow(
     manifest: Option<&mcp_methods::server::Manifest>,
 ) -> Result<Option<Vec<String>>> {
@@ -597,8 +611,19 @@ fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -
     );
     code_source::register(server, graph_state.clone(), source_roots_provider.clone())
         .context("read_code_source registration failed")?;
-    explore::register(server, graph_state.clone(), source_roots_provider)
+    explore::register(server, graph_state.clone(), source_roots_provider.clone())
         .context("explore registration failed")?;
+    // Registered in every mode, disabled where no root can serve the bytes —
+    // an absent name would hard-fail any manifest override that mentions it.
+    if let Some(reason) = fetch_images::register(
+        server,
+        source_roots_provider,
+        boot_fetch_image_caps(manifest)?,
+    )
+    .context("fetch_images registration failed")?
+    {
+        tracing::info!(reason, "fetch_images registered but disabled");
+    }
     Ok(())
 }
 
@@ -1441,7 +1466,8 @@ mod boot_manifest_tests {
             tmp.path(),
             "name: all\nextensions:\n  cypher_recipes: {}\n  value_codecs: []\n  \
              ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
-             write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n",
+             write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
+             fetch_images: {}\n",
         );
         assert!(
             unknown_extension_keys(Some(&all_keys)).is_empty(),

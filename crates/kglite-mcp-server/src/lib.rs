@@ -44,6 +44,7 @@ mod cypher_tools;
 mod embedder;
 mod explore;
 mod extensions;
+mod fetch_images;
 mod modes;
 mod raw_query_routes;
 mod raw_stdio;
