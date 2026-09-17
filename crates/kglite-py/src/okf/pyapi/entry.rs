@@ -15,6 +15,7 @@ use crate::okf::{BuildOptions, Dialect};
 /// the full contract.
 #[pyfunction]
 #[pyo3(signature = (path, *, dialect=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None, embed=false))]
+// One parameter per Python keyword: the stub mirrors this signature verbatim.
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     py: Python<'_>,
