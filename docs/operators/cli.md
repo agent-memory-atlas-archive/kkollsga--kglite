@@ -161,13 +161,16 @@ subcommand, because a CLI user writes Cypher.
 
 `kglite okf` reads a **vault** — a directory of frontmatter-markdown notes in
 the format `VAULT.md` specifies — without Python. `check` reports what a build
-would find and sets the exit code; `build` keeps the result as a `.kgl`:
+would find and sets the exit code; `build` keeps the result as a `.kgl`; and
+`export` runs the other way, writing a `.kgl` back out as a vault:
 
 ```bash
 kglite okf check vault/                       # counts, then errors, then warnings
 kglite okf check vault/ --strict              # warnings fail too
 kglite okf check vault/ --json                # the same report, machine-readable
 kglite okf build vault/ -o vault.kgl          # build and save
+kglite okf export vault.kgl out/ \
+    --source-root vault/                      # write the graph back out
 ```
 
 `check` runs the same read `build` runs and throws the graph away, so it
@@ -185,6 +188,15 @@ default), `okf` or `loose`; an unrecognised spelling is refused rather than
 quietly read as something else. Everything else about a vault — declaring
 indexes, hubs and embed targets in `.kglite/vault.yaml`, carrying skills and
 recipes in `.kglite/` — happens in the vault itself, not in flags.
+
+`export` writes one `.md` file per node under a folder named for its label,
+copies the graph's attachments when `--source-root` names the directory they
+were read from, and prints its report on **stderr** with the directory it wrote
+on stdout (`VAULT.md` §10). **It never replaces a file it did not write**:
+`.kglite/export-manifest.json` records a hash per exported file, and a file
+missing from it or edited since is refused, named on stderr, and the command
+exits non-zero. `--force` lifts exactly those two refusals. Exporting the same
+graph twice is byte-identical, so the output is worth committing.
 
 ## Agent Sessions
 

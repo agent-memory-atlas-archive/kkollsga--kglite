@@ -332,7 +332,7 @@ enum Command {
     /// Retrieve or purge retained agent-response evidence.
     #[command(subcommand)]
     Response(ResponseCommand),
-    /// Check or build a vault directory (the `VAULT.md` markdown format).
+    /// Check, build or write a vault directory (the `VAULT.md` markdown format).
     #[command(subcommand)]
     Okf(okf::OkfCommand),
 }

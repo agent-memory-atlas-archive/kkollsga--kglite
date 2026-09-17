@@ -2,8 +2,9 @@
 //!
 //! `check` is a converter's gate: it runs the real build, prints the §9 report
 //! and sets the exit code. `build` is the same read kept — the vault as a
-//! `.kgl`. Both live here rather than in `lib.rs` so the command table stays a
-//! table; `lib.rs` carries only the variant and the dispatch arm.
+//! `.kgl`. `export` runs the other way, writing a `.kgl` back out as a vault
+//! (§10). All three live here rather than in `lib.rs` so the command table
+//! stays a table; `lib.rs` carries only the variant and the dispatch arm.
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +34,23 @@ pub(crate) enum OkfCommand {
         /// Print the report as a JSON object instead of text.
         #[arg(long)]
         json: bool,
+    },
+    /// Write a `.kgl` graph out as a vault directory.
+    ///
+    /// Only files a previous export wrote are replaced or removed; anything
+    /// else in the directory is refused and named, which exits non-zero.
+    Export {
+        /// Path to the `.kgl` graph to write out.
+        graph: PathBuf,
+        /// Directory to write the vault into; created if it does not exist.
+        directory: PathBuf,
+        /// Replace files this export does not own, and ones edited since.
+        #[arg(long)]
+        force: bool,
+        /// The directory the graph's attachments were read from, so their
+        /// bytes are copied into the vault.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
     },
     /// Build a vault into a `.kgl` graph file.
     Build {
@@ -83,6 +101,42 @@ pub(crate) fn run(command: &OkfCommand) -> Result<()> {
             output,
             dialect,
         } => build(directory, output, *dialect),
+        OkfCommand::Export {
+            graph,
+            directory,
+            force,
+            source_root,
+        } => export(graph, directory, *force, source_root.clone()),
+    }
+}
+
+/// `kglite okf export` — the graph as a vault, report on stderr.
+///
+/// Exits non-zero when the export refused a file, for the same reason `check`
+/// exits non-zero on an error: a converter's CI wants to hear that the vault
+/// on disk is not the one the graph describes.
+fn export(
+    graph_path: &Path,
+    directory: &Path,
+    force: bool,
+    source_root: Option<PathBuf>,
+) -> Result<()> {
+    let graph = crate::load_graph(graph_path)?;
+    let opts = kglite::okf::ExportOptions {
+        force,
+        source_root,
+        ..kglite::okf::ExportOptions::default()
+    };
+    let report = kglite::okf::export(&graph, directory, &opts)
+        .map_err(|reason| anyhow::anyhow!("{reason}"))
+        .with_context(|| format!("failed to export to {}", directory.display()))?;
+    eprint!("{}", report.render());
+    exec::write_stdout(&format!("wrote {}", directory.display()))?;
+    if report.refusals.is_empty() {
+        Ok(())
+    } else {
+        // The refusals are the diagnostic and stderr already carries them.
+        Err(ReportedAgentFailure.into())
     }
 }
 
@@ -175,6 +229,29 @@ mod tests {
         assert!(
             error.to_string().contains("obsidian"),
             "the error names the spellings that work: {error}"
+        );
+    }
+
+    #[test]
+    fn export_takes_a_graph_and_a_directory() {
+        assert!(Cli::try_parse_from(["kglite", "okf", "export", "v.kgl"]).is_err());
+        assert!(Cli::try_parse_from(["kglite", "okf", "export", "v.kgl", "out"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "kglite",
+            "okf",
+            "export",
+            "v.kgl",
+            "out",
+            "--force",
+            "--source-root",
+            "vault"
+        ])
+        .is_ok());
+        // `--source-root` takes a value; a bare flag is a parse error rather
+        // than a silent "copy from nowhere".
+        assert!(
+            Cli::try_parse_from(["kglite", "okf", "export", "v.kgl", "out", "--source-root"])
+                .is_err()
         );
     }
 

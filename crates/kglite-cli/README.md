@@ -127,6 +127,7 @@ Non-interactive commands:
 - `skill <graph.kgl> [name] [--format table|csv|json]` — list the skills the graph carries (sorted, `--format` honoured), or print one body raw on stdout. Read-only, no writer lease. Exits non-zero when the named skill is absent; a graph with no skills lists zero rows and exits 0. Skills and recipe queries are written from Python (`set_skill` / `set_recipe`), not here
 - `okf check <dir> [--dialect obsidian|okf|loose] [--strict] [--json]` — check a vault directory against the `VAULT.md` format and print the build report (counts, then errors, then warnings). Exits non-zero on any error; `--strict` counts warnings too. Runs the same read the build runs, so it reports what a build does
 - `okf build <dir> -o <graph.kgl> [--dialect obsidian]` — build a vault into a `.kgl`; the report goes to stderr, stdout names the file written
+- `okf export <graph.kgl> <dir> [--force] [--source-root <dir>]` — write a `.kgl` back out as a vault. Only files a previous export wrote are replaced or removed; anything else is refused, named on stderr and exits non-zero (`--force` lifts that). `--source-root` names the directory the graph's attachments were read from, so their bytes are copied too
 - `session <graph.kgl>` — process JSONL requests against one in-memory graph (`query`, `write`, `describe`, `save`, `help`, `exit`); `{"op":"help"}` returns the op table
 - `export-text <graph.kgl>` — print the deterministic text projection used by git textconv
 - `diff <a.kgl> <b.kgl>` — compare two graph text projections

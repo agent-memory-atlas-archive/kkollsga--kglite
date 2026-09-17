@@ -114,3 +114,50 @@ def test_build_writes_a_loadable_kgl_matching_okf_build(tmp_path: Path):
         "MATCH ()-[r]->() RETURN type(r) AS k, count(*) AS c ORDER BY k",
     ):
         assert loaded.cypher(query).to_list() == reference.cypher(query).to_list(), query
+
+
+def test_export_writes_a_vault_from_a_built_kgl(tmp_path: Path):
+    built = tmp_path / "vault.kgl"
+    assert _run("okf", "build", str(GOLDEN_VAULT), "-o", str(built)).returncode == 0
+
+    out = tmp_path / "out"
+    proc = _run("okf", "export", str(built), str(out), "--source-root", str(GOLDEN_VAULT))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The report goes to stderr; stdout names the directory it wrote.
+    assert "files written:" in proc.stderr
+    assert "refusals: none" in proc.stderr
+    assert str(out) in proc.stdout
+    assert (out / ".kglite" / "export-manifest.json").is_file()
+    assert (out / "img" / "faults.png").is_file()
+
+    # And it is the same vault `okf.export` writes from the same graph.
+    direct = tmp_path / "direct"
+    okf.export(okf.build(str(GOLDEN_VAULT), dialect="obsidian"), str(direct), source_root=str(GOLDEN_VAULT))
+
+    def listing(root: Path) -> list[str]:
+        return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+
+    assert listing(out) == listing(direct)
+
+
+def test_export_exits_nonzero_when_it_refuses_a_file(tmp_path: Path):
+    built = tmp_path / "vault.kgl"
+    _run("okf", "build", str(GOLDEN_VAULT), "-o", str(built))
+    out = tmp_path / "out"
+    (out / "Article").mkdir(parents=True)
+    (out / "Article" / "Welcome.md").write_text("somebody else's file\n", encoding="utf-8")
+
+    refused = _run("okf", "export", str(built), str(out))
+    assert refused.returncode != 0
+    assert "Article/Welcome.md: not written by an export" in refused.stderr
+    assert (out / "Article" / "Welcome.md").read_text(encoding="utf-8") == "somebody else's file\n"
+
+    forced = _run("okf", "export", str(built), str(out), "--force")
+    assert forced.returncode == 0, forced.stdout + forced.stderr
+    assert (out / "Article" / "Welcome.md").read_text(encoding="utf-8") != "somebody else's file\n"
+
+
+def test_export_of_a_missing_graph_is_an_error(tmp_path: Path):
+    proc = _run("okf", "export", str(tmp_path / "nope.kgl"), str(tmp_path / "out"))
+    assert proc.returncode != 0
+    assert "failed to open" in proc.stderr
