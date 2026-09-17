@@ -275,3 +275,126 @@ class VaultReport:
 
     def __str__(self) -> str:
         """The report as text — counts, then errors, then warnings."""
+
+def export(
+    graph: KnowledgeGraph,
+    path: str,
+    *,
+    force: bool = ...,
+    source_root: str | None = ...,
+) -> ExportReport:
+    """Write a graph out as an Obsidian vault — the inverse of :func:`build`.
+
+    Specified by ``VAULT.md`` §10. Each node becomes one ``.md`` file under a
+    folder named for its label, so the label ladder recovers the label without
+    a ``type:`` key; its properties become sorted frontmatter, its ``body``
+    the prose below, and its outgoing edges wikilink-valued keys named
+    ``lower_snake(TYPE)``. Nodes the build synthesized — ``Folder``, ``Tag``,
+    ``Source``, ``Image``, ``Attachment``, hub nodes and ``_provisional``
+    stubs — are not files; the next import makes them again. Graph-carried
+    skills and recipes are written to ``.kglite/skills/`` and
+    ``.kglite/recipes/``.
+
+    **Nothing this export did not write is ever replaced.**
+    ``.kglite/export-manifest.json`` records a SHA-256 per exported file. A
+    file missing from it, or one whose bytes have moved since (a human edited
+    it), is refused and named in ``ExportReport.refusals`` rather than
+    overwritten; only a manifest-owned file whose bytes still match is
+    replaced, or deleted when its node is gone. ``force`` lifts the two
+    refusals and nothing else.
+
+    Exporting the same graph twice is byte-identical: keys, edge lists, file
+    order and the manifest are all sorted.
+
+    Args:
+        graph: The graph to write. It need not have come from a vault — a
+            graph that carries no ``file_path`` anywhere exports every node.
+        path: Target directory, created if it does not exist. An existing
+            directory is written *into*.
+        force: Replace files the manifest does not own or that were edited
+            since the last export, and delete owned files that were edited.
+        source_root: The directory the graph's attachments were read from, so
+            their bytes are copied into the exported vault. Without it the
+            body references are left as written and counted in
+            ``ExportReport.attachments_unresolved``.
+
+    Returns:
+        An :class:`ExportReport`.
+
+    Raises:
+        RuntimeError: If ``path`` exists and is not a directory, if the
+            existing manifest cannot be read or names an unknown version, or
+            if a write fails.
+
+    Example::
+
+        report = okf.export(g, "out/vault", source_root="vault")
+        print(report)
+        assert report.ok, report.refusals
+    """
+
+class ExportReport:
+    """What an export wrote, left alone, deleted and refused.
+
+    Returned by :func:`export`. Immutable — it describes an export that already
+    happened. ``str(report)`` renders the same text ``kglite okf export``
+    prints.
+    """
+
+    @property
+    def files_written(self) -> int:
+        """Files created or replaced."""
+
+    @property
+    def files_unchanged(self) -> int:
+        """Files already byte-identical to what the export would write.
+
+        These are not rewritten, so their modification times do not move.
+        """
+
+    @property
+    def files_deleted(self) -> int:
+        """Manifest-owned files whose node is gone from the graph."""
+
+    @property
+    def files_refused(self) -> int:
+        """Writes and deletions declined for safety; see :attr:`refusals`."""
+
+    @property
+    def refusals(self) -> list[str]:
+        """One line per refusal — the path and why — in path order."""
+
+    @property
+    def edge_properties_dropped(self) -> int:
+        """Edge properties lost: frontmatter lists carry targets, not properties.
+
+        ``section``, ``anchor``, ``alt`` and ``ordinal`` are the documented
+        loss of the format (``VAULT.md`` §10.9).
+        """
+
+    @property
+    def attachments_copied(self) -> int:
+        """Attachment files copied in from ``source_root``."""
+
+    @property
+    def attachments_unresolved(self) -> int:
+        """Attachment nodes whose bytes could not be copied.
+
+        Either no ``source_root`` was given, or the file is not under it. The
+        body references to them are written as they stand.
+        """
+
+    @property
+    def skills_written(self) -> int:
+        """Files written under ``.kglite/skills/``."""
+
+    @property
+    def recipes_written(self) -> int:
+        """Files written under ``.kglite/recipes/``."""
+
+    @property
+    def ok(self) -> bool:
+        """Whether the export wrote everything it wanted to — no refusals."""
+
+    def __str__(self) -> str:
+        """The report as text — the counts, then the refusals."""

@@ -32,6 +32,6 @@ Usage::
     g.cypher("CALL leiden() YIELD node, community RETURN community, count(*)")
 """
 
-from kglite._kglite_okf import VaultReport, build, source, validate
+from kglite._kglite_okf import ExportReport, VaultReport, build, export, source, validate
 
-__all__ = ["VaultReport", "build", "source", "validate"]
+__all__ = ["ExportReport", "VaultReport", "build", "export", "source", "validate"]

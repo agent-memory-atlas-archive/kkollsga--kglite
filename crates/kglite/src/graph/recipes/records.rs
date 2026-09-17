@@ -428,6 +428,28 @@ pub fn parse_markdown(text: &str) -> Result<RecipeRecord, KgError> {
     })
 }
 
+/// Render a recipe query as the `.kglite/recipes/*.md` document
+/// [`parse_markdown`] reads (VAULT.md §8).
+///
+/// `parameters` is emitted as JSON, which is YAML flow syntax: the schema is a
+/// nested document, and a flow mapping keeps it on one line without this
+/// module having to own a YAML block emitter as well.
+pub fn render_markdown(record: &RecipeRecord) -> String {
+    let quoted = |text: &str| -> String {
+        serde_json::to_string(text).unwrap_or_else(|_| format!("\"{}\"", text.replace('"', "'")))
+    };
+    let parameters = serde_json::to_string(&record.parameters).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "---\nrecipe: {}\nname: {}\ndescription: {}\nrecipe_description: {}\nparameters: {}\n---\n\n```cypher\n{}\n```\n",
+        quoted(&record.recipe),
+        quoted(&record.name),
+        quoted(&record.description),
+        quoted(&record.recipe_description),
+        parameters,
+        record.cypher.trim(),
+    )
+}
+
 /// The statement inside the body's single ` ```cypher ` fence.
 ///
 /// Exactly one: a file with none has nothing to store, and a file with two has

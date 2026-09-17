@@ -1,9 +1,10 @@
-//! Public Python functions for OKF ingestion: `build` and `validate`.
+//! Public Python functions for OKF ingestion: `build`, `validate`, `source`
+//! and the vault writer, `export`.
 
 use pyo3::prelude::*;
 use std::path::PathBuf;
 
-use super::report::VaultReport;
+use super::report::{ExportReport, VaultReport};
 use crate::graph::KnowledgeGraph;
 use crate::okf::{BuildOptions, Dialect};
 
@@ -118,4 +119,29 @@ pub fn validate(
 #[pyfunction]
 pub fn source(path: PathBuf) -> PyResult<String> {
     crate::okf::read_body(&path).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// Write a graph out as an Obsidian vault (VAULT.md §10).
+///
+/// Only files a previous export wrote are replaced or removed; anything else
+/// in the directory is refused and reported unless `force` is set. See the
+/// stub for the full contract.
+#[pyfunction]
+#[pyo3(signature = (graph, path, *, force=false, source_root=None))]
+pub fn export(
+    py: Python<'_>,
+    graph: &KnowledgeGraph,
+    path: PathBuf,
+    force: bool,
+    source_root: Option<PathBuf>,
+) -> PyResult<ExportReport> {
+    let opts = crate::okf::ExportOptions {
+        force,
+        source_root,
+        ..crate::okf::ExportOptions::default()
+    };
+    let inner = graph.inner.clone();
+    py.detach(|| crate::okf::export(&inner, &path, &opts))
+        .map(ExportReport::new)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }

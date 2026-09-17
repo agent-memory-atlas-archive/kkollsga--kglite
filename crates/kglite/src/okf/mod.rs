@@ -17,6 +17,7 @@
 //! the Python wheel enables it, bare builds don't.
 
 pub mod build;
+pub mod export;
 pub mod frontmatter;
 pub mod links;
 pub mod model;
@@ -25,6 +26,7 @@ pub mod vault_config;
 pub mod walk;
 
 pub use build::{build, BuildOutput};
+pub use export::{export, ExportOptions, ExportReport};
 pub use model::{
     BuildOptions, BuildReport, ConceptDoc, Dialect, FolderNoteDirection, IdScheme, LabelFrom, Link,
     Profile,

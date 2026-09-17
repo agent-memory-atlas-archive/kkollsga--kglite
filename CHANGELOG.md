@@ -133,6 +133,32 @@ before upgrading.
   (default), `okf` or `loose`, and refuses anything else rather than quietly
   reading the directory as something it is not.
 
+- `kglite.okf.export(graph, path, *, force=False, source_root=None)` and
+  `ExportReport` — a graph written back out as an Obsidian vault (`VAULT.md`
+  §10). Each node becomes one `.md` file under a folder named for its label, so
+  the label ladder recovers it without a `type:` key; properties become sorted
+  frontmatter (dotted keys re-nested, dates as ISO strings, points as WKT, and
+  a string that would re-parse as a number, boolean or date quoted), the `body`
+  property becomes the prose, and outgoing edges become wikilink-valued keys
+  named `lower_snake(TYPE)`. Synthesized nodes — `Folder`, `Tag`, `Source`,
+  `Image`, `Attachment`, hub nodes and `_provisional` stubs — are not files;
+  graph-carried skills and recipes are written to `.kglite/skills/` and
+  `.kglite/recipes/`. Exporting the same graph twice is byte-identical.
+
+  **The export only ever replaces files it wrote itself.**
+  `.kglite/export-manifest.json` records a SHA-256 per exported file; a file
+  missing from it, or one a human has edited since, is refused and named in the
+  report rather than overwritten, and `force` is the only thing that lifts
+  that. Documented losses: edge properties (`section`, `anchor`, `alt`,
+  `ordinal`) are dropped and counted, attachment bytes are copied only when
+  `source_root` names the directory the graph was read from, and
+  `.kglite/vault.yaml` is not written — so hubs, `heading_edges`, declared
+  `types:` and indexes are re-derived from the defaults on the next import.
+  In Rust as `kglite::okf::{export, ExportOptions, ExportReport}`.
+
+- `kglite okf export <dir.kgl> <dir> [--force] [--source-root DIR]` — the same
+  writer from the CLI, printing the export report.
+
 - `import_recipes()` now reads a `.md` recipe file or a directory of them
   alongside a `.json` catalogue. One query per file: frontmatter `recipe`,
   `name`, `description`, optional `recipe_description` (inherited from the

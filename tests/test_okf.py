@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import json
 from pathlib import Path
 
 import pytest
@@ -769,3 +770,90 @@ class TestValidate:
         assert report.counts["missing_attachments"] == 0
         assert report.counts["nodes_by_label"]["Image"] == 1
         assert report.ok is True
+
+
+class TestExport:
+    """``okf.export`` — the vault written back out (VAULT.md §10)."""
+
+    def _export(self, tmp_path, **kwargs):
+        graph = okf.build(str(VAULT_BUNDLE), dialect="obsidian")
+        out = tmp_path / "vault"
+        return graph, okf.export(graph, str(out), **kwargs), out
+
+    def test_the_golden_vault_writes_files_a_manifest_and_its_kglite_dir(self, tmp_path):
+        _graph, report, out = self._export(tmp_path, source_root=str(VAULT_BUNDLE))
+        assert report.ok is True
+        assert report.files_refused == 0
+        assert report.refusals == []
+        assert report.files_written > 0
+        assert (report.skills_written, report.recipes_written) == (1, 1)
+        assert (report.attachments_copied, report.attachments_unresolved) == (3, 0)
+
+        manifest = json.loads((out / ".kglite" / "export-manifest.json").read_text(encoding="utf-8"))
+        assert manifest["kglite_vault"] == 1
+        written = {
+            str(p.relative_to(out)).replace("\\", "/")
+            for p in out.rglob("*")
+            if p.is_file() and p.name != "export-manifest.json"
+        }
+        assert set(manifest["files"]) == written
+
+        assert (out / ".kglite" / "skills" / "vault_overview.md").is_file()
+        assert (out / ".kglite" / "recipes" / "vault.by_keyword.md").is_file()
+        assert (out / "img" / "faults.png").is_file()
+
+    def test_str_renders_the_counts_then_the_refusals(self, tmp_path):
+        _graph, report, _out = self._export(tmp_path)
+        text = str(report)
+        assert text.startswith(f"files written: {report.files_written}\n")
+        assert "refusals: none" in text
+        assert repr(report).startswith("<ExportReport written=")
+
+    def test_the_export_reimports_to_the_same_note_labels(self, tmp_path):
+        graph, _report, out = self._export(tmp_path, source_root=str(VAULT_BUNDLE))
+        back = okf.build(str(out), dialect="obsidian")
+        query = "MATCH (n) RETURN labels(n)[0] AS k, count(*) AS c ORDER BY k"
+        before = {r["k"]: r["c"] for r in graph.cypher(query).to_list()}
+        after = {r["k"]: r["c"] for r in back.cypher(query).to_list()}
+        for label in ("Article", "Initiative"):
+            assert after[label] == before[label], label
+        # `Keyword` needed the `hubs:` declaration, which lives in
+        # `.kglite/vault.yaml` — not in the graph, so not in the export (§10.9).
+        assert "Keyword" not in after
+
+    def test_a_second_export_reports_every_file_unchanged(self, tmp_path):
+        graph, first, out = self._export(tmp_path, source_root=str(VAULT_BUNDLE))
+        again = okf.export(graph, str(out), source_root=str(VAULT_BUNDLE))
+        assert again.files_written == 0
+        assert again.files_deleted == 0
+        assert again.files_unchanged == first.files_written
+
+    def test_a_hand_edited_file_is_refused_until_force(self, tmp_path):
+        graph, _first, out = self._export(tmp_path)
+        edited = out / "Article" / "Welcome.md"
+        original = edited.read_text(encoding="utf-8")
+        edited.write_text("a human rewrote this\n", encoding="utf-8")
+
+        refused = okf.export(graph, str(out))
+        assert refused.ok is False
+        assert refused.files_refused == 1
+        assert refused.refusals == ["Article/Welcome.md: edited since the last export (use force to replace)"]
+        assert edited.read_text(encoding="utf-8") == "a human rewrote this\n"
+
+        forced = okf.export(graph, str(out), force=True)
+        assert forced.ok is True
+        assert forced.files_written == 1
+        assert edited.read_text(encoding="utf-8") == original
+
+    def test_a_missing_target_directory_is_created(self, tmp_path):
+        graph = okf.build(str(VAULT_BUNDLE), dialect="obsidian")
+        out = tmp_path / "deep" / "nested" / "vault"
+        okf.export(graph, str(out))
+        assert out.is_dir()
+
+    def test_a_target_that_is_not_a_directory_raises(self, tmp_path):
+        graph = okf.build(str(VAULT_BUNDLE), dialect="obsidian")
+        blocker = tmp_path / "file.txt"
+        blocker.write_text("not a directory\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="not a directory"):
+            okf.export(graph, str(blocker))

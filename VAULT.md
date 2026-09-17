@@ -557,46 +557,94 @@ wants the lists rather than the text.
 Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
 `kglite okf export` from the CLI. It targets this format only.
 
-1. **Which nodes.** Every node except the synthesized ones: `Tag`, `Source`,
-   `Folder`, `Image`, `Attachment` and anything `_provisional` is skipped —
-   they regenerate on the next import.
+1. **Which nodes.** A graph carrying `file_path` on any node was built from a
+   vault, and in it a node **with** `file_path` is a note and becomes a file
+   while a node without one was synthesized by the build — a `Folder`, a hub
+   node, an attachment — and is not. A graph carrying `file_path` nowhere was
+   not built from a vault, and every node in it becomes a file. Either way the
+   synthesized labels are never files: `Tag`, `Source`, `Folder`, `Image` and
+   `Attachment` regenerate on the next import, `_provisional` stubs are
+   references rather than notes, and `KgliteSkill` / `KgliteRecipe` nodes are
+   written to `.kglite/skills/` and `.kglite/recipes/` instead (§8).
 2. **File path.** The node's `file_path` is preserved when it has one and its
    top-level folder still matches its label; otherwise `<Label>/<title or
-   id>.md`. `/ \ : * ? " < > |` and control characters are replaced; a
-   case-insensitive path collision appends `-<id>`.
+   id>.md`, so the label ladder recovers the label the export did not write
+   (§10.3). A preserved folder note keeps its `X.md`-beside-`X/` spelling. In a
+   generated segment `/ \ : * ? " < > |` and control characters become `-`, and
+   trailing dots and spaces are stripped — Windows strips them on write, and a
+   filename that differs from the one the manifest recorded would be refused by
+   the next export. A case-insensitive path collision appends `-<id>`.
 3. **Frontmatter.** `type:` is never emitted — the folder carries the label, so
    emitting it would make a later folder move a no-op. `id:` is emitted only
-   when the id differs from the filename stem. Keys are sorted; dotted keys
-   expand back into nested maps; lists become YAML sequences; dates and
-   datetimes become ISO strings; points become WKT; embeddings are never
-   emitted.
-4. **Quoting.** A string that would parse back as an integer, float, boolean,
-   date, datetime or wikilink is quoted. `[[A]]` unquoted is a YAML flow
-   sequence, and a round trip must not change a value's type.
+   when the id differs from the filename stem, and `title:` only when the title
+   does. Keys are sorted; dotted keys expand back into nested maps, except
+   where the expansion would have to grow through a property that is already a
+   scalar, which keeps the literal dotted key; lists become YAML sequences, and
+   a list or map *inside* a sequence is written as JSON, which is YAML flow
+   syntax; dates and datetimes become ISO strings; points become
+   `POINT(lon lat)` WKT; a whole float keeps its `.0`. `file_path`,
+   `concept_id`, `_provisional`, the body property and the attachment-derived
+   properties are never frontmatter, and embeddings are not properties at all —
+   they live in the graph's own store and no export writes them.
+4. **Quoting.** A string is quoted when, unquoted, it would come back as
+   something else. In the order checked: it is empty or padded with
+   whitespace; it starts with a YAML indicator character (`-?:,[]{}#&*!|>'"%@`
+   or a backtick) — which is what quotes a `[[wikilink]]`, since bare `[[A]]`
+   is a flow sequence and not the name it spells; it contains `: `,
+   a ` #` comment opener or a newline, or ends in `:`; it spells a boolean or
+   null in any of YAML's casings, including the 1.1 words `y`/`n`/`yes`/`no`/
+   `on`/`off`; it parses as an integer or a float, or starts `0x`/`0o`; or it
+   matches a date or datetime §4.2 would infer — which is asked of the reader's
+   own inference, so the two cannot disagree. Everything else is written bare.
 5. **Body.** The `body` property verbatim. A node without one produces a
-   frontmatter-only file. Human-owned prose is never rewritten.
+   frontmatter-only file; a node with a body and nothing to say above it
+   produces a file with no frontmatter block at all. Human-owned prose is never
+   rewritten.
 6. **Edges** become frontmatter lists keyed `lower_snake(TYPE)`, with wikilink
-   values: `depends_on: ["[[Seismic interpretation]]"]`. An edge already
-   present in the body as a link or embed is not duplicated. `CONTAINS`,
-   `TAGGED`, `HAS_IMAGE` and `HAS_ATTACHMENT` are structural and are not
-   emitted. An ambiguous target is written folder-qualified,
-   `[[Label/Name]]`.
+   values: `depends_on: ["[[Seismic interpretation]]"]`. The key is exactly
+   what §4.3's `UPPER_SNAKE(key)` turns back into that type. Two kinds of edge
+   are left out. **Every edge whose target is not a file**, which is how
+   `CONTAINS` (it leaves a `Folder`), `TAGGED`, `HAS_IMAGE`, `HAS_ATTACHMENT`
+   and every hub edge leave — none of them named as a special case, because a
+   target that is not a file has no wikilink to name it. And **a `LINKS_TO` or
+   `EMBEDS` edge whose target the body already names** as a link or an embed.
+   Only those two types are checked against the prose: a
+   typed edge says something the link syntax does not, and dropping it because
+   the same two notes happen to be linked would retype it on the next import.
+   An edge to a `_provisional` stub is written as `[[<the unresolved name>]]`,
+   so a dangling link declared in frontmatter dangles in the same place next
+   time. An ambiguous target is written folder-qualified, `[[Label/Name]]`.
 7. **Overwrite safety.** `.kglite/export-manifest.json` records every file the
    export wrote: `{"kglite_vault": 1, "files": {"<vault-relative path>":
    "<sha256 hex>"}}`. On the next export a file whose current hash differs from
-   its manifest entry was edited by a human, and the export refuses unless
-   `force` is set. A file absent from the manifest is never overwritten and
-   never deleted; a node deleted from the graph removes its file only when the
-   manifest owns it.
+   its manifest entry was edited by a human, and the export refuses it; a file
+   absent from the manifest was written by somebody else, and the export
+   refuses that too. `force` overrides both, and nothing else. A refused file
+   stays in the manifest, so the deletion pass does not read it as a file whose
+   node disappeared; a file absent from the manifest is never deleted at all;
+   and a node deleted from the graph removes its file only when the manifest
+   owns it and the bytes still match. A file whose bytes already equal what the
+   export would write is not rewritten, so an unchanged export moves no
+   modification times. A manifest that will not parse, or that names a version
+   this build does not write, fails the export rather than being guessed at.
 8. **Determinism.** Frontmatter keys sorted, edge lists sorted, file order
-   stable: exporting the same graph twice is byte-identical.
+   stable, the manifest's own keys sorted: exporting the same graph twice is
+   byte-identical.
 9. **Documented losses.** Edge properties (`section`, `anchor`, `alt`,
    `ordinal`) are dropped and counted in the export report. Attachment bytes
-   are copied only when the graph knows its source root; otherwise the
-   references are reported as unresolvable. Synthesized nodes are not files.
-   Round-tripping is defined against exactly those losses: importing an
-   exported vault reproduces the imported graph apart from them, and exporting
-   an imported vault twice is byte-identical.
+   are copied only when the caller names the source root the graph was built
+   from; otherwise the references are reported as unresolvable. Synthesized
+   nodes are not files. `.kglite/vault.yaml` is **not** written — a graph does
+   not carry it — so everything it declared is re-derived from the defaults on
+   the next import: hub nodes and their edges, `heading_edges` retyping,
+   declared `types:`, indexes and the `embed:` targets. For the same reason a
+   top-level string that looks like a date comes back a date (§4.2: quoting
+   alone does not stop inference; only `types:` does). A note that is re-filed
+   under its label carries its body verbatim, so a note-relative reference in
+   that body resolves from the new location, not the old one. Round-tripping is
+   defined against exactly those losses: importing an exported vault reproduces
+   the imported graph apart from them, and exporting an imported vault twice is
+   byte-identical.
 
 ## 11. Converter checklist
 

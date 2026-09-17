@@ -13,7 +13,9 @@ pub fn register(py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(entry::build, &m)?)?;
     m.add_function(wrap_pyfunction!(entry::validate, &m)?)?;
     m.add_function(wrap_pyfunction!(entry::source, &m)?)?;
+    m.add_function(wrap_pyfunction!(entry::export, &m)?)?;
     m.add_class::<report::VaultReport>()?;
+    m.add_class::<report::ExportReport>()?;
     parent.add_submodule(&m)?;
     py.import("sys")?
         .getattr("modules")?

@@ -862,3 +862,13 @@ fn carried_directories_are_only_read_under_the_vault_dialect() {
     assert_eq!(out.report.recipes_imported, 0);
     assert!(!out.graph.has_node_type("KgliteSkill"));
 }
+
+#[test]
+fn a_rendered_recipe_parses_back_to_the_same_record() {
+    // The writer the exporter uses (VAULT.md §10, §8) and the reader P6 added
+    // are one dialect, so a vault written from a graph re-imports unchanged.
+    let original = crate::graph::recipes::parse_markdown(RECIPE).unwrap();
+    let rendered = crate::graph::recipes::render_markdown(&original);
+    let back = crate::graph::recipes::parse_markdown(&rendered).unwrap();
+    assert_eq!(back, original);
+}
