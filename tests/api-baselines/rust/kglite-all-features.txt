@@ -1273,6 +1273,62 @@ pub fn kglite::api::durable::resolve_ops(raw: &[kglite::api::durable::RawOp], gr
 pub fn kglite::api::durable::wal_path(checkpoint: &std::path::Path) -> std::path::PathBuf
 pub fn kglite::api::durable::wrap_for_durability(dir: &mut kglite::api::DirGraph) -> core::result::Result<(), kglite::api::durable::DurableOpenError>
 pub mod kglite::api::embeddings
+pub enum kglite::api::embeddings::EmbedError
+pub kglite::api::embeddings::EmbedError::Column(alloc::string::String)
+pub kglite::api::embeddings::EmbedError::Dimension
+pub kglite::api::embeddings::EmbedError::Dimension::model: usize
+pub kglite::api::embeddings::EmbedError::Dimension::store: usize
+pub kglite::api::embeddings::EmbedError::Model(alloc::string::String)
+pub kglite::api::embeddings::EmbedError::Output(alloc::string::String)
+impl core::clone::Clone for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::clone(&self) -> kglite::api::embeddings::EmbedError
+impl core::cmp::Eq for kglite::api::embeddings::EmbedError
+impl core::cmp::PartialEq for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::eq(&self, other: &kglite::api::embeddings::EmbedError) -> bool
+impl core::error::Error for kglite::api::embeddings::EmbedError
+impl core::fmt::Debug for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbedError
+pub enum kglite::api::embeddings::EmbedMode
+pub kglite::api::embeddings::EmbedMode::All
+pub kglite::api::embeddings::EmbedMode::Changed
+pub kglite::api::embeddings::EmbedMode::Missing
+impl core::clone::Clone for kglite::api::embeddings::EmbedMode
+pub fn kglite::api::embeddings::EmbedMode::clone(&self) -> kglite::api::embeddings::EmbedMode
+impl core::cmp::Eq for kglite::api::embeddings::EmbedMode
+impl core::cmp::PartialEq for kglite::api::embeddings::EmbedMode
+pub fn kglite::api::embeddings::EmbedMode::eq(&self, other: &kglite::api::embeddings::EmbedMode) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::EmbedMode
+pub fn kglite::api::embeddings::EmbedMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::embeddings::EmbedMode
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbedMode
+pub struct kglite::api::embeddings::EmbedHooks<'a>
+pub kglite::api::embeddings::EmbedHooks::batch_size: usize
+pub kglite::api::embeddings::EmbedHooks::embed_batch: core::option::Option<kglite::api::embeddings::EmbedBatchFn<'a>>
+pub kglite::api::embeddings::EmbedHooks::load_when_idle: bool
+pub kglite::api::embeddings::EmbedHooks::on_batch: core::option::Option<&'a dyn core::ops::function::Fn(usize)>
+pub kglite::api::embeddings::EmbedHooks::on_start: core::option::Option<&'a dyn core::ops::function::Fn(usize)>
+impl core::default::Default for kglite::api::embeddings::EmbedHooks<'_>
+pub fn kglite::api::embeddings::EmbedHooks<'_>::default() -> Self
+pub struct kglite::api::embeddings::EmbedOutcome
+pub kglite::api::embeddings::EmbedOutcome::dimension: usize
+pub kglite::api::embeddings::EmbedOutcome::embedded: usize
+pub kglite::api::embeddings::EmbedOutcome::reembedded_changed: usize
+pub kglite::api::embeddings::EmbedOutcome::skipped: usize
+pub kglite::api::embeddings::EmbedOutcome::skipped_existing: usize
+impl core::clone::Clone for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::clone(&self) -> kglite::api::embeddings::EmbedOutcome
+impl core::cmp::Eq for kglite::api::embeddings::EmbedOutcome
+impl core::cmp::PartialEq for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::eq(&self, other: &kglite::api::embeddings::EmbedOutcome) -> bool
+impl core::default::Default for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::default() -> kglite::api::embeddings::EmbedOutcome
+impl core::fmt::Debug for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::embeddings::EmbedOutcome
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbedOutcome
 pub struct kglite::api::embeddings::EmbeddingIngestReport
 pub kglite::api::embeddings::EmbeddingIngestReport::dimension: usize
 pub kglite::api::embeddings::EmbeddingIngestReport::embeddings_stored: usize
@@ -1333,6 +1389,7 @@ impl core::marker::StructuralPartialEq for kglite::api::embeddings::VectorIndexS
 pub fn kglite::api::embeddings::add_embeddings<I, V>(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, metric: core::option::Option<&str>, entries: I) -> core::result::Result<kglite::api::embeddings::EmbeddingIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = (kglite::datatypes::values::Value, V)>, V: core::convert::AsRef<[f32]>
 pub fn kglite::api::embeddings::build_vector_index(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, m: core::option::Option<usize>, ef_construction: core::option::Option<usize>, ef_search: core::option::Option<usize>, metric: core::option::Option<&str>, auto_refresh_limit: core::option::Option<usize>) -> core::result::Result<kglite::api::embeddings::VectorIndexReport, alloc::string::String>
 pub fn kglite::api::embeddings::drop_vector_index(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str) -> bool
+pub fn kglite::api::embeddings::embed_property(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, node_type: &str, text_column: &str, mode: kglite::api::embeddings::EmbedMode, model: &dyn kglite::api::Embedder, hooks: &kglite::api::embeddings::EmbedHooks<'_>) -> core::result::Result<kglite::api::embeddings::EmbedOutcome, kglite::api::embeddings::EmbedError>
 pub fn kglite::api::embeddings::has_vector_index(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> bool
 pub fn kglite::api::embeddings::list_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::EmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_vector_indexes(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::VectorIndexStatus>
@@ -1341,6 +1398,7 @@ pub fn kglite::api::embeddings::resolve_source_column<'a>(graph: &'a kglite::api
 pub fn kglite::api::embeddings::set_embeddings<I, V>(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, metric: core::option::Option<&str>, entries: I) -> core::result::Result<kglite::api::embeddings::EmbeddingIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = (kglite::datatypes::values::Value, V)>, V: core::convert::AsRef<[f32]>
 pub fn kglite::api::embeddings::store_key(node_type: &str, text_column: &str) -> (alloc::string::String, alloc::string::String)
 pub fn kglite::api::embeddings::store_name(text_column: &str) -> alloc::string::String
+pub type kglite::api::embeddings::EmbedBatchFn<'a> = &'a dyn core::ops::function::Fn(&[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, alloc::string::String>
 pub mod kglite::api::fluent
 pub enum kglite::api::fluent::EvaluationResult
 pub kglite::api::fluent::EvaluationResult::Computed(alloc::vec::Vec<kglite::api::fluent::StatResult>)
@@ -2338,8 +2396,10 @@ pub fn kglite::api::recipes::import_path(graph: &mut kglite::api::DirGraph, path
 pub fn kglite::api::recipes::import_value(graph: &mut kglite::api::DirGraph, document: &serde_json::value::Value) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, kglite::error::KgError>
 pub fn kglite::api::recipes::list(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::recipes::RecipeRecord>
 pub fn kglite::api::recipes::merge(graph: kglite::api::recipes::RecipeCatalog, manifest: kglite::api::recipes::RecipeCatalog) -> kglite::api::recipes::RecipeCatalog
+pub fn kglite::api::recipes::parse_markdown(text: &str) -> core::result::Result<kglite::api::recipes::RecipeRecord, kglite::error::KgError>
 pub fn kglite::api::recipes::query_conversion_error(error: kglite::param::JsonQueryParameterError) -> kglite::api::recipes::VariablesValidationError
 pub fn kglite::api::recipes::set(graph: &mut kglite::api::DirGraph, record: &kglite::api::recipes::RecipeRecord) -> core::result::Result<kglite::api::recipes::SetOutcome, kglite::error::KgError>
+pub fn kglite::api::recipes::set_from_markdown(graph: &mut kglite::api::DirGraph, text: &str) -> core::result::Result<kglite::api::recipes::RecipeRecord, kglite::error::KgError>
 pub fn kglite::api::recipes::validate(record: &kglite::api::recipes::RecipeRecord) -> core::result::Result<(), kglite::error::KgError>
 pub fn kglite::api::recipes::validate_identifier(identifier: &str, label: &str) -> kglite::api::recipes::CatalogResult<()>
 pub type kglite::api::recipes::CatalogResult<T> = core::result::Result<T, kglite::api::recipes::RecipeCatalogError>
@@ -3493,6 +3553,8 @@ pub kglite::api::DirGraph::save_metadata: kglite::graph::schema::SaveMetadata
 pub kglite::api::DirGraph::schema_definition: core::option::Option<kglite::api::SchemaDefinition>
 pub kglite::api::DirGraph::schema_locked: bool
 pub kglite::api::DirGraph::secondary_label_index: std::collections::hash::map::HashMap<kglite::api::InternedKey, alloc::vec::Vec<petgraph::graph_impl::NodeIndex>>
+pub kglite::api::DirGraph::source_fingerprint: core::option::Option<u64>
+pub kglite::api::DirGraph::source_root: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::spatial_configs: std::collections::hash::map::HashMap<alloc::string::String, kglite::api::SpatialConfig>
 pub kglite::api::DirGraph::spill_dir: core::option::Option<std::path::PathBuf>
 pub kglite::api::DirGraph::table_property_meta: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::TablePropertyMeta>
@@ -5169,15 +5231,76 @@ pub const kglite::graphgen::NODE_TYPES: &[kglite::graphgen::NodeType]
 pub fn kglite::graphgen::generate_to_dir(cfg: &kglite::graphgen::GraphGenConfig, out_dir: &std::path::Path) -> core::io::error::Result<kglite::graphgen::GraphGenStats>
 pub mod kglite::okf
 pub mod kglite::okf::build
-pub fn kglite::okf::build::build(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<alloc::sync::Arc<kglite::api::DirGraph>, alloc::string::String>
+pub struct kglite::okf::build::BuildOutput
+pub kglite::okf::build::BuildOutput::graph: alloc::sync::Arc<kglite::api::DirGraph>
+pub kglite::okf::build::BuildOutput::report: kglite::okf::model::BuildReport
+impl core::clone::Clone for kglite::okf::build::BuildOutput
+pub fn kglite::okf::build::BuildOutput::clone(&self) -> kglite::okf::build::BuildOutput
+pub fn kglite::okf::build::build(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<kglite::okf::build::BuildOutput, alloc::string::String>
+pub mod kglite::okf::export
+pub struct kglite::okf::export::ExportOptions
+pub kglite::okf::export::ExportOptions::body_property: alloc::string::String
+pub kglite::okf::export::ExportOptions::force: bool
+pub kglite::okf::export::ExportOptions::source_root: core::option::Option<std::path::PathBuf>
+impl core::clone::Clone for kglite::okf::export::ExportOptions
+pub fn kglite::okf::export::ExportOptions::clone(&self) -> kglite::okf::export::ExportOptions
+impl core::default::Default for kglite::okf::export::ExportOptions
+pub fn kglite::okf::export::ExportOptions::default() -> Self
+impl core::fmt::Debug for kglite::okf::export::ExportOptions
+pub fn kglite::okf::export::ExportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::okf::export::ExportReport
+pub kglite::okf::export::ExportReport::attachments_copied: usize
+pub kglite::okf::export::ExportReport::attachments_unresolved: usize
+pub kglite::okf::export::ExportReport::edge_properties_dropped: usize
+pub kglite::okf::export::ExportReport::files_deleted: usize
+pub kglite::okf::export::ExportReport::files_refused: usize
+pub kglite::okf::export::ExportReport::files_unchanged: usize
+pub kglite::okf::export::ExportReport::files_written: usize
+pub kglite::okf::export::ExportReport::recipes_written: usize
+pub kglite::okf::export::ExportReport::refusals: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::export::ExportReport::skills_written: usize
+impl kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::render(&self) -> alloc::string::String
+impl core::clone::Clone for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::clone(&self) -> kglite::okf::export::ExportReport
+impl core::cmp::Eq for kglite::okf::export::ExportReport
+impl core::cmp::PartialEq for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::eq(&self, other: &kglite::okf::export::ExportReport) -> bool
+impl core::default::Default for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::default() -> kglite::okf::export::ExportReport
+impl core::fmt::Debug for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::export::ExportReport
+pub const kglite::okf::export::MANIFEST_FILE: &str
+pub const kglite::okf::export::MANIFEST_VERSION: i64
+pub fn kglite::okf::export::export(graph: &kglite::api::DirGraph, dir: &std::path::Path, opts: &kglite::okf::export::ExportOptions) -> core::result::Result<kglite::okf::export::ExportReport, alloc::string::String>
+pub mod kglite::okf::fingerprint
+pub fn kglite::okf::fingerprint::fingerprint(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<u64, alloc::string::String>
+pub fn kglite::okf::fingerprint::rebuild_if_changed(old: &kglite::api::DirGraph, opts: &kglite::okf::model::BuildOptions, embedder: core::option::Option<&dyn kglite::api::Embedder>) -> core::result::Result<core::option::Option<kglite::okf::build::BuildOutput>, alloc::string::String>
 pub mod kglite::okf::frontmatter
+pub fn kglite::okf::frontmatter::infer_temporal(v: kglite::datatypes::values::Value) -> kglite::datatypes::values::Value
 pub fn kglite::okf::frontmatter::parse(text: &str) -> core::result::Result<alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::datatypes::values::Value>, alloc::string::String>
+pub fn kglite::okf::frontmatter::parse_yaml(yaml: &str) -> core::result::Result<kglite::datatypes::values::Value, alloc::string::String>
 pub fn kglite::okf::frontmatter::split(text: &str) -> (core::option::Option<alloc::string::String>, alloc::string::String)
 pub mod kglite::okf::links
-pub fn kglite::okf::links::extract_links(body: &str, source_dir: &str, dialect: kglite::okf::model::Dialect) -> alloc::vec::Vec<kglite::okf::model::Link>
+pub struct kglite::okf::links::Extraction
+pub kglite::okf::links::Extraction::attachments: alloc::vec::Vec<kglite::okf::model::AttachmentRef>
+pub kglite::okf::links::Extraction::links: alloc::vec::Vec<kglite::okf::model::Link>
+pub kglite::okf::links::Extraction::path_errors: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::links::Extraction::tags: alloc::vec::Vec<alloc::string::String>
+impl core::cmp::Eq for kglite::okf::links::Extraction
+impl core::cmp::PartialEq for kglite::okf::links::Extraction
+pub fn kglite::okf::links::Extraction::eq(&self, other: &kglite::okf::links::Extraction) -> bool
+impl core::default::Default for kglite::okf::links::Extraction
+pub fn kglite::okf::links::Extraction::default() -> kglite::okf::links::Extraction
+impl core::fmt::Debug for kglite::okf::links::Extraction
+pub fn kglite::okf::links::Extraction::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::links::Extraction
+pub fn kglite::okf::links::extract(body: &str, source_dir: &str, profile: &kglite::okf::model::Profile) -> kglite::okf::links::Extraction
 pub mod kglite::okf::model
 pub enum kglite::okf::model::Dialect
 pub kglite::okf::model::Dialect::Loose
+pub kglite::okf::model::Dialect::Obsidian
 pub kglite::okf::model::Dialect::Okf
 impl kglite::okf::model::Dialect
 pub fn kglite::okf::model::Dialect::parse(name: core::option::Option<&str>) -> Self
@@ -5191,23 +5314,106 @@ impl core::fmt::Debug for kglite::okf::model::Dialect
 pub fn kglite::okf::model::Dialect::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for kglite::okf::model::Dialect
 impl core::marker::StructuralPartialEq for kglite::okf::model::Dialect
+pub enum kglite::okf::model::FolderNoteDirection
+pub kglite::okf::model::FolderNoteDirection::ChildToParent
+pub kglite::okf::model::FolderNoteDirection::ParentToChild
+impl core::clone::Clone for kglite::okf::model::FolderNoteDirection
+pub fn kglite::okf::model::FolderNoteDirection::clone(&self) -> kglite::okf::model::FolderNoteDirection
+impl core::cmp::Eq for kglite::okf::model::FolderNoteDirection
+impl core::cmp::PartialEq for kglite::okf::model::FolderNoteDirection
+pub fn kglite::okf::model::FolderNoteDirection::eq(&self, other: &kglite::okf::model::FolderNoteDirection) -> bool
+impl core::fmt::Debug for kglite::okf::model::FolderNoteDirection
+pub fn kglite::okf::model::FolderNoteDirection::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::okf::model::FolderNoteDirection
+impl core::marker::StructuralPartialEq for kglite::okf::model::FolderNoteDirection
+pub enum kglite::okf::model::IdScheme
+pub kglite::okf::model::IdScheme::FrontmatterOrStem
+pub kglite::okf::model::IdScheme::Path
+impl core::clone::Clone for kglite::okf::model::IdScheme
+pub fn kglite::okf::model::IdScheme::clone(&self) -> kglite::okf::model::IdScheme
+impl core::cmp::Eq for kglite::okf::model::IdScheme
+impl core::cmp::PartialEq for kglite::okf::model::IdScheme
+pub fn kglite::okf::model::IdScheme::eq(&self, other: &kglite::okf::model::IdScheme) -> bool
+impl core::fmt::Debug for kglite::okf::model::IdScheme
+pub fn kglite::okf::model::IdScheme::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::okf::model::IdScheme
+impl core::marker::StructuralPartialEq for kglite::okf::model::IdScheme
+pub enum kglite::okf::model::LabelFrom
+pub kglite::okf::model::LabelFrom::Folder
+pub kglite::okf::model::LabelFrom::Type
+impl core::clone::Clone for kglite::okf::model::LabelFrom
+pub fn kglite::okf::model::LabelFrom::clone(&self) -> kglite::okf::model::LabelFrom
+impl core::cmp::Eq for kglite::okf::model::LabelFrom
+impl core::cmp::PartialEq for kglite::okf::model::LabelFrom
+pub fn kglite::okf::model::LabelFrom::eq(&self, other: &kglite::okf::model::LabelFrom) -> bool
+impl core::fmt::Debug for kglite::okf::model::LabelFrom
+pub fn kglite::okf::model::LabelFrom::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::okf::model::LabelFrom
+impl core::marker::StructuralPartialEq for kglite::okf::model::LabelFrom
+pub struct kglite::okf::model::AttachmentRef
+pub kglite::okf::model::AttachmentRef::alt: core::option::Option<alloc::string::String>
+pub kglite::okf::model::AttachmentRef::section: core::option::Option<alloc::string::String>
+pub kglite::okf::model::AttachmentRef::target: alloc::string::String
+impl core::clone::Clone for kglite::okf::model::AttachmentRef
+pub fn kglite::okf::model::AttachmentRef::clone(&self) -> kglite::okf::model::AttachmentRef
+impl core::cmp::Eq for kglite::okf::model::AttachmentRef
+impl core::cmp::PartialEq for kglite::okf::model::AttachmentRef
+pub fn kglite::okf::model::AttachmentRef::eq(&self, other: &kglite::okf::model::AttachmentRef) -> bool
+impl core::fmt::Debug for kglite::okf::model::AttachmentRef
+pub fn kglite::okf::model::AttachmentRef::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::model::AttachmentRef
 pub struct kglite::okf::model::BuildOptions
 pub kglite::okf::model::BuildOptions::dialect: kglite::okf::model::Dialect
-pub kglite::okf::model::BuildOptions::embed: bool
+pub kglite::okf::model::BuildOptions::profile: kglite::okf::model::Profile
 pub kglite::okf::model::BuildOptions::require_frontmatter: bool
 pub kglite::okf::model::BuildOptions::respect_skip: bool
 pub kglite::okf::model::BuildOptions::skip_dirs: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::model::BuildOptions::with_body: bool
+impl kglite::okf::model::BuildOptions
+pub fn kglite::okf::model::BuildOptions::for_dialect(dialect: kglite::okf::model::Dialect) -> Self
 impl core::clone::Clone for kglite::okf::model::BuildOptions
 pub fn kglite::okf::model::BuildOptions::clone(&self) -> kglite::okf::model::BuildOptions
 impl core::default::Default for kglite::okf::model::BuildOptions
 pub fn kglite::okf::model::BuildOptions::default() -> Self
 impl core::fmt::Debug for kglite::okf::model::BuildOptions
 pub fn kglite::okf::model::BuildOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::okf::model::BuildReport
+pub kglite::okf::model::BuildReport::ambiguous_attachments: usize
+pub kglite::okf::model::BuildReport::concepts: usize
+pub kglite::okf::model::BuildReport::dangling: usize
+pub kglite::okf::model::BuildReport::edges_by_type: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+pub kglite::okf::model::BuildReport::embed_targets: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub kglite::okf::model::BuildReport::errors: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::model::BuildReport::files_scanned: usize
+pub kglite::okf::model::BuildReport::folder_notes: usize
+pub kglite::okf::model::BuildReport::indexes_declared: usize
+pub kglite::okf::model::BuildReport::missing_attachments: usize
+pub kglite::okf::model::BuildReport::nodes_by_label: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+pub kglite::okf::model::BuildReport::recipes_imported: usize
+pub kglite::okf::model::BuildReport::skills_imported: usize
+pub kglite::okf::model::BuildReport::text_indexes_built: usize
+pub kglite::okf::model::BuildReport::warnings: alloc::vec::Vec<alloc::string::String>
+impl kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::is_ok(&self, strict: bool) -> bool
+pub fn kglite::okf::model::BuildReport::render(&self) -> alloc::string::String
+impl core::clone::Clone for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::clone(&self) -> kglite::okf::model::BuildReport
+impl core::cmp::Eq for kglite::okf::model::BuildReport
+impl core::cmp::PartialEq for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::eq(&self, other: &kglite::okf::model::BuildReport) -> bool
+impl core::default::Default for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::default() -> kglite::okf::model::BuildReport
+impl core::fmt::Debug for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::model::BuildReport
 pub struct kglite::okf::model::ConceptDoc
+pub kglite::okf::model::ConceptDoc::attachments: alloc::vec::Vec<kglite::okf::model::AttachmentRef>
 pub kglite::okf::model::ConceptDoc::body: core::option::Option<alloc::string::String>
 pub kglite::okf::model::ConceptDoc::concept_id: alloc::string::String
+pub kglite::okf::model::ConceptDoc::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::model::ConceptDoc::file_path: alloc::string::String
+pub kglite::okf::model::ConceptDoc::hub_key_edges: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::model::ConceptDoc::inline_tags: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::model::ConceptDoc::label: alloc::string::String
 pub kglite::okf::model::ConceptDoc::links: alloc::vec::Vec<kglite::okf::model::Link>
 pub kglite::okf::model::ConceptDoc::props: alloc::vec::Vec<(alloc::string::String, kglite::datatypes::values::Value)>
@@ -5216,10 +5422,23 @@ impl core::clone::Clone for kglite::okf::model::ConceptDoc
 pub fn kglite::okf::model::ConceptDoc::clone(&self) -> kglite::okf::model::ConceptDoc
 impl core::fmt::Debug for kglite::okf::model::ConceptDoc
 pub fn kglite::okf::model::ConceptDoc::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::okf::model::HubSpec
+pub kglite::okf::model::HubSpec::case_insensitive: bool
+pub kglite::okf::model::HubSpec::edge: alloc::string::String
+pub kglite::okf::model::HubSpec::label: alloc::string::String
+impl core::clone::Clone for kglite::okf::model::HubSpec
+pub fn kglite::okf::model::HubSpec::clone(&self) -> kglite::okf::model::HubSpec
+impl core::cmp::Eq for kglite::okf::model::HubSpec
+impl core::cmp::PartialEq for kglite::okf::model::HubSpec
+pub fn kglite::okf::model::HubSpec::eq(&self, other: &kglite::okf::model::HubSpec) -> bool
+impl core::fmt::Debug for kglite::okf::model::HubSpec
+pub fn kglite::okf::model::HubSpec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::model::HubSpec
 pub struct kglite::okf::model::Link
 pub kglite::okf::model::Link::conn_type: alloc::string::String
 pub kglite::okf::model::Link::is_external: bool
-pub kglite::okf::model::Link::is_wikilink: bool
+pub kglite::okf::model::Link::props: alloc::vec::Vec<(alloc::string::String, kglite::datatypes::values::Value)>
+pub kglite::okf::model::Link::reverse: bool
 pub kglite::okf::model::Link::target: alloc::string::String
 impl core::clone::Clone for kglite::okf::model::Link
 pub fn kglite::okf::model::Link::clone(&self) -> kglite::okf::model::Link
@@ -5229,24 +5448,141 @@ pub fn kglite::okf::model::Link::eq(&self, other: &kglite::okf::model::Link) -> 
 impl core::fmt::Debug for kglite::okf::model::Link
 pub fn kglite::okf::model::Link::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::okf::model::Link
+pub struct kglite::okf::model::Profile
+pub kglite::okf::model::Profile::alias_resolution: bool
+pub kglite::okf::model::Profile::attachments: bool
+pub kglite::okf::model::Profile::body_property: alloc::string::String
+pub kglite::okf::model::Profile::default_label: core::option::Option<alloc::string::String>
+pub kglite::okf::model::Profile::embeds: bool
+pub kglite::okf::model::Profile::fallback_label: alloc::string::String
+pub kglite::okf::model::Profile::folder_label: bool
+pub kglite::okf::model::Profile::folder_note_direction: kglite::okf::model::FolderNoteDirection
+pub kglite::okf::model::Profile::folder_note_edge: alloc::string::String
+pub kglite::okf::model::Profile::folder_notes: bool
+pub kglite::okf::model::Profile::frontmatter_edges: bool
+pub kglite::okf::model::Profile::heading_edges: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::okf::model::Profile::hubs: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::okf::model::HubSpec>
+pub kglite::okf::model::Profile::id_scheme: kglite::okf::model::IdScheme
+pub kglite::okf::model::Profile::index_as_folder_metadata: bool
+pub kglite::okf::model::Profile::infer_temporal: bool
+pub kglite::okf::model::Profile::inline_tags: bool
+pub kglite::okf::model::Profile::label_from: kglite::okf::model::LabelFrom
+pub kglite::okf::model::Profile::link_edge_props: bool
+pub kglite::okf::model::Profile::metadata_type_label: bool
+pub kglite::okf::model::Profile::native_collections: bool
+pub kglite::okf::model::Profile::path_safety: bool
+pub kglite::okf::model::Profile::require_frontmatter: bool
+pub kglite::okf::model::Profile::reserved_key_shapes: bool
+pub kglite::okf::model::Profile::skip_dirs: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::model::Profile::skip_log_files: bool
+pub kglite::okf::model::Profile::store_body: bool
+pub kglite::okf::model::Profile::wikilinks: bool
+impl kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::for_dialect(dialect: kglite::okf::model::Dialect) -> Self
+pub fn kglite::okf::model::Profile::obsidian() -> Self
+impl core::clone::Clone for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::clone(&self) -> kglite::okf::model::Profile
+impl core::cmp::Eq for kglite::okf::model::Profile
+impl core::cmp::PartialEq for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::eq(&self, other: &kglite::okf::model::Profile) -> bool
+impl core::default::Default for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::default() -> Self
+impl core::fmt::Debug for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::model::Profile
+pub const kglite::okf::model::ATTACHMENT_LABEL: &str
 pub const kglite::okf::model::CONTAINS_CONN_TYPE: &str
+pub const kglite::okf::model::DEFAULT_BODY_PROPERTY: &str
 pub const kglite::okf::model::DEFAULT_CONN_TYPE: &str
 pub const kglite::okf::model::DEFAULT_LABEL: &str
+pub const kglite::okf::model::DEFAULT_MIME: &str
+pub const kglite::okf::model::EMBEDS_CONN_TYPE: &str
 pub const kglite::okf::model::FOLDER_LABEL: &str
+pub const kglite::okf::model::FOLDER_NOTE_CONN_TYPE: &str
+pub const kglite::okf::model::HAS_ATTACHMENT_CONN_TYPE: &str
+pub const kglite::okf::model::HAS_IMAGE_CONN_TYPE: &str
+pub const kglite::okf::model::IMAGE_LABEL: &str
 pub const kglite::okf::model::SKIP_KEY: &str
 pub const kglite::okf::model::SOURCE_LABEL: &str
 pub const kglite::okf::model::TAGGED_CONN_TYPE: &str
 pub const kglite::okf::model::TAG_LABEL: &str
+pub const kglite::okf::model::VAULT_DEFAULT_LABEL: &str
+pub mod kglite::okf::validate
+pub fn kglite::okf::validate::validate(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<kglite::okf::model::BuildReport, alloc::string::String>
+pub mod kglite::okf::vault_config
+pub enum kglite::okf::vault_config::IndexDecl
+pub kglite::okf::vault_config::IndexDecl::Composite(alloc::vec::Vec<alloc::string::String>)
+pub kglite::okf::vault_config::IndexDecl::Equality(alloc::string::String)
+pub kglite::okf::vault_config::IndexDecl::Range(alloc::string::String)
+impl core::clone::Clone for kglite::okf::vault_config::IndexDecl
+pub fn kglite::okf::vault_config::IndexDecl::clone(&self) -> kglite::okf::vault_config::IndexDecl
+impl core::cmp::Eq for kglite::okf::vault_config::IndexDecl
+impl core::cmp::PartialEq for kglite::okf::vault_config::IndexDecl
+pub fn kglite::okf::vault_config::IndexDecl::eq(&self, other: &kglite::okf::vault_config::IndexDecl) -> bool
+impl core::fmt::Debug for kglite::okf::vault_config::IndexDecl
+pub fn kglite::okf::vault_config::IndexDecl::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::vault_config::IndexDecl
+pub struct kglite::okf::vault_config::VaultConfig
+pub kglite::okf::vault_config::VaultConfig::body: core::option::Option<alloc::string::String>
+pub kglite::okf::vault_config::VaultConfig::default_label: core::option::Option<alloc::string::String>
+pub kglite::okf::vault_config::VaultConfig::embed: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub kglite::okf::vault_config::VaultConfig::folder_note_direction: core::option::Option<kglite::okf::model::FolderNoteDirection>
+pub kglite::okf::vault_config::VaultConfig::folder_note_edge: core::option::Option<alloc::string::String>
+pub kglite::okf::vault_config::VaultConfig::heading_edges: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::okf::vault_config::VaultConfig::hubs: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::okf::model::HubSpec>
+pub kglite::okf::vault_config::VaultConfig::indexes: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<kglite::okf::vault_config::IndexDecl>>
+pub kglite::okf::vault_config::VaultConfig::label_from: core::option::Option<kglite::okf::model::LabelFrom>
+pub kglite::okf::vault_config::VaultConfig::ontology: core::option::Option<kglite::api::OntologyStore>
+pub kglite::okf::vault_config::VaultConfig::skip_dirs: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub kglite::okf::vault_config::VaultConfig::text_indexes: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
+pub kglite::okf::vault_config::VaultConfig::types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>
+impl kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::apply_to_profile(&self, profile: &mut kglite::okf::model::Profile)
+impl core::clone::Clone for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::clone(&self) -> kglite::okf::vault_config::VaultConfig
+impl core::cmp::PartialEq for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::eq(&self, other: &kglite::okf::vault_config::VaultConfig) -> bool
+impl core::default::Default for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::default() -> kglite::okf::vault_config::VaultConfig
+impl core::fmt::Debug for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::vault_config::VaultConfig
+pub const kglite::okf::vault_config::CONFIG_DIR: &str
+pub const kglite::okf::vault_config::CONFIG_FILE: &str
+pub const kglite::okf::vault_config::RECIPES_DIR: &str
+pub const kglite::okf::vault_config::SKILLS_DIR: &str
+pub const kglite::okf::vault_config::SUPPORTED_VERSION: i64
+pub fn kglite::okf::vault_config::config_dir(root: &std::path::Path) -> std::path::PathBuf
+pub fn kglite::okf::vault_config::config_path(root: &std::path::Path) -> std::path::PathBuf
+pub fn kglite::okf::vault_config::load(root: &std::path::Path) -> core::result::Result<core::option::Option<kglite::okf::vault_config::VaultConfig>, alloc::string::String>
+pub fn kglite::okf::vault_config::parse(text: &str) -> core::result::Result<kglite::okf::vault_config::VaultConfig, alloc::string::String>
 pub mod kglite::okf::walk
+pub struct kglite::okf::walk::DiscoveredAttachment
+pub kglite::okf::walk::DiscoveredAttachment::abs_path: std::path::PathBuf
+pub kglite::okf::walk::DiscoveredAttachment::mtime: core::option::Option<i64>
+pub kglite::okf::walk::DiscoveredAttachment::rel_path: alloc::string::String
+pub kglite::okf::walk::DiscoveredAttachment::size: u64
+impl core::clone::Clone for kglite::okf::walk::DiscoveredAttachment
+pub fn kglite::okf::walk::DiscoveredAttachment::clone(&self) -> kglite::okf::walk::DiscoveredAttachment
+impl core::cmp::Eq for kglite::okf::walk::DiscoveredAttachment
+impl core::cmp::PartialEq for kglite::okf::walk::DiscoveredAttachment
+pub fn kglite::okf::walk::DiscoveredAttachment::eq(&self, other: &kglite::okf::walk::DiscoveredAttachment) -> bool
+impl core::fmt::Debug for kglite::okf::walk::DiscoveredAttachment
+pub fn kglite::okf::walk::DiscoveredAttachment::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::walk::DiscoveredAttachment
 pub struct kglite::okf::walk::DiscoveredFile
 pub kglite::okf::walk::DiscoveredFile::abs_path: std::path::PathBuf
+pub kglite::okf::walk::DiscoveredFile::mtime: core::option::Option<i64>
 pub kglite::okf::walk::DiscoveredFile::rel_path: alloc::string::String
+pub kglite::okf::walk::DiscoveredFile::size: u64
 impl core::clone::Clone for kglite::okf::walk::DiscoveredFile
 pub fn kglite::okf::walk::DiscoveredFile::clone(&self) -> kglite::okf::walk::DiscoveredFile
 impl core::fmt::Debug for kglite::okf::walk::DiscoveredFile
 pub fn kglite::okf::walk::DiscoveredFile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::okf::walk::WalkResult
+pub kglite::okf::walk::WalkResult::attachments: alloc::vec::Vec<kglite::okf::walk::DiscoveredAttachment>
 pub kglite::okf::walk::WalkResult::concepts: alloc::vec::Vec<kglite::okf::walk::DiscoveredFile>
+pub kglite::okf::walk::WalkResult::diverted: alloc::vec::Vec<kglite::okf::walk::DiscoveredFile>
 pub kglite::okf::walk::WalkResult::index_files: std::collections::hash::map::HashMap<alloc::string::String, std::path::PathBuf>
 impl core::clone::Clone for kglite::okf::walk::WalkResult
 pub fn kglite::okf::walk::WalkResult::clone(&self) -> kglite::okf::walk::WalkResult
@@ -5254,9 +5590,10 @@ impl core::default::Default for kglite::okf::walk::WalkResult
 pub fn kglite::okf::walk::WalkResult::default() -> kglite::okf::walk::WalkResult
 impl core::fmt::Debug for kglite::okf::walk::WalkResult
 pub fn kglite::okf::walk::WalkResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn kglite::okf::walk::discover(root: &std::path::Path, skip_dirs: &[alloc::string::String]) -> core::result::Result<kglite::okf::walk::WalkResult, alloc::string::String>
+pub fn kglite::okf::walk::discover(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<kglite::okf::walk::WalkResult, alloc::string::String>
 pub enum kglite::okf::Dialect
 pub kglite::okf::Dialect::Loose
+pub kglite::okf::Dialect::Obsidian
 pub kglite::okf::Dialect::Okf
 impl kglite::okf::model::Dialect
 pub fn kglite::okf::model::Dialect::parse(name: core::option::Option<&str>) -> Self
@@ -5270,23 +5607,111 @@ impl core::fmt::Debug for kglite::okf::model::Dialect
 pub fn kglite::okf::model::Dialect::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for kglite::okf::model::Dialect
 impl core::marker::StructuralPartialEq for kglite::okf::model::Dialect
+pub enum kglite::okf::FolderNoteDirection
+pub kglite::okf::FolderNoteDirection::ChildToParent
+pub kglite::okf::FolderNoteDirection::ParentToChild
+impl core::clone::Clone for kglite::okf::model::FolderNoteDirection
+pub fn kglite::okf::model::FolderNoteDirection::clone(&self) -> kglite::okf::model::FolderNoteDirection
+impl core::cmp::Eq for kglite::okf::model::FolderNoteDirection
+impl core::cmp::PartialEq for kglite::okf::model::FolderNoteDirection
+pub fn kglite::okf::model::FolderNoteDirection::eq(&self, other: &kglite::okf::model::FolderNoteDirection) -> bool
+impl core::fmt::Debug for kglite::okf::model::FolderNoteDirection
+pub fn kglite::okf::model::FolderNoteDirection::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::okf::model::FolderNoteDirection
+impl core::marker::StructuralPartialEq for kglite::okf::model::FolderNoteDirection
+pub enum kglite::okf::IdScheme
+pub kglite::okf::IdScheme::FrontmatterOrStem
+pub kglite::okf::IdScheme::Path
+impl core::clone::Clone for kglite::okf::model::IdScheme
+pub fn kglite::okf::model::IdScheme::clone(&self) -> kglite::okf::model::IdScheme
+impl core::cmp::Eq for kglite::okf::model::IdScheme
+impl core::cmp::PartialEq for kglite::okf::model::IdScheme
+pub fn kglite::okf::model::IdScheme::eq(&self, other: &kglite::okf::model::IdScheme) -> bool
+impl core::fmt::Debug for kglite::okf::model::IdScheme
+pub fn kglite::okf::model::IdScheme::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::okf::model::IdScheme
+impl core::marker::StructuralPartialEq for kglite::okf::model::IdScheme
+pub enum kglite::okf::IndexDecl
+pub kglite::okf::IndexDecl::Composite(alloc::vec::Vec<alloc::string::String>)
+pub kglite::okf::IndexDecl::Equality(alloc::string::String)
+pub kglite::okf::IndexDecl::Range(alloc::string::String)
+impl core::clone::Clone for kglite::okf::vault_config::IndexDecl
+pub fn kglite::okf::vault_config::IndexDecl::clone(&self) -> kglite::okf::vault_config::IndexDecl
+impl core::cmp::Eq for kglite::okf::vault_config::IndexDecl
+impl core::cmp::PartialEq for kglite::okf::vault_config::IndexDecl
+pub fn kglite::okf::vault_config::IndexDecl::eq(&self, other: &kglite::okf::vault_config::IndexDecl) -> bool
+impl core::fmt::Debug for kglite::okf::vault_config::IndexDecl
+pub fn kglite::okf::vault_config::IndexDecl::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::vault_config::IndexDecl
+pub enum kglite::okf::LabelFrom
+pub kglite::okf::LabelFrom::Folder
+pub kglite::okf::LabelFrom::Type
+impl core::clone::Clone for kglite::okf::model::LabelFrom
+pub fn kglite::okf::model::LabelFrom::clone(&self) -> kglite::okf::model::LabelFrom
+impl core::cmp::Eq for kglite::okf::model::LabelFrom
+impl core::cmp::PartialEq for kglite::okf::model::LabelFrom
+pub fn kglite::okf::model::LabelFrom::eq(&self, other: &kglite::okf::model::LabelFrom) -> bool
+impl core::fmt::Debug for kglite::okf::model::LabelFrom
+pub fn kglite::okf::model::LabelFrom::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::okf::model::LabelFrom
+impl core::marker::StructuralPartialEq for kglite::okf::model::LabelFrom
 pub struct kglite::okf::BuildOptions
 pub kglite::okf::BuildOptions::dialect: kglite::okf::model::Dialect
-pub kglite::okf::BuildOptions::embed: bool
+pub kglite::okf::BuildOptions::profile: kglite::okf::model::Profile
 pub kglite::okf::BuildOptions::require_frontmatter: bool
 pub kglite::okf::BuildOptions::respect_skip: bool
 pub kglite::okf::BuildOptions::skip_dirs: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::BuildOptions::with_body: bool
+impl kglite::okf::model::BuildOptions
+pub fn kglite::okf::model::BuildOptions::for_dialect(dialect: kglite::okf::model::Dialect) -> Self
 impl core::clone::Clone for kglite::okf::model::BuildOptions
 pub fn kglite::okf::model::BuildOptions::clone(&self) -> kglite::okf::model::BuildOptions
 impl core::default::Default for kglite::okf::model::BuildOptions
 pub fn kglite::okf::model::BuildOptions::default() -> Self
 impl core::fmt::Debug for kglite::okf::model::BuildOptions
 pub fn kglite::okf::model::BuildOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::okf::BuildOutput
+pub kglite::okf::BuildOutput::graph: alloc::sync::Arc<kglite::api::DirGraph>
+pub kglite::okf::BuildOutput::report: kglite::okf::model::BuildReport
+impl core::clone::Clone for kglite::okf::build::BuildOutput
+pub fn kglite::okf::build::BuildOutput::clone(&self) -> kglite::okf::build::BuildOutput
+pub struct kglite::okf::BuildReport
+pub kglite::okf::BuildReport::ambiguous_attachments: usize
+pub kglite::okf::BuildReport::concepts: usize
+pub kglite::okf::BuildReport::dangling: usize
+pub kglite::okf::BuildReport::edges_by_type: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+pub kglite::okf::BuildReport::embed_targets: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub kglite::okf::BuildReport::errors: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::BuildReport::files_scanned: usize
+pub kglite::okf::BuildReport::folder_notes: usize
+pub kglite::okf::BuildReport::indexes_declared: usize
+pub kglite::okf::BuildReport::missing_attachments: usize
+pub kglite::okf::BuildReport::nodes_by_label: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+pub kglite::okf::BuildReport::recipes_imported: usize
+pub kglite::okf::BuildReport::skills_imported: usize
+pub kglite::okf::BuildReport::text_indexes_built: usize
+pub kglite::okf::BuildReport::warnings: alloc::vec::Vec<alloc::string::String>
+impl kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::is_ok(&self, strict: bool) -> bool
+pub fn kglite::okf::model::BuildReport::render(&self) -> alloc::string::String
+impl core::clone::Clone for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::clone(&self) -> kglite::okf::model::BuildReport
+impl core::cmp::Eq for kglite::okf::model::BuildReport
+impl core::cmp::PartialEq for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::eq(&self, other: &kglite::okf::model::BuildReport) -> bool
+impl core::default::Default for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::default() -> kglite::okf::model::BuildReport
+impl core::fmt::Debug for kglite::okf::model::BuildReport
+pub fn kglite::okf::model::BuildReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::model::BuildReport
 pub struct kglite::okf::ConceptDoc
+pub kglite::okf::ConceptDoc::attachments: alloc::vec::Vec<kglite::okf::model::AttachmentRef>
 pub kglite::okf::ConceptDoc::body: core::option::Option<alloc::string::String>
 pub kglite::okf::ConceptDoc::concept_id: alloc::string::String
+pub kglite::okf::ConceptDoc::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::ConceptDoc::file_path: alloc::string::String
+pub kglite::okf::ConceptDoc::hub_key_edges: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::ConceptDoc::inline_tags: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::ConceptDoc::label: alloc::string::String
 pub kglite::okf::ConceptDoc::links: alloc::vec::Vec<kglite::okf::model::Link>
 pub kglite::okf::ConceptDoc::props: alloc::vec::Vec<(alloc::string::String, kglite::datatypes::values::Value)>
@@ -5295,10 +5720,44 @@ impl core::clone::Clone for kglite::okf::model::ConceptDoc
 pub fn kglite::okf::model::ConceptDoc::clone(&self) -> kglite::okf::model::ConceptDoc
 impl core::fmt::Debug for kglite::okf::model::ConceptDoc
 pub fn kglite::okf::model::ConceptDoc::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::okf::ExportOptions
+pub kglite::okf::ExportOptions::body_property: alloc::string::String
+pub kglite::okf::ExportOptions::force: bool
+pub kglite::okf::ExportOptions::source_root: core::option::Option<std::path::PathBuf>
+impl core::clone::Clone for kglite::okf::export::ExportOptions
+pub fn kglite::okf::export::ExportOptions::clone(&self) -> kglite::okf::export::ExportOptions
+impl core::default::Default for kglite::okf::export::ExportOptions
+pub fn kglite::okf::export::ExportOptions::default() -> Self
+impl core::fmt::Debug for kglite::okf::export::ExportOptions
+pub fn kglite::okf::export::ExportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::okf::ExportReport
+pub kglite::okf::ExportReport::attachments_copied: usize
+pub kglite::okf::ExportReport::attachments_unresolved: usize
+pub kglite::okf::ExportReport::edge_properties_dropped: usize
+pub kglite::okf::ExportReport::files_deleted: usize
+pub kglite::okf::ExportReport::files_refused: usize
+pub kglite::okf::ExportReport::files_unchanged: usize
+pub kglite::okf::ExportReport::files_written: usize
+pub kglite::okf::ExportReport::recipes_written: usize
+pub kglite::okf::ExportReport::refusals: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::ExportReport::skills_written: usize
+impl kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::render(&self) -> alloc::string::String
+impl core::clone::Clone for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::clone(&self) -> kglite::okf::export::ExportReport
+impl core::cmp::Eq for kglite::okf::export::ExportReport
+impl core::cmp::PartialEq for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::eq(&self, other: &kglite::okf::export::ExportReport) -> bool
+impl core::default::Default for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::default() -> kglite::okf::export::ExportReport
+impl core::fmt::Debug for kglite::okf::export::ExportReport
+pub fn kglite::okf::export::ExportReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::export::ExportReport
 pub struct kglite::okf::Link
 pub kglite::okf::Link::conn_type: alloc::string::String
 pub kglite::okf::Link::is_external: bool
-pub kglite::okf::Link::is_wikilink: bool
+pub kglite::okf::Link::props: alloc::vec::Vec<(alloc::string::String, kglite::datatypes::values::Value)>
+pub kglite::okf::Link::reverse: bool
 pub kglite::okf::Link::target: alloc::string::String
 impl core::clone::Clone for kglite::okf::model::Link
 pub fn kglite::okf::model::Link::clone(&self) -> kglite::okf::model::Link
@@ -5308,10 +5767,81 @@ pub fn kglite::okf::model::Link::eq(&self, other: &kglite::okf::model::Link) -> 
 impl core::fmt::Debug for kglite::okf::model::Link
 pub fn kglite::okf::model::Link::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::okf::model::Link
-pub fn kglite::okf::build(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<alloc::sync::Arc<kglite::api::DirGraph>, alloc::string::String>
+pub struct kglite::okf::Profile
+pub kglite::okf::Profile::alias_resolution: bool
+pub kglite::okf::Profile::attachments: bool
+pub kglite::okf::Profile::body_property: alloc::string::String
+pub kglite::okf::Profile::default_label: core::option::Option<alloc::string::String>
+pub kglite::okf::Profile::embeds: bool
+pub kglite::okf::Profile::fallback_label: alloc::string::String
+pub kglite::okf::Profile::folder_label: bool
+pub kglite::okf::Profile::folder_note_direction: kglite::okf::model::FolderNoteDirection
+pub kglite::okf::Profile::folder_note_edge: alloc::string::String
+pub kglite::okf::Profile::folder_notes: bool
+pub kglite::okf::Profile::frontmatter_edges: bool
+pub kglite::okf::Profile::heading_edges: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::okf::Profile::hubs: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::okf::model::HubSpec>
+pub kglite::okf::Profile::id_scheme: kglite::okf::model::IdScheme
+pub kglite::okf::Profile::index_as_folder_metadata: bool
+pub kglite::okf::Profile::infer_temporal: bool
+pub kglite::okf::Profile::inline_tags: bool
+pub kglite::okf::Profile::label_from: kglite::okf::model::LabelFrom
+pub kglite::okf::Profile::link_edge_props: bool
+pub kglite::okf::Profile::metadata_type_label: bool
+pub kglite::okf::Profile::native_collections: bool
+pub kglite::okf::Profile::path_safety: bool
+pub kglite::okf::Profile::require_frontmatter: bool
+pub kglite::okf::Profile::reserved_key_shapes: bool
+pub kglite::okf::Profile::skip_dirs: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::Profile::skip_log_files: bool
+pub kglite::okf::Profile::store_body: bool
+pub kglite::okf::Profile::wikilinks: bool
+impl kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::for_dialect(dialect: kglite::okf::model::Dialect) -> Self
+pub fn kglite::okf::model::Profile::obsidian() -> Self
+impl core::clone::Clone for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::clone(&self) -> kglite::okf::model::Profile
+impl core::cmp::Eq for kglite::okf::model::Profile
+impl core::cmp::PartialEq for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::eq(&self, other: &kglite::okf::model::Profile) -> bool
+impl core::default::Default for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::default() -> Self
+impl core::fmt::Debug for kglite::okf::model::Profile
+pub fn kglite::okf::model::Profile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::model::Profile
+pub struct kglite::okf::VaultConfig
+pub kglite::okf::VaultConfig::body: core::option::Option<alloc::string::String>
+pub kglite::okf::VaultConfig::default_label: core::option::Option<alloc::string::String>
+pub kglite::okf::VaultConfig::embed: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub kglite::okf::VaultConfig::folder_note_direction: core::option::Option<kglite::okf::model::FolderNoteDirection>
+pub kglite::okf::VaultConfig::folder_note_edge: core::option::Option<alloc::string::String>
+pub kglite::okf::VaultConfig::heading_edges: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::okf::VaultConfig::hubs: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::okf::model::HubSpec>
+pub kglite::okf::VaultConfig::indexes: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<kglite::okf::vault_config::IndexDecl>>
+pub kglite::okf::VaultConfig::label_from: core::option::Option<kglite::okf::model::LabelFrom>
+pub kglite::okf::VaultConfig::ontology: core::option::Option<kglite::api::OntologyStore>
+pub kglite::okf::VaultConfig::skip_dirs: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub kglite::okf::VaultConfig::text_indexes: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
+pub kglite::okf::VaultConfig::types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>
+impl kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::apply_to_profile(&self, profile: &mut kglite::okf::model::Profile)
+impl core::clone::Clone for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::clone(&self) -> kglite::okf::vault_config::VaultConfig
+impl core::cmp::PartialEq for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::eq(&self, other: &kglite::okf::vault_config::VaultConfig) -> bool
+impl core::default::Default for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::default() -> kglite::okf::vault_config::VaultConfig
+impl core::fmt::Debug for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::vault_config::VaultConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::okf::vault_config::VaultConfig
+pub fn kglite::okf::build(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<kglite::okf::build::BuildOutput, alloc::string::String>
+pub fn kglite::okf::export(graph: &kglite::api::DirGraph, dir: &std::path::Path, opts: &kglite::okf::export::ExportOptions) -> core::result::Result<kglite::okf::export::ExportReport, alloc::string::String>
+pub fn kglite::okf::fingerprint(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<u64, alloc::string::String>
 pub fn kglite::okf::parse_bundle(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<alloc::vec::Vec<kglite::okf::model::ConceptDoc>, alloc::string::String>
 pub fn kglite::okf::parse_concepts(files: &[kglite::okf::walk::DiscoveredFile], opts: &kglite::okf::model::BuildOptions) -> alloc::vec::Vec<kglite::okf::model::ConceptDoc>
 pub fn kglite::okf::read_body(path: &std::path::Path) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn kglite::okf::rebuild_if_changed(old: &kglite::api::DirGraph, opts: &kglite::okf::model::BuildOptions, embedder: core::option::Option<&dyn kglite::api::Embedder>) -> core::result::Result<core::option::Option<kglite::okf::build::BuildOutput>, alloc::string::String>
+pub fn kglite::okf::validate(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<kglite::okf::model::BuildReport, alloc::string::String>
 pub mod kglite::param
 pub enum kglite::param::JsonQueryParameterErrorKind
 pub kglite::param::JsonQueryParameterErrorKind::IntegerOutOfRange

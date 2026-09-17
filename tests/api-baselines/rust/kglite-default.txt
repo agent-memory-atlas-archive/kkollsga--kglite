@@ -1273,6 +1273,62 @@ pub fn kglite::api::durable::resolve_ops(raw: &[kglite::api::durable::RawOp], gr
 pub fn kglite::api::durable::wal_path(checkpoint: &std::path::Path) -> std::path::PathBuf
 pub fn kglite::api::durable::wrap_for_durability(dir: &mut kglite::api::DirGraph) -> core::result::Result<(), kglite::api::durable::DurableOpenError>
 pub mod kglite::api::embeddings
+pub enum kglite::api::embeddings::EmbedError
+pub kglite::api::embeddings::EmbedError::Column(alloc::string::String)
+pub kglite::api::embeddings::EmbedError::Dimension
+pub kglite::api::embeddings::EmbedError::Dimension::model: usize
+pub kglite::api::embeddings::EmbedError::Dimension::store: usize
+pub kglite::api::embeddings::EmbedError::Model(alloc::string::String)
+pub kglite::api::embeddings::EmbedError::Output(alloc::string::String)
+impl core::clone::Clone for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::clone(&self) -> kglite::api::embeddings::EmbedError
+impl core::cmp::Eq for kglite::api::embeddings::EmbedError
+impl core::cmp::PartialEq for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::eq(&self, other: &kglite::api::embeddings::EmbedError) -> bool
+impl core::error::Error for kglite::api::embeddings::EmbedError
+impl core::fmt::Debug for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::embeddings::EmbedError
+pub fn kglite::api::embeddings::EmbedError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbedError
+pub enum kglite::api::embeddings::EmbedMode
+pub kglite::api::embeddings::EmbedMode::All
+pub kglite::api::embeddings::EmbedMode::Changed
+pub kglite::api::embeddings::EmbedMode::Missing
+impl core::clone::Clone for kglite::api::embeddings::EmbedMode
+pub fn kglite::api::embeddings::EmbedMode::clone(&self) -> kglite::api::embeddings::EmbedMode
+impl core::cmp::Eq for kglite::api::embeddings::EmbedMode
+impl core::cmp::PartialEq for kglite::api::embeddings::EmbedMode
+pub fn kglite::api::embeddings::EmbedMode::eq(&self, other: &kglite::api::embeddings::EmbedMode) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::EmbedMode
+pub fn kglite::api::embeddings::EmbedMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::embeddings::EmbedMode
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbedMode
+pub struct kglite::api::embeddings::EmbedHooks<'a>
+pub kglite::api::embeddings::EmbedHooks::batch_size: usize
+pub kglite::api::embeddings::EmbedHooks::embed_batch: core::option::Option<kglite::api::embeddings::EmbedBatchFn<'a>>
+pub kglite::api::embeddings::EmbedHooks::load_when_idle: bool
+pub kglite::api::embeddings::EmbedHooks::on_batch: core::option::Option<&'a dyn core::ops::function::Fn(usize)>
+pub kglite::api::embeddings::EmbedHooks::on_start: core::option::Option<&'a dyn core::ops::function::Fn(usize)>
+impl core::default::Default for kglite::api::embeddings::EmbedHooks<'_>
+pub fn kglite::api::embeddings::EmbedHooks<'_>::default() -> Self
+pub struct kglite::api::embeddings::EmbedOutcome
+pub kglite::api::embeddings::EmbedOutcome::dimension: usize
+pub kglite::api::embeddings::EmbedOutcome::embedded: usize
+pub kglite::api::embeddings::EmbedOutcome::reembedded_changed: usize
+pub kglite::api::embeddings::EmbedOutcome::skipped: usize
+pub kglite::api::embeddings::EmbedOutcome::skipped_existing: usize
+impl core::clone::Clone for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::clone(&self) -> kglite::api::embeddings::EmbedOutcome
+impl core::cmp::Eq for kglite::api::embeddings::EmbedOutcome
+impl core::cmp::PartialEq for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::eq(&self, other: &kglite::api::embeddings::EmbedOutcome) -> bool
+impl core::default::Default for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::default() -> kglite::api::embeddings::EmbedOutcome
+impl core::fmt::Debug for kglite::api::embeddings::EmbedOutcome
+pub fn kglite::api::embeddings::EmbedOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::embeddings::EmbedOutcome
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbedOutcome
 pub struct kglite::api::embeddings::EmbeddingIngestReport
 pub kglite::api::embeddings::EmbeddingIngestReport::dimension: usize
 pub kglite::api::embeddings::EmbeddingIngestReport::embeddings_stored: usize
@@ -1333,6 +1389,7 @@ impl core::marker::StructuralPartialEq for kglite::api::embeddings::VectorIndexS
 pub fn kglite::api::embeddings::add_embeddings<I, V>(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, metric: core::option::Option<&str>, entries: I) -> core::result::Result<kglite::api::embeddings::EmbeddingIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = (kglite::datatypes::values::Value, V)>, V: core::convert::AsRef<[f32]>
 pub fn kglite::api::embeddings::build_vector_index(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, m: core::option::Option<usize>, ef_construction: core::option::Option<usize>, ef_search: core::option::Option<usize>, metric: core::option::Option<&str>, auto_refresh_limit: core::option::Option<usize>) -> core::result::Result<kglite::api::embeddings::VectorIndexReport, alloc::string::String>
 pub fn kglite::api::embeddings::drop_vector_index(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str) -> bool
+pub fn kglite::api::embeddings::embed_property(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, node_type: &str, text_column: &str, mode: kglite::api::embeddings::EmbedMode, model: &dyn kglite::api::Embedder, hooks: &kglite::api::embeddings::EmbedHooks<'_>) -> core::result::Result<kglite::api::embeddings::EmbedOutcome, kglite::api::embeddings::EmbedError>
 pub fn kglite::api::embeddings::has_vector_index(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> bool
 pub fn kglite::api::embeddings::list_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::EmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_vector_indexes(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::VectorIndexStatus>
@@ -1341,6 +1398,7 @@ pub fn kglite::api::embeddings::resolve_source_column<'a>(graph: &'a kglite::api
 pub fn kglite::api::embeddings::set_embeddings<I, V>(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, metric: core::option::Option<&str>, entries: I) -> core::result::Result<kglite::api::embeddings::EmbeddingIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = (kglite::datatypes::values::Value, V)>, V: core::convert::AsRef<[f32]>
 pub fn kglite::api::embeddings::store_key(node_type: &str, text_column: &str) -> (alloc::string::String, alloc::string::String)
 pub fn kglite::api::embeddings::store_name(text_column: &str) -> alloc::string::String
+pub type kglite::api::embeddings::EmbedBatchFn<'a> = &'a dyn core::ops::function::Fn(&[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<f32>>, alloc::string::String>
 pub mod kglite::api::fluent
 pub enum kglite::api::fluent::EvaluationResult
 pub kglite::api::fluent::EvaluationResult::Computed(alloc::vec::Vec<kglite::api::fluent::StatResult>)
@@ -3476,6 +3534,8 @@ pub kglite::api::DirGraph::save_metadata: kglite::graph::schema::SaveMetadata
 pub kglite::api::DirGraph::schema_definition: core::option::Option<kglite::api::SchemaDefinition>
 pub kglite::api::DirGraph::schema_locked: bool
 pub kglite::api::DirGraph::secondary_label_index: std::collections::hash::map::HashMap<kglite::api::InternedKey, alloc::vec::Vec<petgraph::graph_impl::NodeIndex>>
+pub kglite::api::DirGraph::source_fingerprint: core::option::Option<u64>
+pub kglite::api::DirGraph::source_root: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::spatial_configs: std::collections::hash::map::HashMap<alloc::string::String, kglite::api::SpatialConfig>
 pub kglite::api::DirGraph::spill_dir: core::option::Option<std::path::PathBuf>
 pub kglite::api::DirGraph::table_property_meta: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::TablePropertyMeta>
