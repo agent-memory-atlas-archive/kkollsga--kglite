@@ -239,6 +239,20 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
                         reverse: false,
                     },
                 );
+            } else {
+                // Everything a note link cannot be: a plain `[text](file.ext)`
+                // naming a file the vault holds, which is a reference to that
+                // file exactly as `![alt](file.ext)` is (VAULT.md §6.1), with
+                // the link text as its alt. `push_attachment` drops what is
+                // left — an in-page `#anchor`, a directory, a URL scheme — so
+                // those stay the silent no-ops they always were.
+                push_attachment(
+                    &mut out.attachments,
+                    profile,
+                    dest,
+                    cap.get(1).map(|t| t.as_str()),
+                    section,
+                );
             }
         }
 
@@ -344,9 +358,12 @@ fn edge_props(
 /// does not read attachments — which is what keeps `okf`/`loose` on the
 /// behaviour they have always had.
 ///
-/// An `http(s)` target is somebody else's file: it is not in the vault, no
-/// `stat` describes it, and §6.2's ladder has no rung for it. A target with no
-/// extension or a `.md` one is a note embed, handled by the caller.
+/// A target carrying **any** URI scheme is somebody else's file: it is not in
+/// the vault, no `stat` describes it, and §6.2's ladder has no rung for it.
+/// `http(s)` is only the common one — `[mail](mailto:a@b.com)` reaches here
+/// too now that a plain link does, and `mailto:a@b.com` ends in `.com`, so
+/// without the scheme check it would resolve as a file named `com`. A target
+/// with no extension or a `.md` one is a note embed, handled by the caller.
 fn push_attachment(
     out: &mut Vec<AttachmentRef>,
     profile: &Profile,
@@ -354,7 +371,7 @@ fn push_attachment(
     alt: Option<&str>,
     section: Option<&str>,
 ) {
-    if !profile.attachments || is_external_url(dest) || dest.contains("://") {
+    if !profile.attachments || has_uri_scheme(dest) {
         return;
     }
     let target = dest.split(['#', '?']).next().unwrap_or(dest).trim();
@@ -521,6 +538,23 @@ pub(crate) fn push_unique(out: &mut Vec<Link>, link: Link) {
 /// turned into Source nodes).
 fn is_external_url(dest: &str) -> bool {
     dest.starts_with("http://") || dest.starts_with("https://")
+}
+
+/// Whether a target opens with a URI scheme (`mailto:`, `ftp://`, `obsidian:`)
+/// and so names something outside the vault's file tree.
+///
+/// A scheme is at least **two** characters, which is what keeps a Windows
+/// drive letter out: `C:/x.png` is one character before the colon, and §9
+/// refuses it as an absolute filesystem path rather than as a URL.
+fn has_uri_scheme(dest: &str) -> bool {
+    let Some((scheme, _)) = dest.split_once(':') else {
+        return false;
+    };
+    scheme.len() >= 2
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
 }
 
 /// Resolve a raw markdown link destination to a bundle-relative concept-id, or
@@ -1123,6 +1157,124 @@ mod tests {
             embeds,
             vec!["notes/deep", "nameless"],
             "the note embeds on those lines are still links"
+        );
+    }
+
+    /// A plain `[text](file.ext)` link names a file the vault holds, and the
+    /// only thing a vault can do with one is the thing it does with
+    /// `![…](…)`: an `Image`/`Attachment` node and its edge (VAULT.md §6.1).
+    /// Before this it resolved to nothing at all — no node, no edge, no
+    /// warning — which is how 48 download links (`.rmspy`, `.plugin`, `.zip`)
+    /// left the P16 probe's corpus silently.
+    #[test]
+    fn vault_plain_link_to_a_file_is_an_attachment_reference() {
+        let got = extract(
+            concat!(
+                "## Downloads\n",
+                "[The handbook](../img/handbook.pdf) and [a map](../img/faults.png),\n",
+                "[back to top](#downloads) and [the note](other.md) are not,\n",
+                "and neither are [mail](mailto:a@b.com), [dir](sub/) or\n",
+                "[site](https://example.com/x.zip).\n",
+            ),
+            "notes",
+            &vault(),
+        );
+        assert_eq!(
+            attach(&got),
+            vec![
+                (
+                    "../img/handbook.pdf",
+                    Some("The handbook"),
+                    Some("Downloads")
+                ),
+                ("../img/faults.png", Some("a map"), Some("Downloads")),
+            ],
+            "the link text is the reference's alt, exactly as `![alt](…)`'s is"
+        );
+        let links: Vec<&str> = got.links.iter().map(|l| l.target.as_str()).collect();
+        assert_eq!(
+            links,
+            vec!["notes/other", "https://example.com/x.zip"],
+            "a `.md` target is still a note link and an http one still a Source"
+        );
+        assert!(
+            got.path_errors.is_empty(),
+            "an in-page anchor, a mailto and a directory link are silent no-ops"
+        );
+    }
+
+    #[test]
+    fn okf_and_loose_drop_a_plain_link_to_a_file() {
+        for dialect in [Dialect::Okf, Dialect::Loose] {
+            let got = extract("[handbook](img/h.pdf)", "", &Profile::for_dialect(dialect));
+            assert!(
+                got.attachments.is_empty() && got.links.is_empty(),
+                "{dialect:?} reads no attachments, so the link stays dropped"
+            );
+        }
+    }
+
+    /// VAULT.md §5.1: `\[\[` is the escape, and it is the *regex* that gives
+    /// it — two `[` separated by a backslash are not a wikilink opener. Pinned
+    /// because the spec now promises it to converter authors.
+    #[test]
+    fn an_escaped_wikilink_is_literal_text() {
+        let got = extract(r"Write \[\[atlas]] to mean the literal text.", "", &vault());
+        assert!(
+            got.links.is_empty() && got.attachments.is_empty(),
+            "an escaped wikilink names nothing"
+        );
+    }
+
+    /// VAULT.md §5.1: indented code is **not** exempt — only a fence is.
+    /// The loader has no block parser, and a CommonMark indented-code rule
+    /// would collide with list continuation lines.
+    #[test]
+    fn an_indented_code_block_is_scanned_like_prose() {
+        let got = extract(
+            "## Example\n\n    [[atlas]] and ![m](img/x.png)\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas"],
+            "four-space indentation exempts nothing; fence it instead"
+        );
+        assert_eq!(
+            attach(&got),
+            vec![("img/x.png", Some("m"), Some("Example"))]
+        );
+    }
+
+    /// VAULT.md §1.4/§5.1: an HTML tag carries no meaning, but a line holding
+    /// one is still prose and the markdown syntax written inside it is read.
+    #[test]
+    fn markdown_syntax_inside_an_html_block_is_scanned() {
+        let got = extract(
+            concat!(
+                "## Gallery\n",
+                "<div><a href=\"bob.md\">bob</a> <img src=\"img/y.png\"></div>\n",
+                "<div>[[atlas]] and ![m](img/x.png)</div>\n",
+            ),
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas"],
+            "`<a href>` is not a link; the wikilink beside it is"
+        );
+        assert_eq!(
+            attach(&got),
+            vec![("img/x.png", Some("m"), Some("Gallery"))],
+            "`<img src>` is not a reference; the markdown image beside it is"
         );
     }
 

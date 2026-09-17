@@ -13,6 +13,8 @@ carries an anchor, and ![[old]] embeds a whole note.
 ![Fault map](../img/faults.png) resolves note-relative and carries an alt;
 ![[diagram.png]] resolves on the bare-filename rung with none. The appendix
 ![missing appendix](../img/appendix.pdf) is referenced but not present.
+A plain [download the handbook](../img/handbook.pdf) names a file without the
+leading `!`, and §6.1 reads it as the same kind of reference.
 
 ## Related topics
 

@@ -101,8 +101,10 @@ fn golden_vault_bundle_report() {
             // links.md reaches both images and faults.png again from a
             // heading line; seismic.md re-reaches faults.png
             (HAS_IMAGE_CONN_TYPE.to_string(), 4),
-            // index.md → handbook.pdf, links.md → the absent appendix
-            (HAS_ATTACHMENT_CONN_TYPE.to_string(), 2),
+            // index.md → handbook.pdf, links.md → the absent appendix, and
+            // links.md → handbook.pdf again through a plain `[text](…)`
+            // link, which §6.1 reads as a reference like any other
+            (HAS_ATTACHMENT_CONN_TYPE.to_string(), 3),
         ])
     );
     assert_eq!(r.missing_attachments, 1, "`img/appendix.pdf`");
