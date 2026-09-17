@@ -632,6 +632,48 @@ fn a_declared_int_survives_the_round_trip() {
     );
 }
 
+/// **Not** a loss: a re-filed note keeps the stem its links name.
+///
+/// The stem is the link namespace (§3, §5.2) and the title is display, so an
+/// export that cannot preserve a note's folder still preserves its filename.
+/// Naming the re-filed file after the *title* instead dangles every body
+/// wikilink that spelled the old stem, and the next import mints a
+/// `_provisional` stub for each — 110 of them on the Petrel round trip.
+#[test]
+fn a_re_filed_note_keeps_the_stem_its_links_name() {
+    // Both notes sit at the vault root, which no label can match, so §10.2's
+    // preservation rung cannot keep either path.
+    let dir = vault_of(&[
+        (
+            "AB.md",
+            "---\ntitle: A/B\n---\nThe note the other one names.\n",
+        ),
+        ("Other.md", "See [[AB]].\n"),
+    ]);
+    let trip = Trip::from_vault(dir.path());
+    assert_eq!(trip.first.label("Note"), 2);
+    assert_eq!(trip.first.edge("LINKS_TO"), 1);
+    assert!(
+        trip.exports[0].contains_key("Note/AB.md"),
+        "only the folder moves: {:?}",
+        trip.exports[0].keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        trip.second.label("Note"),
+        2,
+        "the body's `[[AB]]` still resolves, so no stub is minted"
+    );
+    assert_eq!(trip.second.label("Concept"), 0);
+    assert_eq!(trip.second.edge("LINKS_TO"), 1);
+    // And the title the stem does not spell is written out, so it survives.
+    assert!(
+        String::from_utf8_lossy(&trip.exports[0]["Note/AB.md"]).contains("title: A/B\n"),
+        "{}",
+        String::from_utf8_lossy(&trip.exports[0]["Note/AB.md"])
+    );
+    trip.assert_byte_identical_from_the_first_export("re-filed stem");
+}
+
 /// Loss 6. A re-filed note carries its body verbatim, so a note-relative
 /// reference in that body resolves from where the note *now* is.
 #[test]
@@ -651,9 +693,9 @@ fn a_re_filed_notes_relative_reference_moves_with_it() {
         "it resolved from `deep/nested/`"
     );
     // `type: Media` and a top folder of `deep` do not match, so the note is
-    // re-filed to `Media/Nested.md` — one level up, where `../../` climbs out of
-    // the vault entirely.
-    assert!(trip.exports[0].contains_key("Media/Nested.md"));
+    // re-filed to `Media/note.md` — keeping its stem, but one level up, where
+    // `../../` climbs out of the vault entirely.
+    assert!(trip.exports[0].contains_key("Media/note.md"));
     assert!(
         trip.second_report
             .errors

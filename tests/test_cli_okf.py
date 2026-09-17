@@ -145,16 +145,16 @@ def test_export_exits_nonzero_when_it_refuses_a_file(tmp_path: Path):
     _run("okf", "build", str(GOLDEN_VAULT), "-o", str(built))
     out = tmp_path / "out"
     (out / "Article").mkdir(parents=True)
-    (out / "Article" / "Welcome.md").write_text("somebody else's file\n", encoding="utf-8")
+    (out / "Article" / "welcome.md").write_text("somebody else's file\n", encoding="utf-8")
 
     refused = _run("okf", "export", str(built), str(out))
     assert refused.returncode != 0
-    assert "Article/Welcome.md: not written by an export" in refused.stderr
-    assert (out / "Article" / "Welcome.md").read_text(encoding="utf-8") == "somebody else's file\n"
+    assert "Article/welcome.md: not written by an export" in refused.stderr
+    assert (out / "Article" / "welcome.md").read_text(encoding="utf-8") == "somebody else's file\n"
 
     forced = _run("okf", "export", str(built), str(out), "--force")
     assert forced.returncode == 0, forced.stdout + forced.stderr
-    assert (out / "Article" / "Welcome.md").read_text(encoding="utf-8") != "somebody else's file\n"
+    assert (out / "Article" / "welcome.md").read_text(encoding="utf-8") != "somebody else's file\n"
 
 
 def test_export_of_a_missing_graph_is_an_error(tmp_path: Path):

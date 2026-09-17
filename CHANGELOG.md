@@ -136,7 +136,10 @@ before upgrading.
 - `kglite.okf.export(graph, path, *, force=False, source_root=None)` and
   `ExportReport` — a graph written back out as an Obsidian vault (`VAULT.md`
   §10). Each node becomes one `.md` file under a folder named for its label, so
-  the label ladder recovers it without a `type:` key; properties become sorted
+  the label ladder recovers it without a `type:` key — a note re-filed that way
+  keeps the filename **stem** it came in with, because a stem is what a
+  `[[wikilink]]` spells, and only a node no file ever backed is named for its
+  title or id; properties become sorted
   frontmatter (dotted keys re-nested, dates as ISO strings, points as WKT, and
   a string that would re-parse as a number, boolean or date quoted), the `body`
   property becomes the prose, and outgoing edges become wikilink-valued keys

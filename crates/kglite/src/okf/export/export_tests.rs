@@ -265,8 +265,11 @@ fn a_folder_note_keeps_its_spelling_beside_its_folder() {
     );
 }
 
+/// A note whose folder cannot be preserved still keeps its filename: the stem
+/// is the link namespace (§3, §5.2), so renaming it after the title dangles
+/// every body wikilink that spelled the old one.
 #[test]
-fn a_relocated_note_is_named_by_its_title_then_its_id() {
+fn a_relocated_note_keeps_the_stem_its_links_name() {
     let source = tempfile::tempdir().unwrap();
     write_vault(
         source.path(),
@@ -278,22 +281,42 @@ fn a_relocated_note_is_named_by_its_title_then_its_id() {
     let graph = build_vault(source.path());
     let out = tempfile::tempdir().unwrap();
     export_to(&graph, out.path());
-    let files = tree(out.path());
-    assert!(
-        files.contains(&"Note/A Nice Title.md".to_string()),
-        "{files:?}"
+    assert_eq!(
+        tree(out.path()),
+        vec![
+            ".kglite/export-manifest.json",
+            "Note/plain.md",
+            "Note/titled.md"
+        ],
+        "only the folder moves"
     );
-    assert!(files.contains(&"Note/plain.md".to_string()), "{files:?}");
+    assert!(
+        read(out.path(), "Note/titled.md").contains("title: A Nice Title\n"),
+        "and the title the stem does not spell is written out"
+    );
 }
 
+/// The title-then-id rung, which only a node with no file behind it reaches.
 #[test]
-fn forbidden_characters_in_a_name_are_replaced() {
-    let source = tempfile::tempdir().unwrap();
-    write_vault(
-        source.path(),
-        &[("n.md", "---\ntitle: 'a/b:c*d?e\"f<g>h|i'\n---\nprose\n")],
+fn a_note_no_file_ever_backed_is_named_by_its_title_then_its_id() {
+    let graph = titled_notes(&[("titled", "A Nice Title"), ("plain", "")]);
+    let out = tempfile::tempdir().unwrap();
+    export_to(&graph, out.path());
+    assert_eq!(
+        tree(out.path()),
+        vec![
+            ".kglite/export-manifest.json",
+            "Note/A Nice Title.md",
+            "Note/plain.md"
+        ]
     );
-    let graph = build_vault(source.path());
+}
+
+/// Sanitisation bites on a *generated* name only: a preserved stem came from a
+/// real file, where the filesystem already refused these characters.
+#[test]
+fn forbidden_characters_in_a_generated_name_are_replaced() {
+    let graph = titled_notes(&[("n", "a/b:c*d?e\"f<g>h|i")]);
     let out = tempfile::tempdir().unwrap();
     export_to(&graph, out.path());
     assert_eq!(
@@ -302,9 +325,41 @@ fn forbidden_characters_in_a_name_are_replaced() {
     );
 }
 
+/// A graph no file ever backed: nothing here carries `file_path`, so every node
+/// is a note (§10.1) reaching §10.2's title-then-id rung. An empty title is how
+/// a test asks for the id rung.
+fn titled_notes(pairs: &[(&str, &str)]) -> DirGraph {
+    let mut graph = DirGraph::new();
+    let frame = crate::datatypes::values::DataFrame::from_cypher_rows(
+        vec!["concept_id".to_string(), "title".to_string()],
+        pairs
+            .iter()
+            .map(|(id, title)| {
+                vec![
+                    Value::String((*id).to_string()),
+                    Value::String((*title).to_string()),
+                ]
+            })
+            .collect(),
+    )
+    .unwrap();
+    crate::graph::mutation::maintain::add_nodes(
+        &mut graph,
+        frame,
+        "Note".to_string(),
+        "concept_id".to_string(),
+        Some("title".to_string()),
+        Some("update".to_string()),
+    )
+    .unwrap();
+    graph
+}
+
 #[test]
 fn a_case_only_path_collision_appends_the_id() {
-    // `Roadmap.md` and `roadmap.md` are one file on macOS and Windows.
+    // `Roadmap.md` and `roadmap.md` are one file on macOS and Windows — and
+    // both stems are preserved from their source files, so the suffix rule is
+    // what keeps the two apart.
     let source = tempfile::tempdir().unwrap();
     write_vault(
         source.path(),
@@ -660,7 +715,8 @@ fn a_parent_the_layout_no_longer_expresses_is_emitted_as_its_edge_key() {
     let out = tempfile::tempdir().unwrap();
     export_to(&graph, out.path());
     let text = read(out.path(), "Note/leaf.md");
-    assert!(text.contains("child_of:\n  - \"[[Hub]]\"\n"), "{text}");
+    // `[[hub]]`, not `[[Hub]]`: the re-filed note kept the stem the link names.
+    assert!(text.contains("child_of:\n  - \"[[hub]]\"\n"), "{text}");
     // And it comes back as the same edge type, not as a `parent` property.
     let back = build_vault(out.path());
     assert!(

@@ -846,14 +846,14 @@ class TestExport:
 
     def test_a_hand_edited_file_is_refused_until_force(self, tmp_path):
         graph, _first, out = self._export(tmp_path)
-        edited = out / "Article" / "Welcome.md"
+        edited = out / "Article" / "welcome.md"
         original = edited.read_text(encoding="utf-8")
         edited.write_text("a human rewrote this\n", encoding="utf-8")
 
         refused = okf.export(graph, str(out))
         assert refused.ok is False
         assert refused.files_refused == 1
-        assert refused.refusals == ["Article/Welcome.md: edited since the last export (use force to replace)"]
+        assert refused.refusals == ["Article/welcome.md: edited since the last export (use force to replace)"]
         assert edited.read_text(encoding="utf-8") == "a human rewrote this\n"
 
         forced = okf.export(graph, str(out), force=True)

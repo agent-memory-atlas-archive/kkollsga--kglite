@@ -6,6 +6,15 @@
 //! `type:`. Preserving a path whose top-level folder already *is* the label
 //! satisfies both; anything else is filed under `<Label>/` so the next
 //! import's folder rung answers with the label it had.
+//!
+//! What re-filing may **not** change is the filename. A stem is the link
+//! namespace (§3, §5.2) — `[[AB]]` names the note in `AB.md`, whatever its
+//! title says — so a note that came from a file keeps that file's stem and
+//! only its folder moves. Naming the re-filed file after the note's *title*
+//! instead dangles every body wikilink that spelled the old stem and mints a
+//! `_provisional` stub for each on the next import. Only a note with no file
+//! behind it is named `<title or id>`, and then §10.3's `id:` key carries the
+//! identity the stem no longer spells.
 
 use super::Note;
 use std::collections::{HashMap, HashSet};
@@ -31,7 +40,7 @@ pub(super) fn assign_paths(notes: &mut [Note]) {
             None => format!(
                 "{}/{}.md",
                 sanitize_segment(&note.label),
-                sanitize_segment(note.display_name())
+                sanitize_segment(provenance_stem(note).unwrap_or_else(|| note.display_name()))
             ),
         };
         if taken.contains(&path.to_ascii_lowercase()) {
@@ -51,8 +60,8 @@ pub(super) fn assign_paths(notes: &mut [Note]) {
     }
 }
 
-/// The notes whose stored `file_path` survives: the ones whose top-level folder
-/// is already their label.
+/// The notes whose stored `file_path` survives whole: the ones whose top-level
+/// folder is already their label.
 ///
 /// A folder note (`X.md` beside `X/`) is one of these whenever its own top
 /// folder matches, and then keeps that exact spelling — the file is not moved
@@ -71,6 +80,19 @@ fn preserved_paths(notes: &[Note]) -> HashMap<usize, String> {
         }
     }
     out
+}
+
+/// The stem of the file this note was read from — the name every wikilink to it
+/// spells — or `None` for a node no file ever backed.
+///
+/// An empty stem is no name at all (a `file_path` of `.md`, or one ending in a
+/// separator), so it falls through to the title-or-id rule rather than becoming
+/// `untitled`.
+fn provenance_stem(note: &Note) -> Option<&str> {
+    let path = note.file_path.as_deref()?;
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let stem = file.strip_suffix(".md")?;
+    (!stem.is_empty()).then_some(stem)
 }
 
 /// The first path segment of a vault-relative path, or `None` for a file at

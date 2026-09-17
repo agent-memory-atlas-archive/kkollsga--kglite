@@ -575,13 +575,21 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    references rather than notes, and `KgliteSkill` / `KgliteRecipe` nodes are
    written to `.kglite/skills/` and `.kglite/recipes/` instead (§8).
 2. **File path.** The node's `file_path` is preserved when it has one and its
-   top-level folder still matches its label; otherwise `<Label>/<title or
-   id>.md`, so the label ladder recovers the label the export did not write
-   (§10.3). A preserved folder note keeps its `X.md`-beside-`X/` spelling. In a
-   generated segment `/ \ : * ? " < > |` and control characters become `-`, and
-   trailing dots and spaces are stripped — Windows strips them on write, and a
-   filename that differs from the one the manifest recorded would be refused by
-   the next export. A case-insensitive path collision appends `-<id>`.
+   top-level folder still matches its label; otherwise the note is re-filed
+   under `<Label>/`, so the label ladder recovers the label the export did not
+   write (§10.3). **Re-filing moves the folder and nothing else**: the file
+   keeps the stem it arrived with, because a stem is the link namespace (§3,
+   §5.2) and a `[[wikilink]]` in somebody else's prose spells that stem, not
+   the note's title — renaming the file after the title dangles every one of
+   them, and the next import mints a `_provisional` stub for each. Only a node
+   no file ever backed has no stem to keep, and it is named
+   `<title or id>.md`; §10.3's `id:` then carries the identity the stem does
+   not spell. A preserved folder note keeps its `X.md`-beside-`X/` spelling. In
+   a segment the export composes, `/ \ : * ? " < > |` and control characters
+   become `-`, and trailing dots and spaces are stripped — Windows strips them
+   on write, and a filename that differs from the one the manifest recorded
+   would be refused by the next export. A case-insensitive path collision
+   appends `-<id>`.
 3. **Frontmatter.** `type:` is never emitted — the folder carries the label, so
    emitting it would make a later folder move a no-op. `id:` is emitted only
    when the id differs from the filename stem, and `title:` only when the next

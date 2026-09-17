@@ -95,6 +95,36 @@ class TestRoundTrip:
         for regenerated in ("Tag", "Image", "Concept"):
             assert after[regenerated] == before[regenerated], regenerated
 
+    def test_a_re_filed_note_keeps_the_stem_its_links_name(self, tmp_path):
+        """§10.2 — the stem is the link namespace, the title is only display.
+
+        Both notes sit at the vault root, so neither path can be preserved. An
+        export that named the re-filed file after its *title* would dangle the
+        body's ``[[AB]]`` and mint a ``_provisional`` stub for it.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "AB.md").write_text("---\ntitle: A/B\n---\nThe note the other one names.\n")
+        (src / "Other.md").write_text("See [[AB]].\n")
+        graph = _build(src)
+        out = tmp_path / "out"
+        out.mkdir()
+        report = okf.export(graph, str(out), source_root=str(src))
+        assert report.ok, report.refusals
+        assert sorted(_tree(out)) == [".kglite/export-manifest.json", "Note/AB.md", "Note/Other.md"]
+        assert "title: A/B" in (out / "Note" / "AB.md").read_text()
+
+        validated = okf.validate(str(out), dialect="obsidian")
+        assert validated.errors == []
+        assert [w for w in validated.warnings if "dangling" in w] == []
+
+        # Loss 3 adds the `Note/` folder the flat source had no node for; what
+        # must not appear is a `Concept` stub for the link that used to dangle.
+        back = _build(out)
+        assert _labels(back)["Note"] == _labels(graph)["Note"] == 2
+        assert "Concept" not in _labels(back)
+        assert _edges(back) == _edges(graph) + Counter({"CONTAINS": 2})
+
     def test_the_report_counts_what_it_dropped(self, tmp_path):
         graph = _build(VAULT)
         out = tmp_path / "vault"
