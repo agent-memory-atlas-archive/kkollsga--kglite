@@ -8,8 +8,9 @@ use crate::okf::{BuildOptions, Dialect};
 
 /// Build a KnowledgeGraph from an OKF bundle directory.
 ///
-/// `dialect`: `"okf"` (default — strict markdown links) or `"loose"`/`"obsidian"`
-/// (also resolve `[[wikilinks]]`, tolerate missing `type`). `require_frontmatter`
+/// `dialect`: `"okf"` (default — strict markdown links), `"loose"` (also
+/// resolve `[[wikilinks]]`, tolerate missing `type`), or `"obsidian"` (the
+/// Obsidian vault profile). `require_frontmatter`
 /// (default `True`): ingest only `.md` files with YAML frontmatter — the
 /// structured-knowledge vs plain-markdown discriminator; set `False` to ingest
 /// every `.md`. `respect_skip` (default `True`): honor the `kg_skip: true`
@@ -32,16 +33,16 @@ pub fn build(
     with_body: bool,
     embed: bool,
 ) -> PyResult<KnowledgeGraph> {
-    let opts = BuildOptions {
-        dialect: Dialect::parse(dialect.as_deref()),
-        require_frontmatter,
-        respect_skip,
-        skip_dirs: skip_dirs.unwrap_or_default(),
-        with_body,
-        embed,
-    };
+    // Built from the dialect rather than as a struct literal, so a new
+    // dialect-carried default reaches the wheel without a code change here.
+    let mut opts = BuildOptions::for_dialect(Dialect::parse(dialect.as_deref()));
+    opts.require_frontmatter = require_frontmatter;
+    opts.respect_skip = respect_skip;
+    opts.skip_dirs = skip_dirs.unwrap_or_default();
+    opts.with_body = with_body;
+    opts.embed = embed;
     py.detach(|| crate::okf::build(&path, &opts))
-        .map(KnowledgeGraph::from_arc)
+        .map(|out| KnowledgeGraph::from_arc(out.graph))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 

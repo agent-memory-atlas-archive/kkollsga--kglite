@@ -1,11 +1,13 @@
 //! Bundle directory walk: enumerate concept `.md` files and per-directory
 //! `index.md` files.
 //!
-//! Reserved filenames (`index.md`, `log.md`) are not concepts. `index.md` is
-//! captured per directory (it describes the directory — it enriches the `Folder`
-//! node in the builder); `log.md` is skipped. Hidden directories (`.git`,
-//! `.obsidian`, …) are pruned, mirroring codingest's `walk_filter`.
+//! Reserved filenames (`index.md`, `log.md`) are not concepts *while the
+//! profile says so*: `index.md` is captured per directory (it describes the
+//! directory — it enriches the `Folder` node in the builder) and `log.md` is
+//! dropped. Hidden directories (`.git`, `.obsidian`, …) are pruned, mirroring
+//! codingest's `walk_filter`.
 
+use crate::okf::model::BuildOptions;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -27,9 +29,6 @@ pub struct WalkResult {
     /// `index.md` absolute path.
     pub index_files: HashMap<String, PathBuf>,
 }
-
-/// `log.md` carries no structure we use; `index.md` is handled specially.
-const SKIPPED: &[&str] = &["log.md"];
 
 fn is_ignored_dir(name: &str) -> bool {
     // Hidden dirs (.git, .obsidian, .venv, …) plus the usual build noise.
@@ -57,9 +56,11 @@ fn matches_skip(rel: &str, name: &str, skip_dirs: &[String]) -> bool {
 }
 
 /// Walk `root`, returning concept `.md` files plus per-directory `index.md`
-/// files. `skip_dirs` prunes matching directories (and their subtrees). Errors
-/// only on an unreadable root.
-pub fn discover(root: &Path, skip_dirs: &[String]) -> Result<WalkResult, String> {
+/// files. `opts.skip_dirs` prunes matching directories (and their subtrees);
+/// `opts.profile` decides which filenames are reserved. Errors only on an
+/// unreadable root.
+pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> {
+    let skip_dirs = opts.skip_dirs.as_slice();
     if !root.exists() {
         return Err(format!(
             "OKF bundle path does not exist: {}",
@@ -115,7 +116,7 @@ pub fn discover(root: &Path, skip_dirs: &[String]) -> Result<WalkResult, String>
             Some(n) => n,
             None => continue,
         };
-        if !name.ends_with(".md") || SKIPPED.contains(&name) {
+        if !name.ends_with(".md") || (name == "log.md" && opts.profile.skip_log_files) {
             continue;
         }
         let rel = match entry.path().strip_prefix(root) {
@@ -127,7 +128,7 @@ pub fn discover(root: &Path, skip_dirs: &[String]) -> Result<WalkResult, String>
             .filter_map(|c| c.as_os_str().to_str())
             .collect::<Vec<_>>()
             .join("/");
-        if name == "index.md" {
+        if name == "index.md" && opts.profile.index_as_folder_metadata {
             // Record per directory (bundle-relative dir path; "" = root).
             let dir = rel_path
                 .rfind('/')
@@ -148,4 +149,54 @@ pub fn discover(root: &Path, skip_dirs: &[String]) -> Result<WalkResult, String>
         concepts: out,
         index_files,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::okf::model::Profile;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn bundle() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("notes")).unwrap();
+        for rel in ["notes/a.md", "notes/index.md", "notes/log.md"] {
+            fs::write(dir.path().join(rel), "body").unwrap();
+        }
+        dir
+    }
+
+    fn rel_paths(r: &WalkResult) -> Vec<&str> {
+        r.concepts.iter().map(|f| f.rel_path.as_str()).collect()
+    }
+
+    #[test]
+    fn default_profile_reserves_index_and_log() {
+        let dir = bundle();
+        let r = discover(dir.path(), &BuildOptions::default()).unwrap();
+        assert_eq!(rel_paths(&r), vec!["notes/a.md"]);
+        assert!(
+            r.index_files.contains_key("notes"),
+            "index.md → folder meta"
+        );
+    }
+
+    #[test]
+    fn profile_can_make_index_and_log_ordinary_concepts() {
+        let dir = bundle();
+        let opts = BuildOptions {
+            profile: Profile {
+                index_as_folder_metadata: false,
+                skip_log_files: false,
+            },
+            ..BuildOptions::default()
+        };
+        let r = discover(dir.path(), &opts).unwrap();
+        assert_eq!(
+            rel_paths(&r),
+            vec!["notes/a.md", "notes/index.md", "notes/log.md"]
+        );
+        assert!(r.index_files.is_empty(), "no folder metadata was diverted");
+    }
 }

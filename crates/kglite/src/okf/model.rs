@@ -8,6 +8,7 @@
 //! body on demand).
 
 use crate::datatypes::values::Value;
+use std::collections::BTreeMap;
 
 /// Which link / frontmatter conventions to honour when parsing a bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,21 +21,69 @@ pub enum Dialect {
     /// resolution (by file stem). For memory dirs / vaults that aren't strict
     /// OKF bundles.
     Loose,
+    /// Obsidian vault: `Loose`'s wikilinks plus the vault conventions carried
+    /// by [`Profile::obsidian`].
+    Obsidian,
 }
 
 impl Dialect {
-    /// Parse a dialect name. `None`, `"okf"` → [`Dialect::Okf`]; `"loose"` /
-    /// `"obsidian"` → [`Dialect::Loose`]. Unknown strings fall back to `Okf`.
+    /// Parse a dialect name. `None`, `"okf"` → [`Dialect::Okf`]; `"loose"` →
+    /// [`Dialect::Loose`]; `"obsidian"` → [`Dialect::Obsidian`]. Unknown
+    /// strings fall back to `Okf`.
     pub fn parse(name: Option<&str>) -> Self {
         match name.map(|s| s.to_ascii_lowercase()).as_deref() {
-            Some("loose") | Some("obsidian") => Dialect::Loose,
+            Some("loose") => Dialect::Loose,
+            Some("obsidian") => Dialect::Obsidian,
             _ => Dialect::Okf,
         }
     }
 
     /// Whether `[[wikilink]]` syntax is resolved in this dialect.
     pub fn wikilinks(self) -> bool {
-        matches!(self, Dialect::Loose)
+        matches!(self, Dialect::Loose | Dialect::Obsidian)
+    }
+}
+
+/// The conventions a dialect brings, as data rather than as `match` arms.
+///
+/// A dialect name selects a `Profile`, and behaviour reads the profile's
+/// fields; the dialect itself is interpreted only here and in
+/// [`Dialect::wikilinks`]. That keeps a convention from threading through the
+/// walker, parser and builder as a value each of them re-interprets, and gives
+/// a vault's own declaration file one struct to override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profile {
+    /// Read by [`crate::okf::walk::discover`]: a directory's `index.md`
+    /// describes the directory, so it is diverted to that directory's `Folder`
+    /// node instead of becoming a concept of its own.
+    pub index_as_folder_metadata: bool,
+    /// Read by [`crate::okf::walk::discover`]: `log.md` is a running journal,
+    /// not a concept — drop it from the walk.
+    pub skip_log_files: bool,
+}
+
+impl Default for Profile {
+    /// The OKF-bundle conventions, which `Okf` and `Loose` both use.
+    fn default() -> Self {
+        Profile {
+            index_as_folder_metadata: true,
+            skip_log_files: true,
+        }
+    }
+}
+
+impl Profile {
+    /// The conventions of [`Dialect::Obsidian`].
+    pub fn obsidian() -> Self {
+        Profile::default()
+    }
+
+    /// The profile a dialect selects.
+    pub fn for_dialect(dialect: Dialect) -> Self {
+        match dialect {
+            Dialect::Okf | Dialect::Loose => Profile::default(),
+            Dialect::Obsidian => Profile::obsidian(),
+        }
     }
 }
 
@@ -42,6 +91,10 @@ impl Dialect {
 #[derive(Debug, Clone)]
 pub struct BuildOptions {
     pub dialect: Dialect,
+    /// The dialect's conventions, as values the walker/parser/builder read.
+    /// [`BuildOptions::for_dialect`] keeps it in step with `dialect`; setting
+    /// `dialect` alone does not.
+    pub profile: Profile,
     /// Only ingest `.md` files that have a YAML frontmatter block — the
     /// discriminator between *structured* knowledge (OKF concepts, Claude
     /// memories) and plain markdown (READMEs, notes). On by default, so pointing
@@ -69,6 +122,7 @@ impl Default for BuildOptions {
     fn default() -> Self {
         BuildOptions {
             dialect: Dialect::Okf,
+            profile: Profile::default(),
             require_frontmatter: true,
             respect_skip: true,
             skip_dirs: Vec::new(),
@@ -76,6 +130,46 @@ impl Default for BuildOptions {
             embed: false,
         }
     }
+}
+
+impl BuildOptions {
+    /// Default options for a dialect, with the matching [`Profile`]. The
+    /// intended constructor: set the remaining fields on the result rather than
+    /// spelling out a struct literal, so a new field keeps its dialect default.
+    pub fn for_dialect(dialect: Dialect) -> Self {
+        BuildOptions {
+            dialect,
+            profile: Profile::for_dialect(dialect),
+            ..BuildOptions::default()
+        }
+    }
+}
+
+/// What a build saw — the counts a caller reports, gates on, or prints.
+///
+/// Every number comes from data the build already computed on its way to the
+/// graph; nothing here costs a second pass over the bundle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BuildReport {
+    /// `.md` files the walk handed to the parser.
+    pub files_scanned: usize,
+    /// Files that became concept nodes. Lower than `files_scanned` when
+    /// `require_frontmatter` or `kg_skip` excluded some.
+    pub concepts: usize,
+    /// Nodes added per label, synthesized `Folder`/`Tag`/`Source` nodes and
+    /// `_provisional` stubs included.
+    pub nodes_by_label: BTreeMap<String, usize>,
+    /// Connection rows emitted per edge type. The mutator collapses duplicate
+    /// source/target pairs, so the built graph can hold fewer edges than this.
+    pub edges_by_type: BTreeMap<String, usize>,
+    /// Link targets that matched no concept and vivified as `_provisional`
+    /// stubs.
+    pub dangling: usize,
+    /// Problems that leave the build's output untrustworthy — a caller that
+    /// gates on the report fails on a non-empty list.
+    pub errors: Vec<String>,
+    /// Problems worth surfacing that still leave a usable graph.
+    pub warnings: Vec<String>,
 }
 
 /// A resolved cross-link from a concept to another concept or an external URL.
@@ -133,3 +227,31 @@ pub const SOURCE_LABEL: &str = "Source";
 pub const FOLDER_LABEL: &str = "Folder";
 /// Frontmatter key that opts a file out of the sweep (`kg_skip: true`).
 pub const SKIP_KEY: &str = "kg_skip";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialect_names_map_to_variants() {
+        assert_eq!(Dialect::parse(None), Dialect::Okf);
+        assert_eq!(Dialect::parse(Some("okf")), Dialect::Okf);
+        assert_eq!(Dialect::parse(Some("loose")), Dialect::Loose);
+        assert_eq!(Dialect::parse(Some("Obsidian")), Dialect::Obsidian);
+        assert_eq!(Dialect::parse(Some("nonsense")), Dialect::Okf);
+        assert!(!Dialect::Okf.wikilinks());
+        assert!(Dialect::Loose.wikilinks());
+        assert!(Dialect::Obsidian.wikilinks());
+    }
+
+    #[test]
+    fn for_dialect_pairs_the_profile_with_the_dialect() {
+        let opts = BuildOptions::for_dialect(Dialect::Obsidian);
+        assert_eq!(opts.dialect, Dialect::Obsidian);
+        assert_eq!(opts.profile, Profile::obsidian());
+        assert_eq!(
+            BuildOptions::for_dialect(Dialect::Loose).profile,
+            Profile::default()
+        );
+    }
+}

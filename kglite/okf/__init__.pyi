@@ -38,9 +38,10 @@ def build(
 
     Args:
         path: Bundle root directory.
-        dialect: ``"okf"`` (default) for strict markdown links, or
-            ``"loose"`` / ``"obsidian"`` to also resolve ``[[wikilinks]]`` and
-            tolerate concepts with no frontmatter ``type``.
+        dialect: ``"okf"`` (default) for strict markdown links; ``"loose"`` to
+            also resolve ``[[wikilinks]]`` and tolerate concepts with no
+            frontmatter ``type``; ``"obsidian"`` to select the Obsidian vault
+            profile, which resolves wikilinks the same way.
         require_frontmatter: When ``True`` (default), only ``.md`` files with a
             YAML frontmatter block are ingested — the discriminator between
             *structured* knowledge (OKF concepts, Claude memories) and plain

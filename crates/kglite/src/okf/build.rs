@@ -16,8 +16,8 @@ use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::mutation::maintain;
 use crate::graph::DirGraph;
 use crate::okf::model::{
-    BuildOptions, ConceptDoc, Link, CONTAINS_CONN_TYPE, DEFAULT_LABEL, FOLDER_LABEL, SOURCE_LABEL,
-    TAGGED_CONN_TYPE, TAG_LABEL,
+    BuildOptions, BuildReport, ConceptDoc, Link, CONTAINS_CONN_TYPE, DEFAULT_LABEL, FOLDER_LABEL,
+    SOURCE_LABEL, TAGGED_CONN_TYPE, TAG_LABEL,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -26,25 +26,56 @@ use std::sync::Arc;
 /// `(source_label, target_label, conn_type)` → `[(source_id, target_id)]`.
 type EdgeGroups = HashMap<(String, String, String), Vec<(String, String)>>;
 
+/// A finished build: the graph, and what the builder saw producing it.
+/// No `Debug` — `DirGraph` has none, and a graph is not a thing to format.
+#[derive(Clone)]
+pub struct BuildOutput {
+    pub graph: Arc<DirGraph>,
+    pub report: BuildReport,
+}
+
 /// Build a knowledge graph from an OKF bundle directory.
-pub fn build(root: &Path, opts: &BuildOptions) -> Result<Arc<DirGraph>, String> {
-    let walked = super::walk::discover(root, &opts.skip_dirs)?;
+pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
+    let walked = super::walk::discover(root, opts)?;
     let docs = super::parse_concepts(&walked.concepts, opts);
+    let mut report = BuildReport {
+        files_scanned: walked.concepts.len(),
+        concepts: docs.len(),
+        ..BuildReport::default()
+    };
     let mut graph = DirGraph::new();
     if docs.is_empty() {
-        return Ok(Arc::new(graph));
+        return Ok(BuildOutput {
+            graph: Arc::new(graph),
+            report,
+        });
     }
-    build_nodes(&mut graph, &docs, opts)?;
-    build_aux_nodes(&mut graph, &docs)?;
-    build_folders(&mut graph, &docs, &walked.index_files)?;
-    build_edges(&mut graph, &docs)?;
-    Ok(Arc::new(graph))
+    build_nodes(&mut graph, &docs, opts, &mut report)?;
+    build_aux_nodes(&mut graph, &docs, &mut report)?;
+    build_folders(&mut graph, &docs, &walked.index_files, &mut report)?;
+    build_edges(&mut graph, &docs, &mut report)?;
+    Ok(BuildOutput {
+        graph: Arc::new(graph),
+        report,
+    })
+}
+
+/// Record `count` nodes of `label` in the report.
+fn count_nodes(report: &mut BuildReport, label: &str, count: usize) {
+    if count > 0 {
+        *report.nodes_by_label.entry(label.to_string()).or_default() += count;
+    }
 }
 
 /// Emit grouped edges: one `add_connections` per `(src_label, tgt_label, conn)`
 /// so every call has correctly-typed endpoints.
-fn emit_groups(graph: &mut DirGraph, groups: EdgeGroups) -> Result<(), String> {
+fn emit_groups(
+    graph: &mut DirGraph,
+    groups: EdgeGroups,
+    report: &mut BuildReport,
+) -> Result<(), String> {
     for ((src_label, tgt_label, conn), pairs) in groups {
+        *report.edges_by_type.entry(conn.clone()).or_default() += pairs.len();
         let rows: Vec<Vec<Value>> = pairs
             .into_iter()
             .map(|(s, t)| vec![Value::String(s), Value::String(t)])
@@ -78,6 +109,7 @@ fn build_folders(
     graph: &mut DirGraph,
     docs: &[ConceptDoc],
     index_files: &HashMap<String, PathBuf>,
+    report: &mut BuildReport,
 ) -> Result<(), String> {
     // Every directory holding a concept, plus all ancestor directories.
     let mut dirs: BTreeSet<String> = BTreeSet::new();
@@ -92,6 +124,7 @@ fn build_folders(
     if dirs.is_empty() {
         return Ok(());
     }
+    count_nodes(report, FOLDER_LABEL, dirs.len());
 
     // Folder nodes (id = dir path; title/description from index.md if present).
     let mut rows: Vec<Vec<Value>> = Vec::with_capacity(dirs.len());
@@ -152,7 +185,7 @@ fn build_folders(
                 .push((parent.to_string(), dir.clone()));
         }
     }
-    emit_groups(graph, groups)
+    emit_groups(graph, groups, report)
 }
 
 /// Extract a `(title, description)` for a Folder node from its `index.md`:
@@ -185,7 +218,11 @@ fn folder_meta(path: &Path) -> (Option<String>, Option<String>) {
 /// Synthesize `Tag` and `Source` nodes from the concepts' tags and external
 /// links. Added before edges so the `TAGGED` / `CITES` connections find real
 /// endpoints instead of vivifying provisional stubs.
-fn build_aux_nodes(graph: &mut DirGraph, docs: &[ConceptDoc]) -> Result<(), String> {
+fn build_aux_nodes(
+    graph: &mut DirGraph,
+    docs: &[ConceptDoc],
+    report: &mut BuildReport,
+) -> Result<(), String> {
     let mut tags: BTreeSet<&str> = BTreeSet::new();
     let mut sources: BTreeSet<&str> = BTreeSet::new();
     for d in docs {
@@ -198,6 +235,8 @@ fn build_aux_nodes(graph: &mut DirGraph, docs: &[ConceptDoc]) -> Result<(), Stri
             }
         }
     }
+    count_nodes(report, TAG_LABEL, tags.len());
+    count_nodes(report, SOURCE_LABEL, sources.len());
     add_id_nodes(graph, TAG_LABEL, &tags)?;
     add_id_nodes(graph, SOURCE_LABEL, &sources)?;
     Ok(())
@@ -248,6 +287,7 @@ fn build_nodes(
     graph: &mut DirGraph,
     docs: &[ConceptDoc],
     opts: &BuildOptions,
+    report: &mut BuildReport,
 ) -> Result<(), String> {
     let mut by_label: HashMap<&str, Vec<&ConceptDoc>> = HashMap::new();
     for d in docs {
@@ -255,6 +295,7 @@ fn build_nodes(
     }
 
     for (label, group) in by_label {
+        count_nodes(report, label, group.len());
         let mut keys: BTreeSet<&str> = BTreeSet::new();
         for d in &group {
             for (k, _) in &d.props {
@@ -318,7 +359,11 @@ pub(crate) fn column_value(v: &Value) -> Value {
 /// Build the concept-level edges: semantic links (typed via the ladder; internal
 /// → concept, external → Source) and tag membership. Directory `CONTAINS` edges
 /// are built in [`build_folders`].
-fn build_edges(graph: &mut DirGraph, docs: &[ConceptDoc]) -> Result<(), String> {
+fn build_edges(
+    graph: &mut DirGraph,
+    docs: &[ConceptDoc],
+    report: &mut BuildReport,
+) -> Result<(), String> {
     let resolver = Resolver::new(docs);
     let mut groups: EdgeGroups = HashMap::new();
     // Dangling internal-link targets — concepts referenced but not present.
@@ -347,6 +392,8 @@ fn build_edges(graph: &mut DirGraph, docs: &[ConceptDoc]) -> Result<(), String> 
     // `concept_id` — so "references not yet written" are queryable identically to
     // real concepts (`MATCH (n {_provisional:true}) RETURN n.concept_id`) rather
     // than via the mutator's default `id` stub field.
+    report.dangling = dangling.len();
+    count_nodes(report, DEFAULT_LABEL, dangling.len());
     if !dangling.is_empty() {
         let rows: Vec<Vec<Value>> = dangling
             .iter()
@@ -380,7 +427,7 @@ fn build_edges(graph: &mut DirGraph, docs: &[ConceptDoc]) -> Result<(), String> 
         }
     }
 
-    emit_groups(graph, groups)
+    emit_groups(graph, groups, report)
 }
 
 /// Normalize a name/path for forgiving link resolution: lowercase, unify
@@ -483,6 +530,7 @@ mod tests {
     use super::*;
     use crate::graph::schema::InternedKey;
     use crate::graph::storage::GraphRead;
+    use std::collections::BTreeMap;
     use std::fs;
     use tempfile::tempdir;
 
@@ -527,7 +575,7 @@ mod tests {
         );
         write(dir.path(), "b.md", "---\ntype: Note\n---\nleaf");
 
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         // a, b, + vivified `missing` stub = 3 nodes.
         assert_eq!(g.graph.node_indices().count(), 3);
         // a→b and a→missing = 2 edges.
@@ -549,7 +597,7 @@ mod tests {
             "tables/index.md",
             "# All Tables\nStructured data tables.",
         );
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         // 2 concepts + 1 Folder("tables")
         assert_eq!(count_label(&g, "Folder"), 1);
         assert_eq!(g.graph.node_indices().count(), 3);
@@ -572,7 +620,7 @@ mod tests {
         let dir = tempdir().unwrap();
         write(dir.path(), "tables/orders.md", "---\ntype: Table\n---\nx");
         write(dir.path(), "tables/index.md", "#data\n# All Tables\nProse.");
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         let folder_title = g
             .graph
             .node_indices()
@@ -588,7 +636,7 @@ mod tests {
     fn nested_folders_chain_contains() {
         let dir = tempdir().unwrap();
         write(dir.path(), "a/b/c.md", "---\ntype: Note\n---\ndeep");
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         // folders a, a/b ; concept a/b/c
         assert_eq!(count_label(&g, "Folder"), 2);
         // CONTAINS: a→a/b, a/b→a/b/c = 2
@@ -603,7 +651,7 @@ mod tests {
             "x.md",
             "---\ntype: Note\ntags:\n- alpha\n- beta\n---\nbody",
         );
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         let n = g.graph.node_indices().next().unwrap();
         let key = InternedKey::from_str("tags");
         let v = GraphRead::get_node_property(&g.graph, n, key);
@@ -611,9 +659,56 @@ mod tests {
     }
 
     #[test]
+    fn report_counts_every_node_and_edge_the_build_made() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.md",
+            "---\ntype: Note\ntags:\n- alpha\n---\nSee [gone](missing.md).\n# Citations\n[src](https://example.com)",
+        );
+        write(dir.path(), "sub/b.md", "---\ntype: Note\n---\nleaf");
+        write(dir.path(), "plain.md", "no frontmatter");
+
+        let out = build(dir.path(), &BuildOptions::default()).unwrap();
+        let r = &out.report;
+        assert_eq!(r.files_scanned, 3);
+        assert_eq!(r.concepts, 2, "plain.md has no frontmatter");
+        assert_eq!(r.dangling, 1, "missing.md");
+        assert_eq!(
+            r.nodes_by_label,
+            BTreeMap::from([
+                ("Note".to_string(), 2),
+                ("Tag".to_string(), 1),
+                ("Source".to_string(), 1),
+                ("Folder".to_string(), 1),
+                (DEFAULT_LABEL.to_string(), 1),
+            ])
+        );
+        assert_eq!(
+            r.edges_by_type,
+            BTreeMap::from([
+                ("LINKS_TO".to_string(), 1),
+                ("CITES".to_string(), 1),
+                ("TAGGED".to_string(), 1),
+                ("CONTAINS".to_string(), 1),
+            ])
+        );
+        assert!(r.errors.is_empty() && r.warnings.is_empty());
+        // The report must describe the graph that was actually built.
+        assert_eq!(
+            out.graph.graph.node_indices().count(),
+            r.nodes_by_label.values().sum::<usize>()
+        );
+        assert_eq!(
+            out.graph.graph.edge_count(),
+            r.edges_by_type.values().sum::<usize>()
+        );
+    }
+
+    #[test]
     fn empty_bundle_is_empty_graph() {
         let dir = tempdir().unwrap();
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         assert_eq!(g.graph.node_indices().count(), 0);
     }
 
@@ -630,7 +725,7 @@ mod tests {
             "b.md",
             "---\ntype: Note\ntags:\n- alpha\n---\nleaf",
         );
-        let g = build(dir.path(), &BuildOptions::default()).unwrap();
+        let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
         assert_eq!(count_label(&g, "Tag"), 2, "alpha, beta");
         assert_eq!(count_label(&g, "Source"), 1, "the cited URL");
         // a→alpha, a→beta, b→alpha (TAGGED) + a→source (CITES) = 4 edges
@@ -668,7 +763,7 @@ mod tests {
             dialect: crate::okf::model::Dialect::Loose,
             ..BuildOptions::default()
         };
-        let g = build(dir.path(), &opts).unwrap();
+        let g = build(dir.path(), &opts).unwrap().graph;
         // both wikilinks resolve to the one file → 2 nodes, no provisional stub.
         assert_eq!(g.graph.node_indices().count(), 2);
         assert_eq!(provisional_count(&g), 0);
@@ -686,7 +781,7 @@ mod tests {
             dialect: crate::okf::model::Dialect::Loose,
             ..BuildOptions::default()
         };
-        let g = build(dir.path(), &opts).unwrap();
+        let g = build(dir.path(), &opts).unwrap().graph;
         assert_eq!(provisional_count(&g), 1);
     }
 }

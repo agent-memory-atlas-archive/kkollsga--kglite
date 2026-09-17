@@ -22,8 +22,8 @@ pub mod links;
 pub mod model;
 pub mod walk;
 
-pub use build::build;
-pub use model::{BuildOptions, ConceptDoc, Dialect, Link};
+pub use build::{build, BuildOutput};
+pub use model::{BuildOptions, BuildReport, ConceptDoc, Dialect, Link, Profile};
 
 use crate::datatypes::values::Value;
 use rayon::prelude::*;
@@ -44,7 +44,7 @@ pub fn read_body(path: &Path) -> Result<String, String> {
 /// and parsed in parallel; a file with malformed frontmatter degrades to a
 /// body-only `Concept` rather than being dropped (permissive consumption).
 pub fn parse_bundle(root: &Path, opts: &BuildOptions) -> Result<Vec<ConceptDoc>, String> {
-    let walked = walk::discover(root, &opts.skip_dirs)?;
+    let walked = walk::discover(root, opts)?;
     Ok(parse_concepts(&walked.concepts, opts))
 }
 

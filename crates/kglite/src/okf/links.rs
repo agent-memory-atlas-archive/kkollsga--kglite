@@ -373,6 +373,34 @@ mod tests {
     }
 
     #[test]
+    fn obsidian_resolves_the_same_links_as_loose() {
+        // `"obsidian"` parsed to `Loose` before the variant existed; the two
+        // must stay link-identical until a later phase deliberately parts them.
+        let body = "see [[other-note]], ![[img.png]], [x](/tables/y.md) and #tag [[Alice]]";
+        let loose = extract_links(body, "tables", Dialect::Loose);
+        assert_eq!(loose, extract_links(body, "tables", Dialect::Obsidian));
+        assert!(!loose.is_empty());
+    }
+
+    #[test]
+    fn loose_dialect_link_set_is_unchanged() {
+        let body = "see [[other-note]], ![[img.png]], [x](/tables/y.md) and #tag [[Alice]]";
+        let links = extract_links(body, "tables", Dialect::Loose);
+        let got: Vec<(&str, &str, bool)> = links
+            .iter()
+            .map(|l| (l.target.as_str(), l.conn_type.as_str(), l.is_wikilink))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("tables/y", "LINKS_TO", false),
+                ("other-note", "LINKS_TO", true),
+                ("Alice", "LINKS_TO", true),
+            ]
+        );
+    }
+
+    #[test]
     fn wikilink_anchor_is_stripped() {
         let links = extract_links(
             "see [[Design Notes#Goals]] and [[api#parse]]",
