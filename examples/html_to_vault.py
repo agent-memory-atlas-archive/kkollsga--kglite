@@ -64,7 +64,9 @@ META_NORMALIZERS: dict[str, dict[str, str]] = {}
 # Extensions the bundled MCP server delivers as images (VAULT.md §6).
 DELIVERABLE_IMAGES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 # Direct parents an image may have inside a heading or a table cell and still be
-# written out as an image rather than collapsed to its alt text.
+# written out as an image rather than collapsed to its alt text. The match is on
+# the image's *direct* parent, so `figure` — the element HTML defines for a
+# picture with a caption — has to be named even though `figcaption` is.
 INLINE_IMAGE_PARENTS = [
     *(f"h{n}" for n in range(1, 7)),
     "a",
@@ -75,6 +77,7 @@ INLINE_IMAGE_PARENTS = [
     "dt",
     "em",
     "figcaption",
+    "figure",
     "i",
     "li",
     "p",

@@ -7,7 +7,8 @@ the thing it promises: run it over a tiny HTML corpus and the result is a vault
 The fixture under ``tests/fixtures/vault_html/`` is deliberately small and
 deliberately awkward — it carries a folder note, a page cross-listed under two
 table-of-contents parents, a cross-reference block, a comma-separated meta list,
-an image that exists, one that does not, one in a table cell, one in a heading,
+an image that exists, one that does not, one in a table cell, one in a heading, one wrapped
+in a ``<figure>``,
 and a link to a page outside the corpus — because those are the cases a converter gets wrong. Three of them were
 found by running this converter over a 6917-page vendor corpus: a markdown
 converter escapes the `_` in a wikilink and every link to an underscored stem
@@ -52,7 +53,7 @@ EXPECTED_FILES = [
 ]
 EXPECTED_LABELS = Counter({"Article": 7, "Component": 1, "Image": 3, "Keyword": 3})
 EXPECTED_EDGES = Counter(
-    {"CHILD_OF": 5, "HAS_IMAGE": 3, "HAS_KEYWORD": 6, "LINKS_TO": 4, "RELATED_TO": 2, "USES_COMPONENT": 1}
+    {"CHILD_OF": 5, "HAS_IMAGE": 5, "HAS_KEYWORD": 6, "LINKS_TO": 4, "RELATED_TO": 2, "USES_COMPONENT": 1}
 )
 
 
@@ -156,6 +157,15 @@ def test_an_image_in_a_table_cell_or_a_heading_is_still_an_image(vault):
     assert "![The widget logo](img/logo.png)" in install
     reference = (vault / "Reference.md").read_text(encoding="utf-8")
     assert "## Settings ![The widget logo](img/logo.png)" in reference
+
+
+def test_an_image_wrapped_in_a_figure_is_still_an_image(vault):
+    # `keep_inline_images_in` is matched against the image's *direct* parent, so
+    # `<figure><img></figure>` in a table cell kept the caption and dropped the
+    # picture — three of a 6917-page vendor corpus's, in the element HTML
+    # defines for exactly this purpose.
+    install = (vault / "Guide" / "Install.md").read_text(encoding="utf-8")
+    assert "![Signal flow](img/diagram.png)" in install
 
 
 def test_a_hub_key_the_source_spells_as_one_value_is_written_as_a_list(vault):
