@@ -249,9 +249,7 @@ Wikidata slice, a SQL warehouse, a RAG corpus, or a parsed codebase.
   bundle (or a Claude memory dir, skills folder, or Obsidian vault) into a
   graph: frontmatter → node properties, markdown links → typed edges. Then
   cluster it (`CALL leiden`), find stale notes, surface dangling references: the
-  query engine OKF itself doesn't ship. The vault dialect is specified in the
-  [vault format](VAULT.md) reference — layout, frontmatter, links, attachments
-  and the converter checklist. **→
+  query engine OKF itself doesn't ship. Vault spec: [VAULT.md](VAULT.md). **→
   [OKF guide](https://kglite.readthedocs.io/en/latest/python/guides/okf.html).**
 
 **Why Cypher?** Questions over connected data (*which insiders sold this stock,
