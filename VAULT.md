@@ -278,25 +278,40 @@ are counted in the build report and are never exported as files (§10).
 ## 6. Attachments
 
 1. **Accepted syntax:** `![alt](rel/path.png)`, `![[image.png]]` and
-   `![[image.png|alt]]`. The body keeps the original syntax verbatim.
+   `![[image.png|alt]]`. The body keeps the original syntax verbatim. An
+   `http(s)` target is somebody else's file: it is not in the vault, no `stat`
+   describes it, and it becomes no node.
 2. **Resolution ladder:** note-relative → vault-root-relative → a unique
    filename anywhere in the vault. The stored value is always the
    **vault-relative** resolved path, so every consumer resolves from one root.
    A filename occurring twice does not resolve on the third rung; qualify it.
+   A target written with a leading `/` is vault-root-relative and skips the
+   first rung, exactly as a path *link* reads one.
 3. **Nodes:** one node per distinct resolved file, labelled `Image` when the
-   extension maps to an image MIME type and `Attachment` otherwise. The id is
-   the vault-relative path, repeated as `path`; `mime` comes from the extension
-   table, `size_bytes` and `mtime` (a UTC datetime) from `stat`. An `Image`
-   also carries `text`: the distinct alt texts and the titles of the notes
-   using it, newline-separated in first-use order, so captions stay
-   text-searchable.
+   extension maps to an image MIME type the MCP server delivers
+   (`image/png`, `image/jpeg`, `image/gif`, `image/webp`) and `Attachment`
+   otherwise — so SVG and TIFF are `Attachment`s. The node's id field is named
+   `path` and holds the vault-relative path, so `n.path` *is* the id; `mime`
+   comes from the extension table (`application/octet-stream` for an extension
+   it does not name), `size_bytes` and `mtime` (a UTC datetime) from `stat`,
+   and `title` is the filename. An `Image` also carries `text`: the distinct
+   alt texts and the titles of the notes using it, newline-separated in
+   first-use order, so captions stay text-searchable.
 4. **Edges:** `HAS_IMAGE` or `HAS_ATTACHMENT` from the note, with edge
-   properties `alt` (the alt text, if any), `section` (enclosing heading) and
-   `ordinal` (0-based position among that note's references of the same kind).
+   properties `alt` (the alt text, when there is one), `section` (enclosing
+   heading) and `ordinal`. Two references to one file from one note are **two
+   edges** when they differ in `section` or `alt` and one when they do not —
+   §5.4's rule, applied to attachments. `ordinal` numbers the edges a note
+   emits of each kind, 0-based in body order, so a folded repeat consumes no
+   number.
 5. **Bytes are never read at build time.** Metadata comes from `stat` only: no
    content hash, no dimensions, so build cost is independent of image volume.
+   The type therefore comes from the extension, never from the content.
 6. **A missing target** becomes a `_provisional: true` node with
-   `missing: true`, counted in the build report.
+   `missing: true`, labelled from its extension like any other, keyed by the
+   reference as written (normalised), and counted in the build report. An
+   ambiguous bare filename is one of these: it resolved to nothing, and the
+   warning names the candidates.
 
 **Recommendation for converters: emit PNG, JPEG, GIF or WebP** — the four types
 the bundled MCP server delivers as images. SVG is stored as an `Attachment` and

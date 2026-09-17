@@ -16,10 +16,14 @@
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::mutation::maintain;
 use crate::graph::DirGraph;
+use crate::okf::links::normalize_path_parts;
+use crate::okf::model::{extension_of, label_for_mime, mime_for_extension};
 use crate::okf::model::{
     BuildOptions, BuildReport, ConceptDoc, FolderNoteDirection, Link, Profile, CONTAINS_CONN_TYPE,
-    DEFAULT_LABEL, FOLDER_LABEL, SOURCE_LABEL,
+    DEFAULT_LABEL, FOLDER_LABEL, HAS_ATTACHMENT_CONN_TYPE, HAS_IMAGE_CONN_TYPE, IMAGE_LABEL,
+    SOURCE_LABEL,
 };
+use crate::okf::walk::DiscoveredAttachment;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,6 +74,16 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     merge_groups(
         &mut groups,
         build_folders(&mut graph, &docs, &walked.index_files, opts, &mut report)?,
+    );
+    merge_groups(
+        &mut groups,
+        build_attachments(
+            &mut graph,
+            &docs,
+            &walked.attachments,
+            &opts.profile,
+            &mut report,
+        )?,
     );
     build_edges(&mut graph, &docs, opts, groups, &mut report)?;
     Ok(BuildOutput {
@@ -420,6 +434,296 @@ fn folder_meta(path: &Path) -> (Option<String>, Option<String>) {
         }
     }
     (title.filter(|s| !s.is_empty()), desc)
+}
+
+/// One attachment reference after the §6.2 ladder ran.
+enum Resolution<'a> {
+    /// The file, and its vault-relative path (the node id).
+    Found(&'a DiscoveredAttachment),
+    /// The bare filename named more than one file, so it names none.
+    Ambiguous(Vec<&'a str>),
+    /// Nothing in the vault matches.
+    Missing,
+}
+
+/// The vault's non-`.md` files, indexed for the §6.2 ladder.
+struct AttachmentIndex<'a> {
+    by_path: HashMap<&'a str, &'a DiscoveredAttachment>,
+    /// Filename → every file with that name. The third rung resolves only
+    /// when there is exactly one; a `Vec` is what lets the ambiguity be
+    /// *reported* instead of silently picking a winner.
+    by_name: HashMap<&'a str, Vec<&'a DiscoveredAttachment>>,
+}
+
+impl<'a> AttachmentIndex<'a> {
+    fn new(files: &'a [DiscoveredAttachment]) -> Self {
+        let mut by_path = HashMap::with_capacity(files.len());
+        let mut by_name: HashMap<&str, Vec<&DiscoveredAttachment>> = HashMap::new();
+        for f in files {
+            by_path.insert(f.rel_path.as_str(), f);
+            let name = f.rel_path.rsplit('/').next().unwrap_or(&f.rel_path);
+            by_name.entry(name).or_default().push(f);
+        }
+        Self { by_path, by_name }
+    }
+
+    /// Walk the ladder: note-relative → vault-root-relative → a unique
+    /// filename anywhere in the vault (VAULT.md §6.2).
+    ///
+    /// A leading `/` means vault-root, matching how a path *link* has always
+    /// read one — so the note-relative rung is skipped for it rather than
+    /// resolving `/img/x.png` against the note's own directory.
+    fn resolve(&self, target: &str, source_dir: &str) -> Resolution<'a> {
+        let rooted = target.starts_with('/');
+        let bare = target.trim_start_matches('/');
+        if !rooted && !source_dir.is_empty() {
+            let joined = normalize_path_parts(source_dir.split('/').chain(bare.split('/')));
+            if let Some(f) = self.by_path.get(joined.as_str()) {
+                return Resolution::Found(f);
+            }
+        }
+        let from_root = normalize_path_parts(bare.split('/'));
+        if let Some(f) = self.by_path.get(from_root.as_str()) {
+            return Resolution::Found(f);
+        }
+        let name = from_root.rsplit('/').next().unwrap_or(&from_root);
+        match self.by_name.get(name).map(Vec::as_slice) {
+            Some([only]) => Resolution::Found(only),
+            Some(many) if many.len() > 1 => {
+                Resolution::Ambiguous(many.iter().map(|f| f.rel_path.as_str()).collect())
+            }
+            _ => Resolution::Missing,
+        }
+    }
+}
+
+/// What a resolved attachment node needs, accumulated across every note that
+/// references it.
+#[derive(Default)]
+struct AttachmentNode<'a> {
+    label: &'static str,
+    mime: &'static str,
+    size: u64,
+    mtime: Option<i64>,
+    /// `Image.text`: distinct alt texts and using-note titles in first-use
+    /// order (VAULT.md §6.3), so a caption stays text-searchable — an edge
+    /// property is not.
+    text: Vec<&'a str>,
+}
+
+/// Resolve every `![…]` reference, synthesize the `Image` / `Attachment` nodes
+/// it reaches, and return the `HAS_IMAGE` / `HAS_ATTACHMENT` rows (VAULT.md §6).
+///
+/// Nodes are added here — before [`build_edges`] emits — so a reference never
+/// vivifies an untyped stub. Nothing reads a file: `size_bytes` and `mtime`
+/// come from the walk's `stat`, which is the whole of §6.5.
+fn build_attachments<'a>(
+    graph: &mut DirGraph,
+    docs: &'a [ConceptDoc],
+    files: &'a [DiscoveredAttachment],
+    profile: &Profile,
+    report: &mut BuildReport,
+) -> Result<EdgeGroups, String> {
+    let mut groups: EdgeGroups = BTreeMap::new();
+    if !profile.attachments {
+        return Ok(groups);
+    }
+    let index = AttachmentIndex::new(files);
+    let mut nodes: BTreeMap<String, AttachmentNode<'a>> = BTreeMap::new();
+    // id → (label, whether the filename was ambiguous). Sorted, so the stub
+    // frames and their warnings come out in the same order on every run.
+    let mut missing: BTreeMap<String, (&'static str, bool)> = BTreeMap::new();
+    let mut warnings: BTreeMap<String, String> = BTreeMap::new();
+
+    for d in docs {
+        let source_dir = super::parent_dir(doc_path(d));
+        // `ordinal` counts the edges this note emits of each kind, so it is
+        // assigned after the dedupe below rather than while scanning: a
+        // reference folded into an earlier edge must not consume a number, or
+        // the ordinals of one note would have holes in them.
+        let mut seen: Vec<(String, Option<&str>, Option<&str>)> = Vec::new();
+        for r in &d.attachments {
+            let (id, label) = match index.resolve(&r.target, source_dir) {
+                Resolution::Found(f) => {
+                    let mime = mime_for_extension(&extension_of(&f.rel_path));
+                    let entry = nodes.entry(f.rel_path.clone()).or_default();
+                    entry.label = label_for_mime(mime);
+                    entry.mime = mime;
+                    entry.size = f.size;
+                    entry.mtime = f.mtime;
+                    if entry.label == IMAGE_LABEL {
+                        for t in r.alt.as_deref().into_iter().chain([d.title.as_str()]) {
+                            if !t.is_empty() && !entry.text.contains(&t) {
+                                entry.text.push(t);
+                            }
+                        }
+                    }
+                    (f.rel_path.clone(), entry.label)
+                }
+                other => {
+                    // An unresolved reference keeps the name the note wrote,
+                    // normalised, so the stub is the thing to go and create.
+                    let id = normalize_path_parts(r.target.trim_start_matches('/').split('/'));
+                    let label = label_for_mime(mime_for_extension(&extension_of(&id)));
+                    missing
+                        .entry(id.clone())
+                        .or_insert((label, matches!(other, Resolution::Ambiguous(_))));
+                    warnings.entry(id.clone()).or_insert(match other {
+                        Resolution::Ambiguous(cands) => format!(
+                            "missing attachment `{id}`: the filename matches {} — qualify it",
+                            cands
+                                .iter()
+                                .map(|c| format!("`{c}`"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        _ => format!("missing attachment: `{id}`"),
+                    });
+                    (id, label)
+                }
+            };
+            // VAULT.md §6.4: two references to one file from one note are one
+            // edge unless they differ in `section` or `alt` — the §5.4 rule,
+            // applied to attachments.
+            let key = (id.clone(), r.section.as_deref(), r.alt.as_deref());
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            let conn = if label == IMAGE_LABEL {
+                HAS_IMAGE_CONN_TYPE
+            } else {
+                HAS_ATTACHMENT_CONN_TYPE
+            };
+            let ordinal = groups
+                .get(&(conn.to_string(), d.label.clone(), label.to_string()))
+                .map(|rows| rows.iter().filter(|(s, _, _)| s == &d.concept_id).count())
+                .unwrap_or(0);
+            let mut props = vec![("ordinal".to_string(), Value::Int64(ordinal as i64))];
+            if let Some(alt) = &r.alt {
+                props.push(("alt".to_string(), Value::String(alt.clone())));
+            }
+            if let Some(section) = &r.section {
+                props.push(("section".to_string(), Value::String(section.clone())));
+            }
+            groups
+                .entry((conn.to_string(), d.label.clone(), label.to_string()))
+                .or_default()
+                .push((d.concept_id.clone(), id, props));
+        }
+    }
+
+    add_attachment_nodes(graph, &nodes, report)?;
+    report.missing_attachments = missing.len();
+    report.ambiguous_attachments = missing.values().filter(|(_, amb)| *amb).count();
+    add_missing_attachment_nodes(graph, &missing, report)?;
+    report.warnings.extend(warnings.into_values());
+    Ok(groups)
+}
+
+/// One `add_nodes` per label for the files that resolved. The id column is
+/// `path`, which is also §6.3's `path` property — one column, so the id and
+/// the property cannot drift apart.
+fn add_attachment_nodes(
+    graph: &mut DirGraph,
+    nodes: &BTreeMap<String, AttachmentNode<'_>>,
+    report: &mut BuildReport,
+) -> Result<(), String> {
+    let mut by_label: BTreeMap<&str, Vec<(&String, &AttachmentNode)>> = BTreeMap::new();
+    for (path, n) in nodes {
+        by_label.entry(n.label).or_default().push((path, n));
+    }
+    for (label, group) in by_label {
+        count_nodes(report, label, group.len());
+        let mut columns = vec![
+            "path".to_string(),
+            "title".to_string(),
+            "mime".to_string(),
+            "size_bytes".to_string(),
+            "mtime".to_string(),
+        ];
+        if label == IMAGE_LABEL {
+            columns.push("text".to_string());
+        }
+        let rows: Vec<Vec<Value>> = group
+            .iter()
+            .map(|(path, n)| {
+                let name = path.rsplit('/').next().unwrap_or(path);
+                let mut row = vec![
+                    Value::String((*path).clone()),
+                    Value::String(name.to_string()),
+                    Value::String(n.mime.to_string()),
+                    Value::Int64(n.size as i64),
+                    n.mtime
+                        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+                        .map(|dt| Value::Timestamp(dt.naive_utc()))
+                        .unwrap_or(Value::Null),
+                ];
+                if label == IMAGE_LABEL {
+                    row.push(Value::String(n.text.join("\n")));
+                }
+                row
+            })
+            .collect();
+        let df = DataFrame::from_cypher_rows(columns, rows)?;
+        maintain::add_nodes(
+            graph,
+            df,
+            label.to_string(),
+            "path".to_string(),
+            Some("title".to_string()),
+            Some("update".to_string()),
+        )?;
+    }
+    Ok(())
+}
+
+/// The stubs for references that resolved to nothing (VAULT.md §6.6). They
+/// carry the `_provisional` marker every stub carries — which is what keeps the
+/// exporter from writing them back out as files (§10.1) — plus `missing: true`,
+/// so "the file is gone" is distinguishable from "the note is unwritten".
+fn add_missing_attachment_nodes(
+    graph: &mut DirGraph,
+    missing: &BTreeMap<String, (&'static str, bool)>,
+    report: &mut BuildReport,
+) -> Result<(), String> {
+    let mut by_label: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
+    for (id, (label, _)) in missing {
+        by_label.entry(label).or_default().push(id);
+    }
+    for (label, ids) in by_label {
+        count_nodes(report, label, ids.len());
+        let rows: Vec<Vec<Value>> = ids
+            .iter()
+            .map(|id| {
+                let name = id.rsplit('/').next().unwrap_or(id);
+                vec![
+                    Value::String((*id).clone()),
+                    Value::String(name.to_string()),
+                    Value::Boolean(true),
+                    Value::Boolean(true),
+                ]
+            })
+            .collect();
+        let df = DataFrame::from_cypher_rows(
+            vec![
+                "path".to_string(),
+                "title".to_string(),
+                "_provisional".to_string(),
+                "missing".to_string(),
+            ],
+            rows,
+        )?;
+        maintain::add_nodes(
+            graph,
+            df,
+            label.to_string(),
+            "path".to_string(),
+            Some("title".to_string()),
+            Some("preserve".to_string()),
+        )?;
+    }
+    Ok(())
 }
 
 /// Synthesize `Source` nodes from the concepts' external links. Added before
@@ -930,7 +1234,8 @@ mod tests {
     use crate::graph::schema::InternedKey;
     use crate::graph::storage::GraphRead;
     use crate::okf::model::{
-        HubSpec, EMBEDS_CONN_TYPE, FOLDER_NOTE_CONN_TYPE, TAGGED_CONN_TYPE, TAG_LABEL,
+        HubSpec, ATTACHMENT_LABEL, DEFAULT_MIME, EMBEDS_CONN_TYPE, FOLDER_NOTE_CONN_TYPE,
+        TAGGED_CONN_TYPE, TAG_LABEL,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -1210,6 +1515,10 @@ mod tests {
                 (FOLDER_LABEL.to_string(), 3),
                 (TAG_LABEL.to_string(), 3), // seismic, plus two inline `#tag`s
                 (DEFAULT_LABEL.to_string(), 1), // the `[[Missing]]` stub
+                // img/diagram.png and img/faults.png (VAULT.md §6)
+                (IMAGE_LABEL.to_string(), 2),
+                // img/handbook.pdf, plus the absent img/appendix.pdf
+                (ATTACHMENT_LABEL.to_string(), 2),
             ])
         );
         assert_eq!(
@@ -1224,8 +1533,14 @@ mod tests {
                 (FOLDER_NOTE_CONN_TYPE.to_string(), 5),
                 ("DEPENDS_ON".to_string(), 2), // the wikilink-valued key
                 (TAGGED_CONN_TYPE.to_string(), 4),
+                // links.md reaches both images; seismic.md re-reaches faults.png
+                (HAS_IMAGE_CONN_TYPE.to_string(), 3),
+                // index.md → handbook.pdf, links.md → the absent appendix
+                (HAS_ATTACHMENT_CONN_TYPE.to_string(), 2),
             ])
         );
+        assert_eq!(r.missing_attachments, 1, "`img/appendix.pdf`");
+        assert_eq!(r.ambiguous_attachments, 0);
 
         assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
         assert!(
@@ -1235,14 +1550,17 @@ mod tests {
             "{}",
             r.errors[0]
         );
-        assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
+        assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
         assert!(
             r.warnings[0].contains("`Roadmap` (projects/Roadmap.md)")
                 && r.warnings[0].contains("`roadmap` (notes/roadmap.md)"),
             "{}",
             r.warnings[0]
         );
-        assert_eq!(r.warnings[1], "dangling link: `Missing`");
+        // Attachments are resolved before the link edges, so their warnings
+        // land between the id findings and the dangling links.
+        assert_eq!(r.warnings[1], "missing attachment: `img/appendix.pdf`");
+        assert_eq!(r.warnings[2], "dangling link: `Missing`");
     }
 
     #[test]
@@ -1883,11 +2201,22 @@ mod tests {
         write(dir.path(), "a.md", "![[b]] and ![[diagram.png]]");
         let out = vault_build(dir.path());
         assert_eq!(
-            edges_of(&out.graph),
-            vec![("a".into(), "EMBEDS".into(), "b".into(), vec![])],
-            "an image embed is an attachment, not a link"
+            edges_of(&out.graph)
+                .into_iter()
+                .map(|(s, c, t, _)| (s, c, t))
+                .collect::<Vec<_>>(),
+            vec![
+                ("a".into(), "EMBEDS".into(), "b".into()),
+                ("a".into(), "HAS_IMAGE".into(), "diagram.png".into()),
+            ],
+            "an image embed is an attachment (§6), not a link"
         );
-        assert_eq!(out.report.dangling, 0, "and it mints no stub");
+        assert_eq!(
+            out.report.dangling, 0,
+            "and it mints no *link* stub — the absent file is a missing \
+             attachment instead"
+        );
+        assert_eq!(out.report.missing_attachments, 1);
     }
 
     #[test]
@@ -2172,5 +2501,487 @@ mod tests {
         let opts = BuildOptions::for_dialect(crate::okf::model::Dialect::Loose);
         let g = build(dir.path(), &opts).unwrap().graph;
         assert_eq!(provisional_count(&g), 1);
+    }
+
+    // ---- attachments (VAULT.md §6) ----
+
+    /// A tiny but real PNG header — enough for a fixture the build never
+    /// opens, and recognisably a PNG to anything that does.
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+    fn write_bytes(dir: &Path, rel: &str, bytes: &[u8]) {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(p, bytes).unwrap();
+    }
+
+    /// `(id, [(key, rendered value)])` for every node carrying `label`, sorted.
+    fn nodes_with_props(g: &DirGraph, label: &str) -> Vec<(String, Vec<(String, String)>)> {
+        let mut out: Vec<(String, Vec<(String, String)>)> = g
+            .graph
+            .node_indices()
+            .filter_map(|n| {
+                let nd = g.node_view(n)?;
+                if nd.node_type_str(&g.interner) != label {
+                    return None;
+                }
+                let id = match nd.id().into_owned() {
+                    Value::String(s) => s,
+                    other => format!("{other:?}"),
+                };
+                let mut props: Vec<(String, String)> = nd
+                    .property_keys(&g.interner)
+                    .into_iter()
+                    .map(|k| {
+                        (
+                            k.to_string(),
+                            match nd.get_property(k).map(std::borrow::Cow::into_owned) {
+                                Some(Value::String(s)) => s,
+                                other => format!("{other:?}"),
+                            },
+                        )
+                    })
+                    .collect();
+                props.sort();
+                Some((id, props))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// `(source, conn, target, props)` of the `HAS_IMAGE` / `HAS_ATTACHMENT`
+    /// edges only — a fixture's containment edges are not what §6 is about.
+    fn attachment_edges(g: &DirGraph) -> Vec<EdgeFacts> {
+        edges_of(g)
+            .into_iter()
+            .filter(|(_, conn, _, _)| conn.starts_with("HAS_"))
+            .collect()
+    }
+
+    /// One vault where each of VAULT.md §6.2's three rungs is the *only* rung
+    /// that answers: the two path-resolved files have a namesake elsewhere, so
+    /// the bare-filename rung below them is ambiguous and cannot stand in.
+    /// Without that, dropping rung 1 or 2 leaves every assertion green.
+    fn ladder_vault() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "img/faults.png", PNG);
+        write_bytes(dir.path(), "other/faults.png", PNG);
+        write_bytes(dir.path(), "notes/local.png", PNG);
+        write_bytes(dir.path(), "other/local.png", PNG);
+        write_bytes(dir.path(), "img/handbook.pdf", b"%PDF-1.4\n");
+        write(
+            dir.path(),
+            "notes/a.md",
+            concat!(
+                "![near](local.png) is note-relative,\n",
+                "![root](img/faults.png) is vault-root-relative,\n",
+                "![[handbook.pdf]] is a bare filename.\n",
+            ),
+        );
+        dir
+    }
+
+    #[test]
+    fn attachment_ladder_resolves_note_relative_root_relative_and_filename() {
+        let dir = ladder_vault();
+        let out = vault_build(dir.path());
+        assert_eq!(
+            attachment_edges(&out.graph)
+                .into_iter()
+                .map(|(s, c, t, _)| (s, c, t))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "a".into(),
+                    "HAS_ATTACHMENT".into(),
+                    "img/handbook.pdf".into()
+                ),
+                ("a".into(), "HAS_IMAGE".into(), "img/faults.png".into()),
+                ("a".into(), "HAS_IMAGE".into(), "notes/local.png".into()),
+            ],
+            "the stored value is always the vault-relative resolved path"
+        );
+        assert_eq!(
+            out.report.missing_attachments, 0,
+            "every reference found its rung"
+        );
+        assert_eq!(
+            out.report.nodes_by_label.get(IMAGE_LABEL),
+            Some(&2),
+            "the two unreferenced namesakes are files, not nodes (§1.2)"
+        );
+    }
+
+    #[test]
+    fn a_rooted_path_skips_the_note_relative_rung() {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "shot.png", PNG);
+        write_bytes(dir.path(), "notes/shot.png", PNG);
+        write(dir.path(), "notes/a.md", "![x](/shot.png)");
+        let out = vault_build(dir.path());
+        assert_eq!(
+            attachment_edges(&out.graph)
+                .into_iter()
+                .map(|(_, _, t, _)| t)
+                .collect::<Vec<_>>(),
+            vec!["shot.png".to_string()],
+            "a leading `/` means the vault root, as it does for a path link"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_filename_does_not_resolve_and_names_both_candidates() {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "a/shot.png", PNG);
+        write_bytes(dir.path(), "b/shot.png", PNG);
+        write(dir.path(), "note.md", "![[shot.png]]");
+        let out = vault_build(dir.path());
+        assert_eq!(out.report.missing_attachments, 1);
+        assert_eq!(out.report.ambiguous_attachments, 1);
+        let w = out
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.contains("shot.png"))
+            .expect("an ambiguity is reported");
+        assert!(
+            w.contains("`a/shot.png`") && w.contains("`b/shot.png`"),
+            "the warning names both candidates: {w}"
+        );
+        assert_eq!(provisional_count(&out.graph), 1, "it resolved to nothing");
+    }
+
+    #[test]
+    fn the_extension_decides_the_label_and_the_mime_type() {
+        let dir = tempdir().unwrap();
+        for rel in [
+            "f/a.png", "f/b.JPG", "f/c.gif", "f/d.webp", "f/e.svg", "f/g.tiff", "f/h.pdf",
+            "f/i.qqq",
+        ] {
+            write_bytes(dir.path(), rel, PNG);
+        }
+        write(
+            dir.path(),
+            "note.md",
+            "![](f/a.png) ![](f/b.JPG) ![](f/c.gif) ![](f/d.webp)\n\
+             ![](f/e.svg) ![](f/g.tiff) ![](f/h.pdf) ![](f/i.qqq)",
+        );
+        let out = vault_build(dir.path());
+        let mimes = |label: &str| -> Vec<(String, String)> {
+            nodes_with_props(&out.graph, label)
+                .into_iter()
+                .map(|(id, props)| {
+                    let mime = props
+                        .iter()
+                        .find(|(k, _)| k == "mime")
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    (id, mime)
+                })
+                .collect()
+        };
+        assert_eq!(
+            mimes(IMAGE_LABEL),
+            vec![
+                ("f/a.png".to_string(), "image/png".to_string()),
+                ("f/b.JPG".to_string(), "image/jpeg".to_string()),
+                ("f/c.gif".to_string(), "image/gif".to_string()),
+                ("f/d.webp".to_string(), "image/webp".to_string()),
+            ],
+            "`Image` is exactly the four types the MCP server delivers, and the \
+             extension match is case-insensitive"
+        );
+        assert_eq!(
+            mimes(ATTACHMENT_LABEL),
+            vec![
+                ("f/e.svg".to_string(), "image/svg+xml".to_string()),
+                ("f/g.tiff".to_string(), "image/tiff".to_string()),
+                ("f/h.pdf".to_string(), "application/pdf".to_string()),
+                ("f/i.qqq".to_string(), DEFAULT_MIME.to_string()),
+            ],
+            "a picture that cannot be delivered is still an Attachment, and an \
+             unknown extension gets a MIME type rather than none"
+        );
+    }
+
+    #[test]
+    fn an_attachment_node_carries_its_stat_metadata_and_nothing_read() {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "img/d.png", b"0123456789");
+        write_bytes(dir.path(), "img/empty.png", b"");
+        write(dir.path(), "note.md", "![d](img/d.png) ![e](img/empty.png)");
+        let out = vault_build(dir.path());
+        let props = nodes_with_props(&out.graph, IMAGE_LABEL);
+        let of = |id: &str, key: &str| -> String {
+            props
+                .iter()
+                .find(|(i, _)| i == id)
+                .unwrap()
+                .1
+                .iter()
+                .find(|(k, _)| k == key)
+                .unwrap_or_else(|| panic!("{id} has no {key}"))
+                .1
+                .clone()
+        };
+        assert_eq!(of("img/d.png", "mime"), "image/png");
+        assert_eq!(of("img/d.png", "size_bytes"), "Some(Int64(10))");
+        assert_eq!(
+            of("img/empty.png", "size_bytes"),
+            "Some(Int64(0))",
+            "an empty file has a size, not a missing one"
+        );
+        assert_eq!(
+            of("img/empty.png", "mime"),
+            "image/png",
+            "the type comes from the name — nothing sniffed the zero bytes"
+        );
+        assert!(
+            of("img/d.png", "mtime").starts_with("Some(Timestamp("),
+            "`mtime` is a UTC datetime, not a number: {}",
+            of("img/d.png", "mtime")
+        );
+        assert_eq!(
+            nodes_with_titles(&out.graph, IMAGE_LABEL),
+            vec![
+                ("img/d.png".to_string(), "d.png".to_string()),
+                ("img/empty.png".to_string(), "empty.png".to_string()),
+            ],
+            "the id is the vault-relative path and the title is the filename"
+        );
+    }
+
+    /// VAULT.md §6.5: the build stats attachments and never opens them. A file
+    /// the process cannot read proves it — `stat` needs no read permission, so
+    /// a build that opened the file would fail where this one succeeds.
+    #[cfg(unix)]
+    #[test]
+    fn attachment_bytes_are_never_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "img/secret.png", b"0123456789");
+        let p = dir.path().join("img/secret.png");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&p).is_ok() {
+            // A privileged user bypasses the mode bits, so the file is not
+            // actually unreadable and this test can prove nothing here.
+            return;
+        }
+        write(dir.path(), "note.md", "![s](img/secret.png)");
+        let out = vault_build(dir.path());
+        assert_eq!(out.report.missing_attachments, 0);
+        assert_eq!(
+            nodes_with_props(&out.graph, IMAGE_LABEL)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            vec!["img/secret.png".to_string()],
+        );
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn image_text_collects_alts_and_note_titles_in_first_use_order() {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "img/f.png", PNG);
+        write_bytes(dir.path(), "img/h.pdf", b"%PDF-1.4\n");
+        write(
+            dir.path(),
+            "a.md",
+            "---\ntitle: Alpha\n---\n![Fault map](img/f.png)\n\n## More\n\n![Fault map](img/f.png)",
+        );
+        write(
+            dir.path(),
+            "b.md",
+            "---\ntitle: Beta\n---\n![Fault map](img/f.png) and ![Handbook](img/h.pdf)",
+        );
+        let out = vault_build(dir.path());
+        let text = nodes_with_props(&out.graph, IMAGE_LABEL)[0]
+            .1
+            .iter()
+            .find(|(k, _)| k == "text")
+            .unwrap()
+            .1
+            .clone();
+        assert_eq!(
+            text, "Fault map\nAlpha\nBeta",
+            "distinct alts and using-note titles, first-use order"
+        );
+        assert!(
+            !nodes_with_props(&out.graph, ATTACHMENT_LABEL)[0]
+                .1
+                .iter()
+                .any(|(k, _)| k == "text"),
+            "only an Image carries `text` (VAULT.md §6.3)"
+        );
+    }
+
+    #[test]
+    fn attachment_edges_carry_alt_section_and_a_per_kind_ordinal() {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "img/one.png", PNG);
+        write_bytes(dir.path(), "img/two.png", PNG);
+        write_bytes(dir.path(), "img/h.pdf", b"%PDF-1.4\n");
+        write(
+            dir.path(),
+            "note.md",
+            concat!(
+                "![](img/one.png)\n",
+                "![Doc](img/h.pdf)\n",
+                "## Figures\n",
+                "![Second](img/two.png)\n",
+            ),
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(
+            attachment_edges(&out.graph),
+            vec![
+                (
+                    "note".into(),
+                    "HAS_ATTACHMENT".into(),
+                    "img/h.pdf".into(),
+                    vec![
+                        ("alt".to_string(), "Doc".to_string()),
+                        ("ordinal".to_string(), "Some(Int64(0))".to_string()),
+                    ]
+                ),
+                (
+                    "note".into(),
+                    "HAS_IMAGE".into(),
+                    "img/one.png".into(),
+                    vec![("ordinal".to_string(), "Some(Int64(0))".to_string())]
+                ),
+                (
+                    "note".into(),
+                    "HAS_IMAGE".into(),
+                    "img/two.png".into(),
+                    vec![
+                        ("alt".to_string(), "Second".to_string()),
+                        ("ordinal".to_string(), "Some(Int64(1))".to_string()),
+                        ("section".to_string(), "Figures".to_string()),
+                    ]
+                ),
+            ],
+            "`alt` is absent when empty, `section` when above the first heading, \
+             and the two kinds number independently"
+        );
+    }
+
+    #[test]
+    fn two_references_to_one_file_are_one_edge_unless_they_differ() {
+        let dir = tempdir().unwrap();
+        write_bytes(dir.path(), "img/f.png", PNG);
+        write(
+            dir.path(),
+            "note.md",
+            concat!(
+                "![Map](img/f.png) and again ![Map](img/f.png)\n",
+                "## Figures\n",
+                "![Map](img/f.png) and ![Other caption](img/f.png)\n",
+            ),
+        );
+        let out = vault_build(dir.path());
+        let ordinals: Vec<String> = attachment_edges(&out.graph)
+            .into_iter()
+            .map(|(_, _, _, props)| {
+                props
+                    .iter()
+                    .find(|(k, _)| k == "ordinal")
+                    .unwrap()
+                    .1
+                    .clone()
+            })
+            .collect();
+        assert_eq!(
+            ordinals,
+            vec![
+                "Some(Int64(0))".to_string(),
+                "Some(Int64(1))".to_string(),
+                "Some(Int64(2))".to_string()
+            ],
+            "the repeat in one section folds away, and the ordinals left behind \
+             have no hole in them"
+        );
+        assert_eq!(out.report.edges_by_type.get("HAS_IMAGE"), Some(&3));
+    }
+
+    #[test]
+    fn a_missing_attachment_is_a_provisional_stub_and_a_warning() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "note.md",
+            "![gone](./img/gone.png) and ![[nowhere.pdf]]",
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(out.report.missing_attachments, 2);
+        assert_eq!(out.report.ambiguous_attachments, 0, "both simply absent");
+        assert_eq!(
+            nodes_with_props(&out.graph, IMAGE_LABEL),
+            vec![(
+                "img/gone.png".to_string(),
+                vec![
+                    (
+                        "_provisional".to_string(),
+                        "Some(Boolean(true))".to_string()
+                    ),
+                    ("missing".to_string(), "Some(Boolean(true))".to_string()),
+                ]
+            )],
+            "the stub is keyed by the normalised reference and carries no stat"
+        );
+        assert_eq!(
+            nodes_with_props(&out.graph, ATTACHMENT_LABEL)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            vec!["nowhere.pdf".to_string()],
+            "the extension still decides the label of a file that is not there"
+        );
+        let mut warnings: Vec<&String> = out
+            .report
+            .warnings
+            .iter()
+            .filter(|w| w.starts_with("missing attachment"))
+            .collect();
+        warnings.sort();
+        assert_eq!(
+            warnings,
+            vec![
+                &"missing attachment: `img/gone.png`".to_string(),
+                &"missing attachment: `nowhere.pdf`".to_string()
+            ]
+        );
+        assert_eq!(out.graph.graph.edge_count(), 2, "the edges reach the stubs");
+    }
+
+    #[test]
+    fn okf_and_loose_mint_no_attachment_nodes() {
+        for dialect in [
+            crate::okf::model::Dialect::Okf,
+            crate::okf::model::Dialect::Loose,
+        ] {
+            let dir = tempdir().unwrap();
+            write_bytes(dir.path(), "img/f.png", PNG);
+            write(
+                dir.path(),
+                "note.md",
+                "---\ntype: Note\n---\n![f](img/f.png) and ![[f.png]]",
+            );
+            let mut opts = BuildOptions::for_dialect(dialect);
+            opts.require_frontmatter = false;
+            let out = build(dir.path(), &opts).unwrap();
+            assert_eq!(
+                out.report.nodes_by_label.get(IMAGE_LABEL),
+                None,
+                "{dialect:?} still drops every image reference"
+            );
+            assert_eq!(out.report.nodes_by_label.get(ATTACHMENT_LABEL), None);
+            assert_eq!(out.graph.graph.edge_count(), 0, "{dialect:?}");
+            assert_eq!(out.report.missing_attachments, 0);
+        }
     }
 }

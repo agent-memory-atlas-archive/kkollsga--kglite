@@ -23,3 +23,6 @@ tags; a `span with #incode in it` does not, and neither does this block:
 ```yaml
 tags: [#infence]
 ```
+
+![Fault map](faults.png) is the same file `notes/links.md` uses, reached from
+another folder by its bare filename.

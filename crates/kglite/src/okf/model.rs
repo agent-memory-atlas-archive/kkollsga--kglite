@@ -197,6 +197,14 @@ pub struct Profile {
     /// temporal `Value`. Top-level scalars only — a list element keeps the
     /// type YAML gave it, so a tag literally named `2026-01-01` stays a tag.
     pub infer_temporal: bool,
+    /// Read by [`crate::okf::links::extract`],
+    /// [`crate::okf::walk::discover`] and
+    /// [`crate::okf::build::build_attachments`]: an `![alt](x.png)` or
+    /// `![[x.png]]` reference becomes an `Image` / `Attachment` node
+    /// (VAULT.md §6). Off for `okf`/`loose`, which keep dropping the
+    /// reference — and which therefore never pay the walk's `stat` per
+    /// non-`.md` file either.
+    pub attachments: bool,
 }
 
 impl Default for Profile {
@@ -227,6 +235,7 @@ impl Default for Profile {
             heading_edges: BTreeMap::new(),
             skip_dirs: Vec::new(),
             infer_temporal: false,
+            attachments: false,
         }
     }
 }
@@ -254,6 +263,7 @@ impl Profile {
             index_as_folder_metadata: false,
             skip_log_files: false,
             infer_temporal: true,
+            attachments: true,
             ..Profile::default()
         }
     }
@@ -373,6 +383,14 @@ pub struct BuildReport {
     pub dangling: usize,
     /// Directories whose `Folder` node a folder note replaced (VAULT.md §2.3).
     pub folder_notes: usize,
+    /// Distinct attachment references that matched no file and vivified as
+    /// `missing: true` stubs (VAULT.md §6.6). An ambiguous filename is one of
+    /// these: it did not resolve.
+    pub missing_attachments: usize,
+    /// The subset of [`BuildReport::missing_attachments`] that failed *because*
+    /// the bare filename named two or more files (VAULT.md §6.2) — a vault
+    /// whose references need qualifying, not one whose files are absent.
+    pub ambiguous_attachments: usize,
     /// Problems that leave the build's output untrustworthy — a caller that
     /// gates on the report fails on a non-empty list.
     pub errors: Vec<String>,
@@ -419,6 +437,23 @@ impl Link {
     }
 }
 
+/// One `![alt](x.png)` / `![[x.png|alt]]` reference in a note's body
+/// (VAULT.md §6.1), before it is resolved against the vault's files.
+///
+/// Resolution needs the whole file list, which the parser does not have — so
+/// extraction records the reference as written and
+/// [`crate::okf::build::build_attachments`] walks the ladder (§6.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRef {
+    /// The target exactly as written, minus any `#fragment` / `?query`.
+    pub target: String,
+    /// The alt text: the `[…]` of a markdown image, or the `|…` of a wikilink
+    /// embed. `None` when empty — VAULT.md §6.4 omits the edge property.
+    pub alt: Option<String>,
+    /// The enclosing heading's text, as body links carry it (VAULT.md §5.4).
+    pub section: Option<String>,
+}
+
 /// One parsed concept document. Partial by default: `body` is `None` unless
 /// `with_body` was requested.
 #[derive(Debug, Clone)]
@@ -447,6 +482,9 @@ pub struct ConceptDoc {
     /// hub gets nothing from this note. Drained into the build report's
     /// warnings, which is the only place the clash is visible.
     pub hub_key_edges: Vec<String>,
+    /// `![…]` references found in the body, in body order (VAULT.md §6).
+    /// Always empty unless [`Profile::attachments`] is set.
+    pub attachments: Vec<AttachmentRef>,
     /// Body markdown — `Some` only when `with_body` was requested.
     pub body: Option<String>,
 }
@@ -474,6 +512,85 @@ pub const SOURCE_LABEL: &str = "Source";
 pub const FOLDER_LABEL: &str = "Folder";
 /// Frontmatter key that opts a file out of the sweep (`kg_skip: true`).
 pub const SKIP_KEY: &str = "kg_skip";
+/// Node label for a referenced file whose MIME type the bundled MCP server
+/// delivers as an image (VAULT.md §6.3).
+pub const IMAGE_LABEL: &str = "Image";
+/// Node label for every other referenced non-`.md` file.
+pub const ATTACHMENT_LABEL: &str = "Attachment";
+/// Edge type note → [`IMAGE_LABEL`] (VAULT.md §6.4).
+pub const HAS_IMAGE_CONN_TYPE: &str = "HAS_IMAGE";
+/// Edge type note → [`ATTACHMENT_LABEL`].
+pub const HAS_ATTACHMENT_CONN_TYPE: &str = "HAS_ATTACHMENT";
+/// MIME type for an extension the table below does not name.
+pub const DEFAULT_MIME: &str = "application/octet-stream";
+
+/// The extension → MIME table, the one place a file type is named
+/// (VAULT.md §6.3). Extensions arrive lowercased.
+///
+/// Not exhaustive and not meant to be: it covers what a vault actually holds,
+/// and everything else is [`DEFAULT_MIME`], which is a correct answer rather
+/// than a missing one.
+pub(crate) fn mime_for_extension(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "avif" => "image/avif",
+        "heic" => "image/heic",
+        "ico" => "image/vnd.microsoft.icon",
+        "pdf" => "application/pdf",
+        "md" | "markdown" => "text/markdown",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "tsv" => "text/tab-separated-values",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "yaml" | "yml" => "application/yaml",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "doc" | "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" | "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" | "pptx" => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "ttf" => "font/ttf",
+        "woff2" => "font/woff2",
+        _ => DEFAULT_MIME,
+    }
+}
+
+/// The label a referenced file's MIME type earns (VAULT.md §6.3).
+///
+/// [`IMAGE_LABEL`] is exactly the four types the bundled MCP server can hand
+/// back as an image block, so `Image` means "deliverable", not "picture": SVG
+/// and TIFF are pictures and are [`ATTACHMENT_LABEL`]s, which is why §6
+/// tells converters to rasterise.
+pub(crate) fn label_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" => IMAGE_LABEL,
+        _ => ATTACHMENT_LABEL,
+    }
+}
+
+/// The lowercased extension of a file path, or `""` when it has none.
+pub(crate) fn extension_of(path: &str) -> String {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    file.rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default()
+}
 
 #[cfg(test)]
 mod tests {

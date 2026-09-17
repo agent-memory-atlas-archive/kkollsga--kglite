@@ -9,33 +9,38 @@
 //!     `# Citations` → `CITES`, …),
 //!  3. the generic [`DEFAULT_CONN_TYPE`] (`LINKS_TO`).
 //!
-//! Links inside fenced code blocks and markdown image links (`![alt](src)`) are
-//! ignored. External `http(s)` links are captured as `is_external` (they become
-//! `Source` nodes in the builder); `mailto:`, anchors, and non-`.md` directory
-//! links are skipped (directory structure is captured separately).
+//! Links inside fenced code blocks, and markdown image links (`![alt](src)`),
+//! are never links. External `http(s)` links are captured as `is_external`
+//! (they become `Source` nodes in the builder); `mailto:`, anchors, and
+//! non-`.md` directory links are skipped (directory structure is captured
+//! separately).
 //!
-//! What the vault profile adds on top (VAULT.md §5), each behind its own
+//! What the vault profile adds on top (VAULT.md §5, §6), each behind its own
 //! [`Profile`] field so `okf`/`loose` bundles are untouched: `section` and
-//! `anchor` edge properties, an `EMBEDS` edge for `![[Note]]`, and inline
-//! `#tag` extraction. Frontmatter-valued edges (§4.3) are built from the
-//! parsed frontmatter by `crate::okf::parse_file`, using [`wikilink_targets`]
-//! and [`upper_snake`] from here.
+//! `anchor` edge properties, an `EMBEDS` edge for `![[Note]]`, inline `#tag`
+//! extraction, and `![alt](x.png)` / `![[x.png]]` attachment references
+//! (resolved against the vault's files by the builder, not here).
+//! Frontmatter-valued edges (§4.3) are built from the parsed frontmatter by
+//! `crate::okf::parse_file`, using [`wikilink_targets`] and [`upper_snake`]
+//! from here.
 
 use crate::datatypes::values::Value;
-use crate::okf::model::{Link, Profile, DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE};
+use crate::okf::model::{AttachmentRef, Link, Profile, DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE};
 use regex::Regex;
 use std::sync::OnceLock;
 
 fn link_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // [text](dest) or [text](dest "title"). `text` may not contain ']'.
-    RE.get_or_init(|| Regex::new(r#"\[[^\]]*\]\(([^)\s]+)(?:\s+"([^"]*)")?\)"#).unwrap())
+    // Group 1 is the text — the alt text when a `!` precedes the whole match.
+    RE.get_or_init(|| Regex::new(r#"\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)"#).unwrap())
 }
 
 fn wikilink_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // [[name]] or [[name|alias]].
-    RE.get_or_init(|| Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]").unwrap())
+    // [[name]] or [[name|alias]]. Group 2 is the alias — display text for a
+    // note link (not stored), the alt text for an attachment embed (§6.1).
+    RE.get_or_init(|| Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]*))?\]\]").unwrap())
 }
 
 /// A whole string that is nothing but one wikilink — the frontmatter
@@ -120,6 +125,13 @@ pub struct Extraction {
     /// Inline `#tag` names in first-use order; always empty unless
     /// [`Profile::inline_tags`] is set.
     pub tags: Vec<String>,
+    /// `![…]` references in body order; always empty unless
+    /// [`Profile::attachments`] is set. Within one line the markdown-image
+    /// spelling is collected before the wikilink-embed spelling, because the
+    /// two syntaxes are scanned by separate passes — which only reorders
+    /// references written on the same line, and `ordinal` stays deterministic
+    /// either way.
+    pub attachments: Vec<AttachmentRef>,
 }
 
 /// Extract resolved outbound links (and, in a vault, inline tags) from a
@@ -162,13 +174,22 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
 
         for cap in link_re().captures_iter(raw) {
             let m = cap.get(0).unwrap();
-            // Skip markdown image links: `![alt](src)`.
+            let dest = cap.get(2).map(|d| d.as_str()).unwrap_or("");
+            // `![alt](src)` is never a link. Under the vault profile it is an
+            // attachment reference instead (VAULT.md §6.1); otherwise it is
+            // dropped, as it always was.
             if m.start() > 0 && raw.as_bytes()[m.start() - 1] == b'!' {
+                push_attachment(
+                    &mut out.attachments,
+                    profile,
+                    dest,
+                    cap.get(1).map(|t| t.as_str()),
+                    section,
+                );
                 continue;
             }
-            let dest = cap.get(1).map(|d| d.as_str()).unwrap_or("");
             let conn = cap
-                .get(2)
+                .get(3)
                 .and_then(|t| conn_from_title(t.as_str()))
                 .or_else(|| heading_conn.clone())
                 .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string());
@@ -221,7 +242,17 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
                     // file with any other extension is an attachment (§6) and
                     // is not a link at all. Without the extension check every
                     // embedded image minted a concept stub.
-                    if !profile.embeds || !embeds_a_note(name) {
+                    if !embeds_a_note(name) {
+                        push_attachment(
+                            &mut out.attachments,
+                            profile,
+                            name,
+                            cap.get(2).map(|a| a.as_str()),
+                            section,
+                        );
+                        continue;
+                    }
+                    if !profile.embeds {
                         continue;
                     }
                     EMBEDS_CONN_TYPE.to_string()
@@ -273,6 +304,37 @@ fn edge_props(
         props.push(("anchor".to_string(), Value::String(a.to_string())));
     }
     props
+}
+
+/// Record one `![…]` reference (VAULT.md §6.1), or drop it when the profile
+/// does not read attachments — which is what keeps `okf`/`loose` on the
+/// behaviour they have always had.
+///
+/// An `http(s)` target is somebody else's file: it is not in the vault, no
+/// `stat` describes it, and §6.2's ladder has no rung for it. A target with no
+/// extension or a `.md` one is a note embed, handled by the caller.
+fn push_attachment(
+    out: &mut Vec<AttachmentRef>,
+    profile: &Profile,
+    dest: &str,
+    alt: Option<&str>,
+    section: Option<&str>,
+) {
+    if !profile.attachments || is_external_url(dest) || dest.contains("://") {
+        return;
+    }
+    let target = dest.split(['#', '?']).next().unwrap_or(dest).trim();
+    if target.is_empty() || embeds_a_note(target) {
+        return;
+    }
+    out.push(AttachmentRef {
+        target: target.to_string(),
+        alt: alt
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_string),
+        section: section.map(str::to_string),
+    });
 }
 
 /// Whether an embed's target names a note rather than an attachment. A target
@@ -471,7 +533,7 @@ fn resolve_target(dest: &str, source_dir: &str) -> Option<String> {
 }
 
 /// Normalize a path: drop `.`/empty segments, pop on `..`, join with `/`.
-fn normalize_path_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+pub(crate) fn normalize_path_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
     let mut stack: Vec<&str> = Vec::new();
     for p in parts {
         match p {
@@ -755,6 +817,77 @@ mod tests {
                 .tags
                 .is_empty()
         );
+    }
+
+    // ---- vault attachments (VAULT.md §6.1) ----
+
+    fn attach(got: &Extraction) -> Vec<(&str, Option<&str>, Option<&str>)> {
+        got.attachments
+            .iter()
+            .map(|a| (a.target.as_str(), a.alt.as_deref(), a.section.as_deref()))
+            .collect()
+    }
+
+    #[test]
+    fn vault_captures_all_three_attachment_spellings() {
+        let got = extract(
+            concat!(
+                "![](img/bare.png) and ![[plain.png]]\n",
+                "## Figures\n",
+                "![Fault map](../img/faults.png) then ![[diagram.png|A diagram]]\n",
+                "and ![  ](img/blank.png) has no alt, ![[notes/deep.md]] is a note,\n",
+                "![[nameless]] is a note too, and ![remote](https://ex.com/x.png)\n",
+                "and ![frag](img/frag.png#page=2) drops its fragment.\n",
+                "![doc](notes/other.md) and ![dir](subdir) are neither.\n",
+            ),
+            "notes",
+            &vault(),
+        );
+        assert_eq!(
+            attach(&got),
+            vec![
+                ("img/bare.png", None, None),
+                ("plain.png", None, None),
+                ("../img/faults.png", Some("Fault map"), Some("Figures")),
+                ("diagram.png", Some("A diagram"), Some("Figures")),
+                ("img/blank.png", None, Some("Figures")),
+                ("img/frag.png", Some("frag"), Some("Figures")),
+            ],
+            "an external URL, a `.md` target and an extension-less one are not \
+             attachments — in either spelling"
+        );
+        assert!(
+            !got.links.iter().any(|l| l.target.contains("other")),
+            "and `![doc](notes/other.md)` is not a link either: the `!` still \
+             disqualifies it"
+        );
+        let embeds: Vec<&str> = got
+            .links
+            .iter()
+            .filter(|l| l.conn_type == EMBEDS_CONN_TYPE)
+            .map(|l| l.target.as_str())
+            .collect();
+        assert_eq!(
+            embeds,
+            vec!["notes/deep", "nameless"],
+            "the note embeds on those lines are still links"
+        );
+    }
+
+    #[test]
+    fn okf_and_loose_capture_no_attachments() {
+        for dialect in [Dialect::Okf, Dialect::Loose] {
+            let got = extract(
+                "![alt](img/x.png) and ![[y.png]]",
+                "",
+                &Profile::for_dialect(dialect),
+            );
+            assert!(
+                got.attachments.is_empty(),
+                "{dialect:?} still drops every image reference"
+            );
+            assert!(got.links.is_empty(), "{dialect:?} mints no link either");
+        }
     }
 
     #[test]

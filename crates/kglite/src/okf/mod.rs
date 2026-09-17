@@ -317,6 +317,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         props,
         links: all_links,
         inline_tags: extracted.tags,
+        attachments: extracted.attachments,
         hub_key_edges,
         body,
     }))

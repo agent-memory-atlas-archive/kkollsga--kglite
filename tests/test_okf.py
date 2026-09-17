@@ -217,9 +217,11 @@ class TestVaultGoldenBundle:
     case-collision pair, a native list and an ISO date — plus the link
     semantics of VAULT.md §5: ``aliases:``, a ``#section`` anchor, wikilink-
     valued frontmatter keys (``depends_on:`` and the reserved ``parent:``),
-    inline ``#tags``, an ``![[embed]]`` and one dangling link; and VAULT.md
-    §2.3–2.4: ``projects.md`` is the folder note for ``projects/`` and
-    ``notes/index.md`` is an ordinary note. The build
+    inline ``#tags``, an ``![[embed]]`` and one dangling link; VAULT.md §6:
+    an ``img/`` folder whose two PNGs and one PDF are reached by all three
+    rungs of the resolution ladder, plus one reference to a file that is not
+    there; and VAULT.md §2.3–2.4: ``projects.md`` is the folder note for
+    ``projects/`` and ``notes/index.md`` is an ordinary note. The build
     *report* for the same bundle (the collision findings, the dangling
     warning) is asserted in Rust, at
     ``okf::build::tests::golden_vault_bundle_report`` — the report has no
@@ -244,6 +246,11 @@ class TestVaultGoldenBundle:
                 "Note": 2,
                 "archive": 1,
                 "Concept": 1,  # the `[[Missing]]` stub, labelled as every dialect labels one
+                # img/diagram.png and img/faults.png
+                "Image": 2,
+                # img/handbook.pdf, plus the absent img/appendix.pdf stub —
+                # the extension labels a file that is not there too
+                "Attachment": 2,
             }
         )
 
@@ -259,6 +266,11 @@ class TestVaultGoldenBundle:
                 "DEPENDS_ON": 2,  # `depends_on:` names two wikilinks
                 "EMBEDS": 1,  # `![[old]]`
                 "RELATED": 1,  # `## Related topics`, via the built-in heading ladder
+                # links.md reaches both images; seismic.md re-reaches faults.png
+                # from another folder by its bare filename
+                "HAS_IMAGE": 3,
+                # index.md → handbook.pdf, links.md → the absent appendix
+                "HAS_ATTACHMENT": 2,
             }
         )
 
@@ -363,10 +375,13 @@ class TestVaultGoldenBundle:
             ("welcome", "old"),  # a path link, relative to the linking note
         ]
 
-    def test_only_the_named_dangling_link_is_a_stub(self):
+    def test_only_the_named_dangling_link_is_a_link_stub(self):
         g = self.build()
-        stubs = g.cypher("MATCH (n {_provisional:true}) RETURN n.concept_id AS id").to_list()
-        assert stubs == [{"id": "Missing"}], "and `![[diagram.png]]` mints none"
+        stubs = g.cypher("MATCH (n {_provisional:true}) WHERE n.missing IS NULL RETURN n.concept_id AS id").to_list()
+        # `![[diagram.png]]` resolves to a real `Image`; the one absent
+        # attachment is a stub of its own kind (`missing: true`, §6.6), which
+        # is what this filter excludes.
+        assert stubs == [{"id": "Missing"}]
 
     def test_body_link_edges_carry_section_and_anchor(self):
         g = self.build()
@@ -466,6 +481,65 @@ class TestVaultGoldenBundle:
             {"id": "geoscience", "title": "geoscience"},
             {"id": "seismic", "title": "seismic"},
         ]
+
+    def test_attachment_nodes_carry_their_stat_metadata(self):
+        import datetime
+
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:Image) RETURN n.path AS path, n.title AS title, n.mime AS mime, "
+            "n.size_bytes AS size, n.mtime AS mtime ORDER BY path"
+        ).to_list()
+        assert [r["path"] for r in rows] == ["img/diagram.png", "img/faults.png"]
+        assert [r["title"] for r in rows] == ["diagram.png", "faults.png"]
+        assert {r["mime"] for r in rows} == {"image/png"}
+        # The committed PNGs are 69 bytes each; the point is that `stat` was
+        # read and the bytes were not.
+        assert [r["size"] for r in rows] == [69, 69]
+        assert all(isinstance(r["mtime"], datetime.datetime) for r in rows)
+        assert g.cypher("MATCH (n:Attachment {path:'img/handbook.pdf'}) RETURN n.mime AS m").to_list() == [
+            {"m": "application/pdf"}
+        ]
+
+    def test_image_text_carries_alts_and_using_note_titles(self):
+        # VAULT.md §6.3: captions stay text-searchable — an edge property is
+        # not. `faults.png` is used by two notes, one alt text between them.
+        g = self.build()
+        assert g.cypher("MATCH (n:Image {path:'img/faults.png'}) RETURN n.text AS t").to_list() == [
+            {"t": "Fault map\nLink semantics\nseismic"}
+        ]
+
+    def test_attachment_edges_carry_alt_section_and_ordinal(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (a)-[r:HAS_IMAGE]->(b) RETURN a.concept_id AS src, b.path AS tgt, "
+            "r.alt AS alt, r.section AS section, r.ordinal AS ordinal ORDER BY src, ordinal"
+        ).to_list()
+        assert rows == [
+            {"src": "links", "tgt": "img/faults.png", "alt": "Fault map", "section": "Figures", "ordinal": 0},
+            # the `![[diagram.png]]` spelling carries no alt at all
+            {"src": "links", "tgt": "img/diagram.png", "alt": None, "section": "Figures", "ordinal": 1},
+            # a second note numbers from zero again, above any heading
+            {"src": "seismic", "tgt": "img/faults.png", "alt": "Fault map", "section": None, "ordinal": 0},
+        ]
+
+    def test_missing_attachment_is_a_provisional_stub(self):
+        g = self.build()
+        assert g.cypher(
+            "MATCH (n {missing:true}) RETURN labels(n)[0] AS label, n.path AS path, n._provisional AS prov"
+        ).to_list() == [
+            {"label": "Attachment", "path": "img/appendix.pdf", "prov": True},
+        ]
+
+    def test_okf_and_loose_still_drop_image_references(self):
+        # VAULT.md §6 is an `"obsidian"` rule: the same fixture read as
+        # `"loose"` mints no attachment node and no `HAS_*` edge.
+        g = okf.build(str(VAULT_BUNDLE), dialect="loose", require_frontmatter=False)
+        labels = _labels(g)
+        assert labels["Image"] == 0
+        assert labels["Attachment"] == 0
+        assert _edge_types(g)["HAS_IMAGE"] == 0
+        assert _edge_types(g)["HAS_ATTACHMENT"] == 0
 
     def test_build_is_deterministic(self):
         a, b = self.build(), self.build()

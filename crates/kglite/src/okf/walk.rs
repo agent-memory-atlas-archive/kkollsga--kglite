@@ -22,6 +22,31 @@ pub struct DiscoveredFile {
     pub abs_path: PathBuf,
 }
 
+/// A non-`.md` file the walk saw, with the `stat` metadata VAULT.md §6.3 puts
+/// on its node — and the only metadata it puts there: the bytes are never
+/// read, so build cost is independent of image volume (§6.5).
+///
+/// `(rel_path, mtime, size)` is also the tuple P11 fingerprints a vault by, so
+/// the walk hands it over whole rather than making the fingerprint pass stat
+/// every file a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredAttachment {
+    /// Vault-relative path, forward-slashed (`img/diagram.png`) — the node id.
+    pub rel_path: String,
+    /// Absolute path on disk. Never opened by the build; here for the
+    /// exporter, which copies the file.
+    pub abs_path: PathBuf,
+    /// File size in bytes.
+    pub size: u64,
+    /// Modification time as whole seconds since the Unix epoch, UTC. Seconds
+    /// rather than the platform's native precision because a fingerprint is
+    /// compared across copies and filesystems — APFS keeps nanoseconds, a FAT
+    /// or SMB copy keeps two — and a sub-second difference that no filesystem
+    /// agrees on would report a change that never happened. `None` when the
+    /// filesystem has no mtime for the file.
+    pub mtime: Option<i64>,
+}
+
 /// Result of a bundle walk: concept files + each directory's `index.md`.
 #[derive(Debug, Clone, Default)]
 pub struct WalkResult {
@@ -29,6 +54,11 @@ pub struct WalkResult {
     /// Bundle-relative directory path (`""` = root) → that directory's
     /// `index.md` absolute path.
     pub index_files: HashMap<String, PathBuf>,
+    /// Every non-`.md`, non-hidden file under the root, sorted by `rel_path`.
+    /// Empty unless [`crate::okf::model::Profile::attachments`] is set — an
+    /// OKF sweep drops attachment references, so stat'ing the files would buy
+    /// nothing.
+    pub attachments: Vec<DiscoveredAttachment>,
 }
 
 fn is_ignored_dir(name: &str) -> bool {
@@ -84,6 +114,7 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
     }
 
     let mut out = Vec::new();
+    let mut attachments = Vec::new();
     let mut index_files: HashMap<String, PathBuf> = HashMap::new();
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
         // Never prune the root itself (depth 0) — the bundle directory may
@@ -125,9 +156,6 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
             Some(n) => n,
             None => continue,
         };
-        if !name.ends_with(".md") || (name == "log.md" && opts.profile.skip_log_files) {
-            continue;
-        }
         let rel = match entry.path().strip_prefix(root) {
             Ok(r) => r,
             Err(_) => continue,
@@ -137,6 +165,25 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
             .filter_map(|c| c.as_os_str().to_str())
             .collect::<Vec<_>>()
             .join("/");
+        if !name.ends_with(".md") {
+            // A non-`.md` file is a candidate attachment (VAULT.md §1.2): a
+            // node only if some note references it, so this is an index, not
+            // a node list. Hidden files (`.DS_Store`, editor swap files) are
+            // not vault content and no note references them.
+            if opts.profile.attachments && !name.starts_with('.') {
+                let meta = entry.metadata().ok();
+                attachments.push(DiscoveredAttachment {
+                    rel_path,
+                    abs_path: entry.path().to_path_buf(),
+                    size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                    mtime: meta.as_ref().and_then(mtime_secs),
+                });
+            }
+            continue;
+        }
+        if name == "log.md" && opts.profile.skip_log_files {
+            continue;
+        }
         if name == "index.md" && opts.profile.index_as_folder_metadata {
             // Record per directory (bundle-relative dir path; "" = root).
             let dir = rel_path
@@ -154,9 +201,22 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
     // Deterministic order (parallelism happens at parse time, but a stable file
     // list keeps id-collision resolution and tests reproducible).
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    attachments.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     Ok(WalkResult {
         concepts: out,
         index_files,
+        attachments,
+    })
+}
+
+/// A file's mtime as whole seconds since the Unix epoch, UTC. Pre-epoch times
+/// stay signed rather than saturating at 0 — a 1969 mtime is odd, but claiming
+/// it is 1970 is a lie the fingerprint would then compare.
+fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {
+    let modified = meta.modified().ok()?;
+    Some(match modified.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
     })
 }
 
@@ -188,6 +248,42 @@ mod tests {
         assert!(
             r.index_files.contains_key("notes"),
             "index.md → folder meta"
+        );
+    }
+
+    #[test]
+    fn only_the_attachment_profile_indexes_non_md_files() {
+        let dir = bundle();
+        fs::create_dir_all(dir.path().join("img")).unwrap();
+        fs::write(dir.path().join("img/diagram.png"), b"\x89PNG\r\n").unwrap();
+        fs::write(dir.path().join("notes/.DS_Store"), b"junk").unwrap();
+        fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+        fs::write(dir.path().join(".obsidian/workspace.json"), b"{}").unwrap();
+
+        assert!(
+            discover(dir.path(), &BuildOptions::default())
+                .unwrap()
+                .attachments
+                .is_empty(),
+            "an OKF sweep drops attachment references, so it stats nothing"
+        );
+
+        let opts = BuildOptions::for_dialect(crate::okf::model::Dialect::Obsidian);
+        let r = discover(dir.path(), &opts).unwrap();
+        let paths: Vec<&str> = r.attachments.iter().map(|a| a.rel_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["img/diagram.png"],
+            "hidden files and pruned dot-directories are not vault content"
+        );
+        assert_eq!(r.attachments[0].size, 6);
+        assert!(
+            r.attachments[0].mtime.is_some_and(|m| m > 1_600_000_000),
+            "a freshly written file has an mtime well past 2020"
+        );
+        assert!(
+            rel_paths(&r).contains(&"notes/log.md"),
+            "the vault profile keeps `log.md` a note, not an attachment"
         );
     }
 

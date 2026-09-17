@@ -46,6 +46,20 @@ before upgrading.
   every link target that resolves to no note is counted and named in the build
   report.
 
+  **Attachments** (`VAULT.md` §6) are the other half of what a note's body
+  says. `![alt](img/x.png)` and `![[x.png]]` resolve note-relative →
+  vault-root-relative → by unique filename anywhere in the vault (an ambiguous
+  bare filename resolves to nothing and is reported), and each distinct file
+  becomes one node keyed by its vault-relative `path` — `Image` for the four
+  types the bundled MCP server delivers (PNG, JPEG, GIF, WebP), `Attachment`
+  for everything else, both carrying `mime`, `size_bytes` and `mtime`. **The
+  bytes are never read**: the metadata comes from `stat`, so build cost is
+  independent of image volume. The note reaches the file by `HAS_IMAGE` /
+  `HAS_ATTACHMENT` carrying `alt`, `section` and a per-kind `ordinal`, and an
+  `Image` also carries a `text` of the distinct alt texts and the titles of the
+  notes using it, so captions stay text-searchable. A reference matching no
+  file becomes a `missing: true` stub, counted and named in the build report.
+
   **Layout and hubs** (`VAULT.md` §2.3, §2.4, §5.3, §5.5, §7) complete the read
   side. `index.md` and `log.md` are **ordinary notes** in a vault, where the
   `"okf"` and `"loose"` dialects reserve them. A **folder note** — `X.md`
@@ -71,15 +85,20 @@ before upgrading.
   labels come from the folder ladder above rather than
   `type` → `metadata.type` → `Concept`, bodies are stored, plain markdown files
   are ingested, and list-valued frontmatter arrives as a list instead of a JSON
-  string. Pass `dialect="loose"` to keep the old behaviour — it is unchanged
+  string. Embedded images change shape twice over: the `_provisional` Concept
+  stubs they used to mint are gone, and each referenced file now has an `Image`
+  or `Attachment` node with a `HAS_IMAGE` / `HAS_ATTACHMENT` edge in their
+  place. Pass `dialect="loose"` to keep the old behaviour — it is unchanged
   and is what the string used to mean.
 
 ### Fixed
 
 - `okf.build(dialect="obsidian"/"loose")` no longer turns an embedded image
   into a phantom node. `![[diagram.png]]` was read as an ordinary wikilink, so
-  every embed minted a `_provisional` Concept stub named after the file.
-  Embeds are now skipped; a plain `[[note]]` link is unchanged.
+  every embed minted a `_provisional` Concept stub named after the file. Under
+  `"loose"` the reference is now skipped entirely; under `"obsidian"` it
+  resolves to the file and becomes an `Image` node (or, when no file matches,
+  a `missing: true` attachment stub). A plain `[[note]]` link is unchanged.
 - `okf.build` built a graph whose edge count depended on hash order: the
   builder decided per endpoint-label group whether it owned every edge of a
   connection type, so the first group of a type kept parallel edges while every

@@ -68,6 +68,17 @@ def build(
               ``aliases:`` answer link resolution between the stem and slug
               rungs. ``![[Note]]`` is an ``EMBEDS`` edge; ``![[image.png]]``
               is an attachment and not a link.
+            * **Attachments**: ``![alt](img/x.png)`` and ``![[x.png]]``
+              resolve note-relative → vault-root-relative → by unique
+              filename, and become one ``Image`` (PNG/JPEG/GIF/WebP) or
+              ``Attachment`` node per file, keyed by its vault-relative
+              ``path`` and carrying ``mime`` / ``size_bytes`` / ``mtime``
+              from ``stat`` — the bytes are never read. The note reaches it
+              by ``HAS_IMAGE`` / ``HAS_ATTACHMENT`` carrying ``alt``,
+              ``section`` and ``ordinal``, an ``Image`` also carries a
+              ``text`` of the alt texts and using-note titles, and a
+              reference that matches no file becomes a
+              ``missing: true`` stub.
             * **Frontmatter edges**: a key whose value is a wikilink string,
               or a list of nothing but wikilink strings, becomes edges typed
               ``UPPER_SNAKE(key)`` and is *not* stored as a property; a list
