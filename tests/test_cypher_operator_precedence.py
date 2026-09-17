@@ -82,3 +82,37 @@ def test_reported_not_and_string_shape():
         "lvl"
     )
     assert levels == ["lagmannsrett"]
+
+
+def test_parenthesised_label_disjunction_is_an_expression():
+    """`WHERE (a:Software OR a:Api)` is a parenthesised boolean expression,
+    not a node pattern. The parser's `(` lookahead committed to the pattern
+    parser as soon as it saw `( <var> :`, so the parenthesised form was a
+    CypherSyntaxError while the unparenthesised `a:Software OR a:Api` parsed.
+    """
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Software {id: 's1', name: 'S1'})")
+    g.cypher("CREATE (:Software {id: 's2', name: 'S2'})")
+    g.cypher("CREATE (:Api {id: 'a1', name: 'A1'})")
+    g.cypher("CREATE (:Doc {id: 'd1', name: 'D1'})")
+    for src, dst in [("s1", "a1"), ("s1", "d1"), ("a1", "s2"), ("d1", "s1")]:
+        g.cypher(
+            "MATCH (a), (b) WHERE a.id = $src AND b.id = $dst CREATE (a)-[:LINKS_TO]->(b)",
+            params={"src": src, "dst": dst},
+        )
+
+    # s1->a1 and a1->s2 qualify; the two edges touching the Doc do not.
+    assert (
+        g.cypher(
+            "MATCH (a)-[r:LINKS_TO]->(b) WHERE (a:Software OR a:Api) AND (b:Software OR b:Api) RETURN count(r) AS c"
+        ).scalar()
+        == 2
+    )
+    assert g.cypher("MATCH (n) WHERE (n:Software OR n:Api) RETURN count(n) AS c").scalar() == 3
+    assert g.cypher("MATCH (n) WHERE NOT (n:Software OR n:Api) RETURN count(n) AS c").scalar() == 1
+    assert g.cypher("MATCH (n) WHERE (n:Software AND n.name = 'S1') RETURN count(n) AS c").scalar() == 1
+    # A bare `(n:Label)` and a parenthesised pattern predicate keep their meaning.
+    assert g.cypher("MATCH (n) WHERE (n:Software) RETURN count(n) AS c").scalar() == 2
+    assert g.cypher("MATCH (n) WHERE (n)-[:LINKS_TO]->() RETURN count(n) AS c").scalar() == 3
+    # Value positions share the same expression tower.
+    assert g.cypher("MATCH (n) WHERE n.id = 'a1' RETURN (n:Software OR n:Api) AS flag").scalar() is True

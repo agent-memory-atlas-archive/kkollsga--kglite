@@ -1,7 +1,7 @@
 //! Cypher parser: WHERE predicate tree (OR / XOR / AND / NOT / comparisons).
 
 use super::super::ast::*;
-use super::super::tokenizer::CypherToken;
+use super::super::tokenizer::{keyword_name_token, reserved_literal_name_token, CypherToken};
 use super::CypherParser;
 
 impl CypherParser {
@@ -121,7 +121,15 @@ impl CypherParser {
             Some(CypherToken::Colon) => true, // (:Type)
             Some(CypherToken::Identifier(_)) => {
                 match self.peek_at(2) {
-                    Some(CypherToken::Colon) => true, // (var:Type
+                    // (var:Type — only a *node pattern* if the label list is
+                    // followed by a property map or the closing paren.
+                    // `(n:A OR n:B)` is a parenthesised boolean expression:
+                    // committing to the pattern parser here made it a syntax
+                    // error while the unparenthesised `n:A OR n:B` parsed.
+                    Some(CypherToken::Colon) => self.node_pattern_after_labels(2),
+                    // (var {props} — a property map cannot open an expression
+                    // after a variable, so this is a node pattern.
+                    Some(CypherToken::LBrace) => true,
                     Some(CypherToken::RParen) => {
                         // (var) — pattern only if a real edge continuation
                         // follows, e.g. (p)-[:REL]->() / (p)-->() / (p)<-[...].
@@ -132,6 +140,46 @@ impl CypherParser {
                 }
             }
             _ => false,
+        }
+    }
+
+    /// Walk the label list that starts at `offset` (which points at the first
+    /// `:` after a variable) and report whether what follows it can only be a
+    /// node pattern.
+    ///
+    /// A node pattern continues with `{` (property map) or `)` — the latter
+    /// either closing an existential node pattern or preceding a relationship.
+    /// Anything else (`OR`, `AND`, `XOR`, a comparison operator, …) belongs to
+    /// the boolean tower, which parses `n:A` as a label check itself. Both
+    /// `:A:B` chains and `:A|B` alternations are walked, because the pattern
+    /// parser accepts both spellings.
+    fn node_pattern_after_labels(&self, offset: usize) -> bool {
+        let mut idx = offset;
+        while matches!(
+            self.peek_at(idx),
+            Some(CypherToken::Colon) | Some(CypherToken::Pipe)
+        ) {
+            if !self.is_label_name_at(idx + 1) {
+                return false;
+            }
+            idx += 2;
+        }
+        matches!(
+            self.peek_at(idx),
+            Some(CypherToken::LBrace) | Some(CypherToken::RParen)
+        )
+    }
+
+    /// True when the token at `offset` can stand in a label position — the
+    /// same set [`CypherParser::expect_label_name`] accepts: an identifier, a
+    /// `$param` reference, or a keyword soft enough to be used as a name.
+    fn is_label_name_at(&self, offset: usize) -> bool {
+        match self.peek_at(offset) {
+            Some(CypherToken::Identifier(_)) | Some(CypherToken::Parameter(_)) => true,
+            Some(token) => {
+                keyword_name_token(token).is_some() || reserved_literal_name_token(token).is_some()
+            }
+            None => false,
         }
     }
 

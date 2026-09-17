@@ -8,6 +8,7 @@
 //! - [`expressions`] — comparison, arithmetic, coercion, CASE, parameters
 //! - [`mutations`] — CREATE / SET / DELETE / REMOVE / MERGE and index upkeep
 //! - [`identifiers`] — quoted-identifier escaping (the injection class)
+//! - [`label_predicates`] — parenthesised label checks vs node patterns
 //! - [`lists`] — list parsing, slicing, sizing, and quantifier predicates
 //! - [`score_fuse`] — the retrieval-fusion scalar: absent lanes, weights, fold
 //! - [`semantics`] — absolute goldens for expression semantics (duplicate
@@ -37,6 +38,7 @@ mod deadline_rows;
 mod exists_witness;
 mod expressions;
 mod identifiers;
+mod label_predicates;
 mod lists;
 mod mutations;
 mod parallel;

@@ -300,6 +300,19 @@ before upgrading.
 
 ### Fixed
 
+- Parenthesised label checks parse as expressions: `WHERE (a:Software OR a:Api)`
+  is a boolean expression, not a node pattern. The `(` lookahead committed to
+  the MATCH-pattern parser the moment it saw `( <variable> :`, so every
+  parenthesised label disjunction, negation or conjunction —
+  `(n:A OR n:B)`, `NOT (n:A OR n:B)`, `(n:A AND n.x > 1)`, and the same shapes
+  in `RETURN` / `WITH` / `CASE WHEN` — failed with
+  "Unexpected token in MATCH pattern: OR", while the unparenthesised
+  `WHERE a:Software OR a:Api` answered fine. The lookahead now reads past the
+  label list and only takes the pattern path when a property map or the closing
+  paren follows, so `(n:A)`, `(n:A|B)` and `(n:A)-[:R]->()` keep their present
+  meaning. The same gap made `WHERE (n {name: 'x'})-[:R]->()` a syntax error;
+  it parses now.
+
 - A disk graph no longer refuses its own next write after `save()` in a process
   that spawns subprocesses. The directory lease gave its `flock` back by
   closing the descriptor, and `flock` ownership belongs to the open file
