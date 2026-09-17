@@ -296,10 +296,15 @@ def test_bench_save_kgl_spilled_5k(benchmark, graph_5k_spilled, tmp_path):
 KHOP_NODE_COUNT = 200_000
 
 #: 2x the seeds may cost at most this much more peak. The union of reachable
-#: sets grows ~1.27x between the two sizes and today's peak grows 1.00-1.02x,
-#: so 1.8x is clear of any legitimate verdict; it catches a regression whose
-#: memory is proportional to the seed count.
-MAX_SEED_GROWTH_FACTOR = 1.8
+#: sets grows ~1.27x between the two sizes. On Linux (`/proc/self/statm`)
+#: today's peak grows 1.00-1.02x. On macOS the footprint meter also sees
+#: allocator and binary-composition effects: 2026-09-17 it read 1.71x on main
+#: (15.4 -> 26.3 MB) and 1.80-1.82x on a branch whose absolute peaks were
+#: *lower* (13.6 -> 24.5 MB) and which touched no matcher code, with a
+#: run-to-run spread of +-0.02 on a byte-identical binary. A regression whose
+#: memory is proportional to the seed count reads ~2.0x, so 1.9x keeps the law
+#: while leaving the ceiling outside its own noise band.
+MAX_SEED_GROWTH_FACTOR = 1.9
 
 #: Absolute ceiling on a single peak measurement, in MB. Today's is 28-29 MB on
 #: either spelling and either seed count; the row-shaped analogue measures
