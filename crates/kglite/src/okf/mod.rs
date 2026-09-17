@@ -20,6 +20,7 @@ pub mod build;
 pub mod frontmatter;
 pub mod links;
 pub mod model;
+pub mod vault_config;
 pub mod walk;
 
 pub use build::{build, BuildOutput};
@@ -27,6 +28,7 @@ pub use model::{
     BuildOptions, BuildReport, ConceptDoc, Dialect, FolderNoteDirection, IdScheme, LabelFrom, Link,
     Profile,
 };
+pub use vault_config::{IndexDecl, VaultConfig};
 
 use crate::datatypes::values::Value;
 use model::IdScheme as Ids;

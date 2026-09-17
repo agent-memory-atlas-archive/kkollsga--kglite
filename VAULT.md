@@ -321,8 +321,18 @@ is not delivered; rasterise it when you build the source.
 
 Optional. Read by explicit path (the walk ignores dot-directories), applied to
 every build and re-applied to every rebuild — with carried embeddings, it is
-the only state that survives one. An unknown top-level key, or a value of the
-wrong shape, is an error.
+the only state that survives one. An unknown top-level key, an unknown
+`kglite_vault` version, or a value of the wrong shape is an error, and one of
+those **fails the build** rather than leaving a finding on a graph that looks
+built: because the file is the only thing a rebuild re-applies, a vault whose
+`vault.yaml` stopped parsing would silently lose its labels, hubs, indexes and
+embed targets. `okf.validate` reports the same failure as the §9 error.
+
+The file is a vault construct: it is read under the `obsidian` dialect only,
+and an `okf` or `loose` build that finds one ignores it **with a warning**.
+
+The declarations win over whatever the caller configured, in both directions —
+a rebuild re-reads the file, so the file is the vault's statement about itself.
 
 | Key | Shape | Meaning |
 |---|---|---|
@@ -343,6 +353,22 @@ wrong shape, is an error.
 A hub reads a key's **list** entries; a scalar joins no hub. A key that is
 both a hub and wikilink-valued goes to the typed-edge rule instead (§4.3) —
 that rule wins, and the clash is a warning (§9) rather than a silent empty hub.
+Declared hubs are **merged over** the built-in `tags` one rather than replacing
+the set, and a redeclaration names only what it changes: an omitted `label` is
+`Tag`, an omitted `edge` is `TAGGED`, an omitted `case_insensitive` is false.
+
+`types:` decides how a note's property **column is built**, so a declaration
+overrides inference rather than converting a value afterwards. It names the
+label a note *ends up with* and a property that label carries; `concept_id` is
+never retyped (it is the node's identity and the index built on it). A value
+that will not coerce is left exactly as it was written and **warned** about,
+naming the note, the property, the declared type and the value — the
+declaration is a statement about the vault, and a note that disagrees with it
+still holds what a human typed. A declaration no note matches is a warning too.
+
+`indexes:`, `text_indexes:` and `embed:` name a label or property the vault may
+not carry yet; each is a **warning**, never an error, and the rest are still
+installed.
 
 A complete example — a vendor help corpus of ~7k articles:
 
@@ -387,6 +413,12 @@ A vault can carry its own agent guidance, so a server built from it explains
 how to query itself. Both directories are re-read on every build, so editing a
 file is the whole update procedure.
 
+A file in either directory that fails validation is **skipped with a warning
+naming the file and the rule, and its siblings load** — the directory is
+hand-authored vault content, and one unfinished skill must not cost an agent
+the other nine. The build is not failed: nothing that reached the graph is
+wrong, there is simply less of it than the author intended.
+
 - `.kglite/skills/*.md` become `KgliteSkill` nodes. The frontmatter dialect is
   exactly the one an MCP skills directory uses — `name`, `description`,
   `references_tools`, `delivery`, then the markdown body. See
@@ -415,7 +447,9 @@ file is the whole update procedure.
   ````
 
   The statement must parse and must be read-only. A file that fails validation
-  is skipped with a warning naming the file and the rule; its siblings load.
+  is skipped, as above. A `parameters:` map is read **nested**, not flattened
+  into dotted keys, so a schema's `properties.id.type` keeps its three levels.
+  A file that omits `recipe_description` inherits the group's from a sibling.
 
 ## 9. Build report and validation
 
@@ -432,14 +466,19 @@ Findings are classified, and the classification is the contract:
 frontmatter; misuse of a reserved key (§4.1), such as a non-string `id:` or a
 scalar `tags:`; id collisions (§3); two folder notes for one directory (§2.3);
 `.kglite/vault.yaml` schema errors, including an unknown `kglite_vault`
-version; an absolute path, or a path escaping the vault root, in a link or
-attachment reference.
+version (these fail the build outright — §7); an ontology document the
+declaration API refuses; an absolute path, or a path escaping the vault root,
+in a link or attachment reference.
 
 **Warnings** — legitimate in a real vault, worth seeing: dangling links
 (stubs), missing attachments, case-insensitive collisions, alias clashes (an
 `aliases:` entry that is another note's filename stem, or that two notes both
-claim — the link resolves to exactly one of them), and a declared hub key
-whose value is a wikilink, which the typed-edge rule takes instead (§7).
+claim — the link resolves to exactly one of them), a declared hub key whose
+value is a wikilink, which the typed-edge rule takes instead (§7), a value that
+does not match its declared `types:` entry, a `vault.yaml` declaration naming a
+label or property the vault does not carry, a `.kglite/` skill or recipe file
+that failed validation (§8), and a `vault.yaml` found under the `okf` or
+`loose` dialect, where it does not apply.
 
 `kglite okf check` exits non-zero when any error is present. `--strict`
 promotes every warning to an error — the setting a converter's own test suite

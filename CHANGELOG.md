@@ -78,6 +78,36 @@ before upgrading.
   (`"Related topics"` → `RELATED_TO` rather than `RELATED`). The `"okf"` and
   `"loose"` dialects are unchanged by all of it.
 
+  **A vault declares itself** in `.kglite/vault.yaml` (`VAULT.md` §7), read by
+  explicit path — the walk never enters a dot-directory — and re-applied on
+  every rebuild, which makes it the one place a generated vault keeps what a
+  graph-building script used to hold. Under `kglite_vault: 1` it carries
+  `default_label`, `label_from`, `body`, `skip_dirs`, `folder_notes`, `hubs`,
+  `heading_edges`, `types` (declared property types, overriding inference),
+  `indexes` (equality, `{range: …}` and `{composite: […]}`), `text_indexes`
+  (BM25), `ontology` (the `define_ontology` document) and `embed`. The
+  declarations win over what the caller configured; an unknown key, an unknown
+  version or a value of the wrong shape fails the build rather than being
+  ignored; a label or property the vault does not carry yet is a warning.
+  `embed:` is *reported* as a build target rather than run — the engine links
+  no embedder, so the vectors are computed by whoever has one. Under `"okf"`
+  and `"loose"` the file is ignored with a warning.
+
+  **A vault can carry its own agent guidance** (`VAULT.md` §8):
+  `.kglite/skills/*.md` become `KgliteSkill` nodes and `.kglite/recipes/*.md`
+  become `KgliteRecipe` nodes at build, so a server built from the vault
+  explains how to query itself and editing a file is the whole update
+  procedure. A file that fails validation is skipped with a warning naming the
+  file and the rule; its siblings load.
+
+- `import_recipes()` now reads a `.md` recipe file or a directory of them
+  alongside a `.json` catalogue. One query per file: frontmatter `recipe`,
+  `name`, `description`, optional `recipe_description` (inherited from the
+  group when omitted) and optional `parameters` (the JSON Schema, as a nested
+  map), with the statement in the body's single ```` ```cypher ```` fence.
+  A `.yaml` catalogue is still refused by name. Available in Rust as
+  `kglite::api::recipes::{parse_markdown, set_from_markdown}`.
+
 ### Changed
 
 - **Breaking for existing `dialect="obsidian"` callers**, who until now got

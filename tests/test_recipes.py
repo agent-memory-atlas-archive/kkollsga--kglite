@@ -274,13 +274,74 @@ def test_import_reads_a_bare_catalogue_mapping(g, tmp_path):
     assert len(g.import_recipes(str(path))) == 3
 
 
+MARKDOWN_RECIPE = """---
+recipe: local
+name: by_name
+description: One function by name.
+parameters:
+  {type: object, properties: {name: {type: string}},
+   required: [name], additionalProperties: false}
+recipe_description: Reading a local code graph.
+---
+
+```cypher
+MATCH (f:Function) WHERE f.name = $name RETURN f.qualified_name AS qn LIMIT 10
+```
+"""
+
+
+def test_import_reads_a_markdown_recipe_file_and_a_directory(g, tmp_path):
+    # The dialect a vault's `.kglite/recipes/` uses (VAULT.md §8), available
+    # to any graph through the same method a JSON catalogue goes through.
+    one = tmp_path / "by_name.md"
+    one.write_text(MARKDOWN_RECIPE, encoding="utf-8")
+    assert g.import_recipes(str(one)) == ["local/by_name"]
+
+    stored = g.get_recipe("local", "by_name")
+    assert stored["cypher"].startswith("MATCH (f:Function) WHERE f.name = $name")
+    assert stored["recipe_description"] == "Reading a local code graph."
+    # Nested, not flattened to a `properties.name.type` key.
+    assert stored["parameters"]["properties"]["name"] == {"type": "string"}
+
+    # A whole directory, with the group description inherited by the sibling
+    # that omits it.
+    folder = tmp_path / "recipes"
+    folder.mkdir()
+    (folder / "a_by_name.md").write_text(MARKDOWN_RECIPE, encoding="utf-8")
+    (folder / "b_all.md").write_text(
+        "---\nrecipe: local\nname: all_functions\ndescription: Every function.\n---\n\n"
+        "```cypher\nMATCH (f:Function) RETURN f.qualified_name AS qn LIMIT 10\n```\n",
+        encoding="utf-8",
+    )
+    assert sorted(g.import_recipes(str(folder))) == ["local/all_functions", "local/by_name"]
+    assert g.get_recipe("local", "all_functions")["recipe_description"] == "Reading a local code graph."
+
+
+def test_a_markdown_recipe_that_fails_validation_writes_nothing(g, tmp_path):
+    folder = tmp_path / "recipes"
+    folder.mkdir()
+    (folder / "good.md").write_text(MARKDOWN_RECIPE, encoding="utf-8")
+    (folder / "writes.md").write_text(
+        "---\nrecipe: local\nname: bad\ndescription: A write.\n"
+        "recipe_description: Reading a local code graph.\n---\n\n"
+        "```cypher\nCREATE (:Function {name: 'x'})\n```\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(kglite.FileFormatError):
+        g.import_recipes(str(folder))
+    assert g.list_recipes() == [], "the batch is all-or-nothing"
+
+
 def test_import_of_a_missing_path_raises_file_error(g, tmp_path):
     with pytest.raises(kglite.FileError):
         g.import_recipes(str(tmp_path / "nowhere.json"))
 
 
-def test_import_of_yaml_says_json_only(g):
-    with pytest.raises(kglite.FileFormatError, match="JSON only"):
+def test_import_of_yaml_says_convert_it_first(g):
+    # A `.yaml` *catalogue* is still refused by name: the wheel links no
+    # general YAML reader for that shape. (Markdown recipe files are read —
+    # their schema goes through the non-flattening frontmatter parser.)
+    with pytest.raises(kglite.FileFormatError, match="convert a YAML catalogue first"):
         g.import_recipes(str(Path("examples") / "local_code_review_mcp.yaml"))
 
 

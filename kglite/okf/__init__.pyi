@@ -95,6 +95,21 @@ def build(
               that directory's place — no ``Folder`` node is created for it and
               the notes inside are joined to the note by ``CHILD_OF``.
             * **Hubs**: every hub node carries a ``title`` alongside its id.
+            * **The vault's own declaration file**: ``.kglite/vault.yaml``,
+              read by explicit path (the walk never enters a dot-directory).
+              It carries ``kglite_vault: 1`` plus any of ``default_label``,
+              ``label_from``, ``body``, ``skip_dirs``, ``folder_notes``,
+              ``hubs``, ``heading_edges``, ``types``, ``indexes``,
+              ``text_indexes``, ``ontology`` and ``embed``, and it wins over
+              both the dialect's defaults and this function's keywords for
+              what it declares — a rebuild re-reads it, so it is the vault's
+              statement about itself. An unknown key, an unknown
+              ``kglite_vault`` version or a value of the wrong shape raises
+              rather than being ignored. ``embed:`` is *reported*, not run:
+              core links no embedder. ``.kglite/skills/*.md`` and
+              ``.kglite/recipes/*.md`` are imported into the graph's skill and
+              recipe layers; a file that fails validation is skipped and its
+              siblings still load. See ``VAULT.md`` §7 and §8 for the schema.
         require_frontmatter: When ``True``, only ``.md`` files with a YAML
             frontmatter block are ingested — the discriminator between
             *structured* knowledge (OKF concepts, Claude memories) and plain

@@ -5662,21 +5662,33 @@ class KnowledgeGraph:
         ...
 
     def import_recipes(self, path: str) -> list[str]:
-        """Import a catalogue document, replacing same-keyed queries.
+        """Import recipe queries, replacing same-keyed ones.
 
-        ``path`` must be a ``.json`` file. **JSON only** — the wheel links no
-        general YAML reader, so a YAML catalogue is converted first (an MCP
-        server reads its own manifest and never goes through this method). The
-        document is either a whole MCP manifest, in which case the catalogue is
-        read from its ``extensions.cypher_recipes`` key, or that mapping on its
-        own: ``{"<recipe>": {"description": ..., "queries": {"<name>":
-        {"description": ..., "parameters": {...}, "cypher": ...}}}}``.
+        ``path`` is a ``.json`` catalogue, a ``.md`` recipe file, or a
+        directory of ``.md`` files.
 
-        The whole document compiles before anything is written, so a file with
-        one bad query leaves the graph untouched.
+        A **JSON** document is either a whole MCP manifest, in which case the
+        catalogue is read from its ``extensions.cypher_recipes`` key, or that
+        mapping on its own: ``{"<recipe>": {"description": ..., "queries":
+        {"<name>": {"description": ..., "parameters": {...}, "cypher":
+        ...}}}}``. A ``.yaml`` catalogue is refused by name — the wheel links
+        no general YAML reader for that shape, so convert it first (an MCP
+        server reads its own manifest and never goes through this method).
+
+        A **markdown** file is one query in the dialect a vault's
+        ``.kglite/recipes/`` uses (``VAULT.md`` §8): frontmatter ``recipe``,
+        ``name``, ``description``, optional ``recipe_description`` and
+        optional ``parameters`` (the JSON Schema, as a nested map), with the
+        statement in the body's single ``cypher``-tagged fenced block. A file
+        that omits ``recipe_description`` inherits it from another query in
+        the same group. Directory reads are non-recursive and sorted.
+
+        Everything compiles before anything is written, so one bad query
+        leaves the graph untouched.
 
         Args:
-            path: A ``.json`` manifest or catalogue file.
+            path: A ``.json`` manifest or catalogue file, a ``.md`` recipe
+                file, or a directory of ``.md`` recipe files.
 
         Returns:
             The keys written, as ``"<recipe>/<name>"`` strings in catalogue
@@ -5684,8 +5696,9 @@ class KnowledgeGraph:
 
         Raises:
             FileError: ``path`` does not exist.
-            FileFormatError: ``path`` is not ``.json``, or its JSON is
-                unparseable.
+            FileFormatError: ``path`` is neither ``.json`` nor ``.md`` nor a
+                directory, its JSON is unparseable, or a markdown file does
+                not carry exactly one ``cypher``-tagged fenced block.
             ArgumentError: A query in the document is invalid — the message
                 names the recipe, the query and the rule. Also raised when the
                 graph is in read-only mode.

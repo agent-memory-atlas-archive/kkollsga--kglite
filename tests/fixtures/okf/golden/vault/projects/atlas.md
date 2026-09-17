@@ -6,6 +6,7 @@ keywords:
   - horizons
 tags:
   - seismic
+toc_depth: "2"
 updated: 2026-01-15
 reviewed: '2026-01-15T09:30:00Z'
 ---

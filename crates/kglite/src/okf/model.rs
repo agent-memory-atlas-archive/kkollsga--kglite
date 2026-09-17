@@ -187,6 +187,12 @@ pub struct Profile {
     /// type, merged *over* the built-in heading ladder and matched on the
     /// whole heading, case-insensitively (VAULT.md §5.3).
     pub heading_edges: BTreeMap<String, String>,
+    /// Read by [`crate::okf::build::build_nodes`]: the property name a note's
+    /// prose is stored under when `with_body` is set (VAULT.md §7 `body:`).
+    /// `body` everywhere unless `.kglite/vault.yaml` renames it — a vault
+    /// whose notes already carry a frontmatter `body:` key needs the prose
+    /// somewhere else.
+    pub body_property: String,
     /// Read by [`crate::okf::walk::discover`]: extra directories to prune,
     /// unioned with [`BuildOptions::skip_dirs`]. The profile's copy is what
     /// `.kglite/vault.yaml` declares; the options' copy is what the caller
@@ -234,6 +240,7 @@ impl Default for Profile {
             hubs: default_hubs(),
             heading_edges: BTreeMap::new(),
             skip_dirs: Vec::new(),
+            body_property: DEFAULT_BODY_PROPERTY.to_string(),
             infer_temporal: false,
             attachments: false,
         }
@@ -391,6 +398,21 @@ pub struct BuildReport {
     /// the bare filename named two or more files (VAULT.md §6.2) — a vault
     /// whose references need qualifying, not one whose files are absent.
     pub ambiguous_attachments: usize,
+    /// `(label, property)` pairs `.kglite/vault.yaml`'s `embed:` declared
+    /// (VAULT.md §7), in declaration order. **The core never embeds**: it
+    /// links no embedder, so it reports the targets and leaves the vectors to
+    /// whoever has one — the wheel's rebuild helper, the MCP vault producer.
+    /// Empty for a vault that declares none and for every non-vault build.
+    pub embed_targets: Vec<(String, String)>,
+    /// Index declarations `.kglite/vault.yaml` installed — equality, range and
+    /// composite counted together, one per declared entry.
+    pub indexes_declared: usize,
+    /// BM25 text indexes built from `text_indexes:`.
+    pub text_indexes_built: usize,
+    /// Skills imported from `.kglite/skills/` (VAULT.md §8).
+    pub skills_imported: usize,
+    /// Recipe queries imported from `.kglite/recipes/`.
+    pub recipes_imported: usize,
     /// Problems that leave the build's output untrustworthy — a caller that
     /// gates on the report fails on a non-empty list.
     pub errors: Vec<String>,
@@ -510,6 +532,8 @@ pub const TAGGED_CONN_TYPE: &str = "TAGGED";
 pub const SOURCE_LABEL: &str = "Source";
 /// Node label for synthesized directory nodes (the bundle's folder hierarchy).
 pub const FOLDER_LABEL: &str = "Folder";
+/// Property a note's prose is stored under by default (VAULT.md §7 `body:`).
+pub const DEFAULT_BODY_PROPERTY: &str = "body";
 /// Frontmatter key that opts a file out of the sweep (`kg_skip: true`).
 pub const SKIP_KEY: &str = "kg_skip";
 /// Node label for a referenced file whose MIME type the bundled MCP server

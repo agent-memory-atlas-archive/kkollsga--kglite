@@ -1,0 +1,34 @@
+# The golden vault's own declaration file (VAULT.md §7). It is read by
+# explicit path — the walk prunes `.kglite/`, so nothing in here is a note.
+kglite_vault: 1
+
+# Every note with no `type:` is an Article, ahead of the folder rung (§2.1).
+default_label: Article
+
+hubs:
+  # `keywords:` joins Keyword nodes, folded case-insensitively: seismic.md
+  # writes `faults`, `Faults` and `Horizons`, atlas.md writes `faults` and
+  # `horizons`, and the vault means two keywords.
+  keywords: {label: Keyword, edge: HAS_KEYWORD, case_insensitive: true}
+
+heading_edges:
+  # Retypes the links under `## Related topics`, which the built-in ladder
+  # would otherwise call RELATED.
+  "Related topics": RELATED_TO
+
+types:
+  # atlas.md writes `toc_depth: "2"` as a quoted string; the declaration is
+  # what makes it an integer.
+  Initiative: {toc_depth: int}
+
+indexes:
+  Initiative:
+    - concept_id
+    - {range: toc_depth}
+
+text_indexes:
+  Initiative: [body]
+
+embed:
+  # Reported as a build target; core computes no vectors.
+  Article: body

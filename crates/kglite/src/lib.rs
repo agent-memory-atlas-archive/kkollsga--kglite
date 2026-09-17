@@ -436,6 +436,11 @@ pub mod api {
             RecipeQueryDefinition, VariableIssue, VariableIssueKind, VariablesValidationError,
             RECIPE_RESULT_ROW_LIMIT,
         };
+        /// The markdown recipe dialect (VAULT.md §8) needs a YAML parser, so
+        /// it exists only with the `okf` feature — the same split
+        /// [`super::skills`] makes.
+        #[cfg(feature = "okf")]
+        pub use crate::graph::recipes::{parse_markdown, set_from_markdown};
     }
 
     /// Graph algorithms — pathfinding, components, centrality, community

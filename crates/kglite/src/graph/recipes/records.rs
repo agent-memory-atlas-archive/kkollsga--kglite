@@ -379,6 +379,126 @@ pub fn export_value(graph: &DirGraph) -> Json {
     Json::Object(recipes)
 }
 
+/// Read one recipe query from the markdown dialect a vault carries
+/// (VAULT.md §8): frontmatter `recipe`, `name`, `description`, optional
+/// `recipe_description` and optional `parameters`, with the statement in the
+/// body's single ` ```cypher ` fence.
+///
+/// **Not validated here.** `recipe_description` is optional in the file and
+/// required by [`validate`], and the missing one is inherited from the group
+/// the record joins — which needs a graph. [`set_from_markdown`] does that and
+/// then validates; a caller using this directly owns the same step.
+///
+/// `parameters` is read as a **nested** value
+/// ([`crate::okf::frontmatter::parse_yaml`]), not through the flattening
+/// frontmatter reader: a JSON Schema's `properties.id.type` is three levels,
+/// and a dotted key would make it one property named `properties.id.type`.
+#[cfg(feature = "okf")]
+pub fn parse_markdown(text: &str) -> Result<RecipeRecord, KgError> {
+    let (yaml, body) = crate::okf::frontmatter::split(text);
+    let front = crate::okf::frontmatter::parse_yaml(yaml.as_deref().unwrap_or_default())
+        .map_err(KgError::Argument)?;
+    let front = match &front {
+        Value::Map(map) => map.clone(),
+        _ => {
+            return Err(KgError::Argument(
+                "a recipe file needs a YAML frontmatter block naming `recipe`, `name` and \
+                 `description`"
+                    .to_string(),
+            ))
+        }
+    };
+    let scalar = |key: &str| -> String {
+        match front.get(key) {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Null) | None => String::new(),
+            Some(other) => crate::datatypes::values::raw_string(other),
+        }
+    };
+    Ok(RecipeRecord {
+        recipe: scalar("recipe"),
+        name: scalar("name"),
+        description: scalar("description"),
+        recipe_description: scalar("recipe_description"),
+        parameters: match front.get("parameters") {
+            Some(Value::Null) | None => empty_schema(),
+            Some(value) => crate::param::kglite_value_to_json(value),
+        },
+        cypher: cypher_fence(&body)?,
+    })
+}
+
+/// The statement inside the body's single ` ```cypher ` fence.
+///
+/// Exactly one: a file with none has nothing to store, and a file with two has
+/// not said which is the query — both are refused with the count, rather than
+/// silently storing the first.
+#[cfg(feature = "okf")]
+fn cypher_fence(body: &str) -> Result<String, KgError> {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut current: Option<Vec<&str>> = None;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        match &mut current {
+            // A closing fence is any ``` — the language tag is opening-only.
+            Some(lines) if trimmed.starts_with("```") => {
+                blocks.push(lines.join("\n"));
+                current = None;
+            }
+            Some(lines) => lines.push(line),
+            None => {
+                let tag = trimmed.strip_prefix("```").map(str::trim).unwrap_or("");
+                if trimmed.starts_with("```") && tag.eq_ignore_ascii_case("cypher") {
+                    current = Some(Vec::new());
+                }
+            }
+        }
+    }
+    match blocks.len() {
+        1 => Ok(blocks.remove(0).trim().to_string()),
+        0 => Err(KgError::Argument(
+            "a recipe file's body must hold one ```cypher fenced block; found none".to_string(),
+        )),
+        n => Err(KgError::Argument(format!(
+            "a recipe file's body must hold exactly one ```cypher fenced block; found {n}"
+        ))),
+    }
+}
+
+/// The closed, parameter-free JSON Schema a file that declares no
+/// `parameters:` stores — the same document the wheel's `set_recipe` writes,
+/// so the two routes produce byte-identical nodes.
+#[cfg(feature = "okf")]
+fn empty_schema() -> Json {
+    let mut schema = Map::new();
+    schema.insert("type".to_string(), Json::String("object".to_string()));
+    schema.insert("properties".to_string(), Json::Object(Map::new()));
+    schema.insert("required".to_string(), Json::Array(Vec::new()));
+    schema.insert("additionalProperties".to_string(), Json::Bool(false));
+    Json::Object(schema)
+}
+
+/// [`parse_markdown`] then [`set`], inheriting an omitted group description
+/// from a query already stored under the same `recipe`.
+///
+/// The inheritance is the wheel's `set_recipe` rule, in core because a vault's
+/// `.kglite/recipes/` is a directory of sibling files and only the first one
+/// alphabetically has to spell the group out.
+#[cfg(feature = "okf")]
+pub fn set_from_markdown(graph: &mut DirGraph, text: &str) -> Result<RecipeRecord, KgError> {
+    let mut record = parse_markdown(text)?;
+    if record.recipe_description.trim().is_empty() {
+        if let Some(stored) = list(graph)
+            .into_iter()
+            .find(|stored| stored.recipe == record.recipe)
+        {
+            record.recipe_description = stored.recipe_description;
+        }
+    }
+    set(graph, &record)?;
+    Ok(record)
+}
+
 /// Upsert every query in an `extensions.cypher_recipes` document.
 ///
 /// Accepts a whole manifest (the catalogue is read from `extensions`) or a bare
@@ -420,35 +540,128 @@ fn catalogue_section(document: &Json) -> Option<&Json> {
     }
 }
 
-/// Import an `extensions.cypher_recipes` document from a `.json` file.
+/// Import recipe queries from a `.json` catalogue document, a `.md` recipe
+/// file, or a directory of `.md` files (VAULT.md §8's dialect).
 ///
-/// JSON only, deliberately. Core links no general YAML reader: `okf`'s
-/// `yaml-rust2` frontmatter helper flattens nested mappings into dotted keys
-/// and renders any number outside `i64` as a float lexeme, and a parameter
-/// schema's meaning depends on exactly those two distinctions. A YAML
-/// catalogue is read by whoever already has a YAML parser — the MCP server
-/// reads the manifest — and handed here as a [`Json`] value.
+/// A **YAML catalogue** is still not read here. Core links no general YAML
+/// reader for that shape: `okf`'s frontmatter helper flattens nested mappings
+/// into dotted keys and renders any number outside `i64` as a float lexeme,
+/// and a catalogue's parameter schemas depend on exactly those two
+/// distinctions. (The markdown dialect escapes that because its schema goes
+/// through [`crate::okf::frontmatter::parse_yaml`], which does not flatten.)
+/// A YAML catalogue is read by whoever already has a YAML parser — the MCP
+/// server reads the manifest — and handed here as a [`Json`] value.
+///
+/// Markdown imports are all-or-nothing like the JSON one: every file is parsed
+/// before any is written, so a directory with one bad file leaves the graph
+/// untouched. (A *vault* build takes the opposite posture — §8 has one bad
+/// file skipped with a warning and its siblings loaded — because there the
+/// directory is hand-authored content rather than a catalogue the caller
+/// chose to install.)
 pub fn import_path(graph: &mut DirGraph, path: &Path) -> Result<Vec<(String, String)>, KgError> {
+    let meta = std::fs::metadata(path).map_err(|_| KgError::FileNotFound(path.to_path_buf()))?;
+    if meta.is_dir() {
+        return import_markdown_dir(graph, path);
+    }
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if extension != "json" {
-        return Err(KgError::FileFormat {
+    match extension.as_str() {
+        "json" => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|_| KgError::FileNotFound(path.to_path_buf()))?;
+            let document: Json =
+                serde_json::from_str(&text).map_err(|error| KgError::FileFormat {
+                    path: path.to_path_buf(),
+                    message: error.to_string(),
+                })?;
+            import_value(graph, &document)
+        }
+        "md" => import_markdown_dir(graph, path),
+        _ => Err(KgError::FileFormat {
             path: path.to_path_buf(),
-            message: "recipe import reads JSON only; convert a YAML catalogue first, \
-                      or pass the parsed document to import_value"
+            message: "recipe import reads a .json catalogue, a .md recipe file, or a \
+                      directory of them; convert a YAML catalogue first, or pass the \
+                      parsed document to import_value"
                 .to_string(),
-        });
+        }),
     }
-    let text =
-        std::fs::read_to_string(path).map_err(|_| KgError::FileNotFound(path.to_path_buf()))?;
-    let document: Json = serde_json::from_str(&text).map_err(|error| KgError::FileFormat {
+}
+
+/// Import one `.md` recipe file, or every `.md` directly inside a directory.
+#[cfg(feature = "okf")]
+fn import_markdown_dir(
+    graph: &mut DirGraph,
+    path: &Path,
+) -> Result<Vec<(String, String)>, KgError> {
+    let files: Vec<std::path::PathBuf> = if path.is_dir() {
+        let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(path)
+            .map_err(KgError::FileIo)?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "md"))
+            .collect();
+        // Sorted, so the group-description inheritance below — and therefore
+        // what is stored — does not depend on directory order.
+        found.sort();
+        found
+    } else {
+        vec![path.to_path_buf()]
+    };
+
+    // Parsed and validated in full before anything is written. The group
+    // descriptions a later file inherits come from the batch itself, so a
+    // directory installs the same way whether or not the graph already holds
+    // the group.
+    let mut records: Vec<RecipeRecord> = Vec::with_capacity(files.len());
+    for file in &files {
+        let text = std::fs::read_to_string(file).map_err(KgError::FileIo)?;
+        let mut record = parse_markdown(&text).map_err(|err| KgError::FileFormat {
+            path: file.clone(),
+            message: err.to_string(),
+        })?;
+        if record.recipe_description.trim().is_empty() {
+            let inherited = records
+                .iter()
+                .find(|earlier| earlier.recipe == record.recipe)
+                .map(|earlier| earlier.recipe_description.clone())
+                .or_else(|| {
+                    list(graph)
+                        .into_iter()
+                        .find(|stored| stored.recipe == record.recipe)
+                        .map(|stored| stored.recipe_description)
+                });
+            record.recipe_description = inherited.unwrap_or_default();
+        }
+        validate(&record).map_err(|err| KgError::FileFormat {
+            path: file.clone(),
+            message: err.to_string(),
+        })?;
+        records.push(record);
+    }
+
+    let mut written = Vec::with_capacity(records.len());
+    for record in records {
+        set(graph, &record)?;
+        written.push((record.recipe, record.name));
+    }
+    Ok(written)
+}
+
+/// Without the `okf` feature there is no frontmatter reader, so the markdown
+/// dialect is unavailable rather than silently empty.
+#[cfg(not(feature = "okf"))]
+fn import_markdown_dir(
+    _graph: &mut DirGraph,
+    path: &Path,
+) -> Result<Vec<(String, String)>, KgError> {
+    Err(KgError::FileFormat {
         path: path.to_path_buf(),
-        message: error.to_string(),
-    })?;
-    import_value(graph, &document)
+        message: "markdown recipe files need the `okf` feature; this build reads \
+                  .json catalogues only"
+            .to_string(),
+    })
 }
 
 /// Write [`export_value`] to `path` as pretty-printed JSON.

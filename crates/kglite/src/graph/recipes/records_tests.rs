@@ -482,14 +482,19 @@ fn import_and_export_round_trip_through_json_files() {
     assert_eq!(export_value(&round_tripped), catalogue_document());
 }
 
-/// Core links no general YAML reader — `okf`'s frontmatter helper flattens
-/// nested mappings and re-types numbers — so a `.yaml` catalogue is refused
-/// here rather than read approximately.
+/// Core links no general YAML reader for the *catalogue* shape — `okf`'s
+/// flattening frontmatter helper would re-type its numbers — so a `.yaml`
+/// catalogue is refused here rather than read approximately. (The `.md`
+/// dialect escapes that: its schema goes through the non-flattening
+/// `frontmatter::parse_yaml`.)
 #[test]
 fn a_yaml_path_is_refused_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("catalogue.yaml");
     std::fs::write(&path, "code_review: {}\n").unwrap();
     let error = import_path(&mut graph(), &path).expect_err("must refuse");
-    assert!(error.to_string().contains("JSON only"), "{error}");
+    assert!(
+        error.to_string().contains("convert a YAML catalogue first"),
+        "{error}"
+    );
 }

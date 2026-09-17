@@ -77,6 +77,27 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, Value>, String> {
     Ok(out)
 }
 
+/// Parse a whole YAML document into a **nested** [`Value`] — the counterpart
+/// to [`parse`], which flattens top-level mappings into dotted keys.
+///
+/// `.kglite/vault.yaml` and a recipe's `parameters:` schema are both nested
+/// documents whose shape *is* their meaning: flattening `types: {Article:
+/// {toc_depth: int}}` into the key `types.Article.toc_depth` throws away the
+/// boundary between a label and a property, and a JSON Schema's
+/// `properties.id.type` is not a property named `properties.id.type`. An
+/// empty or null document yields [`Value::Null`].
+pub fn parse_yaml(yaml: &str) -> Result<Value, String> {
+    if yaml.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    let docs =
+        yaml_rust2::YamlLoader::load_from_str(yaml).map_err(|e| format!("invalid YAML: {e}"))?;
+    match docs.into_iter().next() {
+        Some(doc) => Ok(yaml_to_value(&doc)),
+        None => Ok(Value::Null),
+    }
+}
+
 /// Retype a frontmatter string that spells an ISO date or an RFC 3339
 /// timestamp (VAULT.md §4.2). Everything else — including a list's elements —
 /// passes through untouched.

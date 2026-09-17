@@ -30,6 +30,8 @@ pub use records::{
     catalogue_from_graph, delete, export_path, export_value, get, import_path, import_value, list,
     set, validate, RecipeRecord, RecipeWarning, SetOutcome, RECIPE_LABEL,
 };
+#[cfg(feature = "okf")]
+pub use records::{parse_markdown, set_from_markdown};
 pub use schema::ParameterSchema;
 pub use validation::{
     query_conversion_error, VariableIssue, VariableIssueKind, VariablesValidationError,

@@ -47,7 +47,27 @@ pub struct BuildOutput {
 }
 
 /// Build a knowledge graph from an OKF bundle directory.
+///
+/// Under the `obsidian` dialect the vault's own `.kglite/vault.yaml` is read
+/// first and overrides the dialect profile (VAULT.md §7), and its
+/// `.kglite/skills/` + `.kglite/recipes/` are imported into the finished graph
+/// (§8). A `vault.yaml` that does not parse fails the build rather than being
+/// ignored — see [`crate::okf::vault_config`].
 pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
+    let mut config_warnings: Vec<String> = Vec::new();
+    let config = load_vault_config(root, opts, &mut config_warnings)?;
+    // The overrides reach discovery and parsing, so `skip_dirs`, `hubs` and
+    // the label ladder are already the vault's before the first file is read.
+    let effective = match &config {
+        Some(cfg) => {
+            let mut owned = opts.clone();
+            cfg.apply_to_profile(&mut owned.profile);
+            owned
+        }
+        None => opts.clone(),
+    };
+    let opts = &effective;
+
     let walked = super::walk::discover(root, opts)?;
     let (docs, findings) = super::parse_concepts_reported(&walked.concepts, opts);
     let mut report = BuildReport {
@@ -57,14 +77,21 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
         warnings: findings.warnings,
         ..BuildReport::default()
     };
+    report.warnings.extend(config_warnings);
     let mut graph = DirGraph::new();
     if docs.is_empty() {
+        // An empty vault still carries its skills and its declarations; the
+        // config is what a rebuild re-applies, and reporting it only when a
+        // note happened to parse would make the report depend on the content
+        // it is describing.
+        finish_vault(root, opts, config.as_ref(), &mut graph, &mut report);
         return Ok(BuildOutput {
             graph: Arc::new(graph),
             report,
         });
     }
-    build_nodes(&mut graph, &docs, opts, &mut report)?;
+    let declared_types = config.as_ref().map(|c| &c.types);
+    build_nodes(&mut graph, &docs, opts, declared_types, &mut report)?;
     build_aux_nodes(&mut graph, &docs, &mut report)?;
     // Hub and folder edges are collected rather than emitted, because they
     // meet the link edges in one group map: a note's `parent:` and the folder
@@ -86,10 +113,56 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
         )?,
     );
     build_edges(&mut graph, &docs, opts, groups, &mut report)?;
+    finish_vault(root, opts, config.as_ref(), &mut graph, &mut report);
     Ok(BuildOutput {
         graph: Arc::new(graph),
         report,
     })
+}
+
+/// Read `.kglite/vault.yaml` when the dialect is one that has vaults.
+///
+/// The file is a *vault* construct, so `okf` and `loose` ignore it — with a
+/// warning, never silently: a bundle carrying one was almost certainly meant
+/// to be built as a vault, and a config that does nothing and says nothing is
+/// the reassuring-direction failure.
+fn load_vault_config(
+    root: &Path,
+    opts: &BuildOptions,
+    warnings: &mut Vec<String>,
+) -> Result<Option<crate::okf::vault_config::VaultConfig>, String> {
+    if opts.dialect == crate::okf::Dialect::Obsidian {
+        return crate::okf::vault_config::load(root);
+    }
+    if crate::okf::vault_config::config_path(root).is_file() {
+        warnings.push(format!(
+            "`.kglite/vault.yaml` is a vault declaration and is ignored under the `{}` \
+             dialect; build with dialect=\"obsidian\" to apply it",
+            match opts.dialect {
+                crate::okf::Dialect::Loose => "loose",
+                _ => "okf",
+            }
+        ));
+    }
+    Ok(None)
+}
+
+/// Everything a vault's `.kglite/` directory adds to a finished graph: the
+/// config's post-build declarations (§7) and the carried skills and recipes
+/// (§8). A non-vault build passes `None` and reaches neither.
+fn finish_vault(
+    root: &Path,
+    opts: &BuildOptions,
+    config: Option<&crate::okf::vault_config::VaultConfig>,
+    graph: &mut DirGraph,
+    report: &mut BuildReport,
+) {
+    if let Some(cfg) = config {
+        cfg.apply_post_build(graph, report);
+    }
+    if opts.dialect == crate::okf::Dialect::Obsidian {
+        crate::okf::vault_config::import_carried(root, graph, report);
+    }
 }
 
 /// A doc's file path minus `.md` — the directory hierarchy and the path-link
@@ -905,12 +978,23 @@ fn doc_aliases(d: &ConceptDoc) -> Vec<&str> {
 
 /// One `add_nodes` call per label; columns = id/title/file_path (+ body) plus the
 /// union of frontmatter keys across that label's concepts (missing → Null).
+/// `declared_types` is `.kglite/vault.yaml`'s `types:` (VAULT.md §7), applied
+/// **here** rather than to the finished graph: a declared type decides what a
+/// column *is*, and `DataFrame::from_cypher_rows` infers that from the values
+/// it is handed. Retyping afterwards would be a second, weaker implementation
+/// of the same rule, against a store that has already chosen.
 fn build_nodes(
     graph: &mut DirGraph,
     docs: &[ConceptDoc],
     opts: &BuildOptions,
+    declared_types: Option<&BTreeMap<String, BTreeMap<String, String>>>,
     report: &mut BuildReport,
 ) -> Result<(), String> {
+    let mut unmatched: BTreeSet<(&str, &str)> = declared_types
+        .into_iter()
+        .flatten()
+        .flat_map(|(label, props)| props.keys().map(move |p| (label.as_str(), p.as_str())))
+        .collect();
     // Sorted, so the graph's node order is the same on every run: a `HashMap`
     // here made node indices — and therefore a saved `.kgl`'s bytes — depend on
     // hash order.
@@ -929,15 +1013,41 @@ fn build_nodes(
         }
         let keys: Vec<&str> = keys.into_iter().collect();
 
+        let body_column = opts.profile.body_property.as_str();
         let mut columns = vec![
             "concept_id".to_string(),
             "title".to_string(),
             "file_path".to_string(),
         ];
         if opts.with_body {
-            columns.push("body".to_string());
+            columns.push(body_column.to_string());
         }
         columns.extend(keys.iter().map(|k| k.to_string()));
+
+        // The declarations for this label, minus `concept_id`: the id column
+        // is the node's identity and the index built on it, and retyping it
+        // would silently move every link's target.
+        let declared: BTreeMap<&str, &str> = declared_types
+            .and_then(|t| t.get(label))
+            .into_iter()
+            .flatten()
+            .filter(|(property, _)| property.as_str() != "concept_id")
+            .map(|(property, keyword)| (property.as_str(), keyword.as_str()))
+            .collect();
+        // The id column is the node's identity and the index built on it;
+        // retyping it would silently move every link's target. Reported once,
+        // here, rather than also falling out as "no note carries it".
+        if unmatched.remove(&(label, "concept_id")) {
+            report.warnings.push(format!(
+                "`vault.yaml` declares `types.{label}.concept_id`; the id column is not \
+                 retyped"
+            ));
+        }
+        for property in declared.keys() {
+            if columns.iter().any(|c| c == property) {
+                unmatched.remove(&(label, *property));
+            }
+        }
 
         let mut rows = Vec::with_capacity(group.len());
         for d in &group {
@@ -957,6 +1067,9 @@ fn build_nodes(
                         .unwrap_or(Value::Null),
                 );
             }
+            if !declared.is_empty() {
+                apply_declared_types(&mut row, &columns, &declared, label, d, report);
+            }
             rows.push(row);
         }
 
@@ -970,7 +1083,44 @@ fn build_nodes(
             Some("update".to_string()),
         )?;
     }
+    for (label, property) in unmatched {
+        report.warnings.push(format!(
+            "`vault.yaml` declares `types.{label}.{property}`, but no note carries that \
+             label and property"
+        ));
+    }
     Ok(())
+}
+
+/// Coerce one note's row to the label's declared types (VAULT.md §7).
+///
+/// A value that will not coerce keeps the type it had and is **warned about**,
+/// rather than being nulled: the declaration is the author's statement about
+/// the vault, and a note that disagrees with it still holds the value a human
+/// wrote. Mixed types in one column then settle by inference, which is the
+/// same outcome as not having declared anything — visibly so, because the
+/// warning names the note.
+fn apply_declared_types(
+    row: &mut [Value],
+    columns: &[String],
+    declared: &BTreeMap<&str, &str>,
+    label: &str,
+    doc: &ConceptDoc,
+    report: &mut BuildReport,
+) {
+    for (index, column) in columns.iter().enumerate() {
+        let Some(keyword) = declared.get(column.as_str()) else {
+            continue;
+        };
+        match crate::okf::vault_config::coerce(&row[index], keyword) {
+            Some(coerced) => row[index] = coerced,
+            None => report.warnings.push(format!(
+                "`{}`: {label}.{column} is declared `{keyword}` but holds {} — left as written",
+                doc.file_path,
+                crate::datatypes::values::raw_string(&row[index])
+            )),
+        }
+    }
 }
 
 /// Coerce a property value for columnar storage. With `native` set (the vault
@@ -1249,6 +1399,26 @@ mod tests {
         fs::write(p, content).unwrap();
     }
 
+    /// Copy a committed fixture into a temp dir, optionally leaving its
+    /// `.kglite/` behind. The fixture is read-only ground truth, so a test
+    /// that needs it *without* its declaration file copies rather than moves.
+    fn copy_tree(src: &Path, dst: &Path, with_config: bool) {
+        fs::create_dir_all(dst).unwrap();
+        for entry in fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            if !with_config && name == crate::okf::vault_config::CONFIG_DIR {
+                continue;
+            }
+            let target = dst.join(&name);
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target, true);
+            } else {
+                fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
     fn count_label(g: &DirGraph, label: &str) -> usize {
         g.graph
             .node_indices()
@@ -1490,6 +1660,10 @@ mod tests {
     /// The committed vault bundle, whose Python counterpart
     /// (`tests/test_okf.py::TestVaultGoldenBundle`) asserts the graph it makes.
     /// This one asserts the half Python cannot reach yet: the build report.
+    ///
+    /// The bundle carries a `.kglite/vault.yaml`, so every number here is the
+    /// *declared* vault's, not the bare dialect's:
+    /// `golden_vault_bundle_without_its_config` holds the other half.
     #[test]
     fn golden_vault_bundle_report() {
         let root =
@@ -1497,23 +1671,23 @@ mod tests {
         let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
         let r = build(&root, &opts).unwrap().report;
 
-        assert_eq!(r.files_scanned, 13);
+        assert_eq!(r.files_scanned, 13, "`.kglite/` is never walked");
         assert_eq!(r.concepts, 13, "a note needs no frontmatter in a vault");
         assert_eq!(r.dangling, 1, "`[[Missing]]`, named by a `depends_on:`");
         assert_eq!(r.folder_notes, 1, "`projects.md` stands in for `projects/`");
         assert_eq!(
             r.nodes_by_label,
             BTreeMap::from([
-                // welcome.md and projects.md, both at the root — a folder note
-                // is labelled from where its *folder* sits (VAULT.md §2.3)
-                ("Note".to_string(), 2),
+                // `default_label: Article` sits ahead of the folder rung, so
+                // every note without a `type:` is one
+                ("Article".to_string(), 11),
                 ("Initiative".to_string(), 2), // atlas.md and seismic.md, from `type:`
-                ("projects".to_string(), 2),
-                ("notes".to_string(), 6),
-                ("archive".to_string(), 1),
                 // notes, notes/deep, archive — `projects/` has a folder note
                 (FOLDER_LABEL.to_string(), 3),
                 (TAG_LABEL.to_string(), 3), // seismic, plus two inline `#tag`s
+                // `faults` and `horizons`, folded from five spellings by the
+                // declared `case_insensitive` hub
+                ("Keyword".to_string(), 2),
                 (DEFAULT_LABEL.to_string(), 1), // the `[[Missing]]` stub
                 // img/diagram.png and img/faults.png (VAULT.md §6)
                 (IMAGE_LABEL.to_string(), 2),
@@ -1526,13 +1700,16 @@ mod tests {
             BTreeMap::from([
                 (CONTAINS_CONN_TYPE.to_string(), 8),
                 ("LINKS_TO".to_string(), 6),
-                ("RELATED".to_string(), 1), // the `## Related topics` heading
+                // the `## Related topics` heading, retyped by `heading_edges`
+                ("RELATED_TO".to_string(), 1),
                 (EMBEDS_CONN_TYPE.to_string(), 1), // `![[old]]`
                 // four notes under the `projects` folder note, plus the
                 // reserved `parent: "[[atlas]]"`
                 (FOLDER_NOTE_CONN_TYPE.to_string(), 5),
                 ("DEPENDS_ON".to_string(), 2), // the wikilink-valued key
                 (TAGGED_CONN_TYPE.to_string(), 4),
+                // two notes × two folded keywords
+                ("HAS_KEYWORD".to_string(), 4),
                 // links.md reaches both images; seismic.md re-reaches faults.png
                 (HAS_IMAGE_CONN_TYPE.to_string(), 3),
                 // index.md → handbook.pdf, links.md → the absent appendix
@@ -1541,6 +1718,19 @@ mod tests {
         );
         assert_eq!(r.missing_attachments, 1, "`img/appendix.pdf`");
         assert_eq!(r.ambiguous_attachments, 0);
+
+        // What `.kglite/` declared and carried (VAULT.md §7, §8).
+        assert_eq!(
+            r.indexes_declared, 2,
+            "concept_id, and toc_depth as a range"
+        );
+        assert_eq!(r.text_indexes_built, 1, "Initiative.body");
+        assert_eq!(
+            r.embed_targets,
+            vec![("Article".to_string(), "body".to_string())]
+        );
+        assert_eq!(r.skills_imported, 1);
+        assert_eq!(r.recipes_imported, 1);
 
         assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
         assert!(
@@ -1561,6 +1751,48 @@ mod tests {
         // land between the id findings and the dangling links.
         assert_eq!(r.warnings[1], "missing attachment: `img/appendix.pdf`");
         assert_eq!(r.warnings[2], "dangling link: `Missing`");
+    }
+
+    /// The same bundle with its `.kglite/vault.yaml` moved out of reach — the
+    /// control for the test above. Every difference between the two is the
+    /// config doing something, which is what makes each declaration in the
+    /// fixture non-vacuous.
+    #[test]
+    fn golden_vault_bundle_without_its_config() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/okf/golden/vault");
+        let dir = tempdir().unwrap();
+        copy_tree(&root, dir.path(), false);
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let r = build(dir.path(), &opts).unwrap().report;
+
+        assert_eq!(
+            r.nodes_by_label,
+            BTreeMap::from([
+                ("Note".to_string(), 2),
+                ("Initiative".to_string(), 2),
+                ("projects".to_string(), 2),
+                ("notes".to_string(), 6),
+                ("archive".to_string(), 1),
+                (FOLDER_LABEL.to_string(), 3),
+                (TAG_LABEL.to_string(), 3),
+                (DEFAULT_LABEL.to_string(), 1),
+                (IMAGE_LABEL.to_string(), 2),
+                (ATTACHMENT_LABEL.to_string(), 2),
+            ]),
+            "no `default_label`, no `keywords` hub"
+        );
+        assert_eq!(
+            r.edges_by_type.get("RELATED"),
+            Some(&1),
+            "the built-in ladder types the `## Related topics` links"
+        );
+        assert_eq!(r.edges_by_type.get("HAS_KEYWORD"), None);
+        assert_eq!(r.indexes_declared, 0);
+        assert_eq!(r.text_indexes_built, 0);
+        assert!(r.embed_targets.is_empty());
+        assert_eq!(r.skills_imported, 0, "no `.kglite/skills/` was copied");
+        assert_eq!(r.recipes_imported, 0);
     }
 
     #[test]
@@ -2076,10 +2308,16 @@ mod tests {
         );
     }
 
+    /// The same hub and heading map the fixture's `.kglite/vault.yaml` declares,
+    /// set by the **caller** instead — over a copy with the config removed, so
+    /// the profile route is what produces the result rather than the file.
     #[test]
     fn golden_vault_bundle_under_a_declared_hub_and_heading_map() {
-        let root =
+        let fixture =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/okf/golden/vault");
+        let dir = tempdir().unwrap();
+        copy_tree(&fixture, dir.path(), false);
+        let root = dir.path().to_path_buf();
         let mut opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
         opts.profile.hubs.extend([keyword_hub(true)]);
         opts.profile

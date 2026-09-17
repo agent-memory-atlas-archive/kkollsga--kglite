@@ -221,9 +221,14 @@ class TestVaultGoldenBundle:
     an ``img/`` folder whose two PNGs and one PDF are reached by all three
     rungs of the resolution ladder, plus one reference to a file that is not
     there; and VAULT.md §2.3–2.4: ``projects.md`` is the folder note for
-    ``projects/`` and ``notes/index.md`` is an ordinary note. The build
-    *report* for the same bundle (the collision findings, the dangling
-    warning) is asserted in Rust, at
+    ``projects/`` and ``notes/index.md`` is an ordinary note. VAULT.md §7-§8:
+    the bundle carries a ``.kglite/vault.yaml`` declaring ``default_label``, a
+    case-folding ``keywords`` hub, a ``heading_edges`` entry, a ``types``
+    coercion, two indexes, a text index and an ``embed`` target, plus one
+    ``.kglite/skills/`` and one ``.kglite/recipes/`` file — so every label and
+    edge below is the *declared* vault's. The build *report* for the same
+    bundle (the collision findings, the dangling warning, the declaration
+    counters, the embed targets) is asserted in Rust, at
     ``okf::build::tests::golden_vault_bundle_report`` — the report has no
     Python surface yet.
     """
@@ -232,25 +237,28 @@ class TestVaultGoldenBundle:
         return okf.build(str(VAULT_BUNDLE), dialect="obsidian")
 
     def test_label_ladder(self):
-        # `type:` → top-level folder → `Note`. Folder names are used verbatim,
-        # so a lowercase directory gives a lowercase label.
+        # `type:` → `default_label` → top-level folder → `Note`. The vault
+        # declares `default_label: Article`, which sits ahead of the folder
+        # rung, so every note without a `type:` is an Article.
         assert _labels(self.build()) == Counter(
             {
-                "notes": 6,
+                "Article": 11,
                 "Folder": 3,  # `projects/` has a folder note, so it has no Folder node
                 "Tag": 3,
-                "projects": 2,
                 "Initiative": 2,
-                # welcome.md, and projects.md — a folder note is labelled from
-                # where its folder sits, which here is the root
-                "Note": 2,
-                "archive": 1,
+                # `faults` and `horizons`, folded from five spellings by the
+                # declared case-insensitive hub
+                "Keyword": 2,
                 "Concept": 1,  # the `[[Missing]]` stub, labelled as every dialect labels one
                 # img/diagram.png and img/faults.png
                 "Image": 2,
                 # img/handbook.pdf, plus the absent img/appendix.pdf stub —
                 # the extension labels a file that is not there too
                 "Attachment": 2,
+                # `.kglite/skills/one.md` and `.kglite/recipes/one.md` — system
+                # labels, but ordinary nodes to Cypher (VAULT.md §8)
+                "KgliteSkill": 1,
+                "KgliteRecipe": 1,
             }
         )
 
@@ -265,7 +273,10 @@ class TestVaultGoldenBundle:
                 "TAGGED": 4,
                 "DEPENDS_ON": 2,  # `depends_on:` names two wikilinks
                 "EMBEDS": 1,  # `![[old]]`
-                "RELATED": 1,  # `## Related topics`, via the built-in heading ladder
+                # `## Related topics`, retyped from the ladder's `RELATED` by
+                # the vault's `heading_edges`
+                "RELATED_TO": 1,
+                "HAS_KEYWORD": 4,  # two notes x two folded keywords
                 # links.md reaches both images; seismic.md re-reaches faults.png
                 # from another folder by its bare filename
                 "HAS_IMAGE": 3,
@@ -467,7 +478,7 @@ class TestVaultGoldenBundle:
     def test_index_md_is_an_ordinary_note_in_a_vault(self):
         g = self.build()
         rows = g.cypher("MATCH (n {concept_id:'index'}) RETURN labels(n)[0] AS l, n.title AS t").to_list()
-        assert rows == [{"l": "notes", "t": "Notes index"}]
+        assert rows == [{"l": "Article", "t": "Notes index"}]
         # The `okf` dialect still diverts it to the folder's metadata.
         j = okf.build(str(VAULT_BUNDLE), require_frontmatter=False)
         assert j.cypher("MATCH (n {concept_id:'notes/index'}) RETURN count(n) AS c").to_list()[0]["c"] == 0
@@ -540,6 +551,94 @@ class TestVaultGoldenBundle:
         assert labels["Attachment"] == 0
         assert _edge_types(g)["HAS_IMAGE"] == 0
         assert _edge_types(g)["HAS_ATTACHMENT"] == 0
+
+    # ── `.kglite/vault.yaml` and `.kglite/` (VAULT.md §7-§8) ──────────────
+
+    def test_the_declared_hub_folds_casing_and_titles_by_frequency(self):
+        g = self.build()
+        rows = g.cypher("MATCH (k:Keyword) RETURN k.id AS id, k.title AS title ORDER BY id").to_list()
+        # atlas.md writes `faults`/`horizons`, seismic.md `faults`/`Faults`/
+        # `Horizons`: two nodes, titled by the commonest casing and, for the
+        # one-all tie, alphabetically.
+        assert rows == [
+            {"id": "faults", "title": "faults"},
+            {"id": "horizons", "title": "Horizons"},
+        ]
+        edges = sorted(
+            (r["a"], r["k"])
+            for r in g.cypher("MATCH (a)-[:HAS_KEYWORD]->(k:Keyword) RETURN a.concept_id AS a, k.id AS k").to_list()
+        )
+        assert edges == [
+            ("atlas", "faults"),
+            ("atlas", "horizons"),
+            ("seismic", "faults"),
+            ("seismic", "horizons"),
+        ]
+        # …and the key is still a property: a hub reads it, it does not drain it.
+        assert g.cypher("MATCH (n {concept_id:'atlas'}) RETURN n.keywords AS k").to_list() == [
+            {"k": ["faults", "horizons"]}
+        ]
+
+    def test_heading_edges_retype_the_related_topics_links(self):
+        g = self.build()
+        assert g.cypher("MATCH (a)-[:RELATED_TO]->(b) RETURN a.concept_id AS a, b.concept_id AS b").to_list() == [
+            {"a": "links", "b": "roadmap"}
+        ]
+        # The ladder's own rung for that heading is gone, not doubled.
+        assert g.cypher("MATCH ()-[r:RELATED]->() RETURN count(r) AS c").to_list()[0]["c"] == 0
+
+    def test_declared_types_win_over_inference(self):
+        g = self.build()
+        # atlas.md writes `toc_depth: "2"` — a quoted string, which inference
+        # would leave a string. The declaration makes it an integer, so it
+        # orders and compares as one.
+        rows = g.cypher(
+            "MATCH (n:Initiative) RETURN n.concept_id AS id, n.toc_depth AS d, n.toc_depth > 1 AS gt ORDER BY id"
+        ).to_list()
+        assert rows == [{"id": "atlas", "d": 2, "gt": True}, {"id": "seismic", "d": None, "gt": None}]
+
+    def test_declared_indexes_and_text_index_are_installed(self):
+        g = self.build()
+        rows = sorted((r["name"], r["type"]) for r in g.cypher("CALL db.indexes()").to_list())
+        assert rows == [
+            ("Initiative.body", "FULLTEXT"),
+            ("Initiative.concept_id", "PROPERTY"),
+            ("Initiative.toc_depth", "RANGE"),
+        ]
+        assert g.has_index("Initiative", "concept_id")
+        assert g.has_text_index("Initiative", "body")
+        # The BM25 index answers, rather than merely existing: only atlas.md's
+        # body holds "umbrella".
+        hits = [
+            r["id"]
+            for r in g.cypher(
+                "MATCH (n:Initiative) RETURN n.concept_id AS id, text_bm25(n, 'body', 'umbrella') AS s"
+            ).to_list()
+            if r["s"] > 0
+        ]
+        assert hits == ["atlas"]
+
+    def test_the_vault_carries_its_own_skill_and_recipe(self):
+        g = self.build()
+        assert [s["name"] for s in g.list_skills()] == ["vault_overview"]
+        assert g.get_skill("vault_overview")["body"].startswith("Notes with no `type:`")
+        assert [(r["recipe"], r["name"]) for r in g.list_recipes()] == [("vault", "by_keyword")]
+        recipe = g.get_recipe("vault", "by_keyword")
+        assert recipe["recipe_description"] == "Navigating the golden vault."
+        # The JSON Schema stayed nested — a flattening reader would have stored
+        # one property literally named `properties.keyword.type`.
+        assert recipe["parameters"]["properties"]["keyword"] == {"type": "string"}
+        assert recipe["cypher"].startswith("MATCH (n)-[:HAS_KEYWORD]->")
+
+    def test_okf_and_loose_ignore_the_vault_config(self):
+        # The same bundle read as `loose`: no `Article`, no `Keyword`, and no
+        # skill or recipe node — `.kglite/` is a vault construct.
+        g = okf.build(str(VAULT_BUNDLE), dialect="loose", require_frontmatter=False)
+        labels = _labels(g)
+        assert labels["Article"] == 0
+        assert labels["Keyword"] == 0
+        assert labels["KgliteSkill"] == 0
+        assert g.cypher("CALL db.indexes()").to_list() == []
 
     def test_build_is_deterministic(self):
         a, b = self.build(), self.build()
