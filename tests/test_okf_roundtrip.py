@@ -104,15 +104,15 @@ class TestRoundTrip:
         """
         src = tmp_path / "src"
         src.mkdir()
-        (src / "AB.md").write_text("---\ntitle: A/B\n---\nThe note the other one names.\n")
-        (src / "Other.md").write_text("See [[AB]].\n")
+        (src / "AB.md").write_text("---\ntitle: A/B\n---\nThe note the other one names.\n", encoding="utf-8")
+        (src / "Other.md").write_text("See [[AB]].\n", encoding="utf-8")
         graph = _build(src)
         out = tmp_path / "out"
         out.mkdir()
         report = okf.export(graph, str(out), source_root=str(src))
         assert report.ok, report.refusals
         assert sorted(_tree(out)) == [".kglite/export-manifest.json", "Note/AB.md", "Note/Other.md"]
-        assert "title: A/B" in (out / "Note" / "AB.md").read_text()
+        assert "title: A/B" in (out / "Note" / "AB.md").read_text(encoding="utf-8")
 
         validated = okf.validate(str(out), dialect="obsidian")
         assert validated.errors == []
