@@ -14,7 +14,8 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-use kglite::api::{DirGraph, Embedder};
+use kglite::api::embeddings::{embed_property, EmbedHooks, EmbedMode};
+use kglite::api::{make_dir_graph_mut, DirGraph, Embedder};
 use kglite::okf::{BuildOptions, BuildOutput, BuildReport, Dialect};
 
 use crate::tools::{
@@ -112,17 +113,16 @@ fn build_vault_graph(
     embedder: &RwLock<Option<Arc<dyn Embedder>>>,
 ) -> Result<(Arc<DirGraph>, BuildReport), String> {
     let opts = vault_build_options();
-    let BuildOutput { graph, report } = kglite::okf::build(root, &opts)?;
-    // Sole owner: `build` just made this `Arc` and nothing else has seen it.
-    let mut graph = Arc::try_unwrap(graph)
-        .map_err(|_| "vault build: the freshly built graph was already shared".to_string())?;
+    let BuildOutput { mut graph, report } = kglite::okf::build(root, &opts)?;
 
     // Same-label carry (VAULT.md / decision D4): a note that kept its label
     // and id keeps its vector, and the carried text hashes are what make the
     // embed pass below re-embed only what changed. A note whose label moved
     // (a folder move) is re-embedded — documented, not worked around.
     if let Some(old) = previous.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        let (stores, vectors, skipped) = graph.copy_embeddings_from(old);
+        // `build` just made this `Arc` and nothing else has seen it, so the
+        // copy-on-write handle hands back the graph itself rather than a fork.
+        let (stores, vectors, skipped) = make_dir_graph_mut(&mut graph).copy_embeddings_from(old);
         if stores > 0 {
             tracing::debug!(stores, vectors, skipped, "vault rebuild carried embeddings");
         }
@@ -132,11 +132,25 @@ fn build_vault_graph(
         let bound = read_lock(embedder).as_ref().map(Arc::clone);
         match bound {
             Some(model) => {
+                // `changed` mode, on the hashes the carry brought across:
+                // without it a 7 000-note vault would re-embed itself on
+                // every saved keystroke.
+                let hooks = EmbedHooks::default();
                 for (label, property) in &report.embed_targets {
-                    match embed_target(&mut graph, label, property, model.as_ref()) {
-                        Ok(embedded) => {
-                            tracing::info!(label, property, embedded, "vault embed target")
-                        }
+                    match embed_property(
+                        &mut graph,
+                        label,
+                        property,
+                        EmbedMode::Changed,
+                        model.as_ref(),
+                        &hooks,
+                    ) {
+                        Ok(outcome) => tracing::info!(
+                            label,
+                            property,
+                            embedded = outcome.embedded,
+                            "vault embed target"
+                        ),
                         // A model that fails mid-rebuild must not throw away a
                         // graph that is otherwise correct: the notes are
                         // served, `text_score()` simply has less to match on.
@@ -153,125 +167,7 @@ fn build_vault_graph(
             ),
         }
     }
-    Ok((Arc::new(graph), report))
-}
-
-/// Embed one declared `(label, property)` target, skipping every node whose
-/// text is unchanged since the vector it already carries.
-///
-/// This is `embed_texts(mode="changed")` as the wheel spells it, minus the
-/// Python: the staleness test is the carried text hash, which is exactly what
-/// `copy_embeddings_from` brings across. Without it a 7 000-note vault would
-/// re-embed itself on every saved keystroke.
-fn embed_target(
-    graph: &mut DirGraph,
-    label: &str,
-    property: &str,
-    model: &dyn Embedder,
-) -> Result<usize, String> {
-    use kglite::api::embeddings::{resolve_source_column, store_name};
-    use kglite::api::storage::EmbeddingStore;
-    use kglite::api::{InternedKey, Value};
-
-    let Some(node_indices) = graph.type_indices.get(label).map(|v| v.to_vec()) else {
-        // A declared label the build produced no nodes for is a vault-config
-        // problem, and `okf::validate` is where it is reported; here it is
-        // simply nothing to embed.
-        return Ok(0);
-    };
-    if node_indices.is_empty() {
-        return Ok(0);
-    }
-    let source_field = resolve_source_column(graph, label, property)?.to_string();
-    let source_key = InternedKey::from_str(&source_field);
-    let store_key = (label.to_string(), store_name(property));
-
-    let existing = graph.embeddings.get(&store_key);
-    let mut pending: Vec<(usize, String, u64)> = Vec::new();
-    {
-        // Disk arena guard; a no-op on the memory backend a vault builds in.
-        let _arena_guard = graph.begin_read_pass();
-        for &node_idx in &node_indices {
-            let Some(node) = graph.node_view(node_idx) else {
-                continue;
-            };
-            let Some(field) = node.resolved_field(label, &source_field, source_key) else {
-                continue;
-            };
-            let Value::String(text) = field.as_ref() else {
-                continue;
-            };
-            if text.is_empty() {
-                continue;
-            }
-            let hash = EmbeddingStore::text_hash(text);
-            let stale = existing.is_none_or(|store| store.is_stale(node_idx.index(), hash));
-            if stale {
-                pending.push((node_idx.index(), text.clone(), hash));
-            }
-        }
-    }
-    if pending.is_empty() {
-        return Ok(0);
-    }
-
-    model.load()?;
-    let dimension = model.dimension();
-    if let Some(store) = existing {
-        if store.dimension != dimension {
-            model.unload();
-            return Err(format!(
-                "the bound embedder produces {dimension}-d vectors but the existing \
-                 '{label}.{property}' store is {}-d — mixing dimensions would corrupt search",
-                store.dimension
-            ));
-        }
-    }
-    let mut store = match existing {
-        Some(s) => s.clone(),
-        None => EmbeddingStore::new(dimension),
-    };
-    let outcome = embed_into(&mut store, &pending, model, dimension);
-    model.unload();
-    outcome?;
-    if let Some(id) = model.model_id() {
-        store.model_id = Some(id);
-    }
-    let embedded = pending.len();
-    graph.set_embedding_store(label, property, store);
-    Ok(embedded)
-}
-
-/// Embed `pending` in batches, writing each vector and its text hash.
-fn embed_into(
-    store: &mut kglite::api::storage::EmbeddingStore,
-    pending: &[(usize, String, u64)],
-    model: &dyn Embedder,
-    dimension: usize,
-) -> Result<(), String> {
-    const BATCH: usize = 256;
-    for batch in pending.chunks(BATCH) {
-        let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
-        let vectors = model.embed(&texts)?;
-        if vectors.len() != batch.len() {
-            return Err(format!(
-                "the embedder returned {} vectors for {} texts",
-                vectors.len(),
-                batch.len()
-            ));
-        }
-        for (i, vector) in vectors.iter().enumerate() {
-            if vector.len() != dimension {
-                return Err(format!(
-                    "the embedder returned a {}-d vector (expected {dimension})",
-                    vector.len()
-                ));
-            }
-            store.set_embedding(batch[i].0, vector);
-            store.set_text_hash(batch[i].0, batch[i].2);
-        }
-    }
-    Ok(())
+    Ok((graph, report))
 }
 
 /// Whether a changed path can affect the vault graph.

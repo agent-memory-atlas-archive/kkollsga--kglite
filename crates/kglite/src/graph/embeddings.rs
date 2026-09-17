@@ -733,6 +733,349 @@ pub fn resolve_source_column<'a>(
     ))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The changed-mode embedding pass.
+//
+// One property of one label, through the bound model, skipping whatever is
+// already current. Every binding writes the same loop otherwise — the wheel's
+// `embed_texts` and the MCP server's vault producer each had a copy — and
+// nothing in it is binding-shaped: read the resolved column, hash the text,
+// compare with the hash beside the vector, batch what is left, write the store.
+// What *is* binding-shaped rides on [`EmbedHooks`].
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Which nodes an [`embed_property`] pass sends to the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedMode {
+    /// Only nodes with no vector in the store yet.
+    Missing,
+    /// Nodes with no vector, **or** whose text no longer matches the hash
+    /// stored beside their vector — the incremental re-embed. This is what
+    /// makes a rebuild of a 7 000-note vault embed the one note that changed.
+    Changed,
+    /// Every node carrying text, into a store built from scratch. The only
+    /// mode that can change a store's dimension, because it is the only one
+    /// that does not have to agree with vectors already in it.
+    All,
+}
+
+/// What one [`embed_property`] pass did. The four counters are disjoint over
+/// the label's nodes: `embedded + skipped + skipped_existing` is every node,
+/// and `reembedded_changed` counts the subset of `embedded` that *had* a
+/// vector already.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EmbedOutcome {
+    /// Vectors computed and written by this pass.
+    pub embedded: usize,
+    /// Nodes whose source field held no non-empty string.
+    pub skipped: usize,
+    /// Nodes left alone because their vector is already current.
+    pub skipped_existing: usize,
+    /// Nodes that already had a vector and were re-embedded (`Changed` only).
+    pub reembedded_changed: usize,
+    /// The store's vector dimension. `0` only when nothing was embedded and
+    /// the model was never asked (see [`EmbedHooks::load_when_idle`]).
+    pub dimension: usize,
+}
+
+/// Why a pass could not run. Split by what a binding has to *say* about it,
+/// not by where it happened: the first three are the caller's or the data's
+/// problem and conventionally raise a "bad value" error, the last is the model
+/// failing at its own job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbedError {
+    /// The property resolves to no readable column on that label
+    /// ([`resolve_source_column`]'s complaint, verbatim).
+    Column(String),
+    /// The model's dimension differs from the store already holding vectors
+    /// for this property; embedding into it would mix dimensions and corrupt
+    /// search. Carries both so a binding can name its own remedy — the
+    /// remedies are spelled differently in every binding, the fact is not.
+    Dimension { store: usize, model: usize },
+    /// The model returned a batch that contradicts its declared dimension.
+    Output(String),
+    /// The model failed to load, or failed to embed a batch.
+    Model(String),
+}
+
+impl std::fmt::Display for EmbedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EmbedError::Column(message) | EmbedError::Output(message) => f.write_str(message),
+            EmbedError::Model(message) => f.write_str(message),
+            EmbedError::Dimension { store, model } => write!(
+                f,
+                "the model produces {model}-d vectors but the existing store is {store}-d — \
+                 embedding into it would mix dimensions and corrupt search"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EmbedError {}
+
+/// One batch of texts through the model — the seam a binding fills to wrap
+/// the call (the wheel releases the GIL around it).
+pub type EmbedBatchFn<'a> = &'a dyn Fn(&[String]) -> Result<Vec<Vec<f32>>, String>;
+
+/// The seams [`embed_property`] leaves for a binding, with defaults that are
+/// what a binding with no runtime lock and no progress UI wants.
+pub struct EmbedHooks<'a> {
+    /// Texts per `model.embed()` call.
+    pub batch_size: usize,
+    /// Load the model even when nothing needs embedding, so the outcome can
+    /// report its `dimension`. The wheel's `embed_texts` reports a dimension
+    /// in every return dict and therefore asks for it; a server rebuilding a
+    /// vault leaves it off, so a rebuild that changed no note never touches
+    /// the model at all.
+    pub load_when_idle: bool,
+    /// Runs one batch through the model. `None` calls `model.embed` directly;
+    /// a binding that must release a runtime lock around the call — the
+    /// wheel releases the GIL — wraps it here.
+    pub embed_batch: Option<EmbedBatchFn<'a>>,
+    /// Called once with the number of texts about to be embedded, before the
+    /// first batch, and not at all when there is nothing to embed.
+    pub on_start: Option<&'a dyn Fn(usize)>,
+    /// Called after each batch is written, with that batch's size.
+    pub on_batch: Option<&'a dyn Fn(usize)>,
+}
+
+impl Default for EmbedHooks<'_> {
+    fn default() -> Self {
+        EmbedHooks {
+            batch_size: 256,
+            load_when_idle: false,
+            embed_batch: None,
+            on_start: None,
+            on_batch: None,
+        }
+    }
+}
+
+/// Embed one `(node_type, text_column)` through `model`, writing the vectors
+/// and their text hashes into the property's store.
+///
+/// A label with no nodes — including one the graph has never seen — embeds
+/// nothing and reports zeros; whether that is an error is the caller's policy
+/// (the wheel refuses an unknown type before it gets here, a vault rebuild
+/// treats a declared-but-empty label as nothing to do).
+///
+/// The model is loaded once around the whole pass and unloaded on every exit,
+/// including every error exit. The store is written once, at the end, so a
+/// failure mid-pass leaves the graph exactly as it found it.
+pub fn embed_property(
+    graph: &mut std::sync::Arc<DirGraph>,
+    node_type: &str,
+    text_column: &str,
+    mode: EmbedMode,
+    model: &dyn crate::graph::embedder::Embedder,
+    hooks: &EmbedHooks<'_>,
+) -> Result<EmbedOutcome, EmbedError> {
+    let key = store_key(node_type, text_column);
+    let (mut found, store_dimension) = {
+        let graph: &DirGraph = graph;
+        let node_indices: Vec<NodeIndex> = graph
+            .type_indices
+            .get(node_type)
+            .map(|indices| indices.to_vec())
+            .unwrap_or_default();
+        // A type with no rows resolves nothing: `resolve_source_column` asks
+        // whether some node carries the property, so a legitimate column on an
+        // empty type would be rejected for want of a row to find it on.
+        let source_field = if node_indices.is_empty() {
+            text_column.to_string()
+        } else {
+            resolve_source_column(graph, node_type, text_column)
+                .map_err(EmbedError::Column)?
+                .to_string()
+        };
+        let source_key = crate::graph::storage::interner::InternedKey::from_str(&source_field);
+        // `All` rebuilds the store, so it neither reads the old vectors nor
+        // has to match their dimension.
+        let existing = (mode != EmbedMode::All)
+            .then(|| graph.embeddings.get(&key))
+            .flatten();
+        // Disk arena guard; a no-op on the memory backend most callers use.
+        let _arena_guard = graph.begin_read_pass();
+        let found = collect_embed_candidates(
+            graph,
+            &node_indices,
+            node_type,
+            &source_field,
+            source_key,
+            existing,
+            mode,
+        );
+        (found, existing.map(|store| store.dimension))
+    };
+
+    if found.texts.is_empty() && !hooks.load_when_idle {
+        return Ok(found.outcome(0, store_dimension.unwrap_or(0)));
+    }
+    model.load().map_err(EmbedError::Model)?;
+    let dimension = model.dimension();
+    if let Some(store) = store_dimension.filter(|d| *d != dimension) {
+        model.unload();
+        return Err(EmbedError::Dimension {
+            store,
+            model: dimension,
+        });
+    }
+    if found.texts.is_empty() {
+        model.unload();
+        return Ok(found.outcome(0, dimension));
+    }
+
+    let mut store = match (mode != EmbedMode::All)
+        .then(|| graph.embeddings.get(&key))
+        .flatten()
+    {
+        Some(existing) => existing.clone(),
+        None => EmbeddingStore::new(dimension),
+    };
+    store.data.reserve(found.texts.len() * dimension);
+    if let Some(started) = hooks.on_start {
+        started(found.texts.len());
+    }
+    let written = embed_batches(&mut store, &found.texts, model, dimension, hooks);
+    model.unload();
+    written?;
+    // Provenance: stamp the model identity when the embedder names one, and
+    // leave a prior id intact otherwise.
+    if let Some(id) = model.model_id() {
+        store.model_id = Some(id);
+    }
+    let embedded = found.texts.len();
+    found.texts = Vec::new();
+    crate::graph::handle::make_dir_graph_mut(graph).set_embedding_store(
+        node_type,
+        text_column,
+        store,
+    );
+    Ok(found.outcome(embedded, dimension))
+}
+
+/// What a pass decided about a label's nodes before any model work.
+struct EmbedCandidates {
+    /// `(node_index, text, text_hash)` for every node that needs embedding.
+    texts: Vec<(usize, String, u64)>,
+    skipped: usize,
+    skipped_existing: usize,
+    reembedded_changed: usize,
+}
+
+impl EmbedCandidates {
+    fn outcome(&self, embedded: usize, dimension: usize) -> EmbedOutcome {
+        EmbedOutcome {
+            embedded,
+            skipped: self.skipped,
+            skipped_existing: self.skipped_existing,
+            reembedded_changed: self.reembedded_changed,
+            dimension,
+        }
+    }
+}
+
+/// Split a label's nodes into "needs embedding" and the skip counters.
+///
+/// The text is read through the alias-resolved field, so `source_field` /
+/// `source_key` must be what [`resolve_source_column`] returned — the same
+/// predicate the ingest guard applies. Reading the property map directly was
+/// the old bug: it excludes `id`/`title` by contract, so a `title_field='name'`
+/// type embedded nothing and called it `skipped`.
+fn collect_embed_candidates(
+    graph: &DirGraph,
+    node_indices: &[NodeIndex],
+    node_type: &str,
+    source_field: &str,
+    source_key: crate::graph::storage::interner::InternedKey,
+    existing: Option<&EmbeddingStore>,
+    mode: EmbedMode,
+) -> EmbedCandidates {
+    let mut found = EmbedCandidates {
+        texts: Vec::new(),
+        skipped: 0,
+        skipped_existing: 0,
+        reembedded_changed: 0,
+    };
+    for &node_idx in node_indices {
+        let Some(node) = graph.graph.node_view(node_idx) else {
+            continue;
+        };
+        match node
+            .resolved_field(node_type, source_field, source_key)
+            .as_deref()
+        {
+            Some(Value::String(text)) if !text.is_empty() => {
+                let hash = EmbeddingStore::text_hash(text);
+                let has_vector = existing
+                    .map(|store| store.get_embedding(node_idx.index()).is_some())
+                    .unwrap_or(false);
+                let take = match mode {
+                    EmbedMode::All => true,
+                    EmbedMode::Missing => !has_vector,
+                    EmbedMode::Changed => existing
+                        .map(|store| store.is_stale(node_idx.index(), hash))
+                        .unwrap_or(true),
+                };
+                if !take {
+                    found.skipped_existing += 1;
+                    continue;
+                }
+                if has_vector && mode == EmbedMode::Changed {
+                    found.reembedded_changed += 1;
+                }
+                found.texts.push((node_idx.index(), text.clone(), hash));
+            }
+            _ => found.skipped += 1,
+        }
+    }
+    found
+}
+
+/// Embed the selected texts in batches, writing each vector and its text hash.
+///
+/// Teardown belongs to the caller: it unloads the model on every path, so the
+/// error exits here just return.
+fn embed_batches(
+    store: &mut EmbeddingStore,
+    pending: &[(usize, String, u64)],
+    model: &dyn crate::graph::embedder::Embedder,
+    dimension: usize,
+    hooks: &EmbedHooks<'_>,
+) -> Result<(), EmbedError> {
+    let batch_size = hooks.batch_size.max(1);
+    for batch in pending.chunks(batch_size) {
+        let texts: Vec<String> = batch.iter().map(|(_, text, _)| text.clone()).collect();
+        let vectors = match hooks.embed_batch {
+            Some(embed) => embed(&texts),
+            None => model.embed(&texts),
+        }
+        .map_err(EmbedError::Model)?;
+        if vectors.len() != batch.len() {
+            return Err(EmbedError::Output(format!(
+                "the model returned {} vectors for {} texts",
+                vectors.len(),
+                batch.len()
+            )));
+        }
+        for (i, vector) in vectors.iter().enumerate() {
+            if vector.len() != dimension {
+                return Err(EmbedError::Output(format!(
+                    "the model returned a vector of dimension {} (expected {dimension})",
+                    vector.len()
+                )));
+            }
+            store.set_embedding(batch[i].0, vector);
+            store.set_text_hash(batch[i].0, batch[i].2);
+        }
+        if let Some(batched) = hooks.on_batch {
+            batched(batch.len());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "embeddings_tests.rs"]
 mod tests;

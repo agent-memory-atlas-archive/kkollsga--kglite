@@ -2,7 +2,9 @@
 
 import math
 import os
+import sys
 import tempfile
+import types
 import warnings
 
 import pandas as pd
@@ -920,8 +922,11 @@ class TestEmbedTexts:
         with pytest.raises(RuntimeError, match="set_embedder"):
             graph.embed_texts("Node", "text")
 
-    def test_embed_texts_show_progress(self):
-        """show_progress=True works (uses tqdm if available)."""
+    def test_embed_texts_show_progress(self, monkeypatch):
+        """show_progress=True drives a real tqdm bar: opened with the number of
+        texts to embed, ticked once per batch, closed at the end. Asserting the
+        calls rather than only the result — a bar that is never opened or never
+        ticked passes any assertion about ``embedded``."""
         graph = kglite.KnowledgeGraph()
         df = pd.DataFrame(
             {
@@ -933,9 +938,37 @@ class TestEmbedTexts:
         graph.add_nodes(df, "Item", "id", "title")
         graph.set_embedder(MockEmbedder(dimension=3))
 
-        # show_progress=True (default) — should work even if tqdm is missing
+        calls: list = []
+
+        class _Bar:
+            def update(self, n):
+                calls.append(("update", n))
+
+            def close(self):
+                calls.append(("close",))
+
+        def _tqdm(**kwargs):
+            calls.append(("open", kwargs["total"], kwargs["desc"]))
+            return _Bar()
+
+        fake = types.ModuleType("tqdm.auto")
+        fake.tqdm = _tqdm
+        monkeypatch.setitem(sys.modules, "tqdm.auto", fake)
+
         result = graph.embed_texts("Item", "text", batch_size=2, show_progress=True)
         assert result["embedded"] == 5
+        assert calls == [
+            ("open", 5, "Embedding Item.text"),
+            ("update", 2),
+            ("update", 2),
+            ("update", 1),
+            ("close",),
+        ]
+
+        # A pass with nothing to embed opens no bar at all.
+        calls.clear()
+        assert graph.embed_texts("Item", "text", show_progress=True)["embedded"] == 0
+        assert calls == []
 
     def test_embed_texts_show_progress_false(self):
         """show_progress=False skips tqdm."""

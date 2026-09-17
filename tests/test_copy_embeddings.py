@@ -69,24 +69,39 @@ def test_copy_carries_provenance_and_hashes():
     assert info["hashed"] == 3  # text hashes carried
 
 
-def test_copy_then_changed_only_embeds_new_nodes():
+def test_copy_then_changed_only_embeds_new_and_edited_nodes():
     """The headline workflow: carry old vectors, then embed_texts(mode='changed')
-    fills ONLY the genuinely-new node — not the carried ones."""
+    fills the genuinely-new node and the edited one — not the carried ones.
+
+    The edited node is what makes this a test of ``mode='changed'`` rather than
+    of ``'missing'``: it already *has* a carried vector, so only the text-hash
+    comparison can notice that the vector is out of date.
+    """
     old = _old()
     # Fresh rebuild has an extra doc (id 4) that old never embedded.
     new = _fresh_rebuild(ids=(1, 2, 3, 4))
-    # Make the carried nodes' text identical to what 'old' embedded, so their
-    # hashes match and they're not re-embedded.
+    # Two carried nodes keep the text 'old' embedded, so their hashes match and
+    # they are not re-embedded; the third is edited.
     new.cypher("MATCH (n:Doc {id: 1}) SET n.summary = 'x'")
     new.cypher("MATCH (n:Doc {id: 2}) SET n.summary = 'y'")
-    new.cypher("MATCH (n:Doc {id: 3}) SET n.summary = 'z'")
+    new.cypher("MATCH (n:Doc {id: 3}) SET n.summary = 'z rewritten'")
 
     new.copy_embeddings_from(old)
     new.set_embedder(_Embedder())
     r = new.embed_texts("Doc", "summary", show_progress=False, mode="changed")
-    # Only id 4 (never carried) gets embedded; 1/2/3 are unchanged → skipped.
-    assert r["embedded"] == 1
-    assert r["skipped_existing"] == 3
+    # id 4 (never carried) and id 3 (edited since); 1/2 are unchanged → skipped.
+    assert r["embedded"] == 2
+    assert r["skipped_existing"] == 2
+    assert r["reembedded_changed"] == 1, "id 3 had a vector and lost it to an edit"
+
+    # …and 'missing' would have left the edited node's stale vector in place.
+    new2 = _fresh_rebuild(ids=(1, 2, 3, 4))
+    new2.cypher("MATCH (n:Doc {id: 1}) SET n.summary = 'x'")
+    new2.cypher("MATCH (n:Doc {id: 2}) SET n.summary = 'y'")
+    new2.cypher("MATCH (n:Doc {id: 3}) SET n.summary = 'z rewritten'")
+    new2.copy_embeddings_from(old)
+    new2.set_embedder(_Embedder())
+    assert new2.embed_texts("Doc", "summary", show_progress=False)["embedded"] == 1
 
 
 def test_copy_skips_ids_with_no_matching_node():

@@ -353,11 +353,20 @@ pub mod api {
     /// Querying by vector needs no surface here: `vector_score` and
     /// `text_score` both take a caller-supplied query vector through
     /// `cypher_query`.
+    /// `embed_property` is the other half: the pass that *computes* the
+    /// vectors, given a bound [`Embedder`]. Every binding wrote the same loop
+    /// before it existed — collect the label's texts through
+    /// `resolve_source_column`, skip whatever the store already holds a
+    /// current vector for, batch the rest through the model, write the
+    /// vectors and their text hashes — so it lives here and the bindings pass
+    /// their own concerns in through `EmbedHooks` (a progress bar, releasing
+    /// the GIL around the model call).
     pub mod embeddings {
         pub use crate::graph::embeddings::{
-            add_embeddings, build_vector_index, drop_vector_index, has_vector_index,
-            list_embeddings, list_vector_indexes, refresh_vector_index, resolve_source_column,
-            set_embeddings, store_key, store_name, EmbeddingIngestReport, EmbeddingStoreInfo,
+            add_embeddings, build_vector_index, drop_vector_index, embed_property,
+            has_vector_index, list_embeddings, list_vector_indexes, refresh_vector_index,
+            resolve_source_column, set_embeddings, store_key, store_name, EmbedBatchFn, EmbedError,
+            EmbedHooks, EmbedMode, EmbedOutcome, EmbeddingIngestReport, EmbeddingStoreInfo,
             VectorIndexReport, VectorIndexStatus,
         };
     }

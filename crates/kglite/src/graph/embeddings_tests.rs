@@ -1092,3 +1092,299 @@ fn every_listed_index_name_is_droppable() {
             .unwrap_or_else(|e| panic!("SHOW INDEXES listed '{name}' but DROP refused: {e}"));
     }
 }
+
+// ── embed_property: the changed-mode pass every binding shares ───────────────
+
+/// Counts what a pass asked of the model, so "did this re-embed the corpus?"
+/// is an assertion rather than an inference.
+#[derive(Default)]
+struct StubEmbedder {
+    dimension: usize,
+    /// Every text the pass sent, in order.
+    seen: std::sync::Mutex<Vec<String>>,
+    loads: std::sync::atomic::AtomicUsize,
+    unloads: std::sync::atomic::AtomicUsize,
+    /// When set, `embed` fails with this message instead of answering.
+    fails: Option<String>,
+    /// When set, every returned vector has this length instead of `dimension`.
+    wrong_width: Option<usize>,
+    /// When set, the model answers one vector short of the batch it was given.
+    short_batch: bool,
+}
+
+impl StubEmbedder {
+    fn new(dimension: usize) -> Self {
+        StubEmbedder {
+            dimension,
+            ..StubEmbedder::default()
+        }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+    fn loads(&self) -> usize {
+        self.loads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::graph::embedder::Embedder for StubEmbedder {
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        if let Some(message) = &self.fails {
+            return Err(message.clone());
+        }
+        self.seen.lock().unwrap().extend_from_slice(texts);
+        let width = self.wrong_width.unwrap_or(self.dimension);
+        let answered = texts.len() - usize::from(self.short_batch && !texts.is_empty());
+        Ok((0..answered).map(|i| vec![i as f32; width]).collect())
+    }
+    fn model_id(&self) -> Option<String> {
+        Some("stub".to_string())
+    }
+    fn load(&self) -> Result<(), String> {
+        self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn unload(&self) {
+        self.unloads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn embed_docs(
+    graph: &mut std::sync::Arc<DirGraph>,
+    model: &StubEmbedder,
+    mode: EmbedMode,
+) -> Result<EmbedOutcome, EmbedError> {
+    embed_property(graph, "Doc", "summary", mode, model, &EmbedHooks::default())
+}
+
+/// Overwrite one node's text through the ordinary write path, so the next
+/// `Changed` pass has exactly one stale row.
+fn retext(graph: &mut std::sync::Arc<DirGraph>, id: i64, text: &str) {
+    let params = HashMap::new();
+    crate::graph::session::execute_mut(
+        crate::graph::handle::make_dir_graph_mut(graph),
+        &format!("MATCH (d:Doc) WHERE d.id = {id} SET d.summary = '{text}'"),
+        &crate::graph::session::ExecuteOptions::eager(&params),
+    )
+    .expect("the retext write");
+}
+
+/// The node slot of the `n`th `Doc` — `docs()` adds them in id order.
+fn doc_slot(graph: &DirGraph, nth: usize) -> usize {
+    graph.type_indices.get("Doc").expect("Doc nodes").to_vec()[nth].index()
+}
+
+#[test]
+fn changed_mode_embeds_only_the_rows_whose_text_moved() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2, 3]));
+    let model = StubEmbedder::new(2);
+
+    let first = embed_docs(&mut g, &model, EmbedMode::Changed).unwrap();
+    assert_eq!(first.embedded, 3);
+    assert_eq!(first.dimension, 2);
+    assert_eq!(model.seen().len(), 3);
+
+    retext(&mut g, 2, "a different summary");
+    let second = embed_docs(&mut g, &model, EmbedMode::Changed).unwrap();
+    assert_eq!(second.embedded, 1, "only the retexted node");
+    assert_eq!(second.skipped_existing, 2);
+    assert_eq!(second.reembedded_changed, 1);
+    assert_eq!(model.seen()[3..], ["a different summary".to_string()]);
+
+    let third = embed_docs(&mut g, &model, EmbedMode::Changed).unwrap();
+    assert_eq!(third.embedded, 0, "nothing moved since");
+    assert_eq!(model.seen().len(), 4, "and the model was asked nothing");
+}
+
+#[test]
+fn all_mode_rebuilds_the_store_and_missing_mode_ignores_stale_text() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2]));
+    let model = StubEmbedder::new(2);
+    embed_docs(&mut g, &model, EmbedMode::Missing).unwrap();
+    retext(&mut g, 1, "moved on");
+
+    let missing = embed_docs(&mut g, &model, EmbedMode::Missing).unwrap();
+    assert_eq!(
+        missing.embedded, 0,
+        "`missing` asks whether a vector exists, never whether it is current"
+    );
+    assert_eq!(missing.skipped_existing, 2);
+
+    let all = embed_docs(&mut g, &model, EmbedMode::All).unwrap();
+    assert_eq!(all.embedded, 2, "`all` rebuilds the store from scratch");
+    assert_eq!(all.skipped_existing, 0);
+}
+
+#[test]
+fn an_idle_pass_leaves_the_model_alone_unless_the_caller_wants_its_dimension() {
+    let mut g = std::sync::Arc::new(docs(&[1]));
+    let model = StubEmbedder::new(2);
+    embed_docs(&mut g, &model, EmbedMode::Changed).unwrap();
+    assert_eq!(model.loads(), 1);
+
+    let idle = embed_docs(&mut g, &model, EmbedMode::Changed).unwrap();
+    assert_eq!(idle.embedded, 0);
+    assert_eq!(
+        model.loads(),
+        1,
+        "a rebuild that changed no note must not pay a model load"
+    );
+    assert_eq!(
+        idle.dimension, 2,
+        "the store's own dimension answers without the model"
+    );
+
+    let hooks = EmbedHooks {
+        load_when_idle: true,
+        ..EmbedHooks::default()
+    };
+    let asked =
+        embed_property(&mut g, "Doc", "summary", EmbedMode::Changed, &model, &hooks).unwrap();
+    assert_eq!(asked.embedded, 0);
+    assert_eq!(model.loads(), 2, "the wheel's contract: always a dimension");
+}
+
+#[test]
+fn a_label_with_no_nodes_is_a_no_op_and_an_unknown_column_is_an_error() {
+    let mut g = std::sync::Arc::new(docs(&[1]));
+    let model = StubEmbedder::new(2);
+
+    let empty = embed_property(
+        &mut g,
+        "Nothing",
+        "summary",
+        EmbedMode::Changed,
+        &model,
+        &EmbedHooks::default(),
+    )
+    .unwrap();
+    assert_eq!(empty, EmbedOutcome::default(), "nothing to embed, no model");
+    assert_eq!(model.loads(), 0);
+
+    let bad = embed_property(
+        &mut g,
+        "Doc",
+        "nowhere",
+        EmbedMode::Changed,
+        &model,
+        &EmbedHooks::default(),
+    );
+    assert!(
+        matches!(bad, Err(EmbedError::Column(ref m)) if m.contains("nowhere")),
+        "{bad:?}"
+    );
+}
+
+#[test]
+fn a_dimension_change_is_refused_and_leaves_the_store_untouched() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2]));
+    embed_docs(&mut g, &StubEmbedder::new(2), EmbedMode::All).unwrap();
+    retext(&mut g, 1, "changed");
+
+    let wider = StubEmbedder::new(8);
+    let refused = embed_docs(&mut g, &wider, EmbedMode::Changed);
+    assert_eq!(refused, Err(EmbedError::Dimension { store: 2, model: 8 }));
+    assert_eq!(store_of(&g).dimension, 2, "the store is as it was");
+    assert_eq!(wider.unloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let rebuilt = embed_docs(&mut g, &wider, EmbedMode::All).unwrap();
+    assert_eq!(rebuilt.dimension, 8, "`all` is the way through");
+    assert_eq!(store_of(&g).dimension, 8);
+}
+
+#[test]
+fn a_failing_model_writes_nothing_and_is_still_unloaded() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2]));
+    let broken = StubEmbedder {
+        fails: Some("the model is on fire".to_string()),
+        ..StubEmbedder::new(2)
+    };
+    assert_eq!(
+        embed_docs(&mut g, &broken, EmbedMode::Changed),
+        Err(EmbedError::Model("the model is on fire".to_string()))
+    );
+    assert_eq!(broken.unloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        g.embeddings.is_empty(),
+        "a failed pass leaves the graph as it found it"
+    );
+
+    let lying = StubEmbedder {
+        wrong_width: Some(5),
+        ..StubEmbedder::new(2)
+    };
+    let refused = embed_docs(&mut g, &lying, EmbedMode::Changed);
+    assert!(
+        matches!(refused, Err(EmbedError::Output(ref m)) if m.contains("dimension 5")),
+        "{refused:?}"
+    );
+    assert!(g.embeddings.is_empty());
+
+    // A model that answers one vector short would otherwise write the batch's
+    // *first* texts' vectors against the right slots and drop the rest in
+    // silence — the pass would report every text embedded.
+    let short = StubEmbedder {
+        short_batch: true,
+        ..StubEmbedder::new(2)
+    };
+    let refused = embed_docs(&mut g, &short, EmbedMode::Changed);
+    assert!(
+        matches!(refused, Err(EmbedError::Output(ref m)) if m.contains("1 vectors for 2 texts")),
+        "{refused:?}"
+    );
+    assert!(g.embeddings.is_empty());
+}
+
+#[test]
+fn the_hooks_see_every_batch_and_can_wrap_the_model_call() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2, 3, 4, 5]));
+    let model = StubEmbedder::new(2);
+    let started = std::cell::Cell::new(0usize);
+    let batches = std::cell::RefCell::new(Vec::new());
+    let wrapped = std::cell::Cell::new(0usize);
+    let start = |total: usize| started.set(total);
+    let batch = |done: usize| batches.borrow_mut().push(done);
+    let embed = |texts: &[String]| {
+        wrapped.set(wrapped.get() + 1);
+        crate::graph::embedder::Embedder::embed(&model, texts)
+    };
+    let hooks = EmbedHooks {
+        batch_size: 2,
+        embed_batch: Some(&embed),
+        on_start: Some(&start),
+        on_batch: Some(&batch),
+        ..EmbedHooks::default()
+    };
+    let outcome =
+        embed_property(&mut g, "Doc", "summary", EmbedMode::Changed, &model, &hooks).unwrap();
+
+    assert_eq!(outcome.embedded, 5);
+    assert_eq!(started.get(), 5, "the count arrives before the first batch");
+    assert_eq!(*batches.borrow(), vec![2, 2, 1]);
+    assert_eq!(wrapped.get(), 3, "every batch went through the wrapper");
+
+    // …and an idle pass draws no bar at all.
+    started.set(0);
+    batches.borrow_mut().clear();
+    embed_property(&mut g, "Doc", "summary", EmbedMode::Changed, &model, &hooks).unwrap();
+    assert_eq!(started.get(), 0);
+    assert!(batches.borrow().is_empty());
+}
+
+#[test]
+fn a_written_pass_stamps_the_model_and_the_hashes_a_carry_moves() {
+    let mut g = std::sync::Arc::new(docs(&[1]));
+    embed_docs(&mut g, &StubEmbedder::new(2), EmbedMode::Changed).unwrap();
+    let store = store_of(&g);
+    assert_eq!(store.model_id.as_deref(), Some("stub"));
+    let idx = doc_slot(&g, 0);
+    assert!(store.get_embedding(idx).is_some());
+    assert!(
+        !store.is_stale(idx, EmbeddingStore::text_hash("text 1")),
+        "the hash beside the vector is the text that produced it"
+    );
+}
