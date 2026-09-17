@@ -176,6 +176,73 @@ fn a_wikilink_is_never_percent_decoded() {
     assert_eq!(report.edges_by_type.get("LINKS_TO"), Some(&1));
 }
 
+/// §4.3's typed-edge rule resolves its targets the way §5.2 resolves a body
+/// link, so a target naming a place the vault does not own is the same §9
+/// error there — a reader that follows the edge does not care which half of
+/// the file spelled it.
+#[test]
+fn a_frontmatter_wikilink_is_path_checked_like_a_body_one() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "notes/deep/a.md",
+        "---\n\
+         depends_on: \"[[../../../outside/note]]\"\n\
+         parent: \"[[C:/secrets/plan]]\"\n\
+         see_also: [\"[[../b]]\", \"[[../../../../far/away]]\"]\n\
+         ---\n\
+         prose\n",
+    );
+    write(dir.path(), "notes/b.md", "still inside");
+    let report = validate(dir.path(), &vault()).unwrap();
+    let errors = report.errors.join("\n");
+    assert_eq!(report.errors.len(), 3, "{errors}");
+    assert!(
+        report
+            .errors
+            .iter()
+            .all(|e| e.starts_with("notes/deep/a.md: ")),
+        "{errors}"
+    );
+    for (target, why) in [
+        ("`../../../outside/note`", "escapes the vault root"),
+        ("`C:/secrets/plan`", "absolute filesystem path"),
+        ("`../../../../far/away`", "escapes the vault root"),
+    ] {
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains(target) && e.contains(why)),
+            "{target} was not reported: {errors}"
+        );
+    }
+}
+
+/// A wikilink is a *name*: only one spelled like a path is checked, or every
+/// note called `C: the sequel` would be an error. The Windows and UNC
+/// spellings carry no `/` at all, so the name check is the absolute-path one
+/// as well as the `/` one.
+#[test]
+fn a_wikilink_naming_a_windows_path_is_an_error_without_a_slash() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "a.md",
+        "---\ndepends_on: \"[[~]]\"\n---\n[[D:\\\\vault\\\\x]] and [[an ordinary name]]\n",
+    );
+    let report = validate(dir.path(), &vault()).unwrap();
+    let errors = report.errors.join("\n");
+    assert_eq!(report.errors.len(), 2, "{errors}");
+    assert!(
+        report
+            .errors
+            .iter()
+            .all(|e| e.contains("absolute filesystem path")),
+        "{errors}"
+    );
+}
+
 #[test]
 fn okf_and_loose_bundles_are_not_path_checked() {
     let dir = tempdir().unwrap();

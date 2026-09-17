@@ -149,7 +149,7 @@ Frontmatter is not required: a plain `.md` file with no `---` block is a note.
 | What | Rule |
 |---|---|
 | **id** | frontmatter `id:` → the filename stem |
-| **title** | frontmatter `title:` → frontmatter `name:` → the first `# H1` in the body → the filename stem |
+| **title** | frontmatter `title:` → frontmatter `name:` → the body's first heading, of any level → the filename stem |
 | **file path** | vault-relative, forward-slashed, stored as `file_path` |
 
 The id is the node's `concept_id` property and the target of every link. Ids
@@ -224,7 +224,8 @@ both would duplicate it on export.
 
 A list mixing wikilinks and plain strings stays an ordinary list property — the
 rule never splits a key. Targets resolve as body links do (§5.2); an unresolved
-one becomes a stub (§5.6).
+one becomes a stub (§5.6), and one naming a place the vault does not own is the
+same §9 error here as in the prose.
 
 `parent:` is the one reserved key that follows this rule with a fixed edge
 type: it emits the `folder_notes.edge` type in the `folder_notes.direction`,
@@ -529,7 +530,7 @@ classification is the contract.
 | A reserved key of the wrong shape: a non-string `id:` or `type:`, a non-list `tags:` or `aliases:`, a non-boolean `kg_skip:`. | §4.1 |
 | An id collision — two or more notes resolving to one id, each falling back to its path. | §3 |
 | Two folder notes declared for one directory (`X.md` *and* `X/X.md`). | §2.3 |
-| A link or attachment reference naming an absolute filesystem path, or climbing above the vault root. | §5.1, §6.2 |
+| A link or attachment reference naming an absolute filesystem path, or climbing above the vault root — in the body or in a typed-edge key. | §4.3, §5.1, §6.2 |
 | A `.kglite/vault.yaml` the schema refuses — an unknown key, an unknown `kglite_vault` version, a value of the wrong shape, a malformed `ontology:` document. This **fails the build** (§7); `okf.validate` reports it as the report's single error. | §7 |
 | An ontology document the declaration API refuses. | §7 |
 
@@ -576,8 +577,10 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    the next export. A case-insensitive path collision appends `-<id>`.
 3. **Frontmatter.** `type:` is never emitted — the folder carries the label, so
    emitting it would make a later folder move a no-op. `id:` is emitted only
-   when the id differs from the filename stem, and `title:` only when the title
-   does. Keys are sorted; dotted keys expand back into nested maps, except
+   when the id differs from the filename stem, and `title:` only when the next
+   import would not recover it: §3's ladder reads a `name:` key and **the
+   body's first heading** before the stem, so a note titled after its file but
+   opening with a heading still writes its `title:`. Keys are sorted; dotted keys expand back into nested maps, except
    where the expansion would have to grow through a property that is already a
    scalar, which keeps the literal dotted key; lists become YAML sequences, and
    a list or map *inside* a sequence is written as JSON, which is YAML flow
@@ -596,21 +599,28 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    `on`/`off`; it parses as an integer or a float, or starts `0x`/`0o`; or it
    matches a date or datetime §4.2 would infer — which is asked of the reader's
    own inference, so the two cannot disagree. Everything else is written bare.
-5. **Body.** The `body` property verbatim. A node without one produces a
-   frontmatter-only file; a node with a body and nothing to say above it
-   produces a file with no frontmatter block at all. Human-owned prose is never
-   rewritten.
+5. **Body.** The `body` property verbatim, starting on the line after the
+   closing `---` with no blank line inserted: the reader keeps everything below
+   the terminator, so a separator written here would come back *as* body and
+   the next export would write another one. A note whose author left a blank
+   line there has it in its body and gets it back. A node without a body
+   produces a frontmatter-only file; a node with a body and nothing to say
+   above it produces a file with no frontmatter block at all. Human-owned prose
+   is never rewritten.
 6. **Edges** become frontmatter lists keyed `lower_snake(TYPE)`, with wikilink
    values: `depends_on: ["[[Seismic interpretation]]"]`. The key is exactly
    what §4.3's `UPPER_SNAKE(key)` turns back into that type. Two kinds of edge
    are left out. **Every edge whose target is not a file**, which is how
    `CONTAINS` (it leaves a `Folder`), `TAGGED`, `HAS_IMAGE`, `HAS_ATTACHMENT`
    and every hub edge leave — none of them named as a special case, because a
-   target that is not a file has no wikilink to name it. And **a `LINKS_TO` or
-   `EMBEDS` edge whose target the body already names** as a link or an embed.
-   Only those two types are checked against the prose: a
-   typed edge says something the link syntax does not, and dropping it because
-   the same two notes happen to be linked would retype it on the next import.
+   target that is not a file has no wikilink to name it. And **an edge the body
+   already states**: the prose is re-read with the reader's own scanner, and an
+   edge is left out when a body link reaches the same target *with the same
+   type* — which is the type §5.3's heading ladder gives it, not `LINKS_TO` by
+   assumption. The type has to match both ways. Writing an edge the body
+   already states makes a second edge on the next import, one carrying the
+   body's `section` and one carrying nothing; dropping one whose type differs
+   from what the body's link would produce retypes it.
    An edge to a `_provisional` stub is written as `[[<the unresolved name>]]`,
    so a dangling link declared in frontmatter dangles in the same place next
    time. An ambiguous target is written folder-qualified, `[[Label/Name]]`.
@@ -630,21 +640,44 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
 8. **Determinism.** Frontmatter keys sorted, edge lists sorted, file order
    stable, the manifest's own keys sorted: exporting the same graph twice is
    byte-identical.
-9. **Documented losses.** Edge properties (`section`, `anchor`, `alt`,
-   `ordinal`) are dropped and counted in the export report. Attachment bytes
-   are copied only when the caller names the source root the graph was built
-   from; otherwise the references are reported as unresolvable. Synthesized
-   nodes are not files. `.kglite/vault.yaml` is **not** written — a graph does
-   not carry it — so everything it declared is re-derived from the defaults on
-   the next import: hub nodes and their edges, `heading_edges` retyping,
-   declared `types:`, indexes and the `embed:` targets. For the same reason a
-   top-level string that looks like a date comes back a date (§4.2: quoting
-   alone does not stop inference; only `types:` does). A note that is re-filed
-   under its label carries its body verbatim, so a note-relative reference in
-   that body resolves from the new location, not the old one. Round-tripping is
-   defined against exactly those losses: importing an exported vault reproduces
-   the imported graph apart from them, and exporting an imported vault twice is
-   byte-identical.
+9. **Documented losses.** Six, and no others:
+
+   1. **Edge properties** (`section`, `anchor`, `alt`, `ordinal`) are not
+      written — a frontmatter list carries targets — and are counted in the
+      export report. An edge the *body* states keeps them anyway: the prose
+      travels verbatim and the next import re-derives them from it with the
+      same scanner. An edge only frontmatter carried has none to begin with, so
+      the loss bites exactly where an edge with properties was never written in
+      prose — a graph that was not built from a vault.
+   2. **Attachment bytes** are copied only when the caller names the source
+      root the graph was built from; otherwise the references are reported as
+      unresolvable and come back as `missing: true` stubs (§6.6).
+   3. **Synthesized nodes are not files**, so `Folder`, `Tag`, `Image`,
+      `Attachment` and stub nodes are whatever the exported layout regenerates
+      — the same ones where the prose decides, a different set of `Folder`s
+      because the layout is now one folder per label.
+   4. **`.kglite/vault.yaml` is not written** — a graph does not carry it — so
+      what it declared is gone: hub nodes and their edges, the index and
+      text-index declarations, the `embed:` targets, and `heading_edges`
+      retyping, which shows up as the built-in ladder's own type appearing
+      *beside* the declared one, because the typed edge is written as a
+      frontmatter key and the prose still reads as what the ladder says.
+   5. **A declared `type:` survives only where §4.2's inference agrees with
+      it.** The writer emits an `int` as an int and a quoted string quoted, so
+      most declarations are re-derived for free. The exception is temporal:
+      a top-level string that looks like a date comes back a **date**, because
+      quoting alone does not stop inference and only `types:` does.
+   6. **A re-filed note carries its body verbatim**, so a note-relative
+      reference in it resolves from the new location, not the old one — a
+      §9 error when the climb now leaves the vault, and a different file when
+      the same name exists in both places.
+
+   Round-tripping is defined against exactly those: importing an exported vault
+   reproduces the imported graph apart from them. They are taken **once**, on
+   the way out of the author's vault, so an exported tree is a fixed point —
+   exporting it, reading it back and exporting it again is byte-identical, and
+   so is the graph. Only loss 5 moves the bytes at all, and only on the first
+   export after it.
 
 ## 11. Converter checklist
 

@@ -294,10 +294,10 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         .next()
         .unwrap_or_else(|| profile.fallback_label.clone());
 
-    // Title: `title` → `name` (Claude memories) → first `# H1` heading (so a
-    // frontmatter-less README/doc gets its real title, not the file stem) →
-    // file stem. The stem comes from the *path*, not the id, so a note with a
-    // declared `id:` is still titled after its file.
+    // Title: `title` → `name` (Claude memories) → the body's first heading, of
+    // any level (so a frontmatter-less README/doc gets its real title, not the
+    // file stem) → file stem. The stem comes from the *path*, not the id, so a
+    // note with a declared `id:` is still titled after its file.
     let title = fm
         .remove("title")
         .map(value_to_display)
@@ -313,7 +313,8 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
 
     // Wikilink-valued keys become edges, not properties (VAULT.md §4.3) —
     // before `props` is built, because the rule *removes* the key.
-    let (fm_links, hub_key_edges) = frontmatter_edges(&mut fm, profile);
+    let (fm_links, hub_key_edges) =
+        frontmatter_edges(&mut fm, profile, parent_dir(doc_path), &mut errors);
 
     let props: Vec<(String, Value)> = fm
         .into_iter()
@@ -393,9 +394,17 @@ const NON_EDGE_KEYS: [&str; 3] = ["aliases", "tags", model::SKIP_KEY];
 /// Returns the edges and the [`Profile::hubs`] keys among them — a key that is
 /// both a hub and wikilink-valued goes to the typed-edge rule, and the caller
 /// reports the clash rather than leaving the hub silently short.
+///
+/// Every target goes through the §9 path check the body's wikilinks go
+/// through, on the same routine: `depends_on: "[[../../etc/passwd]]"` names a
+/// place the vault does not own exactly as the same spelling in the prose
+/// does, and the reader that follows it does not care which half of the file
+/// it was written in.
 fn frontmatter_edges(
     fm: &mut BTreeMap<String, Value>,
     profile: &Profile,
+    source_dir: &str,
+    errors: &mut Vec<String>,
 ) -> (Vec<Link>, Vec<String>) {
     let mut out = Vec::new();
     let mut hub_keys = Vec::new();
@@ -411,6 +420,9 @@ fn frontmatter_edges(
             let reverse =
                 profile.folder_note_direction == model::FolderNoteDirection::ParentToChild;
             for target in targets {
+                if profile.path_safety {
+                    links::record_wikilink_path_error(errors, &target, source_dir);
+                }
                 out.push(Link {
                     target,
                     conn_type: profile.folder_note_edge.clone(),
@@ -438,6 +450,9 @@ fn frontmatter_edges(
             hub_keys.push(key);
         }
         for target in links::wikilink_targets(&value).expect("filtered on Some above") {
+            if profile.path_safety {
+                links::record_wikilink_path_error(errors, &target, source_dir);
+            }
             out.push(Link::plain(target, conn_type.clone(), false));
         }
     }
@@ -472,10 +487,15 @@ fn value_to_display(v: Value) -> String {
     }
 }
 
-/// First markdown heading (`# ...`) in a body, used as a title fallback for
-/// frontmatter-less docs. Skips fenced code blocks; returns the heading text
-/// (leading `#`s stripped), or `None`.
-fn first_heading(body: &str) -> Option<String> {
+/// The body's first markdown heading, of **any** level, used as a title
+/// fallback for frontmatter-less docs. Skips fenced code blocks; returns the
+/// heading text (leading `#`s stripped), or `None`.
+///
+/// Levels below `#` count deliberately: a note whose prose opens with an `##`
+/// still has a better title there than in its filename stem, and this ladder
+/// is shared with the `okf` and `loose` dialects, whose producers write no
+/// `# H1` at all. VAULT.md §3 says the same.
+pub(crate) fn first_heading(body: &str) -> Option<String> {
     let mut in_fence = false;
     for line in body.lines() {
         let t = line.trim_start();
@@ -589,7 +609,7 @@ mod tests {
         let docs = parse_bundle(dir.path(), &opts).unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].label, "Concept");
-        // No frontmatter title/name → falls back to the first H1 heading.
+        // No frontmatter title/name → falls back to the body's first heading.
         assert_eq!(docs[0].title, "Just a note");
     }
 
@@ -613,6 +633,21 @@ mod tests {
     fn title_from_first_heading_when_no_frontmatter_fields() {
         let dir = tempdir().unwrap();
         write(dir.path(), "readme.md", "# My Project\n\nIntro text.");
+        let opts = BuildOptions {
+            require_frontmatter: false,
+            ..BuildOptions::default()
+        };
+        let docs = parse_bundle(dir.path(), &opts).unwrap();
+        assert_eq!(docs[0].title, "My Project");
+    }
+
+    /// VAULT.md §3's heading rung is "the first heading", not "the first `# H1`":
+    /// a producer that opens every note with an `##` would otherwise be titled
+    /// by its filenames.
+    #[test]
+    fn a_heading_below_h1_still_titles_the_note() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "readme.md", "## My Project\n\nIntro text.");
         let opts = BuildOptions {
             require_frontmatter: false,
             ..BuildOptions::default()

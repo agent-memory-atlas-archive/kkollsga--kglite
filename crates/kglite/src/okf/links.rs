@@ -253,8 +253,14 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
                 // A wikilink is a name, not a URL, so it is never decoded —
                 // but §5.2 tries a `/`-bearing one as a path, and §6 resolves
                 // every embed as one, so both reach the §9 check.
-                if profile.path_safety && (name.contains('/') || is_embed && !embeds_a_note(name)) {
-                    record_path_error(&mut out.path_errors, name, source_dir);
+                if profile.path_safety {
+                    if is_embed && !embeds_a_note(name) {
+                        // An embedded file is resolved as a path whatever it
+                        // is spelled like, so every spelling is checked.
+                        record_path_error(&mut out.path_errors, name, source_dir);
+                    } else {
+                        record_wikilink_path_error(&mut out.path_errors, name, source_dir);
+                    }
                 }
                 // strip a trailing `.md` if the wikilink included it
                 let target = name.trim_end_matches(".md");
@@ -645,6 +651,20 @@ fn escapes_root(target: &str, source_dir: &str) -> bool {
         }
     }
     false
+}
+
+/// Record one §9 path error for a **wikilink** target, wherever it was
+/// written — in the prose or as a typed-edge key's value (VAULT.md §4.3).
+///
+/// A wikilink is a name, not a path, so only one spelled like a path is
+/// checked: §5.2 resolves a `/`-bearing target as a vault-relative id and then
+/// as a note-relative path, which is the rung `[[../../etc/passwd]]` would
+/// otherwise reach. One routine for both sources, so a spelling refused in the
+/// body cannot be accepted in frontmatter.
+pub(crate) fn record_wikilink_path_error(out: &mut Vec<String>, name: &str, source_dir: &str) {
+    if name.contains('/') || is_absolute_fs_path(name) {
+        record_path_error(out, name, source_dir);
+    }
 }
 
 /// Record one §9 path error, once per distinct target: a note that references

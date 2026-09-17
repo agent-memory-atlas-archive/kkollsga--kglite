@@ -16,12 +16,12 @@ use crate::datatypes::values::Value;
 use crate::graph::storage::GraphRead;
 use crate::graph::DirGraph;
 use crate::okf::model::{
-    Profile, ATTACHMENT_LABEL, DEFAULT_BODY_PROPERTY, DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE,
-    FOLDER_LABEL, IMAGE_LABEL, SOURCE_LABEL, TAG_LABEL,
+    Profile, ATTACHMENT_LABEL, DEFAULT_BODY_PROPERTY, FOLDER_LABEL, IMAGE_LABEL, SOURCE_LABEL,
+    TAG_LABEL,
 };
 use crate::okf::vault_config::{CONFIG_DIR, RECIPES_DIR, SKILLS_DIR};
 use petgraph::graph::NodeIndex;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 mod manifest;
@@ -50,13 +50,6 @@ const SYNTHESIZED_LABELS: [&str; 5] = [
     IMAGE_LABEL,
     ATTACHMENT_LABEL,
 ];
-
-/// Edge types whose relationship the *body* may already state as a link or an
-/// embed. Only these are checked against the prose: a typed edge
-/// (`DEPENDS_ON`, `RELATED_TO`) means something the link syntax does not say,
-/// and dropping it because the same two notes happen to be linked would change
-/// that edge's type on the next import.
-const BODY_EXPRESSIBLE_CONN_TYPES: [&str; 2] = [DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE];
 
 /// What [`export`] may do to the target directory.
 #[derive(Debug, Clone)]
@@ -458,7 +451,7 @@ fn render_note(
     if note.id != note.stem() {
         tree.insert("id", Value::String(note.id.clone()));
     }
-    if !note.title.is_empty() && note.title != note.stem() {
+    if !note.title.is_empty() && note.title != recovered_title(note) {
         tree.insert("title", Value::String(note.title.clone()));
     }
     for (key, value) in &note.props {
@@ -474,7 +467,12 @@ fn render_note(
         (true, true) => String::new(),
         (true, false) => ensure_newline(body),
         (false, true) => format!("---\n{front}---\n"),
-        (false, false) => format!("---\n{front}---\n\n{}", ensure_newline(body)),
+        // No separator line between the closing `---` and the prose: the
+        // reader keeps whatever follows the terminator *as* the body, so a
+        // blank line written here comes back as a leading newline on the
+        // property and the next export writes another one. A note whose author
+        // left a blank line there still has it, in the body, and gets it back.
+        (false, false) => format!("---\n{front}---\n{}", ensure_newline(body)),
     }
 }
 
@@ -497,23 +495,20 @@ fn edge_keys(
     let Some(outgoing) = edges.get(&note.idx) else {
         return BTreeMap::new();
     };
-    let mentioned = body_mentions(note);
+    let mentioned = body_links(note);
     let mut by_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for edge in outgoing {
         let name = match &edge.target {
             Target::Note(at) => {
                 let target = &notes[*at];
-                if BODY_EXPRESSIBLE_CONN_TYPES.contains(&edge.conn_type.as_str())
-                    && mentions(&mentioned, target)
-                {
+                if body_states(&mentioned, &edge.conn_type, |name| names(target, name)) {
                     continue;
                 }
                 index.wikilink(target)
             }
             Target::Stub(name) => {
-                if BODY_EXPRESSIBLE_CONN_TYPES.contains(&edge.conn_type.as_str())
-                    && mentioned.contains(&name.to_ascii_lowercase())
-                {
+                let lowered = name.to_ascii_lowercase();
+                if body_states(&mentioned, &edge.conn_type, |written| written == lowered) {
                     continue;
                 }
                 name.clone()
@@ -530,12 +525,37 @@ fn edge_keys(
         .collect()
 }
 
-/// The link and embed targets the note's own prose already names, lowercased.
+/// The title the next import will read off the file this export is writing:
+/// §3's ladder run forwards over the bytes going out — a `name:` property, the
+/// body's first heading, then the filename stem.
+///
+/// `title:` is emitted exactly when the note's own title is not that (§10.3).
+/// Comparing against the *stem* alone is not enough: the heading rung sits
+/// above it, so a note titled after its file but opening with a heading came
+/// back titled by the heading.
+fn recovered_title(note: &Note) -> String {
+    let named = note
+        .props
+        .iter()
+        .find(|(k, _)| k == "name")
+        .and_then(|(_, v)| match v {
+            Value::String(s) if !s.is_empty() => Some(s.clone()),
+            Value::Null | Value::String(_) => None,
+            other => Some(crate::datatypes::values::raw_string(other)),
+        });
+    named
+        .or_else(|| note.body.as_deref().and_then(crate::okf::first_heading))
+        .unwrap_or_else(|| note.stem().to_string())
+}
+
+/// Every link the note's own prose states, as `(edge type, lowercased target)`.
 /// Re-extracted with the reader's own scanner, so "already in the body" means
-/// exactly what the next import will read there.
-fn body_mentions(note: &Note) -> HashSet<String> {
+/// exactly what the next import will read there — including the type the
+/// heading ladder (§5.3) gives it, which is why a link under `## Related` is
+/// not a `LINKS_TO`.
+fn body_links(note: &Note) -> Vec<(String, String)> {
     let Some(body) = note.body.as_deref() else {
-        return HashSet::new();
+        return Vec::new();
     };
     let dir = match note.out.rfind('/') {
         Some(at) => &note.out[..at],
@@ -544,17 +564,55 @@ fn body_mentions(note: &Note) -> HashSet<String> {
     crate::okf::links::extract(body, dir, &Profile::obsidian())
         .links
         .into_iter()
-        .map(|link| link.target.trim_end_matches(".md").to_ascii_lowercase())
+        .map(|link| {
+            (
+                link.conn_type,
+                link.target.trim_end_matches(".md").to_ascii_lowercase(),
+            )
+        })
         .collect()
 }
 
+/// Whether the prose already states *this* edge — the same type to the same
+/// target (VAULT.md §10.6).
+///
+/// The type has to match. A `RELATED_TO` between two notes the body also links
+/// plainly is a different statement from that link, and dropping it would
+/// retype the edge to `LINKS_TO` on the next import; conversely an edge the
+/// body does state, of the type the body gives it, is a duplicate, and writing
+/// it into frontmatter as well makes a second edge — one with the body's
+/// `section` and one without.
+fn body_states(
+    written: &[(String, String)],
+    conn_type: &str,
+    names_target: impl Fn(&str) -> bool,
+) -> bool {
+    written
+        .iter()
+        .any(|(conn, target)| conn == conn_type && names_target(target))
+}
+
 /// Whether one of the body's targets names this note — by stem, by id, by its
-/// vault-relative path or by title, which are the rungs §5.2 resolves on.
-fn mentions(targets: &HashSet<String>, note: &Note) -> bool {
-    targets.contains(&note.stem().to_ascii_lowercase())
-        || targets.contains(&note.id.to_ascii_lowercase())
-        || targets.contains(&note.qualified().to_ascii_lowercase())
-        || (!note.title.is_empty() && targets.contains(&note.title.to_ascii_lowercase()))
+/// vault-relative path, by title or by one of its `aliases:`, which are the
+/// rungs §5.2 resolves on.
+fn names(note: &Note, target: &str) -> bool {
+    if target == note.stem().to_ascii_lowercase()
+        || target == note.id.to_ascii_lowercase()
+        || target == note.qualified().to_ascii_lowercase()
+        || (!note.title.is_empty() && target == note.title.to_ascii_lowercase())
+    {
+        return true;
+    }
+    note.props
+        .iter()
+        .find(|(k, _)| k == "aliases")
+        .is_some_and(|(_, v)| match v {
+            Value::List(items) => items.iter().any(|item| match item {
+                Value::String(s) => s.to_ascii_lowercase() == target,
+                _ => false,
+            }),
+            _ => false,
+        })
 }
 
 /// The graph's skills and recipes as `.kglite/` markdown (VAULT.md §8).
@@ -614,3 +672,5 @@ fn copy_attachments(
 
 #[cfg(test)]
 mod export_tests;
+#[cfg(test)]
+mod roundtrip_tests;

@@ -129,7 +129,7 @@ def build(
             dialect's default: ``True`` for ``"okf"`` / ``"loose"``, ``False``
             for ``"obsidian"``. Under the OKF ladder node labels fall back
             ``type`` → ``metadata.type`` → ``Concept`` and titles ``title`` →
-            ``name`` → first ``# H1`` → file stem, so Claude memories land as
+            ``name`` → the body's first heading → file stem, so Claude memories land as
             ``:feedback`` / ``:project`` / etc. with their ``name`` as title.
         respect_skip: When ``True`` (default), honor a ``kg_skip: true``
             frontmatter marker that opts a file out of the sweep. Set ``False``

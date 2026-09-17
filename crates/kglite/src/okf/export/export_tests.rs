@@ -705,8 +705,130 @@ fn edge_properties_are_dropped_and_counted() {
     );
     let text = read(out.path(), "Note/a.md");
     assert!(
-        !text.starts_with("---"),
-        "the link is already in the body, so nothing is written above it: {text}"
+        !text.contains("links_to"),
+        "the link is already in the body, so no edge key repeats it: {text}"
+    );
+}
+
+// ── §10.5 the frontmatter/body seam ────────────────────────────────────────
+
+#[test]
+fn no_separator_line_is_inserted_between_the_frontmatter_and_the_body() {
+    // The reader keeps everything below the closing `---`, so a blank line
+    // written here comes back as a leading newline on `body` and the next
+    // export writes another one — one line of growth per round trip.
+    let (_dir, tight) = export_one("---\nid: x\n---\n", "prose\n");
+    assert!(tight.ends_with("---\nprose\n"), "{tight}");
+    let (_dir, spaced) = export_one("---\nid: x\n---\n", "\nprose\n");
+    assert!(
+        spaced.ends_with("---\n\nprose\n"),
+        "the author's own blank line is body, and survives: {spaced}"
+    );
+}
+
+// ── §10.3 the title the next import recovers ───────────────────────────────
+
+#[test]
+fn a_title_a_heading_would_shadow_is_written_out() {
+    // The §3 ladder reads the body's first heading *before* the filename stem,
+    // so leaving `title:` out because the title equals the stem hands the next
+    // import the heading instead.
+    let (_dir, text) = export_one("---\ntitle: subject\n---\n", "## Deep dive\n\nprose\n");
+    assert!(
+        text.starts_with("---\ntitle: subject\n---\n"),
+        "the heading would have taken the title: {text}"
+    );
+}
+
+/// The §3 ladder reads `name:` before the heading and the stem, and `name:`
+/// is an ordinary property the export writes out — so a note titled by one
+/// needs no `title:` either.
+#[test]
+fn a_title_a_name_key_already_states_is_left_out() {
+    let (_dir, text) = export_one("---\nname: Claude memory\n---\n", "## Deep dive\n\nprose\n");
+    assert!(
+        text.contains("name: Claude memory"),
+        "`name:` is a property, not a reserved key: {text}"
+    );
+    assert!(
+        !text.contains("title:"),
+        "the reader reads `name:` before the heading: {text}"
+    );
+    let (dir, _) = export_one("---\nname: Claude memory\n---\n", "## Deep dive\n\nprose\n");
+    let back = build_vault(dir.path());
+    assert!(
+        title_of(&back, "subject") == "Claude memory",
+        "and recovers exactly that"
+    );
+}
+
+/// A body link that resolves through the target's `aliases:` (§5.2 rung 3) is
+/// the same statement as a plain one, so it must not be repeated as a
+/// frontmatter key — the repeat becomes a second edge on the next import, one
+/// carrying the body's `section` and one carrying nothing.
+#[test]
+fn a_body_link_resolved_through_an_alias_is_not_repeated_in_frontmatter() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(
+        source.path(),
+        &[
+            ("Note/a.md", "## Deep dive\n\nSee [[The Other One]].\n"),
+            (
+                "Note/b.md",
+                "---\naliases:\n  - The Other One\n---\nprose\n",
+            ),
+        ],
+    );
+    let graph = build_vault(source.path());
+    assert_eq!(links_to_count(&graph), 1);
+    let out = tempfile::tempdir().unwrap();
+    export_to(&graph, out.path());
+    let text = read(out.path(), "Note/a.md");
+    assert!(!text.contains("links_to"), "{text}");
+    assert_eq!(
+        links_to_count(&build_vault(out.path())),
+        1,
+        "and the re-import still has one edge, not the body's plus a copy"
+    );
+}
+
+fn links_to_count(graph: &DirGraph) -> usize {
+    let _arena_guard = graph.graph.begin_query();
+    graph
+        .graph
+        .edge_indices()
+        .filter(|e| {
+            graph
+                .graph
+                .edge_weight(*e)
+                .is_some_and(|d| d.connection_type_str(&graph.interner) == "LINKS_TO")
+        })
+        .count()
+}
+
+fn title_of(graph: &DirGraph, id: &str) -> String {
+    let _arena_guard = graph.graph.begin_query();
+    for idx in graph.graph.node_indices() {
+        if let Some(view) = graph.node_view(idx) {
+            if matches!(view.id().as_ref(), Value::String(s) if s == id) {
+                return crate::datatypes::values::raw_string(&view.title());
+            }
+        }
+    }
+    panic!("no node with id `{id}`");
+}
+
+#[test]
+fn a_title_the_reader_recovers_on_its_own_is_left_out() {
+    let (_dir, heading) = export_one("---\ntitle: Deep dive\n---\n", "## Deep dive\n\nprose\n");
+    assert!(
+        !heading.contains("title:"),
+        "the body's own heading already says it: {heading}"
+    );
+    let (_dir, stem) = export_one("---\ntitle: subject\n---\n", "prose with no heading\n");
+    assert!(
+        !stem.contains("title:"),
+        "the filename stem already says it: {stem}"
     );
 }
 
