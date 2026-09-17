@@ -12,6 +12,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install maturin pytest pandas hypothesis networkx neo4j ruff mypy
 pip install -r requirements/coverage.txt
+pip install -r requirements/examples.txt   # only to run tests/test_html_to_vault_example.py
 cargo install cargo-llvm-cov --version 0.8.7 --locked
 maturin develop --release
 ```

@@ -1,0 +1,7 @@
+# Dependencies of the scripts under `examples/`, and of the tests that run
+# them. Deliberately not kglite dependencies and not a wheel extra: the loader
+# reads markdown, and HTML is a declared non-goal (VAULT.md, decision K4).
+# `tests/test_html_to_vault_example.py` skips when they are absent, so install
+# these to actually run it.
+beautifulsoup4>=4.12
+markdownify>=0.13

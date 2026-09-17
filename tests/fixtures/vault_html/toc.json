@@ -1,0 +1,42 @@
+{
+  "label": "Widget Docs",
+  "children": [
+    {
+      "label": "Guide",
+      "href": "html/guide.html",
+      "children": [
+        {
+          "label": "Getting started",
+          "href": "html/getting_started.html",
+          "children": []
+        },
+        {
+          "label": "Install",
+          "href": "html/install.html",
+          "children": []
+        },
+        {
+          "label": "Usage",
+          "href": "html/usage.html",
+          "children": []
+        },
+        {
+          "label": "Guide",
+          "href": "html/guide_faq.html",
+          "children": []
+        }
+      ]
+    },
+    {
+      "label": "Reference",
+      "href": "html/reference.html",
+      "children": [
+        {
+          "label": "Usage reference",
+          "href": "html/usage_alt.html",
+          "children": []
+        }
+      ]
+    }
+  ]
+}

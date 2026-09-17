@@ -709,3 +709,7 @@ What a converter must emit, in order:
 10. **Run `kglite okf check <dir>`.** Zero errors is the bar; add `--strict`
     to your own test suite once the warnings are down to the ones you accept,
     and `--json` when the suite wants the finding lists rather than the text.
+
+`examples/html_to_vault.py` in this repository is a worked converter following
+exactly this checklist — HTML pages plus a JSON table of contents in, a
+validated vault out — and is the fastest way to see each step in code.

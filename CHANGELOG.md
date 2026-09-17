@@ -215,6 +215,14 @@ before upgrading.
   map), with the statement in the body's single ```` ```cypher ```` fence.
   A `.yaml` catalogue is still refused by name. Available in Rust as
   `kglite::api::recipes::{parse_markdown, set_from_markdown}`.
+- `examples/html_to_vault.py` — a reference HTML-to-vault converter following
+  the `VAULT.md` §11 checklist: a JSON table of contents becomes the folder-note
+  layout, `<meta>` tags become frontmatter, internal anchors become wikilinks,
+  a cross-reference block becomes `parent:` keys and a `## Related topics`
+  section, images are copied in, and `.kglite/vault.yaml` is written from
+  `--hub` / `--index` / `--embed` flags. It validates its own output and exits
+  non-zero on errors. Needs `beautifulsoup4` and `markdownify`
+  (`requirements/examples.txt`); neither is a kglite dependency.
 
 ### Changed
 

@@ -127,6 +127,19 @@ The format is specified in
 which is also the checklist to follow when writing a converter from HTML or any
 other source into a vault. Check a vault with `kglite okf check <dir>`.
 
+**Converting HTML help into a vault.** A vendor help corpus — thousands of HTML
+pages, a JSON table of contents, `<meta>` metadata and an image directory — is
+the case the format was shaped around, and
+[`examples/html_to_vault.py`](https://github.com/kkollsga/kglite/blob/main/examples/html_to_vault.py)
+converts one end to end: the table of contents becomes the folder-note layout,
+each `<meta name=…>` a frontmatter key, internal anchors `[[wikilinks]]`, the
+cross-reference block a `parent:` key plus a `## Related topics` section, and
+the images are copied in beside the notes. It writes the `.kglite/vault.yaml`
+for you from `--hub` / `--index` / `--embed` flags and ends by running
+`okf.validate` over its own output, so a converter run that leaves the vault
+broken exits non-zero. It needs `beautifulsoup4` and `markdownify`
+(`requirements/examples.txt`) — neither is a kglite dependency.
+
 ## Maintaining agent memory & skills
 
 Because the result is a normal graph, "tooling for memories and skills" is just
