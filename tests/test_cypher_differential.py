@@ -108,7 +108,115 @@ def self_loop_incidence_graph():
     return graph
 
 
+@pytest.fixture
+def label_mixed_parent_graph():
+    """Parents of three labels sharing one CHILD_OF edge type.
+
+    The fused `MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(c)` path
+    answered from a per-connection-type peer histogram that applied no label
+    filter at all, so `:Api` and `:Doc` parents came back too. Every other
+    corpus fixture either puts one label on both ends of an edge type or
+    constrains the group node with a property map (which bails the fusion),
+    which is why the corpus stayed green through the bug.
+    """
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (s:Software{cid:'s'}),(a:Api{cid:'a'}),(d:Doc{cid:'d'}),"
+        "(c1:Software{cid:'c1'})-[:CHILD_OF]->(a),"
+        "(c2:Software{cid:'c2'})-[:CHILD_OF]->(a),"
+        "(c3:Software{cid:'c3'})-[:CHILD_OF]->(s),"
+        "(c4:Api{cid:'c4'})-[:CHILD_OF]->(s),"
+        "(c5:Api{cid:'c5'})-[:CHILD_OF]->(d),"
+        "(c6:Doc{cid:'c6'})-[:CHILD_OF]->(d)"
+    ).to_list()
+    return graph
+
+
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    # ── fused MATCH … WITH count(): the pattern's own node labels ──
+    # `fuse_match_with_aggregate` hands the group node to a peer-count
+    # histogram that counts every peer of the edge type. Nothing applied the
+    # group node's `:Label` (or `:A|B`), so parents of the wrong label came
+    # back with a count — a silent wrong answer in every storage mode. The
+    # variants below are the distinct re-entries into that one fused clause:
+    # reversed pattern, edge-variable count, count(*), absorbed top-K, bare
+    # LIMIT, and a WITH-level WHERE.
+    (
+        "fused_with_aggregate_group_label",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(c) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        "fused_with_aggregate_group_label_reversed",
+        "label_mixed_parent_graph",
+        "MATCH (p:Software)<-[:CHILD_OF]-(c) WITH p, count(c) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        "fused_with_aggregate_group_label_edge_var",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[r:CHILD_OF]->(p:Software) WITH p, count(r) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        "fused_with_aggregate_group_label_count_star",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(*) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        "fused_with_aggregate_group_label_top_k",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(c) AS k RETURN p.cid AS id, k ORDER BY k DESC, id LIMIT 3",
+        None,
+    ),
+    (
+        "fused_with_aggregate_group_label_with_limit",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(c) AS k LIMIT 3 RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        "fused_with_aggregate_group_label_with_where",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(c) AS k WHERE k > 0 RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        # Alternation on the group node: keeps Software and Api, drops Doc.
+        # Reading the pattern's singular `node_type` would have kept only the
+        # first branch; reading nothing kept all three.
+        "fused_with_aggregate_group_label_alternation",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software|Api) WITH p, count(c) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        # Alternation on the source node — the branch the disk-backed source
+        # sweep narrows to `alt_labels[0]` when it reads `node_type`.
+        "fused_with_aggregate_source_label_alternation",
+        "label_mixed_parent_graph",
+        "MATCH (c:Software|Api)-[:CHILD_OF]->(p) WITH p, count(c) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        # Two-MATCH fusion: the clauses join on `p`, so M1 binding `p` twice
+        # doubles the joined rows. The fused path deduplicated the group key
+        # and dropped that multiplicity, reporting count(r)/2.
+        "fused_two_match_with_aggregate_multiplicity",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p:Software) MATCH (p)<-[r:CHILD_OF]-() "
+        "WITH p, count(r) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
+    (
+        "fused_two_match_with_aggregate_multiplicity_labelled_peer",
+        "label_mixed_parent_graph",
+        "MATCH (c)-[:CHILD_OF]->(p) MATCH (p)<-[r:CHILD_OF]-(:Api) "
+        "WITH p, count(r) AS k RETURN p.cid AS id, k ORDER BY id",
+        None,
+    ),
     (
         "filter_after_optional_null_extension",
         "social_graph",

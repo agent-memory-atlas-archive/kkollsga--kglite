@@ -1669,34 +1669,10 @@ impl<'a> CypherExecutor<'a> {
             executor.execute(&group_only_pattern)?
         };
 
-        // Phase 1 — sequential: extract distinct group-key NodeIndices from
-        // the match set. Dedup applies to the two-MATCH path because M1's
-        // full execution can yield duplicate `w` bindings (one per edge
-        // satisfying M1's constraint). The single-MATCH path's
-        // group_only_pattern already produces unique nodes.
-        let mut group_keys: Vec<NodeIndex> = Vec::with_capacity(group_matches.len());
-        let mut seen_group_keys: HashSet<NodeIndex> = HashSet::new();
-        for m in &group_matches {
-            let node_idx = m.bindings.iter().find_map(|(name, binding)| {
-                if name == group_var {
-                    match binding {
-                        MatchBinding::Node { index, .. } | MatchBinding::NodeRef(index) => {
-                            Some(*index)
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            });
-            let Some(node_idx) = node_idx else {
-                continue;
-            };
-            if secondary_match.is_some() && !seen_group_keys.insert(node_idx) {
-                continue;
-            }
-            group_keys.push(node_idx);
-        }
+        // Phase 1 — sequential: distinct group-key NodeIndices plus, for the
+        // two-MATCH shape, how many times M1 bound each of them.
+        let (group_keys, m1_multiplicity) =
+            collect_fused_group_keys(&group_matches, group_var, secondary_match.is_some());
 
         // Phase 2 — parallel: degree count per group key. Each
         // try_count_simple_pattern call is read-only against the graph and
@@ -1716,6 +1692,7 @@ impl<'a> CypherExecutor<'a> {
                 self.try_count_simple_pattern(count_pattern, &bindings)?
                     .unwrap_or(0)
             };
+            let c = c * m1_multiplicity.get(&idx).copied().unwrap_or(1);
             Ok((idx, c))
         };
         let counts: Vec<(NodeIndex, i64)> = if group_keys.len() >= PARALLEL_COUNT_THRESHOLD {
@@ -1764,6 +1741,126 @@ impl<'a> CypherExecutor<'a> {
         })
     }
 
+    /// Drop every peer whose label is outside `labels` (empty = no
+    /// constraint, everything kept). Without this the caller's histogram —
+    /// which counts every peer of a connection type — reported a row for
+    /// parents of any label, so `MATCH (c)-[:T]->(p:Software) WITH p,
+    /// count(c)` answered for `:Api` parents too (silent wrong answer, fixed
+    /// 0.17.8). Uses the same `type_indices` binary search as the RETURN-side
+    /// fast paths: pure CPU, none of the random `node_type_of` mmap reads
+    /// that dominate on disk-backed graphs.
+    ///
+    /// Sound on the PRIMARY label alone because the planner's
+    /// `multi_label_fuse_unsafe` refuses the pattern on any graph where a
+    /// constrained label can also be a secondary one, and the caller bails on
+    /// `:A:B` AND-chains.
+    fn retain_peers_with_labels(
+        &self,
+        counts: std::collections::HashMap<u32, i64>,
+        labels: &[String],
+    ) -> std::collections::HashMap<u32, i64> {
+        if labels.is_empty() {
+            return counts;
+        }
+        let views: Vec<_> = labels
+            .iter()
+            .filter_map(|l| self.graph.type_indices.get(l))
+            .collect();
+        counts
+            .into_iter()
+            .filter(|(peer, _)| {
+                let idx = petgraph::graph::NodeIndex::new(*peer as usize);
+                views.iter().any(|v| v.binary_search_idx(idx))
+            })
+            .collect()
+    }
+
+    /// Path (B) of [`Self::try_fast_with_aggregate_via_histogram`]: the source
+    /// node is label-constrained, so the precomputed per-peer histogram (which
+    /// counts every source) cannot answer. Sweep the connection type's edges
+    /// once, keep the edges whose source carries one of `want_keys`, and
+    /// accumulate per-peer counts.
+    ///
+    /// `Ok(None)` means "no disk graph here" — the caller falls back to the
+    /// generic per-source counter. An unknown connection type yields an empty
+    /// map, which projects to zero rows.
+    ///
+    /// This previously iterated per source and called `edges_directed_filtered`
+    /// for each; every matching edge went through `DiskEdges::next →
+    /// make_edge_ref → materialize_edge`, which heap-allocated a
+    /// `Box<EdgeData>` and took the `edge_arena` Mutex per edge. On wiki1000m
+    /// (~11 M P27 edges) the per-query arena growth hit an allocator-growth
+    /// cliff (426 ms at 500 M → 5387 ms at 1 B). The callback form reads only
+    /// the (src, tgt) pair we need — no allocation, no arena growth — and
+    /// restores the expected ~2× scaling.
+    fn sweep_peer_counts_by_typed_source(
+        &self,
+        ct_str: &str,
+        conn_key: InternedKey,
+        want_keys: &[InternedKey],
+    ) -> Result<Option<std::collections::HashMap<u32, i64>>, String> {
+        let mut counts: std::collections::HashMap<u32, i64> = std::collections::HashMap::new();
+        if !self.graph.has_connection_type(ct_str) {
+            return Ok(Some(counts));
+        }
+        // `as_disk` looks *through* the write-capture wrapper that
+        // `durable=True` / `cdc::enable` install; a bare `Disk` match bailed
+        // this whole fast path on every such disk graph.
+        let Some(disk) = self.graph.graph.as_disk() else {
+            return Ok(None);
+        };
+        let src_passes = |t: Option<InternedKey>| -> bool { t.is_some_and(|t| want_keys.contains(&t)) };
+        let mut deadline_iter: usize = 0;
+        let mut deadline_err: Option<String> = None;
+        // At small scale the source-centric `for_each_edge_of_conn_type` is
+        // cheaper (matching sources are a small fraction of the graph and
+        // `edge_endpoints` fits in L3). Past the threshold, its per-source
+        // binary search reads `edge_endpoints[edge_idx]` randomly; on
+        // wiki1000m (247 MB endpoints, far above the ~32 MB SLC) those miss
+        // cache on every comparison and blow aggregation out to ~4.5 s, while
+        // the linear sweep is bound by memory bandwidth (~5 ms for 250 MB).
+        // The threshold puts `edge_endpoints` (~16 B/edge) comfortably above
+        // L3/SLC; below it both paths are sub-200 ms on Wikidata-style data.
+        const LINEAR_SCAN_EDGE_COUNT_THRESHOLD: usize = 4_000_000;
+        if disk.edge_count() >= LINEAR_SCAN_EDGE_COUNT_THRESHOLD {
+            disk.scan_edges_of_conn_type_linear(conn_key.as_u64(), |src, tgt, _edge_idx| {
+                deadline_iter = deadline_iter.wrapping_add(1);
+                if deadline_iter & ((1 << 17) - 1) == 0 {
+                    if let Err(e) = self.check_deadline() {
+                        deadline_err = Some(e);
+                        return false;
+                    }
+                }
+                if !src_passes(disk.node_type_of(src)) {
+                    return true;
+                }
+                *counts.entry(tgt.index() as u32).or_insert(0) += 1;
+                true
+            });
+        } else {
+            self.graph
+                .graph
+                .for_each_edge_of_conn_type(conn_key, |src, tgt, _edge_idx, _props| {
+                    deadline_iter = deadline_iter.wrapping_add(1);
+                    if deadline_iter & ((1 << 14) - 1) == 0 {
+                        if let Err(e) = self.check_deadline() {
+                            deadline_err = Some(e);
+                            return false;
+                        }
+                    }
+                    if !src_passes(self.graph.graph.node_type_of(src)) {
+                        return true;
+                    }
+                    *counts.entry(tgt.index() as u32).or_insert(0) += 1;
+                    true
+                });
+        }
+        if let Some(e) = deadline_err {
+            return Err(e);
+        }
+        Ok(Some(counts))
+    }
+
     /// Fast path for
     ///   `MATCH (src [:Type])-[:T]->(tgt) WITH tgt, count(src) [AS k] ...`
     /// — answers in O(|distinct peers|) via the `peer_count_histogram`
@@ -1781,15 +1878,17 @@ impl<'a> CypherExecutor<'a> {
     ///   4. Neither endpoint has property constraints (`{…}`) — the
     ///      histogram counts every peer, so an added property filter
     ///      would require post-filter which defeats the point.
-    ///   5. Source's type constraint (if any) is a no-op on this edge
-    ///      type: every node in `sources_for_conn_type_bounded(T)` has
-    ///      the constrained type. Otherwise using the unfiltered
-    ///      histogram would overcount.
+    ///   5. Neither endpoint carries an `:A:B` AND-chain — both label
+    ///      filters below compare a node's PRIMARY label only.
     ///
-    /// Histogram fallback isn't implemented here — when
-    /// `lookup_peer_counts` returns `None` (memory / mapped backends,
-    /// or older disk graphs) we return `Ok(None)` so the caller takes
-    /// the per-source path.
+    /// Label constraints ARE honoured: a typed/alternated source narrows
+    /// the sweep (path B), and a typed/alternated group node post-filters
+    /// the peer counts. Dropping the latter returned one row per peer of
+    /// ANY label — the wrong-answer class `label_constrained_histogram_*`
+    /// pins.
+    ///
+    /// When `lookup_peer_counts` returns `None` (older disk graphs) we
+    /// return `Ok(None)` so the caller takes the per-source path.
     #[allow(clippy::too_many_arguments)]
     fn try_fast_with_aggregate_via_histogram(
         &self,
@@ -1846,114 +1945,60 @@ impl<'a> CypherExecutor<'a> {
         // below cares about. Mirrors the planner-reversal duality.
         let source_elem_idx = if group_elem_idx == 2 { 0 } else { 2 };
         // Neither endpoint may carry a property constraint (precondition 4).
-        let (tgt_props, src_type, src_props) = match (
+        let (src_np, tgt_np) = match (
             &pattern.elements[source_elem_idx],
             &pattern.elements[group_elem_idx],
         ) {
-            (PatternElement::Node(src), PatternElement::Node(tgt)) => {
-                (&tgt.properties, src.node_type.as_deref(), &src.properties)
-            }
+            (PatternElement::Node(src), PatternElement::Node(tgt)) => (src, tgt),
             _ => return Ok(None),
         };
-        if tgt_props.is_some() || src_props.is_some() {
+        if tgt_np.properties.is_some() || src_np.properties.is_some() {
+            return Ok(None);
+        }
+        // An AND-chain (`:A:B`) asks for secondary-label membership, which
+        // neither the peer filter below nor the source sweep can express —
+        // both compare a node's PRIMARY label only. Alternation is fine:
+        // `label_alternatives` yields every branch and the planner's
+        // `multi_label_fuse_unsafe` has already refused the pattern on any
+        // graph where a constrained label can also be a secondary one, so a
+        // primary-label comparison is exact here.
+        if !src_np.extra_labels.is_empty() || !tgt_np.extra_labels.is_empty() {
             return Ok(None);
         }
 
         let conn_key = InternedKey::from_str(ct_str);
-        let want_type_key = src_type.map(InternedKey::from_str);
+        // Read the SOURCE constraint through `label_alternatives`, not
+        // `node_type`: under `:A|B` the latter is branch A alone, so the
+        // sweep below would have counted only A-typed sources.
+        let src_labels = src_np.label_alternatives();
+        let want_type_keys: Option<Vec<InternedKey>> = if src_labels.is_empty() {
+            None
+        } else {
+            Some(src_labels.iter().map(|l| InternedKey::from_str(l)).collect())
+        };
 
         // Two fast paths. (A) no source constraint → precomputed
-        // `peer_count_histogram`, O(distinct peers). (B) source has a
-        // type constraint → single-pass sweep of the edge type's edges
-        // (size-gated between two sweeps, below), filtering sources by
-        // `node_type_of` and accumulating per-peer counts.
-        //
-        // Path (B) previously iterated per source and called
-        // `edges_directed_filtered` for each; every matching edge went
-        // through `DiskEdges::next → make_edge_ref → materialize_edge`,
-        // which heap-allocated a `Box<EdgeData>` and took the
-        // `edge_arena` Mutex for every edge. On wiki1000m (~11 M P27
-        // edges) the per-query arena growth hit an allocator-growth
-        // cliff (426 ms at 500 M → 5387 ms at 1 B). The callback form
-        // reads only the (src, tgt) pair we need — no allocation, no
-        // arena growth — and restores the expected ~2× scaling.
-        let counts: std::collections::HashMap<u32, i64> = if let Some(want_key) = want_type_key {
-            if !self.graph.has_connection_type(ct_str) {
-                return Ok(Some(Vec::new()));
+        // `peer_count_histogram`, O(distinct peers). (B) source is label-
+        // constrained → one sweep of the edge type's edges, keeping the ones
+        // whose source matches (see `sweep_peer_counts_by_typed_source`).
+        let counts: std::collections::HashMap<u32, i64> = match want_type_keys {
+            Some(want_keys) => match self.sweep_peer_counts_by_typed_source(
+                ct_str, conn_key, &want_keys,
+            )? {
+                Some(counts) => counts,
+                None => return Ok(None),
+            },
+            None => {
+                let Some(h) = self.graph.graph.lookup_peer_counts(conn_key) else {
+                    return Ok(None);
+                };
+                h
             }
-            // Disk-only: at small scale use the source-centric
-            // `for_each_edge_of_conn_type` (cheaper when matching
-            // sources are a small fraction of the graph and the
-            // `edge_endpoints` array fits in L3 cache). At large scale
-            // switch to a linear sweep of `edge_endpoints` — the
-            // source-centric path binary-searches each source's CSR
-            // slice, reading `edge_endpoints[edge_idx]` randomly; on
-            // wiki1000m (247 MB endpoints, far above the ~32 MB SLC)
-            // those reads miss cache on every comparison, blowing
-            // aggregation out to ~4.5 s. Sequential access is bound by
-            // memory bandwidth (~5 ms for 250 MB) and restores the
-            // expected ~2× scaling from 500 M → 1 B.
-            // `as_disk` looks *through* the write-capture wrapper that
-            // `durable=True` / `cdc::enable` install; a bare `Disk` match
-            // bailed this whole fast path on every such disk graph.
-            let Some(disk) = self.graph.graph.as_disk() else {
-                return Ok(None);
-            };
-            let conn_u64 = conn_key.as_u64();
-            let mut counts: std::collections::HashMap<u32, i64> = std::collections::HashMap::new();
-            let mut deadline_iter: usize = 0;
-            let mut deadline_err: Option<String> = None;
-            // Threshold chosen so `edge_endpoints` (~16 B/edge) sits
-            // comfortably above L3/SLC (~32 MB on Apple Silicon, ~32–
-            // 64 MB on server CPUs) — past that the source-centric
-            // binary search's per-comparison random reads become the
-            // dominant cost. Below this, both paths are sub-200 ms on
-            // Wikidata-style data, so the choice doesn't matter.
-            const LINEAR_SCAN_EDGE_COUNT_THRESHOLD: usize = 4_000_000;
-            if disk.edge_count() >= LINEAR_SCAN_EDGE_COUNT_THRESHOLD {
-                disk.scan_edges_of_conn_type_linear(conn_u64, |src, tgt, _edge_idx| {
-                    deadline_iter = deadline_iter.wrapping_add(1);
-                    if deadline_iter & ((1 << 17) - 1) == 0 {
-                        if let Err(e) = self.check_deadline() {
-                            deadline_err = Some(e);
-                            return false;
-                        }
-                    }
-                    if disk.node_type_of(src) != Some(want_key) {
-                        return true;
-                    }
-                    *counts.entry(tgt.index() as u32).or_insert(0) += 1;
-                    true
-                });
-            } else {
-                self.graph.graph.for_each_edge_of_conn_type(
-                    conn_key,
-                    |src, tgt, _edge_idx, _props| {
-                        deadline_iter = deadline_iter.wrapping_add(1);
-                        if deadline_iter & ((1 << 14) - 1) == 0 {
-                            if let Err(e) = self.check_deadline() {
-                                deadline_err = Some(e);
-                                return false;
-                            }
-                        }
-                        if self.graph.graph.node_type_of(src) != Some(want_key) {
-                            return true;
-                        }
-                        *counts.entry(tgt.index() as u32).or_insert(0) += 1;
-                        true
-                    },
-                );
-            }
-            if let Some(e) = deadline_err {
-                return Err(e);
-            }
-            counts
-        } else {
-            let Some(h) = self.graph.graph.lookup_peer_counts(conn_key) else {
-                return Ok(None);
-            };
-            h
         };
+
+        // The histogram counts EVERY peer of the connection type, so the
+        // group node's own label constraint has to be applied here.
+        let counts = self.retain_peers_with_labels(counts, tgt_np.label_alternatives());
 
         let _ = columns; // column names are the caller's ResultSet wrap
         Ok(Some(self.histogram_counts_to_rows(
@@ -2359,4 +2404,48 @@ fn trim_counts_to_top_k(
     } else {
         counts
     }
+}
+
+/// Phase 1 of [`CypherExecutor::execute_fused_match_with_aggregate`]: pull the
+/// group variable's `NodeIndex` out of every match row.
+///
+/// `dedup` is set for the two-MATCH shape, whose M1 executes in full and can
+/// therefore bind the group variable once per row it produces. The two clauses
+/// JOIN on that variable, so a key M1 bound n times contributes n × (M2
+/// matches) rows — the returned multiplicity map carries that n so the counting
+/// phase can multiply it back in. Deduplicating without it divided the answer
+/// by n (silent wrong answer, fixed 0.17.8). The single-MATCH path executes
+/// only the group node's own pattern, which already yields unique nodes.
+fn collect_fused_group_keys(
+    group_matches: &[crate::graph::core::pattern_matching::PatternMatch],
+    group_var: &str,
+    dedup: bool,
+) -> (Vec<NodeIndex>, std::collections::HashMap<NodeIndex, i64>) {
+    let mut group_keys: Vec<NodeIndex> = Vec::with_capacity(group_matches.len());
+    let mut multiplicity: std::collections::HashMap<NodeIndex, i64> =
+        std::collections::HashMap::new();
+    for m in group_matches {
+        let node_idx = m.bindings.iter().find_map(|(name, binding)| {
+            if name == group_var {
+                match binding {
+                    MatchBinding::Node { index, .. } | MatchBinding::NodeRef(index) => Some(*index),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        let Some(node_idx) = node_idx else {
+            continue;
+        };
+        if dedup {
+            let seen = multiplicity.entry(node_idx).or_insert(0);
+            *seen += 1;
+            if *seen > 1 {
+                continue;
+            }
+        }
+        group_keys.push(node_idx);
+    }
+    (group_keys, multiplicity)
 }

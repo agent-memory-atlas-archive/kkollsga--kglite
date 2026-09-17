@@ -6,6 +6,8 @@
 //!
 //! - [`exists_witness`] — which `EXISTS { … }` subqueries may stop at one match
 //! - [`expressions`] — comparison, arithmetic, coercion, CASE, parameters
+//! - [`fused_aggregate_labels`] — the fused `MATCH … WITH …, count(…)` path
+//!   keeping the pattern's node labels and its first-MATCH row multiplicity
 //! - [`mutations`] — CREATE / SET / DELETE / REMOVE / MERGE and index upkeep
 //! - [`identifiers`] — quoted-identifier escaping (the injection class)
 //! - [`label_predicates`] — parenthesised label checks vs node patterns
@@ -37,6 +39,7 @@ mod cypher25_clauses;
 mod deadline_rows;
 mod exists_witness;
 mod expressions;
+mod fused_aggregate_labels;
 mod identifiers;
 mod label_predicates;
 mod lists;

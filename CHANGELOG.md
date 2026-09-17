@@ -300,6 +300,26 @@ before upgrading.
 
 ### Fixed
 
+- Fused `MATCH … WITH <group>, count(…)` keeps the pattern's node labels.
+  `MATCH (c)-[:CHILD_OF]->(p:Software) WITH p, count(c) AS k` answered from a
+  per-connection-type peer histogram that counted **every** peer of the edge
+  type and applied no filter for the group node's own label, so parents of any
+  other label came back with a count — a silent wrong answer in every storage
+  mode, reachable through the reversed spelling
+  (`MATCH (p:Software)<-[:CHILD_OF]-(c)`), `count(r)` over the edge variable,
+  `count(*)`, an absorbed `ORDER BY … LIMIT`, a bare `LIMIT`, and a
+  `WITH … WHERE`. A `:A|B` alternation on that node was dropped the same way,
+  and on the source side the disk sweep read the pattern's singular label —
+  under alternation branch A alone — so branch B's sources went uncounted. The
+  equivalent `RETURN`-side aggregate was unaffected; a property map on the
+  group node (`(p {id: 'x'})`) declined the fusion and was unaffected too.
+- Fused two-`MATCH` aggregate keeps the first pattern's row multiplicity.
+  `MATCH (c)-[:CHILD_OF]->(p:Software) MATCH (p)<-[r:CHILD_OF]-() WITH p,
+  count(r)` deduplicated the group keys the first `MATCH` produced without
+  keeping the rows they stood for. The two clauses join on `p`, so a key bound
+  n times contributes n × (second-pattern matches) rows; the fused path
+  reported `count(r) / n`.
+
 - Parenthesised label checks parse as expressions: `WHERE (a:Software OR a:Api)`
   is a boolean expression, not a node pattern. The `(` lookahead committed to
   the MATCH-pattern parser the moment it saw `( <variable> :`, so every
