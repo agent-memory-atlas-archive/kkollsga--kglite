@@ -12,67 +12,51 @@ applies_when:
   tool_registered: rebuild_graph
 ---
 
-The graph this server answers from is **derived from the markdown files**, not
-stored separately. The files are canonical: edit a note and the graph rebuilds
-itself on the next tool call. Never write the graph to change the notes.
-
-## A minimal valid note, `Geology/Faults.md`
-
-```markdown
----
-title: Fault interpretation
-depends_on: "[[Horizons]]"
----
-Picked on the 2024 survey. See [[Horizons]] for the surfaces.
-
-![Fault map](img/faults.png)
-```
+The graph is **derived from the markdown files**, not stored separately. The
+files are canonical: edit a note and the graph rebuilds on the next tool call.
+Never write the graph to change the notes.
 
 ## Five rules decide what a note becomes
 
 1. **The folder is the label.** `Geology/Faults.md` is a `:Geology` node
-   unless its frontmatter says `type:`, or `.kglite/vault.yaml` sets a
+   unless frontmatter says `type:` or `.kglite/vault.yaml` sets
    `default_label:`.
-2. **The filename stem is the id, and the link target.** `Faults.md` is reached
-   as `[[Faults]]` from anywhere in the vault; an `id:` in frontmatter
-   overrides it.
+2. **The filename stem is the id, and the link target.** `Faults.md` is
+   reached as `[[Faults]]` from anywhere; frontmatter `id:` overrides it.
 3. **A wikilink-valued frontmatter key is an edge, not a property.**
    `depends_on: "[[Horizons]]"` makes a `DEPENDS_ON` edge and stores no
-   property of that name. A plain string value stays a property.
+   property of that name. A plain string stays a property.
 4. **Images are note-relative and live in the vault.** `![alt](img/x.png)`
-   becomes an `Image` node — copy the file in. A path that leaves the vault
-   (`../`, an absolute path, a `file:` URL) is an error.
-5. **The body is prose.** It is stored whole and searched; nothing in it is
-   rewritten, split or reformatted.
+   becomes an `Image` node — copy the file in. A path leaving the vault
+   (`../`, absolute, `file:`) is an error.
+5. **The body is prose**, stored whole and searched; nothing in it is
+   rewritten or reformatted.
 
-Optional configuration lives in `.kglite/vault.yaml` (profile overrides,
-declared property types, indexes, ontology, embed targets), and the vault's own
-agent guidance in `.kglite/skills/*.md` and `.kglite/recipes/*.md`. All of it
-is re-read on every build, so editing a file is the whole update procedure.
+Optional `.kglite/vault.yaml` declares profile, property types, indexes,
+ontology and embed targets; `.kglite/skills/` and `.kglite/recipes/` carry the
+vault's own agent guidance. All of it is re-read on every build. The full
+format spec is `VAULT.md` in the kglite repository — read it before inventing
+a key, not before writing an ordinary note.
 
-## After editing: `rebuild_graph`
+## The edit loop
 
-The watcher rebuilds on the next tool call by itself; call `rebuild_graph` when
-you want the rebuild *now*, or when you want to read the build report.
+Write the note, then `rebuild_graph` (the watcher gets there by itself on the
+next tool call; call it when you want the report now). Outside this server the
+same check is `kglite okf check <vault>`, which prints the identical report.
 
-Read the report's two classes differently:
+Read its two classes differently:
 
-- **Errors** mean the vault does not meet the format: unparseable frontmatter,
-  a reserved key of the wrong shape (a non-string `id:`, a scalar `tags:`), an
-  id collision, a `.kglite/vault.yaml` that will not validate, a link or image
-  path that escapes the vault. Fix these — they are a defect in what you wrote.
-- **Warnings** are normal in a vault being written: a dangling wikilink (the
-  note does not exist *yet*), a missing image, a case-only filename collision.
-  A dangling link still creates a provisional node, so the edge survives the
-  note being written later.
+- **Errors** mean the vault does not meet the format — unparseable
+  frontmatter, a reserved key of the wrong shape (non-string `id:`, scalar
+  `tags:`), an id collision, an invalid `.kglite/vault.yaml`, a path escaping
+  the vault. These are defects in what you wrote; fix them.
+- **Warnings** are normal while a vault is being written: a dangling wikilink
+  (the note does not exist *yet* — the edge survives via a provisional node), a
+  missing image, a case-only filename collision.
 
-A build that fails outright — a broken `.kglite/vault.yaml` is the usual cause
-— leaves the previous graph serving and returns the message. It never serves an
-empty graph.
+A build that fails outright leaves the previous graph serving and returns the
+message; it never serves an empty graph.
 
-## Checking the schema you just changed
-
-After a rebuild that changed labels or edge types, call `graph_overview` before
-writing Cypher against the new shape: rule 1 means a moved file is a *relabelled*
-node, and a query written against the old label returns zero rows rather than an
-error.
+After a rebuild that moved files or changed edge types, call `graph_overview`
+before writing Cypher: rule 1 means a moved file is a *relabelled* node, and a
+query against the old label returns zero rows rather than an error.

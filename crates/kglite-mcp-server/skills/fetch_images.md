@@ -12,58 +12,45 @@ applies_when:
   tool_registered: fetch_images
 ---
 
-Images in this vault are **nodes, not bytes**. Every `![…](…)` reference in a
-note becomes an `Image` node whose `id` *is* its vault-relative path, joined to
-the note by `HAS_IMAGE`. `fetch_images` is the only route that returns the
-bytes, and it returns them only for the paths you name.
+Images are **nodes, not bytes**. Every `![…](…)` reference becomes an `Image`
+node whose `id` *is* its vault-relative path, joined to the note by
+`HAS_IMAGE`. `fetch_images` is the only route that returns bytes, and only for
+the paths you name.
 
 ## Query first, fetch second
 
-`Image` nodes carry `path`, `text` (the alt texts plus the titles of the notes
-using it), `mime` and `size_bytes`. That is usually enough to choose — and
-often enough to answer without fetching anything.
+`Image` nodes carry `path`, `text` (alt texts plus the titles of the notes
+using it), `mime` and `size_bytes` — usually enough to choose, often enough to
+answer without fetching anything.
 
 ```cypher
 MATCH (a:Article)-[r:HAS_IMAGE]->(i:Image)
 WHERE a.title = 'Fault interpretation'
-RETURN i.id, i.text, i.size_bytes, r.alt
-ORDER BY r.ordinal
+RETURN i.id, i.text, i.size_bytes, r.alt ORDER BY r.ordinal
 ```
 
-Then fetch the one or two that matter:
+Then fetch the one or two that matter: `{"items": ["img/faults.png"]}`.
+`items` takes vault-relative paths **or** `Image` ids — the same string, so
+whatever the query handed you works as-is. Absolute paths, `~`, `file:` URLs
+and `..` segments are refused before the file is looked up.
 
-```json
-{"items": ["img/faults.png"]}
-```
+## What comes back, and the caps
 
-`items` takes vault-relative paths **or** `Image` ids — they are the same
-string, so whichever the query handed you works as-is. Absolute paths, `~`,
-`file:` URLs and `..` segments are refused before the file is looked up; there
-is no way to reach outside the served directory, so do not try to construct
-one.
+One image block per delivered file in request order, then one text block
+listing each item as delivered (path, MIME, bytes) or refused (path, reason).
+A call where *some* items are refused still succeeds — read that block. A call
+where every item is refused is an error carrying the same reasons.
 
-## What comes back
-
-One image content block per delivered file, in request order, followed by one
-text block listing each item as delivered (path, MIME, byte count) or refused
-(path, reason). A call where *some* items are refused still succeeds — read the
-text block to see which. A call where *every* item is refused is an error whose
-body is the same list of reasons.
-
-## The caps, and what to do about them
-
-- **4 images per call.** Extras are refused; ask for them in a second call.
+- **4 images per call**; extras are refused, so ask again.
 - **4 MiB per image, 12 MiB per call.** An over-cap image is refused with its
-  byte count named. It is never resized and never truncated, so there is no
-  smaller version to ask for — `max_bytes` can only lower the ceiling, never
-  raise it. Check `size_bytes` in the query if you want to know first.
-- An operator can set all three lower in the server's
-  `extensions.fetch_images` block; the tool description states the live values.
+  byte count named. It is never resized or truncated, so there is no smaller
+  version to ask for; `max_bytes` only lowers the ceiling. Check `size_bytes`
+  first if it matters.
+- An operator can set all three lower in `extensions.fetch_images`; the tool
+  description states the live values.
 
-## What is never delivered
-
-png, jpeg, gif and webp are delivered. Everything else is refused with its type
-named — **SVG included**, along with PDFs and every other attachment. Those
-still exist as nodes you can query (`Attachment`, `HAS_ATTACHMENT`); their
-*contents* are not available through this server. If a diagram only exists as
-SVG, say so rather than guessing at what it shows.
+png, jpeg, gif and webp are delivered. Everything else is refused with its
+type named — **SVG included**, along with PDFs and every other attachment.
+Those remain queryable as `Attachment` / `HAS_ATTACHMENT` nodes; their
+contents are not available here. If a diagram exists only as SVG, say so
+rather than guessing at what it shows.

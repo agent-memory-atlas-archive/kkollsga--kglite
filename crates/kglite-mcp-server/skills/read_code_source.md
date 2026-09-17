@@ -26,7 +26,7 @@ applies_when:
 
 `read_code_source` is the **symbol-to-slice tool**: given a qualified name (e.g. `foo.bar.MyClass.method`), it resolves to the source file, returns the slice covering the symbol's body, and prepends a `file_path:line_start-line_end` header. It collapses the "Cypher query found a Function; now I want to see its code" workflow into one call — saving the agent one round trip vs. `cypher_query` for the file_path + `read_source` for the slice.
 
-The tool only works against graphs that have **Function** and **Class** nodes (i.e. code graphs built by a code-graph builder such as codingest). A read-only `--graph` server whose graph lacks those types does not offer it at all — it is disabled at boot, so it never appears in `tools/list` (write-enabled servers keep it, because `load_graph` can swap a code graph in at runtime). The framework separately auto-gates this skill via `applies_when: graph_has_node_type: [Function, Class]` so it doesn't appear in `prompts/list` for legal/o&g/data-only deployments.
+The tool only works against graphs that have **Function** and **Class** nodes (i.e. code graphs built by a code-graph builder such as codingest). A read-only `--graph` server whose graph lacks those types does not offer it at all — it is disabled at boot and never appears in `tools/list` (write-enabled servers keep it, because `load_graph` can swap a code graph in at runtime). This skill is gated the same way, on `graph_has_node_type: [Function, Class]`.
 
 ## Quick Reference
 
@@ -36,7 +36,7 @@ The tool only works against graphs that have **Function** and **Class** nodes (i
 | Locate symbols, then read | `cypher_query` → list of qualified_names → `read_code_source(...)` per |
 | Read a file by path (not a symbol) | Use `read_source` instead, not this tool |
 | Read a method on a class | Same qualified-name shape: `pkg.module.ClassName.method_name` |
-| Read just a few lines around a known symbol | `read_code_source(qualified_name=..., context=10)` (if supported) or fall back to `read_source` with `start_line`/`end_line` |
+| Read just part of a symbol | `read_code_source(qualified_name=..., start_line=…, end_line=…)`, or `grep=` to filter its lines |
 
 ## Qualified-name resolution
 
@@ -90,11 +90,6 @@ Prefer `read_source` when:
 ✅ Use `f.id` from a Cypher result directly. The `id` property on graph nodes is the qualified_name kglite indexes by.
 
 ✅ When a qualified-name lookup returns "not found", check whether the entity exists at all via `cypher_query`. If it does exist but the resolver missed it, the entity's `id` might differ from what you typed (case sensitivity, leading-underscore differences) — re-check the exact `id` value.
-
-## When `read_code_source` is the wrong tool
-
-- **Graph has no Function / Class types.** Tool isn't registered; skill is filtered out via `applies_when`. Legal-corpus, o&g, and other non-code graphs fall here.
-- **You only have a file path.** Use `read_source(file_path=...)` — the framework's file-system reader.
 - **You want to read the whole file (not just a symbol).** `read_source(file_path=...)` with no line range, or with the full file's range.
 - **You want regex search inside the file.** `grep(pattern=...)` for the search, then `read_source` or `read_code_source` for the targeted read of any matches.
 

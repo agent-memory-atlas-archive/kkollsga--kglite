@@ -265,6 +265,22 @@ before upgrading.
   place. Pass `dialect="loose"` to keep the old behaviour — it is unchanged
   and is what the string used to mean.
 
+- **`kglite-mcp-server` bundles only the skills a deployment can activate.**
+  mcp-methods charges its 64 KiB per-session skill budget at resolve time,
+  over every resolved body, before `applies_when:` is evaluated — so a skill
+  whose gate is shut still spent its bytes, and the bundled set went over the
+  limit on a plain `--graph` deployment. Where the gate is something the boot
+  already knows, the server now answers it by not bundling: the four
+  code-graph skills (`read_code_source`, `explore`, `code_graph_analysis`,
+  `code_graph_views`) only where the graph carries `Function` / `Class`, and
+  `vault_authoring` only in `--vault`, which is the only mode that registers
+  the `rebuild_graph` tool they gate on. The skills an agent can *reach* are
+  unchanged — those gates already suppressed these — so what moves is the
+  budget: a document deployment resolves about 48 KiB where it resolved 68.
+  When the budget is exceeded the boot summary now says what that costs:
+  nothing is dropped and nothing is truncated, every skill is still served,
+  and the overrun is context on every `tools/list`.
+
 ### Removed
 
 - **Breaking:** `kglite.okf.build(..., embed=...)` and

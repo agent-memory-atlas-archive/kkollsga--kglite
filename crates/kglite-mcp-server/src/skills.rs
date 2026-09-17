@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Result};
 use kglite::api::skills::{self as graph_skills, SkillRecord};
+use mcp_methods::server::skills::SESSION_TOTAL_LIMIT_BYTES;
 use mcp_methods::server::{
     notify_skills_changed, serve_prompts, ActiveSkill, BundledSkill, Manifest, McpServer,
     OwnedSkill, PredicateClause, ResolvedRegistry, ServerOptions, SkillError,
@@ -78,55 +79,77 @@ fn compose_registry(
     // single canonical home. `cargo publish` only packages files inside
     // the crate dir, so they must live here (not behind a
     // `../../../kglite/...` `include_str!` path).
-    let registry = SkillRegistry::new()
-        .add_bundled(BundledSkill {
+    //
+    // A gated skill is bundled only where its gate can be true. mcp-methods
+    // charges its session budget at *resolve* time — `Registry::finalise`
+    // sums every resolved body, whatever `applies_when:` later says — so a
+    // skill that cannot activate here still costs its bytes, and the bundled
+    // set overran the 64 KiB limit on a plain `--graph` deployment. Where the
+    // gate is a fact this composition already knows (the mode, the active
+    // graph's node types), the same answer is given by not bundling it, and
+    // the *active* set is unchanged either way: what moves is the budget. The
+    // composition re-runs on every graph swap ([`SkillRefresher`]), so a gate
+    // that becomes true later still lands its skill.
+    let mut bundled = vec![
+        BundledSkill {
             name: "cypher_query",
             body: include_str!("../skills/cypher_query.md"),
-        })
-        .add_bundled(BundledSkill {
+        },
+        BundledSkill {
             name: "graph_overview",
             body: include_str!("../skills/graph_overview.md"),
-        })
-        .add_bundled(BundledSkill {
+        },
+        BundledSkill {
             name: "save_graph",
             body: include_str!("../skills/save_graph.md"),
-        })
-        .add_bundled(BundledSkill {
-            name: "read_code_source",
-            body: include_str!("../skills/read_code_source.md"),
-        })
-        .add_bundled(BundledSkill {
-            name: "explore",
-            body: include_str!("../skills/explore.md"),
-        })
-        // Gated on `tool_registered: rebuild_graph`, which is registered in
-        // vault mode and nowhere else — the format rules are noise on a server
-        // that does not build its graph from markdown the agent can edit.
-        .add_bundled(BundledSkill {
-            name: "vault_authoring",
-            body: include_str!("../skills/vault_authoring.md"),
-        })
+        },
         // Gated on `tool_registered: fetch_images`, which every mode
         // registers but only a mode with a source root leaves enabled — a
         // disabled route is absent from the router's visible set, so the
-        // predicate is false exactly where the bytes are unreachable.
-        .add_bundled(BundledSkill {
+        // predicate is false exactly where the bytes are unreachable. Not
+        // decidable here: route disabling happens after this composition.
+        BundledSkill {
             name: "fetch_images",
             body: include_str!("../skills/fetch_images.md"),
-        })
-        // Cross-tool skills: named after no tool, they attach via
-        // `references_tools` and lead with the `description` routing —
-        // both rely on the serve_prompts injection added in mcp-methods
-        // 0.3.42 (## When to use + references_tools), so they only became
-        // active with that pin bump.
-        .add_bundled(BundledSkill {
-            name: "code_graph_analysis",
-            body: include_str!("../skills/code_graph_analysis.md"),
-        })
-        .add_bundled(BundledSkill {
-            name: "code_graph_views",
-            body: include_str!("../skills/code_graph_views.md"),
+        },
+    ];
+    // Gated on `tool_registered: rebuild_graph`, which `server_run` registers
+    // for `Mode::Vault` and nothing else — the format rules are noise on a
+    // server that does not build its graph from markdown the agent can edit.
+    if matches!(mode, Mode::Vault { .. }) {
+        bundled.push(BundledSkill {
+            name: "vault_authoring",
+            body: include_str!("../skills/vault_authoring.md"),
         });
+    }
+    // The code-graph four, gated on `graph_has_node_type: [Function, Class]`.
+    // `explore` and `read_code_source` name a tool; the other two are
+    // cross-tool skills that attach via `references_tools` and lead with the
+    // `description` routing (the serve_prompts injection of mcp-methods
+    // 0.3.42). A graph with no code in it activates none of them.
+    if serves_a_code_graph(graph_state) {
+        bundled.extend([
+            BundledSkill {
+                name: "read_code_source",
+                body: include_str!("../skills/read_code_source.md"),
+            },
+            BundledSkill {
+                name: "explore",
+                body: include_str!("../skills/explore.md"),
+            },
+            BundledSkill {
+                name: "code_graph_analysis",
+                body: include_str!("../skills/code_graph_analysis.md"),
+            },
+            BundledSkill {
+                name: "code_graph_views",
+                body: include_str!("../skills/code_graph_views.md"),
+            },
+        ]);
+    }
+    let registry = bundled
+        .into_iter()
+        .fold(SkillRegistry::new(), SkillRegistry::add_bundled);
     let registry =
         add_recipe_query_skill(registry, recipe_catalog_summary).merge_framework_defaults();
 
@@ -166,6 +189,19 @@ fn compose_registry(
         .finalise()
     });
     (registry_result, graph_stats)
+}
+
+/// The node types the four code-graph skills gate on (`applies_when:
+/// graph_has_node_type: [Function, Class]`), asked of the graph this
+/// composition is for.
+///
+/// False with no graph published yet — a workspace mode before its first
+/// activation — which is the same answer the predicate gives there, and the
+/// refresh after the activation asks again.
+fn serves_a_code_graph(graph_state: &GraphState) -> bool {
+    ["Function", "Class"]
+        .iter()
+        .any(|node_type| graph_state.has_node_type(node_type))
 }
 
 /// The `skills:` declaration this composition obeys, and the path its relative
@@ -264,6 +300,7 @@ pub(crate) fn install_skills(
     match registry_result {
         Ok(registry) => {
             log_parse_warnings(&registry);
+            warn_if_over_session_budget(&registry);
             let active = serve_prompts(&registry, server);
             stats.graph.attribute(&active);
             stats.producer.attribute(&active);
@@ -482,6 +519,31 @@ impl ProducerSkillStats {
         }
         Some(text)
     }
+}
+
+/// Say what an over-budget skill set *does*, not just that it is over.
+///
+/// mcp-methods logs the numbers at `Registry::finalise`
+/// (`server/skills.rs:1569`) and stops there, which leaves the operator unable
+/// to tell whether skills were dropped, truncated or served — the three have
+/// very different answers. They are served: `SESSION_TOTAL_LIMIT_BYTES` is an
+/// advisory sum over the resolved set (`ResolvedRegistry::total_body_bytes`),
+/// nothing is removed and nothing is cut short. What the overrun costs is
+/// context, on every `tools/list`, for every client.
+fn warn_if_over_session_budget(registry: &ResolvedRegistry) {
+    let total = registry.total_body_bytes();
+    if total <= SESSION_TOTAL_LIMIT_BYTES {
+        return;
+    }
+    tracing::warn!(
+        total_bytes = total,
+        limit = SESSION_TOTAL_LIMIT_BYTES,
+        over_by = total - SESSION_TOTAL_LIMIT_BYTES,
+        "skill bodies exceed the session budget: nothing is dropped and nothing is \
+         truncated — every skill is still served, and the overrun is context every \
+         client pays for on every tools/list. Trim a skill, or narrow an \
+         `applies_when:` gate, to get under it"
+    );
 }
 
 /// Surface the registry's own per-entry complaints.
@@ -2407,3 +2469,7 @@ mod skill_layer_tests {
 #[cfg(test)]
 #[path = "skills_activation_tests.rs"]
 mod skills_activation_tests;
+
+#[cfg(test)]
+#[path = "skills_budget_tests.rs"]
+mod skills_budget_tests;
