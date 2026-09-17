@@ -9,6 +9,19 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- `okf.build(dialect="obsidian"/"loose")` no longer turns an embedded image
+  into a phantom node. `![[diagram.png]]` was read as an ordinary wikilink, so
+  every embed minted a `_provisional` Concept stub named after the file.
+  Embeds are now skipped; a plain `[[note]]` link is unchanged.
+- A markdown line starting with `#` is read as a heading only when the `#`
+  (one to six of them) is followed by a space, a tab, or the end of the line.
+  An inline tag line such as `#project see [[Alice]]` was taken for a section
+  heading, which both invented a heading for the edge-type ladder and dropped
+  every link on that line. Same rule now applies to the title fallback (first
+  `# H1`) and to a folder's `index.md` title.
+
 ## [0.17.7] - 2026-09-16
 
 ### Added

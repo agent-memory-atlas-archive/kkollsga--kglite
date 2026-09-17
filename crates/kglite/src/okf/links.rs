@@ -9,8 +9,8 @@
 //!     `# Citations` → `CITES`, …),
 //!  3. the generic [`DEFAULT_CONN_TYPE`] (`LINKS_TO`).
 //!
-//! Links inside fenced code blocks and markdown image links (`![alt](src)`) are
-//! ignored. External `http(s)` links are captured as `is_external` (they become
+//! Links inside fenced code blocks, markdown image links (`![alt](src)`) and
+//! Obsidian embeds (`![[x]]`) are ignored. External `http(s)` links are captured as `is_external` (they become
 //! `Source` nodes in the builder); `mailto:`, anchors, and non-`.md` directory
 //! links are skipped (directory structure is captured separately).
 
@@ -43,6 +43,23 @@ fn conn_from_heading(heading: &str) -> Option<&'static str> {
         Some("RELATED")
     } else if h.contains("depend") {
         Some("DEPENDS_ON")
+    } else {
+        None
+    }
+}
+
+/// The text of an ATX heading line (already left-trimmed), or `None` when the
+/// line is not a heading. A heading is one to six `#` followed by a space, a
+/// tab, or the end of the line; `#tag see [[Alice]]` is a tag line, and reading
+/// it as a heading both invents a heading and drops every link on it.
+pub(crate) fn heading_text(trimmed: &str) -> Option<&str> {
+    let hashes = trimmed.len() - trimmed.trim_start_matches('#').len();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let rest = &trimmed[hashes..];
+    if rest.is_empty() || rest.starts_with([' ', '\t']) {
+        Some(rest.trim())
     } else {
         None
     }
@@ -82,8 +99,8 @@ pub fn extract_links(body: &str, source_dir: &str, dialect: Dialect) -> Vec<Link
         if in_fence {
             continue;
         }
-        if let Some(rest) = trimmed.strip_prefix('#') {
-            current_heading = Some(rest.trim_start_matches('#').trim().to_string());
+        if let Some(h) = heading_text(trimmed) {
+            current_heading = Some(h.to_string());
             continue;
         }
 
@@ -127,6 +144,13 @@ pub fn extract_links(body: &str, source_dir: &str, dialect: Dialect) -> Vec<Link
 
         if dialect.wikilinks() {
             for cap in wikilink_re().captures_iter(raw) {
+                // `![[x]]` is an embed, not a link: it transcludes a note or
+                // renders an attachment. Resolving it mints a concept stub for
+                // every embedded image.
+                let m = cap.get(0).unwrap();
+                if m.start() > 0 && raw.as_bytes()[m.start() - 1] == b'!' {
+                    continue;
+                }
                 // Strip a `#heading` anchor: `[[Note#Section]]` targets `Note`
                 // (mirrors path-link fragment handling). Avoids phantom
                 // dangling refs for section links.
@@ -301,6 +325,51 @@ mod tests {
         assert!(links[0].is_wikilink);
         assert_eq!(links[0].target, "other-note");
         assert_eq!(links[1].target, "sub/thing");
+    }
+
+    #[test]
+    fn embedded_wikilink_is_not_a_link() {
+        // `![[img.png]]` renders an attachment; it used to mint a concept stub.
+        let links = extract_links(
+            "![[diagram.png]] and ![[note|alias]] but [[real-note]]",
+            "",
+            Dialect::Loose,
+        );
+        let targets: Vec<&str> = links.iter().map(|l| l.target.as_str()).collect();
+        assert_eq!(targets, vec!["real-note"]);
+    }
+
+    #[test]
+    fn tag_line_is_not_a_heading_and_keeps_its_links() {
+        let links = extract_links("#project see [[Alice]]", "", Dialect::Loose);
+        assert_eq!(links.len(), 1, "a `#tag` line is prose, not a heading");
+        assert_eq!(links[0].target, "Alice");
+        // …and it does not leak a heading into the edge-type ladder.
+        assert_eq!(links[0].conn_type, "LINKS_TO");
+    }
+
+    #[test]
+    fn heading_text_requires_a_space_and_at_most_six_hashes() {
+        assert_eq!(heading_text("# Joins"), Some("Joins"));
+        assert_eq!(heading_text("###\tDeps"), Some("Deps"));
+        assert_eq!(heading_text("#"), Some(""));
+        assert_eq!(heading_text("#related"), None);
+        assert_eq!(heading_text("####### Deep"), None);
+        assert_eq!(heading_text("plain"), None);
+    }
+
+    #[test]
+    fn real_heading_still_types_the_links_below_it() {
+        let links = extract_links(
+            "# Related work\n#seealso\nsee [[Alice]]",
+            "",
+            Dialect::Loose,
+        );
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].conn_type, "RELATED",
+            "heading ladder still applies"
+        );
     }
 
     #[test]

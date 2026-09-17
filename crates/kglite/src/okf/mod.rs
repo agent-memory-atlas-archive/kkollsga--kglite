@@ -157,8 +157,7 @@ fn first_heading(body: &str) -> Option<String> {
             continue;
         }
         if !in_fence {
-            if let Some(rest) = t.strip_prefix('#') {
-                let h = rest.trim_start_matches('#').trim();
+            if let Some(h) = links::heading_text(t) {
                 if !h.is_empty() {
                     return Some(h.to_string());
                 }
@@ -258,6 +257,22 @@ mod tests {
         assert_eq!(docs[0].label, "Concept");
         // No frontmatter title/name → falls back to the first H1 heading.
         assert_eq!(docs[0].title, "Just a note");
+    }
+
+    #[test]
+    fn tag_line_is_not_taken_for_the_title() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "readme.md",
+            "#project-x\n\n# My Project\n\nIntro.",
+        );
+        let opts = BuildOptions {
+            require_frontmatter: false,
+            ..BuildOptions::default()
+        };
+        let docs = parse_bundle(dir.path(), &opts).unwrap();
+        assert_eq!(docs[0].title, "My Project");
     }
 
     #[test]

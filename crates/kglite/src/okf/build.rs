@@ -168,9 +168,9 @@ fn folder_meta(path: &Path) -> (Option<String>, Option<String>) {
         if t.is_empty() {
             continue;
         }
-        if let Some(h) = t.strip_prefix('#') {
+        if let Some(h) = super::links::heading_text(t) {
             if title.is_none() {
-                title = Some(h.trim_start_matches('#').trim().to_string());
+                title = Some(h.to_string());
             }
         } else if desc.is_none() {
             desc = Some(t.to_string());
@@ -556,6 +556,23 @@ mod tests {
         // Folder(tables) CONTAINS both concepts = 2 edges (no links in bodies)
         assert_eq!(g.graph.edge_count(), 2);
         // index.md enriches the folder title (stored as the node title field).
+        let folder_title = g
+            .graph
+            .node_indices()
+            .find(|&n| {
+                g.node_view(n)
+                    .is_some_and(|nd| nd.node_type_str(&g.interner) == "Folder")
+            })
+            .and_then(|n| g.node_view(n).map(|nd| nd.title().into_owned()));
+        assert_eq!(folder_title, Some(Value::String("All Tables".to_string())));
+    }
+
+    #[test]
+    fn folder_title_ignores_a_leading_tag_line() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "tables/orders.md", "---\ntype: Table\n---\nx");
+        write(dir.path(), "tables/index.md", "#data\n# All Tables\nProse.");
+        let g = build(dir.path(), &BuildOptions::default()).unwrap();
         let folder_title = g
             .graph
             .node_indices()
