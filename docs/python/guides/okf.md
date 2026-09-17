@@ -115,8 +115,10 @@ file stem → normalized slug (case- and `_`/`-`-insensitive) → title, so
 come from the top-level folder (or a declared `default_label`), ids are
 filename stems so a folder move keeps a note's identity, bodies are stored,
 frontmatter lists stay lists, wikilink-valued frontmatter keys become typed
-edges, folder notes build a hierarchy, and referenced images become `Image`
-nodes you fetch as files rather than bytes in the graph. A `.kglite/vault.yaml`
+edges, a note's `aliases:` answer link resolution, every body link carries its
+enclosing heading as a `section` edge property, inline `#tags` join the same
+`Tag` hub as `tags:`, folder notes build a hierarchy, and referenced images
+become `Image` nodes you fetch as files rather than bytes in the graph. A `.kglite/vault.yaml`
 in the vault root declares property types, indexes, text indexes, an ontology
 and embed targets, and is re-applied on every rebuild.
 

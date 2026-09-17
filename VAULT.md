@@ -192,6 +192,10 @@ folder layout would have.
 
 Links inside fenced code blocks (``` or `~~~`) are ignored.
 
+An embed is read as a note when its target has no file extension or ends in
+`.md`, and as an attachment otherwise — so a note whose *filename* contains a
+dot is embedded as `![[Release 1.2.md]]`, with the extension written out.
+
 ### 5.2 Resolution ladder
 
 A link target resolves against the first rung that matches exactly one note:
@@ -227,6 +231,11 @@ Every body link carries `section`, the enclosing heading's text verbatim
 fragment without its leading `#`. The fragment never affects resolution:
 `[[Note#Heading]]` and `[[Note]]` reach the same node.
 
+Two links from one note to one target are **two edges** when they differ in
+`section` or `anchor`, and one when they do not — repeating a link inside a
+section is one relationship, linking from two sections is two. Edges emitted
+from frontmatter (§4.3) carry neither property.
+
 ### 5.5 Tags
 
 Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`:
@@ -234,8 +243,11 @@ Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`:
 - `tags:` in frontmatter, which also stays a list property on the note
 - inline `#tag` in the body
 
-Inline extraction skips fenced code, inline code spans, a `#` inside a URL, and
-a `#` that begins a line and is followed by a space (that is a heading).
+Inline extraction skips fenced code, inline code spans, a `#` inside a URL or a
+wikilink anchor, and a `#` that begins a line and is followed by a space (that
+is a heading — though a `#tag` written *in* the heading's text is still a tag).
+A tag name runs over letters, digits, `_`, `-` and `/`, and must contain at
+least one letter: `#2026` is not a tag.
 
 ### 5.6 Unresolved targets
 
@@ -385,7 +397,9 @@ including an unknown `kglite_vault` version; an absolute path, or a path
 escaping the vault root, in a link or attachment reference.
 
 **Warnings** — legitimate in a real vault, worth seeing: dangling links
-(stubs), missing attachments, case-insensitive collisions.
+(stubs), missing attachments, case-insensitive collisions, and alias clashes
+(an `aliases:` entry that is another note's filename stem, or that two notes
+both claim — the link resolves to exactly one of them).
 
 `kglite okf check` exits non-zero when any error is present. `--strict`
 promotes every warning to an error — the setting a converter's own test suite

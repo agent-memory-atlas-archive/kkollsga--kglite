@@ -61,6 +61,23 @@ def build(
               RFC 3339 timestamp becomes a date / datetime value.
             * **Frontmatter is not required** (``require_frontmatter`` defaults
               to ``False``), so a plain ``.md`` file is a note.
+            * **Links**: every body link carries the enclosing heading's text
+              as a ``section`` edge property, and a ``[[Note#Heading]]`` or
+              ``[x](note.md#frag)`` link its fragment as ``anchor`` — the
+              fragment never changes which node the link reaches. A note's
+              ``aliases:`` answer link resolution between the stem and slug
+              rungs. ``![[Note]]`` is an ``EMBEDS`` edge; ``![[image.png]]``
+              is an attachment and not a link.
+            * **Frontmatter edges**: a key whose value is a wikilink string,
+              or a list of nothing but wikilink strings, becomes edges typed
+              ``UPPER_SNAKE(key)`` and is *not* stored as a property; a list
+              mixing wikilinks with plain strings stays a property. The
+              reserved ``parent:`` key emits ``CHILD_OF`` from the note to
+              each named parent.
+            * **Tags**: inline ``#tags`` in the body join the same ``Tag`` hub
+              as ``tags:`` (fenced code, inline code spans and URL or wikilink
+              fragments are skipped), while the ``tags`` property keeps
+              reporting only what the frontmatter said.
         require_frontmatter: When ``True``, only ``.md`` files with a YAML
             frontmatter block are ingested — the discriminator between
             *structured* knowledge (OKF concepts, Claude memories) and plain

@@ -25,7 +25,26 @@ before upgrading.
   directions). Frontmatter **sequences and nested maps stay native `list` /
   `map` properties** instead of JSON strings, and a top-level string spelling
   an ISO `YYYY-MM-DD` date or an RFC 3339 timestamp becomes a date / datetime
-  value. The `"okf"` and `"loose"` dialects are unchanged.
+  value.
+
+  **Link semantics** (`VAULT.md` §5) follow the same specification. Every body
+  link carries the enclosing heading's text as a `section` edge property, and a
+  `[[Note#Heading]]` / `[text](note.md#frag)` link its fragment as `anchor` —
+  the fragment never changes which node the link reaches, so two links from one
+  note to one target are two edges only when their `section` or `anchor`
+  differ. A note's `aliases:` answer link resolution between the stem and slug
+  rungs, and an alias that clashes with another note's stem or alias is
+  reported as a warning. A frontmatter key whose value is a wikilink string, or
+  a list of nothing but wikilink strings, becomes edges typed
+  `UPPER_SNAKE(key)` instead of a property (a list mixing wikilinks with plain
+  strings stays a property); the reserved `parent:` key emits the folder note's
+  edge type and direction, `CHILD_OF` child → parent by default. Inline
+  `#tags` in the body join the same `Tag` hub as `tags:` — skipping fenced
+  code, inline code spans, URL and wikilink fragments — while the `tags`
+  property keeps reporting only the frontmatter. `![[Note]]` is an `EMBEDS`
+  edge (`![[image.png]]` stays an attachment, and still mints nothing), and
+  every link target that resolves to no note is counted and named in the build
+  report. The `"okf"` and `"loose"` dialects are unchanged.
 
 ### Changed
 
@@ -43,6 +62,12 @@ before upgrading.
   into a phantom node. `![[diagram.png]]` was read as an ordinary wikilink, so
   every embed minted a `_provisional` Concept stub named after the file.
   Embeds are now skipped; a plain `[[note]]` link is unchanged.
+- `okf.build` built a graph whose edge count depended on hash order: the
+  builder decided per endpoint-label group whether it owned every edge of a
+  connection type, so the first group of a type kept parallel edges while every
+  later group folded duplicate endpoint pairs onto one. The decision is now
+  made once per connection type, and the node order no longer depends on hash
+  order either.
 - A markdown line starting with `#` is read as a heading only when the `#`
   (one to six of them) is followed by a space, a tab, or the end of the line.
   An inline tag line such as `#project see [[Alice]]` was taken for a section

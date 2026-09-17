@@ -20,12 +20,19 @@ use crate::okf::model::{
     BuildOptions, BuildReport, ConceptDoc, Link, CONTAINS_CONN_TYPE, DEFAULT_LABEL, FOLDER_LABEL,
     SOURCE_LABEL, TAGGED_CONN_TYPE, TAG_LABEL,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// `(source_label, target_label, conn_type)` → `[(source_id, target_id)]`.
-type EdgeGroups = HashMap<(String, String, String), Vec<(String, String)>>;
+/// One connection row: the endpoints plus whatever properties the edge itself
+/// carries (VAULT.md §5.4 `section`/`anchor`, §6's `alt`/`ordinal`). Structural
+/// edges carry none, which keeps their frames two columns wide.
+type EdgeRow = (String, String, Vec<(String, Value)>);
+/// `(conn_type, source_label, target_label)` → the rows to emit for it. A
+/// `BTreeMap` keyed with the connection type first, because [`emit_groups`]
+/// needs every group of one type together and in a fixed order — see the
+/// initial-load note there.
+type EdgeGroups = BTreeMap<(String, String, String), Vec<EdgeRow>>;
 
 /// A finished build: the graph, and what the builder saw producing it.
 /// No `Debug` — `DirGraph` has none, and a graph is not a thing to format.
@@ -56,7 +63,7 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     build_nodes(&mut graph, &docs, opts, &mut report)?;
     build_aux_nodes(&mut graph, &docs, &mut report)?;
     build_folders(&mut graph, &docs, &walked.index_files, &mut report)?;
-    build_edges(&mut graph, &docs, &mut report)?;
+    build_edges(&mut graph, &docs, opts, &mut report)?;
     Ok(BuildOutput {
         graph: Arc::new(graph),
         report,
@@ -85,17 +92,52 @@ fn emit_groups(
     groups: EdgeGroups,
     report: &mut BuildReport,
 ) -> Result<(), String> {
-    for ((src_label, tgt_label, conn), pairs) in groups {
-        *report.edges_by_type.entry(conn.clone()).or_default() += pairs.len();
-        let rows: Vec<Vec<Value>> = pairs
+    // The initial-load regime belongs to the connection *type*, decided once
+    // before the first group of it is emitted. Letting each call re-detect it
+    // made the first group of a type keep its parallel edges while every later
+    // group folded duplicate endpoint pairs onto one — so two body links that
+    // differ only in `section` became two edges or one depending on hash
+    // order, and the same vault built two different graphs.
+    let fresh: BTreeSet<&str> = groups
+        .keys()
+        .map(|(conn, _, _)| conn.as_str())
+        .filter(|conn| !graph.connection_type_metadata.contains_key(*conn))
+        .collect();
+    let fresh: BTreeSet<String> = fresh.into_iter().map(str::to_string).collect();
+    for ((conn, src_label, tgt_label), edges) in groups {
+        *report.edges_by_type.entry(conn.clone()).or_default() += edges.len();
+        // One frame per group, so its columns are the union of the property
+        // keys any row in it carries; a row missing one gets Null, which
+        // `add_connections` drops rather than storing.
+        let prop_keys: Vec<String> = edges
+            .iter()
+            .flat_map(|(_, _, props)| props.iter().map(|(k, _)| k.clone()))
+            .collect::<BTreeSet<String>>()
             .into_iter()
-            .map(|(s, t)| vec![Value::String(s), Value::String(t)])
             .collect();
-        let df = DataFrame::from_cypher_rows(
-            vec!["source_id".to_string(), "target_id".to_string()],
-            rows,
-        )?;
-        maintain::add_connections(
+        let rows: Vec<Vec<Value>> = edges
+            .into_iter()
+            .map(|(s, t, props)| {
+                let mut row = Vec::with_capacity(2 + prop_keys.len());
+                row.push(Value::String(s));
+                row.push(Value::String(t));
+                for key in &prop_keys {
+                    row.push(
+                        props
+                            .iter()
+                            .find(|(k, _)| k == key)
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or(Value::Null),
+                    );
+                }
+                row
+            })
+            .collect();
+        let mut columns = vec!["source_id".to_string(), "target_id".to_string()];
+        columns.extend(prop_keys);
+        let df = DataFrame::from_cypher_rows(columns, rows)?;
+        let initial = maintain::InitialLoad::Preset(fresh.contains(&conn));
+        maintain::add_connections_with_initial_load(
             graph,
             df,
             conn,
@@ -106,6 +148,7 @@ fn emit_groups(
             None,
             None,
             Some("update".to_string()),
+            initial,
         )?;
     }
     Ok(())
@@ -169,18 +212,18 @@ fn build_folders(
     )?;
 
     // CONTAINS edges: folder → immediate child concepts and subfolders.
-    let mut groups: EdgeGroups = HashMap::new();
+    let mut groups: EdgeGroups = BTreeMap::new();
     for d in docs {
         let dir = super::parent_dir(doc_path(d));
         if !dir.is_empty() {
             groups
                 .entry((
+                    CONTAINS_CONN_TYPE.to_string(),
                     FOLDER_LABEL.to_string(),
                     d.label.clone(),
-                    CONTAINS_CONN_TYPE.to_string(),
                 ))
                 .or_default()
-                .push((dir.to_string(), d.concept_id.clone()));
+                .push((dir.to_string(), d.concept_id.clone(), Vec::new()));
         }
     }
     for dir in &dirs {
@@ -188,12 +231,12 @@ fn build_folders(
         if !parent.is_empty() {
             groups
                 .entry((
-                    FOLDER_LABEL.to_string(),
-                    FOLDER_LABEL.to_string(),
                     CONTAINS_CONN_TYPE.to_string(),
+                    FOLDER_LABEL.to_string(),
+                    FOLDER_LABEL.to_string(),
                 ))
                 .or_default()
-                .push((parent.to_string(), dir.clone()));
+                .push((parent.to_string(), dir.clone(), Vec::new()));
         }
     }
     emit_groups(graph, groups, report)
@@ -274,9 +317,13 @@ fn add_id_nodes(graph: &mut DirGraph, label: &str, ids: &BTreeSet<&str>) -> Resu
     Ok(())
 }
 
-/// The string items of a concept's `tags` frontmatter list (empty if none).
+/// The tags a concept joins the hub by: its `tags` frontmatter list, then the
+/// inline `#tag`s the vault profile found in its body, minus the ones already
+/// named by the frontmatter (VAULT.md §5.5). One `TAGGED` edge per distinct
+/// tag — writing a tag in both places is one membership, not two.
 fn doc_tags(d: &ConceptDoc) -> Vec<&str> {
-    d.props
+    let mut tags: Vec<&str> = d
+        .props
         .iter()
         .filter(|(k, _)| k == "tags")
         .flat_map(|(_, v)| match v {
@@ -289,6 +336,34 @@ fn doc_tags(d: &ConceptDoc) -> Vec<&str> {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         })
+        .collect();
+    for t in &d.inline_tags {
+        if !tags.contains(&t.as_str()) {
+            tags.push(t.as_str());
+        }
+    }
+    tags
+}
+
+/// A concept's `aliases:` entries — the names it also answers to in link
+/// resolution (VAULT.md §5.2, rung 3). A scalar `aliases: Foo` is read as the
+/// one-entry list it means.
+fn doc_aliases(d: &ConceptDoc) -> Vec<&str> {
+    d.props
+        .iter()
+        .filter(|(k, _)| k == "aliases")
+        .flat_map(|(_, v)| match v {
+            Value::List(items) => items
+                .iter()
+                .filter_map(|x| match x {
+                    Value::String(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            Value::String(s) => vec![s.as_str()],
+            _ => Vec::new(),
+        })
+        .filter(|s| !s.is_empty())
         .collect()
 }
 
@@ -300,7 +375,10 @@ fn build_nodes(
     opts: &BuildOptions,
     report: &mut BuildReport,
 ) -> Result<(), String> {
-    let mut by_label: HashMap<&str, Vec<&ConceptDoc>> = HashMap::new();
+    // Sorted, so the graph's node order is the same on every run: a `HashMap`
+    // here made node indices — and therefore a saved `.kgl`'s bytes — depend on
+    // hash order.
+    let mut by_label: BTreeMap<&str, Vec<&ConceptDoc>> = BTreeMap::new();
     for d in docs {
         by_label.entry(d.label.as_str()).or_default().push(d);
     }
@@ -379,10 +457,12 @@ pub(crate) fn column_value(v: &Value, native: bool) -> Value {
 fn build_edges(
     graph: &mut DirGraph,
     docs: &[ConceptDoc],
+    opts: &BuildOptions,
     report: &mut BuildReport,
 ) -> Result<(), String> {
-    let resolver = Resolver::new(docs);
-    let mut groups: EdgeGroups = HashMap::new();
+    let (resolver, alias_warnings) = Resolver::new(docs, &opts.profile);
+    report.warnings.extend(alias_warnings);
+    let mut groups: EdgeGroups = BTreeMap::new();
     // Dangling internal-link targets — concepts referenced but not present.
     let mut dangling: BTreeSet<String> = BTreeSet::new();
 
@@ -392,16 +472,33 @@ fn build_edges(
             let (target_label, target_id) = if link.is_external {
                 (SOURCE_LABEL.to_string(), link.target.clone())
             } else {
-                let (id, label) = resolver.resolve(link);
+                let (id, label) = resolver.resolve(link, super::parent_dir(doc_path(d)));
                 if !resolver.id_to_label.contains_key(id.as_str()) {
                     dangling.insert(id.clone());
                 }
                 (label, id)
             };
+            // A reversed link (a `parent:` pointing parent → child) is the same
+            // edge read from the other end, so only the endpoints swap.
+            let (src_label, src_id, tgt_label, tgt_id) = if link.reverse {
+                (
+                    target_label,
+                    target_id,
+                    d.label.clone(),
+                    d.concept_id.clone(),
+                )
+            } else {
+                (
+                    d.label.clone(),
+                    d.concept_id.clone(),
+                    target_label,
+                    target_id,
+                )
+            };
             groups
-                .entry((d.label.clone(), target_label, link.conn_type.clone()))
+                .entry((link.conn_type.clone(), src_label, tgt_label))
                 .or_default()
-                .push((d.concept_id.clone(), target_id));
+                .push((src_id, tgt_id, link.props.clone()));
         }
     }
 
@@ -411,6 +508,11 @@ fn build_edges(
     // than via the mutator's default `id` stub field.
     report.dangling = dangling.len();
     count_nodes(report, DEFAULT_LABEL, dangling.len());
+    // A dangling link is legitimate in a real vault — "referenced but not
+    // written" is a note to write, not a broken build (VAULT.md §9).
+    for id in &dangling {
+        report.warnings.push(format!("dangling link: `{id}`"));
+    }
     if !dangling.is_empty() {
         let rows: Vec<Vec<Value>> = dangling
             .iter()
@@ -435,12 +537,12 @@ fn build_edges(
         for tag in doc_tags(d) {
             groups
                 .entry((
+                    TAGGED_CONN_TYPE.to_string(),
                     d.label.clone(),
                     TAG_LABEL.to_string(),
-                    TAGGED_CONN_TYPE.to_string(),
                 ))
                 .or_default()
-                .push((d.concept_id.clone(), tag.to_string()));
+                .push((d.concept_id.clone(), tag.to_string(), Vec::new()));
         }
     }
 
@@ -469,10 +571,12 @@ fn normalize_slug(s: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// Forgiving link/wikilink → concept resolver. Tries, most-specific first:
-/// exact concept-id (path links) → exact file stem → normalized slug (full path
-/// or last segment) → normalized title. Unresolved targets keep their raw id and
-/// the default label — `add_connections` vivifies them as `_provisional` stubs.
+/// Forgiving link → concept resolver, one ladder for path links and wikilinks
+/// alike (VAULT.md §5.2). Tries, most-specific first: exact id → a
+/// vault-relative then note-relative path → exact file stem → an `aliases:`
+/// entry → normalized slug (full path or last segment) → normalized title.
+/// Unresolved targets keep their raw id and the default label —
+/// `add_connections` vivifies them as `_provisional` stubs.
 struct Resolver<'a> {
     id_to_label: HashMap<&'a str, &'a str>,
     /// File path minus `.md` → id. Identical to `id_to_label`'s keys under the
@@ -480,17 +584,25 @@ struct Resolver<'a> {
     /// `[text](sub/note.md)` path link resolving (VAULT.md §5.2).
     path_to_id: HashMap<&'a str, &'a str>,
     stem_to_id: HashMap<&'a str, &'a str>,
+    /// Empty unless [`Profile::alias_resolution`] is set.
+    alias_to_id: HashMap<&'a str, &'a str>,
     slug_to_id: HashMap<String, &'a str>,
     title_to_id: HashMap<String, &'a str>,
 }
 
 impl<'a> Resolver<'a> {
-    fn new(docs: &'a [ConceptDoc]) -> Self {
+    /// Build the ladder's indexes, and report the alias clashes found on the
+    /// way: an alias that names another note's stem, or that two notes both
+    /// claim, resolves to exactly one of them, so the vault's author needs to
+    /// know (VAULT.md §9, a warning — the graph is still usable).
+    fn new(docs: &'a [ConceptDoc], profile: &crate::okf::model::Profile) -> (Self, Vec<String>) {
         let mut id_to_label = HashMap::new();
         let mut path_to_id = HashMap::new();
         let mut stem_to_id = HashMap::new();
+        let mut alias_to_id = HashMap::new();
         let mut slug_to_id = HashMap::new();
         let mut title_to_id = HashMap::new();
+        let mut warnings = Vec::new();
         for d in docs {
             id_to_label.insert(d.concept_id.as_str(), d.label.as_str());
             let path = doc_path(d);
@@ -509,13 +621,42 @@ impl<'a> Resolver<'a> {
                 .entry(normalize_slug(&d.title))
                 .or_insert(d.concept_id.as_str());
         }
-        Self {
-            id_to_label,
-            path_to_id,
-            stem_to_id,
-            slug_to_id,
-            title_to_id,
+        if profile.alias_resolution {
+            for d in docs {
+                for alias in doc_aliases(d) {
+                    // The note's own stem is not a clash — an alias repeating
+                    // it is redundant, not ambiguous.
+                    if let Some(&owner) = stem_to_id.get(alias) {
+                        if owner != d.concept_id {
+                            warnings.push(format!(
+                                "alias `{alias}` on {} is already the file stem of `{owner}`; the stem wins",
+                                d.file_path
+                            ));
+                        }
+                        continue;
+                    }
+                    if let Some(&owner) = alias_to_id.get(alias) {
+                        warnings.push(format!(
+                            "alias `{alias}` is claimed by both `{owner}` and `{}`; the first wins",
+                            d.concept_id
+                        ));
+                        continue;
+                    }
+                    alias_to_id.insert(alias, d.concept_id.as_str());
+                }
+            }
         }
+        (
+            Self {
+                id_to_label,
+                path_to_id,
+                stem_to_id,
+                alias_to_id,
+                slug_to_id,
+                title_to_id,
+            },
+            warnings,
+        )
     }
 
     fn label_of(&self, id: &str) -> String {
@@ -526,17 +667,26 @@ impl<'a> Resolver<'a> {
             .to_string()
     }
 
-    fn resolve(&self, link: &Link) -> (String, String) {
+    /// Resolve one link's target to `(id, label)`. `source_dir` is the linking
+    /// note's directory, for the note-relative rung a `/`-bearing target gets
+    /// after the vault-relative one (VAULT.md §5.2).
+    fn resolve(&self, link: &Link, source_dir: &str) -> (String, String) {
         let t = link.target.as_str();
-        if !link.is_wikilink {
-            if let Some(lbl) = self.id_to_label.get(t) {
-                return (t.to_string(), lbl.to_string());
-            }
-            if let Some(id) = self.path_to_id.get(t) {
+        if let Some(lbl) = self.id_to_label.get(t) {
+            return (t.to_string(), lbl.to_string());
+        }
+        if let Some(id) = self.path_to_id.get(t) {
+            return ((*id).to_string(), self.label_of(id));
+        }
+        if t.contains('/') && !source_dir.is_empty() {
+            if let Some(id) = self.path_to_id.get(format!("{source_dir}/{t}").as_str()) {
                 return ((*id).to_string(), self.label_of(id));
             }
         }
         if let Some(id) = self.stem_to_id.get(t) {
+            return ((*id).to_string(), self.label_of(id));
+        }
+        if let Some(id) = self.alias_to_id.get(t) {
             return ((*id).to_string(), self.label_of(id));
         }
         let norm = normalize_slug(t);
@@ -560,6 +710,7 @@ mod tests {
     use super::*;
     use crate::graph::schema::InternedKey;
     use crate::graph::storage::GraphRead;
+    use crate::okf::model::{EMBEDS_CONN_TYPE, FOLDER_NOTE_CONN_TYPE};
     use std::collections::BTreeMap;
     use std::fs;
     use tempfile::tempdir;
@@ -820,27 +971,31 @@ mod tests {
         let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
         let r = build(&root, &opts).unwrap().report;
 
-        assert_eq!(r.files_scanned, 9);
-        assert_eq!(r.concepts, 9, "a note needs no frontmatter in a vault");
-        assert_eq!(r.dangling, 0);
+        assert_eq!(r.files_scanned, 11);
+        assert_eq!(r.concepts, 11, "a note needs no frontmatter in a vault");
+        assert_eq!(r.dangling, 1, "`[[Missing]]`, named by a `depends_on:`");
         assert_eq!(
             r.nodes_by_label,
             BTreeMap::from([
                 ("Note".to_string(), 1),       // welcome.md, at the root
-                ("Initiative".to_string(), 1), // atlas.md, from `type:`
+                ("Initiative".to_string(), 2), // atlas.md and seismic.md, from `type:`
                 ("projects".to_string(), 2),
-                ("notes".to_string(), 4),
+                ("notes".to_string(), 5),
                 ("archive".to_string(), 1),
                 (FOLDER_LABEL.to_string(), 4),
-                (TAG_LABEL.to_string(), 1),
+                (TAG_LABEL.to_string(), 3), // seismic, plus two inline `#tag`s
+                (DEFAULT_LABEL.to_string(), 1), // the `[[Missing]]` stub
             ])
         );
         assert_eq!(
             r.edges_by_type,
             BTreeMap::from([
-                (CONTAINS_CONN_TYPE.to_string(), 9),
-                ("LINKS_TO".to_string(), 3),
-                (TAGGED_CONN_TYPE.to_string(), 1),
+                (CONTAINS_CONN_TYPE.to_string(), 11),
+                ("LINKS_TO".to_string(), 6),
+                (EMBEDS_CONN_TYPE.to_string(), 1), // `![[old]]`
+                (FOLDER_NOTE_CONN_TYPE.to_string(), 1), // `parent: "[[atlas]]"`
+                ("DEPENDS_ON".to_string(), 2),     // the wikilink-valued key
+                (TAGGED_CONN_TYPE.to_string(), 4),
             ])
         );
 
@@ -852,13 +1007,14 @@ mod tests {
             "{}",
             r.errors[0]
         );
-        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
         assert!(
             r.warnings[0].contains("`Roadmap` (projects/Roadmap.md)")
                 && r.warnings[0].contains("`roadmap` (notes/roadmap.md)"),
             "{}",
             r.warnings[0]
         );
+        assert_eq!(r.warnings[1], "dangling link: `Missing`");
     }
 
     #[test]
@@ -896,7 +1052,12 @@ mod tests {
                 ("CONTAINS".to_string(), 1),
             ])
         );
-        assert!(r.errors.is_empty() && r.warnings.is_empty());
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(
+            r.warnings,
+            vec!["dangling link: `missing`".to_string()],
+            "the stub is reported as the warning VAULT.md §9 classifies it as"
+        );
         // The report must describe the graph that was actually built.
         assert_eq!(
             out.graph.graph.node_indices().count(),
@@ -905,6 +1066,365 @@ mod tests {
         assert_eq!(
             out.graph.graph.edge_count(),
             r.edges_by_type.values().sum::<usize>()
+        );
+    }
+
+    /// One edge as `(source id, conn type, target id, sorted properties)` —
+    /// the shape the vault link rules below are stated in.
+    type EdgeFacts = (String, String, String, Vec<(String, String)>);
+
+    fn edges_of(g: &DirGraph) -> Vec<EdgeFacts> {
+        let name = |n: petgraph::graph::NodeIndex| -> String {
+            g.node_view(n)
+                .map(|nd| match nd.id().into_owned() {
+                    Value::String(s) => s,
+                    other => format!("{other:?}"),
+                })
+                .unwrap_or_default()
+        };
+        let mut out: Vec<EdgeFacts> = g
+            .graph
+            .edge_indices()
+            .filter_map(|e| {
+                let (src, tgt) = g.graph.edge_endpoints(e)?;
+                let data = &g.graph[e];
+                let mut props: Vec<(String, String)> = data
+                    .property_keys(&g.interner)
+                    .map(|k| {
+                        (
+                            k.to_string(),
+                            match data.get_property(k) {
+                                Some(Value::String(s)) => s.clone(),
+                                other => format!("{other:?}"),
+                            },
+                        )
+                    })
+                    .collect();
+                props.sort();
+                Some((
+                    name(src),
+                    data.connection_type_str(&g.interner).to_string(),
+                    name(tgt),
+                    props,
+                ))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn vault_build(dir: &Path) -> BuildOutput {
+        build(
+            dir,
+            &BuildOptions::for_dialect(crate::okf::Dialect::Obsidian),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn vault_body_link_edges_carry_section_and_anchor() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "b.md", "leaf");
+        write(
+            dir.path(),
+            "a.md",
+            "First [[b]] is section-less.\n\n## Deep dive\n\nThen [[b#Goals]].",
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![
+                ("a".into(), "LINKS_TO".into(), "b".into(), vec![]),
+                (
+                    "a".into(),
+                    "LINKS_TO".into(),
+                    "b".into(),
+                    vec![
+                        ("anchor".to_string(), "Goals".to_string()),
+                        ("section".to_string(), "Deep dive".to_string()),
+                    ]
+                ),
+            ],
+            "two links differing only in their section are two edges"
+        );
+    }
+
+    /// Two links differing only in `section` survive *another* group of the
+    /// same connection type being emitted first. Re-detecting the initial-load
+    /// regime per call made that first group register `LINKS_TO`, which flipped
+    /// every later group into merging and folded these two onto one edge — so
+    /// the graph depended on which endpoint labels happened to sort first.
+    #[test]
+    fn vault_parallel_link_edges_survive_an_earlier_group_of_the_same_type() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "b.md", "leaf");
+        write(dir.path(), "zzz/a.md", "[[b]]\n\n## Sec\n\n[[b]] again");
+        write(dir.path(), "sub/c.md", "see [[b]]");
+        let out = vault_build(dir.path());
+        assert_eq!(
+            out.report.edges_by_type.get("LINKS_TO"),
+            Some(&3),
+            "the report counts three rows"
+        );
+        assert_eq!(
+            edges_of(&out.graph)
+                .iter()
+                .filter(|(_, c, _, _)| c == "LINKS_TO")
+                .count(),
+            3,
+            "and the graph holds three edges"
+        );
+    }
+
+    /// The ladder's first rungs apply to a wikilink too (VAULT.md §5.2): a
+    /// declared `id:` is a link target, and a `/`-bearing name is a path —
+    /// vault-relative first, then relative to the linking note.
+    #[test]
+    fn vault_wikilinks_resolve_by_id_and_by_path() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "notes/meeting.md", "---\nid: mtg-1\n---\nleaf");
+        write(dir.path(), "wing/sub/target.md", "leaf");
+        write(dir.path(), "wing/other.md", "leaf");
+        write(
+            dir.path(),
+            "wing/a.md",
+            "[[mtg-1]] and [[wing/sub/target]] and [[sub/target]]",
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(out.report.dangling, 0, "no rung fell through to a stub");
+        let targets: Vec<String> = edges_of(&out.graph)
+            .into_iter()
+            .filter(|(_, c, _, _)| c == "LINKS_TO")
+            .map(|(_, _, t, _)| t)
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                "mtg-1".to_string(),
+                "target".to_string(),
+                "target".to_string()
+            ],
+            "the vault-relative and note-relative spellings both reach that note"
+        );
+    }
+
+    #[test]
+    fn vault_embed_of_a_note_becomes_an_edge() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "b.md", "leaf");
+        write(dir.path(), "a.md", "![[b]] and ![[diagram.png]]");
+        let out = vault_build(dir.path());
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![("a".into(), "EMBEDS".into(), "b".into(), vec![])],
+            "an image embed is an attachment, not a link"
+        );
+        assert_eq!(out.report.dangling, 0, "and it mints no stub");
+    }
+
+    #[test]
+    fn vault_inline_tags_join_the_same_hub_without_touching_the_property() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.md",
+            "---\ntags:\n- alpha\n---\nAlso #beta, and #alpha again.",
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(count_label(&out.graph, TAG_LABEL), 2, "alpha, beta");
+        assert_eq!(
+            out.report.edges_by_type.get(TAGGED_CONN_TYPE),
+            Some(&2),
+            "writing `alpha` in both places is one membership"
+        );
+        let n = out
+            .graph
+            .graph
+            .node_indices()
+            .find(|&n| {
+                out.graph
+                    .node_view(n)
+                    .is_some_and(|nd| nd.node_type_str(&out.graph.interner) == "Note")
+            })
+            .unwrap();
+        assert_eq!(
+            GraphRead::get_node_property(&out.graph.graph, n, InternedKey::from_str("tags")),
+            Some(Value::List(vec![Value::String("alpha".into())])),
+            "the `tags` property still reports only the frontmatter"
+        );
+    }
+
+    #[test]
+    fn vault_alias_resolves_a_link_and_is_not_a_stub() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "seismic.md",
+            "---\naliases:\n- Seismic interpretation\n---\nleaf",
+        );
+        write(dir.path(), "a.md", "see [[Seismic interpretation]]");
+        let out = vault_build(dir.path());
+        assert_eq!(out.report.dangling, 0);
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![("a".into(), "LINKS_TO".into(), "seismic".into(), vec![])]
+        );
+        // A scalar `aliases:` names the one alias it spells.
+        write(
+            dir.path(),
+            "seismic.md",
+            "---\naliases: Seismic interpretation\n---\nleaf",
+        );
+        assert_eq!(vault_build(dir.path()).report.dangling, 0);
+    }
+
+    #[test]
+    fn vault_alias_collisions_warn() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "atlas.md", "leaf");
+        write(
+            dir.path(),
+            "one.md",
+            "---\naliases:\n- atlas\n---\nclaims a stem",
+        );
+        write(dir.path(), "two.md", "---\naliases:\n- shared\n---\nleaf");
+        write(dir.path(), "three.md", "---\naliases:\n- shared\n---\nleaf");
+        let r = vault_build(dir.path()).report;
+        assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
+        assert!(
+            r.warnings[0].contains("alias `atlas` on one.md") && r.warnings[0].contains("`atlas`"),
+            "{}",
+            r.warnings[0]
+        );
+        assert!(
+            r.warnings[1].contains("alias `shared`")
+                && r.warnings[1].contains("`three`")
+                && r.warnings[1].contains("`two`"),
+            "{}",
+            r.warnings[1]
+        );
+    }
+
+    #[test]
+    fn vault_wikilink_valued_frontmatter_keys_become_typed_edges() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "x.md", "leaf");
+        write(dir.path(), "y.md", "leaf");
+        write(
+            dir.path(),
+            "a.md",
+            "---\nsee_also: \"[[x]]\"\ndepends_on:\n- \"[[x]]\"\n- \"[[y]]\"\nreviewers:\n- \"[[x]]\"\n- ada\n---\nbody",
+        );
+        let out = vault_build(dir.path());
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![
+                ("a".into(), "DEPENDS_ON".into(), "x".into(), vec![]),
+                ("a".into(), "DEPENDS_ON".into(), "y".into(), vec![]),
+                ("a".into(), "SEE_ALSO".into(), "x".into(), vec![]),
+            ]
+        );
+        let n = out
+            .graph
+            .graph
+            .node_indices()
+            .find(|&n| {
+                out.graph.node_view(n).map(|nd| nd.id().into_owned())
+                    == Some(Value::String("a".into()))
+            })
+            .unwrap();
+        let prop =
+            |k: &str| GraphRead::get_node_property(&out.graph.graph, n, InternedKey::from_str(k));
+        assert_eq!(prop("see_also"), None, "an edge key is not also a property");
+        assert_eq!(prop("depends_on"), None);
+        assert_eq!(
+            prop("reviewers"),
+            Some(Value::List(vec![
+                Value::String("[[x]]".into()),
+                Value::String("ada".into()),
+            ])),
+            "a list mixing wikilinks with plain strings stays a property"
+        );
+    }
+
+    #[test]
+    fn vault_parent_key_emits_the_folder_note_edge_in_its_direction() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "atlas.md", "leaf");
+        write(dir.path(), "a.md", "---\nparent: \"[[atlas]]\"\n---\nbody");
+        let out = vault_build(dir.path());
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![("a".into(), "CHILD_OF".into(), "atlas".into(), vec![])],
+            "by default the child points at the parent"
+        );
+        assert_eq!(
+            GraphRead::get_node_property(
+                &out.graph.graph,
+                out.graph
+                    .graph
+                    .node_indices()
+                    .find(|&n| out.graph.node_view(n).map(|nd| nd.id().into_owned())
+                        == Some(Value::String("a".into())))
+                    .unwrap(),
+                InternedKey::from_str("parent")
+            ),
+            None,
+            "`parent:` is reserved, never a property"
+        );
+
+        let mut opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        opts.profile.folder_note_edge = "CONTAINS_NOTE".to_string();
+        opts.profile.folder_note_direction = crate::okf::FolderNoteDirection::ParentToChild;
+        let flipped = build(dir.path(), &opts).unwrap();
+        assert_eq!(
+            edges_of(&flipped.graph),
+            vec![("atlas".into(), "CONTAINS_NOTE".into(), "a".into(), vec![])],
+            "the profile names both the type and the direction"
+        );
+    }
+
+    #[test]
+    fn loose_keeps_every_vault_link_rule_off() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "x.md", "---\ntype: Note\n---\nleaf");
+        write(
+            dir.path(),
+            "a.md",
+            "---\ntype: Note\ndepends_on: \"[[x]]\"\naliases:\n- Ex\n---\n## Sec\n\n#tag and [[x]] and ![[x]] and [[Ex]]",
+        );
+        let out = build(
+            dir.path(),
+            &BuildOptions::for_dialect(crate::okf::Dialect::Loose),
+        )
+        .unwrap();
+        assert_eq!(
+            edges_of(&out.graph),
+            vec![
+                ("a".into(), "LINKS_TO".into(), "Ex".into(), vec![]),
+                ("a".into(), "LINKS_TO".into(), "x".into(), vec![]),
+            ],
+            "two plain wikilinks: no section, no EMBEDS, no frontmatter edge"
+        );
+        assert_eq!(
+            provisional_count(&out.graph),
+            1,
+            "`[[Ex]]` dangles — the alias rung is a vault rule"
+        );
+        assert_eq!(count_label(&out.graph, TAG_LABEL), 0);
+        assert_eq!(
+            GraphRead::get_node_property(
+                &out.graph.graph,
+                out.graph
+                    .graph
+                    .node_indices()
+                    .find(|&n| out.graph.node_view(n).map(|nd| nd.id().into_owned())
+                        == Some(Value::String("a".into())))
+                    .unwrap(),
+                InternedKey::from_str("depends_on")
+            ),
+            Some(Value::String("[[x]]".into())),
+            "the key stays an ordinary property outside a vault"
         );
     }
 
@@ -962,10 +1482,9 @@ mod tests {
             "a.md",
             "---\ntype: Note\n---\nsee [[feedback-cypher-first]] and [[Cypher First]]",
         );
-        let opts = BuildOptions {
-            dialect: crate::okf::model::Dialect::Loose,
-            ..BuildOptions::default()
-        };
+        // `for_dialect`, not a struct literal: the profile carries `wikilinks`
+        // now, and a literal would leave it off and test nothing.
+        let opts = BuildOptions::for_dialect(crate::okf::model::Dialect::Loose);
         let g = build(dir.path(), &opts).unwrap().graph;
         // both wikilinks resolve to the one file → 2 nodes, no provisional stub.
         assert_eq!(g.graph.node_indices().count(), 2);
@@ -980,10 +1499,9 @@ mod tests {
             "a.md",
             "---\ntype: Note\n---\nsee [[truly-absent]]",
         );
-        let opts = BuildOptions {
-            dialect: crate::okf::model::Dialect::Loose,
-            ..BuildOptions::default()
-        };
+        // `for_dialect`, not a struct literal: the profile carries `wikilinks`
+        // now, and a literal would leave it off and test nothing.
+        let opts = BuildOptions::for_dialect(crate::okf::model::Dialect::Loose);
         let g = build(dir.path(), &opts).unwrap().graph;
         assert_eq!(provisional_count(&g), 1);
     }

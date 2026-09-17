@@ -212,12 +212,16 @@ class TestOkfObsidianDialect:
 class TestVaultGoldenBundle:
     """The Obsidian vault dialect over the committed ``golden/vault`` bundle.
 
-    Nine notes across three top-level folders plus one root note, carrying a
+    Eleven notes across three top-level folders plus one root note, carrying a
     ``type:`` override, an ``id:`` override, a stem-collision pair, a
-    case-collision pair, a native list and an ISO date. The build *report* for
-    the same bundle (the collision error and warning) is asserted in Rust, at
-    ``okf::build::tests::golden_vault_bundle_report`` — the report has no Python
-    surface yet.
+    case-collision pair, a native list and an ISO date — plus the link
+    semantics of VAULT.md §5: ``aliases:``, a ``#section`` anchor, wikilink-
+    valued frontmatter keys (``depends_on:`` and the reserved ``parent:``),
+    inline ``#tags``, an ``![[embed]]`` and one dangling link. The build
+    *report* for the same bundle (the collision findings, the dangling
+    warning) is asserted in Rust, at
+    ``okf::build::tests::golden_vault_bundle_report`` — the report has no
+    Python surface yet.
     """
 
     def build(self):
@@ -227,11 +231,29 @@ class TestVaultGoldenBundle:
         # `type:` → top-level folder → `Note`. Folder names are used verbatim,
         # so a lowercase directory gives a lowercase label.
         assert _labels(self.build()) == Counter(
-            {"notes": 4, "Folder": 4, "projects": 2, "Note": 1, "Initiative": 1, "archive": 1, "Tag": 1}
+            {
+                "notes": 5,
+                "Folder": 4,
+                "Tag": 3,
+                "projects": 2,
+                "Initiative": 2,
+                "Note": 1,
+                "archive": 1,
+                "Concept": 1,  # the `[[Missing]]` stub, labelled as every dialect labels one
+            }
         )
 
     def test_edge_types(self):
-        assert _edge_types(self.build()) == Counter({"CONTAINS": 9, "LINKS_TO": 3, "TAGGED": 1})
+        assert _edge_types(self.build()) == Counter(
+            {
+                "CONTAINS": 11,
+                "LINKS_TO": 6,
+                "TAGGED": 4,
+                "DEPENDS_ON": 2,  # `depends_on:` names two wikilinks
+                "CHILD_OF": 1,  # the reserved `parent:` key
+                "EMBEDS": 1,  # `![[old]]`
+            }
+        )
 
     def test_ids_are_stems_declared_ids_and_collision_fallbacks(self):
         g = self.build()
@@ -239,14 +261,17 @@ class TestVaultGoldenBundle:
             r["id"] for r in g.cypher("MATCH (n) WHERE n.concept_id IS NOT NULL RETURN n.concept_id AS id").to_list()
         )
         assert ids == [
+            "Missing",  # the dangling `[[Missing]]` stub keeps its raw name
             "Roadmap",  # case-collision pair: ids are left alone
             "atlas",
+            "links",
             "mtg-2026-01",  # declared `id:` wins over the stem `meeting`
             "nested",  # a stem, three folders deep
             "notes/alpha",  # stem collision → path-relative fallback
             "old",
             "projects/alpha",
             "roadmap",
+            "seismic",
             "welcome",
         ]
 
@@ -303,6 +328,8 @@ class TestVaultGoldenBundle:
         rows = g.cypher("MATCH (f:Folder)-[:CONTAINS]->(c) RETURN f.id AS f, c.concept_id AS c, c.id AS fid").to_list()
         pairs = {(r["f"], r["c"] if r["c"] is not None else r["fid"]) for r in rows}
         assert pairs == {
+            ("projects", "seismic"),
+            ("notes", "links"),
             ("projects", "projects/alpha"),
             ("projects", "Roadmap"),
             ("projects", "atlas"),
@@ -314,14 +341,83 @@ class TestVaultGoldenBundle:
             ("archive", "old"),
         }
 
-    def test_links_resolve_with_no_stubs(self):
+    def test_links_resolve_through_the_ladder(self):
         g = self.build()
         edges = sorted(
             (r["a"], r["b"])
             for r in g.cypher("MATCH (a)-[:LINKS_TO]->(b) RETURN a.concept_id AS a, b.concept_id AS b").to_list()
         )
-        assert edges == [("nested", "atlas"), ("welcome", "atlas"), ("welcome", "old")]
-        assert g.cypher("MATCH (n {_provisional:true}) RETURN count(n) AS c").to_list()[0]["c"] == 0
+        assert edges == [
+            ("links", "Roadmap"),  # an exact id
+            ("links", "atlas"),  # `[[atlas#Overview]]` — the anchor never resolves
+            ("links", "seismic"),  # `[[Seismic interpretation]]` — an alias
+            ("nested", "atlas"),
+            ("welcome", "atlas"),
+            ("welcome", "old"),  # a path link, relative to the linking note
+        ]
+
+    def test_only_the_named_dangling_link_is_a_stub(self):
+        g = self.build()
+        stubs = g.cypher("MATCH (n {_provisional:true}) RETURN n.concept_id AS id").to_list()
+        assert stubs == [{"id": "Missing"}], "and `![[diagram.png]]` mints none"
+
+    def test_body_link_edges_carry_section_and_anchor(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (a)-[r:LINKS_TO]->(b) WHERE a.concept_id = 'links' "
+            "RETURN b.concept_id AS b, r.section AS section, r.anchor AS anchor ORDER BY b"
+        ).to_list()
+        assert rows == [
+            {"b": "Roadmap", "section": None, "anchor": None},  # above the first heading
+            {"b": "atlas", "section": "Deep dive", "anchor": "Overview"},
+            {"b": "seismic", "section": "Deep dive", "anchor": None},
+        ]
+
+    def test_embed_of_a_note_is_an_edge(self):
+        g = self.build()
+        rows = g.cypher("MATCH (a)-[:EMBEDS]->(b) RETURN a.concept_id AS a, b.concept_id AS b").to_list()
+        assert rows == [{"a": "links", "b": "old"}]
+
+    def test_wikilink_valued_frontmatter_keys_are_edges_not_properties(self):
+        g = self.build()
+        deps = sorted(
+            r["b"]
+            for r in g.cypher("MATCH (a {concept_id:'seismic'})-[:DEPENDS_ON]->(b) RETURN b.concept_id AS b").to_list()
+        )
+        assert deps == ["Missing", "atlas"]
+        # `parent:` emits the folder note's edge type and direction, not `PARENT`.
+        assert g.cypher("MATCH (a {concept_id:'seismic'})-[:CHILD_OF]->(b) RETURN b.concept_id AS b").to_list() == [
+            {"b": "atlas"}
+        ]
+        rows = g.cypher(
+            "MATCH (n {concept_id:'seismic'}) RETURN n.depends_on AS d, n.parent AS p, n.reviewers AS r, n.aliases AS a"
+        ).to_list()
+        assert rows == [
+            {
+                "d": None,
+                "p": None,
+                # a list mixing wikilinks with plain strings is never split
+                "r": ["[[atlas]]", "ada"],
+                "a": ["Seismic interpretation", "seismics"],
+            }
+        ]
+
+    def test_inline_tags_join_the_frontmatter_hub(self):
+        g = self.build()
+        tags = sorted(r["t"] for r in g.cypher("MATCH (t:Tag) RETURN t.id AS t").to_list())
+        assert tags == ["field-work", "geoscience", "seismic"], "`#incode` / fenced tags do not count"
+        tagged = sorted(
+            (r["a"], r["t"])
+            for r in g.cypher("MATCH (a)-[:TAGGED]->(t:Tag) RETURN a.concept_id AS a, t.id AS t").to_list()
+        )
+        assert tagged == [
+            ("atlas", "seismic"),
+            ("seismic", "field-work"),
+            ("seismic", "geoscience"),
+            ("seismic", "seismic"),
+        ]
+        # …and the `tags` property still reports only what the frontmatter said.
+        assert g.cypher("MATCH (n {concept_id:'seismic'}) RETURN n.tags AS t").to_list() == [{"t": ["seismic"]}]
 
     def test_build_is_deterministic(self):
         a, b = self.build(), self.build()

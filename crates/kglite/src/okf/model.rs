@@ -67,6 +67,15 @@ pub enum IdScheme {
     FrontmatterOrStem,
 }
 
+/// Which way a `parent:` / folder-note edge points (VAULT.md §2.3, §4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderNoteDirection {
+    /// The note carrying `parent:` is the source: `child -[CHILD_OF]-> parent`.
+    ChildToParent,
+    /// The named parent is the source: `parent -[CONTAINS]-> child`.
+    ParentToChild,
+}
+
 /// The conventions a dialect brings, as data rather than as `match` arms.
 ///
 /// A dialect name selects a `Profile`, and behaviour reads the profile's
@@ -115,6 +124,35 @@ pub struct Profile {
     /// option set on [`BuildOptions`] after that call still wins, in both
     /// directions.
     pub store_body: bool,
+    /// Read by [`crate::okf::links::extract`]: resolve `[[wikilink]]` syntax.
+    /// [`BuildOptions::for_dialect`] sets it from [`Dialect::wikilinks`], so
+    /// the dialect name stays the one place a user says "this vault uses
+    /// wikilinks" and every reader below asks the profile.
+    pub wikilinks: bool,
+    /// Read by [`crate::okf::links::extract`]: carry `section` (the enclosing
+    /// heading's text) and `anchor` (a link's `#fragment`) as edge properties
+    /// on every body link (VAULT.md §5.4).
+    pub link_edge_props: bool,
+    /// Read by [`crate::okf::links::extract`]: `![[Note]]` is an
+    /// [`EMBEDS_CONN_TYPE`] edge (VAULT.md §5.1). An embed naming a non-`.md`
+    /// file stays dropped either way — it is an attachment, not a link.
+    pub embeds: bool,
+    /// Read by [`crate::okf::links::extract`]: an inline `#tag` in the body
+    /// feeds the same `Tag` hub as `tags:` (VAULT.md §5.5). The `tags` list
+    /// property keeps saying exactly what the frontmatter said.
+    pub inline_tags: bool,
+    /// Read by `crate::okf::parse_file`: a frontmatter key whose value is a
+    /// wikilink string — or a list of nothing but wikilink strings — becomes
+    /// edges typed `UPPER_SNAKE(key)` instead of a property (VAULT.md §4.3).
+    pub frontmatter_edges: bool,
+    /// Read by [`crate::okf::build::Resolver`]: a note's `aliases:` entries
+    /// answer link resolution, between the stem and slug rungs (VAULT.md §5.2).
+    pub alias_resolution: bool,
+    /// Read by `crate::okf::parse_file`: the edge type a reserved `parent:`
+    /// emits, which P4 also gives the folder layout (VAULT.md §2.3, §4.3).
+    pub folder_note_edge: String,
+    /// Read by `crate::okf::parse_file`: which way that edge points.
+    pub folder_note_direction: FolderNoteDirection,
     /// Read by `crate::okf::parse_file`: retype a frontmatter string that is
     /// an ISO `YYYY-MM-DD` date or an RFC 3339 timestamp as the matching
     /// temporal `Value`. Top-level scalars only — a list element keeps the
@@ -137,6 +175,14 @@ impl Default for Profile {
             native_collections: false,
             require_frontmatter: true,
             store_body: false,
+            wikilinks: false,
+            link_edge_props: false,
+            embeds: false,
+            inline_tags: false,
+            frontmatter_edges: false,
+            alias_resolution: false,
+            folder_note_edge: FOLDER_NOTE_CONN_TYPE.to_string(),
+            folder_note_direction: FolderNoteDirection::ChildToParent,
             infer_temporal: false,
         }
     }
@@ -155,16 +201,28 @@ impl Profile {
             native_collections: true,
             require_frontmatter: false,
             store_body: true,
+            wikilinks: true,
+            link_edge_props: true,
+            embeds: true,
+            inline_tags: true,
+            frontmatter_edges: true,
+            alias_resolution: true,
             infer_temporal: true,
             ..Profile::default()
         }
     }
 
-    /// The profile a dialect selects.
+    /// The profile a dialect selects. `wikilinks` comes from the dialect
+    /// itself, which is why `Loose` is `Profile::default()` with that one
+    /// field flipped rather than a profile of its own.
     pub fn for_dialect(dialect: Dialect) -> Self {
-        match dialect {
+        let base = match dialect {
             Dialect::Okf | Dialect::Loose => Profile::default(),
             Dialect::Obsidian => Profile::obsidian(),
+        };
+        Profile {
+            wikilinks: dialect.wikilinks(),
+            ..base
         }
     }
 }
@@ -267,11 +325,33 @@ pub struct Link {
     /// Edge type from the inference ladder: explicit link title → section
     /// header → `LINKS_TO`.
     pub conn_type: String,
-    /// True when `target` is a wikilink awaiting builder resolution.
-    pub is_wikilink: bool,
     /// True when `target` is an external `http(s)` URL — becomes a `Source` node
     /// rather than resolving to a concept.
     pub is_external: bool,
+    /// Properties carried onto the edge itself (VAULT.md §5.4): `section` and
+    /// `anchor` for a body link under [`Profile::link_edge_props`]. The
+    /// builder emits them as extra columns on the connection frame, which is
+    /// the path P5's attachment `alt`/`ordinal` reuses.
+    pub props: Vec<(String, Value)>,
+    /// The edge runs target → this concept instead of the other way: a
+    /// `parent:` under [`FolderNoteDirection::ParentToChild`]. Two links
+    /// differing only here are two different edges, so it belongs to the
+    /// link's identity.
+    pub reverse: bool,
+}
+
+impl Link {
+    /// A plain outbound link with no edge properties — every link that is not
+    /// a vault body link, spelled once.
+    pub(crate) fn plain(target: String, conn_type: String, is_external: bool) -> Self {
+        Link {
+            target,
+            conn_type,
+            is_external,
+            props: Vec::new(),
+            reverse: false,
+        }
+    }
 }
 
 /// One parsed concept document. Partial by default: `body` is `None` unless
@@ -293,6 +373,10 @@ pub struct ConceptDoc {
     pub props: Vec<(String, Value)>,
     /// Resolved outbound links (becoming edges).
     pub links: Vec<Link>,
+    /// Inline `#tag` names found in the body, in first-use order (VAULT.md
+    /// §5.5). They join the `tags` frontmatter list at the `Tag` hub and
+    /// nowhere else — the `tags` property still reports only the frontmatter.
+    pub inline_tags: Vec<String>,
     /// Body markdown — `Some` only when `with_body` was requested.
     pub body: Option<String>,
 }
@@ -307,6 +391,10 @@ pub const DEFAULT_LABEL: &str = "Concept";
 /// (VAULT.md §2.1) named one — a root-level note with no `type:` and no
 /// `default_label:`.
 pub const VAULT_DEFAULT_LABEL: &str = "Note";
+/// Edge type for an `![[embed]]` of one note in another (VAULT.md §5.1).
+pub const EMBEDS_CONN_TYPE: &str = "EMBEDS";
+/// Default edge type for a folder note / reserved `parent:` key (VAULT.md §2.3).
+pub const FOLDER_NOTE_CONN_TYPE: &str = "CHILD_OF";
 /// Node label for synthesized tag nodes; edge type concept → tag.
 pub const TAG_LABEL: &str = "Tag";
 pub const TAGGED_CONN_TYPE: &str = "TAGGED";
@@ -338,9 +426,15 @@ mod tests {
         let opts = BuildOptions::for_dialect(Dialect::Obsidian);
         assert_eq!(opts.dialect, Dialect::Obsidian);
         assert_eq!(opts.profile, Profile::obsidian());
+        // Loose is the default profile with wikilinks on — the one convention
+        // the dialect name itself carries.
         assert_eq!(
             BuildOptions::for_dialect(Dialect::Loose).profile,
-            Profile::default()
+            Profile {
+                wikilinks: true,
+                ..Profile::default()
+            }
         );
+        assert!(!BuildOptions::for_dialect(Dialect::Okf).profile.wikilinks);
     }
 }

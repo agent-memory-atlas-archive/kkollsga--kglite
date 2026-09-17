@@ -24,7 +24,8 @@ pub mod walk;
 
 pub use build::{build, BuildOutput};
 pub use model::{
-    BuildOptions, BuildReport, ConceptDoc, Dialect, IdScheme, LabelFrom, Link, Profile,
+    BuildOptions, BuildReport, ConceptDoc, Dialect, FolderNoteDirection, IdScheme, LabelFrom, Link,
+    Profile,
 };
 
 use crate::datatypes::values::Value;
@@ -258,6 +259,10 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         .or_else(|| first_heading(&body))
         .unwrap_or_else(|| stem(doc_path).to_string());
 
+    // Wikilink-valued keys become edges, not properties (VAULT.md §4.3) —
+    // before `props` is built, because the rule *removes* the key.
+    let fm_links = frontmatter_edges(&mut fm, profile);
+
     let props: Vec<(String, Value)> = fm
         .into_iter()
         .map(|(k, v)| {
@@ -270,7 +275,11 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         })
         .collect();
     let source_dir = parent_dir(doc_path);
-    let links = links::extract_links(&body, source_dir, opts.dialect);
+    let extracted = links::extract(&body, source_dir, profile);
+    let mut all_links = extracted.links;
+    for link in fm_links {
+        links::push_unique(&mut all_links, link);
+    }
     let body = if opts.with_body { Some(body) } else { None };
 
     Ok(Some(ConceptDoc {
@@ -279,9 +288,63 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         label,
         title,
         props,
-        links,
+        links: all_links,
+        inline_tags: extracted.tags,
         body,
     }))
+}
+
+/// The keys §4.3's typed-edge rule never touches: `id`/`type`/`title` have
+/// already left the map, and these three are reserved for other meanings
+/// (VAULT.md §4.1). `parent` is reserved too, and is handled first — with a
+/// fixed edge type rather than one spelled by its key.
+const NON_EDGE_KEYS: [&str; 3] = ["aliases", "tags", model::SKIP_KEY];
+
+/// Drain the frontmatter keys whose value is a wikilink string, or a list of
+/// nothing but wikilink strings, into edges (VAULT.md §4.3). The raw property
+/// is not kept: storing both would duplicate it on export.
+fn frontmatter_edges(fm: &mut BTreeMap<String, Value>, profile: &Profile) -> Vec<Link> {
+    let mut out = Vec::new();
+    if !profile.frontmatter_edges {
+        return out;
+    }
+    // `parent:` is the reserved key that follows the rule with the folder
+    // note's edge type and direction, so a cross-listed note contributes the
+    // same edges the folder layout would have (VAULT.md §2.3, §4.3). It leaves
+    // the map whatever its shape: the key is reserved, never a property.
+    if let Some(v) = fm.remove("parent") {
+        if let Some(targets) = links::wikilink_targets(&v) {
+            let reverse =
+                profile.folder_note_direction == model::FolderNoteDirection::ParentToChild;
+            for target in targets {
+                out.push(Link {
+                    target,
+                    conn_type: profile.folder_note_edge.clone(),
+                    is_external: false,
+                    props: Vec::new(),
+                    reverse,
+                });
+            }
+        }
+    }
+    let edge_keys: Vec<String> = fm
+        .iter()
+        .filter(|(k, v)| {
+            !NON_EDGE_KEYS.contains(&k.as_str()) && links::wikilink_targets(v).is_some()
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    for key in edge_keys {
+        let conn_type = links::upper_snake(&key);
+        let value = fm.remove(&key).expect("key came from this map");
+        if conn_type.is_empty() {
+            continue;
+        }
+        for target in links::wikilink_targets(&value).expect("filtered on Some above") {
+            out.push(Link::plain(target, conn_type.clone(), false));
+        }
+    }
+    out
 }
 
 /// Coerce a frontmatter scalar to a display string for label/title use.
