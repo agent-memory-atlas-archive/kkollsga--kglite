@@ -9,6 +9,7 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.17.8] - 2026-09-18
 ### Added
 
 - Obsidian vault dialect (`dialect="obsidian"`): the format specified in
@@ -261,6 +262,17 @@ before upgrading.
   its attachments without being told where they are.
 
 ### Changed
+
+- **Rust API (`kglite::okf`), reported by `make semver-check` as four
+  major-class changes and shipped in this patch release per the project's
+  documented policy:** `okf::build` returns `BuildOutput { graph, report }`
+  instead of `Arc<DirGraph>`; `links::extract_links` and `walk::discover` take
+  the build options/profile instead of a `Dialect` or a `skip_dirs` slice;
+  `BuildOptions` gains `profile` and loses `embed`; `walk::DiscoveredFile`
+  gains `size`/`mtime`; `Dialect` gains the `Obsidian` variant; `Link` loses
+  the unread `is_wikilink` field. Downstream Rust embedders that construct
+  `BuildOptions` or `DiscoveredFile` as exhaustive struct literals (codingest's
+  docs pass) must add the new fields when they move their pin.
 
 - **Breaking for existing `dialect="obsidian"` callers**, who until now got
   `"loose"` behaviour: ids become stems rather than bundle-relative paths,

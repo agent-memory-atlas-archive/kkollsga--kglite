@@ -84,10 +84,16 @@
       "sha256": "5453340f1195c9394cbe92fdc2221b72a4969a73ba5043a0ee30145beb6a52f1",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release 0.17.7, 2026-09-16: two complete 37-cell release captures (100 minimum rounds, 20 warmups) agree closely: repeat median min delta -0.46%, worst +2.48%, best -4.22%, zero heavy-tail cells (no min sits 30% below its own median in either run). Against accepted 0_17_4.json, run 1 spans -2.4%..+4.8% and run 2 -2.6%..+3.0%; controls agree across runs -- cypher_match -0.0%/-0.0%, traversal +0.9%/-0.9%, hop1_deg3_memory +3.3%/+2.4%, untyped_edge_count_1m +3.7%/+2.3%, cypher_where +4.8%/+1.7% (its known heavy tail). Mac16,10 (M4, 16 GiB), Darwin 25.6.0, up 14 days; ordinary desktop load, run 1 at 3.66/2.52/2.41 and run 2 at 2.64/2.99/2.68, top consumers WindowServer 16-18%, iTerm2 ~5%, iLifeSlideshows 14% (run 1 only), several idle claude sessions; no runaway process and no simultaneous native build during either measurement -- the maturin release build completed before pytest started in both. The diff is confined to crates/kglite-mcp-server and touches no engine or perf-sensitive path. This is the quiet window the 0.17.5 and 0.17.6 rejections were owed; the reference advances from 0_17_4.json.",
+    "0_17_8.json": {
+      "evidence": "Darwin/arm64 (Mac16,10 M4) capture 2026-09-18 by make refresh-release-constants, immediately after the release-artifact build, no concurrent builds or benchmarks (the release server-binary build started after the capture finished). Versus accepted reference 0_17_7.json (min metric): worst +3.2% (exists_fixed_hop), 34 of 37 cells within [-6.0%, +2%]; controls traversal -2.5%, cypher_match +0.0%, cypher_where -4.1%, untyped_edge_count_1m -1.8% \u2014 instrument steady. No cell near the 20% gate, so no retake owed (protocol item 5). bench-anchor OK, worst +2.4% over 37 cells. The fused-aggregate label fix (c62969f4) reads -3.0%/-6.0% on the grouped_count_top_k cells that CI's first perf run flagged +41% (same-sha rerun: +7%/+9%; drift, see dev-docs plan).",
       "platform": "Darwin/arm64",
-      "sha256": "5453340f1195c9394cbe92fdc2221b72a4969a73ba5043a0ee30145beb6a52f1",
+      "sha256": "367279535374a6031a2d81da67764d84a87003ef8ad680b03c4151cb576a2961",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Darwin/arm64 (Mac16,10 M4) capture 2026-09-18 by make refresh-release-constants, immediately after the release-artifact build, no concurrent builds or benchmarks (the release server-binary build started after the capture finished). Versus accepted reference 0_17_7.json (min metric): worst +3.2% (exists_fixed_hop), 34 of 37 cells within [-6.0%, +2%]; controls traversal -2.5%, cypher_match +0.0%, cypher_where -4.1%, untyped_edge_count_1m -1.8% \u2014 instrument steady. No cell near the 20% gate, so no retake owed (protocol item 5). bench-anchor OK, worst +2.4% over 37 cells. The fused-aggregate label fix (c62969f4) reads -3.0%/-6.0% on the grouped_count_top_k cells that CI's first perf run flagged +41% (same-sha rerun: +7%/+9%; drift, see dev-docs plan).",
+      "platform": "Darwin/arm64",
+      "sha256": "367279535374a6031a2d81da67764d84a87003ef8ad680b03c4151cb576a2961",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -110,7 +116,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_17_7.json",
+    "Darwin/arm64": "0_17_8.json",
     "Linux/x86_64": "reference_0_17_0_cells.linux.json"
   },
   "schema_version": 1
