@@ -260,6 +260,12 @@ before upgrading.
   "already has an active writer" against a directory nothing else was writing.
   The lease now releases with an explicit `LOCK_UN`, as the `.kgl` writer lease
   already did.
+- `okf.build` no longer drops every link and picture written inside a heading
+  line. `## Heading ![alt](a.png)` set the section and moved on, so the
+  reference produced no node, no edge and no warning — and `## See [[Alice]]`
+  lost its link the same way. A heading is now scanned like any other body
+  line, and what it states carries that heading as its `section` (`VAULT.md`
+  §5.4), the same value the links below it carry.
 - `okf.build(dialect="obsidian"/"loose")` no longer turns an embedded image
   into a phantom node. `![[diagram.png]]` was read as an ordinary wikilink, so
   every embed minted a `_provisional` Concept stub named after the file. Under

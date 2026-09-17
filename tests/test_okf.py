@@ -223,7 +223,7 @@ class TestVaultGoldenBundle:
     inline ``#tags``, an ``![[embed]]`` and one dangling link; VAULT.md §6:
     an ``img/`` folder whose two PNGs and one PDF are reached by all three
     rungs of the resolution ladder, plus one reference to a file that is not
-    there; and VAULT.md §2.3–2.4: ``projects.md`` is the folder note for
+    there and one written inside a heading line; and VAULT.md §2.3–2.4: ``projects.md`` is the folder note for
     ``projects/`` and ``notes/index.md`` is an ordinary note. VAULT.md §7-§8:
     the bundle carries a ``.kglite/vault.yaml`` declaring ``default_label``, a
     case-folding ``keywords`` hub, a ``heading_edges`` entry, a ``types``
@@ -269,7 +269,7 @@ class TestVaultGoldenBundle:
         assert _edge_types(self.build()) == Counter(
             {
                 "CONTAINS": 8,
-                "LINKS_TO": 6,
+                "LINKS_TO": 7,
                 # four notes under the `projects` folder note, plus the reserved
                 # `parent:` key on seismic.md
                 "CHILD_OF": 5,
@@ -280,9 +280,10 @@ class TestVaultGoldenBundle:
                 # the vault's `heading_edges`
                 "RELATED_TO": 1,
                 "HAS_KEYWORD": 4,  # two notes x two folded keywords
-                # links.md reaches both images; seismic.md re-reaches faults.png
-                # from another folder by its bare filename
-                "HAS_IMAGE": 3,
+                # links.md reaches both images, plus faults.png again from a
+                # heading line; seismic.md re-reaches faults.png from another
+                # folder by its bare filename
+                "HAS_IMAGE": 4,
                 # index.md → handbook.pdf, links.md → the absent appendix
                 "HAS_ATTACHMENT": 2,
             }
@@ -383,6 +384,9 @@ class TestVaultGoldenBundle:
         assert edges == [
             ("links", "Roadmap"),  # an exact id
             ("links", "atlas"),  # `[[atlas#Overview]]` — the anchor never resolves
+            # the second `[[atlas]]`, written inside the `## Gallery` heading:
+            # a different `section` is a different edge (VAULT.md §5.4)
+            ("links", "atlas"),
             ("links", "seismic"),  # `[[Seismic interpretation]]` — an alias
             ("nested", "atlas"),
             ("welcome", "atlas"),
@@ -401,11 +405,14 @@ class TestVaultGoldenBundle:
         g = self.build()
         rows = g.cypher(
             "MATCH (a)-[r:LINKS_TO]->(b) WHERE a.concept_id = 'links' "
-            "RETURN b.concept_id AS b, r.section AS section, r.anchor AS anchor ORDER BY b"
+            "RETURN b.concept_id AS b, r.section AS section, r.anchor AS anchor ORDER BY b, section"
         ).to_list()
         assert rows == [
             {"b": "Roadmap", "section": None, "anchor": None},  # above the first heading
             {"b": "atlas", "section": "Deep dive", "anchor": "Overview"},
+            # a link written *in* a heading carries that heading verbatim —
+            # the same string the links below it carry
+            {"b": "atlas", "section": "Gallery ![in a heading](../img/faults.png) beside [[atlas]]", "anchor": None},
             {"b": "seismic", "section": "Deep dive", "anchor": None},
         ]
 
@@ -520,7 +527,7 @@ class TestVaultGoldenBundle:
         # not. `faults.png` is used by two notes, one alt text between them.
         g = self.build()
         assert g.cypher("MATCH (n:Image {path:'img/faults.png'}) RETURN n.text AS t").to_list() == [
-            {"t": "Fault map\nLink semantics\nseismic"}
+            {"t": "Fault map\nLink semantics\nin a heading\nseismic"}
         ]
 
     def test_attachment_edges_carry_alt_section_and_ordinal(self):
@@ -533,6 +540,15 @@ class TestVaultGoldenBundle:
             {"src": "links", "tgt": "img/faults.png", "alt": "Fault map", "section": "Figures", "ordinal": 0},
             # the `![[diagram.png]]` spelling carries no alt at all
             {"src": "links", "tgt": "img/diagram.png", "alt": None, "section": "Figures", "ordinal": 1},
+            # written inside the `## Gallery` heading: the reference counts,
+            # and its section is that heading verbatim
+            {
+                "src": "links",
+                "tgt": "img/faults.png",
+                "alt": "in a heading",
+                "section": "Gallery ![in a heading](../img/faults.png) beside [[atlas]]",
+                "ordinal": 2,
+            },
             # a second note numbers from zero again, above any heading
             {"src": "seismic", "tgt": "img/faults.png", "alt": "Fault map", "section": None, "ordinal": 0},
         ]

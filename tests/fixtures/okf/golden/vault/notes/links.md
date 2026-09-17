@@ -18,3 +18,8 @@ carries an anchor, and ![[old]] embeds a whole note.
 
 [[roadmap]] sits under a heading the built-in ladder reads as `RELATED`; a
 vault declaring `heading_edges` retypes the same link without touching it.
+
+## Gallery ![in a heading](../img/faults.png) beside [[atlas]]
+
+A heading line is a body line: the picture and the link written *in* it are
+both extracted, and both carry the whole heading as their `section`.

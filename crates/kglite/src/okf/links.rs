@@ -159,17 +159,24 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
         if in_fence {
             continue;
         }
-        if let Some(h) = heading_text(trimmed) {
-            // The heading's own `#`s are not a tag; a `#tag` written *in* the
-            // heading text still is (VAULT.md §5.5).
-            if profile.inline_tags {
-                scan_tags(h, &mut out.tags);
+        // A heading opens its section *and* is scanned like any other line:
+        // `## Overview ![map](img/x.png)` states a picture and
+        // `## See also [[Alice]]` states a link, and dropping either lost it
+        // with no node, no edge and no warning. What is scanned is the
+        // heading's own text, so the `#`s cannot land inside a target — and
+        // the section a reference on that line carries is that heading, the
+        // same string the links below it carry (VAULT.md §5.4).
+        let line = match heading_text(trimmed) {
+            Some(h) => {
+                current_heading = Some(h.to_string());
+                current_heading.as_deref().unwrap_or(raw)
             }
-            current_heading = Some(h.to_string());
-            continue;
-        }
+            None => raw,
+        };
+        // The heading's own `#`s are not a tag; a `#tag` written *in* the
+        // heading text still is (VAULT.md §5.5).
         if profile.inline_tags {
-            scan_tags(raw, &mut out.tags);
+            scan_tags(line, &mut out.tags);
         }
 
         let heading_conn = current_heading
@@ -177,7 +184,7 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
             .and_then(|h| conn_from_heading(h, profile));
         let section = current_heading.as_deref().filter(|h| !h.is_empty());
 
-        for cap in link_re().captures_iter(raw) {
+        for cap in link_re().captures_iter(line) {
             let m = cap.get(0).unwrap();
             // The markdown spelling is the one a tool percent-encodes, so it
             // is decoded here — before resolution *and* before the §9 path
@@ -187,7 +194,7 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
             // `![alt](src)` is never a link. Under the vault profile it is an
             // attachment reference instead (VAULT.md §6.1); otherwise it is
             // dropped, as it always was.
-            if m.start() > 0 && raw.as_bytes()[m.start() - 1] == b'!' {
+            if m.start() > 0 && line.as_bytes()[m.start() - 1] == b'!' {
                 if profile.path_safety {
                     record_path_error(&mut out.path_errors, dest, source_dir);
                 }
@@ -236,9 +243,9 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
         }
 
         if profile.wikilinks {
-            for cap in wikilink_re().captures_iter(raw) {
+            for cap in wikilink_re().captures_iter(line) {
                 let m = cap.get(0).unwrap();
-                let is_embed = m.start() > 0 && raw.as_bytes()[m.start() - 1] == b'!';
+                let is_embed = m.start() > 0 && line.as_bytes()[m.start() - 1] == b'!';
                 // A `#heading` anchor never affects resolution:
                 // `[[Note#Section]]` and `[[Note]]` reach the same node
                 // (VAULT.md §5.4). The fragment is kept as an edge property.
@@ -914,6 +921,106 @@ mod tests {
             vec![("section", "Notes"), ("anchor", "^b-12")],
             "a block reference keeps its caret"
         );
+    }
+
+    /// A heading line is a body line: every reference written on it counts,
+    /// and the section it carries is that heading. Before this, `links.rs`
+    /// set the heading and moved on, so `## Figures ![map](img/x.png)`
+    /// produced no node, no edge and no warning (8 pictures in the Petrel
+    /// corpus, found at P14).
+    #[test]
+    fn a_heading_line_states_its_own_links_and_pictures() {
+        let got = extract(
+            concat!(
+                "## Gallery ![in a heading](img/x.png) beside [[atlas]]\n",
+                "Below it: [[bob]].\n",
+            ),
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            attach(&got),
+            vec![(
+                "img/x.png",
+                Some("in a heading"),
+                Some("Gallery ![in a heading](img/x.png) beside [[atlas]]")
+            )],
+            "the picture is referenced, and its section is the heading it sits in"
+        );
+        let links: Vec<(&str, Vec<(&str, &str)>)> = got
+            .links
+            .iter()
+            .map(|l| (l.target.as_str(), props_of(l)))
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "atlas",
+                    vec![(
+                        "section",
+                        "Gallery ![in a heading](img/x.png) beside [[atlas]]"
+                    )]
+                ),
+                (
+                    "bob",
+                    vec![(
+                        "section",
+                        "Gallery ![in a heading](img/x.png) beside [[atlas]]"
+                    )]
+                ),
+            ],
+            "one section string for the heading's own link and for the line \
+             below it — two values would split one section into two edge groups"
+        );
+    }
+
+    /// The same for the other two spellings, plus the edge-type ladder and the
+    /// §9 path check, each of which the heading line used to skip.
+    #[test]
+    fn a_heading_lines_markdown_link_takes_the_headings_own_edge_type() {
+        let got = extract(
+            "## Related work, see [Alice](people/alice.md)\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(got.links.len(), 1);
+        assert_eq!(got.links[0].target, "people/alice");
+        assert_eq!(
+            got.links[0].conn_type, "RELATED",
+            "the heading types the link written on it, as it types the ones below"
+        );
+
+        let escaping = extract("## See ![map](../../etc/passwd.png)\n", "", &vault());
+        assert_eq!(
+            escaping.path_errors,
+            vec!["`../../etc/passwd.png` escapes the vault root".to_string()],
+            "a reference on a heading meets §9 like any other"
+        );
+    }
+
+    /// `okf`/`loose` gain the links a heading states and nothing else: the
+    /// three vault-only reads stay off.
+    #[test]
+    fn a_heading_line_is_scanned_in_every_dialect() {
+        for dialect in [Dialect::Okf, Dialect::Loose] {
+            let got = extract(
+                "## See [Alice](people/alice.md) #tag ![map](img/x.png)\n",
+                "",
+                &Profile::for_dialect(dialect),
+            );
+            assert_eq!(
+                got.links
+                    .iter()
+                    .map(|l| l.target.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["people/alice"],
+                "{dialect:?} reads the link and drops the image, as it does in prose"
+            );
+            assert!(got.attachments.is_empty(), "{dialect:?}");
+            assert!(got.tags.is_empty(), "{dialect:?}");
+            assert!(got.links[0].props.is_empty(), "{dialect:?}");
+        }
     }
 
     #[test]

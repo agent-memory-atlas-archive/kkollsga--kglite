@@ -247,7 +247,10 @@ folder layout would have.
 | `![[image.png]]`, `![alt](img/x.png)` | Attachment (§6), never a note link. |
 | `https://…` | An external `Source` node keyed by the URL. |
 
-Links inside fenced code blocks (``` or `~~~`) are ignored.
+Links inside fenced code blocks (``` or `~~~`) are ignored. A **heading line
+is scanned like any other line**: `## Overview ![map](img/x.png)` states a
+picture and `## See also [[Alice]]` states a link, and §5.4 says which section
+they carry.
 
 A **markdown-style** target — the `(…)` half of `[text](…)` and `![alt](…)` —
 is percent-decoded before it is resolved, because that is the spelling a tool
@@ -298,8 +301,12 @@ For a body link, the edge type is the first that applies:
 ### 5.4 Edge properties
 
 Every body link carries `section`, the enclosing heading's text verbatim
-(absent above the first heading). A fragment link also carries `anchor`, the
-fragment without its leading `#`. The fragment never affects resolution:
+(absent above the first heading). A link or attachment reference written *in* a
+heading line is enclosed by that heading, so it carries the same string as the
+links below it — including any markup the heading contains, because the text is
+verbatim; one section is one value, or a section would split into two edge
+groups. A fragment link also carries `anchor`, the fragment without its
+leading `#`. The fragment never affects resolution:
 `[[Note#Heading]]` and `[[Note]]` reach the same node.
 
 Two links from one note to one target are **two edges** when they differ in

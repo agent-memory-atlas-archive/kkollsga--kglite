@@ -87,7 +87,7 @@ fn golden_vault_bundle_report() {
         r.edges_by_type,
         BTreeMap::from([
             (CONTAINS_CONN_TYPE.to_string(), 8),
-            ("LINKS_TO".to_string(), 6),
+            ("LINKS_TO".to_string(), 7),
             // the `## Related topics` heading, retyped by `heading_edges`
             ("RELATED_TO".to_string(), 1),
             (EMBEDS_CONN_TYPE.to_string(), 1), // `![[old]]`
@@ -98,8 +98,9 @@ fn golden_vault_bundle_report() {
             (TAGGED_CONN_TYPE.to_string(), 4),
             // two notes × two folded keywords
             ("HAS_KEYWORD".to_string(), 4),
-            // links.md reaches both images; seismic.md re-reaches faults.png
-            (HAS_IMAGE_CONN_TYPE.to_string(), 3),
+            // links.md reaches both images and faults.png again from a
+            // heading line; seismic.md re-reaches faults.png
+            (HAS_IMAGE_CONN_TYPE.to_string(), 4),
             // index.md → handbook.pdf, links.md → the absent appendix
             (HAS_ATTACHMENT_CONN_TYPE.to_string(), 2),
         ])
