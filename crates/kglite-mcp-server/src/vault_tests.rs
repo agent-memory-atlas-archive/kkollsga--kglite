@@ -284,6 +284,53 @@ fn relevance_accepts_vault_content_and_rejects_editor_churn() {
     );
 }
 
+/// The policy is only worth anything if the producer's hook actually asks it.
+/// A hook that answered `true` for everything would rebuild the whole vault on
+/// every `.obsidian/workspace.json` rewrite — which Obsidian does on a pane
+/// focus — and nothing above would notice.
+#[test]
+fn the_hooks_relevance_asks_the_policy() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let (hooks, _report) = vault_hooks(root.clone(), Arc::new(RwLock::new(None)));
+    let ask = |relative: &str| {
+        let path = root.join(relative);
+        (hooks.is_relevant)(crate::tools::WorkspaceGraphRelevance::new(
+            &path,
+            WorkspaceGraphMode::Watch,
+        ))
+    };
+    assert!(ask("notes/alpha.md"), "a note is a build input");
+    assert!(ask(".kglite/vault.yaml"), "so is the vault config");
+    assert!(
+        !ask(".obsidian/workspace.json"),
+        "editor state changes nothing the build reads"
+    );
+}
+
+/// Without the `Mode::Vault` arm on the two watcher functions a vault server
+/// registers no watcher at all: it builds once at boot and then serves that
+/// graph forever, with `rebuild_graph` the only way to notice an edit. Nothing
+/// about the served output says so.
+#[test]
+fn vault_mode_arms_a_watcher_over_its_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_vault(temp.path());
+    let mode = Mode::Vault {
+        dir: temp.path().to_path_buf(),
+    };
+    let state = vault_state(temp.path());
+    assert!(
+        crate::watcher::mode_change_handler(&mode, &state).is_some(),
+        "vault mode must install a change handler"
+    );
+    assert_eq!(
+        crate::watcher::resolved_mode_watch_root(&mode).expect("resolve the watch root"),
+        Some(temp.path().canonicalize().expect("canonical root")),
+        "and register its own directory with the OS"
+    );
+}
+
 // ── The rebuild's skill refresh ───────────────────────────────────────────
 
 fn vault_state(root: &Path) -> GraphState {

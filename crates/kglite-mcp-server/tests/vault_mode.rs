@@ -238,9 +238,17 @@ fn a_vault_server_boots_serves_its_notes_and_carries_its_skills() {
         "the golden vault's Articles"
     );
 
-    // The graph-carried layers — `.kglite/skills/` and `.kglite/recipes/` —
-    // reach the graph only because vault mode is aliased at `skills.rs` and
-    // `graph_layer.rs`. Both fail silently when the arm is missed.
+    // The vault's own recipe catalogue reaches the router only because vault
+    // mode is aliased in `graph_layer.rs` — one of the three sites that fail
+    // silently when the arm is missed. The routes are the observable.
+    assert!(
+        tools.iter().any(|name| name == "list_recipe_queries")
+            && tools.iter().any(|name| name == "run_recipe_query"),
+        "the vault's carried recipes are served as routes: {tools:?}"
+    );
+
+    // And the nodes themselves are in the graph, which is what a rebuild
+    // re-reads them from.
     assert_eq!(
         server.count("MATCH (s:KgliteSkill) RETURN count(s) AS n"),
         1,
