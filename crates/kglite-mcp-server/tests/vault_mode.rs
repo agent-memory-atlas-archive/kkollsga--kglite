@@ -433,12 +433,11 @@ fn summary_text(result: &serde_json::Value) -> String {
         .join("\n")
 }
 
-/// **This test requires mcp-methods ≥ 0.4.12 and is expected red until the
-/// dependency bump lands.** The budget exemption for results carrying non-text
-/// content blocks is `054fb5c` on mcp-methods' `feat/binary-content-budget-exemption`
-/// branch, unpublished at the time of writing; against the pinned 0.4.11 this
-/// test fails exactly the way P13a predicted — the image block is replaced by a
-/// truncated JSON text preview. It is deliberately **not** `#[ignore]`d: a red
+/// **This test requires mcp-methods ≥ 0.4.12**, whose response budget exempts
+/// results carrying non-text content blocks. Against 0.4.11 it fails in one
+/// specific way — the image block is replaced by a truncated JSON text
+/// preview — so a red here is a dependency verdict, never a broken tool.
+/// It is deliberately **not** `#[ignore]`d: a red
 /// test naming its cause is the contract, and an ignored one would go green by
 /// disappearing.
 ///
@@ -511,7 +510,7 @@ fn fetch_images_delivers_image_blocks_through_the_real_response_budget() {
 
 /// The refusals an operator will actually hit, over the wire: a non-image
 /// attachment and a file past the per-image cap. Neither needs the budget
-/// exemption — both results are text — so this stays green on 0.4.11 and is
+/// exemption — both results are text — so this stays green on any mcp-methods and is
 /// the reason a red [`fetch_images_delivers_image_blocks_through_the_real_response_budget`]
 /// is a dependency verdict rather than a broken tool.
 #[test]
