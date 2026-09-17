@@ -434,6 +434,7 @@ pub fn parse_markdown(text: &str) -> Result<RecipeRecord, KgError> {
 /// `parameters` is emitted as JSON, which is YAML flow syntax: the schema is a
 /// nested document, and a flow mapping keeps it on one line without this
 /// module having to own a YAML block emitter as well.
+#[cfg(feature = "okf")]
 pub fn render_markdown(record: &RecipeRecord) -> String {
     let quoted = |text: &str| -> String {
         serde_json::to_string(text).unwrap_or_else(|_| format!("\"{}\"", text.replace('"', "'")))
