@@ -542,7 +542,7 @@ jobs:
         # skip is a pass — to pytest and to the `ci-success` aggregate job
         # alike — which is the exact "gate that cannot fail" shape those tests
         # exist to prevent.
-        run: pip install maturin pytest pytest-timeout pandas hypothesis pyyaml -r requirements/coverage.txt
+        run: pip install maturin pytest pytest-timeout pandas hypothesis pyyaml -r requirements/coverage.txt -r requirements/examples.txt
 
       - name: Install pyarrow for the coexistence canary (newest-python leg only)
         # Only the newest-python leg installs pyarrow, so tests/test_pyarrow_coexistence.py
