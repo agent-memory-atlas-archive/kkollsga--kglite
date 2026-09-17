@@ -9,6 +9,9 @@ workflows; these pages define callable/query syntax and supported contracts.
   procedures, divergences, and the machine-checked dialect contract.
 - **[Fluent API](fluent-api.md)** — selection, loading, traversal, algorithms,
   mutation, persistence, and introspection methods.
+- **[Vault format](vault-format.md)** — the markdown-vault contract the
+  `obsidian` dialect reads and writes: layout, frontmatter, links, attachments,
+  `vault.yaml`, and the converter checklist.
 - **[Rust API](../rust/api-reference.md)** — supported `kglite::api::*`
   boundary, with per-symbol details on [docs.rs](https://docs.rs/kglite).
 - **[C ABI](../rust/c-abi.md)** — generated-header/status/lifecycle contract
@@ -23,6 +26,7 @@ workflows; these pages define callable/query syntax and supported contracts.
 
 cypher-reference
 fluent-api
+vault-format
 ../autoapi/index
 ../rust/api-reference
 ../rust/c-abi

@@ -29,8 +29,11 @@ from kglite import okf
 # Strict OKF (bundle-relative markdown links)
 g = okf.build("path/to/bundle")
 
-# Loose / Obsidian: also resolve [[wikilinks]], tolerate missing `type`
-g = okf.build("path/to/memory", dialect="obsidian")
+# Loose: also resolve [[wikilinks]], tolerate missing `type`
+g = okf.build("path/to/memory", dialect="loose")
+
+# Obsidian vault: folder labels, stem ids, stored bodies, attachments
+g = okf.build("path/to/vault", dialect="obsidian")
 
 # Now query it like any graph
 g.cypher("MATCH (n) RETURN labels(n)[0] AS type, count(*) ORDER BY type")
@@ -46,7 +49,7 @@ across all of them in one sweep — plain docs are skipped, each project's tree
 becomes `Folder` nodes, and concept ids stay path-relative so they don't collide:
 
 ```python
-g = okf.build("~/code", dialect="obsidian")   # require_frontmatter=True
+g = okf.build("~/code", dialect="loose")   # require_frontmatter=True
 g.cypher("MATCH (f:Folder)-[:CONTAINS]->(m) "
          "RETURN split(m.concept_id, '/')[0] AS project, count(m) AS memories "
          "ORDER BY memories DESC")
@@ -77,7 +80,7 @@ graph is a rebuildable lens over it.
 | Bundle element | Graph element |
 |---|---|
 | A concept (`.md` file) | A node — label from frontmatter `type` (or `Concept`), id = path minus `.md` |
-| Frontmatter keys | Node properties (`tags`/lists → JSON string; nested `metadata:` → dotted keys `metadata.type`) |
+| Frontmatter keys | Node properties (`tags`/lists → a JSON string in the `okf` and `loose` dialects, a native list under `obsidian`; nested `metadata:` → dotted keys `metadata.type`) |
 | The markdown body | **Not stored** — a `file_path` pointer is kept; read on demand with `okf.source()` (or pass `with_body=True`) |
 | A markdown link | A typed directed edge (see the ladder below) |
 | `tags:` entries | `(:Concept)-[:TAGGED]->(:Tag)` — a Tag hub per distinct tag |
@@ -106,13 +109,29 @@ Link resolution is forgiving: a `[[wikilink]]` or path resolves by exact id →
 file stem → normalized slug (case- and `_`/`-`-insensitive) → title, so
 `[[my-note]]`, `[[My Note]]`, and `my_note.md` all reach the same concept.
 
+## Obsidian vaults
+
+`dialect="obsidian"` is its own contract, not a synonym for `"loose"`: labels
+come from the top-level folder (or a declared `default_label`), ids are
+filename stems so a folder move keeps a note's identity, bodies are stored,
+frontmatter lists stay lists, wikilink-valued frontmatter keys become typed
+edges, folder notes build a hierarchy, and referenced images become `Image`
+nodes you fetch as files rather than bytes in the graph. A `.kglite/vault.yaml`
+in the vault root declares property types, indexes, text indexes, an ontology
+and embed targets, and is re-applied on every rebuild.
+
+The format is specified in
+[VAULT.md](https://kglite.readthedocs.io/en/latest/reference/vault-format.html),
+which is also the checklist to follow when writing a converter from HTML or any
+other source into a vault. Check a vault with `kglite okf check <dir>`.
+
 ## Maintaining agent memory & skills
 
 Because the result is a normal graph, "tooling for memories and skills" is just
 queries — no new API:
 
 ```python
-g = okf.build("~/.claude/.../memory", dialect="obsidian")
+g = okf.build("~/.claude/.../memory", dialect="loose")
 
 # Orphaned memories: no *semantic* edge (every concept has a structural
 # CONTAINS from its Folder and TAGGED edges, so exclude those).
@@ -141,7 +160,7 @@ body = okf.source("~/.claude/.../memory/some-fact.md")
 The generated API reference documents {func}`kglite.okf.build` and
 {func}`kglite.okf.source` from the package stubs. `build(path, *,
 dialect="okf", with_body=False, embed=False)` returns a
-{class}`~kglite.KnowledgeGraph`. `dialect` is `"okf"` (default), `"loose"`, or
-`"obsidian"` (the Obsidian vault profile, which resolves wikilinks as `"loose"`
-does). `source(path)` returns a concept's markdown body with
-the frontmatter stripped.
+{class}`~kglite.KnowledgeGraph`. `dialect` is `"okf"` (default), `"loose"`
+(wikilinks, no `type` required), or `"obsidian"` (the vault format — see
+above). `source(path)` returns a concept's markdown body with the frontmatter
+stripped.

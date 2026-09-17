@@ -22,6 +22,7 @@ engine. The `.kgl` file format is portable across all bindings.
 **[Python quickstart](python/getting-started.md)** ·
 **[Cypher reference](reference/cypher-reference.md)** ·
 **[Fluent API](reference/fluent-api.md)** ·
+**[Vault format](reference/vault-format.md)** ·
 **[Rust quickstart](rust/index.md)** ·
 **[Operators and deployment](operators/index.md)** ·
 **[Reference](reference/index.md)**
