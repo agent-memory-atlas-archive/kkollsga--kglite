@@ -104,7 +104,11 @@ snapshots and external references all key on it.
 **Stem collisions.** When two or more notes share a stem and neither declares
 an `id:`, every colliding note falls back to its vault-relative path minus
 `.md` (`projects/alpha`, `archive/alpha`), and the collision is reported as an
-error. Notes that do not collide keep their stems.
+error. Notes that do not collide keep their stems. The same fallback settles
+two notes that declare the *same* `id:`, and a fallback that collides in turn
+(a note declaring `id: archive/alpha` while `archive/alpha.md` exists) — the
+alternative is merging two notes into one node, which loses one of them
+silently.
 
 **Case-insensitive collisions.** `Foo.md` and `foo.md` in one directory, or two
 ids differing only in case, are reported as a warning on every host — a vault
@@ -137,9 +141,11 @@ Every other key becomes a node property, or edges under the rule in §4.3.
   JSON string). This is dialect-specific: `okf` and `loose` keep JSON strings.
 - Nested maps flatten to dotted keys: `metadata: {source: vendor}` becomes the
   property `metadata.source`.
-- A string matching `YYYY-MM-DD` becomes a **date**; a string matching RFC 3339
-  becomes a **datetime**. A value that must stay text despite matching is
-  declared `string` in `types:` (§7) — quoting alone does not stop inference.
+- A **top-level** string matching `YYYY-MM-DD` becomes a **date**; one matching
+  RFC 3339 becomes a **datetime**, normalised to UTC. A value that must stay
+  text despite matching is declared `string` in `types:` (§7) — quoting alone
+  does not stop inference. Inference does not reach inside a sequence: a tag
+  literally named `2026-01-15` stays the string the tag hub needs.
 - `types:` overrides inference per label and property. Declared beats inferred.
 - The note's prose is stored under the property named by `body:` (default
   `body`), verbatim, frontmatter stripped.
@@ -233,8 +239,9 @@ a `#` that begins a line and is followed by a space (that is a heading).
 
 ### 5.6 Unresolved targets
 
-An unresolved link target becomes a `_provisional: true` stub node whose id is
-the unresolved name, so "referenced but not written" is one Cypher query. Stubs
+An unresolved link target becomes a `_provisional: true` stub node, labelled
+`Concept` and keyed by the unresolved name, so "referenced but not written" is
+one Cypher query and the stubs never mix with the notes' own labels. Stubs
 are counted in the build report and are never exported as files (§10).
 
 ## 6. Attachments

@@ -23,10 +23,14 @@ pub mod model;
 pub mod walk;
 
 pub use build::{build, BuildOutput};
-pub use model::{BuildOptions, BuildReport, ConceptDoc, Dialect, Link, Profile};
+pub use model::{
+    BuildOptions, BuildReport, ConceptDoc, Dialect, IdScheme, LabelFrom, Link, Profile,
+};
 
 use crate::datatypes::values::Value;
+use model::IdScheme as Ids;
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Read a concept's markdown body on demand (frontmatter stripped). The
@@ -52,13 +56,119 @@ pub fn parse_bundle(root: &Path, opts: &BuildOptions) -> Result<Vec<ConceptDoc>,
 /// by [`parse_bundle`], the builder, and codingest's docs pass (which reuses
 /// the OKF parser to ingest a repo's markdown).
 pub fn parse_concepts(files: &[walk::DiscoveredFile], opts: &BuildOptions) -> Vec<ConceptDoc> {
+    parse_concepts_reported(files, opts).0
+}
+
+/// What id resolution found, in the `BuildReport` vocabulary: a collision that
+/// forced ids to change is an error (VAULT.md §9), a case-only clash that a
+/// case-insensitive filesystem would turn into one is a warning.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct IdFindings {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// [`parse_concepts`] plus the findings the build report wants. One
+/// implementation, because id resolution *is* the collision detector: the
+/// findings fall out of the pass that rewrites the colliding ids, and
+/// recomputing them in the builder would be a second walk over the same map.
+pub(crate) fn parse_concepts_reported(
+    files: &[walk::DiscoveredFile],
+    opts: &BuildOptions,
+) -> (Vec<ConceptDoc>, IdFindings) {
     let mut docs: Vec<ConceptDoc> = files
         .par_iter()
         .filter_map(|f| parse_file(f, opts).ok().flatten())
         .collect();
-    // Stable order for reproducible builds / tests.
+    // Stable order for reproducible builds / tests — and for a deterministic
+    // collision pass, which reads the docs in this order.
     docs.sort_by(|a, b| a.concept_id.cmp(&b.concept_id));
-    docs
+    let findings = resolve_ids(&mut docs, opts);
+    if !findings.errors.is_empty() {
+        // Ids changed under the fallback; restore the ordering invariant.
+        docs.sort_by(|a, b| a.concept_id.cmp(&b.concept_id));
+    }
+    (docs, findings)
+}
+
+/// The path-relative id a note falls back to: its vault-relative path minus
+/// `.md`. Unique across a walk by construction, which is what makes it the
+/// collision escape hatch.
+fn path_id(doc: &ConceptDoc) -> String {
+    doc.file_path
+        .strip_suffix(".md")
+        .unwrap_or(&doc.file_path)
+        .to_string()
+}
+
+/// Settle id collisions among already-parsed notes (VAULT.md §3).
+///
+/// Only the stem-based scheme can collide — a path id is unique by
+/// construction — so the whole pass is skipped for OKF bundles, leaving their
+/// report byte-identical. Every note in a colliding group falls back to its
+/// path id, including a group that collided because two notes declared the
+/// same `id:`; leaving those merged would silently lose a note.
+///
+/// The loop re-checks because a fallback can itself collide (a note declaring
+/// `id: notes/alpha` while `notes/alpha.md` exists). Path ids are unique, so a
+/// group of them cannot re-form: two rounds always suffice, and the third is
+/// the guard that says so.
+fn resolve_ids(docs: &mut [ConceptDoc], opts: &BuildOptions) -> IdFindings {
+    let mut findings = IdFindings::default();
+    if opts.profile.id_scheme != Ids::FrontmatterOrStem {
+        return findings;
+    }
+    for _ in 0..3 {
+        let mut by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (i, d) in docs.iter().enumerate() {
+            by_id.entry(d.concept_id.clone()).or_default().push(i);
+        }
+        let colliding: Vec<(String, Vec<usize>)> =
+            by_id.into_iter().filter(|(_, idx)| idx.len() > 1).collect();
+        if colliding.is_empty() {
+            break;
+        }
+        for (id, idx) in colliding {
+            let paths: Vec<&str> = idx.iter().map(|&i| docs[i].file_path.as_str()).collect();
+            findings.errors.push(format!(
+                "id collision: {} notes resolve to id `{id}` ({}); each falls back to its path-relative id",
+                idx.len(),
+                paths.join(", ")
+            ));
+            for &i in &idx {
+                let fallback = path_id(&docs[i]);
+                docs[i].concept_id = fallback;
+            }
+        }
+    }
+
+    // Case-only clashes survive on a case-sensitive host and merge on a
+    // case-insensitive one, so they are reported regardless of where the build
+    // ran (VAULT.md §3).
+    let mut folded: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, d) in docs.iter().enumerate() {
+        folded
+            .entry(d.concept_id.to_lowercase())
+            .or_default()
+            .push(i);
+    }
+    for (_, idx) in folded {
+        let distinct: BTreeMap<&str, &str> = idx
+            .iter()
+            .map(|&i| (docs[i].concept_id.as_str(), docs[i].file_path.as_str()))
+            .collect();
+        if distinct.len() > 1 {
+            let pairs: Vec<String> = distinct
+                .iter()
+                .map(|(id, path)| format!("`{id}` ({path})"))
+                .collect();
+            findings.warnings.push(format!(
+                "case-insensitive id collision: {}",
+                pairs.join(", ")
+            ));
+        }
+    }
+    findings
 }
 
 /// Parse one discovered file into a [`ConceptDoc`]. Returns `Ok(None)` when the
@@ -74,11 +184,8 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         return Ok(None);
     }
 
-    let concept_id = f
-        .rel_path
-        .strip_suffix(".md")
-        .unwrap_or(&f.rel_path)
-        .to_string();
+    let profile = &opts.profile;
+    let doc_path = f.rel_path.strip_suffix(".md").unwrap_or(&f.rel_path);
 
     // Malformed YAML degrades to an empty frontmatter map (the concept still
     // becomes a node — losing the file entirely would be worse).
@@ -89,22 +196,55 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         return Ok(None);
     }
 
-    // Label: top-level `type` → `metadata.type` (Claude memories) → `Concept`.
-    let label = fm
+    // Id (VAULT.md §3): the path, or — in a vault — a declared `id:` falling
+    // back to the filename stem. A declared id is the node's identity, not a
+    // property, so it leaves the frontmatter map; `resolve_ids` settles any
+    // collision once every note is parsed.
+    let concept_id = match profile.id_scheme {
+        Ids::Path => doc_path.to_string(),
+        Ids::FrontmatterOrStem => fm
+            .remove("id")
+            .map(value_to_display)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| stem(doc_path).to_string()),
+    };
+
+    // Label ladder (VAULT.md §2.1): `type` → `metadata.type` (Claude memories)
+    // → the profile's default label → the top-level folder → the fallback.
+    // `label_from: Folder` moves the folder rung to the front, so a folder move
+    // relabels a note that carries a `type:` too. `type` leaves the map either
+    // way: the label is derived, never stored.
+    let declared = fm
         .remove("type")
         .map(value_to_display)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
+        .filter(|s| !s.is_empty());
+    let meta_type = profile
+        .metadata_type_label
+        .then(|| {
             fm.get("metadata.type")
                 .cloned()
                 .map(value_to_display)
                 .filter(|s| !s.is_empty())
         })
-        .unwrap_or_else(|| model::DEFAULT_LABEL.to_string());
+        .flatten();
+    let folder = profile
+        .folder_label
+        .then(|| top_folder(doc_path).map(str::to_string))
+        .flatten();
+    let ladder = match profile.label_from {
+        LabelFrom::Type => [declared, meta_type, profile.default_label.clone(), folder],
+        LabelFrom::Folder => [folder, declared, meta_type, profile.default_label.clone()],
+    };
+    let label = ladder
+        .into_iter()
+        .flatten()
+        .next()
+        .unwrap_or_else(|| profile.fallback_label.clone());
 
     // Title: `title` → `name` (Claude memories) → first `# H1` heading (so a
     // frontmatter-less README/doc gets its real title, not the file stem) →
-    // file stem.
+    // file stem. The stem comes from the *path*, not the id, so a note with a
+    // declared `id:` is still titled after its file.
     let title = fm
         .remove("title")
         .map(value_to_display)
@@ -116,10 +256,20 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
                 .filter(|s| !s.is_empty())
         })
         .or_else(|| first_heading(&body))
-        .unwrap_or_else(|| stem(&concept_id).to_string());
+        .unwrap_or_else(|| stem(doc_path).to_string());
 
-    let props: Vec<(String, Value)> = fm.into_iter().collect();
-    let source_dir = parent_dir(&concept_id);
+    let props: Vec<(String, Value)> = fm
+        .into_iter()
+        .map(|(k, v)| {
+            let v = if profile.infer_temporal {
+                frontmatter::infer_temporal(v)
+            } else {
+                v
+            };
+            (k, v)
+        })
+        .collect();
+    let source_dir = parent_dir(doc_path);
     let links = links::extract_links(&body, source_dir, opts.dialect);
     let body = if opts.with_body { Some(body) } else { None };
 
@@ -170,6 +320,13 @@ fn first_heading(body: &str) -> Option<String> {
 /// Last path component of a concept-id (the file stem).
 fn stem(concept_id: &str) -> &str {
     concept_id.rsplit('/').next().unwrap_or(concept_id)
+}
+
+/// The **top-level** folder of a bundle-relative path — the label rung in
+/// VAULT.md §2.1, so a note nested three deep is still labelled by the folder
+/// its branch hangs off. `None` for a note at the root.
+fn top_folder(doc_path: &str) -> Option<&str> {
+    doc_path.split_once('/').map(|(head, _)| head)
 }
 
 /// Directory portion of a concept-id (`""` at the bundle root). `pub(crate)` so
@@ -353,6 +510,320 @@ mod tests {
             "label falls back to metadata.type"
         );
         assert_eq!(docs[0].title, "Cypher First", "title falls back to name");
+    }
+
+    /// Parse a vault with the obsidian profile, returning docs + findings.
+    fn vault(dir: &Path) -> (Vec<ConceptDoc>, IdFindings) {
+        let opts = BuildOptions::for_dialect(Dialect::Obsidian);
+        let walked = walk::discover(dir, &opts).unwrap();
+        parse_concepts_reported(&walked.concepts, &opts)
+    }
+
+    fn doc<'a>(docs: &'a [ConceptDoc], id: &str) -> &'a ConceptDoc {
+        docs.iter()
+            .find(|d| d.concept_id == id)
+            .unwrap_or_else(|| panic!("no doc with id `{id}` in {:?}", ids(docs)))
+    }
+
+    fn ids(docs: &[ConceptDoc]) -> Vec<&str> {
+        docs.iter().map(|d| d.concept_id.as_str()).collect()
+    }
+
+    #[test]
+    fn vault_label_ladder_walks_type_then_folder_then_note() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "root.md", "Just prose at the vault root.");
+        write(dir.path(), "Geology/faults.md", "A note in a folder.");
+        write(
+            dir.path(),
+            "Geology/deep/nested.md",
+            "Three deep, still Geology.",
+        );
+        write(
+            dir.path(),
+            "Geology/typed.md",
+            "---\ntype: Initiative\n---\nAn explicit type wins.",
+        );
+        let (docs, _) = vault(dir.path());
+        assert_eq!(doc(&docs, "root").label, "Note", "no folder, no type");
+        assert_eq!(doc(&docs, "faults").label, "Geology", "top-level folder");
+        assert_eq!(
+            doc(&docs, "nested").label,
+            "Geology",
+            "the TOP-level folder, not the immediate parent"
+        );
+        assert_eq!(doc(&docs, "typed").label, "Initiative");
+    }
+
+    #[test]
+    fn vault_default_label_sits_between_type_and_folder() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "root.md", "root prose");
+        write(dir.path(), "Geology/faults.md", "folder prose");
+        write(
+            dir.path(),
+            "Geology/typed.md",
+            "---\ntype: Initiative\n---\nprose",
+        );
+        let mut opts = BuildOptions::for_dialect(Dialect::Obsidian);
+        opts.profile.default_label = Some("Article".to_string());
+        let walked = walk::discover(dir.path(), &opts).unwrap();
+        let docs = parse_concepts(&walked.concepts, &opts);
+        assert_eq!(doc(&docs, "root").label, "Article");
+        assert_eq!(
+            doc(&docs, "faults").label,
+            "Article",
+            "the default label outranks the folder rung"
+        );
+        assert_eq!(doc(&docs, "typed").label, "Initiative");
+    }
+
+    #[test]
+    fn label_from_folder_puts_the_folder_rung_first() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "Geology/typed.md",
+            "---\ntype: Initiative\n---\nprose",
+        );
+        write(dir.path(), "root.md", "---\ntype: Initiative\n---\nprose");
+        let mut opts = BuildOptions::for_dialect(Dialect::Obsidian);
+        opts.profile.label_from = LabelFrom::Folder;
+        let walked = walk::discover(dir.path(), &opts).unwrap();
+        let docs = parse_concepts(&walked.concepts, &opts);
+        assert_eq!(
+            doc(&docs, "typed").label,
+            "Geology",
+            "the folder wins over an explicit type"
+        );
+        assert_eq!(
+            doc(&docs, "root").label,
+            "Initiative",
+            "a root note has no folder rung, so type is next"
+        );
+    }
+
+    #[test]
+    fn vault_ignores_the_metadata_type_rung() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "memo.md",
+            "---\nmetadata:\n  type: feedback\n---\nprose",
+        );
+        let (docs, _) = vault(dir.path());
+        assert_eq!(docs[0].label, "Note");
+        assert_eq!(
+            docs[0].props.iter().find(|(k, _)| k == "metadata.type"),
+            Some(&(
+                "metadata.type".to_string(),
+                Value::String("feedback".into())
+            )),
+            "still an ordinary property"
+        );
+    }
+
+    #[test]
+    fn vault_id_is_the_stem_or_the_declared_id() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "notes/meeting.md", "---\nid: mtg-1\n---\nprose");
+        write(dir.path(), "notes/plain.md", "prose");
+        write(dir.path(), "notes/numeric.md", "---\nid: 4711\n---\nprose");
+        let (docs, findings) = vault(dir.path());
+        assert_eq!(ids(&docs), vec!["4711", "mtg-1", "plain"]);
+        assert_eq!(findings, IdFindings::default());
+        assert!(
+            !doc(&docs, "mtg-1").props.iter().any(|(k, _)| k == "id"),
+            "a declared id is identity, not a property"
+        );
+        assert_eq!(
+            doc(&docs, "mtg-1").title,
+            "meeting",
+            "title still falls back to the FILE stem"
+        );
+    }
+
+    #[test]
+    fn okf_dialect_keeps_path_ids_and_an_id_property() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "notes/meeting.md",
+            "---\ntype: Note\nid: mtg-1\n---\nprose",
+        );
+        let opts = BuildOptions::default();
+        let docs = parse_bundle(dir.path(), &opts).unwrap();
+        assert_eq!(ids(&docs), vec!["notes/meeting"]);
+        assert!(docs[0].props.iter().any(|(k, _)| k == "id"));
+    }
+
+    #[test]
+    fn colliding_stems_fall_back_to_path_ids_and_report_an_error() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects/alpha.md", "prose");
+        write(dir.path(), "archive/alpha.md", "prose");
+        write(dir.path(), "solo.md", "prose");
+        let (docs, findings) = vault(dir.path());
+        assert_eq!(ids(&docs), vec!["archive/alpha", "projects/alpha", "solo"]);
+        assert_eq!(findings.errors.len(), 1);
+        assert!(
+            findings.errors[0].contains("`alpha`")
+                && findings.errors[0].contains("archive/alpha.md")
+                && findings.errors[0].contains("projects/alpha.md"),
+            "the error names the id and both paths: {}",
+            findings.errors[0]
+        );
+        assert!(findings.warnings.is_empty());
+    }
+
+    #[test]
+    fn two_notes_declaring_one_id_also_fall_back() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "a.md", "---\nid: shared\n---\nprose");
+        write(dir.path(), "b.md", "---\nid: shared\n---\nprose");
+        let (docs, findings) = vault(dir.path());
+        assert_eq!(ids(&docs), vec!["a", "b"], "neither note is lost");
+        assert_eq!(findings.errors.len(), 1);
+    }
+
+    #[test]
+    fn a_fallback_that_collides_again_is_settled_too() {
+        let dir = tempdir().unwrap();
+        // `alpha` collides; the fallback `archive/alpha` is what `pin.md`
+        // declared, so a single pass would merge those two instead.
+        write(dir.path(), "projects/alpha.md", "prose");
+        write(dir.path(), "archive/alpha.md", "prose");
+        write(dir.path(), "pin.md", "---\nid: archive/alpha\n---\nprose");
+        let (docs, findings) = vault(dir.path());
+        assert_eq!(
+            ids(&docs),
+            vec!["archive/alpha", "pin", "projects/alpha"],
+            "every note keeps a distinct id"
+        );
+        assert_eq!(findings.errors.len(), 2, "both rounds are reported");
+    }
+
+    #[test]
+    fn case_only_clashes_warn_without_changing_ids() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects/Roadmap.md", "prose");
+        write(dir.path(), "notes/roadmap.md", "prose");
+        let (docs, findings) = vault(dir.path());
+        assert_eq!(ids(&docs), vec!["Roadmap", "roadmap"], "ids are untouched");
+        assert!(findings.errors.is_empty());
+        assert_eq!(findings.warnings.len(), 1);
+        assert!(
+            findings.warnings[0].contains("`Roadmap` (projects/Roadmap.md)")
+                && findings.warnings[0].contains("`roadmap` (notes/roadmap.md)"),
+            "the warning names both: {}",
+            findings.warnings[0]
+        );
+    }
+
+    #[test]
+    fn okf_dialect_reports_no_collisions_at_all() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects/Alpha.md", "---\ntype: N\n---\nprose");
+        write(dir.path(), "archive/alpha.md", "---\ntype: N\n---\nprose");
+        let opts = BuildOptions::default();
+        let walked = walk::discover(dir.path(), &opts).unwrap();
+        let (_, findings) = parse_concepts_reported(&walked.concepts, &opts);
+        assert_eq!(findings, IdFindings::default());
+    }
+
+    #[test]
+    fn vault_infers_iso_dates_and_rfc3339_stamps() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.md",
+            "---\nupdated: 2026-01-15\nreviewed: '2026-01-15T09:30:00+02:00'\n\
+             version: '2026-1-5'\nepoch: '1609459200000'\ntags:\n- 2026-01-15\n---\nprose",
+        );
+        let (docs, _) = vault(dir.path());
+        let props: BTreeMap<&str, &Value> =
+            docs[0].props.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        assert_eq!(
+            props["updated"],
+            &Value::DateTime(chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap())
+        );
+        assert_eq!(
+            props["reviewed"],
+            &Value::Timestamp(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 15)
+                    .unwrap()
+                    .and_hms_opt(7, 30, 0)
+                    .unwrap()
+            ),
+            "an offset normalises to UTC"
+        );
+        assert_eq!(
+            props["version"],
+            &Value::String("2026-1-5".into()),
+            "not ISO YYYY-MM-DD"
+        );
+        assert_eq!(
+            props["epoch"],
+            &Value::String("1609459200000".into()),
+            "epoch millis are not a date spelling"
+        );
+        assert_eq!(
+            props["tags"],
+            &Value::List(vec![Value::String("2026-01-15".into())]),
+            "list elements keep the type YAML gave them"
+        );
+    }
+
+    #[test]
+    fn okf_dialect_leaves_date_strings_alone() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "a.md",
+            "---\ntype: Note\nupdated: 2026-01-15\n---\nprose",
+        );
+        let docs = parse_bundle(dir.path(), &BuildOptions::default()).unwrap();
+        assert_eq!(
+            docs[0]
+                .props
+                .iter()
+                .find(|(k, _)| k == "updated")
+                .unwrap()
+                .1,
+            Value::String("2026-01-15".into())
+        );
+    }
+
+    #[test]
+    fn vault_stores_bodies_and_ingests_plain_notes_by_default() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "plain.md", "No frontmatter, just prose.");
+        let opts = BuildOptions::for_dialect(Dialect::Obsidian);
+        assert!(!opts.require_frontmatter, "a vault is mostly plain notes");
+        assert!(opts.with_body);
+        let docs = parse_bundle(dir.path(), &opts).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].body.as_deref(), Some("No frontmatter, just prose."));
+
+        // The explicit option still wins, in both directions.
+        let mut off = BuildOptions::for_dialect(Dialect::Obsidian);
+        off.with_body = false;
+        off.require_frontmatter = true;
+        assert!(
+            parse_bundle(dir.path(), &off).unwrap().is_empty(),
+            "an explicit require_frontmatter=true skips the plain note again"
+        );
+
+        let okf = BuildOptions::for_dialect(Dialect::Okf);
+        assert!(okf.require_frontmatter, "the OKF sweep discriminator stays");
+        assert!(!okf.with_body, "OKF ingestion stays partial");
+        let mut on = okf;
+        on.with_body = true;
+        on.require_frontmatter = false;
+        assert_eq!(
+            parse_bundle(dir.path(), &on).unwrap()[0].body.as_deref(),
+            Some("No frontmatter, just prose.")
+        );
     }
 
     #[test]

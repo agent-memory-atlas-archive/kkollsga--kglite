@@ -8,10 +8,10 @@ def build(
     path: str,
     *,
     dialect: str | None = ...,
-    require_frontmatter: bool = ...,
+    require_frontmatter: bool | None = ...,
     respect_skip: bool = ...,
     skip_dirs: list[str] | None = ...,
-    with_body: bool = ...,
+    with_body: bool | None = ...,
     embed: bool = ...,
 ) -> KnowledgeGraph:
     """Build a :class:`~kglite.KnowledgeGraph` from an OKF bundle directory.
@@ -21,7 +21,8 @@ def build(
     node (label from the frontmatter ``type``, or ``Concept`` when absent; id =
     the bundle-relative path minus ``.md``); frontmatter keys become node
     properties (``tags`` and nested maps are JSON-encoded); markdown links become
-    typed edges. Link types are inferred most-specific-first: an explicit link
+    typed edges. The ``"obsidian"`` dialect changes the label, id and value
+    rules — see ``dialect`` below. Link types are inferred most-specific-first: an explicit link
     title (``[x](/y.md "JOINS_WITH")``) → the enclosing section header
     (``# Citations`` → ``CITES``) → ``LINKS_TO``. Links to not-yet-written
     concepts become ``_provisional`` stub nodes
@@ -34,23 +35,43 @@ def build(
     subfolders, with each directory's ``index.md`` enriching its Folder).
 
     Ingestion is *partial*: the markdown body is not stored unless ``with_body``
-    is set — each node keeps a ``file_path`` pointer instead.
+    is set — each node keeps a ``file_path`` pointer instead. The ``"obsidian"``
+    dialect stores it by default.
 
     Args:
         path: Bundle root directory.
         dialect: ``"okf"`` (default) for strict markdown links; ``"loose"`` to
             also resolve ``[[wikilinks]]`` and tolerate concepts with no
-            frontmatter ``type``; ``"obsidian"`` to select the Obsidian vault
-            profile, which resolves wikilinks the same way.
-        require_frontmatter: When ``True`` (default), only ``.md`` files with a
-            YAML frontmatter block are ingested — the discriminator between
+            frontmatter ``type``; ``"obsidian"`` for the **vault** format
+            specified in ``VAULT.md``, which changes several defaults:
+
+            * **Label**: frontmatter ``type:`` → the note's *top-level* folder
+              name (verbatim — no singularising, no case change) → ``Note``.
+              ``metadata.type`` is not a rung here; it stays an ordinary
+              property.
+            * **Id**: frontmatter ``id:`` → the filename stem, so a note keeps
+              its identity when it moves between folders. When two notes
+              resolve to the same id, every one of them falls back to its
+              path-relative id and the build reports the collision.
+            * **Body**: stored as ``body`` by default (``with_body`` still
+              overrides).
+            * **Frontmatter values**: sequences and nested maps stay native
+              ``list`` / ``dict`` properties instead of JSON strings, and a
+              top-level string spelling an ISO ``YYYY-MM-DD`` date or an
+              RFC 3339 timestamp becomes a date / datetime value.
+            * **Frontmatter is not required** (``require_frontmatter`` defaults
+              to ``False``), so a plain ``.md`` file is a note.
+        require_frontmatter: When ``True``, only ``.md`` files with a YAML
+            frontmatter block are ingested — the discriminator between
             *structured* knowledge (OKF concepts, Claude memories) and plain
             markdown (READMEs, notes). Point at a parent of many projects to
-            sweep out only the structured files across all of them. Set ``False``
-            to ingest every ``.md`` (vault-style). Node labels fall back
+            sweep out only the structured files across all of them. Set
+            ``False`` to ingest every ``.md``. Left unset it takes the
+            dialect's default: ``True`` for ``"okf"`` / ``"loose"``, ``False``
+            for ``"obsidian"``. Under the OKF ladder node labels fall back
             ``type`` → ``metadata.type`` → ``Concept`` and titles ``title`` →
-            ``name`` → file stem, so Claude memories land as ``:feedback`` /
-            ``:project`` / etc. with their ``name`` as title.
+            ``name`` → first ``# H1`` → file stem, so Claude memories land as
+            ``:feedback`` / ``:project`` / etc. with their ``name`` as title.
         respect_skip: When ``True`` (default), honor a ``kg_skip: true``
             frontmatter marker that opts a file out of the sweep. Set ``False``
             to ingest skip-marked files anyway.
@@ -60,8 +81,10 @@ def build(
             with a ``/`` is an anchored **bundle-relative path**
             (``"vendor/repos"``). Use it to exclude cloned / vendored trees you
             don't own.
-        with_body: Store each concept's markdown body as a ``body`` property
-            (off by default — bodies are read on demand).
+        with_body: Store each concept's markdown body as a ``body`` property.
+            Left unset it takes the dialect's default: off for ``"okf"`` /
+            ``"loose"`` (bodies are read on demand through ``source()``), on
+            for ``"obsidian"``. Passing it explicitly wins either way.
         embed: Reserved for the opt-in embedder pass (body vectors for
             ``text_score``); not yet wired.
 

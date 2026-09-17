@@ -189,6 +189,7 @@ mod tests {
             profile: Profile {
                 index_as_folder_metadata: false,
                 skip_log_files: false,
+                ..Profile::default()
             },
             ..BuildOptions::default()
         };

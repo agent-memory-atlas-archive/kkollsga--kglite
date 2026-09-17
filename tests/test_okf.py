@@ -13,6 +13,7 @@ loose/obsidian wikilink dialect, and reserved-file handling.
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import kglite
@@ -21,6 +22,7 @@ from kglite import okf
 FIXTURES = Path(__file__).parent / "fixtures" / "okf" / "golden"
 OKF_BUNDLE = FIXTURES / "okf"
 OBSIDIAN_BUNDLE = FIXTURES / "obsidian"
+VAULT_BUNDLE = FIXTURES / "vault"
 
 
 def _labels(g) -> Counter:
@@ -178,15 +180,20 @@ class TestOkfGoldenBundle:
 
 
 class TestOkfObsidianDialect:
-    """Loose / obsidian dialect: [[wikilinks]] + frontmatter without `type`."""
+    """Obsidian vault dialect over a bundle with no folders: root notes only."""
 
     def test_wikilinks_and_degrade(self):
         g = okf.build(str(OBSIDIAN_BUNDLE), respect_skip=False, dialect="obsidian")
-        # alice + bob + carol-missing stub = 3 (MEMORY.md has no frontmatter →
-        # skipped by default).
-        assert g.cypher("MATCH (n) RETURN count(n) AS c").to_list()[0]["c"] == 3
-        # alice has metadata.type → :person; bob (name only) + stub → :Concept.
-        assert set(_labels(g)) == {"person", "Concept"}
+        # alice + bob + MEMORY + carol-missing stub = 4. A vault does not
+        # require frontmatter, so MEMORY.md is an ordinary note.
+        assert g.cypher("MATCH (n) RETURN count(n) AS c").to_list()[0]["c"] == 4
+        # All three are root-level with no `type:`, so the label ladder falls
+        # through to `Note`; `metadata.type` is not a vault rung. The dangling
+        # stub keeps the `Concept` label every dialect gives a stub.
+        assert _labels(g) == Counter({"Note": 3, "Concept": 1})
+        assert (
+            g.cypher("MATCH (n {concept_id:'alice'}) RETURN n.`metadata.type` AS mt").to_list()[0]["mt"] == "person"
+        ), "metadata.type survives as an ordinary property"
 
     def test_wikilink_resolution_and_dangling(self):
         g = okf.build(str(OBSIDIAN_BUNDLE), respect_skip=False, dialect="obsidian")
@@ -200,6 +207,126 @@ class TestOkfObsidianDialect:
         # In the default (okf) dialect, [[wikilinks]] are not links → no edges.
         g = okf.build(str(OBSIDIAN_BUNDLE), respect_skip=False)
         assert g.cypher("MATCH ()-[r]->() RETURN count(r) AS c").to_list()[0]["c"] == 0
+
+
+class TestVaultGoldenBundle:
+    """The Obsidian vault dialect over the committed ``golden/vault`` bundle.
+
+    Nine notes across three top-level folders plus one root note, carrying a
+    ``type:`` override, an ``id:`` override, a stem-collision pair, a
+    case-collision pair, a native list and an ISO date. The build *report* for
+    the same bundle (the collision error and warning) is asserted in Rust, at
+    ``okf::build::tests::golden_vault_bundle_report`` — the report has no Python
+    surface yet.
+    """
+
+    def build(self):
+        return okf.build(str(VAULT_BUNDLE), dialect="obsidian")
+
+    def test_label_ladder(self):
+        # `type:` → top-level folder → `Note`. Folder names are used verbatim,
+        # so a lowercase directory gives a lowercase label.
+        assert _labels(self.build()) == Counter(
+            {"notes": 4, "Folder": 4, "projects": 2, "Note": 1, "Initiative": 1, "archive": 1, "Tag": 1}
+        )
+
+    def test_edge_types(self):
+        assert _edge_types(self.build()) == Counter({"CONTAINS": 9, "LINKS_TO": 3, "TAGGED": 1})
+
+    def test_ids_are_stems_declared_ids_and_collision_fallbacks(self):
+        g = self.build()
+        ids = sorted(
+            r["id"] for r in g.cypher("MATCH (n) WHERE n.concept_id IS NOT NULL RETURN n.concept_id AS id").to_list()
+        )
+        assert ids == [
+            "Roadmap",  # case-collision pair: ids are left alone
+            "atlas",
+            "mtg-2026-01",  # declared `id:` wins over the stem `meeting`
+            "nested",  # a stem, three folders deep
+            "notes/alpha",  # stem collision → path-relative fallback
+            "old",
+            "projects/alpha",
+            "roadmap",
+            "welcome",
+        ]
+
+    def test_declared_id_is_not_also_a_property(self):
+        g = self.build()
+        rows = g.cypher("MATCH (n {concept_id:'mtg-2026-01'}) RETURN n.title AS t, n.file_path AS f").to_list()
+        assert rows == [{"t": "Kickoff", "f": "notes/meeting.md"}]
+
+    def test_title_falls_back_to_the_first_h1(self):
+        g = self.build()
+        rows = g.cypher("MATCH (n {concept_id:'welcome'}) RETURN n.title AS t").to_list()
+        assert rows == [{"t": "Welcome"}]
+
+    def test_body_is_stored_by_default(self):
+        g = self.build()
+        body = g.cypher("MATCH (n {concept_id:'welcome'}) RETURN n.body AS b").to_list()[0]["b"]
+        assert body.startswith("# Welcome")
+        # …and the explicit option still turns it off.
+        off = okf.build(str(VAULT_BUNDLE), dialect="obsidian", with_body=False)
+        assert off.cypher("MATCH (n {concept_id:'welcome'}) RETURN n.body AS b").to_list() == [{"b": None}]
+
+    def test_require_frontmatter_defaults_off(self):
+        # welcome.md has no frontmatter at all and is still a node.
+        assert self.build().cypher("MATCH (n {concept_id:'welcome'}) RETURN count(n) AS c").to_list()[0]["c"] == 1
+        on = okf.build(str(VAULT_BUNDLE), dialect="obsidian", require_frontmatter=True)
+        assert on.cypher("MATCH (n {concept_id:'welcome'}) RETURN count(n) AS c").to_list()[0]["c"] == 0
+
+    def test_lists_stay_native(self):
+        g = self.build()
+        rows = g.cypher("MATCH (n {concept_id:'atlas'}) RETURN n.keywords AS k, n.tags AS t").to_list()
+        assert rows == [{"k": ["faults", "horizons"], "t": ["seismic"]}]
+        # The okf dialect still JSON-encodes them.
+        j = okf.build(str(VAULT_BUNDLE), require_frontmatter=False)
+        assert j.cypher("MATCH (n {concept_id:'projects/atlas'}) RETURN n.keywords AS k").to_list() == [
+            {"k": '["faults","horizons"]'}
+        ]
+
+    def test_iso_strings_become_temporal_values(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n {concept_id:'atlas'}) "
+            "RETURN n.updated AS u, n.reviewed AS r, "
+            "n.updated + duration({days: 1}) AS plus, n.updated < date('2026-02-01') AS lt"
+        ).to_list()
+        # A date renders as its ISO string, but it is a date: arithmetic and
+        # ordering against date() both work, which a string could not do.
+        assert rows[0]["u"] == "2026-01-15"
+        assert rows[0]["plus"] == "2026-01-16"
+        assert rows[0]["lt"] is True
+        assert rows[0]["r"] == datetime(2026, 1, 15, 9, 30)
+
+    def test_folders_come_from_the_path_not_the_stem_id(self):
+        g = self.build()
+        rows = g.cypher("MATCH (f:Folder)-[:CONTAINS]->(c) RETURN f.id AS f, c.concept_id AS c, c.id AS fid").to_list()
+        pairs = {(r["f"], r["c"] if r["c"] is not None else r["fid"]) for r in rows}
+        assert pairs == {
+            ("projects", "projects/alpha"),
+            ("projects", "Roadmap"),
+            ("projects", "atlas"),
+            ("notes", "notes/alpha"),
+            ("notes", "roadmap"),
+            ("notes", "mtg-2026-01"),
+            ("notes", "notes/deep"),
+            ("notes/deep", "nested"),
+            ("archive", "old"),
+        }
+
+    def test_links_resolve_with_no_stubs(self):
+        g = self.build()
+        edges = sorted(
+            (r["a"], r["b"])
+            for r in g.cypher("MATCH (a)-[:LINKS_TO]->(b) RETURN a.concept_id AS a, b.concept_id AS b").to_list()
+        )
+        assert edges == [("nested", "atlas"), ("welcome", "atlas"), ("welcome", "old")]
+        assert g.cypher("MATCH (n {_provisional:true}) RETURN count(n) AS c").to_list()[0]["c"] == 0
+
+    def test_build_is_deterministic(self):
+        a, b = self.build(), self.build()
+        for q in ("MATCH (n) RETURN count(n) AS c", "MATCH ()-[r]->() RETURN count(r) AS c"):
+            assert a.cypher(q).to_list() == b.cypher(q).to_list()
 
 
 def test_empty_directory_builds_empty_graph(tmp_path):

@@ -77,6 +77,43 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, Value>, String> {
     Ok(out)
 }
 
+/// Retype a frontmatter string that spells an ISO date or an RFC 3339
+/// timestamp (VAULT.md §4.2). Everything else — including a list's elements —
+/// passes through untouched.
+///
+/// Deliberately stricter than [`crate::graph::blueprint::typing::scalar`]'s
+/// `parse_date`, which is the *declared*-type grammar: that one also accepts
+/// epoch milliseconds, so `version: "1609459200000"` would silently become a
+/// date. Inference only fires on the two unambiguous spellings, and the shape
+/// check rejects chrono's lenient `2026-1-5`, which is not ISO `YYYY-MM-DD`.
+pub fn infer_temporal(v: Value) -> Value {
+    let Value::String(s) = &v else { return v };
+    let t = s.trim();
+    if is_iso_date(t) {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(t, "%Y-%m-%d") {
+            return Value::DateTime(d);
+        }
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t) {
+        // Offsets normalise to UTC, matching the RDF literal loader — a
+        // property's value must not depend on the writer's timezone.
+        return Value::Timestamp(dt.naive_utc());
+    }
+    v
+}
+
+/// `YYYY-MM-DD` exactly: ten characters, dashes in positions 4 and 7, digits
+/// everywhere else.
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
 /// Flatten a YAML mapping into dotted keys. Nested mappings recurse with a
 /// `prefix.` ; everything else converts via [`yaml_to_value`].
 fn flatten_into(prefix: &str, map: &yaml_rust2::yaml::Hash, out: &mut BTreeMap<String, Value>) {

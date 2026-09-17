@@ -44,6 +44,29 @@ impl Dialect {
     }
 }
 
+/// Which rung of the label ladder is tried first (VAULT.md §2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelFrom {
+    /// Frontmatter `type:` first, the folder rung after the default label.
+    Type,
+    /// The top-level folder first, so moving a note between folders relabels
+    /// it even when it carries a `type:`. The remaining rungs keep their order.
+    Folder,
+}
+
+/// How a note's id is chosen (VAULT.md §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdScheme {
+    /// Bundle-relative path minus `.md` — unique by construction, and it
+    /// changes whenever the file moves.
+    Path,
+    /// Frontmatter `id:` → the filename stem. A vault's link namespace *is* the
+    /// stem, and an id that survives a folder move is what embedding carry and
+    /// external references key on. Colliding stems fall back to the path id;
+    /// see [`crate::okf::model::BuildReport::errors`].
+    FrontmatterOrStem,
+}
+
 /// The conventions a dialect brings, as data rather than as `match` arms.
 ///
 /// A dialect name selects a `Profile`, and behaviour reads the profile's
@@ -60,6 +83,43 @@ pub struct Profile {
     /// Read by [`crate::okf::walk::discover`]: `log.md` is a running journal,
     /// not a concept — drop it from the walk.
     pub skip_log_files: bool,
+    /// Read by `crate::okf::parse_file`: which label rung is tried first.
+    pub label_from: LabelFrom,
+    /// Read by `crate::okf::parse_file`: the label for a note whose
+    /// frontmatter names none, tried *before* the folder rung. `None` here; a
+    /// vault declares one in `.kglite/vault.yaml`.
+    pub default_label: Option<String>,
+    /// Read by `crate::okf::parse_file`: honour a Claude-memory
+    /// `metadata.type` as a label rung after `type:`. Off in a vault, where
+    /// `metadata:` is ordinary frontmatter.
+    pub metadata_type_label: bool,
+    /// Read by `crate::okf::parse_file`: use the note's **top-level** folder
+    /// name (verbatim — no singularising, no case change) as a label rung.
+    pub folder_label: bool,
+    /// Read by `crate::okf::parse_file`: the label when no rung yielded one.
+    pub fallback_label: String,
+    /// Read by `crate::okf::parse_file` and `crate::okf::resolve_ids`.
+    pub id_scheme: IdScheme,
+    /// Read by [`crate::okf::build::column_value`]: keep sequences and nested
+    /// maps as `Value::List` / `Value::Map` columns. Off for OKF bundles,
+    /// which JSON-encode them into String columns (codingest's convention).
+    pub native_collections: bool,
+    /// Read by [`BuildOptions::for_dialect`]: the dialect's
+    /// `require_frontmatter` default. A vault is mostly plain notes; the
+    /// frontmatter discriminator exists for sweeping a mixed tree. The option
+    /// set on [`BuildOptions`] after that call still wins, in both directions.
+    pub require_frontmatter: bool,
+    /// Read by [`BuildOptions::for_dialect`]: the dialect's `with_body`
+    /// default. A vault stores the prose (BM25 and embeddings want it); an OKF
+    /// sweep keeps the `file_path` pointer and reads bodies on demand. The
+    /// option set on [`BuildOptions`] after that call still wins, in both
+    /// directions.
+    pub store_body: bool,
+    /// Read by `crate::okf::parse_file`: retype a frontmatter string that is
+    /// an ISO `YYYY-MM-DD` date or an RFC 3339 timestamp as the matching
+    /// temporal `Value`. Top-level scalars only — a list element keeps the
+    /// type YAML gave it, so a tag literally named `2026-01-01` stays a tag.
+    pub infer_temporal: bool,
 }
 
 impl Default for Profile {
@@ -68,14 +128,36 @@ impl Default for Profile {
         Profile {
             index_as_folder_metadata: true,
             skip_log_files: true,
+            label_from: LabelFrom::Type,
+            default_label: None,
+            metadata_type_label: true,
+            folder_label: false,
+            fallback_label: DEFAULT_LABEL.to_string(),
+            id_scheme: IdScheme::Path,
+            native_collections: false,
+            require_frontmatter: true,
+            store_body: false,
+            infer_temporal: false,
         }
     }
 }
 
 impl Profile {
-    /// The conventions of [`Dialect::Obsidian`].
+    /// The conventions of [`Dialect::Obsidian`], normative in `VAULT.md`.
     pub fn obsidian() -> Self {
-        Profile::default()
+        Profile {
+            label_from: LabelFrom::Type,
+            default_label: None,
+            metadata_type_label: false,
+            folder_label: true,
+            fallback_label: VAULT_DEFAULT_LABEL.to_string(),
+            id_scheme: IdScheme::FrontmatterOrStem,
+            native_collections: true,
+            require_frontmatter: false,
+            store_body: true,
+            infer_temporal: true,
+            ..Profile::default()
+        }
     }
 
     /// The profile a dialect selects.
@@ -137,9 +219,12 @@ impl BuildOptions {
     /// intended constructor: set the remaining fields on the result rather than
     /// spelling out a struct literal, so a new field keeps its dialect default.
     pub fn for_dialect(dialect: Dialect) -> Self {
+        let profile = Profile::for_dialect(dialect);
         BuildOptions {
             dialect,
-            profile: Profile::for_dialect(dialect),
+            require_frontmatter: profile.require_frontmatter,
+            with_body: profile.store_body,
+            profile,
             ..BuildOptions::default()
         }
     }
@@ -218,6 +303,10 @@ pub const DEFAULT_CONN_TYPE: &str = "LINKS_TO";
 pub const CONTAINS_CONN_TYPE: &str = "CONTAINS";
 /// Node label assigned to concepts with no frontmatter `type`.
 pub const DEFAULT_LABEL: &str = "Concept";
+/// Node label a vault note falls back to when no rung of the label ladder
+/// (VAULT.md §2.1) named one — a root-level note with no `type:` and no
+/// `default_label:`.
+pub const VAULT_DEFAULT_LABEL: &str = "Note";
 /// Node label for synthesized tag nodes; edge type concept → tag.
 pub const TAG_LABEL: &str = "Tag";
 pub const TAGGED_CONN_TYPE: &str = "TAGGED";

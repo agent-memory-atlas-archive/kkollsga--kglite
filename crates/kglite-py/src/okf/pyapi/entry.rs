@@ -8,38 +8,37 @@ use crate::okf::{BuildOptions, Dialect};
 
 /// Build a KnowledgeGraph from an OKF bundle directory.
 ///
-/// `dialect`: `"okf"` (default — strict markdown links), `"loose"` (also
-/// resolve `[[wikilinks]]`, tolerate missing `type`), or `"obsidian"` (the
-/// Obsidian vault profile). `require_frontmatter`
-/// (default `True`): ingest only `.md` files with YAML frontmatter — the
-/// structured-knowledge vs plain-markdown discriminator; set `False` to ingest
-/// every `.md`. `respect_skip` (default `True`): honor the `kg_skip: true`
-/// frontmatter marker that opts a file out of the sweep; set `False` to ingest
-/// skip-marked files anyway. `skip_dirs`: directory names / bundle-relative
-/// paths to prune from the walk (the directory and its whole subtree) — for
-/// excluding cloned / vendored trees. `with_body`: store each concept's markdown
-/// body as a `body` property (off by default — bodies are read on demand via the
-/// `file_path` pointer).
+/// The `dialect` picks the conventions: `"okf"` (default), `"loose"`, or
+/// `"obsidian"` for the vault format specified in VAULT.md. Defaults for
+/// `require_frontmatter` and `with_body` come from the dialect when they are
+/// left unset; every other keyword is dialect-independent. See the stub for
+/// the full contract.
 #[pyfunction]
-#[pyo3(signature = (path, *, dialect=None, require_frontmatter=true, respect_skip=true, skip_dirs=None, with_body=false, embed=false))]
+#[pyo3(signature = (path, *, dialect=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None, embed=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     py: Python<'_>,
     path: PathBuf,
     dialect: Option<String>,
-    require_frontmatter: bool,
+    require_frontmatter: Option<bool>,
     respect_skip: bool,
     skip_dirs: Option<Vec<String>>,
-    with_body: bool,
+    with_body: Option<bool>,
     embed: bool,
 ) -> PyResult<KnowledgeGraph> {
     // Built from the dialect rather than as a struct literal, so a new
     // dialect-carried default reaches the wheel without a code change here.
+    // `None` for the two dialect-defaulted flags means "keep what the profile
+    // chose"; passing either explicitly overrides it in both directions.
     let mut opts = BuildOptions::for_dialect(Dialect::parse(dialect.as_deref()));
-    opts.require_frontmatter = require_frontmatter;
+    if let Some(v) = require_frontmatter {
+        opts.require_frontmatter = v;
+    }
     opts.respect_skip = respect_skip;
     opts.skip_dirs = skip_dirs.unwrap_or_default();
-    opts.with_body = with_body;
+    if let Some(v) = with_body {
+        opts.with_body = v;
+    }
     opts.embed = embed;
     py.detach(|| crate::okf::build(&path, &opts))
         .map(|out| KnowledgeGraph::from_arc(out.graph))

@@ -8,9 +8,10 @@
 //! stub nodes (the mutator's built-in behaviour).
 //!
 //! Structured frontmatter values (`tags` lists, nested maps surfaced inside
-//! lists) are JSON-encoded into String columns — the same convention code-graph builders
-//! uses for `parameters`/`fields` (the columnar `DataFrame` has no list/map
-//! column type).
+//! lists) are JSON-encoded into String columns for OKF bundles — the same
+//! convention code-graph builders use for `parameters`/`fields`. The vault
+//! profile turns that off (`Profile::native_collections`) and stores them as
+//! `Value::List` / `Value::Map` columns instead.
 
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::mutation::maintain;
@@ -37,10 +38,12 @@ pub struct BuildOutput {
 /// Build a knowledge graph from an OKF bundle directory.
 pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     let walked = super::walk::discover(root, opts)?;
-    let docs = super::parse_concepts(&walked.concepts, opts);
+    let (docs, findings) = super::parse_concepts_reported(&walked.concepts, opts);
     let mut report = BuildReport {
         files_scanned: walked.concepts.len(),
         concepts: docs.len(),
+        errors: findings.errors,
+        warnings: findings.warnings,
         ..BuildReport::default()
     };
     let mut graph = DirGraph::new();
@@ -58,6 +61,14 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
         graph: Arc::new(graph),
         report,
     })
+}
+
+/// A doc's file path minus `.md` — the directory hierarchy and the path-link
+/// namespace both live here. Equal to `concept_id` under the path id scheme,
+/// and deliberately *not* under the vault's, where the id is a bare stem: a
+/// folder derived from the id would leave every vault note at the root.
+fn doc_path(d: &ConceptDoc) -> &str {
+    d.file_path.strip_suffix(".md").unwrap_or(&d.file_path)
 }
 
 /// Record `count` nodes of `label` in the report.
@@ -114,7 +125,7 @@ fn build_folders(
     // Every directory holding a concept, plus all ancestor directories.
     let mut dirs: BTreeSet<String> = BTreeSet::new();
     for d in docs {
-        let mut p = super::parent_dir(&d.concept_id).to_string();
+        let mut p = super::parent_dir(doc_path(d)).to_string();
         while !p.is_empty() {
             let parent = super::parent_dir(&p).to_string();
             dirs.insert(p);
@@ -160,7 +171,7 @@ fn build_folders(
     // CONTAINS edges: folder → immediate child concepts and subfolders.
     let mut groups: EdgeGroups = HashMap::new();
     for d in docs {
-        let dir = super::parent_dir(&d.concept_id);
+        let dir = super::parent_dir(doc_path(d));
         if !dir.is_empty() {
             groups
                 .entry((
@@ -326,7 +337,11 @@ fn build_nodes(
             }
             let pm: HashMap<&str, &Value> = d.props.iter().map(|(k, v)| (k.as_str(), v)).collect();
             for k in &keys {
-                row.push(pm.get(k).map(|v| column_value(v)).unwrap_or(Value::Null));
+                row.push(
+                    pm.get(k)
+                        .map(|v| column_value(v, opts.profile.native_collections))
+                        .unwrap_or(Value::Null),
+                );
             }
             rows.push(row);
         }
@@ -344,12 +359,14 @@ fn build_nodes(
     Ok(())
 }
 
-/// Coerce a property value for columnar storage: structured values (lists, maps)
-/// JSON-encode to a String; scalars pass through unchanged. `pub(crate)` so
-/// codingest's docs pass reuses the same frontmatter→column convention.
-pub(crate) fn column_value(v: &Value) -> Value {
+/// Coerce a property value for columnar storage. With `native` set (the vault
+/// profile) every value passes through as itself, so a frontmatter sequence
+/// reaches the graph as a `Value::List` column. Without it, structured values
+/// JSON-encode to a String — the OKF/Loose convention codingest's docs pass
+/// shares, kept because those graphs' consumers parse the JSON today.
+pub(crate) fn column_value(v: &Value, native: bool) -> Value {
     match v {
-        Value::List(_) | Value::Map(_) => Value::String(
+        Value::List(_) | Value::Map(_) if !native => Value::String(
             serde_json::to_string(&crate::param::kglite_value_to_json(v)).unwrap_or_default(),
         ),
         other => other.clone(),
@@ -458,6 +475,10 @@ fn normalize_slug(s: &str) -> String {
 /// the default label — `add_connections` vivifies them as `_provisional` stubs.
 struct Resolver<'a> {
     id_to_label: HashMap<&'a str, &'a str>,
+    /// File path minus `.md` → id. Identical to `id_to_label`'s keys under the
+    /// path id scheme; under the vault's stem ids it is what keeps a
+    /// `[text](sub/note.md)` path link resolving (VAULT.md §5.2).
+    path_to_id: HashMap<&'a str, &'a str>,
     stem_to_id: HashMap<&'a str, &'a str>,
     slug_to_id: HashMap<String, &'a str>,
     title_to_id: HashMap<String, &'a str>,
@@ -466,12 +487,17 @@ struct Resolver<'a> {
 impl<'a> Resolver<'a> {
     fn new(docs: &'a [ConceptDoc]) -> Self {
         let mut id_to_label = HashMap::new();
+        let mut path_to_id = HashMap::new();
         let mut stem_to_id = HashMap::new();
         let mut slug_to_id = HashMap::new();
         let mut title_to_id = HashMap::new();
         for d in docs {
             id_to_label.insert(d.concept_id.as_str(), d.label.as_str());
-            let stem = d.concept_id.rsplit('/').next().unwrap_or(&d.concept_id);
+            let path = doc_path(d);
+            path_to_id.entry(path).or_insert(d.concept_id.as_str());
+            // The stem the *editor* sees, from the filename — a note carrying
+            // its own `id:` is still `[[Stem]]` in the vault.
+            let stem = path.rsplit('/').next().unwrap_or(path);
             stem_to_id.entry(stem).or_insert(d.concept_id.as_str());
             slug_to_id
                 .entry(normalize_slug(&d.concept_id))
@@ -485,6 +511,7 @@ impl<'a> Resolver<'a> {
         }
         Self {
             id_to_label,
+            path_to_id,
             stem_to_id,
             slug_to_id,
             title_to_id,
@@ -504,6 +531,9 @@ impl<'a> Resolver<'a> {
         if !link.is_wikilink {
             if let Some(lbl) = self.id_to_label.get(t) {
                 return (t.to_string(), lbl.to_string());
+            }
+            if let Some(id) = self.path_to_id.get(t) {
+                return ((*id).to_string(), self.label_of(id));
             }
         }
         if let Some(id) = self.stem_to_id.get(t) {
@@ -656,6 +686,179 @@ mod tests {
         let key = InternedKey::from_str("tags");
         let v = GraphRead::get_node_property(&g.graph, n, key);
         assert_eq!(v, Some(Value::String("[\"alpha\",\"beta\"]".to_string())));
+    }
+
+    #[test]
+    fn vault_keeps_lists_and_maps_native() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "x.md",
+            "---\ntags:\n- alpha\n- beta\nrelease:\n- name: v1\n  ok: true\n---\nbody",
+        );
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let g = build(dir.path(), &opts).unwrap().graph;
+        let n = g.graph.node_indices().next().unwrap();
+        assert_eq!(
+            GraphRead::get_node_property(&g.graph, n, InternedKey::from_str("tags")),
+            Some(Value::List(vec![
+                Value::String("alpha".into()),
+                Value::String("beta".into()),
+            ])),
+            "a vault sequence reaches the graph as a list column"
+        );
+        assert!(
+            matches!(
+                GraphRead::get_node_property(&g.graph, n, InternedKey::from_str("release")),
+                Some(Value::List(items)) if matches!(items.as_slice(), [Value::Map(_)])
+            ),
+            "a sequence of mappings stays a list of maps"
+        );
+    }
+
+    #[test]
+    fn vault_dates_reach_the_graph_as_temporal_columns() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "x.md",
+            "---\nupdated: 2026-01-15\nreviewed: '2026-01-15T09:30:00Z'\n---\nbody",
+        );
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let g = build(dir.path(), &opts).unwrap().graph;
+        let n = g.graph.node_indices().next().unwrap();
+        assert_eq!(
+            GraphRead::get_node_property(&g.graph, n, InternedKey::from_str("updated")),
+            Some(Value::DateTime(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap()
+            ))
+        );
+        assert_eq!(
+            GraphRead::get_node_property(&g.graph, n, InternedKey::from_str("reviewed")),
+            Some(Value::Timestamp(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 15)
+                    .unwrap()
+                    .and_hms_opt(9, 30, 0)
+                    .unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn vault_folders_come_from_the_file_path_not_the_stem_id() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "Geology/deep/faults.md", "prose");
+        write(dir.path(), "root.md", "prose");
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let out = build(dir.path(), &opts).unwrap();
+        assert_eq!(
+            out.report.nodes_by_label.get(FOLDER_LABEL),
+            Some(&2),
+            "Geology and Geology/deep — a stem id would have flattened both away"
+        );
+        let contains: Vec<(String, String)> = out
+            .report
+            .edges_by_type
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect();
+        assert_eq!(contains, vec![(CONTAINS_CONN_TYPE.to_string(), "2".into())]);
+        assert_eq!(count_label(&out.graph, "Geology"), 1);
+        assert_eq!(count_label(&out.graph, "Note"), 1, "the root note");
+    }
+
+    #[test]
+    fn vault_path_links_resolve_by_path_not_by_last_segment() {
+        let dir = tempdir().unwrap();
+        // Two notes whose stems slugify alike; only the full path tells them
+        // apart, and the forgiving last-segment rung would answer the wrong one.
+        write(dir.path(), "Docs/Guide.md", "---\nid: g1\n---\nvendor copy");
+        write(dir.path(), "notes/guide.md", "my notes");
+        write(dir.path(), "a.md", "See [g](notes/guide.md).");
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let out = build(dir.path(), &opts).unwrap();
+        assert_eq!(out.report.dangling, 0, "a path link is not a dangling link");
+        assert_eq!(provisional_count(&out.graph), 0);
+        let g = &out.graph;
+        let targets: Vec<String> = g
+            .graph
+            .edge_indices()
+            .filter(|&e| g.graph[e].connection_type_str(&g.interner) == "LINKS_TO")
+            .filter_map(|e| g.graph.edge_endpoints(e))
+            .filter_map(|(_, t)| {
+                g.node_view(t)
+                    .map(|nd| nd.node_type_str(&g.interner).to_string())
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["notes".to_string()],
+            "the link lands on notes/guide.md (label `notes`), not on Docs/Guide.md"
+        );
+    }
+
+    #[test]
+    fn vault_report_carries_the_collision_findings() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "projects/alpha.md", "prose");
+        write(dir.path(), "archive/alpha.md", "prose");
+        write(dir.path(), "notes/Roadmap.md", "prose");
+        write(dir.path(), "plans/roadmap.md", "prose");
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let r = build(dir.path(), &opts).unwrap().report;
+        assert_eq!(r.errors.len(), 1, "the stem collision: {:?}", r.errors);
+        assert_eq!(r.warnings.len(), 1, "the case clash: {:?}", r.warnings);
+    }
+
+    /// The committed vault bundle, whose Python counterpart
+    /// (`tests/test_okf.py::TestVaultGoldenBundle`) asserts the graph it makes.
+    /// This one asserts the half Python cannot reach yet: the build report.
+    #[test]
+    fn golden_vault_bundle_report() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/okf/golden/vault");
+        let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+        let r = build(&root, &opts).unwrap().report;
+
+        assert_eq!(r.files_scanned, 9);
+        assert_eq!(r.concepts, 9, "a note needs no frontmatter in a vault");
+        assert_eq!(r.dangling, 0);
+        assert_eq!(
+            r.nodes_by_label,
+            BTreeMap::from([
+                ("Note".to_string(), 1),       // welcome.md, at the root
+                ("Initiative".to_string(), 1), // atlas.md, from `type:`
+                ("projects".to_string(), 2),
+                ("notes".to_string(), 4),
+                ("archive".to_string(), 1),
+                (FOLDER_LABEL.to_string(), 4),
+                (TAG_LABEL.to_string(), 1),
+            ])
+        );
+        assert_eq!(
+            r.edges_by_type,
+            BTreeMap::from([
+                (CONTAINS_CONN_TYPE.to_string(), 9),
+                ("LINKS_TO".to_string(), 3),
+                (TAGGED_CONN_TYPE.to_string(), 1),
+            ])
+        );
+
+        assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+        assert!(
+            r.errors[0].contains("`alpha`")
+                && r.errors[0].contains("notes/alpha.md")
+                && r.errors[0].contains("projects/alpha.md"),
+            "{}",
+            r.errors[0]
+        );
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(
+            r.warnings[0].contains("`Roadmap` (projects/Roadmap.md)")
+                && r.warnings[0].contains("`roadmap` (notes/roadmap.md)"),
+            "{}",
+            r.warnings[0]
+        );
     }
 
     #[test]

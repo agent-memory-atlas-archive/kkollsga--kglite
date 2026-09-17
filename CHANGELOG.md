@@ -9,6 +9,34 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- Obsidian vault dialect (`dialect="obsidian"`): the format specified in
+  `VAULT.md`, no longer an alias for `"loose"`. A note's **label**
+  walks frontmatter `type:` → the note's *top-level* folder name (verbatim)
+  → `Note`, so moving a file between folders relabels it; a vault can move the
+  folder rung to the front instead. Its **id** is frontmatter `id:` → the
+  filename stem, which is what `[[Alice]]` resolves to and what survives a
+  folder move — notes whose ids collide fall back to their path-relative ids
+  and the build reports the collision, and ids differing only in case are
+  reported as a warning on every host. The **body** is stored as `body` by
+  default and **frontmatter is no longer required**, so a plain `.md` file is a
+  note (`with_body` and `require_frontmatter` still override, in both
+  directions). Frontmatter **sequences and nested maps stay native `list` /
+  `map` properties** instead of JSON strings, and a top-level string spelling
+  an ISO `YYYY-MM-DD` date or an RFC 3339 timestamp becomes a date / datetime
+  value. The `"okf"` and `"loose"` dialects are unchanged.
+
+### Changed
+
+- **Breaking for existing `dialect="obsidian"` callers**, who until now got
+  `"loose"` behaviour: ids become stems rather than bundle-relative paths,
+  labels come from the folder ladder above rather than
+  `type` → `metadata.type` → `Concept`, bodies are stored, plain markdown files
+  are ingested, and list-valued frontmatter arrives as a list instead of a JSON
+  string. Pass `dialect="loose"` to keep the old behaviour — it is unchanged
+  and is what the string used to mean.
+
 ### Fixed
 
 - `okf.build(dialect="obsidian"/"loose")` no longer turns an embedded image
