@@ -411,6 +411,17 @@ def yaml_scalar(value: Any) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"' if quote else text
 
 
+def yaml_item(value: Any) -> str:
+    """One sequence entry. A mapping is written inline — `{range: toc_depth}` is
+    the shape VAULT.md §7 gives a range or composite index, and stringifying the
+    mapping instead spells a *property name* nothing carries."""
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{key}: {yaml_item(value[key])}" for key in value) + "}"
+    if isinstance(value, list):
+        return "[" + ", ".join(yaml_item(item) for item in value) + "]"
+    return yaml_scalar(value)
+
+
 def yaml_block(data: dict[str, Any], indent: int = 0) -> str:
     pad = " " * indent
     lines = []
@@ -421,7 +432,7 @@ def yaml_block(data: dict[str, Any], indent: int = 0) -> str:
             lines.append(yaml_block(value, indent + 2))
         elif isinstance(value, list):
             lines.append(f"{pad}{key}:")
-            lines.extend(f"{pad}- {yaml_scalar(item)}" for item in value)
+            lines.extend(f"{pad}- {yaml_item(item)}" for item in value)
         else:
             lines.append(f"{pad}{key}: {yaml_scalar(value)}")
     return "\n".join(lines)

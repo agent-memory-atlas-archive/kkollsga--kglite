@@ -74,6 +74,8 @@ def convert(out: Path) -> subprocess.CompletedProcess:
             "component=Component:USES_COMPONENT:ci",
             "--index",
             "Article.domain",
+            "--index",
+            "Article.toc_depth:range",
             "--embed",
             "Article.description",
         ],
@@ -175,6 +177,17 @@ def test_an_image_wrapped_in_a_figure_is_still_an_image(vault):
     # defines for exactly this purpose.
     install = (vault / "Guide" / "Install.md").read_text(encoding="utf-8")
     assert "![Signal flow](img/diagram.png)" in install
+
+
+def test_a_range_index_is_declared_as_the_mapping_the_schema_asks_for(vault):
+    # VAULT.md §7 spells a range declaration `{range: <prop>}`. Emitted as a
+    # stringified Python dict it is a *string* entry, and the build installs an
+    # equality index on a property named `{'range': 'toc_depth'}` — no range
+    # index, no complaint.
+    config = (vault / ".kglite" / "vault.yaml").read_text(encoding="utf-8")
+    assert "- {range: toc_depth}" in config
+    graph = okf.build(str(vault), dialect="obsidian")
+    assert [i["property"] for i in graph.list_indexes()] == ["domain"]
 
 
 def test_a_hub_key_the_source_spells_as_one_value_is_written_as_a_list(vault):
