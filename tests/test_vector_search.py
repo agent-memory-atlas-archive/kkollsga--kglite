@@ -1,5 +1,6 @@
 """Tests for embedding storage and vector search functionality."""
 
+import importlib
 import math
 import os
 import sys
@@ -969,6 +970,59 @@ class TestEmbedTexts:
         calls.clear()
         assert graph.embed_texts("Item", "text", show_progress=True)["embedded"] == 0
         assert calls == []
+
+    def test_embed_texts_show_progress_without_the_tqdm_package(self, monkeypatch):
+        """The bar opens from ``sys.modules['tqdm.auto']`` alone, with the
+        parent package unimportable — the shape CI runs in, where tqdm is not
+        installed at all.
+
+        Pinning ``sys.modules['tqdm'] = None`` makes the parent raise on
+        import, so this cannot pass vacuously on a machine that *has* tqdm. It
+        is a regression test for resolving the module through
+        ``importlib.import_module``: ``py.import`` (CPython's
+        ``PyImport_Import``) re-imports the top-level package for a dotted
+        name and so reported "No module named 'tqdm'" here, leaving the bar
+        unopened wherever tqdm was absent.
+        """
+        graph = kglite.KnowledgeGraph()
+        df = pd.DataFrame(
+            {
+                "id": list(range(3)),
+                "title": [f"N{i}" for i in range(3)],
+                "text": [f"Text {i}" for i in range(3)],
+            }
+        )
+        graph.add_nodes(df, "Item", "id", "title")
+        graph.set_embedder(MockEmbedder(dimension=3))
+
+        calls: list = []
+
+        class _Bar:
+            def update(self, n):
+                calls.append(("update", n))
+
+            def close(self):
+                calls.append(("close",))
+
+        def _tqdm(**kwargs):
+            calls.append(("open", kwargs["total"], kwargs["desc"]))
+            return _Bar()
+
+        fake = types.ModuleType("tqdm.auto")
+        fake.tqdm = _tqdm
+        monkeypatch.setitem(sys.modules, "tqdm.auto", fake)
+        # `None` in sys.modules is CPython's "this import fails" marker.
+        monkeypatch.setitem(sys.modules, "tqdm", None)
+        with pytest.raises(ImportError):
+            importlib.import_module("tqdm")
+
+        assert graph.embed_texts("Item", "text", batch_size=2, show_progress=True)["embedded"] == 3
+        assert calls == [
+            ("open", 3, "Embedding Item.text"),
+            ("update", 2),
+            ("update", 1),
+            ("close",),
+        ]
 
     def test_embed_texts_show_progress_false(self):
         """show_progress=False skips tqdm."""

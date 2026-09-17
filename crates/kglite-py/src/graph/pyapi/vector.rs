@@ -918,14 +918,16 @@ impl KnowledgeGraph {
             )));
         }
 
+        // Resolve tqdm here, before core takes over: an optional module has to
+        // be looked up from the method body, not from a hook core drives.
+        let progress_factory = resolve_progress_factory(py, show_progress.unwrap_or(true));
         // The bar is opened by `on_start`, which core calls with the count
         // only when there is something to embed — so a no-op pass draws no bar.
         let progress_bar: std::cell::RefCell<Option<Bound<'_, PyAny>>> =
             std::cell::RefCell::new(None);
         let open_bar = |total: usize| {
             *progress_bar.borrow_mut() = open_progress_bar(
-                py,
-                show_progress.unwrap_or(true),
+                progress_factory.as_ref(),
                 total,
                 format!("Embedding {}.{}", node_type, text_column),
             );
@@ -1202,26 +1204,43 @@ fn embed_error(error: EmbedError, node_type: &str, text_column: &str) -> PyErr {
     }
 }
 
-/// The optional tqdm bar `embed_texts` drives. `None` when the caller opted
-/// out, and `None` rather than an error when tqdm is not installed — the
-/// documented silent fallback.
-fn open_progress_bar<'py>(
+/// The `tqdm` callable `embed_texts` opens its bar with, resolved once before
+/// the pass starts. `None` when the caller opted out, and `None` rather than
+/// an error when tqdm is not installed — the documented silent fallback.
+///
+/// Resolved through `importlib.import_module`, not `py.import`: the latter is
+/// CPython's `PyImport_Import`, which calls `__import__` with an *empty*
+/// fromlist, and that path discards the resolved submodule and imports the
+/// top-level package instead. So `py.import("tqdm.auto")` fails with "No
+/// module named 'tqdm'" whenever the parent is unimportable, even though
+/// `sys.modules["tqdm.auto"]` already holds the target. `import_module`
+/// honours that `sys.modules` entry for the full dotted name.
+fn resolve_progress_factory<'py>(
     py: Python<'py>,
     show_progress: bool,
-    total: usize,
-    desc: String,
 ) -> Option<Bound<'py, PyAny>> {
     if !show_progress {
         return None;
     }
-    py.import("tqdm.auto")
-        .or_else(|_| py.import("tqdm"))
-        .ok()
-        .and_then(|tqdm_mod| {
-            let kwargs = PyDict::new(py);
-            let _ = kwargs.set_item("total", total);
-            let _ = kwargs.set_item("desc", desc);
-            let _ = kwargs.set_item("unit", "text");
-            tqdm_mod.call_method("tqdm", (), Some(&kwargs)).ok()
-        })
+    let import_module = py.import("importlib").ok()?.getattr("import_module").ok()?;
+    ["tqdm.auto", "tqdm"]
+        .iter()
+        .find_map(|name| import_module.call1((*name,)).ok())
+        .and_then(|tqdm_mod| tqdm_mod.getattr("tqdm").ok())
+}
+
+/// One tqdm bar from the factory `resolve_progress_factory` returned, sized to
+/// the texts this pass will embed. `None` keeps the silent fallback: no
+/// factory, or a factory that refuses the call, simply draws no bar.
+fn open_progress_bar<'py>(
+    factory: Option<&Bound<'py, PyAny>>,
+    total: usize,
+    desc: String,
+) -> Option<Bound<'py, PyAny>> {
+    let factory = factory?;
+    let kwargs = PyDict::new(factory.py());
+    kwargs.set_item("total", total).ok()?;
+    kwargs.set_item("desc", desc).ok()?;
+    kwargs.set_item("unit", "text").ok()?;
+    factory.call((), Some(&kwargs)).ok()
 }
