@@ -161,3 +161,56 @@ def test_export_of_a_missing_graph_is_an_error(tmp_path: Path):
     proc = _run("okf", "export", str(tmp_path / "nope.kgl"), str(tmp_path / "out"))
     assert proc.returncode != 0
     assert "failed to open" in proc.stderr
+
+
+# ── `kglite okf status` — the lifecycle question (VAULT.md §12) ──────────────
+
+
+def _vault_beside_its_graph(tmp_path: Path) -> tuple[Path, Path]:
+    """A vault, and a `.kgl` path *outside* it.
+
+    Every non-hidden file under the root is a candidate attachment, so a `.kgl`
+    written into the vault is itself a change to the vault and the directory
+    would read stale the moment it was built.
+    """
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / "notes" / "alpha.md").write_text("Links to [[beta]].\n", encoding="utf-8")
+    (vault / "notes" / "beta.md").write_text("Plain prose.\n", encoding="utf-8")
+    return vault, tmp_path / "vault.kgl"
+
+
+def test_status_prints_the_fingerprint_and_agrees_with_the_library(clean_vault: Path):
+    proc = _run("okf", "status", str(clean_vault))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    printed, path = proc.stdout.split(maxsplit=1)
+    assert path.strip() == str(clean_vault)
+    assert int(printed, 16) == okf.fingerprint(str(clean_vault), dialect="obsidian")
+
+
+def test_status_is_current_then_stale_as_the_vault_moves(tmp_path: Path):
+    vault, graph = _vault_beside_its_graph(tmp_path)
+    assert _run("okf", "build", str(vault), "-o", str(graph)).returncode == 0
+
+    current = _run("okf", "status", str(vault), "--graph", str(graph))
+    assert current.returncode == 0, current.stdout + current.stderr
+    assert current.stdout.startswith("current")
+
+    (vault / "notes" / "gamma.md").write_text("A new note.\n", encoding="utf-8")
+    stale = _run("okf", "status", str(vault), "--graph", str(graph))
+    assert stale.returncode == 1, stale.stdout + stale.stderr
+    assert stale.stdout.startswith("stale")
+    # The verdict is the whole diagnostic: no second, vaguer explanation.
+    assert "Error:" not in stale.stderr
+
+
+def test_status_refuses_a_graph_that_carries_no_provenance(tmp_path: Path):
+    """A `.kgl` that was not built from a directory cannot answer the question,
+    which is an error rather than a third verdict — the CLI has two exit codes."""
+    vault, plain = _vault_beside_its_graph(tmp_path)
+    kglite.KnowledgeGraph().save(str(plain))
+
+    proc = _run("okf", "status", str(vault), "--graph", str(plain))
+    assert proc.returncode == 1
+    assert "no vault provenance" in proc.stderr
+    assert proc.stdout == ""

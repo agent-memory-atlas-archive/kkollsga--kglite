@@ -3,8 +3,10 @@
 //! `check` is a converter's gate: it runs the real build, prints the §9 report
 //! and sets the exit code. `build` is the same read kept — the vault as a
 //! `.kgl`. `export` runs the other way, writing a `.kgl` back out as a vault
-//! (§10). All three live here rather than in `lib.rs` so the command table
-//! stays a table; `lib.rs` carries only the variant and the dispatch arm.
+//! (§10). `status` answers the cheap lifecycle question — has this vault moved
+//! since the `.kgl` was built (§12) — without reading a single note. All four
+//! live here rather than in `lib.rs` so the command table stays a table;
+//! `lib.rs` carries only the variant and the dispatch arm.
 
 use std::path::{Path, PathBuf};
 
@@ -51,6 +53,21 @@ pub(crate) enum OkfCommand {
         /// bytes are copied into the vault.
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
+    },
+    /// Print a vault's fingerprint, and whether a `.kgl` is still current.
+    ///
+    /// Reads no note: the fingerprint is a `stat` pass over the files a build
+    /// would read (`VAULT.md` §12). With `--graph`, exits non-zero when that
+    /// graph was built from an older state of the directory.
+    Status {
+        /// Path to the vault directory.
+        directory: PathBuf,
+        /// A `.kgl` built from this vault, to compare against it.
+        #[arg(long, value_name = "FILE")]
+        graph: Option<PathBuf>,
+        /// Which conventions to read the directory with.
+        #[arg(long, value_enum, default_value_t = OkfDialect::Obsidian)]
+        dialect: OkfDialect,
     },
     /// Build a vault into a `.kgl` graph file.
     Build {
@@ -107,6 +124,11 @@ pub(crate) fn run(command: &OkfCommand) -> Result<()> {
             force,
             source_root,
         } => export(graph, directory, *force, source_root.clone()),
+        OkfCommand::Status {
+            directory,
+            graph,
+            dialect,
+        } => status(directory, graph.as_deref(), *dialect),
     }
 }
 
@@ -138,6 +160,49 @@ fn export(
         // The refusals are the diagnostic and stderr already carries them.
         Err(ReportedAgentFailure.into())
     }
+}
+
+/// `kglite okf status` — the fingerprint, and the verdict when a graph is named.
+///
+/// Three outcomes, two exit codes, because the CLI has two
+/// (`ReportedAgentFailure` is the whole of its non-zero vocabulary):
+/// **current** exits 0, **stale** exits 1 with the verdict already printed,
+/// and a graph that carries no provenance at all — one not built by
+/// `okf build`, or written before the stamp existed — is a question this
+/// command cannot answer, so it is an ordinary error (`Error: …` on stderr,
+/// exit 1) rather than a third verdict.
+fn status(directory: &Path, graph_path: Option<&Path>, dialect: OkfDialect) -> Result<()> {
+    let current = kglite::okf::fingerprint(directory, &options(dialect))
+        .map_err(|reason| anyhow::anyhow!("{reason}"))?;
+    let Some(graph_path) = graph_path else {
+        exec::write_stdout(&format!("{current:016x}  {}", directory.display()))?;
+        return Ok(());
+    };
+    let graph = crate::load_graph(graph_path)?;
+    let Some(stamped) = graph.source_fingerprint else {
+        anyhow::bail!(
+            "{} carries no vault provenance — it was not built from a directory by \
+             `kglite okf build`, so there is nothing to compare {} against",
+            graph_path.display(),
+            directory.display()
+        );
+    };
+    let root = graph.source_root.as_deref().unwrap_or("(unknown)");
+    if stamped == current {
+        exec::write_stdout(&format!(
+            "current  {current:016x}  {} built from {root}",
+            graph_path.display()
+        ))?;
+        return Ok(());
+    }
+    // The verdict is the diagnostic and stdout carries it; `ReportedAgentFailure`
+    // turns this into a bare non-zero exit rather than a second explanation.
+    exec::write_stdout(&format!(
+        "stale    {stamped:016x} built, {current:016x} now  {} vs {}",
+        graph_path.display(),
+        directory.display()
+    ))?;
+    Err(ReportedAgentFailure.into())
 }
 
 fn options(dialect: OkfDialect) -> BuildOptions {

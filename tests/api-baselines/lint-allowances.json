@@ -201,6 +201,10 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/okf/pyapi/entry.rs::fn:rebuild_if_changed:pub fn rebuild_if_changed( py: Python<'_>, graph: &KnowledgeGraph, dialect: Option<String>, embedder: Option<Py<PyAny>>, require_frontmatter: Option<bool>, respect_skip: bool, skip_dirs: Option<Vec<String>>, with_body: Option<bool>, ) -> PyResult<Option<KnowledgeGraph>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/okf/pyapi/entry.rs::fn:validate:pub fn validate( py: Python<'_>, path: PathBuf, dialect: Option<String>, strict: bool, require_frontmatter: Option<bool>, respect_skip: bool, skip_dirs: Option<Vec<String>>, with_body: Option<bool>, ) -> PyResult<VaultReport>::clippy::too_many_arguments",
       "classification": "boundary"
     },

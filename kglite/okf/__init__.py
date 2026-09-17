@@ -27,11 +27,33 @@ Usage::
     print(report)            # counts, errors, warnings
     assert report.ok         # no errors (add strict=True for no warnings)
 
+    # A built graph remembers the directory it came from, so a long-running
+    # process can ask whether anything has changed before rebuilding:
+    fresh = okf.rebuild_if_changed(g, dialect="obsidian")   # None if unchanged
+
     # Now query it like any graph:
     g.cypher("MATCH (n) WHERE NOT (n)--() RETURN n.concept_id")   # orphans
     g.cypher("CALL leiden() YIELD node, community RETURN community, count(*)")
 """
 
-from kglite._kglite_okf import ExportReport, VaultReport, build, export, source, validate
+from kglite._kglite_okf import (
+    ExportReport,
+    VaultReport,
+    build,
+    export,
+    fingerprint,
+    rebuild_if_changed,
+    source,
+    validate,
+)
 
-__all__ = ["ExportReport", "VaultReport", "build", "export", "source", "validate"]
+__all__ = [
+    "ExportReport",
+    "VaultReport",
+    "build",
+    "export",
+    "fingerprint",
+    "rebuild_if_changed",
+    "source",
+    "validate",
+]

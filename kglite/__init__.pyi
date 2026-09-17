@@ -3257,6 +3257,33 @@ class KnowledgeGraph:
         ...
 
     @property
+    def source_root(self) -> str | None:
+        """The directory this graph was built from, or ``None``.
+
+        Stamped by :func:`kglite.okf.build` — the absolute path of the vault
+        or bundle it walked — and by nothing else, so a graph assembled any
+        other way reports ``None``. Persisted through ``save()`` / ``load()``.
+
+        Two things read it: :func:`kglite.okf.rebuild_if_changed`, which needs
+        to know what to rebuild, and :func:`kglite.okf.export`, which copies
+        attachment bytes out of it when no ``source_root`` is given.
+        """
+        ...
+
+    @property
+    def source_fingerprint(self) -> int | None:
+        """What :func:`kglite.okf.fingerprint` said about :attr:`source_root`
+        at build time, or ``None``.
+
+        The ``(path, size, modification time)`` summary a later process
+        compares against the directory as it is now — see ``VAULT.md`` §12.
+        Persisted through ``save()`` / ``load()``, which is what lets a
+        process that opens a ``.kgl`` decide whether the vault behind it has
+        moved on.
+        """
+        ...
+
+    @property
     def schema_version(self) -> int:
         """Your own data-model revision, persisted with the graph.
 

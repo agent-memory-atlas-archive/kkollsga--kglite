@@ -540,6 +540,18 @@ impl KnowledgeGraph {
         self.inner.schema_locked
     }
 
+    /// The directory this graph was built from, or None.
+    #[getter]
+    fn source_root(&self) -> Option<&str> {
+        self.inner.source_root.as_deref()
+    }
+
+    /// What okf.fingerprint() said about source_root at build time, or None.
+    #[getter]
+    fn source_fingerprint(&self) -> Option<u64> {
+        self.inner.source_fingerprint
+    }
+
     /// Your own data-model revision, persisted with the graph.
     ///
     /// This is *your* number, not kglite's: the engine stores and returns it

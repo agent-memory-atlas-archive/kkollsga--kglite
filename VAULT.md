@@ -720,3 +720,28 @@ What a converter must emit, in order:
 `examples/html_to_vault.py` in this repository is a worked converter following
 exactly this checklist — HTML pages plus a JSON table of contents in, a
 validated vault out — and is the fastest way to see each step in code.
+
+## 12. Rebuild and provenance
+
+A build stamps the graph with `source_root` (the absolute directory it walked)
+and `source_fingerprint` — a 64-bit summary of the `(relative path, size,
+modification time)` of every file the build read: each note, each attachment,
+and everything under `.kglite/`. Both are persisted in the `.kgl`, so a process
+that opens one later can ask whether the vault behind it has moved on without
+being told the path again.
+
+`okf.fingerprint(dir)` recomputes it (a `stat` pass; no note is read) and
+`kglite okf status <dir> [--graph f.kgl]` prints it, exiting non-zero when the
+graph is stale. `okf.rebuild_if_changed(graph)` returns `None` when the
+fingerprint still matches and a **new** graph otherwise, carrying the old
+graph's vectors across by `(label, id)`: an unchanged note keeps its vector and
+its stored text hash, so only notes whose text moved are re-embedded. A note
+that changed **label** — by moving between folders under a folder-derived label
+— is a different node and re-embeds; that is the contract, not a defect.
+`embed:` targets then run a changed-mode pass when a model is bound.
+
+Two consequences worth knowing. Modification times are compared as whole
+seconds, so a file rewritten within the same second to exactly the same length
+reads as unchanged. And every non-hidden file under the root is a candidate
+attachment, so writing the `.kgl` *into* the vault changes the vault: keep it
+outside.

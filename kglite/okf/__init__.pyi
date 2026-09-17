@@ -151,6 +151,127 @@ def build(
         RuntimeError: If the bundle path does not exist or is not a directory.
     """
 
+def fingerprint(
+    path: str,
+    *,
+    dialect: str | None = ...,
+    require_frontmatter: bool | None = ...,
+    respect_skip: bool = ...,
+    skip_dirs: list[str] | None = ...,
+    with_body: bool | None = ...,
+) -> int:
+    """A stable 64-bit summary of what a build of this directory would read.
+
+    Specified by ``VAULT.md`` §12. Every note, every attachment and — under
+    ``"obsidian"`` — everything under ``.kglite/`` contributes its
+    ``(relative path, size, modification time)``, so the same directory read
+    with the same keywords gives the same number in any process, on any
+    machine. Editing, touching, renaming, adding or removing a file changes
+    it; the order the filesystem lists the files does not.
+
+    Only the files a build with these keywords would read count: a directory
+    pruned by ``skip_dirs`` (or by the vault's own ``skip_dirs:``) is outside
+    the summary, and ``.kglite/`` counts only under ``"obsidian"``, the one
+    dialect that reads it.
+
+    Modification times are compared as **whole seconds**, because the number
+    travels between copies and filesystems that do not agree below that. The
+    failure this admits is narrow and worth naming: a file rewritten within
+    the same second, to exactly the same length, reads as unchanged.
+
+    :func:`build` stamps this value on the graph it returns, where
+    :attr:`~kglite.KnowledgeGraph.source_fingerprint` reports it and
+    :func:`rebuild_if_changed` compares it.
+
+    Args:
+        path: Vault (or bundle) root directory.
+        dialect: As :func:`build`.
+        require_frontmatter: As :func:`build`.
+        respect_skip: As :func:`build`.
+        skip_dirs: As :func:`build`.
+        with_body: As :func:`build`.
+
+    Returns:
+        The fingerprint, as an unsigned 64-bit integer.
+
+    Raises:
+        RuntimeError: If the path does not exist, is not a directory, or
+            carries a ``.kglite/vault.yaml`` that does not parse.
+    """
+
+def rebuild_if_changed(
+    graph: KnowledgeGraph,
+    *,
+    dialect: str | None = ...,
+    embedder: Any | None = ...,
+    require_frontmatter: bool | None = ...,
+    respect_skip: bool = ...,
+    skip_dirs: list[str] | None = ...,
+    with_body: bool | None = ...,
+) -> KnowledgeGraph | None:
+    """Rebuild a graph from its own directory, if that directory has changed.
+
+    Specified by ``VAULT.md`` §12. ``graph`` must carry the provenance
+    :func:`build` stamps — its
+    :attr:`~kglite.KnowledgeGraph.source_root` and
+    :attr:`~kglite.KnowledgeGraph.source_fingerprint`, both of which survive
+    ``save()`` / ``load()``.
+
+    Returns **None** when the directory still fingerprints as it did at build
+    time: nothing beyond a ``stat`` pass is read, and the graph you passed is
+    still current. Otherwise it returns a **new** graph — the object passed in
+    is never modified — built from the same directory, with:
+
+    * **the old graph's vectors carried across**, matched by
+      ``(label, id)``: a note that kept both keeps its vector *and* its stored
+      text hash, so an unchanged note is never re-embedded. A note that
+      changed **label** — by moving between folders under a folder-derived
+      label — is a different node and re-embeds. That is the documented
+      contract, not a limitation to work around.
+    * **a changed-mode embedding pass** for each ``embed:`` target the
+      rebuilt ``.kglite/vault.yaml`` declares, when a model is available: the
+      ``embedder`` argument, or the one already bound to ``graph`` with
+      ``set_embedder()``. Only notes whose text no longer matches their
+      carried hash are sent to the model. With no model the targets are
+      reported as a warning and no vectors are computed; a target that fails
+      mid-pass leaves a warning too rather than discarding a graph that is
+      otherwise correct. Those warnings are not surfaced on the returned
+      graph — run :func:`validate` for the report.
+
+    The keywords must be the ones the graph was built with: the provenance
+    stamp records the directory and its fingerprint, not the dialect, so a
+    rebuild with different keywords is simply a different build.
+
+    Args:
+        graph: A graph built by :func:`build`.
+        dialect: As :func:`build` — pass what you built with.
+        embedder: A model with ``dimension`` and ``embed()``, as
+            :meth:`~kglite.KnowledgeGraph.set_embedder` takes. Omitted, the
+            model bound to ``graph`` is used, and the returned graph carries it
+            too.
+        require_frontmatter: As :func:`build`.
+        respect_skip: As :func:`build`.
+        skip_dirs: As :func:`build`.
+        with_body: As :func:`build`.
+
+    Returns:
+        A new :class:`~kglite.KnowledgeGraph`, or ``None`` when the directory
+        is unchanged.
+
+    Raises:
+        RuntimeError: If the graph carries no ``source_root``, or if the
+            directory no longer exists — a vault that is gone is an error, not
+            a vault that is unchanged.
+
+    Example::
+
+        g = okf.build("vault", dialect="obsidian")
+        ...
+        fresh = okf.rebuild_if_changed(g, dialect="obsidian")
+        if fresh is not None:
+            g = fresh
+    """
+
 def source(path: str) -> str:
     """Read a concept's markdown body on demand (frontmatter stripped).
 
@@ -309,9 +430,12 @@ def export(
         force: Replace files the manifest does not own or that were edited
             since the last export, and delete owned files that were edited.
         source_root: The directory the graph's attachments were read from, so
-            their bytes are copied into the exported vault. Without it the
-            body references are left as written and counted in
-            ``ExportReport.attachments_unresolved``.
+            their bytes are copied into the exported vault. Omitted, it falls
+            back to the graph's own :attr:`~kglite.KnowledgeGraph.source_root`
+            — a graph built by :func:`build` knows where its pictures are, so
+            an export of a vault-built graph copies them without being told.
+            With neither, the body references are left as written and counted
+            in ``ExportReport.attachments_unresolved``.
 
     Returns:
         An :class:`ExportReport`.

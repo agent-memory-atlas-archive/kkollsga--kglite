@@ -65,17 +65,7 @@ pub struct BuildOutput {
 /// ignored — see [`crate::okf::vault_config`].
 pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     let mut config_warnings: Vec<String> = Vec::new();
-    let config = load_vault_config(root, opts, &mut config_warnings)?;
-    // The overrides reach discovery and parsing, so `skip_dirs`, `hubs` and
-    // the label ladder are already the vault's before the first file is read.
-    let effective = match &config {
-        Some(cfg) => {
-            let mut owned = opts.clone();
-            cfg.apply_to_profile(&mut owned.profile);
-            owned
-        }
-        None => opts.clone(),
-    };
+    let (effective, config) = effective_options(root, opts, &mut config_warnings)?;
     let opts = &effective;
 
     let walked = super::walk::discover(root, opts)?;
@@ -95,6 +85,7 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
         // note happened to parse would make the report depend on the content
         // it is describing.
         finish_vault(root, opts, config.as_ref(), &mut graph, &mut report);
+        stamp_provenance(&mut graph, root, &walked, opts);
         return Ok(BuildOutput {
             graph: Arc::new(graph),
             report,
@@ -124,10 +115,54 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     );
     build_edges(&mut graph, &docs, opts, groups, &mut report)?;
     finish_vault(root, opts, config.as_ref(), &mut graph, &mut report);
+    stamp_provenance(&mut graph, root, &walked, opts);
     Ok(BuildOutput {
         graph: Arc::new(graph),
         report,
     })
+}
+
+/// Record where this graph came from and what that directory looked like
+/// (VAULT.md §12), so a later process can ask whether a rebuild would read
+/// anything new without being told the path again.
+///
+/// The fingerprint is taken from the walk the build already did, not from a
+/// second one: two walks of a directory being edited would disagree, and the
+/// stamp has to describe the files this graph was made of.
+///
+/// The root is stored absolute where the filesystem will say so — a relative
+/// path is only meaningful from the working directory the build happened to
+/// run in, and the graph outlives it.
+fn stamp_provenance(
+    graph: &mut DirGraph,
+    root: &Path,
+    walked: &crate::okf::walk::WalkResult,
+    opts: &BuildOptions,
+) {
+    let absolute = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    graph.source_root = Some(absolute.to_string_lossy().into_owned());
+    graph.source_fingerprint = Some(crate::okf::fingerprint::fingerprint_of(root, walked, opts));
+}
+
+/// The options a build of `root` actually runs with: the caller's, with the
+/// vault's own `.kglite/vault.yaml` applied over their profile.
+///
+/// Shared with [`crate::okf::fingerprint`], which has to see the same
+/// `skip_dirs` the build saw or the two would describe different file sets and
+/// a rebuild check would report a change on every call.
+pub(crate) fn effective_options(
+    root: &Path,
+    opts: &BuildOptions,
+    warnings: &mut Vec<String>,
+) -> Result<(BuildOptions, Option<crate::okf::vault_config::VaultConfig>), String> {
+    let config = load_vault_config(root, opts, warnings)?;
+    // The overrides reach discovery and parsing, so `skip_dirs`, `hubs` and
+    // the label ladder are already the vault's before the first file is read.
+    let mut effective = opts.clone();
+    if let Some(cfg) = &config {
+        cfg.apply_to_profile(&mut effective.profile);
+    }
+    Ok((effective, config))
 }
 
 /// Read `.kglite/vault.yaml` when the dialect is one that has vaults.

@@ -32,6 +32,7 @@ CLI_COMMANDS: dict[str, tuple[str, ...]] = {
     "okf check": ("okf", "check"),
     "okf build": ("okf", "build"),
     "okf export": ("okf", "export"),
+    "okf status": ("okf", "status"),
 }
 #: argv → the error contract it must keep. A run whose exit code or stderr
 #: moves is a change to what an operator sees when they get it wrong.

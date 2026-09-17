@@ -18,6 +18,7 @@
 
 pub mod build;
 pub mod export;
+pub mod fingerprint;
 pub mod frontmatter;
 pub mod links;
 pub mod model;
@@ -27,6 +28,7 @@ pub mod walk;
 
 pub use build::{build, BuildOutput};
 pub use export::{export, ExportOptions, ExportReport};
+pub use fingerprint::{fingerprint, rebuild_if_changed};
 pub use model::{
     BuildOptions, BuildReport, ConceptDoc, Dialect, FolderNoteDirection, IdScheme, LabelFrom, Link,
     Profile,

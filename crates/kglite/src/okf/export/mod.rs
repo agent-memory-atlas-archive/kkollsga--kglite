@@ -59,8 +59,12 @@ pub struct ExportOptions {
     /// Without it each of those is refused and counted.
     pub force: bool,
     /// The directory the graph's attachments were read from, so their bytes can
-    /// be copied into the exported vault. `None` leaves every body reference
-    /// pointing at a file the export did not write, counted as unresolved.
+    /// be copied into the exported vault. `None` falls back to the graph's own
+    /// `source_root` provenance stamp (VAULT.md §12) — a vault-built graph
+    /// knows where its pictures are, and asking the caller to repeat a path
+    /// the graph carries is how the two come to disagree. With neither, every
+    /// body reference is left pointing at a file the export did not write, and
+    /// counted as unresolved.
     pub source_root: Option<PathBuf>,
     /// The property holding each note's prose — `.kglite/vault.yaml`'s `body:`
     /// (VAULT.md §7), which a graph does not carry, so the caller repeats it.
@@ -217,7 +221,12 @@ pub fn export(graph: &DirGraph, dir: &Path, opts: &ExportOptions) -> Result<Expo
         writer.put(&note.out.clone(), text.as_bytes())?;
     }
     write_carried(graph, &mut writer)?;
-    copy_attachments(&attachments, opts, &mut writer)?;
+    // The caller's root wins; the graph's own provenance stands in for it.
+    let source_root = opts
+        .source_root
+        .clone()
+        .or_else(|| graph.source_root.as_ref().map(PathBuf::from));
+    copy_attachments(&attachments, source_root.as_deref(), &mut writer)?;
     writer.finish()
 }
 
@@ -646,15 +655,16 @@ fn write_carried(graph: &DirGraph, writer: &mut Writer) -> Result<(), String> {
 
 /// Copy each attachment's bytes from the source root (VAULT.md §10.9).
 ///
-/// Without a root there is nothing to copy: the body reference is left as the
-/// author wrote it and counted, so a caller knows the vault it just wrote is
-/// missing its figures.
+/// `root` is the caller's `source_root`, or the graph's own provenance stamp
+/// where the caller named none. Without either there is nothing to copy: the
+/// body reference is left as the author wrote it and counted, so a caller
+/// knows the vault it just wrote is missing its figures.
 fn copy_attachments(
     attachments: &[String],
-    opts: &ExportOptions,
+    root: Option<&Path>,
     writer: &mut Writer,
 ) -> Result<(), String> {
-    let Some(root) = opts.source_root.as_ref() else {
+    let Some(root) = root else {
         writer.report.attachments_unresolved += attachments.len();
         return Ok(());
     };

@@ -378,6 +378,27 @@ pub struct DirGraph {
     /// a trivial v2 without changing the format. Additive — absent in old files.
     #[serde(default)]
     pub graph_instructions: HashMap<String, String>,
+    /// The directory this graph was built from, when it was built from one —
+    /// [`okf::build`](crate::okf::build) stamps the root it walked, and
+    /// nothing else writes it.
+    ///
+    /// Two things read it: `okf::rebuild_if_changed`, which needs to know
+    /// *what* to rebuild, and `okf::export`, which copies attachment bytes out
+    /// of it when no other source root is given. Persisted through `.kgl`
+    /// save/load (additive, absent in older files), because a vault's own
+    /// provenance is exactly the thing a later process cannot re-derive.
+    ///
+    /// Not carried by `copy_embeddings_from`, `copy()` aside: it describes
+    /// where the graph's *content* came from, and a graph assembled some other
+    /// way has no answer rather than an inherited one.
+    #[serde(default)]
+    pub source_root: Option<String>,
+    /// What [`okf::fingerprint`](crate::okf::fingerprint) said about
+    /// `source_root` at build time — the `(path, size, mtime)` summary a later
+    /// process compares to decide whether a rebuild would read anything new.
+    /// `None` on a graph that was not built from a directory.
+    #[serde(default)]
+    pub source_fingerprint: Option<u64>,
     /// **User**-schema version — the caller's own data-model revision, bumped by
     /// their migrations. Distinct from the engine's format stamps
     /// (`save_metadata.format_version`, the `.kgl` magic), which the engine owns
@@ -887,6 +908,8 @@ impl DirGraph {
             ontology_closures: HashMap::new(),
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
+            source_root: None,
+            source_fingerprint: None,
             user_schema_version: 0,
             checkpoint_lsn: 0,
             checkpoint_permit: Default::default(),
@@ -961,6 +984,8 @@ impl DirGraph {
             ontology_closures: HashMap::new(),
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
+            source_root: None,
+            source_fingerprint: None,
             user_schema_version: 0,
             checkpoint_lsn: 0,
             checkpoint_permit: Default::default(),

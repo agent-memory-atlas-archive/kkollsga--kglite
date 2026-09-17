@@ -224,6 +224,31 @@ before upgrading.
   non-zero on errors. Needs `beautifulsoup4` and `markdownify`
   (`requirements/examples.txt`); neither is a kglite dependency.
 
+- **Vault lifecycle: fingerprint, provenance and rebuild** (`VAULT.md` §12).
+  `okf.build` now stamps the graph with the directory it walked and a 64-bit
+  fingerprint of every file it read — `(relative path, size, modification
+  time)` over the notes, the attachments and everything under `.kglite/`. Both
+  ride the `.kgl` through `save()` / `load()` (additive header fields; a graph
+  that was not built from a directory writes exactly the bytes it wrote
+  before), and both are readable as `KnowledgeGraph.source_root` and
+  `KnowledgeGraph.source_fingerprint`.
+
+  `okf.fingerprint(dir)` recomputes it — a `stat` pass, no note is read — and
+  `okf.rebuild_if_changed(graph)` returns `None` when the directory still
+  matches, or a new graph when it does not: rebuilt, with the old graph's
+  vectors carried across by `(label, id)` so an unchanged note is never
+  re-embedded, and with a changed-mode embedding pass for each `embed:` target
+  when a model is bound. A note that changed *label* by moving between folders
+  re-embeds — the documented contract of the same-label carry.
+
+  `kglite okf status <dir> [--graph f.kgl]` is the terminal half: it prints the
+  fingerprint, and with `--graph` exits 0 when that graph is current and
+  non-zero when the vault has moved on.
+
+  `okf.export(...)` now falls back to the graph's own `source_root` when the
+  `source_root` argument is omitted, so exporting a vault-built graph copies
+  its attachments without being told where they are.
+
 ### Changed
 
 - **Breaking for existing `dialect="obsidian"` callers**, who until now got

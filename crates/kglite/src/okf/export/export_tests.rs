@@ -999,7 +999,10 @@ fn attachments_are_copied_when_the_source_root_is_known() {
 
 #[test]
 fn attachments_are_reported_unresolved_without_a_source_root() {
-    let graph = build_vault(&golden_vault());
+    // A graph with no provenance to fall back on: nothing says where the
+    // pictures are, so the references are counted and no bytes travel.
+    let mut graph = (*build_vault(&golden_vault())).clone();
+    graph.source_root = None;
     let out = tempfile::tempdir().unwrap();
     let report = export_to(&graph, out.path());
     assert_eq!(
@@ -1007,6 +1010,22 @@ fn attachments_are_reported_unresolved_without_a_source_root() {
         (0, 3)
     );
     assert!(!out.path().join("img").exists());
+}
+
+/// A vault-built graph knows where its own pictures are (VAULT.md §12), so an
+/// export that is told nothing still copies them. Repeating the path at the
+/// call site is how a caller and the graph come to disagree about it.
+#[test]
+fn a_vault_built_graph_exports_its_attachments_without_being_told_the_root() {
+    let graph = build_vault(&golden_vault());
+    assert!(graph.source_root.is_some(), "the build stamped a root");
+    let out = tempfile::tempdir().unwrap();
+    let report = export_to(&graph, out.path());
+    assert_eq!(
+        (report.attachments_copied, report.attachments_unresolved),
+        (3, 0)
+    );
+    assert!(out.path().join("img/faults.png").is_file());
 }
 
 // ── §10.8 determinism ──────────────────────────────────────────────────────

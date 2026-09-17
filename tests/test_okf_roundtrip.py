@@ -103,9 +103,13 @@ class TestRoundTrip:
         assert carried.edge_properties_dropped > 0
         assert (carried.attachments_copied, carried.attachments_unresolved) == (3, 0)
 
+        # A root that holds none of the files leaves the bytes behind and
+        # counts them (§10.9). An omitted `source_root` no longer reaches this
+        # case: the graph's own provenance stands in for it (§12), which
+        # `test_okf.py::TestProvenanceAndRebuild` asserts.
         rootless = tmp_path / "no-root"
         rootless.mkdir()
-        without = okf.export(graph, str(rootless))
+        without = okf.export(graph, str(rootless), source_root=str(tmp_path / "nowhere"))
         assert (without.attachments_copied, without.attachments_unresolved) == (0, 3)
         # Loss 2 — the references now name files the exported vault does not
         # hold, and the re-import says so. One reference was already missing in

@@ -1,5 +1,6 @@
-//! Public Python functions for OKF ingestion: `build`, `validate`, `source`
-//! and the vault writer, `export`.
+//! Public Python functions for OKF ingestion: `build`, `validate`, `source`,
+//! the lifecycle pair `fingerprint` / `rebuild_if_changed`, and the vault
+//! writer, `export`.
 
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -101,6 +102,85 @@ pub fn validate(
     py.detach(|| crate::okf::validate(&path, &opts))
         .map(|report| VaultReport::new(report, strict))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// A stable 64-bit summary of what a build of this directory would read.
+///
+/// Same directory, same keywords, same number — across processes and machines.
+/// See the stub for the full contract.
+#[pyfunction]
+#[pyo3(signature = (path, *, dialect=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
+pub fn fingerprint(
+    py: Python<'_>,
+    path: PathBuf,
+    dialect: Option<String>,
+    require_frontmatter: Option<bool>,
+    respect_skip: bool,
+    skip_dirs: Option<Vec<String>>,
+    with_body: Option<bool>,
+) -> PyResult<u64> {
+    let opts = Keywords {
+        dialect,
+        require_frontmatter,
+        respect_skip,
+        skip_dirs,
+        with_body,
+    }
+    .options();
+    py.detach(|| crate::okf::fingerprint(&path, &opts))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// Rebuild a graph from the directory it was built from, if that directory has
+/// changed since.
+///
+/// Returns `None` when it has not — nothing beyond a `stat` pass is read — and
+/// a new graph otherwise. See the stub for the full contract.
+#[pyfunction]
+#[pyo3(signature = (graph, *, dialect=None, embedder=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
+// One parameter per Python keyword: the stub mirrors this signature verbatim.
+#[allow(clippy::too_many_arguments)]
+pub fn rebuild_if_changed(
+    py: Python<'_>,
+    graph: &KnowledgeGraph,
+    dialect: Option<String>,
+    embedder: Option<Py<PyAny>>,
+    require_frontmatter: Option<bool>,
+    respect_skip: bool,
+    skip_dirs: Option<Vec<String>>,
+    with_body: Option<bool>,
+) -> PyResult<Option<KnowledgeGraph>> {
+    let opts = Keywords {
+        dialect,
+        require_frontmatter,
+        respect_skip,
+        skip_dirs,
+        with_body,
+    }
+    .options();
+    // An explicit `embedder=` is wrapped like `set_embedder`'s; otherwise the
+    // graph's own bound model is used, so a caller who has already registered
+    // one does not register it twice.
+    let model = match embedder {
+        Some(model) => Some(std::sync::Arc::new(
+            crate::graph::embedder::py_adapter::PyEmbedderAdapter::new(py, model)?,
+        ) as std::sync::Arc<dyn kglite_core::api::Embedder>),
+        None => graph.embedder().map(std::sync::Arc::clone),
+    };
+    let inner = graph.inner.clone();
+    let rebuilt = py
+        .detach(|| crate::okf::rebuild_if_changed(&inner, &opts, model.as_deref()))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok(rebuilt.map(|out| {
+        let mut fresh = KnowledgeGraph::from_arc(out.graph);
+        // The rebuilt graph is the same vault, so it keeps the model that was
+        // embedding it — a caller should not have to re-register one to carry
+        // on where they left off.
+        if let Some(model) = model {
+            fresh.set_embedder_native(model);
+        }
+        fresh
+    }))
 }
 
 /// Read a concept's markdown body on demand (frontmatter stripped).

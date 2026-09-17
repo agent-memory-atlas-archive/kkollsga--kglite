@@ -110,7 +110,13 @@ pub struct VaultConfig {
 
 /// Where the declaration file lives under `root`.
 pub fn config_path(root: &Path) -> PathBuf {
-    root.join(CONFIG_DIR).join(CONFIG_FILE)
+    config_dir(root).join(CONFIG_FILE)
+}
+
+/// `<root>/.kglite/` — the directory the walk prunes and the vault reads by
+/// explicit path: the config, `skills/` and `recipes/` all live under it.
+pub fn config_dir(root: &Path) -> PathBuf {
+    root.join(CONFIG_DIR)
 }
 
 /// Read `<root>/.kglite/vault.yaml`.

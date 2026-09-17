@@ -183,6 +183,15 @@ fn build_vault_graph(
 /// `.kglite/` is the exception among dot-directories because the build reads
 /// it by explicit path (the walk prunes it): `vault.yaml`, `skills/` and
 /// `recipes/` are all build inputs.
+///
+/// Staleness is decided by the watcher, not by `okf::fingerprint`: the
+/// fingerprint is a `stat` of every file the build would read — ~7 000 of them
+/// at Petrel scale — and asking it per call would put that walk in front of
+/// every tool response. There is no "the watcher failed to arm" state to fall
+/// back from either: `bind_mode` returns the watcher's error and boot fails
+/// with it, so a server that is answering has a watcher. If that ever becomes
+/// a degraded mode rather than a refusal, `okf::fingerprint(root, &opts)` is
+/// the fallback to wire in here.
 fn is_vault_path(root: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;

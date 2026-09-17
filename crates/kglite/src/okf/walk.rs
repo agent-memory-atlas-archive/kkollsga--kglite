@@ -14,12 +14,22 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// A discovered concept file, with its bundle-relative (forward-slashed) path.
+///
+/// Carries the same `(size, mtime)` pair as [`DiscoveredAttachment`], so
+/// [`crate::okf::fingerprint`] hashes one shape over both lists and no second
+/// walk stats the tree again.
 #[derive(Debug, Clone)]
 pub struct DiscoveredFile {
     /// Bundle-relative path, forward-slashed (e.g. `tables/users.md`).
     pub rel_path: String,
     /// Absolute path on disk (for reading the file).
     pub abs_path: PathBuf,
+    /// File size in bytes; `0` when the filesystem would not say.
+    pub size: u64,
+    /// Modification time as whole seconds since the Unix epoch, UTC — see
+    /// [`DiscoveredAttachment::mtime`] for why seconds and not the platform's
+    /// native precision.
+    pub mtime: Option<i64>,
 }
 
 /// A non-`.md` file the walk saw, with the `stat` metadata VAULT.md §6.3 puts
@@ -54,6 +64,12 @@ pub struct WalkResult {
     /// Bundle-relative directory path (`""` = root) → that directory's
     /// `index.md` absolute path.
     pub index_files: HashMap<String, PathBuf>,
+    /// Every `.md` file the profile's reserved names diverted from `concepts`
+    /// — the `index.md`s of `index_files` and, where `skip_log_files` is set,
+    /// the `log.md`s. Sorted by `rel_path`. Nothing builds from this: it
+    /// exists so [`crate::okf::fingerprint`] can see a file the build read (or
+    /// deliberately did not) without walking the tree a second time.
+    pub diverted: Vec<DiscoveredFile>,
     /// Every non-`.md`, non-hidden file under the root, sorted by `rel_path`.
     /// Empty unless [`crate::okf::model::Profile::attachments`] is set — an
     /// OKF sweep drops attachment references, so stat'ing the files would buy
@@ -125,6 +141,7 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
     check_root(root)?;
 
     let mut out = Vec::new();
+    let mut diverted = Vec::new();
     let mut attachments = Vec::new();
     let mut index_files: HashMap<String, PathBuf> = HashMap::new();
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
@@ -192,7 +209,14 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
             }
             continue;
         }
+        let meta = entry.metadata().ok();
         if name == "log.md" && opts.profile.skip_log_files {
+            diverted.push(DiscoveredFile {
+                rel_path,
+                abs_path: entry.path().to_path_buf(),
+                size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                mtime: meta.as_ref().and_then(mtime_secs),
+            });
             continue;
         }
         if name == "index.md" && opts.profile.index_as_folder_metadata {
@@ -202,20 +226,33 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
                 .map(|i| rel_path[..i].to_string())
                 .unwrap_or_default();
             index_files.insert(dir, entry.path().to_path_buf());
+            // A diverted `index.md` is still a file the build read, so the
+            // fingerprint has to see it: a folder description that changed
+            // must rebuild the graph like any other edit.
+            diverted.push(DiscoveredFile {
+                rel_path,
+                abs_path: entry.path().to_path_buf(),
+                size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                mtime: meta.as_ref().and_then(mtime_secs),
+            });
             continue;
         }
         out.push(DiscoveredFile {
             rel_path,
             abs_path: entry.path().to_path_buf(),
+            size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            mtime: meta.as_ref().and_then(mtime_secs),
         });
     }
     // Deterministic order (parallelism happens at parse time, but a stable file
     // list keeps id-collision resolution and tests reproducible).
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    diverted.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     attachments.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     Ok(WalkResult {
         concepts: out,
         index_files,
+        diverted,
         attachments,
     })
 }
@@ -223,7 +260,7 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
 /// A file's mtime as whole seconds since the Unix epoch, UTC. Pre-epoch times
 /// stay signed rather than saturating at 0 — a 1969 mtime is odd, but claiming
 /// it is 1970 is a lie the fingerprint would then compare.
-fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {
+pub(crate) fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {
     let modified = meta.modified().ok()?;
     Some(match modified.duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_secs() as i64,

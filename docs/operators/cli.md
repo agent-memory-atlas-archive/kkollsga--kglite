@@ -161,8 +161,9 @@ subcommand, because a CLI user writes Cypher.
 
 `kglite okf` reads a **vault** — a directory of frontmatter-markdown notes in
 the format `VAULT.md` specifies — without Python. `check` reports what a build
-would find and sets the exit code; `build` keeps the result as a `.kgl`; and
-`export` runs the other way, writing a `.kgl` back out as a vault:
+would find and sets the exit code; `build` keeps the result as a `.kgl`;
+`export` runs the other way, writing a `.kgl` back out as a vault; and `status`
+answers the cheap question — has the vault moved since the graph was built:
 
 ```bash
 kglite okf check vault/                       # counts, then errors, then warnings
@@ -171,6 +172,8 @@ kglite okf check vault/ --json                # the same report, machine-readabl
 kglite okf build vault/ -o vault.kgl          # build and save
 kglite okf export vault.kgl out/ \
     --source-root vault/                      # write the graph back out
+kglite okf status vault/                      # the vault's fingerprint
+kglite okf status vault/ --graph vault.kgl    # 0 = current, 1 = stale
 ```
 
 `check` runs the same read `build` runs and throws the graph away, so it
@@ -188,6 +191,17 @@ default), `okf` or `loose`; an unrecognised spelling is refused rather than
 quietly read as something else. Everything else about a vault — declaring
 indexes, hubs and embed targets in `.kglite/vault.yaml`, carrying skills and
 recipes in `.kglite/` — happens in the vault itself, not in flags.
+
+`status` reads no note: it `stat`s the files a build would read and folds them
+into the fingerprint `VAULT.md` §12 specifies. Alone it prints that number and
+the directory. With `--graph` it compares it against the one stamped in the
+`.kgl` when it was built, printing `current` and exiting **0**, or `stale` with
+both fingerprints and exiting **non-zero** — the verdict a scheduled rebuild
+checks before doing any work. A `.kgl` that carries no provenance (one not
+built by `okf build`) is an error rather than a verdict, because there is
+nothing to compare. Keep the `.kgl` *outside* the vault: every non-hidden file
+under the root is a candidate attachment, so a graph written into the vault
+changes the vault.
 
 `export` writes one `.md` file per node under a folder named for its label,
 copies the graph's attachments when `--source-root` names the directory they

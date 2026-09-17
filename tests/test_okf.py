@@ -873,3 +873,113 @@ class TestExport:
         blocker.write_text("not a directory\n", encoding="utf-8")
         with pytest.raises(RuntimeError, match="not a directory"):
             okf.export(graph, str(blocker))
+
+
+class TestProvenanceAndRebuild:
+    """``VAULT.md`` §12: a built graph remembers the directory it came from, and
+    can be asked whether that directory has moved on."""
+
+    @staticmethod
+    def _vault(tmp_path) -> Path:
+        vault = tmp_path / "vault"
+        (vault / "notes").mkdir(parents=True)
+        (vault / "notes" / "alpha.md").write_text("---\nid: alpha\n---\nAlpha.\n", encoding="utf-8")
+        (vault / "notes" / "beta.md").write_text("---\nid: beta\n---\nSee [[alpha]].\n", encoding="utf-8")
+        return vault
+
+    def test_fingerprint_is_an_int_and_is_stable(self, tmp_path):
+        vault = self._vault(tmp_path)
+        first = okf.fingerprint(str(vault), dialect="obsidian")
+        assert isinstance(first, int)
+        assert first == okf.fingerprint(str(vault), dialect="obsidian")
+
+        (vault / "notes" / "gamma.md").write_text("New.\n", encoding="utf-8")
+        assert okf.fingerprint(str(vault), dialect="obsidian") != first
+
+    def test_a_built_graph_carries_its_root_and_fingerprint(self, tmp_path):
+        vault = self._vault(tmp_path)
+        g = okf.build(str(vault), dialect="obsidian")
+        assert g.source_root == str(vault.resolve())
+        assert g.source_fingerprint == okf.fingerprint(str(vault), dialect="obsidian")
+
+        # A graph that was not built from a directory has no answer.
+        assert kglite.KnowledgeGraph().source_root is None
+        assert kglite.KnowledgeGraph().source_fingerprint is None
+
+    def test_provenance_survives_a_save_and_load(self, tmp_path):
+        vault = self._vault(tmp_path)
+        g = okf.build(str(vault), dialect="obsidian")
+        path = str(tmp_path / "vault.kgl")
+        g.save(path)
+        loaded = kglite.load(path)
+        assert loaded.source_root == g.source_root
+        assert loaded.source_fingerprint == g.source_fingerprint
+
+    def test_rebuild_is_none_until_the_vault_changes(self, tmp_path):
+        vault = self._vault(tmp_path)
+        g = okf.build(str(vault), dialect="obsidian")
+        assert okf.rebuild_if_changed(g, dialect="obsidian") is None
+
+        (vault / "notes" / "gamma.md").write_text("---\nid: gamma\n---\nNew.\n", encoding="utf-8")
+        fresh = okf.rebuild_if_changed(g, dialect="obsidian")
+        assert fresh is not None
+        # No `type:` and no `default_label`, so the top-level folder labels them.
+        assert _labels(fresh)["notes"] == 3
+        # The graph passed in is never modified — the rebuild is a new object.
+        assert _labels(g)["notes"] == 2
+        assert okf.rebuild_if_changed(fresh, dialect="obsidian") is None
+
+    def test_rebuild_refuses_a_graph_with_no_provenance(self):
+        with pytest.raises(RuntimeError, match="source_root"):
+            okf.rebuild_if_changed(kglite.KnowledgeGraph(), dialect="obsidian")
+
+    def test_a_rebuild_embeds_only_the_note_that_changed(self, tmp_path):
+        """The declared ``embed:`` target runs in changed mode over the carried
+        hashes, through whatever model the graph already has bound."""
+        vault = self._vault(tmp_path)
+        (vault / ".kglite").mkdir()
+        (vault / ".kglite" / "vault.yaml").write_text(
+            "kglite_vault: 1\ndefault_label: Note\nembed:\n  Note: body\n", encoding="utf-8"
+        )
+
+        seen: list[str] = []
+
+        class Model:
+            dimension = 2
+
+            def embed(self, texts):
+                seen.extend(texts)
+                return [[1.0, 0.0] for _ in texts]
+
+        g = okf.build(str(vault), dialect="obsidian")
+        g.set_embedder(Model())
+        g.embed_texts("Note", "body", show_progress=False)
+        assert len(seen) == 2
+        seen.clear()
+
+        (vault / "notes" / "beta.md").write_text("---\nid: beta\n---\nRewritten.\n", encoding="utf-8")
+        fresh = okf.rebuild_if_changed(g, dialect="obsidian")
+        assert fresh is not None
+        assert seen == ["Rewritten."], "only the rewritten note reached the model"
+        assert fresh.embedding_dim("Note", "body") == 2
+        # The rebuilt graph keeps the model, so the next round needs no
+        # re-registration — `embed_texts` raises without one.
+        seen.clear()
+        (vault / "notes" / "alpha.md").write_text("---\nid: alpha\n---\nAlso rewritten.\n", encoding="utf-8")
+        again = okf.rebuild_if_changed(fresh, dialect="obsidian")
+        assert again is not None
+        assert seen == ["Also rewritten."]
+
+    def test_export_defaults_its_source_root_to_the_graphs_own(self, tmp_path):
+        """A vault-built graph knows where its pictures are (§12), so an export
+        that is told nothing still copies them."""
+        vault = self._vault(tmp_path)
+        (vault / "img").mkdir()
+        (vault / "img" / "x.png").write_bytes(b"\x89PNG\r\n")
+        (vault / "notes" / "alpha.md").write_text("---\nid: alpha\n---\n![map](../img/x.png)\n", encoding="utf-8")
+        g = okf.build(str(vault), dialect="obsidian")
+
+        out = tmp_path / "out"
+        report = okf.export(g, str(out))
+        assert (report.attachments_copied, report.attachments_unresolved) == (1, 0)
+        assert (out / "img" / "x.png").read_bytes() == b"\x89PNG\r\n"

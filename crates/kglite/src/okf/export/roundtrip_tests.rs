@@ -160,13 +160,17 @@ impl Trip {
         Trip::run(source, true)
     }
 
-    /// Run it without naming the source root, so no attachment bytes travel.
+    /// Run it with nothing naming the source root — no option, and no
+    /// provenance stamp on the graph either — so no attachment bytes travel.
     fn rootless(source: &Path) -> Trip {
         Trip::run(source, false)
     }
 
     fn run(source: &Path, with_root: bool) -> Trip {
-        let graph = build_vault(source);
+        let mut graph = (*build_vault(source)).clone();
+        if !with_root {
+            graph.source_root = None;
+        }
         let first = Shape::of(&graph);
         let root = with_root.then(|| source.to_path_buf());
         Trip::from_graph(&graph, root, first)
