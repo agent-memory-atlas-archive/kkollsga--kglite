@@ -162,6 +162,19 @@ and one of those members is the module `rmsapi` itself, so it writes
 accident. Rename the member page (`api/rmsapi/rmsapi_module.md`); an `id:`
 will not settle it, because the layout reads paths, not ids.
 
+Renaming the member page moves nothing else. `api/rmsapi/` is still the
+directory beside `api/rmsapi.md`, so `api/rmsapi.md` is still its folder note
+and every note inside keeps it as their folder-note parent — the renamed page
+included, which becomes an ordinary child of the package page, which is what it
+is. **Do not rename the directory instead.** `X.md` is a folder note only while
+`X/` sits beside it, so renaming the directory dissolves the folder note: the
+directory gets its `Folder` node back and every `CHILD_OF` under it becomes a
+`CONTAINS` from that node — the hierarchy the layout was there to express. The
+other spelling is a valid fix too — rename the page *beside* the directory and
+let `api/rmsapi/rmsapi.md` stand for it — but then the package page is the
+parent of nothing: it and the folder note end up siblings under `api/`. Rename
+the member.
+
 ### 2.4 Ignored paths
 
 Pruned from the walk, with their whole subtree:
@@ -398,7 +411,17 @@ are counted in the build report and are never exported as files (§10).
    which name nothing to resolve. The `![alt](…)` and `[text](…)` spellings are
    percent-decoded before resolution and the `![[…]]` one is not, exactly as
    §5.1 reads the two syntaxes; a reference naming an absolute or escaping path
-   is a §9 error.
+   is a §9 error. **A converter emits the encoding** that decoding undoes: a
+   markdown target is read up to the first whitespace or `)`, so a space makes
+   the whole reference invisible — nothing matches, and there is no node, no
+   edge and no warning — and a `)` truncates it to a path that resolves to
+   nothing. Emit `%20`, `%28` and `%29` for those, and `%25` for a literal `%`,
+   which is otherwise eaten whenever the two characters after it are hex
+   digits. Encoding cannot rescue `#` or `?`: the target is decoded *before* it
+   is split, so `img/c%23d.png` is cut at the `#` exactly as `img/c#d.png` is,
+   and the `![[…]]` spelling splits on `#` too — a file whose name holds one is
+   unreachable from either syntax, so rename it. Wikilink targets are names,
+   not URLs, and are never encoded.
 2. **Resolution ladder:** note-relative → vault-root-relative → a unique
    filename anywhere in the vault. The stored value is always the
    **vault-relative** resolved path, so every consumer resolves from one root.
@@ -596,6 +619,18 @@ wrong, there is simply less of it than the author intended.
   simply a query that will be refused on the day it really returns 201 rows —
   and `LIMIT $rows` is never refused, whatever the caller passes. A query that
   wants everything under the cap writes `LIMIT 199`.
+
+  **`parameters` is checked against the statement, exactly.** Its `properties`
+  must name the same set as the `$parameters` the Cypher uses — one undeclared
+  and one unused are both errors, and the message names each — and `required`
+  must list *every* one of those properties: a recipe parameter is never
+  optional. The root carries `type: object`, `properties`, `required` and
+  `additionalProperties: false`; all four are required, `type` must be exactly
+  `object`, `additionalProperties` must be explicitly `false`, and the only
+  other root key allowed is `description`. A file that declares no
+  `parameters:` stores the closed empty schema
+  (`{type: object, properties: {}, required: [], additionalProperties: false}`),
+  which is valid only for a statement that uses no `$parameters` at all.
 
   A file that fails validation is skipped, as above. A `parameters:` map is
   read **nested**, not flattened into dotted keys, so a schema's
@@ -808,6 +843,10 @@ What a converter must emit, in order:
    not after you reorganise the output. Convert to PNG, JPEG, GIF or WebP (§6).
    A download link is the same thing without the `!`: `[the handbook](x.pdf)`
    is an `Attachment` reference, and the file has to be in the vault too.
+   **Percent-encode every markdown target you emit** — at minimum spaces, `(`,
+   `)` and a literal `%`, which otherwise truncate or hide the reference
+   (§6.1) — and keep `#` and `?` out of the filenames themselves, because no
+   encoding reaches them. Wikilink targets are never encoded.
 8. **`.kglite/vault.yaml`** with `kglite_vault: 1`, your `default_label`,
    `folder_notes`, `hubs`, `heading_edges`, `types`, `indexes`, `text_indexes`
    and `embed` (§7). It replaces the graph-building script: everything

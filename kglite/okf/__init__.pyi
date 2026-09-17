@@ -92,8 +92,10 @@ def build(
               or a list of nothing but wikilink strings, becomes edges typed
               ``UPPER_SNAKE(key)`` and is *not* stored as a property; a list
               mixing wikilinks with plain strings stays a property. The
-              reserved ``parent:`` key emits ``CHILD_OF`` from the note to
-              each named parent.
+              reserved ``parent:`` key emits the folder-note edge to each
+              named parent — the ``folder_notes`` type and direction,
+              ``CHILD_OF`` from the note to the parent unless the vault
+              redeclares them.
             * **Tags**: inline ``#tags`` in the body join the same ``Tag`` hub
               as ``tags:`` (fenced code, inline code spans and URL or wikilink
               fragments are skipped), while the ``tags`` property keeps
@@ -102,7 +104,8 @@ def build(
               notes here, not folder metadata and not skipped.
             * **Folder notes**: ``X.md`` beside ``X/``, or ``X/X.md``, takes
               that directory's place — no ``Folder`` node is created for it and
-              the notes inside are joined to the note by ``CHILD_OF``.
+              the notes inside are joined to the note by the ``folder_notes``
+              edge, ``CHILD_OF`` child → parent by default.
             * **Hubs**: every hub node carries a ``title`` alongside its id.
             * **The vault's own declaration file**: ``.kglite/vault.yaml``,
               read by explicit path (the walk never enters a dot-directory).
