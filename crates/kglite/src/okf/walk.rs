@@ -92,14 +92,13 @@ fn matches_skip(rel: &str, name: &str, skip_dirs: &[&str]) -> bool {
 /// declaration (VAULT.md §2.4) are unioned, never one overriding the other;
 /// `opts.profile` also decides which filenames are reserved. Errors only on an
 /// unreadable root.
-pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> {
-    let skip_dirs: Vec<&str> = opts
-        .skip_dirs
-        .iter()
-        .chain(opts.profile.skip_dirs.iter())
-        .map(String::as_str)
-        .collect();
-    let skip_dirs = skip_dirs.as_slice();
+/// The two conditions that make a root unwalkable rather than merely faulty.
+///
+/// Shared with [`crate::okf::validate`], which reserves its `Err` for exactly
+/// these and turns every other build failure into a report finding: the
+/// distinction is only honest while both sides ask the same question in the
+/// same words.
+pub(crate) fn check_root(root: &Path) -> Result<(), String> {
     if !root.exists() {
         return Err(format!(
             "OKF bundle path does not exist: {}",
@@ -112,6 +111,18 @@ pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> 
             root.display()
         ));
     }
+    Ok(())
+}
+
+pub fn discover(root: &Path, opts: &BuildOptions) -> Result<WalkResult, String> {
+    let skip_dirs: Vec<&str> = opts
+        .skip_dirs
+        .iter()
+        .chain(opts.profile.skip_dirs.iter())
+        .map(String::as_str)
+        .collect();
+    let skip_dirs = skip_dirs.as_slice();
+    check_root(root)?;
 
     let mut out = Vec::new();
     let mut attachments = Vec::new();

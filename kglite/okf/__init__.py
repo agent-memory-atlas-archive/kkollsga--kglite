@@ -21,13 +21,17 @@ Usage::
     from kglite import okf
 
     g = okf.build("path/to/bundle")            # strict OKF markdown links
-    g = okf.build("path/to/memory", dialect="obsidian")  # also [[wikilinks]]
+    g = okf.build("path/to/vault", dialect="obsidian")   # the VAULT.md format
+
+    report = okf.validate("path/to/vault", dialect="obsidian")
+    print(report)            # counts, errors, warnings
+    assert report.ok         # no errors (add strict=True for no warnings)
 
     # Now query it like any graph:
     g.cypher("MATCH (n) WHERE NOT (n)--() RETURN n.concept_id")   # orphans
     g.cypher("CALL leiden() YIELD node, community RETURN community, count(*)")
 """
 
-from kglite._kglite_okf import build, source
+from kglite._kglite_okf import VaultReport, build, source, validate
 
-__all__ = ["build", "source"]
+__all__ = ["VaultReport", "build", "source", "validate"]

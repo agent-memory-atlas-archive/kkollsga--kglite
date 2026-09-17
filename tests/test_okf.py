@@ -16,6 +16,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 import kglite
 from kglite import okf
 
@@ -674,3 +676,96 @@ def test_kg_skip_excludes_by_default(tmp_path):
     g2 = okf.build(str(tmp_path), respect_skip=False)
     ids2 = {r["id"] for r in g2.cypher("MATCH (n) WHERE n.concept_id IS NOT NULL RETURN n.concept_id AS id").to_list()}
     assert ids2 == {"keep", "scratch"}
+
+
+class TestValidate:
+    """``okf.validate`` — the build report as a value (VAULT.md §9)."""
+
+    def test_the_golden_vault_reports_its_deliberate_faults(self):
+        report = okf.validate(str(VAULT_BUNDLE), dialect="obsidian")
+        assert report.errors == [
+            "id collision: 2 notes resolve to id `alpha` "
+            "(notes/alpha.md, projects/alpha.md); each falls back to its path-relative id"
+        ]
+        assert report.warnings == [
+            "case-insensitive id collision: `Roadmap` (projects/Roadmap.md), `roadmap` (notes/roadmap.md)",
+            "missing attachment: `img/appendix.pdf`",
+            "dangling link: `Missing`",
+        ]
+        assert report.ok is False
+
+    def test_counts_describe_the_same_build(self):
+        report = okf.validate(str(VAULT_BUNDLE), dialect="obsidian")
+        graph = okf.build(str(VAULT_BUNDLE), dialect="obsidian")
+        counts = report.counts
+        assert counts["files_scanned"] == 13
+        assert counts["concepts"] == 13
+        # Every node the build made is here, except the carried skill and
+        # recipe nodes — those are counted by `skills_imported` /
+        # `recipes_imported` instead of as notes.
+        assert counts["nodes_by_label"] == {
+            label: n for label, n in _labels(graph).items() if label not in ("KgliteSkill", "KgliteRecipe")
+        }
+        assert counts["edges_by_type"] == dict(_edge_types(graph))
+        assert counts["dangling"] == 1
+        assert counts["folder_notes"] == 1
+        assert counts["missing_attachments"] == 1
+        assert counts["ambiguous_attachments"] == 0
+        assert counts["indexes_declared"] == 2
+        assert counts["text_indexes_built"] == 1
+        assert counts["skills_imported"] == 1
+        assert counts["recipes_imported"] == 1
+        # Reported, never computed: core links no embedder.
+        assert counts["embed_targets"] == [("Article", "body")]
+
+    def test_strict_promotes_warnings_only(self, tmp_path):
+        (tmp_path / "a.md").write_text("[[Nowhere]]\n", encoding="utf-8")
+        lenient = okf.validate(str(tmp_path), dialect="obsidian")
+        strict = okf.validate(str(tmp_path), dialect="obsidian", strict=True)
+        assert lenient.warnings == strict.warnings == ["dangling link: `Nowhere`"]
+        assert lenient.errors == strict.errors == []
+        assert lenient.ok is True
+        assert strict.ok is False
+
+    def test_str_renders_the_counts_header_then_the_findings(self, tmp_path):
+        (tmp_path / "a.md").write_text("[[Nowhere]]\n", encoding="utf-8")
+        text = str(okf.validate(str(tmp_path), dialect="obsidian"))
+        assert text.startswith("files scanned: 1\nconcepts: 1\n")
+        assert "errors: none\n" in text
+        assert text.endswith("warnings (1):\n  - dangling link: `Nowhere`\n")
+
+    def test_a_broken_vault_yaml_is_one_error_not_an_exception(self, tmp_path):
+        (tmp_path / "a.md").write_text("prose\n", encoding="utf-8")
+        (tmp_path / ".kglite").mkdir()
+        (tmp_path / ".kglite" / "vault.yaml").write_text("kglite_vault: 1\nnonsense: 3\n", encoding="utf-8")
+        # The build refuses it outright (VAULT.md §7).
+        with pytest.raises(RuntimeError):
+            okf.build(str(tmp_path), dialect="obsidian")
+        report = okf.validate(str(tmp_path), dialect="obsidian")
+        assert len(report.errors) == 1
+        assert "vault.yaml" in report.errors[0] and "nonsense" in report.errors[0]
+        assert report.ok is False
+
+    def test_an_unreadable_root_still_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match="does not exist"):
+            okf.validate(str(tmp_path / "nope"), dialect="obsidian")
+
+    def test_path_safety_errors_name_the_note_and_the_target(self, tmp_path):
+        (tmp_path / "notes").mkdir()
+        (tmp_path / "notes" / "a.md").write_text(
+            "[plan](C:/secrets/plan.md) and [out](../../elsewhere/x.md)\n", encoding="utf-8"
+        )
+        report = okf.validate(str(tmp_path), dialect="obsidian")
+        assert report.errors == [
+            "notes/a.md: `C:/secrets/plan.md` is an absolute filesystem path",
+            "notes/a.md: `../../elsewhere/x.md` escapes the vault root",
+        ]
+
+    def test_a_percent_encoded_reference_reaches_the_file_it_names(self, tmp_path):
+        (tmp_path / "img").mkdir()
+        (tmp_path / "img" / "a b.png").write_bytes(b"PNG")
+        (tmp_path / "note.md").write_text("![chart](img/a%20b.png)\n", encoding="utf-8")
+        report = okf.validate(str(tmp_path), dialect="obsidian")
+        assert report.counts["missing_attachments"] == 0
+        assert report.counts["nodes_by_label"]["Image"] == 1
+        assert report.ok is True

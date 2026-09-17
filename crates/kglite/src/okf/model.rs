@@ -211,6 +211,18 @@ pub struct Profile {
     /// reference — and which therefore never pay the walk's `stat` per
     /// non-`.md` file either.
     pub attachments: bool,
+    /// Read by `crate::okf::parse_file`: check VAULT.md §4.1's reserved keys
+    /// for the shape their meaning depends on — a string `id:`/`type:`, a list
+    /// `tags:`/`aliases:`, a boolean `kg_skip:`. Off for `okf`/`loose`, whose
+    /// producers (codingest, Claude memories) write those keys to their own
+    /// conventions.
+    pub reserved_key_shapes: bool,
+    /// Read by [`crate::okf::links::extract`]: refuse a body reference that
+    /// names a place the vault does not own — an absolute filesystem path, or
+    /// one climbing above the root (VAULT.md §9). Off for `okf`/`loose`, where
+    /// a sweep of many bundles under one parent legitimately links across
+    /// roots and a `../` is how it is written.
+    pub path_safety: bool,
 }
 
 impl Default for Profile {
@@ -243,6 +255,8 @@ impl Default for Profile {
             body_property: DEFAULT_BODY_PROPERTY.to_string(),
             infer_temporal: false,
             attachments: false,
+            path_safety: false,
+            reserved_key_shapes: false,
         }
     }
 }
@@ -271,6 +285,8 @@ impl Profile {
             skip_log_files: false,
             infer_temporal: true,
             attachments: true,
+            path_safety: true,
+            reserved_key_shapes: true,
             ..Profile::default()
         }
     }
@@ -380,7 +396,10 @@ pub struct BuildReport {
     /// `require_frontmatter` or `kg_skip` excluded some.
     pub concepts: usize,
     /// Nodes added per label, synthesized `Folder`/`Tag`/`Source` nodes and
-    /// `_provisional` stubs included.
+    /// `_provisional` stubs included. The `KgliteSkill` / `KgliteRecipe` nodes
+    /// a vault carries (VAULT.md §8) are **not** here: they are content the
+    /// build imported rather than notes it read, and `skills_imported` /
+    /// `recipes_imported` count them.
     pub nodes_by_label: BTreeMap<String, usize>,
     /// Connection rows emitted per edge type. The mutator collapses duplicate
     /// source/target pairs, so the built graph can hold fewer edges than this.
@@ -418,6 +437,76 @@ pub struct BuildReport {
     pub errors: Vec<String>,
     /// Problems worth surfacing that still leave a usable graph.
     pub warnings: Vec<String>,
+}
+
+impl BuildReport {
+    /// Whether the vault meets VAULT.md §9: no errors, and under `strict` no
+    /// warnings either. The exit code of `kglite okf check` and the `ok`
+    /// attribute of `okf.validate`'s report are both this — one rule, so a
+    /// converter's test suite and an operator's terminal cannot disagree.
+    pub fn is_ok(&self, strict: bool) -> bool {
+        self.errors.is_empty() && (!strict || self.warnings.is_empty())
+    }
+
+    /// The report as stable text: counts, then errors, then warnings.
+    ///
+    /// One rendering for `kglite okf check` and Python's `str(report)`, so
+    /// what an operator reads in a terminal and what a converter prints from
+    /// its own harness are the same lines. Deterministic — the count maps are
+    /// `BTreeMap`s and the findings keep the order the build made them in.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        let counted = |map: &BTreeMap<String, usize>| {
+            if map.is_empty() {
+                "none".to_string()
+            } else {
+                map.iter()
+                    .map(|(k, v)| format!("{k} {v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        out.push_str(&format!("files scanned: {}\n", self.files_scanned));
+        out.push_str(&format!("concepts: {}\n", self.concepts));
+        out.push_str(&format!("nodes: {}\n", counted(&self.nodes_by_label)));
+        out.push_str(&format!("edges: {}\n", counted(&self.edges_by_type)));
+        out.push_str(&format!("dangling links: {}\n", self.dangling));
+        out.push_str(&format!("folder notes: {}\n", self.folder_notes));
+        out.push_str(&format!(
+            "missing attachments: {} ({} ambiguous)\n",
+            self.missing_attachments, self.ambiguous_attachments
+        ));
+        out.push_str(&format!("indexes declared: {}\n", self.indexes_declared));
+        out.push_str(&format!(
+            "text indexes built: {}\n",
+            self.text_indexes_built
+        ));
+        out.push_str(&format!("skills imported: {}\n", self.skills_imported));
+        out.push_str(&format!("recipes imported: {}\n", self.recipes_imported));
+        out.push_str(&format!(
+            "embed targets: {}\n",
+            if self.embed_targets.is_empty() {
+                "none".to_string()
+            } else {
+                self.embed_targets
+                    .iter()
+                    .map(|(label, property)| format!("{label}.{property}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        ));
+        for (name, findings) in [("errors", &self.errors), ("warnings", &self.warnings)] {
+            if findings.is_empty() {
+                out.push_str(&format!("{name}: none\n"));
+                continue;
+            }
+            out.push_str(&format!("{name} ({}):\n", findings.len()));
+            for finding in findings {
+                out.push_str(&format!("  - {finding}\n"));
+            }
+        }
+        out
+    }
 }
 
 /// A resolved cross-link from a concept to another concept or an external URL.
@@ -507,6 +596,11 @@ pub struct ConceptDoc {
     /// `![…]` references found in the body, in body order (VAULT.md §6).
     /// Always empty unless [`Profile::attachments`] is set.
     pub attachments: Vec<AttachmentRef>,
+    /// VAULT.md §9 errors this one file produced — unparseable frontmatter, a
+    /// reserved key of the wrong shape, a reference naming an absolute or
+    /// escaping path. Drained into the build report's errors, prefixed with
+    /// this note's `file_path`.
+    pub errors: Vec<String>,
     /// Body markdown — `Some` only when `with_body` was requested.
     pub body: Option<String>,
 }

@@ -207,6 +207,19 @@ folder layout would have.
 
 Links inside fenced code blocks (``` or `~~~`) are ignored.
 
+A **markdown-style** target — the `(…)` half of `[text](…)` and `![alt](…)` —
+is percent-decoded before it is resolved, because that is the spelling a tool
+writes `%20` in: `[report](sales%20report.md)` reaches `sales report.md`. A `%`
+not followed by two hex digits is itself, so a filename containing one
+survives. A **wikilink** target is a name, not a URL, and is never decoded:
+`[[a%20b]]` names a note spelled that way.
+
+A target naming a place the vault does not own is an error (§9), not a link: an
+absolute filesystem path (`C:/…`, `\\server\share`, `~/…`, `file:…`) or one
+climbing above the vault root with `../`. A leading `/` is **not** one of
+these — §6.2 fixes it as vault-root-relative, which is what lets a vault be
+copied somewhere else.
+
 An embed is read as a note when its target has no file extension or ends in
 `.md`, and as an attachment otherwise — so a note whose *filename* contains a
 dot is embedded as `![[Release 1.2.md]]`, with the extension written out.
@@ -280,7 +293,10 @@ are counted in the build report and are never exported as files (§10).
 1. **Accepted syntax:** `![alt](rel/path.png)`, `![[image.png]]` and
    `![[image.png|alt]]`. The body keeps the original syntax verbatim. An
    `http(s)` target is somebody else's file: it is not in the vault, no `stat`
-   describes it, and it becomes no node.
+   describes it, and it becomes no node. The `![alt](…)` spelling is
+   percent-decoded before resolution and the `![[…]]` one is not, exactly as
+   §5.1 reads the two syntaxes; a reference naming an absolute or escaping
+   path is a §9 error.
 2. **Resolution ladder:** note-relative → vault-root-relative → a unique
    filename anywhere in the vault. The stored value is always the
    **vault-relative** resolved path, so every consumer resolves from one root.
@@ -455,34 +471,45 @@ wrong, there is simply less of it than the author intended.
 
 Every build produces a structured report. `okf.validate(path)` returns it
 without keeping the graph; `kglite okf check <dir>` prints it and sets the exit
-code. It carries: files walked, files skipped and why, notes per label, edges
-per type, hub and attachment counts, dangling links, missing attachments, id
-collisions, case-insensitive collisions, unparseable frontmatter, and the
-`embed:` targets declared in `vault.yaml`.
+code. Both run the *same* read a build runs — the check is the build with the
+graph thrown away, never a second opinion about it.
 
-Findings are classified, and the classification is the contract:
+It carries: files scanned and how many became notes, nodes per label, edges per
+type, folder notes, dangling links, missing and ambiguous attachments, the
+index / text-index / skill / recipe counts `.kglite/` produced, the `embed:`
+targets declared in `vault.yaml`, and two classified lists of findings. The
+classification is the contract.
 
-**Errors** — a vault with any of these does not meet this spec: unparseable
-frontmatter; misuse of a reserved key (§4.1), such as a non-string `id:` or a
-scalar `tags:`; id collisions (§3); two folder notes for one directory (§2.3);
-`.kglite/vault.yaml` schema errors, including an unknown `kglite_vault`
-version (these fail the build outright — §7); an ontology document the
-declaration API refuses; an absolute path, or a path escaping the vault root,
-in a link or attachment reference.
+**Errors** — a vault with any of these does not meet this spec:
 
-**Warnings** — legitimate in a real vault, worth seeing: dangling links
-(stubs), missing attachments, case-insensitive collisions, alias clashes (an
-`aliases:` entry that is another note's filename stem, or that two notes both
-claim — the link resolves to exactly one of them), a declared hub key whose
-value is a wikilink, which the typed-edge rule takes instead (§7), a value that
-does not match its declared `types:` entry, a `vault.yaml` declaration naming a
-label or property the vault does not carry, a `.kglite/` skill or recipe file
-that failed validation (§8), and a `vault.yaml` found under the `okf` or
-`loose` dialect, where it does not apply.
+| Class | § |
+|---|---|
+| Unparseable frontmatter (the note still becomes a node, with no properties). | §4 |
+| A reserved key of the wrong shape: a non-string `id:` or `type:`, a non-list `tags:` or `aliases:`, a non-boolean `kg_skip:`. | §4.1 |
+| An id collision — two or more notes resolving to one id, each falling back to its path. | §3 |
+| Two folder notes declared for one directory (`X.md` *and* `X/X.md`). | §2.3 |
+| A link or attachment reference naming an absolute filesystem path, or climbing above the vault root. | §5.1, §6.2 |
+| A `.kglite/vault.yaml` the schema refuses — an unknown key, an unknown `kglite_vault` version, a value of the wrong shape, a malformed `ontology:` document. This **fails the build** (§7); `okf.validate` reports it as the report's single error. | §7 |
+| An ontology document the declaration API refuses. | §7 |
+
+**Warnings** — legitimate in a real vault, worth seeing:
+
+| Class | § |
+|---|---|
+| A dangling link: a target that matched no note and became a stub. | §5.6 |
+| A missing attachment, or an ambiguous bare filename (which resolves to nothing, and the warning names the candidates). | §6.6 |
+| A case-insensitive id collision — two ids differing only in case. | §3 |
+| An alias clash: an `aliases:` entry that is another note's filename stem, or that two notes both claim. The link resolves to exactly one of them. | §5.2 |
+| A declared hub key holding wikilinks, which the typed-edge rule takes instead — reported once per key, naming how many notes. | §4.3, §7 |
+| A value that does not match its declared `types:` entry; it is left as written, never nulled. | §7 |
+| A `vault.yaml` declaration naming a label or property the vault does not carry, an index that indexed no value, or an index / text index that would not install. | §7 |
+| A `.kglite/` skill or recipe file that failed validation and was skipped; its siblings still load. | §8 |
+| A `vault.yaml` found under the `okf` or `loose` dialect, where it does not apply. | §7 |
 
 `kglite okf check` exits non-zero when any error is present. `--strict`
 promotes every warning to an error — the setting a converter's own test suite
-should use.
+should use. `--json` prints the same report as a JSON object for a harness that
+wants the lists rather than the text.
 
 ## 10. Export
 
@@ -558,4 +585,5 @@ What a converter must emit, in order:
 9. **`.kglite/skills/` and `.kglite/recipes/`** when the vault is served to an
    agent (§8).
 10. **Run `kglite okf check <dir>`.** Zero errors is the bar; add `--strict`
-    to your own test suite once the warnings are down to the ones you accept.
+    to your own test suite once the warnings are down to the ones you accept,
+    and `--json` when the suite wants the finding lists rather than the text.

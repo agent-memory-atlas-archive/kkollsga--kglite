@@ -27,6 +27,7 @@
 use crate::datatypes::values::Value;
 use crate::okf::model::{AttachmentRef, Link, Profile, DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE};
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 fn link_re() -> &'static Regex {
@@ -132,6 +133,10 @@ pub struct Extraction {
     /// references written on the same line, and `ordinal` stays deterministic
     /// either way.
     pub attachments: Vec<AttachmentRef>,
+    /// VAULT.md §9 path errors this body wrote: a reference naming an absolute
+    /// filesystem path, or one climbing above the vault root. One entry per
+    /// distinct offending target; the caller prefixes the note's own path.
+    pub path_errors: Vec<String>,
 }
 
 /// Extract resolved outbound links (and, in a vault, inline tags) from a
@@ -174,11 +179,18 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
 
         for cap in link_re().captures_iter(raw) {
             let m = cap.get(0).unwrap();
-            let dest = cap.get(2).map(|d| d.as_str()).unwrap_or("");
+            // The markdown spelling is the one a tool percent-encodes, so it
+            // is decoded here — before resolution *and* before the §9 path
+            // check, which `%2e%2e/` would otherwise walk straight past.
+            let decoded = percent_decode(cap.get(2).map(|d| d.as_str()).unwrap_or(""));
+            let dest = decoded.as_ref();
             // `![alt](src)` is never a link. Under the vault profile it is an
             // attachment reference instead (VAULT.md §6.1); otherwise it is
             // dropped, as it always was.
             if m.start() > 0 && raw.as_bytes()[m.start() - 1] == b'!' {
+                if profile.path_safety {
+                    record_path_error(&mut out.path_errors, dest, source_dir);
+                }
                 push_attachment(
                     &mut out.attachments,
                     profile,
@@ -187,6 +199,9 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
                     section,
                 );
                 continue;
+            }
+            if profile.path_safety && !is_external_url(dest) {
+                record_path_error(&mut out.path_errors, dest, source_dir);
             }
             let conn = cap
                 .get(3)
@@ -234,6 +249,12 @@ pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
                 };
                 if name.is_empty() {
                     continue;
+                }
+                // A wikilink is a name, not a URL, so it is never decoded —
+                // but §5.2 tries a `/`-bearing one as a path, and §6 resolves
+                // every embed as one, so both reach the §9 check.
+                if profile.path_safety && (name.contains('/') || is_embed && !embeds_a_note(name)) {
+                    record_path_error(&mut out.path_errors, name, source_dir);
                 }
                 // strip a trailing `.md` if the wikilink included it
                 let target = name.trim_end_matches(".md");
@@ -529,6 +550,110 @@ fn resolve_target(dest: &str, source_dir: &str) -> Option<String> {
         None
     } else {
         Some(normalized)
+    }
+}
+
+/// Decode `%XX` escapes in a **markdown-style** target (VAULT.md §5.1, §6.1).
+///
+/// Obsidian writes `img/a%20b.png` for a file named `a b.png` in the
+/// `[text](target)` and `![alt](target)` spellings, so resolving the literal
+/// text looks for a file whose name contains a percent sign and finds nothing.
+/// A `%` not followed by two hex digits is itself, so a filename that really
+/// contains one survives; an escape sequence that is not UTF-8 is left alone
+/// rather than replaced. Wikilink targets are names, not URLs, and are never
+/// decoded — `[[a%20b]]` names a note spelled that way.
+pub(crate) fn percent_decode(target: &str) -> Cow<'_, str> {
+    if !target.contains('%') {
+        return Cow::Borrowed(target);
+    }
+    let bytes = target.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let decoded = (bytes[i] == b'%' && i + 2 < bytes.len())
+            .then(|| {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+                u8::from_str_radix(hex, 16).ok()
+            })
+            .flatten();
+        match decoded {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    match String::from_utf8(out) {
+        Ok(text) => Cow::Owned(text),
+        Err(_) => Cow::Borrowed(target),
+    }
+}
+
+/// Why a path-shaped reference names a place the vault does not own
+/// (VAULT.md §9), or `None` when it stays inside.
+///
+/// `source_dir` is the referencing note's directory, because how far `..` has
+/// to climb before it leaves depends on where it was written. A leading `/` is
+/// deliberately **not** absolute here: §6.2 fixes it as vault-root-relative,
+/// which is the only reading under which a vault is relocatable.
+pub(crate) fn path_error(target: &str, source_dir: &str) -> Option<String> {
+    if is_absolute_fs_path(target) {
+        return Some(format!("`{target}` is an absolute filesystem path"));
+    }
+    escapes_root(target, source_dir).then(|| format!("`{target}` escapes the vault root"))
+}
+
+/// A target naming a filesystem location instead of a vault-relative one: a
+/// Windows drive or UNC path, a `~` home path, or a `file:` URL. A vault is a
+/// directory that gets copied, zipped and served from somewhere else, so none
+/// of these can mean anything portable.
+fn is_absolute_fs_path(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    let drive = matches!(bytes, [letter, b':', sep, ..]
+        if letter.is_ascii_alphabetic() && (*sep == b'/' || *sep == b'\\'));
+    drive
+        || target.starts_with('\\')
+        || target == "~"
+        || target.starts_with("~/")
+        || target.len() >= 5 && target[..5].eq_ignore_ascii_case("file:")
+}
+
+/// Whether `..` segments climb above the vault root. [`normalize_path_parts`]
+/// pops at the root and carries on, so `../../etc/passwd` silently *becomes*
+/// `etc/passwd` there — the escape is only visible while the segments are
+/// still being counted.
+fn escapes_root(target: &str, source_dir: &str) -> bool {
+    let mut depth: isize = if target.starts_with('/') || source_dir.is_empty() {
+        0
+    } else {
+        source_dir.split('/').filter(|p| !p.is_empty()).count() as isize
+    };
+    for part in target.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
+/// Record one §9 path error, once per distinct target: a note that references
+/// the same escaping path in five places has one problem, not five.
+fn record_path_error(out: &mut Vec<String>, target: &str, source_dir: &str) {
+    if let Some(message) = path_error(target, source_dir) {
+        if !out.contains(&message) {
+            out.push(message);
+        }
     }
 }
 
@@ -927,5 +1052,38 @@ mod tests {
         assert_eq!(upper_snake("metadata.source"), "METADATA_SOURCE");
         assert_eq!(upper_snake("--x--"), "X");
         assert_eq!(upper_snake("---"), "");
+    }
+
+    #[test]
+    fn percent_decode_leaves_a_literal_percent_alone() {
+        assert_eq!(percent_decode("img/a%20b.png"), "img/a b.png");
+        assert_eq!(percent_decode("img/50%25.png"), "img/50%.png");
+        assert_eq!(percent_decode("notes/r%C3%A5data.md"), "notes/rådata.md");
+        // Not an escape: nothing to decode, so the name survives as written.
+        assert_eq!(percent_decode("img/100%.png"), "img/100%.png");
+        assert_eq!(percent_decode("img/%zz.png"), "img/%zz.png");
+        assert_eq!(percent_decode("img/a%2.png"), "img/a%2.png");
+        // `%FF` alone is not UTF-8; decoding it would corrupt the target, so
+        // the whole string is left as written.
+        assert_eq!(percent_decode("img/%FF.png"), "img/%FF.png");
+        assert!(matches!(percent_decode("img/plain.png"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_rooted_target_is_vault_relative_not_absolute() {
+        // VAULT.md §6.2: a leading `/` means the vault root, which is what
+        // makes a vault relocatable — it is never a §9 absolute path.
+        assert_eq!(path_error("/img/x.png", "notes"), None);
+        assert!(path_error("/../img/x.png", "notes").is_some());
+        assert_eq!(path_error("../img/x.png", "notes"), None);
+        assert_eq!(path_error("../../img/x.png", "notes/deep"), None);
+        assert!(path_error("../../../img/x.png", "notes/deep").is_some());
+        assert!(path_error("\\\\server\\share\\x.png", "").is_some());
+        assert!(path_error("D:\\vault\\x.md", "").is_some());
+        assert_eq!(
+            path_error("C:notes/x.md", ""),
+            None,
+            "no separator, no drive"
+        );
     }
 }

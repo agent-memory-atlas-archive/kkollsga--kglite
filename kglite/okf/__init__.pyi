@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from kglite import KnowledgeGraph
 
 def build(
@@ -79,6 +81,14 @@ def build(
               ``text`` of the alt texts and using-note titles, and a
               reference that matches no file becomes a
               ``missing: true`` stub.
+            * **Path safety**: a markdown-style target (``[text](x)`` and
+              ``![alt](x)``) is percent-decoded before it is resolved, so
+              ``img/a%20b.png`` reaches the file named ``a b.png``; a wikilink
+              is a name and is taken literally. A body reference naming an
+              absolute filesystem path (``C:/…``, ``~/…``, ``file:…``, a UNC
+              path), or climbing above the vault root with ``../``, is a
+              reported **error** — a leading ``/`` is vault-root-relative and
+              is not one.
             * **Frontmatter edges**: a key whose value is a wikilink string,
               or a list of nothing but wikilink strings, becomes edges typed
               ``UPPER_SNAKE(key)`` and is *not* stored as a property; a list
@@ -161,3 +171,107 @@ def source(path: str) -> str:
     Raises:
         RuntimeError: If the file cannot be read.
     """
+
+def validate(
+    path: str,
+    *,
+    dialect: str | None = ...,
+    strict: bool = ...,
+    require_frontmatter: bool | None = ...,
+    respect_skip: bool = ...,
+    skip_dirs: list[str] | None = ...,
+    with_body: bool | None = ...,
+    embed: bool = ...,
+) -> VaultReport:
+    """Check a vault and return the build report, without keeping the graph.
+
+    Runs exactly the read :func:`build` runs — same walk, same parse, same
+    resolution — and discards the graph, so what the report says is what a
+    build does. It is the Python half of ``kglite okf check``.
+
+    Findings are classified by ``VAULT.md`` §9. **Errors** mean the vault does
+    not meet the spec: unparseable frontmatter, a misused reserved key, id
+    collisions, two folder notes for one directory, a `.kglite/vault.yaml`
+    schema error, an ontology the declaration API refuses, and a link or
+    attachment reference naming an absolute filesystem path or climbing above
+    the vault root. **Warnings** are legitimate in a real vault but worth
+    seeing: dangling links, missing or ambiguous attachments,
+    case-insensitive collisions, alias clashes, a declared hub key spent on
+    the typed-edge rule, a value that does not match its declared type, a
+    declaration naming a label or property the vault does not carry, a carried
+    skill or recipe that failed validation, and a `vault.yaml` found under a
+    dialect that does not read one.
+
+    A `.kglite/vault.yaml` that does not parse makes :func:`build` raise; here
+    it is the report's single error instead, so a broken vault and a faulty
+    one are read the same way. The only failure that raises is a root that
+    cannot be read at all.
+
+    Args:
+        path: Vault (or bundle) root directory.
+        dialect: As :func:`build`. The vault rules this checks against are the
+            ``"obsidian"`` ones; under ``"okf"`` / ``"loose"`` the report still
+            describes what was built, in those dialects' terms.
+        strict: Promote every warning to a failure — the setting a converter's
+            own test suite should use. It changes ``VaultReport.ok`` only:
+            errors and warnings stay classified as ``VAULT.md`` §9 classifies
+            them.
+        require_frontmatter: As :func:`build`.
+        respect_skip: As :func:`build`.
+        skip_dirs: As :func:`build`.
+        with_body: As :func:`build`.
+        embed: As :func:`build`.
+
+    Returns:
+        A :class:`VaultReport`.
+
+    Raises:
+        RuntimeError: If the path does not exist or is not a directory.
+
+    Example::
+
+        report = okf.validate("vault", dialect="obsidian", strict=True)
+        if not report.ok:
+            print(report)
+            raise SystemExit(1)
+    """
+
+class VaultReport:
+    """What a build saw: counts, errors, warnings, and one verdict.
+
+    Returned by :func:`validate`. Immutable — it describes a build that already
+    happened. ``str(report)`` renders the same text ``kglite okf check``
+    prints: the counts, then the errors, then the warnings.
+    """
+
+    @property
+    def errors(self) -> list[str]:
+        """Findings that fail the spec, in the order the build found them."""
+
+    @property
+    def warnings(self) -> list[str]:
+        """Findings that leave a usable graph, in the order the build found them."""
+
+    @property
+    def counts(self) -> dict[str, Any]:
+        """What the build counted.
+
+        Keys: ``files_scanned`` and ``concepts`` (ints — ``concepts`` is lower
+        when ``require_frontmatter`` or ``kg_skip`` excluded files),
+        ``nodes_by_label`` and ``edges_by_type`` (``dict[str, int]``, including
+        synthesized ``Folder`` / hub / ``Image`` nodes and ``_provisional``
+        stubs), ``dangling``, ``folder_notes``, ``missing_attachments``,
+        ``ambiguous_attachments``, ``indexes_declared``, ``text_indexes_built``,
+        ``skills_imported``, ``recipes_imported`` (ints), and ``embed_targets``
+        — the ``(label, property)`` pairs ``.kglite/vault.yaml`` declared, in
+        declaration order. The engine computes no vectors: run
+        :meth:`~kglite.KnowledgeGraph.embed_texts` for each pair once an
+        embedder is bound.
+        """
+
+    @property
+    def ok(self) -> bool:
+        """Whether the vault passed: no errors, and no warnings under ``strict``."""
+
+    def __str__(self) -> str:
+        """The report as text — counts, then errors, then warnings."""

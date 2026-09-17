@@ -1,6 +1,7 @@
 //! PyO3 entry points for OKF ingestion.
 
 pub mod entry;
+pub mod report;
 
 use pyo3::prelude::*;
 
@@ -10,7 +11,9 @@ use pyo3::prelude::*;
 pub fn register(py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let m = PyModule::new(py, "_kglite_okf")?;
     m.add_function(wrap_pyfunction!(entry::build, &m)?)?;
+    m.add_function(wrap_pyfunction!(entry::validate, &m)?)?;
     m.add_function(wrap_pyfunction!(entry::source, &m)?)?;
+    m.add_class::<report::VaultReport>()?;
     parent.add_submodule(&m)?;
     py.import("sys")?
         .getattr("modules")?

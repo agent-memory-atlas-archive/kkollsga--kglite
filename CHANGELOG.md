@@ -46,6 +46,17 @@ before upgrading.
   every link target that resolves to no note is counted and named in the build
   report.
 
+  **Path safety and percent escapes** (`VAULT.md` §5.1, §6.1, §9) apply to
+  every reference a body writes. A markdown-style target — the `(…)` half of
+  `[text](…)` and `![alt](…)` — is percent-decoded before it is resolved, so
+  `![chart](img/a%20b.png)` reaches the file named `a b.png`; a wikilink is a
+  name and is taken literally. A reference naming an absolute filesystem path
+  (`C:/…`, `~/…`, `file:…`, a UNC path) or climbing above the vault root with
+  `../` is a reported **error** — a leading `/` stays vault-root-relative and
+  is not one. Unparseable frontmatter and a reserved key of the wrong shape (a
+  non-string `id:`, a scalar `tags:`) are errors too, where both used to
+  degrade silently.
+
   **Attachments** (`VAULT.md` §6) are the other half of what a note's body
   says. `![alt](img/x.png)` and `![[x.png]]` resolve note-relative →
   vault-root-relative → by unique filename anywhere in the vault (an ambiguous
@@ -99,6 +110,18 @@ before upgrading.
   explains how to query itself and editing a file is the whole update
   procedure. A file that fails validation is skipped with a warning naming the
   file and the rule; its siblings load.
+
+- `okf.validate(path, dialect="obsidian", strict=False)` returns a
+  `VaultReport` — the build report as a value, without keeping the graph. It
+  runs the same read `okf.build` runs, so what it reports is what a build does.
+  The report carries `errors`, `warnings`, a `counts` dict (files scanned,
+  concepts, nodes per label, edges per type, dangling links, folder notes,
+  missing and ambiguous attachments, the index / text-index / skill / recipe
+  counts, and the declared `embed:` targets), an `ok` verdict, and a stable
+  `str()` rendering. Findings are classified by `VAULT.md` §9; `strict` decides
+  `ok` only, never the classification. A `.kglite/vault.yaml` that will not
+  parse raises from `build` and is the report's single error here, so a broken
+  vault and a faulty one read the same way.
 
 - `import_recipes()` now reads a `.md` recipe file or a directory of them
   alongside a `.json` catalogue. One query per file: frontmatter `recipe`,

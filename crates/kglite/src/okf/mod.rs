@@ -20,6 +20,7 @@ pub mod build;
 pub mod frontmatter;
 pub mod links;
 pub mod model;
+pub mod validate;
 pub mod vault_config;
 pub mod walk;
 
@@ -28,6 +29,7 @@ pub use model::{
     BuildOptions, BuildReport, ConceptDoc, Dialect, FolderNoteDirection, IdScheme, LabelFrom, Link,
     Profile,
 };
+pub use validate::validate;
 pub use vault_config::{IndexDecl, VaultConfig};
 
 use crate::datatypes::values::Value;
@@ -62,11 +64,11 @@ pub fn parse_concepts(files: &[walk::DiscoveredFile], opts: &BuildOptions) -> Ve
     parse_concepts_reported(files, opts).0
 }
 
-/// What id resolution found, in the `BuildReport` vocabulary: a collision that
+/// What parsing found, in the `BuildReport` vocabulary: a collision that
 /// forced ids to change is an error (VAULT.md §9), a case-only clash that a
 /// case-insensitive filesystem would turn into one is a warning.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct IdFindings {
+pub(crate) struct ParseFindings {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -78,7 +80,7 @@ pub(crate) struct IdFindings {
 pub(crate) fn parse_concepts_reported(
     files: &[walk::DiscoveredFile],
     opts: &BuildOptions,
-) -> (Vec<ConceptDoc>, IdFindings) {
+) -> (Vec<ConceptDoc>, ParseFindings) {
     let mut docs: Vec<ConceptDoc> = files
         .par_iter()
         .filter_map(|f| parse_file(f, opts).ok().flatten())
@@ -87,6 +89,13 @@ pub(crate) fn parse_concepts_reported(
     // collision pass, which reads the docs in this order.
     docs.sort_by(|a, b| a.concept_id.cmp(&b.concept_id));
     let mut findings = resolve_ids(&mut docs, opts);
+    // After the id errors and before the builder's, in the docs' own sorted
+    // order — a report whose findings moved with the filesystem's directory
+    // order would make every golden assertion a coin flip.
+    findings.errors.extend(
+        docs.iter()
+            .flat_map(|d| d.errors.iter().map(|e| format!("{}: {e}", d.file_path))),
+    );
     findings.warnings.extend(hub_key_edge_warnings(&docs));
     if !findings.errors.is_empty() {
         // Ids changed under the fallback; restore the ordering invariant.
@@ -143,8 +152,8 @@ fn path_id(doc: &ConceptDoc) -> String {
 /// `id: notes/alpha` while `notes/alpha.md` exists). Path ids are unique, so a
 /// group of them cannot re-form: two rounds always suffice, and the third is
 /// the guard that says so.
-fn resolve_ids(docs: &mut [ConceptDoc], opts: &BuildOptions) -> IdFindings {
-    let mut findings = IdFindings::default();
+fn resolve_ids(docs: &mut [ConceptDoc], opts: &BuildOptions) -> ParseFindings {
+    let mut findings = ParseFindings::default();
     if opts.profile.id_scheme != Ids::FrontmatterOrStem {
         return findings;
     }
@@ -218,8 +227,20 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     let doc_path = f.rel_path.strip_suffix(".md").unwrap_or(&f.rel_path);
 
     // Malformed YAML degrades to an empty frontmatter map (the concept still
-    // becomes a node — losing the file entirely would be worse).
-    let mut fm = frontmatter::parse(&text).unwrap_or_default();
+    // becomes a node — losing the file entirely would be worse) and is
+    // reported: VAULT.md §4 makes it an error precisely because the degrade is
+    // silent otherwise, and a converter emitting broken YAML would ship it.
+    let mut errors: Vec<String> = Vec::new();
+    let mut fm = match frontmatter::parse(&text) {
+        Ok(map) => map,
+        Err(reason) => {
+            errors.push(reason);
+            BTreeMap::new()
+        }
+    };
+    if profile.reserved_key_shapes {
+        errors.extend(reserved_key_errors(&fm));
+    }
 
     // Honor the `kg_skip: true` opt-out marker (excludes the file from the sweep).
     if opts.respect_skip && matches!(fm.get(model::SKIP_KEY), Some(Value::Boolean(true))) {
@@ -305,6 +326,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         .collect();
     let source_dir = parent_dir(doc_path);
     let extracted = links::extract(&body, source_dir, profile);
+    errors.extend(extracted.path_errors);
     let mut all_links = extracted.links;
     for link in fm_links {
         links::push_unique(&mut all_links, link);
@@ -321,8 +343,39 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         inline_tags: extracted.tags,
         attachments: extracted.attachments,
         hub_key_edges,
+        errors,
         body,
     }))
+}
+
+/// VAULT.md §4.1's reserved keys, checked for the *shape* their meaning
+/// depends on. Every one of these fails quietly otherwise: a scalar `tags:`
+/// joins no hub, a list-valued `id:` is stringified into an identity nobody
+/// links to, and a `kg_skip: "true"` excludes nothing.
+///
+/// The nested-map spelling is invisible here by construction — `tags: {a: 1}`
+/// flattened to `tags.a` before this ran — which is why the message names the
+/// shape found rather than claiming the key is absent.
+fn reserved_key_errors(fm: &BTreeMap<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut require = |key: &str, shape: &str, ok: fn(&Value) -> bool| {
+        if let Some(value) = fm.get(key) {
+            if !ok(value) {
+                out.push(format!(
+                    "reserved key `{key}:` must be {shape}, not {}",
+                    value.type_name()
+                ));
+            }
+        }
+    };
+    require("id", "a string", |v| matches!(v, Value::String(_)));
+    require("type", "a string", |v| matches!(v, Value::String(_)));
+    require("tags", "a list", |v| matches!(v, Value::List(_)));
+    require("aliases", "a list", |v| matches!(v, Value::List(_)));
+    require(model::SKIP_KEY, "a boolean", |v| {
+        matches!(v, Value::Boolean(_))
+    });
+    out
 }
 
 /// The keys §4.3's typed-edge rule never touches: `id`/`type`/`title` have
@@ -635,7 +688,7 @@ mod tests {
     }
 
     /// Parse a vault with the obsidian profile, returning docs + findings.
-    fn vault(dir: &Path) -> (Vec<ConceptDoc>, IdFindings) {
+    fn vault(dir: &Path) -> (Vec<ConceptDoc>, ParseFindings) {
         let opts = BuildOptions::for_dialect(Dialect::Obsidian);
         let walked = walk::discover(dir, &opts).unwrap();
         parse_concepts_reported(&walked.concepts, &opts)
@@ -753,7 +806,13 @@ mod tests {
         write(dir.path(), "notes/numeric.md", "---\nid: 4711\n---\nprose");
         let (docs, findings) = vault(dir.path());
         assert_eq!(ids(&docs), vec!["4711", "mtg-1", "plain"]);
-        assert_eq!(findings, IdFindings::default());
+        // The unquoted id is usable — and reported, because YAML would have
+        // turned `id: 007` into `7` just as quietly (VAULT.md §4.1).
+        assert_eq!(
+            findings.errors,
+            vec!["notes/numeric.md: reserved key `id:` must be a string, not Int64".to_string()]
+        );
+        assert!(findings.warnings.is_empty(), "{:?}", findings.warnings);
         assert!(
             !doc(&docs, "mtg-1").props.iter().any(|(k, _)| k == "id"),
             "a declared id is identity, not a property"
@@ -850,7 +909,7 @@ mod tests {
         let opts = BuildOptions::default();
         let walked = walk::discover(dir.path(), &opts).unwrap();
         let (_, findings) = parse_concepts_reported(&walked.concepts, &opts);
-        assert_eq!(findings, IdFindings::default());
+        assert_eq!(findings, ParseFindings::default());
     }
 
     #[test]
