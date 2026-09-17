@@ -178,7 +178,9 @@ impl GraphDirectoryLock {
         let mut guard = self.file.lock().unwrap_or_else(|p| p.into_inner());
         self.active
             .store(false, std::sync::atomic::Ordering::Release);
-        guard.take();
+        if let Some(file) = guard.take() {
+            release_lock(&file);
+        }
     }
 
     pub(crate) fn try_acquire(root: &Path) -> io::Result<Self> {
@@ -206,14 +208,53 @@ impl GraphDirectoryLock {
         // than the pid. Code that needs to *name* a lock holder must publish
         // the record to an unlocked sibling instead — see `GraphWriterLease`
         // in `graph/io/open.rs`, which had exactly this bug.
-        file.set_len(0)?;
-        writeln!(file, "pid={}", std::process::id())?;
-        file.sync_all()?;
+        //
+        // Stamped through a closure so a failure here gives the lock back
+        // through `release_lock` instead of by dropping the descriptor — the
+        // release rule every other exit from a held lock follows.
+        let stamped = (|| {
+            file.set_len(0)?;
+            writeln!(file, "pid={}", std::process::id())?;
+            file.sync_all()
+        })();
+        if let Err(error) = stamped {
+            release_lock(&file);
+            return Err(error);
+        }
         Ok(Self {
             file: std::sync::Mutex::new(Some(file)),
             active: std::sync::atomic::AtomicBool::new(true),
             root: root.to_path_buf(),
         })
+    }
+}
+
+/// Give the OS lock back explicitly instead of leaving it to the descriptor's
+/// close.
+///
+/// `flock` ownership belongs to the *open file description*, not to the
+/// descriptor and not to the process, and a description outlives the last
+/// `close` in this process whenever some other descriptor still refers to it.
+/// `fork`/`posix_spawn` makes exactly that happen on every ordinary program:
+/// the child receives a copy of the whole descriptor table, and `O_CLOEXEC`
+/// closes those copies at **`exec`**, not at fork. A graph directory unlocked
+/// by dropping its descriptor inside that window stays locked until the child
+/// reaches `exec` — so a process that saves a disk graph while any thread
+/// spawns a subprocess could have its own next mutation refused with "already
+/// has an active writer" against a directory nothing else was writing.
+/// `LOCK_UN` releases the description's lock outright and is not subject to
+/// that race. `GraphWriterLease::drop` releases the `.kgl` lease the same way,
+/// for the same reason.
+fn release_lock(file: &File) {
+    let _ = FileExt::unlock(file);
+}
+
+impl Drop for GraphDirectoryLock {
+    fn drop(&mut self) {
+        let mut guard = self.file.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(file) = guard.take() {
+            release_lock(&file);
+        }
     }
 }
 

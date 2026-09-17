@@ -182,6 +182,16 @@ before upgrading.
 
 ### Fixed
 
+- A disk graph no longer refuses its own next write after `save()` in a process
+  that spawns subprocesses. The directory lease gave its `flock` back by
+  closing the descriptor, and `flock` ownership belongs to the open file
+  description: a `fork`/`posix_spawn` child inherits a copy of every descriptor
+  and drops the `O_CLOEXEC` ones only at `exec`, so a release inside that
+  window left the directory locked until the child got there. The next
+  mutation — a write, `build_property_index`, `reindex()` — then failed with
+  "already has an active writer" against a directory nothing else was writing.
+  The lease now releases with an explicit `LOCK_UN`, as the `.kgl` writer lease
+  already did.
 - `okf.build(dialect="obsidian"/"loose")` no longer turns an embedded image
   into a phantom node. `![[diagram.png]]` was read as an ordinary wikilink, so
   every embed minted a `_provisional` Concept stub named after the file. Under

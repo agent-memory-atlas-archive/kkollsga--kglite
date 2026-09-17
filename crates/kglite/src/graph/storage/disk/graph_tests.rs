@@ -418,6 +418,63 @@ fn a_snapshot_taken_while_dirty_does_not_lock_out_the_writer() {
         .expect("with the snapshot gone the directory is free again");
 }
 
+/// A save releases the directory lease, and the graph's very next mutation
+/// re-takes it. Nothing else is writing these directories, so a `WouldBlock`
+/// there is the handle losing a race against its own just-released lock.
+///
+/// The subprocess spawner is the reproducer, not decoration: `flock`
+/// ownership belongs to the open file description, a `fork`/`posix_spawn`
+/// child inherits a copy of every descriptor and drops the `O_CLOEXEC` ones
+/// only at `exec`, and a lease released by closing its descriptor inside that
+/// window stays locked until the child gets there. Without a process being
+/// spawned alongside, thousands of save/re-take rounds pass and this test
+/// proves nothing. Unix-only for the same reason: Windows handles are
+/// inherited only when explicitly marked inheritable, which these are not.
+#[cfg(unix)]
+#[test]
+fn a_save_does_not_lock_the_writer_out_of_its_next_mutation() {
+    let failures = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawner = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let mut child = std::process::Command::new("true").spawn().unwrap();
+                child.wait().unwrap();
+            }
+        })
+    };
+    let mut workers = Vec::new();
+    for worker in 0..4 {
+        let failures = Arc::clone(&failures);
+        workers.push(std::thread::spawn(move || {
+            for round in 0..15 {
+                let root = TempDir::new().unwrap();
+                let mut graph = DirGraph::new();
+                add_docs(&mut graph, &[1, 2]);
+                graph.enable_disk_mode().unwrap();
+                graph.save_disk(root.path().to_str().unwrap()).unwrap();
+                let GraphBackend::Disk(disk) = &mut graph.graph else {
+                    panic!("expected disk backend");
+                };
+                if let Err(error) = disk.build_property_index("Doc", "title") {
+                    failures
+                        .lock()
+                        .unwrap()
+                        .push(format!("worker {worker} round {round}: {error}"));
+                }
+            }
+        }));
+    }
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    spawner.join().unwrap();
+    let failures = failures.lock().unwrap();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// The lease is an `Arc`, and `adopt_writer_lineage` clones it into a
 /// transaction fork. A parent's publish therefore drops only *its own*
 /// reference: the OS lock stays held for as long as the fork — which may
