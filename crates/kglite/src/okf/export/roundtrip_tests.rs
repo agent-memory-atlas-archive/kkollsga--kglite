@@ -350,6 +350,54 @@ const MEDIA: &[(&str, &str)] = &[
 
 // ── the two properties, over the whole corpus ──────────────────────────────
 
+/// 2020-01-01T00:00:00Z, stamped on the corpus's attachments before the trip
+/// starts. `mtime` is one of the properties [`Shape`] compares, and it comes
+/// from `stat` on the file the round in question read — so with a source that
+/// carries today's time, a round whose two exports happen to land in the same
+/// second compares equal whether or not the modification time travelled. A
+/// backdated source makes the comparison say what it claims to say.
+fn backdate_attachments(root: &Path) -> std::time::SystemTime {
+    let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+    for rel in ["img/faults.png", "img/diagram.png", "img/handbook.pdf"] {
+        let path = root.join(rel);
+        if path.is_file() {
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        }
+    }
+    when
+}
+
+/// §10.9 lists six losses and no others, so the modification time of a copied
+/// attachment is not one of them: it has to reach the second graph unchanged,
+/// and the third.
+#[test]
+fn a_copied_attachment_keeps_its_modification_time_across_the_rounds() {
+    let dir = vault_of(MEDIA);
+    backdate_attachments(dir.path());
+    let trip = Trip::from_vault(dir.path());
+    let source = trip
+        .first
+        .props(IMAGE_LABEL, "img/faults.png")
+        .and_then(|p| p.get("mtime"))
+        .cloned()
+        .expect("the source image has an mtime");
+    assert_eq!(source, "2020-01-01 00:00:00", "the backdating took");
+    for (round, shape) in [("second", &trip.second), ("third", &trip.third)] {
+        assert_eq!(
+            shape
+                .props(IMAGE_LABEL, "img/faults.png")
+                .and_then(|p| p.get("mtime")),
+            Some(&source),
+            "the {round} graph's image was stamped with the time of the copy"
+        );
+    }
+}
+
 #[test]
 fn every_corpus_vault_reaches_a_fixed_point() {
     // `typing` is the one that declares a `types:` entry §4.2 re-infers

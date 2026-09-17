@@ -4,6 +4,7 @@ use super::*;
 use crate::okf::model::{BuildOptions, Dialect};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 fn golden_vault() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/okf/golden/vault")
@@ -1082,6 +1083,99 @@ fn a_vault_built_graph_exports_its_attachments_without_being_told_the_root() {
         (3, 0)
     );
     assert!(out.path().join("img/faults.png").is_file());
+}
+
+/// A vault whose one note reaches one image note-relative, so an export told
+/// the source root has exactly one attachment to copy.
+const MEDIA: &[(&str, &str)] = &[
+    (
+        "Media/figures.md",
+        "---\ntitle: Figures\n---\n![Fault map](../img/faults.png) is note-relative.\n",
+    ),
+    ("img/faults.png", "stand-in bytes\n"),
+];
+
+/// 2020-01-01T00:00:00Z. The source file is backdated to it so that "the copy
+/// kept the source's modification time" is a claim the clock cannot satisfy by
+/// accident: an export that stamped the destination with the time of the copy
+/// passes a same-second comparison and fails this one.
+fn fixed_mtime() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(1_577_836_800)
+}
+
+fn set_mtime(path: &Path, when: SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+fn modified(path: &Path) -> SystemTime {
+    std::fs::metadata(path).unwrap().modified().unwrap()
+}
+
+/// A source vault with one backdated image, and the graph built from it.
+fn backdated_media() -> (tempfile::TempDir, Arc<DirGraph>) {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(source.path(), MEDIA);
+    set_mtime(&source.path().join("img/faults.png"), fixed_mtime());
+    let graph = build_vault(source.path());
+    (source, graph)
+}
+
+/// `mtime` is a node property the loader reads back from `stat` (VAULT.md
+/// §6.3), and §10.9 does not list it among the round trip's losses — so the
+/// copy has to arrive carrying the source file's, not the time it was written.
+#[test]
+fn a_copied_attachment_keeps_the_source_files_modification_time() {
+    let (source, graph) = backdated_media();
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (report.attachments_copied, report.attachments_unresolved),
+        (1, 0)
+    );
+    assert_eq!(
+        modified(&out.path().join("img/faults.png")),
+        fixed_mtime(),
+        "the copy was stamped with the time of the copy, not the source's"
+    );
+}
+
+/// The manifest's unchanged branch (§10.7) covers attachment bytes as well as
+/// note bytes: a re-export of a vault nothing changed writes no file at all,
+/// so ten thousand pictures are not rewritten to say the same thing.
+#[test]
+fn a_second_export_leaves_an_unchanged_attachment_alone() {
+    let (source, graph) = backdated_media();
+    let out = tempfile::tempdir().unwrap();
+    let opts = ExportOptions {
+        source_root: Some(source.path().to_path_buf()),
+        ..ExportOptions::default()
+    };
+    let first = export(&graph, out.path(), &opts).unwrap();
+    assert!(first.files_written > 0);
+    let second = export(&graph, out.path(), &opts).unwrap();
+    assert_eq!(
+        (second.files_written, second.files_unchanged),
+        (0, first.files_written),
+        "the second export rewrote a file whose bytes had not moved"
+    );
+    assert_eq!(
+        modified(&out.path().join("img/faults.png")),
+        fixed_mtime(),
+        "and left the modification time where the first export put it"
+    );
 }
 
 // ── §10.8 determinism ──────────────────────────────────────────────────────

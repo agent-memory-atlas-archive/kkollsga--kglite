@@ -19,6 +19,7 @@ use crate::okf::vault_config::CONFIG_DIR;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// The manifest's filename inside `.kglite/`.
 pub const MANIFEST_FILE: &str = "export-manifest.json";
@@ -63,6 +64,23 @@ impl<'a> Writer<'a> {
 
     /// Write one file, or account for why it was not written.
     pub(super) fn put(&mut self, rel: &str, bytes: &[u8]) -> Result<(), String> {
+        self.put_at(rel, bytes, None)
+    }
+
+    /// Write one file and give it `modified` as its modification time.
+    ///
+    /// A copied attachment carries the source file's, because the loader reads
+    /// `mtime` back off `stat` into a node property (VAULT.md §6.3) and §10.9
+    /// does not list it among the round trip's losses: a destination stamped
+    /// with the time of the copy makes the fixed point depend on which second
+    /// the export ran in. Files the export *generates* pass `None` — their
+    /// content is the graph's, and no earlier time belongs to them.
+    pub(super) fn put_at(
+        &mut self,
+        rel: &str,
+        bytes: &[u8],
+        modified: Option<SystemTime>,
+    ) -> Result<(), String> {
         let digest = hex_digest(bytes);
         let path = self.dir.join(rel);
         let on_disk = match std::fs::read(&path) {
@@ -71,7 +89,7 @@ impl<'a> Writer<'a> {
         };
         match (on_disk, self.previous.get(rel)) {
             // Nothing there: ours to create.
-            (None, _) => self.write(rel, &path, bytes, digest),
+            (None, _) => self.write(rel, &path, bytes, digest, modified),
             // There, and ours, and already exactly right.
             (Some(found), Some(recorded)) if &found == recorded && found == digest => {
                 self.report.files_unchanged += 1;
@@ -80,12 +98,12 @@ impl<'a> Writer<'a> {
             }
             // There, ours, and stale: replace it.
             (Some(found), Some(recorded)) if &found == recorded => {
-                self.write(rel, &path, bytes, digest)
+                self.write(rel, &path, bytes, digest, modified)
             }
             // There and edited, or there and never ours.
             (Some(_), owned) => {
                 if self.force {
-                    return self.write(rel, &path, bytes, digest);
+                    return self.write(rel, &path, bytes, digest, modified);
                 }
                 self.report.files_refused += 1;
                 self.report.refusals.push(match owned {
@@ -111,12 +129,16 @@ impl<'a> Writer<'a> {
         path: &Path,
         bytes: &[u8],
         digest: String,
+        modified: Option<SystemTime>,
     ) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
         std::fs::write(path, bytes).map_err(|e| format!("writing {}: {e}", path.display()))?;
+        if let Some(when) = modified {
+            stamp(path, when)?;
+        }
         self.report.files_written += 1;
         self.current.insert(rel.to_string(), digest);
         Ok(())
@@ -164,6 +186,20 @@ impl<'a> Writer<'a> {
 /// `<dir>/.kglite/export-manifest.json`.
 pub(super) fn manifest_path(dir: &Path) -> PathBuf {
     dir.join(CONFIG_DIR).join(MANIFEST_FILE)
+}
+
+/// Give a file the modification time it is supposed to carry.
+///
+/// A failure is an `Err` rather than a shrug: the whole point of the stamp is
+/// that the value on disk is the one the graph will read back, and a vault
+/// whose pictures quietly carry the wrong time round-trips differently every
+/// run for no visible reason.
+fn stamp(path: &Path, when: SystemTime) -> Result<(), String> {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(when))
+        .map_err(|e| format!("setting the modification time of {}: {e}", path.display()))
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

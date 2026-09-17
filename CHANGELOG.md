@@ -163,7 +163,9 @@ before upgrading.
   counted — though an edge the body states keeps them, because the prose
   travels verbatim and the next import re-derives them from it; attachment
   bytes are copied only when `source_root` names the directory the graph was
-  read from; synthesized nodes follow the new layout; `.kglite/vault.yaml` is
+  read from, and a copy that travels keeps the source file's modification time,
+  so §6.3's `mtime` survives the trip and a re-export rewrites no attachment
+  it already holds; synthesized nodes follow the new layout; `.kglite/vault.yaml` is
   not written, so hubs, `heading_edges` retyping, indexes and `embed:` targets
   are re-derived from the defaults; a declared `types:` entry survives wherever
   inference agrees with it, the exception being a date-like string, which comes

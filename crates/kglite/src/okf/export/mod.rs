@@ -659,6 +659,12 @@ fn write_carried(graph: &DirGraph, writer: &mut Writer) -> Result<(), String> {
 /// where the caller named none. Without either there is nothing to copy: the
 /// body reference is left as the author wrote it and counted, so a caller
 /// knows the vault it just wrote is missing its figures.
+///
+/// The copy carries the source file's modification time, because §6.3 makes
+/// `mtime` a node property read off `stat` and §10.9 does not list it among
+/// the losses — see [`Writer::put_at`]. A source whose metadata cannot be read
+/// leaves the destination with the time of the write, which is the best
+/// available answer rather than a wrong one.
 fn copy_attachments(
     attachments: &[String],
     root: Option<&Path>,
@@ -669,9 +675,13 @@ fn copy_attachments(
         return Ok(());
     };
     for rel in attachments {
-        match std::fs::read(root.join(rel)) {
+        let from = root.join(rel);
+        match std::fs::read(&from) {
             Ok(bytes) => {
-                writer.put(rel, &bytes)?;
+                let modified = std::fs::metadata(&from)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
+                writer.put_at(rel, &bytes, modified)?;
                 writer.report.attachments_copied += 1;
             }
             Err(_) => writer.report.attachments_unresolved += 1,

@@ -775,7 +775,10 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    and a node deleted from the graph removes its file only when the manifest
    owns it and the bytes still match. A file whose bytes already equal what the
    export would write is not rewritten, so an unchanged export moves no
-   modification times. A manifest that will not parse, or that names a version
+   modification times — attachments included, so a re-export of a vault of
+   ten thousand pictures rewrites none of them. A copied attachment is written
+   with the *source* file's modification time rather than the time of the copy,
+   so the `mtime` §6.3 stats off it reads the same on both sides. A manifest that will not parse, or that names a version
    this build does not write, fails the export rather than being guessed at.
 8. **Determinism.** Frontmatter keys sorted, edge lists sorted, file order
    stable, the manifest's own keys sorted: exporting the same graph twice is
@@ -791,7 +794,10 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
       prose — a graph that was not built from a vault.
    2. **Attachment bytes** are copied only when the caller names the source
       root the graph was built from; otherwise the references are reported as
-      unresolvable and come back as `missing: true` stubs (§6.6).
+      unresolvable and come back as `missing: true` stubs (§6.6). A copy that
+      *does* travel keeps the source file's modification time (§10.7), so
+      §6.3's `mtime` is not one of these losses and the fixed point does not
+      depend on which second the export ran in.
    3. **Synthesized nodes are not files**, so `Folder`, `Tag`, `Image`,
       `Attachment` and stub nodes are whatever the exported layout regenerates
       — the same ones where the prose decides, a different set of `Folder`s
