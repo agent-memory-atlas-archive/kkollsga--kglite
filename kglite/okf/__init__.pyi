@@ -14,7 +14,6 @@ def build(
     respect_skip: bool = ...,
     skip_dirs: list[str] | None = ...,
     with_body: bool | None = ...,
-    embed: bool = ...,
 ) -> KnowledgeGraph:
     """Build a :class:`~kglite.KnowledgeGraph` from an OKF bundle directory.
 
@@ -144,8 +143,6 @@ def build(
             Left unset it takes the dialect's default: off for ``"okf"`` /
             ``"loose"`` (bodies are read on demand through ``source()``), on
             for ``"obsidian"``. Passing it explicitly wins either way.
-        embed: Reserved for the opt-in embedder pass (body vectors for
-            ``text_score``); not yet wired.
 
     Returns:
         A KnowledgeGraph of the bundle.
@@ -181,7 +178,6 @@ def validate(
     respect_skip: bool = ...,
     skip_dirs: list[str] | None = ...,
     with_body: bool | None = ...,
-    embed: bool = ...,
 ) -> VaultReport:
     """Check a vault and return the build report, without keeping the graph.
 
@@ -220,7 +216,6 @@ def validate(
         respect_skip: As :func:`build`.
         skip_dirs: As :func:`build`.
         with_body: As :func:`build`.
-        embed: As :func:`build`.
 
     Returns:
         A :class:`VaultReport`.

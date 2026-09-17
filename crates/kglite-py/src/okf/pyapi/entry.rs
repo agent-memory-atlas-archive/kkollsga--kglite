@@ -19,7 +19,6 @@ struct Keywords {
     respect_skip: bool,
     skip_dirs: Option<Vec<String>>,
     with_body: Option<bool>,
-    embed: bool,
 }
 
 impl Keywords {
@@ -37,7 +36,6 @@ impl Keywords {
         if let Some(v) = self.with_body {
             opts.with_body = v;
         }
-        opts.embed = self.embed;
         opts
     }
 }
@@ -50,9 +48,7 @@ impl Keywords {
 /// left unset; every other keyword is dialect-independent. See the stub for
 /// the full contract.
 #[pyfunction]
-#[pyo3(signature = (path, *, dialect=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None, embed=false))]
-// One parameter per Python keyword: the stub mirrors this signature verbatim.
-#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (path, *, dialect=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
 pub fn build(
     py: Python<'_>,
     path: PathBuf,
@@ -61,7 +57,6 @@ pub fn build(
     respect_skip: bool,
     skip_dirs: Option<Vec<String>>,
     with_body: Option<bool>,
-    embed: bool,
 ) -> PyResult<KnowledgeGraph> {
     let opts = Keywords {
         dialect,
@@ -69,7 +64,6 @@ pub fn build(
         respect_skip,
         skip_dirs,
         with_body,
-        embed,
     }
     .options();
     py.detach(|| crate::okf::build(&path, &opts))
@@ -83,7 +77,7 @@ pub fn build(
 /// do. `strict` decides the report's `ok` only, never what it found. See the
 /// stub for the full contract.
 #[pyfunction]
-#[pyo3(signature = (path, *, dialect=None, strict=false, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None, embed=false))]
+#[pyo3(signature = (path, *, dialect=None, strict=false, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
 // One parameter per Python keyword: the stub mirrors this signature verbatim.
 #[allow(clippy::too_many_arguments)]
 pub fn validate(
@@ -95,7 +89,6 @@ pub fn validate(
     respect_skip: bool,
     skip_dirs: Option<Vec<String>>,
     with_body: Option<bool>,
-    embed: bool,
 ) -> PyResult<VaultReport> {
     let opts = Keywords {
         dialect,
@@ -103,7 +96,6 @@ pub fn validate(
         respect_skip,
         skip_dirs,
         with_body,
-        embed,
     }
     .options();
     py.detach(|| crate::okf::validate(&path, &opts))

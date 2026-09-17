@@ -161,7 +161,7 @@ body = okf.source("~/.claude/.../memory/some-fact.md")
 
 The generated API reference documents {func}`kglite.okf.build` and
 {func}`kglite.okf.source` from the package stubs. `build(path, *,
-dialect="okf", with_body=False, embed=False)` returns a
+dialect="okf", with_body=False)` returns a
 {class}`~kglite.KnowledgeGraph`. `dialect` is `"okf"` (default), `"loose"`
 (wikilinks, no `type` required), or `"obsidian"` (the vault format — see
 above). `source(path)` returns a concept's markdown body with the frontmatter

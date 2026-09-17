@@ -211,6 +211,17 @@ before upgrading.
   place. Pass `dialect="loose"` to keep the old behaviour — it is unchanged
   and is what the string used to mean.
 
+### Removed
+
+- **Breaking:** `kglite.okf.build(..., embed=...)` and
+  `kglite.okf.validate(..., embed=...)`, with `BuildOptions.embed` in Rust. The
+  keyword reached a field the loader never read — it embedded nothing, in any
+  dialect, since the day it was added. A caller passing it now gets a
+  `TypeError` instead of silence; nothing else changes, because nothing it
+  claimed to do was happening. Use
+  `KnowledgeGraph.embed_texts()` with an embedder bound, which is
+  what the `embed:` targets in `.kglite/vault.yaml` are reported for.
+
 ### Fixed
 
 - A disk graph no longer refuses its own next write after `save()` in a process

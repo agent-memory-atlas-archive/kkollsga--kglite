@@ -349,9 +349,6 @@ pub struct BuildOptions {
     /// Store each concept's markdown body as a `body` property. Off by default
     /// (partial ingestion — read bodies on demand via the file pointer).
     pub with_body: bool,
-    /// Reserved for the opt-in embedder pass (stores body vectors for
-    /// `text_score`). Not wired in the core loader; honoured by the wheel.
-    pub embed: bool,
 }
 
 impl Default for BuildOptions {
@@ -363,7 +360,6 @@ impl Default for BuildOptions {
             respect_skip: true,
             skip_dirs: Vec::new(),
             with_body: false,
-            embed: false,
         }
     }
 }
