@@ -53,7 +53,7 @@ EXPECTED_FILES = [
 ]
 EXPECTED_LABELS = Counter({"Article": 7, "Component": 1, "Image": 3, "Keyword": 3})
 EXPECTED_EDGES = Counter(
-    {"CHILD_OF": 5, "HAS_IMAGE": 5, "HAS_KEYWORD": 6, "LINKS_TO": 4, "RELATED_TO": 2, "USES_COMPONENT": 1}
+    {"CHILD_OF": 5, "HAS_IMAGE": 5, "HAS_KEYWORD": 7, "LINKS_TO": 4, "RELATED_TO": 2, "USES_COMPONENT": 1}
 )
 
 
@@ -139,8 +139,17 @@ def test_a_link_out_of_the_corpus_stays_prose(vault):
 
 def test_the_meta_list_is_a_yaml_sequence_and_boilerplate_is_dropped(vault):
     guide = (vault / "Guide.md").read_text(encoding="utf-8")
-    assert "keywords:\n- alpha\n- Beta\n" in guide
+    assert "keywords:\n- alpha\n- Beta\n- gamma\n" in guide
     assert "generator" not in guide
+
+
+def test_a_repeated_list_valued_meta_key_keeps_every_entry(vault):
+    # A page may carry `<meta name="keywords">` more than once, and for a key
+    # that is a list either "first wins" or "last wins" silently drops entries:
+    # one page of a 6917-page vendor corpus names three components across three
+    # tags, and both spellings of the rule kept one of the three.
+    guide = (vault / "Guide.md").read_text(encoding="utf-8")
+    assert "- gamma" in guide
 
 
 def test_a_wikilink_keeps_the_underscores_in_the_name_it_spells(vault):

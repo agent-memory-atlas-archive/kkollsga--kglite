@@ -167,19 +167,29 @@ def normalize_key(name: str) -> str:
 
 
 def extract_meta(soup: BeautifulSoup, table: dict[str, dict[str, str]], list_keys: frozenset[str]) -> dict[str, Any]:
-    """Every named `<meta>` becomes a frontmatter key; the first spelling wins."""
+    """Every named `<meta>` becomes a frontmatter key.
+
+    A page may spell one key more than once. For a scalar key the first tag
+    wins, because the later ones are alternatives to it; for a key whose value
+    is a list they are *more of the same list*, so the entries are appended in
+    document order and either "wins" rule would throw data away.
+    """
     meta: dict[str, Any] = {}
     for tag in soup.find_all("meta"):
         key = normalize_key(tag.get("name") or "")
         content = (tag.get("content") or "").strip()
-        if not key or not content or key in meta or key in BOILERPLATE_META or key.startswith("dc."):
+        if not key or not content or key in BOILERPLATE_META or key.startswith("dc."):
             continue
         fold = table.get(key, {})
         if key in list_keys:
-            items = [fold.get(p.strip().lower(), p.strip()) for p in content.split(",") if p.strip()]
-            if items:
-                meta[key] = items
-        else:
+            entries = meta.setdefault(key, [])
+            for part in content.split(","):
+                item = fold.get(part.strip().lower(), part.strip())
+                if item and item not in entries:
+                    entries.append(item)
+            if not entries:
+                del meta[key]
+        elif key not in meta:
             meta[key] = fold.get(content.lower(), content)
     return meta
 
