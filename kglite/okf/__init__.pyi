@@ -112,7 +112,8 @@ def build(
               It carries ``kglite_vault: 1`` plus any of ``default_label``,
               ``label_from``, ``body``, ``skip_dirs``, ``folder_notes``,
               ``hubs``, ``heading_edges``, ``types``, ``indexes``,
-              ``text_indexes``, ``ontology`` and ``embed``, and it wins over
+              ``text_indexes``, ``ontology``, ``embed`` and ``structure``, and
+              it wins over
               both the dialect's defaults and this function's keywords for
               what it declares — a rebuild re-reads it, so it is the vault's
               statement about itself. An unknown key, an unknown
@@ -121,7 +122,12 @@ def build(
               core links no embedder. ``.kglite/skills/*.md`` and
               ``.kglite/recipes/*.md`` are imported into the graph's skill and
               recipe layers; a file that fails validation is skipped and its
-              siblings still load. See ``VAULT.md`` §7 and §8 for the schema.
+              siblings still load. ``structure:`` derives nodes from each
+              note's own body — its headings as ``Section`` nodes and the
+              prose under them as ``Chunk`` nodes, with ``inherit:`` and
+              ``embed_text:`` decorating them and ``#``-anchored links
+              retargeting onto them; see ``VAULT.md`` §7.1 for its keys. See
+              ``VAULT.md`` §7 and §8 for the schema.
         require_frontmatter: When ``True``, only ``.md`` files with a YAML
             frontmatter block are ingested — the discriminator between
             *structured* knowledge (OKF concepts, Claude memories) and plain

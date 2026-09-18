@@ -8,6 +8,39 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+### Added
+
+- **`structure:` in `.kglite/vault.yaml` — a note's own body becomes nodes**
+  (`VAULT.md` §7.1). `sections:` derives one `Section` per heading, keyed by
+  its whole heading path (`Note#A#B`, the spelling Obsidian itself links) and
+  carrying `title`, `level`, `ordinal`, `path` and the verbatim `text` below
+  the heading; `chunks:` packs the prose under each section greedily to
+  `max_words` / `max_chars` (650 / 6 000 by default) into `Chunk` nodes
+  carrying `text`, `ordinal` and a `chunk_hash`. `HAS_SECTION`, `HAS_CHUNK`,
+  `PARENT_SECTION`, `NEXT_SECTION` and `NEXT_CHUNK` join them. A paragraph
+  ending in a ` ^block-id` is a chunk of its own, keyed `Note#^id` — the one
+  derived id that survives editing around it. `inherit:` copies named
+  frontmatter properties onto every derived node and `embed_text:`
+  materialises a template (`{title} {section_title} {heading_path} {text}
+  {id}`) as a property `embed:` and `text_indexes:` can name. Derived nodes
+  never carry a `file_path`, so an export still writes exactly the notes.
+  There is no default and no heuristic: a vault that declares no `structure:`
+  builds precisely the graph it built before.
+- **A `#`-anchored link reaches the derived node it names.** `[[Note#A#B]]`
+  now ends on that section, `[[Note#Heading]]` on the first section of that
+  title (Obsidian's own rule) and `[[Note#^id]]` on that chunk, with the
+  `anchor` property kept either way. A fragment naming no heading and no block
+  id leaves the edge on the note and is a warning, as is a heading path a note
+  uses twice — which takes a `~2` id, the fix being a block id.
+- **A rebuild keeps the vectors of a chunk that only moved.**
+  `copy_embeddings_from` matches by node id first, as before, and then by
+  `chunk_hash` where exactly one node on each side carries it — so renaming a
+  heading, which moves every derived id beneath it, no longer re-embeds a page
+  whose prose did not change.
+- **Compatibility:** `structure:` is an unknown key to any kglite released
+  before it, and an unknown key fails the build. A vault that declares it
+  needs this release or newer. `kglite_vault` stays `1`.
+
 ### Fixed
 
 - **A `~~~` line written inside a ``` code block no longer turns link scanning
@@ -29,6 +62,12 @@ before upgrading.
 
 ### Changed
 
+- **The export's `edge_properties_dropped` no longer counts an edge whose
+  target the export does not write.** The count ran before the target lookup,
+  so the properties of every `HAS_IMAGE`, `HAS_ATTACHMENT` and hub edge were
+  reported as fidelity loss although no edge was written for them at all — and
+  a vault deriving sections would have had every retargeted link counted too
+  (`VAULT.md` §10.9). The number now counts what an export actually loses.
 - **`%%comments%%` are never scanned** in an Obsidian vault: a link, tag,
   attachment reference or heading written inside one names nothing, as
   `VAULT.md` §5.7 says. A commented-out heading no longer titles its note or

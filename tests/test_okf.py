@@ -26,6 +26,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "okf" / "golden"
 OKF_BUNDLE = FIXTURES / "okf"
 OBSIDIAN_BUNDLE = FIXTURES / "obsidian"
 VAULT_BUNDLE = FIXTURES / "vault"
+STRUCTURE_BUNDLE = FIXTURES / "vault-structure"
 
 
 def _labels(g) -> Counter:
@@ -695,6 +696,162 @@ def test_kg_skip_excludes_by_default(tmp_path):
     g2 = okf.build(str(tmp_path), respect_skip=False)
     ids2 = {r["id"] for r in g2.cypher("MATCH (n) WHERE n.concept_id IS NOT NULL RETURN n.concept_id AS id").to_list()}
     assert ids2 == {"keep", "scratch"}
+
+
+class TestVaultStructureProfile:
+    """``structure:`` — the nodes a note's own body derives (VAULT.md §7.1).
+
+    A **second** golden vault, because the feature is vault-wide: declaring it
+    in ``golden/vault`` would move every count that fixture pins. That one
+    therefore stays structure-free and is the compatibility record; this one
+    declares ``sections:`` + ``chunks:`` (``max_chars: 120``, small on purpose)
+    plus ``inherit:`` and ``embed_text:``, over four notes holding a duplicate
+    heading path, a section that packs into two chunks, a ``^block-id``
+    paragraph, and anchored wikilinks that retarget onto all of it.
+    """
+
+    def build(self):
+        return okf.build(str(STRUCTURE_BUNDLE), dialect="obsidian")
+
+    def test_labels(self):
+        assert _labels(self.build()) == Counter(
+            {
+                "Article": 4,  # welcome, and the three under `structure/`
+                "Folder": 1,  # `structure/`
+                # Seven headings: two in chunky, three in duplicate (the
+                # second `## Details` included), one each in links and welcome
+                "Section": 7,
+                # chunky packs 2 + its own `^cite-1` chunk; duplicate 3;
+                # links and welcome 1 each
+                "Chunk": 8,
+            }
+        )
+
+    def test_edge_types(self):
+        assert _edge_types(self.build()) == Counter(
+            {
+                "HAS_SECTION": 7,  # one per section: from the note, or its parent
+                "PARENT_SECTION": 3,  # only the three nested ones
+                "NEXT_SECTION": 1,  # duplicate.md's two `## Details` siblings
+                "HAS_CHUNK": 8,
+                "NEXT_CHUNK": 2,  # chunky's three, in one section
+                "CONTAINS": 3,
+                "LINKS_TO": 3,
+            }
+        )
+
+    def test_a_section_is_keyed_by_its_whole_heading_path(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:Section) RETURN n.concept_id AS id, n.title AS title, n.level AS level, "
+            "n.ordinal AS ordinal, n.path AS path ORDER BY id"
+        ).to_list()
+        assert [r["id"] for r in rows] == [
+            "chunky#Chunky",
+            "chunky#Chunky#Sub",
+            "duplicate#Notes",
+            "duplicate#Notes#Details",
+            # Obsidian resolves a heading link to the first of that text and
+            # has no syntax for a later one, so the second takes `~2`.
+            "duplicate#Notes#Details~2",
+            "links#Links",
+            "welcome#Welcome",
+        ]
+        second = rows[4]
+        assert (second["title"], second["level"], second["ordinal"]) == ("Details", 2, 1)
+        assert second["path"] == ["Notes", "Details"]
+
+    def test_a_sections_text_is_the_verbatim_slice_below_its_heading(self):
+        g = self.build()
+        text = g.cypher("MATCH (n {concept_id:'chunky#Chunky#Sub'}) RETURN n.text AS t").to_list()[0]["t"]
+        assert text.startswith("\nParagraph one is written long enough")
+        assert text.endswith("around it. ^cite-1"), "trailing blank lines trimmed, nothing else"
+
+    def test_chunks_pack_to_the_declared_limit_and_a_block_id_keys_its_own(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:Chunk {note_id:'chunky'}) RETURN n.concept_id AS id, n.ordinal AS o, "
+            "n.section_id AS section ORDER BY o"
+        ).to_list()
+        assert [r["id"] for r in rows] == [
+            "chunky#Chunky#Sub~chunk1",
+            "chunky#Chunky#Sub~chunk2",
+            # The one lever an author has over where a section divides, and the
+            # only derived id that survives editing around it.
+            "chunky#^cite-1",
+        ]
+        assert {r["section"] for r in rows} == {"chunky#Chunky#Sub"}
+        assert len(g.cypher("MATCH (n:Chunk) WHERE n.chunk_hash IS NULL RETURN n").to_list()) == 0
+
+    def test_inherit_and_embed_text_decorate_every_derived_node(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n {concept_id:'chunky#^cite-1'}) RETURN n.corpus AS corpus, "
+            "n.embed_text AS embed, n.note_id AS note"
+        ).to_list()
+        assert rows == [
+            {
+                "corpus": "golden",  # `inherit: [corpus]`, from the note's frontmatter
+                "embed": "Chunky | Chunky > Sub\n\nThis sentence is addressable on its own, "
+                "whatever is written around it. ^cite-1",
+                "note": "chunky",
+            }
+        ]
+        # welcome.md carries no `corpus:`, so its nodes carry none either.
+        assert g.cypher("MATCH (n {concept_id:'welcome#Welcome'}) RETURN n.corpus AS c").to_list() == [{"c": None}]
+
+    def test_an_anchored_link_retargets_onto_the_derived_node(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (:Article {concept_id:'links'})-[r:LINKS_TO]->(t) "
+            "RETURN t.concept_id AS target, r.anchor AS anchor ORDER BY target"
+        ).to_list()
+        assert rows == [
+            # A fragment naming no heading leaves the edge on the note…
+            {"target": "chunky", "anchor": "Nowhere"},
+            # …a bare heading reaches the first section of that title…
+            {"target": "chunky#Chunky#Sub", "anchor": "Sub"},
+            # …and a block id reaches its chunk. The anchor is kept either way.
+            {"target": "chunky#^cite-1", "anchor": "^cite-1"},
+        ]
+
+    def test_the_two_warnings_the_fixture_is_built_to_produce(self):
+        report = okf.validate(str(STRUCTURE_BUNDLE), dialect="obsidian")
+        assert report.errors == []
+        assert [w.split(":")[0] for w in report.warnings] == [
+            "structure/duplicate.md",
+            "structure/links.md",
+        ]
+        assert "duplicate heading path `Notes#Details`" in report.warnings[0]
+        assert "names no heading or block id in `chunky`" in report.warnings[1]
+
+    def test_a_derived_node_is_never_a_file(self, tmp_path):
+        """VAULT.md §7.1/§10.1: a derived node carries no ``file_path``, and an
+        export therefore writes exactly the notes — not a file per section."""
+        g = self.build()
+        assert (
+            g.cypher(
+                "MATCH (n) WHERE n.note_id IS NOT NULL AND n.file_path IS NOT NULL RETURN count(n) AS c"
+            ).to_list()[0]["c"]
+            == 0
+        )
+        out = tmp_path / "vault"
+        okf.export(g, str(out), source_root=str(STRUCTURE_BUNDLE))
+        written = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
+        assert written == [
+            ".kglite/export-manifest.json",
+            "Article/chunky.md",
+            "Article/duplicate.md",
+            "Article/links.md",
+            "Article/welcome.md",
+        ]
+
+    def test_the_first_golden_vault_is_untouched_by_the_feature(self):
+        """The compatibility promise: a vault that declares no ``structure:``
+        builds exactly what it built before (VAULT.md §7.1)."""
+        g = okf.build(str(VAULT_BUNDLE), dialect="obsidian")
+        assert "Section" not in _labels(g)
+        assert "HAS_SECTION" not in _edge_types(g)
 
 
 class TestValidate:

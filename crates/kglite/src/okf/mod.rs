@@ -102,6 +102,16 @@ pub(crate) fn parse_concepts_reported(
             .flat_map(|d| d.errors.iter().map(|e| format!("{}: {e}", d.file_path))),
     );
     findings.warnings.extend(hub_key_edge_warnings(&docs));
+    // The structure pass's own findings (VAULT.md §9): a duplicate derived id,
+    // and nothing else this early — the ones that need the whole vault (a link
+    // whose anchor names no heading, a rule that matched nothing anywhere) are
+    // the builder's.
+    findings.warnings.extend(docs.iter().flat_map(|d| {
+        d.derived
+            .warnings
+            .iter()
+            .map(|w| format!("{}: {w}", d.file_path))
+    }));
     if !findings.errors.is_empty() {
         // Ids changed under the fallback; restore the ordering invariant.
         docs.sort_by(|a, b| a.concept_id.cmp(&b.concept_id));
@@ -340,6 +350,15 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     for link in fm_links {
         links::push_unique(&mut all_links, link);
     }
+    // The structure pass reads the same tree the link pass just read
+    // (VAULT.md §7.1). Nothing is derived unless the vault declared a rule, so
+    // a profile without one costs one `Option` test per note.
+    let derived = match &profile.structure {
+        Some(structure) if structure.derives_anything() => {
+            structure::derive(&body, &tree, structure)
+        }
+        _ => structure::Derived::default(),
+    };
     let body = if opts.with_body { Some(body) } else { None };
 
     Ok(Some(ConceptDoc {
@@ -354,6 +373,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         hub_key_edges,
         errors,
         body,
+        derived,
     }))
 }
 

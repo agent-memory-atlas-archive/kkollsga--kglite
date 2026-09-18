@@ -16,12 +16,16 @@
 //! implement the same rules twice.
 
 pub(crate) mod block;
+pub(crate) mod derive;
+pub(crate) mod profile;
 
 use block::{BlockKind, Heading, List};
 use std::collections::BTreeSet;
 use std::ops::Range;
 
 pub(crate) use block::{parse_blocks, BlockTree};
+pub(crate) use derive::{derive, Derived, DerivedNode};
+pub(crate) use profile::StructureProfile;
 
 /// The heading whose section `offset` sits in, or `None` before the body's
 /// first heading.

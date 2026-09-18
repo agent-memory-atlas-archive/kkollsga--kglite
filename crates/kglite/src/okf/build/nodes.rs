@@ -20,13 +20,9 @@ pub(super) fn build_nodes(
     docs: &[ConceptDoc],
     opts: &BuildOptions,
     declared_types: Option<&BTreeMap<String, BTreeMap<String, String>>>,
+    unmatched: &mut DeclaredPairs,
     report: &mut BuildReport,
 ) -> Result<(), String> {
-    let mut unmatched: BTreeSet<(&str, &str)> = declared_types
-        .into_iter()
-        .flatten()
-        .flat_map(|(label, props)| props.keys().map(move |p| (label.as_str(), p.as_str())))
-        .collect();
     // Sorted, so the graph's node order is the same on every run: a `HashMap`
     // here made node indices — and therefore a saved `.kgl`'s bytes — depend on
     // hash order.
@@ -69,7 +65,7 @@ pub(super) fn build_nodes(
         // The id column is the node's identity and the index built on it;
         // retyping it would silently move every link's target. Reported once,
         // here, rather than also falling out as "no note carries it".
-        if unmatched.remove(&(label, "concept_id")) {
+        if unmatched.remove(&(label.to_string(), "concept_id".to_string())) {
             report.warnings.push(format!(
                 "`vault.yaml` declares `types.{label}.concept_id`; the id column is not \
                  retyped"
@@ -77,7 +73,7 @@ pub(super) fn build_nodes(
         }
         for property in declared.keys() {
             if columns.iter().any(|c| c == property) {
-                unmatched.remove(&(label, *property));
+                unmatched.remove(&(label.to_string(), (*property).to_string()));
             }
         }
 
@@ -100,7 +96,7 @@ pub(super) fn build_nodes(
                 );
             }
             if !declared.is_empty() {
-                apply_declared_types(&mut row, &columns, &declared, label, d, report);
+                apply_declared_types(&mut row, &columns, &declared, label, &d.file_path, report);
             }
             rows.push(row);
         }
@@ -115,16 +111,40 @@ pub(super) fn build_nodes(
             Some("update".to_string()),
         )?;
     }
+    Ok(())
+}
+
+/// Every `(label, property)` a vault's `types:` declared, so the builders can
+/// strike off what they matched and the leftovers become one warning each.
+///
+/// Shared rather than local because a declaration can name a **derived** label
+/// (VAULT.md §7.1 — `types: {Chunk: {...}}` is legitimate), and a check that
+/// only ever saw the notes would report every one of those as carried by no
+/// note at all.
+pub(super) type DeclaredPairs = BTreeSet<(String, String)>;
+
+pub(super) fn declared_pairs(
+    declared_types: Option<&BTreeMap<String, BTreeMap<String, String>>>,
+) -> DeclaredPairs {
+    declared_types
+        .into_iter()
+        .flatten()
+        .flat_map(|(label, props)| props.keys().map(move |p| (label.clone(), p.clone())))
+        .collect()
+}
+
+/// One warning per declaration nothing in the vault carried (VAULT.md §7).
+pub(super) fn report_unmatched(unmatched: DeclaredPairs, report: &mut BuildReport) {
     for (label, property) in unmatched {
         report.warnings.push(format!(
             "`vault.yaml` declares `types.{label}.{property}`, but no note carries that \
              label and property"
         ));
     }
-    Ok(())
 }
 
-/// Coerce one note's row to the label's declared types (VAULT.md §7).
+/// Coerce one row to its label's declared types (VAULT.md §7). `source` names
+/// the row in a warning — a note's `file_path`, or a derived node's own id.
 ///
 /// A value that will not coerce keeps the type it had and is **warned about**,
 /// rather than being nulled: the declaration is the author's statement about
@@ -132,12 +152,12 @@ pub(super) fn build_nodes(
 /// wrote. Mixed types in one column then settle by inference, which is the
 /// same outcome as not having declared anything — visibly so, because the
 /// warning names the note.
-fn apply_declared_types(
+pub(super) fn apply_declared_types(
     row: &mut [Value],
     columns: &[String],
     declared: &BTreeMap<&str, &str>,
     label: &str,
-    doc: &ConceptDoc,
+    source: &str,
     report: &mut BuildReport,
 ) {
     for (index, column) in columns.iter().enumerate() {
@@ -147,8 +167,7 @@ fn apply_declared_types(
         match crate::okf::vault_config::coerce(&row[index], keyword) {
             Some(coerced) => row[index] = coerced,
             None => report.warnings.push(format!(
-                "`{}`: {label}.{column} is declared `{keyword}` but holds {} — left as written",
-                doc.file_path,
+                "`{source}`: {label}.{column} is declared `{keyword}` but holds {} — left as written",
                 crate::datatypes::values::raw_string(&row[index])
             )),
         }

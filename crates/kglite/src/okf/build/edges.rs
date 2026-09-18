@@ -3,11 +3,12 @@
 //! collected.
 
 use super::resolver::Resolver;
+use super::structure::DerivedIndex;
 use super::{count_nodes, doc_path, emit_groups, EdgeGroups};
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::mutation::maintain;
 use crate::graph::DirGraph;
-use crate::okf::model::{BuildOptions, BuildReport, ConceptDoc, DEFAULT_LABEL, SOURCE_LABEL};
+use crate::okf::model::{BuildOptions, BuildReport, ConceptDoc, Link, DEFAULT_LABEL, SOURCE_LABEL};
 use std::collections::BTreeSet;
 
 /// Build the concept-level edges — semantic links, typed via the ladder
@@ -19,6 +20,7 @@ pub(super) fn build_edges(
     docs: &[ConceptDoc],
     opts: &BuildOptions,
     mut groups: EdgeGroups,
+    derived: &DerivedIndex,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     let (resolver, alias_warnings) = Resolver::new(docs, &opts.profile);
@@ -35,8 +37,10 @@ pub(super) fn build_edges(
                 let (id, label) = resolver.resolve(link, crate::okf::parent_dir(doc_path(d)));
                 if !resolver.id_to_label.contains_key(id.as_str()) {
                     dangling.insert(id.clone());
+                    (label, id)
+                } else {
+                    retarget(link, id, label, derived, d, report)
                 }
-                (label, id)
             };
             // A reversed link (a `parent:` pointing parent → child) is the same
             // edge read from the other end, so only the endpoints swap.
@@ -93,6 +97,49 @@ pub(super) fn build_edges(
     }
 
     emit_groups(graph, groups, report)
+}
+
+/// The `anchor` a body link carries (VAULT.md §5.4), or `None` for a link
+/// without a fragment.
+fn anchor_of(link: &Link) -> Option<&str> {
+    link.props
+        .iter()
+        .find(|(k, _)| k == "anchor")
+        .and_then(|(_, v)| match v {
+            Value::String(anchor) if !anchor.is_empty() => Some(anchor.as_str()),
+            _ => None,
+        })
+}
+
+/// Move a fragment link onto the derived node its fragment names (VAULT.md
+/// §5.4): `[[Note#Heading]]` reaches the Section, `[[Note#^id]]` the chunk, and
+/// a fragment naming neither leaves the edge on the note and is a warning.
+///
+/// The note the link resolved to never changes — only which node of that note
+/// the edge ends on — and the `anchor` property is kept either way, so the
+/// fragment as written survives the move.
+fn retarget(
+    link: &Link,
+    id: String,
+    label: String,
+    derived: &DerivedIndex,
+    d: &ConceptDoc,
+    report: &mut BuildReport,
+) -> (String, String) {
+    let Some(anchor) = anchor_of(link) else {
+        return (label, id);
+    };
+    if let Some((derived_id, derived_label)) = derived.retarget(&id, anchor) {
+        return (derived_label, derived_id);
+    }
+    if derived.sections_declared() {
+        report.warnings.push(format!(
+            "{}: `#{anchor}` names no heading or block id in `{id}`; the link resolved \
+             to the note",
+            d.file_path
+        ));
+    }
+    (label, id)
 }
 
 #[cfg(test)]

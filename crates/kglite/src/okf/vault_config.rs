@@ -49,7 +49,7 @@ const TYPE_KEYWORDS: [&str; 7] = ["string", "int", "float", "bool", "date", "dat
 /// (VAULT.md §7): a declaration the reader cannot place is never harmless —
 /// a misspelled `heading_edge:` would leave every link typed by the ladder
 /// with nothing to say so.
-const TOP_LEVEL_KEYS: [&str; 13] = [
+const TOP_LEVEL_KEYS: [&str; 14] = [
     "kglite_vault",
     "default_label",
     "label_from",
@@ -63,6 +63,7 @@ const TOP_LEVEL_KEYS: [&str; 13] = [
     "text_indexes",
     "ontology",
     "embed",
+    "structure",
 ];
 
 /// One entry of an `indexes:` list (VAULT.md §7).
@@ -106,6 +107,10 @@ pub struct VaultConfig {
     pub ontology: Option<crate::graph::ontology::OntologyStore>,
     /// `(label, property)` in declaration order. Core computes no vectors.
     pub embed: Vec<(String, String)>,
+    /// `structure:` (VAULT.md §7.1) — what the vault derives from its notes'
+    /// own bodies. A profile override, applied before the walk, because the
+    /// derivation runs inside the parse.
+    pub(crate) structure: Option<crate::okf::structure::StructureProfile>,
 }
 
 /// Where the declaration file lives under `root`.
@@ -224,6 +229,9 @@ pub fn parse(text: &str) -> Result<VaultConfig, String> {
             crate::graph::ontology::ontology_from_value(v)
                 .map_err(|e| format!("`ontology`: {e}"))?,
         );
+    }
+    if let Some(v) = map.get("structure") {
+        config.structure = Some(crate::okf::structure::profile::parse(v)?);
     }
     if let Some(v) = map.get("embed") {
         for (label, prop) in map_of(v, "embed")?.iter() {
@@ -378,7 +386,7 @@ fn parse_indexes(v: &Value) -> Result<BTreeMap<String, Vec<IndexDecl>>, String> 
 
 /// The word a message uses for a value of the wrong shape. Never the value
 /// itself: a frontmatter body can be long, and the shape is the complaint.
-fn kind_of(v: &Value) -> &'static str {
+pub(crate) fn kind_of(v: &Value) -> &'static str {
     match v {
         Value::Null => "nothing",
         Value::Boolean(_) => "a boolean",
@@ -457,6 +465,9 @@ impl VaultConfig {
         }
         for (heading, edge) in &self.heading_edges {
             profile.heading_edges.insert(heading.clone(), edge.clone());
+        }
+        if let Some(structure) = &self.structure {
+            profile.structure = Some(structure.clone());
         }
     }
 

@@ -217,6 +217,12 @@ pub struct Profile {
     /// producers (codingest, Claude memories) write those keys to their own
     /// conventions.
     pub reserved_key_shapes: bool,
+    /// Read by [`crate::okf::structure::derive`]: what this vault derives from
+    /// a note's own body — sections, chunks, and what decorates them
+    /// (VAULT.md §7.1). `None` on every dialect and on every vault that
+    /// declares no `structure:`, and a `None` here is the 0.17.8 build: note
+    /// for note and edge for edge.
+    pub(crate) structure: Option<crate::okf::structure::StructureProfile>,
     /// Read by [`crate::okf::links::extract`]: refuse a body reference that
     /// names a place the vault does not own — an absolute filesystem path, or
     /// one climbing above the root (VAULT.md §9). Off for `okf`/`loose`, where
@@ -257,6 +263,7 @@ impl Default for Profile {
             attachments: false,
             path_safety: false,
             reserved_key_shapes: false,
+            structure: None,
         }
     }
 }
@@ -599,6 +606,11 @@ pub struct ConceptDoc {
     pub errors: Vec<String>,
     /// Body markdown — `Some` only when `with_body` was requested.
     pub body: Option<String>,
+    /// What `structure:` derived from this note's body (VAULT.md §7.1), with
+    /// every id held as the **suffix** of the note's own — `resolve_ids` can
+    /// still move `concept_id` after this doc is parsed, and the builder is
+    /// what joins the two. Empty unless the vault declares a rule.
+    pub(crate) derived: crate::okf::structure::Derived,
 }
 
 /// Default edge type when no title or section header gives a more specific one.

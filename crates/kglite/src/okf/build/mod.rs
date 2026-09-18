@@ -24,6 +24,7 @@ mod folders;
 mod hubs;
 mod nodes;
 mod resolver;
+mod structure;
 
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::mutation::maintain;
@@ -33,10 +34,11 @@ use attachments::build_attachments;
 use edges::build_edges;
 use folders::build_folders;
 use hubs::{build_aux_nodes, build_hubs};
-use nodes::build_nodes;
+use nodes::{build_nodes, declared_pairs, report_unmatched};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use structure::build_structure;
 
 /// One connection row: the endpoints plus whatever properties the edge itself
 /// carries (VAULT.md §5.4 `section`/`anchor`, §6's `alt`/`ordinal`). Structural
@@ -92,7 +94,17 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
         });
     }
     let declared_types = config.as_ref().map(|c| &c.types);
-    build_nodes(&mut graph, &docs, opts, declared_types, &mut report)?;
+    // One set of declarations, struck off by whichever builder carries each —
+    // the notes' labels here, the derived ones below (VAULT.md §7.1).
+    let mut unmatched = declared_pairs(declared_types);
+    build_nodes(
+        &mut graph,
+        &docs,
+        opts,
+        declared_types,
+        &mut unmatched,
+        &mut report,
+    )?;
     build_aux_nodes(&mut graph, &docs, &mut report)?;
     // Hub and folder edges are collected rather than emitted, because they
     // meet the link edges in one group map: a note's `parent:` and the folder
@@ -113,7 +125,20 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
             &mut report,
         )?,
     );
-    build_edges(&mut graph, &docs, opts, groups, &mut report)?;
+    // Derived nodes are added before the edges are emitted: a `HAS_SECTION`
+    // whose target did not exist yet would vivify it as a `_provisional`
+    // `Concept` stub instead of finding the Section.
+    let (derived_groups, derived) = build_structure(
+        &mut graph,
+        &docs,
+        opts,
+        declared_types,
+        &mut unmatched,
+        &mut report,
+    )?;
+    merge_groups(&mut groups, derived_groups);
+    report_unmatched(unmatched, &mut report);
+    build_edges(&mut graph, &docs, opts, groups, &derived, &mut report)?;
     finish_vault(root, opts, config.as_ref(), &mut graph, &mut report);
     stamp_provenance(&mut graph, root, &walked, opts);
     Ok(BuildOutput {

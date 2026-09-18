@@ -958,3 +958,59 @@ fn a_rendered_recipe_parses_back_to_the_same_record() {
     let back = crate::graph::recipes::parse_markdown(&rendered).unwrap();
     assert_eq!(back, original);
 }
+
+/// `structure:` is a profile override like `hubs:` — it has to reach the
+/// *parse*, because the derivation runs there, over the tree the link pass
+/// already read (VAULT.md §7.1).
+#[test]
+fn structure_reaches_the_notes_through_the_config() {
+    let dir = vault_with(
+        Some("kglite_vault: 1\nstructure:\n  sections: {}\n"),
+        &[("note.md", "# One\n\ntext\n")],
+    );
+    let out = build_vault(&dir);
+    assert!(
+        labels(&out).contains(&("Section".to_string(), "note#One".to_string())),
+        "{:?}",
+        labels(&out)
+    );
+}
+
+/// A `structure:` block a build cannot read fails it, exactly as any other
+/// schema failure does — the file is what a rebuild re-applies, so a vault
+/// whose rules stopped parsing would quietly lose every derived node.
+#[test]
+fn a_structure_block_this_build_cannot_read_fails_the_build() {
+    let dir = vault_with(
+        Some("kglite_vault: 1\nstructure:\n  callouts: {label: Note}\n"),
+        &[("note.md", "# One\n")],
+    );
+    let message = match build_as(&dir, Dialect::Obsidian) {
+        Err(message) => message,
+        Ok(_) => panic!("the build fails on a rule it cannot read"),
+    };
+    assert!(
+        message.contains("unknown key `structure.callouts`"),
+        "{message}"
+    );
+    // …and `okf.validate` reports the same failure as the §9 error.
+    let report =
+        crate::okf::validate(dir.path(), &BuildOptions::for_dialect(Dialect::Obsidian)).unwrap();
+    assert_eq!(report.errors.len(), 1);
+}
+
+/// The one compatibility promise: a vault that declares nothing derives
+/// nothing, so every graph built before this feature is the graph it was.
+#[test]
+fn a_vault_without_the_block_derives_nothing() {
+    let dir = vault_with(
+        Some("kglite_vault: 1\n"),
+        &[("note.md", "# One\n\ntext\n\n## Two\n")],
+    );
+    let out = build_vault(&dir);
+    assert_eq!(
+        out.report.nodes_by_label.keys().collect::<Vec<_>>(),
+        vec!["Note"],
+        "one note, and nothing else"
+    );
+}

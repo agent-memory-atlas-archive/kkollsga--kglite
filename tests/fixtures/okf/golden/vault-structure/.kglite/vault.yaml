@@ -1,0 +1,25 @@
+# The structure vault's declaration file (VAULT.md §7.1). Its sibling
+# `golden/vault` deliberately declares no `structure:` at all: that one pins
+# what a vault built before this feature still builds, and this one pins what
+# declaring the feature adds.
+kglite_vault: 1
+
+default_label: Article
+
+structure:
+  sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}
+  # 120 characters is small on purpose: `chunky.md` holds two paragraphs that
+  # fit one at a time and not together, so the packer is exercised by a
+  # fixture a reader can check by eye.
+  chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_chars: 120}
+  # Every derived node carries the note's `corpus:`; a note without one gives
+  # its nodes none.
+  inherit: [corpus]
+  embed_text: "{title} | {heading_path}\n\n{text}"
+
+# A declaration may name a derived label exactly as it names a note's.
+text_indexes:
+  Chunk: [embed_text]
+
+embed:
+  Chunk: embed_text
