@@ -982,7 +982,7 @@ fn structure_reaches_the_notes_through_the_config() {
 #[test]
 fn a_structure_block_this_build_cannot_read_fails_the_build() {
     let dir = vault_with(
-        Some("kglite_vault: 1\nstructure:\n  tables: []\n"),
+        Some("kglite_vault: 1\nstructure:\n  paragraphs: {}\n"),
         &[("note.md", "# One\n")],
     );
     let message = match build_as(&dir, Dialect::Obsidian) {
@@ -990,7 +990,7 @@ fn a_structure_block_this_build_cannot_read_fails_the_build() {
         Ok(_) => panic!("the build fails on a rule it cannot read"),
     };
     assert!(
-        message.contains("unknown key `structure.tables`"),
+        message.contains("unknown key `structure.paragraphs`"),
         "{message}"
     );
     // …and `okf.validate` reports the same failure as the §9 error.

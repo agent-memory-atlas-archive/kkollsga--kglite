@@ -73,7 +73,7 @@ fn yaml_lists(min_items: usize, under_heading: Option<&str>) -> Value {
 }
 
 fn run(body: &str, profile: &StructureProfile) -> Derived {
-    derive(body, &parse_blocks(body), "The Note", profile)
+    derive(body, &parse_blocks(body), "The Note", "Article", profile)
 }
 
 /// `(suffix, label)` in derivation order, sections dropped — every fixture

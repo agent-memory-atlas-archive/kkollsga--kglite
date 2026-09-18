@@ -353,12 +353,19 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     // The structure pass reads the same tree the link pass just read
     // (VAULT.md §7.1). Nothing is derived unless the vault declared a rule, so
     // a profile without one costs one `Option` test per note.
-    let derived = match &profile.structure {
+    let mut derived = match &profile.structure {
         Some(structure) if structure.derives_anything() => {
-            structure::derive(&body, &tree, &title, structure)
+            structure::derive(&body, &tree, &title, &label, structure)
         }
         _ => structure::Derived::default(),
     };
+    // An edge table's rows are links, not derived edges: their targets are
+    // notes the resolver has yet to find (VAULT.md §7.1 `tables:`), so they
+    // join the note's own links and travel the ladder every prose link
+    // travels — stub, `edge_defaults:` and all.
+    for link in std::mem::take(&mut derived.links) {
+        links::push_unique(&mut all_links, link);
+    }
     let body = if opts.with_body { Some(body) } else { None };
 
     Ok(Some(ConceptDoc {

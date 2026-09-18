@@ -96,7 +96,16 @@ pub(super) fn build_structure(
         sections_declared: profile.sections.is_some(),
         ..DerivedIndex::default()
     };
-    let section_label = profile.sections.as_ref().map(|rule| rule.label.as_str());
+    // A section relabelled by `key_from_heading:` is still a section: it is the
+    // same node under another name, and `[[Note#Heading]]` must still reach it
+    // (VAULT.md §7.1). Nothing *else* joins the by-title rung — P4's guard.
+    let section_labels: Vec<&str> = profile
+        .sections
+        .as_ref()
+        .map(|rule| rule.label.as_str())
+        .into_iter()
+        .chain(profile.key_from_heading.as_ref().map(|r| r.label.as_str()))
+        .collect();
     let mut rows_by_label: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     let mut groups = EdgeGroups::new();
     for doc in docs {
@@ -116,7 +125,7 @@ pub(super) fn build_structure(
             // `section_title` is its container's, and a `Procedure` carries
             // its section's title as its own — either would let
             // `[[Note#Heading]]` land on something that is not the heading.
-            let is_section = section_label.is_some_and(|label| label == node.label);
+            let is_section = section_labels.iter().any(|label| *label == node.label);
             if let (true, Some(Value::String(title))) = (is_section, property(node, "title")) {
                 anchors
                     .by_title
@@ -135,7 +144,11 @@ pub(super) fn build_structure(
         collect_edges(doc, &mut groups);
     }
     emit_nodes(graph, rows_by_label, declared_types, unmatched, report)?;
-    warn_unmatched_rules(profile, report);
+    let edge_tables_hit: BTreeSet<&str> = docs
+        .iter()
+        .flat_map(|doc| doc.derived.edge_tables_hit.iter().map(String::as_str))
+        .collect();
+    warn_unmatched_rules(profile, &edge_tables_hit, report);
     Ok((groups, index))
 }
 
@@ -289,7 +302,11 @@ fn emit_nodes(
 /// A declared rule that derived nothing anywhere in the vault (VAULT.md §9).
 /// Worth a warning and not an error: a vault mid-authoring legitimately has no
 /// callout yet, and the declaration is still what it means to build.
-fn warn_unmatched_rules(profile: &StructureProfile, report: &mut BuildReport) {
+fn warn_unmatched_rules(
+    profile: &StructureProfile,
+    edge_tables_hit: &BTreeSet<&str>,
+    report: &mut BuildReport,
+) {
     let labels = [
         profile.sections.as_ref().map(|r| r.label.as_str()),
         profile.chunks.as_ref().map(|r| r.label.as_str()),
@@ -298,12 +315,30 @@ fn warn_unmatched_rules(profile: &StructureProfile, report: &mut BuildReport) {
         // The step label, not the container's: a list that qualified produced
         // both, and one that did not produced neither.
         profile.ordered_lists.as_ref().map(|r| r.label.as_str()),
+        profile.key_from_heading.as_ref().map(|r| r.label.as_str()),
     ];
-    for label in labels.into_iter().flatten() {
+    let rows = profile
+        .tables
+        .iter()
+        .filter(|rule| !rule.edges)
+        .map(|rule| rule.label.as_deref());
+    for label in labels.into_iter().chain(rows).flatten() {
         if !report.nodes_by_label.contains_key(label) {
             report.warnings.push(format!(
                 "`vault.yaml` declares a `structure:` rule for `{label}`, but no note's \
                  body produced one"
+            ));
+        }
+    }
+    // An edge table makes no node, so its rule is measured by the edges it
+    // stated — which the notes report, because a row's edge is a link and the
+    // link builder has not run yet.
+    for rule in profile.tables.iter().filter(|rule| rule.edges) {
+        if !edge_tables_hit.contains(rule.edge.as_str()) {
+            report.warnings.push(format!(
+                "`vault.yaml` declares an edge table for `{}`, but no note's body \
+                 produced one",
+                rule.edge
             ));
         }
     }

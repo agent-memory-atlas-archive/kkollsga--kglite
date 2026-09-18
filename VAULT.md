@@ -301,6 +301,7 @@ folder layout would have.
 |---|---|
 | `[[Note]]` | Link to `Note`. |
 | `[[Note\|display text]]` | Same link. The display text is stored as the edge's `label` property when `structure:` is declared (§7.1), and is dropped otherwise. |
+| `[[Note\\\|display text]]` *(in a table cell)* | The same link. `\\\|` is how Obsidian writes a pipe inside a cell, so the escape belongs to the separator and never to the note's name — and a cell's `\\\|` is unescaped wherever it is read, in a property value as much as in a link. |
 | `[[Note#Heading]]`, `[[Note#A#B]]`, `[[Note#^block-id]]` | Link to `Note`, `anchor` = the fragment. A nested heading is addressed by joining the levels with further `#`. With `structure:` the edge retargets to the section or chunk the fragment names (§5.4, §7.1). |
 | `[[Label/Name]]` | Folder-qualified — use when a stem is ambiguous. |
 | `[text](path.md)`, `[text](path.md "EDGE_TYPE")` | Path link, resolved relative to the linking note; the title is an explicit edge type. |
@@ -834,49 +835,74 @@ whatever heading it sits under.
 
 ```yaml
   tables:
-    - {under_heading: "Parameters", label: ApiParameter, key_column: name, edge: HAS_PARAMETER}
-    - {under_heading: "Worked at", edge: WORKED_AT, edges: true}
+    - {under_heading: '^Parameters$', label: ApiParameter, key_column: name, edge: HAS_PARAMETER}
+    - {under_heading: '^Worked at$', edge: WORKED_AT, edges: true}
 ```
 
 A **list** of rules, each naming the heading its tables sit under as a regular
-expression; the first rule that matches the enclosing section's title reads the
-table, and a table under no matching heading is prose like any other. Only GFM
-pipe tables are read — **raw HTML is never structure** (§1.4), so a converter
-emits GFM.
+expression — matched the way `ordered_lists.under_heading` is, so a rule that
+means the whole heading anchors it (`^Parameters$`) and one that means either
+case writes `(?i)`. The first rule that matches the enclosing section's title
+reads the table, and a table under no matching heading is prose like any other.
+A table above the body's first heading sits under no section and no rule
+reaches it. Only GFM pipe tables are read — **raw HTML is never structure**
+(§1.4), so a converter emits GFM.
 
 - **Node form** (the default): one node per body row, labelled `label`. Each
-  column becomes a property named by its header text, typed by `types:` under
-  that label or inferred (§4.2). The key column is `key_column:` when declared
-  and the first column otherwise; its value keys the row — `<section id>~<value>`
-  — and is stored under its own column name as well. `edge` joins the enclosing
-  section, or the note, to each row node.
-- **Edge form** (`edges: true`): the row states **an edge, not a node**. Its
-  target is the first column holding a `[[wikilink]]`, or the column
-  `key_column:` names; every other column becomes an **edge property** on an
-  edge of type `edge:` from the note to that target, and an empty cell writes no
-  property. This is how a vault states per-edge attributes — a role, a weight, a
-  date range — and §10.6 writes them back out.
+  column becomes a property named by its header text **as written**, typed by
+  `types:` under that label; a cell is text unless a declaration says
+  otherwise, because a cell is a string and not a YAML scalar. A **blank**
+  header cell names no property and its cells are dropped: GFM has no
+  headerless table, so a converter that had none wrote an empty header row, and
+  inventing a positional name would key a corpus to a column order that moves.
+  The key column is `key_column:` when declared and the first column otherwise;
+  its value keys the row — `<section id>~<value>` — and is stored under its own
+  column name as well. A key that is empty, or that a row above already used,
+  keys on its position instead (`~row<n>`, counting from 1) and is a warning
+  (§9); so is a `key_column:` the table does not carry, which falls back to the
+  first column. `edge` joins the enclosing section, or the note, to each row
+  node; omitted, it is `HAS_<UPPER_SNAKE(label)>`.
+- **Edge form** (`edges: true`): the row states **an edge, not a node**, and
+  `label:` is refused. Its target is the first column holding a `[[wikilink]]`,
+  or the column `key_column:` names; every other column becomes a string
+  **edge property** on an edge of type `edge:` from the note to that target, and
+  an empty cell writes no property. The edge also carries `section` (the
+  enclosing heading), `anchor` where the target's own wikilink has a fragment,
+  `label` where it has display text, and `row`, the 1-based row number — a
+  column named like one of those is dropped with a warning, because the link
+  itself states it. A table with no target column states nothing, and warns.
+  This is how a vault states per-edge attributes — a role, a weight, a date
+  range — and §10.6 writes them back out.
 - A cell's `[[links]]` and `![images]` are scanned as prose wherever they sit
   (§5.1), so a picture inside a table cell is the note's attachment reference as
-  usual and a row rule never swallows it. A link column that resolves to nothing
-  becomes a `_provisional` stub and a warning, as any link does (§5.6, §9).
+  usual, an edge table's target is *also* the note's `LINKS_TO` edge, and a row
+  rule never swallows either. A link column that resolves to nothing becomes a
+  `_provisional` stub and a warning, as any link does (§5.6, §9). A cell's `\|`
+  is the pipe the author meant, in a property value and in a wikilink alike.
 
 #### `key_from_heading:`
 
 ```yaml
-  key_from_heading: {label: ApiSymbol, when_matches: '^[\w.]+\.[\w]+(\(.*\))?$',
+  key_from_heading: {label: ApiSymbol, when_matches: '^[\w.]+\.[\w]+(\(.*\))?(\s*→.*)?$',
                      property: qualified_name, under_label: Api}
 ```
 
-Relabels a Section whose title is really a symbol name, and stores that title
-under `property`. Two gates, both required, because the shape is cheap to match
-by accident: `under_label:` restricts the rule to notes carrying that label, and
-the heading must contain a `.` or a `(` whatever `when_matches` says. On one
-corpus the regex alone matched 1 439 headings of which 13 were symbols — a
-heading like `Overview` is a valid qualified name to a regex and nothing else.
-The default `when_matches` is the one above: a dotted name, optionally with a
-call's parentheses. Relabelling changes the label and adds the property; the
-section's own properties and its section edges are unchanged.
+Relabels a Section whose title is really a symbol name. Two gates, both
+required, because the shape is cheap to match by accident: `under_label:`
+restricts the rule to notes carrying that label, and the heading must contain a
+`.` or a `(` whatever `when_matches` says. On one corpus the regex alone
+matched 1 439 headings of which 13 were symbols — a heading like `Overview` is
+a valid qualified name to a regex and nothing else. The default `when_matches`
+is the one above: a dotted name, optionally with a call's parentheses and the
+`→ type` return annotation a converter writes into the same heading.
+
+The heading is **split** where that annotation or the call begins: everything
+before the first `(` or `→` is stored under `property` — the name a query looks
+up, `rmsapi.Project.open` — and the rest under `signature`, `(path) → Project`.
+Storing the whole title under `property` would only repeat `title`. Relabelling
+changes the label and adds the two properties; the section's own properties,
+its id and its section edges are unchanged, and `[[Note#Heading]]` still
+reaches it — it is the same node under another name.
 
 #### `inherit:` and `embed_text:`
 
@@ -890,8 +916,8 @@ onto **every** node derived from it, so a chunk-level filter or BM25 query needs
 no hop back to the note. A key the note does not carry is simply absent there.
 It may not name a property a derived node defines itself — `title`, `text`,
 `level`, `ordinal`, `path`, `note_id`, `section_id`, `kind`, `lang`, `code`,
-`caption`, `chunk_hash`, `step_count` — nor a reserved frontmatter key (§4.1);
-either is an error (§9), because the alternative is a note silently overwriting
+`caption`, `chunk_hash`, `step_count`, `signature` — nor a reserved
+frontmatter key (§4.1); either is an error (§9), because the alternative is a note silently overwriting
 the structure it was read from.
 
 `embed_text:` materialises a property of that name on every derived node that
@@ -1053,8 +1079,10 @@ classification is the contract.
 |---|---|
 | A dangling link: a target that matched no note and became a stub — in the body, in a typed-edge key, or in an edge table's link column (§7.1). | §5.6 |
 | A fragment link naming a heading or block id the target note does not have: the edge stays on the note and keeps its `anchor`. | §5.4 |
-| A duplicate derived id — a second section with one heading path, or a second table row with one key under one section — which takes a `~2` suffix. The fix is a block id. | §7.1 |
-| A `structure:` rule that matched nothing anywhere in the vault. | §7.1 |
+| A duplicate derived id — a second section with one heading path — which takes a `~2` suffix. The fix is a block id. | §7.1 |
+| A table row whose key is empty or already used, which keys on its position instead; a `key_column:` the table does not carry, which falls back to the first column. | §7.1 |
+| An edge table with no target column, which states nothing, or one whose column repeats a property the link itself carries, which is dropped. | §7.1 |
+| A `structure:` rule that matched nothing anywhere in the vault — for an edge table, one that stated no edge. | §7.1 |
 | An `edge_defaults:` entry whose property the edge already carries, or whose edge type the vault has none of. | §7.2 |
 | A missing attachment, or an ambiguous bare filename (which resolves to nothing, and the warning names the candidates). | §6.6 |
 | A case-insensitive id collision — two ids differing only in case. | §3 |

@@ -1,6 +1,7 @@
 //! Derive a note's own nodes from its block tree (VAULT.md §7.1).
 //!
-//! Pure: `derive(body, tree, title, profile)` reads no file and touches no graph, so
+//! Pure: `derive(body, tree, title, label, profile)` reads no file and touches no
+//! graph, so
 //! it runs inside the parallel parse pass beside the link extraction that
 //! shares its tree.
 //!
@@ -13,10 +14,12 @@
 
 use super::block::BlockTree;
 use super::constructs::{derive_callouts, derive_fences, derive_lists, Ctx};
-use super::profile::{ChunkRule, SectionRule, StructureProfile};
+use super::profile::{ChunkRule, KeyFromHeadingRule, SectionRule, StructureProfile};
+use super::tables::derive_tables;
 use crate::datatypes::values::Value;
+use crate::okf::model::Link;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One node derived from a note's body.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +58,15 @@ pub(crate) struct DerivedEdge {
 pub(crate) struct Derived {
     pub nodes: Vec<DerivedNode>,
     pub edges: Vec<DerivedEdge>,
+    /// The edges an `edges: true` table stated (VAULT.md §7.1). They are
+    /// [`Link`]s and not [`DerivedEdge`]s because their target is a *note* the
+    /// resolver has yet to find: a row travels the ladder every prose link
+    /// travels, stub and all. `parse_file` moves them onto the note's own
+    /// links, so this is empty by the time the builder sees a `ConceptDoc`.
+    pub links: Vec<Link>,
+    /// The edge types an edge-table rule actually produced, for the §9 warning
+    /// about a rule the vault declared and no note matched.
+    pub edge_tables_hit: BTreeSet<String>,
     /// VAULT.md §9 warnings, without the note prefix the report adds.
     pub warnings: Vec<String>,
 }
@@ -68,6 +80,7 @@ pub(crate) fn derive(
     body: &str,
     tree: &BlockTree,
     note_title: &str,
+    note_label: &str,
     profile: &StructureProfile,
 ) -> Derived {
     let mut out = Derived::default();
@@ -94,7 +107,76 @@ pub(crate) fn derive(
     if let Some(rule) = &profile.ordered_lists {
         derive_lists(&ctx, rule, &mut ids, &mut out);
     }
+    if !profile.tables.is_empty() {
+        derive_tables(&ctx, &profile.tables, &mut ids, &mut out);
+    }
+    if let Some(rule) = &profile.key_from_heading {
+        let section_label = profile.sections.as_ref().map(|r| r.label.as_str());
+        relabel_symbols(&mut out, rule, note_label, section_label);
+    }
     out
+}
+
+/// `key_from_heading:` — a Section whose title is really a symbol name is
+/// **relabelled**, not duplicated (VAULT.md §7.1).
+///
+/// Both declared gates plus the one the format states outright: the heading
+/// must contain a `.` or a `(` whatever `when_matches:` says. On one corpus
+/// the regex alone matched 1 439 headings of which 13 were symbols, and a
+/// heading like `Overview` is a valid qualified name to a regex and nothing
+/// else. The section's own properties and its section edges are unchanged —
+/// this adds a label and two properties and takes nothing away.
+fn relabel_symbols(
+    out: &mut Derived,
+    rule: &KeyFromHeadingRule,
+    note_label: &str,
+    section_label: Option<&str>,
+) {
+    if note_label != rule.under_label {
+        return;
+    }
+    let Some(section_label) = section_label else {
+        return;
+    };
+    for node in &mut out.nodes {
+        if node.label != section_label {
+            continue;
+        }
+        let Some(Value::String(title)) = node
+            .props
+            .iter()
+            .find(|(k, _)| k == "title")
+            .map(|(_, v)| v)
+            .cloned()
+        else {
+            continue;
+        };
+        if !(title.contains('.') || title.contains('(')) || !rule.when_matches.is_match(&title) {
+            continue;
+        }
+        node.label = rule.label.clone();
+        let (name, signature) = split_signature(&title);
+        node.props
+            .push((rule.property.clone(), Value::String(name.to_string())));
+        if !signature.is_empty() {
+            node.props.push((
+                "signature".to_string(),
+                Value::String(signature.to_string()),
+            ));
+        }
+    }
+}
+
+/// The symbol name and what follows it: everything up to the first `(` or `→`
+/// is the name a query looks up, the rest is the call signature and the return
+/// annotation a converter wrote into the same heading.
+fn split_signature(title: &str) -> (&str, &str) {
+    let cut = [title.find('('), title.find('→')]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(title.len());
+    (title[..cut].trim_end(), title[cut..].trim())
 }
 
 /// The ids one note has already minted. A second node wanting an id takes

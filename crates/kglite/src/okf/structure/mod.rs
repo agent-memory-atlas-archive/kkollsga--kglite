@@ -17,6 +17,7 @@ pub(crate) mod block;
 mod constructs;
 pub(crate) mod derive;
 pub(crate) mod profile;
+mod tables;
 
 use block::{BlockKind, Heading, List};
 use std::collections::BTreeSet;

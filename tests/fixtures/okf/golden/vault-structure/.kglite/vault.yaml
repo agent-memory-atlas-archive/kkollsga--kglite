@@ -18,10 +18,25 @@ structure:
   code_fences: {label: Example, edge: HAS_EXAMPLE}
   ordered_lists: {label: ProcedureStep, container: Procedure, edge: HAS_STEP,
                   next: NEXT_STEP, min_items: 2}
+  # `^Parameters$` and not `Parameters`: `under_heading:` is a plain regular
+  # expression, the same key `ordered_lists:` carries, so a rule that means the
+  # whole heading anchors it.
+  tables:
+    - {under_heading: '^Parameters$', label: ApiParameter, key_column: name,
+       edge: HAS_PARAMETER}
+    # `edges: true` — a row is an edge from the note, never a node.
+    - {under_heading: '^Worked on by$', edge: WORKED_ON_BY, edges: true}
+  # `under_label: Api` restricts the relabel to `tables.md`, which declares
+  # `type: Api`; the other four notes are Articles and keep their sections.
+  key_from_heading: {label: ApiSymbol, property: qualified_name, under_label: Api}
   # Every derived node carries the note's `corpus:`; a note without one gives
   # its nodes none.
   inherit: [corpus]
   embed_text: "{title} | {heading_path}\n\n{text}"
+
+# A cell is text unless a declaration says otherwise (VAULT.md §7.1 `tables:`).
+types:
+  ApiParameter: {required: bool}
 
 # A declaration may name a derived label exactly as it names a note's.
 text_indexes:

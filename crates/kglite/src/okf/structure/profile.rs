@@ -17,16 +17,19 @@ use crate::okf::vault_config::kind_of;
 use regex::Regex;
 use std::sync::OnceLock;
 
-/// The `structure:` keys this build reads. A key VAULT.md names but this build
-/// has not implemented is *not* here: it is refused with the same message an
-/// invented key gets, which is what makes "a vault declaring `structure:`
-/// needs a kglite that knows it" a loud failure rather than a quiet one.
-const STRUCTURE_KEYS: [&str; 7] = [
+/// The `structure:` keys this build reads — every key VAULT.md §7.1 names, as
+/// of this build. A key the spec adds later is refused here with the same
+/// message an invented key gets, which is what makes "a vault declaring
+/// `structure:` needs a kglite that knows it" a loud failure rather than a
+/// quiet one.
+const STRUCTURE_KEYS: [&str; 9] = [
     "sections",
     "chunks",
     "callouts",
     "code_fences",
     "ordered_lists",
+    "tables",
+    "key_from_heading",
     "inherit",
     "embed_text",
 ];
@@ -36,7 +39,7 @@ const STRUCTURE_KEYS: [&str; 7] = [
 /// overwriting the structure it was read from. Names the whole vocabulary, P4's
 /// and P5's included, so a vault written against the spec gets the spec's
 /// answer whether or not this build derives that construct yet.
-const DERIVED_PROPERTIES: [&str; 14] = [
+const DERIVED_PROPERTIES: [&str; 15] = [
     "title",
     "text",
     "level",
@@ -51,6 +54,7 @@ const DERIVED_PROPERTIES: [&str; 14] = [
     "caption",
     "chunk_hash",
     "step_count",
+    "signature",
 ];
 
 /// VAULT.md §4.1's reserved frontmatter keys. `inherit:` may not name one
@@ -77,6 +81,11 @@ pub(crate) struct StructureProfile {
     pub callouts: Option<CalloutRule>,
     pub code_fences: Option<FenceRule>,
     pub ordered_lists: Option<OrderedListRule>,
+    /// `tables:` is a **list**: the first rule whose `under_heading` matches
+    /// the enclosing section's title reads the table, and a table under no
+    /// matching heading is prose.
+    pub tables: Vec<TableRule>,
+    pub key_from_heading: Option<KeyFromHeadingRule>,
     /// Frontmatter properties copied verbatim onto every derived node.
     pub inherit: Vec<String>,
     /// The template materialised as a property of its own name on every
@@ -143,6 +152,49 @@ pub(crate) struct OrderedListRule {
     pub min_items: usize,
 }
 
+/// `tables:` — one rule per heading whose tables are read (VAULT.md §7.1).
+///
+/// The two forms are one rule shape: `edges: true` reads a row as an **edge**
+/// and `label` is then meaningless (and refused), while the default reads it
+/// as a **node** and `label` is what that node is called.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TableRule {
+    /// Matched against the enclosing section's title, as
+    /// `ordered_lists.under_heading` is: a plain regular expression, so a rule
+    /// that means the whole heading anchors it and one that means either case
+    /// writes `(?i)`.
+    pub under_heading: HeadingMatcher,
+    /// The row label — node form only, `None` when `edges: true`.
+    pub label: Option<String>,
+    /// Node form: the column whose value keys the row. Edge form: the column
+    /// holding the target. `None` is the first column in the node form, and
+    /// the first column holding a `[[wikilink]]` in the edge form.
+    pub key_column: Option<String>,
+    /// Node form: the edge from the enclosing section (or the note) to each
+    /// row. Edge form: the type of the edge each row states.
+    pub edge: String,
+    pub edges: bool,
+}
+
+/// `key_from_heading:` — relabel a Section whose title is really a symbol name
+/// (VAULT.md §7.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyFromHeadingRule {
+    pub label: String,
+    pub when_matches: HeadingMatcher,
+    /// Where the symbol name itself is stored; the call signature, when the
+    /// heading carries one, goes to `signature`.
+    pub property: String,
+    /// The note label the rule is restricted to — required, because the shape
+    /// is cheap to match by accident (VAULT.md §7.1).
+    pub under_label: String,
+}
+
+/// The default `when_matches:` (VAULT.md §7.1): a dotted name, optionally with
+/// a call's parentheses and a trailing `→ type` return annotation — the
+/// spelling a converter writes a Python signature heading in.
+const DEFAULT_SYMBOL_PATTERN: &str = r"^[\w.]+\.[\w]+(\(.*\))?(\s*→.*)?$";
+
 /// A compiled `under_heading:` regular expression.
 ///
 /// Compiled once at load rather than per note: `derive` runs inside the
@@ -175,6 +227,8 @@ impl StructureProfile {
             || self.callouts.is_some()
             || self.code_fences.is_some()
             || self.ordered_lists.is_some()
+            || !self.tables.is_empty()
+            || self.key_from_heading.is_some()
     }
 }
 
@@ -214,6 +268,12 @@ pub(crate) fn parse(v: &Value) -> Result<StructureProfile, String> {
     }
     if let Some(v) = map.get("ordered_lists") {
         out.ordered_lists = Some(ordered_list_rule(v)?);
+    }
+    if let Some(v) = map.get("tables") {
+        out.tables = table_rules(v)?;
+    }
+    if let Some(v) = map.get("key_from_heading") {
+        out.key_from_heading = Some(key_from_heading_rule(v)?);
     }
     if let Some(v) = map.get("inherit") {
         out.inherit = inherit_list(v)?;
@@ -307,23 +367,167 @@ fn ordered_list_rule(v: &Value) -> Result<OrderedListRule, String> {
         container: field(&spec, CTX, "container", "Procedure")?,
         edge: field(&spec, CTX, "edge", "HAS_STEP")?,
         next: field(&spec, CTX, "next", "NEXT_STEP")?,
-        under_heading: heading_matcher(spec.get("under_heading"))?,
+        under_heading: heading_matcher(
+            spec.get("under_heading"),
+            "structure.ordered_lists.under_heading",
+        )?,
         min_items: limit(&spec, CTX, "min_items", 2)?,
     })
 }
 
 /// `under_heading:` — compiled at load, so a broken pattern fails the build
 /// once rather than being rebuilt against every list in the vault.
-fn heading_matcher(v: Option<&Value>) -> Result<Option<HeadingMatcher>, String> {
+fn heading_matcher(v: Option<&Value>, ctx: &str) -> Result<Option<HeadingMatcher>, String> {
     match v {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(pattern)) => Regex::new(pattern)
-            .map(|re| Some(HeadingMatcher(re)))
-            .map_err(|e| {
-                format!("`structure.ordered_lists.under_heading` is not a regular expression: {e}")
-            }),
+        Some(Value::String(pattern)) => compile(pattern, ctx).map(Some),
+        Some(other) => Err(format!("`{ctx}` must be a string, not {}", kind_of(other))),
+    }
+}
+
+fn compile(pattern: &str, ctx: &str) -> Result<HeadingMatcher, String> {
+    Regex::new(pattern)
+        .map(HeadingMatcher)
+        .map_err(|e| format!("`{ctx}` is not a regular expression: {e}"))
+}
+
+/// `tables:` (VAULT.md §7.1) — a list of rules, read in order, so a vault can
+/// state a narrow heading before a broad one.
+fn table_rules(v: &Value) -> Result<Vec<TableRule>, String> {
+    const CTX: &str = "structure.tables";
+    let Value::List(items) = v else {
+        return Err(format!(
+            "`{CTX}` must be a list of rules, not {}",
+            kind_of(v)
+        ));
+    };
+    items.iter().map(table_rule).collect()
+}
+
+fn table_rule(v: &Value) -> Result<TableRule, String> {
+    const CTX: &str = "structure.tables";
+    let Value::Map(spec) = v else {
+        return Err(format!(
+            "`{CTX}` must be a list of rules, not a list of {}",
+            kind_of(v)
+        ));
+    };
+    check_keys(
+        spec,
+        CTX,
+        &["under_heading", "label", "key_column", "edge", "edges"],
+    )?;
+    let edges = match spec.get("edges") {
+        None | Some(Value::Null) => false,
+        Some(Value::Boolean(b)) => *b,
+        Some(other) => {
+            return Err(format!(
+                "`{CTX}.edges` must be true or false, not {}",
+                kind_of(other)
+            ))
+        }
+    };
+    let under_heading =
+        match heading_matcher(spec.get("under_heading"), "structure.tables.under_heading")? {
+            Some(matcher) => matcher,
+            // Without it every table in the vault is a row rule's, and the spec's
+            // "a table under no matching heading is prose" would name nothing.
+            None => {
+                return Err(format!(
+                    "`{CTX}` needs an `under_heading:` naming the heading its tables sit under"
+                ))
+            }
+        };
+    let label = match spec.get("label") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::String(_)) => return Err(format!("`{CTX}.label` must not be empty")),
+        Some(other) => {
+            return Err(format!(
+                "`{CTX}.label` must be a string, not {}",
+                kind_of(other)
+            ))
+        }
+    };
+    if edges && label.is_some() {
+        return Err(format!(
+            "`{CTX}.label` cannot be set with `edges: true`: a row of an edge table \
+             states an edge, not a node"
+        ));
+    }
+    let edge = match (&label, spec.get("edge")) {
+        (_, Some(Value::String(s))) if !s.is_empty() => s.clone(),
+        (_, Some(Value::String(_))) => return Err(format!("`{CTX}.edge` must not be empty")),
+        (_, Some(other)) if !matches!(other, Value::Null) => {
+            return Err(format!(
+                "`{CTX}.edge` must be a string, not {}",
+                kind_of(other)
+            ))
+        }
+        // The node form spells its edge from its label the way
+        // `ordered_lists:` spells its container's; the edge form has no label
+        // to spell one from, and the edge type is the whole point of the rule.
+        (Some(label), _) => format!("HAS_{}", crate::okf::links::upper_snake(label)),
+        (None, _) => {
+            return Err(format!(
+                "`{CTX}` needs a `label:` for the row nodes, or `edges: true` and an `edge:`"
+            ))
+        }
+    };
+    Ok(TableRule {
+        under_heading,
+        label,
+        key_column: optional_field(spec, CTX, "key_column")?,
+        edge,
+        edges,
+    })
+}
+
+/// `key_from_heading:` (VAULT.md §7.1). Both gates are required, and the
+/// heading must carry a `.` or a `(` whatever `when_matches:` says — that
+/// second gate is in [`super::derive`], where the heading is.
+fn key_from_heading_rule(v: &Value) -> Result<KeyFromHeadingRule, String> {
+    const CTX: &str = "structure.key_from_heading";
+    let spec = rule_map(v, CTX)?;
+    check_keys(
+        &spec,
+        CTX,
+        &["label", "when_matches", "property", "under_label"],
+    )?;
+    let under_label = optional_field(&spec, CTX, "under_label")?.ok_or_else(|| {
+        format!(
+            "`{CTX}` needs an `under_label:`: the shape of a symbol name is cheap to match \
+             by accident, so the rule is restricted to the notes that hold symbols"
+        )
+    })?;
+    let when_matches = match spec.get("when_matches") {
+        None | Some(Value::Null) => compile(
+            DEFAULT_SYMBOL_PATTERN,
+            "structure.key_from_heading.when_matches",
+        )?,
+        Some(_) => heading_matcher(
+            spec.get("when_matches"),
+            "structure.key_from_heading.when_matches",
+        )?
+        .expect("a non-null value compiles or fails"),
+    };
+    Ok(KeyFromHeadingRule {
+        label: field(&spec, CTX, "label", "ApiSymbol")?,
+        when_matches,
+        property: field(&spec, CTX, "property", "qualified_name")?,
+        under_label,
+    })
+}
+
+/// A string key with no default: `None` when it is absent, an error when it is
+/// present and not a non-empty string.
+fn optional_field(map: &PropMap, ctx: &str, key: &str) -> Result<Option<String>, String> {
+    match map.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        Some(Value::String(_)) => Err(format!("`{ctx}.{key}` must not be empty")),
         Some(other) => Err(format!(
-            "`structure.ordered_lists.under_heading` must be a string, not {}",
+            "`{ctx}.{key}` must be a string, not {}",
             kind_of(other)
         )),
     }

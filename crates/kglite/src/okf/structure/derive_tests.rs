@@ -39,7 +39,7 @@ fn both(max_words: usize, max_chars: usize) -> StructureProfile {
 }
 
 fn run(body: &str, profile: &StructureProfile) -> Derived {
-    derive(body, &parse_blocks(body), "The Note", profile)
+    derive(body, &parse_blocks(body), "The Note", "Article", profile)
 }
 
 /// `(suffix, label)` in derivation order.
@@ -347,4 +347,193 @@ fn a_nested_block_is_not_chunked_twice() {
 fn nothing_is_derived_without_a_rule() {
     let d = run("# A\n\ntext\n", &StructureProfile::default());
     assert_eq!(d, Derived::default());
+}
+
+// ---------------------------------------------------------------------------
+// `key_from_heading:` (VAULT.md §7.1)
+// ---------------------------------------------------------------------------
+
+/// The rule as a vault declares it, so `when_matches:` is the compiled default
+/// unless a fixture overrides it.
+fn symbols(yaml: &str) -> StructureProfile {
+    let value = crate::okf::frontmatter::parse_yaml(yaml).expect("the fixture is YAML");
+    let parsed = crate::okf::structure::profile::parse(&value).expect("the rule the parser takes");
+    StructureProfile {
+        sections: Some(sections_rule()),
+        key_from_heading: parsed.key_from_heading,
+        ..StructureProfile::default()
+    }
+}
+
+fn labelled(body: &str, note_label: &str, profile: &StructureProfile) -> Derived {
+    derive(body, &parse_blocks(body), "The Note", note_label, profile)
+}
+
+/// `(suffix, label, qualified_name, signature)` per node.
+fn symbol_rows(d: &Derived) -> Vec<(String, String, String, String)> {
+    d.nodes
+        .iter()
+        .map(|n| {
+            let prop = |name: &str| match n.props.iter().find(|(k, _)| k == name) {
+                Some((_, Value::String(s))) => s.clone(),
+                _ => String::new(),
+            };
+            (
+                n.suffix.clone(),
+                n.label.clone(),
+                prop("qualified_name"),
+                prop("signature"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_symbol_heading_is_relabelled_and_split_into_name_and_signature() {
+    let body = "# Api\n\n## rmsapi.Project.open(path) → Project\n\ntext\n";
+    let d = labelled(
+        body,
+        "Api",
+        &symbols("key_from_heading: {label: ApiSymbol, under_label: Api}\n"),
+    );
+    assert_eq!(
+        symbol_rows(&d),
+        vec![
+            (
+                "#Api".to_string(),
+                "Section".to_string(),
+                String::new(),
+                String::new()
+            ),
+            (
+                "#Api#rmsapi.Project.open(path) → Project".to_string(),
+                "ApiSymbol".to_string(),
+                "rmsapi.Project.open".to_string(),
+                "(path) → Project".to_string(),
+            ),
+        ],
+        "the section is relabelled in place, id and all"
+    );
+    // Its own properties and its section edges are unchanged (VAULT.md §7.1):
+    // one `HAS_SECTION` per heading, and the symbol still has its parent.
+    let symbol = &d.nodes[1];
+    assert_eq!(
+        symbol
+            .props
+            .iter()
+            .filter(|(k, _)| k == "title" || k == "level")
+            .count(),
+        2
+    );
+    assert_eq!(
+        d.edges
+            .iter()
+            .filter(|e| e.conn_type == "HAS_SECTION")
+            .count(),
+        2
+    );
+    assert!(d
+        .edges
+        .iter()
+        .any(|e| e.conn_type == "PARENT_SECTION" && e.target == "#Api"));
+}
+
+#[test]
+fn the_default_pattern_takes_a_return_annotation_and_refuses_a_prose_heading() {
+    let body = "# Api\n\n## Introduction\n\n## rmsapi.grid.get() → Grid\n\n## rmsapi.grid\n";
+    let d = labelled(
+        body,
+        "Api",
+        &symbols("key_from_heading: {label: ApiSymbol, under_label: Api}\n"),
+    );
+    let labels: Vec<&str> = d.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(labels, vec!["Section", "Section", "ApiSymbol", "ApiSymbol"]);
+}
+
+#[test]
+fn a_heading_with_no_dot_or_paren_is_never_a_symbol() {
+    // The gate the format states outright, whatever `when_matches:` says: a
+    // pattern that matches everything still cannot relabel `Overview`.
+    let body = "# Api\n\n## Overview\n\n## open(path)\n";
+    let d = labelled(
+        body,
+        "Api",
+        &symbols("key_from_heading: {label: ApiSymbol, under_label: Api, when_matches: '.*'}\n"),
+    );
+    let labels: Vec<&str> = d.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(labels, vec!["Section", "Section", "ApiSymbol"]);
+}
+
+#[test]
+fn the_rule_reaches_only_the_notes_carrying_under_label() {
+    let body = "# Api\n\n## rmsapi.grid.get()\n";
+    let rule = symbols("key_from_heading: {label: ApiSymbol, under_label: Api}\n");
+    assert_eq!(labelled(body, "Api", &rule).nodes[1].label, "ApiSymbol");
+    assert_eq!(labelled(body, "Article", &rule).nodes[1].label, "Section");
+}
+
+#[test]
+fn the_property_the_name_is_stored_under_is_declared() {
+    let body = "# Api\n\n## rmsapi.grid.get()\n";
+    let d = labelled(
+        body,
+        "Api",
+        &symbols("key_from_heading: {label: Sym, under_label: Api, property: symbol}\n"),
+    );
+    assert!(d.nodes[1]
+        .props
+        .iter()
+        .any(|(k, v)| k == "symbol" && v == &Value::String("rmsapi.grid.get".to_string())));
+}
+
+#[test]
+fn a_heading_that_is_only_a_return_annotation_splits_at_the_arrow() {
+    // No parentheses at all: the split cuts at whichever of `(` and `→` comes
+    // first, and here only the arrow is there.
+    let body = "# Api\n\n## rmsapi.grid.count → int\n";
+    let d = labelled(
+        body,
+        "Api",
+        &symbols("key_from_heading: {label: ApiSymbol, under_label: Api}\n"),
+    );
+    assert_eq!(
+        symbol_rows(&d)[1],
+        (
+            "#Api#rmsapi.grid.count → int".to_string(),
+            "ApiSymbol".to_string(),
+            "rmsapi.grid.count".to_string(),
+            "→ int".to_string(),
+        )
+    );
+}
+
+#[test]
+fn only_a_section_is_relabelled_never_another_construct_under_it() {
+    // A `Procedure` carries its section's title as its own, so a symbol-named
+    // heading with a list under it offers the rule a second node with exactly
+    // the matching `title` — and relabelling that would move a procedure into
+    // the API surface.
+    let body = "# Api\n\n## rmsapi.grid.get()\n\n1. Open it.\n2. Close it.\n";
+    let mut profile = symbols("key_from_heading: {label: ApiSymbol, under_label: Api}\n");
+    profile.ordered_lists = crate::okf::structure::profile::parse(
+        &crate::okf::frontmatter::parse_yaml("ordered_lists:\n").unwrap(),
+    )
+    .unwrap()
+    .ordered_lists;
+    let d = labelled(body, "Api", &profile);
+    let labels: Vec<(&str, &str)> = d
+        .nodes
+        .iter()
+        .map(|n| (n.suffix.as_str(), n.label.as_str()))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            ("#Api", "Section"),
+            ("#Api#rmsapi.grid.get()", "ApiSymbol"),
+            ("#Api#rmsapi.grid.get()~list1", "Procedure"),
+            ("#Api#rmsapi.grid.get()~list1~step1", "ProcedureStep"),
+            ("#Api#rmsapi.grid.get()~list1~step2", "ProcedureStep"),
+        ]
+    );
 }

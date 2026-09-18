@@ -36,6 +36,18 @@ before upgrading.
   headings that match) into a container node plus one node per item, joined by
   `HAS_<UPPER_SNAKE(container)>`, `HAS_STEP` and `NEXT_STEP`, with an ordered
   list nested inside an item becoming that step's sub-steps.
+  `tables:` is a list of rules, each naming the heading its GFM tables sit
+  under: by default one node per body row, labelled and keyed by a declared
+  `key_column:` (`<section id>~<value>`) with every column a property named by
+  its header; with `edges: true` the row states an **edge** instead — its
+  target is the first column holding a `[[wikilink]]`, every other column
+  becomes an edge property, and the edge carries `section`, `row`, and the
+  link's own `anchor` and `label`. `key_from_heading:` relabels a section whose
+  heading is really a symbol name, splitting it into `qualified_name` and
+  `signature`; both its gates are required — `under_label:` and a heading
+  carrying a `.` or a `(` — because the shape is cheap to match by accident.
+  Declaring `structure:` also turns on the `label` edge property, so
+  `[[Target|the display text]]` records that text.
   There is no default and no heuristic: a vault that declares no `structure:`
   builds precisely the graph it built before.
 - **`edge_defaults:` in `.kglite/vault.yaml`** (`VAULT.md` §7.2) — properties
@@ -61,6 +73,12 @@ before upgrading.
 
 ### Fixed
 
+- **A wikilink written `[[Note\|display text]]` inside a table cell names
+  `Note`.** `\|` is Obsidian's escape for a pipe inside a cell, and the reader
+  left the backslash on the target: every such link resolved to a note spelled
+  `Note\` — 398 dangling links and 541 dropped display texts on one converted
+  corpus — and a cell's own `\|` now reads as the pipe the author meant in a
+  property value too. Affects every vault whose notes hold tables.
 - **A `~~~` line written inside a ``` code block no longer turns link scanning
   back on** in an Obsidian vault (and in the `okf` / `loose` dialects). The
   reader toggled one flag on any fence line, so the rest of a code block became
@@ -105,9 +123,9 @@ before upgrading.
   `<dt id=…>` becomes a heading per symbol, `<pre>` becomes a fence carrying
   the language its `highlight-…` class names, nested lists indent four spaces,
   and `--block-ids` turns a `<p id=…>` into a citable ` ^id` block. A wikilink
-  inside a table cell keeps its target and drops its display text, because the
-  `\|` Obsidian writes there is part of a wikilink target (`VAULT.md` §5.1) and
-  an unescaped `|` would end the cell. New flags:
+  inside a table cell is written with Obsidian's `\|`, since an unescaped `|`
+  would end the cell — the reader unescapes it (see Fixed) and keeps the
+  display text. New flags:
   `--admonition-classes`, `--param-heading`, `--procedure-heading`,
   `--dl-mode`, `--table-header`, `--block-ids`, `--api-label` and
   `--emit-structure`, which writes the matching `structure:` block into the

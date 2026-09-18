@@ -5,7 +5,9 @@
 use crate::datatypes::values::Value;
 use crate::graph::storage::GraphRead;
 use crate::graph::DirGraph;
-use crate::okf::build::tests_support::{edges_of, nodes_with_titles, vault_build_with, write};
+use crate::okf::build::tests_support::{
+    count_label, edges_of, nodes_with_titles, provisional_count, vault_build_with, write, EdgeFacts,
+};
 use crate::okf::build::{build, BuildOutput};
 use crate::okf::model::{BuildOptions, BuildReport, Profile};
 use crate::okf::structure::profile::{ChunkRule, SectionRule, StructureProfile};
@@ -385,7 +387,7 @@ fn without_a_rule_an_anchored_link_stays_on_the_note() {
 }
 
 /// The committed structure vault, whose Python counterpart asserts the graph.
-/// This half is the report: the two warnings it is built to produce.
+/// This half is the report: the three warnings it is built to produce.
 #[test]
 fn golden_structure_vault_report() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -407,6 +409,9 @@ fn golden_structure_vault_report() {
             "structure/links.md: `#Nowhere` names no heading or block id in `chunky`; \
              the link resolved to the note"
                 .to_string(),
+            // The edge table's second row names a note nobody wrote: a stub
+            // and a warning, exactly as a prose link to it would be.
+            "dangling link: `nobody`".to_string(),
         ],
     );
 }
@@ -678,14 +683,23 @@ fn golden_structure_vault_census() {
     assert_eq!(
         nodes,
         vec![
+            // `tables.md` declares `type: Api`, which is what
+            // `key_from_heading.under_label` gates on.
+            ("Api", 1),
+            ("ApiParameter", 3),
+            // The symbol heading is **relabelled**, not duplicated: 15
+            // headings, 14 of them still Sections.
+            ("ApiSymbol", 1),
             ("Article", 5),
-            ("Chunk", 13),
+            ("Chunk", 17),
+            // The edge table's unresolvable target, as any dangling link is.
+            ("Concept", 1),
             ("Example", 3),
             ("Folder", 1),
             ("Note", 3),
             ("Procedure", 1),
             ("ProcedureStep", 4),
-            ("Section", 11),
+            ("Section", 14),
         ]
     );
     let edges: Vec<(&str, usize)> = report
@@ -696,18 +710,161 @@ fn golden_structure_vault_census() {
     assert_eq!(
         edges,
         vec![
-            ("CONTAINS", 4),
-            ("HAS_CHUNK", 13),
+            ("CONTAINS", 5),
+            ("HAS_CHUNK", 17),
             ("HAS_EXAMPLE", 3),
             ("HAS_NOTE", 3),
+            ("HAS_PARAMETER", 3),
             ("HAS_PROCEDURE", 1),
-            ("HAS_SECTION", 11),
+            // One per heading, relabelled or not.
+            ("HAS_SECTION", 15),
             ("HAS_STEP", 4),
-            ("LINKS_TO", 3),
+            // Three prose links, plus the two the edge table's own cells state
+            // as prose — a row rule never swallows a cell's link (VAULT.md
+            // §7.1).
+            ("LINKS_TO", 5),
             ("NEXT_CHUNK", 4),
-            ("NEXT_SECTION", 3),
+            ("NEXT_SECTION", 4),
             ("NEXT_STEP", 2),
-            ("PARENT_SECTION", 6),
+            ("PARENT_SECTION", 9),
+            // One edge per row of the edge table, the dangling one included.
+            ("WORKED_ON_BY", 2),
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `tables:` and `key_from_heading:` as the graph holds them (VAULT.md §7.1)
+// ---------------------------------------------------------------------------
+
+/// A `structure:` block from YAML, so a build test declares its rules in the
+/// spelling a vault does.
+fn structure_from(yaml: &str) -> StructureProfile {
+    crate::okf::structure::profile::parse(
+        &crate::okf::frontmatter::parse_yaml(yaml).expect("the fixture is YAML"),
+    )
+    .expect("the rules the parser accepts")
+}
+
+/// An edge table's row is an edge from the **note**, carrying its other
+/// columns — and its target travels the resolver ladder, so an unwritten one
+/// becomes the same `_provisional` stub a prose link's does (VAULT.md §5.6).
+#[test]
+fn an_edge_table_row_is_an_edge_from_the_note_with_its_columns() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "acme.md", "# Acme\n");
+    write(
+        dir.path(),
+        "ada.md",
+        // `\|` is Obsidian's escape for the pipe inside a cell: written
+        // plainly it would split the cell in two (VAULT.md §5.1).
+        "# Ada\n\n## Worked at\n\n| company | role |\n|---|---|\n\
+         | [[acme\\|Acme Corp]] | author |\n| [[globex]] | editor |\n",
+    );
+    let out = vault_build_with(dir.path(), |profile| {
+        profile.structure = Some(structure_from(
+            "sections:\ntables:\n  - {under_heading: '^Worked at$', edge: WORKED_AT, edges: true}\n",
+        ));
+    });
+    let worked: Vec<EdgeFacts> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, conn, _, _)| conn == "WORKED_AT")
+        .collect();
+    assert_eq!(
+        worked,
+        vec![
+            (
+                "ada".to_string(),
+                "WORKED_AT".to_string(),
+                "acme".to_string(),
+                vec![
+                    ("label".to_string(), "Acme Corp".to_string()),
+                    ("role".to_string(), "author".to_string()),
+                    // An integer on the edge, as the debug rendering shows.
+                    ("row".to_string(), "Some(Int64(1))".to_string()),
+                    ("section".to_string(), "Worked at".to_string()),
+                ]
+            ),
+            (
+                "ada".to_string(),
+                "WORKED_AT".to_string(),
+                "globex".to_string(),
+                vec![
+                    ("role".to_string(), "editor".to_string()),
+                    ("row".to_string(), "Some(Int64(2))".to_string()),
+                    ("section".to_string(), "Worked at".to_string()),
+                ]
+            ),
+        ]
+    );
+    assert_eq!(provisional_count(&out.graph), 1, "`globex` is a stub");
+    assert_eq!(
+        out.report.warnings,
+        vec!["dangling link: `globex`".to_string()]
+    );
+    // No row node: an edge table states edges (VAULT.md §7.1).
+    assert_eq!(count_label(&out.graph, "Row"), 0);
+}
+
+/// A `[[Note#Heading]]` reaches a section the symbol rule renamed: it is the
+/// same node under another label, and the by-title rung must still find it.
+#[test]
+fn a_relabelled_symbol_is_still_what_an_anchored_link_reaches() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "api.md",
+        "---\ntype: Api\n---\n\n# Api\n\n## rmsapi.grid.get()\n\ntext\n",
+    );
+    write(dir.path(), "links.md", "See [[api#rmsapi.grid.get()]].\n");
+    let out = vault_build_with(dir.path(), |profile| {
+        profile.structure = Some(structure_from(
+            "sections:\nkey_from_heading: {label: ApiSymbol, under_label: Api}\n",
+        ));
+    });
+    let targets: Vec<String> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(source, conn, _, _)| conn == "LINKS_TO" && source == "links")
+        .map(|(_, _, target, _)| target)
+        .collect();
+    assert_eq!(targets, vec!["api#Api#rmsapi.grid.get()".to_string()]);
+    assert_eq!(
+        property(&out.graph, "api#Api#rmsapi.grid.get()", "qualified_name"),
+        Some(Value::String("rmsapi.grid.get".to_string()))
+    );
+    assert!(out.report.warnings.is_empty(), "{:?}", out.report.warnings);
+}
+
+#[test]
+fn a_table_or_symbol_rule_that_matched_nothing_is_a_warning() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "plain.md",
+        "# A\n\nProse, and no table at all.\n",
+    );
+    let out = vault_build_with(dir.path(), |profile| {
+        profile.structure = Some(structure_from(
+            "sections:\n\
+             tables:\n  - {under_heading: '^Parameters$', label: ApiParameter}\n  \
+             - {under_heading: '^Worked at$', edge: WORKED_AT, edges: true}\n\
+             key_from_heading: {label: ApiSymbol, under_label: Api}\n",
+        ));
+    });
+    assert_eq!(
+        out.report.warnings,
+        vec![
+            "`vault.yaml` declares a `structure:` rule for `ApiSymbol`, but no note's body \
+             produced one"
+                .to_string(),
+            "`vault.yaml` declares a `structure:` rule for `ApiParameter`, but no note's body \
+             produced one"
+                .to_string(),
+            // An edge table makes no node, so its rule is measured by the edges
+            // it stated.
+            "`vault.yaml` declares an edge table for `WORKED_AT`, but no note's body \
+             produced one"
+                .to_string(),
         ]
     );
 }

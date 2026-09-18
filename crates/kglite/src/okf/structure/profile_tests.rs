@@ -59,13 +59,13 @@ fn every_declared_name_is_read() {
 /// against a later spec fails loudly instead of quietly deriving less.
 #[test]
 fn an_unimplemented_or_invented_key_is_an_error() {
-    for key in ["tables: []", "key_from_heading: {}", "sctions: {}"] {
+    for key in ["paragraphs: {}", "sctions: {}"] {
         let message = error(key);
         assert!(
             message.starts_with("unknown key `structure.")
                 && message.contains(
                     "this build accepts sections, chunks, callouts, code_fences, \
-                     ordered_lists, inherit, embed_text"
+                     ordered_lists, tables, key_from_heading, inherit, embed_text"
                 ),
             "{message}"
         );
@@ -204,4 +204,107 @@ fn a_template_renders_each_placeholder_once() {
 fn a_block_that_declares_no_rule_derives_nothing() {
     assert!(!parsed("inherit: [corpus]").unwrap().derives_anything());
     assert!(parsed("chunks: {}").unwrap().derives_anything());
+}
+
+// ---------------------------------------------------------------------------
+// `tables:` and `key_from_heading:` (VAULT.md §7.1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_table_rule_names_its_heading_and_one_of_the_two_forms() {
+    let got = parsed(
+        "tables:\n  - {under_heading: '^Parameters$', label: ApiParameter, key_column: name, \
+         edge: HAS_PARAMETER}\n  - {under_heading: 'Worked at', edge: WORKED_AT, edges: true}\n",
+    )
+    .unwrap();
+    let node = &got.tables[0];
+    assert!(node.under_heading.is_match("Parameters") && !node.under_heading.is_match("Returns"));
+    assert_eq!(
+        (
+            node.label.as_deref(),
+            node.key_column.as_deref(),
+            node.edge.as_str(),
+            node.edges
+        ),
+        (Some("ApiParameter"), Some("name"), "HAS_PARAMETER", false)
+    );
+    let edge = &got.tables[1];
+    assert_eq!(
+        (edge.label.as_deref(), edge.edge.as_str(), edge.edges),
+        (None, "WORKED_AT", true)
+    );
+    // An undeclared node-form `edge:` is spelled from the label.
+    assert_eq!(
+        parsed("tables:\n  - {under_heading: 'Parameters', label: Api Parameter}\n")
+            .unwrap()
+            .tables[0]
+            .edge,
+        "HAS_API_PARAMETER"
+    );
+}
+
+#[test]
+fn a_table_rule_refuses_the_shapes_that_could_not_be_read() {
+    for (yaml, wanted) in [
+        (
+            "tables:\n  - {label: Row}\n",
+            "needs an `under_heading:` naming the heading its tables sit under",
+        ),
+        (
+            "tables:\n  - {under_heading: 'P'}\n",
+            "needs a `label:` for the row nodes, or `edges: true` and an `edge:`",
+        ),
+        (
+            "tables:\n  - {under_heading: 'P', label: Row, edges: true, edge: HAS_ROW}\n",
+            "states an edge, not a node",
+        ),
+        (
+            "tables:\n  - {under_heading: '(', label: Row}\n",
+            "is not a regular expression",
+        ),
+        (
+            "tables:\n  - {under_heading: 'P', label: Row, rows: 2}\n",
+            "unknown key `structure.tables.rows`",
+        ),
+        ("tables: {under_heading: 'P'}\n", "must be a list of rules"),
+    ] {
+        let message = error(yaml);
+        assert!(message.contains(wanted), "{yaml:?} gave {message}");
+    }
+}
+
+#[test]
+fn the_symbol_rule_needs_its_under_label_and_defaults_the_rest() {
+    let got = parsed("key_from_heading: {under_label: Api}\n")
+        .unwrap()
+        .key_from_heading
+        .expect("declared");
+    assert_eq!(
+        (
+            got.label.as_str(),
+            got.property.as_str(),
+            got.under_label.as_str()
+        ),
+        ("ApiSymbol", "qualified_name", "Api")
+    );
+    // The default pattern: a dotted name, a call, and the trailing `→ type` a
+    // converter writes into the same heading — and nothing that is merely a
+    // word (the `.`/`(` gate refuses those too, in `derive`).
+    for heading in [
+        "rmsapi.grid.get",
+        "rmsapi.grid.get(a, b)",
+        "rmsapi.Project.open(path) → Project",
+    ] {
+        assert!(got.when_matches.is_match(heading), "{heading}");
+    }
+    for heading in ["Introduction", "Read this first", "A. B"] {
+        assert!(!got.when_matches.is_match(heading), "{heading}");
+    }
+    assert!(error("key_from_heading: {label: ApiSymbol}").contains("needs an `under_label:`"));
+    assert!(
+        error("key_from_heading: {under_label: Api, when_matches: '('}")
+            .contains("is not a regular expression")
+    );
+    assert!(error("key_from_heading: {under_label: Api, propery: x}")
+        .contains("unknown key `structure.key_from_heading.propery`"));
 }

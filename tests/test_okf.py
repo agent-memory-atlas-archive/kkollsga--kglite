@@ -705,12 +705,14 @@ class TestVaultStructureProfile:
     in ``golden/vault`` would move every count that fixture pins. That one
     therefore stays structure-free and is the compatibility record; this one
     declares ``sections:`` + ``chunks:`` (``max_chars: 120``, small on purpose)
-    plus ``inherit:`` and ``embed_text:``, over five notes holding a duplicate
+    plus ``inherit:`` and ``embed_text:``, over six notes holding a duplicate
     heading path, a section that packs into two chunks, a ``^block-id``
-    paragraph, anchored wikilinks that retarget onto all of it, and — in
+    paragraph, anchored wikilinks that retarget onto all of it, — in
     ``constructs.md`` — callouts (titled, untitled, nested), three fences (one
     captioned ``python``, one bare, one ``~~~``), a three-step procedure with a
-    sub-step and a one-item list the ``min_items: 2`` gate excludes.
+    sub-step and a one-item list the ``min_items: 2`` gate excludes, and — in
+    ``tables.md`` — a ``Parameters`` table read as nodes, a ``Worked on by``
+    table read as edges, and a symbol heading ``key_from_heading:`` relabels.
     """
 
     def build(self):
@@ -720,14 +722,25 @@ class TestVaultStructureProfile:
         assert _labels(self.build()) == Counter(
             {
                 "Article": 5,  # welcome, and the four under `structure/`
+                # `tables.md` declares `type: Api` — the label
+                # `key_from_heading.under_label` gates on.
+                "Api": 1,
                 "Folder": 1,  # `structure/`
-                # Eleven headings: two in chunky, three in duplicate (the
+                # Fifteen headings: two in chunky, three in duplicate (the
                 # second `## Details` included), one each in links and welcome,
-                # four in constructs
-                "Section": 11,
+                # four in constructs, four in tables — less the one the symbol
+                # rule relabels.
+                "Section": 14,
+                # Relabelled in place, never duplicated (VAULT.md §7.1).
+                "ApiSymbol": 1,
                 # chunky packs 2 + its own `^cite-1` chunk; duplicate 3;
-                # links and welcome 1 each; constructs 5
-                "Chunk": 13,
+                # links and welcome 1 each; constructs 5; tables 4 (its intro,
+                # its prose, and one per table — a table is prose too)
+                "Chunk": 17,
+                # One node per body row of the `Parameters` table.
+                "ApiParameter": 3,
+                # The edge table's second row names a note nobody wrote.
+                "Concept": 1,
                 # constructs.md: two callouts under `## Notes`, one nested
                 "Note": 3,
                 # every fence qualifies — `langs:` is omitted
@@ -740,10 +753,12 @@ class TestVaultStructureProfile:
     def test_edge_types(self):
         assert _edge_types(self.build()) == Counter(
             {
-                "HAS_SECTION": 11,  # one per section: from the note, or its parent
-                "PARENT_SECTION": 6,  # only the nested ones
-                "NEXT_SECTION": 3,  # duplicate's two `## Details`, constructs' three `##`
-                "HAS_CHUNK": 13,
+                # One per heading, relabelled or not: a symbol keeps its
+                # section edges (VAULT.md §7.1).
+                "HAS_SECTION": 15,
+                "PARENT_SECTION": 9,  # only the nested ones
+                "NEXT_SECTION": 4,  # duplicate's two `## Details`, constructs' three `##`
+                "HAS_CHUNK": 17,
                 "NEXT_CHUNK": 4,  # chunky's three, and two sections of two
                 "HAS_NOTE": 3,  # two from the section, one from the callout it nests in
                 "HAS_EXAMPLE": 3,
@@ -752,8 +767,12 @@ class TestVaultStructureProfile:
                 "HAS_PROCEDURE": 1,
                 "HAS_STEP": 4,  # three from the container, one from step 2
                 "NEXT_STEP": 2,  # consecutive steps at one level only
-                "CONTAINS": 4,
-                "LINKS_TO": 3,
+                "HAS_PARAMETER": 3,  # the section to each of its rows
+                "WORKED_ON_BY": 2,  # one per row of the edge table
+                "CONTAINS": 5,
+                # Three prose links, plus the two the edge table's own cells
+                # state as prose: a row rule reads a cell, never swallows it.
+                "LINKS_TO": 5,
             }
         )
 
@@ -776,6 +795,11 @@ class TestVaultStructureProfile:
             # has no syntax for a later one, so the second takes `~2`.
             "duplicate#Notes#Details~2",
             "links#Links",
+            "tables#Tables",
+            # The symbol heading between them is an `ApiSymbol`, not a
+            # `Section`, and its sub-headings are Sections under it.
+            "tables#Tables#rmsapi.Project.open(path) → Project#Parameters",
+            "tables#Tables#rmsapi.Project.open(path) → Project#Worked on by",
             "welcome#Welcome",
         ]
         second = rows[8]
@@ -836,15 +860,19 @@ class TestVaultStructureProfile:
             {"target": "chunky#^cite-1", "anchor": "^cite-1"},
         ]
 
-    def test_the_two_warnings_the_fixture_is_built_to_produce(self):
+    def test_the_three_warnings_the_fixture_is_built_to_produce(self):
         report = okf.validate(str(STRUCTURE_BUNDLE), dialect="obsidian")
         assert report.errors == []
         assert [w.split(":")[0] for w in report.warnings] == [
             "structure/duplicate.md",
             "structure/links.md",
+            "dangling link",
         ]
         assert "duplicate heading path `Notes#Details`" in report.warnings[0]
         assert "names no heading or block id in `chunky`" in report.warnings[1]
+        # The edge table's second row names a note nobody wrote: a stub and a
+        # warning, exactly as a prose link to it would be (VAULT.md §5.6).
+        assert report.warnings[2] == "dangling link: `nobody`"
 
     def test_a_derived_node_is_never_a_file(self, tmp_path):
         """VAULT.md §7.1/§10.1: a derived node carries no ``file_path``, and an
@@ -861,6 +889,7 @@ class TestVaultStructureProfile:
         written = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
         assert written == [
             ".kglite/export-manifest.json",
+            "Api/tables.md",
             "Article/chunky.md",
             "Article/constructs.md",
             "Article/duplicate.md",
@@ -929,9 +958,108 @@ class TestVaultStructureProfile:
         rows = g.cypher(
             "MATCH ()-[r:LINKS_TO]->() RETURN r.derivation AS d, r.anchor AS anchor ORDER BY anchor"
         ).to_list()
-        assert [r["d"] for r in rows] == ["prose_reference"] * 3
+        assert [r["d"] for r in rows] == ["prose_reference"] * 5
         # A type with no entry carries nothing extra.
         assert g.cypher("MATCH ()-[r:HAS_SECTION]->() RETURN DISTINCT r.derivation AS d").to_list() == [{"d": None}]
+
+    def test_a_table_row_is_a_node_keyed_by_its_key_column(self):
+        """VAULT.md §7.1 ``tables:`` — one node per body row, columns as
+        properties, ``types:`` deciding how a cell is built."""
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:ApiParameter) RETURN n.concept_id AS id, n.name AS name, "
+            "n.type AS type, n.required AS required, n.section_id AS section, "
+            "n.corpus AS corpus ORDER BY id"
+        ).to_list()
+        section = "tables#Tables#rmsapi.Project.open(path) → Project#Parameters"
+        assert rows == [
+            {
+                "id": f"{section}~mode",
+                "name": "mode",
+                "type": "string",
+                "required": False,
+                "section": section,
+                "corpus": "golden",  # `inherit:` reaches a row like any node
+            },
+            {
+                "id": f"{section}~path",
+                "name": "path",
+                "type": "string",
+                "required": True,
+                "section": section,
+                "corpus": "golden",
+            },
+            {
+                "id": f"{section}~readonly",
+                "name": "readonly",
+                "type": "bool",
+                # An empty cell writes no property at all (VAULT.md §7.1).
+                "required": None,
+                "section": section,
+                "corpus": "golden",
+            },
+        ]
+        assert (
+            g.cypher(
+                f"MATCH (:Section {{concept_id:'{section}'}})-[:HAS_PARAMETER]->(n) RETURN count(n) AS c"
+            ).to_list()[0]["c"]
+            == 3
+        )
+
+    def test_an_edge_table_row_is_an_edge_carrying_its_other_columns(self):
+        """VAULT.md §7.1 ``edges: true`` — the row states an edge from the
+        note, never a node, and an unwritten target is the usual stub."""
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (:Api {concept_id:'tables'})-[r:WORKED_ON_BY]->(t) "
+            "RETURN t.concept_id AS target, t._provisional AS stub, r.role AS role, "
+            "r.since AS since, r.row AS row, r.section AS section, r.label AS label "
+            "ORDER BY row"
+        ).to_list()
+        assert rows == [
+            {
+                "target": "chunky",
+                "stub": None,
+                "role": "author",
+                "since": "2024",
+                "row": 1,
+                "section": "Worked on by",
+                # `[[chunky\|The chunky note]]`: the escaped pipe is the
+                # separator, so the target is the note and the display text is
+                # the edge's label (VAULT.md §5.1, §5.4).
+                "label": "The chunky note",
+            },
+            {
+                "target": "nobody",
+                "stub": True,
+                "role": "reviewer",
+                "since": "2025",
+                "row": 2,
+                "section": "Worked on by",
+                "label": None,
+            },
+        ]
+
+    def test_a_symbol_heading_is_relabelled_and_split(self):
+        """VAULT.md §7.1 ``key_from_heading:`` — the section is renamed in
+        place; its id, its properties and its section edges are unchanged."""
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:ApiSymbol) RETURN n.concept_id AS id, n.title AS title, "
+            "n.qualified_name AS name, n.signature AS signature, n.level AS level"
+        ).to_list()
+        assert rows == [
+            {
+                "id": "tables#Tables#rmsapi.Project.open(path) → Project",
+                "title": "rmsapi.Project.open(path) → Project",
+                "name": "rmsapi.Project.open",
+                "signature": "(path) → Project",
+                "level": 2,
+            }
+        ]
+        # Only the notes carrying `under_label: Api` are read that way: the
+        # Articles' sections are untouched.
+        assert g.cypher("MATCH (n:Section) WHERE n.note_id = 'tables' RETURN count(n) AS c").to_list()[0]["c"] == 3
 
     def test_the_first_golden_vault_is_untouched_by_the_feature(self):
         """The compatibility promise: a vault that declares no ``structure:``

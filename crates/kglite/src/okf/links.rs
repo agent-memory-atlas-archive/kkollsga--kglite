@@ -77,11 +77,60 @@ fn wikilink_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\[\[([^\]|\n]+)(?:\|([^\]\n]*))?\]\]").unwrap())
 }
 
+/// One `[[target#anchor|display text]]` split into its three parts.
+pub(crate) struct WikiRef<'t> {
+    pub name: &'t str,
+    /// The `#fragment`, without its `#`; `None` when there is none.
+    pub anchor: Option<&'t str>,
+    /// The display text, which becomes the edge's `label` where `structure:`
+    /// is declared (VAULT.md §5.1, §5.4).
+    pub alias: Option<&'t str>,
+}
+
+/// Split one wikilink's two capture groups into target, anchor and display
+/// text.
+///
+/// `\|` is Obsidian's escape for a pipe **inside a table cell**, and the
+/// wikilink regex reads the pipe as the separator it is: the backslash is left
+/// at the end of the target, where it belongs to the escape and not to the
+/// note's name. Without this, `[[Usage\|the guide]]` in a cell names a note
+/// spelled `Usage\` — 398 dangling links on one converted corpus — and the
+/// display text is lost with it.
+fn wikilink_parts<'t>(raw_name: &'t str, alias: Option<&'t str>) -> WikiRef<'t> {
+    let raw = match alias {
+        Some(_) => raw_name.strip_suffix('\\').unwrap_or(raw_name),
+        None => raw_name,
+    };
+    let (name, anchor) = match raw.split_once('#') {
+        Some((n, a)) => (n.trim(), Some(a.trim())),
+        None => (raw.trim(), None),
+    };
+    WikiRef {
+        name,
+        anchor,
+        alias: alias.map(str::trim).filter(|a| !a.is_empty()),
+    }
+}
+
+/// The first `[[wikilink]]` in a string that is not an `![[embed]]` — how a
+/// table cell states the target of an edge row (VAULT.md §7.1 `tables:`).
+pub(crate) fn first_wikilink(text: &str) -> Option<WikiRef<'_>> {
+    wikilink_re().captures_iter(text).find_map(|cap| {
+        let m = cap.get(0).expect("the whole match");
+        (m.start() == 0 || text.as_bytes()[m.start() - 1] != b'!').then(|| {
+            wikilink_parts(
+                cap.get(1).expect("the name group").as_str(),
+                cap.get(2).map(|a| a.as_str()),
+            )
+        })
+    })
+}
+
 /// A whole string that is nothing but one wikilink — the frontmatter
 /// typed-edge discriminator (VAULT.md §4.3).
 fn only_wikilink_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*\[\[([^\]|]+)(?:\|[^\]]*)?\]\]\s*$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^\s*\[\[([^\]|]+)(?:\|([^\]]*))?\]\]\s*$").unwrap())
 }
 
 /// Map a section heading to a connection type, or `None` to fall through
@@ -267,7 +316,10 @@ impl Region<'_> {
             .and_then(|t| conn_from_title(t.as_str()))
             .or_else(|| self.heading_conn.clone())
             .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string());
-        let props = edge_props(self.profile, self.section, fragment_of(dest));
+        // A markdown link's text is prose around a path, not a display name for
+        // a note: VAULT.md §5.4 gives `label` to the `[[Target|text]]` spelling
+        // alone.
+        let props = edge_props(self.profile, self.section, fragment_of(dest), None);
         if is_external_url(dest) {
             // External http(s) link → a Source node (citation / reference).
             push_unique(
@@ -309,11 +361,11 @@ impl Region<'_> {
         // A `#heading` anchor never affects resolution: `[[Note#Section]]` and
         // `[[Note]]` reach the same node (VAULT.md §5.4). The fragment is kept
         // as an edge property.
-        let raw_name = cap.get(1).expect("the name group").as_str();
-        let (name, anchor) = match raw_name.split_once('#') {
-            Some((n, a)) => (n.trim(), Some(a.trim())),
-            None => (raw_name.trim(), None),
-        };
+        let parts = wikilink_parts(
+            cap.get(1).expect("the name group").as_str(),
+            cap.get(2).map(|a| a.as_str()),
+        );
+        let (name, anchor) = (parts.name, parts.anchor);
         if name.is_empty() {
             return;
         }
@@ -337,7 +389,7 @@ impl Region<'_> {
             // all. Without the extension check every embedded image minted a
             // concept stub.
             if !embeds_a_note(name) {
-                self.attachment(name, cap.get(2).map(|a| a.as_str()), out);
+                self.attachment(name, parts.alias, out);
                 return;
             }
             if !self.profile.embeds {
@@ -355,7 +407,7 @@ impl Region<'_> {
                 target: target.to_string(),
                 conn_type: conn,
                 is_external: false,
-                props: edge_props(self.profile, self.section, anchor),
+                props: edge_props(self.profile, self.section, anchor, parts.alias),
                 reverse: false,
             },
         );
@@ -417,6 +469,7 @@ fn edge_props(
     profile: &Profile,
     section: Option<&str>,
     anchor: Option<&str>,
+    label: Option<&str>,
 ) -> Vec<(String, Value)> {
     if !profile.link_edge_props {
         return Vec::new();
@@ -427,6 +480,12 @@ fn edge_props(
     }
     if let Some(a) = anchor.filter(|a| !a.is_empty()) {
         props.push(("anchor".to_string(), Value::String(a.to_string())));
+    }
+    // Declaring `structure:` is what turns the display text into a property:
+    // a vault that models the inside of its notes is one that wants its links
+    // described, and there is no separate switch (VAULT.md §5.4, §7.1).
+    if let Some(l) = label.filter(|l| !l.is_empty() && profile.structure.is_some()) {
+        props.push(("label".to_string(), Value::String(l.to_string())));
     }
     props
 }
@@ -562,9 +621,11 @@ fn mask_code_spans(line: &str) -> String {
 /// mixes wikilinks with plain strings, which the rule never splits.
 pub(crate) fn wikilink_targets(v: &Value) -> Option<Vec<String>> {
     let one = |s: &str| -> Option<String> {
-        let name = only_wikilink_re().captures(s)?.get(1)?.as_str();
-        let name = name.split('#').next().unwrap_or(name).trim();
-        let name = name.trim_end_matches(".md");
+        let cap = only_wikilink_re().captures(s)?;
+        // The same `\|` escape a table cell writes (VAULT.md §5.1): one
+        // spelling of a wikilink, read one way wherever it is written.
+        let parts = wikilink_parts(cap.get(1)?.as_str(), cap.get(2).map(|a| a.as_str()));
+        let name = parts.name.trim_end_matches(".md");
         (!name.is_empty()).then(|| name.to_string())
     };
     match v {
@@ -1652,5 +1713,79 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A vault that declares `structure:` — the one switch that turns a
+    /// wikilink's display text into the edge's `label` (VAULT.md §5.4, §7.1).
+    fn structured_vault() -> Profile {
+        let mut profile = vault();
+        profile.structure = Some(crate::okf::structure::StructureProfile::default());
+        profile
+    }
+
+    #[test]
+    fn display_text_is_the_edge_label_only_where_structure_is_declared() {
+        let body = "# Notes\n\nSee [[atlas|the atlas]] and [[atlas#Maps|its maps]].\n";
+        let plain = extract(body, "", &vault()).links;
+        assert_eq!(
+            plain.iter().map(props_of).collect::<Vec<_>>(),
+            vec![
+                vec![("section", "Notes")],
+                vec![("section", "Notes"), ("anchor", "Maps")],
+            ],
+            "without `structure:` the display text is dropped, as it always was"
+        );
+        let structured = extract(body, "", &structured_vault()).links;
+        assert_eq!(
+            structured.iter().map(props_of).collect::<Vec<_>>(),
+            vec![
+                vec![("section", "Notes"), ("label", "the atlas")],
+                vec![
+                    ("section", "Notes"),
+                    ("anchor", "Maps"),
+                    ("label", "its maps")
+                ],
+            ]
+        );
+        // A markdown link's text is prose around a path, not a display name.
+        let markdown = extract("[the atlas](atlas.md)\n", "", &structured_vault()).links;
+        assert_eq!(
+            markdown.iter().map(props_of).collect::<Vec<_>>(),
+            vec![vec![]]
+        );
+    }
+
+    /// Obsidian's `\|` is the pipe a wikilink writes inside a table cell. The
+    /// regex reads the pipe as the separator it is, so the backslash is left
+    /// on the target — and a corpus of tables resolved to notes named `Usage\`.
+    #[test]
+    fn an_escaped_pipe_in_a_table_cell_names_the_note_and_keeps_its_text() {
+        let body = "| topic | guide |\n|---|---|\n| chunking | [[Usage\\|the guide]] |\n";
+        let got = extract(body, "", &structured_vault()).links;
+        assert_eq!(
+            got.iter()
+                .map(|l| (l.target.as_str(), props_of(l)))
+                .collect::<Vec<_>>(),
+            vec![("Usage", vec![("label", "the guide")])]
+        );
+        // The same escape wherever a wikilink is read, including an anchored
+        // one and the frontmatter typed-edge rule (VAULT.md §4.3).
+        let anchored = extract(
+            "| a | [[Usage#Sub\\|text]] |\n|---|---|\n| b | c |\n",
+            "",
+            &vault(),
+        )
+        .links;
+        assert_eq!(
+            anchored
+                .iter()
+                .map(|l| (l.target.as_str(), props_of(l)))
+                .collect::<Vec<_>>(),
+            vec![("Usage", vec![("anchor", "Sub")])]
+        );
+        assert_eq!(
+            wikilink_targets(&Value::String("[[Usage\\|the guide]]".to_string())),
+            Some(vec!["Usage".to_string()])
+        );
     }
 }

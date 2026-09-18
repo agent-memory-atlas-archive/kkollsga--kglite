@@ -30,14 +30,14 @@ pub(super) struct Ctx<'a> {
 
 /// Where a block sits: the section node it belongs to (when there is one) and
 /// that section's path and title, which every derived node carries.
-struct Place {
-    section: Option<String>,
-    heading_path: Vec<String>,
-    section_title: Option<String>,
+pub(super) struct Place {
+    pub section: Option<String>,
+    pub heading_path: Vec<String>,
+    pub section_title: Option<String>,
 }
 
 impl Ctx<'_> {
-    fn place(&self, block: &Block) -> Place {
+    pub(super) fn place(&self, block: &Block) -> Place {
         Place {
             section: self
                 .sections
@@ -53,7 +53,7 @@ impl Ctx<'_> {
 
 /// `<n>` for the next node of one kind under `parent`, counting from 1
 /// (VAULT.md §7.1). `ordinal` is `n - 1`.
-fn bump(counters: &mut BTreeMap<String, usize>, parent: &str) -> usize {
+pub(super) fn bump(counters: &mut BTreeMap<String, usize>, parent: &str) -> usize {
     let count = counters.entry(parent.to_string()).or_insert(0);
     *count += 1;
     *count
@@ -63,7 +63,7 @@ fn bump(counters: &mut BTreeMap<String, usize>, parent: &str) -> usize {
 ///
 /// A duplicate is only reachable through a `^block-id` that already named
 /// something, so the message points at the same fix the section one does.
-fn claim(ids: &mut IdSpace, wanted: String, out: &mut Derived) -> String {
+pub(super) fn claim(ids: &mut IdSpace, wanted: String, out: &mut Derived) -> String {
     let (suffix, duplicate) = ids.claim(&wanted);
     if duplicate {
         out.warnings.push(format!(
