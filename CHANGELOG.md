@@ -40,6 +40,21 @@ before upgrading.
   `[[wikilinks]]` with `[markdown](links)` used to report every markdown one
   first, which decided an attachment edge's `ordinal`; the order now follows
   the prose, so re-wrapping a paragraph cannot renumber it.
+- `examples/html_to_vault.py` now emits the constructs the `VAULT.md` §13
+  modelling guide asks for instead of letting the markdown converter flatten
+  them: admonitions become callouts keeping the source's own kind
+  (`versionadded` stays `versionadded`), `<table>` becomes a GFM pipe table
+  with pipes escaped and merged cells flattened, a Sphinx `<dl>` with
+  `<dt id=…>` becomes a heading per symbol, `<pre>` becomes a fence carrying
+  the language its `highlight-…` class names, nested lists indent four spaces,
+  and `--block-ids` turns a `<p id=…>` into a citable ` ^id` block. A wikilink
+  inside a table cell keeps its target and drops its display text, because the
+  `\|` Obsidian writes there is part of a wikilink target (`VAULT.md` §5.1) and
+  an unescaped `|` would end the cell. New flags:
+  `--admonition-classes`, `--param-heading`, `--procedure-heading`,
+  `--dl-mode`, `--table-header`, `--block-ids`, `--api-label` and
+  `--emit-structure`, which writes the matching `structure:` block into the
+  generated `.kglite/vault.yaml`.
 
 ## [0.17.8] - 2026-09-18
 ### Added

@@ -20,6 +20,37 @@ files copied into the vault; and a ``.kglite/vault.yaml`` declaring the label,
 the folder-note edge, the hubs, the heading map and the indexes and embed
 targets you name.
 
+It also emits the constructs ``VAULT.md`` §13 asks for, because HTML a markdown
+converter flattens arrives in the graph as nothing (§13.2):
+
+* an admonition — ``class="admonition note"``, ``class="note tip note_tip"``,
+  ``class="versionadded"`` — becomes an Obsidian callout, keeping the source's
+  own word for the kind rather than folding it into ``note`` (§5.7);
+* a ``<table>`` becomes a **GFM** pipe table, and one under a heading matching
+  ``--param-heading`` has its first column renamed ``name`` so a
+  ``tables: {under_heading: Parameters, key_column: name}`` rule keys its rows;
+* a ``<dl>`` whose ``<dt>`` ids name their own terms — the Sphinx API shape —
+  becomes a heading per symbol, so ``key_from_heading:`` can relabel it; any
+  other ``<dl>``, including one whose ids are a generator's own anchors,
+  becomes ``**term**`` paragraphs;
+* a ``<pre>`` becomes a fenced block carrying the language its
+  ``highlight-<lang>`` / ``language-<lang>`` class names;
+* with ``--block-ids``, a ``<p id=...>`` gains the trailing `` ^id`` that makes
+  it a citable passage (§5.7, §13.1);
+* nested lists keep their nesting, indented four spaces per level.
+
+Two losses are deliberate and worth knowing. A **merged cell** is flattened: a
+``colspan`` writes its value once and leaves the cells it spanned empty, and a
+``rowspan`` writes its value in its first row only — GFM has no merge, so the
+shape survives and the span does not. And a **nested table** inside a cell is
+reduced to its text, because a pipe table cannot contain one.
+
+``--emit-structure`` adds the matching ``structure:`` block to the generated
+``.kglite/vault.yaml``. It is off by default because ``structure:`` is a hard
+compatibility boundary: a kglite that does not know the key fails the build with
+an unknown-key error (§7.1), so the block is written only when you are running a
+kglite that reads it.
+
 The TOC file is JSON -- ``{"label": ..., "href": ..., "children": [...]}`` --
 where ``href`` names an HTML file (leading directories ignored) and a node
 without one is a grouping folder with no note of its own. The root's own label
@@ -47,7 +78,7 @@ import time
 from typing import Any, Iterator
 
 from bs4 import BeautifulSoup, NavigableString
-from markdownify import markdownify
+from markdownify import MarkdownConverter
 
 # `<meta name=…>` tags describing the generator rather than the document. Names
 # are lowercased and whitespace-normalised first, and the Dublin Core namespace
@@ -93,6 +124,127 @@ _YAML_INDICATORS = "-?:,[]{}#&*!|>'\"%@`"
 _YAML_BOOLISH = frozenset("true false yes no on off y n null".split())
 _DATEISH = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}.*)?$")
 _UNSAFE_NAME = re.compile(r"[<>:\"/\\|?*\x00-\x1f‘’“”]")
+
+# Classes that mark an element as an admonition. Sphinx writes
+# `<div class="admonition note">` and `<div class="versionadded">`; DITA writes
+# `<div class="note tip note_tip">`. Extend the list with `--admonition-classes`.
+ADMONITION_CLASSES = "admonition,note,warning,tip,important,caution,seealso,versionadded,versionchanged,deprecated"
+# `admonition` names the box and `note` is what a source calls one it has no
+# better word for, so either loses to a class that says which kind it is.
+GENERIC_ADMONITION = frozenset({"admonition", "note"})
+# Where an admonition keeps its title: Sphinx, DITA, and DITA's older spelling.
+ADMONITION_TITLE = ".admonition-title, .note__title, .notetitle"
+# `highlight-python` sits on the wrapper div Sphinx emits; `language-python` on
+# the `<code>` a GFM-flavoured generator emits.
+CODE_LANGUAGE = re.compile(r"^(?:highlight|language)-([\w+#.-]+)$")
+HEADING = re.compile(r"^h[1-6]$")
+# A block id is Latin letters, digits and dashes only (VAULT.md §5.7), so
+# `<p id="para_1">` names the block `^para-1` and not `^para_1`, which is text.
+_BLOCK_ID_JUNK = re.compile(r"[^A-Za-z0-9-]+")
+_LIST_BULLET = re.compile(r"(?:[-*+]|\d+\.) +")
+# A wikilink's display text inside a table cell. The cell's `|` separators are
+# escaped `\|`, which is what Obsidian's own help writes in a table — but
+# VAULT.md §5.1 reads a wikilink target up to the first `|` and never unescapes
+# one, so `[[Usage\|the guide]]` names a note called `Usage\` and the edge
+# dangles. The target is what a link is for, so the cell keeps it and drops the
+# display text, which §5.1 stores only where `structure:` is declared.
+_CELL_WIKILINK = re.compile(r"\[\[([^\[\]|]+)\|[^\[\]]*\]\]")
+# Tags that already stand on their own line, so a `<dd>` holding one needs no
+# paragraph wrapper when it is unwrapped.
+BLOCK_TAGS = ["blockquote", "div", "dl", "h1", "h2", "h3", "h4", "h5", "h6", "ol", "p", "pre", "table", "ul"]
+# Elements an admonition class may sit on.
+ADMONITION_TAGS = ("aside", "blockquote", "div", "p", "section")
+
+# Tags are minted from one scratch document; bs4 moves them into any tree.
+_SOUP = BeautifulSoup("", "html.parser")
+
+
+class VaultMarkdown(MarkdownConverter):
+    """markdownify, with a list item's continuation indented a fixed four spaces.
+
+    markdownify indents by the width of the item's own bullet, so `1.` nests
+    three spaces and `10.` nests four and the indent of a line no longer says
+    how deep it is. Four is a multiple of every bullet width and still short of
+    the indented-code threshold at each level.
+    """
+
+    def convert_li(self, el, text, parent_tags):  # noqa: D102 -- markdownify's own hook
+        item = super().convert_li(el, text, parent_tags)
+        bullet = _LIST_BULLET.match(item)
+        if bullet is None:
+            return item
+        width = bullet.end()
+        first, _, rest = item.partition("\n")
+        lines = [first]
+        for line in rest.split("\n"):
+            indented = line.strip() and not line[:width].strip()
+            lines.append("    " + line[width:] if indented else line)
+        return "\n".join(lines)
+
+
+MD_OPTIONS: dict[str, Any] = {
+    "heading_style": "ATX",
+    "bullets": "-",
+    "code_language": "",
+    # A wikilink is a note's name, not prose: escaping the `_` in
+    # `[[Well_tops]]` spells a note nothing resolves to, and the link silently
+    # becomes a dangling stub.
+    "escape_underscores": False,
+    # markdownify reduces an image inside a heading or a table cell to its alt
+    # text. A help corpus puts its button icons in exactly those two places, and
+    # a converter that drops a picture has lost the picture.
+    "keep_inline_images_in": INLINE_IMAGE_PARENTS,
+}
+
+
+def to_md(html: str) -> str:
+    return VaultMarkdown(**MD_OPTIONS).convert(html)
+
+
+def inner_md(element: Any) -> str:
+    """The element's children as markdown; the element's own tag is not read."""
+    return to_md("".join(str(child) for child in element.contents))
+
+
+def tidy(text: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", text).strip("\n")
+
+
+def term_text(term: Any) -> str:
+    """A `<dt>`'s own words.
+
+    No separator: a signature is spelled in adjacent inline spans, and joining
+    them with a space writes `func ( a, b )`, which the `key_from_heading:`
+    default regex does not match.
+    """
+    return re.sub(r"\s+", " ", term.get_text()).strip()
+
+
+def qualified_name(term: Any) -> str:
+    """The dotted name a `<dt>`'s id gives its text, or "" when it names something else.
+
+    Sphinx writes `<dt id="pkg.mod.func">func(a, b)</dt>`, so the id is the
+    qualified name and the text carries the signature. Every other generator
+    writes an id of its own devising — DITA's `GUID-…__DLENTRY_…` — and reading
+    one as the heading would replace the term with an anchor, which is what a
+    definition list is *for*. So the id is used only when it ends in the term's
+    own leading name.
+    """
+    identifier = (term.get("id") or "").strip()
+    name = term_text(term)
+    head = name.split("(")[0].strip()
+    if not identifier or not head or not (identifier == head or identifier.endswith(f".{head}")):
+        return ""
+    opened, closed = name.find("("), name.rfind(")")
+    return identifier + (name[opened : closed + 1] if 0 <= opened < closed else "")
+
+
+def previous_heading(element: Any, content: Any) -> Any:
+    """The heading a block sits under, or None when it sits above all of them."""
+    found = element.find_previous(HEADING)
+    if found is None or not (found is content or content in found.parents):
+        return None
+    return found
 
 
 @dataclass(frozen=True)
@@ -361,22 +513,301 @@ def collect_images(page: Page, images_root: Path | None, report: Report) -> list
     return copies
 
 
-def to_markdown(page: Page, related: list[str]) -> str:
-    body = markdownify(
-        str(page.content),
-        heading_style="ATX",
-        bullets="-",
-        code_language="",
-        # A wikilink is a note's name, not prose: escaping the `_` in
-        # `[[Well_tops]]` spells a note nothing resolves to, and the link
-        # silently becomes a dangling stub.
-        escape_underscores=False,
-        # markdownify reduces an image inside a heading or a table cell to its
-        # alt text. A help corpus puts its button icons in exactly those two
-        # places, and a converter that drops a picture has lost the picture.
-        keep_inline_images_in=INLINE_IMAGE_PARENTS,
-    ).strip()
-    body = re.sub(r"\n{3,}", "\n\n", body)
+@dataclass(frozen=True)
+class BodyRules:
+    """What the body transform reads off the command line."""
+
+    admonition_classes: frozenset[str]
+    param_heading: re.Pattern
+    procedure_heading: re.Pattern
+    dl_mode: str
+    block_ids: bool
+    table_header: str
+
+
+class Body:
+    """One page's body on its way to markdown.
+
+    HTML the markdown converter would flatten is rendered here instead — a
+    table to GFM, an admonition to a callout, a `<pre>` to a fence carrying its
+    language — and replaced in the DOM by a token that survives the markdown
+    pass untouched. ``expand`` puts the markdown back at the end, indented to
+    the line the token sat on, so a construct inside a list item stays inside
+    it; and because the blank-line tidy runs while the tokens are still in
+    place, it cannot reach inside a fence and close a gap the code meant.
+    """
+
+    def __init__(self, rules: BodyRules, report: Report) -> None:
+        self.rules = rules
+        self.report = report
+        self.blocks: dict[str, str] = {}
+        self.ids: set[str] = set()
+
+    def render(self, content: Any) -> str:
+        """Markdown for the whole body, with every rendered block still a token."""
+        if self.rules.block_ids:
+            self.name_blocks(content)
+        self.rewrite_definition_lists(content)
+        self.rewrite_tables(content)
+        self.rewrite_fences(content)
+        self.rewrite_admonitions(content)
+        # Last: what is left in the DOM is what will be a *top-level* list, and
+        # a list inside a callout is not one (VAULT.md §7.1).
+        self.count_ordered_lists(content)
+        return to_md(str(content)).strip()
+
+    def token(self, markdown: str) -> str:
+        name = f"KGLITEBLOCK{len(self.blocks):04d}X"
+        self.blocks[name] = markdown
+        return name
+
+    def replace(self, element: Any, markdown: str) -> None:
+        holder = _SOUP.new_tag("p")
+        holder.string = self.token(markdown)
+        element.replace_with(holder)
+
+    def expand(self, text: str) -> str:
+        lines: list[str] = []
+        for line in text.split("\n"):
+            block = self.blocks.get(line.strip())
+            if block is None:
+                lines.append(line)
+                continue
+            pad = line[: len(line) - len(line.lstrip())]
+            lines.extend(pad + part if part else "" for part in block.split("\n"))
+        return "\n".join(lines)
+
+    def name_blocks(self, content: Any) -> None:
+        """A `<p id=...>` becomes a citable passage: VAULT.md §5.7's ` ^id`.
+
+        A paragraph inside a table is skipped — the id would land in a cell,
+        where it is text and not a name.
+        """
+        for para in content.find_all("p"):
+            slug = _BLOCK_ID_JUNK.sub("-", (para.get("id") or "").strip()).strip("-")
+            if not slug or para.find_parent("table"):
+                continue
+            candidate, suffix = slug, 1
+            while candidate in self.ids:
+                suffix += 1
+                candidate = f"{slug}-{suffix}"
+            self.ids.add(candidate)
+            para.append(NavigableString(f" ^{candidate}"))
+            self.report.block_ids += 1
+
+    def rewrite_definition_lists(self, content: Any) -> None:
+        """A `<dl>` is prose to the reader (§13.2), so it becomes headings or terms.
+
+        Headings mode is for the Sphinx shape — a `<dt>` whose id is the
+        symbol's qualified name — because a heading is what `key_from_heading:`
+        relabels and what `[[Note#pkg.mod.func(a, b)]]` reaches. Everything else
+        becomes a bold term above its own paragraph.
+
+        `auto` asks whether an id *names its own term*, not merely whether there
+        is one: DITA gives every `<dt>` a generated id, and reading those as
+        symbols turned 275 of the Petrel corpus's GUI labels into headings.
+        """
+        for definitions in content.find_all("dl"):
+            symbols = self.rules.dl_mode == "headings" or (
+                self.rules.dl_mode == "auto"
+                and any(
+                    qualified_name(term) for term in definitions.find_all("dt") if term.find_parent("dl") is definitions
+                )
+            )
+            heading = previous_heading(definitions, content)
+            level = min(6, int(heading.name[1]) + 1) if heading is not None else 2
+            for part in definitions.find_all(["dt", "dd"]):
+                if part.find_parent("dl") is not definitions:
+                    continue  # a nested list's own term, handled when we reach it
+                if part.name == "dt":
+                    self.rewrite_term(part, level, symbols)
+                else:
+                    self.open_definition_body(part, level if symbols else 0)
+            definitions.unwrap()
+
+    def rewrite_term(self, term: Any, level: int, symbols: bool) -> None:
+        name = term_text(term)
+        if not symbols:
+            paragraph, strong = _SOUP.new_tag("p"), _SOUP.new_tag("strong")
+            strong.string = name
+            paragraph.append(strong)
+            term.replace_with(paragraph)
+            self.report.definition_terms += 1
+            return
+        qualified = qualified_name(term)
+        heading = _SOUP.new_tag(f"h{level}")
+        heading.string = qualified or name
+        term.replace_with(heading)
+        self.report.symbol_headings += 1 if qualified else 0
+
+    def open_definition_body(self, body: Any, under: int) -> None:
+        """Unwrap a `<dd>`, demoting the headings it holds to sit below `under`.
+
+        Left at their own level they would *close* the symbol's section instead
+        of nesting in it, and the parameter table would sit under the wrong
+        heading path.
+        """
+        levels = [int(tag.name[1]) for tag in body.find_all(HEADING)]
+        if under and levels:
+            shift = under + 1 - min(levels)
+            for tag in body.find_all(HEADING):
+                tag.name = f"h{min(6, max(1, int(tag.name[1]) + shift))}"
+        if body.find(BLOCK_TAGS, recursive=False) is None:
+            wrapper = _SOUP.new_tag("p")
+            for child in list(body.contents):
+                wrapper.append(child.extract())
+            body.append(wrapper)
+        body.unwrap()
+
+    def rewrite_tables(self, content: Any) -> None:
+        for table in content.find_all("table"):
+            if table.parent is None or table.find_parent("table") is not None:
+                # A nested table left the tree when its cell flattened it, and
+                # a detached element cannot be replaced.
+                continue
+            heading = previous_heading(table, content)
+            title = heading.get_text(" ", strip=True) if heading is not None else ""
+            parameters = bool(self.rules.param_heading.search(title))
+            header, rows = self.table_shape(table)
+            if header is None:
+                table.decompose()
+                continue
+            self.replace(table, self.gfm(header, rows, parameters))
+            self.report.tables += 1
+            self.report.table_rows += len(rows)
+            self.report.param_tables += 1 if parameters else 0
+
+    def table_shape(self, table: Any) -> tuple[list[str] | None, list[list[str]]]:
+        """The header row and the body rows, or ``(None, [])`` for an empty table."""
+        rows: list[tuple[bool, list[str]]] = []
+        for line in table.find_all("tr"):
+            if line.find_parent("table") is not table:
+                continue
+            cells = [cell for cell in line.find_all(["th", "td"]) if cell.find_parent(["th", "td"]) is None]
+            if not cells:
+                continue
+            heading_row = all(cell.name == "th" for cell in cells) or line.find_parent("thead") is not None
+            rows.append((heading_row, [text for cell in cells for text in self.cell_texts(cell)]))
+        if not rows:
+            return None, []
+        if rows[0][0]:
+            return rows[0][1], [cells for _, cells in rows[1:]]
+        if self.rules.table_header == "first-row":
+            return rows[0][1], [cells for _, cells in rows[1:]]
+        # No `<th>` anywhere: promoting the first row would name the columns
+        # after one row's data and lose that row, so the header is left blank
+        # and the count says how many tables need one written at source.
+        self.report.tables_without_header += 1
+        return [""] * max(len(cells) for _, cells in rows), [cells for _, cells in rows]
+
+    def cell_texts(self, cell: Any) -> list[str]:
+        """One cell's markdown, plus an empty cell for each column it spans.
+
+        A row is one line, so every newline a cell would carry — a `<br>`, a
+        second `<p>`, a list — is collapsed to a space, and a nested table to
+        its text, because a pipe table cannot hold one.
+        """
+        for nested in cell.find_all("table"):
+            nested.replace_with(NavigableString(nested.get_text(" ", strip=True)))
+        text = re.sub(r"\s+", " ", inner_md(cell)).strip()
+        text, aliases = _CELL_WIKILINK.subn(r"[[\1]]", text)
+        self.report.cell_link_aliases += aliases
+        text = text.replace("|", "\\|")
+        span = cell.get("colspan", "1")
+        return [text] + [""] * (int(span) - 1 if str(span).isdigit() else 0)
+
+    def gfm(self, header: list[str], rows: list[list[str]], parameters: bool) -> str:
+        width = max(len(line) for line in [header, *rows])
+        if parameters and header:
+            # `tables: {under_heading: Parameters, key_column: name}` keys each
+            # row on this column (VAULT.md §7.1), whatever the source called it.
+            header = ["name" if index == 0 else cell for index, cell in enumerate(header)]
+
+        def line(cells: list[str]) -> str:
+            return "| " + " | ".join(cells + [""] * (width - len(cells))) + " |"
+
+        return "\n".join([line(header), line(["---"] * width), *(line(cells) for cells in rows)])
+
+    def rewrite_fences(self, content: Any) -> None:
+        for block in content.find_all("pre"):
+            language = self.fence_language(block)
+            code = block.get_text().strip("\n")
+            runs = [len(run) for run in re.findall(r"`+", code)]
+            ticks = "`" * max(3, max(runs, default=0) + 1)
+            self.replace(block, f"{ticks}{language}\n{code}\n{ticks}")
+            self.report.fences[language or "(none)"] += 1
+
+    def fence_language(self, block: Any) -> str:
+        """`<div class="highlight-python"><div class="highlight"><pre>` is Sphinx's
+        shape, so the class is looked for on the block, its wrappers and its code."""
+        holders = [block, *list(block.parents)[:2], *block.find_all("code", limit=1)]
+        for holder in holders:
+            for name in holder.get("class", None) or []:
+                found = CODE_LANGUAGE.match(name)
+                if found:
+                    return found.group(1)
+        return ""
+
+    def is_admonition(self, element: Any) -> bool:
+        if getattr(element, "name", None) not in ADMONITION_TAGS:
+            return False
+        classes = {name.lower() for name in element.get("class", None) or []}
+        return bool(classes & self.rules.admonition_classes)
+
+    def rewrite_admonitions(self, content: Any) -> None:
+        """Innermost first, so a callout inside a callout is already `> ` lines
+        when the outer one prefixes its body and Obsidian's nesting falls out."""
+        while True:
+            pending = [el for el in content.find_all(self.is_admonition) if el.find(self.is_admonition) is None]
+            if not pending:
+                return
+            for element in pending:
+                self.replace(element, self.callout(element))
+
+    def callout(self, element: Any) -> str:
+        kind = self.callout_kind(element)
+        title = ""
+        marked = element.select_one(ADMONITION_TITLE)
+        if marked is not None:
+            title = re.sub(r"\s+", " ", marked.get_text(" ", strip=True)).strip().rstrip(":")
+            marked.decompose()
+            if title.lower() in GENERIC_ADMONITION | {kind}:
+                title = ""  # Obsidian displays the type; a title repeating it says nothing
+        # DITA writes the title inline — `<span class="note__title">Tip:</span>
+        # text` — so removing it leaves the space that followed it.
+        body = self.expand(tidy(inner_md(element))).lstrip(" \t")
+        marker = f"> [!{kind}] {title}" if title else f"> [!{kind}]"
+        self.report.callouts[kind] += 1
+        if not body:
+            return marker
+        return "\n".join([marker, *(f"> {line}".rstrip() for line in body.split("\n"))])
+
+    def callout_kind(self, element: Any) -> str:
+        """The source's own word for the kind, which VAULT.md §5.7 keeps verbatim."""
+        classes = [name.lower() for name in element.get("class", None) or []]
+        named = [name for name in classes if name in self.rules.admonition_classes]
+        specific = [name for name in named if name not in GENERIC_ADMONITION]
+        if specific:
+            return specific[0]
+        return "note" if "note" in named or not named else named[0].replace("admonition", "note")
+
+    def count_ordered_lists(self, content: Any) -> None:
+        """Census only: `ordered_lists:` reads every top-level list of two or more
+        items, and the count under a `--procedure-heading` says whether narrowing
+        the rule with `under_heading:` would be worth declaring."""
+        for listing in content.find_all("ol"):
+            if listing.find_parent("li") is not None or len(listing.find_all("li", recursive=False)) < 2:
+                continue
+            self.report.ordered_lists += 1
+            heading = previous_heading(listing, content)
+            title = heading.get_text(" ", strip=True) if heading is not None else ""
+            if self.rules.procedure_heading.search(title):
+                self.report.procedure_lists += 1
+
+
+def to_markdown(page: Page, related: list[str], rules: BodyRules, report: Report) -> str:
+    writer = Body(rules, report)
+    body = writer.expand(tidy(writer.render(page.content)))
     if related:
         links = "\n".join(f"- [[{name}]]" for name in related)
         body = f"{body}\n\n## Related topics\n\n{links}" if body else f"## Related topics\n\n{links}"
@@ -438,7 +869,62 @@ def yaml_block(data: dict[str, Any], indent: int = 0) -> str:
     return "\n".join(lines)
 
 
-def vault_yaml(args: argparse.Namespace) -> str:
+def structure_yaml(args: argparse.Namespace, report: Report) -> str:
+    """The `structure:` block for what this run actually emitted (VAULT.md §7.1).
+
+    A rule that matched nothing is the §13.4 warning the author is told to look
+    for, so a rule is declared only when the corpus carries the construct it
+    reads: no `callouts:` where the source had no admonitions, no `tables:`
+    where no table sat under a parameter heading.
+    """
+    if not args.emit_structure or not report.structured():
+        return ""
+    block: dict[str, Any] = {
+        "sections": {"label": "Section", "edge": "HAS_SECTION", "parent": "PARENT_SECTION", "next": "NEXT_SECTION"},
+        "chunks": {"label": "Chunk", "edge": "HAS_CHUNK", "next": "NEXT_CHUNK", "max_words": 650, "max_chars": 6000},
+    }
+    if report.callouts:
+        block["callouts"] = {"label": "Note", "edge": "HAS_NOTE"}
+    if report.fences:
+        # No `langs:` filter: a fence the source left unlabelled is still an
+        # example, and naming languages here would drop it (VAULT.md §13.2).
+        block["code_fences"] = {"label": "Example", "edge": "HAS_EXAMPLE"}
+    if report.ordered_lists:
+        block["ordered_lists"] = {
+            "label": "ProcedureStep",
+            "container": "Procedure",
+            "edge": "HAS_STEP",
+            "next": "NEXT_STEP",
+        }
+    if report.param_tables:
+        block["tables"] = [
+            {
+                "under_heading": args.param_heading.pattern,
+                "label": "ApiParameter",
+                "key_column": "name",
+                "edge": "HAS_PARAMETER",
+            }
+        ]
+    if report.symbol_headings and args.api_label:
+        # `under_label:` is one of the rule's two required gates, so without
+        # `--api-label` there is no rule to declare (VAULT.md §7.1).
+        block["key_from_heading"] = {
+            "label": "ApiSymbol",
+            "property": "qualified_name",
+            "under_label": args.api_label,
+        }
+    lines = ["structure:"]
+    for key in sorted(block):
+        value = block[key]
+        if isinstance(value, list):
+            lines.append(f"  {key}:")
+            lines.extend(f"  - {yaml_item(entry)}" for entry in value)
+        else:
+            lines.append(f"  {key}: {yaml_item(value)}")
+    return "\n".join(lines) + "\n"
+
+
+def vault_yaml(args: argparse.Namespace, report: Report) -> str:
     doc: dict[str, Any] = {
         "kglite_vault": 1,
         "default_label": args.default_label,
@@ -468,7 +954,7 @@ def vault_yaml(args: argparse.Namespace) -> str:
     for key, value in (("hubs", hubs), ("indexes", dict(indexes)), ("embed", embed)):
         if value:
             doc[key] = value
-    return yaml_block(doc) + "\n"
+    return yaml_block(doc) + "\n" + structure_yaml(args, report)
 
 
 class Report:
@@ -479,7 +965,18 @@ class Report:
         self.missing_images: set[str] = set()
         self.unplaceable_images: list[str] = []
         self.other_image_types: defaultdict[str, int] = defaultdict(int)
+        self.tables = self.table_rows = self.tables_without_header = self.param_tables = 0
+        self.ordered_lists = self.procedure_lists = self.block_ids = self.cell_link_aliases = 0
+        self.symbol_headings = self.definition_terms = 0
+        self.callouts: defaultdict[str, int] = defaultdict(int)
+        self.fences: defaultdict[str, int] = defaultdict(int)
         self.seconds = 0.0
+
+    def structured(self) -> bool:
+        """Whether the run produced anything a `structure:` block would read."""
+        return bool(
+            self.callouts or self.fences or self.tables or self.ordered_lists or self.symbol_headings or self.block_ids
+        )
 
     def render(self) -> str:
         counted = [
@@ -490,9 +987,24 @@ class Report:
             ("missing image originals", len(self.missing_images)),
             ("unplaceable image refs", len(self.unplaceable_images)),
             ("unresolved internal links", self.unresolved_links),
+            ("callouts", sum(self.callouts.values())),
+            ("GFM tables", self.tables),
+            ("GFM table rows", self.table_rows),
+            ("tables with no header", self.tables_without_header),
+            ("cell link aliases dropped", self.cell_link_aliases),
+            ("parameter tables", self.param_tables),
+            ("ordered lists", self.ordered_lists),
+            ("under a procedure heading", self.procedure_lists),
+            ("fenced code blocks", sum(self.fences.values())),
+            ("symbol headings", self.symbol_headings),
+            ("definition terms", self.definition_terms),
+            ("block ids", self.block_ids),
         ]
         lines = [f"{label + ':':<27}{value}" for label, value in counted]
         lines.append(f"{'elapsed:':<27}{self.seconds:.1f}s")
+        for what, census in (("callouts by kind", self.callouts), ("fences by language", self.fences)):
+            if census:
+                lines.append(f"{what}: " + ", ".join(f"{k} x{n}" for k, n in sorted(census.items())))
         if self.other_image_types:
             kinds = ", ".join(f"{ext} x{n}" for ext, n in sorted(self.other_image_types.items()))
             lines.append(f"non-deliverable image types: {kinds} -- convert these at source (VAULT.md 6)")
@@ -519,11 +1031,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--hub", action="append", default=[], metavar="KEY=Label:EDGE[:ci]")
     p.add_argument("--index", action="append", default=[], metavar="Label.property[:range]")
     p.add_argument("--embed", action="append", default=[], metavar="Label.property")
+    p.add_argument("--admonition-classes", default=ADMONITION_CLASSES, metavar="LIST", help="comma list of classes")
+    p.add_argument("--param-heading", default=r"^(Parameters|Arguments|Fields)$", metavar="REGEX")
+    p.add_argument("--procedure-heading", default=r"^(Steps|Procedure|To .*)", metavar="REGEX")
+    p.add_argument("--dl-mode", choices=("headings", "terms", "auto"), default="auto", help="how a <dl> is written")
+    p.add_argument("--table-header", choices=("th", "first-row"), default="th", help="where a header comes from")
+    p.add_argument("--block-ids", action="store_true", help="a <p id=...> gets the trailing ` ^id` that cites it")
+    p.add_argument("--api-label", metavar="LABEL", help="under_label: for the key_from_heading rule")
+    p.add_argument("--emit-structure", action="store_true", help="write structure: into the generated vault.yaml")
     p.add_argument("--no-validate", action="store_true", help="skip the closing okf.validate pass")
     p.add_argument("--dry-run", action="store_true", help="scan and report; write nothing")
     args = p.parse_args(argv)
     args.id_from = [s.strip() for s in args.id_from.split(",") if s.strip()]
     args.id_pattern = re.compile(args.id_pattern) if args.id_pattern else None
+    args.param_heading = re.compile(args.param_heading)
+    args.procedure_heading = re.compile(args.procedure_heading)
+    args.rules = BodyRules(
+        admonition_classes=frozenset(c.strip().lower() for c in args.admonition_classes.split(",") if c.strip()),
+        param_heading=args.param_heading,
+        procedure_heading=args.procedure_heading,
+        dl_mode=args.dl_mode,
+        block_ids=args.block_ids,
+        table_header=args.table_header,
+    )
     # A hub reads a key's *list* entries and a scalar joins no hub (VAULT.md §7),
     # so a key the caller declared a hub for is written as a sequence even when
     # the source spells it as one value.
@@ -531,7 +1061,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def write_note(note: Page, out_root: Path, related: list[str]) -> None:
+def write_note(note: Page, out_root: Path, related: list[str], rules: BodyRules, report: Report) -> None:
     front: dict[str, Any] = dict(note.meta)
     if note.explicit_id:
         front["id"] = note.doc_id
@@ -541,7 +1071,7 @@ def write_note(note: Page, out_root: Path, related: list[str]) -> None:
         front["parent"] = [f"[[{name}]]" for name in note.parents]
     if note.toc_depth is not None:
         front["toc_depth"] = note.toc_depth
-    body = to_markdown(note, related)
+    body = to_markdown(note, related, rules, report)
     destination = out_root / note.out_path
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(f"---\n{yaml_block(front)}\n---\n\n{body}" if front else body, encoding="utf-8")
@@ -599,7 +1129,7 @@ def write_vault(
             copies[rel] = origin
         self_link = link_target(note, ambiguous)
         related = {link_target(notes_by_file[f], ambiguous) for f in note.related_files if f in notes_by_file}
-        write_note(note, out_root, sorted(related - {self_link}))
+        write_note(note, out_root, sorted(related - {self_link}), args.rules, report)
         report.notes += 1
     for rel, origin in sorted(copies.items()):
         destination = out_root / rel
@@ -608,7 +1138,7 @@ def write_vault(
         report.images += 1
     config = out_root / ".kglite"
     config.mkdir(exist_ok=True)
-    (config / "vault.yaml").write_text(vault_yaml(args), encoding="utf-8")
+    (config / "vault.yaml").write_text(vault_yaml(args, report), encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="id" content="structure-001">
+<meta name="description" content="Every construct a structure profile reads.">
+<title>Structure</title></head>
+<body id="page-structure">
+<h1>Structure</h1>
+<p id="para_1">A widget writes its state to disk on every stop.</p>
+<div class="admonition note"><p class="admonition-title">Check the datum</p><p>Depth values are metres below MSL.</p></div>
+<div class="versionadded"><p><span class="versionmodified">Added in version 2.1:</span> the second widget slot.</p></div>
+<div class="admonition warning"><p class="admonition-title">Mind the gap</p><p>Stopping mid-write leaves a partial file.</p>
+<div class="note tip note_tip"><span class="note__title">Tip:</span> Wait for the light.</div></div>
+<h2>Steps</h2>
+<ol>
+<li>Open the panel.
+<ol><li>Select the <b>Slots</b> tab.</li><li>Confirm the change.</li></ol>
+</li>
+<li>Press the button.</li>
+</ol>
+<h2>Limits</h2>
+<table>
+<tr><th>Setting</th><th>Default</th><th>Notes</th></tr>
+<tr><td>slots</td><td>4</td><td>per machine<br>and per slot</td></tr>
+<tr><td colspan="2">reserved</td><td>ignored | for now</td></tr>
+<tr><td>nested</td><td>0</td><td><table><tr><td>inner a</td><td>inner b</td></tr></table></td></tr>
+<tr><td><a href="usage.html">the usage guide</a></td><td>-</td><td>see also</td></tr>
+</table>
+<h2>Example</h2>
+<div class="highlight-python"><div class="highlight"><pre><code>widget = Widget()
+widget.start()</code></pre></div></div>
+</body></html>
