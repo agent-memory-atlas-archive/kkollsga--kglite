@@ -1110,6 +1110,69 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (p:Person {name:'Person_1'}) WITH * MATCH (p)-[:KNOWS]->(q) RETURN q.name AS n ORDER BY n",
         None,
     ),
+    # ── `*` beside other projection items ──
+    # A mixed `WITH *, expr AS b` kept the `*` as a literal item — a column
+    # named `*` holding a constant — and dropped every value-carrying name in
+    # scope. Both plan profiles agreed on the wrong answer, so these pin the
+    # pass interaction; the absolute answers are the executor's
+    # `star_projection` goldens and test_cypher_with_boundary.py. Several
+    # WITH-boundary passes inspect items for `Expression::Star` to decide what
+    # a projection keeps, so their reading has to match the expansion.
+    (
+        "mixed_star_with_alias",
+        "social_graph",
+        "UNWIND [1] AS a WITH *, a + 1 AS b RETURN a, b",
+        None,
+    ),
+    (
+        "mixed_star_return_alias",
+        "social_graph",
+        "UNWIND [1] AS a RETURN *, a + 1 AS b",
+        None,
+    ),
+    (
+        "mixed_star_explicit_wins",
+        "social_graph",
+        "UNWIND [1] AS a WITH *, a + 1 AS a RETURN a",
+        None,
+    ),
+    (
+        "mixed_star_after_aggregate",
+        "social_graph",
+        "MATCH (p:Person) WITH count(*) AS c WITH *, c + 1 AS d RETURN c, d",
+        None,
+    ),
+    (
+        "mixed_star_group_by_scope",
+        "social_graph",
+        "MATCH (p:Person) WITH *, count(*) AS c RETURN p.name AS n, c ORDER BY n",
+        None,
+    ),
+    (
+        "mixed_star_distinct",
+        "social_graph",
+        "MATCH (p:Person) WITH DISTINCT *, 1 AS k RETURN count(*) AS c",
+        None,
+    ),
+    (
+        "mixed_star_keeps_bindings",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH *, 1 AS k MATCH (p)-[:KNOWS]->(q) RETURN q.name AS n ORDER BY n",
+        None,
+    ),
+    (
+        "mixed_star_order_by_alias",
+        "social_graph",
+        "MATCH (p:Person) WITH *, p.age AS a ORDER BY a DESC LIMIT 3 RETURN p.name AS n, a",
+        None,
+    ),
+    (
+        # The sole-`*` spellings, as the control the expansion must not move.
+        "sole_star_projection",
+        "social_graph",
+        "UNWIND [1] AS a WITH * RETURN *",
+        None,
+    ),
     # ── fold_aliasing_with / hoist_terminal_return_over_with_top_k ──
     # An aliasing WITH is not a pass-through, so the existing fold declines it
     # and the top-k fusion window never forms. These two passes substitute the

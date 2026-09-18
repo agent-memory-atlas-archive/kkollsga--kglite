@@ -286,3 +286,74 @@ def test_writes_behind_a_with_act_on_the_rebound_node() -> None:
         {"i": "w"}
     ]
     assert graph.cypher("MATCH (n:N) RETURN count(*) AS c").to_list() == [{"c": 2}]
+
+
+# ── `*` beside other projection items ────────────────────────────────
+
+
+def test_a_mixed_star_carries_the_scalar_names_in_scope(boundary_graph) -> None:
+    """`WITH *, expr AS b` kept `*` as a literal item and dropped the scope.
+
+    The `*` expanded only when it was the clause's sole unaliased item.
+    Written beside anything else it was projected like an ordinary
+    expression: a column literally named `*` holding the `1` that exists for
+    `count(*)`, with every value-carrying name in scope gone.
+    """
+    for rows in both_profiles(boundary_graph, "UNWIND [1] AS a WITH *, a + 1 AS b RETURN a, b"):
+        assert rows == [{"a": 1, "b": 2}]
+    for rows in both_profiles(boundary_graph, "MATCH (p:P) WITH count(*) AS c WITH *, c + 1 AS d RETURN c, d"):
+        assert rows == [{"c": 5, "d": 6}]
+
+
+def test_a_mixed_star_never_reaches_the_output_as_a_column(boundary_graph) -> None:
+    """No result column is ever literally named `*`."""
+    for rows in both_profiles(boundary_graph, "UNWIND [1] AS a RETURN *, a + 1 AS b"):
+        assert [list(row) for row in rows] == [["a", "b"]]
+        assert rows == [{"a": 1, "b": 2}]
+    for rows in both_profiles(boundary_graph, "UNWIND [1] AS a WITH *, a + 1 AS b RETURN *"):
+        assert rows == [{"a": 1, "b": 2}]
+
+
+def test_an_explicit_item_wins_over_the_name_the_star_would_carry(boundary_graph) -> None:
+    """The de-duplication rule: `*` stands for the names you did not write.
+
+    An explicit item keeps its position, name and value; the `*` expands to
+    the rest of the scope. So a name both would project appears once, with
+    the explicit item's value — never as two columns of the same name, which
+    the parser rejects when both are written out.
+    """
+    for rows in both_profiles(boundary_graph, "UNWIND [1] AS a WITH *, a AS a RETURN a"):
+        assert rows == [{"a": 1}]
+    for rows in both_profiles(boundary_graph, "UNWIND [1] AS a RETURN *, a + 1 AS a"):
+        assert [list(row) for row in rows] == [["a"]]
+        assert rows == [{"a": 2}]
+
+
+def test_a_star_beside_an_aggregate_groups_by_the_scope(boundary_graph) -> None:
+    """`WITH *, count(*)` grouped by the constant the `*` evaluated to.
+
+    One group for the whole input instead of one per row-scope — a silent
+    fold of five rows into one.
+    """
+    query = "MATCH (p:P) WITH *, count(*) AS c RETURN p.title AS t, c ORDER BY t"
+    for rows in both_profiles(boundary_graph, query):
+        assert rows == [{"t": letter, "c": 1} for letter in ["a", "b", "c", "d", "e"]]
+
+
+def test_a_mixed_star_distinct_deduplicates_on_the_scope(boundary_graph) -> None:
+    """DISTINCT over a mixed `*` saw identical `{*: 1, k: 1}` rows and kept one."""
+    for rows in both_profiles(boundary_graph, "MATCH (p:P) WITH DISTINCT *, 1 AS k RETURN count(*) AS c"):
+        assert rows == [{"c": 5}]
+
+
+def test_a_star_carries_the_path_variable_too(boundary_graph) -> None:
+    """`*` is every name in scope, and a path variable is one of them."""
+    for rows in both_profiles(boundary_graph, "MATCH q = (a:P {title:'a'})-[:K]->(b) RETURN * ORDER BY b.title"):
+        assert [list(row) for row in rows] == [["a", "b", "q"], ["a", "b", "q"]]
+
+
+def test_a_mixed_star_keeps_every_binding_in_scope(boundary_graph) -> None:
+    """`WITH *` carries the whole incoming scope, extra items or not."""
+    query = "MATCH (p:P {title:'a'}) WITH *, 1 AS k MATCH (p)-[:K]->(q) RETURN q.title AS t ORDER BY t"
+    for rows in both_profiles(boundary_graph, query):
+        assert rows == [{"t": "b"}, {"t": "c"}]

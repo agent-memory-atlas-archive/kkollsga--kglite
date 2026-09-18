@@ -15,6 +15,8 @@
 //! - [`score_fuse`] — the retrieval-fusion scalar: absent lanes, weights, fold
 //! - [`semantics`] — absolute goldens for expression semantics (duplicate
 //!   result columns, `datetime()` time/zone, integer overflow and div-by-zero)
+//! - [`star_projection`] — `*` written beside other projection items:
+//!   which names it stands for, and which explicit item wins a collision
 //! - [`strings`] — string functions and procedure list arguments
 //! - [`text_bm25`] — the BM25 scalar's null/zero split, freshness policy, cache
 //! - [`vector_score`] — the embedding-store scalar's per-query argument cache
@@ -50,6 +52,7 @@ mod parallel;
 mod score_fuse;
 mod self_loops;
 mod semantics;
+mod star_projection;
 mod strings;
 mod text_bm25;
 mod vector_score;
