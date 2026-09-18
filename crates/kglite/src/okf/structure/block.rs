@@ -197,8 +197,56 @@ fn block_id_re() -> &'static Regex {
 pub(crate) fn parse_blocks(body: &str) -> BlockTree {
     let mut tree = Walker::default().run(body);
     tree.comments = scan_comments(body, &tree.blocks);
+    drop_commented_headings(&mut tree, body.len());
     tree.block_ids = scan_block_ids(body, &tree.blocks);
     tree
+}
+
+/// Drop the headings a `%%comment%%` hides, and rebuild what was derived from
+/// them.
+///
+/// VAULT.md §5.7: nothing is read out of a comment — a heading included — but
+/// CommonMark knows nothing of `%%`, so the parser reports the `# Hidden` in
+/// `%%\n# Hidden\n%%` as an ordinary heading, and it would then title the note
+/// and name a section. Paths, section extents and each block's heading are all
+/// derived from the heading *sequence*, so they are recomputed against the
+/// filtered one rather than patched.
+fn drop_commented_headings(tree: &mut BlockTree, body_len: usize) {
+    let comments = std::mem::take(&mut tree.comments);
+    let hidden = |h: &Heading| {
+        comments
+            .iter()
+            .any(|c| c.start <= h.range.start && h.range.end <= c.end)
+    };
+    if tree.headings.iter().any(&hidden) {
+        let mut kept: Vec<Heading> = Vec::with_capacity(tree.headings.len());
+        let mut stack: Vec<(u8, usize)> = Vec::new();
+        for mut heading in std::mem::take(&mut tree.headings) {
+            if hidden(&heading) {
+                continue;
+            }
+            while let Some(&(level, index)) = stack.last() {
+                if level < heading.level {
+                    break;
+                }
+                kept[index].body_range.end = heading.range.start;
+                stack.pop();
+            }
+            heading.path = stack.iter().map(|&(_, i)| kept[i].text.clone()).collect();
+            heading.path.push(heading.text.clone());
+            heading.body_range = heading.range.end..body_len;
+            stack.push((heading.level, kept.len()));
+            kept.push(heading);
+        }
+        tree.headings = kept;
+        for block in &mut tree.blocks {
+            let after = tree
+                .headings
+                .partition_point(|h| h.range.start <= block.range.start);
+            block.heading = (after > 0).then(|| after - 1);
+        }
+    }
+    tree.comments = comments;
 }
 
 // ---------------------------------------------------------------------------

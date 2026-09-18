@@ -312,15 +312,22 @@ folder layout would have.
 | `https://…` | An external `Source` node keyed by the URL. |
 
 **A fenced code block (``` or `~~~`) and a `%%comment%%` (§5.7) are the only
-regions that are not scanned.**
-Indented four-space code is **not** exempt, and neither is an HTML block: the
-reader takes one line at a time and owns no block parser, so a CommonMark
-indented-code rule would also swallow every list continuation line, which is
-where a converter writes most of its links. Fence whatever must not be read —
-and write `\[\[` for a literal `[[`, which is the escape Obsidian uses. A
-**heading line is scanned like any other line**: `## Overview ![map](img/x.png)`
-states a picture and `## See also [[Alice]]` states a link, and §5.4 says which
-section they carry.
+regions that are not scanned.** A fence ends at its own delimiter, so a `~~~`
+line written inside a ``` block is code like everything else between them.
+Indented four-space code is **not** exempt, and neither is an HTML block:
+honouring CommonMark's indented-code rule would also swallow every list
+continuation line, which is where a converter writes most of its links. Fence
+whatever must not be read — and write `\[\[` for a literal `[[`, which is the
+escape Obsidian uses. A **heading line is scanned like any other line**:
+`## Overview ![map](img/x.png)` states a picture and `## See also [[Alice]]`
+states a link, and §5.4 says which section they carry.
+
+The reader parses a body's **blocks** once and scans each of them — a heading
+line, a paragraph, a list item, a table cell — as one region. So the text half
+of a `[…](…)` link may be hard-wrapped across lines, `[Binary\nExtensions](url)`
+being one link and not none, while a bracket left open at the end of a
+paragraph can never swallow the next one. A `[[wikilink]]` is the exception
+that stays on one line, as it is in Obsidian.
 
 A **markdown-style** target — the `(…)` half of `[text](…)` and `![alt](…)` —
 is percent-decoded before it is resolved, because that is the spelling a tool

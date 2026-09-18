@@ -9,11 +9,18 @@
 //!     `# Citations` → `CITES`, …),
 //!  3. the generic [`DEFAULT_CONN_TYPE`] (`LINKS_TO`).
 //!
-//! Links inside fenced code blocks, and markdown image links (`![alt](src)`),
-//! are never links. External `http(s)` links are captured as `is_external`
-//! (they become `Source` nodes in the builder); `mailto:`, anchors, and
-//! non-`.md` directory links are skipped (directory structure is captured
-//! separately).
+//! The body is read through `okf::structure`'s block tree, one scan region at
+//! a time (VAULT.md §5.1): a fenced code block and a `%%comment%%` are the two
+//! regions that are never scanned, while indented code and HTML blocks are
+//! read like prose. A region is one construct's source — a heading line, a
+//! paragraph, a list item, a table cell — so link text may wrap across a line
+//! but never across a paragraph, and the section every reference carries is
+//! the heading the tree puts that region under.
+//!
+//! Markdown image links (`![alt](src)`) are never links. External `http(s)`
+//! links are captured as `is_external` (they become `Source` nodes in the
+//! builder); `mailto:`, anchors, and non-`.md` directory links are skipped
+//! (directory structure is captured separately).
 //!
 //! What the vault profile adds on top (VAULT.md §5, §6), each behind its own
 //! [`Profile`] field so `okf`/`loose` bundles are untouched: `section` and
@@ -26,7 +33,8 @@
 
 use crate::datatypes::values::Value;
 use crate::okf::model::{AttachmentRef, Link, Profile, DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE};
-use regex::Regex;
+use crate::okf::structure::{self, BlockTree};
+use regex::{Captures, Regex};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -34,6 +42,10 @@ fn link_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // [text](dest) or [text](dest "title"). `text` may not contain ']'.
     // Group 1 is the text — the alt text when a `!` precedes the whole match.
+    //
+    // Newlines are inside `[^\]]`, so a hard-wrapped `[Binary\nExtensions](url)`
+    // matches; a scan region never spans a paragraph, which is what keeps that
+    // from running two paragraphs' brackets together.
     RE.get_or_init(|| Regex::new(r#"\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)"#).unwrap())
 }
 
@@ -41,7 +53,10 @@ fn wikilink_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // [[name]] or [[name|alias]]. Group 2 is the alias — display text for a
     // note link (not stored), the alt text for an attachment embed (§6.1).
-    RE.get_or_init(|| Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]*))?\]\]").unwrap())
+    // Neither half may hold a newline: Obsidian writes a wikilink on one line,
+    // and allowing the span to wrap turns a stray `[[` and a later `]]` into a
+    // link to whatever prose sits between them.
+    RE.get_or_init(|| Regex::new(r"\[\[([^\]|\n]+)(?:\|([^\]\n]*))?\]\]").unwrap())
 }
 
 /// A whole string that is nothing but one wikilink — the frontmatter
@@ -85,23 +100,6 @@ pub(crate) fn conn_from_heading(heading: &str, profile: &Profile) -> Option<Stri
     Some(built_in.to_string())
 }
 
-/// The text of an ATX heading line (already left-trimmed), or `None` when the
-/// line is not a heading. A heading is one to six `#` followed by a space, a
-/// tab, or the end of the line; `#tag see [[Alice]]` is a tag line, and reading
-/// it as a heading both invents a heading and drops every link on it.
-pub(crate) fn heading_text(trimmed: &str) -> Option<&str> {
-    let hashes = trimmed.len() - trimmed.trim_start_matches('#').len();
-    if hashes == 0 || hashes > 6 {
-        return None;
-    }
-    let rest = &trimmed[hashes..];
-    if rest.is_empty() || rest.starts_with([' ', '\t']) {
-        Some(rest.trim())
-    } else {
-        None
-    }
-}
-
 /// A link title is honoured as an edge type only when it looks like one
 /// (`SCREAMING_SNAKE_CASE`) — otherwise it's a human tooltip, not a type.
 fn conn_from_title(title: &str) -> Option<String> {
@@ -118,8 +116,8 @@ fn conn_from_title(title: &str) -> Option<String> {
 }
 
 /// What one body yielded: its links, and the inline tags the vault profile
-/// asks for. One pass, because both are per-line decisions gated by the same
-/// fenced-code state.
+/// asks for. One pass over the same scan regions, because both are gated by
+/// the same fenced-code and comment extents.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Extraction {
     pub links: Vec<Link>,
@@ -127,11 +125,11 @@ pub struct Extraction {
     /// [`Profile::inline_tags`] is set.
     pub tags: Vec<String>,
     /// `![…]` references in body order; always empty unless
-    /// [`Profile::attachments`] is set. Within one line the markdown-image
-    /// spelling is collected before the wikilink-embed spelling, because the
-    /// two syntaxes are scanned by separate passes — which only reorders
-    /// references written on the same line, and `ordinal` stays deterministic
-    /// either way.
+    /// [`Profile::attachments`] is set. Within one scan region the
+    /// markdown-image spelling is collected before the wikilink-embed
+    /// spelling, because the two syntaxes are scanned by separate passes —
+    /// which only reorders references written in the same paragraph, and
+    /// `ordinal` stays deterministic either way.
     pub attachments: Vec<AttachmentRef>,
     /// VAULT.md §9 path errors this body wrote: a reference naming an absolute
     /// filesystem path, or one climbing above the vault root. One entry per
@@ -145,184 +143,220 @@ pub struct Extraction {
 /// `source_dir` is the concept's directory (bundle-relative, `""` at root), used
 /// to resolve relative link targets to bundle-relative concept-ids.
 pub fn extract(body: &str, source_dir: &str, profile: &Profile) -> Extraction {
+    extract_with_tree(body, &structure::parse_blocks(body), source_dir, profile)
+}
+
+/// [`extract`] against a block tree the caller already has, so a note that also
+/// wants its title from the tree parses its body once.
+pub(crate) fn extract_with_tree(
+    body: &str,
+    tree: &BlockTree,
+    source_dir: &str,
+    profile: &Profile,
+) -> Extraction {
     let mut out = Extraction::default();
-    let mut current_heading: Option<String> = None;
-    let mut in_fence = false;
-
-    for raw in body.lines() {
-        let trimmed = raw.trim_start();
-        // Toggle fenced code blocks (``` or ~~~).
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        // A heading opens its section *and* is scanned like any other line:
-        // `## Overview ![map](img/x.png)` states a picture and
-        // `## See also [[Alice]]` states a link, and dropping either lost it
-        // with no node, no edge and no warning. What is scanned is the
-        // heading's own text, so the `#`s cannot land inside a target — and
-        // the section a reference on that line carries is that heading, the
-        // same string the links below it carry (VAULT.md §5.4).
-        let line = match heading_text(trimmed) {
-            Some(h) => {
-                current_heading = Some(h.to_string());
-                current_heading.as_deref().unwrap_or(raw)
-            }
-            None => raw,
+    for range in structure::scan_regions(body, tree) {
+        let text = &body[range.clone()];
+        // A region never crosses a heading, so the section is decided once for
+        // the whole of it — including a heading's own line, which carries its
+        // own heading (VAULT.md §5.4). An empty heading text (`### #`, whose
+        // lone `#` is CommonMark's closing sequence) names no section.
+        let heading = structure::heading_at(tree, range.start);
+        let region = Region {
+            source_dir,
+            profile,
+            section: heading.map(|h| h.text.as_str()).filter(|h| !h.is_empty()),
+            heading_conn: heading.and_then(|h| conn_from_heading(&h.text, profile)),
         };
-        // The heading's own `#`s are not a tag; a `#tag` written *in* the
-        // heading text still is (VAULT.md §5.5).
         if profile.inline_tags {
-            scan_tags(line, &mut out.tags);
-        }
-
-        let heading_conn = current_heading
-            .as_deref()
-            .and_then(|h| conn_from_heading(h, profile));
-        let section = current_heading.as_deref().filter(|h| !h.is_empty());
-
-        for cap in link_re().captures_iter(line) {
-            let m = cap.get(0).unwrap();
-            // The markdown spelling is the one a tool percent-encodes, so it
-            // is decoded here — before resolution *and* before the §9 path
-            // check, which `%2e%2e/` would otherwise walk straight past.
-            let decoded = percent_decode(cap.get(2).map(|d| d.as_str()).unwrap_or(""));
-            let dest = decoded.as_ref();
-            // `![alt](src)` is never a link. Under the vault profile it is an
-            // attachment reference instead (VAULT.md §6.1); otherwise it is
-            // dropped, as it always was.
-            if m.start() > 0 && line.as_bytes()[m.start() - 1] == b'!' {
-                if profile.path_safety {
-                    record_path_error(&mut out.path_errors, dest, source_dir);
-                }
-                push_attachment(
-                    &mut out.attachments,
-                    profile,
-                    dest,
-                    cap.get(1).map(|t| t.as_str()),
-                    section,
-                );
-                continue;
-            }
-            if profile.path_safety && !is_external_url(dest) {
-                record_path_error(&mut out.path_errors, dest, source_dir);
-            }
-            let conn = cap
-                .get(3)
-                .and_then(|t| conn_from_title(t.as_str()))
-                .or_else(|| heading_conn.clone())
-                .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string());
-            let props = edge_props(profile, section, fragment_of(dest));
-            if is_external_url(dest) {
-                // External http(s) link → a Source node (citation / reference).
-                push_unique(
-                    &mut out.links,
-                    Link {
-                        target: dest.to_string(),
-                        conn_type: conn,
-                        is_external: true,
-                        props,
-                        reverse: false,
-                    },
-                );
-            } else if let Some(target) = resolve_target(dest, source_dir) {
-                push_unique(
-                    &mut out.links,
-                    Link {
-                        target,
-                        conn_type: conn,
-                        is_external: false,
-                        props,
-                        reverse: false,
-                    },
-                );
-            } else {
-                // Everything a note link cannot be: a plain `[text](file.ext)`
-                // naming a file the vault holds, which is a reference to that
-                // file exactly as `![alt](file.ext)` is (VAULT.md §6.1), with
-                // the link text as its alt. `push_attachment` drops what is
-                // left — an in-page `#anchor`, a directory, a URL scheme — so
-                // those stay the silent no-ops they always were.
-                push_attachment(
-                    &mut out.attachments,
-                    profile,
-                    dest,
-                    cap.get(1).map(|t| t.as_str()),
-                    section,
-                );
+            // Per line: a tag is a line-local token, and an inline code span
+            // opened on one line does not reach across to hide one on another.
+            for line in text.lines() {
+                scan_tags(line, &mut out.tags);
             }
         }
+        region.scan(text, &mut out);
+    }
+    out
+}
 
-        if profile.wikilinks {
-            for cap in wikilink_re().captures_iter(line) {
-                let m = cap.get(0).unwrap();
-                let is_embed = m.start() > 0 && line.as_bytes()[m.start() - 1] == b'!';
-                // A `#heading` anchor never affects resolution:
-                // `[[Note#Section]]` and `[[Note]]` reach the same node
-                // (VAULT.md §5.4). The fragment is kept as an edge property.
-                let raw_name = cap.get(1).unwrap().as_str();
-                let (name, anchor) = match raw_name.split_once('#') {
-                    Some((n, a)) => (n.trim(), Some(a.trim())),
-                    None => (raw_name.trim(), None),
-                };
-                if name.is_empty() {
-                    continue;
-                }
-                // A wikilink is a name, not a URL, so it is never decoded —
-                // but §5.2 tries a `/`-bearing one as a path, and §6 resolves
-                // every embed as one, so both reach the §9 check.
-                if profile.path_safety {
-                    if is_embed && !embeds_a_note(name) {
-                        // An embedded file is resolved as a path whatever it
-                        // is spelled like, so every spelling is checked.
-                        record_path_error(&mut out.path_errors, name, source_dir);
-                    } else {
-                        record_wikilink_path_error(&mut out.path_errors, name, source_dir);
-                    }
-                }
-                // strip a trailing `.md` if the wikilink included it
-                let target = name.trim_end_matches(".md");
-                let conn = if is_embed {
-                    // `![[x]]` transcludes: a note becomes an EMBEDS edge, a
-                    // file with any other extension is an attachment (§6) and
-                    // is not a link at all. Without the extension check every
-                    // embedded image minted a concept stub.
-                    if !embeds_a_note(name) {
-                        push_attachment(
-                            &mut out.attachments,
-                            profile,
-                            name,
-                            cap.get(2).map(|a| a.as_str()),
-                            section,
-                        );
-                        continue;
-                    }
-                    if !profile.embeds {
-                        continue;
-                    }
-                    EMBEDS_CONN_TYPE.to_string()
-                } else {
-                    heading_conn
-                        .clone()
-                        .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string())
-                };
-                push_unique(
-                    &mut out.links,
-                    Link {
-                        target: target.to_string(),
-                        conn_type: conn,
-                        is_external: false,
-                        props: edge_props(profile, section, anchor),
-                        reverse: false,
-                    },
-                );
+/// One scan region's constants: the note's directory, the dialect, and the
+/// heading the region sits under.
+struct Region<'a> {
+    source_dir: &'a str,
+    profile: &'a Profile,
+    section: Option<&'a str>,
+    heading_conn: Option<String>,
+}
+
+/// A reference the region's two syntaxes found, kept with its offset so both
+/// spellings are handled in the order they were **written**.
+enum Found<'t> {
+    Markdown(Captures<'t>),
+    Wikilink(Captures<'t>),
+}
+
+impl Region<'_> {
+    /// Every `[text](dest)`, `![alt](src)`, `[[Note]]` and `![[embed]]` in one
+    /// region, in document order.
+    ///
+    /// The two syntaxes are matched by separate regexes and then merged on
+    /// offset, so a paragraph mixing them yields its references in the order a
+    /// reader meets them — which is what makes an attachment's `ordinal`
+    /// survive re-wrapping the prose around it.
+    fn scan(&self, text: &str, out: &mut Extraction) {
+        let mut found: Vec<Found<'_>> =
+            link_re().captures_iter(text).map(Found::Markdown).collect();
+        if self.profile.wikilinks {
+            found.extend(wikilink_re().captures_iter(text).map(Found::Wikilink));
+        }
+        found.sort_by_key(Found::start);
+        for one in found {
+            match one {
+                Found::Markdown(cap) => self.markdown(text, &cap, out),
+                Found::Wikilink(cap) => self.wikilink(text, &cap, out),
             }
         }
     }
-    out
+
+    /// `[text](dest)`, and the `![alt](src)` spelling of an attachment.
+    fn markdown(&self, text: &str, cap: &Captures<'_>, out: &mut Extraction) {
+        let m = cap.get(0).expect("the whole match");
+        let label = cap.get(1).map_or("", |t| t.as_str());
+        // The markdown spelling is the one a tool percent-encodes, so it
+        // is decoded here — before resolution *and* before the §9 path
+        // check, which `%2e%2e/` would otherwise walk straight past.
+        let decoded = percent_decode(cap.get(2).map_or("", |d| d.as_str()));
+        let dest = decoded.as_ref();
+        // `![alt](src)` is never a link. Under the vault profile it is an
+        // attachment reference instead (VAULT.md §6.1); otherwise it is
+        // dropped, as it always was.
+        if m.start() > 0 && text.as_bytes()[m.start() - 1] == b'!' {
+            self.check_path(dest, out);
+            self.attachment(dest, Some(label), out);
+            return;
+        }
+        if !is_external_url(dest) {
+            self.check_path(dest, out);
+        }
+        let conn = cap
+            .get(3)
+            .and_then(|t| conn_from_title(t.as_str()))
+            .or_else(|| self.heading_conn.clone())
+            .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string());
+        let props = edge_props(self.profile, self.section, fragment_of(dest));
+        if is_external_url(dest) {
+            // External http(s) link → a Source node (citation / reference).
+            push_unique(
+                &mut out.links,
+                Link {
+                    target: dest.to_string(),
+                    conn_type: conn,
+                    is_external: true,
+                    props,
+                    reverse: false,
+                },
+            );
+        } else if let Some(target) = resolve_target(dest, self.source_dir) {
+            push_unique(
+                &mut out.links,
+                Link {
+                    target,
+                    conn_type: conn,
+                    is_external: false,
+                    props,
+                    reverse: false,
+                },
+            );
+        } else {
+            // Everything a note link cannot be: a plain `[text](file.ext)`
+            // naming a file the vault holds, which is a reference to that
+            // file exactly as `![alt](file.ext)` is (VAULT.md §6.1), with
+            // the link text as its alt. `attachment` drops what is left —
+            // an in-page `#anchor`, a directory, a URL scheme — so those
+            // stay the silent no-ops they always were.
+            self.attachment(dest, Some(label), out);
+        }
+    }
+
+    /// `[[Note]]`, `[[Note|alias]]` and the `![[…]]` embed spelling.
+    fn wikilink(&self, text: &str, cap: &Captures<'_>, out: &mut Extraction) {
+        let m = cap.get(0).expect("the whole match");
+        let is_embed = m.start() > 0 && text.as_bytes()[m.start() - 1] == b'!';
+        // A `#heading` anchor never affects resolution: `[[Note#Section]]` and
+        // `[[Note]]` reach the same node (VAULT.md §5.4). The fragment is kept
+        // as an edge property.
+        let raw_name = cap.get(1).expect("the name group").as_str();
+        let (name, anchor) = match raw_name.split_once('#') {
+            Some((n, a)) => (n.trim(), Some(a.trim())),
+            None => (raw_name.trim(), None),
+        };
+        if name.is_empty() {
+            return;
+        }
+        // A wikilink is a name, not a URL, so it is never decoded — but §5.2
+        // tries a `/`-bearing one as a path, and §6 resolves every embed as
+        // one, so both reach the §9 check.
+        if self.profile.path_safety {
+            if is_embed && !embeds_a_note(name) {
+                // An embedded file is resolved as a path whatever it is
+                // spelled like, so every spelling is checked.
+                record_path_error(&mut out.path_errors, name, self.source_dir);
+            } else {
+                record_wikilink_path_error(&mut out.path_errors, name, self.source_dir);
+            }
+        }
+        // strip a trailing `.md` if the wikilink included it
+        let target = name.trim_end_matches(".md");
+        let conn = if is_embed {
+            // `![[x]]` transcludes: a note becomes an EMBEDS edge, a file with
+            // any other extension is an attachment (§6) and is not a link at
+            // all. Without the extension check every embedded image minted a
+            // concept stub.
+            if !embeds_a_note(name) {
+                self.attachment(name, cap.get(2).map(|a| a.as_str()), out);
+                return;
+            }
+            if !self.profile.embeds {
+                return;
+            }
+            EMBEDS_CONN_TYPE.to_string()
+        } else {
+            self.heading_conn
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string())
+        };
+        push_unique(
+            &mut out.links,
+            Link {
+                target: target.to_string(),
+                conn_type: conn,
+                is_external: false,
+                props: edge_props(self.profile, self.section, anchor),
+                reverse: false,
+            },
+        );
+    }
+
+    fn attachment(&self, dest: &str, alt: Option<&str>, out: &mut Extraction) {
+        push_attachment(&mut out.attachments, self.profile, dest, alt, self.section);
+    }
+
+    fn check_path(&self, dest: &str, out: &mut Extraction) {
+        if self.profile.path_safety {
+            record_path_error(&mut out.path_errors, dest, self.source_dir);
+        }
+    }
+}
+
+impl Found<'_> {
+    fn start(&self) -> usize {
+        match self {
+            Found::Markdown(cap) | Found::Wikilink(cap) => {
+                cap.get(0).expect("the whole match").start()
+            }
+        }
+    }
 }
 
 /// The `#fragment` of a path-link destination, without its `#` — `None` when
@@ -857,14 +891,30 @@ mod tests {
         assert_eq!(links[0].conn_type, "LINKS_TO");
     }
 
+    /// The heading rule — one to six `#` then a space, a tab or the end of the
+    /// line — read through the `section` a link under it carries, which is the
+    /// only thing the rule is *for* now that the tree owns it.
     #[test]
-    fn heading_text_requires_a_space_and_at_most_six_hashes() {
-        assert_eq!(heading_text("# Joins"), Some("Joins"));
-        assert_eq!(heading_text("###\tDeps"), Some("Deps"));
-        assert_eq!(heading_text("#"), Some(""));
-        assert_eq!(heading_text("#related"), None);
-        assert_eq!(heading_text("####### Deep"), None);
-        assert_eq!(heading_text("plain"), None);
+    fn heading_rule_decides_the_section_a_link_carries() {
+        let section_under = |heading: &str| {
+            let body = format!("{heading}\nsee [[Alice]]");
+            let links = extract(&body, "", &vault()).links;
+            assert_eq!(links.len(), 1, "{heading}");
+            props_of(&links[0])
+                .into_iter()
+                .find(|(k, _)| *k == "section")
+                .map(|(_, v)| v.to_string())
+        };
+        assert_eq!(section_under("# Joins").as_deref(), Some("Joins"));
+        assert_eq!(section_under("###\tDeps").as_deref(), Some("Deps"));
+        assert_eq!(
+            section_under("#"),
+            None,
+            "an empty heading names no section"
+        );
+        assert_eq!(section_under("#related"), None, "a `#tag` line is prose");
+        assert_eq!(section_under("####### Deep"), None, "seven hashes is prose");
+        assert_eq!(section_under("plain"), None);
     }
 
     #[test]
@@ -893,8 +943,12 @@ mod tests {
         assert_eq!(
             links,
             vec![
-                ("tables/y", "LINKS_TO", true),
+                // Document order, both spellings merged: before P2 the
+                // markdown pass ran over a whole line ahead of the wikilink
+                // pass, so `tables/y` came out first although it is written
+                // third.
                 ("other-note", "LINKS_TO", true),
+                ("tables/y", "LINKS_TO", true),
                 ("Alice", "LINKS_TO", true),
             ]
         );
@@ -1226,9 +1280,11 @@ mod tests {
         );
     }
 
-    /// VAULT.md §5.1: indented code is **not** exempt — only a fence is.
-    /// The loader has no block parser, and a CommonMark indented-code rule
-    /// would collide with list continuation lines.
+    /// VAULT.md §5.1: indented code is **not** exempt — only a fence and a
+    /// comment are. The block tree marks an `IndentedCode` block, and
+    /// `scan_regions` deliberately keeps scanning it: honouring CommonMark's
+    /// rule here would swallow every list continuation line, which is where a
+    /// converter writes most of its links.
     #[test]
     fn an_indented_code_block_is_scanned_like_prose() {
         let got = extract(
@@ -1364,5 +1420,158 @@ mod tests {
             None,
             "no separator, no drive"
         );
+    }
+
+    /// The pre-P2 scanner toggled one `in_fence` boolean on **any** fence
+    /// line, so a `~~~` written inside a ``` block turned scanning back on and
+    /// the rest of the code block became links. The tree closes the block at
+    /// its own delimiter.
+    #[test]
+    fn a_tilde_line_inside_a_backtick_fence_does_not_resume_scanning() {
+        let got = extract(
+            concat!(
+                "```text\n",
+                "~~~\n",
+                "[[atlas]] and ![m](img/x.png) and #buried\n",
+                "```\n",
+                "[real](/notes/z.md)\n",
+            ),
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/z"],
+            "everything between the ``` delimiters is code"
+        );
+        assert!(attach(&got).is_empty());
+        assert!(got.tags.is_empty());
+    }
+
+    /// A link text hard-wrapped by an editor is one link, and two paragraphs'
+    /// brackets are never run together into one.
+    #[test]
+    fn link_text_may_wrap_a_line_but_never_a_paragraph() {
+        let got = extract(
+            "see the [Binary\nExtensions](/notes/atlas.md) page\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/atlas"]
+        );
+
+        let across = extract("a [open\n\nclose](/notes/atlas.md) b\n", "", &vault());
+        assert!(
+            across.links.is_empty(),
+            "a blank line ends the paragraph, and the bracket with it"
+        );
+    }
+
+    /// VAULT.md §5.7: a comment's text is never scanned — inline or spanning
+    /// lines — and it is the only region besides a fence with that property.
+    #[test]
+    fn a_comment_hides_links_tags_and_attachments() {
+        let inline = extract(
+            "## Notes\n\nkeep [[atlas]] %%drop [[ghost]] ![g](img/g.png) #hidden%% here\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            inline
+                .links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas"]
+        );
+        assert!(attach(&inline).is_empty());
+        assert!(inline.tags.is_empty());
+
+        let block = extract(
+            "%%\n[[ghost]] ![g](img/g.png) #hidden\n%%\n\n[[atlas]] #kept\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            block
+                .links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas"]
+        );
+        assert!(attach(&block).is_empty());
+        assert_eq!(block.tags, vec!["kept"]);
+
+        // …and a commented-out heading names no section and titles nothing:
+        // CommonMark reports it, but VAULT.md §5.7 says nothing is read out of
+        // a comment.
+        let heading = extract("%%\n# Hidden\n%%\n\n[[atlas]]\n", "", &vault());
+        assert_eq!(props_of(&heading.links[0]), Vec::new());
+        assert_eq!(crate::okf::first_heading("%%\n# Hidden\n%%\n"), None);
+    }
+
+    /// A setext heading was invisible to the line scanner, so everything under
+    /// one carried no `section` at all. One heading model, one answer.
+    #[test]
+    fn a_setext_heading_names_the_section_below_it() {
+        let got = extract(
+            "Related work\n============\n\nsee [[atlas]] and ![m](img/x.png)\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(props_of(&got.links[0]), vec![("section", "Related work")]);
+        assert_eq!(
+            attach(&got),
+            vec![("img/x.png", Some("m"), Some("Related work"))]
+        );
+        assert_eq!(
+            got.links[0].conn_type, "RELATED",
+            "the heading ladder reads a setext heading too"
+        );
+    }
+
+    /// Every `section` a body's references carry must name a heading the block
+    /// tree actually holds — the two passes cannot disagree, because there is
+    /// only one of them.
+    #[test]
+    fn every_sections_value_names_a_heading_of_the_same_tree() {
+        let bodies = [
+            "# Joins\n[x](/tables/y.md)\n## Deep\nsee [[Alice]]\n",
+            "Setext\n------\n\n![m](img/x.png)\n\n### #\n[[atlas]]\n",
+            "no heading at all: [[atlas]]\n",
+            "## Figures\n\n| a | b |\n|---|---|\n| [[atlas]] | ![m](img/x.png) |\n",
+            "## Steps\n\n- one [[atlas]]\n  - two ![m](img/x.png)\n",
+            "## Quote\n\n> [!note] Title\n> see [[atlas]]\n",
+        ];
+        for body in bodies {
+            let tree = crate::okf::structure::parse_blocks(body);
+            let got = extract(body, "", &vault());
+            let headings: Vec<&str> = tree.headings.iter().map(|h| h.text.as_str()).collect();
+            let sections = got
+                .links
+                .iter()
+                .flat_map(|l| l.props.iter())
+                .filter(|(k, _)| k == "section")
+                .map(|(_, v)| match v {
+                    Value::String(s) => s.clone(),
+                    other => panic!("section is a string, got {other:?}"),
+                })
+                .chain(got.attachments.iter().filter_map(|a| a.section.clone()));
+            for section in sections {
+                assert!(
+                    headings.contains(&section.as_str()),
+                    "{body:?}: section {section:?} is not a heading of the tree {headings:?}"
+                );
+            }
+        }
     }
 }

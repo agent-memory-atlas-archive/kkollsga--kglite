@@ -745,10 +745,6 @@
     {
       "identity": "crates/kglite/src/graph/storage/mapped/mmap_vec.rs::fn:save_to_file:pub fn save_to_file(&self, path: &Path) -> io::Result<()>::dead_code",
       "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/okf/structure/mod.rs::module::dead_code",
-      "classification": "dead-code"
     }
   ]
 }

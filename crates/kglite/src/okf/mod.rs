@@ -230,6 +230,9 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
 
     let profile = &opts.profile;
     let doc_path = f.rel_path.strip_suffix(".md").unwrap_or(&f.rel_path);
+    // One block tree per note, shared by the title ladder and the link pass so
+    // the two can never disagree about where a heading is (VAULT.md §5.4).
+    let tree = structure::parse_blocks(&body);
 
     // Malformed YAML degrades to an empty frontmatter map (the concept still
     // becomes a node — losing the file entirely would be worse) and is
@@ -311,7 +314,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
                 .map(value_to_display)
                 .filter(|s| !s.is_empty())
         })
-        .or_else(|| first_heading(&body))
+        .or_else(|| first_heading_of(&tree))
         .unwrap_or_else(|| stem(doc_path).to_string());
 
     // Wikilink-valued keys become edges, not properties (VAULT.md §4.3) —
@@ -331,7 +334,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         })
         .collect();
     let source_dir = parent_dir(doc_path);
-    let extracted = links::extract(&body, source_dir, profile);
+    let extracted = links::extract_with_tree(&body, &tree, source_dir, profile);
     errors.extend(extracted.path_errors);
     let mut all_links = extracted.links;
     for link in fm_links {
@@ -491,30 +494,27 @@ fn value_to_display(v: Value) -> String {
 }
 
 /// The body's first markdown heading, of **any** level, used as a title
-/// fallback for frontmatter-less docs. Skips fenced code blocks; returns the
-/// heading text (leading `#`s stripped), or `None`.
+/// fallback for frontmatter-less docs. Reads the same block tree the link pass
+/// does, so a `#` inside a fenced code block is not a heading here either.
 ///
 /// Levels below `#` count deliberately: a note whose prose opens with an `##`
 /// still has a better title there than in its filename stem, and this ladder
 /// is shared with the `okf` and `loose` dialects, whose producers write no
 /// `# H1` at all. VAULT.md §3 says the same.
 pub(crate) fn first_heading(body: &str) -> Option<String> {
-    let mut in_fence = false;
-    for line in body.lines() {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if !in_fence {
-            if let Some(h) = links::heading_text(t) {
-                if !h.is_empty() {
-                    return Some(h.to_string());
-                }
-            }
-        }
-    }
-    None
+    first_heading_of(&structure::parse_blocks(body))
+}
+
+/// [`first_heading`] against a block tree the caller already parsed.
+///
+/// A heading whose text is empty is skipped, not returned: `##` titles
+/// nothing, and neither does `### #`, whose lone `#` is CommonMark's closing
+/// sequence rather than a title. The ladder falls through to the file stem.
+fn first_heading_of(tree: &structure::BlockTree) -> Option<String> {
+    tree.headings
+        .iter()
+        .find(|h| !h.text.is_empty())
+        .map(|h| h.text.clone())
 }
 
 /// Last path component of a concept-id (the file stem).
@@ -657,6 +657,44 @@ mod tests {
         };
         let docs = parse_bundle(dir.path(), &opts).unwrap();
         assert_eq!(docs[0].title, "My Project");
+    }
+
+    /// CommonMark reads the lone `#` in `### #` as the optional **closing**
+    /// sequence, so that heading titles nothing and the ladder falls through
+    /// to the file stem. The pre-P2 line scanner kept the `#` and titled the
+    /// note `#` (one heading in 8 917 across the RMS corpus).
+    #[test]
+    fn a_heading_that_is_only_a_closing_sequence_titles_nothing() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "readme.md",
+            "### #
+
+Intro text.",
+        );
+        write(
+            dir.path(),
+            "after.md",
+            "### #
+
+## Real one
+",
+        );
+        let opts = BuildOptions {
+            require_frontmatter: false,
+            ..BuildOptions::default()
+        };
+        let docs = parse_bundle(dir.path(), &opts).unwrap();
+        let titles: Vec<(&str, &str)> = docs
+            .iter()
+            .map(|d| (d.concept_id.as_str(), d.title.as_str()))
+            .collect();
+        assert_eq!(
+            titles,
+            vec![("after", "Real one"), ("readme", "readme")],
+            "an empty heading is skipped, not used as a title"
+        );
     }
 
     #[test]

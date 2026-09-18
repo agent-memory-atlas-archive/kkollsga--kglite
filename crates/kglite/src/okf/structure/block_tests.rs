@@ -492,19 +492,76 @@ fn golden_bodies(vault: &str) -> Vec<(String, String)> {
     out
 }
 
+/// VAULT.md §5.7: a heading inside a `%%comment%%` is not a heading, so the
+/// ones around it keep the paths and extents they would have had without it.
+#[test]
+fn a_heading_inside_a_comment_is_not_in_the_tree() {
+    // The hidden heading is a level 1, so keeping it would both close `# Top`'s
+    // section early and reparent `## Real` underneath itself.
+    let body = "# Top\n\n%%\n# Hidden\n%%\n\ntext\n\n## Real\n\nmore\n";
+    let tree = parse_blocks(body);
+    assert_eq!(
+        tree.headings
+            .iter()
+            .map(|h| h.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Top", "Real"]
+    );
+    assert_eq!(tree.headings[1].path, vec!["Top", "Real"]);
+    assert_eq!(
+        tree.headings[0].body_range.end,
+        body.len(),
+        "the hidden heading does not close the section it sits in"
+    );
+    let text = tree
+        .blocks
+        .iter()
+        .find(|b| slice(body, &b.range).trim() == "more")
+        .expect("the paragraph under `## Real`");
+    assert_eq!(
+        text.heading,
+        Some(1),
+        "blocks re-point at the kept headings"
+    );
+}
+
+/// An independent oracle for the tree's headings: the line rule the link pass
+/// used before P2 re-seated it on this tree (one to six `#` then a space, a
+/// tab or the end of the line, outside a fence). Kept as a *replica*, not a
+/// call into the shipped code, so the two cannot agree by construction.
+fn scanned_heading_lines(body: &str) -> usize {
+    let mut fenced = false;
+    let mut count = 0;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let hashes = t.len() - t.trim_start_matches('#').len();
+        if (1..=6).contains(&hashes) {
+            let rest = &t[hashes..];
+            if rest.is_empty() || rest.starts_with([' ', '\t']) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 /// The structure pass may assume the link pass agrees about headings, so the
-/// count has to match what `links.rs` produces today — 12 across the three
-/// golden vaults, all ATX (Phase 0 census).
+/// count has to match what the pre-P2 line scanner produced — 12 across the
+/// three golden vaults, all ATX (Phase 0 census).
 #[test]
 fn the_golden_vaults_headings_match_what_the_link_pass_counts() {
     let mut total = 0;
     for vault in ["okf", "obsidian", "vault"] {
         for (path, body) in golden_bodies(vault) {
             let tree = parse_blocks(&body);
-            let scanned = body
-                .lines()
-                .filter(|l| crate::okf::links::heading_text(l.trim_start()).is_some())
-                .count();
+            let scanned = scanned_heading_lines(&body);
             assert_eq!(
                 tree.headings.len(),
                 scanned,

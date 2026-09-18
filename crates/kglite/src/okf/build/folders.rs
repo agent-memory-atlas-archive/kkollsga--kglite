@@ -242,7 +242,7 @@ fn folder_meta(path: &Path) -> (Option<String>, Option<String>) {
         if t.is_empty() {
             continue;
         }
-        if let Some(h) = crate::okf::links::heading_text(t) {
+        if let Some(h) = heading_line(t) {
             if title.is_none() {
                 title = Some(h.to_string());
             }
@@ -254,6 +254,28 @@ fn folder_meta(path: &Path) -> (Option<String>, Option<String>) {
         }
     }
     (title.filter(|s| !s.is_empty()), desc)
+}
+
+/// The text of an ATX heading line (already left-trimmed), or `None` when the
+/// line is not a heading. A heading is one to six `#` followed by a space, a
+/// tab, or the end of the line; `#tag see [[Alice]]` is a tag line, not a
+/// heading.
+///
+/// A line scan, not `okf::structure`'s block tree, because [`folder_meta`]
+/// reads an `index.md` **whole** — frontmatter included. CommonMark reads the
+/// `title: x` above a closing `---` as a setext heading, so a parser would
+/// title every folder after its own frontmatter's last key.
+fn heading_line(trimmed: &str) -> Option<&str> {
+    let hashes = trimmed.len() - trimmed.trim_start_matches('#').len();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let rest = &trimmed[hashes..];
+    if rest.is_empty() || rest.starts_with([' ', '\t']) {
+        Some(rest.trim())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

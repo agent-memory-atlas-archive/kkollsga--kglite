@@ -8,6 +8,32 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+### Fixed
+
+- **A `~~~` line written inside a ``` code block no longer turns link scanning
+  back on** in an Obsidian vault (and in the `okf` / `loose` dialects). The
+  reader toggled one flag on any fence line, so the rest of a code block became
+  links, tags and attachment references — every one of them a node or an edge
+  in the graph. A fenced block now ends at its own delimiter.
+- **A link whose text is hard-wrapped is one link.** `[Binary\nExtensions](url)`
+  was read line by line and matched nothing at all; a body's links are now
+  matched over its blocks, so the text may wrap within a paragraph — and a
+  bracket left open at the end of one paragraph still cannot reach into the
+  next.
+
+### Changed
+
+- **`%%comments%%` are never scanned** in an Obsidian vault: a link, tag,
+  attachment reference or heading written inside one names nothing, as
+  `VAULT.md` §5.7 says. A commented-out heading no longer titles its note or
+  names a section either.
+- **A setext heading (`Title` over an `=====` underline) now names the section** its links
+  and attachment references carry. The previous reader saw only `#` headings,
+  so everything under a setext one carried no `section` at all.
+- **Body references are collected in document order.** A paragraph mixing
+  `[[wikilinks]]` with `[markdown](links)` used to report every markdown one
+  first, which decided an attachment edge's `ordinal`; the order now follows
+  the prose, so re-wrapping a paragraph cannot renumber it.
 
 ## [0.17.8] - 2026-09-18
 ### Added
