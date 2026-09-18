@@ -157,6 +157,38 @@ def test_export_exits_nonzero_when_it_refuses_a_file(tmp_path: Path):
     assert (out / "Article" / "welcome.md").read_text(encoding="utf-8") != "somebody else's file\n"
 
 
+def test_export_declares_an_edge_table_from_the_command_line(tmp_path: Path):
+    """`--edge-table TYPE=Heading` is `export.edge_tables:` for a graph whose
+    vault does not declare one (`VAULT.md` §7.3, §10.6). The warning about the
+    missing import rule rides the report on stderr."""
+    vault = tmp_path / "vault"
+    (vault / "Note").mkdir(parents=True)
+    (vault / "Note" / "paper.md").write_text('---\nworked_on_by: "[[alice]]"\n---\n# Paper\n', encoding="utf-8")
+    (vault / "Note" / "alice.md").write_text("Alice.\n", encoding="utf-8")
+    built = tmp_path / "vault.kgl"
+    assert _run("okf", "build", str(vault), "-o", str(built)).returncode == 0
+
+    out = tmp_path / "out"
+    proc = _run(
+        "okf",
+        "export",
+        str(built),
+        str(out),
+        "--source-root",
+        str(vault),
+        "--edge-table",
+        "WORKED_ON_BY=Worked on by",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = (out / "Note" / "paper.md").read_text(encoding="utf-8")
+    assert "## Worked on by\n\n| target |\n| --- |\n| [[alice]] |\n" in body, body
+    assert "worked_on_by:" not in body
+
+    bad = _run("okf", "export", str(built), str(tmp_path / "out2"), "--edge-table", "WORKED_ON_BY")
+    assert bad.returncode != 0
+    assert "expected TYPE=HEADING" in bad.stderr
+
+
 def test_export_of_a_missing_graph_is_an_error(tmp_path: Path):
     proc = _run("okf", "export", str(tmp_path / "nope.kgl"), str(tmp_path / "out"))
     assert proc.returncode != 0

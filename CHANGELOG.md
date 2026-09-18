@@ -67,9 +67,29 @@ before upgrading.
   `chunk_hash` where exactly one node on each side carries it — so renaming a
   heading, which moves every derived id beneath it, no longer re-embeds a page
   whose prose did not change.
-- **Compatibility:** `structure:` and `edge_defaults:` are unknown keys to any
-  kglite released before them, and an unknown key fails the build. A vault that
-  declares one needs this release or newer. `kglite_vault` stays `1`.
+- **`export: {edge_tables: {TYPE: "Heading"}}` in `.kglite/vault.yaml` — an
+  edge's properties survive the export** (`VAULT.md` §7.3, §10.6). A
+  frontmatter list carries targets and nothing else, so an edge's properties
+  were a documented loss for every type. A declared type is written instead as
+  a GFM table under the named heading in each source note's body: the first
+  column holds the `[[target]]` with the edge's `anchor` as its fragment and
+  its `label` as its display text, every other property gets a column named for
+  it, and rows come back in the order the `row` property gives them. The
+  declared heading's **first table belongs to the export**, which rewrites it
+  whole on the next round rather than appending a second one — and removes it
+  when the type's edges are gone from the graph. This is the only prose an
+  export adds: an undeclared type is untouched, and its properties are still
+  dropped and counted. Reading the table back needs the matching
+  `structure.tables … edges: true` rule, which lives in `vault.yaml`, which no
+  export writes — so the report now carries **warnings**: a declared type with
+  no such rule in the source vault, one no exported note emits, and a source
+  `vault.yaml` that will not parse. `okf.export(..., edge_tables={...})` and
+  `kglite okf export --edge-table 'TYPE=Heading'` declare the same thing for a
+  graph that never was a vault, and win per type over the file.
+- **Compatibility:** `structure:`, `edge_defaults:` and `export:` are unknown
+  keys to any kglite released before them, and an unknown key fails the build.
+  A vault that declares one needs this release or newer. `kglite_vault` stays
+  `1`.
 
 ### Fixed
 
@@ -103,7 +123,9 @@ before upgrading.
   so the properties of every `HAS_IMAGE`, `HAS_ATTACHMENT` and hub edge were
   reported as fidelity loss although no edge was written for them at all — and
   a vault deriving sections would have had every retargeted link counted too
-  (`VAULT.md` §10.9). The number now counts what an export actually loses.
+  (`VAULT.md` §10.9). The number now counts what an export actually loses —
+  which, since `export.edge_tables` landed, excludes a declared type's
+  properties: those are written rather than lost.
 - **`%%comments%%` are never scanned** in an Obsidian vault: a link, tag,
   attachment reference or heading written inside one names nothing, as
   `VAULT.md` §5.7 says. A commented-out heading no longer titles its note or

@@ -157,26 +157,44 @@ struct Trip {
 impl Trip {
     /// Run the trip from a source vault, copying its attachments in.
     fn from_vault(source: &Path) -> Trip {
-        Trip::run(source, true)
+        Trip::run(source, true, false)
     }
 
     /// Run it with nothing naming the source root — no option, and no
     /// provenance stamp on the graph either — so no attachment bytes travel.
     fn rootless(source: &Path) -> Trip {
-        Trip::run(source, false)
+        Trip::run(source, false, false)
     }
 
-    fn run(source: &Path, with_root: bool) -> Trip {
+    /// Run it with the source's own `.kglite/vault.yaml` copied into each
+    /// exported tree before it is read back.
+    ///
+    /// No export writes that file (§10.9 loss 4), so a vault whose declarations
+    /// *are* the contract — `structure:` deriving nodes, and the
+    /// `structure.tables … edges: true` rule that reads a declared edge table
+    /// back (§10.6) — cannot round-trip without it. Copying it is what the
+    /// spec asks an author to do, done here.
+    fn carrying_config(source: &Path) -> Trip {
+        Trip::run(source, true, true)
+    }
+
+    fn run(source: &Path, with_root: bool, carry_config: bool) -> Trip {
         let mut graph = (*build_vault(source)).clone();
         if !with_root {
             graph.source_root = None;
         }
         let first = Shape::of(&graph);
         let root = with_root.then(|| source.to_path_buf());
-        Trip::from_graph(&graph, root, first)
+        let config = carry_config.then(|| crate::okf::vault_config::config_path(source));
+        Trip::from_graph(&graph, root, first, config)
     }
 
-    fn from_graph(graph: &DirGraph, source_root: Option<PathBuf>, first: Shape) -> Trip {
+    fn from_graph(
+        graph: &DirGraph,
+        source_root: Option<PathBuf>,
+        first: Shape,
+        config: Option<PathBuf>,
+    ) -> Trip {
         let carry_root = source_root.is_some();
         let dirs: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
         let mut root = source_root;
@@ -197,6 +215,11 @@ impl Trip {
                 },
             )
             .unwrap();
+            if let Some(config) = &config {
+                let into = crate::okf::vault_config::config_path(dir.path());
+                std::fs::create_dir_all(into.parent().unwrap()).unwrap();
+                std::fs::copy(config, into).unwrap();
+            }
             exports.push(snapshot(dir.path()));
             let built = crate::okf::build(dir.path(), &vault_opts()).unwrap();
             if round == 0 {
@@ -348,6 +371,103 @@ const MEDIA: &[(&str, &str)] = &[
     ("img/handbook.pdf", "not a pdf either\n"),
 ];
 
+/// A declared edge table (VAULT.md §7.3, §10.6): the `structure.tables … edges:
+/// true` rule that reads one in, and the `export.edge_tables:` entry that
+/// writes it back. The shape is `vault-structure/structure/tables.md`'s — a
+/// row whose cell carries display text, and one naming a note nobody wrote.
+const EDGE_TABLES: &[(&str, &str)] = &[
+    (
+        ".kglite/vault.yaml",
+        "kglite_vault: 1\ndefault_label: Note\n\
+         structure:\n  tables:\n    \
+         - {under_heading: '^Worked on by$', edge: WORKED_ON_BY, edges: true}\n\
+         export:\n  edge_tables:\n    WORKED_ON_BY: Worked on by\n",
+    ),
+    (
+        "Note/paper.md",
+        "# Paper\n\nWho worked on this, and when.\n\n\
+         ## Worked on by\n\n\
+         | person | role | since |\n|---|---|---|\n\
+         | [[chunky\\|The chunky note]] | author | 2024 |\n\
+         | [[nobody]] | reviewer | 2025 |\n",
+    ),
+    ("Note/chunky.md", "The chunky note's own prose.\n"),
+];
+
+/// Every edge of one type as `source -> target {props}`, sorted — two
+/// independently built graphs compare by value.
+fn edges_of(graph: &DirGraph, conn_type: &str) -> Vec<String> {
+    let _arena_guard = graph.graph.begin_query();
+    let name = |idx| {
+        graph
+            .node_view(idx)
+            .map(|view| crate::datatypes::values::raw_string(&view.id()))
+            .unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for edge in graph.graph.edge_indices() {
+        let Some(data) = graph.graph.edge_weight(edge) else {
+            continue;
+        };
+        if data.connection_type_str(&graph.interner) != conn_type {
+            continue;
+        }
+        let Some((src, tgt)) = graph.graph.edge_endpoints(edge) else {
+            continue;
+        };
+        let props: BTreeMap<String, String> = data
+            .property_iter(&graph.interner)
+            .map(|(key, value)| (key.to_string(), crate::datatypes::values::raw_string(value)))
+            .collect();
+        out.push(format!("{} -> {} {props:?}", name(src), name(tgt)));
+    }
+    out.sort();
+    out
+}
+
+/// The phase's claim, end to end: a declared type's edges come back with the
+/// properties they left with — `row`, `section`, the cell's display text and
+/// every other column — where the author's own `vault.yaml` travelled with the
+/// vault (§10.6).
+#[test]
+fn a_declared_edge_table_carries_its_properties_through_the_round_trip() {
+    let dir = vault_of(EDGE_TABLES);
+    let source = build_vault(dir.path());
+    let before = edges_of(&source, "WORKED_ON_BY");
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert!(
+        before[0].contains("\"label\": \"The chunky note\"")
+            && before[0].contains("\"row\": \"1\""),
+        "{before:?}"
+    );
+
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &source,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(dir.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        report.edge_properties_dropped, 3,
+        "the cells' own prose links"
+    );
+    assert_eq!(report.warnings, Vec::<String>::new());
+
+    let into = crate::okf::vault_config::config_path(out.path());
+    std::fs::create_dir_all(into.parent().unwrap()).unwrap();
+    std::fs::copy(crate::okf::vault_config::config_path(dir.path()), into).unwrap();
+    let after = build_vault(out.path());
+    assert_eq!(
+        edges_of(&after, "WORKED_ON_BY"),
+        before,
+        "every property survived, and the rows kept their order"
+    );
+}
+
 // ── the two properties, over the whole corpus ──────────────────────────────
 
 /// 2020-01-01T00:00:00Z, stamped on the corpus's attachments before the trip
@@ -410,6 +530,11 @@ fn every_corpus_vault_reaches_a_fixed_point() {
     }
     let dir = vault_of(TYPING);
     Trip::from_vault(dir.path()).assert_stable("typing");
+    // The declared edge table is the other vault whose first export moves
+    // bytes: the exporter owns that table and rewrites it whole (§10.6), so
+    // the author's own delimiter row is normalised once and never again.
+    let dir = vault_of(EDGE_TABLES);
+    Trip::carrying_config(dir.path()).assert_stable("edge tables");
     // Without a source root the attachments do not travel, which is a
     // different second vault — and it has to be a fixed point too.
     let dir = vault_of(MEDIA);
@@ -420,7 +545,7 @@ fn every_corpus_vault_reaches_a_fixed_point() {
 #[test]
 fn a_graph_that_was_never_a_vault_reaches_a_fixed_point() {
     let graph = cypher_graph();
-    Trip::from_graph(&graph, None, Shape::of(&graph))
+    Trip::from_graph(&graph, None, Shape::of(&graph), None)
         .assert_byte_identical_from_the_first_export("cypher");
 }
 
@@ -448,13 +573,14 @@ fn cypher_graph() -> DirGraph {
 
 // ── §10.9, loss by loss ────────────────────────────────────────────────────
 
-/// Loss 1. Edge properties are not written, and the report says how many went.
-/// Where no body states the edge — a graph that was never a vault — they are
-/// simply gone.
+/// Loss 1, as narrowed by this phase: edge properties are not written **for a
+/// type `export.edge_tables` does not declare**, and the report says how many
+/// went. Where no body states the edge — a graph that was never a vault — they
+/// are simply gone.
 #[test]
-fn edge_properties_are_dropped_where_no_prose_restates_them() {
+fn an_undeclared_types_properties_are_dropped_where_no_prose_restates_them() {
     let graph = cypher_graph();
-    let trip = Trip::from_graph(&graph, None, Shape::of(&graph));
+    let trip = Trip::from_graph(&graph, None, Shape::of(&graph), None);
     assert_eq!(
         trip.first.edge_props.get("CITES"),
         Some(&2),
@@ -473,6 +599,34 @@ fn edge_properties_are_dropped_where_no_prose_restates_them() {
         trip.second.edge_props.get("CITES"),
         Some(&0),
         "but with nothing on it"
+    );
+}
+
+/// The other half of loss 1: the same graph, one declaration apart. A declared
+/// type's properties are written as a table in the source note's own prose, so
+/// nothing is dropped and nothing is counted (VAULT.md §7.3, §10.6).
+#[test]
+fn a_declared_types_properties_are_written_instead_of_dropped() {
+    let graph = cypher_graph();
+    let dir = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        dir.path(),
+        &ExportOptions {
+            edge_tables: BTreeMap::from([("CITES".to_string(), "Cites".to_string())]),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.edge_properties_dropped, 0);
+    let alpha = std::fs::read_to_string(dir.path().join("Paper/Alpha.md")).unwrap();
+    assert!(
+        alpha.contains("## Cites\n\n| target |\n| --- |\n| [[Beta#intro]] |\n"),
+        "`section` is the heading and `anchor` rides the link: {alpha}"
+    );
+    assert!(
+        !alpha.contains("cites:"),
+        "and not a frontmatter key too: {alpha}"
     );
 }
 

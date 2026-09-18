@@ -53,6 +53,11 @@ pub(crate) enum OkfCommand {
         /// bytes are copied into the vault.
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
+        /// Write this edge type's edges as a table under this heading, keeping
+        /// their properties (`VAULT.md` §10.6). Repeatable; merged over the
+        /// source vault's own `export.edge_tables:`.
+        #[arg(long = "edge-table", value_name = "TYPE=HEADING")]
+        edge_tables: Vec<String>,
     },
     /// Print a vault's fingerprint, and whether a `.kgl` is still current.
     ///
@@ -123,7 +128,8 @@ pub(crate) fn run(command: &OkfCommand) -> Result<()> {
             directory,
             force,
             source_root,
-        } => export(graph, directory, *force, source_root.clone()),
+            edge_tables,
+        } => export(graph, directory, *force, source_root.clone(), edge_tables),
         OkfCommand::Status {
             directory,
             graph,
@@ -142,11 +148,13 @@ fn export(
     directory: &Path,
     force: bool,
     source_root: Option<PathBuf>,
+    edge_tables: &[String],
 ) -> Result<()> {
     let graph = crate::load_graph(graph_path)?;
     let opts = kglite::okf::ExportOptions {
         force,
         source_root,
+        edge_tables: parse_edge_tables(edge_tables)?,
         ..kglite::okf::ExportOptions::default()
     };
     let report = kglite::okf::export(&graph, directory, &opts)
@@ -160,6 +168,24 @@ fn export(
         // The refusals are the diagnostic and stderr already carries them.
         Err(ReportedAgentFailure.into())
     }
+}
+
+/// `--edge-table TYPE=Heading`, as the map [`kglite::okf::ExportOptions`] takes.
+///
+/// The heading may hold `=` (`Worked on by = who?`), so the split is on the
+/// *first* one; the type may not, so nothing is lost by it.
+fn parse_edge_tables(args: &[String]) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    for arg in args {
+        let (conn_type, heading) = arg.split_once('=').with_context(|| {
+            format!("--edge-table {arg}: expected TYPE=HEADING, as `WORKED_ON_BY=Worked on by`")
+        })?;
+        if conn_type.is_empty() || heading.trim().is_empty() {
+            anyhow::bail!("--edge-table {arg}: both the edge type and the heading are required");
+        }
+        out.insert(conn_type.to_string(), heading.to_string());
+    }
+    Ok(out)
 }
 
 /// `kglite okf status` — the fingerprint, and the verdict when a graph is named.

@@ -1347,3 +1347,324 @@ fn structure_options() -> BuildOptions {
     });
     opts
 }
+
+// ── declared edge tables (VAULT.md §7.3, §10.6) ─────────────────────────────
+
+/// A vault that declares one edge table: the `structure.tables:` rule that
+/// reads it in and the `export.edge_tables:` entry that writes it back.
+const EDGE_TABLE_VAULT: &[(&str, &str)] = &[
+    (
+        ".kglite/vault.yaml",
+        "kglite_vault: 1\ndefault_label: Note\n\
+         structure:\n  tables:\n    \
+         - {under_heading: '^Worked on by$', edge: WORKED_ON_BY, edges: true}\n\
+         export:\n  edge_tables:\n    WORKED_ON_BY: Worked on by\n",
+    ),
+    (
+        "Note/paper.md",
+        "# Paper\n\n## Worked on by\n\n\
+         | person | role |\n|---|---|\n\
+         | [[alice\\|Alice A]] | author |\n| [[nobody]] | reviewer |\n",
+    ),
+    ("Note/alice.md", "Alice's own note.\n"),
+];
+
+fn build_with_config(dir: &Path) -> Arc<DirGraph> {
+    crate::okf::build(dir, &BuildOptions::for_dialect(Dialect::Obsidian))
+        .unwrap()
+        .graph
+}
+
+/// The whole point (§10.6): the properties a frontmatter list cannot hold are
+/// written as the table the vault declared, and the type is *not* also written
+/// as a key — writing both would make the edge twice on the next import.
+#[test]
+fn a_declared_type_is_written_as_a_table_and_not_as_a_frontmatter_key() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(source.path(), EDGE_TABLE_VAULT);
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+
+    let paper = read(out.path(), "Note/paper.md");
+    assert!(
+        paper.contains(
+            "## Worked on by\n\n\
+             | person | role |\n| --- | --- |\n\
+             | [[alice\\|Alice A]] | author |\n| [[nobody]] | reviewer |\n"
+        ),
+        "{paper}"
+    );
+    assert!(!paper.contains("worked_on_by:"), "{paper}");
+    assert_eq!(report.warnings, Vec::<String>::new());
+    // The three left are the cells' *own* prose links (`LINKS_TO` carrying
+    // `section`, and `label` on the one with display text): a row rule reads a
+    // cell, it never swallows it, so the body states those links as well — and
+    // the body travels verbatim, which is why they come back anyway (§10.9).
+    assert_eq!(
+        report.edge_properties_dropped, 3,
+        "none of the six WORKED_ON_BY properties is dropped; they are written"
+    );
+}
+
+/// The same vault without the declaration: the type's targets go to a
+/// frontmatter list and every property it carried is counted as loss 1.
+#[test]
+fn an_undeclared_type_keeps_todays_frontmatter_list_and_its_count() {
+    let source = tempfile::tempdir().unwrap();
+    let mut files = EDGE_TABLE_VAULT.to_vec();
+    files[0] = (
+        ".kglite/vault.yaml",
+        "kglite_vault: 1\ndefault_label: Note\n\
+         structure:\n  tables:\n    \
+         - {under_heading: '^Worked on by$', edge: WORKED_ON_BY, edges: true}\n",
+    );
+    write_vault(source.path(), &files);
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+
+    let paper = read(out.path(), "Note/paper.md");
+    assert!(paper.contains("worked_on_by:"), "{paper}");
+    assert!(
+        report.edge_properties_dropped >= 6,
+        "`section`, `row` and `role` on each of the two rows: {}",
+        report.edge_properties_dropped
+    );
+}
+
+/// `ExportOptions::edge_tables` is how a graph that never was a vault declares
+/// one — and how a caller overrides the heading the vault named.
+#[test]
+fn the_callers_declaration_adds_a_type_and_overrides_a_heading() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(source.path(), EDGE_TABLE_VAULT);
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            edge_tables: BTreeMap::from([("WORKED_ON_BY".to_string(), "Contributors".to_string())]),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    let paper = read(out.path(), "Note/paper.md");
+    assert!(
+        paper.contains("## Contributors\n\n| target | role |"),
+        "the caller's heading wins, and the vault's table is left as prose: {paper}"
+    );
+}
+
+/// No export writes a `vault.yaml` (§10.9 loss 4), so a declared table the
+/// source vault has no import rule for travels as prose nobody reads back. The
+/// author hears it from the export rather than from a missing edge later.
+#[test]
+fn a_declared_table_with_no_import_rule_warns() {
+    let source = tempfile::tempdir().unwrap();
+    let mut files = EDGE_TABLE_VAULT.to_vec();
+    files[0] = (
+        ".kglite/vault.yaml",
+        "kglite_vault: 1\ndefault_label: Note\n\
+         export:\n  edge_tables:\n    WROTE: Worked on by\n",
+    );
+    write_vault(source.path(), &files);
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`export.edge_tables.WROTE`")
+                && w.contains("no `structure.tables:` rule")),
+        "{:?}",
+        report.warnings
+    );
+}
+
+/// A type whose only sources are nodes the export does not write — every node
+/// `structure:` derives — has no note to write its table in.
+#[test]
+fn a_type_no_exported_note_emits_warns() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(
+        source.path(),
+        &[
+            (
+                ".kglite/vault.yaml",
+                "kglite_vault: 1\ndefault_label: Note\n\
+                 export:\n  edge_tables:\n    HAS_PARAMETER: Parameters\n",
+            ),
+            ("Note/a.md", "# A\n\nProse.\n"),
+        ],
+    );
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("no exported source note emits HAS_PARAMETER")),
+        "{:?}",
+        report.warnings
+    );
+}
+
+/// The export is writing a different directory: one unreadable file beside the
+/// graph's source is a warning, not a refusal to write a vault.
+#[test]
+fn an_unreadable_source_vault_yaml_warns_rather_than_failing() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(source.path(), &[("Note/a.md", "Prose.\n")]);
+    let broken = tempfile::tempdir().unwrap();
+    write_vault(
+        broken.path(),
+        &[(".kglite/vault.yaml", "kglite_vault: 1\nnonsense: true\n")],
+    );
+    let graph = build_vault(source.path());
+    let out = tempfile::tempdir().unwrap();
+    let report = export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(broken.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.files_written, 1);
+    assert!(
+        report.warnings.iter().any(|w| w.contains("unknown key")),
+        "{:?}",
+        report.warnings
+    );
+}
+
+/// The body states an edge of a declared type *outside* the table — a link
+/// under a heading the §5.3 ladder types. It keeps its properties in that
+/// prose, so a row for it would make a second edge on the next import, exactly
+/// as a frontmatter list would (§10.6).
+///
+/// The type is one the **built-in** ladder gives, because that is the ladder
+/// the export re-reads the body with: a `heading_edges:` retyping lives in
+/// `vault.yaml`, which no export writes, and §10.9 loss 4 already says such an
+/// edge comes back beside the ladder's own.
+#[test]
+fn an_edge_the_prose_states_elsewhere_gets_no_row() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(
+        source.path(),
+        &[
+            (
+                ".kglite/vault.yaml",
+                "kglite_vault: 1\ndefault_label: Note\n\
+                 structure:\n  tables:\n    \
+                 - {under_heading: '^Worked on by$', edge: RELATED, edges: true}\n\
+                 export:\n  edge_tables:\n    RELATED: Worked on by\n",
+            ),
+            (
+                "Note/paper.md",
+                "# Paper\n\n## Worked on by\n\n\
+                 | person | role |\n|---|---|\n| [[alice]] | author |\n\n\
+                 ## Related\n\n[[bob]] is related.\n",
+            ),
+            ("Note/alice.md", "Alice.\n"),
+            ("Note/bob.md", "Bob.\n"),
+        ],
+    );
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    let paper = read(out.path(), "Note/paper.md");
+    assert!(paper.contains("| [[alice]] | author |"), "{paper}");
+    assert!(
+        !paper.contains("| [[bob]]"),
+        "bob is stated in prose, and that prose travels: {paper}"
+    );
+    assert!(paper.contains("[[bob]] is related."), "{paper}");
+}
+
+/// …and the exporter's **own** table is not the body stating anything. Under a
+/// heading the ladder types, every cell is a prose link of the declared type
+/// too — read as "the body already says this", every row would drop itself and
+/// the table would empty on the first export, losing the properties the whole
+/// feature exists to keep.
+#[test]
+fn the_tables_own_cells_are_not_read_as_the_body_stating_the_edge() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(
+        source.path(),
+        &[
+            (
+                ".kglite/vault.yaml",
+                "kglite_vault: 1\ndefault_label: Note\n\
+                 structure:\n  tables:\n    \
+                 - {under_heading: '^Related$', edge: RELATED, edges: true}\n\
+                 export:\n  edge_tables:\n    RELATED: Related\n",
+            ),
+            (
+                "Note/paper.md",
+                "# Paper\n\n## Related\n\n\
+                 | person | role |\n|---|---|\n| [[alice]] | author |\n",
+            ),
+            ("Note/alice.md", "Alice.\n"),
+        ],
+    );
+    let graph = build_with_config(source.path());
+    let out = tempfile::tempdir().unwrap();
+    export(
+        &graph,
+        out.path(),
+        &ExportOptions {
+            source_root: Some(source.path().to_path_buf()),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    let paper = read(out.path(), "Note/paper.md");
+    assert!(paper.contains("| [[alice]] | author |"), "{paper}");
+}

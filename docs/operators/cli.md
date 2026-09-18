@@ -212,6 +212,26 @@ missing from it or edited since is refused, named on stderr, and the command
 exits non-zero. `--force` lifts exactly those two refusals. Exporting the same
 graph twice is byte-identical, so the output is worth committing.
 
+A frontmatter list carries an edge's target and not its properties, so those
+are a documented loss — unless the type is **declared as an edge table**. The
+source vault declares it in its own `.kglite/vault.yaml`
+(`export: {edge_tables: {WORKED_ON_BY: "Worked on by"}}`, `VAULT.md` §7.3),
+which the export finds through the graph's provenance; `--edge-table` says the
+same thing from the command line, repeatably, and wins per type:
+
+```bash
+kglite okf export vault.kgl out/ \
+    --source-root vault/ \
+    --edge-table 'WORKED_ON_BY=Worked on by'
+```
+
+Each declared type's edges are then written as a GFM table under that heading in
+the source note's body — the only prose an export ever adds — one column per
+property, and the export owns that table on the next round. Reading it back
+needs the matching `structure.tables … edges: true` rule, which lives in
+`vault.yaml`, which no export writes: copy that file across. The report warns on
+stderr when the rule is missing or when no exported note emits the type.
+
 ## Agent Sessions
 
 For byte-bounded output with executable retrieval commands, use explicit

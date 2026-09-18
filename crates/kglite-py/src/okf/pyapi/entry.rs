@@ -199,17 +199,19 @@ pub fn source(path: PathBuf) -> PyResult<String> {
 /// in the directory is refused and reported unless `force` is set. See the
 /// stub for the full contract.
 #[pyfunction]
-#[pyo3(signature = (graph, path, *, force=false, source_root=None))]
+#[pyo3(signature = (graph, path, *, force=false, source_root=None, edge_tables=None))]
 pub fn export(
     py: Python<'_>,
     graph: &KnowledgeGraph,
     path: PathBuf,
     force: bool,
     source_root: Option<PathBuf>,
+    edge_tables: Option<std::collections::BTreeMap<String, String>>,
 ) -> PyResult<ExportReport> {
     let opts = crate::okf::ExportOptions {
         force,
         source_root,
+        edge_tables: edge_tables.unwrap_or_default(),
         ..crate::okf::ExportOptions::default()
     };
     let inner = graph.inner.clone();

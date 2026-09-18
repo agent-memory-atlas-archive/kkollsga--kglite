@@ -49,7 +49,7 @@ const TYPE_KEYWORDS: [&str; 7] = ["string", "int", "float", "bool", "date", "dat
 /// (VAULT.md §7): a declaration the reader cannot place is never harmless —
 /// a misspelled `heading_edge:` would leave every link typed by the ladder
 /// with nothing to say so.
-const TOP_LEVEL_KEYS: [&str; 15] = [
+const TOP_LEVEL_KEYS: [&str; 16] = [
     "kglite_vault",
     "default_label",
     "label_from",
@@ -65,6 +65,7 @@ const TOP_LEVEL_KEYS: [&str; 15] = [
     "embed",
     "structure",
     "edge_defaults",
+    "export",
 ];
 
 /// One entry of an `indexes:` list (VAULT.md §7).
@@ -116,6 +117,11 @@ pub struct VaultConfig {
     /// every edge of it carries. A profile override, like `structure:`,
     /// because the builder reads it where the rows are emitted.
     pub(crate) edge_defaults: BTreeMap<String, Vec<(String, Value)>>,
+    /// `export.edge_tables:` (VAULT.md §7.3) — edge type → the heading whose
+    /// table the exporter writes its edges under. Read by nothing in the
+    /// build: it is a declaration *about* the export, which finds it through
+    /// the graph's `source_root` provenance (VAULT.md §10.6).
+    pub(crate) export_edge_tables: BTreeMap<String, String>,
 }
 
 /// Where the declaration file lives under `root`.
@@ -215,6 +221,25 @@ pub fn parse(text: &str) -> Result<VaultConfig, String> {
             );
         }
     }
+    if let Some(v) = map.get("structure") {
+        config.structure = Some(crate::okf::structure::profile::parse(v)?);
+    }
+    if let Some(v) = map.get("edge_defaults") {
+        config.edge_defaults = parse_edge_defaults(v)?;
+    }
+    if let Some(v) = map.get("export") {
+        config.export_edge_tables = parse_export(v)?;
+    }
+    parse_declarations(map, &mut config)?;
+    Ok(config)
+}
+
+/// The half of the file that runs against the **finished graph** — types,
+/// indexes, text indexes, the ontology and the embed targets (see the module
+/// doc's two moments). Split from [`parse`] because it is the half no reader
+/// below the build ever sees, and because one function that reads every key in
+/// the format is a function nobody can hold in their head.
+fn parse_declarations(map: &PropMap, config: &mut VaultConfig) -> Result<(), String> {
     if let Some(v) = map.get("types") {
         config.types = parse_types(v)?;
     }
@@ -235,30 +260,6 @@ pub fn parse(text: &str) -> Result<VaultConfig, String> {
                 .map_err(|e| format!("`ontology`: {e}"))?,
         );
     }
-    if let Some(v) = map.get("structure") {
-        config.structure = Some(crate::okf::structure::profile::parse(v)?);
-    }
-    if let Some(v) = map.get("edge_defaults") {
-        for (conn_type, props) in map_of(v, "edge_defaults")?.iter() {
-            let props = map_of(props, &format!("edge_defaults.{conn_type}"))?;
-            // A scalar, and only a scalar: the value is a *constant* stated
-            // once for a whole type, and a list or a map there would be a
-            // declaration the reader cannot place on an edge column.
-            let mut entries = Vec::with_capacity(props.len());
-            for (name, value) in props.iter() {
-                match value {
-                    Value::List(_) | Value::Map(_) | Value::Null => {
-                        return Err(format!(
-                            "`edge_defaults.{conn_type}.{name}` must be a scalar, not {}",
-                            kind_of(value)
-                        ))
-                    }
-                    scalar => entries.push((name.to_string(), scalar.clone())),
-                }
-            }
-            config.edge_defaults.insert(conn_type.to_string(), entries);
-        }
-    }
     if let Some(v) = map.get("embed") {
         for (label, prop) in map_of(v, "embed")?.iter() {
             config.embed.push((
@@ -267,7 +268,32 @@ pub fn parse(text: &str) -> Result<VaultConfig, String> {
             ));
         }
     }
-    Ok(config)
+    Ok(())
+}
+
+/// `edge_defaults:` (VAULT.md §7.2) — edge type → its constant properties.
+fn parse_edge_defaults(v: &Value) -> Result<BTreeMap<String, Vec<(String, Value)>>, String> {
+    let mut out = BTreeMap::new();
+    for (conn_type, props) in map_of(v, "edge_defaults")?.iter() {
+        let props = map_of(props, &format!("edge_defaults.{conn_type}"))?;
+        // A scalar, and only a scalar: the value is a *constant* stated once
+        // for a whole type, and a list or a map there would be a declaration
+        // the reader cannot place on an edge column.
+        let mut entries = Vec::with_capacity(props.len());
+        for (name, value) in props.iter() {
+            match value {
+                Value::List(_) | Value::Map(_) | Value::Null => {
+                    return Err(format!(
+                        "`edge_defaults.{conn_type}.{name}` must be a scalar, not {}",
+                        kind_of(value)
+                    ))
+                }
+                scalar => entries.push((name.to_string(), scalar.clone())),
+            }
+        }
+        out.insert(conn_type.to_string(), entries);
+    }
+    Ok(out)
 }
 
 fn parse_folder_notes(v: &Value, config: &mut VaultConfig) -> Result<(), String> {
@@ -293,6 +319,52 @@ fn parse_folder_notes(v: &Value, config: &mut VaultConfig) -> Result<(), String>
             });
     }
     Ok(())
+}
+
+/// `export:` (VAULT.md §7.3) — what the exporter writes that a frontmatter
+/// list cannot hold.
+///
+/// The edge type is spelled as an edge type (`UPPER_SNAKE`) and the heading is
+/// not empty, because both are refused rather than silently ignored: a
+/// lowercased type would name no edge the build ever emits, and an empty
+/// heading would send the table under `## `.
+fn parse_export(v: &Value) -> Result<BTreeMap<String, String>, String> {
+    let map = map_of(v, "export")?;
+    for (key, _) in map.iter() {
+        if key != "edge_tables" {
+            return Err(format!("unknown key `export.{key}`; accepts `edge_tables`"));
+        }
+    }
+    let mut out = BTreeMap::new();
+    let Some(tables) = map.get("edge_tables") else {
+        return Ok(out);
+    };
+    for (conn_type, heading) in map_of(tables, "export.edge_tables")?.iter() {
+        if !is_edge_type(conn_type) {
+            return Err(format!(
+                "`export.edge_tables.{conn_type}` is not an edge type; \
+                 edge types are UPPER_SNAKE, as `WORKED_ON_BY` is"
+            ));
+        }
+        let heading = string_of(heading, &format!("export.edge_tables.{conn_type}"))?;
+        if heading.trim().is_empty() {
+            return Err(format!(
+                "`export.edge_tables.{conn_type}` names no heading; \
+                 it is the heading the type's edges are written under"
+            ));
+        }
+        out.insert(conn_type.to_string(), heading);
+    }
+    Ok(out)
+}
+
+/// The spelling `UPPER_SNAKE(key)` produces (VAULT.md §4.3), which is what a
+/// declared type has to match to name an edge the build emits.
+fn is_edge_type(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn parse_hubs(v: &Value) -> Result<BTreeMap<String, HubSpec>, String> {

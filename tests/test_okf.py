@@ -16,6 +16,7 @@ from collections import Counter
 from datetime import datetime
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -1234,6 +1235,47 @@ class TestExport:
         assert forced.ok is True
         assert forced.files_written == 1
         assert edited.read_text(encoding="utf-8") == original
+
+    def test_a_declared_edge_table_writes_its_properties_and_reimports_equal(self, tmp_path):
+        """VAULT.md §7.3/§10.6. The structure vault declares `WORKED_ON_BY`, so
+        the export writes the table back instead of a `worked_on_by:` list that
+        would drop `role` and `since`. Re-importing it needs the vault's own
+        `vault.yaml`, which no export writes (§10.9 loss 4) — so the test copies
+        it, exactly as the spec asks an author to."""
+        graph = okf.build(str(STRUCTURE_BUNDLE), dialect="obsidian")
+        out = tmp_path / "vault"
+        report = okf.export(graph, str(out), source_root=str(STRUCTURE_BUNDLE))
+        assert report.warnings == []
+
+        body = (out / "Api" / "tables.md").read_text(encoding="utf-8")
+        assert "## Worked on by\n\n| person | role | since |\n| --- | --- | --- |\n" in body
+        assert "| [[chunky\\|The chunky note]] | author | 2024 |" in body
+        assert "| [[nobody]] | reviewer | 2025 |" in body
+        assert "worked_on_by:" not in body
+
+        shutil.copy2(STRUCTURE_BUNDLE / ".kglite" / "vault.yaml", out / ".kglite" / "vault.yaml")
+        back = okf.build(str(out), dialect="obsidian")
+        query = (
+            "MATCH ()-[r:WORKED_ON_BY]->(t) "
+            "RETURN r.row AS row, r.section AS section, r.label AS label, "
+            "r.role AS role, r.since AS since ORDER BY r.row"
+        )
+        assert back.cypher(query).to_list() == graph.cypher(query).to_list()
+
+    def test_the_caller_can_declare_an_edge_table_a_vault_does_not(self, tmp_path):
+        """`edge_tables=` is how a graph that never was a vault declares one —
+        and it wins per type over the file."""
+        graph = okf.build(str(STRUCTURE_BUNDLE), dialect="obsidian")
+        out = tmp_path / "vault"
+        report = okf.export(
+            graph,
+            str(out),
+            source_root=str(STRUCTURE_BUNDLE),
+            edge_tables={"WORKED_ON_BY": "Contributors"},
+        )
+        body = (out / "Api" / "tables.md").read_text(encoding="utf-8")
+        assert "## Contributors\n\n| target | role | since |\n" in body
+        assert any("no `structure.tables:` rule" in w for w in report.warnings), report.warnings
 
     def test_a_missing_target_directory_is_created(self, tmp_path):
         graph = okf.build(str(VAULT_BUNDLE), dialect="obsidian")

@@ -409,6 +409,7 @@ def export(
     *,
     force: bool = ...,
     source_root: str | None = ...,
+    edge_tables: dict[str, str] | None = ...,
 ) -> ExportReport:
     """Write a graph out as an Obsidian vault — the inverse of :func:`build`.
 
@@ -433,6 +434,16 @@ def export(
     Exporting the same graph twice is byte-identical: keys, edge lists, file
     order and the manifest are all sorted.
 
+    **Declared edge tables.** A frontmatter list carries targets and nothing
+    else, so an edge's properties are a documented loss. A type named in
+    ``export: {edge_tables: {TYPE: "Heading"}}`` in the source vault's
+    ``.kglite/vault.yaml`` — or in ``edge_tables`` here — is written as a GFM
+    table under that heading in each source note's body instead, one column per
+    property, and keeps them. This is the only prose an export ever adds. The
+    table is read back only by a vault whose ``structure.tables`` declares the
+    matching ``edges: true`` rule; no export writes ``vault.yaml``, so copy it
+    across, and ``ExportReport.warnings`` says so when the rule is missing.
+
     Args:
         graph: The graph to write. It need not have come from a vault — a
             graph that carries no ``file_path`` anywhere exports every node.
@@ -440,6 +451,10 @@ def export(
             directory is written *into*.
         force: Replace files the manifest does not own or that were edited
             since the last export, and delete owned files that were edited.
+        edge_tables: Edge type to the heading its edges are written under,
+            merged over the source vault's own ``export.edge_tables:`` per
+            type. How a graph that never was a vault declares one, and how to
+            override a heading the vault named.
         source_root: The directory the graph's attachments were read from, so
             their bytes are copied into the exported vault. Omitted, it falls
             back to the graph's own :attr:`~kglite.KnowledgeGraph.source_root`
@@ -512,6 +527,16 @@ class ExportReport:
 
         Either no ``source_root`` was given, or the file is not under it. The
         body references to them are written as they stand.
+        """
+
+    @property
+    def warnings(self) -> list[str]:
+        """One line per declared edge table the export could not write as asked.
+
+        A type whose source vault has no ``structure.tables`` rule to read the
+        table back, one no exported note emits, or a ``vault.yaml`` that would
+        not parse. Nothing here failed; each line is a table the author will
+        not get back.
         """
 
     @property

@@ -24,6 +24,7 @@ use petgraph::graph::NodeIndex;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+mod edge_tables;
 mod manifest;
 mod paths;
 mod yaml_out;
@@ -69,6 +70,12 @@ pub struct ExportOptions {
     /// The property holding each note's prose — `.kglite/vault.yaml`'s `body:`
     /// (VAULT.md §7), which a graph does not carry, so the caller repeats it.
     pub body_property: String,
+    /// Edge type → the heading whose table its edges are written under
+    /// (VAULT.md §7.3, §10.6), for a graph with no vault to declare it — or to
+    /// override what one declared. Merged **over** the `export.edge_tables:`
+    /// of the source vault's own `.kglite/vault.yaml`, per type: an entry here
+    /// wins, and a type only the vault names still gets its table.
+    pub edge_tables: BTreeMap<String, String>,
 }
 
 impl Default for ExportOptions {
@@ -77,6 +84,7 @@ impl Default for ExportOptions {
             force: false,
             source_root: None,
             body_property: DEFAULT_BODY_PROPERTY.to_string(),
+            edge_tables: BTreeMap::new(),
         }
     }
 }
@@ -109,6 +117,11 @@ pub struct ExportReport {
     pub skills_written: usize,
     /// `.kglite/recipes/*.md` files the graph's `KgliteRecipe` nodes produced.
     pub recipes_written: usize,
+    /// What the export could not do as declared, in declaration order — a
+    /// declared edge table the source vault has no import rule for, or one no
+    /// exported note emits. Nothing here failed; each line is a table the
+    /// author will not get back (VAULT.md §10.6).
+    pub warnings: Vec<String>,
 }
 
 impl ExportReport {
@@ -131,6 +144,9 @@ impl ExportReport {
             "edge properties dropped: {}\n",
             self.edge_properties_dropped
         ));
+        for line in &self.warnings {
+            out.push_str(&format!("warning: {line}\n"));
+        }
         if self.refusals.is_empty() {
             out.push_str("refusals: none\n");
         } else {
@@ -212,12 +228,15 @@ pub fn export(graph: &DirGraph, dir: &Path, opts: &ExportOptions) -> Result<Expo
     } = collect(graph, &opts.body_property);
     assign_paths(&mut notes);
     let index = LinkIndex::new(&notes);
-    let (edges, edge_properties_dropped) = outgoing_edges(graph, &notes, &stubs);
+    let (declared, mut warnings) = declared_edge_tables(graph, opts);
+    let (edges, edge_properties_dropped) = outgoing_edges(graph, &notes, &stubs, &declared);
+    warnings.extend(unemitted_edge_tables(&declared, &edges));
 
     let mut writer = Writer::open(dir, opts.force)?;
     writer.report.edge_properties_dropped = edge_properties_dropped;
+    writer.report.warnings = warnings;
     for note in &notes {
-        let text = render_note(note, &notes, &index, &edges);
+        let text = render_note(note, &notes, &index, &edges, &declared);
         writer.put(&note.out.clone(), text.as_bytes())?;
     }
     write_carried(graph, &mut writer)?;
@@ -378,10 +397,14 @@ impl LinkIndex {
     }
 }
 
-/// One outgoing edge, reduced to what a frontmatter list can hold.
+/// One outgoing edge, reduced to what the export can write: a target, and —
+/// for a type `export.edge_tables` declares — the properties its row carries.
+/// An undeclared type's properties are dropped and counted (VAULT.md §10.9),
+/// so they are not carried here at all.
 struct OutEdge {
     conn_type: String,
     target: Target,
+    props: Vec<(String, Value)>,
 }
 
 /// What a frontmatter wikilink can point at: a note the export writes, or the
@@ -401,14 +424,15 @@ enum Target {
 /// types instead would also drop a note-to-note `CONTAINS` in a graph that was
 /// never a vault, where nothing else expresses it.
 ///
-/// The count covers **every** edge leaving an exported note, including the ones
-/// whose target is not a file: an `alt` on a `HAS_IMAGE` is as lost as an
-/// `anchor` on a `LINKS_TO`, and a caller asking "what did this cost me?"
-/// wants both.
+/// The count covers every edge the export *writes* whose type no
+/// `export.edge_tables` entry declares: an edge to a node the export does not
+/// write loses nothing it could have carried, and a declared type's properties
+/// are written rather than lost (VAULT.md §7.3, §10.9).
 fn outgoing_edges(
     graph: &DirGraph,
     notes: &[Note],
     stubs: &HashMap<NodeIndex, String>,
+    declared: &BTreeMap<String, String>,
 ) -> (HashMap<NodeIndex, Vec<OutEdge>>, usize) {
     let positions: HashMap<NodeIndex, usize> = notes
         .iter()
@@ -442,13 +466,174 @@ fn outgoing_edges(
         // does not write loses nothing it could have carried. Counting before
         // this match made every `HAS_SECTION` a dropped property the moment a
         // vault declared `structure:` (VAULT.md §7.1, §10.9).
-        dropped += data.properties.len();
         let conn_type = data.connection_type_str(&graph.interner).to_string();
-        out.entry(src)
-            .or_default()
-            .push(OutEdge { conn_type, target });
+        // A declared type's properties are written, as a table (§10.6), so
+        // they are never part of the count: where the export leaves such an
+        // edge out because the body already states it, the prose carries them
+        // instead — the same reason a body-stated edge keeps them today.
+        let props = match declared.contains_key(&conn_type) {
+            true => data
+                .property_iter(&graph.interner)
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect(),
+            false => {
+                dropped += data.property_count();
+                Vec::new()
+            }
+        };
+        out.entry(src).or_default().push(OutEdge {
+            conn_type,
+            target,
+            props,
+        });
     }
     (out, dropped)
+}
+
+/// The edge types written as body tables, and the heading each goes under
+/// (VAULT.md §7.3, §10.6), with what the caller should know about them.
+///
+/// Two sources. The **source vault's own** `.kglite/vault.yaml`, found through
+/// the `source_root` the caller named or the graph's provenance stamp — the
+/// declaration lives with the vault because the same file carries the
+/// `structure.tables:` rule that reads the table back. And
+/// [`ExportOptions::edge_tables`], which is how a graph that never was a vault
+/// declares one; it is merged **over** the file, per type, so a caller can add
+/// a type or move one type's heading without restating the rest.
+///
+/// A `vault.yaml` that will not parse is a warning rather than an error: the
+/// export is writing a *different* directory, and one unreadable file beside
+/// the graph's source is no reason to refuse a vault of a thousand notes.
+fn declared_edge_tables(
+    graph: &DirGraph,
+    opts: &ExportOptions,
+) -> (BTreeMap<String, String>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let root = opts
+        .source_root
+        .clone()
+        .or_else(|| graph.source_root.as_ref().map(PathBuf::from));
+    let config = match root.as_deref().map(crate::okf::vault_config::load) {
+        Some(Ok(config)) => config,
+        Some(Err(reason)) => {
+            warnings.push(format!(
+                "{reason}; no `export.edge_tables` were read from the source vault"
+            ));
+            None
+        }
+        None => None,
+    };
+    let mut declared = config
+        .as_ref()
+        .map(|config| config.export_edge_tables.clone())
+        .unwrap_or_default();
+    declared.extend(opts.edge_tables.clone());
+    if let Some(config) = &config {
+        warnings.extend(unreadable_edge_tables(&declared, config));
+    }
+    (declared, warnings)
+}
+
+/// A declared table the source vault cannot read back (VAULT.md §10.6).
+///
+/// No export writes a `vault.yaml` (§10.9 loss 4), so the table travels and the
+/// rule that reads it does not: a vault whose own `structure.tables:` has no
+/// `edges: true` rule for the type under that heading exports a table its next
+/// build reads as prose. The author hears it here rather than from a missing
+/// edge three steps later.
+fn unreadable_edge_tables(
+    declared: &BTreeMap<String, String>,
+    config: &crate::okf::vault_config::VaultConfig,
+) -> Vec<String> {
+    declared
+        .iter()
+        .filter(|(conn_type, heading)| {
+            !config.structure.as_ref().is_some_and(|structure| {
+                structure.tables.iter().any(|rule| {
+                    rule.edges && &&rule.edge == conn_type && rule.under_heading.is_match(heading)
+                })
+            })
+        })
+        .map(|(conn_type, heading)| {
+            format!(
+                "`export.edge_tables.{conn_type}` writes a table under `{heading}`, but the \
+                 source vault declares no `structure.tables:` rule with `edges: true`, \
+                 `edge: {conn_type}` and an `under_heading:` matching that heading — the \
+                 exported table reads back as prose (VAULT.md §7.1, §10.6)"
+            )
+        })
+        .collect()
+}
+
+/// A declared type no exported note emits (VAULT.md §10.6).
+///
+/// The common cause is a type whose *source* is a node the export does not
+/// write — every node `structure:` derives is part of a note's prose and has no
+/// file (§10.1), so an edge leaving one has nowhere to be written from.
+fn unemitted_edge_tables(
+    declared: &BTreeMap<String, String>,
+    edges: &HashMap<NodeIndex, Vec<OutEdge>>,
+) -> Vec<String> {
+    declared
+        .keys()
+        .filter(|conn_type| {
+            !edges
+                .values()
+                .flatten()
+                .any(|edge| &&edge.conn_type == conn_type)
+        })
+        .map(|conn_type| {
+            format!(
+                "`export.edge_tables.{conn_type}`: no exported source note emits {conn_type}, \
+                 so no table is written — an edge leaving a node the export does not write \
+                 has no note to write it in (VAULT.md §10.1)"
+            )
+        })
+        .collect()
+}
+
+/// The note's prose with every declared type's table written into it (§10.6).
+///
+/// A type is *in play* for a note when the note has an edge of it, or when the
+/// body already carries its heading: the second because a table whose edges are
+/// gone from the graph has to go with them, or the next import would make them
+/// again.
+fn declared_tables(
+    note: &Note,
+    outgoing: &[OutEdge],
+    notes: &[Note],
+    index: &LinkIndex,
+    declared: &BTreeMap<String, String>,
+) -> String {
+    let body = note.body.as_deref().unwrap_or("");
+    let in_play: Vec<(&str, &str)> = declared
+        .iter()
+        .map(|(conn_type, heading)| (conn_type.as_str(), heading.as_str()))
+        .filter(|(conn_type, heading)| {
+            outgoing.iter().any(|edge| edge.conn_type == *conn_type) || body.contains(*heading)
+        })
+        .collect();
+    if in_play.is_empty() {
+        return body.to_string();
+    }
+    let headings: Vec<&str> = in_play.iter().map(|(_, heading)| *heading).collect();
+    // What the note states *outside* the tables the exporter owns: an edge one
+    // of those states keeps its properties in that prose, and a row for it
+    // would make a second edge on the next import.
+    let stated = body_links(
+        note,
+        &edge_tables::prose_outside_owned_tables(body, &headings),
+    );
+    let tables: Vec<(&str, Vec<edge_tables::Row>)> = in_play
+        .iter()
+        .map(|(conn_type, heading)| {
+            let rows = edge_tables::rows_for(outgoing, conn_type, notes, index, |edge| {
+                body_states_edge(&stated, edge, notes)
+            });
+            (*heading, rows)
+        })
+        .collect();
+    edge_tables::apply(body, &tables)
 }
 
 /// Render one note: frontmatter, then the body verbatim (VAULT.md §10.3–§10.6).
@@ -457,25 +642,32 @@ fn render_note(
     notes: &[Note],
     index: &LinkIndex,
     edges: &HashMap<NodeIndex, Vec<OutEdge>>,
+    declared: &BTreeMap<String, String>,
 ) -> String {
+    let outgoing: &[OutEdge] = edges.get(&note.idx).map_or(&[], Vec::as_slice);
+    // The declared tables are written into the prose first, so the frontmatter
+    // pass below reads the body the file will actually carry — a table's own
+    // `[[cells]]` are links like any other, and an edge one of them states is
+    // an edge the frontmatter must not state again (§10.6).
+    let body = declared_tables(note, outgoing, notes, index, declared);
     let mut tree = Tree::default();
     // `type:` is never emitted (§10.4): the folder carries the label, so
     // writing it too would make a later folder move a no-op.
     if note.id != note.stem() {
         tree.insert("id", Value::String(note.id.clone()));
     }
-    if !note.title.is_empty() && note.title != recovered_title(note) {
+    if !note.title.is_empty() && note.title != recovered_title(note, &body) {
         tree.insert("title", Value::String(note.title.clone()));
     }
     for (key, value) in &note.props {
         tree.insert(key, value.clone());
     }
-    for (key, targets) in edge_keys(note, notes, index, edges) {
+    for (key, targets) in edge_keys(note, &body, notes, index, outgoing, declared) {
         tree.insert_wikilinks(&key, targets);
     }
 
     let front = render_frontmatter(&tree);
-    let body = note.body.as_deref().unwrap_or("");
+    let body = body.as_str();
     match (front.is_empty(), body.is_empty()) {
         (true, true) => String::new(),
         (true, false) => ensure_newline(body),
@@ -501,31 +693,26 @@ fn ensure_newline(text: &str) -> String {
 /// and by target within each key (VAULT.md §10.6, §10.8).
 fn edge_keys(
     note: &Note,
+    body: &str,
     notes: &[Note],
     index: &LinkIndex,
-    edges: &HashMap<NodeIndex, Vec<OutEdge>>,
+    outgoing: &[OutEdge],
+    declared: &BTreeMap<String, String>,
 ) -> BTreeMap<String, Vec<String>> {
-    let Some(outgoing) = edges.get(&note.idx) else {
+    if outgoing.is_empty() {
         return BTreeMap::new();
-    };
-    let mentioned = body_links(note);
+    }
+    let mentioned = body_links(note, body);
     let mut by_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for edge in outgoing {
+        // A declared type is written as a table in the body, never as a
+        // frontmatter list: writing both would make the edge twice (§10.6).
+        if declared.contains_key(&edge.conn_type) || body_states_edge(&mentioned, edge, notes) {
+            continue;
+        }
         let name = match &edge.target {
-            Target::Note(at) => {
-                let target = &notes[*at];
-                if body_states(&mentioned, &edge.conn_type, |name| names(target, name)) {
-                    continue;
-                }
-                index.wikilink(target)
-            }
-            Target::Stub(name) => {
-                let lowered = name.to_ascii_lowercase();
-                if body_states(&mentioned, &edge.conn_type, |written| written == lowered) {
-                    continue;
-                }
-                name.clone()
-            }
+            Target::Note(at) => index.wikilink(&notes[*at]),
+            Target::Stub(name) => name.clone(),
         };
         by_key
             .entry(lower_snake(&edge.conn_type))
@@ -546,7 +733,7 @@ fn edge_keys(
 /// Comparing against the *stem* alone is not enough: the heading rung sits
 /// above it, so a note titled after its file but opening with a heading came
 /// back titled by the heading.
-fn recovered_title(note: &Note) -> String {
+fn recovered_title(note: &Note, body: &str) -> String {
     let named = note
         .props
         .iter()
@@ -557,7 +744,7 @@ fn recovered_title(note: &Note) -> String {
             other => Some(crate::datatypes::values::raw_string(other)),
         });
     named
-        .or_else(|| note.body.as_deref().and_then(crate::okf::first_heading))
+        .or_else(|| crate::okf::first_heading(body))
         .unwrap_or_else(|| note.stem().to_string())
 }
 
@@ -566,10 +753,10 @@ fn recovered_title(note: &Note) -> String {
 /// exactly what the next import will read there — including the type the
 /// heading ladder (§5.3) gives it, which is why a link under `## Related` is
 /// not a `LINKS_TO`.
-fn body_links(note: &Note) -> Vec<(String, String)> {
-    let Some(body) = note.body.as_deref() else {
+fn body_links(note: &Note, body: &str) -> Vec<(String, String)> {
+    if body.is_empty() {
         return Vec::new();
-    };
+    }
     let dir = match note.out.rfind('/') {
         Some(at) => &note.out[..at],
         None => "",
@@ -603,6 +790,17 @@ fn body_states(
     written
         .iter()
         .any(|(conn, target)| conn == conn_type && names_target(target))
+}
+
+/// [`body_states`] for one outgoing edge, whichever kind of target it has.
+fn body_states_edge(written: &[(String, String)], edge: &OutEdge, notes: &[Note]) -> bool {
+    match &edge.target {
+        Target::Note(at) => body_states(written, &edge.conn_type, |name| names(&notes[*at], name)),
+        Target::Stub(name) => {
+            let lowered = name.to_ascii_lowercase();
+            body_states(written, &edge.conn_type, |written| written == lowered)
+        }
+    }
 }
 
 /// Whether one of the body's targets names this note — by stem, by id, by its

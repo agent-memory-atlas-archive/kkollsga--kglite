@@ -38,6 +38,14 @@ structure:
 types:
   ApiParameter: {required: bool}
 
+# Read by the exporter, never by the build (VAULT.md §7.3). Without it the
+# `WORKED_ON_BY` edges the table above states would be exported as a
+# frontmatter list of targets, dropping `role` and `since`; with it they are
+# written back as the same table.
+export:
+  edge_tables:
+    WORKED_ON_BY: Worked on by
+
 # A declaration may name a derived label exactly as it names a note's.
 text_indexes:
   Chunk: [embed_text]

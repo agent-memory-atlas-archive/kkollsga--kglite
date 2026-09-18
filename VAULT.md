@@ -975,6 +975,14 @@ properties survives an export instead of being counted as a loss. A type with no
 entry keeps today's behaviour exactly: its targets go to a frontmatter list and
 its properties are dropped and counted (§10.9).
 
+The key is an edge type (`UPPER_SNAKE`) and the heading is not blank; anything
+else is a config error, like any other. The export finds this file through the
+graph's `source_root` provenance (§12), or through the root the caller names,
+and a caller may add or override an entry — that is how a graph that never was
+a vault declares one. Declaring the table does not read it back: pair it with
+the `structure.tables … edges: true` rule (§7.1) whose `under_heading:` matches
+that heading, or the export warns that the table it wrote is prose (§10.10).
+
 ## 8. Skills and recipes carried in the vault
 
 A vault can carry its own agent guidance, so a server built from it explains
@@ -1162,9 +1170,10 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    line there has it in its body and gets it back. A node without a body
    produces a frontmatter-only file; a node with a body and nothing to say
    above it produces a file with no frontmatter block at all. Human-owned prose
-   is never rewritten. The one thing an export ever *adds* to a body is an edge
-   table under the heading `export.edge_tables` names (§10.6) — appended because
-   the vault declared it by name, and appended nowhere else.
+   is never rewritten, with one declared exception: the table under a heading
+   `export.edge_tables` names (§10.6) belongs to the export, which rewrites it
+   whole or appends it where it is missing. The vault asked for that table by
+   name; nothing else in the body is touched.
 6. **Edges** become frontmatter lists keyed `lower_snake(TYPE)`, with wikilink
    values: `depends_on: ["[[Seismic interpretation]]"]`. The key is exactly
    what §4.3's `UPPER_SNAKE(key)` turns back into that type. Two kinds of edge
@@ -1184,18 +1193,42 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    time. An ambiguous target is written folder-qualified, `[[Label/Name]]`.
 
    **An edge whose type `export.edge_tables` declares** (§7.3) is written as a
-   table in the body instead of a frontmatter list: the declared heading, a
-   first column holding the `[[target]]`, then one column per property the
-   type's edges carry, rows ordered by target and columns by name. This is the
-   only place an export adds prose to a note, and it does so because the vault
-   asked for it — an undeclared type is never appended to, because human prose
-   is never rewritten (§10.5), and its properties are counted as loss 1 exactly
-   as before. Reading the table back needs the matching
-   `structure.tables … edges: true` rule (§7.1), which lives in `vault.yaml`,
-   which no export writes (loss 4). An edge the body's own table already states
-   is left out exactly as any body-stated edge is, so exporting an exported
-   vault appends no second table and the tree stays the fixed point §10.9
-   describes.
+   table in the body instead of a frontmatter list, and keeps its properties.
+   This is the only place an export adds prose to a note, and it does so
+   because the vault asked for it — an undeclared type is never written into a
+   body, because human prose is never rewritten (§10.5), and its properties are
+   counted as loss 1 exactly as before.
+
+   **The declared heading's first table is the exporter's.** It rewrites that
+   table whole — header row, delimiter row and rows — keeping only the name the
+   author gave its first column; where the heading carries no table, one is
+   written at the end of what that heading itself holds, before the next
+   heading of any level; where the heading is absent, `## <heading>` and the
+   table are appended to the body. A table under a *nested* heading belongs to
+   that heading and is left alone. A declared type with no edges to write
+   **removes** the table the export owns, because leaving it would make those
+   edges again on the next import. That ownership is what makes an exported
+   vault a fixed point: the second export finds its own table and replaces it,
+   rather than appending a second one.
+
+   The first column holds the `[[target]]`, carrying the edge's `anchor` as its
+   fragment and its `label` as its display text; every **other** property gets a
+   column, named for it, in name order. `section`, `anchor`, `row` and `label`
+   get none: the reader mints all four from the table itself (§7.1). Rows are
+   ordered by `row` where the edges carry one — which is the order the author's
+   own table had — and by target and then by their columns where they do not. A
+   cell is text, so a property that was not a string comes back a string; `row`
+   is the exception, minted as an integer by the reader.
+
+   Reading the table back needs the matching `structure.tables … edges: true`
+   rule (§7.1), which lives in `vault.yaml`, which no export writes (loss 4):
+   copy that file across, or the exported table reads as prose. An export
+   **warns** (§10.10) when a declared type has no such rule in the source
+   vault's own `vault.yaml`, and when no exported note emits it at all — which
+   is what a type only derived nodes emit looks like (§10.1). The table's own
+   cells are links like any other, so the next import reads a `LINKS_TO` (or
+   whatever the heading ladder types) beside the declared edge, exactly as it
+   does from an author's own table.
 7. **Overwrite safety.** `.kglite/export-manifest.json` records every file the
    export wrote: `{"kglite_vault": 1, "files": {"<vault-relative path>":
    "<sha256 hex>"}}`. On the next export a file whose current hash differs from
@@ -1256,8 +1289,16 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    reproduces the imported graph apart from them. They are taken **once**, on
    the way out of the author's vault, so an exported tree is a fixed point —
    exporting it, reading it back and exporting it again is byte-identical, and
-   so is the graph. Only loss 5 moves the bytes at all, and only on the first
-   export after it.
+   so is the graph. Two things move the bytes at all, and only on the first
+   export after them: loss 5, and a declared edge table, whose table the export
+   owns and writes in its own spelling (§10.6).
+10. **Warnings.** The report carries a line per declared edge table the export
+    could not write as asked: a type whose source vault declares no
+    `structure.tables … edges: true` rule to read the table back, a type no
+    exported note emits, and a source `vault.yaml` that would not parse. None
+    of them fails the export — every one is a table the author will not get
+    back, said at the moment it can still be fixed rather than three steps
+    later as a missing edge.
 
 ## 11. Converter checklist
 

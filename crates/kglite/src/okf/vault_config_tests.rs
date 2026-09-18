@@ -1050,3 +1050,45 @@ fn an_edge_default_that_is_not_a_scalar_fails_the_build() {
         "{message}"
     );
 }
+
+/// `export:` (VAULT.md §7.3). Read by the exporter, not by the build — but
+/// validated *here*, because an unknown key inside it is a compatibility
+/// boundary exactly as `structure:`'s is, and a declaration nobody reads is
+/// exactly what a typo produces.
+#[test]
+fn an_export_block_is_read_and_its_unknown_sub_key_refused() {
+    let config =
+        parse("kglite_vault: 1\nexport:\n  edge_tables:\n    WORKED_ON_BY: Worked on by\n")
+            .expect("a declared edge table parses");
+    assert_eq!(
+        config.export_edge_tables,
+        BTreeMap::from([("WORKED_ON_BY".to_string(), "Worked on by".to_string())])
+    );
+
+    let message = parse("kglite_vault: 1\nexport:\n  edge_table: {A: B}\n")
+        .expect_err("a key this build does not read is refused by name");
+    assert!(
+        message.contains("unknown key `export.edge_table`"),
+        "{message}"
+    );
+}
+
+/// The two rules a declared entry has to satisfy: the key spells an edge type
+/// and the value names a heading. Neither is checkable later — a lowercased
+/// type would simply match no edge, and an empty heading would write the table
+/// under `## `.
+#[test]
+fn a_declared_edge_table_names_an_edge_type_and_a_heading() {
+    let lowercase = parse("kglite_vault: 1\nexport:\n  edge_tables:\n    worked_on_by: Who\n")
+        .expect_err("an edge type is UPPER_SNAKE");
+    assert!(
+        lowercase.contains("`export.edge_tables.worked_on_by` is not an edge type"),
+        "{lowercase}"
+    );
+    let blank = parse("kglite_vault: 1\nexport:\n  edge_tables:\n    WORKED_ON_BY: '  '\n")
+        .expect_err("a heading is not blank");
+    assert!(
+        blank.contains("`export.edge_tables.WORKED_ON_BY` names no heading"),
+        "{blank}"
+    );
+}

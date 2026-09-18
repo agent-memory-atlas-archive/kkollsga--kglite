@@ -154,6 +154,12 @@ impl ExportReport {
         self.report.recipes_written
     }
 
+    /// One line per declared edge table the export could not write as asked.
+    #[getter]
+    fn warnings(&self) -> Vec<String> {
+        self.report.warnings.clone()
+    }
+
     /// Whether the export wrote everything it wanted to — no refusals.
     #[getter]
     fn ok(&self) -> bool {
