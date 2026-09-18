@@ -217,8 +217,10 @@ impl<'a> CypherExecutor<'a> {
             group_limit_hint: clause.group_limit_hint,
         };
         let mut projected = self.execute_return(&return_clause, result_set)?;
+        restrict_bindings_to_projection(&clause.items, &mut projected);
 
-        // Apply optional WHERE
+        // The WHERE sees exactly the scope the projection produced, which is
+        // why it runs after the restriction rather than before it.
         if let Some(ref where_clause) = clause.where_clause {
             projected = self.execute_where(where_clause, projected)?;
         }
@@ -490,6 +492,50 @@ impl<'a> CypherExecutor<'a> {
     // ========================================================================
     // UNWIND
     // ========================================================================
+}
+
+/// Drop the identity bindings a `WITH` projection does not carry forward.
+///
+/// A projection replaces the row's *values* but the node, edge and path
+/// bindings are a second, parallel scope that `execute_return_projection`
+/// deliberately leaves alone — `RETURN` is terminal, so nothing downstream
+/// can observe them. A `WITH` is not terminal and is a scope barrier, so
+/// leaving them behind kept every dropped name bound: `MATCH (a:N {id:'x'})
+/// WITH 1 AS u MATCH (a:N {id:'y'})` re-used the stale `a` as the second
+/// pattern's anchor and verified `id = 'y'` against `x`, answering zero rows,
+/// and the write clauses behind the same shape wrote nothing. An
+/// *aggregating* projection builds its rows with `ResultRow::from_projected`
+/// and so was never affected — which is why only the non-aggregating
+/// spellings were wrong.
+///
+/// A binding survives only where the projection carries the variable itself:
+/// `WITH a` keeps it, `WITH a AS k` moves it to `k`, and `WITH a.id AS i`
+/// keeps a value with no identity behind it. `WITH *` carries the incoming
+/// scope wholesale. This is the executor's half of the scope model
+/// `planner::schema_check::scope_after_with` validates names against; the
+/// two must agree.
+fn restrict_bindings_to_projection(items: &[ReturnItem], result_set: &mut ResultSet) {
+    if items
+        .iter()
+        .any(|item| matches!(item.expression, Expression::Star))
+    {
+        return;
+    }
+    let carried: Vec<(String, String)> = items
+        .iter()
+        .filter_map(|item| match &item.expression {
+            Expression::Variable(source) => Some((
+                item.alias.clone().unwrap_or_else(|| source.clone()),
+                source.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    for row in &mut result_set.rows {
+        row.node_bindings.restrict_renamed(&carried);
+        row.edge_bindings.restrict_renamed(&carried);
+        row.path_bindings.restrict_renamed(&carried);
+    }
 }
 
 include!("aggregation/materialized.rs");

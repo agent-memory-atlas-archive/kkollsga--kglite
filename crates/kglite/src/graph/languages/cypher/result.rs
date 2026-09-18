@@ -83,6 +83,42 @@ impl<V> Bindings<V> {
         }
     }
 
+    /// Keep only the entries `carried` names, re-keyed to the name each is
+    /// carried under. `carried` is `(output name, source name)`.
+    ///
+    /// This is a `WITH` projection's effect on identity bindings: the clause
+    /// is a scope barrier, so a name it does not project stops being bound,
+    /// and `WITH n AS m` moves the binding to `m` rather than copying it.
+    /// A source name absent from the map (an `OPTIONAL MATCH` miss) stays
+    /// absent — it is not carried as a null.
+    pub fn restrict_renamed(&mut self, carried: &[(String, String)])
+    where
+        V: Clone,
+    {
+        if carried.is_empty() {
+            self.entries.clear();
+            return;
+        }
+        // The common shape — every binding projected under its own name, in
+        // order — needs no rebuild at all. Anything else falls through.
+        if self.entries.len() == carried.len()
+            && self
+                .entries
+                .iter()
+                .zip(carried)
+                .all(|((key, _), (out, src))| key == src && src == out)
+        {
+            return;
+        }
+        let mut kept = Vec::with_capacity(carried.len().min(self.entries.len()));
+        for (out, src) in carried {
+            if let Some(value) = self.get(src) {
+                kept.push((out.clone(), value.clone()));
+            }
+        }
+        self.entries = kept;
+    }
+
     /// Convert to HashMap for interop with pattern_matching pre_bindings.
     pub fn to_hashmap(&self) -> HashMap<String, V>
     where

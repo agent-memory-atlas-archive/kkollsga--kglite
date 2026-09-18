@@ -8,6 +8,25 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+### Fixed
+
+- **`WITH` is a scope barrier again: a variable it drops now binds afresh in
+  the clauses after it.** A non-aggregating `WITH` projected the row's values
+  but left its *identity* bindings — node, edge and path variables — in place,
+  so a name the projection dropped stayed silently bound and a later `MATCH`
+  anchored on the stale node instead of scanning. `MATCH (a:N {id:'x'})
+  WITH 1 AS u MATCH (a:N {id:'y'}) RETURN a.id` returned no rows,
+  `MATCH (a:N) RETURN count(*)` behind the same barrier counted 1 instead of
+  the label, `OPTIONAL MATCH` read the stale node back out of a null-extended
+  row, and `RETURN *` listed a column for an out-of-scope variable. The write
+  clauses lost writes the same way and just as quietly: `CREATE`, `SET`,
+  `MERGE` and `FOREACH` after such a `WITH` acted on nothing, with no error and
+  no warning. `WITH n AS m` now moves the binding to `m`, freeing `n`; `WITH *`
+  and a projected `WITH n` keep theirs, as before. An *aggregating* `WITH`
+  (`WITH count(*) AS c`) rebuilds its rows from the projection and was correct
+  throughout — which is why the defect survived. Optimized and unoptimized
+  plans agreed on every wrong answer, so this was invisible to the
+  optimizer-differential corpus; it is now pinned by absolute goldens.
 
 ## [0.17.9] - 2026-09-18
 ### Added
