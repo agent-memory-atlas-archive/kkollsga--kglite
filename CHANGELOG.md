@@ -8,6 +8,8 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+
+## [0.17.10] - 2026-09-18
 ### Fixed
 
 - **`WITH` is a scope barrier again: a variable it drops now binds afresh in
@@ -47,7 +49,11 @@ before upgrading.
   of twice. **The rule for a name both halves would project is that the
   explicit item wins** — `WITH *, a + 1 AS a` is one column `a` holding
   `a + 1` — so `*` can never manufacture the duplicate result column the
-  parser rejects when you write both out by hand.
+  parser rejects when you write both out by hand. One consequence surfaces as
+  an error where there was a wrong answer: a `CALL { … }` body ending in
+  `RETURN *, …` now really does carry its imported variable, so re-exporting
+  an import is refused by name (the same collision Neo4j raises) instead of
+  answering rows of nulls.
 
 ## [0.17.9] - 2026-09-18
 ### Added

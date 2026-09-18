@@ -42,6 +42,12 @@
       "sha256": "166cce2ca36c37ee556e792e0789fbf2a5389e21ce699eb003fba3e11e9256e7",
       "status": "accepted"
     },
+    "0_17_10.json": {
+      "evidence": "2026-09-18 22:53 capture on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, load avg 2.4, no concurrent builds (the five sibling releases had finished), no stray processes; vs accepted 0_17_9: worst cell +2.3% min (untyped_edge_count_1m, itself a control), traversal +1.9%, all 37 cells within +2.3%; controls within +2.3%; single clean capture, no retake needed (nothing near threshold)",
+      "platform": "Darwin/arm64",
+      "sha256": "8ecb282b0d1ec178a4813dc1f5f9a4e7f14006807c8938ba18da378cc63c8d73",
+      "status": "accepted"
+    },
     "0_17_2.json": {
       "evidence": "Release 0.17.2, 2026-09-09: two complete 37-cell release captures (100 minimum rounds, 20 warmups) agree against accepted 0.17.1: median min delta -1.10%/-2.50%, worst regression +5.80%/+5.10%, none near 20%, zero heavy-tail cells. Cypher controls stayed within -3.08%..0.00% across both runs. Captured under active desktop load 5.53/2.86/2.53 (aggregate process CPU 41%) then 2.24/2.65/2.55 (43%); no simultaneous native build during measurements. The anchor remains red only for the pre-existing 0.17.0 complete-snapshot normalization correctness cost: disk_dir_reopen_fresh +293.5% vs accepted 0.16.24, but -1.2%/-2.6% in these runs vs 0.17.1 and about +4% vs accepted 0.17.0; all other anchor cells are below 30% (next load_kgl +20.8%).",
       "platform": "Darwin/arm64",
@@ -97,9 +103,9 @@
       "status": "accepted"
     },
     "current.json": {
-      "evidence": "Darwin/arm64 (Mac16,10 M4) capture 2026-09-18 16:5x by refresh_release_constants.py against the release extension. THIRD capture: the first two (discarded, not registered) read a uniform +8..+13% on every cell INCLUDING controls (median +9.2%) \u2014 caused by an orphaned worker Python process at 99% CPU for 5h13m (pid 18138, parent launchd), stopped before this retake; load 2.0 at capture. Versus accepted reference 0_17_8.json (min metric): worst +6.9% (grouped_count_top_k_source_property), median +0.6%, controls traversal -1.2% / cypher_match -0.9% / cypher_where -1.9% / untyped_edge_count_1m -2.3% \u2014 instrument steady. No cell near the 20% gate; no retake owed. Code under test touches okf loading/export only, no matcher/executor paths.",
+      "evidence": "2026-09-18 22:53 capture on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, load avg 2.4, no concurrent builds (the five sibling releases had finished), no stray processes; vs accepted 0_17_9: worst cell +2.3% min (untyped_edge_count_1m, itself a control), traversal +1.9%, all 37 cells within +2.3%; controls within +2.3%; single clean capture, no retake needed (nothing near threshold)",
       "platform": "Darwin/arm64",
-      "sha256": "100c82e5d81b766b400fb8981a86dec9a603a5bc1a4237fdd7f945ed0d48ea42",
+      "sha256": "8ecb282b0d1ec178a4813dc1f5f9a4e7f14006807c8938ba18da378cc63c8d73",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -122,7 +128,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_17_9.json",
+    "Darwin/arm64": "0_17_10.json",
     "Linux/x86_64": "reference_0_17_0_cells.linux.json"
   },
   "schema_version": 1

@@ -98,7 +98,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: (run on each platform; the script writes whichever entry matches the
 #: current host).
 BINARY_SIZE_BASELINES = {
-    "darwin": 25_245_584,  # 0.17.9 darwin baseline
+    "darwin": 25_245_584,  # 0.17.10 darwin baseline
     "linux": 28_810_000,  # estimate: the post-code_tree Linux estimate (30.2 MB)
     # scaled by the same −4.6% the macOS loader removal measured. Both
     # removals deliberately recaptured DOWNWARD so the +10% budget guards
@@ -542,6 +542,11 @@ def test_binary_size_regression():
         derivation, edge tables on import and export, key_from_heading) and
         the re-seated link scanner.
 
+
+      - 0.17.10:      25,245,584 bytes — unchanged to the byte: the two Cypher
+        executor fixes (WITH scope barrier, mixed-`*` projection; ~230 lines)
+        fit inside the existing page-aligned `__TEXT` segment.
+
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
     drilldown, run `cargo bloat --release --crates --filter kglite`.
@@ -573,7 +578,7 @@ def test_binary_size_regression():
     gate = int(baseline * 1.10)
     assert size <= gate, (
         f"{bin_path.name} = {size:,} bytes > gate {gate:,} "
-        f"(+10% over 0.17.9 {platform_key} baseline {baseline:,}). "
+        f"(+10% over 0.17.10 {platform_key} baseline {baseline:,}). "
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )
