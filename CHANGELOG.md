@@ -102,6 +102,12 @@ before upgrading.
   code loses those edges (and any stub that existed only for them) on upgrade.
   What is written *around* a span is untouched: ``[`file.md`](file.md)`` is
   still one link, and its display text is still the author's own.
+- **A link target whose fifth byte is inside a character no longer panics the
+  build.** The `file:` scheme test sliced every target at byte 5, so a link to
+  a note whose name opens with four ASCII characters and then a non-ASCII one —
+  `[[RMS_—_RMS_API_1.13_documentation]]`, 121 of them on one converted corpus —
+  killed the thread reading that note, and with it the build, the validate and
+  the export.
 - **A wikilink written `[[Note\|display text]]` inside a table cell names
   `Note`.** `\|` is Obsidian's escape for a pipe inside a cell, and the reader
   left the backslash on the target: every such link resolved to a note spelled

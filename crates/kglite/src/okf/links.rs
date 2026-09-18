@@ -858,7 +858,11 @@ fn is_absolute_fs_path(target: &str) -> bool {
         || target.starts_with('\\')
         || target == "~"
         || target.starts_with("~/")
-        || target.len() >= 5 && target[..5].eq_ignore_ascii_case("file:")
+        // `get`, not a slice: byte 5 lands inside a character whenever the
+        // target opens with one, and slicing there panics the whole build.
+        || target
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
 }
 
 /// Whether `..` segments climb above the vault root. [`normalize_path_parts`]
@@ -1711,6 +1715,30 @@ mod tests {
         let heading = extract("%%\n# Hidden\n%%\n\n[[atlas]]\n", "", &vault());
         assert_eq!(props_of(&heading.links[0]), Vec::new());
         assert_eq!(crate::okf::first_heading("%%\n# Hidden\n%%\n"), None);
+    }
+
+    /// A target is arbitrary text, so the `file:` scheme test cannot slice it
+    /// at a fixed byte: one page of a converted help corpus links to a note
+    /// whose title carries an em dash, byte 5 landed in the middle of it, and
+    /// every thread reading that vault panicked.
+    #[test]
+    fn a_target_whose_fifth_byte_is_inside_a_character_is_read_not_sliced() {
+        let got = extract(
+            "see [[RMS_—_RMS_API_1.13_documentation]] and [x](a_—_b.md)\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["RMS_—_RMS_API_1.13_documentation", "a_—_b"]
+        );
+        assert!(got.path_errors.is_empty());
+        // …and the scheme it is testing for is still refused.
+        let refused = extract("see [x](FILE:///etc/passwd)\n", "", &vault());
+        assert_eq!(refused.path_errors.len(), 1);
     }
 
     /// VAULT.md §5.1: an inline code span is rendered literally, in every
