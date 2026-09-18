@@ -5240,6 +5240,7 @@ pub fn kglite::okf::build::build(root: &std::path::Path, opts: &kglite::okf::mod
 pub mod kglite::okf::export
 pub struct kglite::okf::export::ExportOptions
 pub kglite::okf::export::ExportOptions::body_property: alloc::string::String
+pub kglite::okf::export::ExportOptions::edge_tables: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
 pub kglite::okf::export::ExportOptions::force: bool
 pub kglite::okf::export::ExportOptions::source_root: core::option::Option<std::path::PathBuf>
 impl core::clone::Clone for kglite::okf::export::ExportOptions
@@ -5259,6 +5260,7 @@ pub kglite::okf::export::ExportReport::files_written: usize
 pub kglite::okf::export::ExportReport::recipes_written: usize
 pub kglite::okf::export::ExportReport::refusals: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::export::ExportReport::skills_written: usize
+pub kglite::okf::export::ExportReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::okf::export::ExportReport
 pub fn kglite::okf::export::ExportReport::render(&self) -> alloc::string::String
 impl core::clone::Clone for kglite::okf::export::ExportReport
@@ -5722,6 +5724,7 @@ impl core::fmt::Debug for kglite::okf::model::ConceptDoc
 pub fn kglite::okf::model::ConceptDoc::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::okf::ExportOptions
 pub kglite::okf::ExportOptions::body_property: alloc::string::String
+pub kglite::okf::ExportOptions::edge_tables: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
 pub kglite::okf::ExportOptions::force: bool
 pub kglite::okf::ExportOptions::source_root: core::option::Option<std::path::PathBuf>
 impl core::clone::Clone for kglite::okf::export::ExportOptions
@@ -5741,6 +5744,7 @@ pub kglite::okf::ExportReport::files_written: usize
 pub kglite::okf::ExportReport::recipes_written: usize
 pub kglite::okf::ExportReport::refusals: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::ExportReport::skills_written: usize
+pub kglite::okf::ExportReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::okf::export::ExportReport
 pub fn kglite::okf::export::ExportReport::render(&self) -> alloc::string::String
 impl core::clone::Clone for kglite::okf::export::ExportReport
