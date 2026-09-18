@@ -8,6 +8,8 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+
+## [0.17.9] - 2026-09-18
 ### Added
 
 - **`structure:` in `.kglite/vault.yaml` — a note's own body becomes nodes**
@@ -149,6 +151,17 @@ before upgrading.
   `.md` file — and the alt text is the one a reader sees.
 
 ### Changed
+
+- **Rust API (`kglite::okf`), reported by `make semver-check` as two
+  major-class changes and shipped in this patch release per the project's
+  documented policy:** `ExportOptions` gains the public `edge_tables` field and
+  `ExportReport` gains `warnings`, so a downstream that builds either as an
+  exhaustive struct literal must add them; `Profile` gains crate-private
+  fields for the structure profile, so it can no longer be built as a struct
+  literal outside the crate — construct it through `Profile::obsidian()`,
+  `Profile::default()` or `BuildOptions::for_dialect`. A vault whose
+  `.kglite/vault.yaml` declares `structure:`, `edge_defaults:` or `export:`
+  needs this kglite or newer; an older loader refuses the unknown key.
 
 - **`okf.validate(path)` reads a directory as a vault by default.** It is the
   Python half of `kglite okf check`, which has always defaulted to

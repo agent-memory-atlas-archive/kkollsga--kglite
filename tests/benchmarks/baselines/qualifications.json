@@ -90,10 +90,16 @@
       "sha256": "367279535374a6031a2d81da67764d84a87003ef8ad680b03c4151cb576a2961",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Darwin/arm64 (Mac16,10 M4) capture 2026-09-18 by make refresh-release-constants, immediately after the release-artifact build, no concurrent builds or benchmarks (the release server-binary build started after the capture finished). Versus accepted reference 0_17_7.json (min metric): worst +3.2% (exists_fixed_hop), 34 of 37 cells within [-6.0%, +2%]; controls traversal -2.5%, cypher_match +0.0%, cypher_where -4.1%, untyped_edge_count_1m -1.8% \u2014 instrument steady. No cell near the 20% gate, so no retake owed (protocol item 5). bench-anchor OK, worst +2.4% over 37 cells. The fused-aggregate label fix (c62969f4) reads -3.0%/-6.0% on the grouped_count_top_k cells that CI's first perf run flagged +41% (same-sha rerun: +7%/+9%; drift, see dev-docs plan).",
+    "0_17_9.json": {
+      "evidence": "Darwin/arm64 (Mac16,10 M4) capture 2026-09-18 16:5x by refresh_release_constants.py against the release extension. THIRD capture: the first two (discarded, not registered) read a uniform +8..+13% on every cell INCLUDING controls (median +9.2%) \u2014 caused by an orphaned worker Python process at 99% CPU for 5h13m (pid 18138, parent launchd), stopped before this retake; load 2.0 at capture. Versus accepted reference 0_17_8.json (min metric): worst +6.9% (grouped_count_top_k_source_property), median +0.6%, controls traversal -1.2% / cypher_match -0.9% / cypher_where -1.9% / untyped_edge_count_1m -2.3% \u2014 instrument steady. No cell near the 20% gate; no retake owed. Code under test touches okf loading/export only, no matcher/executor paths.",
       "platform": "Darwin/arm64",
-      "sha256": "367279535374a6031a2d81da67764d84a87003ef8ad680b03c4151cb576a2961",
+      "sha256": "100c82e5d81b766b400fb8981a86dec9a603a5bc1a4237fdd7f945ed0d48ea42",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Darwin/arm64 (Mac16,10 M4) capture 2026-09-18 16:5x by refresh_release_constants.py against the release extension. THIRD capture: the first two (discarded, not registered) read a uniform +8..+13% on every cell INCLUDING controls (median +9.2%) \u2014 caused by an orphaned worker Python process at 99% CPU for 5h13m (pid 18138, parent launchd), stopped before this retake; load 2.0 at capture. Versus accepted reference 0_17_8.json (min metric): worst +6.9% (grouped_count_top_k_source_property), median +0.6%, controls traversal -1.2% / cypher_match -0.9% / cypher_where -1.9% / untyped_edge_count_1m -2.3% \u2014 instrument steady. No cell near the 20% gate; no retake owed. Code under test touches okf loading/export only, no matcher/executor paths.",
+      "platform": "Darwin/arm64",
+      "sha256": "100c82e5d81b766b400fb8981a86dec9a603a5bc1a4237fdd7f945ed0d48ea42",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -116,7 +122,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_17_8.json",
+    "Darwin/arm64": "0_17_9.json",
     "Linux/x86_64": "reference_0_17_0_cells.linux.json"
   },
   "schema_version": 1
