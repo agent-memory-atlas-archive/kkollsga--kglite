@@ -314,9 +314,14 @@ folder layout would have.
 | `[![alt](thumb.png)](full.png)` | A thumbnail linking to the full picture: **both halves count**. The inner image is a reference to `thumb.png` and the outer link is one to `full.png` — or an ordinary note link when it names a `.md` file. The outer reference wears the inner `alt`. |
 | `https://…` | An external `Source` node keyed by the URL. |
 
-**A fenced code block (``` or `~~~`) and a `%%comment%%` (§5.7) are the only
-regions that are not scanned.** A fence ends at its own delimiter, so a `~~~`
-line written inside a ``` block is code like everything else between them.
+**A fenced code block (``` or `~~~`), a `%%comment%%` (§5.7) and the inside of
+an inline `` `code span` `` are the only regions that are not scanned.** A
+fence ends at its own delimiter, so a `~~~` line written inside a ``` block is
+code like everything else between them. A code span is rendered literally, in
+every dialect, so `` `[[Note]]` `` states no link, `` `#tag` `` no tag and
+`` `![x](y.png)` `` no picture — while the span is still ordinary inline text
+to what is written *around* it, so ``[`file.md`](file.md)`` is one link whose
+display text happens to be code.
 Indented four-space code is **not** exempt, and neither is an HTML block:
 honouring CommonMark's indented-code rule would also swallow every list
 continuation line, which is where a converter writes most of its links. Fence

@@ -20,6 +20,7 @@ pub(crate) mod profile;
 mod tables;
 
 use block::{BlockKind, Heading, List};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
@@ -37,6 +38,44 @@ pub(crate) use profile::StructureProfile;
 pub(crate) fn heading_at(tree: &BlockTree, offset: usize) -> Option<&Heading> {
     let after = tree.headings.partition_point(|h| h.range.start <= offset);
     (after > 0).then(|| &tree.headings[after - 1])
+}
+
+/// The characters a link, a tag or an attachment is spelled with. Inside an
+/// inline code span they are literal text, so they are the ones the mask hides.
+const SPELLING: &[u8] = b"[]()!#";
+
+/// The body with every link-, tag- and attachment-spelling character inside an
+/// inline code span replaced by NUL (VAULT.md §5.1).
+///
+/// A code span is rendered literally — `` `[[Note]]` `` is the five characters
+/// a reader sees, not a link — but it is *inline* content, so cutting it out of
+/// the scan the way a fence or a comment is cut would break the constructs
+/// written **around** it: ``[`file.md`](file.md)`` is one link whose display
+/// text happens to be code, and a help corpus writes tens of thousands of them.
+/// Masking keeps the region contiguous, and because every replaced byte is
+/// ASCII the mask is byte-for-byte the same length as the body, so a match's
+/// offsets still index the author's own text (which is what the label, the
+/// target and the title are read from).
+///
+/// The backticks themselves are left alone and the replacement is NUL rather
+/// than a space, so nothing the mask writes can read as a word boundary: a `#`
+/// glued to a closing backtick is glued, not preceded by whitespace, which is
+/// what `links::scan_tags` looks at to decide it is not a tag.
+pub(crate) fn mask_code_spans<'a>(body: &'a str, tree: &BlockTree) -> Cow<'a, str> {
+    if tree.code_spans.is_empty() {
+        return Cow::Borrowed(body);
+    }
+    let mut bytes = body.as_bytes().to_vec();
+    for span in &tree.code_spans {
+        for byte in &mut bytes[span.clone()] {
+            if SPELLING.contains(byte) {
+                *byte = 0;
+            }
+        }
+    }
+    Cow::Owned(
+        String::from_utf8(bytes).expect("only ASCII bytes were replaced, so UTF-8 still holds"),
+    )
 }
 
 /// The body regions a text scanner may read, in document order, with fenced

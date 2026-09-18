@@ -34,7 +34,7 @@
 use crate::datatypes::values::Value;
 use crate::okf::model::{AttachmentRef, Link, Profile, DEFAULT_CONN_TYPE, EMBEDS_CONN_TYPE};
 use crate::okf::structure::{self, BlockTree};
-use regex::{Captures, Regex};
+use regex::{Captures, Match, Regex};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -222,8 +222,15 @@ pub(crate) fn extract_with_tree(
     profile: &Profile,
 ) -> Extraction {
     let mut out = Extraction::default();
+    // Masked once for the whole body: an inline code span is literal text, so
+    // the constructs written inside one are hidden from every pass below while
+    // the block around it stays one contiguous region (VAULT.md §5.1).
+    let masked = structure::mask_code_spans(body, tree);
     for range in structure::scan_regions(body, tree) {
-        let text = &body[range.clone()];
+        let text = RegionText {
+            masked: &masked[range.clone()],
+            raw: &body[range.clone()],
+        };
         // A region never crosses a heading, so the section is decided once for
         // the whole of it — including a heading's own line, which carries its
         // own heading (VAULT.md §5.4). An empty heading text (`### #`, whose
@@ -238,7 +245,7 @@ pub(crate) fn extract_with_tree(
         if profile.inline_tags {
             // Per line: a tag is a line-local token, and an inline code span
             // opened on one line does not reach across to hide one on another.
-            for line in text.lines() {
+            for line in text.masked.lines() {
                 scan_tags(line, &mut out.tags);
             }
         }
@@ -256,6 +263,41 @@ struct Region<'a> {
     heading_conn: Option<String>,
 }
 
+/// One scan region's text in the two spellings the pass needs.
+///
+/// `masked` is what the regexes read — every link-, tag- and
+/// attachment-spelling character inside an inline code span replaced by NUL, so
+/// that ``​`[[Note]]`​`` matches nothing — and `raw` is the author's own bytes at
+/// exactly the same offsets, which is what a match's label, target and title
+/// are read from. The two are the same length by construction (only ASCII bytes
+/// are replaced), so a match found in one indexes the other.
+#[derive(Clone, Copy)]
+struct RegionText<'t> {
+    masked: &'t str,
+    raw: &'t str,
+}
+
+impl<'t> RegionText<'t> {
+    /// The author's own text under a match.
+    fn of(&self, m: Match<'_>) -> &'t str {
+        &self.raw[m.start()..m.end()]
+    }
+
+    /// The author's own text under a capture group, `""` when it did not match.
+    fn group(&self, cap: &Captures<'_>, index: usize) -> &'t str {
+        cap.get(index).map_or("", |m| self.of(m))
+    }
+
+    /// One match's span as a region in its own right — a link's display text,
+    /// which is scanned again for the pictures inside it.
+    fn sub(&self, m: Match<'_>) -> RegionText<'t> {
+        RegionText {
+            masked: &self.masked[m.start()..m.end()],
+            raw: self.of(m),
+        }
+    }
+}
+
 /// A reference the region's two syntaxes found, kept with its offset so both
 /// spellings are handled in the order they were **written**.
 enum Found<'t> {
@@ -271,11 +313,17 @@ impl Region<'_> {
     /// offset, so a paragraph mixing them yields its references in the order a
     /// reader meets them — which is what makes an attachment's `ordinal`
     /// survive re-wrapping the prose around it.
-    fn scan(&self, text: &str, out: &mut Extraction) {
-        let mut found: Vec<Found<'_>> =
-            link_re().captures_iter(text).map(Found::Markdown).collect();
+    fn scan(&self, text: RegionText<'_>, out: &mut Extraction) {
+        let mut found: Vec<Found<'_>> = link_re()
+            .captures_iter(text.masked)
+            .map(Found::Markdown)
+            .collect();
         if self.profile.wikilinks {
-            found.extend(wikilink_re().captures_iter(text).map(Found::Wikilink));
+            found.extend(
+                wikilink_re()
+                    .captures_iter(text.masked)
+                    .map(Found::Wikilink),
+            );
         }
         found.sort_by_key(Found::start);
         for one in found {
@@ -287,18 +335,18 @@ impl Region<'_> {
     }
 
     /// `[text](dest)`, and the `![alt](src)` spelling of an attachment.
-    fn markdown(&self, text: &str, cap: &Captures<'_>, out: &mut Extraction) {
+    fn markdown(&self, text: RegionText<'_>, cap: &Captures<'_>, out: &mut Extraction) {
         let m = cap.get(0).expect("the whole match");
-        let label = cap.get(1).map_or("", |t| t.as_str());
         // The markdown spelling is the one a tool percent-encodes, so it
         // is decoded here — before resolution *and* before the §9 path
         // check, which `%2e%2e/` would otherwise walk straight past.
-        let decoded = percent_decode(cap.get(2).map_or("", |d| d.as_str()));
+        let decoded = percent_decode(text.group(cap, 2));
         let dest = decoded.as_ref();
         // `![alt](src)` is never a link. Under the vault profile it is an
         // attachment reference instead (VAULT.md §6.1); otherwise it is
         // dropped, as it always was.
-        if m.start() > 0 && text.as_bytes()[m.start() - 1] == b'!' {
+        if m.start() > 0 && text.masked.as_bytes()[m.start() - 1] == b'!' {
+            let label = text.group(cap, 1);
             self.check_path(dest, out);
             self.attachment(dest, Some(label), out);
             return;
@@ -307,13 +355,16 @@ impl Region<'_> {
         // thumbnail is a reference in its own right and the outer half is an
         // ordinary link, so both are recorded and the reader's alt text comes
         // from the inner image rather than from its markdown source.
-        let alt = self.inner_images(label, out);
+        let alt = match cap.get(1) {
+            Some(label) => self.inner_images(text.sub(label), out),
+            None => "",
+        };
         if !is_external_url(dest) {
             self.check_path(dest, out);
         }
         let conn = cap
             .get(3)
-            .and_then(|t| conn_from_title(t.as_str()))
+            .and_then(|t| conn_from_title(text.of(t)))
             .or_else(|| self.heading_conn.clone())
             .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string());
         // A markdown link's text is prose around a path, not a display name for
@@ -355,15 +406,15 @@ impl Region<'_> {
     }
 
     /// `[[Note]]`, `[[Note|alias]]` and the `![[…]]` embed spelling.
-    fn wikilink(&self, text: &str, cap: &Captures<'_>, out: &mut Extraction) {
+    fn wikilink(&self, text: RegionText<'_>, cap: &Captures<'_>, out: &mut Extraction) {
         let m = cap.get(0).expect("the whole match");
-        let is_embed = m.start() > 0 && text.as_bytes()[m.start() - 1] == b'!';
+        let is_embed = m.start() > 0 && text.masked.as_bytes()[m.start() - 1] == b'!';
         // A `#heading` anchor never affects resolution: `[[Note#Section]]` and
         // `[[Note]]` reach the same node (VAULT.md §5.4). The fragment is kept
         // as an edge property.
         let parts = wikilink_parts(
-            cap.get(1).expect("the name group").as_str(),
-            cap.get(2).map(|a| a.as_str()),
+            text.of(cap.get(1).expect("the name group")),
+            cap.get(2).map(|a| text.of(a)),
         );
         let (name, anchor) = (parts.name, parts.anchor);
         if name.is_empty() {
@@ -419,14 +470,17 @@ impl Region<'_> {
     /// A link text that is nothing but one image reports that image's alt,
     /// because that is the text a reader sees; a text mixing prose and pictures
     /// keeps its own, and every picture in it is still a reference.
-    fn inner_images<'t>(&self, label: &'t str, out: &mut Extraction) -> &'t str {
-        let mut alt = label;
-        for image in image_re().captures_iter(label) {
-            let decoded = percent_decode(image.get(2).map_or("", |d| d.as_str()));
+    fn inner_images<'t>(&self, label: RegionText<'t>, out: &mut Extraction) -> &'t str {
+        let mut alt = label.raw;
+        for image in image_re().captures_iter(label.masked) {
+            let decoded = percent_decode(label.group(&image, 2));
             self.check_path(decoded.as_ref(), out);
-            let inner = image.get(1).map_or("", |a| a.as_str());
+            let inner = label.group(&image, 1);
             self.attachment(decoded.as_ref(), Some(inner), out);
-            if image.get(0).is_some_and(|m| m.as_str() == label.trim()) {
+            if image
+                .get(0)
+                .is_some_and(|m| m.as_str() == label.masked.trim())
+            {
                 alt = inner;
             }
         }
@@ -1657,6 +1711,101 @@ mod tests {
         let heading = extract("%%\n# Hidden\n%%\n\n[[atlas]]\n", "", &vault());
         assert_eq!(props_of(&heading.links[0]), Vec::new());
         assert_eq!(crate::okf::first_heading("%%\n# Hidden\n%%\n"), None);
+    }
+
+    /// VAULT.md §5.1: an inline code span is rendered literally, in every
+    /// dialect, so nothing written inside one is a link, a tag or an
+    /// attachment. A cold agent's converter minted eleven stub notes from
+    /// Python subscripts a page had written as code.
+    #[test]
+    fn a_code_span_hides_links_tags_and_attachments() {
+        let got = extract(
+            "keep [[atlas]] `[[ghost]] ![g](img/g.png) [t](x.md) #hidden` here #kept\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas"]
+        );
+        assert!(attach(&got).is_empty());
+        assert_eq!(got.tags, vec!["kept"]);
+
+        // A code span may be opened on one line and closed on the next, which
+        // the line-local tag mask cannot see and the block tree can.
+        let wrapped = extract("`[[ghost]]\nstill code` then [[atlas]]\n", "", &vault());
+        assert_eq!(
+            wrapped
+                .links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas"]
+        );
+
+        // CommonMark, not an Obsidian rule: the okf dialect reads a code span
+        // the same way.
+        let okf = extract_links(
+            "see `[t](/tables/x.md)` and [u](/tables/y.md)",
+            "",
+            Dialect::Okf,
+        );
+        assert_eq!(
+            okf.iter().map(|l| l.target.as_str()).collect::<Vec<_>>(),
+            vec!["tables/y"]
+        );
+    }
+
+    /// The mask hides what is written *inside* a span, never the constructs
+    /// written around one: `[`file.md`](file.md)` is the spelling a generated
+    /// help corpus uses thirteen thousand times, and cutting the span out of
+    /// the scan the way a fence is cut would lose every one of those links —
+    /// along with the author's own display text, which is read from the
+    /// unmasked body at the same offsets.
+    #[test]
+    fn a_code_span_can_still_be_a_links_display_text() {
+        let got = extract(
+            "see [`atlas.md`](atlas.md) and [[beta|`inline`]]\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["atlas", "beta"]
+        );
+
+        // A bracket inside the span is masked for the match and restored for
+        // the text: the link survives and its label is what was written.
+        let subscript = extract("see [the `rows[0]` case](atlas.md)\n", "", &vault());
+        assert_eq!(subscript.links.len(), 1);
+        assert_eq!(subscript.links[0].target, "atlas");
+
+        // An image whose alt is code is still one reference, alt intact.
+        let picture = extract("![a `b[0]` c](img/x.png)\n", "", &vault());
+        assert_eq!(
+            picture
+                .attachments
+                .iter()
+                .map(|a| (a.target.as_str(), a.alt.as_deref().unwrap_or("")))
+                .collect::<Vec<_>>(),
+            vec![("img/x.png", "a `b[0]` c")]
+        );
+    }
+
+    /// A `#` glued to a closing backtick is glued, not preceded by whitespace,
+    /// so it is not a tag. That survives the mask because the mask leaves the
+    /// backticks themselves alone and writes NUL, not a space: either choice
+    /// reversed and the glued `#` reads as a tag.
+    #[test]
+    fn a_hash_glued_to_a_code_span_is_still_not_a_tag() {
+        let got = extract("`code`#glued and #free\n", "", &vault());
+        assert_eq!(got.tags, vec!["free"]);
     }
 
     /// A setext heading was invisible to the line scanner, so everything under

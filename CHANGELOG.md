@@ -93,6 +93,15 @@ before upgrading.
 
 ### Fixed
 
+- **Nothing written inside an inline `` `code span` `` is a link, a tag or an
+  attachment any more** (`VAULT.md` §5.1). A code span is rendered literally,
+  so `` `[[Horizons]]` `` stated an edge — and minted a stub note — for text a
+  reader sees as code; one converted page's Python subscripts made eleven such
+  stubs. The rule is CommonMark's, not Obsidian's, so it holds in the `okf` and
+  `loose` dialects too: a vault or bundle whose prose quotes link syntax as
+  code loses those edges (and any stub that existed only for them) on upgrade.
+  What is written *around* a span is untouched: ``[`file.md`](file.md)`` is
+  still one link, and its display text is still the author's own.
 - **A wikilink written `[[Note\|display text]]` inside a table cell names
   `Note`.** `\|` is Obsidian's escape for a pipe inside a cell, and the reader
   left the backslash on the target: every such link resolved to a note spelled

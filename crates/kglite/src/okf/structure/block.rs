@@ -37,6 +37,12 @@ pub(crate) struct BlockTree {
     /// comment can be *inline* — inside a paragraph, a list item or a table
     /// cell — so it is a range to exclude from scanning, not a sibling block.
     pub comments: Vec<Range<usize>>,
+    /// Inline `` `code` `` spans, backticks included, in document order. A code
+    /// span is rendered literally, so nothing written inside one is a link, a
+    /// tag or an attachment — but the span itself is ordinary inline content of
+    /// the block around it, which is why these are ranges to mask rather than
+    /// blocks or skipped regions: `` [`file.md`](file.md) `` is still a link.
+    pub code_spans: Vec<Range<usize>>,
 }
 
 /// An ATX or setext heading.
@@ -298,6 +304,7 @@ struct Walker {
     lists: Vec<ListBuilder>,
     table: Option<TableBuilder>,
     code: Option<CodeBuilder>,
+    code_spans: Vec<Range<usize>>,
 }
 
 impl Walker {
@@ -309,6 +316,10 @@ impl Walker {
                 Event::Start(tag) => self.start(body, tag, range),
                 Event::End(tag) => self.end(body, tag, range),
                 Event::Text(_) if self.code.is_some() => self.extend_code(range),
+                Event::Code(_) => {
+                    self.code_spans.push(range.clone());
+                    self.extend_item_text(range);
+                }
                 Event::Rule => self.item_text_done(),
                 _ => self.extend_item_text(range),
             }
@@ -316,6 +327,7 @@ impl Walker {
         BlockTree {
             headings: self.headings,
             blocks: self.blocks,
+            code_spans: self.code_spans,
             ..BlockTree::default()
         }
     }

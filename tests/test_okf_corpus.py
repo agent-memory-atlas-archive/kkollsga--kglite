@@ -27,7 +27,12 @@ CORPUS = Path(__file__).parent / "fixtures" / "okf" / "google"
 EXPECTED = {
     "stackoverflow": {"nodes": 133, "edges": 377},
     "ga4": {"nodes": 28, "edges": 47},
-    "crypto_bitcoin": {"nodes": 26, "edges": 54},
+    # 52 rather than the 54 captured before: `outputs.md` writes
+    # "`[transactions](transactions.md)` and `[inputs](inputs.md)`" — two links
+    # quoted *as code*, which a reader sees literally and VAULT.md §5.1 no
+    # longer scans. Both targets are still reached by prose links elsewhere, so
+    # no node moved.
+    "crypto_bitcoin": {"nodes": 26, "edges": 52},
 }
 
 
