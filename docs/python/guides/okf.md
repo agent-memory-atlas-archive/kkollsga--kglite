@@ -122,6 +122,19 @@ become `Image` nodes you fetch as files rather than bytes in the graph. A `.kgli
 in the vault root declares property types, indexes, text indexes, an ontology
 and embed targets, and is re-applied on every rebuild.
 
+**The structure profile.** A note is one node with one body until
+`.kglite/vault.yaml` declares a `structure:` block — then the note's own
+markdown becomes nodes too: headings are `Section`s with parent and next edges,
+paragraphs pack into `Chunk`s you embed and search, callouts become `Note`s,
+fenced blocks `Example`s, numbered lists `Procedure`/`ProcedureStep` chains, and
+a table under a declared heading becomes one node per row (or, with
+`edges: true`, one *edge* per row carrying the other columns as edge
+properties). The ids are Obsidian's own — `[[Page#Heading]]`, `[[Page#^block]]`
+— so every derived node stays linkable from any note and navigable in Obsidian.
+Nothing is rewritten and no file is added; the block is opt-in, and a vault
+without one builds exactly as before. VAULT.md §7.1 specifies the keys and §13
+is the modelling guide for a converter deciding what to emit.
+
 The format is specified in
 [VAULT.md](https://kglite.readthedocs.io/en/latest/reference/vault-format.html),
 which is also the checklist to follow when writing a converter from HTML or any

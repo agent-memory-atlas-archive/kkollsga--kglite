@@ -46,12 +46,19 @@ Five rules decide what a hand-written note becomes:
 4. **Images are note-relative and live in the vault.** `![alt](img/x.png)`
    becomes an `Image` node — copy the file in; a path out of the vault is an
    error (§6).
-5. **The body is prose.** It is stored whole and searched; nothing in it is
-   rewritten, split or reformatted (§4.2).
+5. **The body is prose.** It is stored whole and searched, and nothing in it is
+   ever rewritten or reformatted (§4.2). It is *split* into nodes of its own —
+   sections, chunks, callouts, steps, table rows — only where
+   `.kglite/vault.yaml` declares a `structure:` block (§7.1); with no such block
+   a note is one node holding one body.
 
 Then run `kglite okf check <dir>`. **Errors** mean the vault does not meet this
 spec; **warnings** — a dangling link, a missing image — are normal in a vault
 being written. `--strict` fails on warnings too (§9).
+
+**Writing a converter, or authoring for one?** §13 is the modelling guide: what
+to emit for each shape a source already has, and the anti-patterns that cost a
+corpus its structure on the way in.
 
 ## 1. Scope and versioning
 
@@ -66,7 +73,11 @@ being written. `--strict` fails on warnings too (§9).
    version is `1`, and so is a vault with no such file or key. Any other value
    is an error.
 4. Never interpreted: HTML **tags**, canvas files, Dataview inline fields
-   (`key:: value`), Logseq properties, and heading-level splitting of a note.
+   (`key:: value`) and Logseq properties. Heading-level splitting is not done
+   either unless the vault asks for it: a `structure:` block in
+   `.kglite/vault.yaml` (§7.1) derives nodes from a note's own headings,
+   paragraphs, callouts, lists, fences and tables, and without one a note stays
+   a single node holding a single body.
    An `<a href>` is not a link and an `<img src>` is not an attachment
    reference. A line holding HTML is still prose, though: the markdown link and
    image syntax written *inside* an HTML block is scanned exactly as it is
@@ -289,8 +300,8 @@ folder layout would have.
 | Written | Meaning |
 |---|---|
 | `[[Note]]` | Link to `Note`. |
-| `[[Note\|display text]]` | Same link; the display text is not stored. |
-| `[[Note#Heading]]`, `[[Note#^block-id]]` | Link to `Note`, `anchor` = the fragment. |
+| `[[Note\|display text]]` | Same link. The display text is stored as the edge's `label` property when `structure:` is declared (§7.1), and is dropped otherwise. |
+| `[[Note#Heading]]`, `[[Note#A#B]]`, `[[Note#^block-id]]` | Link to `Note`, `anchor` = the fragment. A nested heading is addressed by joining the levels with further `#`. With `structure:` the edge retargets to the section or chunk the fragment names (§5.4, §7.1). |
 | `[[Label/Name]]` | Folder-qualified — use when a stem is ambiguous. |
 | `[text](path.md)`, `[text](path.md "EDGE_TYPE")` | Path link, resolved relative to the linking note; the title is an explicit edge type. |
 | `[text](path.md#Heading)` | Same link, `anchor` = the fragment — a path link carries one exactly as a wikilink does, and it is never part of the target. |
@@ -300,7 +311,8 @@ folder layout would have.
 | `![[image.png]]`, `![alt](img/x.png)` | Attachment (§6), never a note link. |
 | `https://…` | An external `Source` node keyed by the URL. |
 
-**A fenced code block (``` or `~~~`) is the only region that is not scanned.**
+**A fenced code block (``` or `~~~`) and a `%%comment%%` (§5.7) are the only
+regions that are not scanned.**
 Indented four-space code is **not** exempt, and neither is an HTML block: the
 reader takes one line at a time and owns no block parser, so a CommonMark
 indented-code rule would also swallow every list continuation line, which is
@@ -363,22 +375,37 @@ Every body link carries `section`, the enclosing heading's text verbatim
 heading line is enclosed by that heading, so it carries the same string as the
 links below it — including any markup the heading contains, because the text is
 verbatim; one section is one value, or a section would split into two edge
-groups. A fragment link also carries `anchor`, the fragment without its
-leading `#`. The fragment never affects resolution:
-`[[Note#Heading]]` and `[[Note]]` reach the same node.
+groups. A fragment link also carries `anchor`, the fragment without its leading
+`#` — a nested heading path keeps the `#`s *inside* it, so `[[Note#A#B]]`
+carries `A#B`. A link written `[[Target|display text]]` carries `label`, that
+text, where `structure:` is declared (§7.1); without it the text is dropped.
+
+**The fragment never changes which note a link names**: `[[Note#Heading]]` and
+`[[Note]]` name the same note, and so do the two spellings of a path link. Where
+`structure:` derives sections or chunks from that note, the edge then
+**retargets** to the derived node whose id is exactly `<note id>#<fragment>`, and
+a fragment naming a single heading retargets to the **first** section in the note
+titled that — the heading Obsidian itself jumps to (§7.1). The `anchor` property
+is kept either way, so the fragment as written survives the retarget. A fragment
+naming no heading and no block id in that note leaves the edge on the note and is
+a warning (§9).
 
 Two links from one note to one target are **two edges** when they differ in
-`section` or `anchor`, and one when they do not — repeating a link inside a
-section is one relationship, linking from two sections is two. Edges emitted
-from frontmatter (§4.3) carry neither property.
+`section`, `anchor` or `label`, and one when they do not — repeating a link
+inside a section is one relationship, linking from two sections is two. Edges
+emitted from frontmatter (§4.3) carry none of the three.
 
 ### 5.5 Tags
 
 Both forms feed one `Tag` hub per distinct tag, joined by `TAGGED`. A hub node
 holds its text in `id`, not in the `concept_id` a note uses — §7's table names
-the id property of every kind of node. Tag identity is **case-sensitive** — `#Seismic` and `#seismic` are two tags — and a
-vault that wants them folded redeclares the hub in `vault.yaml` with
-`case_insensitive: true` (§7), which is the same mechanism any other hub uses:
+the id property of every kind of node. Tag identity is **case-insensitive**, as
+it is in Obsidian: `#Seismic` and `#seismic` are one tag, held under the
+lowercased id and titled with the casing the vault used most often. A vault that
+wants the two kept apart redeclares the hub in `vault.yaml` with
+`case_insensitive: false` (§7), which is the same mechanism any other hub uses.
+This is one of the places the dialects genuinely differ: `okf` and `loose` keep
+tags case-sensitive. The two forms are:
 
 - `tags:` in frontmatter, which also stays a list property on the note
 - inline `#tag` in the body
@@ -395,6 +422,51 @@ An unresolved link target becomes a `_provisional: true` stub node, labelled
 `Concept` and keyed by the unresolved name, so "referenced but not written" is
 one Cypher query and the stubs never mix with the notes' own labels. Stubs
 are counted in the build report and are never exported as files (§10).
+
+### 5.7 Comments, block ids and callouts
+
+Three more constructs a body can carry. None is new syntax — all three are
+Obsidian's own — and the reader honours them whether or not `structure:` is
+declared. Turning callouts into *nodes* is what `structure:` adds (§7.1).
+
+**Comments.** `%%…%%` hides text from a reader: inline, `a %%hidden%% word`, and
+as a block, where the opening and closing `%%` sit on lines of their own. A
+comment's text is **never scanned** — no link, no tag, no attachment reference
+and no heading is read out of it — which makes it the only region besides a
+fenced code block with that property (§5.1). It is still part of the body
+property, verbatim, and it still travels through an export.
+
+**Block ids.** A trailing ` ^id` names a block, so `[[Note#^id]]` links to
+exactly that block rather than to the note. The id may hold **Latin letters,
+digits and dashes only**: `^my_id` is not a block id, it is text. The three
+placements are Obsidian's:
+
+- at the end of the last line of a paragraph, after a space;
+- on a line of its own, blank line above and below, directly after a table,
+  list, quotation or fenced block;
+- directly on a bullet, naming that one item.
+
+With `chunks:` declared a block id keys the chunk it names (§7.1). It is the one
+derived id that survives editing around it, which makes it the answer both to a
+chunk id that churns and to a duplicate heading that cannot be linked.
+
+**Callouts.** A blockquote whose first line begins `> [!type]` is a callout:
+
+```markdown
+> [!warning]+ Check the survey datum
+> Depth values are metres below MSL.
+```
+
+The type identifier is case-insensitive and **arbitrary**: Obsidian styles the
+thirteen it knows and renders any other as a plain callout, so `[!versionadded]`
+is legal and a corpus keeps its own vocabulary rather than being folded into
+`note`. The kind is stored **lowercased**. A `+` or `-` directly after the
+identifier folds the callout open or closed and is not part of the kind. Text
+after the identifier is the title; with none, there is no title — Obsidian
+displays the type, and this spec stores nothing. Callouts nest.
+
+A callout's body is prose like any other: its links, tags and images are
+scanned — a callout is not a comment — and its `section` is the heading above it.
 
 ## 6. Attachments
 
@@ -462,8 +534,9 @@ is not delivered; rasterise it when you build the source.
 
 Optional. Read by explicit path (the walk ignores dot-directories), applied to
 every build and re-applied to every rebuild — with carried embeddings, it is
-the only state that survives one. An unknown top-level key, an unknown
-`kglite_vault` version, or a value of the wrong shape is an error, and one of
+the only state that survives one. An unknown top-level key, an unknown key
+inside `structure:` (§7.1), an unknown `kglite_vault` version, or a value of
+the wrong shape is an error, and one of
 those **fails the build** rather than leaving a finding on a graph that looks
 built: because the file is the only thing a rebuild re-applies, a vault whose
 `vault.yaml` stopped parsing would silently lose its labels, hubs, indexes and
@@ -483,20 +556,24 @@ a rebuild re-reads the file, so the file is the vault's statement about itself.
 | `body` | string | Property name for the prose. Default `body`. |
 | `skip_dirs` | list of strings | Extra directories to prune (§2.4). |
 | `folder_notes` | `{edge, direction}` | `edge` default `CHILD_OF`; `direction` is `child_to_parent` (default) or `parent_to_child`. |
-| `hubs` | `{<frontmatter key>: {label, edge, case_insensitive}}` | Turn a list-valued key into hub nodes. `case_insensitive: true` folds the id to lowercase and titles the node with the casing the vault used most often, ties settled alphabetically; otherwise the title is the id. The built-in `tags` hub is `{label: Tag, edge: TAGGED, case_insensitive: false}` and can be redeclared like any other. |
+| `hubs` | `{<frontmatter key>: {label, edge, case_insensitive}}` | Turn a list-valued key into hub nodes. `case_insensitive: true` folds the id to lowercase and titles the node with the casing the vault used most often, ties settled alphabetically; otherwise the title is the id. The built-in `tags` hub is `{label: Tag, edge: TAGGED, case_insensitive: true}` (§5.5) and can be redeclared like any other. |
 | `heading_edges` | `{<heading text>: EDGE_TYPE}` | Merged over the built-in ladder (§5.3). |
 | `types` | `{<Label>: {<property>: <type>}}` | Declared property types: `string`, `int`, `float`, `bool`, `date`, `datetime`, `list`. Overrides inference. |
 | `indexes` | `{<Label>: [ <prop> \| {range: <prop>} \| {composite: [<prop>, …]} ]}` | Equality, range and composite index declarations. |
 | `text_indexes` | `{<Label>: [<prop>]}` | BM25 lexical indexes. |
 | `ontology` | mapping | Passed verbatim to the ontology declaration API — same document `define_ontology` accepts; see the [ontology guide](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html). |
 | `embed` | `{<Label>: <prop>}` | Which text property to embed per label. Reported as a build target; the vectors are computed when an embedder is bound. |
+| `structure` | mapping | Nodes derived from a note's own body — sections, chunks, callouts, fences, ordered lists, tables (§7.1). |
+| `edge_defaults` | `{EDGE_TYPE: {<prop>: <value>}}` | Edge properties that are constant per type, pushed onto every edge of it (§7.2). |
+| `export` | `{edge_tables: {EDGE_TYPE: <heading>}}` | What the exporter writes back beyond the default (§7.3, §10.6). |
 
 A hub reads a key's **list** entries; a scalar joins no hub. A key that is
 both a hub and wikilink-valued goes to the typed-edge rule instead (§4.3) —
 that rule wins, and the clash is a warning (§9) rather than a silent empty hub.
 Declared hubs are **merged over** the built-in `tags` one rather than replacing
 the set, and a redeclaration names only what it changes: an omitted `label` is
-`Tag`, an omitted `edge` is `TAGGED`, an omitted `case_insensitive` is false.
+`Tag`, an omitted `edge` is `TAGGED`, and an omitted `case_insensitive` is what
+the built-in already said — `true` for `tags`, `false` for every other key.
 
 `types:` decides how a note's property **column is built**, so a declaration
 overrides inference rather than converting a value afterwards. It names the
@@ -525,6 +602,7 @@ that says so, hence this table:
 | A `Source` node for an external URL (§5.1) | `id` |
 | A `Folder` node (§2.2) | `id`, holding the vault-relative directory path |
 | An `Image` or `Attachment`, present or missing (§6.3) | `path` |
+| A node `structure:` derived from a note's body (§7.1) | `concept_id` |
 
 A note's id is `concept_id` because it is a **name** every link in the vault
 resolves to (§3), and it is the one property `types:` never retypes. The
@@ -567,6 +645,285 @@ text_indexes:
 embed:
   Article: description
 ```
+
+### 7.1 `structure:` — nodes from a note's own body
+
+By default a note is one node and its prose is one property (§4.2). A
+`structure:` block derives nodes from the note's own markdown as well: the
+headings, the paragraphs under them, the callouts, the fenced examples, the
+numbered steps, the table rows. It adds no file to the vault and no syntax to a
+note — Obsidian already names sub-note things, and every id this block mints is
+one of those names, so a derived node is linkable from anywhere in the vault as
+`[[Note#Heading]]` or `[[Note#^block-id]]` and navigable in Obsidian itself.
+
+There is no default and no heuristic: a vault with no `structure:` block builds
+the graph it built before, note for note and edge for edge. An unknown key
+*inside* `structure:` is an error exactly as an unknown top-level key is (§9) —
+the block is a hard compatibility boundary, and the rest of this section says
+what a kglite that knows it does with each key.
+
+**How a derived node is keyed.** Every one of them keys on `concept_id`, like a
+note, and **never carries `file_path`** — it is not a file, and no export writes
+one (§10.1).
+
+| Construct | Id |
+|---|---|
+| A section | `Note#A#B` — the note's id, then its heading path joined by `#` |
+| A chunk, callout, example, procedure, step or table row | its parent's id, then `~<kind><n>`: `Note#A#B~chunk3`, `~note1`, `~example2`, `~list1`, `~list1~step4`, `~row7` |
+| Anything named by a block id (§5.7) | `Note#^block-id` |
+| A duplicate of either | the same id with `~2`, `~3`… appended |
+
+`<kind>` is the construct's own word and `<n>` counts that kind under that
+parent from 1, so the counter always starts with a letter and the duplicate
+suffix never starts with one. That is deliberate: a bare `~2` can only ever mean
+"the second thing that wanted this id", and can never be read as the second
+chunk of a section.
+
+Only the section ids and the block-id ones are **stable** across edits. A
+`~chunk<n>` id is scoped to its section and renumbers when a paragraph is
+inserted above it; every id under a heading changes when that heading is
+renamed, because the heading text is in the id. On a 22 226-chunk corpus a
+one-paragraph insert moved 3.6% of the ids and a heading rename moved 58% of
+one page's. Where an id has to survive, write a block id (§5.7); where it does
+not, `chunk_hash` below is what carries the embedding across.
+
+#### `sections:`
+
+```yaml
+structure:
+  sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}
+```
+
+One node per heading in the body, in document order; a `#` inside a fenced code
+block is not one, because that region is not scanned at all (§5.1).
+
+- **Title** is the heading's text **verbatim**, including any inline markup it
+  carries: `## See also [[Alice]]` titles a section `See also [[Alice]]`, which
+  is the same string §5.4 already stores in `section`, and one heading must not
+  have two spellings. Markdown's optional closing run of `#`s (`## Overview ##`)
+  is a closer and not part of the text; surrounding whitespace is trimmed.
+- **Id** is `Note#A#B`: the note's id, then the titles of the headings enclosing
+  this one and its own, joined by `#`. That is Obsidian's own nested-heading
+  link spelling, so `[[Note#A#B]]` reaches exactly this node.
+- **Properties**: `title`, `level` (1–6), `ordinal` (0-based among its
+  siblings), `path` (the list of titles the id joins), `text` (the body verbatim
+  from the line after the heading to the next heading of the same or higher
+  level, trailing blank lines trimmed), `note_id`, plus every `inherit:`
+  property. The note's own `body` property is untouched and still holds the
+  whole body — deriving sections moves nothing out of the prose.
+- **Edges**: `edge` joins the note to each of its top-level sections and a
+  section to each section directly inside it, so every section has exactly one
+  incoming `HAS_SECTION` and the chain from the note spells its path. `parent`
+  states the same nesting child→parent and is emitted only for a section that
+  has one. `next` joins consecutive siblings under one parent in document order.
+- **Duplicate headings.** Obsidian resolves a heading link to the **first**
+  heading of that text and has no syntax for a later one. So does this spec:
+  `[[Note#A]]` reaches the first, the second gets a `~2` id and a warning (§9),
+  and the fix the warning steers to is a block id on the second — the only
+  spelling Obsidian itself can link.
+
+#### `chunks:`
+
+```yaml
+  chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_words: 650, max_chars: 6000}
+```
+
+The retrieval unit. Leaf blocks — paragraphs, list blocks, fences, tables,
+quotations — are packed greedily in document order, and the open chunk closes
+before a block that would take it past `max_words` **or** `max_chars`. A block
+bigger than either limit on its own is a chunk on its own. A section boundary
+always closes the open chunk, so a chunk never spans two sections.
+
+- `edge` joins the enclosing Section, or the note when `sections:` is not
+  declared; `next` joins consecutive chunks within one section.
+- A paragraph whose last line ends in a block id **closes the open chunk and is
+  a chunk of its own**, keyed `Note#^id`. That makes a block id the author's one
+  lever over where chunks divide, and the way to give a passage a citable id
+  that editing around it cannot move.
+- **Properties**: `text` (the packed blocks verbatim, spaced as the source
+  spaced them), `ordinal` (0-based within the section), `chunk_hash` (the
+  SHA-256 of `text`, lowercase hex), `note_id`, `section_id`, plus `inherit:`.
+- **Embeddings survive a rewrite.** A rebuild carries vectors by `(label, id)`
+  (§12) and then, for anything this block derived, by `(label, chunk_hash)`
+  where exactly one old node of that label carried the hash — so a chunk that
+  only moved is recognised as the same chunk instead of being minted afresh. The
+  fallback decides *which old node this is*, not whether to re-embed: the
+  changed-mode pass still compares the embedded property's own stored hash, so a
+  chunk whose `embed_text` changed because its heading changed is re-embedded,
+  and one whose text merely shifted is not.
+
+#### `callouts:`
+
+```yaml
+  callouts: {label: Note, edge: HAS_NOTE}
+```
+
+One node per callout (§5.7), attached by `edge` to the enclosing Section — or to
+the note where there is no section, and to the enclosing callout where callouts
+nest. Properties: `kind` (the type identifier, lowercased, **whatever word it
+is** — `versionadded` and `caution` are as valid as `note`), `title` (absent
+when the callout has none), `text` (the callout body verbatim with the `>`
+markers stripped), `ordinal`, `note_id`, `section_id`, plus `inherit:`.
+
+#### `code_fences:`
+
+```yaml
+  code_fences: {label: Example, edge: HAS_EXAMPLE, langs: [python]}
+```
+
+One node per fenced block whose info string's first word is in `langs`. **Omit
+`langs` and every fence qualifies**, including one carrying no info string at
+all — which is the setting a corpus needs when its converter dropped the
+languages on the way in. Properties: `lang` (the first word of the info string,
+absent when there is none), `code` (the fence contents verbatim, without the
+fence lines and without the info string), `caption` (the paragraph immediately
+above the fence, when that paragraph's text ends with `:`), `ordinal`,
+`note_id`, `section_id`, plus `inherit:`. A caption paragraph stays in its
+chunk's text as well: nothing is taken out of the prose.
+
+#### `ordered_lists:`
+
+```yaml
+  ordered_lists: {label: ProcedureStep, container: Procedure, edge: HAS_STEP,
+                  next: NEXT_STEP, under_heading: "^(Procedure|Steps|To .*)", min_items: 2}
+```
+
+Every **top-level** ordered list — one not nested inside another list item —
+holding at least `min_items` items (default 2) becomes a procedure.
+`under_heading` is optional and is the opt-in narrowing: a regular expression
+matched against the enclosing section's title, reading only the lists under a
+heading that matches. Without it every qualifying list is read, which is the
+rule the corpus this profile was measured against was built with. An *unordered*
+list is never a procedure, whatever heading it sits under.
+
+- The container is a **new node**, not the enclosing section relabelled, so a
+  section holding two lists yields two procedures — `Note#A#B~list1` and
+  `~list2`. It carries `title` (the enclosing section's title, or the note's),
+  `ordinal`, `step_count`, `note_id`, `section_id`, plus `inherit:`, and joins
+  its section by `HAS_<UPPER_SNAKE(container)>`, here `HAS_PROCEDURE`.
+- One node per item: `text` (the item's own content, excluding any list nested
+  inside it), `ordinal` (0-based), `level`, plus `inherit:`. `edge` joins the
+  container to each top-level step and a step to the steps of an ordered list
+  nested inside it; `next` joins consecutive steps at one level.
+
+#### `tables:`
+
+```yaml
+  tables:
+    - {under_heading: "Parameters", label: ApiParameter, key_column: name, edge: HAS_PARAMETER}
+    - {under_heading: "Worked at", edge: WORKED_AT, edges: true}
+```
+
+A **list** of rules, each naming the heading its tables sit under as a regular
+expression; the first rule that matches the enclosing section's title reads the
+table, and a table under no matching heading is prose like any other. Only GFM
+pipe tables are read — **raw HTML is never structure** (§1.4), so a converter
+emits GFM.
+
+- **Node form** (the default): one node per body row, labelled `label`. Each
+  column becomes a property named by its header text, typed by `types:` under
+  that label or inferred (§4.2). The key column is `key_column:` when declared
+  and the first column otherwise; its value keys the row — `<section id>~<value>`
+  — and is stored under its own column name as well. `edge` joins the enclosing
+  section, or the note, to each row node.
+- **Edge form** (`edges: true`): the row states **an edge, not a node**. Its
+  target is the first column holding a `[[wikilink]]`, or the column
+  `key_column:` names; every other column becomes an **edge property** on an
+  edge of type `edge:` from the note to that target, and an empty cell writes no
+  property. This is how a vault states per-edge attributes — a role, a weight, a
+  date range — and §10.6 writes them back out.
+- A cell's `[[links]]` and `![images]` are scanned as prose wherever they sit
+  (§5.1), so a picture inside a table cell is the note's attachment reference as
+  usual and a row rule never swallows it. A link column that resolves to nothing
+  becomes a `_provisional` stub and a warning, as any link does (§5.6, §9).
+
+#### `key_from_heading:`
+
+```yaml
+  key_from_heading: {label: ApiSymbol, when_matches: '^[\w.]+\.[\w]+(\(.*\))?$',
+                     property: qualified_name, under_label: Api}
+```
+
+Relabels a Section whose title is really a symbol name, and stores that title
+under `property`. Two gates, both required, because the shape is cheap to match
+by accident: `under_label:` restricts the rule to notes carrying that label, and
+the heading must contain a `.` or a `(` whatever `when_matches` says. On one
+corpus the regex alone matched 1 439 headings of which 13 were symbols — a
+heading like `Overview` is a valid qualified name to a regex and nothing else.
+The default `when_matches` is the one above: a dotted name, optionally with a
+call's parentheses. Relabelling changes the label and adds the property; the
+section's own properties and its section edges are unchanged.
+
+#### `inherit:` and `embed_text:`
+
+```yaml
+  inherit: [corpus, category]
+  embed_text: "{title} | {heading_path}\n\n{text}"
+```
+
+`inherit:` names frontmatter properties of the note that are copied verbatim
+onto **every** node derived from it, so a chunk-level filter or BM25 query needs
+no hop back to the note. A key the note does not carry is simply absent there.
+It may not name a property a derived node defines itself — `title`, `text`,
+`level`, `ordinal`, `path`, `note_id`, `section_id`, `kind`, `lang`, `code`,
+`caption`, `chunk_hash`, `step_count` — nor a reserved frontmatter key (§4.1);
+either is an error (§9), because the alternative is a note silently overwriting
+the structure it was read from.
+
+`embed_text:` materialises a property of that name on every derived node that
+carries `text`. The placeholders are `{title}` (the **note's** title),
+`{section_title}` (the derived node's own), `{heading_path}` (its path joined by
+` > `), `{text}` and `{id}`; any other placeholder is an error. A chunk that
+carries its document and its heading inside its own text is what makes a
+retrieval hit legible without a second query, and declaring the template is what
+lets `embed: {Chunk: embed_text}` and `text_indexes: {Chunk: [embed_text]}` name
+it.
+
+`indexes:`, `text_indexes:` and `embed:` name a derived label exactly as they
+name a note's. The labels do not exist until a rule declares them, so naming one
+without its rule is the §7 warning for a declaration the vault does not carry.
+
+**Links become labelled.** Declaring `structure:` also turns on the `label` edge
+property, so `[[Target|the display text]]` stores that text (§5.1, §5.4). There
+is no separate switch: a vault that models the inside of its notes is a vault
+that wants its links described, and the property is simply absent everywhere
+else.
+
+**Compatibility.** `structure:`, `edge_defaults:` and `export:` are unknown
+top-level keys to any kglite released before them, and an unknown key **fails
+the build** (§7). A vault using them therefore needs a kglite that knows them.
+`kglite_vault` stays `1`: the keys are additive, and the failure on an older
+build is loud and names the key rather than quietly producing a smaller graph.
+
+### 7.2 `edge_defaults:`
+
+```yaml
+edge_defaults:
+  NEXT_STEP: {derivation: source_order}
+  CHILD_OF: {derivation: directory_index_hierarchy}
+```
+
+Edge properties that are constant for a whole type, pushed onto every edge of it
+the build emits — from prose, from frontmatter or from a `structure:` rule
+alike. It is how a vault states provenance that is true per type without writing
+it on every line, and it is declared rather than authored: nothing in a note
+changes. A default never overwrites a property the edge already carries
+(`section`, `anchor`, `alt`, `ordinal`, `label`, an edge table's own columns),
+and that clash is a warning (§9); so is a type the vault has no edges of.
+
+### 7.3 `export:`
+
+```yaml
+export:
+  edge_tables:
+    WORKED_AT: "Worked at"
+```
+
+Read by the exporter only (§10.6). Each entry names an edge type and the heading
+whose table its edges are written under in the source note, so an edge carrying
+properties survives an export instead of being counted as a loss. A type with no
+entry keeps today's behaviour exactly: its targets go to a frontmatter list and
+its properties are dropped and counted (§10.9).
 
 ## 8. Skills and recipes carried in the vault
 
@@ -663,14 +1020,18 @@ classification is the contract.
 | An id collision — two or more notes resolving to one id, each falling back to its path. | §3 |
 | Two folder notes declared for one directory (`X.md` *and* `X/X.md`). | §2.3 |
 | A link or attachment reference naming an absolute filesystem path, or climbing above the vault root — in the body or in a typed-edge key. | §4.3, §5.1, §6.2 |
-| A `.kglite/vault.yaml` the schema refuses — an unknown key, an unknown `kglite_vault` version, a value of the wrong shape, a malformed `ontology:` document. This **fails the build** (§7); `okf.validate` reports it as the report's single error. | §7 |
+| A `.kglite/vault.yaml` the schema refuses — an unknown key at the top level or inside `structure:` (§7.1), an unknown `kglite_vault` version, a value of the wrong shape, a malformed `ontology:` document, an `inherit:` entry naming a property a derived node defines itself, or an `embed_text:` placeholder this spec does not name. This **fails the build** (§7); `okf.validate` reports it as the report's single error. | §7 |
 | An ontology document the declaration API refuses. | §7 |
 
 **Warnings** — legitimate in a real vault, worth seeing:
 
 | Class | § |
 |---|---|
-| A dangling link: a target that matched no note and became a stub. | §5.6 |
+| A dangling link: a target that matched no note and became a stub — in the body, in a typed-edge key, or in an edge table's link column (§7.1). | §5.6 |
+| A fragment link naming a heading or block id the target note does not have: the edge stays on the note and keeps its `anchor`. | §5.4 |
+| A duplicate derived id — a second section with one heading path, or a second table row with one key under one section — which takes a `~2` suffix. The fix is a block id. | §7.1 |
+| A `structure:` rule that matched nothing anywhere in the vault. | §7.1 |
+| An `edge_defaults:` entry whose property the edge already carries, or whose edge type the vault has none of. | §7.2 |
 | A missing attachment, or an ambiguous bare filename (which resolves to nothing, and the warning names the candidates). | §6.6 |
 | A case-insensitive id collision — two ids differing only in case. | §3 |
 | An alias clash: an `aliases:` entry that is another note's filename stem, or that two notes both claim. The link resolves to exactly one of them. | §5.2 |
@@ -698,7 +1059,10 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    synthesized labels are never files: `Tag`, `Source`, `Folder`, `Image` and
    `Attachment` regenerate on the next import, `_provisional` stubs are
    references rather than notes, and `KgliteSkill` / `KgliteRecipe` nodes are
-   written to `.kglite/skills/` and `.kglite/recipes/` instead (§8).
+   written to `.kglite/skills/` and `.kglite/recipes/` instead (§8). So are the nodes `structure:` derives
+   (§7.1): a section, chunk, callout, example, procedure, step or table row is
+   part of a note's prose, carries no `file_path`, and the next build derives it
+   again from the body the note's own file already holds.
 2. **File path.** The node's `file_path` is preserved when it has one and its
    top-level folder still matches its label; otherwise the note is re-filed
    under `<Label>/`, so the label ladder recovers the label the export did not
@@ -746,7 +1110,9 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    line there has it in its body and gets it back. A node without a body
    produces a frontmatter-only file; a node with a body and nothing to say
    above it produces a file with no frontmatter block at all. Human-owned prose
-   is never rewritten.
+   is never rewritten. The one thing an export ever *adds* to a body is an edge
+   table under the heading `export.edge_tables` names (§10.6) — appended because
+   the vault declared it by name, and appended nowhere else.
 6. **Edges** become frontmatter lists keyed `lower_snake(TYPE)`, with wikilink
    values: `depends_on: ["[[Seismic interpretation]]"]`. The key is exactly
    what §4.3's `UPPER_SNAKE(key)` turns back into that type. Two kinds of edge
@@ -764,6 +1130,20 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    An edge to a `_provisional` stub is written as `[[<the unresolved name>]]`,
    so a dangling link declared in frontmatter dangles in the same place next
    time. An ambiguous target is written folder-qualified, `[[Label/Name]]`.
+
+   **An edge whose type `export.edge_tables` declares** (§7.3) is written as a
+   table in the body instead of a frontmatter list: the declared heading, a
+   first column holding the `[[target]]`, then one column per property the
+   type's edges carry, rows ordered by target and columns by name. This is the
+   only place an export adds prose to a note, and it does so because the vault
+   asked for it — an undeclared type is never appended to, because human prose
+   is never rewritten (§10.5), and its properties are counted as loss 1 exactly
+   as before. Reading the table back needs the matching
+   `structure.tables … edges: true` rule (§7.1), which lives in `vault.yaml`,
+   which no export writes (loss 4). An edge the body's own table already states
+   is left out exactly as any body-stated edge is, so exporting an exported
+   vault appends no second table and the tree stays the fixed point §10.9
+   describes.
 7. **Overwrite safety.** `.kglite/export-manifest.json` records every file the
    export wrote: `{"kglite_vault": 1, "files": {"<vault-relative path>":
    "<sha256 hex>"}}`. On the next export a file whose current hash differs from
@@ -785,9 +1165,11 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    byte-identical.
 9. **Documented losses.** Six, and no others:
 
-   1. **Edge properties** (`section`, `anchor`, `alt`, `ordinal`) are not
-      written — a frontmatter list carries targets — and are counted in the
-      export report. An edge the *body* states keeps them anyway: the prose
+   1. **Edge properties** (`section`, `anchor`, `alt`, `ordinal`, `label`) are
+      not written for a type `export.edge_tables` does not declare — a
+      frontmatter list carries targets — and are counted in the export report.
+      A declared type keeps them, as a table (§10.6). An edge the *body* states
+      keeps them anyway: the prose
       travels verbatim and the next import re-derives them from it with the
       same scanner. An edge only frontmatter carried has none to begin with, so
       the loss bites exactly where an edge with properties was never written in
@@ -855,7 +1237,8 @@ What a converter must emit, in order:
    encoding reaches them. Wikilink targets are never encoded.
 8. **`.kglite/vault.yaml`** with `kglite_vault: 1`, your `default_label`,
    `folder_notes`, `hubs`, `heading_edges`, `types`, `indexes`, `text_indexes`
-   and `embed` (§7). It replaces the graph-building script: everything
+   and `embed` (§7) — plus `structure:` when the notes carry structure worth
+   querying, which §13 is the guide to. It replaces the graph-building script: everything
    declarative lives here and is re-applied on every rebuild.
 9. **`.kglite/skills/` and `.kglite/recipes/`** when the vault is served to an
    agent (§8).
@@ -881,7 +1264,11 @@ being told the path again.
 graph is stale. `okf.rebuild_if_changed(graph)` returns `None` when the
 fingerprint still matches and a **new** graph otherwise, carrying the old
 graph's vectors across by `(label, id)`: an unchanged note keeps its vector and
-its stored text hash, so only notes whose text moved are re-embedded. A note
+its stored text hash, so only notes whose text moved are re-embedded. Nodes a
+`structure:` block derived add one fallback to that, because their ids move
+when the prose around them does: a derived node whose id is new but whose
+`chunk_hash` matches exactly one old node of its label is that node, and
+carries its vector and hash across too (§7.1). A note
 that changed **label** — by moving between folders under a folder-derived label
 — is a different node and re-embeds; that is the contract, not a defect.
 `embed:` targets then run a changed-mode pass when a model is bound.
@@ -891,3 +1278,105 @@ seconds, so a file rewritten within the same second to exactly the same length
 reads as unchanged. And every non-hidden file under the root is a candidate
 attachment, so writing the `.kgl` *into* the vault changes the vault: keep it
 outside.
+
+## 13. Modelling guide for converters and authoring agents
+
+A source corpus already has structure — a table of contents, sections,
+procedures, parameter tables, admonitions. This section says what to write so
+that structure arrives in the graph, and what to avoid writing because it
+arrives as nothing. It is normative in the same sense as the rest: a converter
+that follows it produces a vault this spec describes.
+
+> **Frontmatter is the node, headings are the sections, `^blockid` is the
+> citable unit.** Everything below follows from those three.
+
+### 13.1 What to emit
+
+| Source has … | Emit … | Graph gets … |
+|---|---|---|
+| a hierarchy or table of contents | folders plus folder notes — `X.md` beside `X/` (§2.3) | a `CHILD_OF` chain, labels from the folders |
+| sections within a page | headings, one level per depth | `Section` with `PARENT_SECTION` / `NEXT_SECTION` (§7.1) |
+| a passage worth citing | a paragraph ending in ` ^id` | a `Chunk` keyed `Note#^id` that later edits cannot move |
+| an ordered procedure | a numbered list | `Procedure` + `ProcedureStep` + `NEXT_STEP` |
+| parameters, fields, columns | a **GFM** table under a named heading | one node per row, columns as properties |
+| notes, warnings, version remarks | callouts — `> [!versionadded] Title` | `Note {kind, title, text}` |
+| code samples | fenced blocks **with the language on the fence** | `Example {lang, code}` |
+| typed relations | frontmatter `key: ["[[A]]", "[[B]]"]` (§4.3) | `KEY` edges |
+| relations **with attributes** | an edge table under a declared heading (§7.1) | `KEY` edges carrying properties |
+| what a link means in prose | `[[Target\|the words you would have written]]` | the edge's `label` |
+| categorical facets — tags, keywords, components | list-valued frontmatter keys plus `hubs:` | hub nodes and their edges |
+| images and downloads | note-relative references, files copied in, PNG/JPEG/GIF/WebP | `Image` / `Attachment` nodes and edges (§6) |
+| a heading that is really a symbol name | `key_from_heading:` with `under_label:` | the section relabelled, `qualified_name` stored |
+| provenance that is constant per edge type | `edge_defaults:` (§7.2) | that property on every edge of the type |
+| anything to search or embed | `text_indexes:` / `embed:` on `Chunk` and `Section`, with `embed_text:` | BM25 and vectors at the granularity that answers |
+
+### 13.2 Anti-patterns
+
+- **One file per tiny record** — per chunk, step or parameter. It destroys the
+  property that makes a vault worth having, that a human can open it; a
+  `structure:` block yields the same nodes from the same pages.
+- **Raw HTML tables and definition lists.** HTML tags are never interpreted
+  (§1.4), so a `<table>` is prose and its rows are nothing. Emit a GFM table;
+  emit headings or a table for a `<dl>`, never `<dt>`.
+- **Admonitions flattened into paragraphs**, or folded into `note` because the
+  source word is not one of Obsidian's thirteen. Callout kinds are arbitrary —
+  keep `versionadded`, keep `deprecated` (§5.7).
+- **Unlabelled fences** when the source knew the language. `langs: [python]`
+  then matches nothing; write the language, or omit `langs:` and take them all.
+- **JSON-encoded lists.** `tags: "[\"a\", \"b\"]"` is one string. Write a YAML
+  sequence (§4.2).
+- **Nested frontmatter maps.** They flatten to dotted keys that Obsidian's own
+  Properties UI cannot edit. Keep frontmatter to scalars and lists.
+- **`type:` on every file when the folder already says it.** The label ladder
+  reads the folder (§2.1) and an export never writes `type:` back (§10.3), so
+  the declaration only makes a later folder move a no-op.
+- **Absolute paths and `../` climbs** out of the vault: a §9 error, in prose and
+  in a typed-edge key alike.
+- **SVG.** It is stored as an `Attachment` and is not delivered as an image;
+  rasterise it when you build the source (§6).
+- **The same heading text twice in one note.** Obsidian can link only the first
+  and so can this spec; the second takes a `~2` id and a warning. Add a block id.
+
+### 13.3 A `structure:` block to start from
+
+```yaml
+# .kglite/vault.yaml — a converted help corpus
+kglite_vault: 1
+default_label: Article
+
+structure:
+  sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}
+  chunks:   {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_words: 650, max_chars: 6000}
+  callouts: {label: Note, edge: HAS_NOTE}
+  code_fences: {label: Example, edge: HAS_EXAMPLE}
+  ordered_lists: {label: ProcedureStep, container: Procedure, edge: HAS_STEP, next: NEXT_STEP}
+  tables:
+    - {under_heading: "Parameters", label: ApiParameter, key_column: name, edge: HAS_PARAMETER}
+  key_from_heading: {label: ApiSymbol, property: qualified_name, under_label: Api}
+  inherit: [corpus, category]
+  embed_text: "{title} | {heading_path}\n\n{text}"
+
+edge_defaults:
+  NEXT_STEP: {derivation: source_order}
+
+text_indexes:
+  Chunk: [embed_text]
+  ProcedureStep: [text]
+embed:
+  Chunk: embed_text
+```
+
+`code_fences:` here omits `langs:` on purpose — the corpus lost its languages in
+conversion, and every fence is still an example. Fix the converter and the
+filter becomes worth declaring.
+
+### 13.4 The loop
+
+1. Convert a **sample** — fifty pages, not the corpus.
+2. `kglite okf check <dir> --strict`. Errors are spec violations; warnings at
+   this stage are usually the converter's, not the corpus's.
+3. Read the report's per-label counts against what you know the sample holds. A
+   rule that matched nothing is a warning and the fastest defect there is
+   (§7.1): the heading regex is wrong, or the tables are still HTML.
+4. Fix the converter, not the vault. Then run the whole corpus, and keep
+   `--strict` in the converter's own test suite (§11.10).
