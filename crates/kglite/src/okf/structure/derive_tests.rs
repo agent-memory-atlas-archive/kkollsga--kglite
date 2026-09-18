@@ -39,7 +39,7 @@ fn both(max_words: usize, max_chars: usize) -> StructureProfile {
 }
 
 fn run(body: &str, profile: &StructureProfile) -> Derived {
-    derive(body, &parse_blocks(body), profile)
+    derive(body, &parse_blocks(body), "The Note", profile)
 }
 
 /// `(suffix, label)` in derivation order.

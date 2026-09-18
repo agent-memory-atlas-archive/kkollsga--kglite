@@ -49,7 +49,7 @@ const TYPE_KEYWORDS: [&str; 7] = ["string", "int", "float", "bool", "date", "dat
 /// (VAULT.md §7): a declaration the reader cannot place is never harmless —
 /// a misspelled `heading_edge:` would leave every link typed by the ladder
 /// with nothing to say so.
-const TOP_LEVEL_KEYS: [&str; 14] = [
+const TOP_LEVEL_KEYS: [&str; 15] = [
     "kglite_vault",
     "default_label",
     "label_from",
@@ -64,6 +64,7 @@ const TOP_LEVEL_KEYS: [&str; 14] = [
     "ontology",
     "embed",
     "structure",
+    "edge_defaults",
 ];
 
 /// One entry of an `indexes:` list (VAULT.md §7).
@@ -111,6 +112,10 @@ pub struct VaultConfig {
     /// own bodies. A profile override, applied before the walk, because the
     /// derivation runs inside the parse.
     pub(crate) structure: Option<crate::okf::structure::StructureProfile>,
+    /// `edge_defaults:` (VAULT.md §7.2) — edge type → the constant properties
+    /// every edge of it carries. A profile override, like `structure:`,
+    /// because the builder reads it where the rows are emitted.
+    pub(crate) edge_defaults: BTreeMap<String, Vec<(String, Value)>>,
 }
 
 /// Where the declaration file lives under `root`.
@@ -232,6 +237,27 @@ pub fn parse(text: &str) -> Result<VaultConfig, String> {
     }
     if let Some(v) = map.get("structure") {
         config.structure = Some(crate::okf::structure::profile::parse(v)?);
+    }
+    if let Some(v) = map.get("edge_defaults") {
+        for (conn_type, props) in map_of(v, "edge_defaults")?.iter() {
+            let props = map_of(props, &format!("edge_defaults.{conn_type}"))?;
+            // A scalar, and only a scalar: the value is a *constant* stated
+            // once for a whole type, and a list or a map there would be a
+            // declaration the reader cannot place on an edge column.
+            let mut entries = Vec::with_capacity(props.len());
+            for (name, value) in props.iter() {
+                match value {
+                    Value::List(_) | Value::Map(_) | Value::Null => {
+                        return Err(format!(
+                            "`edge_defaults.{conn_type}.{name}` must be a scalar, not {}",
+                            kind_of(value)
+                        ))
+                    }
+                    scalar => entries.push((name.to_string(), scalar.clone())),
+                }
+            }
+            config.edge_defaults.insert(conn_type.to_string(), entries);
+        }
     }
     if let Some(v) = map.get("embed") {
         for (label, prop) in map_of(v, "embed")?.iter() {
@@ -468,6 +494,11 @@ impl VaultConfig {
         }
         if let Some(structure) = &self.structure {
             profile.structure = Some(structure.clone());
+        }
+        for (conn_type, props) in &self.edge_defaults {
+            profile
+                .edge_defaults
+                .insert(conn_type.clone(), props.clone());
         }
     }
 

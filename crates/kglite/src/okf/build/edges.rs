@@ -96,7 +96,7 @@ pub(super) fn build_edges(
         )?;
     }
 
-    emit_groups(graph, groups, report)
+    emit_groups(graph, groups, &opts.profile.edge_defaults, report)
 }
 
 /// The `anchor` a body link carries (VAULT.md §5.4), or `None` for a link

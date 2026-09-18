@@ -218,11 +218,15 @@ pub struct Profile {
     /// conventions.
     pub reserved_key_shapes: bool,
     /// Read by [`crate::okf::structure::derive`]: what this vault derives from
-    /// a note's own body — sections, chunks, and what decorates them
-    /// (VAULT.md §7.1). `None` on every dialect and on every vault that
+    /// a note's own body — sections, chunks, callouts, fenced examples,
+    /// ordered lists, and what decorates them (VAULT.md §7.1). `None` on every dialect and on every vault that
     /// declares no `structure:`, and a `None` here is the 0.17.8 build: note
     /// for note and edge for edge.
     pub(crate) structure: Option<crate::okf::structure::StructureProfile>,
+    /// Read by [`crate::okf::build`]: `edge_defaults:` — properties that are
+    /// constant for a whole edge type, pushed onto every edge of it the build
+    /// emits (VAULT.md §7.2). Empty on every dialect; a vault declares them.
+    pub(crate) edge_defaults: BTreeMap<String, Vec<(String, Value)>>,
     /// Read by [`crate::okf::links::extract`]: refuse a body reference that
     /// names a place the vault does not own — an absolute filesystem path, or
     /// one climbing above the root (VAULT.md §9). Off for `okf`/`loose`, where
@@ -264,6 +268,7 @@ impl Default for Profile {
             path_safety: false,
             reserved_key_shapes: false,
             structure: None,
+            edge_defaults: BTreeMap::new(),
         }
     }
 }

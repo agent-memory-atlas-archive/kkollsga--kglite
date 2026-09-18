@@ -5,8 +5,8 @@
 use crate::datatypes::values::Value;
 use crate::graph::storage::GraphRead;
 use crate::graph::DirGraph;
-use crate::okf::build::build;
 use crate::okf::build::tests_support::{edges_of, nodes_with_titles, vault_build_with, write};
+use crate::okf::build::{build, BuildOutput};
 use crate::okf::model::{BuildOptions, BuildReport, Profile};
 use crate::okf::structure::profile::{ChunkRule, SectionRule, StructureProfile};
 use std::path::Path;
@@ -408,5 +408,306 @@ fn golden_structure_vault_report() {
              the link resolved to the note"
                 .to_string(),
         ],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `edge_defaults:` (VAULT.md §7.2)
+// ---------------------------------------------------------------------------
+
+/// A vault with one edge of several types: the folder layout (`CONTAINS`), a
+/// body link (`LINKS_TO`), a procedure (`HAS_PROCEDURE`/`HAS_STEP`/
+/// `NEXT_STEP`) and two chunks (`HAS_CHUNK`/`NEXT_CHUNK`).
+fn edge_type_vault(dir: &Path) {
+    write(
+        dir,
+        "guide/steps.md",
+        "# Steps\n\n1. Open it.\n2. Close it.\n\nSee [[guide/other]].\n",
+    );
+    write(dir, "guide/other.md", "# Other\n\nText.\n");
+}
+
+fn full_structure(profile: &mut Profile) {
+    profile.structure = Some(StructureProfile {
+        sections: Some(sections()),
+        chunks: Some(ChunkRule {
+            max_chars: 40,
+            ..chunks()
+        }),
+        ordered_lists: Some(
+            crate::okf::structure::profile::parse(
+                &crate::okf::frontmatter::parse_yaml("ordered_lists:\n").unwrap(),
+            )
+            .unwrap()
+            .ordered_lists
+            .unwrap(),
+        ),
+        ..StructureProfile::default()
+    });
+}
+
+fn derivation_of(g: &DirGraph) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = edges_of(g)
+        .into_iter()
+        .map(|(_, conn, _, props)| {
+            (
+                conn,
+                props
+                    .iter()
+                    .find(|(k, _)| k == "derivation")
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The `derivation` table `RMS_HelpDesk/build_rms_graph.py:186-192` writes onto
+/// every edge it adds, verbatim, plus its `.get(kind, …)` fallback. The
+/// acceptance test for `edge_defaults:` is that declaring this reproduces that
+/// column on every edge of the types a vault build produces.
+const RMS_DERIVATION: &[(&str, &str)] = &[
+    ("HAS_TOPIC", "curated_navigation_crosswalk"),
+    ("SUPPORTS_ACTION", "normalized_source_verb"),
+    ("HAS_GUI_ROUTE", "candidate_topic_action_grouping"),
+    ("HAS_API_ROUTE", "candidate_topic_action_grouping"),
+    ("HAS_CANDIDATE", "candidate_topic_action_grouping"),
+    ("ABOUT_TOPIC", "candidate_topic_action_grouping"),
+    ("HAS_ACTION", "candidate_topic_action_grouping"),
+    ("CONTAINS", "directory_index_hierarchy"),
+    ("MEMBER_OF", "qualified_symbol_name"),
+    ("NEXT_STEP", "source_order"),
+    ("NEXT_CHUNK", "source_order"),
+    ("HAS_UI_ROUTE", "source_access_instruction"),
+    ("ANCHORED_IN", "source_access_instruction"),
+];
+const RMS_FALLBACK: &str = "source_structure";
+
+fn rms_derivation(conn: &str) -> &'static str {
+    RMS_DERIVATION
+        .iter()
+        .find(|(kind, _)| *kind == conn)
+        .map(|(_, value)| *value)
+        .unwrap_or(RMS_FALLBACK)
+}
+
+#[test]
+fn the_rms_derivation_table_declared_as_edge_defaults_reproduces_itself() {
+    let dir = tempdir().unwrap();
+    edge_type_vault(dir.path());
+    // What the producer wrote per edge: one lookup in its own table, exactly
+    // as its `dict.get(kind, 'source_structure')` does.
+    let present: Vec<String> = derivation_of(&vault_build_with(dir.path(), full_structure).graph)
+        .into_iter()
+        .map(|(conn, _)| conn)
+        .collect();
+    assert!(
+        present.len() >= 6,
+        "the fixture exercises several types: {present:?}"
+    );
+    let out = vault_build_with(dir.path(), |profile| {
+        full_structure(profile);
+        for conn in &present {
+            profile.edge_defaults.insert(
+                conn.clone(),
+                vec![(
+                    "derivation".to_string(),
+                    Value::String(rms_derivation(conn).to_string()),
+                )],
+            );
+        }
+    });
+    assert!(out.report.warnings.is_empty(), "{:?}", out.report.warnings);
+    for (source, conn, target, props) in edges_of(&out.graph) {
+        let got = props
+            .iter()
+            .find(|(k, _)| k == "derivation")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            got,
+            Some(rms_derivation(&conn)),
+            "{source} -[{conn}]-> {target}"
+        );
+    }
+}
+
+#[test]
+fn a_default_never_overwrites_a_property_the_edge_already_carries() {
+    let dir = tempdir().unwrap();
+    edge_type_vault(dir.path());
+    let out = vault_build_with(dir.path(), |profile| {
+        profile.edge_defaults.insert(
+            "LINKS_TO".to_string(),
+            vec![
+                ("section".to_string(), Value::String("declared".to_string())),
+                ("derivation".to_string(), Value::String("prose".to_string())),
+            ],
+        );
+    });
+    let link: Vec<(String, String)> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, conn, _, _)| conn == "LINKS_TO")
+        .flat_map(|(_, _, _, props)| props)
+        .collect();
+    assert!(
+        link.contains(&("section".to_string(), "Steps".to_string())),
+        "the edge's own value is kept: {link:?}"
+    );
+    assert!(link.contains(&("derivation".to_string(), "prose".to_string())));
+    assert_eq!(
+        out.report.warnings,
+        vec![
+            "`edge_defaults.LINKS_TO.section` names a property a `LINKS_TO` edge \
+             already carries; the edge's own value is kept"
+                .to_string()
+        ],
+    );
+}
+
+#[test]
+fn a_default_for_a_type_the_vault_has_no_edge_of_is_a_warning() {
+    let dir = tempdir().unwrap();
+    edge_type_vault(dir.path());
+    let out = vault_build_with(dir.path(), |profile| {
+        profile.edge_defaults.insert(
+            "NEXT_STEP".to_string(),
+            vec![("derivation".to_string(), Value::String("x".to_string()))],
+        );
+    });
+    assert_eq!(
+        out.report.warnings,
+        vec![
+            "`edge_defaults:` declares `NEXT_STEP`, but the vault has no edge of that type"
+                .to_string()
+        ],
+        "nothing declares `ordered_lists:` here, so the type is never emitted"
+    );
+}
+
+#[test]
+fn a_construct_rule_that_matched_nothing_anywhere_is_a_warning() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "plain.md",
+        "# A\n\nProse with no construct in it.\n",
+    );
+    let out = vault_build_with(dir.path(), |profile| {
+        full_structure(profile);
+        profile.structure.as_mut().unwrap().callouts = Some(
+            crate::okf::structure::profile::parse(
+                // Not the spec's default `Note`: the obsidian dialect already
+                // labels an untyped note that, and the rule would then read as
+                // matched by the notes themselves.
+                &crate::okf::frontmatter::parse_yaml("callouts: {label: Admonition}").unwrap(),
+            )
+            .unwrap()
+            .callouts
+            .unwrap(),
+        );
+    });
+    assert_eq!(
+        out.report.warnings,
+        vec![
+            "`vault.yaml` declares a `structure:` rule for `Admonition`, but no note's body \
+             produced one"
+                .to_string(),
+            "`vault.yaml` declares a `structure:` rule for `ProcedureStep`, but no note's body \
+             produced one"
+                .to_string(),
+        ],
+    );
+}
+
+#[test]
+fn a_procedure_never_claims_the_heading_a_link_names() {
+    // A `Procedure` carries its section's title as its own, so with no
+    // `sections:` declared there is nothing a `#Steps` fragment may land on —
+    // and the by-title rung of the anchor ladder, which is a section's alone,
+    // must not hand it the procedure that sits under that heading.
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "steps.md",
+        "# Steps\n\n1. Open it.\n2. Close it.\n",
+    );
+    write(dir.path(), "links.md", "See [[steps#Steps]].\n");
+    let link_targets = |out: BuildOutput| -> Vec<String> {
+        edges_of(&out.graph)
+            .into_iter()
+            .filter(|(_, conn, _, _)| conn == "LINKS_TO")
+            .map(|(_, _, target, _)| target)
+            .collect()
+    };
+    let without_sections = vault_build_with(dir.path(), |profile| {
+        full_structure(profile);
+        profile.structure.as_mut().unwrap().sections = None;
+    });
+    assert_eq!(
+        link_targets(without_sections),
+        vec!["steps".to_string()],
+        "no `sections:`, so the fragment names nothing derivable and the edge stays on the note"
+    );
+    assert_eq!(
+        link_targets(vault_build_with(dir.path(), full_structure)),
+        vec!["steps#Steps".to_string()],
+        "with `sections:` it reaches the section, never the procedure under it"
+    );
+}
+
+/// The second golden vault's whole census, so a rule that quietly stops
+/// deriving is a failure here and not only in the Python suite.
+#[test]
+fn golden_structure_vault_census() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/okf/golden/vault-structure");
+    let report = build(
+        &root,
+        &BuildOptions::for_dialect(crate::okf::Dialect::Obsidian),
+    )
+    .unwrap()
+    .report;
+    let nodes: Vec<(&str, usize)> = report
+        .nodes_by_label
+        .iter()
+        .map(|(label, n)| (label.as_str(), *n))
+        .collect();
+    assert_eq!(
+        nodes,
+        vec![
+            ("Article", 5),
+            ("Chunk", 13),
+            ("Example", 3),
+            ("Folder", 1),
+            ("Note", 3),
+            ("Procedure", 1),
+            ("ProcedureStep", 4),
+            ("Section", 11),
+        ]
+    );
+    let edges: Vec<(&str, usize)> = report
+        .edges_by_type
+        .iter()
+        .map(|(conn, n)| (conn.as_str(), *n))
+        .collect();
+    assert_eq!(
+        edges,
+        vec![
+            ("CONTAINS", 4),
+            ("HAS_CHUNK", 13),
+            ("HAS_EXAMPLE", 3),
+            ("HAS_NOTE", 3),
+            ("HAS_PROCEDURE", 1),
+            ("HAS_SECTION", 11),
+            ("HAS_STEP", 4),
+            ("LINKS_TO", 3),
+            ("NEXT_CHUNK", 4),
+            ("NEXT_SECTION", 3),
+            ("NEXT_STEP", 2),
+            ("PARENT_SECTION", 6),
+        ]
     );
 }

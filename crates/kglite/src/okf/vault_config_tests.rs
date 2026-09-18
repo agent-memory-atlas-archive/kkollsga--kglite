@@ -982,7 +982,7 @@ fn structure_reaches_the_notes_through_the_config() {
 #[test]
 fn a_structure_block_this_build_cannot_read_fails_the_build() {
     let dir = vault_with(
-        Some("kglite_vault: 1\nstructure:\n  callouts: {label: Note}\n"),
+        Some("kglite_vault: 1\nstructure:\n  tables: []\n"),
         &[("note.md", "# One\n")],
     );
     let message = match build_as(&dir, Dialect::Obsidian) {
@@ -990,7 +990,7 @@ fn a_structure_block_this_build_cannot_read_fails_the_build() {
         Ok(_) => panic!("the build fails on a rule it cannot read"),
     };
     assert!(
-        message.contains("unknown key `structure.callouts`"),
+        message.contains("unknown key `structure.tables`"),
         "{message}"
     );
     // …and `okf.validate` reports the same failure as the §9 error.
@@ -1012,5 +1012,41 @@ fn a_vault_without_the_block_derives_nothing() {
         out.report.nodes_by_label.keys().collect::<Vec<_>>(),
         vec!["Note"],
         "one note, and nothing else"
+    );
+}
+
+/// `edge_defaults:` is a top-level key like `structure:` — declared in the
+/// file, applied where the rows are emitted (VAULT.md §7.2).
+#[test]
+fn edge_defaults_reach_every_edge_of_their_type() {
+    let dir = vault_with(
+        Some("kglite_vault: 1\nedge_defaults:\n  LINKS_TO: {derivation: prose_reference}\n"),
+        &[("a.md", "See [[b]].\n"), ("b.md", "# B\n")],
+    );
+    let out = build_vault(&dir);
+    let props: Vec<(String, String)> = crate::okf::build::tests_support::edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, conn, _, _)| conn == "LINKS_TO")
+        .flat_map(|(_, _, _, props)| props)
+        .collect();
+    assert!(
+        props.contains(&("derivation".to_string(), "prose_reference".to_string())),
+        "{props:?}"
+    );
+}
+
+#[test]
+fn an_edge_default_that_is_not_a_scalar_fails_the_build() {
+    let dir = vault_with(
+        Some("kglite_vault: 1\nedge_defaults:\n  LINKS_TO: {sources: [a, b]}\n"),
+        &[("a.md", "# A\n")],
+    );
+    let message = match build_as(&dir, Dialect::Obsidian) {
+        Err(message) => message,
+        Ok(_) => panic!("a constant is a scalar"),
+    };
+    assert!(
+        message.contains("`edge_defaults.LINKS_TO.sources` must be a scalar"),
+        "{message}"
     );
 }

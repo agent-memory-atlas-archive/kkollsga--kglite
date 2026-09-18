@@ -269,6 +269,7 @@ pub(crate) fn column_value(v: &Value, native: bool) -> Value {
 fn emit_groups(
     graph: &mut DirGraph,
     groups: EdgeGroups,
+    edge_defaults: &BTreeMap<String, Vec<(String, Value)>>,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     // The initial-load regime belongs to the connection *type*, decided once
@@ -283,16 +284,29 @@ fn emit_groups(
         .filter(|conn| !graph.connection_type_metadata.contains_key(*conn))
         .collect();
     let fresh: BTreeSet<String> = fresh.into_iter().map(str::to_string).collect();
+    let present: BTreeSet<String> = groups.keys().map(|(conn, _, _)| conn.clone()).collect();
+    // A declaration the vault has no edges of (VAULT.md §7.2, §9): a typo in
+    // an edge type is otherwise silent — the property simply never appears.
+    for conn in edge_defaults.keys() {
+        if !present.contains(conn) {
+            report.warnings.push(format!(
+                "`edge_defaults:` declares `{conn}`, but the vault has no edge of that type"
+            ));
+        }
+    }
     for ((conn, src_label, tgt_label), edges) in groups {
         // The same relationship can be written twice — a `parent:` naming the
         // folder note the layout already joined this note to (VAULT.md §2.3,
         // §4.3). Identical rows are one edge; rows differing in an edge
         // property are not identical and stay two (§5.4).
         let mut seen: HashSet<EdgeRow> = HashSet::new();
-        let edges: Vec<EdgeRow> = edges
+        let mut edges: Vec<EdgeRow> = edges
             .into_iter()
             .filter(|r| seen.insert(r.clone()))
             .collect();
+        if let Some(defaults) = edge_defaults.get(&conn) {
+            apply_edge_defaults(&conn, defaults, &mut edges, report);
+        }
         *report.edges_by_type.entry(conn.clone()).or_default() += edges.len();
         // One frame per group, so its columns are the union of the property
         // keys any row in it carries; a row missing one gets Null, which
@@ -342,6 +356,36 @@ fn emit_groups(
     Ok(())
 }
 
+/// Push a type's declared constants onto every row of it (VAULT.md §7.2).
+///
+/// A default **never overwrites** a property the edge already carries — a
+/// link's `section`, an attachment's `ordinal`, an edge table's own column —
+/// and that clash is a warning, reported once per property rather than once
+/// per edge.
+fn apply_edge_defaults(
+    conn: &str,
+    defaults: &[(String, Value)],
+    edges: &mut [EdgeRow],
+    report: &mut BuildReport,
+) {
+    for (name, value) in defaults {
+        let mut clashed = false;
+        for (_, _, props) in edges.iter_mut() {
+            if props.iter().any(|(key, _)| key == name) {
+                clashed = true;
+                continue;
+            }
+            props.push((name.clone(), value.clone()));
+        }
+        if clashed {
+            report.warnings.push(format!(
+                "`edge_defaults.{conn}.{name}` names a property a `{conn}` edge \
+                 already carries; the edge's own value is kept"
+            ));
+        }
+    }
+}
+
 /// Fold one group map into another, concatenating the rows of shared keys.
 fn merge_groups(into: &mut EdgeGroups, from: EdgeGroups) {
     for (key, rows) in from {
@@ -352,4 +396,4 @@ fn merge_groups(into: &mut EdgeGroups, from: EdgeGroups) {
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
-mod tests_support;
+pub(crate) mod tests_support;

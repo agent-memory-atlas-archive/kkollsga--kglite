@@ -12,6 +12,12 @@ structure:
   # fit one at a time and not together, so the packer is exercised by a
   # fixture a reader can check by eye.
   chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_chars: 120}
+  callouts: {label: Note, edge: HAS_NOTE}
+  # `langs:` omitted on purpose, so every fence qualifies — including the two
+  # that carry no info string (VAULT.md §7.1).
+  code_fences: {label: Example, edge: HAS_EXAMPLE}
+  ordered_lists: {label: ProcedureStep, container: Procedure, edge: HAS_STEP,
+                  next: NEXT_STEP, min_items: 2}
   # Every derived node carries the note's `corpus:`; a note without one gives
   # its nodes none.
   inherit: [corpus]
@@ -23,3 +29,8 @@ text_indexes:
 
 embed:
   Chunk: embed_text
+
+# Provenance that is true of a whole edge type, stated once (VAULT.md §7.2).
+edge_defaults:
+  HAS_STEP: {derivation: source_order}
+  LINKS_TO: {derivation: prose_reference}

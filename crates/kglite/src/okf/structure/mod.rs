@@ -1,13 +1,11 @@
 //! `okf::structure` — the block model of a note body.
 //!
-//! The link pass (`okf::links`) reads a body one line at a time with a single
-//! `in_fence` boolean, which is enough for links and tags and nothing else: it
-//! has no notion of a list item, a table cell, a blockquote's extent, or where
-//! one paragraph ends and the next begins. The structure profile needs all of
-//! those, so this module parses the body once with `pulldown-cmark` and keeps
-//! only the **block skeleton** — every node carrying a byte `Range` into the
-//! original body, so a derived node's text is a verbatim slice and never a
-//! re-render.
+//! One parse of the body with `pulldown-cmark`, kept as the **block
+//! skeleton** — every node carrying a byte `Range` into the original body, so
+//! a derived node's text is a verbatim slice and never a re-render. Both the
+//! structure profile and the link pass read it: list items, table cells, a
+//! blockquote's extent and where one paragraph ends are all things a line
+//! scanner cannot see, and a second scanner would be a second answer.
 //!
 //! Deliberately *not* here: link, tag and attachment semantics. Those stay in
 //! `okf::links`, which keeps scanning the body's own text (VAULT.md §1.4/§5.1:
@@ -16,6 +14,7 @@
 //! implement the same rules twice.
 
 pub(crate) mod block;
+mod constructs;
 pub(crate) mod derive;
 pub(crate) mod profile;
 

@@ -21,14 +21,22 @@ use std::sync::OnceLock;
 /// has not implemented is *not* here: it is refused with the same message an
 /// invented key gets, which is what makes "a vault declaring `structure:`
 /// needs a kglite that knows it" a loud failure rather than a quiet one.
-const STRUCTURE_KEYS: [&str; 4] = ["sections", "chunks", "inherit", "embed_text"];
+const STRUCTURE_KEYS: [&str; 7] = [
+    "sections",
+    "chunks",
+    "callouts",
+    "code_fences",
+    "ordered_lists",
+    "inherit",
+    "embed_text",
+];
 
 /// Properties a derived node defines itself, which `inherit:` may therefore
 /// not name (VAULT.md §7.1): the alternative is a note's frontmatter silently
 /// overwriting the structure it was read from. Names the whole vocabulary, P4's
 /// and P5's included, so a vault written against the spec gets the spec's
 /// answer whether or not this build derives that construct yet.
-const DERIVED_PROPERTIES: [&str; 13] = [
+const DERIVED_PROPERTIES: [&str; 14] = [
     "title",
     "text",
     "level",
@@ -37,6 +45,7 @@ const DERIVED_PROPERTIES: [&str; 13] = [
     "note_id",
     "section_id",
     "kind",
+    "fold",
     "lang",
     "code",
     "caption",
@@ -65,6 +74,9 @@ const PLACEHOLDERS: [&str; 5] = ["title", "section_title", "heading_path", "text
 pub(crate) struct StructureProfile {
     pub sections: Option<SectionRule>,
     pub chunks: Option<ChunkRule>,
+    pub callouts: Option<CalloutRule>,
+    pub code_fences: Option<FenceRule>,
+    pub ordered_lists: Option<OrderedListRule>,
     /// Frontmatter properties copied verbatim onto every derived node.
     pub inherit: Vec<String>,
     /// The template materialised as a property of its own name on every
@@ -94,11 +106,75 @@ pub(crate) struct ChunkRule {
     pub max_chars: usize,
 }
 
+/// `callouts:` — one node per callout (VAULT.md §7.1, §5.7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CalloutRule {
+    pub label: String,
+    /// Enclosing section → callout, or note → callout, or callout → nested
+    /// callout.
+    pub edge: String,
+}
+
+/// `code_fences:` — one node per fenced block (VAULT.md §7.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FenceRule {
+    pub label: String,
+    pub edge: String,
+    /// Info-string first words, lowercased, that qualify. `None` — the key
+    /// omitted — is **every** fence, including one carrying no info string,
+    /// which is what a corpus whose converter dropped its languages needs.
+    pub langs: Option<Vec<String>>,
+}
+
+/// `ordered_lists:` — a container node per qualifying top-level ordered list,
+/// and a node per item (VAULT.md §7.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrderedListRule {
+    /// The **step** label.
+    pub label: String,
+    /// The container label. Its edge from the section is
+    /// `HAS_<UPPER_SNAKE(container)>`, which is therefore not declared.
+    pub container: String,
+    pub edge: String,
+    pub next: String,
+    /// Matched against the enclosing section's title; `None` reads every
+    /// qualifying list, which is the default (VAULT.md §7.1).
+    pub under_heading: Option<HeadingMatcher>,
+    pub min_items: usize,
+}
+
+/// A compiled `under_heading:` regular expression.
+///
+/// Compiled once at load rather than per note: `derive` runs inside the
+/// parallel parse, and a regex rebuilt per list would dominate the rule.
+/// Two matchers are equal when their patterns are — which is what keeps
+/// [`StructureProfile`] comparable, and `Regex` itself is not.
+#[derive(Debug, Clone)]
+pub(crate) struct HeadingMatcher(Regex);
+
+impl HeadingMatcher {
+    pub fn is_match(&self, title: &str) -> bool {
+        self.0.is_match(title)
+    }
+}
+
+impl PartialEq for HeadingMatcher {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Eq for HeadingMatcher {}
+
 impl StructureProfile {
     /// Whether anything at all is derived. `inherit:`/`embed_text:` alone
     /// declare how derived nodes are decorated, not that there are any.
     pub fn derives_anything(&self) -> bool {
-        self.sections.is_some() || self.chunks.is_some()
+        self.sections.is_some()
+            || self.chunks.is_some()
+            || self.callouts.is_some()
+            || self.code_fences.is_some()
+            || self.ordered_lists.is_some()
     }
 }
 
@@ -125,33 +201,19 @@ pub(crate) fn parse(v: &Value) -> Result<StructureProfile, String> {
     }
     let mut out = StructureProfile::default();
     if let Some(v) = map.get("sections") {
-        let spec = rule_map(v, "structure.sections")?;
-        check_keys(
-            &spec,
-            "structure.sections",
-            &["label", "edge", "parent", "next"],
-        )?;
-        out.sections = Some(SectionRule {
-            label: field(&spec, "structure.sections", "label", "Section")?,
-            edge: field(&spec, "structure.sections", "edge", "HAS_SECTION")?,
-            parent: field(&spec, "structure.sections", "parent", "PARENT_SECTION")?,
-            next: field(&spec, "structure.sections", "next", "NEXT_SECTION")?,
-        });
+        out.sections = Some(section_rule(v)?);
     }
     if let Some(v) = map.get("chunks") {
-        let spec = rule_map(v, "structure.chunks")?;
-        check_keys(
-            &spec,
-            "structure.chunks",
-            &["label", "edge", "next", "max_words", "max_chars"],
-        )?;
-        out.chunks = Some(ChunkRule {
-            label: field(&spec, "structure.chunks", "label", "Chunk")?,
-            edge: field(&spec, "structure.chunks", "edge", "HAS_CHUNK")?,
-            next: field(&spec, "structure.chunks", "next", "NEXT_CHUNK")?,
-            max_words: limit(&spec, "structure.chunks", "max_words", 650)?,
-            max_chars: limit(&spec, "structure.chunks", "max_chars", 6000)?,
-        });
+        out.chunks = Some(chunk_rule(v)?);
+    }
+    if let Some(v) = map.get("callouts") {
+        out.callouts = Some(callout_rule(v)?);
+    }
+    if let Some(v) = map.get("code_fences") {
+        out.code_fences = Some(fence_rule(v)?);
+    }
+    if let Some(v) = map.get("ordered_lists") {
+        out.ordered_lists = Some(ordered_list_rule(v)?);
     }
     if let Some(v) = map.get("inherit") {
         out.inherit = inherit_list(v)?;
@@ -170,6 +232,101 @@ pub(crate) fn parse(v: &Value) -> Result<StructureProfile, String> {
         out.embed_text = Some(template);
     }
     Ok(out)
+}
+
+fn section_rule(v: &Value) -> Result<SectionRule, String> {
+    let spec = rule_map(v, "structure.sections")?;
+    check_keys(
+        &spec,
+        "structure.sections",
+        &["label", "edge", "parent", "next"],
+    )?;
+    Ok(SectionRule {
+        label: field(&spec, "structure.sections", "label", "Section")?,
+        edge: field(&spec, "structure.sections", "edge", "HAS_SECTION")?,
+        parent: field(&spec, "structure.sections", "parent", "PARENT_SECTION")?,
+        next: field(&spec, "structure.sections", "next", "NEXT_SECTION")?,
+    })
+}
+
+fn chunk_rule(v: &Value) -> Result<ChunkRule, String> {
+    let spec = rule_map(v, "structure.chunks")?;
+    check_keys(
+        &spec,
+        "structure.chunks",
+        &["label", "edge", "next", "max_words", "max_chars"],
+    )?;
+    Ok(ChunkRule {
+        label: field(&spec, "structure.chunks", "label", "Chunk")?,
+        edge: field(&spec, "structure.chunks", "edge", "HAS_CHUNK")?,
+        next: field(&spec, "structure.chunks", "next", "NEXT_CHUNK")?,
+        max_words: limit(&spec, "structure.chunks", "max_words", 650)?,
+        max_chars: limit(&spec, "structure.chunks", "max_chars", 6000)?,
+    })
+}
+
+fn callout_rule(v: &Value) -> Result<CalloutRule, String> {
+    let spec = rule_map(v, "structure.callouts")?;
+    check_keys(&spec, "structure.callouts", &["label", "edge"])?;
+    Ok(CalloutRule {
+        label: field(&spec, "structure.callouts", "label", "Note")?,
+        edge: field(&spec, "structure.callouts", "edge", "HAS_NOTE")?,
+    })
+}
+
+fn fence_rule(v: &Value) -> Result<FenceRule, String> {
+    let spec = rule_map(v, "structure.code_fences")?;
+    check_keys(&spec, "structure.code_fences", &["label", "edge", "langs"])?;
+    Ok(FenceRule {
+        label: field(&spec, "structure.code_fences", "label", "Example")?,
+        edge: field(&spec, "structure.code_fences", "edge", "HAS_EXAMPLE")?,
+        langs: match spec.get("langs") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(lang_list(v)?),
+        },
+    })
+}
+
+fn ordered_list_rule(v: &Value) -> Result<OrderedListRule, String> {
+    const CTX: &str = "structure.ordered_lists";
+    let spec = rule_map(v, CTX)?;
+    check_keys(
+        &spec,
+        CTX,
+        &[
+            "label",
+            "container",
+            "edge",
+            "next",
+            "under_heading",
+            "min_items",
+        ],
+    )?;
+    Ok(OrderedListRule {
+        label: field(&spec, CTX, "label", "ProcedureStep")?,
+        container: field(&spec, CTX, "container", "Procedure")?,
+        edge: field(&spec, CTX, "edge", "HAS_STEP")?,
+        next: field(&spec, CTX, "next", "NEXT_STEP")?,
+        under_heading: heading_matcher(spec.get("under_heading"))?,
+        min_items: limit(&spec, CTX, "min_items", 2)?,
+    })
+}
+
+/// `under_heading:` — compiled at load, so a broken pattern fails the build
+/// once rather than being rebuilt against every list in the vault.
+fn heading_matcher(v: Option<&Value>) -> Result<Option<HeadingMatcher>, String> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(pattern)) => Regex::new(pattern)
+            .map(|re| Some(HeadingMatcher(re)))
+            .map_err(|e| {
+                format!("`structure.ordered_lists.under_heading` is not a regular expression: {e}")
+            }),
+        Some(other) => Err(format!(
+            "`structure.ordered_lists.under_heading` must be a string, not {}",
+            kind_of(other)
+        )),
+    }
 }
 
 /// A rule's own mapping. A bare `sections:` with nothing under it is the rule
@@ -252,6 +409,27 @@ fn inherit_list(v: &Value) -> Result<Vec<String>, String> {
         out.push(name.clone());
     }
     Ok(out)
+}
+
+/// `langs:` — the info-string first words that qualify, lowercased so a
+/// declaration and a fence written `Python` agree.
+fn lang_list(v: &Value) -> Result<Vec<String>, String> {
+    let Value::List(items) = v else {
+        return Err(format!(
+            "`structure.code_fences.langs` must be a list of strings, not {}",
+            kind_of(v)
+        ));
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            Value::String(s) => Ok(s.to_lowercase()),
+            other => Err(format!(
+                "`structure.code_fences.langs` must be a list of strings, not {}",
+                kind_of(other)
+            )),
+        })
+        .collect()
 }
 
 fn placeholder_re() -> &'static Regex {

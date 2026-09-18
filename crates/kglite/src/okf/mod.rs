@@ -355,7 +355,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     // a profile without one costs one `Option` test per note.
     let derived = match &profile.structure {
         Some(structure) if structure.derives_anything() => {
-            structure::derive(&body, &tree, structure)
+            structure::derive(&body, &tree, &title, structure)
         }
         _ => structure::Derived::default(),
     };

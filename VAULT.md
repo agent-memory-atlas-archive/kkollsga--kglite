@@ -772,8 +772,16 @@ One node per callout (§5.7), attached by `edge` to the enclosing Section — or
 the note where there is no section, and to the enclosing callout where callouts
 nest. Properties: `kind` (the type identifier, lowercased, **whatever word it
 is** — `versionadded` and `caution` are as valid as `note`), `title` (absent
-when the callout has none), `text` (the callout body verbatim with the `>`
-markers stripped), `ordinal`, `note_id`, `section_id`, plus `inherit:`.
+when the callout has none), `fold` (`+` or `-`, the identifier that folds the
+callout open or closed; absent when it is not foldable), `text` (the callout
+body verbatim with the `>` markers stripped), `ordinal`, `note_id`,
+`section_id`, plus `inherit:`.
+
+A nested callout's `text` loses **its own** depth of markers and no more: a
+callout written `> > text` two deep reads `text` on its own node, while its
+parent's `text` keeps the `> [!tip]` line that says a callout is nested inside
+it. `section_id` names the heading either way — a nested callout is inside
+another callout *and* inside the same section.
 
 #### `code_fences:`
 
@@ -784,10 +792,13 @@ markers stripped), `ordinal`, `note_id`, `section_id`, plus `inherit:`.
 One node per fenced block whose info string's first word is in `langs`. **Omit
 `langs` and every fence qualifies**, including one carrying no info string at
 all — which is the setting a corpus needs when its converter dropped the
-languages on the way in. Properties: `lang` (the first word of the info string,
-absent when there is none), `code` (the fence contents verbatim, without the
-fence lines and without the info string), `caption` (the paragraph immediately
-above the fence, when that paragraph's text ends with `:`), `ordinal`,
+languages on the way in. The comparison is case-insensitive at both ends.
+Properties: `lang` (the first word of the info string, lowercased; absent when
+there is none), `code` (the fence contents verbatim, without the fence lines
+and without the info string, and dedented by the indentation of the container
+it sits in, so a fence inside a list item keeps only the code's own
+indentation), `caption` (the paragraph immediately above the fence in the same
+container, when that paragraph's text ends with `:`), `ordinal`,
 `note_id`, `section_id`, plus `inherit:`. A caption paragraph stays in its
 chunk's text as well: nothing is taken out of the prose.
 
@@ -803,13 +814,16 @@ holding at least `min_items` items (default 2) becomes a procedure.
 `under_heading` is optional and is the opt-in narrowing: a regular expression
 matched against the enclosing section's title, reading only the lists under a
 heading that matches. Without it every qualifying list is read, which is the
-rule the corpus this profile was measured against was built with. An *unordered*
-list is never a procedure, whatever heading it sits under.
+rule the corpus this profile was measured against was built with. A list above
+the body's first heading sits under no heading at all, so a declared
+`under_heading` cannot reach one. An *unordered* list is never a procedure,
+whatever heading it sits under.
 
 - The container is a **new node**, not the enclosing section relabelled, so a
   section holding two lists yields two procedures — `Note#A#B~list1` and
   `~list2`. It carries `title` (the enclosing section's title, or the note's),
-  `ordinal`, `step_count`, `note_id`, `section_id`, plus `inherit:`, and joins
+  `ordinal`, `step_count` (the steps the container itself holds — a sub-step
+  counts on its own step), `note_id`, `section_id`, plus `inherit:`, and joins
   its section by `HAS_<UPPER_SNAKE(container)>`, here `HAS_PROCEDURE`.
 - One node per item: `text` (the item's own content, excluding any list nested
   inside it), `ordinal` (0-based), `level`, plus `inherit:`. `edge` joins the

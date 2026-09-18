@@ -1,6 +1,6 @@
 //! Derive a note's own nodes from its block tree (VAULT.md §7.1).
 //!
-//! Pure: `derive(body, tree, profile)` reads no file and touches no graph, so
+//! Pure: `derive(body, tree, title, profile)` reads no file and touches no graph, so
 //! it runs inside the parallel parse pass beside the link extraction that
 //! shares its tree.
 //!
@@ -12,6 +12,7 @@
 //! prefixes the id the note ended up with.
 
 use super::block::BlockTree;
+use super::constructs::{derive_callouts, derive_fences, derive_lists, Ctx};
 use super::profile::{ChunkRule, SectionRule, StructureProfile};
 use crate::datatypes::values::Value;
 use sha2::{Digest, Sha256};
@@ -27,14 +28,16 @@ pub(crate) struct DerivedNode {
     /// note itself (a top-level section, a chunk above the first heading).
     pub section: Option<String>,
     /// The heading path of this node's own section — its own for a section,
-    /// its container's for a chunk. `{heading_path}` in `embed_text:`, and the
-    /// `path` property of a section.
+    /// its enclosing one for everything else. `{heading_path}` in
+    /// `embed_text:`, and the `path` property of a section.
     pub heading_path: Vec<String>,
     /// `{section_title}` in `embed_text:`.
     pub section_title: Option<String>,
     /// The verbatim source slice this node carries, if any.
     pub text: Option<String>,
-    /// Everything else: `title`, `level`, `ordinal`, `chunk_hash`, `path`.
+    /// Everything else — `title`, `level`, `ordinal`, `path`, `chunk_hash`,
+    /// `kind`, `fold`, `lang`, `code`, `caption`, `step_count` — as the rule
+    /// that derived this node declares them.
     pub props: Vec<(String, Value)>,
 }
 
@@ -57,7 +60,16 @@ pub(crate) struct Derived {
 }
 
 /// Derive every node `structure:` declares from one note's body.
-pub(crate) fn derive(body: &str, tree: &BlockTree, profile: &StructureProfile) -> Derived {
+///
+/// Rule order is the order the ids are claimed in, and therefore the order a
+/// collision resolves in: sections first (the only stable ids), then chunks,
+/// then the constructs a section contains.
+pub(crate) fn derive(
+    body: &str,
+    tree: &BlockTree,
+    note_title: &str,
+    profile: &StructureProfile,
+) -> Derived {
     let mut out = Derived::default();
     let mut ids = IdSpace::default();
     let sections = profile
@@ -67,6 +79,21 @@ pub(crate) fn derive(body: &str, tree: &BlockTree, profile: &StructureProfile) -
     if let Some(rule) = &profile.chunks {
         derive_chunks(body, tree, rule, sections.as_deref(), &mut ids, &mut out);
     }
+    let ctx = Ctx {
+        body,
+        tree,
+        sections: sections.as_deref(),
+        note_title,
+    };
+    if let Some(rule) = &profile.callouts {
+        derive_callouts(&ctx, rule, &mut ids, &mut out);
+    }
+    if let Some(rule) = &profile.code_fences {
+        derive_fences(&ctx, rule, &mut ids, &mut out);
+    }
+    if let Some(rule) = &profile.ordered_lists {
+        derive_lists(&ctx, rule, &mut ids, &mut out);
+    }
     out
 }
 
@@ -75,11 +102,11 @@ pub(crate) fn derive(body: &str, tree: &BlockTree, profile: &StructureProfile) -
 /// letter, so a bare `~2` can only ever mean "the second thing that wanted
 /// this id".
 #[derive(Default)]
-struct IdSpace(BTreeMap<String, usize>);
+pub(super) struct IdSpace(BTreeMap<String, usize>);
 
 impl IdSpace {
     /// `(the id to use, whether it was already taken)`.
-    fn claim(&mut self, wanted: &str) -> (String, bool) {
+    pub(super) fn claim(&mut self, wanted: &str) -> (String, bool) {
         let count = self.0.entry(wanted.to_string()).or_insert(0);
         *count += 1;
         match *count {

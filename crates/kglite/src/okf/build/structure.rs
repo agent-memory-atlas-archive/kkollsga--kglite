@@ -1,6 +1,6 @@
-//! The nodes a note's own body derived (VAULT.md §7.1): sections and chunks as
-//! rows of their own, and the anchor index a `[[Note#Heading]]` retargets
-//! through.
+//! The nodes a note's own body derived (VAULT.md §7.1) — sections, chunks,
+//! callouts, fenced examples, procedures and their steps — as rows of their
+//! own, and the anchor index a `[[Note#Heading]]` retargets through.
 //!
 //! The parse produced them as **suffixes** of the note's id (see
 //! `okf::structure::derive`); this is where they become ids, because
@@ -96,6 +96,7 @@ pub(super) fn build_structure(
         sections_declared: profile.sections.is_some(),
         ..DerivedIndex::default()
     };
+    let section_label = profile.sections.as_ref().map(|rule| rule.label.as_str());
     let mut rows_by_label: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     let mut groups = EdgeGroups::new();
     for doc in docs {
@@ -111,10 +112,12 @@ pub(super) fn build_structure(
                 .by_lower_suffix
                 .entry(node.suffix.to_lowercase())
                 .or_insert_with(|| node.suffix.clone());
-            // A section's own title, and only a section's: a chunk's
-            // `section_title` is its container's and naming it here would let
-            // `[[Note#Heading]]` land on a chunk.
-            if let Some(Value::String(title)) = property(node, "title") {
+            // A section's own title, and only a section's. A chunk's
+            // `section_title` is its container's, and a `Procedure` carries
+            // its section's title as its own — either would let
+            // `[[Note#Heading]]` land on something that is not the heading.
+            let is_section = section_label.is_some_and(|label| label == node.label);
+            if let (true, Some(Value::String(title))) = (is_section, property(node, "title")) {
                 anchors
                     .by_title
                     .entry(title.clone())
@@ -287,19 +290,16 @@ fn emit_nodes(
 /// Worth a warning and not an error: a vault mid-authoring legitimately has no
 /// callout yet, and the declaration is still what it means to build.
 fn warn_unmatched_rules(profile: &StructureProfile, report: &mut BuildReport) {
-    for (declared, label) in [
-        (
-            profile.sections.is_some(),
-            profile.sections.as_ref().map(|r| r.label.as_str()),
-        ),
-        (
-            profile.chunks.is_some(),
-            profile.chunks.as_ref().map(|r| r.label.as_str()),
-        ),
-    ] {
-        let Some(label) = label.filter(|_| declared) else {
-            continue;
-        };
+    let labels = [
+        profile.sections.as_ref().map(|r| r.label.as_str()),
+        profile.chunks.as_ref().map(|r| r.label.as_str()),
+        profile.callouts.as_ref().map(|r| r.label.as_str()),
+        profile.code_fences.as_ref().map(|r| r.label.as_str()),
+        // The step label, not the container's: a list that qualified produced
+        // both, and one that did not produced neither.
+        profile.ordered_lists.as_ref().map(|r| r.label.as_str()),
+    ];
+    for label in labels.into_iter().flatten() {
         if !report.nodes_by_label.contains_key(label) {
             report.warnings.push(format!(
                 "`vault.yaml` declares a `structure:` rule for `{label}`, but no note's \

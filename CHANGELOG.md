@@ -24,8 +24,26 @@ before upgrading.
   materialises a template (`{title} {section_title} {heading_path} {text}
   {id}`) as a property `embed:` and `text_indexes:` can name. Derived nodes
   never carry a `file_path`, so an export still writes exactly the notes.
+  `callouts:` derives one node per Obsidian callout — `kind` (lowercased and
+  arbitrary, so a corpus keeps `versionadded` rather than folding it into
+  `note`), `title`, `fold` and the body with its `>` markers stripped —
+  attached to its section, or to the callout it nests inside. `code_fences:`
+  derives one per fenced block, with `lang`, the `code` dedented out of
+  whatever container it sits in, and the `caption` above it when that paragraph
+  ends in `:`; omitting `langs:` takes every fence, including those a converter
+  left unlabelled. `ordered_lists:` turns every top-level ordered list of at
+  least `min_items` items (2 by default, and `under_heading:` narrows to the
+  headings that match) into a container node plus one node per item, joined by
+  `HAS_<UPPER_SNAKE(container)>`, `HAS_STEP` and `NEXT_STEP`, with an ordered
+  list nested inside an item becoming that step's sub-steps.
   There is no default and no heuristic: a vault that declares no `structure:`
   builds precisely the graph it built before.
+- **`edge_defaults:` in `.kglite/vault.yaml`** (`VAULT.md` §7.2) — properties
+  that are constant for a whole edge type, pushed onto every edge of it the
+  build emits, from prose, frontmatter, the folder layout or a `structure:`
+  rule alike. It is how a vault states provenance per type without writing it
+  on every line. A default never overwrites a property the edge already
+  carries, and that clash is a warning; so is a type the vault has no edges of.
 - **A `#`-anchored link reaches the derived node it names.** `[[Note#A#B]]`
   now ends on that section, `[[Note#Heading]]` on the first section of that
   title (Obsidian's own rule) and `[[Note#^id]]` on that chunk, with the
@@ -37,9 +55,9 @@ before upgrading.
   `chunk_hash` where exactly one node on each side carries it — so renaming a
   heading, which moves every derived id beneath it, no longer re-embeds a page
   whose prose did not change.
-- **Compatibility:** `structure:` is an unknown key to any kglite released
-  before it, and an unknown key fails the build. A vault that declares it
-  needs this release or newer. `kglite_vault` stays `1`.
+- **Compatibility:** `structure:` and `edge_defaults:` are unknown keys to any
+  kglite released before them, and an unknown key fails the build. A vault that
+  declares one needs this release or newer. `kglite_vault` stays `1`.
 
 ### Fixed
 

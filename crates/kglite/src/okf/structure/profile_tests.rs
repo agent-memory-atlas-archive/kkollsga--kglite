@@ -59,15 +59,76 @@ fn every_declared_name_is_read() {
 /// against a later spec fails loudly instead of quietly deriving less.
 #[test]
 fn an_unimplemented_or_invented_key_is_an_error() {
-    for key in ["callouts: {}", "tables: []", "sctions: {}"] {
+    for key in ["tables: []", "key_from_heading: {}", "sctions: {}"] {
         let message = error(key);
         assert!(
             message.starts_with("unknown key `structure.")
-                && message.contains("this build accepts sections, chunks, inherit, embed_text"),
+                && message.contains(
+                    "this build accepts sections, chunks, callouts, code_fences, \
+                     ordered_lists, inherit, embed_text"
+                ),
             "{message}"
         );
     }
     assert!(error("sections: {lable: Section}").contains("unknown key `structure.sections.lable`"));
+    assert!(error("callouts: {lable: Note}").contains("unknown key `structure.callouts.lable`"));
+    assert!(error("code_fences: {lang: [py]}").contains("unknown key `structure.code_fences.lang`"));
+    assert!(
+        error("ordered_lists: {steps: 2}").contains("unknown key `structure.ordered_lists.steps`")
+    );
+}
+
+/// The three rules P4 shipped, with their defaults and their refusals.
+#[test]
+fn the_construct_rules_default_to_the_names_the_spec_writes() {
+    let got = parsed("callouts:\ncode_fences:\nordered_lists:\n").unwrap();
+    let callouts = got.callouts.unwrap();
+    assert_eq!(
+        (callouts.label.as_str(), callouts.edge.as_str()),
+        ("Note", "HAS_NOTE")
+    );
+    let fences = got.code_fences.unwrap();
+    assert_eq!(
+        (fences.label.as_str(), fences.edge.as_str()),
+        ("Example", "HAS_EXAMPLE")
+    );
+    assert_eq!(fences.langs, None, "omitting `langs:` is every fence");
+    let lists = got.ordered_lists.unwrap();
+    assert_eq!(
+        (
+            lists.label.as_str(),
+            lists.container.as_str(),
+            lists.edge.as_str(),
+            lists.next.as_str(),
+            lists.min_items
+        ),
+        ("ProcedureStep", "Procedure", "HAS_STEP", "NEXT_STEP", 2)
+    );
+    assert!(
+        lists.under_heading.is_none(),
+        "the heading gate is the opt-in"
+    );
+}
+
+#[test]
+fn a_construct_rule_of_the_wrong_shape_is_an_error() {
+    assert!(error("code_fences: {langs: python}").contains("must be a list of strings"));
+    assert!(error("code_fences: {langs: [3]}").contains("must be a list of strings"));
+    assert!(error("ordered_lists: {min_items: 0}").contains("must be a positive integer"));
+    assert!(error("ordered_lists: {under_heading: 3}").contains("must be a string"));
+    assert!(
+        error("ordered_lists: {under_heading: \"^(\"}").contains("is not a regular expression"),
+        "compiled once at load, so a broken pattern fails the build rather than every note"
+    );
+}
+
+#[test]
+fn langs_are_lowercased_so_a_declaration_and_a_fence_agree() {
+    let got = parsed("code_fences: {langs: [Python, CYPHER]}").unwrap();
+    assert_eq!(
+        got.code_fences.unwrap().langs.unwrap(),
+        vec!["python".to_string(), "cypher".to_string()]
+    );
 }
 
 #[test]

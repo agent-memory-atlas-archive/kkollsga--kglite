@@ -705,9 +705,12 @@ class TestVaultStructureProfile:
     in ``golden/vault`` would move every count that fixture pins. That one
     therefore stays structure-free and is the compatibility record; this one
     declares ``sections:`` + ``chunks:`` (``max_chars: 120``, small on purpose)
-    plus ``inherit:`` and ``embed_text:``, over four notes holding a duplicate
+    plus ``inherit:`` and ``embed_text:``, over five notes holding a duplicate
     heading path, a section that packs into two chunks, a ``^block-id``
-    paragraph, and anchored wikilinks that retarget onto all of it.
+    paragraph, anchored wikilinks that retarget onto all of it, and — in
+    ``constructs.md`` — callouts (titled, untitled, nested), three fences (one
+    captioned ``python``, one bare, one ``~~~``), a three-step procedure with a
+    sub-step and a one-item list the ``min_items: 2`` gate excludes.
     """
 
     def build(self):
@@ -716,26 +719,40 @@ class TestVaultStructureProfile:
     def test_labels(self):
         assert _labels(self.build()) == Counter(
             {
-                "Article": 4,  # welcome, and the three under `structure/`
+                "Article": 5,  # welcome, and the four under `structure/`
                 "Folder": 1,  # `structure/`
-                # Seven headings: two in chunky, three in duplicate (the
-                # second `## Details` included), one each in links and welcome
-                "Section": 7,
+                # Eleven headings: two in chunky, three in duplicate (the
+                # second `## Details` included), one each in links and welcome,
+                # four in constructs
+                "Section": 11,
                 # chunky packs 2 + its own `^cite-1` chunk; duplicate 3;
-                # links and welcome 1 each
-                "Chunk": 8,
+                # links and welcome 1 each; constructs 5
+                "Chunk": 13,
+                # constructs.md: two callouts under `## Notes`, one nested
+                "Note": 3,
+                # every fence qualifies — `langs:` is omitted
+                "Example": 3,
+                "Procedure": 1,  # the three-step list; the one-item one is out
+                "ProcedureStep": 4,  # three steps and one sub-step
             }
         )
 
     def test_edge_types(self):
         assert _edge_types(self.build()) == Counter(
             {
-                "HAS_SECTION": 7,  # one per section: from the note, or its parent
-                "PARENT_SECTION": 3,  # only the three nested ones
-                "NEXT_SECTION": 1,  # duplicate.md's two `## Details` siblings
-                "HAS_CHUNK": 8,
-                "NEXT_CHUNK": 2,  # chunky's three, in one section
-                "CONTAINS": 3,
+                "HAS_SECTION": 11,  # one per section: from the note, or its parent
+                "PARENT_SECTION": 6,  # only the nested ones
+                "NEXT_SECTION": 3,  # duplicate's two `## Details`, constructs' three `##`
+                "HAS_CHUNK": 13,
+                "NEXT_CHUNK": 4,  # chunky's three, and two sections of two
+                "HAS_NOTE": 3,  # two from the section, one from the callout it nests in
+                "HAS_EXAMPLE": 3,
+                # `HAS_<UPPER_SNAKE(container)>`, spelled from the label rather
+                # than declared (VAULT.md §7.1)
+                "HAS_PROCEDURE": 1,
+                "HAS_STEP": 4,  # three from the container, one from step 2
+                "NEXT_STEP": 2,  # consecutive steps at one level only
+                "CONTAINS": 4,
                 "LINKS_TO": 3,
             }
         )
@@ -749,6 +766,10 @@ class TestVaultStructureProfile:
         assert [r["id"] for r in rows] == [
             "chunky#Chunky",
             "chunky#Chunky#Sub",
+            "constructs#Constructs",
+            "constructs#Constructs#Examples",
+            "constructs#Constructs#Notes",
+            "constructs#Constructs#Steps",
             "duplicate#Notes",
             "duplicate#Notes#Details",
             # Obsidian resolves a heading link to the first of that text and
@@ -757,7 +778,7 @@ class TestVaultStructureProfile:
             "links#Links",
             "welcome#Welcome",
         ]
-        second = rows[4]
+        second = rows[8]
         assert (second["title"], second["level"], second["ordinal"]) == ("Details", 2, 1)
         assert second["path"] == ["Notes", "Details"]
 
@@ -841,10 +862,76 @@ class TestVaultStructureProfile:
         assert written == [
             ".kglite/export-manifest.json",
             "Article/chunky.md",
+            "Article/constructs.md",
             "Article/duplicate.md",
             "Article/links.md",
             "Article/welcome.md",
         ]
+
+    def test_a_callout_is_a_node_with_its_kind_title_and_stripped_text(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:Note) RETURN n.concept_id AS id, n.kind AS kind, n.title AS title, "
+            "n.fold AS fold, n.text AS text, n.section_id AS section ORDER BY id"
+        ).to_list()
+        assert [r["id"] for r in rows] == [
+            "constructs#Constructs#Notes~note1",
+            "constructs#Constructs#Notes~note2",
+            # A nested callout is keyed under the callout it sits in, and still
+            # names the section it sits under.
+            "constructs#Constructs#Notes~note2~note1",
+        ]
+        assert [r["kind"] for r in rows] == ["warning", "versionadded", "tip"]
+        assert [r["title"] for r in rows] == ["Check the survey datum", None, "Nested"]
+        assert [r["fold"] for r in rows] == ["+", None, None]
+        assert rows[0]["text"] == "Depth values are metres below MSL."
+        assert rows[2]["text"] == "A callout inside a callout hangs off that callout."
+        assert {r["section"] for r in rows} == {"constructs#Constructs#Notes"}
+
+    def test_a_fence_is_an_example_with_its_language_code_and_caption(self):
+        g = self.build()
+        rows = g.cypher(
+            "MATCH (n:Example) RETURN n.concept_id AS id, n.lang AS lang, n.code AS code, "
+            "n.caption AS caption ORDER BY n.ordinal"
+        ).to_list()
+        assert [r["lang"] for r in rows] == ["python", None, None]
+        assert rows[0]["code"] == "depths = [1, 2]\n"
+        assert rows[0]["caption"] == "Read the depths like this:"
+        # …and only when the paragraph above ends with a colon.
+        assert [r["caption"] for r in rows[1:]] == [None, None]
+
+    def test_the_step_chain_runs_in_source_order_and_a_sub_step_hangs_off_its_step(self):
+        g = self.build()
+        chain = g.cypher(
+            "MATCH (a:ProcedureStep)-[:NEXT_STEP]->(b:ProcedureStep) RETURN a.text AS a, b.text AS b ORDER BY a.ordinal"
+        ).to_list()
+        assert chain == [
+            {"a": "Open the survey.", "b": "Pick the datum."},
+            {"a": "Pick the datum.", "b": "Save the selection."},
+        ]
+        sub = g.cypher(
+            "MATCH (s:ProcedureStep)-[:HAS_STEP]->(t:ProcedureStep) "
+            "RETURN s.text AS step, t.text AS sub, t.level AS level"
+        ).to_list()
+        assert sub == [{"step": "Pick the datum.", "sub": "Metres below MSL.", "level": 1}]
+        procedure = g.cypher(
+            "MATCH (p:Procedure) RETURN p.concept_id AS id, p.title AS title, p.step_count AS steps"
+        ).to_list()
+        assert procedure == [{"id": "constructs#Constructs#Steps~list1", "title": "Steps", "steps": 3}]
+
+    def test_edge_defaults_reach_every_edge_of_their_type(self):
+        """VAULT.md §7.2: a constant stated once, never authored in a note."""
+        g = self.build()
+        assert g.cypher("MATCH ()-[r:HAS_STEP]->() RETURN DISTINCT r.derivation AS d").to_list() == [
+            {"d": "source_order"}
+        ]
+        # A derived edge and a prose one take their own type's default.
+        rows = g.cypher(
+            "MATCH ()-[r:LINKS_TO]->() RETURN r.derivation AS d, r.anchor AS anchor ORDER BY anchor"
+        ).to_list()
+        assert [r["d"] for r in rows] == ["prose_reference"] * 3
+        # A type with no entry carries nothing extra.
+        assert g.cypher("MATCH ()-[r:HAS_SECTION]->() RETURN DISTINCT r.derivation AS d").to_list() == [{"d": None}]
 
     def test_the_first_golden_vault_is_untouched_by_the_feature(self):
         """The compatibility promise: a vault that declares no ``structure:``

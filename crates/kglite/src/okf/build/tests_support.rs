@@ -65,9 +65,9 @@ pub(super) fn provisional_count(g: &DirGraph) -> usize {
 
 /// One edge as `(source id, conn type, target id, sorted properties)` —
 /// the shape the vault link rules below are stated in.
-pub(super) type EdgeFacts = (String, String, String, Vec<(String, String)>);
+pub(crate) type EdgeFacts = (String, String, String, Vec<(String, String)>);
 
-pub(super) fn edges_of(g: &DirGraph) -> Vec<EdgeFacts> {
+pub(crate) fn edges_of(g: &DirGraph) -> Vec<EdgeFacts> {
     let name = |n: petgraph::graph::NodeIndex| -> String {
         g.node_view(n)
             .map(|nd| match nd.id().into_owned() {
