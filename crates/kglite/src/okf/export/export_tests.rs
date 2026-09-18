@@ -1259,3 +1259,91 @@ fn label_counts(graph: &DirGraph) -> BTreeMap<String, usize> {
     }
     out
 }
+
+/// A vault that derives sections and chunks exports exactly the notes it
+/// exported without them: a derived node carrying a `file_path` would have
+/// been written out as a note of its own (VAULT.md §7.1, §10.1).
+#[test]
+fn deriving_structure_writes_no_extra_files() {
+    let source = golden_vault();
+    let plain = crate::okf::build(&source, &BuildOptions::for_dialect(Dialect::Obsidian))
+        .unwrap()
+        .graph;
+    let structured = crate::okf::build(&source, &structure_options())
+        .unwrap()
+        .graph;
+    assert!(
+        structured.has_node_type("Section") && structured.has_node_type("Chunk"),
+        "the fixture has to derive something for this to mean anything"
+    );
+    let plain_out = tempfile::tempdir().unwrap();
+    let structured_out = tempfile::tempdir().unwrap();
+    let plain_report = export_to(&plain, plain_out.path());
+    let structured_report = export_to(&structured, structured_out.path());
+    assert_eq!(tree(structured_out.path()), tree(plain_out.path()));
+    assert_eq!(
+        structured_report.edge_properties_dropped, plain_report.edge_properties_dropped,
+        "no derived node is a file, so none of them can move this number"
+    );
+}
+
+/// The fidelity number counts what an export **loses**, and an edge whose
+/// target the export does not write is not written at all — the body's own
+/// `[[note#Heading]]` is, and the next import re-derives the edge and its
+/// properties from that prose (VAULT.md §10.9 loss 1).
+///
+/// The count ran *before* the target lookup, so every such edge was counted as
+/// loss. Sections make it visible — a retargeted link lands on a node that is
+/// never a file — but the same over-count applied to every `HAS_IMAGE` and
+/// every hub edge before them.
+#[test]
+fn an_edge_to_a_target_the_export_never_writes_is_not_counted_as_loss() {
+    let source = tempfile::tempdir().unwrap();
+    write_vault(
+        source.path(),
+        &[
+            ("a.md", "## Deep\n\n[[b#Heading]]\n"),
+            ("b.md", "# Heading\n\nprose\n"),
+        ],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let plain = build_vault(source.path());
+    assert_eq!(
+        export_to(&plain, out.path()).edge_properties_dropped,
+        2,
+        "without sections the link ends on `b`, which is written"
+    );
+
+    let structured = crate::okf::build(source.path(), &structure_options())
+        .unwrap()
+        .graph;
+    let structured_out = tempfile::tempdir().unwrap();
+    assert_eq!(
+        export_to(&structured, structured_out.path()).edge_properties_dropped,
+        0,
+        "with sections it ends on `b#Heading`, which is not"
+    );
+}
+
+/// Sections and chunks with the spec's own defaults.
+fn structure_options() -> BuildOptions {
+    use crate::okf::structure::profile::{ChunkRule, SectionRule, StructureProfile};
+    let mut opts = BuildOptions::for_dialect(Dialect::Obsidian);
+    opts.profile.structure = Some(StructureProfile {
+        sections: Some(SectionRule {
+            label: "Section".to_string(),
+            edge: "HAS_SECTION".to_string(),
+            parent: "PARENT_SECTION".to_string(),
+            next: "NEXT_SECTION".to_string(),
+        }),
+        chunks: Some(ChunkRule {
+            label: "Chunk".to_string(),
+            edge: "HAS_CHUNK".to_string(),
+            next: "NEXT_CHUNK".to_string(),
+            max_words: 650,
+            max_chars: 6000,
+        }),
+        ..Default::default()
+    });
+    opts
+}

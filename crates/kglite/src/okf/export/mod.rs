@@ -427,7 +427,6 @@ fn outgoing_edges(
         let Some(data) = graph.graph.edge_weight(edge) else {
             continue;
         };
-        dropped += data.properties.len();
         // A target the export does not write has no wikilink to name it: hub
         // nodes, `Source` URLs, attachments and stubs all land here, which is
         // how `TAGGED`, `HAS_KEYWORD`, `HAS_IMAGE` and `HAS_ATTACHMENT` leave
@@ -439,6 +438,11 @@ fn outgoing_edges(
                 None => continue,
             },
         };
+        // Counted only for an edge the export *writes*: an edge to a node it
+        // does not write loses nothing it could have carried. Counting before
+        // this match made every `HAS_SECTION` a dropped property the moment a
+        // vault declared `structure:` (VAULT.md §7.1, §10.9).
+        dropped += data.properties.len();
         let conn_type = data.connection_type_str(&graph.interner).to_string();
         out.entry(src)
             .or_default()
