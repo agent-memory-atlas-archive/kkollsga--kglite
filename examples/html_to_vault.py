@@ -10,6 +10,13 @@ Usage::
     html_to_vault.py <html-dir> <out-vault> [--toc TOC.json] [--images-dir DIR]
                      [--default-label Article] [--dry-run]
 
+A page is identified by its **route** — its path below ``<html-dir>``, with a
+``<dir>/index.html`` naming ``<dir>`` — so a corpus that gives every page its
+own directory is one note per page rather than one note called ``index``.
+Everything a page names is resolved the way a browser reads it: a ``/``-absolute
+``src`` or ``href`` against the source root, a relative one against the page's
+own directory, and never by filename alone.
+
 It follows the converter checklist in ``VAULT.md`` §11: one ``.md`` per page;
 the folder-note layout (``X.md`` beside ``X/``) mirroring the table of contents
 when one is given, else every note flat under ``<out>/<default_label>/``; each
@@ -33,6 +40,21 @@ converter flattens arrives in the graph as nothing (§13.2):
   becomes a heading per symbol, so ``key_from_heading:`` can relabel it; any
   other ``<dl>``, including one whose ids are a generator's own anchors,
   becomes ``**term**`` paragraphs;
+* a docutils **field list** — ``<th>`` name beside ``<td>`` value, with no
+  header row anywhere — is given a synthesised ``Field | Value`` header,
+  whatever ``--table-header`` says: its first row is data, so promoting it
+  would name the columns after one field and lose it, and leaving the header
+  blank names nothing at all;
+* a ``[[`` the source itself wrote is escaped with backslashes, because the
+  converter mints every wikilink in the output and one that arrives from the
+  page is text a reader is meant to see -- an API page's
+  ``(e.g., [["Tables", "Table1"]])`` read as a link mints a note named after a
+  Python literal (inside ``<code>`` it is left alone: a code span is not
+  scanned at all, §5.1);
+* a link to an ``id`` **inside** a page — a Sphinx ``<span id=...>``, a section
+  ``<div id=...>`` — becomes ``[[Note#Heading#Subheading]]``, the heading path
+  that id sits under, so an anchor reaches the section a reader lands on rather
+  than the top of the page;
 * a ``<pre>`` becomes a fenced block carrying the language its
   ``highlight-<lang>`` / ``language-<lang>`` class names;
 * with ``--block-ids``, a ``<p id=...>`` gains the trailing `` ^id`` that makes
@@ -52,12 +74,16 @@ an unknown-key error (§7.1), so the block is written only when you are running 
 kglite that reads it.
 
 The TOC file is JSON -- ``{"label": ..., "href": ..., "children": [...]}`` --
-where ``href`` names an HTML file (leading directories ignored) and a node
-without one is a grouping folder with no note of its own. The root's own label
+where ``href`` names an HTML file — as a path, matched to the page whose route
+it ends in, so a TOC written relative to its own directory places the corpus
+just as one written from the root does — and a node without one is a grouping
+folder with no note of its own. The root's own label
 names the collection, not a folder inside it.
 
-Nothing is converted: an image is copied byte for byte, and one whose type the
-MCP server does not deliver is counted so you can convert it at source.
+Nothing is converted: an image is copied byte for byte to its path below the
+source root -- so two pages in two directories that both write ``img/logo.png``
+stay two pictures -- and one whose type the MCP server does not deliver is
+counted so you can convert it at source.
 
 It ends by running ``kglite.okf.validate`` and exits non-zero when the vault has
 errors. Warnings do not fail it; ``--no-validate`` skips the pass.
@@ -67,7 +93,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path, PurePosixPath
 import posixpath
@@ -138,6 +164,12 @@ ADMONITION_TITLE = ".admonition-title, .note__title, .notetitle"
 # the `<code>` a GFM-flavoured generator emits.
 CODE_LANGUAGE = re.compile(r"^(?:highlight|language)-([\w+#.-]+)$")
 HEADING = re.compile(r"^h[1-6]$")
+# Filenames that name their directory rather than themselves: `guide/index.html`
+# is the page a reader reaches at `guide/`, so its route is `guide`.
+INDEX_STEMS = frozenset({"index"})
+# `[[Note#A#B]]` has no escape for any of these (VAULT.md §13.2), so a heading
+# carrying one cannot be the anchor half of a link, however it is spelled.
+UNLINKABLE_IN_HEADING = frozenset("[]|#")
 # A block id is Latin letters, digits and dashes only (VAULT.md §5.7), so
 # `<p id="para_1">` names the block `^para-1` and not `^para_1`, which is text.
 _BLOCK_ID_JUNK = re.compile(r"[^A-Za-z0-9-]+")
@@ -239,6 +271,89 @@ def qualified_name(term: Any) -> str:
     return identifier + (name[opened : closed + 1] if 0 <= opened < closed else "")
 
 
+def heading_text(element: Any) -> str:
+    """A heading's text as the markdown will spell it.
+
+    `get_text()` is not it: a heading holding `<strong>` renders as `**Bold**`,
+    and an anchor written against the plain words would name a heading the note
+    does not have — a VAULT.md §9 warning per link.
+    """
+    return re.sub(r"\s+", " ", inner_md(element)).strip()
+
+
+def definition_levels(content: Any, rules: BodyRules) -> list[tuple[Any, int, bool]]:
+    """Every `<dl>` in document order, with the heading level its terms take and
+    whether those terms are symbols — decided before any of them is rewritten.
+
+    Both halves have to be settled up front. `rewrite_definition_lists` turns a
+    `<dt>` into a heading, so asking a later sibling `<dl>` for "the previous
+    heading" answers with the *symbol* the list before it just wrote: three
+    sibling symbols under one `##` came out as `###`, `####` and `#####`, each
+    nested inside the one before it, and the whole page's heading paths with
+    them. A `<dl>` inside a `<dd>` is genuinely one deeper, and that is the only
+    thing that nests.
+    """
+    spec: list[tuple[Any, int, bool]] = []
+    levels: dict[int, int] = {}
+    for definitions in content.find_all("dl"):
+        parent = definitions.find_parent("dl")
+        if parent is not None and id(parent) in levels:
+            level = min(6, levels[id(parent)] + 1)
+        else:
+            heading = previous_heading(definitions, content)
+            level = min(6, int(heading.name[1]) + 1) if heading is not None else 2
+        levels[id(definitions)] = level
+        spec.append((definitions, level, definition_symbols(definitions, rules)))
+    return spec
+
+
+def definition_symbols(definitions: Any, rules: BodyRules) -> bool:
+    """Whether a `<dl>`'s terms are API symbols, and so become headings.
+
+    `auto` asks whether an id *names its own term*, not merely whether there is
+    one: DITA gives every `<dt>` a generated id, and reading those as symbols
+    turned 275 of the Petrel corpus's GUI labels into headings.
+    """
+    if rules.dl_mode != "auto":
+        return rules.dl_mode == "headings"
+    return any(qualified_name(term) for term in definitions.find_all("dt") if term.find_parent("dl") is definitions)
+
+
+def anchor_paths(content: Any, rules: BodyRules) -> dict[str, list[str]]:
+    """Every `id` in a page's body, mapped to the heading path it sits under.
+
+    A generator anchors its cross-references at the element they point to — a
+    Sphinx `<span id="…">` before a paragraph, a section `<div id="…">` — and
+    the markdown keeps no trace of either. The heading path is what survives the
+    conversion, is what `[[Note#A#B]]` addresses, and is what a `structure:`
+    build turns into a `Section` node, so it is what an anchor resolves to. An
+    id *on* a heading names that heading itself.
+
+    Read from the page before anything rewrites it, and through the same two
+    decisions the body transform makes, so both passes name one heading tree.
+    """
+    spec = definition_levels(content, rules)
+    symbols = {id(definitions): (level, is_symbol) for definitions, level, is_symbol in spec}
+    stack: list[tuple[int, str]] = []
+    paths: dict[str, list[str]] = {}
+    for element in content.find_all(True):
+        identifier = (element.get("id") or "").strip()
+        if HEADING.match(element.name):
+            level, text = int(element.name[1]), heading_text(element)
+        elif element.name == "dt" and symbols.get(id(element.find_parent("dl")), (0, False))[1]:
+            level, text = symbols[id(element.find_parent("dl"))][0], (qualified_name(element) or term_text(element))
+        else:
+            if identifier:
+                paths.setdefault(identifier, [text for _, text in stack])
+            continue
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, text))
+        if identifier:
+            paths.setdefault(identifier, [text for _, text in stack])
+    return {identifier: path for identifier, path in paths.items() if path}
+
+
 def previous_heading(element: Any, content: Any) -> Any:
     """The heading a block sits under, or None when it sits above all of them."""
     found = element.find_previous(HEADING)
@@ -247,14 +362,50 @@ def previous_heading(element: Any, content: Any) -> Any:
     return found
 
 
+def to_route(path: str) -> str:
+    """The route a path below the source root names.
+
+    A route is the page's identity: `guide/install.html` is `guide/install`,
+    `guide/index.html` and the directory link `guide/` are both `guide`, and the
+    root's own `index.html` is `index`. A corpus that gives every page its own
+    directory therefore has one route per page, where the filename alone has
+    `index` for all of them.
+    """
+    trimmed = PurePosixPath(path.rstrip("/"))
+    if trimmed.suffix:
+        parent = str(trimmed.parent)
+        trimmed = trimmed.parent if trimmed.stem in INDEX_STEMS and parent != "." else trimmed.with_suffix("")
+    return "" if str(trimmed) in (".", "") else str(trimmed)
+
+
+def resolve_href(href: str, page_dir: str) -> str:
+    """One `href` or `src` as a path below the source root, `""` when it leaves it.
+
+    The browser's own rule, which is the only one that holds for a corpus of
+    more than one directory: a leading `/` is the source root and everything
+    else is relative to the page that wrote it. Resolving by filename instead
+    reaches a *different* page whenever two directories carry the same name.
+    """
+    path = href.split("#")[0].split("?")[0].strip()
+    if not path:
+        return ""
+    joined = path[1:] if path.startswith("/") else posixpath.join(page_dir, path)
+    resolved = posixpath.normpath(joined)
+    return "" if resolved == "." or resolved.startswith("..") else resolved
+
+
 @dataclass(frozen=True)
 class Placement:
-    """Where the TOC puts one page: its directory, its stem, and its parent."""
+    """Where the TOC puts one page: its directory, its stem, and its parent.
+
+    ``parent`` is the parent entry's ``href`` as the TOC wrote it until
+    :func:`place_toc` resolves it, and the parent page's route after.
+    """
 
     directory: str
     stem: str
     depth: int
-    parent_file: str | None
+    parent: str | None
 
 
 @dataclass
@@ -262,6 +413,9 @@ class Page:
     """One source HTML file on its way to becoming one note."""
 
     source: Path
+    #: The source file's path below the source root, and the route it names.
+    rel: str
+    route: str
     doc_id: str
     explicit_id: bool
     title: str
@@ -281,8 +435,12 @@ def sanitize(name: str, max_len: int = 120) -> str:
     return name[:max_len] if name else "untitled"
 
 
-def layout_toc(node: dict, directory: str = "", parent_file: str | None = None) -> Iterator[tuple[str, Placement]]:
-    """Walk the TOC, yielding ``(html filename, placement)`` depth-first.
+def layout_toc(node: dict, directory: str = "", parent: str | None = None) -> Iterator[tuple[str, Placement]]:
+    """Walk the TOC, yielding ``(href, placement)`` depth-first.
+
+    A node's ``href`` is read as the route it names, not as a filename: a TOC
+    over a corpus of ``<page>/index.html`` directories otherwise places every
+    one of its entries on the same page.
 
     A node's children live in the directory named by the node's own stem, so a
     node that has both an ``href`` and children becomes a folder note. Sibling
@@ -294,23 +452,46 @@ def layout_toc(node: dict, directory: str = "", parent_file: str | None = None) 
     """
     used: set[str] = {PurePosixPath(directory).name.lower()} if directory else set()
     for index, child in enumerate(node.get("children", [])):
-        href = child.get("href", "")
-        filename = PurePosixPath(href).name if href else None
+        href = child.get("href", "") or None
         stem = sanitize(child.get("label", ""))
         if stem.lower() in used:
             stem = f"{stem}_{index}"
         used.add(stem.lower())
         below = posixpath.join(directory, stem) if directory else stem
-        if filename:
-            yield filename, Placement(directory, stem, len(PurePosixPath(below).parts), parent_file)
-        yield from layout_toc(child, below, filename or parent_file)
+        if href:
+            yield href, Placement(directory, stem, len(PurePosixPath(below).parts), parent)
+        yield from layout_toc(child, below, href or parent)
 
 
-def load_toc(toc_path: Path) -> dict[str, list[Placement]]:
-    root = json.loads(toc_path.read_text(encoding="utf-8"))
+def load_toc(toc_path: Path) -> list[tuple[str, Placement]]:
+    """Every entry the TOC places, in depth-first order, keyed by its own href."""
+    return list(layout_toc(json.loads(toc_path.read_text(encoding="utf-8"))))
+
+
+def match_route(href: str, routes: set[str]) -> str:
+    """The route of the page an ``href`` names, or ``""`` when the corpus has none.
+
+    A table of contents is written relative to wherever it lives — an exported
+    one names `html/guide.html` for a corpus whose root *is* `html/` — so the
+    full path is tried first and then each shorter tail of it. Reading only the
+    filename instead, which is what a flat corpus lets you get away with, puts
+    every `<page>/index.html` of a route-per-directory corpus on one entry.
+    """
+    route = to_route(resolve_href(href, ""))
+    while route and route not in routes:
+        route = route.partition("/")[2]
+    return route
+
+
+def place_toc(entries: list[tuple[str, Placement]], routes: set[str]) -> dict[str, list[Placement]]:
+    """The TOC as placements keyed by the route each entry reaches."""
+    resolved = {href: match_route(href, routes) for href, _ in entries}
     placements: dict[str, list[Placement]] = defaultdict(list)
-    for filename, placement in layout_toc(root):
-        placements[filename].append(placement)
+    for href, placement in entries:
+        route = resolved.get(href)
+        if route:
+            parent = resolved.get(placement.parent or "") or None
+            placements[route].append(replace(placement, parent=parent))
     return dict(placements)
 
 
@@ -346,11 +527,14 @@ def extract_meta(soup: BeautifulSoup, table: dict[str, dict[str, str]], list_key
     return meta
 
 
-def extract_id(soup: BeautifulSoup, source: Path, sources: list[str], pattern: re.Pattern | None) -> tuple[str, bool]:
+def extract_id(soup: BeautifulSoup, route: str, sources: list[str], pattern: re.Pattern | None) -> tuple[str, bool]:
     """The first durable identifier the page offers, and whether it is one.
 
-    Returning the stem is the fallback VAULT.md §11.2 calls fragile: it is the
-    id anyway, so the note simply does not declare it.
+    Falling back to the **route** is what VAULT.md §11.2 calls fragile: it is
+    the note's identity anyway, so the note simply does not declare it. It is
+    the route rather than the filename stem because pages are grouped by this
+    id — and a corpus of `<page>/index.html` directories has one stem for the
+    whole corpus, which collapses every page onto the first.
     """
     for spec in sources:
         if spec.startswith("meta:"):
@@ -360,7 +544,7 @@ def extract_id(soup: BeautifulSoup, source: Path, sources: list[str], pattern: r
             body = soup.find("body")
             candidate = (body.get("id") or "").strip() if body else ""
         elif spec == "stem":
-            candidate = source.stem
+            candidate = route
         else:
             raise SystemExit(f"--id-from: unknown source {spec!r} (meta:<name>, body-id or stem)")
         if not candidate:
@@ -371,10 +555,30 @@ def extract_id(soup: BeautifulSoup, source: Path, sources: list[str], pattern: r
                 continue
             candidate = found.group(1) if found.groups() else found.group(0)
         return candidate, spec != "stem"
-    return source.stem, False
+    return route, False
 
 
-def parse_page(source: Path, args: argparse.Namespace, table: dict[str, dict[str, str]]) -> Page | None:
+def escape_wikilink_syntax(content: Any, report: Report) -> None:
+    r"""Escape a `[[` the *source* wrote, which is text and not a link.
+
+    The converter mints every wikilink in the output itself, so a `[[` that
+    survives from the page is something a reader is meant to see: an API page
+    writes `(e.g., [["Tables", "Table1"]])` in its prose, and read as a link it
+    mints a stub note named after a Python literal. `\[\[` is the escape
+    VAULT.md §5.1 names. Text inside `<pre>` or `<code>` is left exactly as
+    written — it becomes a fence or a code span, neither of which is scanned
+    for links, and a backslash there would be code the source never had.
+    """
+    for text in list(content.find_all(string=True)):
+        if "[[" not in text or text.find_parent(["pre", "code"]) is not None:
+            continue
+        text.replace_with(NavigableString(text.replace("[[", "\\[\\[")))
+        report.literal_brackets += 1
+
+
+def parse_page(source: Path, args: argparse.Namespace, table: dict[str, dict[str, str]], report: Report) -> Page | None:
+    rel = PurePosixPath(source.relative_to(args.html_dir).as_posix())
+    page_dir = str(rel.parent) if str(rel.parent) != "." else ""
     soup = BeautifulSoup(source.read_text(encoding="utf-8", errors="replace"), "html.parser")
     content = soup.select_one(args.content_selector) or soup.find("body")
     if content is None:
@@ -382,15 +586,18 @@ def parse_page(source: Path, args: argparse.Namespace, table: dict[str, dict[str
     for selector in args.strip:
         for junk in content.select(selector):
             junk.decompose()
+    escape_wikilink_syntax(content, report)
 
     parent_files: list[str] = []
     related_files: list[str] = []
     for nav in content.select(args.related_selector):
         for link in nav.find_all("a"):
-            href = (link.get("href") or "").split("#")[0]
-            if not href or "://" in href:
+            href = link.get("href") or ""
+            if "://" in href:
                 continue
-            name = PurePosixPath(href).name
+            name = to_route(resolve_href(href, page_dir))
+            if not name:
+                continue
             if link.find_parent(class_=args.parent_link_class):
                 parent_files.append(name)
             elif not link.find_parent(class_=args.child_link_class):
@@ -398,12 +605,15 @@ def parse_page(source: Path, args: argparse.Namespace, table: dict[str, dict[str
         nav.decompose()  # the links are edges now; leaving them would double every one
 
     title_tag = soup.find("title") or content.find(re.compile("^h[1-6]$"))
-    doc_id, explicit = extract_id(soup, source, args.id_from, args.id_pattern)
+    route = to_route(str(rel))
+    doc_id, explicit = extract_id(soup, route, args.id_from, args.id_pattern)
     return Page(
         source=source,
+        rel=str(rel),
+        route=route,
         doc_id=doc_id,
         explicit_id=explicit,
-        title=title_tag.get_text(strip=True) if title_tag else source.stem,
+        title=title_tag.get_text(strip=True) if title_tag else PurePosixPath(route).name,
         meta=extract_meta(soup, table, args.list_keys),
         content=content,
         related_files=related_files,
@@ -422,15 +632,24 @@ def assign_paths(notes: list[Page], toc: dict[str, list[Placement]], default_lab
     loose = "" if toc else default_label
     used: set[str] = set()
     for note in notes:
-        placements = toc.get(note.source.name)
+        placements = toc.get(note.route)
         if placements:
             directory, stem = placements[0].directory, placements[0].stem
             note.toc_depth = placements[0].depth
         else:
             directory, stem = loose, sanitize(note.title)
         candidate = posixpath.join(directory, stem) if directory else stem
+        # Two pages may carry one title — a route-per-directory corpus names
+        # every page `index.html` and titles many of them the same word — so the
+        # route, which is unique by construction, disambiguates. The counter is
+        # the floor under that: without it a third clash overwrites a note that
+        # is already written, and the run reports one note per page either way.
         if candidate.lower() in used:
-            candidate = f"{candidate}_{sanitize(note.doc_id)[:8]}"
+            candidate = f"{candidate}_{sanitize(note.route.replace('/', '_'))}"
+        base, suffix = candidate, 1
+        while candidate.lower() in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
         used.add(candidate.lower())
         note.out_path = candidate + ".md"
 
@@ -441,11 +660,11 @@ def canonical(pages: list[Page], toc: dict[str, list[Placement]]) -> Page:
     lexicographic — never source-scan order."""
 
     def key(page: Page) -> tuple[int, str, str]:
-        placements = toc.get(page.source.name)
+        placements = toc.get(page.route)
         if not placements:
-            return (10_000, "", page.source.name)
+            return (10_000, "", page.rel)
         first = placements[0]
-        return (first.depth, posixpath.join(first.directory, first.stem), page.source.name)
+        return (first.depth, posixpath.join(first.directory, first.stem), page.rel)
 
     return sorted(pages, key=key)[0]
 
@@ -462,48 +681,79 @@ def link_target(page: Page, ambiguous: set[str]) -> str:
     return page.doc_id if page.explicit_id else page.out_path[: -len(".md")]
 
 
-def rewrite_links(page: Page, notes_by_file: dict[str, Page], ambiguous: set[str]) -> int:
-    """Turn internal anchors into wikilinks; return how many named no page.
+def rewrite_links(
+    page: Page,
+    notes_by_route: dict[str, Page],
+    ambiguous: set[str],
+    anchors: dict[str, dict[str, list[str]]],
+    report: Report,
+) -> int:
+    """Turn internal links into wikilinks; return how many named no page.
 
-    An anchor naming nothing in the output set becomes its own text: left as a
+    A link naming nothing in the output set becomes its own text: left as a
     markdown link it would name a file the vault does not own, which the loader
     reads as a path link or an attachment rather than as the prose it is.
+
+    A `#fragment` that names an id *inside* the target page becomes the heading
+    path that id sits under — `[[Note#Section#Subsection]]`, which is the
+    spelling Obsidian and VAULT.md §5.1 both read — so a generator's anchor
+    lands the reader where the link meant, and a `structure:` build retargets
+    the edge onto that section. A heading carrying `[`, `]`, `|` or `#` cannot
+    be written as an anchor at all (§13.2), so the link is left on the note.
     """
     unresolved = 0
+    page_dir = posixpath.dirname(page.rel)
     for link in list(page.content.find_all("a")):
-        href = (link.get("href") or "").split("#")[0]
+        href = (link.get("href") or "").strip()
         if "://" in href:
             continue
-        target = notes_by_file.get(PurePosixPath(href).name) if href else None
+        path, _, fragment = href.partition("#")
+        route = to_route(resolve_href(path, page_dir)) if path else ""
+        target = notes_by_route.get(route) if route else None
         text = link.get_text(strip=True)
         if target is None or target is page:
-            unresolved += 1 if href and target is None else 0
+            unresolved += 1 if path and target is None else 0
             link.replace_with(NavigableString(text))
             continue
         name = link_target(target, ambiguous)
+        heading = anchors.get(target.route, {}).get(fragment, []) if fragment else []
+        if heading and not any(set(part) & UNLINKABLE_IN_HEADING for part in heading):
+            name = f"{name}#" + "#".join(heading)
+            report.anchored_links += 1
         link.replace_with(NavigableString(f"[[{name}]]" if text in ("", name) else f"[[{name}|{text}]]"))
     return unresolved
 
 
-def collect_images(page: Page, images_root: Path | None, report: Report) -> list[tuple[Path, str]]:
+def collect_images(page: Page, root: Path, images_root: Path | None, report: Report) -> list[tuple[Path, str]]:
     """Resolve every `<img src>` to (file on disk, vault-relative destination).
 
-    The reference in the body is left exactly as written: it resolves
-    note-relative for a note beside the images and vault-root-relative for one
-    below them (VAULT.md §6.2), and copying to the same relative path keeps both
-    readings true however the TOC reorganises the output.
+    A picture's place in the vault is its path below the **source root**: a
+    `/`-absolute `src` already names one and a relative one is resolved against
+    the page that wrote it, which is how a browser reads both. That is what
+    keeps two pages in two directories that each write `img/logo.png` as two
+    pictures — reading every `src` as written puts them on one path, and the
+    second copy overwrites the first.
+
+    The reference is left exactly as written wherever the page's own directory
+    did not change what it means, so a flat corpus writes what it always wrote;
+    where it did, the reference becomes the `/`-absolute one VAULT.md §6.2
+    resolves from the vault root, which no reorganisation of the output can
+    break.
     """
     copies: list[tuple[Path, str]] = []
+    page_dir = posixpath.dirname(page.rel)
     for img in page.content.find_all("img"):
         src = (img.get("src") or "").strip()
-        if not src or "://" in src or src.startswith(("/", "data:")):
+        if not src or "://" in src or src.startswith("data:"):
             continue
-        rel = posixpath.normpath(src)
-        if rel.startswith(".."):
-            report.unplaceable_images.append(f"{page.source.name}: {src}")
+        rel = resolve_href(src, page_dir)
+        if not rel:
+            report.unplaceable_images.append(f"{page.rel}: {src}")
             img.replace_with(NavigableString(img.get("alt") or ""))
             continue
-        origin = (images_root / rel) if images_root else (page.source.parent / rel)
+        if rel != posixpath.normpath(src.lstrip("/")):
+            img["src"] = "/" + rel
+        origin = (images_root or root) / rel
         if not origin.is_file():
             report.missing_images.add(rel)
             continue
@@ -603,19 +853,11 @@ class Body:
         relabels and what `[[Note#pkg.mod.func(a, b)]]` reaches. Everything else
         becomes a bold term above its own paragraph.
 
-        `auto` asks whether an id *names its own term*, not merely whether there
-        is one: DITA gives every `<dt>` a generated id, and reading those as
-        symbols turned 275 of the Petrel corpus's GUI labels into headings.
+        The level each list's terms take is decided for the whole page first
+        (`definition_levels`), because rewriting one list changes what "the
+        previous heading" answers for the next.
         """
-        for definitions in content.find_all("dl"):
-            symbols = self.rules.dl_mode == "headings" or (
-                self.rules.dl_mode == "auto"
-                and any(
-                    qualified_name(term) for term in definitions.find_all("dt") if term.find_parent("dl") is definitions
-                )
-            )
-            heading = previous_heading(definitions, content)
-            level = min(6, int(heading.name[1]) + 1) if heading is not None else 2
+        for definitions, level, symbols in definition_levels(content, self.rules):
             for part in definitions.find_all(["dt", "dd"]):
                 if part.find_parent("dl") is not definitions:
                     continue  # a nested list's own term, handled when we reach it
@@ -679,7 +921,7 @@ class Body:
 
     def table_shape(self, table: Any) -> tuple[list[str] | None, list[list[str]]]:
         """The header row and the body rows, or ``(None, [])`` for an empty table."""
-        rows: list[tuple[bool, list[str]]] = []
+        rows: list[tuple[bool, list[str], list[str]]] = []
         for line in table.find_all("tr"):
             if line.find_parent("table") is not table:
                 continue
@@ -687,18 +929,28 @@ class Body:
             if not cells:
                 continue
             heading_row = all(cell.name == "th" for cell in cells) or line.find_parent("thead") is not None
-            rows.append((heading_row, [text for cell in cells for text in self.cell_texts(cell)]))
+            names = [cell.name for cell in cells]
+            rows.append((heading_row, [text for cell in cells for text in self.cell_texts(cell)], names))
         if not rows:
             return None, []
+        body = [cells for _, cells, _ in rows]
         if rows[0][0]:
-            return rows[0][1], [cells for _, cells in rows[1:]]
+            return rows[0][1], body[1:]
+        # A docutils field list: a `<th>` naming the field beside a `<td>`
+        # holding it, and no header row anywhere. Both `--table-header` answers
+        # are wrong for it — promoting the first row names the columns
+        # "Parameters | …" and loses that field, leaving it blank names nothing
+        # — so the shape gets the header it means, whichever the flag says.
+        if all(names == ["th", "td"] for _, _, names in rows):
+            self.report.field_lists += 1
+            return ["Field", "Value"], body
         if self.rules.table_header == "first-row":
-            return rows[0][1], [cells for _, cells in rows[1:]]
+            return rows[0][1], body[1:]
         # No `<th>` anywhere: promoting the first row would name the columns
         # after one row's data and lose that row, so the header is left blank
         # and the count says how many tables need one written at source.
         self.report.tables_without_header += 1
-        return [""] * max(len(cells) for _, cells in rows), [cells for _, cells in rows]
+        return [""] * max(len(cells) for cells in body), body
 
     def cell_texts(self, cell: Any) -> list[str]:
         """One cell's markdown, plus an empty cell for each column it spans.
@@ -966,6 +1218,7 @@ class Report:
         self.unplaceable_images: list[str] = []
         self.other_image_types: defaultdict[str, int] = defaultdict(int)
         self.tables = self.table_rows = self.tables_without_header = self.param_tables = 0
+        self.field_lists = self.anchored_links = self.literal_brackets = 0
         self.ordered_lists = self.procedure_lists = self.block_ids = self.cell_link_aliases = 0
         self.symbol_headings = self.definition_terms = 0
         self.callouts: defaultdict[str, int] = defaultdict(int)
@@ -987,10 +1240,13 @@ class Report:
             ("missing image originals", len(self.missing_images)),
             ("unplaceable image refs", len(self.unplaceable_images)),
             ("unresolved internal links", self.unresolved_links),
+            ("links resolved to a heading", self.anchored_links),
+            ("literal [[ escaped", self.literal_brackets),
             ("callouts", sum(self.callouts.values())),
             ("GFM tables", self.tables),
             ("GFM table rows", self.table_rows),
             ("tables with no header", self.tables_without_header),
+            ("field lists", self.field_lists),
             ("cell link aliases dropped", self.cell_link_aliases),
             ("parameter tables", self.param_tables),
             ("ordered lists", self.ordered_lists),
@@ -1018,8 +1274,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("html_dir", type=Path)
     p.add_argument("out_vault", type=Path)
     p.add_argument("--toc", type=Path, help="JSON table of contents driving the folder layout")
-    p.add_argument("--images-dir", type=Path, help="root <img src> paths resolve against (default: beside the page)")
-    p.add_argument("--default-label", default="Note")
+    p.add_argument(
+        "--images-dir", type=Path, help="root the resolved <img src> paths are read from (default: html_dir)"
+    )
+    p.add_argument(
+        "--default-label",
+        default="Note",
+        help="label for every note; outranks the folder name (VAULT.md 2.1)",
+    )
     p.add_argument("--content-selector", default="div.pageData", help="CSS selector for the body; falls back to <body>")
     p.add_argument("--strip", action="append", default=[], metavar="SELECTOR", help="delete from the body; repeatable")
     p.add_argument("--related-selector", default="nav.related-links", help="CSS selector for the cross-reference block")
@@ -1080,19 +1342,22 @@ def write_note(note: Page, out_root: Path, related: list[str], rules: BodyRules,
 def plan(
     args: argparse.Namespace,
     table: dict[str, dict[str, str]],
-    toc: dict[str, list[Placement]],
+    entries: list[tuple[str, Placement]],
     report: Report,
-) -> tuple[list[Page], dict[str, Page], set[str]]:
+) -> tuple[list[Page], dict[str, Page], set[str], dict[str, dict[str, list[str]]]]:
     """Read every page and decide, before a byte is written, what each note is:
-    where it lands, which name reaches it, and which notes are its parents."""
+    where it lands, which name reaches it, which notes are its parents, and
+    what heading each of its anchors sits under."""
     sources = sorted({p for pattern in ("*.html", "*.htm") for p in args.html_dir.rglob(pattern)})
-    scanned = [page for page in (parse_page(s, args, table) for s in sources) if page]
+    scanned = [page for page in (parse_page(s, args, table, report) for s in sources) if page]
     report.pages = len(scanned)
+    # The TOC is resolved against the corpus, so it has to wait for it.
+    toc = place_toc(entries, {page.route for page in scanned})
 
     by_id: dict[str, list[Page]] = defaultdict(list)
     for page in scanned:
         by_id[page.doc_id].append(page)
-    notes = sorted((canonical(group, toc) for group in by_id.values()), key=lambda p: p.source.name)
+    notes = sorted((canonical(group, toc) for group in by_id.values()), key=lambda p: p.rel)
     report.cross_listed = len(scanned) - len(notes)
     assign_paths(notes, toc, args.default_label)
 
@@ -1102,21 +1367,26 @@ def plan(
     ambiguous = {stem for stem, n in stems.items() if n > 1}
     # A collapsed duplicate is still a link destination: it is reached through
     # the note that survived it.
-    notes_by_file = {page.source.name: canonical(by_id[page.doc_id], toc) for page in scanned}
+    notes_by_route = {page.route: canonical(by_id[page.doc_id], toc) for page in scanned}
+    # Read before anything rewrites a body, and for the notes that survive: a
+    # link's anchor names an id in the page it *reaches*, not in the page that
+    # wrote it.
+    anchors = {note.route: anchor_paths(note.content, args.rules) for note in notes}
 
     for note in notes:
         pages = by_id[note.doc_id]
-        parent_files = {p.parent_file for page in pages for p in toc.get(page.source.name, []) if p.parent_file}
-        parent_files.update(f for page in pages for f in page.parent_files)
-        parents = {link_target(notes_by_file[f], ambiguous) for f in parent_files if f in notes_by_file}
+        parent_routes = {p.parent for page in pages for p in toc.get(page.route, []) if p.parent}
+        parent_routes.update(f for page in pages for f in page.parent_files)
+        parents = {link_target(notes_by_route[f], ambiguous) for f in parent_routes if f in notes_by_route}
         note.parents = sorted(parents - {link_target(note, ambiguous)})
-    return notes, notes_by_file, ambiguous
+    return notes, notes_by_route, ambiguous, anchors
 
 
 def write_vault(
     notes: list[Page],
-    notes_by_file: dict[str, Page],
+    notes_by_route: dict[str, Page],
     ambiguous: set[str],
+    anchors: dict[str, dict[str, list[str]]],
     args: argparse.Namespace,
     report: Report,
 ) -> None:
@@ -1124,11 +1394,11 @@ def write_vault(
     out_root.mkdir(parents=True, exist_ok=True)
     copies: dict[str, Path] = {}
     for note in notes:
-        report.unresolved_links += rewrite_links(note, notes_by_file, ambiguous)
-        for origin, rel in collect_images(note, args.images_dir, report):
+        report.unresolved_links += rewrite_links(note, notes_by_route, ambiguous, anchors, report)
+        for origin, rel in collect_images(note, args.html_dir, args.images_dir, report):
             copies[rel] = origin
         self_link = link_target(note, ambiguous)
-        related = {link_target(notes_by_file[f], ambiguous) for f in note.related_files if f in notes_by_file}
+        related = {link_target(notes_by_route[f], ambiguous) for f in note.related_files if f in notes_by_route}
         write_note(note, out_root, sorted(related - {self_link}), args.rules, report)
         report.notes += 1
     for rel, origin in sorted(copies.items()):
@@ -1152,8 +1422,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(f'--meta-map: "{key}" must map value spellings to their fold, got {mapping!r}')
             table[normalize_key(key)] = {k.lower(): v for k, v in mapping.items()}
 
-    toc = load_toc(args.toc) if args.toc else {}
-    notes, notes_by_file, ambiguous = plan(args, table, toc, report)
+    notes, notes_by_route, ambiguous, anchors = plan(args, table, load_toc(args.toc) if args.toc else [], report)
     if args.dry_run:
         report.notes = len(notes)
         report.seconds = time.monotonic() - started
@@ -1161,7 +1430,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     out_root = args.out_vault
-    write_vault(notes, notes_by_file, ambiguous, args, report)
+    write_vault(notes, notes_by_route, ambiguous, anchors, args, report)
     report.seconds = time.monotonic() - started
     print(report.render())
     if args.no_validate:

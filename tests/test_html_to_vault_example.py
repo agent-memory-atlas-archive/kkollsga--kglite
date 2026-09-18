@@ -42,6 +42,7 @@ pytest.importorskip("markdownify")
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "examples" / "html_to_vault.py"
 FIXTURE = REPO / "tests" / "fixtures" / "vault_html"
+ROUTES = REPO / "tests" / "fixtures" / "vault_routes"
 
 EXPECTED_FILES = [
     ".kglite/vault.yaml",
@@ -112,6 +113,30 @@ def structured(tmp_path_factory) -> Path:
     """
     out = tmp_path_factory.mktemp("vault_structure") / "vault"
     done = convert(out, "--emit-structure", "--api-label", "Article", "--no-validate")
+    assert done.returncode == 0, done.stdout + done.stderr
+    return out
+
+
+@pytest.fixture(scope="module")
+def routes(tmp_path_factory) -> Path:
+    """A corpus that routes by directory: every page is `<dir>/index.html`.
+
+    Sphinx, MkDocs and every help system that serves clean URLs write one, and
+    the converter read all of them as a page called `index`: one note survived,
+    the rest were "cross-listed" onto it, and every link and image reached
+    whichever page won. It also carries what such a corpus carries — a
+    `/`-absolute image, a page-relative one, a link to a directory, a link to
+    an id *inside* another page, two sibling symbol lists, a docutils field
+    list, and two pages titled the same word.
+    """
+    out = tmp_path_factory.mktemp("vault_routes") / "vault"
+    done = subprocess.run(
+        [sys.executable, str(SCRIPT), str(ROUTES), str(out), "--emit-structure", "--no-validate"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
     assert done.returncode == 0, done.stdout + done.stderr
     return out
 
@@ -384,3 +409,99 @@ def test_converting_twice_into_one_directory_is_byte_identical(vault):
     again = convert(vault)
     assert again.returncode == 0, again.stdout + again.stderr
     assert snapshot(vault) == before
+
+
+def test_a_route_per_directory_corpus_is_one_note_per_page(routes):
+    # Identity is the route — `guide/index.html` is `guide` — so the three
+    # `index.html` pages are three notes. Read as a filename they were one.
+    assert sorted(snapshot(routes)) == [
+        ".kglite/vault.yaml",
+        "Note/Guide.md",
+        "Note/Reference.md",
+        "Note/Reference_guide_reference.md",
+        "Note/Widget_Help.md",
+        "api/pics/flow.png",
+        "img/logo.png",
+    ]
+
+
+def test_two_pages_titled_the_same_word_are_disambiguated_by_route(routes):
+    # `api/index.html` and `guide/reference.html` are both titled "Reference".
+    # The route is unique by construction, so it is what tells them apart —
+    # and the note that took the suffix still says what it is called.
+    assert "title: Reference" in (routes / "Note" / "Reference_guide_reference.md").read_text(encoding="utf-8")
+
+
+def test_an_absolute_image_is_kept_and_a_page_relative_one_is_rooted(routes):
+    # A `/`-absolute `src` was skipped outright — the picture never reached the
+    # vault. A relative one resolves against the page that wrote it, so
+    # `api/index.html`'s `pics/flow.png` is `api/pics/flow.png` and cannot be
+    # overwritten by another directory's file of the same name; the reference
+    # becomes the vault-root-relative one VAULT.md §6.2 resolves.
+    assert "![The widget logo](/img/logo.png)" in (routes / "Note" / "Guide.md").read_text(encoding="utf-8")
+    assert "![Signal flow](/api/pics/flow.png)" in (routes / "Note" / "Reference.md").read_text(encoding="utf-8")
+
+
+def test_a_link_to_a_directory_route_reaches_the_page_it_names(routes):
+    # `<a href="../api/">` names the page served at `api/`, which is
+    # `api/index.html`. Resolved by filename it named nothing at all.
+    assert "[[Reference|the API]]" in (routes / "Note" / "Guide.md").read_text(encoding="utf-8")
+
+
+def test_sibling_symbol_lists_stay_siblings(routes):
+    # Each `<dl>` became a heading, and the next one asked for "the previous
+    # heading" *after* that: three siblings came out at three depths, each
+    # nested in the one before it, and every heading path below them was wrong.
+    page = (routes / "Note" / "Reference.md").read_text(encoding="utf-8")
+    assert "### pkg.widget.start(mode)" in page
+    assert "### pkg.widget.stop()" in page
+    # …a `<dl>` inside a `<dd>` is the one thing that *is* one deeper…
+    assert "#### pkg.widget.stop.force()" in page
+    # …and the heading after them is still the `##` it was written as.
+    assert "\n## Tuning\n" in page
+
+
+def test_a_field_list_gets_the_header_it_means(routes):
+    # docutils writes a field list as `<th>` name beside `<td>` value with no
+    # header row: blank headers name no column and `--table-header first-row`
+    # would name them "Parameters: | mode …" and lose that field.
+    page = (routes / "Note" / "Reference.md").read_text(encoding="utf-8")
+    assert "| Field | Value |\n| --- | --- |\n| Parameters: | mode -- which slot to start |" in page
+    # Only that shape. A table with no `<th>` at all is data in every cell, and
+    # naming its columns "Field" and "Value" would be an invention: it keeps
+    # the blank header and the count that says one was never written.
+    assert "|  |  |\n| --- | --- |\n| 1 | the first slot |" in page
+
+
+def test_an_anchor_resolves_to_the_heading_path_it_sits_under(routes):
+    # `#sec-tuning` is a `<span id>` a generator left before the paragraph, and
+    # the markdown keeps no trace of it. The heading path does survive, is what
+    # `[[Note#A#B]]` addresses, and is what a `structure:` build makes a node
+    # of — so the edge lands on the section a reader is sent to.
+    assert "[[Reference#API reference#Tuning|how to tune it]]" in (routes / "Note" / "Widget_Help.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_link_syntax_the_source_wrote_as_text_mints_no_note(routes):
+    # Two spellings, two answers, one outcome. `[[` in prose is escaped here,
+    # because the converter mints every wikilink itself and a `[[` that
+    # survives from the page is something a reader is meant to see; `[[` inside
+    # a `<code>` span is left alone, because VAULT.md §5.1 does not scan a code
+    # span at all. Either one read as a link mints a stub note named after a
+    # Python literal — eleven of them on one converted page.
+    page = (routes / "Note" / "Guide.md").read_text(encoding="utf-8")
+    assert r'(e.g., \[\["Tables", "Table1"]])' in page
+    assert '`project[["Horizons", "TopA"]]`' in page
+
+
+def test_the_route_vault_validates_clean_and_the_anchor_is_a_section_edge(routes):
+    report = okf.validate(str(routes), strict=True)
+    assert report.errors == [] and report.warnings == []
+    # …and no stub: a dangling link is what a phantom `[[…]]` leaves behind.
+    assert report.counts["nodes_by_label"].get("Concept", 0) == 0
+    graph = okf.build(str(routes), dialect="obsidian")
+    anchored = graph.cypher(
+        "MATCH (a)-[:LINKS_TO]->(b:Section) RETURN a.concept_id AS source, b.concept_id AS target"
+    ).to_list()
+    assert anchored == [{"source": "Widget_Help", "target": "Reference#API reference#Tuning"}]

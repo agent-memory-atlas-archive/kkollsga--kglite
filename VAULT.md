@@ -1351,7 +1351,10 @@ What a converter must emit, in order:
 
 `examples/html_to_vault.py` in this repository is a worked converter following
 exactly this checklist — HTML pages plus a JSON table of contents in, a
-validated vault out — and is the fastest way to see each step in code.
+validated vault out — and is the fastest way to see each step in code. It shows
+what item 1 means for a corpus that routes by directory: a page's identity is
+its **path** below the source root, `<dir>/index.html` naming `<dir>`, because
+a site serving clean URLs has one filename for every page in it.
 
 ## 12. Rebuild and provenance
 

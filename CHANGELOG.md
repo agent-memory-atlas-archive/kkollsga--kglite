@@ -102,6 +102,23 @@ before upgrading.
   code loses those edges (and any stub that existed only for them) on upgrade.
   What is written *around* a span is untouched: ``[`file.md`](file.md)`` is
   still one link, and its display text is still the author's own.
+- **`examples/html_to_vault.py` converts a route-per-directory corpus.** A page
+  is identified by its **route** — its path below the source root, with
+  `<dir>/index.html` naming `<dir>` — where it was identified by filename, so a
+  corpus whose pages are all `index.html` (Sphinx, MkDocs, any site serving
+  clean URLs) collapsed onto one note: a 1 238-page help system came out as 294
+  notes and no images at all, and now comes out as 1 238 notes, 3 276 images
+  and no errors. In the same pass: a `/`-absolute `<img src>` is copied instead
+  of skipped and a relative one is resolved against the page that wrote it (two
+  directories writing `img/logo.png` stay two pictures); an `href` is resolved
+  the same way rather than by filename, so a link to `../api/` reaches the page
+  served there; sibling `<dl>` symbol lists stay siblings instead of each
+  nesting inside the one before it; a docutils field list is given the
+  `Field | Value` header it means; a link to an id *inside* a page becomes
+  `[[Note#Heading#Subheading]]`, the heading path that id sits under; and a
+  `[[` the source wrote in its own prose is escaped, so an API page's
+  `(e.g., [["Tables", "Table1"]])` no longer mints a note named after a Python
+  literal.
 - **A link target whose fifth byte is inside a character no longer panics the
   build.** The `file:` scheme test sliced every target at byte 5, so a link to
   a note whose name opens with four ASCII characters and then a non-ASCII one —
