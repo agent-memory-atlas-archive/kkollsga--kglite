@@ -1092,6 +1092,13 @@ pub(crate) fn fuse_node_scan_aggregate(
         }
 
         let has_supported_agg = if let Clause::Return(r) = &query.clauses[return_idx] {
+            // A bare `*` is not an aggregate, so the "not an aggregate,
+            // therefore a group key" arm below would accept it and the fused
+            // projection would emit a column called `*`.
+            if super::projection_has_wildcard(&r.items) {
+                i += 1;
+                continue;
+            }
             let has_any_agg = r
                 .items
                 .iter()

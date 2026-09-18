@@ -278,14 +278,41 @@ fn a_mixed_star_keeps_every_binding_in_scope() {
         "MATCH p = (:N {id:'x'})-[:R]->(b) WITH *, 1 AS k RETURN length(p) AS l, b.id ORDER BY b.id",
         vec![vec![i(1), s("y")], vec![i(1), s("z")]],
     );
-    // A correlated subquery whose body ends in a mixed `RETURN *` exports the
-    // body's own names. Pre-fix `m` never reached the outer scope.
+    // A subquery whose body ends in a mixed `RETURN *` exports the body's own
+    // names. Pre-fix `m` never reached the outer scope, so `m.id` was null.
     assert_rows(
         &graph,
-        "MATCH (n:N {id:'x'}) CALL { WITH n MATCH (n)-[:R]->(m) RETURN *, 1 AS k } \
+        "MATCH (:N {id:'x'}) CALL { MATCH (a:N {id:'x'})-[:R]->(m) RETURN *, 1 AS k } \
          RETURN m.id ORDER BY m.id",
         vec![vec![s("y")], vec![s("z")]],
     );
+}
+
+#[test]
+fn a_subquery_star_that_re_exports_an_import_is_still_refused() {
+    let graph = star_graph();
+    // Now that the mixed `*` really does carry the imported `n`, it collides
+    // with the outer scope — the same refusal the explicit spelling gets, and
+    // the same one Neo4j raises. Pre-fix the `*` exported nothing, so this
+    // silently returned null rows instead of naming the problem.
+    for optimize in [false, true] {
+        let params = HashMap::new();
+        let mut query = parser::parse_cypher(
+            "MATCH (n:N {id:'x'}) CALL { WITH n MATCH (n)-[:R]->(m) RETURN *, 1 AS k } \
+             RETURN m.id",
+        )
+        .unwrap();
+        if optimize {
+            crate::graph::languages::cypher::planner::optimize(&mut query, &graph, &params);
+        }
+        let error = CypherExecutor::with_params(&graph, &params, None)
+            .execute(&query)
+            .expect_err("re-exporting an imported variable must be refused");
+        assert!(
+            error.contains("already exists in the outer scope"),
+            "optimize={optimize}: {error}"
+        );
+    }
 }
 
 // ========================================================================

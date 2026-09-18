@@ -28,6 +28,27 @@ before upgrading.
   plans agreed on every wrong answer, so this was invisible to the
   optimizer-differential corpus; it is now pinned by absolute goldens.
 
+- **`*` written beside another projection item now means what it says.**
+  `RETURN *` / `WITH *` expanded only when the `*` was the clause's sole item.
+  Written alongside anything else — `WITH *, a + 1 AS b` — the `*` was
+  projected like an ordinary expression: a result column literally named `*`
+  holding the constant `1`, while every value-carrying name in scope was
+  dropped with the projection it replaced. `UNWIND [1] AS a WITH *, a + 1 AS b
+  RETURN a, b` answered `{a: null, b: 2}`. Node, edge and path *bindings*
+  survived, so the loss was invisible behind `MATCH (n) WITH *, 1 AS k` and
+  total for an `UNWIND` alias or an earlier aggregate's output. Two spellings
+  lost rows rather than cells: `WITH *, count(*) AS c` grouped by that constant
+  and folded the whole input into one group instead of one group per row-scope,
+  and `WITH DISTINCT *, 1 AS k` deduplicated every row down to one. The same
+  `*` is now also projected by the fused aggregate plan and the top-K plan
+  identically to the unfused one. Two smaller repairs come with it: `*` lists a
+  path variable (`MATCH p = (a)-->(b) RETURN *` now returns `p`, which it never
+  did), and a variable that is both bound and projected is listed once instead
+  of twice. **The rule for a name both halves would project is that the
+  explicit item wins** — `WITH *, a + 1 AS a` is one column `a` holding
+  `a + 1` — so `*` can never manufacture the duplicate result column the
+  parser rejects when you write both out by hand.
+
 ## [0.17.9] - 2026-09-18
 ### Added
 

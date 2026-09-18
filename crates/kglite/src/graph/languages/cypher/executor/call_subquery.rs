@@ -394,13 +394,7 @@ pub(crate) fn subquery_arm_output_columns(
     for clause in clauses {
         match clause {
             Clause::Return(ret) => {
-                if ret.items.len() == 1
-                    && matches!(ret.items[0].expression, Expression::Star)
-                    && ret.items[0].alias.is_none()
-                {
-                    return Ok(scope);
-                }
-                return Ok(ret.items.iter().map(return_item_column_name).collect());
+                return Ok(project_static_items(&ret.items, scope));
             }
             Clause::Union(_) => break,
             Clause::With(with) => project_static_scope(&mut scope, with, globals),
@@ -437,21 +431,40 @@ pub(crate) fn subquery_arm_output_columns(
 }
 
 fn project_static_scope(scope: &mut Vec<String>, with: &WithClause, globals: &[String]) {
-    if !with
-        .items
-        .iter()
-        .any(|item| matches!(item.expression, Expression::Star))
-    {
-        scope.clear();
-    }
-    for item in &with.items {
-        if !matches!(item.expression, Expression::Star) {
-            push_unique(scope, &return_item_column_name(item));
-        }
-    }
+    *scope = project_static_items(&with.items, std::mem::take(scope));
     for global in globals {
         push_unique(scope, global);
     }
+}
+
+/// The column names a projection of `items` produces, given the names
+/// `incoming` carries.
+///
+/// A bare `*` stands for the incoming names the projection does not write out
+/// — the rule `executor/return_clause.rs::expand_wildcards` applies to the
+/// runtime row, restated over a static name list so the two agree. Without a
+/// `*` the incoming scope is replaced outright, which is what makes a `WITH`
+/// a scope barrier. Explicit items keep their written position; `push_unique`
+/// makes a name the `*` already supplied appear once.
+fn project_static_items(items: &[ReturnItem], incoming: Vec<String>) -> Vec<String> {
+    let written: Vec<String> = items
+        .iter()
+        .filter(|item| !matches!(item.expression, Expression::Star))
+        .map(return_item_column_name)
+        .collect();
+    let mut out = Vec::with_capacity(items.len() + incoming.len());
+    for item in items {
+        if !matches!(item.expression, Expression::Star) {
+            push_unique(&mut out, &return_item_column_name(item));
+            continue;
+        }
+        for name in &incoming {
+            if !written.iter().any(|w| w == name) {
+                push_unique(&mut out, name);
+            }
+        }
+    }
+    out
 }
 
 fn extend_match_scope(scope: &mut Vec<String>, matched: &MatchClause) {

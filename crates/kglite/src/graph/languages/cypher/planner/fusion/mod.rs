@@ -20,6 +20,34 @@ pub(super) use count::*;
 pub(super) use spatial::*;
 pub(super) use topk::*;
 
+/// True when a projection carries a `*`, which no fused operator can project.
+///
+/// `*` names no item in the AST: the executor expands it from the *runtime
+/// row's* bindings (`executor/return_clause.rs::expand_wildcards`), which a
+/// fused operator's own projection never builds. Fusing it projects the
+/// literal `Star` expression instead, which evaluates to the `1` that exists
+/// so `count(*)` has an argument. Two passes have shipped that bug:
+/// `MATCH (p:Person) RETURN * ORDER BY p.age DESC LIMIT 2` answered
+/// `[{'*': 1}, {'*': 1}]` while the same query without the LIMIT answered the
+/// rows, and `MATCH (n:N) RETURN *, count(*) AS c` fused to a column called
+/// `*` after the mixed-`*` expansion started producing real columns
+/// everywhere else. The unoptimised plan is right in both, so the
+/// differential corpus is the detector and carries both shapes.
+///
+/// Gates that classify items one at a time need this explicitly: a bare
+/// `Star` is not an aggregate, so a check shaped "not an aggregate, therefore
+/// a group key" accepts it.
+pub(super) fn projection_has_wildcard(
+    items: &[crate::graph::languages::cypher::ast::ReturnItem],
+) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            item.expression,
+            crate::graph::languages::cypher::ast::Expression::Star
+        )
+    })
+}
+
 /// Finer multi-label fusion gate, shared by the fusions whose executors
 /// filter typed nodes via `binary_search` on the primary `type_indices`
 /// slice (edge aggregates) or build an R-tree from it (spatial join), and

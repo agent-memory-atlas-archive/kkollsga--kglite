@@ -36,50 +36,25 @@ impl<'a> CypherExecutor<'a> {
         result_set: ResultSet,
         retain: &[String],
     ) -> Result<ResultSet, String> {
-        // Expand RETURN * to individual items for each bound variable (BUG-05)
+        // Replace every `*` with the names it stands for, before the
+        // aggregate/window split below reads the item list: an unexpanded
+        // `Star` is neither, so it would reach the projection as an ordinary
+        // item and become a column called `*`.
         let expanded;
-        let clause = if clause.items.len() == 1
-            && matches!(clause.items[0].expression, Expression::Star)
-            && clause.items[0].alias.is_none()
-        {
-            if let Some(first_row) = result_set.rows.first() {
-                let mut items = Vec::new();
-                // Add projected bindings (from WITH)
-                for key in first_row.projected.keys() {
-                    items.push(ReturnItem {
-                        expression: Expression::Variable(key.clone()),
-                        alias: Some(key.clone()),
-                    });
-                }
-                // Add node bindings
-                for key in first_row.node_bindings.keys() {
-                    if !first_row.projected.contains_key(key) {
-                        items.push(ReturnItem {
-                            expression: Expression::Variable(key.clone()),
-                            alias: Some(key.clone()),
-                        });
-                    }
-                }
-                // Add edge bindings
-                for key in first_row.edge_bindings.keys() {
-                    items.push(ReturnItem {
-                        expression: Expression::Variable(key.clone()),
-                        alias: Some(key.clone()),
-                    });
-                }
+        let clause = match result_set.rows.first() {
+            Some(first_row) if clause.items.iter().any(is_wildcard_item) => {
                 expanded = ReturnClause {
-                    items,
+                    items: expand_wildcards(&clause.items, first_row),
                     distinct: clause.distinct,
                     having: clause.having.clone(),
                     lazy_eligible: clause.lazy_eligible,
                     group_limit_hint: clause.group_limit_hint,
                 };
                 &expanded
-            } else {
-                clause
             }
-        } else {
-            clause
+            // No rows: there is no scope to read the names out of, and no row
+            // for them to be wrong in either.
+            _ => clause,
         };
 
         let has_aggregation = clause
@@ -492,6 +467,79 @@ impl<'a> CypherExecutor<'a> {
     // ========================================================================
     // UNWIND
     // ========================================================================
+}
+
+/// A bare `*`, as opposed to an aliased one (`RETURN * AS x`, which the
+/// grammar accepts and which names a single ordinary column).
+fn is_wildcard_item(item: &ReturnItem) -> bool {
+    matches!(item.expression, Expression::Star) && item.alias.is_none()
+}
+
+/// A binding the executor created for its own bookkeeping rather than one the
+/// query named. The `__` prefix is the crate-wide convention for these
+/// (`__fixed_path`, `__anon_edge_1`, `__agg_arg_0`, the planner's
+/// `__dgr_grp_0`), and a query cannot introduce one: the parser has no
+/// spelling that produces a leading `__` variable except a quoted identifier,
+/// which is the caller's choice to collide.
+fn is_internal_binding(name: &str) -> bool {
+    name.starts_with("__")
+}
+
+/// Expand each `*` in `items` into one item per name it stands for.
+///
+/// **The rule: `*` stands for the names the projection does not write out.**
+/// An explicit item keeps its written position, name and value; the `*`
+/// expands, where it stands, to every other name in scope. So a name both
+/// would project appears exactly once and carries the explicit item's
+/// value — `WITH *, a + 1 AS a` is one column `a` holding `a + 1`.
+///
+/// Two reasons for that direction. It cannot manufacture a duplicate result
+/// column, which `parse_cypher` rejects outright when both halves are written
+/// by hand ("Multiple result columns with the same name are not supported"),
+/// and it is the rule the rest of the projection already follows: the
+/// sole-`*` path has always skipped a binding whose name `projected` holds,
+/// and `execute_return_retaining`'s ORDER BY carry only ever fills a hole the
+/// projection left. `call_subquery::project_static_scope` computes a
+/// subquery's output columns the same way, so the static and runtime column
+/// lists agree.
+///
+/// The names in scope are the row's own: its projected values first, then the
+/// node, edge and path variables it still binds. A variable that is both —
+/// `MATCH ()-[r]->() WITH r RETURN *` binds `r` and projects it — is emitted
+/// once. Bindings the executor made for itself are skipped: a fixed-length
+/// trail binds `__fixed_path` and an unnamed edge `__anon_edge_1`, and `*`
+/// means the names the *query* introduced.
+fn expand_wildcards(items: &[ReturnItem], row: &ResultRow) -> Vec<ReturnItem> {
+    let written: FxHashSet<String> = items
+        .iter()
+        .filter(|item| !is_wildcard_item(item))
+        .map(return_item_column_name)
+        .collect();
+
+    let mut out = Vec::with_capacity(items.len() + row.projected.len());
+    let mut emitted: FxHashSet<&str> = FxHashSet::default();
+    for item in items {
+        if !is_wildcard_item(item) {
+            out.push(item.clone());
+            continue;
+        }
+        let in_scope = row
+            .projected
+            .keys()
+            .chain(row.node_bindings.keys())
+            .chain(row.edge_bindings.keys())
+            .chain(row.path_bindings.keys());
+        for name in in_scope {
+            if is_internal_binding(name) || written.contains(name) || !emitted.insert(name) {
+                continue;
+            }
+            out.push(ReturnItem {
+                expression: Expression::Variable(name.clone()),
+                alias: Some(name.clone()),
+            });
+        }
+    }
+    out
 }
 
 /// Drop the identity bindings a `WITH` projection does not carry forward.
