@@ -38,15 +38,33 @@ use regex::{Captures, Regex};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
+/// `![alt](src)` / `![alt](src "title")` on its own. Used for the images
+/// written **inside** a link's text, which the outer match consumes whole.
+fn image_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)"#).unwrap())
+}
+
 fn link_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // [text](dest) or [text](dest "title"). `text` may not contain ']'.
-    // Group 1 is the text — the alt text when a `!` precedes the whole match.
+    // [text](dest) or [text](dest "title"). Group 1 is the text — the alt text
+    // when a `!` precedes the whole match.
+    //
+    // The text is any run of non-`]` characters, **or a complete image**: that
+    // second branch is the whole of `[![alt](thumb)](full)`, a thumbnail
+    // linking to the full picture. Without it the first `]` ends the text and
+    // the match stops at `[![alt](thumb)`, so `full` is never seen. The image
+    // branch comes first because alternation is leftmost-*first*: taken the
+    // other way round, `[^\]]` eats `![alt` and the match reverts to the short
+    // one (`linked_image_yields_the_thumbnail_and_the_outer_link` pins it).
     //
     // Newlines are inside `[^\]]`, so a hard-wrapped `[Binary\nExtensions](url)`
     // matches; a scan region never spans a paragraph, which is what keeps that
     // from running two paragraphs' brackets together.
-    RE.get_or_init(|| Regex::new(r#"\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)"#).unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r#"\[((?:!\[[^\]]*\]\([^)\s]*(?:\s+"[^"]*")?\)|[^\]])*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)"#)
+            .unwrap()
+    })
 }
 
 fn wikilink_re() -> &'static Regex {
@@ -236,6 +254,11 @@ impl Region<'_> {
             self.attachment(dest, Some(label), out);
             return;
         }
+        // A link whose text is a picture — `[![alt](thumb)](full)`. The
+        // thumbnail is a reference in its own right and the outer half is an
+        // ordinary link, so both are recorded and the reader's alt text comes
+        // from the inner image rather than from its markdown source.
+        let alt = self.inner_images(label, out);
         if !is_external_url(dest) {
             self.check_path(dest, out);
         }
@@ -275,7 +298,7 @@ impl Region<'_> {
             // the link text as its alt. `attachment` drops what is left —
             // an in-page `#anchor`, a directory, a URL scheme — so those
             // stay the silent no-ops they always were.
-            self.attachment(dest, Some(label), out);
+            self.attachment(dest, Some(alt), out);
         }
     }
 
@@ -336,6 +359,26 @@ impl Region<'_> {
                 reverse: false,
             },
         );
+    }
+
+    /// Record every `![alt](src)` written *inside* a link's text and return the
+    /// alt the outer link should carry.
+    ///
+    /// A link text that is nothing but one image reports that image's alt,
+    /// because that is the text a reader sees; a text mixing prose and pictures
+    /// keeps its own, and every picture in it is still a reference.
+    fn inner_images<'t>(&self, label: &'t str, out: &mut Extraction) -> &'t str {
+        let mut alt = label;
+        for image in image_re().captures_iter(label) {
+            let decoded = percent_decode(image.get(2).map_or("", |d| d.as_str()));
+            self.check_path(decoded.as_ref(), out);
+            let inner = image.get(1).map_or("", |a| a.as_str());
+            self.attachment(decoded.as_ref(), Some(inner), out);
+            if image.get(0).is_some_and(|m| m.as_str() == label.trim()) {
+                alt = inner;
+            }
+        }
+        alt
     }
 
     fn attachment(&self, dest: &str, alt: Option<&str>, out: &mut Extraction) {
@@ -1449,6 +1492,42 @@ mod tests {
         );
         assert!(attach(&got).is_empty());
         assert!(got.tags.is_empty());
+    }
+
+    /// `[![alt](thumb)](full)` — a thumbnail linking to the full picture. The
+    /// old regex stopped its text at the inner `]`, matched `[![alt](thumb)`
+    /// and never saw `full` at all (217 of these in the RMS corpus).
+    #[test]
+    fn linked_image_yields_the_thumbnail_and_the_outer_link() {
+        let got = extract(
+            "## Figures\n\n[![Fault map](img/thumb.png)](img/faults.png)\n",
+            "",
+            &vault(),
+        );
+        assert_eq!(
+            attach(&got),
+            vec![
+                ("img/thumb.png", Some("Fault map"), Some("Figures")),
+                ("img/faults.png", Some("Fault map"), Some("Figures")),
+            ],
+            "both halves are references; the outer one wears the inner alt"
+        );
+        assert!(got.links.is_empty(), "neither half is a note");
+    }
+
+    /// The same shape with a `.md` outer target: the picture is a reference and
+    /// the link around it is an ordinary note link.
+    #[test]
+    fn a_linked_image_pointing_at_a_note_is_still_a_link() {
+        let got = extract("[![map](img/x.png)](/notes/atlas.md)\n", "", &vault());
+        assert_eq!(
+            got.links
+                .iter()
+                .map(|l| l.target.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/atlas"]
+        );
+        assert_eq!(attach(&got), vec![("img/x.png", Some("map"), None)]);
     }
 
     /// A link text hard-wrapped by an editor is one link, and two paragraphs'

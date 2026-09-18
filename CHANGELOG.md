@@ -20,6 +20,12 @@ before upgrading.
   matched over its blocks, so the text may wrap within a paragraph — and a
   bracket left open at the end of one paragraph still cannot reach into the
   next.
+- **A thumbnail linking to a full picture, `[![alt](thumb.png)](full.png)`,
+  yields both references.** The outer link was invisible (217 of them in one
+  6 000-page corpus): the scanner stopped at the inner `]` and recorded a
+  reference to the thumbnail alone, with the image's own markdown as its `alt`.
+  Both halves are now recorded — the outer one as a note link when it names a
+  `.md` file — and the alt text is the one a reader sees.
 
 ### Changed
 

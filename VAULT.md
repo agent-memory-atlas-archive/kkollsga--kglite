@@ -309,6 +309,7 @@ folder layout would have.
 | `[text](#fragment)`, `[text](sub/dir/)`, `[text](mailto:…)` | An in-page anchor, a directory link and any other URI scheme name no node: silent no-ops. |
 | `![[Note]]` | Embed → an `EMBEDS` edge. |
 | `![[image.png]]`, `![alt](img/x.png)` | Attachment (§6), never a note link. |
+| `[![alt](thumb.png)](full.png)` | A thumbnail linking to the full picture: **both halves count**. The inner image is a reference to `thumb.png` and the outer link is one to `full.png` — or an ordinary note link when it names a `.md` file. The outer reference wears the inner `alt`. |
 | `https://…` | An external `Source` node keyed by the URL. |
 
 **A fenced code block (``` or `~~~`) and a `%%comment%%` (§5.7) are the only
@@ -479,7 +480,9 @@ scanned — a callout is not a comment — and its `section` is the heading abov
 
 1. **Accepted syntax:** `![alt](rel/path.png)`, `![[image.png]]`,
    `![[image.png|alt]]` — and `[text](rel/path.pdf)`, a **plain** link naming a
-   non-`.md` file, whose link text is its `alt`. The leading `!` says how a
+   non-`.md` file, whose link text is its `alt`. An image written *inside* a
+   link's text, `[![alt](thumb.png)](full.png)`, is two references: the
+   thumbnail and whatever the link points at (§5.1). The leading `!` says how a
    renderer displays the file, not whether the vault holds it, so both
    spellings are the same reference here and make the same node and the same
    edge; a vault of 48 `[download](tool.zip)` links would otherwise produce
