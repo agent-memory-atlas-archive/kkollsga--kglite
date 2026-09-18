@@ -379,13 +379,16 @@ fn parse_hubs(v: &Value) -> Result<BTreeMap<String, HubSpec>, String> {
             }
         }
         // The built-in tag hub's shape is the default for a hub that names
-        // only what it changes, so `tags: {case_insensitive: true}` is the
-        // whole redeclaration §7 promises.
+        // only what it changes, so `tags: {label: Topic}` is the whole
+        // redeclaration §7 promises — and it keeps the folding the built-in
+        // declares, where a key naming no built-in hub starts unfolded.
         let label = opt_string(spec, "label")?.unwrap_or_else(|| TAG_LABEL.to_string());
         let edge = opt_string(spec, "edge")?.unwrap_or_else(|| TAGGED_CONN_TYPE.to_string());
         let case_insensitive = match spec.get("case_insensitive") {
             Some(Value::Boolean(b)) => *b,
-            None | Some(Value::Null) => false,
+            None | Some(Value::Null) => {
+                crate::okf::model::vault_builtin_hub(key).is_some_and(|h| h.case_insensitive)
+            }
             Some(other) => {
                 return Err(format!(
                     "`hubs.{key}.case_insensitive` must be a boolean, not {}",

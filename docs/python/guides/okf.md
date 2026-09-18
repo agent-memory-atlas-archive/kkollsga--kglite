@@ -117,7 +117,8 @@ filename stems so a folder move keeps a note's identity, bodies are stored,
 frontmatter lists stay lists, wikilink-valued frontmatter keys become typed
 edges, a note's `aliases:` answer link resolution, every body link carries its
 enclosing heading as a `section` edge property, inline `#tags` join the same
-`Tag` hub as `tags:`, folder notes build a hierarchy, and referenced images
+`Tag` hub as `tags:` (case-insensitively, as in Obsidian — `#Seismic` and
+`#seismic` are one tag), Obsidian's own `cssclasses:` is ignored, folder notes build a hierarchy, and referenced images
 become `Image` nodes you fetch as files rather than bytes in the graph. A `.kglite/vault.yaml`
 in the vault root declares property types, indexes, text indexes, an ontology
 and embed targets, and is re-applied on every rebuild.
@@ -131,9 +132,16 @@ a table under a declared heading becomes one node per row (or, with
 `edges: true`, one *edge* per row carrying the other columns as edge
 properties). The ids are Obsidian's own — `[[Page#Heading]]`, `[[Page#^block]]`
 — so every derived node stays linkable from any note and navigable in Obsidian.
-Nothing is rewritten and no file is added; the block is opt-in, and a vault
-without one builds exactly as before. VAULT.md §7.1 specifies the keys and §13
-is the modelling guide for a converter deciding what to emit.
+A heading that is really a symbol name is relabelled in place by
+`key_from_heading:`; `inherit:` copies the note's own properties onto every
+derived node, `embed_text:` renders the string those nodes are embedded and
+searched on, and `edge_defaults:` stamps a constant property on every edge of a
+type. Nothing is rewritten and no file is added; the block is opt-in, and a
+vault without one builds exactly as before. VAULT.md §7.1 specifies the keys
+and §13 is the modelling guide for a converter deciding what to emit —
+including the loop to convert by: a fifty-page sample, `kglite okf check <dir>
+--strict`, the per-label counts read against what the sample holds, then fix
+the converter rather than the vault.
 
 The format is specified in
 [VAULT.md](https://kglite.readthedocs.io/en/latest/reference/vault-format.html),

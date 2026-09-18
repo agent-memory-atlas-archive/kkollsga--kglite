@@ -248,6 +248,7 @@ with no frontmatter properties, so one bad file never costs the rest.
 | `tags` | Tag hub membership (§5.5). Stored as a list property. |
 | `kg_skip` | `true` excludes the file from the build. |
 | `parent` | Additional parents (§4.3). Not stored as a property. |
+| `cssclasses` | Obsidian's own styling key: which CSS snippets render this note. Ignored — no property, no edge (§4.3), no hub (§7). |
 
 Every other key becomes a node property, or edges under the rule in §4.3.
 
@@ -1429,6 +1430,11 @@ that follows it produces a vault this spec describes.
   rasterise it when you build the source (§6).
 - **The same heading text twice in one note.** Obsidian can link only the first
   and so can this spec; the second takes a `~2` id and a warning. Add a block id.
+- **`[`, `]`, `|` or `#` inside a heading you link to.** `[[Note#Heading]]` has
+  no escape for any of them: `#` starts the next path component, `|` starts the
+  display text, and `[[`/`]]` end the link. The section is still built; it is
+  the *link* that cannot be written. Rename the heading, or cite a `^blockid`
+  on the paragraph below it.
 
 ### 13.3 A `structure:` block to start from
 

@@ -79,3 +79,67 @@ fn vault_dates_reach_the_graph_as_temporal_columns() {
         ))
     );
 }
+
+/// Obsidian's own `cssclasses:` names a stylesheet, not a fact about the
+/// note, and VAULT.md §4.1 reserves it: no property, and — its value being a
+/// list of strings — no typed edge either when a vault writes one that looks
+/// like a wikilink.
+#[test]
+fn a_vault_ignores_the_cssclasses_key() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "x.md",
+        "---\ncssclasses:\n- wide-table\ncssclasses.theme: dark\nkeep: yes\n---\nbody",
+    );
+    write(dir.path(), "y.md", "---\ncssclasses: \"[[x]]\"\n---\nbody");
+    let opts = BuildOptions::for_dialect(crate::okf::Dialect::Obsidian);
+    let out = build(dir.path(), &opts).unwrap();
+    let g = &out.graph;
+    let x = g
+        .graph
+        .node_indices()
+        .find(|&n| {
+            matches!(g.node_view(n).map(|nd| nd.id().into_owned()),
+                Some(Value::String(id)) if id == "x")
+        })
+        .unwrap();
+    assert_eq!(
+        GraphRead::get_node_property(&g.graph, x, InternedKey::from_str("cssclasses")),
+        None
+    );
+    assert_eq!(
+        GraphRead::get_node_property(&g.graph, x, InternedKey::from_str("cssclasses.theme")),
+        None,
+        "the dotted keys a nested spelling flattens to go with it"
+    );
+    assert_eq!(
+        GraphRead::get_node_property(&g.graph, x, InternedKey::from_str("keep")),
+        Some(Value::String("yes".into())),
+        "only the ignored key leaves"
+    );
+    assert_eq!(
+        out.report.edges_by_type.get("CSSCLASSES"),
+        None,
+        "a wikilink-shaped value never reaches the typed-edge rule"
+    );
+}
+
+/// The key is reserved in a **vault**, not in a bundle: `okf`/`loose` have no
+/// Obsidian to render for, and a producer writing `cssclasses:` there means
+/// whatever it means.
+#[test]
+fn an_okf_bundle_stores_cssclasses_like_any_other_key() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "x.md",
+        "---\ntype: Note\ncssclasses: wide-table\n---\nbody",
+    );
+    let g = build(dir.path(), &BuildOptions::default()).unwrap().graph;
+    let n = g.graph.node_indices().next().unwrap();
+    assert_eq!(
+        GraphRead::get_node_property(&g.graph, n, InternedKey::from_str("cssclasses")),
+        Some(Value::String("wide-table".into()))
+    );
+}

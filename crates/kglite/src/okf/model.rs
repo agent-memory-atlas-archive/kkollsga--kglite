@@ -217,6 +217,12 @@ pub struct Profile {
     /// producers (codingest, Claude memories) write those keys to their own
     /// conventions.
     pub reserved_key_shapes: bool,
+    /// Read by `crate::okf::parse_file`: frontmatter keys this profile drops
+    /// outright — no property, no typed edge, no hub value (VAULT.md §4.1).
+    /// Obsidian's `cssclasses:` styles how a note renders and says nothing
+    /// about the knowledge in it; `okf`/`loose` have no such key and keep
+    /// whatever a producer wrote.
+    pub(crate) ignored_keys: &'static [&'static str],
     /// Read by [`crate::okf::structure::derive`]: what this vault derives from
     /// a note's own body — sections, chunks, callouts, fenced examples,
     /// ordered lists, and what decorates them (VAULT.md §7.1). `None` on every dialect and on every vault that
@@ -259,7 +265,7 @@ impl Default for Profile {
             folder_note_edge: FOLDER_NOTE_CONN_TYPE.to_string(),
             folder_note_direction: FolderNoteDirection::ChildToParent,
             folder_notes: false,
-            hubs: default_hubs(),
+            hubs: default_hubs(false),
             heading_edges: BTreeMap::new(),
             skip_dirs: Vec::new(),
             body_property: DEFAULT_BODY_PROPERTY.to_string(),
@@ -267,6 +273,7 @@ impl Default for Profile {
             attachments: false,
             path_safety: false,
             reserved_key_shapes: false,
+            ignored_keys: &[],
             structure: None,
             edge_defaults: BTreeMap::new(),
         }
@@ -299,6 +306,8 @@ impl Profile {
             attachments: true,
             path_safety: true,
             reserved_key_shapes: true,
+            ignored_keys: VAULT_IGNORED_KEYS,
+            hubs: default_hubs(true),
             ..Profile::default()
         }
     }
@@ -320,20 +329,36 @@ impl Profile {
 
 /// The one hub every dialect has: `tags:` → `Tag` nodes joined by `TAGGED`.
 ///
-/// Case-**sensitive**, because tag identity has always been the string the
-/// frontmatter spelled; folding it would silently merge two existing `Tag`
-/// nodes in every bundle already built. A vault that wants folding declares
-/// the hub again in `.kglite/vault.yaml` with `case_insensitive: true`.
-fn default_hubs() -> BTreeMap<String, HubSpec> {
+/// Folded in a **vault**, where `#Seismic` and `#seismic` are one tag as they
+/// are in Obsidian (VAULT.md §5.5), and case-**sensitive** in an `okf`/`loose`
+/// bundle, where tag identity has always been the string the frontmatter
+/// spelled and folding it would merge two existing `Tag` nodes in every bundle
+/// already built. Either default is redeclarable in `.kglite/vault.yaml` with
+/// `hubs: {tags: {case_insensitive: …}}`.
+fn default_hubs(case_insensitive: bool) -> BTreeMap<String, HubSpec> {
     BTreeMap::from([(
         "tags".to_string(),
         HubSpec {
             label: TAG_LABEL.to_string(),
             edge: TAGGED_CONN_TYPE.to_string(),
-            case_insensitive: false,
+            case_insensitive,
         },
     )])
 }
+
+/// The built-in hub a `.kglite/vault.yaml` redeclaration merges over, when
+/// the key names one (VAULT.md §7). A redeclaration states only what it
+/// changes, so `hubs: {tags: {label: Topic}}` has to keep the vault default's
+/// folding rather than silently returning tag identity to case-sensitive.
+pub(crate) fn vault_builtin_hub(key: &str) -> Option<HubSpec> {
+    default_hubs(true).get(key).cloned()
+}
+
+/// VAULT.md §4.1's ignored keys: frontmatter a vault writes for Obsidian
+/// itself, which describes the *rendering* rather than the knowledge. Storing
+/// `cssclasses:` would put a stylesheet name on the node and — its value being
+/// a list — offer it to the typed-edge rule as well.
+const VAULT_IGNORED_KEYS: &[&str] = &["cssclasses"];
 
 /// Options controlling a bundle build.
 #[derive(Debug, Clone)]

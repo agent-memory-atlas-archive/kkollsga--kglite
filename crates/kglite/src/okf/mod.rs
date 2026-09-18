@@ -265,6 +265,21 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         return Ok(None);
     }
 
+    // The keys a profile ignores outright (VAULT.md §4.1) leave before the
+    // typed-edge rule, the hubs and `props` can see them — with the dotted
+    // keys a nested-map spelling flattened to, so "not stored" holds whatever
+    // shape the value had.
+    if !profile.ignored_keys.is_empty() {
+        fm.retain(|key, _| {
+            !profile.ignored_keys.iter().any(|ignored| {
+                key.as_str() == *ignored
+                    || key
+                        .strip_prefix(ignored)
+                        .is_some_and(|rest| rest.starts_with('.'))
+            })
+        });
+    }
+
     // Id (VAULT.md §3): the path, or — in a vault — a declared `id:` falling
     // back to the filename stem. A declared id is the node's identity, not a
     // property, so it leaves the frontmatter map; `resolve_ids` settles any

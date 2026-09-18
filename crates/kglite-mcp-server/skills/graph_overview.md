@@ -14,25 +14,11 @@ references_properties: []
 auto_inject_hint: true
 ---
 
-> **Code-graph workflow — do these in order:** **1** `graph_overview` (map the schema) · **2** `cypher_query` (structure: defs, callers, members, types, counts, paths) · **3** `grep` (literal text ONLY — log strings, comments, config keys) · **4** `read_source` / `read_code_source(qualified_name=…)` (read bodies, cite lines).
->
-> **Never `grep` for a definition, caller, or call site — that is a `cypher_query` question.** The graph already resolved the cross-file relationships grep can't see.
-
 # `graph_overview` methodology
 
 ## Overview
 
 `graph_overview` returns an XML schema description of the active graph — every node type with its property catalogue (including one example value per property), every edge type with source/target shapes and counts. It is the **schema discovery tool**: call it before reasoning about a graph you don't already know. The output is small (< 4 KB for typical graphs, configurable for huge ones) and forms the basis of every well-shaped Cypher query.
-
-## Quick Reference
-
-| Task | Call |
-|---|---|
-| First contact with an unfamiliar graph | `graph_overview()` — no args |
-| Drill into one node type's property catalogue | `graph_overview(types=['Function'])` |
-| See connectivity (which types connect via which edges) | `graph_overview(connections=True)` |
-| Read the Cypher reference before a query | `graph_overview(cypher=['MATCH', 'WHERE'])` |
-| Pre-flight a hypothesis | drill into the type you're about to query, look at `vals=` / `sample=` for properties |
 
 ## Reading the output
 
@@ -96,12 +82,6 @@ The `cypher:` parameter selects reference topics; it accepts `true` for the full
 ❌ Ignoring the `sample="..."` attribute on properties. The agent guesses `WHERE n.path CONTAINS 'foo'` when the actual property is `file_path` (with example shown in `sample=`). Read the schema; don't reconstruct it.
 
 ❌ Using `connections=True` only — without bare overview first you don't have property context. Bare → drill → connections is the natural escalation, not connections-first.
-
-✅ Bare `graph_overview()` first thing every session. Cache mentally; re-call if the shape stops making sense.
-
-✅ Read `vals=` and `sample=` carefully — they're the agent's authoritative source for "what does this property's value actually look like?"
-
-✅ Drill into `types=['<one type>']` when you're about to write Cypher against that specific label. The full property catalogue + sample values is what makes the next query correct on the first attempt.
 
 ## Behaviour notes
 

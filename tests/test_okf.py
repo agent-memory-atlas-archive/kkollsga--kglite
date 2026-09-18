@@ -500,7 +500,8 @@ class TestVaultGoldenBundle:
     def test_hub_nodes_carry_a_title(self):
         g = self.build()
         rows = g.cypher("MATCH (t:Tag) RETURN t.id AS id, t.title AS title ORDER BY id").to_list()
-        # The built-in tag hub is case-sensitive, so each title is its id.
+        # The built-in tag hub folds casing in a vault, and this fixture
+        # writes every tag in one casing, so each title is its own id.
         assert rows == [
             {"id": "field-work", "title": "field-work"},
             {"id": "geoscience", "title": "geoscience"},

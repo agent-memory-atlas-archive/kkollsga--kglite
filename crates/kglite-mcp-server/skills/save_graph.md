@@ -18,16 +18,6 @@ applies_when:
 
 `save_graph` writes the active graph back to its bound `.kgl` file. It is the **persistence tool** — call it once after a coherent chain of mutations the user wants kept. The tool registers when the manifest declares `builtins.save_graph: true` or the server is write-enabled with `--writable` / `extensions.writable: true`. The `builtins.save_graph` switch alone exposes save for already-dirty or boot-configured graph state; it does not authorize Cypher mutations.
 
-## Quick Reference
-
-| Task | Approach |
-|---|---|
-| After CREATE/SET/DELETE the user wants kept | `save_graph()` — no args |
-| User said "save" / "commit" | `save_graph()` |
-| Each mutation in a long chain | NO — save once at the end, not per-statement |
-| Read-only exploration | Don't call. Tool likely isn't registered anyway. |
-| Any storage mode with changes to publish | `save_graph()` — persistence still requires an explicit save |
-
 ## When the tool isn't registered
 
 If neither `builtins.save_graph: true` nor writable mode enables the route, `save_graph` won't appear in `tools/list`. If the user asks to save changes and the tool isn't available, surface the gate clearly:
@@ -50,23 +40,11 @@ What does NOT get saved:
 - Source-tool bindings (`source_roots`, watch handles — these are session state)
 - Workspace state (clone inventory, active repo path — those live in their own files)
 
-## When not to publish mutations
+## When to call it
 
-If the operator's intent is **try-it-and-see** mutations (a Cypher CREATE to see what the schema looks like with a hypothetical node, or a SET to test a query against modified data), don't call `save_graph` proactively. The next server restart will discard the changes, which is the right behaviour. Save only when the user explicitly says "save" / "commit" / "make this permanent."
+Once, after a coherent chain: CREATE → SET → SET → DELETE → `save_graph()`. Each call writes the whole file, so saving per statement writes it three times over for one change. Every storage mode works this way — a disk-backed mutation is session state until a save publishes it.
 
-## Common Pitfalls
-
-❌ Calling `save_graph` after every CREATE statement. Each call does a full file write; chain three CREATEs and you've done three full writes. Save once at the end.
-
-❌ Calling `save_graph` proactively after a read query. Read queries don't mutate; save is a no-op but signals intent the user didn't have.
-
-❌ Trying to pass an output path to `save_graph`. The tool publishes to the bound path and has no `to_path` argument. On a write-enabled server, use `save_graph_as` for another path.
-
-❌ Assuming a disk-backed mutation is already published. Disk storage changes session state; call `save_graph` to publish the coherent change set just as you would for other storage modes.
-
-✅ Save after a chain. CREATE → SET → SET → DELETE → `save_graph()`. One write, one persistent change.
-
-✅ Surface the manifest gate when save isn't available. The operator can flip `builtins.save_graph: true` and restart; that's a clean recovery path.
+If the operator's intent is **try-it-and-see** mutations (a Cypher CREATE to see what the schema looks like with a hypothetical node, or a SET to test a query against modified data), don't call `save_graph` proactively, and don't call it after a read query at all. The next server restart discards uncommitted changes, which is the right behaviour. Save when the user says "save" / "commit" / "make this permanent."
 
 ## Sharing the file with other servers
 
@@ -86,8 +64,3 @@ The server holds the cross-process writer lease only **between your first unsave
 - **"…has unsaved changes"** (from `reload_graph` / `load_graph` / `create_graph`) — you asked to replace the active graph while holding work that only exists in memory. `save_graph` first to keep it, or `reload_graph(discard_unsaved=true)` to drop it. That flag is the *only* spelling for "throw it away"; the other two tools deliberately have no discard argument.
 - **OSError on write** — disk full, permission denied, file removed. Surface to the user verbatim; the tool returns the underlying error message.
 - **Read-only graph** — if the operator booted with a graph marked read-only (rare; via `KnowledgeGraph(read_only=True)`), the in-memory mutations would have failed earlier. Save can't fix that.
-
-## When `save_graph` is the wrong tool
-
-- **Workspace mode** — the active graph is a code graph built from cloned source, not a `.kgl` file. The graph is rebuilt every time the workspace is re-activated; persistence isn't the right model here.
-- **Read-only session** — if the operator's manifest doesn't enable save, the tool won't appear, and the session is read-only by design. Respect it.

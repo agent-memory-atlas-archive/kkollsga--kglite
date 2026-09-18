@@ -118,6 +118,32 @@ before upgrading.
 
 ### Changed
 
+- **Tag identity is case-insensitive in an Obsidian vault.** `#Seismic`,
+  `#seismic` and a frontmatter `Seismic` are one `Tag` node, held under the
+  lowercased id and titled with the casing the vault used most often — the rule
+  Obsidian itself applies (`VAULT.md` §5.5). A vault that wants the spellings
+  apart declares `hubs: {tags: {case_insensitive: false}}`, and a
+  redeclaration that is silent about the key keeps the fold. `okf` and `loose`
+  bundles are unchanged: tag identity there is still the string the
+  frontmatter spelled.
+- **Obsidian's own `cssclasses:` is ignored in a vault** (`VAULT.md` §4.1). It
+  names the CSS snippets a note renders with, so it became a list property on
+  the node — and, being a list of strings, one that the typed-edge rule would
+  read as edges if a vault ever wrote a wikilink there. It is now reserved:
+  no property, no edge, no hub. `okf`/`loose` bundles still store it like any
+  other key.
+- **The bundled `vault_authoring` MCP skill teaches the structure profile.**
+  It now carries the `VAULT.md` §13 modelling guide condensed — what to write
+  so a source corpus's sections, chunks, callouts, fences, procedures and
+  parameter tables arrive as nodes, which `structure:` key declares each, and
+  the anti-patterns that arrive as nothing (raw HTML tables, JSON-encoded
+  lists, unaddressable headings) — plus the `kglite okf check --strict` loop.
+  Its neighbours paid for the bytes: `graph_overview` no longer opens with the
+  code-graph workflow preamble that `code_graph_analysis`, `explore` and
+  `read_code_source` each carry already (it was shipping codebase methodology
+  to every document deployment), and `save_graph` loses two sections that
+  restated its own prose. Every deployment shape resolves fewer skill bytes
+  than before.
 - **The export's `edge_properties_dropped` no longer counts an edge whose
   target the export does not write.** The count ran before the target lookup,
   so the properties of every `HAS_IMAGE`, `HAS_ATTACHMENT` and hub edge were

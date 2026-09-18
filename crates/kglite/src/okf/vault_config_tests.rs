@@ -396,17 +396,38 @@ fn a_declared_hub_folds_casing_and_keeps_the_built_in_tag_hub() {
         "declaring a hub adds to the built-in `tags` one, it does not replace it"
     );
 
-    // …and `tags` itself can be redeclared, naming only what changes.
-    let folded = vault_with(
-        Some("kglite_vault: 1\nhubs: {tags: {case_insensitive: true}}\n"),
+    // …and `tags` itself can be redeclared, naming only what changes: the
+    // built-in's own folding survives a redeclaration that is silent about it.
+    let relabelled = vault_with(
+        Some("kglite_vault: 1\nhubs: {tags: {label: Topic}}\n"),
         &[("a.md", "---\ntags: [Seismic, seismic]\n---\nprose")],
     );
-    let out = build_vault(&folded);
-    assert_eq!(out.report.nodes_by_label.get("Tag"), Some(&1));
+    let out = build_vault(&relabelled);
+    assert_eq!(out.report.nodes_by_label.get("Topic"), Some(&1));
     assert_eq!(
-        title(&out, "Tag", "seismic").as_deref(),
+        title(&out, "Topic", "seismic").as_deref(),
         Some("Seismic"),
         "a tie in frequency settles alphabetically"
+    );
+
+    // A vault that wants the two spellings apart says so, and only `tags`
+    // starts folded — a fresh key does not inherit anything.
+    let split = vault_with(
+        Some(
+            "kglite_vault: 1\nhubs:\n  tags: {case_insensitive: false}\n  \
+             keywords: {label: Keyword, edge: HAS_KEYWORD}\n",
+        ),
+        &[(
+            "a.md",
+            "---\ntags: [Seismic, seismic]\nkeywords: [Faults, faults]\n---\nprose",
+        )],
+    );
+    let out = build_vault(&split);
+    assert_eq!(out.report.nodes_by_label.get("Tag"), Some(&2));
+    assert_eq!(
+        out.report.nodes_by_label.get("Keyword"),
+        Some(&2),
+        "`case_insensitive` defaults to false for a key naming no built-in hub"
     );
 }
 

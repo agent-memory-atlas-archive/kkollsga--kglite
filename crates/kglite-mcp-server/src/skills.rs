@@ -1308,26 +1308,37 @@ mod recipe_skill_tests {
 
 #[cfg(test)]
 mod bundled_skill_body_tests {
-    /// The generic `cypher_query` skill ships to every deployment — shipping,
-    /// legal, maritime — with no `applies_when` gate, because Cypher applies
-    /// to any graph. Code-graph *methodology* does not: it opened with the
-    /// four-step code-graph workflow and "Never `grep` for a definition",
-    /// ~1.5k tokens of instruction about a codebase, delivered verbatim to a
-    /// graph of vessels. That content already lives in `code_graph_analysis`,
-    /// which gates on `graph_has_node_type: [Function, Class]` and reaches
-    /// the readers it is for.
+    /// The unconditionally bundled skills ship to every deployment — shipping, legal, maritime — with no `applies_when` gate,
+    /// because a graph and a Cypher query are what they are about. Code-graph
+    /// *methodology* is not: `cypher_query` opened with the four-step
+    /// code-graph workflow and "Never `grep` for a definition", ~1.5k tokens
+    /// of instruction about a codebase delivered verbatim to a graph of
+    /// vessels, and `graph_overview` carried the same preamble until the
+    /// vault skill needed the bytes. That content already lives in
+    /// `code_graph_analysis`, `explore` and `read_code_source`, each gated on
+    /// `graph_has_node_type: [Function, Class]`, so every reader it is for
+    /// still gets it.
     #[test]
-    fn the_generic_cypher_skill_carries_no_code_graph_preamble() {
-        let body = include_str!("../skills/cypher_query.md");
-        for marker in [
-            "Never `grep`",
-            "Code-graph workflow",
-            "read_code_source(qualified_name=…)",
+    fn the_always_bundled_skills_carry_no_code_graph_preamble() {
+        for (name, body) in [
+            ("cypher_query", include_str!("../skills/cypher_query.md")),
+            (
+                "graph_overview",
+                include_str!("../skills/graph_overview.md"),
+            ),
+            ("save_graph", include_str!("../skills/save_graph.md")),
+            ("fetch_images", include_str!("../skills/fetch_images.md")),
         ] {
-            assert!(
-                !body.contains(marker),
-                "cypher_query.md still carries code-graph methodology: {marker:?}"
-            );
+            for marker in [
+                "Never `grep`",
+                "Code-graph workflow",
+                "read_code_source(qualified_name=…)",
+            ] {
+                assert!(
+                    !body.contains(marker),
+                    "{name}.md still carries code-graph methodology: {marker:?}"
+                );
+            }
         }
         // The gated skill is where it belongs, and still has it.
         let gated = include_str!("../skills/code_graph_analysis.md");

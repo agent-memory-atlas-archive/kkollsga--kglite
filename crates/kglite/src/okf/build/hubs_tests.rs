@@ -91,21 +91,77 @@ fn a_case_sensitive_hub_keeps_every_spelling_apart() {
     assert_eq!(out.report.edges_by_type.get("HAS_KEYWORD"), Some(&5));
 }
 
+/// A vault folds tag casing because Obsidian does (VAULT.md §5.5): `#Seismic`
+/// and `seismic` are one tag, held under the lowercased id and titled with the
+/// casing the vault used most often.
 #[test]
-fn the_tag_hub_is_case_sensitive_in_every_dialect() {
+fn the_tag_hub_folds_casing_in_a_vault() {
     let dir = tempdir().unwrap();
     write(dir.path(), "a.md", "---\ntags: [Seismic, seismic]\n---\nx");
+    write(
+        dir.path(),
+        "b.md",
+        "---\ntags: [seismic]\n---\nAnd inline #SEISMIC.",
+    );
     let out = vault_build(dir.path());
+    assert_eq!(
+        nodes_with_titles(&out.graph, TAG_LABEL),
+        vec![("seismic".to_string(), "seismic".to_string())],
+        "one tag, titled with the casing the vault used most often"
+    );
+    assert_eq!(
+        out.report.edges_by_type.get(TAGGED_CONN_TYPE),
+        Some(&2),
+        "two spellings in one note, and a third form inline, are one \
+         membership each"
+    );
+}
+
+/// And an `okf`/`loose` bundle does not: tag identity there has always been
+/// the string the frontmatter spelled, and folding it would merge two `Tag`
+/// nodes in every bundle already built.
+#[test]
+fn the_tag_hub_keeps_casing_apart_in_a_bundle() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "a.md",
+        "---\ntype: Note\ntags: [Seismic, seismic]\n---\nx",
+    );
+    let out = build(
+        dir.path(),
+        &BuildOptions::for_dialect(crate::okf::Dialect::Okf),
+    )
+    .unwrap();
     assert_eq!(
         nodes_with_titles(&out.graph, TAG_LABEL),
         vec![
             ("Seismic".to_string(), "Seismic".to_string()),
             ("seismic".to_string(), "seismic".to_string()),
-        ],
-        "folding tag identity would silently merge nodes in every bundle \
-         already built; a vault that wants it declares the hub again"
+        ]
     );
     assert_eq!(out.report.edges_by_type.get(TAGGED_CONN_TYPE), Some(&2));
+}
+
+/// A vault that wants the two kept apart redeclares the hub, which is the
+/// same mechanism any other hub uses — so the fold is a default, not a rule.
+#[test]
+fn a_vault_can_redeclare_the_tag_hub_case_sensitive() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "a.md", "---\ntags: [Seismic, seismic]\n---\nx");
+    let out = vault_build_with(dir.path(), |p| {
+        p.hubs
+            .get_mut("tags")
+            .expect("the built-in hub")
+            .case_insensitive = false;
+    });
+    assert_eq!(
+        nodes_with_titles(&out.graph, TAG_LABEL),
+        vec![
+            ("Seismic".to_string(), "Seismic".to_string()),
+            ("seismic".to_string(), "seismic".to_string()),
+        ]
+    );
 }
 
 #[test]
