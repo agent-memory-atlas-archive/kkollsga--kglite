@@ -1762,9 +1762,15 @@ mod tests {
         assert!(attach(&got).is_empty());
         assert_eq!(got.tags, vec!["kept"]);
 
-        // A code span may be opened on one line and closed on the next, which
-        // the line-local tag mask cannot see and the block tree can.
-        let wrapped = extract("`[[ghost]]\nstill code` then [[atlas]]\n", "", &vault());
+        // A code span may be opened on one line and closed on the next. The
+        // line-local tag mask cannot see that — each line carries one
+        // unmatched backtick, which masks only itself — so the second line's
+        // `#hidden` is a tag to it and not to the block tree.
+        let wrapped = extract(
+            "`[[ghost]]\n#hidden still code` then [[atlas]] #kept\n",
+            "",
+            &vault(),
+        );
         assert_eq!(
             wrapped
                 .links
@@ -1773,6 +1779,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["atlas"]
         );
+        assert_eq!(wrapped.tags, vec!["kept"]);
 
         // CommonMark, not an Obsidian rule: the okf dialect reads a code span
         // the same way.
@@ -1827,9 +1834,10 @@ mod tests {
     }
 
     /// A `#` glued to a closing backtick is glued, not preceded by whitespace,
-    /// so it is not a tag. That survives the mask because the mask leaves the
-    /// backticks themselves alone and writes NUL, not a space: either choice
-    /// reversed and the glued `#` reads as a tag.
+    /// so it is not a tag (VAULT.md §5.5). The mask must not change that, and
+    /// it cannot while it leaves the backticks alone and writes a character
+    /// that is not whitespace — a mask that did both would turn this line's
+    /// `#glued` into a tag. This is what pins the pair.
     #[test]
     fn a_hash_glued_to_a_code_span_is_still_not_a_tag() {
         let got = extract("`code`#glued and #free\n", "", &vault());

@@ -57,10 +57,11 @@ const SPELLING: &[u8] = b"[]()!#";
 /// offsets still index the author's own text (which is what the label, the
 /// target and the title are read from).
 ///
-/// The backticks themselves are left alone and the replacement is NUL rather
-/// than a space, so nothing the mask writes can read as a word boundary: a `#`
-/// glued to a closing backtick is glued, not preceded by whitespace, which is
-/// what `links::scan_tags` looks at to decide it is not a tag.
+/// Only the spelling characters are replaced — the backticks are not among
+/// them and stay where the author put them, so the text around a span reads
+/// exactly as it did, `#` glued to a closing backtick included. The
+/// replacement is NUL because no note writes one, so a masked position can
+/// never be mistaken for something the author typed.
 pub(crate) fn mask_code_spans<'a>(body: &'a str, tree: &BlockTree) -> Cow<'a, str> {
     if tree.code_spans.is_empty() {
         return Cow::Borrowed(body);

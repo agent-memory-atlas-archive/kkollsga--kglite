@@ -241,6 +241,19 @@ class TestVaultGoldenBundle:
     def build(self):
         return okf.build(str(VAULT_BUNDLE), dialect="obsidian")
 
+    def test_validate_reads_a_vault_without_being_told_to(self):
+        # VAULT.md §9: `okf.validate` is the Python half of `kglite okf check`,
+        # which has always read a directory as a vault. It defaulted to `okf`
+        # instead, so the same call resolved no wikilink, minted no `Tag`, read
+        # no `vault.yaml` — and reported a *healthier* vault than the command
+        # did. `okf.build` still defaults to `okf`, which is what the third
+        # assertion pins: the two entry points differ on purpose.
+        default = okf.validate(str(VAULT_BUNDLE))
+        vault = okf.validate(str(VAULT_BUNDLE), dialect="obsidian")
+        bundle = okf.validate(str(VAULT_BUNDLE), dialect="okf")
+        assert default.counts == vault.counts and default.warnings == vault.warnings
+        assert default.counts != bundle.counts
+
     def test_label_ladder(self):
         # `type:` → `default_label` → top-level folder → `Note`. The vault
         # declares `default_label: Article`, which sits ahead of the folder
