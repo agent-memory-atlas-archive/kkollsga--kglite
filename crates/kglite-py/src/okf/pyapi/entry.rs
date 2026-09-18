@@ -27,8 +27,19 @@ impl Keywords {
     /// dialect-carried default reaches the wheel without a code change here.
     /// `None` for the two dialect-defaulted flags means "keep what the profile
     /// chose"; passing either explicitly overrides it in both directions.
-    fn options(self) -> BuildOptions {
-        let mut opts = BuildOptions::for_dialect(Dialect::parse(self.dialect.as_deref()));
+    ///
+    /// `default` is the dialect an omitted `dialect=` keyword picks, and it is
+    /// **not** the same for every entry point: `validate` is the vault checker
+    /// and defaults to `obsidian`, matching `kglite okf check`, while `build`
+    /// and the lifecycle pair keep `okf` for the bundle callers that have
+    /// always relied on it. An unrecognised *name* still falls back to `okf`,
+    /// as `Dialect::parse` defines.
+    fn options(self, default: Dialect) -> BuildOptions {
+        let dialect = match self.dialect.as_deref() {
+            Some(name) => Dialect::parse(Some(name)),
+            None => default,
+        };
+        let mut opts = BuildOptions::for_dialect(dialect);
         if let Some(v) = self.require_frontmatter {
             opts.require_frontmatter = v;
         }
@@ -43,8 +54,9 @@ impl Keywords {
 
 /// Build a KnowledgeGraph from an OKF bundle directory.
 ///
-/// The `dialect` picks the conventions: `"okf"` (default), `"loose"`, or
-/// `"obsidian"` for the vault format specified in VAULT.md. Defaults for
+/// The `dialect` picks the conventions: `"okf"` (this function's default),
+/// `"loose"`, or `"obsidian"` for the vault format specified in VAULT.md —
+/// which is what `validate` defaults to instead. Defaults for
 /// `require_frontmatter` and `with_body` come from the dialect when they are
 /// left unset; every other keyword is dialect-independent. See the stub for
 /// the full contract.
@@ -66,7 +78,7 @@ pub fn build(
         skip_dirs,
         with_body,
     }
-    .options();
+    .options(Dialect::Okf);
     py.detach(|| crate::okf::build(&path, &opts))
         .map(|out| KnowledgeGraph::from_arc(out.graph))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
@@ -75,8 +87,9 @@ pub fn build(
 /// Check a vault and return the build report without keeping the graph.
 ///
 /// Runs the same read `build` runs, so what it reports is what a build would
-/// do. `strict` decides the report's `ok` only, never what it found. See the
-/// stub for the full contract.
+/// do, and reads a vault by default (`dialect="obsidian"`, as `kglite okf
+/// check` does) where `build` defaults to `okf`. `strict` decides the report's
+/// `ok` only, never what it found. See the stub for the full contract.
 #[pyfunction]
 #[pyo3(signature = (path, *, dialect=None, strict=false, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
 // One parameter per Python keyword: the stub mirrors this signature verbatim.
@@ -98,7 +111,7 @@ pub fn validate(
         skip_dirs,
         with_body,
     }
-    .options();
+    .options(Dialect::Obsidian);
     py.detach(|| crate::okf::validate(&path, &opts))
         .map(|report| VaultReport::new(report, strict))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
@@ -126,7 +139,7 @@ pub fn fingerprint(
         skip_dirs,
         with_body,
     }
-    .options();
+    .options(Dialect::Okf);
     py.detach(|| crate::okf::fingerprint(&path, &opts))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
@@ -157,7 +170,7 @@ pub fn rebuild_if_changed(
         skip_dirs,
         with_body,
     }
-    .options();
+    .options(Dialect::Okf);
     // An explicit `embedder=` is wrapped like `set_embedder`'s; otherwise the
     // graph's own bound model is used, so a caller who has already registered
     // one does not register it twice.

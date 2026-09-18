@@ -127,6 +127,14 @@ before upgrading.
 
 ### Changed
 
+- **`okf.validate(path)` reads a directory as a vault by default.** It is the
+  Python half of `kglite okf check`, which has always defaulted to
+  `dialect="obsidian"`, while `okf.validate` defaulted to `"okf"` — so the same
+  directory checked from Python resolved no wikilink, minted no `Tag`, read no
+  `.kglite/vault.yaml`, and reported a *healthier* vault than the command did
+  (`VAULT.md` §9). `okf.build` keeps its `okf` default, so a bundle is now
+  validated with an explicit `dialect="okf"` — the same keyword its build
+  already passes.
 - **Tag identity is case-insensitive in an Obsidian vault.** `#Seismic`,
   `#seismic` and a frontmatter `Seismic` are one `Tag` node, held under the
   lowercased id and titled with the casing the vault used most often — the rule

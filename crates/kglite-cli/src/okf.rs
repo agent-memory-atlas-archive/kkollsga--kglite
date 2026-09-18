@@ -27,7 +27,8 @@ pub(crate) enum OkfCommand {
     Check {
         /// Path to the vault directory.
         directory: PathBuf,
-        /// Which conventions to read the directory with.
+        /// Which conventions to read the directory with; `okf.validate`
+        /// defaults to the same one, while `okf.build` defaults to `okf`.
         #[arg(long, value_enum, default_value_t = OkfDialect::Obsidian)]
         dialect: OkfDialect,
         /// Fail on warnings too — what a converter's own test suite wants.

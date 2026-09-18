@@ -41,7 +41,8 @@ def build(
 
     Args:
         path: Bundle root directory.
-        dialect: ``"okf"`` (default) for strict markdown links; ``"loose"`` to
+        dialect: ``"okf"`` (this function's default; :func:`validate` defaults
+            to ``"obsidian"`` instead) for strict markdown links; ``"loose"`` to
             also resolve ``[[wikilinks]]`` and tolerate concepts with no
             frontmatter ``type``; ``"obsidian"`` for the **vault** format
             specified in ``VAULT.md``, which changes several defaults:
@@ -315,7 +316,10 @@ def validate(
 
     Runs exactly the read :func:`build` runs — same walk, same parse, same
     resolution — and discards the graph, so what the report says is what a
-    build does. It is the Python half of ``kglite okf check``.
+    build does. It is the Python half of ``kglite okf check``, and it defaults
+    to the same dialect that command does: ``"obsidian"``, the vault format
+    this validates against. :func:`build` still defaults to ``"okf"``, so a
+    bundle caller passes ``dialect="okf"`` here to check what it builds.
 
     Findings are classified by ``VAULT.md`` §9. **Errors** mean the vault does
     not meet the spec: unparseable frontmatter, a misused reserved key, id
@@ -337,9 +341,11 @@ def validate(
 
     Args:
         path: Vault (or bundle) root directory.
-        dialect: As :func:`build`. The vault rules this checks against are the
-            ``"obsidian"`` ones; under ``"okf"`` / ``"loose"`` the report still
-            describes what was built, in those dialects' terms.
+        dialect: As :func:`build`, except that this function defaults to
+            ``"obsidian"`` — the vault rules it checks against, and what
+            ``kglite okf check`` reads a directory with. Under ``"okf"`` /
+            ``"loose"`` the report still describes what was built, in those
+            dialects' terms.
         strict: Promote every warning to a failure — the setting a converter's
             own test suite should use. It changes ``VaultReport.ok`` only:
             errors and warnings stay classified as ``VAULT.md`` §9 classifies
@@ -357,7 +363,7 @@ def validate(
 
     Example::
 
-        report = okf.validate("vault", dialect="obsidian", strict=True)
+        report = okf.validate("vault", strict=True)
         if not report.ok:
             print(report)
             raise SystemExit(1)

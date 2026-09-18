@@ -86,6 +86,27 @@ def test_json_parses_and_carries_the_same_verdict(warned_vault: Path):
     assert strict_payload["warnings"] == payload["warnings"]
 
 
+def test_the_library_default_reads_a_vault_exactly_as_the_command_does():
+    """VAULT.md §9: the two are one read, so they cannot start from two dialects.
+
+    `okf.validate` defaulted to `okf` while `kglite okf check` defaulted to
+    `obsidian`, so the Python half of the same check silently resolved no
+    wikilink, minted no `Tag`, read no `.kglite/vault.yaml` — and reported a
+    *healthier* vault than the command did on the same directory.
+    """
+    proc = _run("okf", "check", str(GOLDEN_VAULT), "--json")
+    printed = json.loads(proc.stdout)
+    report = okf.validate(str(GOLDEN_VAULT))
+    assert report.errors == printed["errors"]
+    assert report.warnings == printed["warnings"]
+    assert report.counts["nodes_by_label"] == printed["counts"]["nodes_by_label"]
+    assert report.counts["edges_by_type"] == printed["counts"]["edges_by_type"]
+    # …and the bundle dialect is still one keyword away, for a caller of
+    # `okf.build`, which keeps the `okf` default it has always had.
+    bundle = okf.validate(str(GOLDEN_VAULT), dialect="okf")
+    assert bundle.counts["nodes_by_label"] != report.counts["nodes_by_label"]
+
+
 def test_an_unknown_dialect_is_refused(clean_vault: Path):
     proc = _run("okf", "check", str(clean_vault), "--dialect", "obsidan")
     assert proc.returncode == 2

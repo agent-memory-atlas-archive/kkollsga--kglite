@@ -631,7 +631,7 @@ A complete example — a vendor help corpus of ~7k articles:
 ```yaml
 # .kglite/vault.yaml
 kglite_vault: 1
-default_label: Article
+default_label: Article  # outranks the folder rung — omit when folders are your labels
 body: body
 
 folder_notes:
@@ -1067,7 +1067,11 @@ wrong, there is simply less of it than the author intended.
 Every build produces a structured report. `okf.validate(path)` returns it
 without keeping the graph; `kglite okf check <dir>` prints it and sets the exit
 code. Both run the *same* read a build runs — the check is the build with the
-graph thrown away, never a second opinion about it.
+graph thrown away, never a second opinion about it — and both read a directory
+as a **vault** when no dialect is named: `dialect="obsidian"` is what
+`okf.validate` and `kglite okf check` default to, where `okf.build` defaults to
+`okf` for the bundle callers it has always served. A bundle is therefore
+checked with an explicit `dialect="okf"`, which is what its build passes too.
 
 It carries: files scanned and how many became notes, nodes per label, edges per
 type, folder notes, dangling links, missing and ambiguous attachments, the
@@ -1429,6 +1433,11 @@ that follows it produces a vault this spec describes.
 - **`type:` on every file when the folder already says it.** The label ladder
   reads the folder (§2.1) and an export never writes `type:` back (§10.3), so
   the declaration only makes a later folder move a no-op.
+- **`default_label:` in a vault whose folders are its labels.** It is rung 2
+  and the folder is rung 3 (§2.1), so it wins over every folder and relabels
+  the whole vault — a converter that declared `default_label: Article` and a
+  `types:` block per folder label got 1 237 `Article`s and no `Api`, with
+  nothing but the per-label counts in the report to say so.
 - **Absolute paths and `../` climbs** out of the vault: a §9 error, in prose and
   in a typed-edge key alike.
 - **SVG.** It is stored as an `Attachment` and is not delivered as an image;
@@ -1446,7 +1455,6 @@ that follows it produces a vault this spec describes.
 ```yaml
 # .kglite/vault.yaml — a converted help corpus
 kglite_vault: 1
-default_label: Article
 
 structure:
   sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}
@@ -1469,6 +1477,11 @@ text_indexes:
 embed:
   Chunk: embed_text
 ```
+
+There is no `default_label:` on purpose: it is rung 2 of the label ladder
+(§2.1) and the folder name is rung 3, so declaring one labels *every* note with
+it and a converted corpus's folders stop saying anything. Declare it only for a
+vault whose notes are genuinely one kind, as §7's example is.
 
 `code_fences:` here omits `langs:` on purpose — the corpus lost its languages in
 conversion, and every fence is still an example. Fix the converter and the
