@@ -1041,6 +1041,75 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (p:Person) OPTIONAL MATCH (p)-[:KNOWS]->(q) WITH p, q WHERE q.age > 30 RETURN count(*) AS n",
         None,
     ),
+    # ── WITH as a scope barrier ──
+    # A non-aggregating WITH left the row's node/edge/path bindings in place,
+    # so a name the projection dropped stayed bound and a later MATCH anchored
+    # on it instead of binding afresh. Both plan profiles answered the same
+    # wrong rows, so these entries pin the *pass interaction* rather than the
+    # defect — the absolute answers live in test_cypher_with_boundary.py and
+    # the executor's `with_scope` goldens. `fold_pass_through_with` and the
+    # aliasing folds all decide what a WITH keeps in scope, and each of those
+    # decisions now has to agree with the executor's.
+    (
+        "with_scope_rebind_dropped_name",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH 1 AS u MATCH (p:Person {name:'Person_2'}) RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_scope_rebind_unconstrained_scan",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH 1 AS u MATCH (p:Person) RETURN count(*) AS c",
+        None,
+    ),
+    (
+        "with_scope_alias_renames_binding",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH p AS q "
+        "MATCH (p:Person {name:'Person_2'}) RETURN p.name AS n, q.name AS s",
+        None,
+    ),
+    (
+        "with_scope_optional_rebind",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH 1 AS u OPTIONAL MATCH (p:Person {name:'Person_2'}) RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_scope_distinct_rebind",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH DISTINCT 1 AS u MATCH (p:Person {name:'Person_2'}) RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_scope_chained_projection_rebind",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH 1 AS u WITH u AS v "
+        "MATCH (p:Person {name:'Person_2'}) RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_scope_edge_variable_rebind",
+        "social_graph",
+        "MATCH (:Person {name:'Person_1'})-[r:KNOWS]->(:Person {name:'Person_2'}) WITH 1 AS u "
+        "MATCH (:Person {name:'Person_1'})-[r:KNOWS]->(t:Person {name:'Person_3'}) RETURN t.name AS n",
+        None,
+    ),
+    (
+        # The control: a projected variable keeps its node identity, so the
+        # pattern expands from it rather than scanning.
+        "with_scope_keeps_projected_binding",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH p MATCH (p)-[:KNOWS]->(q) RETURN q.name AS n ORDER BY n",
+        None,
+    ),
+    (
+        # `WITH *` carries the whole incoming scope, bindings included.
+        "with_scope_star_keeps_bindings",
+        "social_graph",
+        "MATCH (p:Person {name:'Person_1'}) WITH * MATCH (p)-[:KNOWS]->(q) RETURN q.name AS n ORDER BY n",
+        None,
+    ),
     # ── fold_aliasing_with / hoist_terminal_return_over_with_top_k ──
     # An aliasing WITH is not a pass-through, so the existing fold declines it
     # and the top-k fusion window never forms. These two passes substitute the

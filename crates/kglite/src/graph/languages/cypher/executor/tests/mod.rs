@@ -19,6 +19,8 @@
 //! - [`text_bm25`] — the BM25 scalar's null/zero split, freshness policy, cache
 //! - [`vector_score`] — the embedding-store scalar's per-query argument cache
 //! - [`vectors`] — `dot` / `cosine` / `norm` over list-valued data
+//! - [`with_scope`] — `WITH` as a scope barrier: which bindings a projection
+//!   carries forward, and which a later clause must bind afresh
 //! - [`deadline_rows`] — deadline/cancel polling inside the sequential MATCH
 //!   row loops (match-to-row, comma-pattern join, driving-row join)
 //! - [`parallel`] — deadline/cancel polling inside the rayon-parallel regions
@@ -52,6 +54,7 @@ mod strings;
 mod text_bm25;
 mod vector_score;
 mod vectors;
+mod with_scope;
 
 /// Test helper: unwraps evaluate_comparison Result for use in assert!()
 pub(super) fn cmp(left: &Value, op: &ComparisonOp, right: &Value) -> bool {

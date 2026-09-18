@@ -209,3 +209,80 @@ def test_return_star_is_not_fused_into_a_top_k(boundary_graph) -> None:
     without = boundary_graph.cypher("MATCH (p:P) RETURN * ORDER BY p.age DESC").to_list()
     assert list(with_limit[0]) == ["p"]
     assert with_limit == without[:2]
+
+
+# ── WITH as a scope barrier ──────────────────────────────────────────
+
+
+def test_a_name_the_with_drops_binds_afresh_in_a_later_match(boundary_graph) -> None:
+    """`WITH 1 AS u` ends `p`'s scope, so a later `MATCH (p:P …)` binds anew.
+
+    The projection replaced the row's values and left its *identity*
+    bindings alone, so the dropped `p` stayed bound and the second MATCH
+    verified its property map against the stale node instead of scanning.
+    Both plan profiles answered zero rows.
+    """
+    query = "MATCH (p:P {title:'a'}) WITH 1 AS u MATCH (p:P {title:'b'}) RETURN p.title AS t"
+    for rows in both_profiles(boundary_graph, query):
+        assert rows == [{"t": "b"}]
+
+
+def test_a_dropped_name_does_not_constrain_a_later_scan(boundary_graph) -> None:
+    """A silent undercount: the scan was pinned to the one stale node."""
+    query = "MATCH (p:P {title:'a'}) WITH 1 AS u MATCH (p:P) RETURN count(*) AS c"
+    for rows in both_profiles(boundary_graph, query):
+        assert rows == [{"c": 5}]
+
+
+def test_return_star_after_a_with_lists_only_the_projected_names(boundary_graph) -> None:
+    """`RETURN *` must not surface a variable the WITH dropped."""
+    for rows in both_profiles(boundary_graph, "MATCH (p:P {title:'a'}) WITH 1 AS u RETURN *"):
+        assert [list(row) for row in rows] == [["u"]]
+
+
+def test_a_with_alias_moves_the_binding_and_frees_the_old_name(boundary_graph) -> None:
+    """`WITH p AS q` renames the binding; `p` is free for a fresh MATCH."""
+    query = "MATCH (p:P {title:'a'}) WITH p AS q MATCH (p:P {title:'b'}) RETURN p.title AS t, q.title AS s"
+    for rows in both_profiles(boundary_graph, query):
+        assert rows == [{"t": "b", "s": "a"}]
+
+
+def test_a_with_keeps_the_names_it_projects(boundary_graph) -> None:
+    """The control: a projected variable keeps its node identity."""
+    for rows in both_profiles(
+        boundary_graph, "MATCH (p:P {title:'a'}) WITH p MATCH (p)-[:K]->(q) RETURN q.title AS t ORDER BY t"
+    ):
+        assert rows == [{"t": "b"}, {"t": "c"}]
+    for rows in both_profiles(
+        boundary_graph, "MATCH (p:P {title:'a'}) WITH * MATCH (p)-[:K]->(q) RETURN q.title AS t ORDER BY t"
+    ):
+        assert rows == [{"t": "b"}, {"t": "c"}]
+
+
+def test_writes_behind_a_with_act_on_the_rebound_node() -> None:
+    """CREATE / SET / MERGE behind the barrier wrote nothing, silently.
+
+    A fresh graph per assertion: these mutate.
+    """
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:N {id:'x'}) CREATE (:N {id:'y'}) CREATE (:N {id:'z'})").to_list()
+    graph.cypher(
+        "MATCH (a:N {id:'x'}), (b:N {id:'y'}) CREATE (a)-[:R]->(b) WITH 1 AS u "
+        "MATCH (a:N {id:'x'}), (b:N {id:'z'}) CREATE (a)-[:R]->(b)"
+    ).to_list()
+    assert graph.cypher("MATCH (:N {id:'x'})-[:R]->(t) RETURN t.id AS t ORDER BY t").to_list() == [
+        {"t": "y"},
+        {"t": "z"},
+    ]
+
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:N {id:'x'}) CREATE (:N {id:'y'})").to_list()
+    graph.cypher("MATCH (a:N {id:'x'}) WITH 1 AS u MATCH (a:N {id:'y'}) SET a.tag = 'hit'").to_list()
+    assert graph.cypher("MATCH (n:N) WHERE n.tag = 'hit' RETURN n.id AS i").to_list() == [{"i": "y"}]
+
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:N {id:'x'})").to_list()
+    assert graph.cypher("MATCH (a:N {id:'x'}) WITH 1 AS u MERGE (a:N {id:'w'}) RETURN a.id AS i").to_list() == [
+        {"i": "w"}
+    ]
+    assert graph.cypher("MATCH (n:N) RETURN count(*) AS c").to_list() == [{"c": 2}]
