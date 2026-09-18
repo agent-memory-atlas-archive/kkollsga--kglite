@@ -64,7 +64,7 @@ parallel-bz2 = ["dep:parallel-bz2-redux"]
 # OKF / memory / skills / Obsidian bundles). Off by default so the bare
 # crate pulls no YAML parser; the Python wheel enables it. `regex` (link
 # extraction) and `walkdir` (tree walk) are already non-optional deps.
-okf = ["dep:yaml-rust2"]
+okf = ["dep:yaml-rust2", "dep:pulldown-cmark"]
 # General-purpose RDF loader (Turtle / N-Triples / N-Quads / TriG via
 # the oxttl parser family). Off by default so the bare crate pulls no
 # RDF parser; `oxttl` + `oxrdf` are only in the dep tree when `rdf` is
@@ -166,6 +166,13 @@ indexmap = { version = "2.6.0", features = ["serde"] }
 # `unsafe`/libyaml, no unmaintained advisory); only pulled when `okf` is
 # enabled (the wheel enables it; bare builds don't).
 yaml-rust2 = { version = "0.12", optional = true }
+# OKF loader block tree (`okf::structure`) — gated behind the same `okf`
+# feature. CommonMark + GFM tables with byte-offset source ranges
+# (`into_offset_iter`), so a section's text is a verbatim slice of the note
+# rather than a re-render. `default-features = false` drops the bundled CLI
+# and HTML renderer we never call; the `simd` feature stays OFF because the
+# crate is `forbid(unsafe_code)` without it.
+pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 
 # RDF loader deps — gated behind the `rdf` feature. `oxttl` is the
 # Oxigraph family's standalone Turtle/N-Triples/N-Quads/TriG parser;

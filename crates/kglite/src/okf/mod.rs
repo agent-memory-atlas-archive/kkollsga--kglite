@@ -22,6 +22,7 @@ pub mod fingerprint;
 pub mod frontmatter;
 pub mod links;
 pub mod model;
+pub(crate) mod structure;
 pub mod validate;
 pub mod vault_config;
 pub mod walk;
