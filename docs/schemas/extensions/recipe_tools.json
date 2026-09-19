@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/recipe_tools.json",
+  "title": "extensions.recipe_tools",
+  "description": "Whether a recipe query's own `tool:` name is registered as an MCP tool of its own. Default true: the catalogue author curates which queries declare a name, each one runs the same validated read-only Cypher run_recipe_query does, and a name another route already owns refuses the boot. Set false to serve the two fixed routes only. Boot-time: a `tool:` added or removed after boot needs a restart.",
+  "type": "boolean",
+  "default": true
+}

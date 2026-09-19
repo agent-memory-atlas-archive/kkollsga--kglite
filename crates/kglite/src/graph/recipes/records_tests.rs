@@ -32,6 +32,7 @@ fn record(recipe: &str, name: &str) -> RecipeRecord {
         ),
         cypher: "MATCH (n) WHERE n.name = $qualified_name RETURN n.name".to_string(),
         recipe_description: format!("the {recipe} group"),
+        tool: None,
     }
 }
 
@@ -566,4 +567,105 @@ fn a_yaml_path_is_refused_by_name() {
         error.to_string().contains("convert a YAML catalogue first"),
         "{error}"
     );
+}
+
+// ── `tool:` — a query served as a named MCP tool ────────────────────────────
+
+/// The seventh field has to survive every route a record travels: the graph,
+/// the markdown dialect a vault carries, and the `extensions.cypher_recipes`
+/// export an operator edits and re-imports. A field that survives only one of
+/// them is a field an author loses by saving.
+#[test]
+fn a_tool_name_survives_the_graph_and_the_catalogue_export() {
+    let mut g = graph();
+    let mut named = record("code_review", "callers");
+    named.tool = Some("find_callers".to_string());
+    set(&mut g, &named).unwrap();
+    let plain = record("code_review", "callees");
+    set(&mut g, &plain).unwrap();
+
+    assert_eq!(
+        get(&g, "code_review", "callers").unwrap().tool,
+        Some("find_callers".to_string())
+    );
+    assert_eq!(
+        get(&g, "code_review", "callees").unwrap().tool,
+        None,
+        "a query that did not ask for a tool must not grow one"
+    );
+
+    let exported = export_value(&g);
+    let queries = &exported["code_review"]["queries"];
+    assert_eq!(
+        queries["callers"]["tool"],
+        serde_json::json!("find_callers")
+    );
+    assert!(
+        queries["callees"].get("tool").is_none(),
+        "an absent tool is absent from the document, not a null: {queries}"
+    );
+
+    // And the document re-imports to the same records.
+    let mut round = graph();
+    import_value(&mut round, &exported).unwrap();
+    assert_eq!(get(&round, "code_review", "callers").unwrap(), named);
+    assert_eq!(get(&round, "code_review", "callees").unwrap(), plain);
+}
+
+/// Dropping a `tool:` is an edit an author makes by deleting one line, so the
+/// write has to clear the stored property rather than leave the old name
+/// serving a tool the file no longer declares.
+#[test]
+fn clearing_a_tool_name_removes_it_from_the_stored_record() {
+    let mut g = graph();
+    let mut named = record("code_review", "callers");
+    named.tool = Some("find_callers".to_string());
+    set(&mut g, &named).unwrap();
+    named.tool = None;
+    set(&mut g, &named).unwrap();
+    assert_eq!(get(&g, "code_review", "callers").unwrap().tool, None);
+}
+
+/// A tool name reaches `tools/list`, so it is held to the MCP name rule —
+/// wider than a catalogue identifier (a hyphen is legal in a tool name) and
+/// bounded, because a client renders it.
+#[test]
+fn a_tool_name_must_be_an_mcp_tool_token() {
+    for good in ["find_callers", "find-callers", "_x", "a", &"a".repeat(64)] {
+        let mut r = record("code_review", "callers");
+        r.tool = Some(good.to_string());
+        assert!(validate(&r).is_ok(), "{good:?} must be a legal tool name");
+    }
+    for bad in [
+        "",
+        "9lives",
+        "two words",
+        "a.b",
+        "find/callers",
+        &"a".repeat(65),
+    ] {
+        let mut r = record("code_review", "callers");
+        r.tool = Some(bad.to_string());
+        assert!(validate(&r).is_err(), "{bad:?} must not be a tool name");
+    }
+}
+
+#[cfg(feature = "okf")]
+#[test]
+fn a_tool_name_survives_the_markdown_dialect() {
+    let text = "---\nrecipe: help\nname: where_is\ndescription: Where a thing lives.\n\
+                recipe_description: Help desk.\ntool: where_is\n---\n\n\
+                ```cypher\nMATCH (n) RETURN n.name AS name\n```\n";
+    let parsed = parse_markdown(text).unwrap();
+    assert_eq!(parsed.tool, Some("where_is".to_string()));
+    assert_eq!(parse_markdown(&render_markdown(&parsed)).unwrap(), parsed);
+
+    let plain = parse_markdown(&markdown_file("help", "where_is", Some("Help desk."))).unwrap();
+    assert_eq!(plain.tool, None);
+    assert!(
+        !render_markdown(&plain).contains("tool:"),
+        "a record with no tool must not render an empty key: {}",
+        render_markdown(&plain)
+    );
+    assert_eq!(parse_markdown(&render_markdown(&plain)).unwrap(), plain);
 }

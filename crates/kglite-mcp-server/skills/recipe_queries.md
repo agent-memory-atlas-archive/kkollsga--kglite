@@ -25,20 +25,25 @@ or a workflow engine.
 
 ## Choose the shortest correct path
 
-1. **A domain skill names an exact recipe and query:** call
+1. **The query has its own tool: call it directly.** An entry marked
+   `→ tool: <name>` in the catalogue block is registered as the tool
+   `<name>`, taking the query's variables as its arguments: same validation,
+   same rows, same error envelope, one call instead of a nested one.
+2. **A domain skill names an exact recipe and query:** call
    `run_recipe_query` directly with that recipe, query, and its variables. Do
    not call `list_recipe_queries` first; the domain skill already selected the
    operation.
-2. **You suspect a recipe exists but do not know its name:** read the
+3. **You suspect a recipe exists but do not know its name:** read the
    catalogue block in `run_recipe_query`'s own description — every
-   `recipe.query`, what it answers and its variables are already there. Call
-   `list_recipe_queries(recipe=...)` only when that block says to (a catalogue
-   too large to publish in full lists names only) or when a parameter schema
-   needs more detail than the line carries.
-3. **The stored operation exactly matches the requested scope:** call
-   `run_recipe_query`. Treat its structured columns, positional rows, and
-   errors as the operation's complete contract.
-4. **The request is broader, differently scoped, or unmatched:** fall back to
+   `recipe.query`, what it answers, its variables and its `→ tool:` marker
+   are already there. Call `list_recipe_queries(recipe=...)` only when that
+   block says to (its text says whether descriptions were shortened or
+   reduced to names) or when a schema needs more detail than the line
+   carries.
+4. **The stored operation exactly matches the requested scope:** call it.
+   Treat its structured columns, positional rows, and errors as the
+   operation's complete contract.
+5. **The request is broader, differently scoped, or unmatched:** fall back to
    raw `cypher_query` and express the requested read-only traversal directly.
    Call `graph_overview` first if the graph schema is not already known.
 
@@ -52,9 +57,10 @@ Cypher fragments, labels, property names, or wider traversal semantics.
 
 Entity-oriented workflows may need to distinguish a missing target from a
 real target with no matching neighbors. The owning domain skill decides that
-sequence and interpretation, including any mandatory `resolve_*` preflight.
-The generic recipe methodology must not guess target existence from an empty
-row set or invent a preflight query.
+sequence, including any mandatory `resolve_*` preflight. The generic recipe
+methodology must not guess target existence from an empty row set or invent a
+preflight query.
 
-Use `include_cypher=true` only when the stored query and bound parameters need
-to be audited. It is not required for ordinary execution.
+Use `include_cypher=true` only to audit the stored query and bound
+parameters. Ordinary execution does not need it, and a named tool does not
+take it — audit through `run_recipe_query`.

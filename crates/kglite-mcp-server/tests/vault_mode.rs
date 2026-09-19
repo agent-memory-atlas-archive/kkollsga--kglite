@@ -276,6 +276,68 @@ fn a_vault_server_boots_serves_its_notes_and_carries_its_skills() {
     );
 }
 
+/// A vault-carried recipe that declares `tool:` is served under that name,
+/// and answers exactly as `run_recipe_query` does.
+///
+/// The fixture is edited in the *copy*: the golden vault's own digests are
+/// asserted elsewhere, and a `tool:` added to it there would move them for a
+/// reason unrelated to what those tests check.
+#[test]
+fn a_vault_recipe_that_declares_a_tool_is_served_under_that_name() {
+    let vault = golden_vault_copy();
+    let recipe = vault.path().join(".kglite/recipes/one.md");
+    let text = std::fs::read_to_string(&recipe).expect("the carried recipe");
+    let declared = "recipe_description: Navigating the golden vault.\n";
+    assert!(text.contains(declared), "{text}");
+    std::fs::write(
+        &recipe,
+        text.replace(declared, &format!("{declared}tool: notes_by_keyword\n")),
+    )
+    .expect("declare the tool name");
+
+    let mut server = Server::boot(&["--vault", &vault.path().to_string_lossy()]);
+    let tools = server.tool_names();
+    assert!(
+        tools.iter().any(|name| name == "notes_by_keyword"),
+        "the vault's own `tool:` reaches tools/list: {tools:?}"
+    );
+
+    let arguments = serde_json::json!({"keyword": "absent"});
+    let named = server.call_raw("notes_by_keyword", arguments.clone());
+    let fixed = server.call_raw(
+        "run_recipe_query",
+        serde_json::json!({
+            "recipe": "vault", "query": "by_keyword", "variables": arguments
+        }),
+    );
+    assert_eq!(
+        named["structuredContent"], fixed["structuredContent"],
+        "one envelope, whichever route reached the query"
+    );
+    assert_eq!(named.get("isError"), fixed.get("isError"));
+
+    // A refusal is the same envelope too — the named route validates through
+    // the same schema.
+    let refused = server.call_raw("notes_by_keyword", serde_json::json!({}));
+    assert_eq!(refused["structuredContent"]["code"], "invalid_variables");
+
+    // And the catalogue block says which entries have a route of their own.
+    let listed = server.request("tools/list", serde_json::json!({}));
+    let run = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .find(|tool| tool["name"] == "run_recipe_query")
+        .expect("the fixed run route");
+    assert!(
+        run["description"]
+            .as_str()
+            .expect("a description")
+            .contains("→ tool: notes_by_keyword"),
+        "{run}"
+    );
+}
+
 #[test]
 fn rebuild_graph_picks_up_a_new_note_and_reports_the_build() {
     let vault = golden_vault_copy();

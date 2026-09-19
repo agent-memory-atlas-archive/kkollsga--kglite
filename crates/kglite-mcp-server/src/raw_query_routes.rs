@@ -51,6 +51,7 @@ pub(crate) const RECIPE_QUERY_POINTER: &[&str] = &["params", "arguments", "varia
 pub(crate) fn route_pointers(
     manifest: Option<&mcp_methods::server::Manifest>,
     has_recipes: bool,
+    named_recipe_tools: &[String],
 ) -> HashMap<String, &'static [&'static str]> {
     let mut routes = HashMap::from([("cypher_query".to_string(), CYPHER_QUERY_POINTER)]);
     if let Some(manifest) = manifest {
@@ -62,6 +63,11 @@ pub(crate) fn route_pointers(
     }
     if has_recipes {
         routes.insert("run_recipe_query".to_string(), RECIPE_QUERY_POINTER);
+    }
+    // A named recipe route takes the variables *as* its arguments, so the
+    // guarded subtree is one level shallower than `run_recipe_query`'s.
+    for tool in named_recipe_tools {
+        routes.insert(tool.clone(), TEMPLATE_QUERY_POINTER);
     }
     routes
 }

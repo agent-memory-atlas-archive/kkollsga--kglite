@@ -1,12 +1,12 @@
 //! The catalogue text `run_recipe_query` publishes in `tools/list`.
 //!
-//! Two fixed routes serve a whole catalogue, so what a named per-query tool
-//! would have put in front of the agent — the pair to call, what it answers,
-//! which variables it takes — has to arrive through this one description and
-//! the enums beside it. Without it the tool is generic, and an agent that
-//! cannot read the routing off the tool list goes looking for it
-//! (`list_recipe_queries`, then raw Cypher), which is the round trip this
-//! block exists to remove.
+//! Two fixed routes serve the whole catalogue, and only the queries whose
+//! author asked for a `tool:` also get a route of their own — so for
+//! everything else the pair to call, what it answers and which variables it
+//! takes have to arrive through this one description and the enums beside
+//! it. Without it the tool is generic, and an agent that cannot read the
+//! routing off the tool list goes looking for it (`list_recipe_queries`,
+//! then raw Cypher), which is the round trip this block exists to remove.
 
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
@@ -237,14 +237,24 @@ fn block_at(catalog: &RecipeCatalog, header: &str, cap: Option<usize>) -> String
         for query in recipe.queries() {
             let params = render_parameters(query.parameters.as_json());
             let name = format!("{}.{}", recipe.name, query.name);
+            // A query with its own route is reachable both ways; the marker
+            // is what tells an agent reading this block that the one-call
+            // form exists, which is the whole point of having asked for it.
+            let tool = query
+                .tool
+                .as_deref()
+                .map(|tool| format!(" → tool: {tool}"))
+                .unwrap_or_default();
             match cap {
                 None => block.push_str(&format!(
-                    "\n{name} — {}; params: {params}",
+                    "\n{name} — {}; params: {params}{tool}",
                     query.description
                 )),
                 Some(cap) => match shorten(&query.description, cap) {
-                    Some(text) => block.push_str(&format!("\n{name} — {text}; params: {params}")),
-                    None => block.push_str(&format!("\n{name}; params: {params}")),
+                    Some(text) => {
+                        block.push_str(&format!("\n{name} — {text}; params: {params}{tool}"))
+                    }
+                    None => block.push_str(&format!("\n{name}; params: {params}{tool}")),
                 },
             }
         }
@@ -480,6 +490,39 @@ mod tests {
             !rendered.contains("params:"),
             "the names-only form carries no parameters"
         );
+    }
+
+    /// A query served under its own tool name says so in the catalogue: the
+    /// agent reading this block otherwise has two routes to the same query
+    /// and no reason to prefer the cheaper one.
+    #[test]
+    fn a_query_with_its_own_tool_is_marked_in_the_block() {
+        let named = RecipeCatalog::from_manifest_value(Some(&json!({
+            "review": {
+                "description": "Review operations.",
+                "queries": {
+                    "search": {
+                        "description": "Find a document.",
+                        "tool": "find_document",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                            "additionalProperties": false
+                        },
+                        "cypher": "MATCH (d:Doc) WHERE d.title CONTAINS $query RETURN d.title AS title"
+                    }
+                }
+            }
+        })))
+        .expect("valid catalog");
+        let (rendered, _) = catalog_block(&named, &CatalogBudgets::default());
+        assert!(
+            rendered.ends_with("params: query: string (required) → tool: find_document"),
+            "{rendered}"
+        );
+        let (plain, _) = catalog_block(&catalog("x"), &CatalogBudgets::default());
+        assert!(!plain.contains("→ tool:"), "{plain}");
     }
 
     #[test]

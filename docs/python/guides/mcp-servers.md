@@ -513,9 +513,9 @@ extensions:
 The full three-query code-review example, including its resolve-first domain
 skill, is
 [`examples/local_code_review_mcp.yaml`](https://github.com/kkollsga/kglite/blob/main/examples/local_code_review_mcp.yaml).
-Catalogs are immutable after boot — including the graph-carried half below, so
-a recipe added to the graph is served after a restart, not on the next
-`reload_graph`. (Skills differ: they *are* re-resolved on a graph swap.)
+Catalogs are immutable after boot — including the graph-carried half below and
+every `tool:` route it registers, so a recipe added to the graph, or a `tool:`
+added to one, is served after a restart, not on the next `reload_graph`. (Skills differ: they *are* re-resolved on a graph swap.)
 KGLite parses every stored query, requires
 an exact match between `$parameters` and root `properties`, requires
 `required` to list every property that has no `default`, and
@@ -644,8 +644,11 @@ catalogue and merges it **under** the manifest's:
 
 Unlike skills, the graph recipe layer has **no `skills:`-style opt-in**: a
 served graph's recipes are read whenever the mode has a graph. They cannot
-change a tool's description or add a tool name — the two route names are fixed
-and every query is validated read-only before it is served.
+change a tool's description. They *can* add a tool name — a query that
+declares `tool:` is registered under it (see `extensions.recipe_tools` below)
+— but only one the operator did not already allow to something else: a
+collision with any registered route refuses the boot, and every query is
+validated read-only before it is served.
 
 [`examples/code_review_graph_skills.py`](https://github.com/kkollsga/kglite/blob/main/examples/code_review_graph_skills.py)
 builds a graph carrying three recipes and the skill that names them.
@@ -693,9 +696,10 @@ can ship the catalogue as an asset and load it with one call.
 - **Merge order is `producer < graph < manifest`**, per `(recipe, name)` and
   per group description; queries only one layer carries are all served. Same
   rule as everywhere else: closer to the operator wins.
-- **Registered in every mode.** The two route names are fixed and mode-blind,
-  so a producer catalogue alone gives a manifest-less workspace server
-  `list_recipe_queries` and `run_recipe_query`.
+- **Registered in every mode.** The two fixed route names are mode-blind, so
+  a producer catalogue alone gives a manifest-less workspace server
+  `list_recipe_queries` and `run_recipe_query` — plus a route per query that
+  declares a `tool:`.
 - **A producer query that does not compile fails the boot**, like a manifest
   one: it is the embedder's code, not graph data.
 - **An operator allowlist is unaffected by a catalogue they did not declare.**
@@ -1418,6 +1422,7 @@ repo:
 - [`cypher_recipes.json`][schema-cypher-recipes]
 - [`embedder.json`][schema-embedder]
 - [`recipe_catalog.json`][schema-recipe-catalog]
+- [`recipe_tools.json`][schema-recipe-tools]
 - [`value_codecs.json`][schema-value-codecs]
 
 The schemas are anchored to the Python parsers by the regression
@@ -1430,6 +1435,7 @@ as a test failure on the next CI run.
 [schema-cypher-recipes]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/cypher_recipes.json
 [schema-embedder]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embedder.json
 [schema-recipe-catalog]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_catalog.json
+[schema-recipe-tools]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_tools.json
 [schema-value-codecs]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/value_codecs.json
 
 #### `extensions.cypher_recipes`
@@ -1483,6 +1489,40 @@ tools) are charged to the skill registry's session budget, not to
 `block_budget`. Set `skills: false` to drop them; it does not change this
 block. The schema file is
 [`docs/schemas/extensions/recipe_catalog.json`][schema-recipe-catalog].
+
+#### `extensions.recipe_tools`
+
+```yaml
+extensions:
+  recipe_tools: false   # default: true
+```
+
+A recipe query may declare `tool: <name>` — in the manifest's own catalogue,
+in a `.kgl`'s `KgliteRecipe` records (`set_recipe(..., tool=...)`) or in a
+vault's `.kglite/recipes/*.md` frontmatter. Every such query is registered as
+an MCP tool of that name, in addition to the fixed pair:
+
+- **Description** = the query's description. **Input schema** = the query's
+  `parameters`, so the arguments *are* the variables. **Output schema and
+  annotations** = `run_recipe_query`'s, so the rows and the error envelope are
+  byte-for-byte the ones the fixed route returns. `include_cypher` is not
+  reachable from a named tool — audit through `run_recipe_query`.
+- **Names** match `^[A-Za-z_][A-Za-z0-9_-]{0,63}$`. Two queries claiming one
+  name is a catalogue error; a name any already-registered route owns (a
+  built-in, a manifest `tools:` entry, a domain tool, the fixed pair) refuses
+  the boot and names the owner. Nothing is ever replaced.
+- **Ordinary allowlist members.** `extensions.tools_allow` that omits a named
+  recipe tool simply drops it — unlike the two fixed routes, which a manifest
+  catalogue cannot half-declare.
+- **Boot-time only**, like the rest of the catalogue: adding or removing a
+  `tool:` needs a restart, not a `reload_graph`.
+- The catalogue block in `run_recipe_query`'s description marks these entries
+  `→ tool: <name>`, and the bundled `recipe_queries` skill tells an agent to
+  prefer the direct call where the marker is present.
+
+Set `recipe_tools: false` to serve the two fixed routes only. Author guidance:
+expose a curated few. Each named tool costs its description and schema in
+every `tools/list`, which every session pays for.
 
 #### `extensions.embedder`
 

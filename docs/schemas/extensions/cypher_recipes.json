@@ -57,6 +57,11 @@
           "type": "string",
           "minLength": 1,
           "pattern": "\\S"
+        },
+        "tool": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$",
+          "description": "Optional MCP tool name to serve this query under, beside run_recipe_query. The registered tool takes the query's parameters as its arguments and answers with the same envelope. Two queries cannot claim one name, and a name any other route already owns refuses the server's boot. extensions.recipe_tools: false disables registration for the whole deployment."
         }
       }
     },

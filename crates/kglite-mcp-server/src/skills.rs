@@ -748,8 +748,9 @@ fn render_skills_index(active: &[ActiveSkill]) -> Option<String> {
 /// at all. In source-root and bare modes there is no graph either way, so a
 /// rebuild would recompose a byte-identical registry and spend a
 /// `tools/list_changed` on nothing. The recipe catalogue is deliberately
-/// *not* rebuilt: its routes are fixed tool names settled before the
-/// allowlist, and the catalogue is documented immutable after boot.
+/// *not* rebuilt: its route names — the fixed pair and every `tool:` a query
+/// declared — are settled before the allowlist, and the catalogue is
+/// documented immutable after boot.
 ///
 /// **One swap path does not refresh.** The per-call freshness re-read
 /// (`GraphState::ensure_graph_fresh`, which re-opens the served file when the

@@ -5584,8 +5584,10 @@ class KnowledgeGraph:
 
         Returns:
             One dict per query with ``recipe``, ``name``, ``description``,
-            ``parameters`` (the JSON Schema, as a nested dict), ``cypher`` and
-            ``recipe_description`` keys. Empty when the graph carries none.
+            ``parameters`` (the JSON Schema, as a nested dict), ``cypher``,
+            ``recipe_description`` and ``tool`` (the MCP tool name the query
+            asked to be served under, or ``None``) keys. Empty when the graph
+            carries none.
 
         Example:
             ```python
@@ -5602,7 +5604,7 @@ class KnowledgeGraph:
             name: The query id inside that group.
 
         Returns:
-            A dict with the same six keys :meth:`list_recipes` returns.
+            A dict with the same seven keys :meth:`list_recipes` returns.
 
         Raises:
             NodeNotFoundError: No query is stored under that pair.
@@ -5622,6 +5624,7 @@ class KnowledgeGraph:
         cypher: str,
         parameters: dict[str, Any] | None = None,
         recipe_description: str | None = None,
+        tool: str | None = None,
     ) -> dict[str, Any]:
         """Create a recipe query, or replace the one stored under the same key.
 
@@ -5659,9 +5662,20 @@ class KnowledgeGraph:
                 stored for that group when this is omitted. Every member node
                 carries a copy, and the catalogue serves the one on the first
                 query in name order.
+            tool: An MCP tool name to serve this query under, in addition to
+                ``run_recipe_query``. A server that reads this graph registers
+                a tool of that name whose description is this query's and
+                whose input schema is ``parameters``, so an agent calls the
+                query in one step instead of naming it inside another tool's
+                arguments. Must match ``^[A-Za-z_][A-Za-z0-9_-]{0,63}$``. Two
+                queries cannot claim one name, and a name another route
+                already owns refuses the server's boot — so expose a curated
+                few rather than every query; each one costs description bytes
+                in every ``tools/list``. Omit it (the default) to leave the
+                query reachable through ``run_recipe_query`` alone.
 
         Returns:
-            The query as stored — the same six keys as :meth:`get_recipe`, plus
+            The query as stored — the same seven keys as :meth:`get_recipe`, plus
             ``created``, which is ``True`` when this call made a new query and
             ``False`` when it replaced one.
 
@@ -5670,9 +5684,9 @@ class KnowledgeGraph:
                 identifier, an empty ``description``, ``cypher`` or group
                 description, Cypher that does not parse or is not read-only,
                 a parameter schema using a keyword outside the closed set, a
-                ``default`` its own property rejects, or a schema that does not
-                match the Cypher ``$parameters``. The message names the rule
-                that was broken. Also raised when the
+                ``default`` its own property rejects, a ``tool`` that is not a
+                legal tool name, or a schema that does not match the Cypher
+                ``$parameters``. The message names the rule that was broken. Also raised when the
                 graph is in read-only mode (see
                 :meth:`KnowledgeGraph.read_only`).
             CypherExecutionError: The graph is schema-locked and does not
@@ -5720,16 +5734,16 @@ class KnowledgeGraph:
         A **JSON** document is either a whole MCP manifest, in which case the
         catalogue is read from its ``extensions.cypher_recipes`` key, or that
         mapping on its own: ``{"<recipe>": {"description": ..., "queries":
-        {"<name>": {"description": ..., "parameters": {...}, "cypher":
-        ...}}}}``. A ``.yaml`` catalogue is refused by name — the wheel links
+        {"<name>": {"description": ..., "parameters": {...}, "cypher": ...,
+        "tool": ...}}}}`` (``tool`` optional). A ``.yaml`` catalogue is refused by name — the wheel links
         no general YAML reader for that shape, so convert it first (an MCP
         server reads its own manifest and never goes through this method).
 
         A **markdown** file is one query in the dialect a vault's
         ``.kglite/recipes/`` uses (``VAULT.md`` §8): frontmatter ``recipe``,
-        ``name``, ``description``, optional ``recipe_description`` and
-        optional ``parameters`` (the JSON Schema, as a nested map), with the
-        statement in the body's single ``cypher``-tagged fenced block. A file
+        ``name``, ``description``, optional ``recipe_description``,
+        ``parameters`` (the JSON Schema, as a nested map) and ``tool``, with
+        the statement in the body's single ``cypher``-tagged fenced block. A file
         that omits ``recipe_description`` inherits it from another query in
         the same group. Directory reads are non-recursive and sorted.
 

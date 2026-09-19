@@ -18,6 +18,14 @@ fn catalog(query_value: Value) -> Value {
     })
 }
 
+/// The plain single-query catalogue, with no `tool:` anywhere.
+fn catalog_fixture() -> Value {
+    catalog(query(
+        string_parameter(),
+        "MATCH (n) WHERE n.name = $qualified_name RETURN n.name AS name",
+    ))
+}
+
 fn string_parameter() -> Value {
     json!({
         "type": "object",
@@ -170,4 +178,73 @@ fn payload_cap_limit_is_rejected_but_other_semantic_limits_are_valid() {
     // queries.
     let above = catalog(query(no_parameters, "RETURN 1 LIMIT 201"));
     RecipeCatalog::from_manifest_value(Some(&above)).unwrap();
+}
+
+/// `tool:` is the seventh catalogue key: optional, and the name the MCP
+/// server registers the query under.
+#[test]
+fn a_query_may_declare_the_tool_name_it_is_served_under() {
+    let mut raw = query(
+        string_parameter(),
+        "MATCH (n) WHERE n.name = $qualified_name RETURN n.name AS name",
+    );
+    raw["tool"] = json!("find_callers");
+    let catalog = RecipeCatalog::from_manifest_value(Some(&catalog(raw))).unwrap();
+    let query = catalog
+        .get("code_review")
+        .and_then(|recipe| recipe.get("direct_callers"))
+        .unwrap();
+    assert_eq!(query.tool.as_deref(), Some("find_callers"));
+
+    let plain = RecipeCatalog::from_manifest_value(Some(&catalog_fixture())).unwrap();
+    assert_eq!(
+        plain
+            .get("code_review")
+            .and_then(|recipe| recipe.get("direct_callers"))
+            .unwrap()
+            .tool,
+        None
+    );
+}
+
+/// Two queries under one name would leave the router serving whichever
+/// registered last, silently. The catalogue refuses to build instead, naming
+/// both claimants.
+#[test]
+fn two_queries_cannot_claim_one_tool_name() {
+    let cypher = "MATCH (n) WHERE n.name = $qualified_name RETURN n.name AS name";
+    let mut first = query(string_parameter(), cypher);
+    first["tool"] = json!("find_callers");
+    let mut second = query(string_parameter(), cypher);
+    second["tool"] = json!("find_callers");
+    let error = RecipeCatalog::from_manifest_value(Some(&json!({
+        "code_review": {
+            "description": "Code review operations.",
+            "queries": {"direct_callers": first, "indirect_callers": second}
+        }
+    })))
+    .expect_err("one tool name, two queries");
+    let message = error.to_string();
+    assert!(message.contains("find_callers"), "{message}");
+    assert!(
+        message.contains("code_review.direct_callers")
+            && message.contains("code_review.indirect_callers"),
+        "both claimants must be named: {message}"
+    );
+}
+
+#[test]
+fn a_catalogue_tool_name_is_held_to_the_mcp_token_rule() {
+    let cypher = "MATCH (n) WHERE n.name = $qualified_name RETURN n.name AS name";
+    for bad in json!(["", "two words", "a.b", "9lives"])
+        .as_array()
+        .unwrap()
+    {
+        let mut raw = query(string_parameter(), cypher);
+        raw["tool"] = bad.clone();
+        assert!(
+            RecipeCatalog::from_manifest_value(Some(&catalog(raw))).is_err(),
+            "{bad} must not be a tool name"
+        );
+    }
 }

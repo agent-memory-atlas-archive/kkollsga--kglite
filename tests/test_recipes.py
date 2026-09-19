@@ -88,6 +88,7 @@ def test_list_is_empty_until_a_recipe_is_set(g):
         "parameters": LIMIT_SCHEMA,
         "cypher": DEEPEST,
         "recipe_description": "Asking this graph about wells.",
+        "tool": None,
     }
     assert stored["created"] is True
 
@@ -123,6 +124,41 @@ def test_a_second_query_inherits_the_group_description(g):
 def test_the_first_query_in_a_group_must_bring_a_group_description(g):
     with pytest.raises(kglite.ArgumentError, match="recipe_description"):
         g.set_recipe("wells", "count", "How many.", COUNT)
+    assert _recipe_count(g) == 0
+
+
+def test_a_tool_name_round_trips_through_the_graph_and_the_catalogue(g, tmp_path):
+    """`tool=` is the seventh key: stored, read back, exported and re-imported.
+
+    The name is what an MCP server registers the query under, so losing it on
+    a save would silently unpublish a tool the author declared.
+    """
+    stored = _store(g, tool="deepest_wells")
+    assert stored["tool"] == "deepest_wells"
+    assert g.get_recipe("wells", "deepest")["tool"] == "deepest_wells"
+    assert _store(g, name="count", cypher=COUNT, parameters=None)["tool"] is None
+
+    path = tmp_path / "recipes.json"
+    g.export_recipes(str(path))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    queries = document["wells"]["queries"]
+    assert queries["deepest"]["tool"] == "deepest_wells"
+    assert "tool" not in queries["count"], "an absent tool is absent, not null"
+
+    fresh = KnowledgeGraph()
+    fresh.import_recipes(str(path))
+    assert fresh.get_recipe("wells", "deepest")["tool"] == "deepest_wells"
+    assert fresh.get_recipe("wells", "count")["tool"] is None
+
+    # And clearing it clears the stored property.
+    _store(g, tool=None)
+    assert g.get_recipe("wells", "deepest")["tool"] is None
+
+
+@pytest.mark.parametrize("bad", ["", "9lives", "two words", "a.b", "a" * 65])
+def test_an_illegal_tool_name_is_refused(g, bad):
+    with pytest.raises(kglite.ArgumentError, match="tool name"):
+        _store(g, tool=bad)
     assert _recipe_count(g) == 0
 
 

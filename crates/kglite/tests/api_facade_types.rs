@@ -289,6 +289,7 @@ fn recipe_records_compile_into_a_catalogue_through_the_facade() {
         }),
         cypher: "MATCH (p:Person) WHERE p.age >= $floor RETURN p.name ORDER BY p.name".to_string(),
         recipe_description: "Questions about people.".to_string(),
+        tool: Some("people_by_age".to_string()),
     };
     validate(&record).expect("a well-formed record validates");
 

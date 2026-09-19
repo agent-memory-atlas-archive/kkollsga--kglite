@@ -8,6 +8,40 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+### Added
+
+- **A recipe query can be served as its own MCP tool.** A query that declares
+  `tool: <name>` — in `extensions.cypher_recipes`, in a graph's
+  `KgliteRecipe` records (`set_recipe(..., tool=...)`), or in a vault's
+  `.kglite/recipes/*.md` frontmatter — is registered as an MCP tool of that
+  name beside `run_recipe_query`: the query's description, its `parameters`
+  as the input schema, and the identical result envelope. Names match
+  `^[A-Za-z_][A-Za-z0-9_-]{0,63}$`; two queries claiming one name is a
+  catalogue error and a name another route already owns refuses the boot
+  naming the owner. `extensions.recipe_tools: false` switches it off.
+- **`extensions.recipe_catalog: {block_budget, description_budget}`** — the
+  catalogue block's byte ceiling and per-description character cap.
+
+### Changed
+
+- **The `run_recipe_query` catalogue block no longer drops parameter
+  schemas.** The ceiling is 16 000 bytes (was 4 000) and prose gives way
+  first: descriptions are shortened largest-first to at most 600 characters,
+  with names and parameter lines unconditional. Names-only is reached only
+  when names and parameters together exceed the budget. `list_recipe_queries`
+  states which form was rendered. A seven-query help-desk catalogue with
+  ~4 000 characters of routing prose now publishes in full — it degraded to
+  names alone on 0.17.11.
+- **API (Rust, breaking):** `RecipeRecord` gains a public `tool` field
+  (struct literals must add it), `RecipeQueryDefinition` gains `tool` and its
+  `compile` takes it as a fifth argument. `make semver-check` flags both.
+- **API (Python):** `set_recipe` gains `tool=None`; `list_recipes`,
+  `get_recipe` and `set_recipe` return a seventh `tool` key.
+
+### Fixed
+
+- The MCP guide claimed graph-carried recipes load in "Graph and watch modes
+  only"; vault mode has read them since 0.17.8.
 
 ## [0.17.11] - 2026-09-19
 ### Fixed

@@ -180,7 +180,7 @@ mod tools_allow_tests {
             &mut server,
             GraphState::default(),
             recipe_catalog(),
-            &recipe_queries::CatalogBudgets::default(),
+            &recipe_queries::RecipeRouteOptions::default(),
         )
         .expect("register recipe routes");
         server
@@ -338,6 +338,59 @@ mod tools_allow_tests {
             !old_name.tool_router_mut().map.contains_key("ping"),
             "the pre-rename name is simply absent — an allowlist naming it is a no-op"
         );
+    }
+
+    /// A named recipe tool is an **ordinary** allowlist member: omitting it
+    /// drops the route and the boot continues. Only the two fixed routes are
+    /// an ownership unit the operator cannot half-declare — a `tool:` is one
+    /// query the catalogue's author offered, not a surface the operator
+    /// promised.
+    #[test]
+    fn omitting_a_named_recipe_tool_drops_it_without_refusing_the_boot() {
+        let mut server = McpServer::new(ServerOptions::default());
+        recipe_queries::register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            Arc::new(
+                recipe_queries::RecipeCatalog::from_manifest_value(Some(&json!({
+                    "review": {
+                        "description": "Review operations.",
+                        "queries": {
+                            "lookup": {
+                                "description": "Look up one value.",
+                                "tool": "look_up_value",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": [],
+                                    "additionalProperties": false
+                                },
+                                "cypher": "RETURN 1 AS value"
+                            }
+                        }
+                    }
+                })))
+                .expect("valid recipe catalog"),
+            ),
+            &recipe_queries::RecipeRouteOptions::default(),
+        )
+        .expect("register recipe routes");
+        assert!(server.tool_router_mut().has_route("look_up_value"));
+
+        apply_tool_allowlist(
+            &mut server,
+            &allow(&[
+                recipe_queries::LIST_RECIPE_QUERIES_TOOL,
+                recipe_queries::RUN_RECIPE_QUERY_TOOL,
+            ]),
+            true,
+        )
+        .expect("an omitted named recipe tool is a choice, not a contradiction");
+
+        assert!(!server.tool_router_mut().has_route("look_up_value"));
+        assert!(server
+            .tool_router_mut()
+            .has_route(recipe_queries::RUN_RECIPE_QUERY_TOOL));
     }
 
     /// The allowlist is a ceiling, not a floor: it never re-enables a route

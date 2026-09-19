@@ -203,6 +203,10 @@ mod recipe_skill_tests {
         assert_eq!(applies.extension_enabled, None);
         let body = skill.body.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(body.contains("Do not call `list_recipe_queries` first"));
+        // A query with its own route is the cheapest path of all, and the
+        // block marks which ones have one.
+        assert!(body.contains("The query has its own tool: call it directly"));
+        assert!(body.contains("marked `→ tool: <name>`"));
         assert!(body.contains("domain skill already selected the"));
         // The discovery step is the catalogue block the run tool now
         // publishes, not a listing round trip.

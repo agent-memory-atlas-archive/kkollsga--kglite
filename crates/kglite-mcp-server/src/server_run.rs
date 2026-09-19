@@ -20,6 +20,7 @@ use crate::*;
 const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "cypher_recipes",
     "recipe_catalog",
+    "recipe_tools",
     "value_codecs",
     "ontology",
     // Retired but still recognised — see `boot_graph_watch`.
@@ -356,6 +357,73 @@ fn boot_recipe_catalog_budgets(
     recipe_queries::CatalogBudgets::from_manifest_value(
         manifest.and_then(|m| m.extensions.get("recipe_catalog")),
     )
+}
+
+/// `extensions.recipe_tools: false` — the operator's off switch for the
+/// per-query named routes a catalogue's `tool:` keys ask for.
+///
+/// Default on, the same posture as producer skills: the catalogue author
+/// curates which queries declare a name, each one runs the same validated
+/// read-only Cypher `run_recipe_query` does, and a name already registered
+/// refuses the boot. A non-boolean is a boot error, not a dropped key.
+fn boot_recipe_tools_enabled(manifest: Option<&mcp_methods::server::Manifest>) -> Result<bool> {
+    match manifest.and_then(|m| m.extensions.get("recipe_tools")) {
+        None => Ok(true),
+        Some(raw) => raw
+            .as_bool()
+            .context("extensions.recipe_tools must be a boolean"),
+    }
+}
+
+/// Both catalogue-publishing knobs, read together because both decide what
+/// `register_recipe_query_routes` puts in `tools/list`.
+fn boot_recipe_routes(
+    manifest: Option<&mcp_methods::server::Manifest>,
+) -> Result<recipe_queries::RecipeRouteOptions> {
+    Ok(recipe_queries::RecipeRouteOptions {
+        budgets: boot_recipe_catalog_budgets(manifest)?,
+        named_tools: boot_recipe_tools_enabled(manifest)?,
+        manifest_tools: Vec::new(),
+    })
+}
+
+/// Close the two code-graph routes on a graph that carries no code types.
+///
+/// Disable, never skip registration: an unregistered name is absent from
+/// `router.map`, and `apply_bundled_tool_overrides` hard-errors on any
+/// manifest override naming a route not in that map (only the
+/// framework-gated `repo_management` gets a pass there). `disable_route`
+/// keeps the entry — unlisted, rejected on call — while leaving overrides
+/// resolvable.
+fn disable_code_tools(server: &mut McpServer) {
+    server.tool_router_mut().disable_route("explore");
+    server.tool_router_mut().disable_route("read_code_source");
+}
+
+/// The catalogue's publishing options, and the tool names its `tool:` keys
+/// will claim.
+///
+/// Both are read here rather than inside registration because the *names* are
+/// needed twice: once by `register_recipe_query_routes`, and again by the
+/// raw-stdio layer, which must capture the untouched JSON of every route that
+/// binds Cypher parameters or a named recipe tool's integer guard never sees
+/// the request it is guarding. Registration re-derives them and is the party
+/// that refuses a duplicate, so a duplicate here is simply an empty list — the
+/// boot fails moments later with the message that names both claimants.
+fn recipe_route_plan(
+    manifest: Option<&mcp_methods::server::Manifest>,
+    catalog: &recipe_queries::RecipeCatalog,
+) -> Result<(recipe_queries::RecipeRouteOptions, Vec<String>)> {
+    let options = boot_recipe_routes(manifest)?;
+    let names = if options.named_tools {
+        catalog
+            .tool_names()
+            .map(|names| names.into_keys().collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Ok((options, names))
 }
 
 fn boot_fetch_image_caps(
@@ -1045,24 +1113,19 @@ pub(crate) async fn run_async(
         tools::refresh_skills_after_activation(&mut server, skill_refresher.clone());
     }
     if gate_code_tools {
-        // Disable, never skip registration: an unregistered name is absent from
-        // `router.map`, and `apply_bundled_tool_overrides` hard-errors on any
-        // manifest override naming a route not in that map (only the
-        // framework-gated `repo_management` gets a pass there). `disable_route`
-        // keeps the entry — unlisted, rejected on call — while leaving
-        // overrides resolvable.
-        server.tool_router_mut().disable_route("explore");
-        server.tool_router_mut().disable_route("read_code_source");
+        disable_code_tools(&mut server);
     }
     // Register YAML Cypher tools, then downstream domain routes. Keeping this
     // before skill finalisation makes every route visible to predicates.
+    let (recipe_routes, named_recipe_tools) =
+        recipe_route_plan(manifest.as_ref(), &recipe_catalog)?;
     register_extension_tools(
         &mut server,
         &graph_state,
         manifest.as_ref(),
         &csv_http,
         recipe_catalog,
-        &boot_recipe_catalog_budgets(manifest.as_ref())?,
+        &recipe_routes,
         domain_tools,
     )?;
 
@@ -1124,6 +1187,7 @@ pub(crate) async fn run_async(
             crate::raw_query_routes::route_pointers(
                 manifest.as_ref(),
                 recipe_catalog_hint.is_some(),
+                &named_recipe_tools,
             ),
         ))
         .await
@@ -1490,7 +1554,7 @@ mod boot_manifest_tests {
         let all_keys = manifest_with(
             tmp.path(),
             "name: all\nextensions:\n  cypher_recipes: {}\n  recipe_catalog: {}\n  \
-             value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
+             recipe_tools: true\n  value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
              write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
              fetch_images: {}\n",
         );
@@ -1538,6 +1602,36 @@ mod boot_manifest_tests {
         assert!(
             boot_recipe_catalog_budgets(Some(&typo)).is_err(),
             "a misspelled budget must fail the boot, not silently keep the default"
+        );
+    }
+
+    /// Named recipe tools are on unless the operator says no — the same
+    /// posture as producer skills — and a non-boolean is a boot error.
+    #[test]
+    fn recipe_tools_default_on_and_read_the_manifest_switch() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(boot_recipe_tools_enabled(None).expect("no manifest parses"));
+        let bare = manifest_with(tmp.path(), "name: bare\n");
+        assert!(boot_recipe_tools_enabled(Some(&bare)).expect("bare manifest parses"));
+
+        let off = manifest_with(
+            tmp.path(),
+            "name: off\nextensions:\n  recipe_tools: false\n",
+        );
+        assert!(!boot_recipe_tools_enabled(Some(&off)).expect("switch parses"));
+        assert!(
+            !boot_recipe_routes(Some(&off))
+                .expect("options parse")
+                .named_tools
+        );
+
+        let bad = manifest_with(
+            tmp.path(),
+            "name: bad\nextensions:\n  recipe_tools: maybe\n",
+        );
+        assert!(
+            boot_recipe_tools_enabled(Some(&bad)).is_err(),
+            "a non-boolean must fail the boot rather than read as off"
         );
     }
 

@@ -89,6 +89,11 @@ graph.set_recipe(
     "count(t) AS covering_tests ORDER BY qualified_name",
     schema({"requested": {"type": "array", "items": {"type": "string"}}}),
     GROUP_DESCRIPTION,
+    # The one query every review starts with, so it earns a tool of its own:
+    # a server reading this graph registers `code_review_coverage` with this
+    # description and this schema, and an agent calls it in one step. Expose
+    # a curated few — each named tool costs bytes in every `tools/list`.
+    tool="code_review_coverage",
 )
 
 graph.set_recipe(

@@ -177,6 +177,7 @@ fn add_recipe(graph: &mut DirGraph, recipe: &str, name: &str, group_description:
             }),
             cypher: "RETURN 1 AS n".to_string(),
             recipe_description: group_description.to_string(),
+            tool: None,
         },
     )
     .unwrap_or_else(|error| panic!("recipe {recipe}/{name}: {error}"));

@@ -29,5 +29,6 @@ pub(crate) use kglite::api::recipes::{
 };
 pub(crate) use result::{list_recipe_queries, run_recipe_query};
 pub(crate) use routes::{
-    register_recipe_query_routes, LIST_RECIPE_QUERIES_TOOL, RUN_RECIPE_QUERY_TOOL,
+    register_recipe_query_routes, RecipeRouteOptions, LIST_RECIPE_QUERIES_TOOL,
+    RUN_RECIPE_QUERY_TOOL,
 };

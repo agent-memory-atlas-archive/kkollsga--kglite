@@ -1102,7 +1102,7 @@
         },
         "set_recipe": {
           "kind": "method",
-          "signature": "(self, /, recipe, name, description, cypher, parameters=None, recipe_description=None)"
+          "signature": "(self, /, recipe, name, description, cypher, parameters=None, recipe_description=None, tool=None)"
         },
         "set_schema_version": {
           "kind": "method",

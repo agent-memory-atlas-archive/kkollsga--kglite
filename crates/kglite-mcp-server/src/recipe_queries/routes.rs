@@ -28,20 +28,90 @@ type DynFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 pub(crate) const LIST_RECIPE_QUERIES_TOOL: &str = "list_recipe_queries";
 pub(crate) const RUN_RECIPE_QUERY_TOOL: &str = "run_recipe_query";
 
-/// Register the two catalog routes as one ownership unit.
+/// How this deployment publishes the catalogue.
+#[derive(Clone, Debug)]
+pub(crate) struct RecipeRouteOptions {
+    /// What the catalogue block in `run_recipe_query`'s description may cost.
+    pub(crate) budgets: CatalogBudgets,
+    /// `extensions.recipe_tools`. On unless the operator says otherwise, the
+    /// same posture as producer skills: the *author* curates which queries
+    /// declare a `tool:`, every one of them runs the same validated read-only
+    /// Cypher `run_recipe_query` would, and a name already taken refuses the
+    /// boot rather than replacing anything.
+    pub(crate) named_tools: bool,
+    /// Tool names the manifest's own `tools:` block declares. Read only to
+    /// name the owner when a recipe asks for a name one of them already has.
+    pub(crate) manifest_tools: Vec<String>,
+}
+
+impl Default for RecipeRouteOptions {
+    fn default() -> Self {
+        Self {
+            budgets: CatalogBudgets::default(),
+            named_tools: true,
+            manifest_tools: Vec::new(),
+        }
+    }
+}
+
+/// One query a catalogue asked to have served under its own tool name.
+struct NamedRecipeTool {
+    tool: String,
+    recipe: String,
+    query: String,
+    description: String,
+    parameters: Map<String, Value>,
+}
+
+/// Every `tool:` the merged catalogue declares, refusing two claims on one
+/// name.
+///
+/// The duplicate check is the catalogue's own ([`RecipeCatalog::tool_names`])
+/// because a single manifest is checked the same way at parse time; what only
+/// registration can see is a name two *layers* claim — a producer query and a
+/// `.kgl` one, say — which `merge` composes without either source being wrong
+/// on its own.
+fn named_recipe_tools(catalog: &RecipeCatalog) -> Result<Vec<NamedRecipeTool>> {
+    catalog.tool_names()?;
+    let mut named = Vec::new();
+    for recipe in catalog.recipes() {
+        for query in recipe.queries() {
+            let Some(tool) = query.tool.clone() else {
+                continue;
+            };
+            named.push(NamedRecipeTool {
+                tool,
+                recipe: recipe.name.clone(),
+                query: query.name.clone(),
+                description: query.description.clone(),
+                parameters: query.parameters.as_json().clone(),
+            });
+        }
+    }
+    Ok(named)
+}
+
+/// Register the catalogue's routes as one ownership unit.
 ///
 /// The router's normal `add_route` operation replaces an existing route with
-/// the same name. Preflight both fixed names before adding either so a domain
-/// or manifest collision cannot leave a partially registered catalog.
+/// the same name. Preflight every name this call will claim — the two fixed
+/// ones and every `tool:` the catalogue declares — before adding any, so a
+/// domain or manifest collision cannot leave a partially registered catalog.
 pub(crate) fn register_recipe_query_routes(
     server: &mut McpServer,
     state: GraphState,
     catalog: Arc<RecipeCatalog>,
-    budgets: &CatalogBudgets,
+    options: &RecipeRouteOptions,
 ) -> Result<usize> {
     if catalog.is_empty() {
         return Ok(0);
     }
+
+    let named = if options.named_tools {
+        named_recipe_tools(&catalog)?
+    } else {
+        Vec::new()
+    };
 
     let collisions = [LIST_RECIPE_QUERIES_TOOL, RUN_RECIPE_QUERY_TOOL]
         .into_iter()
@@ -53,8 +123,75 @@ pub(crate) fn register_recipe_query_routes(
             collisions.join(", ")
         );
     }
+    for entry in &named {
+        let owner = if entry.tool == LIST_RECIPE_QUERIES_TOOL || entry.tool == RUN_RECIPE_QUERY_TOOL
+        {
+            Some("the recipe catalogue's own fixed route")
+        } else if !server
+            .tool_router_mut()
+            .map
+            .contains_key(entry.tool.as_str())
+        {
+            None
+        } else if options.manifest_tools.contains(&entry.tool) {
+            Some("a manifest `tools:` entry")
+        } else {
+            Some("an already-registered tool — a built-in or a downstream domain tool")
+        };
+        if let Some(owner) = owner {
+            anyhow::bail!(
+                "recipe query {}.{} asks to be served as tool {:?}, a name already owned by {}: \
+                 rename the query's `tool:`, or drop it and reach the query through \
+                 run_recipe_query",
+                entry.recipe,
+                entry.query,
+                entry.tool,
+                owner
+            );
+        }
+    }
 
-    let (run_description, form) = run_tool_description(&catalog, budgets);
+    for entry in named.iter() {
+        let attr = Tool::new_with_raw(
+            entry.tool.clone(),
+            Some(entry.description.clone().into()),
+            Arc::new(entry.parameters.clone()),
+        )
+        .with_output_schema::<RunRecipeQueryOutput>()
+        .with_annotations(safe_annotations());
+        let handler_state = state.clone();
+        let handler_catalog = catalog.clone();
+        let recipe = entry.recipe.clone();
+        let query = entry.query.clone();
+        server.tool_router_mut().add_route(ToolRoute::new_dyn(
+            attr,
+            move |ctx: ToolCallContext<'_, McpServer>| -> DynFut<'_, Result<CallToolResponse, McpError>> {
+                let state = handler_state.clone();
+                let catalog = handler_catalog.clone();
+                // The arguments *are* the variables: the route already knows
+                // which query it is, so `include_cypher` has no way to be
+                // asked for here — `run_recipe_query` remains the audit route.
+                let args = RunRecipeQueryArgs {
+                    recipe: recipe.clone(),
+                    query: query.clone(),
+                    variables: ctx.arguments.clone().unwrap_or_default(),
+                    include_cypher: false,
+                };
+                Box::pin(async move {
+                    Ok(run_recipe_query(&state, &catalog, args)
+                        .into_call_tool_result()
+                        .into())
+                })
+            },
+        ));
+        crate::raw_query_routes::protect_query_route(
+            server,
+            &entry.tool,
+            crate::raw_query_routes::TEMPLATE_QUERY_POINTER,
+        );
+    }
+
+    let (run_description, form) = run_tool_description(&catalog, &options.budgets);
     let list_catalog = catalog.clone();
     server.tool_router_mut().add_route(ToolRoute::new_dyn(
         recipe_tool::<ListRecipeQueriesArgs, ListRecipeQueriesOutput>(
@@ -95,7 +232,7 @@ pub(crate) fn register_recipe_query_routes(
         crate::raw_query_routes::RECIPE_QUERY_POINTER,
     );
 
-    Ok(2)
+    Ok(2 + named.len())
 }
 
 /// The run route's published tool: the catalogue in the description, and the
@@ -147,13 +284,17 @@ where
     Tool::new_with_raw(name, Some(description.into()), Arc::new(Map::new()))
         .with_input_schema::<I>()
         .with_output_schema::<O>()
-        .with_annotations(
-            ToolAnnotations::new()
-                .read_only(true)
-                .destructive(false)
-                .idempotent(true)
-                .open_world(false),
-        )
+        .with_annotations(safe_annotations())
+}
+
+/// Every recipe route is a read-only, idempotent, closed-world call over the
+/// graph this server has open — the fixed pair and a named query alike.
+fn safe_annotations() -> ToolAnnotations {
+    ToolAnnotations::new()
+        .read_only(true)
+        .destructive(false)
+        .idempotent(true)
+        .open_world(false)
 }
 
 fn deserialize_arguments<T: DeserializeOwned>(
@@ -310,7 +451,7 @@ mod tests {
             &mut server,
             GraphState::default(),
             described_catalog(),
-            &CatalogBudgets::default(),
+            &RecipeRouteOptions::default(),
         )
         .unwrap();
         let router = server.tool_router_mut();
@@ -357,7 +498,7 @@ mod tests {
             &mut server,
             GraphState::default(),
             described_catalog(),
-            &CatalogBudgets::default(),
+            &RecipeRouteOptions::default(),
         )
         .unwrap();
         let router = server.tool_router_mut();
@@ -395,7 +536,7 @@ mod tests {
                 &mut server,
                 GraphState::default(),
                 Arc::new(RecipeCatalog::default()),
-                &CatalogBudgets::default(),
+                &RecipeRouteOptions::default(),
             )
             .unwrap(),
             0
@@ -416,7 +557,7 @@ mod tests {
             &mut server,
             GraphState::default(),
             catalog(),
-            &CatalogBudgets::default(),
+            &RecipeRouteOptions::default(),
         )
         .expect_err("collision must fail");
 
@@ -441,7 +582,7 @@ mod tests {
             &mut server,
             GraphState::default(),
             catalog(),
-            &CatalogBudgets::default(),
+            &RecipeRouteOptions::default(),
         )
         .unwrap();
 
@@ -509,8 +650,13 @@ mod tests {
             .create_in_mode(&temp.path().join("empty.kgl"), StorageMode::Memory)
             .expect("create active graph");
         let mut server = McpServer::new(Default::default());
-        register_recipe_query_routes(&mut server, state, catalog(), &CatalogBudgets::default())
-            .unwrap();
+        register_recipe_query_routes(
+            &mut server,
+            state,
+            catalog(),
+            &RecipeRouteOptions::default(),
+        )
+        .unwrap();
 
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
         let server_handle = tokio::spawn(async move { server.serve(server_transport).await });
@@ -592,6 +738,321 @@ mod tests {
         server_handle.abort();
     }
 
+    /// A catalogue whose `by_city` query asks to be served under its own
+    /// name, beside one that did not.
+    fn named_catalog() -> Arc<RecipeCatalog> {
+        Arc::new(
+            RecipeCatalog::from_manifest_value(Some(&json!({
+                "review": {
+                    "description": "Review operations.",
+                    "queries": {
+                        "by_city": {
+                            "description": "People in one city.",
+                            "tool": "people_by_city",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                                "additionalProperties": false
+                            },
+                            "cypher": "MATCH (p:Person) WHERE p.city = $city RETURN p.title AS title ORDER BY title"
+                        },
+                        "empty": {
+                            "description": "Return a deterministic empty result.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                                "additionalProperties": false
+                            },
+                            "cypher": "UNWIND [] AS value RETURN value ORDER BY value"
+                        }
+                    }
+                }
+            })))
+            .expect("valid catalog"),
+        )
+    }
+
+    /// The named route publishes the *query's* contract, not the catalogue's:
+    /// its own description and its own parameter schema, with the same
+    /// read-only annotations and the same output envelope as the fixed pair.
+    #[test]
+    fn a_named_recipe_tool_publishes_the_query_contract() {
+        let mut server = McpServer::new(Default::default());
+        let registered = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            named_catalog(),
+            &RecipeRouteOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(registered, 3, "the fixed pair plus one named query");
+
+        let router = server.tool_router_mut();
+        let named = router.get("people_by_city").expect("named route");
+        assert_safe_contract(named);
+        assert_eq!(named.description.as_deref(), Some("People in one city."));
+        assert_eq!(
+            named.input_schema.get("required"),
+            Some(&json!(["city"])),
+            "the input schema is the query's own parameter schema"
+        );
+        assert_eq!(
+            named.input_schema.get("additionalProperties"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            named.output_schema,
+            router.get(RUN_RECIPE_QUERY_TOOL).unwrap().output_schema,
+            "one envelope, whichever route the agent reached the query through"
+        );
+        assert!(
+            !router.map.contains_key("empty"),
+            "a query that declared no tool gets no route"
+        );
+    }
+
+    #[test]
+    fn the_named_tool_opt_out_leaves_only_the_fixed_pair() {
+        let mut server = McpServer::new(Default::default());
+        let registered = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            named_catalog(),
+            &RecipeRouteOptions {
+                named_tools: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(registered, 2);
+        assert!(!server.tool_router_mut().map.contains_key("people_by_city"));
+    }
+
+    /// A name already taken is a boot refusal naming the owner, and nothing is
+    /// registered — the same ownership rule the fixed pair has, extended to
+    /// the names a catalogue author chose.
+    #[test]
+    fn a_colliding_tool_name_refuses_the_boot_atomically() {
+        // (a) another already-registered route — a built-in, a domain tool.
+        let mut server = McpServer::new(Default::default());
+        server.register_typed_tool::<ListRecipeQueriesArgs, _>(
+            "people_by_city",
+            "Existing owner.",
+            |_| "owned".to_string(),
+        );
+        let error = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            named_catalog(),
+            &RecipeRouteOptions::default(),
+        )
+        .expect_err("collision must fail the boot");
+        let message = error.to_string();
+        assert!(message.contains("people_by_city"), "{message}");
+        assert!(message.contains("review.by_city"), "{message}");
+        assert!(
+            !server
+                .tool_router_mut()
+                .map
+                .contains_key(RUN_RECIPE_QUERY_TOOL),
+            "a collision must not leave half a catalogue registered"
+        );
+        assert_eq!(
+            server
+                .tool_router_mut()
+                .get("people_by_city")
+                .and_then(|tool| tool.description.as_deref()),
+            Some("Existing owner."),
+            "the owner keeps its route"
+        );
+
+        // (b) a manifest `tools:` entry is named as the owner it is.
+        let mut server = McpServer::new(Default::default());
+        server.register_typed_tool::<ListRecipeQueriesArgs, _>(
+            "people_by_city",
+            "Manifest owner.",
+            |_| "owned".to_string(),
+        );
+        let error = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            named_catalog(),
+            &RecipeRouteOptions {
+                manifest_tools: vec!["people_by_city".to_string()],
+                ..Default::default()
+            },
+        )
+        .expect_err("collision must fail the boot");
+        assert!(error.to_string().contains("manifest `tools:`"), "{error}");
+
+        // (c) one of the catalogue's own fixed names.
+        let mut server = McpServer::new(Default::default());
+        let catalog = Arc::new(
+            RecipeCatalog::from_manifest_value(Some(&json!({
+                "review": {
+                    "description": "Review operations.",
+                    "queries": {
+                        "empty": {
+                            "description": "Return a deterministic empty result.",
+                            "tool": RUN_RECIPE_QUERY_TOOL,
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                                "additionalProperties": false
+                            },
+                            "cypher": "UNWIND [] AS value RETURN value ORDER BY value"
+                        }
+                    }
+                }
+            })))
+            .expect("valid catalog"),
+        );
+        let error = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            catalog,
+            &RecipeRouteOptions::default(),
+        )
+        .expect_err("a fixed name cannot be claimed");
+        assert!(
+            error.to_string().contains("the recipe catalogue's own"),
+            "{error}"
+        );
+        assert!(!server
+            .tool_router_mut()
+            .map
+            .contains_key(RUN_RECIPE_QUERY_TOOL));
+    }
+
+    /// Two queries claiming one name never reach registration — the catalogue
+    /// refuses to answer for its tool names at all, naming both claimants.
+    #[test]
+    fn two_queries_claiming_one_tool_name_refuse_the_boot() {
+        let cypher = "UNWIND [] AS value RETURN value ORDER BY value";
+        let parameters = json!({
+            "type": "object", "properties": {}, "required": [],
+            "additionalProperties": false
+        });
+        let catalog = Arc::new(
+            RecipeCatalog::from_manifest_value(Some(&json!({
+                "review": {
+                    "description": "Review operations.",
+                    "queries": {
+                        "one": {"description": "First.", "tool": "collide",
+                                "parameters": parameters, "cypher": cypher}
+                    }
+                },
+                "audit": {
+                    "description": "Audit operations.",
+                    "queries": {
+                        "two": {"description": "Second.", "tool": "collide",
+                                "parameters": parameters, "cypher": cypher}
+                    }
+                }
+            })))
+            .map(Arc::new),
+        );
+        // A single manifest refuses at parse time; the merged catalogue below
+        // is the case only registration can see.
+        assert!(catalog.is_err(), "one manifest, two claims");
+
+        let merged = kglite::api::recipes::merge(
+            RecipeCatalog::from_manifest_value(Some(&json!({
+                "audit": {"description": "Audit operations.", "queries": {
+                    "two": {"description": "Second.", "tool": "collide",
+                            "parameters": parameters, "cypher": cypher}}}
+            })))
+            .unwrap(),
+            RecipeCatalog::from_manifest_value(Some(&json!({
+                "review": {"description": "Review operations.", "queries": {
+                    "one": {"description": "First.", "tool": "collide",
+                            "parameters": parameters, "cypher": cypher}}}
+            })))
+            .unwrap(),
+        );
+        let mut server = McpServer::new(Default::default());
+        let error = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            Arc::new(merged),
+            &RecipeRouteOptions::default(),
+        )
+        .expect_err("two layers, one tool name");
+        let message = error.to_string();
+        assert!(
+            message.contains("audit.two") && message.contains("review.one"),
+            "{message}"
+        );
+        assert!(!server.tool_router_mut().map.contains_key("collide"));
+        assert!(!server
+            .tool_router_mut()
+            .map
+            .contains_key(RUN_RECIPE_QUERY_TOOL));
+    }
+
+    /// The point of the named route: the same query, reached two ways, must
+    /// answer with the identical envelope — success and failure alike.
+    #[tokio::test]
+    async fn a_named_recipe_tool_answers_exactly_as_run_recipe_query_does() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = GraphState::default();
+        state
+            .create_in_mode(&temp.path().join("empty.kgl"), StorageMode::Memory)
+            .expect("create active graph");
+        let mut server = McpServer::new(Default::default());
+        register_recipe_query_routes(
+            &mut server,
+            state,
+            named_catalog(),
+            &RecipeRouteOptions::default(),
+        )
+        .unwrap();
+
+        let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+        let server_handle = tokio::spawn(async move { server.serve(server_transport).await });
+        let client = ().serve(client_transport).await.expect("start MCP client");
+
+        for (variables, expected_error) in [
+            (json!({"city": "Oslo"}), None),
+            (json!({}), Some("invalid_variables")),
+            (json!({"city": 3}), Some("invalid_variables")),
+        ] {
+            let through_named = client
+                .call_tool(
+                    CallToolRequestParams::new("people_by_city")
+                        .with_arguments(variables.as_object().unwrap().clone()),
+                )
+                .await
+                .expect("named route answers");
+            let through_fixed = client
+                .call_tool(
+                    CallToolRequestParams::new(RUN_RECIPE_QUERY_TOOL).with_arguments(
+                        json!({"recipe": "review", "query": "by_city", "variables": variables})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+                .await
+                .expect("fixed route answers");
+            assert_eq!(through_named.is_error, through_fixed.is_error);
+            assert_eq!(
+                structured_json(&through_named),
+                structured_json(&through_fixed)
+            );
+            match expected_error {
+                Some(code) => assert_eq!(structured_json(&through_named)["code"], code),
+                None => assert_eq!(structured_json(&through_named)["result"]["row_count"], 0),
+            }
+        }
+
+        client.cancel().await.expect("stop MCP client");
+        server_handle.abort();
+    }
+
     #[tokio::test]
     async fn registered_recipe_route_rejects_unrepresentable_integer_variables() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -604,7 +1065,7 @@ mod tests {
             &mut server,
             state,
             numeric_catalog(),
-            &CatalogBudgets::default(),
+            &RecipeRouteOptions::default(),
         )
         .unwrap();
 

@@ -42,7 +42,7 @@ pub use validation::{
 };
 
 const RECIPE_KEYS: &[&str] = &["description", "queries"];
-const QUERY_KEYS: &[&str] = &["description", "parameters", "cypher"];
+const QUERY_KEYS: &[&str] = &["description", "parameters", "cypher", "tool"];
 
 /// Maximum rows a single recipe result may carry.
 ///
@@ -135,7 +135,9 @@ impl RecipeCatalog {
                 .map_err(|error| error.context(format!("recipe {name:?}")))?;
             parsed.insert(name.clone(), recipe);
         }
-        Ok(Self { recipes: parsed })
+        let catalog = Self { recipes: parsed };
+        catalog.tool_names()?;
+        Ok(catalog)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -166,6 +168,31 @@ impl RecipeCatalog {
 
     pub fn get(&self, name: &str) -> Option<&RecipeDefinition> {
         self.recipes.get(name)
+    }
+
+    /// Every declared tool name, mapped to the `recipe.query` that declared
+    /// it, in name order.
+    ///
+    /// Errors when two queries claim one name: the router would silently
+    /// serve whichever registered last, and which one that is depends on
+    /// catalogue order rather than on anything the author wrote. The check
+    /// lives here, on the catalogue, because a merged catalogue (producer
+    /// under graph under manifest) has to be asked the same question the
+    /// single-source one is asked at parse time.
+    pub fn tool_names(&self) -> CatalogResult<BTreeMap<String, String>> {
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        for recipe in self.recipes.values() {
+            for query in recipe.queries.values() {
+                let Some(tool) = &query.tool else { continue };
+                let owner = format!("{}.{}", recipe.name, query.name);
+                if let Some(existing) = names.insert(tool.clone(), owner.clone()) {
+                    return Err(invalid(format!(
+                        "tool name {tool:?} is claimed by two queries: {existing} and {owner}"
+                    )));
+                }
+            }
+        }
+        Ok(names)
     }
 
     /// Add one already-compiled query, creating its group with
@@ -265,6 +292,10 @@ pub struct RecipeQueryDefinition {
     pub description: String,
     pub parameters: ParameterSchema,
     pub cypher: String,
+    /// The MCP tool name this query asked to be served under, if any. The
+    /// catalogue only carries and de-duplicates it; registering the route is
+    /// the agent host's job.
+    pub tool: Option<String>,
 }
 
 impl RecipeQueryDefinition {
@@ -275,8 +306,17 @@ impl RecipeQueryDefinition {
         let raw_parameters = map
             .get("parameters")
             .ok_or_else(|| invalid("parameters is required"))?;
+        let tool = match map.get("tool") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .ok_or_else(|| invalid("tool must be a string"))?
+                    .to_string(),
+            ),
+        };
 
-        Self::compile(name, description, cypher_source, raw_parameters)
+        Self::compile(name, description, cypher_source, raw_parameters, tool)
     }
 
     /// Compile one already-destructured query definition.
@@ -290,7 +330,11 @@ impl RecipeQueryDefinition {
         description: String,
         cypher_source: String,
         raw_parameters: &Value,
+        tool: Option<String>,
     ) -> CatalogResult<Self> {
+        if let Some(tool) = &tool {
+            validate_tool_name(tool)?;
+        }
         let features = cypher::query_features(&cypher_source)
             .map_err(|error| invalid(format!("cypher is not a valid KGLite query: {error}")))?;
         validate_read_only_query(&features)?;
@@ -306,6 +350,7 @@ impl RecipeQueryDefinition {
             description,
             parameters,
             cypher: cypher_source,
+            tool,
         })
     }
 
@@ -385,6 +430,24 @@ pub fn validate_identifier(identifier: &str, label: &str) -> CatalogResult<()> {
     if !valid_start || !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
         return Err(invalid(format!(
             "{label} identifier {identifier:?} must match ^[A-Za-z_][A-Za-z0-9_]*$"
+        )));
+    }
+    Ok(())
+}
+
+/// An MCP tool name is wider than a catalogue identifier and bounded: it is
+/// published in `tools/list` and typed by a model, so a hyphen is legal (the
+/// convention in every hand-written tool set) and 64 characters is the ceiling
+/// a client can be expected to render.
+pub fn validate_tool_name(name: &str) -> CatalogResult<()> {
+    let mut chars = name.chars();
+    let valid_start = chars
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_');
+    let valid_rest = chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-');
+    if !valid_start || !valid_rest || name.len() > 64 {
+        return Err(invalid(format!(
+            "tool name {name:?} must match ^[A-Za-z_][A-Za-z0-9_-]{{0,63}}$"
         )));
     }
     Ok(())

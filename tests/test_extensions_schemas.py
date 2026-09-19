@@ -255,6 +255,10 @@ def test_recipe_schema_acceptance_matches_structural_parser_fixtures() -> None:
     assert _schema_accepts({}, schema, schema), "an empty catalog is the documented disabled shape"
     assert _schema_accepts(valid, schema, schema)
 
+    named = deepcopy(valid)
+    named["code_review"]["queries"]["resolve_function"]["tool"] = "resolve-function"
+    assert _schema_accepts(named, schema, schema), "a query may name the tool it is served under"
+
     defaulted = deepcopy(valid)
     parameters = defaulted["code_review"]["queries"]["resolve_function"]["parameters"]
     parameters["properties"]["limit"] = {"type": "integer", "default": 5, "minimum": 1}
@@ -276,6 +280,10 @@ def test_recipe_schema_acceptance_matches_structural_parser_fixtures() -> None:
     fixture = deepcopy(valid)
     fixture["code_review"]["workflow"] = ["resolve_function"]
     invalid.append(fixture)
+    for bad_tool in ("", "9lives", "two words", "a.b", "a" * 65):
+        fixture = deepcopy(valid)
+        fixture["code_review"]["queries"]["resolve_function"]["tool"] = bad_tool
+        invalid.append(fixture)
     fixture = deepcopy(valid)
     fixture["code_review"]["queries"] = {}
     invalid.append(fixture)

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use kglite::api::recipes::RecipeCatalog;
 use kglite::api::skills::SkillRecord;
-use mcp_methods::server::{Manifest, McpServer};
+use mcp_methods::server::{Manifest, McpServer, ToolSpec};
 
 use crate::tools::GraphState;
 use crate::*;
@@ -283,9 +283,9 @@ impl ServerExtensions {
     /// manifest — the one file an operator can edit — corrects both. Queries
     /// only one layer carries are all served.
     ///
-    /// Boot-only, like every catalogue: the two route names are fixed and are
-    /// settled before the tool allowlist, so the catalogue is immutable for
-    /// the session.
+    /// Boot-only, like every catalogue: the two fixed route names and any
+    /// `tool:` a query declares are all settled before the tool allowlist, so
+    /// the catalogue is immutable for the session.
     ///
     /// Build one with `kglite::api::recipes::RecipeCatalog::from_manifest_value`
     /// over the same JSON document `extensions.cypher_recipes` takes, or
@@ -331,7 +331,7 @@ pub(crate) fn register_extension_tools(
     manifest: Option<&Manifest>,
     csv_http: &Arc<csv_http::CsvHttpState>,
     recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
-    catalog_budgets: &recipe_queries::CatalogBudgets,
+    recipe_routes: &recipe_queries::RecipeRouteOptions,
     domain_tools: Option<Box<DomainToolRegistrar>>,
 ) -> Result<()> {
     if let Some(manifest) = manifest {
@@ -344,11 +344,29 @@ pub(crate) fn register_extension_tools(
     }
     register_domain_tools(server, graph_state.clone(), domain_tools)
         .context("downstream domain-tool registration failed")?;
+    // The manifest's own tool names, so a recipe asking for one of them is
+    // refused with the layer that owns it named.
+    let mut recipe_routes = recipe_routes.clone();
+    recipe_routes.manifest_tools = manifest
+        .map(|manifest| {
+            manifest
+                .tools
+                .iter()
+                .filter_map(|tool| match tool {
+                    ToolSpec::Cypher(spec) => Some(spec.name.clone()),
+                    ToolSpec::Python(spec) => Some(spec.name.clone()),
+                    // A bundled override renames a route this crate owns; the
+                    // refusal for those names is the fixed-route one.
+                    ToolSpec::Bundled(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let registered = recipe_queries::register_recipe_query_routes(
         server,
         graph_state.clone(),
         recipe_catalog,
-        catalog_budgets,
+        &recipe_routes,
     )
     .context("Cypher recipe route registration failed")?;
     if registered > 0 {

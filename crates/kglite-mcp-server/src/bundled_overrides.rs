@@ -281,7 +281,7 @@ mod bundled_override_tests {
             &mut server,
             GraphState::default(),
             recipe_catalog(),
-            &recipe_queries::CatalogBudgets::default(),
+            &recipe_queries::RecipeRouteOptions::default(),
         )
         .expect("register recipe routes");
 
@@ -308,7 +308,7 @@ mod bundled_override_tests {
                 &mut server,
                 GraphState::default(),
                 recipe_catalog(),
-                &recipe_queries::CatalogBudgets::default(),
+                &recipe_queries::RecipeRouteOptions::default(),
             )
             .expect("register recipe routes");
             let error = apply_bundled_tool_overrides(&mut server, &manifest)
@@ -337,7 +337,7 @@ mod bundled_override_tests {
             Some(&manifest),
             &std::sync::Arc::default(),
             recipe_catalog(),
-            &recipe_queries::CatalogBudgets::default(),
+            &recipe_queries::RecipeRouteOptions::default(),
             None,
         )
         .expect_err("legacy owner must block recipe registration");
@@ -376,7 +376,7 @@ mod bundled_override_tests {
             None,
             &std::sync::Arc::default(),
             recipe_catalog(),
-            &recipe_queries::CatalogBudgets::default(),
+            &recipe_queries::RecipeRouteOptions::default(),
             Some(domain_tools),
         )
         .expect_err("domain owner must block recipe registration");

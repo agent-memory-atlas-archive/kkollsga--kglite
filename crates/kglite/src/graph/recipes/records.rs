@@ -70,6 +70,10 @@ pub struct RecipeRecord {
     /// The group's description. Every member of a group carries it; the
     /// catalogue takes the first in name order.
     pub recipe_description: String,
+    /// The MCP tool name this query is served under, when its author asked
+    /// for one. `None` — the default — leaves it reachable through
+    /// `run_recipe_query` alone.
+    pub tool: Option<String>,
 }
 
 /// What [`set`] did — the caller usually wants to report one or the other.
@@ -135,6 +139,9 @@ pub fn validate(record: &RecipeRecord) -> Result<(), KgError> {
     if record.cypher.trim().is_empty() {
         return Err(missing("cypher", "a non-empty Cypher statement"));
     }
+    if let Some(tool) = &record.tool {
+        super::validate_tool_name(tool)?;
+    }
     compile(record)?;
     Ok(())
 }
@@ -145,6 +152,7 @@ fn compile(record: &RecipeRecord) -> Result<RecipeQueryDefinition, RecipeCatalog
         record.description.clone(),
         record.cypher.clone(),
         &record.parameters,
+        record.tool.clone(),
     )
 }
 
@@ -186,6 +194,7 @@ fn read_record(graph: &DirGraph, idx: petgraph::graph::NodeIndex) -> RecipeRecor
         parameters: parameters_property(graph, idx),
         cypher: string_property(graph, idx, "cypher"),
         recipe_description: string_property(graph, idx, "recipe_description"),
+        tool: Some(string_property(graph, idx, "tool")).filter(|name| !name.is_empty()),
     }
 }
 
@@ -193,8 +202,8 @@ fn read_record(graph: &DirGraph, idx: petgraph::graph::NodeIndex) -> RecipeRecor
 ///
 /// Unlike [`crate::graph::skills::list`], which drops 16 KiB bodies, this keeps
 /// every field: a recipe query is one statement, and both the catalogue build
-/// and export need all six properties, so an abridged listing would only force
-/// a [`get`] per row.
+/// and export need every property, so an abridged listing would only force a
+/// [`get`] per row.
 pub fn list(graph: &DirGraph) -> Vec<RecipeRecord> {
     let _arena_guard = graph.graph.begin_query();
     let Some(members) = graph.type_indices.get(RECIPE_LABEL) else {
@@ -258,10 +267,12 @@ fn refuse_if_read_only(graph: &DirGraph) -> Result<(), KgError> {
 /// Create or replace the record keyed `(record.recipe, record.name)`.
 ///
 /// Routes through Cypher `MERGE` so the write inherits the schema lock, write
-/// scope, declared shapes, constraint checks, WAL and CDC. All six properties
-/// are written every time: the planner's typo-guard rejects a property the
-/// type's metadata has never seen, so a node first written with a subset would
-/// make the next full write illegal.
+/// scope, declared shapes, constraint checks, WAL and CDC. Every property is
+/// written every time — including `tool` as an empty string when the record
+/// declares none: the planner's typo-guard rejects a property the type's
+/// metadata has never seen, so a node first written with a subset would make
+/// the next full write illegal, and an omitted `tool` would leave a cleared
+/// one still serving.
 pub fn set(graph: &mut DirGraph, record: &RecipeRecord) -> Result<SetOutcome, KgError> {
     validate(record)?;
     refuse_if_read_only(graph)?;
@@ -283,6 +294,10 @@ pub fn set(graph: &mut DirGraph, record: &RecipeRecord) -> Result<SetOutcome, Kg
         (
             "recipe_description".into(),
             Value::String(record.recipe_description.clone()),
+        ),
+        (
+            "tool".into(),
+            Value::String(record.tool.clone().unwrap_or_default()),
         ),
     ];
 
@@ -367,21 +382,22 @@ pub fn export_value(graph: &DirGraph) -> Json {
         let Some(queries) = entry.get_mut("queries").and_then(Json::as_object_mut) else {
             continue;
         };
-        queries.insert(
-            record.name.clone(),
-            serde_json::json!({
-                "description": record.description,
-                "parameters": record.parameters,
-                "cypher": record.cypher,
-            }),
-        );
+        let mut query = serde_json::json!({
+            "description": record.description,
+            "parameters": record.parameters,
+            "cypher": record.cypher,
+        });
+        if let (Some(tool), Some(map)) = (record.tool, query.as_object_mut()) {
+            map.insert("tool".to_string(), Json::String(tool));
+        }
+        queries.insert(record.name.clone(), query);
     }
     Json::Object(recipes)
 }
 
 /// Read one recipe query from the markdown dialect a vault carries
 /// (VAULT.md §8): frontmatter `recipe`, `name`, `description`, optional
-/// `recipe_description` and optional `parameters`, with the statement in the
+/// `recipe_description`, `parameters` and `tool`, with the statement in the
 /// body's single ` ```cypher ` fence.
 ///
 /// **Not validated here.** `recipe_description` is optional in the file and
@@ -425,6 +441,7 @@ pub fn parse_markdown(text: &str) -> Result<RecipeRecord, KgError> {
             Some(value) => crate::param::kglite_value_to_json(value),
         },
         cypher: cypher_fence(&body)?,
+        tool: Some(scalar("tool")).filter(|name| !name.is_empty()),
     })
 }
 
@@ -440,8 +457,15 @@ pub fn render_markdown(record: &RecipeRecord) -> String {
         serde_json::to_string(text).unwrap_or_else(|_| format!("\"{}\"", text.replace('"', "'")))
     };
     let parameters = serde_json::to_string(&record.parameters).unwrap_or_else(|_| "{}".to_string());
+    // Emitted only when set: an author reading the file back must see the key
+    // exactly when the query is served as a tool.
+    let tool = record
+        .tool
+        .as_deref()
+        .map(|name| format!("tool: {}\n", quoted(name)))
+        .unwrap_or_default();
     format!(
-        "---\nrecipe: {}\nname: {}\ndescription: {}\nrecipe_description: {}\nparameters: {}\n---\n\n```cypher\n{}\n```\n",
+        "---\nrecipe: {}\nname: {}\ndescription: {}\nrecipe_description: {}\nparameters: {}\n{tool}---\n\n```cypher\n{}\n```\n",
         quoted(&record.recipe),
         quoted(&record.name),
         quoted(&record.description),
@@ -601,6 +625,7 @@ pub fn import_value(
                 parameters: Json::Object(query.parameters.as_json().clone()),
                 cypher: query.cypher.clone(),
                 recipe_description: recipe.description.clone(),
+                tool: query.tool.clone(),
             };
             set(graph, &record)?;
             written.push((record.recipe, record.name));

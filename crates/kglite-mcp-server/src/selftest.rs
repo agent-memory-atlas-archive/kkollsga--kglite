@@ -473,6 +473,78 @@ fn check_recipe_tools(
         )),
     };
     checks.push(("recipe catalog tools", check));
+    check_named_recipe_tools(manifest, names, checks);
+}
+
+/// Every `tool:` the *manifest's* catalogue declares must be a registered
+/// route.
+///
+/// Only the manifest layer, and deliberately: the harness speaks MCP to a
+/// child and cannot read a `.kgl`'s or a producer's queries, so a graph-
+/// carried `tool:` has nothing here to be compared against. What it can
+/// check is the one layer the operator wrote — where a missing route means
+/// the allowlist dropped it, `extensions.recipe_tools: false` is set, or the
+/// name never registered at all, and all three are worth a line.
+fn check_named_recipe_tools(
+    manifest: Option<&Manifest>,
+    names: &[String],
+    checks: &mut Vec<(&'static str, Check)>,
+) {
+    let named_tools_on = manifest
+        .and_then(|manifest| manifest.extensions.get("recipe_tools"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let declared: Vec<String> = manifest
+        .and_then(|manifest| manifest.extensions.get("cypher_recipes"))
+        .and_then(Value::as_object)
+        .map(|catalog| {
+            catalog
+                .values()
+                .filter_map(|recipe| recipe.get("queries").and_then(Value::as_object))
+                .flat_map(|queries| queries.values())
+                .filter_map(|query| query.get("tool").and_then(Value::as_str))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(check) = named_recipe_tool_check(&declared, names, named_tools_on) {
+        checks.push(("named recipe tools", check));
+    }
+}
+
+/// The verdict for the manifest-declared `tool:` names, given what
+/// `tools/list` carried. `None` when the manifest declared none.
+fn named_recipe_tool_check(declared: &[String], names: &[String], enabled: bool) -> Option<Check> {
+    if declared.is_empty() {
+        return None;
+    }
+    if !enabled {
+        let still_there: Vec<&String> = declared
+            .iter()
+            .filter(|tool| registered(names, tool))
+            .collect();
+        return Some(if still_there.is_empty() {
+            Check::Skip(format!(
+                "extensions.recipe_tools is off; {} declared name(s) not registered",
+                declared.len()
+            ))
+        } else {
+            Check::Fail(format!(
+                "extensions.recipe_tools is off but {still_there:?} is registered"
+            ))
+        });
+    }
+    let missing: Vec<&String> = declared
+        .iter()
+        .filter(|tool| !registered(names, tool))
+        .collect();
+    Some(if missing.is_empty() {
+        Check::Pass(format!("{} registered", declared.len()))
+    } else {
+        Check::Fail(format!(
+            "manifest recipe queries declare {missing:?}, which `tools/list` does not carry"
+        ))
+    })
 }
 
 /// Ask the child what its merged catalog actually holds.
@@ -891,6 +963,34 @@ mod tests {
             "",
         ] {
             assert!(!activation_succeeded(text), "expected failure for {text:?}");
+        }
+    }
+
+    /// Every arm, because each one is a different operator mistake: a name
+    /// that never registered (an allowlist, a collision the operator has not
+    /// read yet), and a switch turned off while the routes are still there.
+    #[test]
+    fn named_recipe_tools_are_checked_against_what_tools_list_carried() {
+        let declared = vec!["find_callers".to_string(), "find_callees".to_string()];
+        let both = vec!["find_callers".to_string(), "find_callees".to_string()];
+
+        assert!(named_recipe_tool_check(&[], &both, true).is_none());
+        assert!(matches!(
+            named_recipe_tool_check(&declared, &both, true),
+            Some(Check::Pass(_))
+        ));
+        let one = vec!["find_callers".to_string()];
+        match named_recipe_tool_check(&declared, &one, true) {
+            Some(Check::Fail(message)) => assert!(message.contains("find_callees"), "{message}"),
+            _ => panic!("a declared name `tools/list` lacks must fail"),
+        }
+        assert!(matches!(
+            named_recipe_tool_check(&declared, &[], false),
+            Some(Check::Skip(_))
+        ));
+        match named_recipe_tool_check(&declared, &one, false) {
+            Some(Check::Fail(message)) => assert!(message.contains("find_callers"), "{message}"),
+            _ => panic!("a registered name under an off switch must fail"),
         }
     }
 

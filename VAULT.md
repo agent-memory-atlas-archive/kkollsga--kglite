@@ -1229,9 +1229,10 @@ wrong, there is simply less of it than the author intended.
   [Authoring MCP skills](https://kglite.readthedocs.io/en/latest/python/guides/mcp-skills.html).
 - `.kglite/recipes/*.md` become `KgliteRecipe` nodes — one stored Cypher query
   per file. Frontmatter carries `recipe` (the group id), `name`, `description`,
-  optional `recipe_description` (what the group is for) and optional
-  `parameters` (the JSON Schema for the query's `$parameters`, as a nested
-  map). The body is the statement, in a fenced ` ```cypher ` block:
+  optional `recipe_description` (what the group is for), optional `parameters`
+  (the JSON Schema for the query's `$parameters`, as a nested map) and optional
+  `tool` (an MCP tool name to serve the query under directly). The body is the
+  statement, in a fenced ` ```cypher ` block:
 
   ````markdown
   ---
@@ -1283,6 +1284,23 @@ wrong, there is simply less of it than the author intended.
   carries the declaration is free, and the group needs exactly one. A group no
   file describes is every member's own failure — each is skipped with its own
   warning, because there is nothing to inherit.
+
+  **`tool:` serves the query as a named MCP tool.** A server reading this
+  vault registers a tool of that name whose description is the query's and
+  whose input schema is its `parameters`, so an agent calls it in one step
+  instead of naming the query inside `run_recipe_query`'s arguments. The name
+  matches `^[A-Za-z_][A-Za-z0-9_-]{0,63}$`; two queries cannot claim one name,
+  and a name the server has already registered for anything else refuses the
+  boot naming the owner. The operator can switch the whole mechanism off with
+  `extensions.recipe_tools: false`.
+
+  **Expose a curated few.** Every named tool costs its description and its
+  schema in every `tools/list`, which every session pays for whether or not it
+  calls the query; the queries that carry the vault's routine questions earn
+  that, a long tail does not. The catalogue block in `run_recipe_query`'s
+  description marks the ones that have a tool, so nothing is hidden by leaving
+  `tool:` off. Registration is **boot-time**: adding or removing a `tool:`
+  needs the server restarted, not a rebuild.
 
 ## 9. Build report and validation
 

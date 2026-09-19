@@ -41,6 +41,7 @@ fn record_to_dict<'py>(py: Python<'py>, record: &RecipeRecord) -> PyResult<Bound
     )?;
     dict.set_item("cypher", &record.cypher)?;
     dict.set_item("recipe_description", &record.recipe_description)?;
+    dict.set_item("tool", record.tool.as_deref())?;
     Ok(dict)
 }
 
@@ -77,11 +78,11 @@ impl KnowledgeGraph {
     }
 
     /// Create or replace one recipe query, returning it as stored.
-    // The six catalogue fields are the Python signature, and a params struct
-    // cannot cross the pyo3 boundary — the argument count is the API's, not a
-    // shape this side is free to choose.
+    // The seven catalogue fields are the Python signature, and a params
+    // struct cannot cross the pyo3 boundary — the argument count is the
+    // API's, not a shape this side is free to choose.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (recipe, name, description, cypher, parameters=None, recipe_description=None))]
+    #[pyo3(signature = (recipe, name, description, cypher, parameters=None, recipe_description=None, tool=None))]
     fn set_recipe(
         &mut self,
         py: Python<'_>,
@@ -91,6 +92,7 @@ impl KnowledgeGraph {
         cypher: &str,
         parameters: Option<&Bound<'_, PyAny>>,
         recipe_description: Option<&str>,
+        tool: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let parameters = match parameters {
             Some(value) => kglite_value_to_json(&py_in::py_value_to_value(value)?),
@@ -107,6 +109,7 @@ impl KnowledgeGraph {
             parameters,
             cypher: cypher.to_string(),
             recipe_description: group_description,
+            tool: tool.map(str::to_string),
         };
         self.check_durable_owner()?;
         let outcome = recipes::set(get_graph_mut(&mut self.inner), &record).map_err(kg_to_pyerr)?;

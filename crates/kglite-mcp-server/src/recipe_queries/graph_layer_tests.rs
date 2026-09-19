@@ -11,8 +11,8 @@ use serde_json::json;
 
 use super::*;
 use crate::recipe_queries::{
-    description::CatalogBudgets, register_recipe_query_routes, run_recipe_query,
-    wire::RunRecipeQueryArgs, LIST_RECIPE_QUERIES_TOOL, RUN_RECIPE_QUERY_TOOL,
+    register_recipe_query_routes, run_recipe_query, wire::RunRecipeQueryArgs, RecipeRouteOptions,
+    LIST_RECIPE_QUERIES_TOOL, RUN_RECIPE_QUERY_TOOL,
 };
 
 const NO_PARAMETERS: &str =
@@ -26,6 +26,7 @@ fn record(recipe: &str, name: &str, cypher: &str) -> RecipeRecord {
         parameters: serde_json::from_str(NO_PARAMETERS).expect("the empty closed schema"),
         cypher: cypher.to_string(),
         recipe_description: format!("Group {recipe}."),
+        tool: None,
     }
 }
 
@@ -122,7 +123,7 @@ fn a_graph_only_catalogue_registers_the_routes_and_runs() {
         &mut server,
         state.clone(),
         catalogue.clone(),
-        &CatalogBudgets::default(),
+        &RecipeRouteOptions::default(),
     )
     .expect("routes");
     assert_eq!(registered, 2);
@@ -445,7 +446,7 @@ fn a_producer_only_catalogue_registers_the_routes_in_the_workspace_modes() {
             &mut server,
             state.clone(),
             catalogue.clone(),
-            &CatalogBudgets::default(),
+            &RecipeRouteOptions::default(),
         )
         .expect("routes");
         assert_eq!(registered, 2, "{mode:?}");
