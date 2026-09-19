@@ -48,6 +48,12 @@
       "sha256": "8ecb282b0d1ec178a4813dc1f5f9a4e7f14006807c8938ba18da378cc63c8d73",
       "status": "accepted"
     },
+    "0_17_11.json": {
+      "evidence": "2026-09-19 16:44 capture on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, uptime 17 d, load avg 3.3-4.5 (desktop load, no concurrent builds); vs accepted 0_17_10: worst cell +13.4% min (return_node_10k), median +7.0%, controls flat (cypher_match +1.4%, untyped_edge_count_1m +0.5%, hop1_deg3_memory -0.9%, khop3 -0.3%). Retake 16:57 under the same load: worst +9.8% (fixed_two_hop_count_star), median +1.7%, save_kgl -0.1% (the first run's +11.2% was load), load_kgl +7.4%/+6.0% in both runs \u2014 the one consistent small cost (the .kgl header gained the source_dialect field), far under the 20% gate. Two agreeing passes, nothing threshold-adjacent; anchor OK worst +10.9%.",
+      "platform": "Darwin/arm64",
+      "sha256": "653b971c340732318002ce37a9b9f6572beea3079ffc5052ca167beb7ba54f7b",
+      "status": "accepted"
+    },
     "0_17_2.json": {
       "evidence": "Release 0.17.2, 2026-09-09: two complete 37-cell release captures (100 minimum rounds, 20 warmups) agree against accepted 0.17.1: median min delta -1.10%/-2.50%, worst regression +5.80%/+5.10%, none near 20%, zero heavy-tail cells. Cypher controls stayed within -3.08%..0.00% across both runs. Captured under active desktop load 5.53/2.86/2.53 (aggregate process CPU 41%) then 2.24/2.65/2.55 (43%); no simultaneous native build during measurements. The anchor remains red only for the pre-existing 0.17.0 complete-snapshot normalization correctness cost: disk_dir_reopen_fresh +293.5% vs accepted 0.16.24, but -1.2%/-2.6% in these runs vs 0.17.1 and about +4% vs accepted 0.17.0; all other anchor cells are below 30% (next load_kgl +20.8%).",
       "platform": "Darwin/arm64",
@@ -103,9 +109,9 @@
       "status": "accepted"
     },
     "current.json": {
-      "evidence": "2026-09-18 22:53 capture on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, load avg 2.4, no concurrent builds (the five sibling releases had finished), no stray processes; vs accepted 0_17_9: worst cell +2.3% min (untyped_edge_count_1m, itself a control), traversal +1.9%, all 37 cells within +2.3%; controls within +2.3%; single clean capture, no retake needed (nothing near threshold)",
+      "evidence": "2026-09-19 16:44 capture on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, uptime 17 d, load avg 3.3-4.5 (desktop load, no concurrent builds); vs accepted 0_17_10: worst cell +13.4% min (return_node_10k), median +7.0%, controls flat (cypher_match +1.4%, untyped_edge_count_1m +0.5%, hop1_deg3_memory -0.9%, khop3 -0.3%). Retake 16:57 under the same load: worst +9.8% (fixed_two_hop_count_star), median +1.7%, save_kgl -0.1% (the first run's +11.2% was load), load_kgl +7.4%/+6.0% in both runs \u2014 the one consistent small cost (the .kgl header gained the source_dialect field), far under the 20% gate. Two agreeing passes, nothing threshold-adjacent; anchor OK worst +10.9%.",
       "platform": "Darwin/arm64",
-      "sha256": "8ecb282b0d1ec178a4813dc1f5f9a4e7f14006807c8938ba18da378cc63c8d73",
+      "sha256": "653b971c340732318002ce37a9b9f6572beea3079ffc5052ca167beb7ba54f7b",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -128,7 +134,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_17_10.json",
+    "Darwin/arm64": "0_17_11.json",
     "Linux/x86_64": "reference_0_17_0_cells.linux.json"
   },
   "schema_version": 1

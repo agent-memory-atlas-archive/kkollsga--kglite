@@ -8,6 +8,8 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+
+## [0.17.11] - 2026-09-19
 ### Fixed
 
 - A code span holding a multi-byte character no longer shifts the byte
@@ -128,7 +130,12 @@ before upgrading.
   `&okf::RebuildOptions` instead of `&okf::BuildOptions` — its `dialect` is
   `Option<Dialect>`, which is what lets an omitted dialect mean "as this graph
   was built". New: `okf::stamped_dialect`, `Dialect::from_name`,
-  `Dialect::name`, `KnowledgeGraph.source_dialect`.
+  `Dialect::name`, `KnowledgeGraph.source_dialect`. Two more struct-shape
+  changes `make semver-check` flags: `okf::BuildReport` gained the public
+  field `forced_splits` (a struct literal must name it), and `okf::links::
+  Extraction` gained a private `warnings` field, so it is no longer
+  constructible by struct literal outside the crate (it is a returned value;
+  `Extraction::default()` still works).
 
 ## [0.17.10] - 2026-09-18
 ### Fixed
