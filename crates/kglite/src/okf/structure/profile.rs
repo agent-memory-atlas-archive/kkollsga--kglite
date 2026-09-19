@@ -64,6 +64,19 @@ const RESERVED_FRONTMATTER: [&str; 7] = [
     "id", "type", "title", "aliases", "tags", "kg_skip", "parent",
 ];
 
+/// Whether a key names something a note or a derived node defines itself, so
+/// no vault-side declaration may write it: [`DERIVED_PROPERTIES`],
+/// [`RESERVED_FRONTMATTER`], and the two identity columns the builder owns.
+///
+/// `inherit:` checks the first two lists directly, because its message names
+/// which of them the key came from. A directive (VAULT.md §5.8) has one
+/// message for all of them and asks here.
+pub(crate) fn is_reserved_property(key: &str) -> bool {
+    DERIVED_PROPERTIES.contains(&key)
+        || RESERVED_FRONTMATTER.contains(&key)
+        || matches!(key, "concept_id" | "file_path")
+}
+
 /// The `embed_text:` placeholders (VAULT.md §7.1). Any other is an error: a
 /// template is written once and read on every node, so a typo that rendered
 /// literally would be baked into an entire corpus's embedding text.

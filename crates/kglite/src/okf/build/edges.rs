@@ -30,7 +30,7 @@ pub(super) fn build_edges(
 
     // Semantic links: internal → concept edges (resolved), external → Source.
     for d in docs {
-        for link in &d.links {
+        for (source, link) in note_links(d).chain(derived_links(d)) {
             let (target_label, target_id) = if link.is_external {
                 (SOURCE_LABEL.to_string(), link.target.clone())
             } else {
@@ -44,20 +44,11 @@ pub(super) fn build_edges(
             };
             // A reversed link (a `parent:` pointing parent → child) is the same
             // edge read from the other end, so only the endpoints swap.
+            let (source_id, source_label) = source;
             let (src_label, src_id, tgt_label, tgt_id) = if link.reverse {
-                (
-                    target_label,
-                    target_id,
-                    d.label.clone(),
-                    d.concept_id.clone(),
-                )
+                (target_label, target_id, source_label, source_id)
             } else {
-                (
-                    d.label.clone(),
-                    d.concept_id.clone(),
-                    target_label,
-                    target_id,
-                )
+                (source_label, source_id, target_label, target_id)
             };
             groups
                 .entry((link.conn_type.clone(), src_label, tgt_label))
@@ -97,6 +88,35 @@ pub(super) fn build_edges(
     }
 
     emit_groups(graph, groups, &opts.profile.edge_defaults, report)
+}
+
+/// One link's source endpoint as `(id, label)`.
+type Source = (String, String);
+
+/// Every link the note itself wrote — prose, frontmatter, edge-table rows.
+fn note_links(d: &ConceptDoc) -> impl Iterator<Item = (Source, &Link)> {
+    d.links
+        .iter()
+        .map(|link| ((d.concept_id.clone(), d.label.clone()), link))
+}
+
+/// The links a directive wrote **from a derived node** (VAULT.md §5.8). The
+/// target travels the same ladder a note's own link travels — stub and all —
+/// and only the tail differs: the section the directive sat under.
+fn derived_links(d: &ConceptDoc) -> impl Iterator<Item = (Source, &Link)> {
+    d.derived
+        .links_from
+        .iter()
+        .filter_map(move |(suffix, link)| {
+            let label = d
+                .derived
+                .nodes
+                .iter()
+                .find(|node| node.suffix == *suffix)?
+                .label
+                .clone();
+            Some(((format!("{}{suffix}", d.concept_id), label), link))
+        })
 }
 
 /// The `anchor` a body link carries (VAULT.md §5.4), or `None` for a link

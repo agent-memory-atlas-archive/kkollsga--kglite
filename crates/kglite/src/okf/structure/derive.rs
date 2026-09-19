@@ -72,6 +72,18 @@ pub(crate) struct Derived {
     /// Chunk boundaries the cap forced *inside* one block, summed over the
     /// note: the pieces a block was cut into, less the one it would have been.
     pub forced_splits: usize,
+    /// Each heading's section suffix, by index into `BlockTree::headings`;
+    /// empty when `sections:` is not declared. It is what lets a pass outside
+    /// this module — the directive reader (VAULT.md §5.8) — name the section
+    /// a byte offset sits in without re-deriving the heading paths.
+    pub section_suffixes: Vec<String>,
+    /// `(source suffix, link)` for the edges a directive stated **from a
+    /// derived node** to a note the resolver has yet to find (§5.8).
+    ///
+    /// Separate from [`Derived::links`], which the note takes over: these
+    /// keep their own source, so `HAS_SECTION`'s section is also the tail of
+    /// the `ADDRESS` edge written under that heading.
+    pub links_from: Vec<(String, Link)>,
 }
 
 /// Derive every node `structure:` declares from one note's body.
@@ -100,6 +112,7 @@ pub(crate) fn derive(
         .sections
         .as_ref()
         .map(|rule| derive_sections(body, tree, rule, &mut ids, &mut out));
+    out.section_suffixes = sections.clone().unwrap_or_default();
     if let Some(rule) = &profile.chunks {
         derive_chunks(body, tree, rule, sections.as_deref(), &mut ids, &mut out);
     }

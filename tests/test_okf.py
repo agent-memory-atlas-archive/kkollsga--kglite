@@ -1503,3 +1503,51 @@ def test_typed_inline_link_names_the_edge(tmp_path):
         "guide.md: `[[atlas]]{3d}`: a link type holds no whitespace and must normalise to a "
         "name that does not start with a digit — the brace is left as prose"
     ]
+
+
+def test_directive_states_a_section_property_and_a_typed_edge(tmp_path):
+    """VAULT.md §5.8, the RMS help shape: a GUI path written beside the
+    sentence it describes is a Section property, queryable by Cypher and
+    absent from the section's text and from every chunk's text and
+    ``embed_text``; a wikilink value is a typed edge leaving that Section.
+    """
+    (tmp_path / ".kglite").mkdir()
+    (tmp_path / ".kglite" / "vault.yaml").write_text(
+        "kglite_vault: 1\ndefault_label: Article\nstructure:\n"
+        "  sections: {label: Section, edge: HAS_SECTION}\n"
+        "  chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, "
+        "max_words: 650, max_chars: 6000}\n"
+        '  embed_text: "{title} | {section_title}\\n\\n{text}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "annotations.md").write_text(
+        "### Annotation Table\n\n"
+        "To open the **Annotation Table** dialog box, click the button.\n\n"
+        "<!-- kglite address: Data tree -> Wells | Task pane: Wells -> Annotations table -->\n"
+        "<!-- kglite documented_in: [[Wells]] -->\n\n"
+        "Then pick a well.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "Wells.md").write_text("The wells guide.\n", encoding="utf-8")
+
+    g = okf.build(str(tmp_path), dialect="obsidian")
+    rows = g.cypher("MATCH (s:Section) RETURN s.concept_id AS id, s.address AS address, s.text AS text").to_list()
+    assert rows == [
+        {
+            "id": "annotations#Annotation Table",
+            "address": "Data tree -> Wells | Task pane: Wells -> Annotations table",
+            "text": "\nTo open the **Annotation Table** dialog box, click the button.\n\n\nThen pick a well.",
+        }
+    ]
+    assert g.cypher("MATCH (:Section)-[r:DOCUMENTED_IN]->(t) RETURN t.concept_id AS target").to_list() == [
+        {"target": "Wells"}
+    ]
+
+    chunks = g.cypher("MATCH (c:Chunk) RETURN c.text AS t, c.embed_text AS e").to_list()
+    assert chunks, "the section packs at least one chunk"
+    for row in chunks:
+        assert "kglite" not in row["t"], row["t"]
+        assert "kglite" not in row["e"], row["e"]
+
+    body = g.cypher("MATCH (n:Article {concept_id:'annotations'}) RETURN n.body AS b").to_list()[0]["b"]
+    assert "<!-- kglite address:" in body, "the note's own prose is verbatim"

@@ -974,3 +974,301 @@ fn a_typed_inline_link_types_the_edge_it_is_written_on() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Directives → properties and typed edges (VAULT.md §5.8)
+// ---------------------------------------------------------------------------
+
+/// `(source id, target id)` of every edge of one type, sorted.
+fn typed_edges(g: &DirGraph, conn: &str) -> Vec<(String, String)> {
+    edges_of(g)
+        .into_iter()
+        .filter(|(_, c, _, _)| c == conn)
+        .map(|(source, _, target, _)| (source, target))
+        .collect()
+}
+
+/// A vault with its own `.kglite/vault.yaml`, built the way a real one is.
+fn config_vault(config: &str, notes: &[(&str, &str)]) -> BuildOutput {
+    let dir = tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".kglite")).unwrap();
+    std::fs::write(dir.path().join(".kglite/vault.yaml"), config).unwrap();
+    for (rel, text) in notes {
+        write(dir.path(), rel, text);
+    }
+    build(
+        dir.path(),
+        &BuildOptions::for_dialect(crate::okf::Dialect::Obsidian),
+    )
+    .unwrap()
+}
+
+const DIRECTIVE_CONFIG: &str = "kglite_vault: 1\ndefault_label: Article\nstructure:\n  \
+     sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}\n  \
+     chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_words: 650, max_chars: 6000}\n";
+
+/// The RMS shape: a GUI path stated beside the prose it describes, queryable
+/// on the Section and absent from every text the section and its chunks hold.
+#[test]
+fn a_directive_sets_a_property_on_its_enclosing_section() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[(
+            "annotations.md",
+            "### Annotation Table\n\n\
+             To open the **Annotation Table** dialog box, click the button.\n\n\
+             <!-- kglite address: Data tree -> Wells | Task pane: Wells -> Annotations table -->\n",
+        )],
+    );
+    let g = out.graph;
+    assert_eq!(
+        property(&g, "annotations#Annotation Table", "address"),
+        Some(Value::String(
+            "Data tree -> Wells | Task pane: Wells -> Annotations table".to_string()
+        )),
+        "a value YAML would read as a mapping is the raw text the author wrote"
+    );
+    for id in [
+        "annotations#Annotation Table",
+        "annotations#Annotation Table~chunk1",
+    ] {
+        let Some(Value::String(text)) = property(&g, id, "text") else {
+            panic!("no text on `{id}`");
+        };
+        assert!(!text.contains("kglite"), "`{id}` = {text:?}");
+    }
+}
+
+#[test]
+fn a_directive_above_the_first_heading_sets_a_property_on_the_note() {
+    let g = config_vault(
+        DIRECTIVE_CONFIG,
+        &[(
+            "note.md",
+            "<!-- kglite owner: docs -->\n\nlead-in\n\n# One\n\nbody\n",
+        )],
+    )
+    .graph;
+    assert_eq!(
+        property(&g, "note", "owner"),
+        Some(Value::String("docs".to_string()))
+    );
+}
+
+/// With no `sections:` rule there is no section to carry it, so every
+/// directive lands on the note.
+#[test]
+fn without_a_sections_rule_a_directive_lands_on_the_note() {
+    let g = config_vault(
+        "kglite_vault: 1\ndefault_label: Article\nstructure:\n  \
+         chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_words: 650, max_chars: 6000}\n",
+        &[("note.md", "# One\n\nbody\n\n<!-- kglite owner: docs -->\n")],
+    )
+    .graph;
+    assert_eq!(
+        property(&g, "note", "owner"),
+        Some(Value::String("docs".to_string()))
+    );
+}
+
+#[test]
+fn a_wikilink_valued_directive_is_a_typed_edge_from_its_section() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[
+            (
+                "guide.md",
+                "# Faults\n\nprose\n\n<!-- kglite depends_on: [[Horizons]] -->\n",
+            ),
+            ("Horizons.md", "The surfaces.\n"),
+        ],
+    );
+    assert_eq!(
+        typed_edges(&out.graph, "DEPENDS_ON"),
+        vec![("guide#Faults".to_string(), "Horizons".to_string())],
+        "the edge leaves the Section, not the note"
+    );
+    assert_eq!(
+        property(&out.graph, "guide#Faults", "depends_on"),
+        None,
+        "a wikilink value is edges and never also a property (§4.3)"
+    );
+}
+
+#[test]
+fn a_list_of_wikilinks_is_several_edges_and_a_plain_list_is_a_property() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[
+            (
+                "guide.md",
+                "# Faults\n\nprose\n\n<!-- kglite see_also: [\"[[A]]\", \"[[B]]\"] -->\n\
+                 <!-- kglite keywords: [one, two] -->\n",
+            ),
+            ("A.md", "a\n"),
+            ("B.md", "b\n"),
+        ],
+    );
+    let mut targets: Vec<String> = typed_edges(&out.graph, "SEE_ALSO")
+        .into_iter()
+        .map(|(_, target)| target)
+        .collect();
+    targets.sort();
+    assert_eq!(targets, vec!["A".to_string(), "B".to_string()]);
+    assert_eq!(
+        property(&out.graph, "guide#Faults", "keywords"),
+        Some(Value::List(vec![
+            Value::String("one".to_string()),
+            Value::String("two".to_string())
+        ]))
+    );
+}
+
+/// A target no note answers to is a stub, exactly as a frontmatter or a prose
+/// link's is (§5.6).
+#[test]
+fn a_directive_edge_to_a_missing_note_dangles_like_any_other() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[(
+            "guide.md",
+            "# Faults\n\nprose\n\n<!-- kglite depends_on: [[Nowhere]] -->\n",
+        )],
+    );
+    assert_eq!(out.report.dangling, 1);
+    assert_eq!(provisional_count(&out.graph), 1);
+}
+
+#[test]
+fn a_directive_property_obeys_the_declared_type() {
+    let g = config_vault(
+        &format!("{DIRECTIVE_CONFIG}types:\n  Section: {{version: string}}\n"),
+        &[("note.md", "# One\n\nbody\n\n<!-- kglite version: 12 -->\n")],
+    )
+    .graph;
+    assert_eq!(
+        property(&g, "note#One", "version"),
+        Some(Value::String("12".to_string())),
+        "declared beats inferred, as it does for a frontmatter value (§4.2)"
+    );
+}
+
+/// A date behaves as it does in frontmatter (§4.2).
+#[test]
+fn a_directive_value_is_typed_like_a_frontmatter_value() {
+    let g = config_vault(
+        DIRECTIVE_CONFIG,
+        &[(
+            "note.md",
+            "# One\n\nbody\n\n<!-- kglite released: 2026-09-19 -->\n<!-- kglite count: 3 -->\n",
+        )],
+    )
+    .graph;
+    assert!(
+        matches!(
+            property(&g, "note#One", "released"),
+            Some(Value::DateTime(_))
+        ),
+        "{:?}",
+        property(&g, "note#One", "released")
+    );
+    assert_eq!(property(&g, "note#One", "count"), Some(Value::Int64(3)));
+}
+
+#[test]
+fn a_directive_naming_a_reserved_property_is_an_error() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[(
+            "note.md",
+            "# One\n\nbody\n\n<!-- kglite text: nope -->\n<!-- kglite tags: nope -->\n",
+        )],
+    );
+    assert_eq!(out.report.errors.len(), 2, "{:?}", out.report.errors);
+    assert!(
+        out.report.errors.iter().any(|e| e.contains("`text`"))
+            && out.report.errors.iter().any(|e| e.contains("`tags`")),
+        "{:?}",
+        out.report.errors
+    );
+    let Some(Value::String(text)) = property(&out.graph, "note#One", "text") else {
+        panic!("the section keeps its own text");
+    };
+    assert!(!text.contains("nope"), "{text:?}");
+}
+
+/// Pre-mortem (i): a key the vault also declares as a hub is an ordinary
+/// property here — the typed-edge rule is what takes a key away from a hub,
+/// and it fires on the value, not on the name (§4.3, §7).
+#[test]
+fn a_hub_key_directive_is_a_property_unless_its_value_is_a_wikilink() {
+    let config = format!("{DIRECTIVE_CONFIG}hubs:\n  topic: {{label: Topic, edge: ABOUT}}\n");
+    let g = config_vault(
+        &config,
+        &[(
+            "note.md",
+            "# One\n\nbody\n\n<!-- kglite topic: seismic -->\n",
+        )],
+    )
+    .graph;
+    assert_eq!(
+        property(&g, "note#One", "topic"),
+        Some(Value::String("seismic".to_string()))
+    );
+    assert_eq!(count_label(&g, "Topic"), 0, "no hub node from a directive");
+
+    let out = config_vault(
+        &config,
+        &[
+            (
+                "note.md",
+                "# One\n\nbody\n\n<!-- kglite topic: [[Seismic]] -->\n",
+            ),
+            ("Seismic.md", "s\n"),
+        ],
+    );
+    assert_eq!(
+        typed_edges(&out.graph, "TOPIC"),
+        vec![("note#One".to_string(), "Seismic".to_string())]
+    );
+}
+
+#[test]
+fn the_last_directive_with_one_key_wins_and_warns() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[(
+            "note.md",
+            "# One\n\nbody\n\n<!-- kglite owner: first -->\n<!-- kglite owner: second -->\n",
+        )],
+    );
+    assert_eq!(
+        property(&out.graph, "note#One", "owner"),
+        Some(Value::String("second".to_string()))
+    );
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("owner") && w.contains("note.md")),
+        "{:?}",
+        out.report.warnings
+    );
+}
+
+#[test]
+fn a_directive_with_no_value_warns_and_states_nothing() {
+    let out = config_vault(
+        DIRECTIVE_CONFIG,
+        &[("note.md", "# One\n\nbody\n\n<!-- kglite address -->\n")],
+    );
+    assert_eq!(property(&out.graph, "note#One", "address"), None);
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("address") && w.contains("no value")),
+        "{:?}",
+        out.report.warnings
+    );
+}

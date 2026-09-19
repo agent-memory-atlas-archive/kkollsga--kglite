@@ -17,6 +17,7 @@
 //! the Python wheel enables it, bare builds don't.
 
 pub mod build;
+pub(crate) mod directives;
 pub mod export;
 pub mod fingerprint;
 pub mod frontmatter;
@@ -351,7 +352,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     let (fm_links, hub_key_edges) =
         frontmatter_edges(&mut fm, profile, parent_dir(doc_path), &mut errors);
 
-    let props: Vec<(String, Value)> = fm
+    let mut props: Vec<(String, Value)> = fm
         .into_iter()
         .map(|(k, v)| {
             let v = if profile.infer_temporal {
@@ -385,6 +386,19 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     for link in std::mem::take(&mut derived.links) {
         links::push_unique(&mut all_links, link);
     }
+    // `<!-- kglite key: value -->` reaches the section derive just made, or
+    // the note (VAULT.md §5.8). After the derive, before the doc is sealed.
+    directives::apply(
+        &tree,
+        &mut derived,
+        &mut directives::NoteSide {
+            profile,
+            source_dir,
+            props: &mut props,
+            links: &mut all_links,
+            errors: &mut errors,
+        },
+    );
     let body = if opts.with_body { Some(body) } else { None };
 
     Ok(Some(ConceptDoc {

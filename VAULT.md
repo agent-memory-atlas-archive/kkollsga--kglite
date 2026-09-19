@@ -542,13 +542,53 @@ author's own. The note's `body` property keeps the directive verbatim, which
 is what lets an export write the file back byte for byte (§10).
 
 A directive is recognised — and skipped — in every dialect; what a key
-*means* is defined where the feature it configures is. A key this build does
-not know is recorded and otherwise ignored, so a vault may carry a directive a
-later kglite will read.
+*means* is defined here.
 
 | Directive | Meaning |
 |---|---|
 | `<!-- kglite chunk -->` | Close the open chunk at this point (§7.1 `chunks:`). |
+| `<!-- kglite <key>: <value> -->` | State `<key>` on the node this directive sits in: a **typed edge** when the value names wikilinks, a **property** otherwise. |
+| `<!-- kglite <key> -->` | Nothing — a key with no value states nothing, and the build warns (§9). |
+
+**Which node it states it on.** The **enclosing section**, when `structure:`
+declares `sections:` and the directive sits under a heading; the **note**
+otherwise — above the first heading, and in a vault that derives no sections.
+A directive therefore reaches exactly the node a reader would point at: the
+one whose prose it was written beside.
+
+**Value or edge, by §4.3's rule.** A value that names a wikilink — one
+`[[Target]]`, or a list in which every element is one — becomes edges of type
+`UPPER_SNAKE(key)` from that node to those notes, and no property. Targets
+resolve as body links do (§5.2) and an unresolved one becomes a stub (§5.6),
+exactly as a frontmatter key's would. Anything else becomes a property named
+`key`, typed as §4.2 types a frontmatter value and overridden by `types:` for
+that node's label.
+
+A directive is written *inline in prose*, and the value grammar bends three
+ways for it:
+
+- **A bare `[[Target]]` needs no quotes**, and nor does `[[A]], [[B]]`. In
+  frontmatter the quotes are what stop YAML reading `[[X]]` as a nested flow
+  sequence; in a comment beside a sentence there is nothing else `[[X]]` could
+  mean. `[[A, B]]` is still one target — the whole value is tried as a single
+  wikilink before the commas are.
+- **A value YAML would read as a mapping is the raw text.** `:` is ordinary
+  punctuation in a sentence, so `address: Data tree -> Wells | Task pane:
+  Wells` states that string. A property could not hold a mapping in any case.
+- **A value YAML refuses is the raw text too**, for the same reason.
+
+**Keys a directive may not name.** Anything a note or a derived node defines
+itself: the §4.1 reserved keys, the derived properties `inherit:` may not name
+either (§7.1), the note's `body:` property, and `concept_id` / `file_path`.
+Each is an **error** naming the key (§9). A key the vault declares under
+`hubs:` (§7) is nothing special here — it is a property, unless its value is a
+wikilink and the typed-edge rule takes it, which is the same precedence §4.3
+already sets for frontmatter.
+
+**One key, one value per node.** A second directive naming a key the same node
+already carries — from an earlier directive or from the note's own frontmatter
+— replaces it, and the build warns (§9). Edges do not follow that rule: two
+wikilink directives sharing a key state two edges, as a frontmatter list does.
 
 ## 6. Attachments
 
@@ -794,7 +834,9 @@ block is not one, because that region is not scanned at all (§5.1).
   from the line after the heading to the next heading of the same or higher
   level, trailing blank lines trimmed and any `<!-- kglite … -->` directive
   cut out, §5.8), `note_id`, plus every `inherit:`
-  property. The note's own `body` property is untouched and still holds the
+  property — **and** whatever a `<!-- kglite <key>: <value> -->` written under
+  this heading states, as a property or as a typed edge leaving this section
+  (§5.8). The note's own `body` property is untouched and still holds the
   whole body — deriving sections moves nothing out of the prose.
 - **Edges**: `edge` joins the note to each of its top-level sections and a
   section to each section directly inside it, so every section has exactly one
@@ -1183,6 +1225,7 @@ findings. The classification is the contract.
 | A link or attachment reference naming an absolute filesystem path, or climbing above the vault root — in the body or in a typed-edge key. | §4.3, §5.1, §6.2 |
 | A `.kglite/vault.yaml` the schema refuses — an unknown key at the top level or inside `structure:` (§7.1), an unknown `kglite_vault` version, a value of the wrong shape, a malformed `ontology:` document, an `inherit:` entry naming a property a derived node defines itself, or an `embed_text:` placeholder this spec does not name. This **fails the build** (§7); `okf.validate` reports it as the report's single error. | §7 |
 | An ontology document the declaration API refuses. | §7 |
+| A `<!-- kglite <key>: … -->` naming a reserved key, a derived property, the note's `body:` property, `concept_id` or `file_path`. | §5.8 |
 
 **Warnings** — legitimate in a real vault, worth seeing:
 
@@ -1196,6 +1239,8 @@ findings. The classification is the contract.
 | A `structure:` rule that matched nothing anywhere in the vault — for an edge table, one that stated no edge. | §7.1 |
 | A `<!-- kglite -->` directive naming no key. Its line is still cut out of the derived text, and it carries no meaning. | §5.8 |
 | A `<!-- kglite chunk -->` written inside a list item, a quotation or a table, where there is no chunk of its own to close. | §7.1 |
+| A `<!-- kglite <key> -->` with no value, which states nothing. | §5.8 |
+| A key stated twice on one node — by two directives, or by a directive and the note's frontmatter. The last directive wins. | §5.8 |
 | An `edge_defaults:` entry whose property the edge already carries, or whose edge type the vault has none of. | §7.2 |
 | A missing attachment, or an ambiguous bare filename (which resolves to nothing, and the warning names the candidates). | §6.6 |
 | A case-insensitive id collision — two ids differing only in case. | §3 |
@@ -1521,6 +1566,7 @@ that follows it produces a vault this spec describes.
 | categorical facets — tags, keywords, components | list-valued frontmatter keys plus `hubs:` | hub nodes and their edges |
 | images and downloads | note-relative references, files copied in, PNG/JPEG/GIF/WebP | `Image` / `Attachment` nodes and edges (§6) |
 | a heading that is really a symbol name | `key_from_heading:` with `under_label:` | the section relabelled, `qualified_name` stored |
+| a fact about **one section** that the prose states in words — a menu path, an owner, a version | a directive under that heading (§5.8) | that property on the `Section`, out of its `text` |
 | provenance that is constant per edge type | `edge_defaults:` (§7.2) | that property on every edge of the type |
 | anything to search or embed | `text_indexes:` / `embed:` on `Chunk` and `Section`, with `embed_text:` | BM25 and vectors at the granularity that answers |
 
@@ -1598,7 +1644,37 @@ vault whose notes are genuinely one kind, as §7's example is.
 conversion, and every fence is still an example. Fix the converter and the
 filter becomes worth declaring.
 
-### 13.4 The loop
+### 13.4 Stating a fact the prose only says in words
+
+A help corpus writes the way to reach a dialog into the sentence that
+introduces it:
+
+```markdown
+### Annotation Table
+
+To open the **Annotation Table** dialog box, click the button on the
+**Wells** task pane.
+
+<!-- kglite address: Data tree -> Wells | Task pane: Wells -> Annotations table -->
+<!-- kglite documented_in: [[Wells]] -->
+```
+
+The two directives (§5.8) state on the `Annotation Table` **Section** what the
+paragraph only implies: an `address` property and a `DOCUMENTED_IN` edge to
+the `Wells` note. Neither reaches the section's `text` or the chunk packed
+from it, so retrieval still sees only the prose, and the file still renders in
+Obsidian exactly as it did.
+
+```cypher
+MATCH (s:Section) WHERE s.address CONTAINS 'Task pane'
+RETURN s.title, s.address
+```
+
+Reach for this when the fact is **about one section** and the alternative is a
+frontmatter key about the whole note, which would be wrong, or a table nobody
+reads. A fact about the whole note still belongs in frontmatter (§4.3).
+
+### 13.5 The loop
 
 1. Convert a **sample** — fifty pages, not the corpus.
 2. `kglite okf check <dir> --strict`. Errors are spec violations; warnings at

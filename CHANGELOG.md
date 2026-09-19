@@ -10,6 +10,9 @@ before upgrading.
 ## [Unreleased]
 ### Fixed
 
+- A code span holding a multi-byte character no longer shifts the byte
+  offsets of the inline tags after it (`links.rs::mask_code_spans` emitted one
+  NUL per char). Latent until tags carried offsets; pinned.
 - **A `CALL { }` body whose pattern reads an imported variable through a
   property map no longer aggregates to 0.** `MATCH (n:Note) CALL { WITH n
   MATCH (c:Chunk {note_id: n.id}) RETURN count(c) AS k } RETURN k` returned
@@ -69,6 +72,24 @@ before upgrading.
   body is unchanged: a chunk's `text` keeps the `{type}`, and an export writes
   the line back byte for byte without restating the edge in frontmatter.
   Obsidian dialect only.
+- **Vault directives (VAULT.md §5.8).** An HTML comment on a line of its
+  own, `<!-- kglite <key>: <value> -->`, states `<key>` on the section it sits
+  under — or on the note, above the first heading and in a vault that derives
+  no sections. A value naming wikilinks becomes `UPPER_SNAKE(key)` edges from
+  that node, resolved and dangling-handled exactly as a frontmatter edge key
+  is; anything else becomes a property, typed as a frontmatter value is typed
+  and overridden by `types:`. A bare `[[Target]]` needs no quotes here, and a
+  value YAML would read as a mapping (a sentence holding a colon) is kept as
+  the raw text. A directive is never scanned and never prose: its line is cut
+  out of every derived `text` and of the `embed_text` rendered from one, while
+  the note's `body` keeps it verbatim so an export still writes the file back
+  byte for byte. A `<!-- kglite -->` with no key, a directive with no value, a
+  key stated twice on one node, and a chunk marker inside a list, quotation or
+  table are warnings; a directive naming a reserved key, a derived property,
+  the `body:` property, `concept_id` or `file_path` is an error.
+- **`<!-- kglite chunk -->`** closes the open chunk at that point — the
+  author's second lever, beside `^block-id`, over where a section divides. It
+  is not counted in `forced_splits`.
 - **`run_recipe_query`'s description carries the served catalogue** — one line
   per query with its description and parameters (types, enum values, defaults,
   required) — and its input schema publishes `enum` arrays of the real
