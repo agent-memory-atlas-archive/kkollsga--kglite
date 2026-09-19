@@ -1637,6 +1637,12 @@ that follows it produces a vault this spec describes.
 > **Frontmatter is the node, headings are the sections, `^blockid` is the
 > citable unit.** Everything below follows from those three.
 
+§13.4 and §13.5 are about the other direction — annotating a corpus that is
+already converted. The
+[OKF guide](https://kglite.readthedocs.io/en/latest/python/guides/okf.html#annotating-a-vault-in-place)
+walks all four in-note annotations on one page with the Cypher that reads each
+back.
+
 ### 13.1 What to emit
 
 | Source has … | Emit … | Graph gets … |

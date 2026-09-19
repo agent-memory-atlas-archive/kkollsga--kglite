@@ -161,6 +161,100 @@ for you from `--hub` / `--index` / `--embed` flags and ends by running
 broken exits non-zero. It needs `beautifulsoup4` and `markdownify`
 (`requirements/examples.txt`) — neither is a kglite dependency.
 
+## Annotating a vault in place
+
+A converted help corpus says things in prose that no query can reach: which
+task pane opens a dialog, what a paragraph is *for*, where one topic ends and
+the next begins. Four annotations state those facts **in the note itself**, in
+syntax Obsidian either renders normally or hides, so the vault stays the source
+of truth — nothing is rewritten, and an export writes every file back byte for
+byte. They are specified in VAULT.md §5.3, §5.5 and §5.8; what follows is one
+page using all four.
+
+```markdown
+---
+type: Article
+---
+## Annotation table
+
+To open the **Annotation table** dialog box, click the button on the
+[[Wells]]{opens-dialog} task pane. #intent/annotate-wells
+
+<!-- kglite address: Data tree -> Wells | Task pane: Wells -> Annotations table -->
+
+<!-- kglite chunk -->
+
+The datum is not checked when the table is imported. #warning
+```
+
+```yaml
+# .kglite/vault.yaml
+kglite_vault: 1
+default_label: Article
+
+tag_labels:
+  "intent/*": {label: Intent, edge: HAS_INTENT}
+
+structure:
+  sections: {label: Section, edge: HAS_SECTION}
+  chunks: {label: Chunk, edge: HAS_CHUNK, max_words: 120}
+```
+
+**1. A typed link — `[[Wells]]{opens-dialog}`.** The brace directly after `]]`
+names that one link's edge type, above the heading it sits under and above
+`heading_edges:`. It renders as an ordinary wikilink plus the literal text
+`{opens-dialog}`, and it normalises the way a frontmatter key does
+(`opens-dialog` → `OPENS_DIALOG`).
+
+```python
+g.cypher("MATCH (a:Article)-[:OPENS_DIALOG]->(b) RETURN a.title, b.concept_id")
+```
+
+**2. A directive property — `<!-- kglite address: … -->`.** An HTML comment on
+a line of its own states a key on the **enclosing section** (on the note above
+the first heading, or where no `sections:` rule is declared). A value naming
+wikilinks becomes typed edges instead; anything else is a property typed the
+way frontmatter is. Obsidian hides it, and it is cut out of every derived
+`text` and `embed_text`, so retrieval still sees only the prose.
+
+```python
+g.cypher("MATCH (s:Section) WHERE s.address CONTAINS 'Task pane' "
+         "RETURN s.title, s.address")
+```
+
+**3. A modelled tag — `#intent/annotate-wells`.** With a `tag_labels:` rule the
+tag stops being a `Tag` and becomes an `Intent` node keyed on the text after
+the prefix, joined from the innermost derived node that holds it — here the
+chunk. Tags no rule matches are unchanged, and *every* inline tag also lands in
+a `tags` list on that same node, which is what makes a one-word marker
+selectable per paragraph rather than per page.
+
+```python
+g.cypher("MATCH (c:Chunk)-[:HAS_INTENT]->(i:Intent) RETURN i.title, c.text")
+g.cypher("MATCH (c:Chunk) WHERE 'warning' IN c.tags RETURN c.concept_id, c.text")
+```
+
+**4. A chunk boundary — `<!-- kglite chunk -->`.** The packer fills a chunk to
+`max_words` / `max_chars` and knows nothing about where a topic ends; this
+marker closes the open chunk at that point. It is the fix for the caveat above:
+without it the caution and the procedure pack together and `#warning` marks
+both. A `^block-id` (Obsidian's own anchor) does the same and additionally
+gives the chunk a stable id.
+
+```python
+g.cypher("MATCH (:Section {title:'Annotation table'})-[:HAS_CHUNK]->(c) "
+         "RETURN c.ordinal, c.text ORDER BY c.ordinal")
+```
+
+`kglite okf check <dir> --strict` reports a marker that promoted nothing, a
+`tag_labels:` rule no tag matched, and a directive naming a key a note or a
+derived node defines itself — the three ways an annotation can be written and
+silently do nothing.
+
+A fifth annotation, `<!-- kglite heading -->`, promotes the line below it to a
+heading: it is for a converter that emitted a bold signature line where a
+`####` belonged, and it is documented with the rest in VAULT.md §5.8.
+
 ## Maintaining agent memory & skills
 
 Because the result is a normal graph, "tooling for memories and skills" is just

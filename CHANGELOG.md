@@ -90,6 +90,28 @@ before upgrading.
 - **`<!-- kglite chunk -->`** closes the open chunk at that point — the
   author's second lever, beside `^block-id`, over where a section divides. It
   is not counted in `forced_splits`.
+- **Vault format: `tag_labels:`** in `.kglite/vault.yaml` maps a tag prefix
+  pattern `<prefix>/*` to `{label, edge}`. A tag it matches — inline or in
+  frontmatter — becomes a node of that label keyed on the text after the
+  prefix, joined by `edge` from the innermost derived node holding it (the
+  note where `structure:` derives none), and leaves the `Tag` hub. Identity
+  folds case as the hub's does, the longest matching prefix wins, and a rule
+  no tag matched is a build warning (VAULT.md §5.5, §7).
+- **Vault format: `tags` on derived nodes.** With `structure:` declared, every
+  inline `#tag` is written into a `tags` list property on the innermost
+  derived node whose range contains it, so a paragraph-scoped marker is
+  selectable per chunk (`WHERE 'warning' IN c.tags`). `tags` joins the
+  properties a derived node defines itself, so `inherit:` and
+  `<!-- kglite tags: … -->` may not name it (VAULT.md §5.5, §7.1).
+- **Vault format: `<!-- kglite heading -->`** on the line above a paragraph
+  promotes that paragraph's first line to a heading at the enclosing
+  heading's level + 1, with surrounding `**bold**` markers stripped — so a
+  converted API page's bold signature lines become addressable sections,
+  with the file left byte-for-byte unchanged. Sections, ids,
+  `key_from_heading:`, table attachment and `[[Note#Name]]` all read it as an
+  ordinary heading; a marker with no paragraph below it warns (VAULT.md §5.8).
+- OKF guide: "Annotating a vault in place" walks the four in-note annotations
+  on one help page with the Cypher that reads each back.
 - **`run_recipe_query`'s description carries the served catalogue** — one line
   per query with its description and parameters (types, enum values, defaults,
   required) — and its input schema publishes `enum` arrays of the real
