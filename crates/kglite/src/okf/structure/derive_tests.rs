@@ -799,3 +799,99 @@ fn a_keyless_directive_warns() {
     );
     assert_eq!(text_of(&d, "#One~chunk1"), "para");
 }
+
+// ---------------------------------------------------------------------------
+// `<!-- kglite chunk -->` (VAULT.md §5.8, §7.1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_chunk_marker_closes_the_open_chunk_between_two_paragraphs() {
+    let body = concat!(
+        "# One\n",
+        "\n",
+        "First paragraph.\n",
+        "\n",
+        "<!-- kglite chunk -->\n",
+        "\n",
+        "Second paragraph.\n",
+    );
+    let d = run(body, &both(650, 6000));
+    assert_eq!(
+        nodes(&d),
+        vec![
+            ("#One", "Section"),
+            ("#One~chunk1", "Chunk"),
+            ("#One~chunk2", "Chunk"),
+        ]
+    );
+    assert_eq!(text_of(&d, "#One~chunk1"), "First paragraph.");
+    assert_eq!(text_of(&d, "#One~chunk2"), "Second paragraph.");
+    assert_eq!(prop(&d, "#One~chunk1", "ordinal"), Value::Int64(0));
+    assert_eq!(prop(&d, "#One~chunk2", "ordinal"), Value::Int64(1));
+    assert!(edges(&d).contains(&(
+        "NEXT_CHUNK".to_string(),
+        "#One~chunk1".to_string(),
+        "#One~chunk2".to_string()
+    )));
+    assert_eq!(
+        d.forced_splits, 0,
+        "an authored boundary is a choice, not a cap the packer had to break"
+    );
+}
+
+#[test]
+fn a_chunk_marker_first_or_last_in_a_section_splits_nothing() {
+    let body = concat!(
+        "# One\n",
+        "\n",
+        "<!-- kglite chunk -->\n",
+        "\n",
+        "Only paragraph.\n",
+        "\n",
+        "<!-- kglite chunk -->\n",
+    );
+    let d = run(body, &both(650, 6000));
+    assert_eq!(
+        nodes(&d),
+        vec![("#One", "Section"), ("#One~chunk1", "Chunk")]
+    );
+    assert_eq!(text_of(&d, "#One~chunk1"), "Only paragraph.");
+    assert!(d.warnings.is_empty(), "{:?}", d.warnings);
+}
+
+/// Only a top-level marker names a boundary: inside a list item there is no
+/// chunk of its own to close, and silently doing nothing would look like a
+/// packer bug to the author.
+#[test]
+fn a_chunk_marker_inside_a_list_warns_and_splits_nothing() {
+    let body = concat!(
+        "# One\n",
+        "\n",
+        "- first item\n",
+        "\n",
+        "  <!-- kglite chunk -->\n",
+        "\n",
+        "- second item\n",
+    );
+    let d = run(body, &both(650, 6000));
+    assert_eq!(
+        d.warnings,
+        vec!["`<!-- kglite chunk -->` inside a list has no chunk to split (VAULT.md §7.1)"]
+    );
+    assert_eq!(
+        nodes(&d),
+        vec![("#One", "Section"), ("#One~chunk1", "Chunk")]
+    );
+    assert!(!text_of(&d, "#One~chunk1").contains("kglite"));
+}
+
+/// A marker between two paragraphs of one *note* with no `sections:` rule
+/// divides the note's own chunk sequence just the same.
+#[test]
+fn a_chunk_marker_above_the_first_heading_divides_the_notes_own_chunks() {
+    let body = "alpha\n\n<!-- kglite chunk -->\n\nbeta\n";
+    let d = run(body, &both(650, 6000));
+    assert_eq!(nodes(&d), vec![("~chunk1", "Chunk"), ("~chunk2", "Chunk")]);
+    assert_eq!(text_of(&d, "~chunk1"), "alpha");
+    assert_eq!(text_of(&d, "~chunk2"), "beta");
+}

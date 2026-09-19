@@ -512,7 +512,7 @@ scanned — a callout is not a comment — and its `section` is the heading abov
 ### 5.8 Directives
 
 ```markdown
-<!-- kglite owner: docs -->
+<!-- kglite chunk -->
 <!-- kglite address: Data tree -> Wells | Task pane: Wells -> Annotations table -->
 ```
 
@@ -545,6 +545,10 @@ A directive is recognised — and skipped — in every dialect; what a key
 *means* is defined where the feature it configures is. A key this build does
 not know is recorded and otherwise ignored, so a vault may carry a directive a
 later kglite will read.
+
+| Directive | Meaning |
+|---|---|
+| `<!-- kglite chunk -->` | Close the open chunk at this point (§7.1 `chunks:`). |
 
 ## 6. Attachments
 
@@ -830,6 +834,13 @@ fix.
 
 - `edge` joins the enclosing Section, or the note when `sections:` is not
   declared; `next` joins consecutive chunks within one section.
+- `<!-- kglite chunk -->` on a line of its own (§5.8) **closes the open
+  chunk** at that point and is itself no chunk at all: the author's break,
+  where a blank line would have joined the two passages anyway. Only a
+  top-level marker counts — inside a list item, a quotation or a table there
+  is no chunk of its own to close, so the marker does nothing and the build
+  warns (§9). It is **not** counted in `forced_splits`: that number is the
+  boundaries the caps had to place blind, and an authored one is a choice.
 - A paragraph whose last line ends in a block id **closes the open chunk and is
   a chunk of its own**, keyed `Note#^id`. That makes a block id the author's one
   lever over where chunks divide, and the way to give a passage a citable id
@@ -1184,6 +1195,7 @@ findings. The classification is the contract.
 | An edge table with no target column, which states nothing, or one whose column repeats a property the link itself carries, which is dropped. | §7.1 |
 | A `structure:` rule that matched nothing anywhere in the vault — for an edge table, one that stated no edge. | §7.1 |
 | A `<!-- kglite -->` directive naming no key. Its line is still cut out of the derived text, and it carries no meaning. | §5.8 |
+| A `<!-- kglite chunk -->` written inside a list item, a quotation or a table, where there is no chunk of its own to close. | §7.1 |
 | An `edge_defaults:` entry whose property the edge already carries, or whose edge type the vault has none of. | §7.2 |
 | A missing attachment, or an ambiguous bare filename (which resolves to nothing, and the warning names the candidates). | §6.6 |
 | A case-insensitive id collision — two ids differing only in case. | §3 |

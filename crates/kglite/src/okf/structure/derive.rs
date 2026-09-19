@@ -307,6 +307,7 @@ fn derive_chunks(
     ids: &mut IdSpace,
     out: &mut Derived,
 ) {
+    warn_nested_chunk_markers(tree, out);
     // `<n>` counts chunks under one *parent*, and the parent is the section
     // when sections are derived and the note otherwise — so a vault with
     // `chunks:` alone numbers one sequence for the whole note.
@@ -408,6 +409,49 @@ fn chunkable_groups(tree: &BlockTree) -> Vec<Group> {
     groups
 }
 
+/// The directive key that closes the open chunk (VAULT.md §5.8).
+const CHUNK_MARKER: &str = "chunk";
+
+/// Whether a top-level `<!-- kglite chunk -->` sits in `from..to`.
+fn chunk_marker_between(tree: &BlockTree, from: usize, to: usize) -> bool {
+    tree.directives.iter().any(|d| {
+        d.key == CHUNK_MARKER
+            && tree.blocks[d.block].inside.is_none()
+            && d.range.start >= from
+            && d.range.end <= to
+    })
+}
+
+/// A `<!-- kglite chunk -->` inside a list item, a quotation or a table has
+/// no chunk of its own to close — those blocks are one chunk whole (VAULT.md
+/// §7.1) — so the marker does nothing, and says so rather than looking like a
+/// packer that ignored it.
+fn warn_nested_chunk_markers(tree: &BlockTree, out: &mut Derived) {
+    for directive in &tree.directives {
+        if directive.key != CHUNK_MARKER {
+            continue;
+        }
+        let Some(container) = tree.blocks[directive.block].inside else {
+            continue;
+        };
+        out.warnings.push(format!(
+            "`<!-- kglite chunk -->` inside a {} has no chunk to split (VAULT.md §7.1)",
+            container_word(&tree.blocks[container].kind)
+        ));
+    }
+}
+
+fn container_word(kind: &super::block::BlockKind) -> &'static str {
+    use super::block::BlockKind;
+    match kind {
+        BlockKind::List(_) => "list",
+        BlockKind::Table(_) => "table",
+        BlockKind::BlockQuote(quote) if quote.callout.is_some() => "callout",
+        BlockKind::BlockQuote(_) => "quotation",
+        _ => "block",
+    }
+}
+
 fn is_own_line_block_id(tree: &BlockTree, block: usize) -> bool {
     tree.block_ids.iter().any(|id| {
         id.own_line
@@ -441,6 +485,23 @@ fn pack(body: &str, tree: &BlockTree, blocks: &[usize], rule: &ChunkRule) -> (Ve
     let mut words = 0usize;
     for &index in blocks {
         let range = tree.blocks[index].range.clone();
+        // `<!-- kglite chunk -->` written between the last block and this one
+        // closes the open chunk, exactly as a `^block-id` block does — the
+        // author's second lever over where a section divides (VAULT.md §5.8,
+        // §7.1). The marker is not itself a block here (it never joins a
+        // group), so it costs no chunk of its own, and it is not a
+        // `forced_splits`: that counter is for boundaries the caps had to
+        // place blind, and an authored one is a choice.
+        if let Some(current) = open.clone() {
+            if chunk_marker_between(tree, current.end, range.start) {
+                out.push(Packed {
+                    range: current,
+                    block_id: None,
+                });
+                open = None;
+                words = 0;
+            }
+        }
         let text = &body[range.clone()];
         let block_words = text.split_whitespace().count();
         let id = block_id_of(tree, index);
