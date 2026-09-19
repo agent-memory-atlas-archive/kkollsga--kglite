@@ -3660,6 +3660,61 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (p:Person) CALL (*) { MATCH (p)-[:KNOWS]->(f) RETURN count(f) AS c } RETURN p.name AS pn, c ORDER BY pn",
         None,
     ),
+    # ── CALL { } bodies whose pattern reads an import through a property map ──
+    # `{city: p.city}` references the imported `p` without using it as a
+    # pattern anchor, so the anchor walk alone did not disable the graph-global
+    # fusions; the fused scan then ran with no per-row seed (count → 0, top-k
+    # → no rows). Reported by the RMS help vault recipes, 2026-09-19.
+    (
+        "call_map_ref_count",
+        "social_graph",
+        "MATCH (p:Person) CALL { WITH p MATCH (q:Person {city: p.city}) RETURN count(q) AS k } "
+        "RETURN p.name AS pn, k ORDER BY pn",
+        None,
+    ),
+    (
+        "call_map_ref_sum_max_distinct",
+        "social_graph",
+        "MATCH (p:Person) CALL { WITH p MATCH (q:Person {city: p.city}) "
+        "RETURN sum(q.age) AS s, max(q.age) AS m, count(DISTINCT q.city) AS d } "
+        "RETURN p.name AS pn, s, m, d ORDER BY pn",
+        None,
+    ),
+    (
+        "call_map_ref_with_extra_where",
+        "social_graph",
+        "MATCH (p:Person) CALL { WITH p MATCH (q:Person {city: p.city}) WHERE q.age > p.age "
+        "RETURN count(q) AS k } RETURN p.name AS pn, k ORDER BY pn",
+        None,
+    ),
+    (
+        "call_map_ref_top_k",
+        "social_graph",
+        "MATCH (p:Person) CALL { WITH p MATCH (q:Person {city: p.city}) "
+        "RETURN q.name AS qn ORDER BY q.age DESC LIMIT 1 } RETURN p.name AS pn, qn ORDER BY pn",
+        None,
+    ),
+    (
+        "call_map_ref_edge_pattern",
+        "social_graph",
+        "MATCH (p:Person) CALL { WITH p MATCH (q:Person {name: p.name})-[:KNOWS]->(f) "
+        "RETURN count(f) AS k } RETURN p.name AS pn, k ORDER BY pn",
+        None,
+    ),
+    (
+        "call_scoped_map_ref_count",
+        "social_graph",
+        "MATCH (p:Person) CALL (p) { MATCH (q:Person {city: p.city}) RETURN count(q) AS k } "
+        "RETURN p.name AS pn, k ORDER BY pn",
+        None,
+    ),
+    (
+        "call_map_ref_imported_scalar",
+        "social_graph",
+        "MATCH (p:Person) WITH p, p.city AS city CALL { WITH city MATCH (q:Person {city: city}) "
+        "RETURN count(q) AS k } RETURN p.name AS pn, k ORDER BY pn",
+        None,
+    ),
     (
         "call_scoped_empty_per_row",
         "social_graph",

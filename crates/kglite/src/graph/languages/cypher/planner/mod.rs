@@ -650,5 +650,7 @@ mod tests;
 mod fusion_tests;
 
 #[cfg(test)]
+mod nested_tests;
+#[cfg(test)]
 #[path = "with_boundary_tests.rs"]
 mod with_boundary_tests;

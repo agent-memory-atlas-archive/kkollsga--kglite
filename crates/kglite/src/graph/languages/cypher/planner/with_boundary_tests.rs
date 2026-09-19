@@ -11,7 +11,7 @@ use crate::graph::languages::cypher::parser::parse_cypher;
 
 /// Four `P` nodes over two cities and four ages, plus four `K` edges so a
 /// multi-row driving pattern (and therefore a hideable variable) exists.
-fn with_boundary_graph() -> DirGraph {
+pub(super) fn with_boundary_graph() -> DirGraph {
     let nodes = crate::datatypes::DataFrame::from_cypher_rows(
         vec!["id".into(), "title".into(), "city".into(), "age".into()],
         vec![

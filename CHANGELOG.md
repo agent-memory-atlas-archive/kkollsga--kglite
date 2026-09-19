@@ -8,6 +8,21 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+### Fixed
+
+- **A `CALL { }` body whose pattern reads an imported variable through a
+  property map no longer aggregates to 0.** `MATCH (n:Note) CALL { WITH n
+  MATCH (c:Chunk {note_id: n.id}) RETURN count(c) AS k } RETURN k` returned
+  `0` while `collect(c.id)` over the same pattern, the `WHERE c.note_id =
+  n.id` spelling, and the same pattern outside `CALL` all returned the rows.
+  The subquery planner disabled the graph-global fusions only when an import
+  was used as a pattern *anchor*; a map reference (`{k: n.prop}` or `{k:
+  name}`) slipped through, and the fused node scan ran with no per-row seed.
+  Same cause, same fix for `sum`/`max`/`count(DISTINCT …)`, an extra `WHERE`
+  beside the map, `ORDER BY … LIMIT` top-k inside the body (which returned no
+  rows), an edge pattern anchored through a map, the scoped `CALL (n) { … }`
+  spelling and an imported scalar. Seven corpus entries (`call_map_ref_*`)
+  and a plan-shape test pin it. Reported from the RMS help vault recipes.
 
 ## [0.17.10] - 2026-09-18
 ### Fixed

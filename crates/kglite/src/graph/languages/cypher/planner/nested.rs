@@ -4,9 +4,11 @@ use super::*;
 use crate::graph::core::pattern_matching::PatternElement;
 
 /// **Pass:** `optimize_nested_queries` — Recurse into UNION right-arms and
-/// `CALL { }` bodies, inheriting diagnostic pass disables. Imported pattern
-/// anchors disable graph-global fusions that cannot consume a per-row seed;
-/// legacy set arms also retain their importing WITH boundaries.
+/// `CALL { }` bodies, inheriting diagnostic pass disables. A pattern that
+/// reaches an import — as an anchor, or through a property map
+/// (`{city: p.city}`, `{city: city}`) — disables the graph-global fusions
+/// that cannot consume a per-row seed; legacy set arms also retain their
+/// importing WITH boundaries.
 pub(super) fn pass_optimize_nested_queries(query: &mut CypherQuery, ctx: &PassCtx) {
     let mut visible = ctx.initial_scope.clone();
     for clause in &mut query.clauses {
@@ -44,6 +46,7 @@ fn optimize_call_body(
     };
     let import_names: Vec<String> = imports.iter().cloned().collect();
     let anchors = import_pattern_anchors(body, &import_names);
+    let seeded_pattern = !anchors.is_empty() || pattern_reads_import(body, &import_names);
     let empty_globals = HashSet::new();
     let body_globals = if matches!(
         import,
@@ -62,7 +65,7 @@ fn optimize_call_body(
     if legacy_set {
         disabled.insert("fold_pass_through_with".to_string());
     }
-    if !anchors.is_empty() {
+    if seeded_pattern {
         disabled.extend(seed_ignoring_fusion_passes().iter().cloned());
     }
     optimize_with_disabled_scoped(
@@ -121,6 +124,43 @@ fn collect_import_pattern_anchors(
             }
         }
     }
+}
+
+/// Whether any MATCH pattern in this subquery/set tree reads an import through
+/// a property map — `{k: p.prop}` or `{k: name}` — rather than anchoring on it.
+///
+/// Such a pattern is still per-row: the fused node-scan / edge-count operators
+/// evaluate the map against the graph with no seed row, so the property
+/// matcher finds no `p` and answers 0 (aggregates) or no rows (top-k). This is
+/// deliberately separate from [`import_pattern_anchors_in_arm`], which the
+/// executor uses to seed anchored variables: a property reference is not an
+/// anchor, it only disqualifies the seed-ignoring fusions.
+fn pattern_reads_import(body: &CypherQuery, import: &[String]) -> bool {
+    use crate::graph::core::pattern_matching::PropertyMatcher;
+    let reads_import = |properties: &Option<HashMap<String, PropertyMatcher>>| {
+        properties.as_ref().is_some_and(|map| {
+            map.values().any(|matcher| match matcher {
+                PropertyMatcher::EqualsVar(name)
+                | PropertyMatcher::EqualsNodeProp { var: name, .. } => {
+                    import.iter().any(|import| import == name)
+                }
+                _ => false,
+            })
+        })
+    };
+    body.clauses.iter().any(|clause| {
+        let patterns = match clause {
+            Clause::Match(matched) | Clause::OptionalMatch(matched) => &matched.patterns,
+            Clause::Union(set) => return pattern_reads_import(&set.query, import),
+            _ => return false,
+        };
+        patterns.iter().any(|pattern| {
+            pattern.elements.iter().any(|element| match element {
+                PatternElement::Node(node) => reads_import(&node.properties),
+                PatternElement::Edge(edge) => reads_import(&edge.properties),
+            })
+        })
+    })
 }
 
 /// Optimizer passes that emit graph-global operators and cannot consume a
