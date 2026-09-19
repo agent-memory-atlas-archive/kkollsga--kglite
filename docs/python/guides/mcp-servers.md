@@ -429,6 +429,16 @@ KGLite does not validate that schema or compare it with the template's
 when dispatching a call. Missing or incompatible values surface through the
 normal Cypher execution error response.
 
+The one keyword the server acts on is `default:` on a top-level property: when
+the agent omits that argument, the declared value is bound before the template
+runs, so `top_k` above is optional and `$top_k` is never unbound. Only an
+absent argument is filled — an explicit value wins, and an explicit `null`
+stays null. A parameter with no default that the agent omits reaches the engine
+unbound and fails with `Missing parameter: $top_k`; `coalesce($top_k, 5)`
+cannot repair that, because the parameter is absent rather than null. Defaults
+in these uncompiled manifest schemas are bound exactly as written; nested ones
+are ignored, since only a top-level property is a `$parameter`.
+
 JSON numeric parameters are still admitted exactly before execution. Integer
 tokens at any nesting depth must fit the signed 64-bit range; decimal and
 exponent tokens must fit a finite 64-bit float. A refusal names its nested
@@ -496,15 +506,26 @@ Catalogs are immutable after boot — including the graph-carried half below, so
 a recipe added to the graph is served after a restart, not on the next
 `reload_graph`. (Skills differ: they *are* re-resolved on a graph swap.)
 KGLite parses every stored query, requires
-an exact match between `$parameters`, root `properties`, and `required`, and
+an exact match between `$parameters` and root `properties`, requires
+`required` to list every property that has no `default`, and
 rejects mutations, `EXPLAIN`, `PROFILE`, `FORMAT CSV`, and `LOAD CSV`.
 Supported schema keywords are deliberately limited to `type`, `properties`,
 `required`, `items`, `enum`, `minimum`, `maximum`, `minItems`, `maxItems`,
-`additionalProperties`, and `description`; unsupported keywords fail boot.
+`additionalProperties`, `description`, and `default`; unsupported keywords fail
+boot.
 `type` may be a supported type name or an array such as
 `[string, "null"]`. Integer values must fit KGLite's signed 64-bit range.
 Decimal and exponent values must fit a finite 64-bit float. Equivalent finite
 spellings such as `1.0` and `1e0` compare as the same numeric enum value.
+
+A top-level property may declare `default:`, and that is what makes a recipe
+parameter optional: the value is bound before validation when the caller omits
+the key, so the stored Cypher still sees every `$parameter`. An explicit value
+wins and an explicit `null` stays null. Because the default supplies the value,
+such a property must **not** appear in `required` — listing it there is refused
+at boot, as is a default that does not satisfy its own property (wrong type,
+outside `enum`, past `minimum`/`maximum`) and a `default` nested below a
+top-level property, which could never bind a parameter.
 
 Successful execution returns MCP `structuredContent`; the text content is the
 same serialized JSON for clients that only expose text:

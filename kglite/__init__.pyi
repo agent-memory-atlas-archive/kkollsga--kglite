@@ -5626,12 +5626,18 @@ class KnowledgeGraph:
                 "properties": {...}, "required": [...],
                 "additionalProperties": False}``, its properties must match the
                 ``$parameters`` the Cypher references exactly, and ``required``
-                must list all of them. Only the keywords ``type``,
-                ``properties``, ``required``, ``items``, ``enum``, ``minimum``,
-                ``maximum``, ``minItems``, ``maxItems``,
-                ``additionalProperties`` and ``description`` compile. Omit it
-                for a statement with no parameters and the empty closed schema
-                is stored.
+                must list every property that declares no ``default``. Only the
+                keywords ``type``, ``properties``, ``required``, ``items``,
+                ``enum``, ``minimum``, ``maximum``, ``minItems``, ``maxItems``,
+                ``additionalProperties``, ``description`` and ``default``
+                compile. A top-level property's ``default`` is bound when the
+                caller omits that variable — an explicit value wins and an
+                explicit ``None`` stays null — which is what makes a parameter
+                optional; it must satisfy its own property, and a ``default``
+                nested below a top-level property is refused because it could
+                never bind a ``$parameter``. Omit ``parameters`` for a
+                statement with no parameters and the empty closed schema is
+                stored.
             recipe_description: What the group is for. Required for the first
                 query in a group; a later one inherits the description already
                 stored for that group when this is omitted. Every member node
@@ -5647,9 +5653,10 @@ class KnowledgeGraph:
             ArgumentError: A ``recipe`` or ``name`` that is not a catalogue
                 identifier, an empty ``description``, ``cypher`` or group
                 description, Cypher that does not parse or is not read-only,
-                a parameter schema using a keyword outside the closed set, or a
-                schema that does not match the Cypher ``$parameters``. The
-                message names the rule that was broken. Also raised when the
+                a parameter schema using a keyword outside the closed set, a
+                ``default`` its own property rejects, or a schema that does not
+                match the Cypher ``$parameters``. The message names the rule
+                that was broken. Also raised when the
                 graph is in read-only mode (see
                 :meth:`KnowledgeGraph.read_only`).
             CypherExecutionError: The graph is schema-locked and does not
@@ -5659,8 +5666,8 @@ class KnowledgeGraph:
 
         Example:
             ```python
-            props = {"limit": {"type": "integer"}}
-            schema = {"type": "object", "properties": props, "required": ["limit"], "additionalProperties": False}
+            props = {"limit": {"type": "integer", "default": 10}}
+            schema = {"type": "object", "properties": props, "required": [], "additionalProperties": False}
             cypher = "MATCH (w:Well) RETURN w.title ORDER BY w.depth DESC LIMIT $limit"
             graph.set_recipe("wells", "deepest", "Deepest wells.", cypher, schema, "About wells.")
             ```

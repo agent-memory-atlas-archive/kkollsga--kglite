@@ -208,6 +208,9 @@ fn parameters_survive_every_storage_mode_and_a_kgl_round_trip() {
     let rich = schema(
         serde_json::json!({
             "qualified_name": {"type": "string"},
+            // A defaulted property: stored, reloaded and still the value the
+            // catalogue binds for a caller who omits it.
+            "limit": {"type": ["integer", "null"], "default": null},
             "filters": {
                 "type": "array",
                 "minItems": 1,
@@ -238,7 +241,7 @@ fn parameters_survive_every_storage_mode_and_a_kgl_round_trip() {
             r.cypher = if parameters == no_parameters() {
                 "RETURN 1".to_string()
             } else {
-                "RETURN $qualified_name, $filters".to_string()
+                "RETURN $qualified_name, $filters, $limit".to_string()
             };
             set(&mut g, &r).unwrap_or_else(|error| panic!("{mode:?}: {error}"));
 

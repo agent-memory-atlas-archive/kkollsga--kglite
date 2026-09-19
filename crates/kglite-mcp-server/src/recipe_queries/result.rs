@@ -61,6 +61,7 @@ pub(crate) fn run_recipe_query(
     catalog: &RecipeCatalog,
     args: RunRecipeQueryArgs,
 ) -> RunRecipeQueryOutput {
+    let mut args = args;
     let Some(recipe) = catalog.get(&args.recipe) else {
         return RunRecipeQueryOutput::Error(RecipeErrorEnvelope::unknown_recipe(args.recipe));
     };
@@ -70,6 +71,10 @@ pub(crate) fn run_recipe_query(
             args.query,
         ));
     };
+    // Before validation and before the audit map is taken: a declared
+    // `default` binds the parameter the caller omitted, so the stored Cypher
+    // sees every `$parameter` and `include_cypher` reports what actually ran.
+    query.parameters.apply_defaults(&mut args.variables);
     if let Err(error) = query.validate_variables(&args.variables) {
         return RunRecipeQueryOutput::Error(RecipeErrorEnvelope::invalid_variables(
             &args, query, error,

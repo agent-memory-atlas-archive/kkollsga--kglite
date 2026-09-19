@@ -76,7 +76,7 @@
         "properties": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/parameterSchema"
+            "$ref": "#/$defs/topLevelParameterSchema"
           }
         },
         "required": {
@@ -93,11 +93,11 @@
         "description": {
           "type": "string"
         }
-      }
+      },
+      "description": "`required` must list exactly the properties that declare no `default`; a property with a default is bound by the server when the caller omits it, and listing it as required is refused."
     },
-    "parameterSchema": {
+    "parameterSchemaKeywords": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "type"
       ],
@@ -159,7 +159,29 @@
         "description": {
           "type": "string"
         }
-      }
+      },
+      "description": "The closed keyword set itself. Reference parameterSchema or topLevelParameterSchema rather than this, which does not close the mapping."
+    },
+    "parameterSchema": {
+      "description": "A nested parameter schema. No `default`: only a top-level parameter property may declare one.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/parameterSchemaKeywords"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "topLevelParameterSchema": {
+      "description": "A top-level parameter property: the same keywords plus `default`, the value the server binds when the caller omits this parameter. A default must itself satisfy this property's schema.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/parameterSchemaKeywords"
+        }
+      ],
+      "properties": {
+        "default": true
+      },
+      "unevaluatedProperties": false
     },
     "typeName": {
       "type": "string",

@@ -449,3 +449,108 @@ fn retrieval_diagnostics_survive_recipe_serialization() {
         ])
     );
 }
+
+fn defaulted_catalog() -> RecipeCatalog {
+    RecipeCatalog::from_manifest_value(Some(&json!({
+        "review": {
+            "description": "Review operations.",
+            "queries": {
+                "search": {
+                    "description": "Echo the bound variables.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "limit": {"type": ["integer", "null"], "default": 5}
+                        },
+                        "required": ["query"],
+                        "additionalProperties": false
+                    },
+                    "cypher": "RETURN $query AS query, $limit AS limit"
+                }
+            }
+        }
+    })))
+    .expect("catalogue with a defaulted parameter")
+}
+
+fn defaulted_args(variables: Value) -> RunRecipeQueryArgs {
+    RunRecipeQueryArgs {
+        recipe: "review".into(),
+        query: "search".into(),
+        variables: variables.as_object().expect("object").clone(),
+        include_cypher: true,
+    }
+}
+
+fn active_memory_state(temp: &std::path::Path) -> GraphState {
+    let state = GraphState::default();
+    state
+        .create_in_mode(&temp.join("empty.kgl"), StorageMode::Memory)
+        .expect("create active graph");
+    state
+}
+
+/// An omitted parameter that declares a `default` is bound before validation,
+/// so the stored Cypher never sees the engine's `Missing parameter` — that
+/// failure is what made every declared parameter effectively required.
+#[test]
+fn an_omitted_parameter_is_bound_to_its_declared_default() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = active_memory_state(temp.path());
+    let output = run_recipe_query(
+        &state,
+        &defaulted_catalog(),
+        defaulted_args(json!({"query": "wells"})),
+    );
+    let value = assert_text_matches_structured(&output.into_call_tool_result());
+    assert_eq!(value["result"]["rows"], json!([["wells", 5]]), "{value}");
+    assert_eq!(
+        value["parameters"],
+        json!({"query": "wells", "limit": 5}),
+        "the audit map reports what actually bound"
+    );
+}
+
+#[test]
+fn an_explicit_value_wins_over_the_default_and_an_explicit_null_stays_null() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = active_memory_state(temp.path());
+    let catalog = defaulted_catalog();
+
+    let explicit = run_recipe_query(
+        &state,
+        &catalog,
+        defaulted_args(json!({"query": "wells", "limit": 2})),
+    );
+    let value = assert_text_matches_structured(&explicit.into_call_tool_result());
+    assert_eq!(value["result"]["rows"], json!([["wells", 2]]), "{value}");
+
+    let null = run_recipe_query(
+        &state,
+        &catalog,
+        defaulted_args(json!({"query": "wells", "limit": null})),
+    );
+    let value = assert_text_matches_structured(&null.into_call_tool_result());
+    assert_eq!(
+        value["result"]["rows"],
+        json!([["wells", null]]),
+        "an explicit null is the caller's value, not an absent key: {value}"
+    );
+}
+
+#[test]
+fn a_required_parameter_without_a_default_is_still_refused_when_omitted() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = active_memory_state(temp.path());
+    let output = run_recipe_query(
+        &state,
+        &defaulted_catalog(),
+        defaulted_args(json!({"limit": 2})),
+    );
+    let result = output.into_call_tool_result();
+    assert_eq!(result.is_error, Some(true));
+    let value = assert_text_matches_structured(&result);
+    assert_eq!(value["code"], "invalid_variables");
+    assert_eq!(value["details"]["issues"][0]["path"], "$.query");
+}

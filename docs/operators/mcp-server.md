@@ -82,6 +82,38 @@ Details worth knowing before writing one:
   instead of being ignored — an allowlist that silently fails open is worse than
   none.
 
+## Optional parameters (`default:`)
+
+A parameter an agent may omit declares a JSON-Schema `default:`, and the server
+binds it before the query runs — for manifest `tools[].cypher` entries and for
+`extensions.cypher_recipes` queries alike:
+
+```yaml
+tools:
+  - name: search_docs
+    parameters:
+      type: object
+      properties:
+        query: {type: string}
+        limit: {type: integer, default: 5}
+      required: [query]
+    cypher: MATCH (d:Doc) WHERE d.title CONTAINS $query RETURN d LIMIT $limit
+```
+
+Only an *absent* argument is filled: an explicit value wins, and an explicit
+`null` stays null. Without a default, an omitted parameter reaches the engine
+unbound and the call fails with `Missing parameter: $limit` — which is why
+`coalesce($limit, 5)` in the query does not help, and why a parameter with no
+default is effectively required however the schema describes it.
+
+In a recipe's closed schema the two halves must agree: a property with a
+`default` is the one thing `required` may leave out, and listing it as required
+anyway is refused at boot. A default must also satisfy its own property — its
+type, `enum`, `minimum`/`maximum` — or the catalogue fails to compile, so a
+wrong default is an operator's boot failure rather than an agent's call-time
+error. Manifest `tools:` schemas are published as written and never compiled,
+so their defaults are bound as-is.
+
 ## Query deadlines
 
 **Every query this server runs has a 180,000 ms (three-minute) deadline**, the

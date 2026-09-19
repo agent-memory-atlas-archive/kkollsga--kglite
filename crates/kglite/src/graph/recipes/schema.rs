@@ -34,6 +34,7 @@ const ALLOWED_KEYWORDS: &[&str] = &[
     "maxItems",
     "additionalProperties",
     "description",
+    "default",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -110,10 +111,34 @@ impl ParameterSchema {
             let unused: Vec<_> = property_names.difference(&referenced).cloned().collect();
             return Err(invalid(format!("parameter properties must exactly match Cypher $parameters; missing={missing:?}, unused={unused:?}")));
         }
-        if root.required != property_names {
-            let optional: Vec<_> = property_names.difference(&root.required).cloned().collect();
-            let unknown: Vec<_> = root.required.difference(&property_names).cloned().collect();
-            return Err(invalid(format!("required must list every parameter property exactly; optional={optional:?}, unknown={unknown:?}")));
+        for (name, property) in &root.properties {
+            property.reject_nested_defaults(&format!("parameters.properties.{name}"))?;
+        }
+
+        // A property with a `default` is the one thing a caller may leave out:
+        // `apply_defaults` binds it before validation, so the Cypher still
+        // gets every `$parameter`. Everything else must still be required,
+        // and a defaulted property listed as required would advertise a
+        // demand this schema does not make.
+        let defaulted: BTreeSet<_> = root
+            .properties
+            .iter()
+            .filter(|(_, property)| property.default.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+        let expected_required: BTreeSet<_> =
+            property_names.difference(&defaulted).cloned().collect();
+        if root.required != expected_required {
+            let optional: Vec<_> = expected_required
+                .difference(&root.required)
+                .cloned()
+                .collect();
+            let unknown: Vec<_> = root
+                .required
+                .difference(&expected_required)
+                .cloned()
+                .collect();
+            return Err(invalid(format!("required must list every parameter property without a default exactly; optional={optional:?}, unknown={unknown:?}")));
         }
 
         Ok(Self {
@@ -124,6 +149,25 @@ impl ParameterSchema {
 
     pub fn as_json(&self) -> &Map<String, Value> {
         &self.raw
+    }
+
+    /// Bind every declared `default` whose key the caller did not send.
+    ///
+    /// Absence is the only trigger: an explicit value wins, and an explicit
+    /// `null` stays null — a caller that spelled the parameter out meant it,
+    /// and an unbound `$parameter` is a Cypher error rather than a null, which
+    /// is why filling it here is what makes a defaulted parameter optional.
+    /// Run it *before* [`validate_variables`](Self::validate_variables), so a
+    /// default is held to the same rules as a value the caller sent.
+    pub fn apply_defaults(&self, variables: &mut Map<String, Value>) {
+        for (name, property) in &self.root.properties {
+            let Some(default) = property.default.as_ref() else {
+                continue;
+            };
+            if !variables.contains_key(name) {
+                variables.insert(name.clone(), default.clone());
+            }
+        }
     }
 
     pub fn validate_variables(
@@ -154,6 +198,9 @@ pub(super) struct SchemaNode {
     pub(super) min_items: Option<usize>,
     pub(super) max_items: Option<usize>,
     pub(super) additional_properties: Option<bool>,
+    /// Bound for this property when the caller omits it. Only a top-level
+    /// parameter property may carry one — see `reject_nested_defaults`.
+    pub(super) default: Option<Value>,
 }
 
 impl SchemaNode {
@@ -232,9 +279,55 @@ impl SchemaNode {
             min_items,
             max_items,
             additional_properties,
+            default: map.get("default").cloned(),
         };
         node.validate_enum_values(path)?;
+        node.validate_default(path)?;
         Ok(node)
+    }
+
+    /// A default is a value this schema will bind on the caller's behalf, so
+    /// it is held to the property's own rules at catalogue build — a boot
+    /// failure the author sees, never a call-time surprise the agent sees.
+    fn validate_default(&self, path: &str) -> CatalogResult<()> {
+        let Some(default) = self.default.as_ref() else {
+            return Ok(());
+        };
+        let default_path = format!("{path}.default");
+        let mut issues = Vec::new();
+        validate_exact_i64_recursive(default, &default_path, &mut issues);
+        self.validate(default, &default_path, true, &mut issues);
+        match issues.first() {
+            Some(issue) => Err(invalid(issue.message.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuse a `default` anywhere below a top-level parameter property.
+    ///
+    /// Defaults exist to bind absent `$parameters`, which are the root
+    /// object's own properties; one nested inside an object property or an
+    /// array's items would be published to clients and never applied.
+    fn reject_nested_defaults(&self, path: &str) -> CatalogResult<()> {
+        for (name, property) in &self.properties {
+            let child = format!("{path}.properties.{name}");
+            if property.default.is_some() {
+                return Err(invalid(format!(
+                    "{child}.default is only supported on top-level parameter properties"
+                )));
+            }
+            property.reject_nested_defaults(&child)?;
+        }
+        if let Some(items) = self.items.as_ref() {
+            let child = format!("{path}.items");
+            if items.default.is_some() {
+                return Err(invalid(format!(
+                    "{child}.default is only supported on top-level parameter properties"
+                )));
+            }
+            items.reject_nested_defaults(&child)?;
+        }
+        Ok(())
     }
 
     fn validate_enum_values(&self, path: &str) -> CatalogResult<()> {
@@ -487,6 +580,5 @@ fn validate_numeric_bound(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 #[path = "schema_tests.rs"]
-mod numeric_bound_tests;
+mod schema_tests;
