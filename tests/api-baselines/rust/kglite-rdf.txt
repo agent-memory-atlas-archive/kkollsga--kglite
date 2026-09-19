@@ -2287,6 +2287,7 @@ pub fn kglite::api::recipes::RecipeCatalog::insert_query(&mut self, recipe: &str
 pub fn kglite::api::recipes::RecipeCatalog::is_empty(&self) -> bool
 pub fn kglite::api::recipes::RecipeCatalog::recipes(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &kglite::api::recipes::RecipeDefinition>
 pub fn kglite::api::recipes::RecipeCatalog::summary(&self) -> kglite::api::recipes::CatalogSummary
+pub fn kglite::api::recipes::RecipeCatalog::tool_names(&self) -> kglite::api::recipes::CatalogResult<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>
 impl core::clone::Clone for kglite::api::recipes::RecipeCatalog
 pub fn kglite::api::recipes::RecipeCatalog::clone(&self) -> kglite::api::recipes::RecipeCatalog
 impl core::default::Default for kglite::api::recipes::RecipeCatalog
@@ -2324,8 +2325,9 @@ pub kglite::api::recipes::RecipeQueryDefinition::cypher: alloc::string::String
 pub kglite::api::recipes::RecipeQueryDefinition::description: alloc::string::String
 pub kglite::api::recipes::RecipeQueryDefinition::name: alloc::string::String
 pub kglite::api::recipes::RecipeQueryDefinition::parameters: kglite::api::recipes::ParameterSchema
+pub kglite::api::recipes::RecipeQueryDefinition::tool: core::option::Option<alloc::string::String>
 impl kglite::api::recipes::RecipeQueryDefinition
-pub fn kglite::api::recipes::RecipeQueryDefinition::compile(name: &str, description: alloc::string::String, cypher_source: alloc::string::String, raw_parameters: &serde_json::value::Value) -> kglite::api::recipes::CatalogResult<Self>
+pub fn kglite::api::recipes::RecipeQueryDefinition::compile(name: &str, description: alloc::string::String, cypher_source: alloc::string::String, raw_parameters: &serde_json::value::Value, tool: core::option::Option<alloc::string::String>) -> kglite::api::recipes::CatalogResult<Self>
 pub fn kglite::api::recipes::RecipeQueryDefinition::validate_variables(&self, variables: &serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> core::result::Result<(), kglite::api::recipes::VariablesValidationError>
 impl core::clone::Clone for kglite::api::recipes::RecipeQueryDefinition
 pub fn kglite::api::recipes::RecipeQueryDefinition::clone(&self) -> kglite::api::recipes::RecipeQueryDefinition
@@ -2338,6 +2340,7 @@ pub kglite::api::recipes::RecipeRecord::name: alloc::string::String
 pub kglite::api::recipes::RecipeRecord::parameters: serde_json::value::Value
 pub kglite::api::recipes::RecipeRecord::recipe: alloc::string::String
 pub kglite::api::recipes::RecipeRecord::recipe_description: alloc::string::String
+pub kglite::api::recipes::RecipeRecord::tool: core::option::Option<alloc::string::String>
 impl core::clone::Clone for kglite::api::recipes::RecipeRecord
 pub fn kglite::api::recipes::RecipeRecord::clone(&self) -> kglite::api::recipes::RecipeRecord
 impl core::cmp::PartialEq for kglite::api::recipes::RecipeRecord
@@ -3550,8 +3553,10 @@ pub kglite::api::DirGraph::save_metadata: kglite::graph::schema::SaveMetadata
 pub kglite::api::DirGraph::schema_definition: core::option::Option<kglite::api::SchemaDefinition>
 pub kglite::api::DirGraph::schema_locked: bool
 pub kglite::api::DirGraph::secondary_label_index: std::collections::hash::map::HashMap<kglite::api::InternedKey, alloc::vec::Vec<petgraph::graph_impl::NodeIndex>>
+pub kglite::api::DirGraph::source_build_version: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::source_dialect: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::source_fingerprint: core::option::Option<u64>
+pub kglite::api::DirGraph::source_options: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::source_root: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::spatial_configs: std::collections::hash::map::HashMap<alloc::string::String, kglite::api::SpatialConfig>
 pub kglite::api::DirGraph::spill_dir: core::option::Option<std::path::PathBuf>
