@@ -414,6 +414,28 @@ pub struct DirGraph {
     /// 0.17.8–0.17.10, which stamped the pair above and not this.
     #[serde(default)]
     pub source_dialect: Option<String>,
+    /// The version of kglite whose `okf::build` produced this graph —
+    /// `okf::cache::build_version()` at stamp time.
+    ///
+    /// The fingerprint answers "did the directory change"; this answers
+    /// "would this build of kglite read it the same way". They are
+    /// independent: an untouched vault fingerprints identically across a
+    /// release that changed how notes are split into chunks, and the graph
+    /// that release would build is a different one. `okf::open` treats a
+    /// mismatch as a cache miss. `None` on a graph not built from a
+    /// directory, and on one saved before 0.17.12.
+    #[serde(default)]
+    pub source_build_version: Option<String>,
+    /// The non-dialect build knobs `source_root` was read with, as
+    /// `okf::cache::options_stamp` renders them.
+    ///
+    /// Same role as `source_build_version` for the caller's own options:
+    /// two builds of one untouched directory with different
+    /// `require_frontmatter` / `respect_skip` / `skip_dirs` / `with_body`
+    /// carry the same fingerprint and are different graphs. `None` on a
+    /// graph not built from a directory, and on one saved before 0.17.12.
+    #[serde(default)]
+    pub source_options: Option<String>,
     /// **User**-schema version — the caller's own data-model revision, bumped by
     /// their migrations. Distinct from the engine's format stamps
     /// (`save_metadata.format_version`, the `.kgl` magic), which the engine owns
@@ -926,6 +948,8 @@ impl DirGraph {
             source_root: None,
             source_fingerprint: None,
             source_dialect: None,
+            source_build_version: None,
+            source_options: None,
             user_schema_version: 0,
             checkpoint_lsn: 0,
             checkpoint_permit: Default::default(),
@@ -1003,6 +1027,8 @@ impl DirGraph {
             source_root: None,
             source_fingerprint: None,
             source_dialect: None,
+            source_build_version: None,
+            source_options: None,
             user_schema_version: 0,
             checkpoint_lsn: 0,
             checkpoint_permit: Default::default(),

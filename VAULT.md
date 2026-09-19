@@ -1607,10 +1607,18 @@ a site serving clean URLs has one filename for every page in it.
 A build stamps the graph with `source_root` (the absolute directory it walked),
 `source_fingerprint` — a 64-bit summary of the `(relative path, size,
 modification time)` of every file the build read: each note, each attachment,
-and everything under `.kglite/` — and `source_dialect`, the dialect it read
-them with. All three are persisted in the `.kgl`, so a process that opens one
-later can ask whether the vault behind it has moved on without being told the
-path, or the conventions, again.
+and every build input under `.kglite/` — and `source_dialect`, the dialect it
+read them with. Two more stamps record what the fingerprint cannot see:
+`source_build_version`, the version of kglite that built it, and
+`source_options`, the non-dialect build knobs (`require_frontmatter`,
+`respect_skip`, `skip_dirs`, `with_body`) it read with. One untouched
+directory fingerprints identically across a release that changed how notes
+are read, and across two callers who passed different knobs, and those are
+different graphs. All five are persisted in the `.kgl`, so a process that
+opens one later can ask whether the vault behind it has moved on — and
+whether this build would read it the same way — without being told the path,
+or the conventions, again. A `.kgl` written before 0.17.12 carries the first
+three and not the last two.
 
 The dialect belongs in the stamp because the fingerprint depends on it:
 `.kglite/` is a build input for `obsidian` alone, and the dialect decides which
@@ -1638,11 +1646,39 @@ that changed **label** — by moving between folders under a folder-derived labe
 — is a different node and re-embeds; that is the contract, not a defect.
 `embed:` targets then run a changed-mode pass when a model is bound.
 
+### The graph a vault carries
+
+`okf.open(dir)`, `kglite okf open <dir>` and the MCP server's `--vault` mode
+do the whole of the above in one call: load the vault's own graph, ask the
+fingerprint whether the directory has moved, rebuild only if it has, and write
+the result back. The default cache lives at **`.kglite/graph.kgl`** and is
+excluded from the fingerprint by `okf.is_cache_artifact` — along with its
+`.lock` and `.lock-owner` siblings, the in-flight `graph.kgl.tmp.*` of a save,
+and `.kglite/export-manifest.json` — so writing it does not mark the vault it
+describes as changed. A vault may therefore be *shipped* with its graph, and
+a machine that has never read it serves it without a build.
+
+Five things make the cache a miss rather than a hit, and every one of them
+rebuilds silently: the file is absent or this build cannot read it, the vault
+was moved or copied (the stamped `source_root` is not this directory), the
+cache was built by another version of kglite, it was built with other option
+knobs, or it carries no dialect stamp to compare under. **A cache problem
+never fails an open.** A cache that cannot be written — a read-only vault, a
+full volume, another process holding the writer lease — leaves a warning in
+the build report and returns the graph anyway; the cost is one more rebuild
+next time.
+
+Relocate the cache with `--cache PATH` / `cache=`, or switch it off with
+`--cache none` / `cache=False`. A `.kgl` anywhere in the vault other than
+`.kglite/graph.kgl` is **not** a cache: every non-hidden file under the root
+is a candidate attachment, so a graph written beside the notes changes the
+vault it describes — keep it in `.kglite/`, or outside the vault entirely.
+
 Two consequences worth knowing. Modification times are compared as whole
 seconds, so a file rewritten within the same second to exactly the same length
-reads as unchanged. And every non-hidden file under the root is a candidate
-attachment, so writing the `.kgl` *into* the vault changes the vault: keep it
-outside.
+reads as unchanged. And the stamp does not record which embedder computed the
+vectors, so swapping models and reusing a cache serves the old model's
+vectors until the notes behind them change.
 
 ## 13. Modelling guide for converters and authoring agents
 

@@ -4,6 +4,7 @@
 use super::*;
 use crate::graph::schema::EmbeddingStore;
 use crate::graph::storage::GraphRead;
+use crate::okf::cache::is_cache_artifact;
 use crate::okf::model::{Dialect, RebuildOptions};
 use std::fs;
 use std::path::PathBuf;
@@ -309,6 +310,58 @@ fn the_kglite_directory_counts_only_where_it_is_read() {
         fingerprint(dir.path(), &okf).unwrap(),
         "an OKF build never reads it"
     );
+}
+
+/// The cache the vault carries is not a build input, so writing it — and the
+/// lease, owner-record and in-flight temp siblings `save_graph` leaves beside
+/// it — must leave the fingerprint exactly where it was. Without the
+/// exclusion the cache invalidates itself on the save that writes it and can
+/// never hit.
+#[test]
+fn the_cache_and_its_siblings_do_not_move_the_fingerprint() {
+    let dir = vault();
+    let before = fp(&dir);
+    for rel in [
+        ".kglite/graph.kgl",
+        ".kglite/graph.kgl.lock",
+        ".kglite/graph.kgl.lock-owner",
+        ".kglite/graph.kgl.tmp.4242.17",
+        ".kglite/export-manifest.json",
+    ] {
+        write(dir.path(), rel, "cache bytes");
+        assert_eq!(before, fp(&dir), "`{rel}` is not a build input");
+    }
+    // …and the exclusion is exactly those names: a note the author happened
+    // to keep in `.kglite/` still counts.
+    write(dir.path(), ".kglite/skills/one.md", "a carried skill");
+    assert_ne!(before, fp(&dir), "a carried skill is a build input");
+}
+
+/// The predicate is about the cache set alone, keyed on the whole relative
+/// path: a `graph.kgl` the author put somewhere else in the vault is an
+/// ordinary file, and so is a directory that merely shares a name.
+#[test]
+fn only_the_kglite_cache_set_is_a_cache_artifact() {
+    for rel in [
+        ".kglite/graph.kgl",
+        ".kglite/graph.kgl.lock",
+        ".kglite/graph.kgl.lock-owner",
+        ".kglite/graph.kgl.tmp.1.2",
+        ".kglite/export-manifest.json",
+    ] {
+        assert!(is_cache_artifact(Path::new(rel)), "{rel}");
+    }
+    for rel in [
+        "graph.kgl",
+        "notes/graph.kgl",
+        ".kglite/vault.yaml",
+        ".kglite/skills/one.md",
+        ".kglite/graph.kgl/inner",
+        ".kglite/graph.kgl.notes.md",
+        "other/.kglite/graph.kgl",
+    ] {
+        assert!(!is_cache_artifact(Path::new(rel)), "{rel}");
+    }
 }
 
 #[test]

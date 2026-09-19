@@ -17,6 +17,7 @@
 //! the Python wheel enables it, bare builds don't.
 
 pub mod build;
+pub mod cache;
 pub(crate) mod directives;
 pub mod export;
 pub mod fingerprint;
@@ -30,6 +31,7 @@ pub mod vault_config;
 pub mod walk;
 
 pub use build::{build, BuildOutput};
+pub use cache::{is_cache_artifact, open, CachePolicy, Opened};
 pub use export::{export, ExportOptions, ExportReport};
 pub use fingerprint::{fingerprint, rebuild_if_changed, stamped_dialect};
 pub use model::{

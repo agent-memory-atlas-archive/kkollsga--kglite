@@ -175,7 +175,7 @@ def fingerprint(
     """A stable 64-bit summary of what a build of this directory would read.
 
     Specified by ``VAULT.md`` §12. Every note, every attachment and — under
-    ``"obsidian"`` — everything under ``.kglite/`` contributes its
+    ``"obsidian"`` — every build input under ``.kglite/`` contributes its
     ``(relative path, size, modification time)``, so the same directory read
     with the same keywords gives the same number in any process, on any
     machine. Editing, touching, renaming, adding or removing a file changes
@@ -184,7 +184,10 @@ def fingerprint(
     Only the files a build with these keywords would read count: a directory
     pruned by ``skip_dirs`` (or by the vault's own ``skip_dirs:``) is outside
     the summary, and ``.kglite/`` counts only under ``"obsidian"``, the one
-    dialect that reads it.
+    dialect that reads it. The files kglite writes into ``.kglite/`` itself
+    are not inputs and are excluded — the vault's own ``graph.kgl`` cache
+    with its lock and in-flight save siblings, and ``export-manifest.json``
+    — so caching or exporting a vault does not mark it changed.
 
     Modification times are compared as **whole seconds**, because the number
     travels between copies and filesystems that do not agree below that. The

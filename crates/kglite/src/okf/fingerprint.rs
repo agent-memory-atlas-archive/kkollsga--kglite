@@ -2,8 +2,10 @@
 //! (VAULT.md §12).
 //!
 //! [`fingerprint`] is a 64-bit summary of every file a build of that directory
-//! would read: each note, each attachment, and — for a vault — everything under
-//! `.kglite/`, as `(rel_path, size, mtime)`. [`crate::okf::build`] stamps it
+//! would read: each note, each attachment, and — for a vault — every build
+//! input under `.kglite/`, as `(rel_path, size, mtime)`. The files kglite
+//! itself writes there are not inputs and are excluded
+//! ([`crate::okf::is_cache_artifact`]). [`crate::okf::build`] stamps it
 //! onto the graph beside the root it was built from and the dialect it read
 //! them with, `save_graph` persists all three, and [`rebuild_if_changed`]
 //! compares the stamp with the directory as it is now.
@@ -115,7 +117,7 @@ pub(crate) fn fingerprint_of(root: &Path, walked: &walk::WalkResult, opts: &Buil
     hash
 }
 
-/// Every file under `root/.kglite/`, sorted by relative path.
+/// Every build input under `root/.kglite/`, sorted by relative path.
 ///
 /// The walk prunes dot-directories, so `vault.yaml`, `skills/` and `recipes/`
 /// are invisible to it — and they are build inputs (VAULT.md §7, §8), so a
@@ -123,6 +125,11 @@ pub(crate) fn fingerprint_of(root: &Path, walked: &walk::WalkResult, opts: &Buil
 /// declarations were rewritten. Unreadable entries are skipped rather than
 /// erroring: this is a summary, and a file the build cannot read is a build
 /// problem to report, not a fingerprint problem.
+///
+/// The files kglite itself writes there are *not* inputs and are excluded by
+/// [`crate::okf::is_cache_artifact`] — the vault's own graph cache and the
+/// export manifest. Including them would make the cache invalidate itself on
+/// the save that writes it.
 fn kglite_dir_entries(root: &Path) -> Vec<(String, u64, Option<i64>)> {
     let dir = crate::okf::vault_config::config_dir(root);
     let mut entries: Vec<(String, u64, Option<i64>)> = walkdir::WalkDir::new(&dir)
@@ -136,6 +143,9 @@ fn kglite_dir_entries(root: &Path) -> Vec<(String, u64, Option<i64>)> {
                 .filter_map(|c| c.as_os_str().to_str())
                 .collect::<Vec<_>>()
                 .join("/");
+            if crate::okf::is_cache_artifact(Path::new(&rel_path)) {
+                return None;
+            }
             let meta = entry.metadata().ok();
             Some((
                 rel_path,

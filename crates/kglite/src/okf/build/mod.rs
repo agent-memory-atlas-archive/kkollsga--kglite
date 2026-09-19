@@ -169,6 +169,12 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
 /// The root is stored absolute where the filesystem will say so — a relative
 /// path is only meaningful from the working directory the build happened to
 /// run in, and the graph outlives it.
+///
+/// The build version and the option knobs ride along because the fingerprint
+/// cannot see either: an untouched directory read by a later kglite, or with
+/// different `skip_dirs`, summarises to the same number and builds a
+/// different graph. `okf::open` is the reader — a mismatch there is a cache
+/// miss, not an error.
 fn stamp_provenance(
     graph: &mut DirGraph,
     root: &Path,
@@ -179,6 +185,8 @@ fn stamp_provenance(
     graph.source_root = Some(absolute.to_string_lossy().into_owned());
     graph.source_fingerprint = Some(crate::okf::fingerprint::fingerprint_of(root, walked, opts));
     graph.source_dialect = Some(opts.dialect.name().to_string());
+    graph.source_build_version = Some(crate::okf::cache::build_version().to_string());
+    graph.source_options = Some(crate::okf::cache::options_stamp(opts));
 }
 
 /// The options a build of `root` actually runs with: the caller's, with the

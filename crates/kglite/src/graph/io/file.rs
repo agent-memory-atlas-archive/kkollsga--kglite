@@ -296,6 +296,16 @@ pub(crate) struct FileMetadata {
     source_fingerprint: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_dialect: Option<String>,
+    /// The kglite version that built it and the non-dialect knobs it was
+    /// read with — `DirGraph::{source_build_version, source_options}`. Same
+    /// additive, skip-when-absent posture as the three above, so a graph that
+    /// was not built from a directory still writes the bytes it wrote before
+    /// these existed and every golden digest holds. Both are younger than the
+    /// other three: a `.kgl` written before 0.17.12 carries neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_build_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_options: Option<String>,
     /// The caller's own data-model revision (see `DirGraph::user_schema_version`),
     /// carried across save/load so a migration runner can tell which of its
     /// ordered scripts a graph has already had applied. Not an engine version:
@@ -453,6 +463,8 @@ impl FileMetadata {
             source_root: graph.source_root.clone(),
             source_fingerprint: graph.source_fingerprint,
             source_dialect: graph.source_dialect.clone(),
+            source_build_version: graph.source_build_version.clone(),
+            source_options: graph.source_options.clone(),
             user_schema_version: graph.user_schema_version,
             checkpoint_lsn: graph.checkpoint_lsn,
             // A live log's position wins; otherwise carry forward what an
@@ -534,6 +546,8 @@ impl FileMetadata {
         graph.source_root = self.source_root;
         graph.source_fingerprint = self.source_fingerprint;
         graph.source_dialect = self.source_dialect;
+        graph.source_build_version = self.source_build_version;
+        graph.source_options = self.source_options;
         graph.user_schema_version = self.user_schema_version;
         graph.checkpoint_lsn = self.checkpoint_lsn;
         graph.cdc_handoff = self.cdc_handoff;
