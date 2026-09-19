@@ -1374,16 +1374,29 @@ a site serving clean URLs has one filename for every page in it.
 
 ## 12. Rebuild and provenance
 
-A build stamps the graph with `source_root` (the absolute directory it walked)
-and `source_fingerprint` — a 64-bit summary of the `(relative path, size,
+A build stamps the graph with `source_root` (the absolute directory it walked),
+`source_fingerprint` — a 64-bit summary of the `(relative path, size,
 modification time)` of every file the build read: each note, each attachment,
-and everything under `.kglite/`. Both are persisted in the `.kgl`, so a process
-that opens one later can ask whether the vault behind it has moved on without
-being told the path again.
+and everything under `.kglite/` — and `source_dialect`, the dialect it read
+them with. All three are persisted in the `.kgl`, so a process that opens one
+later can ask whether the vault behind it has moved on without being told the
+path, or the conventions, again.
+
+The dialect belongs in the stamp because the fingerprint depends on it:
+`.kglite/` is a build input for `obsidian` alone, and the dialect decides which
+files are notes at all, so one untouched directory has one fingerprint per
+dialect. A caller comparing across two of them is told "changed" every time.
+So `okf.rebuild_if_changed(graph)` and `kglite okf status <dir> --graph f.kgl`
+read the dialect off the stamp when they are not given one, and refuse a given
+one that contradicts it, naming both. A `.kgl` written before the dialect was
+stamped (0.17.8–0.17.10) keeps the old behaviour — the caller's dialect, `okf`
+when they name none — and the rebuild report says the stamp was missing.
 
 `okf.fingerprint(dir)` recomputes it (a `stat` pass; no note is read) and
 `kglite okf status <dir> [--graph f.kgl]` prints it, exiting non-zero when the
-graph is stale. `okf.rebuild_if_changed(graph)` returns `None` when the
+graph is stale. A *path* carries no stamp, so `okf.fingerprint` still defaults
+to `dialect="okf"` and must be told `"obsidian"` for a vault.
+`okf.rebuild_if_changed(graph)` returns `None` when the
 fingerprint still matches and a **new** graph otherwise, carrying the old
 graph's vectors across by `(label, id)`: an unchanged note keeps its vector and
 its stored text hash, so only notes whose text moved are re-embedded. Nodes a

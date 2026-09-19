@@ -3538,6 +3538,7 @@ pub kglite::api::DirGraph::save_metadata: kglite::graph::schema::SaveMetadata
 pub kglite::api::DirGraph::schema_definition: core::option::Option<kglite::api::SchemaDefinition>
 pub kglite::api::DirGraph::schema_locked: bool
 pub kglite::api::DirGraph::secondary_label_index: std::collections::hash::map::HashMap<kglite::api::InternedKey, alloc::vec::Vec<petgraph::graph_impl::NodeIndex>>
+pub kglite::api::DirGraph::source_dialect: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::source_fingerprint: core::option::Option<u64>
 pub kglite::api::DirGraph::source_root: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::spatial_configs: std::collections::hash::map::HashMap<alloc::string::String, kglite::api::SpatialConfig>
@@ -5248,7 +5249,8 @@ pub const kglite::okf::export::MANIFEST_VERSION: i64
 pub fn kglite::okf::export::export(graph: &kglite::api::DirGraph, dir: &std::path::Path, opts: &kglite::okf::export::ExportOptions) -> core::result::Result<kglite::okf::export::ExportReport, alloc::string::String>
 pub mod kglite::okf::fingerprint
 pub fn kglite::okf::fingerprint::fingerprint(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<u64, alloc::string::String>
-pub fn kglite::okf::fingerprint::rebuild_if_changed(old: &kglite::api::DirGraph, opts: &kglite::okf::model::BuildOptions, embedder: core::option::Option<&dyn kglite::api::Embedder>) -> core::result::Result<core::option::Option<kglite::okf::build::BuildOutput>, alloc::string::String>
+pub fn kglite::okf::fingerprint::rebuild_if_changed(old: &kglite::api::DirGraph, opts: &kglite::okf::model::RebuildOptions, embedder: core::option::Option<&dyn kglite::api::Embedder>) -> core::result::Result<core::option::Option<kglite::okf::build::BuildOutput>, alloc::string::String>
+pub fn kglite::okf::fingerprint::stamped_dialect(graph: &kglite::api::DirGraph) -> core::result::Result<core::option::Option<kglite::okf::model::Dialect>, alloc::string::String>
 pub mod kglite::okf::frontmatter
 pub fn kglite::okf::frontmatter::infer_temporal(v: kglite::datatypes::values::Value) -> kglite::datatypes::values::Value
 pub fn kglite::okf::frontmatter::parse(text: &str) -> core::result::Result<alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::datatypes::values::Value>, alloc::string::String>
@@ -5275,6 +5277,8 @@ pub kglite::okf::model::Dialect::Loose
 pub kglite::okf::model::Dialect::Obsidian
 pub kglite::okf::model::Dialect::Okf
 impl kglite::okf::model::Dialect
+pub fn kglite::okf::model::Dialect::from_name(name: &str) -> core::option::Option<Self>
+pub fn kglite::okf::model::Dialect::name(self) -> &'static str
 pub fn kglite::okf::model::Dialect::parse(name: core::option::Option<&str>) -> Self
 pub fn kglite::okf::model::Dialect::wikilinks(self) -> bool
 impl core::clone::Clone for kglite::okf::model::Dialect
@@ -5463,6 +5467,22 @@ pub fn kglite::okf::model::Profile::default() -> Self
 impl core::fmt::Debug for kglite::okf::model::Profile
 pub fn kglite::okf::model::Profile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::okf::model::Profile
+pub struct kglite::okf::model::RebuildOptions
+pub kglite::okf::model::RebuildOptions::dialect: core::option::Option<kglite::okf::model::Dialect>
+pub kglite::okf::model::RebuildOptions::profile: core::option::Option<kglite::okf::model::Profile>
+pub kglite::okf::model::RebuildOptions::require_frontmatter: core::option::Option<bool>
+pub kglite::okf::model::RebuildOptions::respect_skip: bool
+pub kglite::okf::model::RebuildOptions::skip_dirs: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::model::RebuildOptions::with_body: core::option::Option<bool>
+impl kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::for_dialect(dialect: kglite::okf::model::Dialect) -> Self
+pub fn kglite::okf::model::RebuildOptions::resolve(&self, dialect: kglite::okf::model::Dialect) -> kglite::okf::model::BuildOptions
+impl core::clone::Clone for kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::clone(&self) -> kglite::okf::model::RebuildOptions
+impl core::default::Default for kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::default() -> Self
+impl core::fmt::Debug for kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const kglite::okf::model::ATTACHMENT_LABEL: &str
 pub const kglite::okf::model::CONTAINS_CONN_TYPE: &str
 pub const kglite::okf::model::DEFAULT_BODY_PROPERTY: &str
@@ -5569,6 +5589,8 @@ pub kglite::okf::Dialect::Loose
 pub kglite::okf::Dialect::Obsidian
 pub kglite::okf::Dialect::Okf
 impl kglite::okf::model::Dialect
+pub fn kglite::okf::model::Dialect::from_name(name: &str) -> core::option::Option<Self>
+pub fn kglite::okf::model::Dialect::name(self) -> &'static str
 pub fn kglite::okf::model::Dialect::parse(name: core::option::Option<&str>) -> Self
 pub fn kglite::okf::model::Dialect::wikilinks(self) -> bool
 impl core::clone::Clone for kglite::okf::model::Dialect
@@ -5785,6 +5807,22 @@ pub fn kglite::okf::model::Profile::default() -> Self
 impl core::fmt::Debug for kglite::okf::model::Profile
 pub fn kglite::okf::model::Profile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::okf::model::Profile
+pub struct kglite::okf::RebuildOptions
+pub kglite::okf::RebuildOptions::dialect: core::option::Option<kglite::okf::model::Dialect>
+pub kglite::okf::RebuildOptions::profile: core::option::Option<kglite::okf::model::Profile>
+pub kglite::okf::RebuildOptions::require_frontmatter: core::option::Option<bool>
+pub kglite::okf::RebuildOptions::respect_skip: bool
+pub kglite::okf::RebuildOptions::skip_dirs: alloc::vec::Vec<alloc::string::String>
+pub kglite::okf::RebuildOptions::with_body: core::option::Option<bool>
+impl kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::for_dialect(dialect: kglite::okf::model::Dialect) -> Self
+pub fn kglite::okf::model::RebuildOptions::resolve(&self, dialect: kglite::okf::model::Dialect) -> kglite::okf::model::BuildOptions
+impl core::clone::Clone for kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::clone(&self) -> kglite::okf::model::RebuildOptions
+impl core::default::Default for kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::default() -> Self
+impl core::fmt::Debug for kglite::okf::model::RebuildOptions
+pub fn kglite::okf::model::RebuildOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::okf::VaultConfig
 pub kglite::okf::VaultConfig::body: core::option::Option<alloc::string::String>
 pub kglite::okf::VaultConfig::default_label: core::option::Option<alloc::string::String>
@@ -5816,7 +5854,8 @@ pub fn kglite::okf::fingerprint(root: &std::path::Path, opts: &kglite::okf::mode
 pub fn kglite::okf::parse_bundle(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<alloc::vec::Vec<kglite::okf::model::ConceptDoc>, alloc::string::String>
 pub fn kglite::okf::parse_concepts(files: &[kglite::okf::walk::DiscoveredFile], opts: &kglite::okf::model::BuildOptions) -> alloc::vec::Vec<kglite::okf::model::ConceptDoc>
 pub fn kglite::okf::read_body(path: &std::path::Path) -> core::result::Result<alloc::string::String, alloc::string::String>
-pub fn kglite::okf::rebuild_if_changed(old: &kglite::api::DirGraph, opts: &kglite::okf::model::BuildOptions, embedder: core::option::Option<&dyn kglite::api::Embedder>) -> core::result::Result<core::option::Option<kglite::okf::build::BuildOutput>, alloc::string::String>
+pub fn kglite::okf::rebuild_if_changed(old: &kglite::api::DirGraph, opts: &kglite::okf::model::RebuildOptions, embedder: core::option::Option<&dyn kglite::api::Embedder>) -> core::result::Result<core::option::Option<kglite::okf::build::BuildOutput>, alloc::string::String>
+pub fn kglite::okf::stamped_dialect(graph: &kglite::api::DirGraph) -> core::result::Result<core::option::Option<kglite::okf::model::Dialect>, alloc::string::String>
 pub fn kglite::okf::validate(root: &std::path::Path, opts: &kglite::okf::model::BuildOptions) -> core::result::Result<kglite::okf::model::BuildReport, alloc::string::String>
 pub mod kglite::param
 pub enum kglite::param::JsonQueryParameterErrorKind

@@ -3549,6 +3549,7 @@ pub kglite::api::DirGraph::save_metadata: kglite::graph::schema::SaveMetadata
 pub kglite::api::DirGraph::schema_definition: core::option::Option<kglite::api::SchemaDefinition>
 pub kglite::api::DirGraph::schema_locked: bool
 pub kglite::api::DirGraph::secondary_label_index: std::collections::hash::map::HashMap<kglite::api::InternedKey, alloc::vec::Vec<petgraph::graph_impl::NodeIndex>>
+pub kglite::api::DirGraph::source_dialect: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::source_fingerprint: core::option::Option<u64>
 pub kglite::api::DirGraph::source_root: core::option::Option<alloc::string::String>
 pub kglite::api::DirGraph::spatial_configs: std::collections::hash::map::HashMap<alloc::string::String, kglite::api::SpatialConfig>

@@ -4,7 +4,7 @@
 use super::*;
 use crate::graph::schema::EmbeddingStore;
 use crate::graph::storage::GraphRead;
-use crate::okf::model::Dialect;
+use crate::okf::model::{Dialect, RebuildOptions};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -355,8 +355,12 @@ fn provenance_survives_a_save_and_load() {
 
 // ── rebuild_if_changed ──────────────────────────────────────────────────────
 
+fn vault_rebuild_opts() -> RebuildOptions {
+    RebuildOptions::for_dialect(Dialect::Obsidian)
+}
+
 fn rebuild(graph: &DirGraph) -> Option<BuildOutput> {
-    rebuild_if_changed(graph, &vault_opts(), None).unwrap()
+    rebuild_if_changed(graph, &vault_rebuild_opts(), None).unwrap()
 }
 
 #[test]
@@ -378,7 +382,7 @@ fn an_unchanged_vault_rebuilds_nothing_and_a_changed_one_rebuilds() {
 
 #[test]
 fn a_graph_with_no_source_root_cannot_be_rebuilt() {
-    let error = rebuild_if_changed(&DirGraph::new(), &vault_opts(), None)
+    let error = rebuild_if_changed(&DirGraph::new(), &vault_rebuild_opts(), None)
         .map(|_| "rebuilt")
         .unwrap_err();
     assert!(error.contains("source_root"), "{error}");
@@ -446,9 +450,16 @@ fn a_relabelled_note_loses_its_vector() {
         dir.path().join("archive/alpha.md"),
     )
     .unwrap();
-    let out = rebuild_if_changed(&built, &opts, None)
-        .unwrap()
-        .expect("the move is a change");
+    let out = rebuild_if_changed(
+        &built,
+        &RebuildOptions {
+            profile: Some(opts.profile.clone()),
+            ..vault_rebuild_opts()
+        },
+        None,
+    )
+    .unwrap()
+    .expect("the move is a change");
     assert_eq!(
         out.graph.type_indices.get("archive").map(|n| n.len()),
         Some(1)
@@ -492,8 +503,108 @@ fn a_vanished_source_root_is_an_error_not_an_unchanged_verdict() {
     let moved: PathBuf = dir.path().to_path_buf();
     drop(dir);
     assert!(!moved.exists());
-    let error = rebuild_if_changed(&built, &vault_opts(), None)
+    let error = rebuild_if_changed(&built, &vault_rebuild_opts(), None)
         .map(|_| "rebuilt")
         .unwrap_err();
     assert!(error.contains("does not exist"), "{error}");
+}
+
+// ── the build dialect (VAULT.md §12) ────────────────────────────────────────
+
+/// The trap the stamp closes: a vault-built graph rebuilt by a caller who
+/// named no dialect was rebuilt as an OKF bundle — a different file set, a
+/// different fingerprint, so "changed" every time, and the result was an
+/// almost empty graph that loads and looks valid.
+#[test]
+fn a_rebuild_that_was_not_told_a_dialect_uses_the_one_the_build_stamped() {
+    let dir = vault();
+    let built = build(dir.path(), &vault_opts()).unwrap().graph;
+    let out = rebuild_if_changed(&built, &RebuildOptions::default(), None).unwrap();
+    assert!(
+        out.is_none(),
+        "nothing in the vault moved, so an unasked dialect must read the stamp"
+    );
+}
+
+#[test]
+fn a_build_stamps_the_dialect_it_read_with_and_it_survives_a_save_and_load() {
+    let dir = vault();
+    let mut built = build(dir.path(), &vault_opts()).unwrap().graph;
+    assert_eq!(built.source_dialect.as_deref(), Some("obsidian"));
+    assert_eq!(
+        build(dir.path(), &BuildOptions::default())
+            .unwrap()
+            .graph
+            .source_dialect
+            .as_deref(),
+        Some("okf"),
+        "the stamp is what was read, not what a vault would have been"
+    );
+
+    let file = dir.path().join("../vault.kgl");
+    crate::graph::io::file::save_graph(&mut built, &file.to_string_lossy()).unwrap();
+    let loaded = crate::graph::io::file::load_file(&file.to_string_lossy()).unwrap();
+    assert_eq!(loaded.source_dialect, built.source_dialect);
+    assert_eq!(stamped_dialect(&loaded).unwrap(), Some(Dialect::Obsidian));
+}
+
+/// The two readings of one directory are different builds, and the numbers
+/// they compare are not comparable. Obeying the caller would rebuild the
+/// vault into a bundle; obeying the stamp would ignore what they asked for.
+#[test]
+fn a_dialect_that_contradicts_the_stamp_is_refused_naming_both() {
+    let dir = vault();
+    let built = build(dir.path(), &vault_opts()).unwrap().graph;
+    let error = rebuild_if_changed(&built, &RebuildOptions::for_dialect(Dialect::Okf), None)
+        .map(|_| "rebuilt")
+        .unwrap_err();
+    assert!(error.contains("`obsidian`"), "the stamp is named: {error}");
+    assert!(error.contains("`okf`"), "and so is the request: {error}");
+}
+
+/// A dialect a newer build knows and this one does not must not degrade to
+/// `okf` the way [`Dialect::parse`] does — that is exactly the silent wrong
+/// reading the stamp exists to prevent.
+#[test]
+fn an_unknown_stamped_dialect_is_reported_rather_than_guessed() {
+    let dir = vault();
+    let mut built = build(dir.path(), &vault_opts()).unwrap().graph;
+    crate::graph::handle::make_dir_graph_mut(&mut built).source_dialect =
+        Some("hypergraph".to_string());
+    let error = stamped_dialect(&built).map(|_| "parsed").unwrap_err();
+    assert!(error.contains("hypergraph"), "{error}");
+    assert!(rebuild_if_changed(&built, &RebuildOptions::default(), None)
+        .map(|_| "rebuilt")
+        .unwrap_err()
+        .contains("hypergraph"));
+}
+
+/// A `.kgl` from 0.17.8–0.17.10 carries the root and the fingerprint and no
+/// dialect. Nothing changes for it — the caller's dialect still decides — but
+/// the report says so, because that is the graph on which an untouched vault
+/// can still read as changed.
+#[test]
+fn a_graph_with_no_dialect_stamp_keeps_the_callers_dialect_and_says_so() {
+    let dir = vault();
+    let mut built = build(dir.path(), &vault_opts()).unwrap().graph;
+    crate::graph::handle::make_dir_graph_mut(&mut built).source_dialect = None;
+    assert_eq!(stamped_dialect(&built).unwrap(), None);
+
+    let out = rebuild(&built);
+    assert!(
+        out.is_none(),
+        "the caller named `obsidian`, which is what it was built as"
+    );
+
+    write(dir.path(), "notes/gamma.md", "---\nid: gamma\n---\nNew.\n");
+    let out = rebuild(&built).expect("a new note is a change");
+    assert_eq!(out.graph.source_dialect.as_deref(), Some("obsidian"));
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("no dialect stamp")),
+        "{:?}",
+        out.report.warnings
+    );
 }

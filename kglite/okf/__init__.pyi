@@ -191,13 +191,23 @@ def fingerprint(
     failure this admits is narrow and worth naming: a file rewritten within
     the same second, to exactly the same length, reads as unchanged.
 
+    The number is only meaningful beside the dialect it was taken with —
+    ``.kglite/`` counts for ``"obsidian"`` alone, and the dialect decides
+    which files are notes at all — and a path carries no stamp to read one
+    from, so ``dialect`` here keeps :func:`build`'s ``"okf"`` default and
+    must be passed for a vault. To compare against a *graph*, read the
+    dialect it was built with off
+    :attr:`~kglite.KnowledgeGraph.source_dialect`, or let
+    :func:`rebuild_if_changed` do it.
+
     :func:`build` stamps this value on the graph it returns, where
     :attr:`~kglite.KnowledgeGraph.source_fingerprint` reports it and
     :func:`rebuild_if_changed` compares it.
 
     Args:
         path: Vault (or bundle) root directory.
-        dialect: As :func:`build`.
+        dialect: As :func:`build` — ``"okf"`` when omitted, which is **not**
+            what an Obsidian vault fingerprints as.
         require_frontmatter: As :func:`build`.
         respect_skip: As :func:`build`.
         skip_dirs: As :func:`build`.
@@ -225,8 +235,9 @@ def rebuild_if_changed(
 
     Specified by ``VAULT.md`` §12. ``graph`` must carry the provenance
     :func:`build` stamps — its
-    :attr:`~kglite.KnowledgeGraph.source_root` and
-    :attr:`~kglite.KnowledgeGraph.source_fingerprint`, both of which survive
+    :attr:`~kglite.KnowledgeGraph.source_root`,
+    :attr:`~kglite.KnowledgeGraph.source_fingerprint` and
+    :attr:`~kglite.KnowledgeGraph.source_dialect`, all of which survive
     ``save()`` / ``load()``.
 
     Returns **None** when the directory still fingerprints as it did at build
@@ -250,13 +261,24 @@ def rebuild_if_changed(
       otherwise correct. Those warnings are not surfaced on the returned
       graph — run :func:`validate` for the report.
 
-    The keywords must be the ones the graph was built with: the provenance
-    stamp records the directory and its fingerprint, not the dialect, so a
-    rebuild with different keywords is simply a different build.
+    **The dialect comes from the graph.** Omit ``dialect`` and the vault is
+    rebuilt as it was built, because the stamp records that too; pass one
+    that contradicts the stamp and the call is refused, naming both. That
+    matters because the fingerprint is dialect-dependent: asked as an OKF
+    bundle, an untouched Obsidian vault reads as changed *every* time and
+    rebuilds into a near-empty graph that loads and looks valid. A ``.kgl``
+    saved by 0.17.8–0.17.10 carries no dialect stamp; for those the keyword
+    still decides (``"okf"`` when omitted) and the rebuild says the stamp was
+    missing.
+
+    The remaining keywords must be the ones the graph was built with: the
+    stamp does not record them, so a rebuild with different ones is simply a
+    different build.
 
     Args:
         graph: A graph built by :func:`build`.
-        dialect: As :func:`build` — pass what you built with.
+        dialect: As :func:`build`. Omitted, it is the one
+            :attr:`~kglite.KnowledgeGraph.source_dialect` reports.
         embedder: A model with ``dimension`` and ``embed()``, as
             :meth:`~kglite.KnowledgeGraph.set_embedder` takes. Omitted, the
             model bound to ``graph`` is used, and the returned graph carries it
@@ -271,15 +293,16 @@ def rebuild_if_changed(
         is unchanged.
 
     Raises:
-        RuntimeError: If the graph carries no ``source_root``, or if the
-            directory no longer exists — a vault that is gone is an error, not
-            a vault that is unchanged.
+        RuntimeError: If the graph carries no ``source_root``; if ``dialect``
+            contradicts the one the graph was built with; or if the directory
+            no longer exists — a vault that is gone is an error, not a vault
+            that is unchanged.
 
     Example::
 
         g = okf.build("vault", dialect="obsidian")
         ...
-        fresh = okf.rebuild_if_changed(g, dialect="obsidian")
+        fresh = okf.rebuild_if_changed(g)   # as it was built
         if fresh is not None:
             g = fresh
     """

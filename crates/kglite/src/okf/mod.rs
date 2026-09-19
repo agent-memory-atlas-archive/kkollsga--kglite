@@ -29,10 +29,10 @@ pub mod walk;
 
 pub use build::{build, BuildOutput};
 pub use export::{export, ExportOptions, ExportReport};
-pub use fingerprint::{fingerprint, rebuild_if_changed};
+pub use fingerprint::{fingerprint, rebuild_if_changed, stamped_dialect};
 pub use model::{
     BuildOptions, BuildReport, ConceptDoc, Dialect, FolderNoteDirection, IdScheme, LabelFrom, Link,
-    Profile,
+    Profile, RebuildOptions,
 };
 pub use validate::validate;
 pub use vault_config::{IndexDecl, VaultConfig};

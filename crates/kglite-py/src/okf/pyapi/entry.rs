@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::report::{ExportReport, VaultReport};
 use crate::graph::KnowledgeGraph;
-use crate::okf::{BuildOptions, Dialect};
+use crate::okf::{BuildOptions, Dialect, RebuildOptions};
 
 /// The keywords `build` and `validate` share, as one value.
 ///
@@ -31,24 +31,31 @@ impl Keywords {
     /// `default` is the dialect an omitted `dialect=` keyword picks, and it is
     /// **not** the same for every entry point: `validate` is the vault checker
     /// and defaults to `obsidian`, matching `kglite okf check`, while `build`
-    /// and the lifecycle pair keep `okf` for the bundle callers that have
-    /// always relied on it. An unrecognised *name* still falls back to `okf`,
-    /// as `Dialect::parse` defines.
+    /// and `fingerprint` keep `okf` for the bundle callers that have always
+    /// relied on it — a path carries no stamp to read a better answer from.
+    /// `rebuild_if_changed` does, so it takes no default at all and goes
+    /// through `rebuild_options` below. An unrecognised *name* still falls
+    /// back to `okf`, as `Dialect::parse` defines.
     fn options(self, default: Dialect) -> BuildOptions {
-        let dialect = match self.dialect.as_deref() {
-            Some(name) => Dialect::parse(Some(name)),
-            None => default,
-        };
-        let mut opts = BuildOptions::for_dialect(dialect);
-        if let Some(v) = self.require_frontmatter {
-            opts.require_frontmatter = v;
+        let rebuild = self.rebuild_options();
+        rebuild.resolve(rebuild.dialect.unwrap_or(default))
+    }
+
+    /// The same keywords with the dialect left open, for the one entry point
+    /// that can answer it from the graph: an omitted `dialect=` on a rebuild
+    /// means "as this graph was built", not "as an OKF bundle".
+    fn rebuild_options(self) -> RebuildOptions {
+        RebuildOptions {
+            dialect: self
+                .dialect
+                .as_deref()
+                .map(|name| Dialect::parse(Some(name))),
+            require_frontmatter: self.require_frontmatter,
+            respect_skip: self.respect_skip,
+            skip_dirs: self.skip_dirs.unwrap_or_default(),
+            with_body: self.with_body,
+            ..RebuildOptions::default()
         }
-        opts.respect_skip = self.respect_skip;
-        opts.skip_dirs = self.skip_dirs.unwrap_or_default();
-        if let Some(v) = self.with_body {
-            opts.with_body = v;
-        }
-        opts
     }
 }
 
@@ -148,7 +155,8 @@ pub fn fingerprint(
 /// changed since.
 ///
 /// Returns `None` when it has not — nothing beyond a `stat` pass is read — and
-/// a new graph otherwise. See the stub for the full contract.
+/// a new graph otherwise. An omitted dialect is the one the graph's build
+/// stamped. See the stub for the full contract.
 #[pyfunction]
 #[pyo3(signature = (graph, *, dialect=None, embedder=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
 // One parameter per Python keyword: the stub mirrors this signature verbatim.
@@ -170,7 +178,7 @@ pub fn rebuild_if_changed(
         skip_dirs,
         with_body,
     }
-    .options(Dialect::Okf);
+    .rebuild_options();
     // An explicit `embedder=` is wrapped like `set_embedder`'s; otherwise the
     // graph's own bound model is used, so a caller who has already registered
     // one does not register it twice.

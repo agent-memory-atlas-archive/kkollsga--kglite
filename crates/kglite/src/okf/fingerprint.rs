@@ -4,9 +4,17 @@
 //! [`fingerprint`] is a 64-bit summary of every file a build of that directory
 //! would read: each note, each attachment, and — for a vault — everything under
 //! `.kglite/`, as `(rel_path, size, mtime)`. [`crate::okf::build`] stamps it
-//! onto the graph beside the root it was built from, `save_graph` persists
-//! both, and [`rebuild_if_changed`] compares the stamp with the directory as it
-//! is now.
+//! onto the graph beside the root it was built from and the dialect it read
+//! them with, `save_graph` persists all three, and [`rebuild_if_changed`]
+//! compares the stamp with the directory as it is now.
+//!
+//! **Why the dialect is part of the stamp.** The summary covers "what a build
+//! would read", and that depends on the dialect: `.kglite/` is an input for
+//! `obsidian` alone, and the dialect decides which files are notes. Two
+//! dialects therefore give two numbers for one untouched directory, so a
+//! caller who asked "is my graph current?" without naming the dialect its
+//! build used was told "changed" every time — and got back a graph of a
+//! different shape, which loads and looks valid.
 //!
 //! **Why `(path, size, mtime)` and not the bytes.** The fingerprint has to be
 //! cheap enough to ask on demand — a vault is thousands of small files, and
@@ -26,7 +34,7 @@ use std::path::Path;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::embedder::Embedder;
 use crate::okf::build::{build, effective_options, BuildOutput};
-use crate::okf::model::BuildOptions;
+use crate::okf::model::{BuildOptions, Dialect, RebuildOptions};
 use crate::okf::walk;
 
 /// FNV-1a offset basis and prime (64-bit).
@@ -140,6 +148,27 @@ fn kglite_dir_entries(root: &Path) -> Vec<(String, u64, Option<i64>)> {
     entries
 }
 
+/// The dialect `graph`'s build read its directory with, if it recorded one.
+///
+/// `Ok(None)` is a graph that was not built from a directory, or one saved by
+/// 0.17.8–0.17.10, which stamped the root and the fingerprint and not this.
+/// A name this build does not know is an error rather than a fallback to
+/// `okf`: it means the `.kgl` came from a build that knows a dialect this one
+/// does not, and silently reading a vault as a bundle is the failure the
+/// stamp exists to prevent.
+pub fn stamped_dialect(graph: &DirGraph) -> Result<Option<Dialect>, String> {
+    let Some(name) = graph.source_dialect.as_deref() else {
+        return Ok(None);
+    };
+    Dialect::from_name(name).map(Some).ok_or_else(|| {
+        format!(
+            "this graph was built with dialect `{name}`, which this build of kglite does not \
+             know — it was written by a newer one. Upgrade kglite, or rebuild the directory \
+             with a dialect this build has."
+        )
+    })
+}
+
 /// Rebuild a graph from the directory it was built from, but only if that
 /// directory has changed.
 ///
@@ -153,12 +182,23 @@ fn kglite_dir_entries(root: &Path) -> Vec<(String, u64, Option<i64>)> {
 /// leaves a warning in the returned report rather than discarding a graph that
 /// is otherwise correct.
 ///
-/// `opts` must be the options the graph was built with: the provenance stamp
-/// records the root and the fingerprint, not the dialect, so a rebuild with
-/// different options is a different build and says so by rebuilding.
+/// The dialect comes from the stamp when `opts` names none — that is what
+/// makes `rebuild_if_changed(graph, &RebuildOptions::default(), None)` a
+/// question about *this* graph rather than about a bundle that happens to
+/// live at the same path. Naming one that contradicts the stamp is refused
+/// rather than obeyed: the two answers ("rebuild it as it was built" and
+/// "build something else here") are far enough apart that guessing between
+/// them is how the wrong graph gets written. The remaining options are the
+/// caller's own, and a rebuild with different ones is a different build that
+/// says so by rebuilding.
+///
+/// A graph saved before the dialect was stamped (0.17.8–0.17.10) keeps the
+/// old behaviour — the caller's dialect, `okf` when they named none — and the
+/// returned report says the stamp was missing, since that is the case where
+/// an unchanged vault can still read as changed.
 pub fn rebuild_if_changed(
     old: &DirGraph,
-    opts: &BuildOptions,
+    opts: &RebuildOptions,
     embedder: Option<&dyn Embedder>,
 ) -> Result<Option<BuildOutput>, String> {
     let Some(root) = old.source_root.clone() else {
@@ -169,11 +209,34 @@ pub fn rebuild_if_changed(
                 .to_string(),
         );
     };
+    let stamped = stamped_dialect(old)?;
+    let dialect = match (opts.dialect, stamped) {
+        (Some(asked), Some(stamped)) if asked != stamped => {
+            return Err(format!(
+                "this graph was built with dialect `{}`, and the rebuild asks for `{}`. \
+                 Reading the same directory the other way is a different build, not a \
+                 refresh of this one: drop the dialect to rebuild it as it was built, or \
+                 call okf::build for the other reading.",
+                stamped.name(),
+                asked.name(),
+            ));
+        }
+        (asked, stamped) => asked.or(stamped).unwrap_or(Dialect::Okf),
+    };
+    let opts = &opts.resolve(dialect);
     let root = Path::new(&root);
     if old.source_fingerprint == Some(fingerprint(root, opts)?) {
         return Ok(None);
     }
     let mut out = build(root, opts)?;
+    if stamped.is_none() {
+        out.report.warnings.push(format!(
+            "this graph carries no dialect stamp (it was built before kglite recorded one), \
+             so it was rebuilt as `{}` — check that is what it was built as, because the \
+             fingerprint of the other dialects will not match it",
+            dialect.name(),
+        ));
+    }
     let graph = crate::graph::handle::make_dir_graph_mut(&mut out.graph);
     let (stores, _vectors, _skipped) = graph.copy_embeddings_from(old);
     if let Some(model) = embedder {

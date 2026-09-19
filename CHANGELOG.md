@@ -32,6 +32,16 @@ before upgrading.
   cut at a `char` boundary. The pieces chain with `next` and keep contiguous
   ordinals; a `^block-id` keys the first piece. Chunk ids (`~chunk<n>`)
   renumber on affected pages; `chunk_hash` carries embeddings across the move.
+- **`okf.rebuild_if_changed(graph)` no longer rebuilds an Obsidian vault as an
+  OKF bundle.** A build now stamps the dialect it read the directory with
+  (`KnowledgeGraph.source_dialect`, persisted in the `.kgl`), and a rebuild
+  that is given no `dialect=` uses it. The fingerprint is dialect-dependent, so
+  the old `okf` default reported an untouched vault as changed on every call
+  and returned a near-empty graph that loaded and looked valid. A `dialect=`
+  that contradicts the stamp is refused, naming both; `kglite okf status
+  --graph` reads the stamp the same way. A `.kgl` written by 0.17.8–0.17.10
+  carries no dialect stamp: those keep the old behaviour and the rebuild
+  report says the stamp was missing.
 
 ### Added
 
@@ -59,6 +69,11 @@ before upgrading.
 
 - `list_recipe_queries`' description and the bundled `recipe_queries`
   methodology route to that catalogue block instead of to a listing call.
+- **Breaking (Rust):** `kglite::okf::rebuild_if_changed` takes
+  `&okf::RebuildOptions` instead of `&okf::BuildOptions` — its `dialect` is
+  `Option<Dialect>`, which is what lets an omitted dialect mean "as this graph
+  was built". New: `okf::stamped_dialect`, `Dialect::from_name`,
+  `Dialect::name`, `KnowledgeGraph.source_dialect`.
 
 ## [0.17.10] - 2026-09-18
 ### Fixed

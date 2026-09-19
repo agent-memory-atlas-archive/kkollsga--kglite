@@ -31,10 +31,35 @@ impl Dialect {
     /// [`Dialect::Loose`]; `"obsidian"` → [`Dialect::Obsidian`]. Unknown
     /// strings fall back to `Okf`.
     pub fn parse(name: Option<&str>) -> Self {
-        match name.map(|s| s.to_ascii_lowercase()).as_deref() {
-            Some("loose") => Dialect::Loose,
-            Some("obsidian") => Dialect::Obsidian,
-            _ => Dialect::Okf,
+        match name {
+            Some(name) => Dialect::from_name(name).unwrap_or(Dialect::Okf),
+            None => Dialect::Okf,
+        }
+    }
+
+    /// The dialect a name denotes, or `None` when it denotes none.
+    ///
+    /// The strict counterpart to [`Dialect::parse`], for the two callers that
+    /// must not silently degrade to `Okf`: a terminal, where `--dialect
+    /// obsidan` would read a vault as a bundle, and the build stamp, where an
+    /// unrecognised name means the graph was written by a build that knows a
+    /// dialect this one does not.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "okf" => Some(Dialect::Okf),
+            "loose" => Some(Dialect::Loose),
+            "obsidian" => Some(Dialect::Obsidian),
+            _ => None,
+        }
+    }
+
+    /// The name [`Dialect::from_name`] parses back, and the one the build
+    /// stamp persists.
+    pub fn name(self) -> &'static str {
+        match self {
+            Dialect::Okf => "okf",
+            Dialect::Loose => "loose",
+            Dialect::Obsidian => "obsidian",
         }
     }
 
@@ -414,6 +439,79 @@ impl BuildOptions {
             profile,
             ..BuildOptions::default()
         }
+    }
+}
+
+/// What to read a *rebuild* with, when the dialect may be the graph's own.
+///
+/// [`BuildOptions`] cannot express this: its `dialect` is a value, and a
+/// rebuild has to distinguish "read it as a vault" from "read it as whatever
+/// this graph was built as". The distinction is the whole of the trap the
+/// build stamp closes — the fingerprint is dialect-dependent, so a caller who
+/// meant "am I current?" and got the wrong dialect is told "changed", every
+/// time, and rebuilds into a graph of a different shape.
+///
+/// The non-dialect knobs are the ones [`BuildOptions`] takes from the dialect:
+/// `None` keeps whatever the resolved dialect chose, a value overrides it in
+/// both directions. Any field added to `BuildOptions` that a dialect does
+/// *not* set belongs here too, or a rebuild cannot set it.
+#[derive(Debug, Clone)]
+pub struct RebuildOptions {
+    /// The dialect to read the directory with, or `None` to use the one the
+    /// graph's build stamped (`DirGraph::source_dialect`).
+    pub dialect: Option<Dialect>,
+    /// The conventions to read with, or `None` for the resolved dialect's
+    /// own — the one knob whose default cannot be named before the dialect
+    /// is.
+    pub profile: Option<Profile>,
+    pub require_frontmatter: Option<bool>,
+    pub respect_skip: bool,
+    pub skip_dirs: Vec<String>,
+    pub with_body: Option<bool>,
+}
+
+impl Default for RebuildOptions {
+    fn default() -> Self {
+        RebuildOptions {
+            dialect: None,
+            profile: None,
+            require_frontmatter: None,
+            respect_skip: true,
+            skip_dirs: Vec::new(),
+            with_body: None,
+        }
+    }
+}
+
+impl RebuildOptions {
+    /// Read the directory as `dialect`, with nothing else asked for.
+    pub fn for_dialect(dialect: Dialect) -> Self {
+        RebuildOptions {
+            dialect: Some(dialect),
+            ..RebuildOptions::default()
+        }
+    }
+
+    /// The full options once the dialect is known: that dialect's own
+    /// defaults, with these overrides applied over them.
+    pub fn resolve(&self, dialect: Dialect) -> BuildOptions {
+        let mut opts = BuildOptions::for_dialect(dialect);
+        if let Some(profile) = &self.profile {
+            // Same order `for_dialect` uses: the profile carries the two
+            // defaults, and an explicit override below still wins.
+            opts.require_frontmatter = profile.require_frontmatter;
+            opts.with_body = profile.store_body;
+            opts.profile = profile.clone();
+        }
+        if let Some(value) = self.require_frontmatter {
+            opts.require_frontmatter = value;
+        }
+        opts.respect_skip = self.respect_skip;
+        opts.skip_dirs = self.skip_dirs.clone();
+        if let Some(value) = self.with_body {
+            opts.with_body = value;
+        }
+        opts
     }
 }
 

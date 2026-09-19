@@ -278,20 +278,24 @@ pub(crate) struct FileMetadata {
     /// describe()). Additive — old files default to empty.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     graph_instructions: HashMap<String, String>,
-    /// Where this graph was built from, and what that directory looked like —
-    /// `DirGraph::{source_root, source_fingerprint}`, the vault-provenance
-    /// pair (VAULT.md §12). A later process reads them to decide whether a
-    /// rebuild would read anything new; nothing in the engine can re-derive
-    /// them from the graph's content.
+    /// Where this graph was built from, what that directory looked like, and
+    /// which dialect it was read with — `DirGraph::{source_root,
+    /// source_fingerprint, source_dialect}`, the vault-provenance set
+    /// (VAULT.md §12). A later process reads them to decide whether a rebuild
+    /// would read anything new, and *how* to read it; nothing in the engine
+    /// can re-derive them from the graph's content.
     ///
     /// Additive and skipped when absent (the `unique_constraint_keys` posture
     /// above): a graph that was not built from a directory writes exactly the
     /// bytes it wrote before these fields existed, which is what keeps every
-    /// golden digest stable.
+    /// golden digest stable. `source_dialect` is younger than the other two,
+    /// so a `.kgl` written by 0.17.8–0.17.10 carries them and not it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_fingerprint: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_dialect: Option<String>,
     /// The caller's own data-model revision (see `DirGraph::user_schema_version`),
     /// carried across save/load so a migration runner can tell which of its
     /// ordered scripts a graph has already had applied. Not an engine version:
@@ -448,6 +452,7 @@ impl FileMetadata {
             graph_instructions: graph.graph_instructions.clone(),
             source_root: graph.source_root.clone(),
             source_fingerprint: graph.source_fingerprint,
+            source_dialect: graph.source_dialect.clone(),
             user_schema_version: graph.user_schema_version,
             checkpoint_lsn: graph.checkpoint_lsn,
             // A live log's position wins; otherwise carry forward what an
@@ -528,6 +533,7 @@ impl FileMetadata {
         graph.graph_instructions = self.graph_instructions;
         graph.source_root = self.source_root;
         graph.source_fingerprint = self.source_fingerprint;
+        graph.source_dialect = self.source_dialect;
         graph.user_schema_version = self.user_schema_version;
         graph.checkpoint_lsn = self.checkpoint_lsn;
         graph.cdc_handoff = self.cdc_handoff;

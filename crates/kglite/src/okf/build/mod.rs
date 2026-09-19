@@ -147,13 +147,20 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     })
 }
 
-/// Record where this graph came from and what that directory looked like
-/// (VAULT.md §12), so a later process can ask whether a rebuild would read
-/// anything new without being told the path again.
+/// Record where this graph came from, what that directory looked like, and
+/// which dialect it was read with (VAULT.md §12), so a later process can ask
+/// whether a rebuild would read anything new without being told the path —
+/// or the conventions — again.
 ///
 /// The fingerprint is taken from the walk the build already did, not from a
 /// second one: two walks of a directory being edited would disagree, and the
 /// stamp has to describe the files this graph was made of.
+///
+/// The dialect is part of it because the fingerprint is only meaningful
+/// beside one: the same directory summarised as a vault and as a bundle gives
+/// two different numbers, so a later `rebuild_if_changed` that guessed would
+/// read "changed" on an untouched vault and rebuild it into a different
+/// graph.
 ///
 /// The root is stored absolute where the filesystem will say so — a relative
 /// path is only meaningful from the working directory the build happened to
@@ -167,6 +174,7 @@ fn stamp_provenance(
     let absolute = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     graph.source_root = Some(absolute.to_string_lossy().into_owned());
     graph.source_fingerprint = Some(crate::okf::fingerprint::fingerprint_of(root, walked, opts));
+    graph.source_dialect = Some(opts.dialect.name().to_string());
 }
 
 /// The options a build of `root` actually runs with: the caller's, with the

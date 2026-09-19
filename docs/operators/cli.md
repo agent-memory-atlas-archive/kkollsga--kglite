@@ -194,12 +194,15 @@ recipes in `.kglite/` — happens in the vault itself, not in flags.
 
 `status` reads no note: it `stat`s the files a build would read and folds them
 into the fingerprint `VAULT.md` §12 specifies. Alone it prints that number and
-the directory. With `--graph` it compares it against the one stamped in the
-`.kgl` when it was built, printing `current` and exiting **0**, or `stale` with
-both fingerprints and exiting **non-zero** — the verdict a scheduled rebuild
-checks before doing any work. A `.kgl` that carries no provenance (one not
-built by `okf build`) is an error rather than a verdict, because there is
-nothing to compare. Keep the `.kgl` *outside* the vault: every non-hidden file
+the directory, reading it as a vault. With `--graph` it compares it against the
+one stamped in the `.kgl` when it was built, printing `current` and exiting
+**0**, or `stale` with both fingerprints and exiting **non-zero** — the verdict
+a scheduled rebuild checks before doing any work. The dialect then comes from
+the graph, because the fingerprint depends on it: a `.kgl` built with
+`--dialect okf` is compared as an OKF bundle without being asked, and a
+`--dialect` that contradicts the stamp is refused instead of reported as
+`stale`. A `.kgl` that carries no provenance (one not built by `okf build`) is
+an error rather than a verdict, because there is nothing to compare. Keep the `.kgl` *outside* the vault: every non-hidden file
 under the root is a candidate attachment, so a graph written into the vault
 changes the vault.
 

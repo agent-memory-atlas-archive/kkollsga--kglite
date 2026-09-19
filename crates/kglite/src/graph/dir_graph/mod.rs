@@ -399,6 +399,21 @@ pub struct DirGraph {
     /// `None` on a graph that was not built from a directory.
     #[serde(default)]
     pub source_fingerprint: Option<u64>,
+    /// The name of the dialect [`okf::build`](crate::okf::build) read
+    /// `source_root` with (`okf`, `loose`, `obsidian`) — stored as the name
+    /// rather than the enum so a graph written by a build that knows a
+    /// dialect this one does not can be reported instead of silently read as
+    /// another.
+    ///
+    /// The fingerprint is dialect-dependent (`.kglite/` is a build input for
+    /// `obsidian` alone, and the dialect decides which files are notes at
+    /// all), so `okf::rebuild_if_changed` needs it to answer "is this graph
+    /// still current?" at all: asked with the wrong dialect it reads
+    /// "changed" every time and rebuilds a graph of a different shape.
+    /// `None` on a graph not built from a directory, and on one saved by
+    /// 0.17.8–0.17.10, which stamped the pair above and not this.
+    #[serde(default)]
+    pub source_dialect: Option<String>,
     /// **User**-schema version — the caller's own data-model revision, bumped by
     /// their migrations. Distinct from the engine's format stamps
     /// (`save_metadata.format_version`, the `.kgl` magic), which the engine owns
@@ -910,6 +925,7 @@ impl DirGraph {
             graph_instructions: HashMap::new(),
             source_root: None,
             source_fingerprint: None,
+            source_dialect: None,
             user_schema_version: 0,
             checkpoint_lsn: 0,
             checkpoint_permit: Default::default(),
@@ -986,6 +1002,7 @@ impl DirGraph {
             graph_instructions: HashMap::new(),
             source_root: None,
             source_fingerprint: None,
+            source_dialect: None,
             user_schema_version: 0,
             checkpoint_lsn: 0,
             checkpoint_permit: Default::default(),

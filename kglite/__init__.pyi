@@ -3271,6 +3271,22 @@ class KnowledgeGraph:
         ...
 
     @property
+    def source_dialect(self) -> str | None:
+        """The dialect :func:`kglite.okf.build` read :attr:`source_root`
+        with — ``"okf"``, ``"loose"`` or ``"obsidian"`` — or ``None``.
+
+        :attr:`source_fingerprint` only means anything beside this: the same
+        directory summarised as a vault and as a bundle gives two different
+        numbers. So :func:`kglite.okf.rebuild_if_changed` reads it when the
+        caller names no ``dialect``, and refuses one that contradicts it.
+
+        ``None`` on a graph that was not built from a directory, and on a
+        ``.kgl`` saved by 0.17.8–0.17.10, which stamped the other two and not
+        this. Persisted through ``save()`` / ``load()``.
+        """
+        ...
+
+    @property
     def source_fingerprint(self) -> int | None:
         """What :func:`kglite.okf.fingerprint` said about :attr:`source_root`
         at build time, or ``None``.

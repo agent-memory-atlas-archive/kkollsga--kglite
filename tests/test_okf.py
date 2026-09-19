@@ -1451,3 +1451,27 @@ class TestProvenanceAndRebuild:
         report = okf.export(g, str(out))
         assert (report.attachments_copied, report.attachments_unresolved) == (1, 0)
         assert (out / "img" / "x.png").read_bytes() == b"\x89PNG\r\n"
+
+    def test_rebuild_reads_the_dialect_off_the_stamp(self, tmp_path):
+        """The operator's repro (2026-09-19): a vault built as ``obsidian``,
+        saved, reopened, and rebuilt by a caller who named no dialect was
+        rebuilt as an OKF bundle — a near-empty graph that loads and looks
+        valid. The stamp answers the question the caller left open."""
+        vault = self._vault(tmp_path)
+        (vault / ".kglite").mkdir()
+        (vault / ".kglite" / "vault.yaml").write_text("kglite_vault: 1\ndefault_label: Note\n", encoding="utf-8")
+        built = okf.build(str(vault), dialect="obsidian")
+        assert built.source_dialect == "obsidian"
+        path = str(tmp_path / "vault.kgl")
+        built.save(path)
+        g = kglite.load(path)
+        assert g.source_dialect == "obsidian"
+
+        assert okf.rebuild_if_changed(g) is None, "nothing moved, whoever asked"
+
+    def test_a_rebuild_dialect_that_contradicts_the_stamp_is_refused(self, tmp_path):
+        vault = self._vault(tmp_path)
+        built = okf.build(str(vault), dialect="obsidian")
+        with pytest.raises(RuntimeError, match="obsidian") as caught:
+            okf.rebuild_if_changed(built, dialect="okf")
+        assert "okf" in str(caught.value), "both dialects are named"

@@ -71,9 +71,10 @@ pub(crate) enum OkfCommand {
         /// A `.kgl` built from this vault, to compare against it.
         #[arg(long, value_name = "FILE")]
         graph: Option<PathBuf>,
-        /// Which conventions to read the directory with.
-        #[arg(long, value_enum, default_value_t = OkfDialect::Obsidian)]
-        dialect: OkfDialect,
+        /// Which conventions to read the directory with [default: the
+        /// dialect `--graph` was built with, else obsidian].
+        #[arg(long, value_enum)]
+        dialect: Option<OkfDialect>,
     },
     /// Build a vault into a `.kgl` graph file.
     Build {
@@ -198,14 +199,39 @@ fn parse_edge_tables(args: &[String]) -> Result<std::collections::BTreeMap<Strin
 /// `okf build`, or written before the stamp existed — is a question this
 /// command cannot answer, so it is an ordinary error (`Error: …` on stderr,
 /// exit 1) rather than a third verdict.
-fn status(directory: &Path, graph_path: Option<&Path>, dialect: OkfDialect) -> Result<()> {
-    let current = kglite::okf::fingerprint(directory, &options(dialect))
-        .map_err(|reason| anyhow::anyhow!("{reason}"))?;
+///
+/// With `--graph` the graph is opened first, because the dialect to
+/// fingerprint the directory with is the one that graph was built with
+/// unless `--dialect` says otherwise: the two readings of one directory give
+/// two numbers, so comparing across them would report every graph stale. A
+/// `--dialect` that contradicts the stamp is refused for the same reason
+/// `okf::rebuild_if_changed` refuses it — the question has no answer, and
+/// "stale" would be the wrong one.
+fn status(directory: &Path, graph_path: Option<&Path>, dialect: Option<OkfDialect>) -> Result<()> {
+    let asked = dialect.map(Dialect::from);
     let Some(graph_path) = graph_path else {
+        let current = kglite::okf::fingerprint(directory, &options(asked))
+            .map_err(|reason| anyhow::anyhow!("{reason}"))?;
         exec::write_stdout(&format!("{current:016x}  {}", directory.display()))?;
         return Ok(());
     };
     let graph = crate::load_graph(graph_path)?;
+    let built_as =
+        kglite::okf::stamped_dialect(&graph).map_err(|reason| anyhow::anyhow!("{reason}"))?;
+    if let (Some(asked), Some(built_as)) = (asked, built_as) {
+        if asked != built_as {
+            anyhow::bail!(
+                "{} was built with `--dialect {}`, and this asks for `{}` — the same \
+                 directory read the other way has a different fingerprint, so there is \
+                 nothing to compare. Drop `--dialect` to check it as it was built.",
+                graph_path.display(),
+                built_as.name(),
+                asked.name(),
+            );
+        }
+    }
+    let current = kglite::okf::fingerprint(directory, &options(asked.or(built_as)))
+        .map_err(|reason| anyhow::anyhow!("{reason}"))?;
     let Some(stamped) = graph.source_fingerprint else {
         anyhow::bail!(
             "{} carries no vault provenance — it was not built from a directory by \
@@ -232,13 +258,16 @@ fn status(directory: &Path, graph_path: Option<&Path>, dialect: OkfDialect) -> R
     Err(ReportedAgentFailure.into())
 }
 
-fn options(dialect: OkfDialect) -> BuildOptions {
-    BuildOptions::for_dialect(dialect.into())
+/// The build options for a dialect, `obsidian` being what a terminal means
+/// when it names none (`kglite okf` is the vault front end; the library
+/// keyword defaults to `okf` for the bundle callers that predate vaults).
+fn options(dialect: Option<Dialect>) -> BuildOptions {
+    BuildOptions::for_dialect(dialect.unwrap_or(Dialect::Obsidian))
 }
 
 /// `kglite okf check` — print the report, exit non-zero on an error.
 fn check(directory: &Path, dialect: OkfDialect, strict: bool, json: bool) -> Result<()> {
-    let report = kglite::okf::validate(directory, &options(dialect))
+    let report = kglite::okf::validate(directory, &options(Some(dialect.into())))
         .map_err(|reason| anyhow::anyhow!("{reason}"))?;
     if json {
         exec::write_stdout(&serde_json::to_string(&as_json(&report, strict))?)?;
@@ -260,7 +289,7 @@ fn check(directory: &Path, dialect: OkfDialect, strict: bool, json: bool) -> Res
 /// The report goes to **stderr**: a build's contract is the file it wrote, and
 /// a caller redirecting stdout is capturing a graph, not a summary.
 fn build(directory: &Path, output: &Path, dialect: OkfDialect) -> Result<()> {
-    let mut built = kglite::okf::build(directory, &options(dialect))
+    let mut built = kglite::okf::build(directory, &options(Some(dialect.into())))
         .map_err(|reason| anyhow::anyhow!("{reason}"))
         .with_context(|| format!("failed to build {}", directory.display()))?;
     kglite::api::io::save_graph(&mut built.graph, &output.to_string_lossy())

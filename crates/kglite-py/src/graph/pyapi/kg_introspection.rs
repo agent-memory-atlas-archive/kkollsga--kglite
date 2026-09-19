@@ -552,6 +552,12 @@ impl KnowledgeGraph {
         self.inner.source_fingerprint
     }
 
+    /// The dialect okf.build() read source_root with, or None.
+    #[getter]
+    fn source_dialect(&self) -> Option<&str> {
+        self.inner.source_dialect.as_deref()
+    }
+
     /// Your own data-model revision, persisted with the graph.
     ///
     /// This is *your* number, not kglite's: the engine stores and returns it

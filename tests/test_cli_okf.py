@@ -267,3 +267,27 @@ def test_status_refuses_a_graph_that_carries_no_provenance(tmp_path: Path):
     assert proc.returncode == 1
     assert "no vault provenance" in proc.stderr
     assert proc.stdout == ""
+
+
+def test_status_reads_the_dialect_off_the_graphs_stamp(tmp_path: Path):
+    """`--dialect` defaults to `obsidian` at the terminal, so a graph built as
+    an OKF bundle used to read as stale against its own unchanged directory:
+    `.kglite/` counts for one dialect and not the other."""
+    vault, graph = _vault_beside_its_graph(tmp_path)
+    (vault / ".kglite").mkdir()
+    (vault / ".kglite" / "vault.yaml").write_text("kglite_vault: 1\n", encoding="utf-8")
+    assert _run("okf", "build", str(vault), "-o", str(graph), "--dialect", "okf").returncode == 0
+
+    proc = _run("okf", "status", str(vault), "--graph", str(graph))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.startswith("current"), proc.stdout
+
+
+def test_status_refuses_a_dialect_that_contradicts_the_stamp(tmp_path: Path):
+    vault, graph = _vault_beside_its_graph(tmp_path)
+    assert _run("okf", "build", str(vault), "-o", str(graph), "--dialect", "okf").returncode == 0
+
+    proc = _run("okf", "status", str(vault), "--graph", str(graph), "--dialect", "obsidian")
+    assert proc.returncode == 1
+    assert "okf" in proc.stderr and "obsidian" in proc.stderr, proc.stderr
+    assert proc.stdout == ""

@@ -27,9 +27,10 @@ Usage::
     print(report)            # counts, errors, warnings
     assert report.ok         # no errors (add strict=True for no warnings)
 
-    # A built graph remembers the directory it came from, so a long-running
-    # process can ask whether anything has changed before rebuilding:
-    fresh = okf.rebuild_if_changed(g, dialect="obsidian")   # None if unchanged
+    # A built graph remembers the directory it came from and how it read it,
+    # so a long-running process can ask whether anything has changed before
+    # rebuilding:
+    fresh = okf.rebuild_if_changed(g)   # None if unchanged
 
     # Now query it like any graph:
     g.cypher("MATCH (n) WHERE NOT (n)--() RETURN n.concept_id")   # orphans
