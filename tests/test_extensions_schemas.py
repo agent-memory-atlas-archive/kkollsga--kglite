@@ -60,7 +60,25 @@ def _has_json_type(instance: Any, expected: str) -> bool:
     }[expected]
 
 
-def _schema_accepts(instance: Any, schema: dict[str, Any], root: dict[str, Any]) -> bool:
+def _evaluated_property_names(schema: dict[str, Any] | bool, root: dict[str, Any]) -> set[str]:
+    """Property names `schema` evaluates itself or through `$ref` / `allOf`.
+
+    `unevaluatedProperties: false` closes a mapping over that union, which is
+    how the recipe schema shares one keyword set between the nested and the
+    top-level parameter definitions while only the latter admits `default`.
+    """
+
+    if isinstance(schema, bool):
+        return set()
+    names: set[str] = set(schema.get("properties", {}))
+    if "$ref" in schema:
+        names |= _evaluated_property_names(_resolve_ref(root, schema["$ref"]), root)
+    for option in schema.get("allOf", []):
+        names |= _evaluated_property_names(option, root)
+    return names
+
+
+def _schema_accepts(instance: Any, schema: dict[str, Any] | bool, root: dict[str, Any]) -> bool:
     """Evaluate the JSON-Schema keywords used by cypher_recipes fixtures.
 
     This intentionally small evaluator keeps the ordinary test matrix
@@ -68,7 +86,13 @@ def _schema_accepts(instance: Any, schema: dict[str, Any], root: dict[str, Any])
     executable. Rust tests separately cover query parsing and runtime values.
     """
 
+    if isinstance(schema, bool):
+        # A boolean schema: `true` accepts any value (`default: true` — a
+        # default is checked against its own property by the server).
+        return schema
     if "$ref" in schema and not _schema_accepts(instance, _resolve_ref(root, schema["$ref"]), root):
+        return False
+    if "allOf" in schema and any(not _schema_accepts(instance, option, root) for option in schema["allOf"]):
         return False
     if "const" in schema and not _json_equal(instance, schema["const"]):
         return False
@@ -110,6 +134,10 @@ def _schema_accepts(instance: Any, schema: dict[str, Any], root: dict[str, Any])
                 return False
             if isinstance(additional, dict) and not _schema_accepts(value, additional, root):
                 return False
+        if schema.get("unevaluatedProperties") is False:
+            evaluated = _evaluated_property_names(schema, root)
+            if any(name not in evaluated for name in instance):
+                return False
 
     if isinstance(instance, list):
         if len(instance) < schema.get("minItems", 0):
@@ -148,7 +176,9 @@ def test_every_extension_schema_has_canonical_identity_and_guide_inventory() -> 
 def test_recipe_schema_declares_the_closed_runtime_subset() -> None:
     schema = _schemas()["cypher_recipes.json"]
     definitions = schema["$defs"]
+    keywords = definitions["parameterSchemaKeywords"]
     parameter = definitions["parameterSchema"]
+    top_level = definitions["topLevelParameterSchema"]
     root = definitions["rootParameterSchema"]
 
     expected_keywords = {
@@ -164,8 +194,16 @@ def test_recipe_schema_declares_the_closed_runtime_subset() -> None:
         "additionalProperties",
         "description",
     }
-    assert parameter["additionalProperties"] is False
-    assert set(parameter["properties"]) == expected_keywords
+    assert set(keywords["properties"]) == expected_keywords
+    # Both closed over the shared keyword set; only the top-level form admits
+    # `default`, the value the server binds for an omitted parameter.
+    assert parameter["unevaluatedProperties"] is False
+    assert parameter["allOf"] == [{"$ref": "#/$defs/parameterSchemaKeywords"}]
+    assert "properties" not in parameter
+    assert top_level["unevaluatedProperties"] is False
+    assert top_level["allOf"] == [{"$ref": "#/$defs/parameterSchemaKeywords"}]
+    assert set(top_level["properties"]) == {"default"}
+    assert root["properties"]["properties"]["additionalProperties"] == {"$ref": "#/$defs/topLevelParameterSchema"}
     assert root["properties"]["type"] == {"const": "object"}
     assert root["properties"]["additionalProperties"] == {"const": False}
     assert root["required"] == ["type", "properties", "required", "additionalProperties"]
@@ -175,7 +213,7 @@ def test_recipe_schema_supports_nullable_type_arrays_and_rejects_workflow_fields
     schema = _schemas()["cypher_recipes.json"]
     definitions = schema["$defs"]
 
-    type_options = definitions["parameterSchema"]["properties"]["type"]["oneOf"]
+    type_options = definitions["parameterSchemaKeywords"]["properties"]["type"]["oneOf"]
     assert type_options[1]["uniqueItems"] is True
     assert definitions["typeName"]["enum"] == [
         "null",
@@ -217,6 +255,11 @@ def test_recipe_schema_acceptance_matches_structural_parser_fixtures() -> None:
     assert _schema_accepts({}, schema, schema), "an empty catalog is the documented disabled shape"
     assert _schema_accepts(valid, schema, schema)
 
+    defaulted = deepcopy(valid)
+    parameters = defaulted["code_review"]["queries"]["resolve_function"]["parameters"]
+    parameters["properties"]["limit"] = {"type": "integer", "default": 5, "minimum": 1}
+    assert _schema_accepts(defaulted, schema, schema), "a top-level property may declare a default"
+
     invalid: list[dict[str, Any]] = []
     for field in ("description",):
         fixture = deepcopy(valid)
@@ -243,6 +286,14 @@ def test_recipe_schema_acceptance_matches_structural_parser_fixtures() -> None:
     fixture["code_review"]["queries"]["resolve_function"]["parameters"]["properties"]["qualified_name"]["pattern"] = (
         ".*"
     )
+    invalid.append(fixture)
+    fixture = deepcopy(valid)
+    fixture["code_review"]["queries"]["resolve_function"]["parameters"]["properties"]["filter"] = {
+        "type": "object",
+        # A default below a top-level property could never bind a `$parameter`,
+        # so only the top-level form admits the keyword.
+        "properties": {"mode": {"type": "string", "default": "any"}},
+    }
     invalid.append(fixture)
 
     for fixture in invalid:
