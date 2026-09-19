@@ -911,6 +911,15 @@ fn boot_graph(
     })
 }
 
+/// The catalogue dimensions the skill layer gates on — whether a catalogue is
+/// served and how large it is. The `recipe.query` names stay with the overview
+/// hint; the skills never read them.
+fn skills_catalog_summary(
+    hint: Option<&recipe_queries::CatalogHint>,
+) -> Option<recipe_queries::CatalogSummary> {
+    hint.map(|hint| hint.summary)
+}
+
 pub(crate) async fn run_async(
     cli: Cli,
     py_embedder_factory: Option<PyEmbedderFactory>,
@@ -1070,9 +1079,7 @@ pub(crate) async fn run_async(
             manifest: manifest.as_ref(),
             mode: &mode,
             graph_state: &graph_state,
-            // The skill only gates on whether a catalogue is served and how
-            // large it is; the names belong to the overview hint.
-            recipe_catalog_summary: recipe_catalog_hint.as_ref().map(|hint| hint.summary),
+            recipe_catalog_summary: skills_catalog_summary(recipe_catalog_hint.as_ref()),
             skills_index: &skills_index,
             refresher: &skill_refresher,
             peer: &peer_slot,
