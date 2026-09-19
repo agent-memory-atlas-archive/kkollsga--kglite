@@ -1172,6 +1172,10 @@
           "kind": "method",
           "signature": "(self, /, name, node_type=None)"
         },
+        "source_dialect": {
+          "kind": "attribute",
+          "type": "getset_descriptor"
+        },
         "source_fingerprint": {
           "kind": "attribute",
           "type": "getset_descriptor"
