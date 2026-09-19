@@ -12,7 +12,10 @@ use rmcp::ErrorData as McpError;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::description::{run_tool_description, schema_enums, VARIABLES_DESCRIPTION};
+use super::description::{
+    list_tool_description, run_tool_description, schema_enums, CatalogBudgets,
+    VARIABLES_DESCRIPTION,
+};
 use super::wire::{
     structured_error_result, ListRecipeQueriesArgs, ListRecipeQueriesOutput, RunRecipeQueryArgs,
     RunRecipeQueryOutput,
@@ -25,8 +28,6 @@ type DynFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 pub(crate) const LIST_RECIPE_QUERIES_TOOL: &str = "list_recipe_queries";
 pub(crate) const RUN_RECIPE_QUERY_TOOL: &str = "run_recipe_query";
 
-const LIST_DESCRIPTION: &str = "List the boot-validated Cypher recipe catalog. Omit `recipe` for compact recipe summaries; provide it to inspect that recipe's named queries and parameter schemas. The routing is already in run_recipe_query's description; call this only for a recipe not listed there.";
-
 /// Register the two catalog routes as one ownership unit.
 ///
 /// The router's normal `add_route` operation replaces an existing route with
@@ -36,6 +37,7 @@ pub(crate) fn register_recipe_query_routes(
     server: &mut McpServer,
     state: GraphState,
     catalog: Arc<RecipeCatalog>,
+    budgets: &CatalogBudgets,
 ) -> Result<usize> {
     if catalog.is_empty() {
         return Ok(0);
@@ -52,11 +54,12 @@ pub(crate) fn register_recipe_query_routes(
         );
     }
 
+    let (run_description, form) = run_tool_description(&catalog, budgets);
     let list_catalog = catalog.clone();
     server.tool_router_mut().add_route(ToolRoute::new_dyn(
         recipe_tool::<ListRecipeQueriesArgs, ListRecipeQueriesOutput>(
             LIST_RECIPE_QUERIES_TOOL,
-            LIST_DESCRIPTION.to_string(),
+            list_tool_description(form),
         ),
         move |ctx: ToolCallContext<'_, McpServer>| -> DynFut<'_, Result<CallToolResponse, McpError>> {
             let catalog = list_catalog.clone();
@@ -72,7 +75,7 @@ pub(crate) fn register_recipe_query_routes(
     ));
 
     server.tool_router_mut().add_route(ToolRoute::new_dyn(
-        run_tool(&catalog),
+        run_tool(&catalog, run_description),
         move |ctx: ToolCallContext<'_, McpServer>| -> DynFut<'_, Result<CallToolResponse, McpError>> {
             let catalog = catalog.clone();
             let state = state.clone();
@@ -104,11 +107,9 @@ pub(crate) fn register_recipe_query_routes(
 /// per query was considered and rejected in planning: clients render it
 /// inconsistently, and the enum plus the description block is what named
 /// manifest tools already put in front of an agent.
-fn run_tool(catalog: &RecipeCatalog) -> Tool {
-    let mut tool = recipe_tool::<RunRecipeQueryArgs, RunRecipeQueryOutput>(
-        RUN_RECIPE_QUERY_TOOL,
-        run_tool_description(catalog),
-    );
+fn run_tool(catalog: &RecipeCatalog, description: String) -> Tool {
+    let mut tool =
+        recipe_tool::<RunRecipeQueryArgs, RunRecipeQueryOutput>(RUN_RECIPE_QUERY_TOOL, description);
     let (recipes, queries) = schema_enums(catalog);
     let mut schema = tool.input_schema.as_ref().clone();
     if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
@@ -305,8 +306,13 @@ mod tests {
     #[test]
     fn the_run_description_carries_the_whole_catalogue() {
         let mut server = McpServer::new(Default::default());
-        register_recipe_query_routes(&mut server, GraphState::default(), described_catalog())
-            .unwrap();
+        register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            described_catalog(),
+            &CatalogBudgets::default(),
+        )
+        .unwrap();
         let router = server.tool_router_mut();
         let run = router.get(RUN_RECIPE_QUERY_TOOL).expect("run route");
         let description = run.description.as_deref().expect("description");
@@ -347,8 +353,13 @@ mod tests {
     #[test]
     fn the_run_input_schema_enumerates_the_real_recipe_and_query_names() {
         let mut server = McpServer::new(Default::default());
-        register_recipe_query_routes(&mut server, GraphState::default(), described_catalog())
-            .unwrap();
+        register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            described_catalog(),
+            &CatalogBudgets::default(),
+        )
+        .unwrap();
         let router = server.tool_router_mut();
         let run = router.get(RUN_RECIPE_QUERY_TOOL).expect("run route");
 
@@ -384,6 +395,7 @@ mod tests {
                 &mut server,
                 GraphState::default(),
                 Arc::new(RecipeCatalog::default()),
+                &CatalogBudgets::default(),
             )
             .unwrap(),
             0
@@ -400,8 +412,13 @@ mod tests {
             |_| "owned".to_string(),
         );
 
-        let error = register_recipe_query_routes(&mut server, GraphState::default(), catalog())
-            .expect_err("collision must fail");
+        let error = register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            catalog(),
+            &CatalogBudgets::default(),
+        )
+        .expect_err("collision must fail");
 
         assert!(error.to_string().contains(LIST_RECIPE_QUERIES_TOOL));
         assert_eq!(
@@ -420,7 +437,13 @@ mod tests {
     #[test]
     fn routes_publish_closed_schemas_and_all_safe_annotations() {
         let mut server = McpServer::new(Default::default());
-        register_recipe_query_routes(&mut server, GraphState::default(), catalog()).unwrap();
+        register_recipe_query_routes(
+            &mut server,
+            GraphState::default(),
+            catalog(),
+            &CatalogBudgets::default(),
+        )
+        .unwrap();
 
         let router = server.tool_router_mut();
         let list = router.get(LIST_RECIPE_QUERIES_TOOL).expect("list route");
@@ -486,7 +509,8 @@ mod tests {
             .create_in_mode(&temp.path().join("empty.kgl"), StorageMode::Memory)
             .expect("create active graph");
         let mut server = McpServer::new(Default::default());
-        register_recipe_query_routes(&mut server, state, catalog()).unwrap();
+        register_recipe_query_routes(&mut server, state, catalog(), &CatalogBudgets::default())
+            .unwrap();
 
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
         let server_handle = tokio::spawn(async move { server.serve(server_transport).await });
@@ -576,7 +600,13 @@ mod tests {
             .create_in_mode(&temp.path().join("empty.kgl"), StorageMode::Memory)
             .expect("create active graph");
         let mut server = McpServer::new(Default::default());
-        register_recipe_query_routes(&mut server, state, numeric_catalog()).unwrap();
+        register_recipe_query_routes(
+            &mut server,
+            state,
+            numeric_catalog(),
+            &CatalogBudgets::default(),
+        )
+        .unwrap();
 
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
         let server_handle = tokio::spawn(async move { server.serve(server_transport).await });

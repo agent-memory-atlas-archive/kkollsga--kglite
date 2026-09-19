@@ -20,7 +20,7 @@ mod catalog_tests;
 #[cfg(test)]
 mod result_tests;
 
-pub(crate) use description::{catalog_hint, CatalogHint};
+pub(crate) use description::{catalog_hint, CatalogBudgets, CatalogHint};
 pub(crate) use errors::RecipeErrorEnvelope;
 pub(crate) use graph_layer::{merge_recipe_layers, GraphRecipeStats, ProducerRecipeStats};
 pub(crate) use kglite::api::recipes::{

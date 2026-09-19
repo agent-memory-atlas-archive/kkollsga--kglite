@@ -180,6 +180,7 @@ mod tools_allow_tests {
             &mut server,
             GraphState::default(),
             recipe_catalog(),
+            &recipe_queries::CatalogBudgets::default(),
         )
         .expect("register recipe routes");
         server

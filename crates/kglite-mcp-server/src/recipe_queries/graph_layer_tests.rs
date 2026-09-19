@@ -11,8 +11,8 @@ use serde_json::json;
 
 use super::*;
 use crate::recipe_queries::{
-    register_recipe_query_routes, run_recipe_query, wire::RunRecipeQueryArgs,
-    LIST_RECIPE_QUERIES_TOOL, RUN_RECIPE_QUERY_TOOL,
+    description::CatalogBudgets, register_recipe_query_routes, run_recipe_query,
+    wire::RunRecipeQueryArgs, LIST_RECIPE_QUERIES_TOOL, RUN_RECIPE_QUERY_TOOL,
 };
 
 const NO_PARAMETERS: &str =
@@ -118,8 +118,13 @@ fn a_graph_only_catalogue_registers_the_routes_and_runs() {
 
     let catalogue = Arc::new(catalogue);
     let mut server = McpServer::new(ServerOptions::default());
-    let registered = register_recipe_query_routes(&mut server, state.clone(), catalogue.clone())
-        .expect("routes");
+    let registered = register_recipe_query_routes(
+        &mut server,
+        state.clone(),
+        catalogue.clone(),
+        &CatalogBudgets::default(),
+    )
+    .expect("routes");
     assert_eq!(registered, 2);
     let names: Vec<String> = server
         .tool_router_mut()
@@ -436,9 +441,13 @@ fn a_producer_only_catalogue_registers_the_routes_in_the_workspace_modes() {
 
         let catalogue = Arc::new(catalogue);
         let mut server = McpServer::new(ServerOptions::default());
-        let registered =
-            register_recipe_query_routes(&mut server, state.clone(), catalogue.clone())
-                .expect("routes");
+        let registered = register_recipe_query_routes(
+            &mut server,
+            state.clone(),
+            catalogue.clone(),
+            &CatalogBudgets::default(),
+        )
+        .expect("routes");
         assert_eq!(registered, 2, "{mode:?}");
 
         // And it runs against whatever graph the server activated later —

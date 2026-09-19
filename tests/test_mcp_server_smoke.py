@@ -2094,6 +2094,51 @@ class TestYamlManifest:
         # it answers, and its variables, all in `tools/list`.
         assert "smoke.count_people — Count Person nodes.; params: none" in injected, injected
 
+    def test_recipe_catalog_budgets_shorten_prose_and_keep_every_parameter(self, tmp_path: Path):
+        """`extensions.recipe_catalog` reaches `tools/list`, and shortening never costs the schema.
+
+        The 0.17.11 failure this pins: a catalogue past the ceiling published
+        names alone, so an agent had to call `list_recipe_queries` to learn
+        what to pass — and both tool descriptions then claimed the routing was
+        complete in the other one.
+        """
+        kgl = tmp_path / "demo.kgl"
+        _build_fixture_graph(kgl)
+        manifest = tmp_path / "budgets_mcp.yaml"
+        manifest.write_text(
+            "name: Budget Smoke Test\n"
+            "extensions:\n"
+            "  recipe_catalog:\n"
+            "    description_budget: 20\n"
+            "    block_budget: 300\n"
+            "  cypher_recipes:\n"
+            "    smoke:\n"
+            "      description: Smoke-test recipe operations.\n"
+            "      queries:\n"
+            "        count_people:\n"
+            f"          description: {'w' * 400}\n"
+            "          parameters:\n"
+            "            type: object\n"
+            "            properties:\n"
+            "              city:\n"
+            "                type: string\n"
+            "            required: [city]\n"
+            "            additionalProperties: false\n"
+            "          cypher: MATCH (p:Person) WHERE p.city = $city RETURN count(p) AS n ORDER BY n\n",
+            encoding="utf-8",
+        )
+        client = _spawn(["--graph", str(kgl), "--mcp-config", str(manifest)])
+        try:
+            tools = {tool["name"]: (tool.get("description") or "") for tool in client.list_tools()}
+        finally:
+            client.shutdown()
+
+        run = " ".join(tools["run_recipe_query"].split())
+        assert f"smoke.count_people — {'w' * 20}…; params: city: string (required)" in run, run
+        assert "descriptions are shortened" in run, run
+        # The pointer tool agrees with the form that was actually rendered.
+        assert "descriptions shortened to fit" in tools["list_recipe_queries"], tools["list_recipe_queries"]
+
     def test_absent_and_empty_catalogs_expose_no_recipe_skill(self, graph_with_manifest: Path):
         for label, catalog_yaml in (
             ("absent", ""),

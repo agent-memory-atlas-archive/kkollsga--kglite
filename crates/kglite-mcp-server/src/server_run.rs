@@ -19,6 +19,7 @@ use crate::*;
 /// typo forever after.
 const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "cypher_recipes",
+    "recipe_catalog",
     "value_codecs",
     "ontology",
     // Retired but still recognised — see `boot_graph_watch`.
@@ -343,6 +344,20 @@ fn query_pool_width() -> (usize, bool) {
 /// Absent block = the defaults (4 images, 4 MiB each, 12 MiB total). Read at
 /// registration rather than in [`boot_graph`] because the caps are the route's
 /// own, and the route is where a malformed block should stop the boot.
+/// `extensions.recipe_catalog: { block_budget, description_budget }`.
+///
+/// Absent block = the defaults. Read here rather than inside the catalogue
+/// because the budgets are the *description's*, not the catalogue's: they
+/// change what `tools/list` publishes about a catalogue that compiled either
+/// way.
+fn boot_recipe_catalog_budgets(
+    manifest: Option<&mcp_methods::server::Manifest>,
+) -> Result<recipe_queries::CatalogBudgets> {
+    recipe_queries::CatalogBudgets::from_manifest_value(
+        manifest.and_then(|m| m.extensions.get("recipe_catalog")),
+    )
+}
+
 fn boot_fetch_image_caps(
     manifest: Option<&mcp_methods::server::Manifest>,
 ) -> Result<fetch_images::ImageCaps> {
@@ -1047,6 +1062,7 @@ pub(crate) async fn run_async(
         manifest.as_ref(),
         &csv_http,
         recipe_catalog,
+        &boot_recipe_catalog_budgets(manifest.as_ref())?,
         domain_tools,
     )?;
 
@@ -1473,8 +1489,8 @@ mod boot_manifest_tests {
         // here rather than as a boot warning on a manifest that works.
         let all_keys = manifest_with(
             tmp.path(),
-            "name: all\nextensions:\n  cypher_recipes: {}\n  value_codecs: []\n  \
-             ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
+            "name: all\nextensions:\n  cypher_recipes: {}\n  recipe_catalog: {}\n  \
+             value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
              write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
              fetch_images: {}\n",
         );
@@ -1488,6 +1504,40 @@ mod boot_manifest_tests {
             KNOWN_EXTENSION_KEYS.len(),
             "this manifest must exercise every known key, or the list can grow stale entries \
              unnoticed"
+        );
+    }
+
+    /// The absent-key arm is what makes the present-key arm mean anything.
+    #[test]
+    fn recipe_catalog_budgets_default_and_read_the_manifest_block() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let defaults = recipe_queries::CatalogBudgets::default();
+        assert_eq!(
+            boot_recipe_catalog_budgets(None).expect("no manifest parses"),
+            defaults
+        );
+        let bare = manifest_with(tmp.path(), "name: bare\n");
+        assert_eq!(
+            boot_recipe_catalog_budgets(Some(&bare)).expect("bare manifest parses"),
+            defaults,
+            "an absent key must leave both shipped budgets in place"
+        );
+
+        let set = manifest_with(
+            tmp.path(),
+            "name: set\nextensions:\n  recipe_catalog:\n    block_budget: 32000\n    \
+             description_budget: 250\n",
+        );
+        let budgets = boot_recipe_catalog_budgets(Some(&set)).expect("block parses");
+        assert_eq!((budgets.block, budgets.description), (32_000, 250));
+
+        let typo = manifest_with(
+            tmp.path(),
+            "name: typo\nextensions:\n  recipe_catalog:\n    descripton_budget: 250\n",
+        );
+        assert!(
+            boot_recipe_catalog_budgets(Some(&typo)).is_err(),
+            "a misspelled budget must fail the boot, not silently keep the default"
         );
     }
 

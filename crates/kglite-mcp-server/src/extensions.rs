@@ -331,6 +331,7 @@ pub(crate) fn register_extension_tools(
     manifest: Option<&Manifest>,
     csv_http: &Arc<csv_http::CsvHttpState>,
     recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
+    catalog_budgets: &recipe_queries::CatalogBudgets,
     domain_tools: Option<Box<DomainToolRegistrar>>,
 ) -> Result<()> {
     if let Some(manifest) = manifest {
@@ -343,9 +344,13 @@ pub(crate) fn register_extension_tools(
     }
     register_domain_tools(server, graph_state.clone(), domain_tools)
         .context("downstream domain-tool registration failed")?;
-    let registered =
-        recipe_queries::register_recipe_query_routes(server, graph_state.clone(), recipe_catalog)
-            .context("Cypher recipe route registration failed")?;
+    let registered = recipe_queries::register_recipe_query_routes(
+        server,
+        graph_state.clone(),
+        recipe_catalog,
+        catalog_budgets,
+    )
+    .context("Cypher recipe route registration failed")?;
     if registered > 0 {
         tracing::info!(count = registered, "Cypher recipe routes registered");
     }

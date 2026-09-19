@@ -636,9 +636,9 @@ catalogue and merges it **under** the manifest's:
   record that does not is **skipped with a warning** naming it and the rule,
   and its siblings still serve. Graph content is data; it may have been written
   by a raw `CREATE` that bypassed validation entirely.
-- **Graph and watch modes only**, for the same reason skills give: the other
-  modes have no graph open when the routes are registered, and the catalogue is
-  immutable afterwards.
+- **Graph, watch and vault modes only**, for the same reason skills give: the
+  other modes have no graph open when the routes are registered, and the
+  catalogue is immutable afterwards.
 - The boot summary reports what the graph contributed —
   `graph recipes: 3 served, 1 overridden by the manifest, 1 skipped: …`.
 
@@ -1417,6 +1417,7 @@ repo:
 - [`csv_http_server.json`][schema-csv]
 - [`cypher_recipes.json`][schema-cypher-recipes]
 - [`embedder.json`][schema-embedder]
+- [`recipe_catalog.json`][schema-recipe-catalog]
 - [`value_codecs.json`][schema-value-codecs]
 
 The schemas are anchored to the Python parsers by the regression
@@ -1428,6 +1429,7 @@ as a test failure on the next CI run.
 [schema-csv]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/csv_http_server.json
 [schema-cypher-recipes]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/cypher_recipes.json
 [schema-embedder]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embedder.json
+[schema-recipe-catalog]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_catalog.json
 [schema-value-codecs]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/value_codecs.json
 
 #### `extensions.cypher_recipes`
@@ -1443,6 +1445,44 @@ own records are merged under it.
 structured read-query section above. Catalog validation happens at server
 boot and any violation exits before MCP serving starts. The schema file is
 [`docs/schemas/extensions/cypher_recipes.json`][schema-cypher-recipes].
+
+#### `extensions.recipe_catalog`
+
+Budgets for the catalogue block `run_recipe_query` publishes inside its
+`tools/list` description — a sibling key, not a member of
+`extensions.cypher_recipes` (every key *there* is a recipe name).
+
+```yaml
+extensions:
+  recipe_catalog:
+    block_budget: 16000       # bytes of rendered block; default 16000
+    description_budget: 600   # characters per query description; default 600
+```
+
+Both keys are optional and an omitted one keeps its default. What the budgets
+buy, in order:
+
+- **Whole while it fits.** Under `block_budget` the block carries every
+  query's `recipe.query` name, its full description and its parameter line
+  (types, enums, defaults, required flags).
+- **Prose gives way first.** Past the ceiling, descriptions are shortened
+  largest-first — never below `description_budget`, and only as far as the
+  block needs — with a trailing `…` on each one that was cut. Names and
+  parameter lines are never dropped for prose: the schema is what saves the
+  agent a `list_recipe_queries` round trip. `description_budget: 0` keeps
+  names and parameters and drops the prose entirely.
+- **Names alone are the last resort**, reached only when names and parameters
+  *together* already exceed `block_budget` — a catalogue of hundreds of
+  queries, not of seven.
+- `list_recipe_queries`' own description states which of the three forms was
+  rendered, so the two tools cannot contradict each other.
+
+The skill bodies the framework appends **after** this block (the bundled
+`recipe_queries` methodology and any graph-carried skill that references these
+tools) are charged to the skill registry's session budget, not to
+`block_budget`. Set `skills: false` to drop them; it does not change this
+block. The schema file is
+[`docs/schemas/extensions/recipe_catalog.json`][schema-recipe-catalog].
 
 #### `extensions.embedder`
 

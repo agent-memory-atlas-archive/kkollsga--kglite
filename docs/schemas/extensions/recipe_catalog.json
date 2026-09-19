@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/recipe_catalog.json",
+  "title": "extensions.recipe_catalog",
+  "description": "Budgets for the catalogue block run_recipe_query publishes in its tools/list description. Both keys are optional; an omitted key keeps its shipped default. The block is rendered whole while it fits the block budget; past it, per-query descriptions are shortened largest-first (never below name and parameters) and only far enough to fit; names alone are published only when names and parameters together already exceed the budget. Skill bodies the framework appends after the block are not counted here.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "block_budget": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 16000,
+      "description": "Longest rendered catalogue block, in bytes."
+    },
+    "description_budget": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 600,
+      "description": "Longest per-query description, in characters, once shortening begins. A shortened description is marked with a trailing ellipsis. 0 drops the prose entirely and keeps every recipe.query name and its parameter line."
+    }
+  }
+}
