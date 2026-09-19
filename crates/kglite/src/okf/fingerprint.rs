@@ -249,31 +249,46 @@ pub fn rebuild_if_changed(
     }
     let graph = crate::graph::handle::make_dir_graph_mut(&mut out.graph);
     let (stores, _vectors, _skipped) = graph.copy_embeddings_from(old);
-    if let Some(model) = embedder {
-        let hooks = crate::graph::embeddings::EmbedHooks::default();
-        for (label, property) in out.report.embed_targets.clone() {
-            if let Err(error) = crate::graph::embeddings::embed_property(
-                &mut out.graph,
-                &label,
-                &property,
-                crate::graph::embeddings::EmbedMode::Changed,
-                model,
-                &hooks,
-            ) {
-                out.report
-                    .warnings
-                    .push(format!("embed target `{label}.{property}` failed: {error}"));
-            }
-        }
-    } else if !out.report.embed_targets.is_empty() {
-        out.report.warnings.push(format!(
-            "`.kglite/vault.yaml` declares {} embed target(s) but no embedder was given — \
-             no vectors were computed",
-            out.report.embed_targets.len()
-        ));
-    }
     let _ = stores;
+    apply_embed_targets(&mut out, embedder);
     Ok(Some(out))
+}
+
+/// Run the `embed:` targets the build's own `.kglite/vault.yaml` declared, in
+/// changed mode over whatever hashes the graph already carries.
+///
+/// Shared by [`rebuild_if_changed`] and [`crate::okf::open`] so the two cannot
+/// answer differently: whether a vault has vectors must not depend on whether
+/// a cache happened to hit. A target that fails leaves a warning rather than
+/// discarding a graph that is otherwise correct — the notes are served, the
+/// text search simply has less to match on — and an embedder-less caller is
+/// told what was declared and skipped.
+pub(crate) fn apply_embed_targets(out: &mut BuildOutput, embedder: Option<&dyn Embedder>) {
+    let Some(model) = embedder else {
+        if !out.report.embed_targets.is_empty() {
+            out.report.warnings.push(format!(
+                "`.kglite/vault.yaml` declares {} embed target(s) but no embedder was \
+                 given — no vectors were computed",
+                out.report.embed_targets.len()
+            ));
+        }
+        return;
+    };
+    let hooks = crate::graph::embeddings::EmbedHooks::default();
+    for (label, property) in out.report.embed_targets.clone() {
+        if let Err(error) = crate::graph::embeddings::embed_property(
+            &mut out.graph,
+            &label,
+            &property,
+            crate::graph::embeddings::EmbedMode::Changed,
+            model,
+            &hooks,
+        ) {
+            out.report
+                .warnings
+                .push(format!("embed target `{label}.{property}` failed: {error}"));
+        }
+    }
 }
 
 #[cfg(test)]

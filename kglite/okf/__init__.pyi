@@ -163,6 +163,82 @@ def build(
         RuntimeError: If the bundle path does not exist or is not a directory.
     """
 
+def open(
+    path: str,
+    *,
+    cache: str | bool | None = ...,
+    dialect: str | None = ...,
+    embedder: Any | None = ...,
+    require_frontmatter: bool | None = ...,
+    respect_skip: bool = ...,
+    skip_dirs: list[str] | None = ...,
+    with_body: bool | None = ...,
+) -> KnowledgeGraph:
+    """Open a directory as a graph, through a `.kgl` cache beside it.
+
+    Specified by ``VAULT.md`` §12. The one call for "give me this vault as a
+    graph" when the caller does not want to decide whether that costs a
+    build: the cache is loaded, the directory is ``stat``-ed against the
+    stamp it carries, and only a directory that moved is read again. What was
+    read is written back, so the next call — in this process or the next one
+    — starts from it. A vault may therefore be *shipped* with its graph.
+
+    The default cache is ``<path>/.kglite/graph.kgl``, which travels with the
+    vault and is excluded from its own fingerprint (along with its lock,
+    owner-record and in-flight save siblings) so that writing it does not mark
+    the vault changed.
+
+    **A cache problem never fails an open.** A cache that is missing,
+    unreadable, written by another version of kglite, built with other
+    keywords, or stamped with another directory is a silent miss — the
+    directory is read instead. A cache that cannot be *written* — a read-only
+    vault, a full volume, another process holding its writer lease — is
+    skipped just as quietly; the graph is returned either way, and the cost is
+    one more rebuild next time. Use ``kglite okf open`` when you want to see
+    which of those happened.
+
+    Args:
+        path: Path to the directory.
+        cache: Where to keep the graph. ``None`` (the default) is
+            ``<path>/.kglite/graph.kgl``; ``False`` reads the directory
+            without caching anything; a path puts it there. A path *inside*
+            the vault that is not the default location is an ordinary file of
+            that vault and will invalidate itself — keep it in ``.kglite/``
+            or outside the directory.
+        dialect: As :func:`build`, and as there it defaults to ``"okf"``: a
+            path carries no stamp to read a better answer from. Name
+            ``"obsidian"`` for a vault. A cache built with another dialect is
+            a miss.
+        embedder: A model with ``dimension`` and ``embed()``, as
+            :meth:`~kglite.KnowledgeGraph.set_embedder` takes. The vault's
+            declared ``embed:`` targets run over whatever the graph does not
+            already carry, on the build path *and* the rebuild path — so
+            whether a vault has vectors never depends on whether its cache
+            hit. The returned graph keeps the model.
+        require_frontmatter: As :func:`build`. Part of the cache stamp: a
+            cache built with a different value is a miss.
+        respect_skip: As :func:`build`. Part of the cache stamp.
+        skip_dirs: As :func:`build`. Part of the cache stamp (as a set — the
+            order does not matter).
+        with_body: As :func:`build`. Part of the cache stamp.
+
+    Returns:
+        The :class:`~kglite.KnowledgeGraph`, loaded or rebuilt.
+
+    Raises:
+        RuntimeError: If the directory cannot be read — it does not exist, is
+            not a directory, or its ``.kglite/vault.yaml`` will not parse.
+            Never for anything the cache did.
+
+    Example::
+
+        from kglite import okf
+
+        g = okf.open("vault", dialect="obsidian")     # builds, and caches
+        g = okf.open("vault", dialect="obsidian")     # loads the cache
+        g = okf.open("vault", dialect="obsidian", cache=False)   # no cache
+    """
+
 def fingerprint(
     path: str,
     *,
@@ -308,6 +384,11 @@ def rebuild_if_changed(
         fresh = okf.rebuild_if_changed(g)   # as it was built
         if fresh is not None:
             g = fresh
+
+    :func:`open` is that loop with a `.kgl` under it: it survives the process
+    that built the graph, so a restart costs a ``stat`` pass rather than a
+    build. Reach for this one when the graph is already in hand and the
+    question is only whether it is still current.
     """
 
 def source(path: str) -> str:

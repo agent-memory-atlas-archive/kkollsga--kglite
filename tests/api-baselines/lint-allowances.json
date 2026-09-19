@@ -157,7 +157,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/recipes.rs::fn:set_recipe:fn set_recipe( &mut self, py: Python<'_>, recipe: &str, name: &str, description: &str, cypher: &str, parameters: Option<&Bound<'_, PyAny>>, recipe_description: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/recipes.rs::fn:set_recipe:fn set_recipe( &mut self, py: Python<'_>, recipe: &str, name: &str, description: &str, cypher: &str, parameters: Option<&Bound<'_, PyAny>>, recipe_description: Option<&str>, tool: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -198,6 +198,10 @@
     },
     {
       "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:vector_search:fn vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
+      "identity": "crates/kglite-py/src/okf/pyapi/entry.rs::fn:open:pub fn open( py: Python<'_>, path: PathBuf, cache: Option<Bound<'_, PyAny>>, dialect: Option<String>, embedder: Option<Py<PyAny>>, require_frontmatter: Option<bool>, respect_skip: bool, skip_dirs: Option<Vec<String>>, with_body: Option<bool>, ) -> PyResult<KnowledgeGraph>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {

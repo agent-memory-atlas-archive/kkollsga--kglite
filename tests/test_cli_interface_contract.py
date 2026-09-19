@@ -70,7 +70,7 @@ def test_cli_offers_the_okf_commands():
     assert "okf" in root_help.stdout
 
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-    for entry in ("okf", "okf check", "okf build"):
+    for entry in ("okf", "okf check", "okf build", "okf open"):
         assert entry in baseline["help"], entry
 
     group = _run("okf", "--help")
@@ -86,6 +86,15 @@ def test_cli_offers_the_okf_commands():
     build = _run("okf", "build", "--help")
     assert build.returncode == 0
     assert "Usage: kglite okf build [OPTIONS] --output <OUTPUT> <DIRECTORY>" in build.stdout, build.stdout
+
+    # `open` is the one vault command that needs no output path — the vault
+    # carries the graph — so the absence of `--output` in its usage line is
+    # the contract, not an omission.
+    opened = _run("okf", "open", "--help")
+    assert opened.returncode == 0
+    assert "Usage: kglite okf open [OPTIONS] <DIRECTORY>" in opened.stdout, opened.stdout
+    for flag in ("--cache", "--dialect"):
+        assert flag in opened.stdout, flag
 
     typo = _run("okf", "chekc", "vault")
     assert typo.returncode == 2, typo.stdout + typo.stderr

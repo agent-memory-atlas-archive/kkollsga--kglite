@@ -337,9 +337,13 @@ pub fn register_vault_mode_tools(
                 .map(|report| report.render());
             Ok(match report {
                 Some(text) => text,
-                // Unreachable in practice (the build just succeeded, and a
-                // success always fills the slot), and still not an `expect`:
-                // an agent that asked for a rebuild got one.
+                // The slot *is* empty after a boot served from the vault's
+                // cache — nothing was read, so there is no report — but not
+                // here: this handler reaches the producer with a graph
+                // already in hand, which is the case the producer always
+                // rebuilds. Still not an `expect`: an agent that asked for a
+                // rebuild got one, and a missing summary is no reason to
+                // fail the call.
                 None => "Rebuilt the vault graph.".to_string(),
             })
         },

@@ -32,6 +32,10 @@ Usage::
     # rebuilding:
     fresh = okf.rebuild_if_changed(g)   # None if unchanged
 
+    # Or let one call do all of it: load the vault's own cached graph, rebuild
+    # only what moved, and write the result back.
+    g = okf.open("path/to/vault", dialect="obsidian")
+
     # Now query it like any graph:
     g.cypher("MATCH (n) WHERE NOT (n)--() RETURN n.concept_id")   # orphans
     g.cypher("CALL leiden() YIELD node, community RETURN community, count(*)")
@@ -43,6 +47,7 @@ from kglite._kglite_okf import (
     build,
     export,
     fingerprint,
+    open,
     rebuild_if_changed,
     source,
     validate,
@@ -54,6 +59,7 @@ __all__ = [
     "build",
     "export",
     "fingerprint",
+    "open",
     "rebuild_if_changed",
     "source",
     "validate",

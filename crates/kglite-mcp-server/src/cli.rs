@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use kglite::api::storage::StorageMode;
+use kglite::okf::CachePolicy;
 use mcp_methods::server::manifest::{
     find_sibling_manifest, find_workspace_manifest, ManifestError,
 };
@@ -70,6 +71,17 @@ pub(crate) struct Cli {
     /// graph's own agent guidance.
     #[arg(long, conflicts_with_all = ["graph", "source_root", "workspace", "watch"])]
     pub(crate) vault: Option<PathBuf>,
+
+    /// Where vault mode keeps the graph it builds, so a restart serves the
+    /// vault without rebuilding it. Defaults to `<VAULT>/.kglite/graph.kgl`,
+    /// which travels with the vault — ship a pre-built vault and the first
+    /// boot on a new machine costs a `stat` pass instead of a build. Give a
+    /// path to keep it elsewhere (a read-only vault, or a cache the vault's
+    /// own git history should not carry), or `none` to switch it off and
+    /// rebuild at every boot. A cache that cannot be read or written never
+    /// fails the boot: the server rebuilds and says so.
+    #[arg(long = "vault-cache", value_name = "PATH|none", requires = "vault")]
+    pub(crate) vault_cache: Option<String>,
 
     /// Enable the write-mode "agent graph workbench" (single-graph mode):
     /// `cypher_query` accepts mutations (optionally `write_scope`-restricted)
@@ -190,6 +202,25 @@ pub(crate) fn pick_mode(cli: &Cli) -> Mode {
         Mode::Vault { dir: d.clone() }
     } else {
         Mode::Bare
+    }
+}
+
+/// The spelling `--vault-cache none` reserves, so a vault cannot be cached
+/// into a file of that name by accident.
+const CACHE_OFF: &str = "none";
+
+/// Resolve `--vault-cache` into the policy the vault producer opens with.
+///
+/// An omitted flag is the in-vault default; `none` switches the cache off;
+/// anything else is a path. Relative paths resolve against the working
+/// directory the server was started in, like every other path argument —
+/// an MCP client's working directory is its own, so an operator writing one
+/// into a manifest should write it absolute.
+pub(crate) fn vault_cache_policy(cli: &Cli) -> CachePolicy {
+    match cli.vault_cache.as_deref() {
+        None => CachePolicy::Default,
+        Some(CACHE_OFF) => CachePolicy::Disabled,
+        Some(path) => CachePolicy::At(PathBuf::from(path)),
     }
 }
 

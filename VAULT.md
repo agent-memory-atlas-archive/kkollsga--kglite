@@ -196,7 +196,10 @@ Pruned from the walk, with their whole subtree:
 - anything matched by `skip_dirs`: a bare name matches a directory at any
   depth, an entry containing `/` is an anchored vault-relative subtree
 
-`.kglite/` is read by explicit path (§7, §8), never by the walk.
+`.kglite/` is read by explicit path (§7, §8), never by the walk. It also
+holds what kglite writes back: the graph cache `.kglite/graph.kgl` (§12) and
+the export manifest `.kglite/export-manifest.json` (§10), neither of which is
+a build input.
 
 A single file opts out with `kg_skip: true` in its frontmatter.
 
@@ -733,6 +736,11 @@ is not delivered; rasterise it when you build the source.
 
 ## 7. `.kglite/vault.yaml`
 
+The declaration file, and one of four things a vault keeps in `.kglite/`: this,
+`skills/` and `recipes/` (§8) are inputs the build reads; `graph.kgl` (§12) and
+`export-manifest.json` (§10) are outputs kglite writes and never reads as
+content.
+
 Optional. Read by explicit path (the walk ignores dot-directories), applied to
 every build and re-applied to every rebuild — with carried embeddings, it is
 the only state that survives one. An unknown top-level key, an unknown key
@@ -1223,6 +1231,9 @@ hand-authored vault content, and one unfinished skill must not cost an agent
 the other nine. The build is not failed: nothing that reached the graph is
 wrong, there is simply less of it than the author intended.
 
+(These two are the *inputs* under `.kglite/`; `graph.kgl` and
+`export-manifest.json` beside them are kglite's own output — §2.4.)
+
 - `.kglite/skills/*.md` become `KgliteSkill` nodes. The frontmatter dialect is
   exactly the one an MCP skills directory uses — `name`, `description`,
   `references_tools`, `delivery`, then the markdown body. See
@@ -1486,7 +1497,9 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    whatever the heading ladder types) beside the declared edge, exactly as it
    does from an author's own table.
 7. **Overwrite safety.** `.kglite/export-manifest.json` records every file the
-   export wrote: `{"kglite_vault": 1, "files": {"<vault-relative path>":
+   export wrote — one of the two files kglite writes into `.kglite/` and does
+   not read back as content (§2.4), so it does not move the vault's
+   fingerprint: `{"kglite_vault": 1, "files": {"<vault-relative path>":
    "<sha256 hex>"}}`. On the next export a file whose current hash differs from
    its manifest entry was edited by a human, and the export refuses it; a file
    absent from the manifest was written by somebody else, and the export
@@ -1590,7 +1603,9 @@ What a converter must emit, in order:
    querying, which §13 is the guide to. It replaces the graph-building script: everything
    declarative lives here and is re-applied on every rebuild.
 9. **`.kglite/skills/` and `.kglite/recipes/`** when the vault is served to an
-   agent (§8).
+   agent (§8). Do not write `.kglite/graph.kgl` by hand — that is the cache
+   `okf.open` / `kglite okf open` maintains (§12); to ship a pre-built vault,
+   run one of those and commit what it leaves.
 10. **Run `kglite okf check <dir>`.** Zero errors is the bar; add `--strict`
     to your own test suite once the warnings are down to the ones you accept,
     and `--json` when the suite wants the finding lists rather than the text.

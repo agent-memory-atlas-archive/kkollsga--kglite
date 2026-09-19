@@ -32,7 +32,7 @@ use crate::graph::embedder::Embedder;
 use crate::graph::io::open::GraphWriterLease;
 use crate::okf::build::{build, BuildOutput};
 use crate::okf::export::MANIFEST_FILE;
-use crate::okf::fingerprint::{rebuild_if_changed, stamped_dialect};
+use crate::okf::fingerprint::{apply_embed_targets, rebuild_if_changed, stamped_dialect};
 use crate::okf::model::{BuildOptions, Dialect, RebuildOptions};
 use crate::okf::vault_config::{config_dir, CONFIG_DIR};
 
@@ -234,7 +234,9 @@ pub fn open(
     cache: CachePolicy,
 ) -> Result<Opened, String> {
     let Some(cache_path) = cache.path_for(root) else {
-        return Ok(Opened::Rebuilt(Box::new(build_fresh(root, opts)?)));
+        return Ok(Opened::Rebuilt(Box::new(build_fresh(
+            root, opts, embedder,
+        )?)));
     };
     if let Some(loaded) = load_usable_cache(&cache_path, root, opts) {
         match rebuild_if_changed(&loaded, opts, embedder)? {
@@ -243,16 +245,27 @@ pub fn open(
         }
     }
     Ok(Opened::Rebuilt(Box::new(write_back(
-        build_fresh(root, opts)?,
+        build_fresh(root, opts, embedder)?,
         &cache_path,
     ))))
 }
 
 /// Build `root` with the dialect `opts` names, or `okf` when it names none —
 /// the same default [`crate::okf::rebuild_if_changed`] falls back to for a
-/// graph with no stamp.
-fn build_fresh(root: &Path, opts: &RebuildOptions) -> Result<BuildOutput, String> {
-    build(root, &opts.resolve(opts.dialect.unwrap_or(Dialect::Okf)))
+/// graph with no stamp — and run the `embed:` targets the build declared.
+///
+/// The embed pass is not optional decoration: [`rebuild_if_changed`] runs it
+/// on its own path, so an [`open`] that skipped it here would give a vault
+/// vectors or not depending on whether the cache happened to miss — and the
+/// vectorless graph would be the one written back.
+fn build_fresh(
+    root: &Path,
+    opts: &RebuildOptions,
+    embedder: Option<&dyn Embedder>,
+) -> Result<BuildOutput, String> {
+    let mut out = build(root, &opts.resolve(opts.dialect.unwrap_or(Dialect::Okf)))?;
+    apply_embed_targets(&mut out, embedder);
+    Ok(out)
 }
 
 /// The cache at `path`, if it is a cache of *this* directory as *this* build
@@ -279,51 +292,62 @@ fn load_usable_cache(path: &Path, root: &Path, opts: &RebuildOptions) -> Option<
     Some(loaded)
 }
 
-/// Save `out.graph` to `path`, turning every way that can fail into a warning
-/// on `out.report`. Returns the same output either way — the caller asked for
-/// a graph, and it has one.
-fn write_back(mut out: BuildOutput, path: &Path) -> BuildOutput {
+/// Write `graph` to the cache at `path`, or say in one sentence why it was
+/// not written.
+///
+/// `None` is the write that happened. Everything else — a directory that
+/// cannot be created, a volume that is full, a read-only vault, another
+/// process holding the graph's writer lease — is `Some(warning)`, never an
+/// error: a cache is an optimisation, and failing an open because one could
+/// not be saved would trade a slow answer for no answer.
+///
+/// The lease is taken with a **zero** timeout. A second process opening the
+/// same vault at the same moment wants its graph, not a queue: skipping the
+/// write costs it one rebuild next time, while waiting costs it a rebuild's
+/// worth of wall clock now, every time.
+pub fn store(graph: &mut Arc<DirGraph>, path: &Path) -> Option<String> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         if let Err(error) = std::fs::create_dir_all(parent) {
-            return warn_unwritten(out, path, &error);
+            return Some(unwritten(path, &error));
         }
     }
-    // Zero timeout: a second process opening the same vault at the same moment
-    // wants its graph, not a queue. Skipping the write costs that process one
-    // rebuild next time; waiting for the lease costs it a rebuild's worth of
-    // wall clock now, every time.
     let _lease = match GraphWriterLease::acquire_ex(path, Duration::ZERO) {
         Ok(lease) => lease,
         // Contention and a failure to take the lock at all are different
         // stories for the operator reading the warning: one is another
         // process doing the same work, the other is the directory.
         Err(refusal) if refusal.error.kind() == std::io::ErrorKind::WouldBlock => {
-            out.report.warnings.push(format!(
+            return Some(format!(
                 "the graph cache at `{}` is held by another process, so it was not \
                  rewritten ({})",
                 path.display(),
                 refusal.error
-            ));
-            return out;
+            ))
         }
-        Err(refusal) => return warn_unwritten(out, path, &refusal.error),
+        Err(refusal) => return Some(unwritten(path, &refusal.error)),
     };
-    if let Err(error) = crate::graph::io::file::save_graph(&mut out.graph, &path.to_string_lossy())
-    {
-        return warn_unwritten(out, path, &error);
+    crate::graph::io::file::save_graph(graph, &path.to_string_lossy())
+        .err()
+        .map(|error| unwritten(path, &error))
+}
+
+/// [`store`], with the warning folded into the build report the caller is
+/// already carrying.
+fn write_back(mut out: BuildOutput, path: &Path) -> BuildOutput {
+    if let Some(warning) = store(&mut out.graph, path) {
+        out.report.warnings.push(warning);
     }
     out
 }
 
-/// The warning every "the cache did not get written" path leaves — one
-/// wording, so an operator seeing it once recognises it from any cause.
-fn warn_unwritten(mut out: BuildOutput, path: &Path, error: &dyn std::fmt::Display) -> BuildOutput {
-    out.report.warnings.push(format!(
+/// The wording every "the cache did not get written" cause shares, so an
+/// operator who has seen it once recognises it from any of them.
+fn unwritten(path: &Path, error: &dyn std::fmt::Display) -> String {
+    format!(
         "the graph cache at `{}` was not written ({error}); this open rebuilt the \
          directory and the next one will too",
         path.display()
-    ));
-    out
+    )
 }
 
 #[cfg(test)]

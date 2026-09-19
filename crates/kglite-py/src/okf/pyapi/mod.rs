@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 pub fn register(py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let m = PyModule::new(py, "_kglite_okf")?;
     m.add_function(wrap_pyfunction!(entry::build, &m)?)?;
+    m.add_function(wrap_pyfunction!(entry::open, &m)?)?;
     m.add_function(wrap_pyfunction!(entry::validate, &m)?)?;
     m.add_function(wrap_pyfunction!(entry::source, &m)?)?;
     m.add_function(wrap_pyfunction!(entry::fingerprint, &m)?)?;

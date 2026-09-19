@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use kglite::api::embeddings::{embed_property, EmbedHooks, EmbedMode};
 use kglite::api::{make_dir_graph_mut, DirGraph, Embedder};
-use kglite::okf::{BuildOptions, BuildOutput, BuildReport, Dialect};
+use kglite::okf::{
+    BuildOptions, BuildOutput, BuildReport, CachePolicy, Dialect, Opened, RebuildOptions,
+};
 
 use crate::tools::{
     read_lock, WorkspaceGraphHooks, WorkspaceGraphRelevance, WorkspaceGraphRequest,
@@ -40,6 +42,14 @@ pub(crate) fn vault_build_options() -> BuildOptions {
     BuildOptions::for_dialect(Dialect::Obsidian)
 }
 
+/// The same options in the shape the cache-aware boot takes, so the graph the
+/// cache hands back is the graph a rebuild would produce. A vault's build has
+/// no knobs beyond its dialect — `.kglite/vault.yaml` carries the rest — so
+/// the two renderings are one value written twice.
+pub(crate) fn vault_rebuild_options() -> RebuildOptions {
+    RebuildOptions::for_dialect(Dialect::Obsidian)
+}
+
 /// Settle which producer boot installs, for any mode.
 ///
 /// Vault mode builds its own and refuses to share; every other mode passes the
@@ -49,6 +59,7 @@ pub(crate) fn vault_producer(
     mode: &crate::cli::Mode,
     injected: Option<WorkspaceGraphHooks>,
     embedder: &Arc<RwLock<Option<Arc<dyn Embedder>>>>,
+    cache: CachePolicy,
 ) -> Result<(Option<WorkspaceGraphHooks>, Option<VaultReportSlot>), String> {
     let crate::cli::Mode::Vault { dir } = mode else {
         return Ok((injected, None));
@@ -57,7 +68,7 @@ pub(crate) fn vault_producer(
         return Err(VAULT_HOOKS_CONFLICT_MSG.to_string());
     }
     let root = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-    let (hooks, report) = vault_hooks(root, Arc::clone(embedder));
+    let (hooks, report) = vault_hooks(root, Arc::clone(embedder), cache);
     Ok((Some(hooks), Some(report)))
 }
 
@@ -72,6 +83,7 @@ pub(crate) fn vault_producer(
 pub(crate) fn vault_hooks(
     root: PathBuf,
     embedder: Arc<RwLock<Option<Arc<dyn Embedder>>>>,
+    cache: CachePolicy,
 ) -> (WorkspaceGraphHooks, VaultReportSlot) {
     // The graph the last successful build published, kept so the next one can
     // carry its vectors forward. `Mutex` rather than `RwLock`: the only access
@@ -82,9 +94,11 @@ pub(crate) fn vault_hooks(
     let relevance_root = root.clone();
     let hooks = WorkspaceGraphHooks {
         build: Box::new(move |request: WorkspaceGraphRequest| {
-            let (built, report) = build_vault_graph(request.root(), &previous, &embedder)?;
+            let (built, report) = build_vault_graph(request.root(), &previous, &embedder, &cache)?;
             *previous.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&built));
-            *report_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(report);
+            // `None` on a boot served straight from the cache: nothing was
+            // read, so there is nothing a build report could describe.
+            *report_slot.lock().unwrap_or_else(|e| e.into_inner()) = report;
             Ok(WorkspaceGraphResult::new(built))
         }),
         is_relevant: Box::new(move |change: WorkspaceGraphRelevance<'_>| {
@@ -102,16 +116,31 @@ pub(crate) type VaultReportSlot = Arc<Mutex<Option<BuildReport>>>;
 
 /// One vault build: okf, then the carry, then the declared embed targets.
 ///
+/// **Boot goes through the cache, a rebuild does not.** With no previous
+/// graph in hand, `okf::open` answers the question — load the vault's own
+/// `.kglite/graph.kgl`, `stat` the directory against its stamp, and build
+/// only if it moved — so a restart over an untouched vault costs a load
+/// instead of a walk. Once the server holds a graph, the cache can only tell
+/// it what it already knows, and consulting it would read the whole file back
+/// to learn nothing; the rebuild builds and then *refreshes* the cache, so
+/// the next boot starts from what the watcher last saw.
+///
 /// A build failure (a `vault.yaml` that will not parse, an unreadable root) is
 /// returned as `Err` and reaches the caller through the workspace rebuild's
 /// hot-fail path, which keeps serving the previous graph and surfaces the
 /// message. It must never degrade to an empty graph: that answers every query
-/// with "no results", which reads as data rather than as a broken vault.
+/// with "no results", which reads as data rather than as a broken vault. A
+/// cache that cannot be read or written is never one of those failures.
 fn build_vault_graph(
     root: &Path,
     previous: &Mutex<Option<Arc<DirGraph>>>,
     embedder: &RwLock<Option<Arc<dyn Embedder>>>,
-) -> Result<(Arc<DirGraph>, BuildReport), String> {
+    cache: &CachePolicy,
+) -> Result<(Arc<DirGraph>, Option<BuildReport>), String> {
+    let first = previous.lock().unwrap_or_else(|e| e.into_inner()).is_none();
+    if first {
+        return boot_vault_graph(root, embedder, cache);
+    }
     let opts = vault_build_options();
     let BuildOutput { mut graph, report } = kglite::okf::build(root, &opts)?;
 
@@ -167,7 +196,66 @@ fn build_vault_graph(
             ),
         }
     }
-    Ok((graph, report))
+    // After the carry and the embed pass, so the cache holds the graph the
+    // server is about to serve rather than the vectorless one the build
+    // produced. The write is excluded from `is_vault_path`, so it cannot tag
+    // the graph dirty and rebuild the server in a loop.
+    store_cache(root, &mut graph, cache);
+    Ok((graph, Some(report)))
+}
+
+/// The boot leg: the cache, or a build, with `okf::open` deciding which.
+///
+/// The embedder is read here rather than inside `open` for the same reason the
+/// rebuild leg reads it: the slot is the state's, bound before boot, and a
+/// deployment with no `extensions.embedder` simply never embeds. `open`
+/// then runs the vault's declared `embed:` targets itself on the build path,
+/// which is what keeps the cache it writes from being a vectorless one.
+fn boot_vault_graph(
+    root: &Path,
+    embedder: &RwLock<Option<Arc<dyn Embedder>>>,
+    cache: &CachePolicy,
+) -> Result<(Arc<DirGraph>, Option<BuildReport>), String> {
+    let bound = read_lock(embedder).as_ref().map(Arc::clone);
+    let opened = kglite::okf::open(
+        root,
+        &vault_rebuild_options(),
+        bound.as_deref().map(|model| model as &dyn Embedder),
+        cache.clone(),
+    )?;
+    match opened {
+        Opened::Loaded(graph) => {
+            tracing::info!(
+                root = %root.display(),
+                "vault served from its cached graph (nothing under the root has changed)"
+            );
+            Ok((graph, None))
+        }
+        Opened::Rebuilt(out) => {
+            tracing::info!(
+                root = %root.display(),
+                notes = out.report.files_scanned,
+                "vault built from its notes"
+            );
+            for warning in &out.report.warnings {
+                tracing::warn!(warning, "vault build");
+            }
+            Ok((out.graph, Some(out.report)))
+        }
+    }
+}
+
+/// Refresh the cache from the graph the server is about to serve, logging
+/// rather than failing when it cannot be written — the whole point of the
+/// cache is that the server works without one.
+fn store_cache(root: &Path, graph: &mut Arc<DirGraph>, cache: &CachePolicy) {
+    let Some(path) = cache.path_for(root) else {
+        return;
+    };
+    match kglite::okf::cache::store(graph, &path) {
+        None => tracing::debug!(path = %path.display(), "vault cache refreshed"),
+        Some(warning) => tracing::warn!(warning, "vault cache"),
+    }
 }
 
 /// Whether a changed path can affect the vault graph.
@@ -182,7 +270,11 @@ fn build_vault_graph(
 ///
 /// `.kglite/` is the exception among dot-directories because the build reads
 /// it by explicit path (the walk prunes it): `vault.yaml`, `skills/` and
-/// `recipes/` are all build inputs.
+/// `recipes/` are all build inputs. The files kglite writes there are the
+/// exception to the exception, named by the same `okf::is_cache_artifact` the
+/// fingerprint uses: this server's own cache write lands inside the directory
+/// it watches, and treating it as an edit would dirty the graph it just
+/// built, rebuild, write the cache again, and never stop.
 ///
 /// Staleness is decided by the watcher, not by `okf::fingerprint`: the
 /// fingerprint is a `stat` of every file the build would read — ~7 000 of them
@@ -202,7 +294,7 @@ fn is_vault_path(root: &Path, path: &Path) -> bool {
         Some(Component::Normal(name)) if name == ".kglite"
     );
     if first_dir_is_kglite {
-        return true;
+        return !kglite::okf::is_cache_artifact(relative);
     }
     !relative.components().any(|component| {
         matches!(component, Component::Normal(name)

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use kglite::api::{DirGraph, Embedder, GraphRead};
+use kglite::okf::CachePolicy;
 
 use super::*;
 use crate::cli::Mode;
@@ -32,7 +33,11 @@ fn write_config(root: &Path, body: &str) {
 }
 
 fn build_once(root: &Path) -> Arc<DirGraph> {
-    let (hooks, _report) = vault_hooks(root.to_path_buf(), Arc::new(RwLock::new(None)));
+    let (hooks, _report) = vault_hooks(
+        root.to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    );
     let request = WorkspaceGraphRequest::new(
         root.to_path_buf(),
         None,
@@ -106,7 +111,11 @@ fn a_broken_vault_config_fails_the_build_instead_of_serving_an_empty_graph() {
     write_vault(temp.path());
     write_config(temp.path(), "kglite_vault: 7\n");
 
-    let (hooks, _report) = vault_hooks(temp.path().to_path_buf(), Arc::new(RwLock::new(None)));
+    let (hooks, _report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    );
     let request = WorkspaceGraphRequest::new(
         temp.path().to_path_buf(),
         None,
@@ -130,7 +139,11 @@ fn a_broken_vault_config_fails_the_build_instead_of_serving_an_empty_graph() {
 fn a_failing_build_leaves_the_previous_graph_serving() {
     let temp = tempfile::tempdir().expect("tempdir");
     write_vault(temp.path());
-    let (hooks, _report) = vault_hooks(temp.path().to_path_buf(), Arc::new(RwLock::new(None)));
+    let (hooks, _report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    );
     let state = GraphState::new(Some(WorkspaceGraphMode::Watch))
         .with_workspace_graph(Some(Arc::new(hooks)));
     state
@@ -162,7 +175,11 @@ fn declared_embed_targets_are_embedded_when_an_embedder_is_bound() {
     let (model, calls, _texts) = LengthEmbedder::new();
     let slot: Arc<RwLock<Option<Arc<dyn Embedder>>>> = Arc::new(RwLock::new(Some(model)));
 
-    let (hooks, _report) = vault_hooks(temp.path().to_path_buf(), Arc::clone(&slot));
+    let (hooks, _report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::clone(&slot),
+        CachePolicy::Disabled,
+    );
     let request = WorkspaceGraphRequest::new(
         temp.path().to_path_buf(),
         None,
@@ -207,7 +224,11 @@ fn a_rebuild_carries_vectors_and_re_embeds_only_the_changed_note() {
     );
     let (model, calls, texts) = LengthEmbedder::new();
     let slot: Arc<RwLock<Option<Arc<dyn Embedder>>>> = Arc::new(RwLock::new(Some(model)));
-    let (hooks, _report) = vault_hooks(temp.path().to_path_buf(), Arc::clone(&slot));
+    let (hooks, _report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::clone(&slot),
+        CachePolicy::Disabled,
+    );
     let build = || {
         let request = WorkspaceGraphRequest::new(
             temp.path().to_path_buf(),
@@ -292,7 +313,11 @@ fn relevance_accepts_vault_content_and_rejects_editor_churn() {
 fn the_hooks_relevance_asks_the_policy() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().canonicalize().expect("canonical root");
-    let (hooks, _report) = vault_hooks(root.clone(), Arc::new(RwLock::new(None)));
+    let (hooks, _report) = vault_hooks(
+        root.clone(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    );
     let ask = |relative: &str| {
         let path = root.join(relative);
         (hooks.is_relevant)(crate::tools::WorkspaceGraphRelevance::new(
@@ -306,6 +331,174 @@ fn the_hooks_relevance_asks_the_policy() {
         !ask(".obsidian/workspace.json"),
         "editor state changes nothing the build reads"
     );
+}
+
+// ── The cache ─────────────────────────────────────────────────────────────
+
+/// The loop this predicate exists to prevent: the server's own cache write
+/// lands under `.kglite/`, which is otherwise relevant wholesale, so it would
+/// tag the graph it just built dirty, rebuild, write the cache again, and
+/// never settle.
+#[test]
+fn the_servers_own_cache_write_is_not_a_vault_change() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    for relative in [
+        ".kglite/graph.kgl",
+        ".kglite/graph.kgl.lock",
+        ".kglite/graph.kgl.lock-owner",
+        ".kglite/graph.kgl.tmp.991.4",
+        ".kglite/export-manifest.json",
+    ] {
+        assert!(
+            !is_vault_path(&root, &root.join(relative)),
+            "`{relative}` is this server's own writing, not an edit to the vault"
+        );
+    }
+    for relative in [".kglite/vault.yaml", ".kglite/skills/one.md"] {
+        assert!(
+            is_vault_path(&root, &root.join(relative)),
+            "`{relative}` is still a build input"
+        );
+    }
+}
+
+/// Boot writes the cache; a second producer over the same directory loads it
+/// and reports nothing, because nothing was read. The report slot's `None` is
+/// exactly that state.
+#[test]
+fn a_second_boot_over_an_unchanged_vault_loads_the_cache() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_vault(temp.path());
+    let cache = temp.path().join(".kglite/graph.kgl");
+
+    let (first, first_report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Default,
+    );
+    let graph = (first.build)(full_request(temp.path()))
+        .expect("boot build")
+        .into_parts()
+        .0;
+    assert_eq!(node_count(&graph, "notes"), 2);
+    assert!(cache.is_file(), "the boot wrote the vault's cache");
+    assert!(
+        first_report.lock().unwrap().is_some(),
+        "a build has a report"
+    );
+
+    let (second, second_report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Default,
+    );
+    let loaded = (second.build)(full_request(temp.path()))
+        .expect("boot from cache")
+        .into_parts()
+        .0;
+    assert_eq!(node_count(&loaded, "notes"), 2, "the cached graph serves");
+    assert!(
+        second_report.lock().unwrap().is_none(),
+        "nothing was read, so there is no build report to render"
+    );
+}
+
+/// A rebuild refreshes the cache, and the cache it leaves behind is itself
+/// current — if the write moved the fingerprint, the next boot would rebuild
+/// and write again, forever. Asserted as "the next boot loads".
+#[test]
+fn a_rebuild_refreshes_the_cache_and_leaves_it_current() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_vault(temp.path());
+    let (hooks, report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Default,
+    );
+    (hooks.build)(full_request(temp.path())).expect("boot build");
+
+    std::fs::write(
+        temp.path().join("notes/gamma.md"),
+        "---\ntitle: Gamma\n---\nA third note.\n",
+    )
+    .expect("new note");
+    let rebuilt = (hooks.build)(full_request(temp.path()))
+        .expect("rebuild")
+        .into_parts()
+        .0;
+    assert_eq!(node_count(&rebuilt, "notes"), 3);
+    assert_eq!(
+        report.lock().unwrap().as_ref().map(|r| r.files_scanned),
+        Some(3),
+        "a rebuild reports what it read"
+    );
+
+    let (next, next_report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Default,
+    );
+    let served = (next.build)(full_request(temp.path()))
+        .expect("boot from the refreshed cache")
+        .into_parts()
+        .0;
+    assert_eq!(
+        node_count(&served, "notes"),
+        3,
+        "the cache the rebuild wrote holds the new note"
+    );
+    assert!(
+        next_report.lock().unwrap().is_none(),
+        "and it is current — a write that moved the fingerprint would rebuild here"
+    );
+}
+
+#[test]
+fn a_disabled_cache_writes_nothing_into_the_vault() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_vault(temp.path());
+    let (hooks, _report) = vault_hooks(
+        temp.path().to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    );
+    (hooks.build)(full_request(temp.path())).expect("boot build");
+    (hooks.build)(full_request(temp.path())).expect("rebuild");
+    assert!(
+        !temp.path().join(".kglite/graph.kgl").exists(),
+        "--vault-cache none leaves the vault alone"
+    );
+}
+
+/// `--vault-cache` is the operator's whole control over this, so the three
+/// spellings have to resolve where the flag's help says they do.
+#[test]
+fn the_vault_cache_flag_resolves_to_its_three_policies() {
+    let vault = PathBuf::from("/vaults/notes");
+    let policy = |flag: Option<&str>| {
+        let mut argv = vec!["kglite-mcp-server", "--vault", "/vaults/notes"];
+        if let Some(flag) = flag {
+            argv.extend(["--vault-cache", flag]);
+        }
+        let cli = <crate::cli::Cli as clap::Parser>::parse_from(argv);
+        crate::cli::vault_cache_policy(&cli).path_for(&vault)
+    };
+    assert_eq!(policy(None), Some(vault.join(".kglite/graph.kgl")));
+    assert_eq!(policy(Some("none")), None);
+    assert_eq!(
+        policy(Some("/tmp/elsewhere.kgl")),
+        Some(PathBuf::from("/tmp/elsewhere.kgl"))
+    );
+}
+
+fn full_request(root: &Path) -> WorkspaceGraphRequest {
+    WorkspaceGraphRequest::new(
+        root.to_path_buf(),
+        None,
+        WorkspaceGraphMode::Watch,
+        crate::tools::WorkspaceGraphChanges::Full,
+    )
 }
 
 /// Without the `Mode::Vault` arm on the two watcher functions a vault server
@@ -334,7 +527,11 @@ fn vault_mode_arms_a_watcher_over_its_root() {
 // ── The rebuild's skill refresh ───────────────────────────────────────────
 
 fn vault_state(root: &Path) -> GraphState {
-    let (hooks, _report) = vault_hooks(root.to_path_buf(), Arc::new(RwLock::new(None)));
+    let (hooks, _report) = vault_hooks(
+        root.to_path_buf(),
+        Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    );
     GraphState::new(Some(WorkspaceGraphMode::Watch)).with_workspace_graph(Some(Arc::new(hooks)))
 }
 
@@ -461,8 +658,13 @@ fn vault_mode_builds_its_own_producer() {
     let mode = Mode::Vault {
         dir: temp.path().to_path_buf(),
     };
-    let (hooks, report) = vault_producer(&mode, None, &Arc::new(RwLock::new(None)))
-        .expect("vault mode installs its own producer");
+    let (hooks, report) = vault_producer(
+        &mode,
+        None,
+        &Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    )
+    .expect("vault mode installs its own producer");
     assert!(hooks.is_some(), "--vault must not boot with NO_BUILDER_MSG");
     assert!(report.is_some(), "rebuild_graph needs the report slot");
 }
@@ -475,7 +677,12 @@ fn vault_mode_refuses_an_injected_producer() {
     let mode = Mode::Vault {
         dir: temp.path().to_path_buf(),
     };
-    let error = match vault_producer(&mode, Some(noop_hooks()), &Arc::new(RwLock::new(None))) {
+    let error = match vault_producer(
+        &mode,
+        Some(noop_hooks()),
+        &Arc::new(RwLock::new(None)),
+        CachePolicy::Disabled,
+    ) {
         Err(error) => error,
         Ok(_) => panic!("two producers for one graph must be refused"),
     };
@@ -498,9 +705,13 @@ fn every_other_mode_keeps_the_injected_producer_and_gets_no_slot() {
         },
         Mode::Bare,
     ] {
-        let (hooks, report) =
-            vault_producer(&mode, Some(noop_hooks()), &Arc::new(RwLock::new(None)))
-                .expect("injection passes through");
+        let (hooks, report) = vault_producer(
+            &mode,
+            Some(noop_hooks()),
+            &Arc::new(RwLock::new(None)),
+            CachePolicy::Disabled,
+        )
+        .expect("injection passes through");
         assert!(hooks.is_some(), "{mode:?}");
         assert!(report.is_none(), "{mode:?} has no vault report to render");
     }

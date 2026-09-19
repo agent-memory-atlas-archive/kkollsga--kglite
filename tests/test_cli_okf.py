@@ -291,3 +291,63 @@ def test_status_refuses_a_dialect_that_contradicts_the_stamp(tmp_path: Path):
     assert proc.returncode == 1
     assert "okf" in proc.stderr and "obsidian" in proc.stderr, proc.stderr
     assert proc.stdout == ""
+
+
+def test_open_builds_the_vault_once_and_loads_it_after(clean_vault: Path):
+    """The whole point: the second open costs a `stat` pass, not a build."""
+    cache = clean_vault / ".kglite" / "graph.kgl"
+
+    first = _run("okf", "open", str(clean_vault))
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert first.stdout.startswith("rebuilt "), first.stdout
+    assert str(cache) in first.stdout
+    assert "files scanned: 2" in first.stderr, first.stderr
+    assert cache.is_file()
+
+    second = _run("okf", "open", str(clean_vault))
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert second.stdout.startswith("loaded "), second.stdout
+    assert second.stderr == "", "a cache hit reads nothing, so it reports nothing"
+
+    (clean_vault / "notes" / "gamma.md").write_text("A third.\n", encoding="utf-8")
+    third = _run("okf", "open", str(clean_vault))
+    assert third.stdout.startswith("rebuilt "), third.stdout
+    assert "files scanned: 3" in third.stderr, third.stderr
+
+    # …and the cache the rebuild wrote is itself current. If writing it moved
+    # the fingerprint, this would rebuild forever.
+    assert _run("okf", "open", str(clean_vault)).stdout.startswith("loaded ")
+
+
+def test_open_writes_the_cache_where_it_is_told_and_nowhere_when_told_none(
+    clean_vault: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    # Outside the vault: a `.kgl` *inside* it is an attachment candidate like
+    # any other file, so a relocated cache kept there would move the very
+    # fingerprint it is stamped with (VAULT.md §12).
+    elsewhere = tmp_path_factory.mktemp("cache") / "nested" / "vault.kgl"
+    moved = _run("okf", "open", str(clean_vault), "--cache", str(elsewhere))
+    assert moved.returncode == 0, moved.stdout + moved.stderr
+    assert elsewhere.is_file()
+    assert not (clean_vault / ".kglite" / "graph.kgl").exists()
+    assert _run("okf", "open", str(clean_vault), "--cache", str(elsewhere)).stdout.startswith("loaded ")
+
+    off = _run("okf", "open", str(clean_vault), "--cache", "none")
+    assert off.returncode == 0, off.stdout + off.stderr
+    assert off.stdout.startswith("rebuilt "), off.stdout
+    assert "no cache" in off.stdout
+    assert not (clean_vault / ".kglite" / "graph.kgl").exists()
+
+
+def test_open_leaves_a_graph_the_library_can_load(clean_vault: Path):
+    _run("okf", "open", str(clean_vault))
+    loaded = kglite.load(str(clean_vault / ".kglite" / "graph.kgl"))
+    reference = okf.build(str(clean_vault), dialect="obsidian")
+    query = "MATCH (n) RETURN labels(n)[0] AS k, count(*) AS c ORDER BY k"
+    assert loaded.cypher(query).to_list() == reference.cypher(query).to_list()
+
+
+def test_open_of_a_missing_directory_is_an_error_not_a_verdict(tmp_path: Path):
+    proc = _run("okf", "open", str(tmp_path / "nowhere"))
+    assert proc.returncode != 0
+    assert "nowhere" in proc.stderr

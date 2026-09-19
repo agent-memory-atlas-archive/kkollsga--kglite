@@ -1,13 +1,13 @@
-//! Public Python functions for OKF ingestion: `build`, `validate`, `source`,
-//! the lifecycle pair `fingerprint` / `rebuild_if_changed`, and the vault
-//! writer, `export`.
+//! Public Python functions for OKF ingestion: `build` and the cache-aware
+//! `open`, `validate`, `source`, the lifecycle pair `fingerprint` /
+//! `rebuild_if_changed`, and the vault writer, `export`.
 
 use pyo3::prelude::*;
 use std::path::PathBuf;
 
 use super::report::{ExportReport, VaultReport};
 use crate::graph::KnowledgeGraph;
-use crate::okf::{BuildOptions, Dialect, RebuildOptions};
+use crate::okf::{BuildOptions, CachePolicy, Dialect, RebuildOptions};
 
 /// The keywords `build` and `validate` share, as one value.
 ///
@@ -89,6 +89,76 @@ pub fn build(
     py.detach(|| crate::okf::build(&path, &opts))
         .map(|out| KnowledgeGraph::from_arc(out.graph))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// Open a directory as a graph, through a cached `.kgl` beside it.
+///
+/// Loads the cache, rebuilds only what the directory changed, and writes the
+/// result back — the one call for "give me this vault as a graph" when the
+/// caller does not want to decide whether that costs a build. `cache=False`
+/// switches the cache off; a path relocates it. See the stub for the full
+/// contract.
+#[pyfunction]
+#[pyo3(signature = (path, *, cache=None, dialect=None, embedder=None, require_frontmatter=None, respect_skip=true, skip_dirs=None, with_body=None))]
+// One parameter per Python keyword: the stub mirrors this signature verbatim.
+#[allow(clippy::too_many_arguments)]
+pub fn open(
+    py: Python<'_>,
+    path: PathBuf,
+    cache: Option<Bound<'_, PyAny>>,
+    dialect: Option<String>,
+    embedder: Option<Py<PyAny>>,
+    require_frontmatter: Option<bool>,
+    respect_skip: bool,
+    skip_dirs: Option<Vec<String>>,
+    with_body: Option<bool>,
+) -> PyResult<KnowledgeGraph> {
+    let policy = cache_policy(cache.as_ref())?;
+    let opts = Keywords {
+        dialect,
+        require_frontmatter,
+        respect_skip,
+        skip_dirs,
+        with_body,
+    }
+    .rebuild_options();
+    let model = match embedder {
+        Some(model) => Some(std::sync::Arc::new(
+            crate::graph::embedder::py_adapter::PyEmbedderAdapter::new(py, model)?,
+        ) as std::sync::Arc<dyn kglite_core::api::Embedder>),
+        None => None,
+    };
+    let opened = py
+        .detach(|| crate::okf::open(&path, &opts, model.as_deref(), policy))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    let mut graph = KnowledgeGraph::from_arc(opened.into_graph());
+    // The graph keeps the model that embedded it, for the same reason
+    // `rebuild_if_changed`'s result does: a caller should not have to
+    // re-register one to carry on where they left off.
+    if let Some(model) = model {
+        graph.set_embedder_native(model);
+    }
+    Ok(graph)
+}
+
+/// `cache=` as the three policies it spells.
+///
+/// `None` (and an omitted keyword) is the vault's own `.kglite/graph.kgl`;
+/// `False` is no cache at all; anything else is a path, which is why `True`
+/// has to be answered before the path extraction — `PathBuf` would reject it
+/// with a type error that says nothing about caches.
+fn cache_policy(cache: Option<&Bound<'_, PyAny>>) -> PyResult<CachePolicy> {
+    let Some(value) = cache.filter(|value| !value.is_none()) else {
+        return Ok(CachePolicy::Default);
+    };
+    if let Ok(flag) = value.extract::<bool>() {
+        return Ok(if flag {
+            CachePolicy::Default
+        } else {
+            CachePolicy::Disabled
+        });
+    }
+    Ok(CachePolicy::At(value.extract::<PathBuf>()?))
 }
 
 /// Check a vault and return the build report without keeping the graph.

@@ -197,6 +197,18 @@ impl Server {
             .recv_timeout(Duration::from_secs(2))
             .unwrap_or_else(|_| "<stderr unavailable>".to_string())
     }
+
+    /// Stop the server and return everything it logged.
+    ///
+    /// The reader thread holds the pipe until EOF, which only arrives when
+    /// the child exits — so a test that wants the boot log has to end the
+    /// server first. Calling `drain_stderr` on a live one waits out its
+    /// timeout and reports nothing.
+    fn shutdown_log(mut self) -> String {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        self.drain_stderr()
+    }
 }
 
 /// A copy of the golden vault, so a test that edits notes cannot touch the
@@ -642,5 +654,101 @@ fn the_fetch_images_skill_is_served_where_the_route_is() {
     assert!(
         prompts.iter().any(|name| name == "fetch_images"),
         "the bundled skill is active wherever the route is enabled: {prompts:?}"
+    );
+}
+
+/// The cache, end to end: the first boot writes it, the second serves the
+/// vault out of it, and an edit plus a rebuild leaves a cache that the *third*
+/// boot can still use. That last assertion is the loop guard — a cache write
+/// the fingerprint noticed would leave every boot after it rebuilding, and a
+/// live watcher would rebuild on its own write forever.
+#[test]
+fn the_vault_cache_is_written_at_boot_reused_at_the_next_and_refreshed_by_a_rebuild() {
+    let vault = golden_vault_copy();
+    let cache = vault.path().join(".kglite/graph.kgl");
+    let arg = vault.path().to_string_lossy().into_owned();
+
+    {
+        let mut server = Server::boot(&["--vault", &arg]);
+        assert_eq!(server.count("MATCH (n:Article) RETURN count(n) AS n"), 11);
+        let log = server.shutdown_log();
+        assert!(
+            log.contains("vault built from its notes"),
+            "a vault with no cache is built: {log}"
+        );
+    }
+    assert!(cache.is_file(), "and the build left one behind");
+
+    {
+        let mut server = Server::boot(&["--vault", &arg]);
+        assert_eq!(
+            server.count("MATCH (n:Article) RETURN count(n) AS n"),
+            11,
+            "the cached graph serves the same notes"
+        );
+        let log = server.shutdown_log();
+        assert!(
+            log.contains("served from its cached graph"),
+            "an untouched vault is not rebuilt: {log}"
+        );
+    }
+
+    {
+        let mut server = Server::boot(&["--vault", &arg]);
+        std::fs::write(
+            vault.path().join("notes/fresh.md"),
+            "---\ntitle: Fresh\n---\nWritten after boot.\n",
+        )
+        .expect("write note");
+        server.call("rebuild_graph");
+        assert_eq!(server.count("MATCH (n:Article) RETURN count(n) AS n"), 12);
+    }
+
+    let mut server = Server::boot(&["--vault", &arg]);
+    assert_eq!(
+        server.count("MATCH (n:Article) RETURN count(n) AS n"),
+        12,
+        "the rebuild refreshed the cache"
+    );
+    let log = server.shutdown_log();
+    assert!(
+        log.contains("served from its cached graph"),
+        "and left it current — writing it must not look like an edit: {log}"
+    );
+}
+
+#[test]
+fn vault_cache_none_writes_nothing_into_the_vault() {
+    let vault = golden_vault_copy();
+    let mut server = Server::boot(&[
+        "--vault",
+        &vault.path().to_string_lossy(),
+        "--vault-cache",
+        "none",
+    ]);
+    assert_eq!(server.count("MATCH (n:Article) RETURN count(n) AS n"), 11);
+    assert!(
+        !vault.path().join(".kglite/graph.kgl").exists(),
+        "--vault-cache none leaves the vault as it found it"
+    );
+}
+
+/// The flag only means anything if the cache actually lands where it says.
+#[test]
+fn vault_cache_puts_the_graph_where_it_is_told() {
+    let vault = golden_vault_copy();
+    let elsewhere = tempfile::tempdir().expect("tempdir");
+    let path = elsewhere.path().join("nested/vault.kgl");
+    let mut server = Server::boot(&[
+        "--vault",
+        &vault.path().to_string_lossy(),
+        "--vault-cache",
+        &path.to_string_lossy(),
+    ]);
+    assert_eq!(server.count("MATCH (n:Article) RETURN count(n) AS n"), 11);
+    assert!(path.is_file(), "the relocated cache was created");
+    assert!(
+        !vault.path().join(".kglite/graph.kgl").exists(),
+        "and the default location was left alone"
     );
 }

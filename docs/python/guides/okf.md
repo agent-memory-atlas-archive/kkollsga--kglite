@@ -161,6 +161,50 @@ for you from `--hub` / `--index` / `--embed` flags and ends by running
 broken exits non-zero. It needs `beautifulsoup4` and `markdownify`
 (`requirements/examples.txt`) — neither is a kglite dependency.
 
+## Opening a vault
+
+`okf.build` reads every note every time. For a vault you open repeatedly —
+a long-running server, a CLI you run all day, a corpus you ship to other
+machines — `okf.open` is the same graph without the repetition:
+
+```python
+from kglite import okf
+
+g = okf.open("vault", dialect="obsidian")   # builds it, and caches the graph
+g = okf.open("vault", dialect="obsidian")   # loads the cache; no note is read
+```
+
+The cache is an ordinary `.kgl` at `.kglite/graph.kgl` inside the vault, so it
+travels with it: commit it and the first open on a new machine costs a `stat`
+of each file instead of a build. `okf.open` rebuilds when the directory has
+moved on, when the cache was written by another version of kglite, when it was
+built with different keywords, or when it belongs to a vault at another path —
+and writes back whatever it had to build, so the next open starts from there.
+Declared `embed:` targets run on the build path too, which is why a cache hit
+still comes back with its vectors.
+
+**A cache problem never fails an open.** An unreadable cache is a silent miss;
+a cache that cannot be *written* — a read-only vault, a full volume, another
+process mid-write — is skipped just as quietly and costs one more rebuild next
+time. `cache="path/to.kgl"` puts it elsewhere (keep it *outside* the vault, or
+it becomes a file of the vault and invalidates itself) and `cache=False`
+switches it off.
+
+From a terminal the same thing says which of the two happened:
+
+```console
+$ kglite okf open vault
+files scanned: 412
+...
+rebuilt  vault/.kglite/graph.kgl
+$ kglite okf open vault
+loaded   vault/.kglite/graph.kgl
+```
+
+The MCP server's `--vault` mode boots through the same path, so a restart over
+an untouched vault serves immediately; `--vault-cache PATH|none` is the same
+two controls. VAULT.md §12 specifies the stamps the cache is validated against.
+
 ## Annotating a vault in place
 
 A converted help corpus says things in prose that no query can reach: which
@@ -287,10 +331,11 @@ body = okf.source("~/.claude/.../memory/some-fact.md")
 
 ## API
 
-The generated API reference documents {func}`kglite.okf.build` and
-{func}`kglite.okf.source` from the package stubs. `build(path, *,
-dialect="okf", with_body=False)` returns a
-{class}`~kglite.KnowledgeGraph`. `dialect` is `"okf"` (default), `"loose"`
+The generated API reference documents {func}`kglite.okf.build`,
+{func}`kglite.okf.open` and {func}`kglite.okf.source` from the package stubs.
+`build(path, *, dialect="okf", with_body=False)` returns a
+{class}`~kglite.KnowledgeGraph`; `open(path, *, cache=None, …)` returns the
+same thing through a cached `.kgl` (see above). `dialect` is `"okf"` (default), `"loose"`
 (wikilinks, no `type` required), or `"obsidian"` (the vault format — see
 above). `source(path)` returns a concept's markdown body with the frontmatter
 stripped.

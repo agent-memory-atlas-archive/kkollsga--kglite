@@ -935,9 +935,13 @@ fn boot_graph(
     // The state's own embedder slot is what the vault producer reads, at build
     // time — so a rebuild uses whatever the manifest bound, and the boot build
     // sees it too (bound just below, before `bind_mode`).
-    let (workspace_graph, vault_report) =
-        crate::vault::vault_producer(&mode, workspace_graph, &graph_state.embedder)
-            .map_err(|e| anyhow::anyhow!(e))?;
+    let (workspace_graph, vault_report) = crate::vault::vault_producer(
+        &mode,
+        workspace_graph,
+        &graph_state.embedder,
+        crate::cli::vault_cache_policy(cli),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
     let graph_state = graph_state.with_workspace_graph(workspace_graph.map(Arc::new));
 
     // Bound before `bind_mode`, whose boot open publishes the first graph —

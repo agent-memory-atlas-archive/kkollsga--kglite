@@ -156,6 +156,68 @@ fn a_rebuild_through_open_carries_the_vectors_of_the_unchanged_notes() {
     assert_eq!(carried.len(), 2, "both notes kept their vectors");
 }
 
+/// Whether a vault has vectors must not depend on whether its cache happened
+/// to hit. `rebuild_if_changed` runs the declared `embed:` targets, so the
+/// cold build inside `open` has to as well — otherwise the very first open of
+/// a vault writes a vectorless cache, and every later open loads it and finds
+/// no targets to run.
+#[test]
+fn a_cold_open_runs_the_declared_embed_targets_and_caches_the_vectors() {
+    let dir = vault();
+    write(
+        dir.path(),
+        ".kglite/vault.yaml",
+        "kglite_vault: 1\ndefault_label: Note\nembed:\n  Note: body\n",
+    );
+    let model = ConstantEmbedder;
+    let opened = open(dir.path(), &opts(), Some(&model), CachePolicy::Default).unwrap();
+    assert!(opened.was_rebuilt(), "nothing was cached yet");
+    assert!(warnings(&opened).is_empty(), "{:?}", warnings(&opened));
+    assert!(
+        !opened.graph().embeddings.is_empty(),
+        "the cold build ran the target the vault declared"
+    );
+
+    let cached = open(dir.path(), &opts(), Some(&model), CachePolicy::Default).unwrap();
+    assert!(matches!(cached, Opened::Loaded(_)));
+    assert!(
+        !cached.graph().embeddings.is_empty(),
+        "and the vectors were in the cache it wrote"
+    );
+}
+
+#[test]
+fn a_cold_open_with_no_embedder_says_what_it_skipped() {
+    let dir = vault();
+    write(
+        dir.path(),
+        ".kglite/vault.yaml",
+        "kglite_vault: 1\ndefault_label: Note\nembed:\n  Note: body\n",
+    );
+    let opened = open_default(&dir);
+    assert!(
+        warnings(&opened)
+            .iter()
+            .any(|w| w.contains("no embedder was given")),
+        "{:?}",
+        warnings(&opened)
+    );
+}
+
+/// Two dimensions of the same vector for every text — enough to prove a pass
+/// ran, and nothing more.
+struct ConstantEmbedder;
+
+impl crate::graph::embedder::Embedder for ConstantEmbedder {
+    fn dimension(&self) -> usize {
+        2
+    }
+
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Ok(texts.iter().map(|_| vec![0.5, 0.5]).collect())
+    }
+}
+
 // ── the misses ──────────────────────────────────────────────────────────────
 
 /// A vault copied to another path carries a cache stamped with the *old* root,

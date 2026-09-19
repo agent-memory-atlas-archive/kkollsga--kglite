@@ -1397,6 +1397,61 @@ class TestProvenanceAndRebuild:
         assert _labels(g)["notes"] == 2
         assert okf.rebuild_if_changed(fresh, dialect="obsidian") is None
 
+    def test_open_builds_once_then_loads_its_own_cache(self, tmp_path):
+        vault = self._vault(tmp_path)
+        cache = vault / ".kglite" / "graph.kgl"
+
+        g = okf.open(str(vault), dialect="obsidian")
+        assert _labels(g)["notes"] == 2
+        assert cache.is_file(), "the first open left the vault its graph"
+
+        # The load is not observable from the returned object, so the
+        # observable is the one that matters: the cache the save wrote did not
+        # invalidate itself, so `rebuild_if_changed` on the loaded graph is
+        # still `None`.
+        again = okf.open(str(vault), dialect="obsidian")
+        assert _labels(again)["notes"] == 2
+        assert okf.rebuild_if_changed(again) is None
+
+        (vault / "notes" / "gamma.md").write_text("---\nid: gamma\n---\nNew.\n", encoding="utf-8")
+        assert _labels(okf.open(str(vault), dialect="obsidian"))["notes"] == 3
+        assert okf.rebuild_if_changed(okf.open(str(vault), dialect="obsidian")) is None
+
+    def test_open_takes_a_cache_path_and_switches_off_on_false(self, tmp_path):
+        vault = self._vault(tmp_path)
+        elsewhere = tmp_path / "cache" / "vault.kgl"
+
+        okf.open(str(vault), dialect="obsidian", cache=str(elsewhere))
+        assert elsewhere.is_file()
+        assert not (vault / ".kglite" / "graph.kgl").exists()
+
+        g = okf.open(str(vault), dialect="obsidian", cache=False)
+        assert _labels(g)["notes"] == 2
+        assert not (vault / ".kglite" / "graph.kgl").exists()
+
+    def test_open_is_never_failed_by_its_cache(self, tmp_path):
+        """Every way the cache can be wrong is a miss, never an exception."""
+        vault = self._vault(tmp_path)
+        (vault / ".kglite").mkdir(exist_ok=True)
+        (vault / ".kglite" / "graph.kgl").write_bytes(b"not a kgl file at all")
+        assert _labels(okf.open(str(vault), dialect="obsidian"))["notes"] == 2
+
+        # A cache that cannot be written is the same: the graph still comes
+        # back. (A plain file where the cache's directory should be fails for
+        # every user, root included.)
+        (tmp_path / "in-the-way").write_text("a file", encoding="utf-8")
+        g = okf.open(str(vault), dialect="obsidian", cache=str(tmp_path / "in-the-way" / "g.kgl"))
+        assert _labels(g)["notes"] == 2
+
+    def test_open_defaults_to_okf_like_build_does(self, tmp_path):
+        """A path carries no stamp, so `open` keeps `build`'s default rather
+        than guessing that a directory is a vault."""
+        vault = self._vault(tmp_path)
+        (vault / ".kglite").mkdir(exist_ok=True)
+        (vault / ".kglite" / "vault.yaml").write_text("kglite_vault: 1\ndefault_label: Note\n", encoding="utf-8")
+        assert "Note" not in _labels(okf.open(str(vault)))
+        assert _labels(okf.open(str(vault), dialect="obsidian"))["Note"] == 2
+
     def test_rebuild_refuses_a_graph_with_no_provenance(self):
         with pytest.raises(RuntimeError, match="source_root"):
             okf.rebuild_if_changed(kglite.KnowledgeGraph(), dialect="obsidian")

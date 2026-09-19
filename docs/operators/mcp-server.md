@@ -209,8 +209,9 @@ the notes are canonical, the graph is a derived view, and the server rebuilds
 it as the files change. A manifest is optional; the common invocation is the
 one above.
 
-What boot does, in order: build the graph from `DIR` (a 7 000-note vault takes
-well under a second), bind `DIR` as the source root so `read_source` / `grep` /
+What boot does, in order: open the graph for `DIR` — load the vault's cached
+graph and rebuild only if the directory has moved since, a build being well
+under a second for a 7 000-note vault — bind `DIR` as the source root so `read_source` / `grep` /
 `list_source` serve the notes as files too, register `rebuild_graph`, and
 install the vault's own skills and recipe queries.
 
@@ -230,6 +231,18 @@ install the vault's own skills and recipe queries.
   one rebuild. A path inside a hidden directory other than `.kglite/` is
   ignored, which is what keeps `.obsidian/` and `.git/` churn from rebuilding
   anything.
+- **The graph is cached at `.kglite/graph.kgl`.** Boot writes it and the next
+  boot loads it, so a restart over an untouched vault answers immediately
+  instead of re-reading every note; each rebuild refreshes it. The file is
+  excluded from the vault's own fingerprint and from the watcher, so writing
+  it never looks like an edit. It is an ordinary `.kgl`, so a vault can be
+  *shipped* with its graph — build it once, commit it, and the first boot
+  anywhere costs a `stat` pass. `--vault-cache PATH` keeps it elsewhere (a
+  read-only vault, or a vault whose git history should not carry it) and
+  `--vault-cache none` switches it off. **A cache never fails the boot**: one
+  that cannot be read is rebuilt, one that cannot be written is skipped with a
+  warning on stderr, and the boot log always says which of "vault built from
+  its notes" and "vault served from its cached graph" happened.
 - **`rebuild_graph`** forces a rebuild now and returns the build report —
   notes scanned, nodes by label, edges by type, and the errors and warnings
   `kglite okf check` would print. It is the vault counterpart of

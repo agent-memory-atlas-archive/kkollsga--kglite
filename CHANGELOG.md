@@ -21,6 +21,20 @@ before upgrading.
   naming the owner. `extensions.recipe_tools: false` switches it off.
 - **`extensions.recipe_catalog: {block_budget, description_budget}`** — the
   catalogue block's byte ceiling and per-description character cap.
+- **`okf.open(path, *, cache=None, …)`, `kglite okf open <DIR> [--cache
+  PATH|none]` and the MCP server's `--vault-cache PATH|none`**: open a vault
+  through a cached `.kgl`, rebuilding only when the directory changed and
+  writing the result back. The default cache is `<vault>/.kglite/graph.kgl`,
+  which travels with the vault — a vault can be shipped pre-built and served
+  on a new machine without a build. `--vault` boots through it and each
+  watcher rebuild refreshes it. A cache problem never fails an open: a cache
+  that cannot be read is a silent miss; one that cannot be written leaves a
+  warning and the graph is returned anyway (VAULT.md §12).
+- Two additive `.kgl` provenance stamps, `source_build_version` and
+  `source_options`, recording the kglite version and the non-dialect build
+  knobs a graph was built with — the two invalidators the fingerprint cannot
+  see. Skipped when absent, so no golden digest moves and older files load as
+  before.
 
 ### Changed
 
@@ -42,6 +56,10 @@ before upgrading.
 
 - The MCP guide claimed graph-carried recipes load in "Graph and watch modes
   only"; vault mode has read them since 0.17.8.
+- `okf.fingerprint` no longer counts the files kglite itself writes into
+  `.kglite/`. `export-manifest.json` had moved the fingerprint of any vault
+  exported into itself since exports existed, reporting an untouched vault as
+  changed.
 
 ## [0.17.11] - 2026-09-19
 ### Fixed

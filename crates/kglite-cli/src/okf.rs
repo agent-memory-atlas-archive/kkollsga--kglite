@@ -2,17 +2,19 @@
 //!
 //! `check` is a converter's gate: it runs the real build, prints the §9 report
 //! and sets the exit code. `build` is the same read kept — the vault as a
-//! `.kgl`. `export` runs the other way, writing a `.kgl` back out as a vault
-//! (§10). `status` answers the cheap lifecycle question — has this vault moved
-//! since the `.kgl` was built (§12) — without reading a single note. All four
-//! live here rather than in `lib.rs` so the command table stays a table;
-//! `lib.rs` carries only the variant and the dispatch arm.
+//! `.kgl`. `open` is `build` that does not repeat itself: it reads the vault's
+//! own cached graph and rebuilds only what moved (§12). `export` runs the
+//! other way, writing a `.kgl` back out as a vault (§10). `status` answers the
+//! cheap lifecycle question — has this vault moved since the `.kgl` was built
+//! — without reading a single note. All five live here rather than in
+//! `lib.rs` so the command table stays a table; `lib.rs` carries only the
+//! variant and the dispatch arm.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
-use kglite::okf::{BuildOptions, BuildReport, Dialect};
+use kglite::okf::{BuildOptions, BuildReport, CachePolicy, Dialect, Opened, RebuildOptions};
 
 use crate::exec;
 use crate::ReportedAgentFailure;
@@ -76,6 +78,24 @@ pub(crate) enum OkfCommand {
         #[arg(long, value_enum)]
         dialect: Option<OkfDialect>,
     },
+    /// Open a vault through its cached graph, rebuilding only if it moved.
+    ///
+    /// The cache is the vault's own `.kglite/graph.kgl` unless `--cache`
+    /// says otherwise (`VAULT.md` §12). Prints whether the graph was loaded
+    /// or rebuilt; a rebuild also prints the build report on stderr, as
+    /// `build` does. A cache that cannot be read or written never fails the
+    /// command — it is reported and the vault is read instead.
+    Open {
+        /// Path to the vault directory.
+        directory: PathBuf,
+        /// Where to keep the graph [default: `<DIRECTORY>/.kglite/graph.kgl`],
+        /// or `none` to read the vault without caching anything.
+        #[arg(long, value_name = "PATH|none")]
+        cache: Option<String>,
+        /// Which conventions to read the directory with.
+        #[arg(long, value_enum, default_value_t = OkfDialect::Obsidian)]
+        dialect: OkfDialect,
+    },
     /// Build a vault into a `.kgl` graph file.
     Build {
         /// Path to the vault directory.
@@ -137,7 +157,51 @@ pub(crate) fn run(command: &OkfCommand) -> Result<()> {
             graph,
             dialect,
         } => status(directory, graph.as_deref(), *dialect),
+        OkfCommand::Open {
+            directory,
+            cache,
+            dialect,
+        } => open(directory, cache.as_deref(), *dialect),
     }
+}
+
+/// The spelling `--cache none` reserves, so a vault cannot be cached into a
+/// file of that name by accident.
+const CACHE_OFF: &str = "none";
+
+/// `kglite okf open` — the vault as a graph, through its cache.
+///
+/// The verdict goes to **stdout** and the build report to stderr, the split
+/// `build` uses: a caller redirecting stdout is capturing the answer to "did
+/// this cost a build?", not a summary of one.
+///
+/// Every cache warning the open collected is printed. They are the only sign
+/// an operator gets that the cache is not doing its job — a read-only vault
+/// rebuilds correctly and silently forever otherwise.
+fn open(directory: &Path, cache: Option<&str>, dialect: OkfDialect) -> Result<()> {
+    let policy = match cache {
+        None => CachePolicy::Default,
+        Some(CACHE_OFF) => CachePolicy::Disabled,
+        Some(path) => CachePolicy::At(PathBuf::from(path)),
+    };
+    let where_kept = policy
+        .path_for(directory)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "no cache".to_string());
+    let opts = RebuildOptions::for_dialect(dialect.into());
+    let opened = kglite::okf::open(directory, &opts, None, policy)
+        .map_err(|reason| anyhow::anyhow!("{reason}"))
+        .with_context(|| format!("failed to open {}", directory.display()))?;
+    match opened {
+        Opened::Loaded(_) => {
+            exec::write_stdout(&format!("loaded   {where_kept}"))?;
+        }
+        Opened::Rebuilt(out) => {
+            eprint!("{}", out.report.render());
+            exec::write_stdout(&format!("rebuilt  {where_kept}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// `kglite okf export` — the graph as a vault, report on stderr.
@@ -381,5 +445,19 @@ mod tests {
     fn build_requires_an_output_path() {
         assert!(Cli::try_parse_from(["kglite", "okf", "build", "vault"]).is_err());
         assert!(Cli::try_parse_from(["kglite", "okf", "build", "vault", "-o", "v.kgl"]).is_ok());
+    }
+
+    /// `open`'s whole point is that it needs no output path: the vault
+    /// carries the graph. `--cache` is optional and takes a value, so a bare
+    /// flag is a parse error rather than a silently default location.
+    #[test]
+    fn open_needs_only_a_directory_and_takes_an_optional_cache() {
+        assert!(Cli::try_parse_from(["kglite", "okf", "open", "vault"]).is_ok());
+        assert!(Cli::try_parse_from(["kglite", "okf", "open", "vault", "--cache", "none"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["kglite", "okf", "open", "vault", "--cache", "v.kgl"]).is_ok()
+        );
+        assert!(Cli::try_parse_from(["kglite", "okf", "open", "vault", "--cache"]).is_err());
+        assert!(Cli::try_parse_from(["kglite", "okf", "open"]).is_err());
     }
 }
