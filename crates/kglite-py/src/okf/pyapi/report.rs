@@ -53,6 +53,7 @@ impl VaultReport {
         dict.set_item("text_indexes_built", report.text_indexes_built)?;
         dict.set_item("skills_imported", report.skills_imported)?;
         dict.set_item("recipes_imported", report.recipes_imported)?;
+        dict.set_item("forced_splits", report.forced_splits)?;
         dict.set_item("embed_targets", report.embed_targets.clone())?;
         Ok(dict)
     }

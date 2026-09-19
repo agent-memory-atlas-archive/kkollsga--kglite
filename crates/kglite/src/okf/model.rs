@@ -465,6 +465,11 @@ pub struct BuildReport {
     pub skills_imported: usize,
     /// Recipe queries imported from `.kglite/recipes/`.
     pub recipes_imported: usize,
+    /// Chunk boundaries `structure.chunks`' caps forced *inside* one block —
+    /// a list, table or paragraph too big to be a chunk on its own (VAULT.md
+    /// §7.1). Zero for a vault whose blocks all fit, so a non-zero count is
+    /// the signal that the source has passages the caps had to cut blind.
+    pub forced_splits: usize,
     /// Problems that leave the build's output untrustworthy — a caller that
     /// gates on the report fails on a non-empty list.
     pub errors: Vec<String>,
@@ -516,6 +521,7 @@ impl BuildReport {
         ));
         out.push_str(&format!("skills imported: {}\n", self.skills_imported));
         out.push_str(&format!("recipes imported: {}\n", self.recipes_imported));
+        out.push_str(&format!("forced chunk splits: {}\n", self.forced_splits));
         out.push_str(&format!(
             "embed targets: {}\n",
             if self.embed_targets.is_empty() {

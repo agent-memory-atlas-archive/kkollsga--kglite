@@ -12,7 +12,7 @@
 //! the note's id — `#A#B`, `#A#B~chunk2`, `#^block-id` — and the builder
 //! prefixes the id the note ended up with.
 
-use super::block::BlockTree;
+use super::block::{BlockTree, List};
 use super::constructs::{derive_callouts, derive_fences, derive_lists, Ctx};
 use super::profile::{ChunkRule, KeyFromHeadingRule, SectionRule, StructureProfile};
 use super::tables::derive_tables;
@@ -69,6 +69,9 @@ pub(crate) struct Derived {
     pub edge_tables_hit: BTreeSet<String>,
     /// VAULT.md §9 warnings, without the note prefix the report adds.
     pub warnings: Vec<String>,
+    /// Chunk boundaries the cap forced *inside* one block, summed over the
+    /// note: the pieces a block was cut into, less the one it would have been.
+    pub forced_splits: usize,
 }
 
 /// Derive every node `structure:` declares from one note's body.
@@ -286,7 +289,8 @@ fn parent_of(tree: &BlockTree, index: usize) -> Option<usize> {
     tree.headings[..index].iter().rposition(|h| h.level < level)
 }
 
-/// Greedy paragraph packing per section (VAULT.md §7.1 `chunks:`).
+/// Greedy block packing per section (VAULT.md §7.1 `chunks:`), plus the
+/// boundaries the caps forced inside a block too big to be one chunk.
 fn derive_chunks(
     body: &str,
     tree: &BlockTree,
@@ -307,7 +311,9 @@ fn derive_chunks(
             .unwrap_or_default();
         let section_title = group.heading.map(|h| tree.headings[h].text.clone());
         let mut previous: Option<String> = None;
-        for packed in pack(body, tree, &group.blocks, rule) {
+        let (packed_chunks, forced) = pack(body, tree, &group.blocks, rule);
+        out.forced_splits += forced;
+        for packed in packed_chunks {
             let counter = counters.entry(container.clone()).or_insert(0);
             let ordinal = *counter;
             *counter += 1;
@@ -405,29 +411,48 @@ struct Packed {
 
 /// Pack blocks greedily to `max_words` / `max_chars`, in document order.
 ///
-/// A block bigger than either limit on its own is a chunk on its own, and a
-/// block a `^block-id` names is a chunk of its own too — which is the author's
-/// one lever over where a section divides (VAULT.md §7.1).
-fn pack(body: &str, tree: &BlockTree, blocks: &[usize], rule: &ChunkRule) -> Vec<Packed> {
+/// A block a `^block-id` names is a chunk of its own — the author's one lever
+/// over where a section divides (VAULT.md §7.1). A block that exceeds either
+/// limit **on its own** is cut at its own line boundaries rather than handed
+/// over whole: an index page written as one 900-line list has no paragraph
+/// break to pack against, and before this it became a single 150 kB chunk
+/// whatever the vault declared.
+///
+/// Returns the packed chunks and how many boundaries the caps forced *inside*
+/// a block — `BuildReport::forced_splits`.
+fn pack(body: &str, tree: &BlockTree, blocks: &[usize], rule: &ChunkRule) -> (Vec<Packed>, usize) {
     let mut out: Vec<Packed> = Vec::new();
+    let mut forced = 0usize;
     let mut open: Option<std::ops::Range<usize>> = None;
     let mut words = 0usize;
     for &index in blocks {
         let range = tree.blocks[index].range.clone();
         let text = &body[range.clone()];
         let block_words = text.split_whitespace().count();
-        if let Some(id) = block_id_of(tree, index) {
+        let id = block_id_of(tree, index);
+        let oversize = block_words > rule.max_words || range.len() > rule.max_chars;
+        if id.is_some() || oversize {
             if let Some(range) = open.take() {
                 out.push(Packed {
                     range,
                     block_id: None,
                 });
             }
-            out.push(Packed {
-                range,
-                block_id: Some(id),
-            });
             words = 0;
+            let pieces = if oversize {
+                split_block(body, tree, index, rule)
+            } else {
+                vec![range]
+            };
+            forced += pieces.len() - 1;
+            // The block id keys the *first* piece: it is the one the author's
+            // `[[Note#^id]]` was pointing at when the block still fitted.
+            for (nth, piece) in pieces.into_iter().enumerate() {
+                out.push(Packed {
+                    range: piece,
+                    block_id: if nth == 0 { id.clone() } else { None },
+                });
+            }
             continue;
         }
         match open.take() {
@@ -457,6 +482,159 @@ fn pack(body: &str, tree: &BlockTree, blocks: &[usize], rule: &ChunkRule) -> Vec
             range,
             block_id: None,
         });
+    }
+    (out, forced)
+}
+
+/// Cut one over-cap block into pieces that tile its range, at the boundaries
+/// its own kind offers (VAULT.md §7.1).
+///
+/// A list divides between its **top-level** items, so a nested list travels
+/// with the item that introduced it; everything else divides at line ends,
+/// which for a table is exactly its rows — the header row therefore stays in
+/// the first piece and is not repeated, because a chunk is a range of the
+/// source and not a rendering of it.
+fn split_block(
+    body: &str,
+    tree: &BlockTree,
+    index: usize,
+    rule: &ChunkRule,
+) -> Vec<std::ops::Range<usize>> {
+    let range = tree.blocks[index].range.clone();
+    let atoms = match &tree.blocks[index].kind {
+        super::block::BlockKind::List(list) => item_atoms(list, &range),
+        _ => line_atoms(body, &range),
+    };
+    let pieces = pack_atoms(body, atoms, rule);
+    merge_blank(body, pieces)
+}
+
+/// The ranges between the starts of a list's top-level items, tiling the whole
+/// block: an item's own trailing blank line belongs to the item above it.
+fn item_atoms(list: &List, range: &std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
+    let mut bounds = vec![range.start];
+    for item in &list.items {
+        if item.range.start > *bounds.last().expect("seeded") && item.range.start < range.end {
+            bounds.push(item.range.start);
+        }
+    }
+    bounds.push(range.end);
+    bounds.windows(2).map(|w| w[0]..w[1]).collect()
+}
+
+/// The lines of `range`, each carrying its own trailing newline.
+fn line_atoms(body: &str, range: &std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = range.start;
+    for (offset, byte) in body.as_bytes()[range.clone()].iter().enumerate() {
+        if *byte == b'\n' {
+            let end = range.start + offset + 1;
+            out.push(start..end);
+            start = end;
+        }
+    }
+    if start < range.end || out.is_empty() {
+        out.push(start..range.end);
+    }
+    out
+}
+
+/// Pack a block's own atoms the way [`pack`] packs blocks. An atom that busts
+/// `max_chars` by itself is refined once more — by line if it has more than
+/// one, and otherwise cut at a `char` boundary, which is the only split left
+/// and the only one that can land inside a word.
+fn pack_atoms(
+    body: &str,
+    atoms: Vec<std::ops::Range<usize>>,
+    rule: &ChunkRule,
+) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut open: Option<std::ops::Range<usize>> = None;
+    let mut words = 0usize;
+    for atom in atoms {
+        if atom.len() > rule.max_chars {
+            if let Some(current) = open.take() {
+                out.push(current);
+                words = 0;
+            }
+            let lines = line_atoms(body, &atom);
+            if lines.len() > 1 {
+                out.extend(pack_atoms(body, lines, rule));
+            } else {
+                out.extend(hard_split(body, atom, rule.max_chars));
+            }
+            continue;
+        }
+        let atom_words = body[atom.clone()].split_whitespace().count();
+        match open.take() {
+            Some(current)
+                if words + atom_words <= rule.max_words
+                    && atom.end - current.start <= rule.max_chars =>
+            {
+                open = Some(current.start..atom.end);
+                words += atom_words;
+            }
+            Some(current) => {
+                out.push(current);
+                open = Some(atom);
+                words = atom_words;
+            }
+            None => {
+                open = Some(atom);
+                words = atom_words;
+            }
+        }
+    }
+    if let Some(current) = open {
+        out.push(current);
+    }
+    out
+}
+
+/// Cut a single over-cap line at `char` boundaries, never mid-codepoint.
+fn hard_split(
+    body: &str,
+    atom: std::ops::Range<usize>,
+    max_chars: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let max = max_chars.max(1);
+    let mut out = Vec::new();
+    let mut start = atom.start;
+    while atom.end - start > max {
+        let mut cut = start + max;
+        while cut > start && !body.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        if cut == start {
+            // One character is wider than the whole budget; emitting it is
+            // the only alternative to an endless loop.
+            cut = start + 1;
+            while cut < atom.end && !body.is_char_boundary(cut) {
+                cut += 1;
+            }
+        }
+        out.push(start..cut);
+        start = cut;
+    }
+    out.push(start..atom.end);
+    out
+}
+
+/// Fold a piece that is nothing but whitespace into its neighbour: the trailing
+/// newline a hard split leaves behind would otherwise become a chunk whose
+/// `text` is the empty string.
+fn merge_blank(body: &str, pieces: Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    for piece in pieces {
+        match out.last_mut() {
+            Some(previous) if body[piece.clone()].trim().is_empty() => previous.end = piece.end,
+            _ => out.push(piece),
+        }
+    }
+    // A leading blank piece has no predecessor to join, so it joins forward.
+    if out.len() > 1 && body[out[0].clone()].trim().is_empty() {
+        let head = out.remove(0);
+        out[0].start = head.start;
     }
     out
 }

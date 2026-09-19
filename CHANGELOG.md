@@ -23,6 +23,21 @@ before upgrading.
   rows), an edge pattern anchored through a map, the scoped `CALL (n) { … }`
   spelling and an imported scalar. Seven corpus entries (`call_map_ref_*`)
   and a plan-shape test pin it. Reported from the RMS help vault recipes.
+- **`structure.chunks` honours `max_words` / `max_chars` inside a single
+  block.** A page written as one long list or table with no blank line became
+  a single chunk whatever the vault declared (a 400-item list produced one
+  29 089-char chunk under `max_chars: 6000`). An over-cap block is now cut at
+  its own boundaries — a list between its top-level items, anything else at
+  line ends, which for a table is its rows — and a single line over the cap is
+  cut at a `char` boundary. The pieces chain with `next` and keep contiguous
+  ordinals; a `^block-id` keys the first piece. Chunk ids (`~chunk<n>`)
+  renumber on affected pages; `chunk_hash` carries embeddings across the move.
+
+### Added
+
+- `BuildReport.forced_splits` — the chunk boundaries the caps had to place
+  inside a block — in `okf check`'s text and `--json` output and in the Python
+  `VaultReport.counts`.
 
 ## [0.17.10] - 2026-09-18
 ### Fixed

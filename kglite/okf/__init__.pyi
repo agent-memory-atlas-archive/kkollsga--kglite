@@ -395,7 +395,11 @@ class VaultReport:
         synthesized ``Folder`` / hub / ``Image`` nodes and ``_provisional``
         stubs), ``dangling``, ``folder_notes``, ``missing_attachments``,
         ``ambiguous_attachments``, ``indexes_declared``, ``text_indexes_built``,
-        ``skills_imported``, ``recipes_imported`` (ints), and ``embed_targets``
+        ``skills_imported``, ``recipes_imported``, ``forced_splits`` (ints —
+        ``forced_splits`` counts the chunk boundaries ``structure.chunks``'
+        ``max_words`` / ``max_chars`` had to place *inside* one block, so a
+        non-zero count means the vault holds lists, tables or paragraphs the
+        caps cut without a blank line to cut at), and ``embed_targets``
         — the ``(label, property)`` pairs ``.kglite/vault.yaml`` declared, in
         declaration order. The engine computes no vectors: run
         :meth:`~kglite.KnowledgeGraph.embed_texts` for each pair once an

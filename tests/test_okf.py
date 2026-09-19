@@ -749,9 +749,12 @@ class TestVaultStructureProfile:
                 # Relabelled in place, never duplicated (VAULT.md §7.1).
                 "ApiSymbol": 1,
                 # chunky packs 2 + its own `^cite-1` chunk; duplicate 3;
-                # links and welcome 1 each; constructs 5; tables 4 (its intro,
-                # its prose, and one per table — a table is prose too)
-                "Chunk": 17,
+                # welcome 1; tables 4 (its intro, its prose, and one per table
+                # — a table is prose too). constructs 6 and links 2: each
+                # holds one block over the vault's 120-char cap on its own —
+                # the nested callout and a two-line paragraph — which the cap
+                # splits at its line boundaries (VAULT.md §7.1).
+                "Chunk": 19,
                 # One node per body row of the `Parameters` table.
                 "ApiParameter": 3,
                 # The edge table's second row names a note nobody wrote.
@@ -773,8 +776,10 @@ class TestVaultStructureProfile:
                 "HAS_SECTION": 15,
                 "PARENT_SECTION": 9,  # only the nested ones
                 "NEXT_SECTION": 4,  # duplicate's two `## Details`, constructs' three `##`
-                "HAS_CHUNK": 17,
-                "NEXT_CHUNK": 4,  # chunky's three, and two sections of two
+                "HAS_CHUNK": 19,
+                # chunky's two, two sections of two, and the two pieces the
+                # cap forced inside a block chain like any consecutive chunks.
+                "NEXT_CHUNK": 6,
                 "HAS_NOTE": 3,  # two from the section, one from the callout it nests in
                 "HAS_EXAMPLE": 3,
                 # `HAS_<UPPER_SNAKE(container)>`, spelled from the label rather
@@ -874,6 +879,39 @@ class TestVaultStructureProfile:
             # …and a block id reaches its chunk. The anchor is kept either way.
             {"target": "chunky#^cite-1", "anchor": "^cite-1"},
         ]
+
+    def test_an_index_page_with_no_blank_line_still_honours_the_chunk_caps(self, tmp_path):
+        """The operator's shape (RMS_HelpDesk, 2026-09-19): a class index
+        written as one 400-item list with no paragraph break used to become a
+        single 29 kB chunk under ``max_chars: 6000`` — returned whole by a
+        recipe, diluting BM25 and making its embedding meaningless.
+        """
+        vault = tmp_path / "vault"
+        (vault / ".kglite").mkdir(parents=True)
+        (vault / ".kglite" / "vault.yaml").write_text(
+            "kglite_vault: 1\ndefault_label: Article\nstructure:\n"
+            "  sections: {label: Section, edge: HAS_SECTION}\n"
+            "  chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, "
+            "max_words: 650, max_chars: 6000}\n",
+            encoding="utf-8",
+        )
+        items = [f"- [[symbol{i}]] — the {i}th entry of the class index" for i in range(400)]
+        (vault / "class_index.md").write_text("# Class index\n\n" + "\n".join(items) + "\n", encoding="utf-8")
+
+        report = okf.validate(str(vault), dialect="obsidian")
+        assert report.counts["forced_splits"] > 0, "the cap placed no boundary inside the list"
+
+        g = okf.build(str(vault), dialect="obsidian")
+        rows = g.cypher("MATCH (n:Chunk) RETURN n.text AS t, n.ordinal AS o ORDER BY o").to_list()
+        assert len(rows) > 1
+        assert report.counts["forced_splits"] == len(rows) - 1
+        assert [r["o"] for r in rows] == list(range(len(rows))), "ordinals stay contiguous"
+        for row in rows:
+            size = len(row["t"])
+            assert size <= 6000, f"a chunk of {size} chars under a 6 000 cap"
+            for line in row["t"].splitlines():
+                assert line.startswith("- [[symbol"), f"a boundary inside an item: {line!r}"
+        assert "\n".join(r["t"] for r in rows) == "\n".join(items), "the list, whole and in order"
 
     def test_the_three_warnings_the_fixture_is_built_to_produce(self):
         report = okf.validate(str(STRUCTURE_BUNDLE), dialect="obsidian")

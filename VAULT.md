@@ -747,16 +747,31 @@ block is not one, because that region is not scanned at all (§5.1).
 
 The retrieval unit. Leaf blocks — paragraphs, list blocks, fences, tables,
 quotations — are packed greedily in document order, and the open chunk closes
-before a block that would take it past `max_words` **or** `max_chars`. A block
-bigger than either limit on its own is a chunk on its own. A section boundary
-always closes the open chunk, so a chunk never spans two sections.
+before a block that would take it past `max_words` **or** `max_chars`. A section
+boundary always closes the open chunk, so a chunk never spans two sections.
+
+**A block bigger than either limit on its own is split inside itself**, at the
+boundaries its own kind offers: a list between its **top-level items** (a
+nested list travels with the item that introduced it), anything else at line
+ends — which for a table is its rows. The pieces are packed greedily to the
+same caps, in document order, and chain with `next` like any consecutive
+chunks. A header row is therefore in the first piece of a split table and is
+**not** repeated in the others: a chunk is a range of the source, not a
+rendering of it. A single line that busts `max_chars` by itself is cut at a
+`char` boundary — the only split left, and the only one that can land inside a
+word. The build reports how many boundaries the caps forced this way as
+`forced_splits` (§9); a non-zero count says the source has passages the caps
+had to cut blind, and a blank line where the author wants the break is the
+fix.
 
 - `edge` joins the enclosing Section, or the note when `sections:` is not
   declared; `next` joins consecutive chunks within one section.
 - A paragraph whose last line ends in a block id **closes the open chunk and is
   a chunk of its own**, keyed `Note#^id`. That makes a block id the author's one
   lever over where chunks divide, and the way to give a passage a citable id
-  that editing around it cannot move.
+  that editing around it cannot move. Where such a block is itself over a limit
+  and splits, the id keys its **first** piece — the one `[[Note#^id]]` was
+  pointing at while the block still fitted.
 - **Properties**: `text` (the packed blocks verbatim, spaced as the source
   spaced them), `ordinal` (0-based within the section), `chunk_hash` (the
   SHA-256 of `text`, lowercase hex), `note_id`, `section_id`, plus `inherit:`.
@@ -1075,9 +1090,10 @@ checked with an explicit `dialect="okf"`, which is what its build passes too.
 
 It carries: files scanned and how many became notes, nodes per label, edges per
 type, folder notes, dangling links, missing and ambiguous attachments, the
-index / text-index / skill / recipe counts `.kglite/` produced, the `embed:`
-targets declared in `vault.yaml`, and two classified lists of findings. The
-classification is the contract.
+index / text-index / skill / recipe counts `.kglite/` produced, `forced_splits`
+— chunk boundaries the `chunks:` caps had to place inside a block (§7.1) — the
+`embed:` targets declared in `vault.yaml`, and two classified lists of
+findings. The classification is the contract.
 
 **Errors** — a vault with any of these does not meet this spec:
 

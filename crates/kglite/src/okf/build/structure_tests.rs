@@ -691,7 +691,11 @@ fn golden_structure_vault_census() {
             // headings, 14 of them still Sections.
             ("ApiSymbol", 1),
             ("Article", 5),
-            ("Chunk", 17),
+            // 17 chunks the packer made, plus the two the caps forced inside
+            // a block: `constructs.md`'s nested callout and `links.md`'s
+            // two-line paragraph are each over the vault's 120-char cap on
+            // their own (VAULT.md §7.1).
+            ("Chunk", 19),
             // The edge table's unresolvable target, as any dangling link is.
             ("Concept", 1),
             ("Example", 3),
@@ -711,7 +715,7 @@ fn golden_structure_vault_census() {
         edges,
         vec![
             ("CONTAINS", 5),
-            ("HAS_CHUNK", 17),
+            ("HAS_CHUNK", 19),
             ("HAS_EXAMPLE", 3),
             ("HAS_NOTE", 3),
             ("HAS_PARAMETER", 3),
@@ -723,7 +727,8 @@ fn golden_structure_vault_census() {
             // as prose — a row rule never swallows a cell's link (VAULT.md
             // §7.1).
             ("LINKS_TO", 5),
-            ("NEXT_CHUNK", 4),
+            // The forced pieces chain like any consecutive chunks.
+            ("NEXT_CHUNK", 6),
             ("NEXT_SECTION", 4),
             ("NEXT_STEP", 2),
             ("PARENT_SECTION", 9),

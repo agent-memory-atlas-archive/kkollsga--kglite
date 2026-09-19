@@ -218,11 +218,15 @@ fn max_chars_closes_a_chunk_too() {
     );
 }
 
+/// A block over a limit is cut at its own line boundaries, and a block that
+/// has none has nothing to cut — a `max_chars` bust would still hard-split it,
+/// but a `max_words` bust on one line leaves the line whole.
 #[test]
-fn a_block_over_a_limit_on_its_own_is_one_chunk() {
+fn a_one_line_block_over_max_words_stays_whole() {
     let body = "# A\n\none two three four\n";
     let d = run(body, &both(2, 6000));
     assert_eq!(text_of(&d, "#A~chunk1"), "one two three four");
+    assert_eq!(d.forced_splits, 0);
 }
 
 #[test]
@@ -536,4 +540,192 @@ fn only_a_section_is_relabelled_never_another_construct_under_it() {
             ("#Api#rmsapi.grid.get()~list1~step2", "ProcedureStep"),
         ]
     );
+}
+
+// ---------------------------------------------------------------------------
+// A block bigger than the cap splits inside itself (VAULT.md §7.1)
+// ---------------------------------------------------------------------------
+
+/// Chunk texts in derivation order.
+fn chunk_texts(d: &Derived) -> Vec<&str> {
+    d.nodes
+        .iter()
+        .filter(|n| n.label == "Chunk")
+        .map(|n| n.text.as_deref().unwrap_or(""))
+        .collect()
+}
+
+/// The `ordinal` of every chunk, in derivation order.
+fn chunk_ordinals(d: &Derived) -> Vec<i64> {
+    d.nodes
+        .iter()
+        .filter(|n| n.label == "Chunk")
+        .map(|n| match n.props.iter().find(|(k, _)| k == "ordinal") {
+            Some((_, Value::Int64(i))) => *i,
+            other => panic!("no int ordinal: {other:?}"),
+        })
+        .collect()
+}
+
+/// The `NEXT_CHUNK` chain, walked from the first chunk: every chunk once, in
+/// derivation order, or the chain is broken.
+fn next_chunk_chain(d: &Derived) -> Vec<String> {
+    let mut chain = Vec::new();
+    let Some(first) = d.nodes.iter().find(|n| n.label == "Chunk") else {
+        return chain;
+    };
+    let mut at = first.suffix.clone();
+    loop {
+        chain.push(at.clone());
+        let Some(edge) = d
+            .edges
+            .iter()
+            .find(|e| e.conn_type == "NEXT_CHUNK" && e.source.as_deref() == Some(at.as_str()))
+        else {
+            return chain;
+        };
+        at = edge.target.clone();
+    }
+}
+
+fn long_list(items: usize) -> String {
+    let mut body = String::from("# A\n\n");
+    for i in 0..items {
+        body.push_str(&format!(
+            "- item {i} with enough words to make the line wide\n"
+        ));
+    }
+    body
+}
+
+#[test]
+fn a_list_over_max_chars_splits_at_item_edges() {
+    let body = long_list(400);
+    let d = run(&body, &both(usize::MAX, 6000));
+    let texts = chunk_texts(&d);
+    assert!(texts.len() > 1, "a 20 kB list is not one 6 000-char chunk");
+    for text in &texts {
+        assert!(
+            text.len() <= 6000,
+            "a chunk of {} chars under a 6 000 cap",
+            text.len()
+        );
+        for line in text.lines() {
+            assert!(
+                line.starts_with("- item "),
+                "a chunk boundary inside an item: {line:?}"
+            );
+        }
+    }
+    assert_eq!(
+        texts.join("\n"),
+        body["# A\n\n".len()..].trim_end(),
+        "the pieces are the list, in order and whole"
+    );
+    assert_eq!(
+        chunk_ordinals(&d),
+        (0..texts.len() as i64).collect::<Vec<_>>(),
+        "ordinals stay contiguous"
+    );
+    assert_eq!(
+        next_chunk_chain(&d).len(),
+        texts.len(),
+        "the NEXT_CHUNK chain covers every piece"
+    );
+}
+
+#[test]
+fn a_table_over_max_chars_splits_at_row_edges_and_the_header_stays_in_the_first_piece() {
+    let mut body = String::from("# A\n\n| name | type |\n| --- | --- |\n");
+    for i in 0..60 {
+        body.push_str(&format!("| row number {i} | string |\n"));
+    }
+    let d = run(&body, &both(usize::MAX, 200));
+    let texts = chunk_texts(&d);
+    assert!(texts.len() > 3, "the table is one chunk again");
+    assert!(texts[0].starts_with("| name | type |\n| --- | --- |\n| row number 0 |"));
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|t| t.contains("| name | type |"))
+            .count(),
+        1,
+        "chunks are text ranges: the header row is never duplicated"
+    );
+    for text in &texts {
+        assert!(text.len() <= 200, "{} chars under a 200 cap", text.len());
+        for line in text.lines() {
+            assert!(
+                line.starts_with('|') && line.ends_with('|'),
+                "a chunk boundary inside a row: {line:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_single_line_over_max_chars_hard_splits_on_char_boundaries() {
+    // Two bytes per character, so a byte-indexed cut that ignored char
+    // boundaries would panic or produce invalid UTF-8.
+    let line: String = "é".repeat(5_000);
+    let body = format!("# A\n\n{line}\n");
+    let d = run(&body, &both(usize::MAX, 1_000));
+    let texts = chunk_texts(&d);
+    assert_eq!(texts.len(), 10, "10 000 bytes under a 1 000-byte cap");
+    for text in &texts {
+        assert!(
+            text.len() <= 1_000,
+            "{} bytes under a 1 000 cap",
+            text.len()
+        );
+    }
+    assert_eq!(texts.concat(), line, "the pieces reassemble to the line");
+}
+
+#[test]
+fn forced_splits_counts_the_boundaries_the_cap_added_inside_blocks() {
+    let under = run("# A\n\none\n\ntwo\n", &both(1, 6000));
+    assert_eq!(
+        under.forced_splits, 0,
+        "two blocks packed apart is the packer, not a forced split"
+    );
+
+    let d = run(&long_list(400), &both(usize::MAX, 6000));
+    let pieces = chunk_texts(&d).len();
+    assert!(pieces > 1, "nothing was split, so the count proves nothing");
+    assert_eq!(
+        d.forced_splits,
+        pieces - 1,
+        "one forced boundary per extra piece of the one block"
+    );
+}
+
+#[test]
+fn a_block_id_on_an_over_cap_block_keys_its_first_piece() {
+    let body = "# A\n\naa bb\ncc dd\nee ^big\n";
+    let d = run(body, &both(usize::MAX, 12));
+    let suffixes: Vec<&str> = d
+        .nodes
+        .iter()
+        .filter(|n| n.label == "Chunk")
+        .map(|n| n.suffix.as_str())
+        .collect();
+    assert_eq!(
+        suffixes,
+        vec!["#^big", "#A~chunk2"],
+        "the id keys the first piece; the rest take chunk ordinals"
+    );
+    assert_eq!(chunk_texts(&d), vec!["aa bb\ncc dd", "ee ^big"]);
+}
+
+#[test]
+fn a_block_over_max_words_splits_at_its_line_boundaries_too() {
+    let body = "# A\n\none two three\nfour five six\nseven eight nine\n";
+    let d = run(body, &both(4, 6000));
+    assert_eq!(
+        chunk_texts(&d),
+        vec!["one two three", "four five six", "seven eight nine"],
+        "three words a line, four to a chunk"
+    );
+    assert_eq!(d.forced_splits, 2);
 }

@@ -295,6 +295,7 @@ fn render_is_the_stable_text_both_front_ends_print() {
          text indexes built: 0\n\
          skills imported: 0\n\
          recipes imported: 0\n\
+         forced chunk splits: 0\n\
          embed targets: none\n\
          errors: none\n\
          warnings (1):\n  \

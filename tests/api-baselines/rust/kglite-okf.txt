@@ -5358,6 +5358,7 @@ pub kglite::okf::model::BuildReport::embed_targets: alloc::vec::Vec<(alloc::stri
 pub kglite::okf::model::BuildReport::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::model::BuildReport::files_scanned: usize
 pub kglite::okf::model::BuildReport::folder_notes: usize
+pub kglite::okf::model::BuildReport::forced_splits: usize
 pub kglite::okf::model::BuildReport::indexes_declared: usize
 pub kglite::okf::model::BuildReport::missing_attachments: usize
 pub kglite::okf::model::BuildReport::nodes_by_label: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
@@ -5656,6 +5657,7 @@ pub kglite::okf::BuildReport::embed_targets: alloc::vec::Vec<(alloc::string::Str
 pub kglite::okf::BuildReport::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::okf::BuildReport::files_scanned: usize
 pub kglite::okf::BuildReport::folder_notes: usize
+pub kglite::okf::BuildReport::forced_splits: usize
 pub kglite::okf::BuildReport::indexes_declared: usize
 pub kglite::okf::BuildReport::missing_attachments: usize
 pub kglite::okf::BuildReport::nodes_by_label: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>

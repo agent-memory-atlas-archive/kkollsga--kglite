@@ -290,6 +290,7 @@ fn as_json(report: &BuildReport, strict: bool) -> serde_json::Value {
             "text_indexes_built": report.text_indexes_built,
             "skills_imported": report.skills_imported,
             "recipes_imported": report.recipes_imported,
+            "forced_splits": report.forced_splits,
             "embed_targets": report.embed_targets,
         },
         "errors": report.errors,

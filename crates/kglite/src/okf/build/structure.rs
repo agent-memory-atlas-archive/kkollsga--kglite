@@ -109,6 +109,7 @@ pub(super) fn build_structure(
     let mut rows_by_label: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     let mut groups = EdgeGroups::new();
     for doc in docs {
+        report.forced_splits += doc.derived.forced_splits;
         if doc.derived.nodes.is_empty() {
             continue;
         }
