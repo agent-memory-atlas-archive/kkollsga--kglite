@@ -8,6 +8,8 @@ releases may include documented breaking changes; review the migration notes
 before upgrading.
 
 ## [Unreleased]
+
+## [0.17.12] - 2026-09-19
 ### Added
 
 - **A recipe query can be served as its own MCP tool.** A query that declares
