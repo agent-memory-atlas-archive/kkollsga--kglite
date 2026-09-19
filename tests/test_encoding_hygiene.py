@@ -33,11 +33,11 @@ SCANNED_ROOTS = ("tests", "scripts", "benchmarks", "examples", "kglite")
 TEXT_IO_METHODS = frozenset({"read_text", "write_text"})
 
 #: `x.open(...)` is only the text-file builtin for some `x`. These receivers
-#: name something else entirely — `kglite.open` opens a *graph*, `os.open`
-#: returns a file descriptor — or take an encoding only in text mode
-#: (`gzip`/`bz2`/`lzma` default to binary). Checking them produces noise, not
-#: findings.
-NON_TEXT_OPEN_RECEIVERS = frozenset({"os", "kglite", "gzip", "bz2", "lzma", "tarfile", "zipfile", "webbrowser"})
+#: name something else entirely — `kglite.open` opens a *graph*, `okf.open`
+#: opens a *vault* through its cached graph, `os.open` returns a file
+#: descriptor — or take an encoding only in text mode (`gzip`/`bz2`/`lzma`
+#: default to binary). Checking them produces noise, not findings.
+NON_TEXT_OPEN_RECEIVERS = frozenset({"os", "kglite", "okf", "gzip", "bz2", "lzma", "tarfile", "zipfile", "webbrowser"})
 
 #: Positional slot at which each call already accepts `encoding`.
 #: `Path.read_text(encoding, errors)`, `Path.write_text(data, encoding, ...)`,
