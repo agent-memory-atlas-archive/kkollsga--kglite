@@ -2255,6 +2255,7 @@ impl core::marker::Copy for kglite::api::recipes::CatalogSummary
 impl core::marker::StructuralPartialEq for kglite::api::recipes::CatalogSummary
 pub struct kglite::api::recipes::ParameterSchema
 impl kglite::api::recipes::ParameterSchema
+pub fn kglite::api::recipes::ParameterSchema::apply_defaults(&self, variables: &mut serde_json::map::Map<alloc::string::String, serde_json::value::Value>)
 pub fn kglite::api::recipes::ParameterSchema::as_json(&self) -> &serde_json::map::Map<alloc::string::String, serde_json::value::Value>
 pub fn kglite::api::recipes::ParameterSchema::compile_root(raw: &serde_json::value::Value, cypher_parameters: &[alloc::string::String]) -> kglite::api::recipes::CatalogResult<Self>
 pub fn kglite::api::recipes::ParameterSchema::validate_variables(&self, variables: &serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> core::result::Result<(), kglite::api::recipes::VariablesValidationError>
