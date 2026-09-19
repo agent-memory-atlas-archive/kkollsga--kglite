@@ -12,6 +12,7 @@ use rmcp::ErrorData as McpError;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use super::description::{run_tool_description, schema_enums, VARIABLES_DESCRIPTION};
 use super::wire::{
     structured_error_result, ListRecipeQueriesArgs, ListRecipeQueriesOutput, RunRecipeQueryArgs,
     RunRecipeQueryOutput,
@@ -24,8 +25,7 @@ type DynFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 pub(crate) const LIST_RECIPE_QUERIES_TOOL: &str = "list_recipe_queries";
 pub(crate) const RUN_RECIPE_QUERY_TOOL: &str = "run_recipe_query";
 
-const LIST_DESCRIPTION: &str = "List the boot-validated Cypher recipe catalog. Omit `recipe` for compact recipe summaries; provide it to inspect that recipe's named queries and parameter schemas.";
-const RUN_DESCRIPTION: &str = "Run one exact, boot-validated, read-only Cypher recipe query with strictly validated variables. Returns all rows up to the MCP payload limit or a structured error; use cypher_query for unmatched or broader questions.";
+const LIST_DESCRIPTION: &str = "List the boot-validated Cypher recipe catalog. Omit `recipe` for compact recipe summaries; provide it to inspect that recipe's named queries and parameter schemas. The routing is already in run_recipe_query's description; call this only for a recipe not listed there.";
 
 /// Register the two catalog routes as one ownership unit.
 ///
@@ -56,7 +56,7 @@ pub(crate) fn register_recipe_query_routes(
     server.tool_router_mut().add_route(ToolRoute::new_dyn(
         recipe_tool::<ListRecipeQueriesArgs, ListRecipeQueriesOutput>(
             LIST_RECIPE_QUERIES_TOOL,
-            LIST_DESCRIPTION,
+            LIST_DESCRIPTION.to_string(),
         ),
         move |ctx: ToolCallContext<'_, McpServer>| -> DynFut<'_, Result<CallToolResponse, McpError>> {
             let catalog = list_catalog.clone();
@@ -72,10 +72,7 @@ pub(crate) fn register_recipe_query_routes(
     ));
 
     server.tool_router_mut().add_route(ToolRoute::new_dyn(
-        recipe_tool::<RunRecipeQueryArgs, RunRecipeQueryOutput>(
-            RUN_RECIPE_QUERY_TOOL,
-            RUN_DESCRIPTION,
-        ),
+        run_tool(&catalog),
         move |ctx: ToolCallContext<'_, McpServer>| -> DynFut<'_, Result<CallToolResponse, McpError>> {
             let catalog = catalog.clone();
             let state = state.clone();
@@ -98,7 +95,50 @@ pub(crate) fn register_recipe_query_routes(
     Ok(2)
 }
 
-fn recipe_tool<I, O>(name: &'static str, description: &'static str) -> Tool
+/// The run route's published tool: the catalogue in the description, and the
+/// names it accepts in the schema beside it.
+///
+/// The `enum` arrays are grafted onto the schemars-derived document rather
+/// than declared on [`RunRecipeQueryArgs`], because the accepted values are
+/// this deployment's merged catalogue and a derive cannot see it. A `oneOf`
+/// per query was considered and rejected in planning: clients render it
+/// inconsistently, and the enum plus the description block is what named
+/// manifest tools already put in front of an agent.
+fn run_tool(catalog: &RecipeCatalog) -> Tool {
+    let mut tool = recipe_tool::<RunRecipeQueryArgs, RunRecipeQueryOutput>(
+        RUN_RECIPE_QUERY_TOOL,
+        run_tool_description(catalog),
+    );
+    let (recipes, queries) = schema_enums(catalog);
+    let mut schema = tool.input_schema.as_ref().clone();
+    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        set_enum(properties, "recipe", recipes);
+        set_enum(properties, "query", queries);
+        if let Some(variables) = properties
+            .get_mut("variables")
+            .and_then(Value::as_object_mut)
+        {
+            variables.insert(
+                "description".to_string(),
+                Value::String(VARIABLES_DESCRIPTION.to_string()),
+            );
+        }
+    }
+    tool.input_schema = Arc::new(schema);
+    tool
+}
+
+fn set_enum(properties: &mut Map<String, Value>, name: &str, values: Vec<String>) {
+    let Some(property) = properties.get_mut(name).and_then(Value::as_object_mut) else {
+        return;
+    };
+    property.insert(
+        "enum".to_string(),
+        Value::Array(values.into_iter().map(Value::String).collect()),
+    );
+}
+
+fn recipe_tool<I, O>(name: &'static str, description: String) -> Tool
 where
     I: schemars::JsonSchema + 'static,
     O: schemars::JsonSchema + 'static,
@@ -124,6 +164,7 @@ fn deserialize_arguments<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::description::RUN_SUMMARY;
     use super::*;
     use kglite::api::storage::StorageMode;
     use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -203,6 +244,135 @@ mod tests {
             structured
         );
         structured
+    }
+
+    fn described_catalog() -> Arc<RecipeCatalog> {
+        Arc::new(
+            RecipeCatalog::from_manifest_value(Some(&json!({
+                "review": {
+                    "description": "Review operations.",
+                    "queries": {
+                        "callers": {
+                            "description": "Functions calling the target.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"qualified_name": {"type": "string"}},
+                                "required": ["qualified_name"],
+                                "additionalProperties": false
+                            },
+                            "cypher": "MATCH (f:Function) WHERE f.qualified_name = $qualified_name RETURN f.qualified_name AS name ORDER BY name"
+                        },
+                        "search": {
+                            "description": "Search the corpus.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string"},
+                                    "limit": {"type": ["integer", "null"], "default": 5},
+                                    "corpus": {"type": "string", "enum": ["docs", "api"], "default": "docs"}
+                                },
+                                "required": ["query"],
+                                "additionalProperties": false
+                            },
+                            "cypher": "MATCH (d:Doc) WHERE d.title CONTAINS $query AND d.corpus = $corpus RETURN d.title AS title ORDER BY title LIMIT $limit"
+                        }
+                    }
+                },
+                "wells": {
+                    "description": "Well operations.",
+                    "queries": {
+                        "count": {
+                            "description": "Count the wells.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": [],
+                                "additionalProperties": false
+                            },
+                            "cypher": "MATCH (w:Well) RETURN count(w) AS wells"
+                        }
+                    }
+                }
+            })))
+            .expect("valid described catalog"),
+        )
+    }
+
+    /// Everything a named per-query tool would have put in `tools/list`: the
+    /// pairs, what each answers, and the variables each takes. An agent that
+    /// has to call `list_recipe_queries` to learn them pays a round trip the
+    /// tool list could have answered.
+    #[test]
+    fn the_run_description_carries_the_whole_catalogue() {
+        let mut server = McpServer::new(Default::default());
+        register_recipe_query_routes(&mut server, GraphState::default(), described_catalog())
+            .unwrap();
+        let router = server.tool_router_mut();
+        let run = router.get(RUN_RECIPE_QUERY_TOOL).expect("run route");
+        let description = run.description.as_deref().expect("description");
+
+        assert!(
+            description.starts_with(RUN_SUMMARY),
+            "the static sentence stays the prefix: {description}"
+        );
+        assert!(
+            description.contains(
+                "review.callers — Functions calling the target.; params: qualified_name: string (required)"
+            ),
+            "{description}"
+        );
+        assert!(
+            description.contains(
+                "review.search — Search the corpus.; params: corpus: string one of [\"docs\",\"api\"] =\"docs\", limit: integer|null =5, query: string (required)"
+            ),
+            "{description}"
+        );
+        assert!(
+            description.contains("wells.count — Count the wells.; params: none"),
+            "{description}"
+        );
+        assert!(
+            description.find("review.callers").unwrap() < description.find("wells.count").unwrap(),
+            "catalogue order is the catalogue's own: {description}"
+        );
+
+        let list = router.get(LIST_RECIPE_QUERIES_TOOL).expect("list route");
+        let list_description = list.description.as_deref().expect("description");
+        assert!(
+            list_description.contains("run_recipe_query"),
+            "the listing tool points at the block that replaced it: {list_description}"
+        );
+    }
+
+    #[test]
+    fn the_run_input_schema_enumerates_the_real_recipe_and_query_names() {
+        let mut server = McpServer::new(Default::default());
+        register_recipe_query_routes(&mut server, GraphState::default(), described_catalog())
+            .unwrap();
+        let router = server.tool_router_mut();
+        let run = router.get(RUN_RECIPE_QUERY_TOOL).expect("run route");
+
+        assert_eq!(
+            run.input_schema["properties"]["recipe"]["enum"],
+            json!(["review", "wells"])
+        );
+        assert_eq!(
+            run.input_schema["properties"]["query"]["enum"],
+            json!(["callers", "search", "count"]),
+            "every query name, in catalogue order, deduplicated"
+        );
+        assert_eq!(
+            run.input_schema["properties"]["variables"]["type"],
+            json!("object"),
+            "variables stays an open object, not a per-query oneOf"
+        );
+        let variables_description = run.input_schema["properties"]["variables"]["description"]
+            .as_str()
+            .expect("variables description");
+        assert!(
+            variables_description.contains("catalogue"),
+            "{variables_description}"
+        );
     }
 
     #[test]

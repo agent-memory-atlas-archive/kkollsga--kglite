@@ -1248,7 +1248,10 @@ mod recipe_skill_tests {
         let body = skill.body.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(body.contains("Do not call `list_recipe_queries` first"));
         assert!(body.contains("domain skill already selected the"));
-        assert!(body.contains("call `list_recipe_queries()` once"));
+        // The discovery step is the catalogue block the run tool now
+        // publishes, not a listing round trip.
+        assert!(body.contains("catalogue block in `run_recipe_query`'s own description"));
+        assert!(body.contains("`list_recipe_queries(recipe=...)` only when"));
         assert!(body.contains("exactly matches the requested scope"));
         assert!(body.contains("mandatory `resolve_*` preflight"));
         assert!(body.contains("fall back to raw `cypher_query`"));

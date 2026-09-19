@@ -575,9 +575,9 @@ struct KgliteToolParams<'a> {
     graph_state: &'a GraphState,
     manifest: Option<&'a mcp_methods::server::Manifest>,
     builtins: tools::Builtins,
-    /// Dimensions of the catalogue actually served — the manifest's, merged
-    /// with whatever the graph carried.
-    recipe_catalog_summary: Option<crate::recipe_queries::CatalogSummary>,
+    /// The catalogue actually served — the manifest's, merged with whatever
+    /// the graph carried — as the bare-overview discovery hint.
+    recipe_catalog_hint: Option<crate::recipe_queries::CatalogHint>,
     csv_http: Arc<csv_http::CsvHttpState>,
     source_roots_provider: Option<mcp_methods::server::source::SourceRootsProvider>,
     skills_index: tools::SkillsIndexSlot,
@@ -591,7 +591,7 @@ fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -
         graph_state,
         manifest,
         builtins,
-        recipe_catalog_summary,
+        recipe_catalog_hint,
         csv_http,
         source_roots_provider,
         skills_index,
@@ -603,7 +603,7 @@ fn register_kglite_tools(server: &mut McpServer, params: KgliteToolParams<'_>) -
         builtins,
         tools::OverviewDecorations {
             prefix: manifest.and_then(|manifest| manifest.overview_prefix.clone()),
-            catalog: recipe_catalog_summary,
+            catalog: recipe_catalog_hint,
             skills: skills_index,
         },
         csv_http,
@@ -774,7 +774,7 @@ struct BootedGraph {
     /// The manifest catalogue with the graph's own, and the embedding binary's
     /// under that, merged beneath it.
     recipe_catalog: Arc<recipe_queries::RecipeCatalog>,
-    recipe_catalog_summary: Option<recipe_queries::CatalogSummary>,
+    recipe_catalog_hint: Option<recipe_queries::CatalogHint>,
     /// See [`BootExtensions::manifest_recipes_declared`].
     manifest_recipes_declared: bool,
     graph_recipes: recipe_queries::GraphRecipeStats,
@@ -889,7 +889,7 @@ fn boot_graph(
         recipe_catalog,
     );
     let recipe_catalog = Arc::new(recipe_catalog);
-    let recipe_catalog_summary = recipe_catalog.discovery_summary();
+    let recipe_catalog_hint = recipe_queries::catalog_hint(&recipe_catalog);
 
     let options = apply_result_decorations(options, &graph_state, source_root_status.as_ref());
     Ok(BootedGraph {
@@ -898,7 +898,7 @@ fn boot_graph(
         options,
         graph_state,
         recipe_catalog,
-        recipe_catalog_summary,
+        recipe_catalog_hint,
         manifest_recipes_declared,
         graph_recipes,
         producer_recipes,
@@ -929,7 +929,7 @@ pub(crate) async fn run_async(
         options,
         graph_state,
         recipe_catalog,
-        recipe_catalog_summary,
+        recipe_catalog_hint,
         manifest_recipes_declared,
         graph_recipes,
         producer_recipes: producer_recipe_stats,
@@ -986,7 +986,7 @@ pub(crate) async fn run_async(
             graph_state: &graph_state,
             manifest: manifest.as_ref(),
             builtins,
-            recipe_catalog_summary,
+            recipe_catalog_hint: recipe_catalog_hint.clone(),
             csv_http: csv_http.clone(),
             source_roots_provider,
             skills_index: skills_index.clone(),
@@ -1070,7 +1070,9 @@ pub(crate) async fn run_async(
             manifest: manifest.as_ref(),
             mode: &mode,
             graph_state: &graph_state,
-            recipe_catalog_summary,
+            // The skill only gates on whether a catalogue is served and how
+            // large it is; the names belong to the overview hint.
+            recipe_catalog_summary: recipe_catalog_hint.as_ref().map(|hint| hint.summary),
             skills_index: &skills_index,
             refresher: &skill_refresher,
             peer: &peer_slot,
@@ -1098,7 +1100,7 @@ pub(crate) async fn run_async(
             tokio::io::stdout(),
             crate::raw_query_routes::route_pointers(
                 manifest.as_ref(),
-                recipe_catalog_summary.is_some(),
+                recipe_catalog_hint.is_some(),
             ),
         ))
         .await

@@ -29,10 +29,12 @@ or a workflow engine.
    `run_recipe_query` directly with that recipe, query, and its variables. Do
    not call `list_recipe_queries` first; the domain skill already selected the
    operation.
-2. **You suspect a recipe exists but do not know its name:** call
-   `list_recipe_queries()` once for compact recipe summaries. If one is a
-   plausible exact match, call `list_recipe_queries(recipe=...)` to inspect
-   only that recipe's query names and parameter schemas.
+2. **You suspect a recipe exists but do not know its name:** read the
+   catalogue block in `run_recipe_query`'s own description — every
+   `recipe.query`, what it answers and its variables are already there. Call
+   `list_recipe_queries(recipe=...)` only when that block says to (a catalogue
+   too large to publish in full lists names only) or when a parameter schema
+   needs more detail than the line carries.
 3. **The stored operation exactly matches the requested scope:** call
    `run_recipe_query`. Treat its structured columns, positional rows, and
    errors as the operation's complete contract.

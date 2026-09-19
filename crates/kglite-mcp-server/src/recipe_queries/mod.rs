@@ -8,6 +8,7 @@
 //! payload an agent sees, and the boot-time merge of the graph's own records
 //! under the manifest's catalogue.
 
+mod description;
 mod errors;
 mod graph_layer;
 mod result;
@@ -19,6 +20,7 @@ mod catalog_tests;
 #[cfg(test)]
 mod result_tests;
 
+pub(crate) use description::{catalog_hint, CatalogHint};
 pub(crate) use errors::RecipeErrorEnvelope;
 pub(crate) use graph_layer::{merge_recipe_layers, GraphRecipeStats, ProducerRecipeStats};
 pub(crate) use kglite::api::recipes::{

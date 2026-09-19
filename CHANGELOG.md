@@ -38,6 +38,27 @@ before upgrading.
 - `BuildReport.forced_splits` — the chunk boundaries the caps had to place
   inside a block — in `okf check`'s text and `--json` output and in the Python
   `VaultReport.counts`.
+- **Recipe parameter schemas accept `default` on a top-level property, and
+  that is what makes a parameter optional.** The value binds when the caller
+  omits the key, `required` lists exactly the properties without one, and a
+  default that fails its own property — or one nested below a top-level
+  property — is refused at catalogue build rather than at call time.
+- **Manifest `tools[].cypher` entries honour a top-level property's JSON-Schema
+  `default` for an omitted argument**, so an optional parameter no longer fails
+  with `Missing parameter: $name` (`coalesce($name, …)` could not help: the
+  parameter was absent, not null).
+- **`run_recipe_query`'s description carries the served catalogue** — one line
+  per query with its description and parameters (types, enum values, defaults,
+  required) — and its input schema publishes `enum` arrays of the real
+  `recipe` and `query` names, so an agent routes from `tools/list` without a
+  listing call. Past 4 000 characters the block degrades to `recipe.query`
+  names and points at `list_recipe_queries`. The bare `graph_overview` hint
+  lists the `recipe.query` names beside its counts.
+
+### Changed
+
+- `list_recipe_queries`' description and the bundled `recipe_queries`
+  methodology route to that catalogue block instead of to a listing call.
 
 ## [0.17.10] - 2026-09-18
 ### Fixed

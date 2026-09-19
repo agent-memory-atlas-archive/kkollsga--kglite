@@ -14,7 +14,7 @@ use rmcp::model::{CallToolResponse, CallToolResult, ContentBlock, Tool, ToolAnno
 use rmcp::ErrorData as McpError;
 use serde::de::DeserializeOwned;
 
-use crate::recipe_queries::CatalogSummary;
+use crate::recipe_queries::CatalogHint;
 use crate::tools::*;
 
 type DynFut<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
@@ -142,7 +142,7 @@ pub(crate) type PeerSlot = Arc<RwLock<Option<rmcp::service::Peer<rmcp::RoleServe
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OverviewDecorations {
     pub(crate) prefix: Option<String>,
-    pub(crate) catalog: Option<CatalogSummary>,
+    pub(crate) catalog: Option<CatalogHint>,
     /// Index of the skills this session actually serves, filled by
     /// `install_skills` at boot and **refreshed on every graph swap** by
     /// [`crate::skills::SkillRefresher`].
@@ -166,13 +166,19 @@ impl OverviewDecorations {
             append_overview_section(&mut rendered, prefix);
         }
         append_overview_section(&mut rendered, &body);
-        if let Some(summary) = self.catalog {
+        if let Some(hint) = self.catalog.as_ref() {
+            // `names` needs no XML escaping: a recipe and a query name are
+            // both `^[A-Za-z_][A-Za-z0-9_]*$` catalogue identifiers, checked
+            // before a catalogue compiles.
             append_overview_section(
                 &mut rendered,
                 &format!(
                     "<query-catalog recipes=\"{}\" queries=\"{}\" \
-                     list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>",
-                    summary.recipe_count, summary.query_count
+                     list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\" \
+                     names=\"{}\"/>",
+                    hint.summary.recipe_count,
+                    hint.summary.query_count,
+                    hint.names.join(", ")
                 ),
             );
         }

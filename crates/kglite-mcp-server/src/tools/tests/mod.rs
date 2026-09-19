@@ -8,7 +8,7 @@ use anyhow::Result;
 use kglite::api::storage::{new_dir_graph_in_mode, StorageMode};
 use kglite::api::KnowledgeGraph;
 
-use crate::recipe_queries::CatalogSummary;
+use crate::recipe_queries::{CatalogHint, CatalogSummary};
 use crate::tools::*;
 
 mod activation;
@@ -25,10 +25,21 @@ mod workspace_api;
 /// CSV extension passes for it.
 const CSV_OFF: &crate::csv_http::CsvHttpState = &crate::csv_http::CsvHttpState::Off;
 
-fn catalog_summary() -> CatalogSummary {
-    CatalogSummary {
-        recipe_count: 2,
-        query_count: 5,
+fn catalog_hint() -> CatalogHint {
+    CatalogHint {
+        summary: CatalogSummary {
+            recipe_count: 2,
+            query_count: 5,
+        },
+        names: [
+            "review.callers",
+            "review.resolve",
+            "review.search",
+            "wells.count",
+            "wells.deepest",
+        ]
+        .map(str::to_string)
+        .to_vec(),
     }
 }
 

@@ -2025,7 +2025,8 @@ class TestYamlManifest:
         prefix = text.index("smoke overview prefix")
         active_graph = text.index("<active_graph")
         catalog = text.index(
-            '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" run-tool="run_recipe_query"/>'
+            '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" '
+            'run-tool="run_recipe_query" names="smoke.count_people"/>'
         )
         assert prefix < active_graph < catalog
 
@@ -2060,7 +2061,10 @@ class TestYamlManifest:
         # Both discovery decorations survive a no-graph boot, in order: the
         # catalog hint (tools) then the skills index (prompts), which this
         # manifest opts into with `skills:`.
-        catalog = '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" run-tool="run_recipe_query"/>'
+        catalog = (
+            '<query-catalog recipes="1" queries="1" list-tool="list_recipe_queries" '
+            'run-tool="run_recipe_query" names="smoke.count_people"/>'
+        )
         assert catalog in text, text
         assert text.index(catalog) < text.index("<skills count="), text
         # The decorations are the tail of the *body*; the framework's own
@@ -2086,6 +2090,9 @@ class TestYamlManifest:
         assert "boot-validated named Cypher recipes" in injected, injected
         assert 'skill("recipe_queries")' in injected, injected
         assert "fall back to raw `cypher_query`" not in injected, injected
+        # The routing a named per-query tool would have carried: the pair, what
+        # it answers, and its variables, all in `tools/list`.
+        assert "smoke.count_people — Count Person nodes.; params: none" in injected, injected
 
     def test_absent_and_empty_catalogs_expose_no_recipe_skill(self, graph_with_manifest: Path):
         for label, catalog_yaml in (

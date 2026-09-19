@@ -461,11 +461,22 @@ stable tools instead of registering one top-level tool per query:
   exact operation with strictly validated variables. `variables` is always
   required; parameter-free queries receive `{}`.
 
-A non-empty catalog adds this hint to a bare `graph_overview()` response:
+`run_recipe_query`'s own description carries the catalogue, so the routing is
+in `tools/list` and an agent does not have to discover it: the static sentence
+above, then one line per query —
+`recipe.query — description; params: name: type [one of …] [=default]
+(required)` — in catalogue order, with `none` for a parameter-free query. Its
+input schema lists the real names too: `recipe` and `query` each carry an
+`enum` of what this deployment serves, while `variables` stays an open object
+pointing at that block. Past 4 000 characters the block degrades to
+`recipe.query` names and points at `list_recipe_queries` for the parameters,
+so a large catalogue cannot crowd out the rest of the tool list.
+
+A non-empty catalog also adds this hint to a bare `graph_overview()` response:
 
 ```xml
-<query-catalog recipes="1" queries="3"
-  list-tool="list_recipe_queries" run-tool="run_recipe_query"/>
+<query-catalog recipes="1" queries="3" list-tool="list_recipe_queries"
+  run-tool="run_recipe_query" names="code_review.direct_callers, …"/>
 ```
 
 That is progressive discovery, not a catalog dump. If a domain skill already

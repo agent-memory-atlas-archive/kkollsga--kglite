@@ -942,7 +942,7 @@ async fn a_failed_bare_overview_keeps_its_discovery_decorations() {
         Builtins::default(),
         OverviewDecorations {
             prefix: Some("operator prefix".to_string()),
-            catalog: Some(catalog_summary()),
+            catalog: Some(catalog_hint()),
             skills: Default::default(),
         },
         Arc::default(),

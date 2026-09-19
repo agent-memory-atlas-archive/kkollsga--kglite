@@ -36,7 +36,7 @@ fn overview_bare_predicate_requires_an_argument_free_call() {
 fn overview_decorations_render_prefix_body_and_catalog_in_order() {
     let decorations = OverviewDecorations {
         prefix: Some("operator prefix\n".to_string()),
-        catalog: Some(catalog_summary()),
+        catalog: Some(catalog_hint()),
         skills: Default::default(),
     };
     let body = "<active_graph/>\n<schema/>".to_string();
@@ -46,7 +46,7 @@ fn overview_decorations_render_prefix_body_and_catalog_in_order() {
         "operator prefix\n\
          <active_graph/>\n\
          <schema/>\n\
-         <query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>"
+         <query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\" names=\"review.callers, review.resolve, review.search, wells.count, wells.deepest\"/>"
     );
     assert_eq!(
         decorations.render(body.clone(), false),
@@ -70,11 +70,11 @@ fn overview_decorations_render_prefix_body_and_catalog_in_order() {
     assert_eq!(
         OverviewDecorations {
             prefix: None,
-            catalog: Some(catalog_summary()),
+            catalog: Some(catalog_hint()),
             skills: Default::default(),
         }
         .render("body".to_string(), true),
-        "body\n<query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>"
+        "body\n<query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\" names=\"review.callers, review.resolve, review.search, wells.count, wells.deepest\"/>"
     );
 }
 
@@ -85,7 +85,7 @@ fn overview_decorations_render_prefix_body_and_catalog_in_order() {
 fn the_skills_index_renders_after_the_catalog_and_only_when_bare() {
     let decorations = OverviewDecorations {
         prefix: None,
-        catalog: Some(catalog_summary()),
+        catalog: Some(catalog_hint()),
         skills: Default::default(),
     };
     *write_lock(&decorations.skills) = Some(
@@ -97,7 +97,7 @@ fn the_skills_index_renders_after_the_catalog_and_only_when_bare() {
     assert_eq!(
         rendered,
         "<schema/>\n\
-         <query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>\n\
+         <query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\" names=\"review.callers, review.resolve, review.search, wells.count, wells.deepest\"/>\n\
          <skills count=\"1\" get-via=\"skill(name)\">\nwells [lazy] \u{2014} Wells.\n</skills>"
     );
     assert_eq!(
@@ -122,14 +122,14 @@ fn the_skills_index_renders_after_the_catalog_and_only_when_bare() {
 fn bare_overview_decorations_include_no_active_graph_body() {
     let decorations = OverviewDecorations {
         prefix: Some("operator prefix".to_string()),
-        catalog: Some(catalog_summary()),
+        catalog: Some(catalog_hint()),
         skills: Default::default(),
     };
     let rendered = decorations.render(NO_GRAPH.to_string(), true);
 
     assert!(rendered.starts_with("operator prefix\nNo active graph."));
     assert!(rendered.ends_with(
-        "<query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\"/>"
+        "<query-catalog recipes=\"2\" queries=\"5\" list-tool=\"list_recipe_queries\" run-tool=\"run_recipe_query\" names=\"review.callers, review.resolve, review.search, wells.count, wells.deepest\"/>"
     ));
 }
 
