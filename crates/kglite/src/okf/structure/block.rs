@@ -23,7 +23,7 @@ use regex::Regex;
 use std::ops::Range;
 use std::sync::OnceLock;
 
-/// One note body's blocks, headings, block ids and comments.
+/// One note body's blocks, headings, block ids, comments and directives.
 ///
 /// `blocks` is in document order. A block's `heading` and `inside` are indices
 /// into `headings` and `blocks` respectively, so attribution ("which section is
@@ -43,6 +43,31 @@ pub(crate) struct BlockTree {
     /// the block around it, which is why these are ranges to mask rather than
     /// blocks or skipped regions: `` [`file.md`](file.md) `` is still a link.
     pub code_spans: Vec<Range<usize>>,
+    /// `<!-- kglite … -->` blocks, in document order (VAULT.md §5.8). Unlike
+    /// [`BlockTree::comments`] these keep their [`Block`] — a directive is one
+    /// whole HTML block and nothing else, which is exactly what makes it
+    /// addressable as "this block is metadata, drop it".
+    pub directives: Vec<Directive>,
+}
+
+/// One `<!-- kglite <key>[: <value>] -->` block (VAULT.md §5.8).
+///
+/// Recorded here and given meaning elsewhere: this module decides only that
+/// the author wrote the documented shape on a line of its own.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Directive {
+    /// The key as written. **Empty** for `<!-- kglite -->`, which names none —
+    /// the shape is recorded anyway so the build can say so (§9).
+    pub key: String,
+    /// Everything after the first `:`, trimmed; `None` when the directive
+    /// carries no `:` at all. Raw: the value's own grammar is §4.2's, and
+    /// parsing it is the consumer's job.
+    pub raw_value: Option<String>,
+    /// The whole HTML block, its trailing newline included — the range a
+    /// consumer subtracts to drop the directive from a text property.
+    pub range: Range<usize>,
+    /// Index into [`BlockTree::blocks`] of the block this directive is.
+    pub block: usize,
 }
 
 /// An ATX or setext heading.
@@ -205,6 +230,7 @@ pub(crate) fn parse_blocks(body: &str) -> BlockTree {
     tree.comments = scan_comments(body, &tree.blocks);
     drop_commented_headings(&mut tree, body.len());
     tree.block_ids = scan_block_ids(body, &tree.blocks);
+    tree.directives = scan_directives(body, &tree.blocks);
     tree
 }
 
@@ -700,6 +726,67 @@ fn scan_comments(body: &str, blocks: &[Block]) -> Vec<Range<usize>> {
         cursor = end;
     }
     out
+}
+
+/// `<!-- kglite … -->` directives (VAULT.md §5.8), one per HTML block that is
+/// nothing but such a comment.
+///
+/// Only a *block* qualifies. An inline `<!-- kglite … -->` written inside a
+/// paragraph is one of that paragraph's inline events and never opens an HTML
+/// block, so prose that happens to mention the syntax stays prose — which is
+/// also what keeps this spec from changing what a body renders as.
+fn scan_directives(body: &str, blocks: &[Block]) -> Vec<Directive> {
+    let mut out = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        if !matches!(block.kind, BlockKind::HtmlBlock) {
+            continue;
+        }
+        if let Some((key, raw_value)) = directive_parts(&body[block.range.clone()]) {
+            out.push(Directive {
+                key,
+                raw_value,
+                range: block.range.clone(),
+                block: index,
+            });
+        }
+    }
+    out
+}
+
+/// Split one HTML block's source into a directive's `(key, value)`.
+///
+/// The whole block must be the comment — `<!-- kglite chunk --> trailing` is
+/// a comment somebody wrote beside prose, not a directive — and the literal
+/// `kglite` must be a word of its own, so `<!-- kglitex … -->` is untouched.
+/// A key that is not spelled like a frontmatter key (a letter or `_`, then
+/// letters, digits, `_`, `-` or `.`) names nothing this format can use, so
+/// that comment stays prose too.
+fn directive_parts(src: &str) -> Option<(String, Option<String>)> {
+    let inner = src
+        .trim()
+        .strip_prefix("<!--")?
+        .strip_suffix("-->")?
+        .trim_start();
+    let rest = inner.strip_prefix("kglite")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        // `<!-- kglite -->`: the shape without the key it needs.
+        return Some((String::new(), None));
+    }
+    let (key, value) = match rest.split_once(':') {
+        Some((key, value)) => (key.trim(), Some(value.trim().to_string())),
+        None => (rest, None),
+    };
+    is_directive_key(key).then(|| (key.to_string(), value))
+}
+
+fn is_directive_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 /// `^block-id` anchors, in the three placements Obsidian allows: trailing a

@@ -117,6 +117,15 @@ pub(crate) fn scan_regions(body: &str, tree: &BlockTree) -> Vec<Range<usize>> {
         cuts.insert(comment.end);
         skipped.push(comment.clone());
     }
+    // A `<!-- kglite … -->` directive is metadata and not prose (VAULT.md
+    // §5.8), so it is skipped like a comment: the wikilink in
+    // `<!-- kglite address: [[Wells]] -->` is the directive's value and must
+    // not also become a plain link from the note.
+    for directive in &tree.directives {
+        cuts.insert(directive.range.start);
+        cuts.insert(directive.range.end);
+        skipped.push(directive.range.clone());
+    }
     let cuts: Vec<usize> = cuts.into_iter().collect();
     cuts.windows(2)
         .map(|w| w[0]..w[1])

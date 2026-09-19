@@ -8,6 +8,7 @@
 //! consistency the structure pass is allowed to assume.
 
 use super::*;
+use crate::okf::structure::scan_regions;
 use std::path::{Path, PathBuf};
 
 fn slice<'a>(body: &'a str, range: &Range<usize>) -> &'a str {
@@ -605,4 +606,116 @@ fn every_golden_range_slices_back_into_its_own_body() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// `<!-- kglite … -->` directives (VAULT.md §5.8)
+// ---------------------------------------------------------------------------
+
+fn directives(tree: &BlockTree) -> Vec<(&str, Option<&str>)> {
+    tree.directives
+        .iter()
+        .map(|d| (d.key.as_str(), d.raw_value.as_deref()))
+        .collect()
+}
+
+#[test]
+fn an_own_line_directive_is_recorded_with_its_key_value_and_range() {
+    let body = "# H\n\npara\n\n<!-- kglite address: Data tree -> Wells | Task pane -->\n\ntail\n";
+    let tree = parse_blocks(body);
+    assert_eq!(
+        directives(&tree),
+        vec![("address", Some("Data tree -> Wells | Task pane"))]
+    );
+    let directive = &tree.directives[0];
+    assert_eq!(
+        slice(body, &directive.range),
+        "<!-- kglite address: Data tree -> Wells | Task pane -->\n"
+    );
+    assert_eq!(
+        tree.blocks[directive.block].kind,
+        BlockKind::HtmlBlock,
+        "a directive names the HTML block it is"
+    );
+}
+
+#[test]
+fn a_valueless_directive_records_no_value() {
+    let body = "para\n\n<!--   kglite   chunk   -->\n\ntail\n";
+    let tree = parse_blocks(body);
+    assert_eq!(directives(&tree), vec![("chunk", None)]);
+}
+
+#[test]
+fn an_inline_kglite_comment_stays_prose() {
+    let body = "A paragraph <!-- kglite address: nope --> and more.\n";
+    let tree = parse_blocks(body);
+    assert_eq!(kinds(&tree), vec!["para"]);
+    assert!(tree.directives.is_empty());
+}
+
+#[test]
+fn a_non_kglite_html_comment_is_not_a_directive() {
+    let body = "para\n\n<!-- just a note -->\n\n<!-- kglitex address: no -->\n\ntail\n";
+    let tree = parse_blocks(body);
+    assert!(tree.directives.is_empty(), "{:?}", directives(&tree));
+    assert_eq!(kinds(&tree), vec!["para", "html", "html", "para"]);
+}
+
+/// A comment block that only *starts* like a directive is prose: the whole
+/// block must be the comment, or the author wrote something else.
+#[test]
+fn a_directive_with_trailing_text_on_its_line_is_not_one() {
+    let body = "para\n\n<!-- kglite chunk --> trailing\n\ntail\n";
+    let tree = parse_blocks(body);
+    assert!(tree.directives.is_empty(), "{:?}", directives(&tree));
+}
+
+/// A key that is not spelled like a frontmatter key names nothing, so the
+/// comment stays the prose it is.
+#[test]
+fn a_directive_whose_key_is_not_a_key_is_not_one() {
+    let body = "<!-- kglite two words -->\n\n<!-- kglite 9lives: x -->\n";
+    let tree = parse_blocks(body);
+    assert!(tree.directives.is_empty(), "{:?}", directives(&tree));
+}
+
+/// `<!-- kglite -->` names no key. It is still recorded — the author plainly
+/// reached for a directive — with an empty key, which is what the build warns
+/// about (VAULT.md §5.8, §9).
+#[test]
+fn a_keyless_directive_is_recorded_with_an_empty_key() {
+    let body = "para\n\n<!-- kglite -->\n\ntail\n";
+    let tree = parse_blocks(body);
+    assert_eq!(directives(&tree), vec![("", None)]);
+}
+
+#[test]
+fn consecutive_directive_lines_are_two_directives() {
+    let body = "<!-- kglite a: 1 -->\n<!-- kglite b: 2 -->\n\npara\n";
+    let tree = parse_blocks(body);
+    assert_eq!(directives(&tree), vec![("a", Some("1")), ("b", Some("2"))]);
+    assert_eq!(
+        slice(body, &tree.directives[0].range),
+        "<!-- kglite a: 1 -->\n"
+    );
+    assert_eq!(
+        slice(body, &tree.directives[1].range),
+        "<!-- kglite b: 2 -->\n"
+    );
+}
+
+/// A directive is metadata, not prose: it is never scanned, so a wikilink or
+/// a tag written inside one mints nothing on its own (VAULT.md §5.1, §5.8).
+#[test]
+fn a_directive_is_not_a_scan_region() {
+    let body = "para\n\n<!-- kglite address: [[Wells]] #here -->\n\ntail\n";
+    let tree = parse_blocks(body);
+    let directive = tree.directives[0].range.clone();
+    assert!(
+        !scan_regions(body, &tree)
+            .iter()
+            .any(|r| r.start >= directive.start && r.end <= directive.end),
+        "the directive's own bytes are skipped"
+    );
 }

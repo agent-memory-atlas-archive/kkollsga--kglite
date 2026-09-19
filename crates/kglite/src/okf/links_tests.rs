@@ -1203,3 +1203,66 @@ fn only_the_vault_dialect_reads_a_typed_link() {
     assert_eq!(got.links[0].conn_type, "LINKS_TO");
     assert!(got.warnings.is_empty());
 }
+
+// ---- tag offsets (VAULT.md §5.5; the anchor a derived node attaches by) ----
+
+/// `(name, the `#tag` token sliced back out of the body)` for every
+/// occurrence, so a wrong range is a wrong string and not a wrong number.
+fn tag_spans<'b>(body: &'b str, got: &'b Extraction) -> Vec<(&'b str, &'b str)> {
+    got.tag_spans
+        .iter()
+        .map(|t| (t.name.as_str(), &body[t.range.clone()]))
+        .collect()
+}
+
+#[test]
+fn every_tag_occurrence_carries_the_range_of_its_own_token() {
+    let body = concat!(
+        "# Heading #inhead\n",
+        "A #plain tag and a #kebab-case/nested one.\n",
+        "#plain again is the same tag written twice.\n",
+    );
+    let got = extract(body, "", &vault());
+    assert_eq!(
+        tag_spans(body, &got),
+        vec![
+            ("inhead", "#inhead"),
+            ("plain", "#plain"),
+            ("kebab-case/nested", "#kebab-case/nested"),
+            ("plain", "#plain"),
+        ],
+        "every occurrence, in body order"
+    );
+    assert_eq!(
+        got.tags,
+        vec!["inhead", "plain", "kebab-case/nested"],
+        "the deduplicated names are unchanged"
+    );
+}
+
+#[test]
+fn tag_ranges_survive_a_table_cell_and_a_callout() {
+    let body = concat!(
+        "> [!warning] Careful\n",
+        "> Tagged #incallout here.\n",
+        "\n",
+        "| a | b |\n",
+        "|---|---|\n",
+        "| #incell | plain |\n",
+    );
+    let got = extract(body, "", &vault());
+    assert_eq!(
+        tag_spans(body, &got),
+        vec![("incallout", "#incallout"), ("incell", "#incell")]
+    );
+}
+
+/// A code span is masked before the scan, and the mask must be byte-for-byte
+/// as long as what it hides — otherwise every offset after a span holding a
+/// multi-byte character is wrong.
+#[test]
+fn a_multibyte_code_span_does_not_shift_the_tags_after_it() {
+    let body = "Prose `café #nope` then #after it.\n";
+    let got = extract(body, "", &vault());
+    assert_eq!(tag_spans(body, &got), vec![("after", "#after")]);
+}

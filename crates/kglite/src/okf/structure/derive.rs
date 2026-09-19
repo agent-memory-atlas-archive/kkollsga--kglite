@@ -88,6 +88,14 @@ pub(crate) fn derive(
 ) -> Derived {
     let mut out = Derived::default();
     let mut ids = IdSpace::default();
+    // `<!-- kglite -->` is the directive shape without the key it needs
+    // (VAULT.md §5.8). It is still cut out of every text below, so saying so
+    // is the only way the author learns the line did nothing.
+    for _ in tree.directives.iter().filter(|d| d.key.is_empty()) {
+        out.warnings.push(
+            "`<!-- kglite -->` names no key; nothing was recorded (VAULT.md §5.8)".to_string(),
+        );
+    }
     let sections = profile
         .sections
         .as_ref()
@@ -257,7 +265,7 @@ fn derive_sections(
             section: parent_suffix,
             heading_path: heading.path.clone(),
             section_title: Some(heading.text.clone()),
-            text: Some(trimmed(body, heading.body_range.clone())),
+            text: Some(trimmed(body, tree, heading.body_range.clone())),
             props: vec![
                 ("title".to_string(), Value::String(heading.text.clone())),
                 ("level".to_string(), Value::Int64(heading.level as i64)),
@@ -331,7 +339,7 @@ fn derive_chunks(
                     "duplicate derived id `{wanted}`: the second one takes `{suffix}`"
                 ));
             }
-            let text = trimmed(body, packed.range.clone());
+            let text = trimmed(body, tree, packed.range.clone());
             out.edges.push(DerivedEdge {
                 conn_type: rule.edge.clone(),
                 source: container.clone(),
@@ -381,6 +389,12 @@ fn chunkable_groups(tree: &BlockTree) -> Vec<Group> {
         // the block above it, which `pack` reads, and its own paragraph is not
         // text a reader sees.
         if is_own_line_block_id(tree, index) {
+            continue;
+        }
+        // A `<!-- kglite … -->` block is metadata, not prose (VAULT.md §5.8).
+        // Dropping it here keeps it from being a chunk of its own; the bytes
+        // a chunk spanning *over* it would still carry are cut by `trimmed`.
+        if tree.directives.iter().any(|d| d.block == index) {
             continue;
         }
         match groups.last_mut() {
@@ -648,9 +662,34 @@ fn block_id_of(tree: &BlockTree, block: usize) -> Option<String> {
         .map(|id| id.id.clone())
 }
 
-/// A derived node's verbatim slice, trailing blank lines trimmed (§7.1).
-fn trimmed(body: &str, range: std::ops::Range<usize>) -> String {
-    body[range].trim_end().to_string()
+/// A derived node's verbatim slice, with every `<!-- kglite … -->` directive
+/// inside it cut out and trailing blank lines trimmed (§5.8, §7.1).
+///
+/// The cut is pure range subtraction: a directive's own line goes, its
+/// trailing newline included, and **every other byte is the author's own**.
+/// So a directive written between two paragraphs leaves behind both of the
+/// blank lines that separated it from them, and the text reads one blank line
+/// wider than a source without the directive would have. That is the price of
+/// the rule that matters more — nothing but the directive moves, so editing a
+/// directive cannot change the `chunk_hash` of a passage it does not sit in.
+fn trimmed(body: &str, tree: &BlockTree, range: std::ops::Range<usize>) -> String {
+    let cuts: Vec<&std::ops::Range<usize>> = tree
+        .directives
+        .iter()
+        .map(|directive| &directive.range)
+        .filter(|cut| cut.start >= range.start && cut.end <= range.end)
+        .collect();
+    if cuts.is_empty() {
+        return body[range].trim_end().to_string();
+    }
+    let mut out = String::with_capacity(range.len());
+    let mut at = range.start;
+    for cut in cuts {
+        out.push_str(&body[at..cut.start]);
+        at = cut.end;
+    }
+    out.push_str(&body[at..range.end]);
+    out.trim_end().to_string()
 }
 
 /// `chunk_hash`: the SHA-256 of the chunk's text, lowercase hex (VAULT.md

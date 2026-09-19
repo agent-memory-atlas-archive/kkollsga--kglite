@@ -208,6 +208,48 @@ fn embed_text_is_materialised_from_the_template() {
     );
 }
 
+/// A directive never reaches an embedding: `embed_text` renders the chunk's
+/// own `text`, which the cut already happened to (VAULT.md §5.8, §7.1).
+#[test]
+fn a_directive_is_absent_from_embed_text_and_from_the_section_and_chunk_texts() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "note.md",
+        "# One\n\nbefore\n\n<!-- kglite address: Data tree -> Wells -->\n\nafter\n",
+    );
+    let g = vault_build_with(dir.path(), |profile| {
+        profile.structure = Some(StructureProfile {
+            sections: Some(sections()),
+            chunks: Some(chunks()),
+            embed_text: Some("{title}\n\n{text}".into()),
+            ..StructureProfile::default()
+        });
+    })
+    .graph;
+    for (id, name) in [
+        ("note#One", "text"),
+        ("note#One~chunk1", "text"),
+        ("note#One~chunk1", "embed_text"),
+    ] {
+        let Some(Value::String(text)) = property(&g, id, name) else {
+            panic!("no `{name}` on `{id}`");
+        };
+        assert!(!text.contains("kglite"), "`{id}`.{name} = {text:?}");
+        assert!(
+            text.contains("before") && text.contains("after"),
+            "{text:?}"
+        );
+    }
+    assert_eq!(
+        property(&g, "note", "body"),
+        Some(Value::String(
+            "# One\n\nbefore\n\n<!-- kglite address: Data tree -> Wells -->\n\nafter\n".to_string()
+        )),
+        "the note's own body is verbatim: the export writes it back byte for byte"
+    );
+}
+
 #[test]
 fn declared_types_reach_a_derived_property() {
     let dir = tempdir().unwrap();

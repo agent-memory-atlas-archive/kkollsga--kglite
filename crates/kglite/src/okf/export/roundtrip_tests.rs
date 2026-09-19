@@ -962,3 +962,43 @@ impl Trip {
         self._dirs[0].path()
     }
 }
+
+/// A `<!-- kglite … -->` directive is metadata to the *graph* and prose to the
+/// *file*: nothing derived carries it, and the body property still holds it
+/// byte for byte, so it travels an export unchanged (VAULT.md §5.8, §10.9).
+#[test]
+fn a_directive_survives_the_round_trip_byte_for_byte() {
+    let files: &[(&str, &str)] = &[
+        (
+            ".kglite/vault.yaml",
+            "kglite_vault: 1\ndefault_label: Note\nstructure:\n  \
+             sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}\n  \
+             chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_words: 650, max_chars: 6000}\n",
+        ),
+        (
+            "Annotations.md",
+            "---\ntitle: Annotations\n---\n### Annotation Table\n\n\
+             To open the **Annotation Table** dialog box, click the button.\n\n\
+             <!-- kglite address: Data tree -> Wells | Task pane -->\n\n\
+             Then pick a well.\n",
+        ),
+    ];
+    let dir = vault_of(files);
+    let trip = Trip::carrying_config(dir.path());
+    trip.assert_byte_identical_from_the_first_export("directives");
+    let exported = String::from_utf8(trip.exports[0]["Note/Annotations.md"].clone()).unwrap();
+    assert!(
+        exported.contains("<!-- kglite address: Data tree -> Wells | Task pane -->"),
+        "the export wrote the author's own directive line back: {exported}"
+    );
+    // And the graph read from it never carried the directive as prose.
+    let chunk = trip
+        .second
+        .props("Chunk", "Annotations#Annotation Table~chunk1")
+        .expect("the chunk the two paragraphs packed into");
+    assert!(
+        !chunk["text"].contains("kglite"),
+        "the chunk is prose only: {:?}",
+        chunk["text"]
+    );
+}

@@ -729,3 +729,73 @@ fn a_block_over_max_words_splits_at_its_line_boundaries_too() {
     );
     assert_eq!(d.forced_splits, 2);
 }
+
+// ---------------------------------------------------------------------------
+// `<!-- kglite … -->` directives are metadata, not prose (VAULT.md §5.8)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_directive_is_cut_out_of_the_chunk_it_sits_in() {
+    let body = concat!(
+        "# Annotation Table\n",
+        "\n",
+        "To open the **Annotation Table** dialog box, click the button.\n",
+        "\n",
+        "<!-- kglite address: Data tree -> Wells | Task pane -->\n",
+        "\n",
+        "Then pick a well.\n",
+    );
+    let d = run(body, &both(650, 6000));
+    let text = text_of(&d, "#Annotation Table~chunk1");
+    assert!(
+        !text.contains("kglite"),
+        "the directive is not chunk text: {text:?}"
+    );
+    assert!(text.starts_with("To open the **Annotation Table** dialog box, click the button."));
+    assert!(text.ends_with("Then pick a well."));
+}
+
+#[test]
+fn a_directive_is_cut_out_of_the_section_text_around_it() {
+    let body = concat!(
+        "# One\n",
+        "\n",
+        "before\n",
+        "\n",
+        "<!-- kglite address: somewhere -->\n",
+        "\n",
+        "after\n",
+    );
+    let d = run(body, &sections_only());
+    // Both blank lines that separated the directive from its neighbours stay:
+    // the cut is the directive's own range and nothing more.
+    assert_eq!(text_of(&d, "#One"), "\nbefore\n\n\nafter");
+}
+
+#[test]
+fn a_directive_above_the_first_heading_is_cut_out_too() {
+    let body = "<!-- kglite owner: docs -->\n\nlead-in prose\n\n# One\n\nbody\n";
+    let d = run(body, &both(650, 6000));
+    assert_eq!(text_of(&d, "~chunk1"), "lead-in prose");
+}
+
+/// Two directives around one paragraph leave the paragraph and nothing else.
+#[test]
+fn directives_on_both_sides_of_a_paragraph_leave_only_the_paragraph() {
+    let body = "<!-- kglite a: 1 -->\n\npara\n\n<!-- kglite b: 2 -->\n";
+    let d = run(body, &both(650, 6000));
+    assert_eq!(text_of(&d, "~chunk1"), "para");
+}
+
+/// `<!-- kglite -->` names no key, so it can carry no meaning — but it is
+/// still the author reaching for a directive, and the build says so (§9).
+#[test]
+fn a_keyless_directive_warns() {
+    let body = "# One\n\npara\n\n<!-- kglite -->\n";
+    let d = run(body, &both(650, 6000));
+    assert_eq!(
+        d.warnings,
+        vec!["`<!-- kglite -->` names no key; nothing was recorded (VAULT.md §5.8)"]
+    );
+    assert_eq!(text_of(&d, "#One~chunk1"), "para");
+}

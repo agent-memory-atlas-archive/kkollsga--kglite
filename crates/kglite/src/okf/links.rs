@@ -194,7 +194,8 @@ fn conn_from_title(title: &str) -> Option<String> {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Extraction {
     pub links: Vec<Link>,
-    /// Inline `#tag` names in first-use order; always empty unless
+    /// Inline `#tag` names in first-use order, deduplicated — the hub's view
+    /// of the body (VAULT.md §5.5). Always empty unless
     /// [`Profile::inline_tags`] is set.
     pub tags: Vec<String>,
     /// `![…]` references in body order; always empty unless
@@ -212,6 +213,20 @@ pub struct Extraction {
     /// wikilink that names no edge type (VAULT.md §5.3). The caller prefixes
     /// the note's own path, as it does for [`Extraction::path_errors`].
     pub(crate) warnings: Vec<String>,
+    /// **Every** inline `#tag` occurrence with the byte range of its own
+    /// token, in body order — what [`Extraction::tags`] is deduplicated from.
+    /// A tag is attributed to the innermost derived node whose range contains
+    /// it (VAULT.md §7.1), and a name alone cannot say which node that is.
+    pub(crate) tag_spans: Vec<TagRef>,
+}
+
+/// One inline `#tag` where it was written.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TagRef {
+    /// The tag name, `#` excluded, exactly as [`Extraction::tags`] spells it.
+    pub name: String,
+    /// The `#tag` token itself, `#` included, as a range into the body.
+    pub range: std::ops::Range<usize>,
 }
 
 /// Extract resolved outbound links (and, in a vault, inline tags) from a
@@ -255,11 +270,22 @@ pub(crate) fn extract_with_tree(
         if profile.inline_tags {
             // Per line: a tag is a line-local token, and an inline code span
             // opened on one line does not reach across to hide one on another.
-            for line in text.masked.lines() {
-                scan_tags(line, &mut out.tags);
+            // `split_inclusive` and not `lines`, because the running offset
+            // has to count the newline each line ends with.
+            let mut at = range.start;
+            for line in text.masked.split_inclusive('\n') {
+                scan_tags(line, at, &mut out.tag_spans);
+                at += line.len();
             }
         }
         region.scan(text, &mut out);
+    }
+    // The hub's list is the span list deduplicated, so the two can never
+    // disagree about what the body says (VAULT.md §5.5).
+    for tag in &out.tag_spans {
+        if !out.tags.contains(&tag.name) {
+            out.tags.push(tag.name.clone());
+        }
     }
     out
 }
@@ -668,11 +694,14 @@ fn embeds_a_note(name: &str) -> bool {
     }
 }
 
-/// Collect inline `#tag` names from one line (VAULT.md §5.5). A tag starts at
-/// a `#` that opens the line or follows whitespace, so a URL fragment
-/// (`…/x#frag`) and a wikilink anchor (`[[Note#Sec]]`) are not tags; inline
-/// code spans are masked out first, and fenced blocks never reach here.
-fn scan_tags(line: &str, out: &mut Vec<String>) {
+/// Collect inline `#tag` occurrences from one line (VAULT.md §5.5). A tag
+/// starts at a `#` that opens the line or follows whitespace, so a URL
+/// fragment (`…/x#frag`) and a wikilink anchor (`[[Note#Sec]]`) are not tags;
+/// inline code spans are masked out first, and fenced blocks never reach here.
+///
+/// `base` is the line's own offset in the body, so every range collected here
+/// indexes the body and not the line.
+fn scan_tags(line: &str, base: usize, out: &mut Vec<TagRef>) {
     let masked = mask_code_spans(line);
     let mut cursor = 0;
     while let Some(pos) = masked[cursor..].find('#') {
@@ -696,15 +725,20 @@ fn scan_tags(line: &str, out: &mut Vec<String>) {
             continue;
         }
         cursor = at + 1 + name.len();
-        if !out.contains(&name) {
-            out.push(name);
-        }
+        out.push(TagRef {
+            range: base + at..base + cursor,
+            name,
+        });
     }
 }
 
 /// Replace inline code spans (and their backticks) with NUL, so a `#` inside
 /// one is invisible to [`scan_tags`] and a `#` glued to a span's closing
 /// backtick still counts as glued rather than as following whitespace.
+///
+/// One NUL **per byte**, not per character: [`scan_tags`] reports the byte
+/// range of every tag it finds, so a mask that shortened a span holding a
+/// multi-byte character would move every tag after it.
 fn mask_code_spans(line: &str) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
@@ -739,8 +773,10 @@ fn mask_code_spans(line: &str) -> String {
         };
         // An unmatched run masks only itself: the rest of the line is prose.
         let end = close.unwrap_or(i);
-        for _ in open..end {
-            out.push('\u{0}');
+        for masked in &chars[open..end] {
+            for _ in 0..masked.len_utf8() {
+                out.push('\u{0}');
+            }
         }
         i = end;
     }

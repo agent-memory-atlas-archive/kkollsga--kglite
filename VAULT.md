@@ -315,15 +315,17 @@ folder layout would have.
 | `[![alt](thumb.png)](full.png)` | A thumbnail linking to the full picture: **both halves count**. The inner image is a reference to `thumb.png` and the outer link is one to `full.png` — or an ordinary note link when it names a `.md` file. The outer reference wears the inner `alt`. |
 | `https://…` | An external `Source` node keyed by the URL. |
 
-**A fenced code block (``` or `~~~`), a `%%comment%%` (§5.7) and the inside of
-an inline `` `code span` `` are the only regions that are not scanned.** A
+**A fenced code block (``` or `~~~`), a `%%comment%%` (§5.7), a
+`<!-- kglite … -->` directive (§5.8) and the inside of an inline
+`` `code span` `` are the only regions that are not scanned.** A
 fence ends at its own delimiter, so a `~~~` line written inside a ``` block is
 code like everything else between them. A code span is rendered literally, in
 every dialect, so `` `[[Note]]` `` states no link, `` `#tag` `` no tag and
 `` `![x](y.png)` `` no picture — while the span is still ordinary inline text
 to what is written *around* it, so ``[`file.md`](file.md)`` is one link whose
 display text happens to be code.
-Indented four-space code is **not** exempt, and neither is an HTML block:
+Indented four-space code is **not** exempt, and neither is an HTML block
+that is not a directive (§5.8):
 honouring CommonMark's indented-code rule would also swallow every list
 continuation line, which is where a converter writes most of its links. Fence
 whatever must not be read — and write `\[\[` for a literal `[[`, which is the
@@ -471,9 +473,9 @@ declared. Turning callouts into *nodes* is what `structure:` adds (§7.1).
 **Comments.** `%%…%%` hides text from a reader: inline, `a %%hidden%% word`, and
 as a block, where the opening and closing `%%` sit on lines of their own. A
 comment's text is **never scanned** — no link, no tag, no attachment reference
-and no heading is read out of it — which makes it the only region besides a
-fenced code block with that property (§5.1). It is still part of the body
-property, verbatim, and it still travels through an export.
+and no heading is read out of it — a property it shares with a fenced code
+block and a directive (§5.1, §5.8). It is still part of the body property,
+verbatim, and it still travels through an export.
 
 **Block ids.** A trailing ` ^id` names a block, so `[[Note#^id]]` links to
 exactly that block rather than to the note. The id may hold **Latin letters,
@@ -506,6 +508,43 @@ displays the type, and this spec stores nothing. Callouts nest.
 
 A callout's body is prose like any other: its links, tags and images are
 scanned — a callout is not a comment — and its `section` is the heading above it.
+
+### 5.8 Directives
+
+```markdown
+<!-- kglite owner: docs -->
+<!-- kglite address: Data tree -> Wells | Task pane: Wells -> Annotations table -->
+```
+
+An HTML comment of the form `<!-- kglite <key>[: <value>] -->`, **on a line of
+its own**, is a directive: an instruction to the reader written where it
+applies, in syntax Obsidian already hides from a rendered note. Whitespace
+inside the comment is free. `kglite` must be a word of its own, so
+`<!-- kglitex … -->` is an ordinary comment, and so is every HTML comment that
+does not open with the literal. The key is spelled like a frontmatter key — a
+letter or `_`, then letters, digits, `_`, `-` or `.` — and everything after the
+first `:` is the value, trimmed. A comment that only starts like a directive
+(`<!-- kglite owner: docs --> and more`) is prose, because the whole block must be
+the comment.
+
+**Only a block counts.** A `<!-- kglite … -->` written *inside* a paragraph is
+inline HTML and stays prose, so a note may document the syntax without
+invoking it. `<!-- kglite -->`, which names no key, is recognised as the shape
+it is and warned about (§9); it carries no meaning.
+
+**A directive is not prose.** Its own bytes are never scanned — no link, no
+tag and no attachment is read out of one, exactly as for a `%%comment%%`
+(§5.1) — and where `structure:` derives nodes (§7.1) the directive's line is
+**cut out of every derived `text`**: a section's, a chunk's, and the
+`embed_text` rendered from either. The cut is the directive's own range and
+nothing more, so the blank lines around it stay and every other byte is the
+author's own. The note's `body` property keeps the directive verbatim, which
+is what lets an export write the file back byte for byte (§10).
+
+A directive is recognised — and skipped — in every dialect; what a key
+*means* is defined where the feature it configures is. A key this build does
+not know is recorded and otherwise ignored, so a vault may carry a directive a
+later kglite will read.
 
 ## 6. Attachments
 
@@ -749,7 +788,8 @@ block is not one, because that region is not scanned at all (§5.1).
 - **Properties**: `title`, `level` (1–6), `ordinal` (0-based among its
   siblings), `path` (the list of titles the id joins), `text` (the body verbatim
   from the line after the heading to the next heading of the same or higher
-  level, trailing blank lines trimmed), `note_id`, plus every `inherit:`
+  level, trailing blank lines trimmed and any `<!-- kglite … -->` directive
+  cut out, §5.8), `note_id`, plus every `inherit:`
   property. The note's own `body` property is untouched and still holds the
   whole body — deriving sections moves nothing out of the prose.
 - **Edges**: `edge` joins the note to each of its top-level sections and a
@@ -797,8 +837,10 @@ fix.
   and splits, the id keys its **first** piece — the one `[[Note#^id]]` was
   pointing at while the block still fitted.
 - **Properties**: `text` (the packed blocks verbatim, spaced as the source
-  spaced them), `ordinal` (0-based within the section), `chunk_hash` (the
-  SHA-256 of `text`, lowercase hex), `note_id`, `section_id`, plus `inherit:`.
+  spaced them, less any `<!-- kglite … -->` directive they contain — a
+  directive is metadata and never chunk text, §5.8), `ordinal` (0-based within
+  the section), `chunk_hash` (the SHA-256 of `text`, lowercase hex),
+  `note_id`, `section_id`, plus `inherit:`.
 - **Embeddings survive a rewrite.** A rebuild carries vectors by `(label, id)`
   (§12) and then, for anything this block derived, by `(label, chunk_hash)`
   where exactly one old node of that label carried the hash — so a chunk that
@@ -1141,6 +1183,7 @@ findings. The classification is the contract.
 | A table row whose key is empty or already used, which keys on its position instead; a `key_column:` the table does not carry, which falls back to the first column. | §7.1 |
 | An edge table with no target column, which states nothing, or one whose column repeats a property the link itself carries, which is dropped. | §7.1 |
 | A `structure:` rule that matched nothing anywhere in the vault — for an edge table, one that stated no edge. | §7.1 |
+| A `<!-- kglite -->` directive naming no key. Its line is still cut out of the derived text, and it carries no meaning. | §5.8 |
 | An `edge_defaults:` entry whose property the edge already carries, or whose edge type the vault has none of. | §7.2 |
 | A missing attachment, or an ambiguous bare filename (which resolves to nothing, and the warning names the candidates). | §6.6 |
 | A case-insensitive id collision — two ids differing only in case. | §3 |
