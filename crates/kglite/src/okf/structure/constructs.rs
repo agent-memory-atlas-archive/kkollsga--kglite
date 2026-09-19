@@ -129,6 +129,10 @@ pub(super) fn derive_callouts(
             section: place.section,
             heading_path: place.heading_path,
             section_title: place.section_title,
+            // The whole blockquote, marker line included: a nested callout's
+            // range is inside its parent's, which is what makes the innermost
+            // one the one a tag written in it belongs to (VAULT.md §5.5).
+            range: block.range.clone(),
             text: Some(strip_quote_markers(
                 &ctx.body[quote.inner_text_range.clone()],
                 quote_depth(ctx.tree, index),
@@ -244,6 +248,7 @@ pub(super) fn derive_fences(ctx: &Ctx<'_>, rule: &FenceRule, ids: &mut IdSpace, 
             section: place.section,
             heading_path: place.heading_path,
             section_title: place.section_title,
+            range: block.range.clone(),
             // `code` is the fence's own property (VAULT.md §7.1); an Example
             // carries no `text`, so no `embed_text` is rendered for one.
             text: None,
@@ -346,6 +351,7 @@ pub(super) fn derive_lists(
             section: place.section.clone(),
             heading_path: place.heading_path.clone(),
             section_title: place.section_title.clone(),
+            range: block.range.clone(),
             text: None,
             props: vec![
                 (
@@ -409,6 +415,7 @@ impl StepWalk<'_> {
                 section: self.place.section.clone(),
                 heading_path: self.place.heading_path.clone(),
                 section_title: self.place.section_title.clone(),
+                range: item.range.clone(),
                 text: Some(step_text(self.ctx.body, item)),
                 props: vec![
                     ("ordinal".to_string(), Value::Int64(index as i64)),

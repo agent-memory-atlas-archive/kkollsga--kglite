@@ -1551,3 +1551,39 @@ def test_directive_states_a_section_property_and_a_typed_edge(tmp_path):
 
     body = g.cypher("MATCH (n:Article {concept_id:'annotations'}) RETURN n.body AS b").to_list()[0]["b"]
     assert "<!-- kglite address:" in body, "the note's own prose is verbatim"
+
+
+def test_tag_labels_model_a_tag_as_its_own_node(tmp_path):
+    """VAULT.md §5.5: a tag under a declared prefix becomes a node of its own,
+    joined from the innermost derived node that holds it, and every inline tag
+    lands in a ``tags`` list on that same node — so a paragraph-scoped marker
+    is selectable per chunk instead of per note.
+    """
+    (tmp_path / ".kglite").mkdir()
+    (tmp_path / ".kglite" / "vault.yaml").write_text(
+        "kglite_vault: 1\ndefault_label: Article\n"
+        'tag_labels:\n  "intent/*": {label: Intent, edge: HAS_INTENT}\n'
+        "structure:\n"
+        "  sections: {label: Section, edge: HAS_SECTION}\n"
+        "  chunks: {label: Chunk, edge: HAS_CHUNK, next: NEXT_CHUNK, max_words: 10, max_chars: 200}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "wells.md").write_text(
+        "## Importing wells\n\n"
+        "Use the import dialog. #intent/import-wells\n\n"
+        "The datum is not checked on import. #warning\n",
+        encoding="utf-8",
+    )
+
+    g = okf.build(str(tmp_path), dialect="obsidian")
+    assert g.cypher(
+        "MATCH (c:Chunk)-[:HAS_INTENT]->(i:Intent {id:'import-wells'}) RETURN c.concept_id AS chunk, i.title AS title"
+    ).to_list() == [{"chunk": "wells#Importing wells~chunk1", "title": "import-wells"}]
+
+    assert g.cypher("MATCH (c:Chunk) WHERE 'warning' IN c.tags RETURN c.concept_id AS id").to_list() == [
+        {"id": "wells#Importing wells~chunk2"}
+    ]
+
+    assert g.cypher("MATCH (t:Tag) RETURN t.id AS id ORDER BY id").to_list() == [{"id": "warning"}], (
+        "the modelled tag left the Tag hub; the plain one did not"
+    )

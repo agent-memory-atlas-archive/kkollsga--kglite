@@ -1272,3 +1272,165 @@ fn a_directive_with_no_value_warns_and_states_nothing() {
         out.report.warnings
     );
 }
+
+// ---------------------------------------------------------------------------
+// Inline tags on derived nodes (VAULT.md §5.5, §7.1)
+// ---------------------------------------------------------------------------
+
+/// Sections, chunks and callouts — the three ranges a tag can sit inside at
+/// once, so "innermost" is a decision and not an accident.
+fn sections_chunks_callouts(profile: &mut Profile) {
+    profile.structure = Some(StructureProfile {
+        sections: Some(sections()),
+        chunks: Some(chunks()),
+        callouts: Some(crate::okf::structure::profile::CalloutRule {
+            label: "Note".to_string(),
+            edge: "HAS_NOTE".to_string(),
+        }),
+        ..StructureProfile::default()
+    });
+}
+
+const TAGGED_BODY: &str = "# Grids\n\nOpen the dialog. #intent/create-grid\n\n\
+                           > [!warning] Datum\n> Check it. #intent/verify-datum\n";
+
+fn intent_rule(profile: &mut Profile) {
+    profile.tag_labels.insert(
+        "intent/*".to_string(),
+        crate::okf::model::TagLabelSpec {
+            prefix: "intent/".to_string(),
+            label: "Intent".to_string(),
+            edge: "HAS_INTENT".to_string(),
+        },
+    );
+}
+
+#[test]
+fn a_matched_tag_is_joined_from_the_innermost_derived_node() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "note.md", TAGGED_BODY);
+    let out = vault_build_with(dir.path(), |p| {
+        sections_chunks_callouts(p);
+        intent_rule(p);
+    });
+    let mut intents: Vec<(String, String)> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, conn, _, _)| conn == "HAS_INTENT")
+        .map(|(source, _, target, _)| (source, target))
+        .collect();
+    intents.sort();
+    assert_eq!(
+        intents,
+        vec![
+            // The callout is inside the chunk that packs it, and the chunk is
+            // inside the section: the smallest range containing the tag wins.
+            ("note#Grids~chunk1".to_string(), "create-grid".to_string()),
+            ("note#Grids~note1".to_string(), "verify-datum".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn every_inline_tag_lands_on_the_node_that_holds_it() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "note.md", TAGGED_BODY);
+    let out = vault_build_with(dir.path(), |p| {
+        sections_chunks_callouts(p);
+        intent_rule(p);
+    });
+    let g = &out.graph;
+    assert_eq!(
+        property(g, "note#Grids~chunk1", "tags"),
+        Some(Value::List(vec![Value::String(
+            "intent/create-grid".to_string()
+        )])),
+        "a modelled tag is still written here — the list says what the prose says"
+    );
+    assert_eq!(
+        property(g, "note#Grids~note1", "tags"),
+        Some(Value::List(vec![Value::String(
+            "intent/verify-datum".to_string()
+        )]))
+    );
+}
+
+/// A heading line belongs to its own section (§5.4), tag included — the same
+/// rule a link written on a heading line follows.
+#[test]
+fn a_tag_in_a_heading_line_belongs_to_that_section() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "note.md", "# Grids #reference\n\nbody\n");
+    let out = vault_build_with(dir.path(), with_sections);
+    assert_eq!(
+        property(&out.graph, "note#Grids #reference", "tags"),
+        Some(Value::List(vec![Value::String("reference".to_string())]))
+    );
+}
+
+/// With no rule at all the list is still written: it is what makes a
+/// paragraph-scoped marker (`#unverified`, `#warning`) selectable per chunk.
+#[test]
+fn tags_are_written_on_derived_nodes_without_any_rule() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "note.md",
+        "# A\n\nFirst. #warning #Warning\n\nSecond, untagged.\n",
+    );
+    let out = vault_build_with(dir.path(), |p| {
+        p.structure = Some(StructureProfile {
+            sections: Some(sections()),
+            chunks: Some(ChunkRule {
+                max_chars: 30,
+                ..chunks()
+            }),
+            ..StructureProfile::default()
+        });
+    });
+    let g = &out.graph;
+    assert_eq!(
+        property(g, "note#A~chunk1", "tags"),
+        Some(Value::List(vec![
+            Value::String("warning".to_string()),
+            Value::String("Warning".to_string()),
+        ])),
+        "in first-use order, spelled as written — the hub is where casing folds"
+    );
+    assert_eq!(
+        property(g, "note#A~chunk2", "tags"),
+        None,
+        "a node holding no tag carries no `tags` property at all"
+    );
+    assert_eq!(
+        property(g, "note#A", "tags"),
+        None,
+        "the tag is inside a chunk, so the enclosing section does not also claim it"
+    );
+}
+
+/// The fallback the rule names: no derived node contains the tag, so the note
+/// answers for it — and the note's own `tags` property is untouched, because
+/// that property reports the frontmatter and nothing else (§5.5).
+#[test]
+fn a_tag_outside_every_derived_node_falls_back_to_the_note() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "note.md",
+        "Above every heading. #intent/open #loose\n\n# A\n\nbody\n",
+    );
+    let out = vault_build_with(dir.path(), |p| {
+        p.structure = Some(StructureProfile {
+            sections: Some(sections()),
+            ..StructureProfile::default()
+        });
+        intent_rule(p);
+    });
+    let intents: Vec<(String, String)> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, conn, _, _)| conn == "HAS_INTENT")
+        .map(|(source, _, target, _)| (source, target))
+        .collect();
+    assert_eq!(intents, vec![("note".to_string(), "open".to_string())]);
+    assert_eq!(property(&out.graph, "note", "tags"), None);
+}

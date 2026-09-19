@@ -24,7 +24,8 @@ use crate::datatypes::values::Value;
 use crate::datatypes::PropMap;
 use crate::graph::DirGraph;
 use crate::okf::model::{
-    BuildReport, FolderNoteDirection, HubSpec, LabelFrom, Profile, TAGGED_CONN_TYPE, TAG_LABEL,
+    BuildReport, FolderNoteDirection, HubSpec, LabelFrom, Profile, TagLabelSpec, TAGGED_CONN_TYPE,
+    TAG_LABEL,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +50,7 @@ const TYPE_KEYWORDS: [&str; 7] = ["string", "int", "float", "bool", "date", "dat
 /// (VAULT.md §7): a declaration the reader cannot place is never harmless —
 /// a misspelled `heading_edge:` would leave every link typed by the ladder
 /// with nothing to say so.
-const TOP_LEVEL_KEYS: [&str; 16] = [
+const TOP_LEVEL_KEYS: [&str; 17] = [
     "kglite_vault",
     "default_label",
     "label_from",
@@ -57,6 +58,7 @@ const TOP_LEVEL_KEYS: [&str; 16] = [
     "skip_dirs",
     "folder_notes",
     "hubs",
+    "tag_labels",
     "heading_edges",
     "types",
     "indexes",
@@ -97,6 +99,10 @@ pub struct VaultConfig {
     /// replacing it: §7 says `tags` "can be redeclared like any other", which
     /// only means anything if not redeclaring it leaves it standing.
     pub hubs: BTreeMap<String, HubSpec>,
+    /// `tag_labels:` (VAULT.md §5.5) — tag prefix pattern → the node a tag
+    /// under it becomes. A profile override, like `structure:`, because the
+    /// parse pass has to know which tags leave the `Tag` hub.
+    pub(crate) tag_labels: BTreeMap<String, TagLabelSpec>,
     /// Heading text → edge type, merged over the built-in ladder (§5.3).
     pub heading_edges: BTreeMap<String, String>,
     /// Label → property → one of [`TYPE_KEYWORDS`].
@@ -212,6 +218,9 @@ pub fn parse(text: &str) -> Result<VaultConfig, String> {
     }
     if let Some(v) = map.get("hubs") {
         config.hubs = parse_hubs(v)?;
+    }
+    if let Some(v) = map.get("tag_labels") {
+        config.tag_labels = parse_tag_labels(v)?;
     }
     if let Some(v) = map.get("heading_edges") {
         for (heading, edge) in map_of(v, "heading_edges")?.iter() {
@@ -408,6 +417,62 @@ fn parse_hubs(v: &Value) -> Result<BTreeMap<String, HubSpec>, String> {
     Ok(out)
 }
 
+/// `tag_labels:` — a tag prefix pattern and the node a tag under it becomes
+/// (VAULT.md §5.5).
+///
+/// The pattern is closed to `<prefix>/*` on purpose. A glob is a language, and
+/// every other shape a vault might write — a bare `intent`, a trailing `*`
+/// with no slash, a `*` in the middle — would either match tags the author did
+/// not mean or match none at all and say nothing. Both fields are required:
+/// unlike `hubs:`, there is no built-in rule to inherit a default from.
+fn parse_tag_labels(v: &Value) -> Result<BTreeMap<String, TagLabelSpec>, String> {
+    let mut out = BTreeMap::new();
+    for (pattern, decl) in map_of(v, "tag_labels")?.iter() {
+        let prefix = match pattern.strip_suffix("/*") {
+            Some(prefix) if !prefix.is_empty() && !prefix.contains('*') => format!("{prefix}/"),
+            _ => {
+                return Err(format!(
+                    "`tag_labels.{pattern}` is not a tag prefix pattern; \
+                     a pattern is `<prefix>/*`, as `intent/*` is"
+                ))
+            }
+        };
+        let spec = map_of(decl, &format!("tag_labels.{pattern}"))?;
+        for (field, _) in spec.iter() {
+            if !["label", "edge"].contains(&field) {
+                return Err(format!(
+                    "unknown key `tag_labels.{pattern}.{field}`; accepts `label`, `edge`"
+                ));
+            }
+        }
+        let label = required_string(spec, &format!("tag_labels.{pattern}"), "label")?;
+        let edge = required_string(spec, &format!("tag_labels.{pattern}"), "edge")?;
+        if !is_edge_type(&edge) {
+            return Err(format!(
+                "`tag_labels.{pattern}.edge` is not an edge type; \
+                 edge types are UPPER_SNAKE, as `HAS_INTENT` is"
+            ));
+        }
+        out.insert(
+            pattern.to_string(),
+            TagLabelSpec {
+                prefix,
+                label,
+                edge,
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// A field a rule cannot do without: present, a string, and not empty.
+fn required_string(map: &PropMap, ctx: &str, key: &str) -> Result<String, String> {
+    match opt_string(map, key)? {
+        Some(value) if !value.is_empty() => Ok(value),
+        _ => Err(format!("`{ctx}.{key}` is required")),
+    }
+}
+
 fn parse_types(v: &Value) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
     let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     for (label, props) in map_of(v, "types")?.iter() {
@@ -563,6 +628,9 @@ impl VaultConfig {
         }
         for (key, spec) in &self.hubs {
             profile.hubs.insert(key.clone(), spec.clone());
+        }
+        for (pattern, spec) in &self.tag_labels {
+            profile.tag_labels.insert(pattern.clone(), spec.clone());
         }
         for (heading, edge) in &self.heading_edges {
             profile.heading_edges.insert(heading.clone(), edge.clone());

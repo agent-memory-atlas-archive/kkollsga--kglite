@@ -1113,3 +1113,69 @@ fn a_declared_edge_table_names_an_edge_type_and_a_heading() {
         "{blank}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `tag_labels:` (VAULT.md §5.5, §7)
+// ---------------------------------------------------------------------------
+
+/// The pattern is the whole schema: `<prefix>/*` and nothing else. A rule
+/// spelled any other way would match no tag and say nothing, which is the
+/// reassuring-direction failure a config error exists to prevent.
+#[test]
+fn tag_labels_accepts_a_prefix_rule_and_refuses_every_other_pattern() {
+    let config =
+        parse("kglite_vault: 1\ntag_labels:\n  \"intent/*\": {label: Intent, edge: HAS_INTENT}\n")
+            .expect("the documented shape parses");
+    assert_eq!(
+        config.tag_labels.get("intent/*"),
+        Some(&crate::okf::model::TagLabelSpec {
+            prefix: "intent/".to_string(),
+            label: "Intent".to_string(),
+            edge: "HAS_INTENT".to_string(),
+        })
+    );
+    for pattern in ["intent", "intent/", "*", "*/intent", "intent/*/*", "in*t/*"] {
+        let message = parse(&format!(
+            "kglite_vault: 1\ntag_labels:\n  \"{pattern}\": {{label: Intent, edge: HAS_INTENT}}\n"
+        ))
+        .expect_err("only `<prefix>/*` is a tag pattern");
+        assert!(
+            message.contains(&format!("`tag_labels.{pattern}`")),
+            "the message names the key that is wrong: {message}"
+        );
+    }
+}
+
+/// Both fields are required, and each is spelled the way its kind is spelled
+/// everywhere else in this file.
+#[test]
+fn a_tag_label_rule_names_a_label_and_an_edge_type() {
+    let no_edge = parse("kglite_vault: 1\ntag_labels:\n  \"intent/*\": {label: Intent}\n")
+        .expect_err("a rule with no edge states no relationship");
+    assert!(no_edge.contains("`tag_labels.intent/*.edge`"), "{no_edge}");
+
+    let no_label = parse("kglite_vault: 1\ntag_labels:\n  \"intent/*\": {edge: HAS_INTENT}\n")
+        .expect_err("a rule with no label names no node");
+    assert!(
+        no_label.contains("`tag_labels.intent/*.label`"),
+        "{no_label}"
+    );
+
+    let lowercase =
+        parse("kglite_vault: 1\ntag_labels:\n  \"intent/*\": {label: Intent, edge: has_intent}\n")
+            .expect_err("an edge type is UPPER_SNAKE");
+    assert!(
+        lowercase.contains("`tag_labels.intent/*.edge` is not an edge type"),
+        "{lowercase}"
+    );
+
+    let unknown = parse(
+        "kglite_vault: 1\ntag_labels:\n  \
+         \"intent/*\": {label: Intent, edge: HAS_INTENT, case_insensitive: false}\n",
+    )
+    .expect_err("a field this build does not read is refused by name");
+    assert!(
+        unknown.contains("unknown key `tag_labels.intent/*.case_insensitive`"),
+        "{unknown}"
+    );
+}

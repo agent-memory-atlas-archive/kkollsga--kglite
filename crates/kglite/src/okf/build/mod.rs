@@ -33,7 +33,7 @@ use crate::okf::model::{BuildOptions, BuildReport, ConceptDoc};
 use attachments::build_attachments;
 use edges::build_edges;
 use folders::build_folders;
-use hubs::{build_aux_nodes, build_hubs};
+use hubs::{build_aux_nodes, build_hubs, build_tag_labels};
 use nodes::{build_nodes, declared_pairs, report_unmatched};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
@@ -111,6 +111,10 @@ pub fn build(root: &Path, opts: &BuildOptions) -> Result<BuildOutput, String> {
     // layout can name the same relationship, and two `emit_groups` calls
     // cannot see each other's rows to fold them into one edge.
     let mut groups = build_hubs(&mut graph, &docs, &opts.profile, &mut report)?;
+    merge_groups(
+        &mut groups,
+        build_tag_labels(&mut graph, &docs, &opts.profile, &mut report)?,
+    );
     merge_groups(
         &mut groups,
         build_folders(&mut graph, &docs, &walked.index_files, opts, &mut report)?,

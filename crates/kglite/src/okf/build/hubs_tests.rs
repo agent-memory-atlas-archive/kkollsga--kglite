@@ -9,7 +9,7 @@ use crate::okf::build::tests_support::{
     copy_tree, count_label, edges_of, nodes_with_titles, vault_build, vault_build_with, write,
     EdgeFacts,
 };
-use crate::okf::model::{BuildOptions, HubSpec, TAGGED_CONN_TYPE, TAG_LABEL};
+use crate::okf::model::{BuildOptions, HubSpec, TagLabelSpec, TAGGED_CONN_TYPE, TAG_LABEL};
 use std::path::Path;
 use tempfile::tempdir;
 
@@ -280,4 +280,183 @@ fn synthesizes_tag_and_source_nodes() {
     assert_eq!(count_label(&g, "Source"), 1, "the cited URL");
     // a→alpha, a→beta, b→alpha (TAGGED) + a→source (CITES) = 4 edges
     assert_eq!(g.graph.edge_count(), 4);
+}
+
+// ---------------------------------------------------------------------------
+// `tag_labels:` — the tags a vault models as nodes of their own (VAULT.md §5.5)
+// ---------------------------------------------------------------------------
+
+/// `intent/*` → `Intent`, the shape `.kglite/vault.yaml` declares.
+fn intent_rule() -> (String, TagLabelSpec) {
+    (
+        "intent/*".to_string(),
+        TagLabelSpec {
+            prefix: "intent/".to_string(),
+            label: "Intent".to_string(),
+            edge: "HAS_INTENT".to_string(),
+        },
+    )
+}
+
+/// Every `(conn type, source, target)` of one type, sorted.
+fn edges_typed(out: &crate::okf::build::BuildOutput, conn: &str) -> Vec<(String, String)> {
+    edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, c, _, _)| c == conn)
+        .map(|(source, _, target, _)| (source, target))
+        .collect()
+}
+
+fn note_property(g: &crate::graph::DirGraph, id: &str, key: &str) -> Option<Value> {
+    g.graph.node_indices().find_map(|n| {
+        let view = g.node_view(n)?;
+        (matches!(view.id().as_ref(), Value::String(s) if s == id))
+            .then(|| view.get_property_value(key))
+            .flatten()
+    })
+}
+
+/// The whole of decision 4 for a vault with no `structure:`: a matched tag is
+/// a node of its own, joined from the note, and it is gone from the `Tag` hub.
+#[test]
+fn a_matched_tag_becomes_its_own_node_and_leaves_the_tag_hub() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "a.md",
+        "Open the dialog. #intent/create-grid, and #seismic for the hub.\n",
+    );
+    let out = vault_build_with(dir.path(), |p| {
+        p.tag_labels.extend([intent_rule()]);
+    });
+    assert_eq!(
+        nodes_with_titles(&out.graph, "Intent"),
+        vec![("create-grid".to_string(), "create-grid".to_string())],
+        "the id is the tag text after the prefix"
+    );
+    assert_eq!(
+        nodes_with_titles(&out.graph, TAG_LABEL),
+        vec![("seismic".to_string(), "seismic".to_string())],
+        "a rule takes its tags out of the hub entirely — no `Tag`, no `TAGGED`"
+    );
+    assert_eq!(
+        edges_typed(&out, "HAS_INTENT"),
+        vec![("a".to_string(), "create-grid".to_string())],
+        "with no `structure:` the edge comes from the note"
+    );
+    assert_eq!(
+        edges_typed(&out, TAGGED_CONN_TYPE),
+        vec![("a".to_string(), "seismic".to_string())]
+    );
+}
+
+/// The two forms §5.5 names feed one hub, so a rule takes a tag out of it
+/// whichever way the note wrote it — and the note's own `tags` list still says
+/// what the author typed.
+#[test]
+fn a_matched_frontmatter_tag_leaves_the_hub_and_stays_in_the_tags_property() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "a.md",
+        "---\ntags: [Intent/Create-Grid, seismic]\n---\nprose\n",
+    );
+    let out = vault_build_with(dir.path(), |p| {
+        p.tag_labels.extend([intent_rule()]);
+    });
+    assert_eq!(
+        nodes_with_titles(&out.graph, "Intent"),
+        vec![("create-grid".to_string(), "Create-Grid".to_string())],
+        "the prefix folds case like the hub does; the title keeps the spelling"
+    );
+    assert_eq!(
+        nodes_with_titles(&out.graph, TAG_LABEL),
+        vec![("seismic".to_string(), "seismic".to_string())]
+    );
+    assert_eq!(
+        note_property(&out.graph, "a", "tags"),
+        Some(Value::List(vec![
+            Value::String("Intent/Create-Grid".to_string()),
+            Value::String("seismic".to_string()),
+        ])),
+        "the property reports the frontmatter verbatim; only the modelling changed"
+    );
+}
+
+/// Two rules can cover one family of tags, and the narrower one is the one the
+/// author meant — never whichever the mapping happened to iterate first.
+#[test]
+fn the_longest_matching_prefix_wins() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "a.md", "#intent/grid/create and #intent/open\n");
+    let out = vault_build_with(dir.path(), |p| {
+        p.tag_labels.extend([
+            intent_rule(),
+            (
+                "intent/grid/*".to_string(),
+                TagLabelSpec {
+                    prefix: "intent/grid/".to_string(),
+                    label: "GridIntent".to_string(),
+                    edge: "HAS_GRID_INTENT".to_string(),
+                },
+            ),
+        ]);
+    });
+    assert_eq!(
+        nodes_with_titles(&out.graph, "GridIntent"),
+        vec![("create".to_string(), "create".to_string())]
+    );
+    assert_eq!(
+        nodes_with_titles(&out.graph, "Intent"),
+        vec![("open".to_string(), "open".to_string())],
+        "`intent/*` still takes the tags `intent/grid/*` does not"
+    );
+}
+
+/// A declared rule no tag matched is the same finding a `structure:` rule that
+/// derived nothing is (VAULT.md §9): the declaration is what the vault means
+/// to build, and silence would hide a typo in the prefix.
+#[test]
+fn a_tag_label_rule_no_tag_matched_is_a_warning() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "a.md", "#intents/create-grid is a typo\n");
+    let out = vault_build_with(dir.path(), |p| {
+        p.tag_labels.extend([intent_rule()]);
+    });
+    assert!(
+        out.report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`tag_labels: intent/*`")),
+        "{:?}",
+        out.report.warnings
+    );
+    assert_eq!(count_label(&out.graph, "Intent"), 0);
+    assert_eq!(
+        nodes_with_titles(&out.graph, TAG_LABEL),
+        vec![(
+            "intents/create-grid".to_string(),
+            "intents/create-grid".to_string()
+        )],
+        "an unmatched tag is exactly the tag it was before"
+    );
+}
+
+/// A tag that is nothing but the prefix names no node, so it is not a match
+/// and keeps its place in the hub.
+#[test]
+fn a_tag_that_is_only_the_prefix_stays_an_ordinary_tag() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "a.md", "#intent/ alone, and #intent/open\n");
+    let out = vault_build_with(dir.path(), |p| {
+        p.tag_labels.extend([intent_rule()]);
+    });
+    assert_eq!(
+        nodes_with_titles(&out.graph, "Intent"),
+        vec![("open".to_string(), "open".to_string())]
+    );
+    assert_eq!(
+        nodes_with_titles(&out.graph, TAG_LABEL),
+        vec![("intent/".to_string(), "intent/".to_string())]
+    );
 }

@@ -20,6 +20,7 @@ use crate::datatypes::values::Value;
 use crate::okf::model::Link;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 /// One node derived from a note's body.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +37,12 @@ pub(crate) struct DerivedNode {
     pub heading_path: Vec<String>,
     /// `{section_title}` in `embed_text:`.
     pub section_title: Option<String>,
+    /// The body range this node covers — the bytes a reader would point at
+    /// when pointing at it. Not the same thing as `text`, which is a *cleaned*
+    /// slice (directives cut, quote markers stripped) and absent on a node
+    /// that carries none: a fence's `code`, a row's cells. The range is what
+    /// attributes an inline `#tag` to the innermost node holding it (§5.5).
+    pub range: Range<usize>,
     /// The verbatim source slice this node carries, if any.
     pub text: Option<String>,
     /// Everything else — `title`, `level`, `ordinal`, `path`, `chunk_hash`,
@@ -278,6 +285,10 @@ fn derive_sections(
             section: parent_suffix,
             heading_path: heading.path.clone(),
             section_title: Some(heading.text.clone()),
+            // The heading's own line included: a tag written in the heading
+            // belongs to that heading's section, exactly as a link does
+            // (VAULT.md §5.4).
+            range: heading.range.start..heading.body_range.end,
             text: Some(trimmed(body, tree, heading.body_range.clone())),
             props: vec![
                 ("title".to_string(), Value::String(heading.text.clone())),
@@ -376,6 +387,7 @@ fn derive_chunks(
                     ("ordinal".to_string(), Value::Int64(ordinal as i64)),
                     ("chunk_hash".to_string(), Value::String(text_hash(&text))),
                 ],
+                range: packed.range.clone(),
                 text: Some(text),
             });
         }

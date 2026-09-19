@@ -187,11 +187,22 @@ fn node_rows(
             section: place.section.clone(),
             heading_path: place.heading_path.clone(),
             section_title: place.section_title.clone(),
+            range: row_range(row),
             // A row's cells are its properties; it holds no prose of its own,
             // so no `embed_text:` is rendered for one.
             text: None,
             props,
         });
+    }
+}
+
+/// A row's extent: its first cell's start to its last cell's end. The block
+/// tree gives cells and not rows, and the pipes between them are the table's
+/// own syntax — a tag can only ever be written inside a cell.
+fn row_range(row: &[Cell]) -> std::ops::Range<usize> {
+    match (row.first(), row.last()) {
+        (Some(first), Some(last)) => first.range.start..last.range.end.max(first.range.start),
+        _ => 0..0,
     }
 }
 

@@ -47,7 +47,7 @@ pub(super) fn build_hubs(
         let mut spellings: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
         let mut members: Vec<(&ConceptDoc, String)> = Vec::new();
         for d in docs {
-            for raw in hub_values(d, key) {
+            for raw in hub_values(d, key, profile) {
                 let id = if spec.case_insensitive {
                     raw.to_lowercase()
                 } else {
@@ -129,6 +129,89 @@ fn add_id_nodes(graph: &mut DirGraph, label: &str, ids: &BTreeSet<&str>) -> Resu
     Ok(())
 }
 
+/// Every `tag_labels:` rule's nodes and the edges joining them (VAULT.md
+/// §5.5).
+///
+/// Shaped like [`build_hubs`] and deliberately not folded into it: a hub joins
+/// the **note**, and these join the derived node the tag was written in, which
+/// is a different endpoint and a different row. What they do share — one node
+/// per folded id, titled with the commonest spelling — is [`hub_title`].
+pub(super) fn build_tag_labels(
+    graph: &mut DirGraph,
+    docs: &[ConceptDoc],
+    profile: &Profile,
+    report: &mut BuildReport,
+) -> Result<EdgeGroups, String> {
+    let mut groups: EdgeGroups = BTreeMap::new();
+    for (pattern, spec) in &profile.tag_labels {
+        let mut spellings: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+        let mut members: Vec<(&ConceptDoc, &crate::okf::tags::TypedTag, String)> = Vec::new();
+        for d in docs {
+            for tag in d.typed_tags.iter().filter(|t| t.rule == *pattern) {
+                let id = tag.name.to_lowercase();
+                *spellings
+                    .entry(id.clone())
+                    .or_default()
+                    .entry(tag.name.as_str())
+                    .or_default() += 1;
+                members.push((d, tag, id));
+            }
+        }
+        if spellings.is_empty() {
+            report.warnings.push(format!(
+                "`vault.yaml` declares `tag_labels: {pattern}`, but no note wrote a tag \
+                 under that prefix"
+            ));
+            continue;
+        }
+        count_nodes(report, &spec.label, spellings.len());
+        let rows: Vec<Vec<Value>> = spellings
+            .iter()
+            .map(|(id, counts)| {
+                vec![
+                    Value::String(id.clone()),
+                    Value::String(hub_title(id, counts)),
+                ]
+            })
+            .collect();
+        let df = DataFrame::from_cypher_rows(vec!["id".to_string(), "title".to_string()], rows)?;
+        maintain::add_nodes(
+            graph,
+            df,
+            spec.label.clone(),
+            "id".to_string(),
+            Some("title".to_string()),
+            Some("update".to_string()),
+        )?;
+        for (d, tag, id) in members {
+            let (source_id, source_label) = source_of(d, tag);
+            groups
+                .entry((spec.edge.clone(), source_label, spec.label.clone()))
+                .or_default()
+                .push((source_id, id, Vec::new()));
+        }
+    }
+    Ok(groups)
+}
+
+/// The end of a typed tag's edge: the derived node it was written in, or the
+/// note. A suffix naming no derived node cannot happen — the parse produced
+/// both — so an unknown one falls back to the note rather than inventing a
+/// label no frame carries.
+fn source_of(d: &ConceptDoc, tag: &crate::okf::tags::TypedTag) -> (String, String) {
+    let node = tag
+        .source
+        .as_ref()
+        .and_then(|suffix| d.derived.nodes.iter().find(|n| n.suffix == *suffix));
+    match node {
+        Some(node) => (
+            format!("{}{}", d.concept_id, node.suffix),
+            node.label.clone(),
+        ),
+        None => (d.concept_id.clone(), d.label.clone()),
+    }
+}
+
 /// The entries a concept joins a hub by: the string elements of its `key`
 /// frontmatter **list**, in order. A scalar is not a list and joins nothing —
 /// VAULT.md §7 defines a hub over a list-valued key, and §9 classes a scalar
@@ -137,7 +220,7 @@ fn add_id_nodes(graph: &mut DirGraph, label: &str, ids: &BTreeSet<&str>) -> Resu
 /// The `tags` key additionally takes the inline `#tag`s the vault profile
 /// found in the body (VAULT.md §5.5): the inline syntax names that hub and no
 /// other, and the `tags` *property* still reports only the frontmatter.
-fn hub_values<'a>(d: &'a ConceptDoc, key: &str) -> Vec<&'a str> {
+fn hub_values<'a>(d: &'a ConceptDoc, key: &str, profile: &Profile) -> Vec<&'a str> {
     let mut vals: Vec<&str> = d
         .props
         .iter()
@@ -158,6 +241,14 @@ fn hub_values<'a>(d: &'a ConceptDoc, key: &str) -> Vec<&'a str> {
             if !vals.contains(&t.as_str()) {
                 vals.push(t.as_str());
             }
+        }
+        // A tag a `tag_labels:` rule models is modelled **only** that way
+        // (VAULT.md §5.5): it leaves this hub whichever of the two forms
+        // wrote it, and the note's `tags` property still reports it.
+        if !profile.tag_labels.is_empty() {
+            vals.retain(|name| {
+                crate::okf::model::tag_label_rule(&profile.tag_labels, name).is_none()
+            });
         }
     }
     vals

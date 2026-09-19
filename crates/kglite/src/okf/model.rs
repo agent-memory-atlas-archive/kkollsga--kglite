@@ -119,6 +119,63 @@ pub struct HubSpec {
     pub case_insensitive: bool,
 }
 
+/// One `tag_labels:` rule (VAULT.md §5.5, §7): a tag whose name opens with
+/// `prefix` is modelled as a node of its own and leaves the `Tag` hub.
+///
+/// The declaration is written as a pattern — `intent/*` — and the prefix is
+/// what is left of it once the `*` is taken off, trailing `/` included, so
+/// matching is one `starts_with` and never a glob engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TagLabelSpec {
+    /// `intent/` for the pattern `intent/*`.
+    pub prefix: String,
+    /// Label of the nodes this rule mints (`Intent`, `Warning`, …).
+    pub label: String,
+    /// Edge type from the node the tag was written in to the tag's node.
+    pub edge: String,
+}
+
+/// The `tag_labels:` rule that models `name`, with the tag text left after its
+/// prefix (VAULT.md §5.5).
+///
+/// **Longest prefix wins**, so `a/b/*` beats `a/*` on `#a/b/c` — a vault
+/// narrowing one family of tags out of another says so by writing the longer
+/// pattern, and a "first rule in the file" rule would make that depend on
+/// YAML order. Case is folded the way the `Tag` hub folds it, because these
+/// tags are the same tags. A tag that is *only* the prefix (`#intent/`) names
+/// no node and therefore matches nothing: an empty id is not an identity.
+pub(crate) fn tag_label_rule<'a, 'n>(
+    rules: &'a BTreeMap<String, TagLabelSpec>,
+    name: &'n str,
+) -> Option<(&'a str, &'a TagLabelSpec, &'n str)> {
+    rules
+        .iter()
+        .filter_map(|(pattern, spec)| {
+            let rest = strip_prefix_folded(name, &spec.prefix)?;
+            (!rest.is_empty()).then_some((pattern.as_str(), spec, rest))
+        })
+        .max_by_key(|(_, spec, _)| spec.prefix.len())
+}
+
+/// `name` without `prefix`, comparing case-insensitively. `None` when the name
+/// does not open with the prefix.
+///
+/// Character by character rather than `to_lowercase().starts_with(…)`: the
+/// remainder has to be a slice of the **author's own spelling**, which is what
+/// titles the node, and lowercasing the whole name first would lose it (and
+/// can change its byte length, so the offset would not even transfer back).
+fn strip_prefix_folded<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    let mut rest = name;
+    for want in prefix.chars() {
+        let got = rest.chars().next()?;
+        if !got.to_lowercase().eq(want.to_lowercase()) {
+            return None;
+        }
+        rest = &rest[got.len_utf8()..];
+    }
+    Some(rest)
+}
+
 /// The conventions a dialect brings, as data rather than as `match` arms.
 ///
 /// A dialect name selects a `Profile`, and behaviour reads the profile's
@@ -213,6 +270,11 @@ pub struct Profile {
     /// list entries join (VAULT.md §5.5, §7). Every dialect declares `tags` →
     /// `Tag`/`TAGGED` here; a vault adds its own in `.kglite/vault.yaml`.
     pub hubs: BTreeMap<String, HubSpec>,
+    /// Read by [`crate::okf::tags`] and
+    /// [`crate::okf::build::hubs`]: `tag_labels:` — tag prefix pattern → the
+    /// node a tag under it becomes instead of a `Tag` (VAULT.md §5.5, §7).
+    /// Empty on every dialect; a vault declares them.
+    pub(crate) tag_labels: BTreeMap<String, TagLabelSpec>,
     /// Read by [`crate::okf::links::conn_from_heading`]: heading text → edge
     /// type, merged *over* the built-in heading ladder and matched on the
     /// whole heading, case-insensitively (VAULT.md §5.3).
@@ -297,6 +359,7 @@ impl Default for Profile {
             folder_note_direction: FolderNoteDirection::ChildToParent,
             folder_notes: false,
             hubs: default_hubs(false),
+            tag_labels: BTreeMap::new(),
             heading_edges: BTreeMap::new(),
             skip_dirs: Vec::new(),
             body_property: DEFAULT_BODY_PROPERTY.to_string(),
@@ -732,6 +795,11 @@ pub struct ConceptDoc {
     /// §5.5). They join the `tags` frontmatter list at the `Tag` hub and
     /// nowhere else — the `tags` property still reports only the frontmatter.
     pub inline_tags: Vec<String>,
+    /// The tags a `tag_labels:` rule claimed (VAULT.md §5.5), with the node
+    /// each was written in. They are **not** in `inline_tags` any less for
+    /// it — that field is what the body says — but `build::hubs` keeps them
+    /// out of the `Tag` hub and mints their own nodes instead.
+    pub(crate) typed_tags: Vec<crate::okf::tags::TypedTag>,
     /// Hub keys (VAULT.md §7 `hubs:`) this note spent on the typed-edge rule
     /// instead: a `keywords:` holding nothing but wikilinks is edges, and its
     /// hub gets nothing from this note. Drained into the build report's

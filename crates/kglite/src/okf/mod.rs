@@ -24,6 +24,7 @@ pub mod frontmatter;
 pub mod links;
 pub mod model;
 pub(crate) mod structure;
+pub(crate) mod tags;
 pub mod validate;
 pub mod vault_config;
 pub mod walk;
@@ -399,6 +400,9 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
             errors: &mut errors,
         },
     );
+    // Inline tags read as placed, once the nodes a tag can sit in exist: the
+    // `tags` list on each of them, and what `tag_labels:` claimed (§5.5).
+    let typed_tags = tags::apply(&extracted.tag_spans, &props, &mut derived, profile);
     let body = if opts.with_body { Some(body) } else { None };
 
     Ok(Some(ConceptDoc {
@@ -409,6 +413,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         props,
         links: all_links,
         inline_tags: extracted.tags,
+        typed_tags,
         attachments: extracted.attachments,
         hub_key_edges,
         errors,

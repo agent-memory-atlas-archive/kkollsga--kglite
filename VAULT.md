@@ -457,6 +457,51 @@ is a heading — though a `#tag` written *in* the heading's text is still a tag)
 A tag name runs over letters, digits, `_`, `-` and `/`, and must contain at
 least one letter: `#2026` is not a tag.
 
+**A tag on the node that holds it.** Where `structure:` derives nodes (§7.1),
+every inline `#tag` is *also* written into a `tags` list property on the
+**innermost derived node whose range contains it** — the chunk, callout, step
+or table row it sits in, else the enclosing section, else nothing. The list is
+in first-use order and spelled as the note wrote it; folding case is the hub's
+rule for identity, not this property's. It is what makes a paragraph-scoped
+marker selectable: `MATCH (c:Chunk) WHERE 'warning' IN c.tags`. `tags` is
+therefore a property a derived node defines itself (§7.1), so no `inherit:` and
+no directive may name it. The note's own `tags` property is unchanged — it
+reports the frontmatter and nothing else — and so are the note's `TAGGED`
+edges.
+
+**Caveat: a chunk is as narrow as the author made it.** A chunk packs several
+paragraphs, so a marker meant for one paragraph tags the whole chunk. Where
+that matters, give the paragraph a `^block-id` (§5.7) or close the chunk with
+`<!-- kglite chunk -->` (§5.8); both make it a chunk of its own.
+
+**`tag_labels:` — a family of tags modelled as its own nodes.** A vault can
+declare that tags under a prefix are not tags at all but a kind of thing:
+
+```yaml
+tag_labels:
+  "intent/*": {label: Intent, edge: HAS_INTENT}
+```
+
+`#intent/create-grid` then mints an `Intent` node with the id `create-grid` —
+the tag text **after** the prefix — and an edge `HAS_INTENT` to it from the
+same innermost derived node the `tags` property landed on (from the note where
+`structure:` derives none). The pattern is `<prefix>/*` and nothing else; any
+other spelling is a config error naming the key. Both `label` and `edge` are
+required, and `edge` is spelled `UPPER_SNAKE` like every other edge type.
+
+A tag a rule matches is modelled **only** that way: it leaves the `Tag` hub
+entirely — no `Tag` node, no `TAGGED` edge — whichever of the two forms above
+wrote it, because both forms feed that one hub. What it does *not* leave is the
+text: a frontmatter `tags:` list still reports every entry as written, and a
+derived node's `tags` list still carries the tag, matched or not. Identity
+folds case exactly as the hub's does (`#Intent/Create-Grid` and
+`#intent/create-grid` are one `Intent`), and the node's title is the spelling
+the vault used most often. Where two rules match, the **longest prefix wins**,
+so `intent/grid/*` takes `#intent/grid/create` out of `intent/*`. A tag that is
+only the prefix (`#intent/`) names nothing and stays an ordinary tag. A rule no
+tag in the vault matched is a warning (§9), like any other declaration the
+vault's content does not carry.
+
 ### 5.6 Unresolved targets
 
 An unresolved link target becomes a `_provisional: true` stub node, labelled
@@ -681,6 +726,7 @@ a rebuild re-reads the file, so the file is the vault's statement about itself.
 | `skip_dirs` | list of strings | Extra directories to prune (§2.4). |
 | `folder_notes` | `{edge, direction}` | `edge` default `CHILD_OF`; `direction` is `child_to_parent` (default) or `parent_to_child`. |
 | `hubs` | `{<frontmatter key>: {label, edge, case_insensitive}}` | Turn a list-valued key into hub nodes. `case_insensitive: true` folds the id to lowercase and titles the node with the casing the vault used most often, ties settled alphabetically; otherwise the title is the id. The built-in `tags` hub is `{label: Tag, edge: TAGGED, case_insensitive: true}` (§5.5) and can be redeclared like any other. |
+| `tag_labels` | `{"<prefix>/*": {label, edge}}` | Tags under `<prefix>/` become nodes of that label instead of joining the `Tag` hub, joined by `edge` from the node that holds them (§5.5). Both fields are required; the longest matching prefix wins. |
 | `heading_edges` | `{<heading text>: EDGE_TYPE}` | Merged over the built-in ladder (§5.3). |
 | `types` | `{<Label>: {<property>: <type>}}` | Declared property types: `string`, `int`, `float`, `bool`, `date`, `datetime`, `list`. Overrides inference. |
 | `indexes` | `{<Label>: [ <prop> \| {range: <prop>} \| {composite: [<prop>, …]} ]}` | Equality, range and composite index declarations. |
@@ -1055,10 +1101,15 @@ reaches it — it is the same node under another name.
 onto **every** node derived from it, so a chunk-level filter or BM25 query needs
 no hop back to the note. A key the note does not carry is simply absent there.
 It may not name a property a derived node defines itself — `title`, `text`,
-`level`, `ordinal`, `path`, `note_id`, `section_id`, `kind`, `lang`, `code`,
-`caption`, `chunk_hash`, `step_count`, `signature` — nor a reserved
+`tags`, `level`, `ordinal`, `path`, `note_id`, `section_id`, `kind`, `lang`,
+`code`, `caption`, `chunk_hash`, `step_count`, `signature` — nor a reserved
 frontmatter key (§4.1); either is an error (§9), because the alternative is a note silently overwriting
 the structure it was read from.
+
+**`tags`.** Every derived node carries the inline `#tag`s written inside its
+own range, as a list in first-use order (§5.5). It is absent from a node that
+holds none, and it is the node's own — a note's frontmatter `tags:` is not
+copied down, which is why `inherit:` may not name it.
 
 `embed_text:` materialises a property of that name on every derived node that
 carries `text`. The placeholders are `{title}` (the **note's** title),
@@ -1674,7 +1725,39 @@ Reach for this when the fact is **about one section** and the alternative is a
 frontmatter key about the whole note, which would be wrong, or a table nobody
 reads. A fact about the whole note still belongs in frontmatter (§4.3).
 
-### 13.5 The loop
+### 13.5 Tagging what a paragraph is, not what the page is about
+
+A page mixes kinds of statement: what the reader can do, and what will go
+wrong if they do it. Both are one sentence inside a longer section, so
+frontmatter cannot carry either.
+
+```markdown
+## Importing wells
+
+Use the import dialog to load a deviation survey. #intent/import-wells
+
+The datum is not checked on import. #warning
+```
+
+With `tag_labels: {"intent/*": {label: Intent, edge: HAS_INTENT}}` declared
+(§5.5), the first tag mints an `Intent` node `import-wells` joined from the
+**chunk** that holds it, and the second stays an ordinary tag — but lands in
+that chunk's own `tags` list as well:
+
+```cypher
+MATCH (c:Chunk)-[:HAS_INTENT]->(i:Intent) RETURN i.title, c.text
+MATCH (c:Chunk) WHERE 'warning' IN c.tags RETURN c.concept_id, c.text
+```
+
+Reach for `tag_labels:` when a family of tags is really a **kind of thing** the
+corpus has many of and queries by name (`intent/…`, `task/…`, `product/…`);
+leave a one-word marker like `#warning` as a tag, where the per-chunk `tags`
+list already answers for it. The caveat is the chunk's width: two paragraphs
+often pack into one chunk, so a marker meant for one of them marks both unless
+the author writes `<!-- kglite chunk -->` between them (§5.8) or gives the
+paragraph a `^block-id` (§5.7).
+
+### 13.6 The loop
 
 1. Convert a **sample** — fifty pages, not the corpus.
 2. `kglite okf check <dir> --strict`. Errors are spec violations; warnings at

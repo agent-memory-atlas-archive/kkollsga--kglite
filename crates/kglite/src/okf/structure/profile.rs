@@ -39,9 +39,10 @@ const STRUCTURE_KEYS: [&str; 9] = [
 /// overwriting the structure it was read from. Names the whole vocabulary, P4's
 /// and P5's included, so a vault written against the spec gets the spec's
 /// answer whether or not this build derives that construct yet.
-const DERIVED_PROPERTIES: [&str; 15] = [
+const DERIVED_PROPERTIES: [&str; 16] = [
     "title",
     "text",
+    "tags",
     "level",
     "ordinal",
     "path",
@@ -59,7 +60,8 @@ const DERIVED_PROPERTIES: [&str; 15] = [
 
 /// VAULT.md §4.1's reserved frontmatter keys. `inherit:` may not name one
 /// either — `id` and `type` are not properties at all, and `title` is a
-/// derived node's own.
+/// derived node's own. `tags` is in **both** lists: it is reserved on a note
+/// and defined by a derived node (§5.5), and either answer refuses it.
 const RESERVED_FRONTMATTER: [&str; 7] = [
     "id", "type", "title", "aliases", "tags", "kg_skip", "parent",
 ];
