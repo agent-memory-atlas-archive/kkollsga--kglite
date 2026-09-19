@@ -43,6 +43,12 @@ pub(crate) struct BlockTree {
     /// the block around it, which is why these are ranges to mask rather than
     /// blocks or skipped regions: `` [`file.md`](file.md) `` is still a link.
     pub code_spans: Vec<Range<usize>>,
+    /// VAULT.md §9 findings the block model itself produced — today only a
+    /// `<!-- kglite heading -->` with nothing below it to promote. They are
+    /// here and not in the caller because only this pass knows what followed
+    /// the marker: by the time anyone else sees the tree, a promotion either
+    /// happened or left no trace of having been asked for.
+    pub warnings: Vec<String>,
     /// `<!-- kglite … -->` blocks, in document order (VAULT.md §5.8). Unlike
     /// [`BlockTree::comments`] these keep their [`Block`] — a directive is one
     /// whole HTML block and nothing else, which is exactly what makes it
@@ -231,6 +237,7 @@ pub(crate) fn parse_blocks(body: &str) -> BlockTree {
     drop_commented_headings(&mut tree, body.len());
     tree.block_ids = scan_block_ids(body, &tree.blocks);
     tree.directives = scan_directives(body, &tree.blocks);
+    promote_marked_headings(&mut tree, body);
     tree
 }
 
@@ -251,34 +258,164 @@ fn drop_commented_headings(tree: &mut BlockTree, body_len: usize) {
             .any(|c| c.start <= h.range.start && h.range.end <= c.end)
     };
     if tree.headings.iter().any(&hidden) {
-        let mut kept: Vec<Heading> = Vec::with_capacity(tree.headings.len());
-        let mut stack: Vec<(u8, usize)> = Vec::new();
-        for mut heading in std::mem::take(&mut tree.headings) {
-            if hidden(&heading) {
-                continue;
-            }
-            while let Some(&(level, index)) = stack.last() {
-                if level < heading.level {
-                    break;
-                }
-                kept[index].body_range.end = heading.range.start;
-                stack.pop();
-            }
-            heading.path = stack.iter().map(|&(_, i)| kept[i].text.clone()).collect();
-            heading.path.push(heading.text.clone());
-            heading.body_range = heading.range.end..body_len;
-            stack.push((heading.level, kept.len()));
-            kept.push(heading);
-        }
-        tree.headings = kept;
-        for block in &mut tree.blocks {
-            let after = tree
-                .headings
-                .partition_point(|h| h.range.start <= block.range.start);
-            block.heading = (after > 0).then(|| after - 1);
-        }
+        tree.headings.retain(|heading| !hidden(heading));
+        recompute_heading_model(tree, body_len);
     }
     tree.comments = comments;
+}
+
+/// Recompute everything derived from the heading **sequence**: each heading's
+/// ancestor path and body extent, and each block's enclosing heading.
+///
+/// The walk computes these as it goes, with a stack; both passes that change
+/// the sequence afterwards — dropping a commented heading, promoting a marked
+/// paragraph into one — would otherwise have to patch four things consistently.
+/// Levels and ranges are the inputs and are never touched here.
+fn recompute_heading_model(tree: &mut BlockTree, body_len: usize) {
+    let mut stack: Vec<(u8, usize)> = Vec::new();
+    for index in 0..tree.headings.len() {
+        let (level, start, end) = {
+            let heading = &tree.headings[index];
+            (heading.level, heading.range.start, heading.range.end)
+        };
+        while let Some(&(open_level, open)) = stack.last() {
+            if open_level < level {
+                break;
+            }
+            tree.headings[open].body_range.end = start;
+            stack.pop();
+        }
+        let mut path: Vec<String> = stack
+            .iter()
+            .map(|&(_, i)| tree.headings[i].text.clone())
+            .collect();
+        path.push(tree.headings[index].text.clone());
+        tree.headings[index].path = path;
+        tree.headings[index].body_range = end..body_len;
+        stack.push((level, index));
+    }
+    for block in &mut tree.blocks {
+        let after = tree
+            .headings
+            .partition_point(|h| h.range.start <= block.range.start);
+        block.heading = (after > 0).then(|| after - 1);
+    }
+}
+
+/// The directive key that promotes the line below it to a heading (VAULT.md
+/// §5.8).
+const HEADING_MARKER: &str = "heading";
+
+/// `<!-- kglite heading -->` — promote the first line of the paragraph below
+/// the marker to a heading at the enclosing heading's level + 1 (VAULT.md
+/// §5.8).
+///
+/// Done **here**, in the block tree, so that nothing downstream has a second
+/// kind of heading to know about: sections, ids, `key_from_heading:`, table
+/// attachment and `[[Note#Name]]` all read the heading model and get the same
+/// answer they would have for an ATX line. The body itself is untouched, so an
+/// export still writes the file back byte for byte.
+///
+/// Levels come from the headings the **author wrote**, not from the sequence
+/// as it grows: two markers under one `###` are two `####` siblings, which is
+/// the shape a converted API page has, and reading the running sequence would
+/// nest the second one inside the first.
+fn promote_marked_headings(tree: &mut BlockTree, body: &str) {
+    let authored: Vec<(usize, u8)> = tree
+        .headings
+        .iter()
+        .map(|h| (h.range.start, h.level))
+        .collect();
+    let markers: Vec<usize> = tree
+        .directives
+        .iter()
+        .filter(|d| d.key == HEADING_MARKER)
+        .map(|d| d.block)
+        .collect();
+    let mut minted: Vec<Heading> = Vec::new();
+    for marker in markers {
+        let Some(range) = promotable_line(tree, body, marker) else {
+            tree.warnings.push(
+                "`<!-- kglite heading -->` is not followed by a paragraph, so there is no \
+                 line to promote (VAULT.md §5.8)"
+                    .to_string(),
+            );
+            continue;
+        };
+        let raw = body[range.clone()].trim().to_string();
+        let enclosing = authored
+            .iter()
+            .rev()
+            .find(|(start, _)| *start < range.start)
+            .map(|(_, level)| *level);
+        minted.push(Heading {
+            // A heading deeper than 6 has no markdown spelling at all, so the
+            // nesting it would claim is not addressable either; the cap keeps
+            // `level` a fact about markdown rather than about this rule.
+            level: enclosing.map_or(1, |level| level.saturating_add(1).min(6)),
+            text: strip_surrounding_bold(&raw).to_string(),
+            raw,
+            path: Vec::new(),
+            body_range: range.end..body.len(),
+            range: range.clone(),
+        });
+        // Whatever followed the promoted line stays a paragraph; a paragraph
+        // that was only that line is left **empty** rather than removed,
+        // because every `inside`, `attaches_to` and `Directive::block` is an
+        // index into `blocks` and removing one would move all of them.
+        tree.blocks[marker + 1].range.start = range.end;
+    }
+    if minted.is_empty() {
+        return;
+    }
+    tree.headings.extend(minted);
+    tree.headings.sort_by_key(|heading| heading.range.start);
+    recompute_heading_model(tree, body.len());
+}
+
+/// The first line of the paragraph a marker sits above, or `None` when there
+/// is no such paragraph.
+///
+/// "The paragraph below" is the **next block**, and it has to be a top-level
+/// paragraph with no heading written between the two: a marker above a list,
+/// a table, a fence or another directive has nothing to promote, and one whose
+/// section ends before the next paragraph is pointing across a heading.
+fn promotable_line(tree: &BlockTree, body: &str, marker: usize) -> Option<Range<usize>> {
+    if tree.blocks[marker].inside.is_some() {
+        return None;
+    }
+    let next = tree.blocks.get(marker + 1)?;
+    if !matches!(next.kind, BlockKind::Paragraph) || next.inside.is_some() {
+        return None;
+    }
+    let after_marker = tree.blocks[marker].range.end;
+    if tree
+        .headings
+        .iter()
+        .any(|h| h.range.start >= after_marker && h.range.start < next.range.start)
+    {
+        return None;
+    }
+    let line = &body[next.range.clone()];
+    let end = match line.find('\n') {
+        Some(at) => next.range.start + at + 1,
+        None => next.range.end,
+    };
+    // A blank first line is no line: promoting it would mint a heading with
+    // no text, which nothing can address.
+    (!body[next.range.start..end].trim().is_empty()).then_some(next.range.start..end)
+}
+
+/// A line's own `**bold**` markers, and only those: `**a** and **b**` is not a
+/// bold line, and a code span or a link inside the line is the heading's text.
+fn strip_surrounding_bold(line: &str) -> &str {
+    let Some(inner) = line.strip_prefix("**").and_then(|r| r.strip_suffix("**")) else {
+        return line;
+    };
+    if inner.is_empty() || inner.contains("**") {
+        return line;
+    }
+    inner
 }
 
 // ---------------------------------------------------------------------------

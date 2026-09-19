@@ -1434,3 +1434,99 @@ fn a_tag_outside_every_derived_node_falls_back_to_the_note() {
     assert_eq!(intents, vec![("note".to_string(), "open".to_string())]);
     assert_eq!(property(&out.graph, "note", "tags"), None);
 }
+
+// ---------------------------------------------------------------------------
+// `<!-- kglite heading -->` — the API-page shape (VAULT.md §5.8)
+// ---------------------------------------------------------------------------
+
+const API_PAGE_CONFIG: &str = "kglite_vault: 1\ndefault_label: Article\nstructure:\n  \
+     sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}\n  \
+     key_from_heading: {under_label: Api, label: ApiSymbol, property: symbol, \
+     when_matches: \"^[A-Za-z_]\"}\n  \
+     tables:\n    - {under_heading: \"\\\\(\", label: ApiParameter, edge: HAS_PARAMETER, \
+     key_column: Name}\n";
+
+/// Everything downstream of the block tree treats a promoted line as the
+/// heading it is: it derives a section, `key_from_heading:` relabels it, the
+/// table under it attaches to it, and `[[note#…]]` resolves onto it.
+#[test]
+fn a_promoted_heading_is_a_symbol_section_a_table_attaches_to() {
+    let out = config_vault(
+        API_PAGE_CONFIG,
+        &[
+            (
+                "project.md",
+                "---\ntype: Api\n---\n\
+                 ### rmsapi.Project\n\nProject access.\n\n\
+                 <!-- kglite heading -->\n\
+                 **open(filename, readonly=False)**\n\nOpens a project.\n\n\
+                 | Name | Type |\n|---|---|\n| filename | str |\n| readonly | bool |\n",
+            ),
+            (
+                "guide.md",
+                "See [[project#rmsapi.Project#open(filename, readonly=False)]].\n",
+            ),
+        ],
+    );
+    let symbol = "project#rmsapi.Project#open(filename, readonly=False)";
+    assert_eq!(
+        property(&out.graph, symbol, "symbol"),
+        Some(Value::String("open".to_string())),
+        "`key_from_heading:` reads the promoted heading's title like any other"
+    );
+    assert_eq!(
+        property(&out.graph, symbol, "signature"),
+        Some(Value::String("(filename, readonly=False)".to_string()))
+    );
+    assert_eq!(
+        count_label(&out.graph, "ApiSymbol"),
+        2,
+        "`### rmsapi.Project` is a symbol heading too — the rule reads both the \
+         authored heading and the promoted one"
+    );
+
+    let rows: Vec<EdgeFacts> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(_, conn, _, _)| conn == "HAS_PARAMETER" || conn == "LINKS_TO")
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "guide".to_string(),
+                "LINKS_TO".to_string(),
+                symbol.to_string(),
+                vec![(
+                    "anchor".to_string(),
+                    "rmsapi.Project#open(filename, readonly=False)".to_string(),
+                )],
+            ),
+            (
+                symbol.to_string(),
+                "HAS_PARAMETER".to_string(),
+                format!("{symbol}~filename"),
+                vec![],
+            ),
+            (
+                symbol.to_string(),
+                "HAS_PARAMETER".to_string(),
+                format!("{symbol}~readonly"),
+                vec![],
+            ),
+        ],
+        "the table under the promoted heading is that section's rows, and the \
+         anchored link retargets onto it"
+    );
+}
+
+/// The body is not rewritten — only the tree the reader builds from it — so
+/// the note's own prose still holds the marker and the bold line.
+#[test]
+fn a_promoted_heading_leaves_the_body_verbatim() {
+    let body = "# Page\n\n<!-- kglite heading -->\n**Alone**\n\ntail\n";
+    let out = config_vault(API_PAGE_CONFIG, &[("page.md", body)]);
+    assert_eq!(
+        property(&out.graph, "page", "body"),
+        Some(Value::String(body.to_string()))
+    );
+}

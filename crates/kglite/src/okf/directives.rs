@@ -20,8 +20,12 @@ use crate::okf::structure::block::Directive;
 use crate::okf::structure::profile::is_reserved_property;
 use crate::okf::structure::{BlockTree, Derived};
 
-/// The directive key `chunks:` owns (VAULT.md §7.1); it states no property.
-const CHUNK_MARKER: &str = "chunk";
+/// The directive keys the format owns (VAULT.md §5.8): `chunk` closes the
+/// open chunk and `heading` promotes the line below it. Neither states a
+/// property, and both are acted on before this pass — `chunk` in the packer,
+/// `heading` in the block tree — so both are skipped here rather than warned
+/// about for carrying no value.
+const MARKER_KEYS: [&str; 2] = ["chunk", "heading"];
 
 /// The note-level half of what one note's directives write. The section-level
 /// half lands on [`Derived`] itself.
@@ -35,13 +39,13 @@ pub(crate) struct NoteSide<'a> {
 
 /// Apply every directive in `tree` (VAULT.md §5.8).
 ///
-/// `<!-- kglite -->` and `<!-- kglite chunk -->` are handled elsewhere — the
-/// first is warned about by `structure::derive`, the second is a chunk
-/// boundary — and are skipped here so neither becomes a property named after
-/// itself.
+/// `<!-- kglite -->` and the marker keys are handled elsewhere — the first is
+/// warned about by `structure::derive`, `chunk` is a chunk boundary and
+/// `heading` a synthetic heading — and are skipped here so none of them
+/// becomes a property named after itself.
 pub(crate) fn apply(tree: &BlockTree, derived: &mut Derived, note: &mut NoteSide<'_>) {
     for directive in &tree.directives {
-        if directive.key.is_empty() || directive.key == CHUNK_MARKER {
+        if directive.key.is_empty() || MARKER_KEYS.contains(&directive.key.as_str()) {
             continue;
         }
         if is_reserved_property(&directive.key) || directive.key == note.profile.body_property {

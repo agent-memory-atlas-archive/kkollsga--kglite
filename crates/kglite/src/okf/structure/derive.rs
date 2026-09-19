@@ -423,6 +423,11 @@ fn chunkable_groups(tree: &BlockTree) -> Vec<Group> {
         if tree.directives.iter().any(|d| d.block == index) {
             continue;
         }
+        // A paragraph `<!-- kglite heading -->` emptied — its only line is a
+        // heading now (VAULT.md §5.8). It holds no bytes, so it is no chunk.
+        if block.range.is_empty() {
+            continue;
+        }
         match groups.last_mut() {
             Some(last) if last.heading == block.heading => last.blocks.push(index),
             _ => groups.push(Group {

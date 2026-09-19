@@ -719,3 +719,148 @@ fn a_directive_is_not_a_scan_region() {
         "the directive's own bytes are skipped"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `<!-- kglite heading -->` — synthetic headings (VAULT.md §5.8)
+// ---------------------------------------------------------------------------
+
+fn heading_facts(tree: &BlockTree) -> Vec<(u8, &str, &str)> {
+    tree.headings
+        .iter()
+        .map(|h| (h.level, h.text.as_str(), h.raw.as_str()))
+        .collect()
+}
+
+/// The API-page shape: a converter emitted a bold signature line where a
+/// heading belonged, and the marker says so without changing what the file
+/// renders as.
+#[test]
+fn a_heading_directive_promotes_the_paragraph_below_it() {
+    let body = "### rmsapi.Project\n\n<!-- kglite heading -->\n\
+                **open(filename)**\nOpens a project.\n\nMore prose.\n";
+    let tree = parse_blocks(body);
+    assert_eq!(
+        heading_facts(&tree),
+        vec![
+            (3, "rmsapi.Project", "rmsapi.Project"),
+            (4, "open(filename)", "**open(filename)**"),
+        ],
+        "the enclosing heading's level + 1, with the bold markers off the text"
+    );
+    assert_eq!(
+        slice(body, &tree.headings[1].range),
+        "**open(filename)**\n",
+        "the promoted line is the heading's own range, as an ATX line would be"
+    );
+    assert_eq!(
+        tree.headings[1].path,
+        vec!["rmsapi.Project", "open(filename)"]
+    );
+    assert_eq!(
+        slice(body, &tree.headings[1].body_range),
+        "Opens a project.\n\nMore prose.\n",
+        "everything below the promoted line is the new section"
+    );
+    let paragraphs: Vec<&str> = tree
+        .blocks
+        .iter()
+        .filter(|b| matches!(b.kind, BlockKind::Paragraph) && !b.range.is_empty())
+        .map(|b| slice(body, &b.range).trim())
+        .collect();
+    assert_eq!(
+        paragraphs,
+        vec!["Opens a project.", "More prose."],
+        "the promoted paragraph's remaining lines are a paragraph of their own"
+    );
+}
+
+/// No blank line between the marker and the line it promotes — the spelling a
+/// converter writes — and a paragraph that is only the promoted line.
+#[test]
+fn a_promoted_paragraph_of_one_line_leaves_no_paragraph_behind() {
+    let body = "<!-- kglite heading -->\n**Alone**\n\ntail\n";
+    let tree = parse_blocks(body);
+    assert_eq!(
+        heading_facts(&tree),
+        vec![(1, "Alone", "**Alone**")],
+        "with no enclosing heading the promoted one is level 1"
+    );
+    let prose: Vec<&str> = tree
+        .blocks
+        .iter()
+        .filter(|b| matches!(b.kind, BlockKind::Paragraph) && !b.range.is_empty())
+        .map(|b| slice(body, &b.range).trim())
+        .collect();
+    assert_eq!(prose, vec!["tail"]);
+}
+
+/// Each marker under one heading promotes to the **same** level: the level is
+/// read from the heading the author wrote, not from the synthetic one above.
+#[test]
+fn two_markers_under_one_heading_are_siblings() {
+    let body = "## Methods\n\n<!-- kglite heading -->\n**open()**\n\n\
+                <!-- kglite heading -->\n**close()**\n";
+    let tree = parse_blocks(body);
+    assert_eq!(
+        heading_facts(&tree),
+        vec![
+            (2, "Methods", "Methods"),
+            (3, "open()", "**open()**"),
+            (3, "close()", "**close()**"),
+        ]
+    );
+    assert_eq!(tree.headings[2].path, vec!["Methods", "close()"]);
+}
+
+/// Only the surrounding `**` come off. A code span or a link inside the line
+/// is the heading's own text, exactly as it is in an ATX heading.
+#[test]
+fn only_surrounding_bold_markers_are_stripped() {
+    let cases = [
+        ("**a** and **b**", "**a** and **b**"),
+        ("`code`", "`code`"),
+        ("**`code`**", "`code`"),
+        ("__also bold__", "__also bold__"),
+        // `***`+ on a line of its own is a thematic break, so `**` is the
+        // shortest line that is only markers.
+        ("**", "**"),
+    ];
+    for (written, expected) in cases {
+        let body = format!("<!-- kglite heading -->\n{written}\n");
+        let tree = parse_blocks(&body);
+        assert_eq!(
+            tree.headings.first().map(|h| h.text.as_str()),
+            Some(expected),
+            "{written}"
+        );
+    }
+}
+
+/// A marker with nothing to promote says so (VAULT.md §9): silence would look
+/// like a reader that had understood it.
+#[test]
+fn a_heading_directive_with_no_paragraph_below_warns() {
+    for body in [
+        "## A\n\n<!-- kglite heading -->\n",
+        "<!-- kglite heading -->\n\n## A real heading\n\npara\n",
+        "<!-- kglite heading -->\n\n- one\n- two\n",
+        "<!-- kglite heading -->\n\n```\ncode\n```\n",
+    ] {
+        let tree = parse_blocks(body);
+        assert!(
+            tree.headings.iter().all(|h| !h.raw.starts_with("**")),
+            "nothing was promoted in {body:?}"
+        );
+        assert_eq!(
+            tree.warnings.len(),
+            1,
+            "{body:?} warned {:?}",
+            tree.warnings
+        );
+        assert!(
+            tree.warnings[0].contains("kglite heading"),
+            "{:?}",
+            tree.warnings
+        );
+    }
+}

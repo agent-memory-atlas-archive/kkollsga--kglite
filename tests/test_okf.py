@@ -1587,3 +1587,40 @@ def test_tag_labels_model_a_tag_as_its_own_node(tmp_path):
     assert g.cypher("MATCH (t:Tag) RETURN t.id AS id ORDER BY id").to_list() == [{"id": "warning"}], (
         "the modelled tag left the Tag hub; the plain one did not"
     )
+
+
+def test_heading_directive_promotes_a_bold_line_to_a_heading(tmp_path):
+    """VAULT.md §5.8: ``<!-- kglite heading -->`` promotes the line below it to
+    a heading at the enclosing level + 1, so a converted API page's bold
+    signature lines become addressable sections without touching the file.
+    """
+    (tmp_path / ".kglite").mkdir()
+    (tmp_path / ".kglite" / "vault.yaml").write_text(
+        "kglite_vault: 1\ndefault_label: Article\nstructure:\n"
+        "  sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}\n",
+        encoding="utf-8",
+    )
+    body = (
+        "### rmsapi.Project\n\nProject access.\n\n"
+        "<!-- kglite heading -->\n"
+        "**open(filename)**\n\nOpens a project.\n\n"
+        "<!-- kglite heading -->\n"
+        "**close()**\n\nCloses it.\n"
+    )
+    (tmp_path / "project.md").write_text(body, encoding="utf-8")
+    (tmp_path / "guide.md").write_text("Start at [[project#rmsapi.Project#open(filename)]].\n", encoding="utf-8")
+
+    g = okf.build(str(tmp_path), dialect="obsidian")
+    assert g.cypher("MATCH (s:Section) RETURN s.concept_id AS id, s.level AS level ORDER BY id").to_list() == [
+        {"id": "project#rmsapi.Project", "level": 3},
+        {"id": "project#rmsapi.Project#close()", "level": 4},
+        {"id": "project#rmsapi.Project#open(filename)", "level": 4},
+    ], "two markers under one heading are siblings, not a chain"
+
+    assert g.cypher(
+        "MATCH (:Article {concept_id:'guide'})-[:LINKS_TO]->(s:Section) RETURN s.concept_id AS id"
+    ).to_list() == [{"id": "project#rmsapi.Project#open(filename)"}]
+
+    assert g.cypher("MATCH (n:Article {concept_id:'project'}) RETURN n.body AS b").to_list()[0]["b"] == body, (
+        "the file is unchanged; only the tree the reader builds from it is"
+    )

@@ -592,6 +592,7 @@ A directive is recognised — and skipped — in every dialect; what a key
 | Directive | Meaning |
 |---|---|
 | `<!-- kglite chunk -->` | Close the open chunk at this point (§7.1 `chunks:`). |
+| `<!-- kglite heading -->` | Promote the first line of the paragraph below to a heading (below). |
 | `<!-- kglite <key>: <value> -->` | State `<key>` on the node this directive sits in: a **typed edge** when the value names wikilinks, a **property** otherwise. |
 | `<!-- kglite <key> -->` | Nothing — a key with no value states nothing, and the build warns (§9). |
 
@@ -629,6 +630,37 @@ Each is an **error** naming the key (§9). A key the vault declares under
 `hubs:` (§7) is nothing special here — it is a property, unless its value is a
 wikilink and the typed-edge rule takes it, which is the same precedence §4.3
 already sets for frontmatter.
+
+**`<!-- kglite heading -->` — a heading the source did not write.** On the
+line above a paragraph, the marker promotes that paragraph's **first line** to
+a heading at the enclosing heading's level + 1 (level 1 where there is none,
+and never deeper than 6, which is as deep as markdown goes). A surrounding
+pair of `**bold**` markers comes off the heading's text and nothing else does:
+a code span, a link or a `**word**` in the middle of the line is the heading's
+own text. The paragraph's remaining lines, if any, are the first paragraph
+under the new heading.
+
+```markdown
+### rmsapi.Project
+
+<!-- kglite heading -->
+**open(filename, readonly=False)**
+
+Opens a project.
+```
+
+From there it is a heading like any other: it derives a `Section` (§7.1), it
+is addressed as `[[Note#rmsapi.Project#open(filename, readonly=False)]]`,
+`key_from_heading:` reads its title, a table under it attaches to it, and the
+`#fragment` ladder of §5.4 resolves onto it. The **body is untouched** — only
+the tree a reader builds from it changes — so the file still renders in
+Obsidian exactly as it did and an export writes it back byte for byte.
+
+Two markers under one heading are **siblings**: the level is read from the
+heading the author wrote, not from the last synthetic one, which is what makes
+a converted API page a flat list of methods under its class. A marker with no
+paragraph below it — the end of a section, or a list, table, fence or second
+directive next — promotes nothing and is a warning (§9).
 
 **One key, one value per node.** A second directive naming a key the same node
 already carries — from an earlier directive or from the note's own frontmatter
@@ -1089,6 +1121,11 @@ Storing the whole title under `property` would only repeat `title`. Relabelling
 changes the label and adds the two properties; the section's own properties,
 its id and its section edges are unchanged, and `[[Note#Heading]]` still
 reaches it — it is the same node under another name.
+
+A **synthetic** heading (§5.8) is a heading here too: a converter that emitted
+`**open(filename) → Project**` as a bold line rather than as `####` gets the
+same relabelling once the author writes `<!-- kglite heading -->` above it,
+without the file changing.
 
 #### `inherit:` and `embed_text:`
 

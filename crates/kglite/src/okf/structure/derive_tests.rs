@@ -895,3 +895,47 @@ fn a_chunk_marker_above_the_first_heading_divides_the_notes_own_chunks() {
     assert_eq!(text_of(&d, "~chunk1"), "alpha");
     assert_eq!(text_of(&d, "~chunk2"), "beta");
 }
+
+/// A synthetic heading (VAULT.md §5.8) is a heading: it derives a section with
+/// the same id shape an ATX one would, so `[[Note#Name]]` reaches it.
+#[test]
+fn a_promoted_heading_derives_a_section_like_any_other() {
+    let body = "## Methods\n\nIntro.\n\n<!-- kglite heading -->\n\
+                **open(filename)**\n\nOpens a project.\n";
+    let derived = run(body, &both(650, 6000));
+    assert_eq!(
+        nodes(&derived),
+        vec![
+            ("#Methods", "Section"),
+            ("#Methods#open(filename)", "Section"),
+            ("#Methods~chunk1", "Chunk"),
+            ("#Methods#open(filename)~chunk1", "Chunk"),
+        ],
+        "the promoted line is a section of its own and closes the chunk above it"
+    );
+    let section = derived
+        .nodes
+        .iter()
+        .find(|n| n.suffix == "#Methods#open(filename)")
+        .expect("the promoted section");
+    assert_eq!(
+        section.props,
+        vec![
+            (
+                "title".to_string(),
+                Value::String("open(filename)".to_string())
+            ),
+            ("level".to_string(), Value::Int64(3)),
+            ("ordinal".to_string(), Value::Int64(0)),
+            (
+                "path".to_string(),
+                Value::List(vec![
+                    Value::String("Methods".to_string()),
+                    Value::String("open(filename)".to_string()),
+                ])
+            ),
+        ],
+        "the bold markers are off the title, and the level is the parent's + 1"
+    );
+    assert_eq!(section.text.as_deref(), Some("\nOpens a project."));
+}

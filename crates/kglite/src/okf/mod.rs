@@ -367,6 +367,11 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
     let source_dir = parent_dir(doc_path);
     let extracted = links::extract_with_tree(&body, &tree, source_dir, profile);
     errors.extend(extracted.path_errors);
+    // The block model's own §9 findings (a `<!-- kglite heading -->` with
+    // nothing to promote) join the link pass's, before either depends on
+    // whether this vault declares `structure:`.
+    let mut warnings = tree.warnings.clone();
+    warnings.extend(extracted.warnings);
     let mut all_links = extracted.links;
     for link in fm_links {
         links::push_unique(&mut all_links, link);
@@ -417,7 +422,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         attachments: extracted.attachments,
         hub_key_edges,
         errors,
-        warnings: extracted.warnings,
+        warnings,
         body,
         derived,
     }))
