@@ -101,6 +101,10 @@ pub(crate) fn parse_concepts_reported(
         docs.iter()
             .flat_map(|d| d.errors.iter().map(|e| format!("{}: {e}", d.file_path))),
     );
+    findings.warnings.extend(
+        docs.iter()
+            .flat_map(|d| d.warnings.iter().map(|w| format!("{}: {w}", d.file_path))),
+    );
     findings.warnings.extend(hub_key_edge_warnings(&docs));
     // The structure pass's own findings (VAULT.md §9): a duplicate derived id,
     // and nothing else this early — the ones that need the whole vault (a link
@@ -394,6 +398,7 @@ fn parse_file(f: &walk::DiscoveredFile, opts: &BuildOptions) -> Result<Option<Co
         attachments: extracted.attachments,
         hub_key_edges,
         errors,
+        warnings: extracted.warnings,
         body,
         derived,
     }))

@@ -180,6 +180,11 @@ pub struct Profile {
     /// [`EMBEDS_CONN_TYPE`] edge (VAULT.md §5.1). An embed naming a non-`.md`
     /// file stays dropped either way — it is an attachment, not a link.
     pub embeds: bool,
+    /// Read by [`crate::okf::links::extract`]: a `{type}` written straight
+    /// after a wikilink's `]]` names that link's edge type, above
+    /// `heading_edges:` and the built-in ladder (VAULT.md §5.3 rung 0). Off
+    /// for `okf`/`loose`, where a brace after a link has always been prose.
+    pub(crate) typed_links: bool,
     /// Read by [`crate::okf::links::extract`]: an inline `#tag` in the body
     /// feeds the same `Tag` hub as `tags:` (VAULT.md §5.5). The `tags` list
     /// property keeps saying exactly what the frontmatter said.
@@ -284,6 +289,7 @@ impl Default for Profile {
             wikilinks: false,
             link_edge_props: false,
             embeds: false,
+            typed_links: false,
             inline_tags: false,
             frontmatter_edges: false,
             alias_resolution: false,
@@ -321,6 +327,7 @@ impl Profile {
             wikilinks: true,
             link_edge_props: true,
             embeds: true,
+            typed_links: true,
             inline_tags: true,
             frontmatter_edges: true,
             alias_resolution: true,
@@ -738,6 +745,10 @@ pub struct ConceptDoc {
     /// escaping path. Drained into the build report's errors, prefixed with
     /// this note's `file_path`.
     pub errors: Vec<String>,
+    /// VAULT.md §9 warnings this one file produced — a `{…}` written against a
+    /// wikilink that names no edge type (§5.3). Drained into the build
+    /// report's warnings, prefixed with this note's `file_path`.
+    pub(crate) warnings: Vec<String>,
     /// Body markdown — `Some` only when `with_body` was requested.
     pub body: Option<String>,
     /// What `structure:` derived from this note's body (VAULT.md §7.1), with

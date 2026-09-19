@@ -57,6 +57,18 @@ before upgrading.
   `default` for an omitted argument**, so an optional parameter no longer fails
   with `Missing parameter: $name` (`coalesce($name, …)` could not help: the
   parameter was absent, not null).
+- **Vault format: typed inline links.** `[[Target]]{type}` and
+  `[[Target|display text]]{type}` name the edge type for that one link, above
+  `heading_edges:` and the built-in heading ladder (VAULT.md §5.3 rung 0);
+  `LINKS_TO` is still the default. The text normalises like a frontmatter
+  key, so `{see-also}`, `{see_also}` and `{SEE_ALSO}` all name `SEE_ALSO`. The
+  brace must follow `]]` with no space, hold no whitespace, close on the same
+  line and normalise to a name that does not start with a digit — otherwise
+  it stays prose and the build warns, naming the note and what was written.
+  `[[Note]] #tag` remains a tag and `![[Note]]` remains `EMBEDS`. The note's
+  body is unchanged: a chunk's `text` keeps the `{type}`, and an export writes
+  the line back byte for byte without restating the edge in frontmatter.
+  Obsidian dialect only.
 - **`run_recipe_query`'s description carries the served catalogue** — one line
   per query with its description and parameters (types, enum values, defaults,
   required) — and its input schema publishes `enum` arrays of the real

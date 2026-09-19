@@ -2,12 +2,17 @@
 //!
 //! A link from concept A to concept B becomes a directed edge. OKF links are
 //! untyped (the relationship lives in prose), so the connection type is inferred
-//! in three tiers, most-specific first:
+//! in four tiers, most-specific first:
+//!  0. a `{type}` written straight after a wikilink's `]]`
+//!     (`[[Customers]]{joins-with}`) — vault only,
 //!  1. an explicit link **title** that looks like an edge type
 //!     (`[customers](/tables/customers.md "JOINS_WITH")`),
 //!  2. the enclosing **section header** (`# Joins` → `JOINS_WITH`,
 //!     `# Citations` → `CITES`, …),
 //!  3. the generic [`DEFAULT_CONN_TYPE`] (`LINKS_TO`).
+//!
+//! Rungs 0 and 1 are the two link spellings' own: a wikilink has no title and
+//! a markdown link takes no brace.
 //!
 //! The body is read through `okf::structure`'s block tree, one scan region at
 //! a time (VAULT.md §5.1): a fenced code block and a `%%comment%%` are the two
@@ -24,8 +29,9 @@
 //!
 //! What the vault profile adds on top (VAULT.md §5, §6), each behind its own
 //! [`Profile`] field so `okf`/`loose` bundles are untouched: `section` and
-//! `anchor` edge properties, an `EMBEDS` edge for `![[Note]]`, inline `#tag`
-//! extraction, and `![alt](x.png)` / `![[x.png]]` attachment references
+//! `anchor` edge properties, an `EMBEDS` edge for `![[Note]]`, rung 0's
+//! `{type}` suffix, inline `#tag` extraction, and `![alt](x.png)` /
+//! `![[x.png]]` attachment references
 //! (resolved against the vault's files by the builder, not here).
 //! Frontmatter-valued edges (§4.3) are built from the parsed frontmatter by
 //! `crate::okf::parse_file`, using [`wikilink_targets`] and [`upper_snake`]
@@ -202,6 +208,10 @@ pub struct Extraction {
     /// filesystem path, or one climbing above the vault root. One entry per
     /// distinct offending target; the caller prefixes the note's own path.
     pub path_errors: Vec<String>,
+    /// Build-report warnings this body wrote: a `{…}` written against a
+    /// wikilink that names no edge type (VAULT.md §5.3). The caller prefixes
+    /// the note's own path, as it does for [`Extraction::path_errors`].
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Extract resolved outbound links (and, in a vault, inline tags) from a
@@ -303,6 +313,19 @@ impl<'t> RegionText<'t> {
 enum Found<'t> {
     Markdown(Captures<'t>),
     Wikilink(Captures<'t>),
+}
+
+/// What a wikilink's `{type}` suffix yielded (VAULT.md §5.3 rung 0).
+///
+/// [`TypeSuffix::Absent`] and [`TypeSuffix::Unusable`] both leave the brace as
+/// prose and differ only in whether the author was plainly reaching for a
+/// type: a space before the brace, or no closing one, is prose somebody wrote
+/// beside a link, while `{see also}` is a suffix that failed and says so in
+/// the build report.
+enum TypeSuffix<'t> {
+    Absent,
+    Named(String),
+    Unusable(&'t str),
 }
 
 impl Region<'_> {
@@ -448,9 +471,23 @@ impl Region<'_> {
             }
             EMBEDS_CONN_TYPE.to_string()
         } else {
-            self.heading_conn
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string())
+            match self.type_suffix(text, m.end()) {
+                TypeSuffix::Named(conn) => conn,
+                TypeSuffix::Unusable(suffix) => {
+                    // Once per distinct spelling, as a path error is: the same
+                    // mistake written in five places is one thing to fix.
+                    let warning = format!(
+                        "`{}{suffix}`: a link type holds no whitespace and must normalise to a \
+                         name that does not start with a digit — the brace is left as prose",
+                        text.of(m)
+                    );
+                    if !out.warnings.contains(&warning) {
+                        out.warnings.push(warning);
+                    }
+                    self.untyped_conn()
+                }
+                TypeSuffix::Absent => self.untyped_conn(),
+            }
         };
         push_unique(
             &mut out.links,
@@ -462,6 +499,47 @@ impl Region<'_> {
                 reverse: false,
             },
         );
+    }
+
+    /// The edge type a wikilink with no `{type}` of its own takes: the
+    /// enclosing heading's, else [`DEFAULT_CONN_TYPE`] (VAULT.md §5.3 rungs
+    /// 2–4).
+    fn untyped_conn(&self) -> String {
+        self.heading_conn
+            .clone()
+            .unwrap_or_else(|| DEFAULT_CONN_TYPE.to_string())
+    }
+
+    /// The `{type}` suffix written against the wikilink that ends at `at`
+    /// (VAULT.md §5.3 rung 0).
+    ///
+    /// The extent is read from the masked text, so a `}` written inside an
+    /// inline code span closes nothing; the name itself is the author's own
+    /// bytes, which is what the warning has to quote back.
+    fn type_suffix<'t>(&self, text: RegionText<'t>, at: usize) -> TypeSuffix<'t> {
+        if !self.profile.typed_links {
+            return TypeSuffix::Absent;
+        }
+        let Some(rest) = text.masked.get(at..).filter(|r| r.starts_with('{')) else {
+            return TypeSuffix::Absent;
+        };
+        // A brace with no `}` before the line ends is not a suffix at all: a
+        // lone `{` is ordinary prose, and warning about one would fire on
+        // every note that writes a brace after a link.
+        let line = &rest[..rest.find('\n').unwrap_or(rest.len())];
+        let Some(close) = line.find('}') else {
+            return TypeSuffix::Absent;
+        };
+        let suffix = &text.raw[at..at + close + 1];
+        let inner = &text.raw[at + 1..at + close];
+        let conn = upper_snake(inner);
+        if inner.contains(char::is_whitespace)
+            || conn.is_empty()
+            || conn.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return TypeSuffix::Unusable(suffix);
+        }
+        TypeSuffix::Named(conn)
     }
 
     /// Record every `![alt](src)` written *inside* a link's text and return the

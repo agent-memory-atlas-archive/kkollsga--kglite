@@ -305,6 +305,7 @@ folder layout would have.
 | `[[Note\\\|display text]]` *(in a table cell)* | The same link. `\\\|` is how Obsidian writes a pipe inside a cell, so the escape belongs to the separator and never to the note's name — and a cell's `\\\|` is unescaped wherever it is read, in a property value as much as in a link. |
 | `[[Note#Heading]]`, `[[Note#A#B]]`, `[[Note#^block-id]]` | Link to `Note`, `anchor` = the fragment. A nested heading is addressed by joining the levels with further `#`. With `structure:` the edge retargets to the section or chunk the fragment names (§5.4, §7.1). |
 | `[[Label/Name]]` | Folder-qualified — use when a stem is ambiguous. |
+| `[[Note]]{type}`, `[[Note\|display text]]{type}` | The same link, **typed**: the brace names the edge type and outranks every heading rule (§5.3 rung 0). It must follow the `]]` with no space, hold no whitespace and close on the same line. |
 | `[text](path.md)`, `[text](path.md "EDGE_TYPE")` | Path link, resolved relative to the linking note; the title is an explicit edge type. |
 | `[text](path.md#Heading)` | Same link, `anchor` = the fragment — a path link carries one exactly as a wikilink does, and it is never part of the target. |
 | `[text](file.ext)` | A plain link to a non-`.md` file is an attachment reference (§6), with the link text as its `alt`. |
@@ -372,6 +373,7 @@ relative to the linking note. A trailing `.md` is stripped first.
 
 For a body link, the edge type is the first that applies:
 
+0. a `{type}` written straight after a wikilink's `]]` — `[[Customers]]{joins-with}`
 1. an explicit link title that looks like a type — `[x](y.md "JOINS_WITH")`
 2. an entry in `heading_edges:` matching the enclosing heading text in full,
    case-insensitively
@@ -380,8 +382,30 @@ For a body link, the edge type is the first that applies:
    *reference* → `REFERENCES`, *related* → `RELATED`, *depend* → `DEPENDS_ON`
 4. `LINKS_TO`
 
+Rungs 0 and 1 are each one spelling's own — a wikilink carries no title and a
+markdown link takes no brace — and both say what *this* link means, which is
+why they outrank the heading the link happens to sit under.
+
 `heading_edges:` wins over the built-in ladder — which is why a corpus writes
 `heading_edges: {"Related topics": RELATED_TO}` instead of accepting `RELATED`.
+
+**The `{type}` suffix.** It must follow the closing `]]` with nothing between
+them, hold no whitespace, and close on the same line. Its text is normalised
+the way a frontmatter key is (§4.3), so `{see-also}`, `{see_also}` and
+`{SEE_ALSO}` all name `SEE_ALSO`, and the result must be a non-empty name that
+does not start with a digit. A brace that fails any of that is left as prose
+and the build **warns**, naming the note and what was written; the link keeps
+the type rungs 2–4 give it. A brace the link does not touch — a space before
+it, or no `}` before the line ends — is ordinary prose and says nothing about
+the link, silently. Two more spellings that are deliberately *not* link types:
+`[[Note]] #tag`, where `#tag` is a tag and stays one (§5.5), and
+`![[Note]]{x}`, because an embed's type is `EMBEDS`. Everything else about the
+link is unchanged — `[[Note#Heading|display text]]{see-also}` keeps its
+`anchor`, its `label` and its retarget (§5.4).
+
+The suffix is prose like the rest of the body, and the body is never rewritten
+(§10.3): a section or chunk whose text spans a typed link keeps the `{type}` in
+its `text` and `embed_text`, and an export writes the line back byte for byte.
 
 ### 5.4 Edge properties
 
@@ -1209,8 +1233,8 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
    target that is not a file has no wikilink to name it. And **an edge the body
    already states**: the prose is re-read with the reader's own scanner, and an
    edge is left out when a body link reaches the same target *with the same
-   type* — which is the type §5.3's heading ladder gives it, not `LINKS_TO` by
-   assumption. The type has to match both ways. Writing an edge the body
+   type* — which is the type §5.3's ladder gives it, a `{type}` suffix as much
+   as a heading rung, not `LINKS_TO` by assumption. The type has to match both ways. Writing an edge the body
    already states makes a second edge on the next import, one carrying the
    body's `section` and one carrying nothing; dropping one whose type differs
    from what the body's link would produce retypes it.

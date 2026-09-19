@@ -912,6 +912,33 @@ fn a_re_filed_notes_relative_reference_moves_with_it() {
     assert!(trip.second.props(IMAGE_LABEL, "img/chart.png").is_some());
 }
 
+/// A typed inline link (VAULT.md §5.3 rung 0) is a statement the prose already
+/// carries, so the export must leave the body alone and must not restate the
+/// edge as a frontmatter `see_also:` key — which would make a second edge on
+/// the next import.
+#[test]
+fn a_typed_inline_link_round_trips_in_the_prose_alone() {
+    let body = "## Related work\n\nRead [[b|the other one]]{see-also}.\n";
+    let dir = vault_of(&[("Note/a.md", body), ("Note/b.md", "prose\n")]);
+    let trip = Trip::from_vault(dir.path());
+    assert_eq!(trip.first.edge("SEE_ALSO"), 1);
+    assert_eq!(trip.first.edge("LINKS_TO"), 0);
+    let written = String::from_utf8(trip.exports[0]["Note/a.md"].clone()).unwrap();
+    assert!(
+        written.ends_with(body),
+        "the body is written verbatim, brace and all: {written:?}"
+    );
+    assert!(
+        !written.contains("see_also"),
+        "the prose states the edge, so the frontmatter must not: {written:?}"
+    );
+    assert_eq!(
+        (trip.second.edge("SEE_ALSO"), trip.second.edge("LINKS_TO")),
+        (1, 0),
+        "and the re-import reads exactly the one edge back"
+    );
+}
+
 /// The declared type of one property, read out of a freshly built vault — the
 /// thing a rendered value cannot tell you (`"2026-02-20"` and a `Date` print
 /// the same).

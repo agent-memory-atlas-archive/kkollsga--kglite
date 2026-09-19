@@ -1475,3 +1475,31 @@ class TestProvenanceAndRebuild:
         with pytest.raises(RuntimeError, match="obsidian") as caught:
             okf.rebuild_if_changed(built, dialect="okf")
         assert "okf" in str(caught.value), "both dialects are named"
+
+
+def test_typed_inline_link_names_the_edge(tmp_path):
+    """VAULT.md §5.3 rung 0: `[[Target]]{type}` types that one link, above the
+    heading it sits under, and a brace that names no type is a warning."""
+    (tmp_path / ".kglite").mkdir()
+    (tmp_path / ".kglite" / "vault.yaml").write_text("kglite_vault: 1\nstructure:\n  sections: {}\n", encoding="utf-8")
+    (tmp_path / "guide.md").write_text(
+        "## Related work\n\nRead [[atlas|the atlas]]{see-also} and [[atlas]]{3d}.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "atlas.md").write_text("The atlas.\n", encoding="utf-8")
+
+    g = okf.build(str(tmp_path), dialect="obsidian")
+    rows = g.cypher(
+        "MATCH (:Note {concept_id:'guide'})-[r]->(:Note {concept_id:'atlas'}) "
+        "RETURN type(r) AS t, r.label AS label ORDER BY t"
+    ).to_list()
+    assert [(r["t"], r["label"]) for r in rows] == [
+        ("RELATED", None),
+        ("SEE_ALSO", "the atlas"),
+    ], "the suffix beats the heading; `{3d}` starts with a digit, so that link keeps RELATED"
+
+    report = okf.validate(str(tmp_path), dialect="obsidian")
+    assert [w for w in report.warnings if "{3d}" in w] == [
+        "guide.md: `[[atlas]]{3d}`: a link type holds no whitespace and must normalise to a "
+        "name that does not start with a digit — the brace is left as prose"
+    ]

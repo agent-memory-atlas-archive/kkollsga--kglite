@@ -1041,3 +1041,165 @@ fn an_escaped_pipe_in_a_table_cell_names_the_note_and_keeps_its_text() {
         Some(vec!["Usage".to_string()])
     );
 }
+
+// ── typed inline links, `[[Target]]{type}` (VAULT.md §5.3 rung 0) ──────────
+
+/// `(target, conn type)` of every link one body states.
+fn typed(body: &str) -> Vec<(String, String)> {
+    extract(body, "", &vault())
+        .links
+        .into_iter()
+        .map(|l| (l.target, l.conn_type))
+        .collect()
+}
+
+#[test]
+fn a_brace_after_a_wikilink_names_the_edge_type() {
+    assert_eq!(
+        typed("see [[Atlas]]{see-also} and [[Api]]{api}\n"),
+        vec![
+            ("Atlas".to_string(), "SEE_ALSO".to_string()),
+            ("Api".to_string(), "API".to_string())
+        ]
+    );
+    assert_eq!(
+        typed("[[Atlas]]{SEE_ALSO}\n"),
+        typed("[[Atlas]]{see-also}\n"),
+        "the suffix normalises, so the two spellings are one type"
+    );
+}
+
+#[test]
+fn a_typed_link_outranks_the_heading_it_sits_under() {
+    assert_eq!(
+        typed("## Related work\n\n[[Atlas]]{see-also} and [[Api]]\n"),
+        vec![
+            ("Atlas".to_string(), "SEE_ALSO".to_string()),
+            ("Api".to_string(), "RELATED".to_string())
+        ],
+        "rung 0 beats the built-in ladder, and only for the link that wrote it"
+    );
+    let mut profile = vault();
+    profile
+        .heading_edges
+        .insert("Related work".to_string(), "RELATED_TO".to_string());
+    let got = extract("## Related work\n\n[[Atlas]]{see-also}\n", "", &profile);
+    assert_eq!(
+        got.links[0].conn_type, "SEE_ALSO",
+        "and it beats `heading_edges:` too"
+    );
+}
+
+#[test]
+fn a_typed_link_keeps_its_display_text_and_its_anchor() {
+    let got = extract(
+        "## Notes\n\n[[Atlas#Overview|the atlas]]{see-also}\n",
+        "",
+        &structured_vault(),
+    );
+    assert_eq!(got.links[0].target, "Atlas");
+    assert_eq!(got.links[0].conn_type, "SEE_ALSO");
+    assert_eq!(
+        props_of(&got.links[0]),
+        vec![
+            ("section", "Notes"),
+            ("anchor", "Overview"),
+            ("label", "the atlas")
+        ]
+    );
+}
+
+#[test]
+fn a_typed_link_is_read_inside_a_table_cell() {
+    let got = extract(
+        "| topic | link |\n|---|---|\n| a | [[Atlas\\|the atlas]]{see-also} |\n",
+        "",
+        &structured_vault(),
+    );
+    assert_eq!(
+        got.links
+            .iter()
+            .map(|l| (l.target.as_str(), l.conn_type.as_str(), props_of(l)))
+            .collect::<Vec<_>>(),
+        vec![("Atlas", "SEE_ALSO", vec![("label", "the atlas")])],
+        "the `\\|` escape belongs to the cell, and the brace still follows the `]]`"
+    );
+}
+
+#[test]
+fn a_brace_that_names_no_type_stays_prose_and_warns() {
+    for suffix in ["{}", "{see also}", "{3d}", "{-}"] {
+        let body = format!("[[Atlas]]{suffix}\n");
+        let got = extract(&body, "", &vault());
+        assert_eq!(
+            got.links[0].conn_type, "LINKS_TO",
+            "`{suffix}` names no type, so the link keeps its default"
+        );
+        assert_eq!(got.warnings.len(), 1, "`{suffix}`: {:?}", got.warnings);
+        assert!(
+            got.warnings[0].contains(suffix) && got.warnings[0].contains("[[Atlas]]"),
+            "the warning names what was written: {}",
+            got.warnings[0]
+        );
+    }
+}
+
+#[test]
+fn a_brace_the_link_does_not_touch_is_ordinary_prose() {
+    for body in [
+        "[[Atlas]] {see-also}\n",
+        "[[Atlas]]{see-also\n",
+        "[[Atlas]]{see-\nalso}\n",
+    ] {
+        let got = extract(body, "", &vault());
+        assert_eq!(got.links[0].conn_type, "LINKS_TO", "{body:?}");
+        assert!(
+            got.warnings.is_empty(),
+            "a brace that is not attached to the link says nothing about it: {:?}",
+            got.warnings
+        );
+    }
+}
+
+#[test]
+fn one_mistake_written_twice_is_one_warning() {
+    let got = extract(
+        "[[Atlas]]{see also} again [[Atlas]]{see also}\n",
+        "",
+        &vault(),
+    );
+    assert_eq!(got.warnings.len(), 1, "{:?}", got.warnings);
+}
+
+#[test]
+fn a_tag_after_a_link_is_a_tag_and_not_a_link_type() {
+    let got = extract("[[Atlas]] #see-also\n", "", &vault());
+    assert_eq!(got.links[0].conn_type, "LINKS_TO");
+    assert_eq!(got.tags, vec!["see-also"], "it is still a tag");
+    assert!(got.warnings.is_empty());
+}
+
+#[test]
+fn an_embed_keeps_embeds_and_the_brace_after_it_is_prose() {
+    let got = extract("![[Atlas]]{see-also}\n", "", &vault());
+    assert_eq!(
+        got.links
+            .iter()
+            .map(|l| (l.target.as_str(), l.conn_type.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("Atlas", "EMBEDS")],
+        "a transclusion's type is what it is"
+    );
+    assert!(got.warnings.is_empty());
+}
+
+#[test]
+fn only_the_vault_dialect_reads_a_typed_link() {
+    let got = extract(
+        "[[Atlas]]{see-also}\n",
+        "",
+        &Profile::for_dialect(Dialect::Loose),
+    );
+    assert_eq!(got.links[0].conn_type, "LINKS_TO");
+    assert!(got.warnings.is_empty());
+}

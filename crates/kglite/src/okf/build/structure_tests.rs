@@ -873,3 +873,62 @@ fn a_table_or_symbol_rule_that_matched_nothing_is_a_warning() {
         ]
     );
 }
+
+// ── Typed inline links (VAULT.md §5.3 rung 0) ──────────────────────────────
+
+/// The whole point of rung 0 end to end: a note that writes
+/// `[[Target|text]]{type}` yields *that* edge type, retargeted and labelled
+/// exactly as the untyped spelling would be, and a brace naming no type is
+/// prose the report names.
+#[test]
+fn a_typed_inline_link_types_the_edge_it_is_written_on() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "guide.md",
+        "## Related work\n\nRead [[target#Sub|the sub-page]]{see-also} and [[target]]{}.\n",
+    );
+    write(dir.path(), "target.md", "# Top\n\n## Sub\n\nprose\n");
+    let out = vault_build_with(dir.path(), with_sections_and_chunks);
+    let stated: Vec<EdgeFacts> = edges_of(&out.graph)
+        .into_iter()
+        .filter(|(source, _, _, _)| source == "guide")
+        .collect();
+    assert_eq!(
+        stated,
+        vec![
+            (
+                "guide".to_string(),
+                "HAS_SECTION".to_string(),
+                "guide#Related work".to_string(),
+                vec![]
+            ),
+            (
+                "guide".to_string(),
+                "RELATED".to_string(),
+                "target".to_string(),
+                vec![("section".to_string(), "Related work".to_string())]
+            ),
+            (
+                "guide".to_string(),
+                "SEE_ALSO".to_string(),
+                "target#Top#Sub".to_string(),
+                vec![
+                    ("anchor".to_string(), "Sub".to_string()),
+                    ("label".to_string(), "the sub-page".to_string()),
+                    ("section".to_string(), "Related work".to_string()),
+                ]
+            ),
+        ],
+        "the suffix beats the `Related work` heading for the link that wrote one, and the \
+         link whose brace named nothing keeps the heading's own `RELATED`"
+    );
+    assert_eq!(
+        out.report.warnings,
+        vec![
+            "guide.md: `[[target]]{}`: a link type holds no whitespace and must normalise to a \
+             name that does not start with a digit — the brace is left as prose"
+                .to_string()
+        ]
+    );
+}
