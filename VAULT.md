@@ -1854,6 +1854,8 @@ structure:
   ordered_lists: {label: ProcedureStep, container: Procedure, edge: HAS_STEP, next: NEXT_STEP}
   tables:
     - {under_heading: "Parameters", label: ApiParameter, key_column: name, edge: HAS_PARAMETER}
+    - {under_heading: "Returns", label: ApiReturn, key_column: name, edge: HAS_RETURN}
+    - {under_heading: "Exceptions", label: ApiException, key_column: condition_id, edge: RAISES}
   key_from_heading: {label: ApiSymbol, property: qualified_name, under_label: Api}
   inherit: [corpus, category]
   embed_text: "{title} | {heading_path}\n\n{text}"
@@ -1876,6 +1878,88 @@ vault whose notes are genuinely one kind, as §7's example is.
 `code_fences:` here omits `langs:` on purpose — the corpus lost its languages in
 conversion, and every fence is still an example. Fix the converter and the
 filter becomes worth declaring.
+
+For API reference pages, a Parameters table alone is not a contract. Preserve
+the owning symbol, complete signature, return, every exception condition, and
+an exact source handle. The converter in the
+[worked help-vault example](https://kglite.readthedocs.io/en/latest/python/guides/help-vault.html)
+emits this shape (hashes shortened here only for readability):
+
+The general starter above selects notes labelled `Api`. The bounded fixture
+labels all three source pages `Article`, so its checked-in `vault.yaml` uses
+`under_label: Article` for the same rule; use the label your converter emits.
+
+```markdown
+## Client.connect(controller_id: str, timeout: int = 30, options: dict = {"mode": "safe"}) → Session
+
+<!-- kglite owner: Client -->
+<!-- kglite returns: Session -->
+<!-- kglite source_signature: connect(controller_id: str, timeout: int = 30, options: dict = {"mode": "safe"}) -> Session -->
+<!-- kglite provenance: Sources/api.html#connect -->
+<!-- kglite source_sha256: <sha256> -->
+
+### Parameters
+| name | type | default | owner | source_anchor | source_sha256 |
+| --- | --- | --- | --- | --- | --- |
+| options | dict | {"mode": "safe"} | Client | api.html#connect | <sha256> |
+
+### Returns
+| name | type | owner | source_anchor | source_sha256 |
+| --- | --- | --- | --- | --- |
+| return | Session | Client | api.html#connect | <sha256> |
+
+### Exceptions
+| condition_id | condition | exception | owner | source_anchor | source_sha256 |
+| --- | --- | --- | --- | --- | --- |
+| value-error-empty-id | controller_id is empty | ValueError | Client | api.html#connect | <sha256> |
+| value-error-negative-timeout | timeout is negative | ValueError | Client | api.html#connect | <sha256> |
+```
+
+These directive and column names are authoring conventions, not reserved vault
+keys. `key_from_heading` derives the `ApiSymbol`, its normalized `signature`
+and its `qualified_name` from the heading. The directives attach the owner,
+return, exact unnormalized `source_signature`, provenance and hash. Each table
+rule creates facts from its own child heading `Section`; that section points to
+the symbol with `PARENT_SECTION`. Preserve a quoted or nested default as source
+text — do not reinterpret `{"mode": "safe"}` into a new value. Key an
+exception by a stable condition identity, not by exception type: both rows
+above must survive even though both raise `ValueError`. The source anchor and
+hash make each extracted fact reviewable after regeneration.
+
+The resulting facts are independently queryable:
+
+```cypher
+MATCH (s:ApiSymbol {qualified_name: 'Client.connect'})
+RETURN s.owner, s.signature, s.source_signature, s.returns,
+       s.provenance, s.source_sha256
+```
+
+```cypher
+MATCH (s:ApiSymbol {qualified_name: 'Client.connect'})
+      <-[:PARENT_SECTION]-(h:Section)-[:HAS_PARAMETER]->(p:ApiParameter)
+WHERE h.title = 'Parameters'
+RETURN p.name, p.type, p.default, p.source_anchor, p.source_sha256
+ORDER BY p.name
+```
+
+```cypher
+MATCH (s:ApiSymbol {qualified_name: 'Client.connect'})
+      <-[:PARENT_SECTION]-(h:Section)-[:HAS_RETURN]->(r:ApiReturn)
+WHERE h.title = 'Returns'
+RETURN r.name, r.type, r.source_anchor, r.source_sha256
+```
+
+```cypher
+MATCH (s:ApiSymbol {qualified_name: 'Client.connect'})
+      <-[:PARENT_SECTION]-(h:Section)-[:RAISES]->(e:ApiException)
+WHERE h.title = 'Exceptions'
+RETURN e.condition_id, e.exception, e.condition, e.source_anchor, e.source_sha256
+ORDER BY e.condition_id
+```
+
+Test the values, not just nonzero counts: this example must return one symbol,
+the exact nested default, one `Session` return, and two distinct `ValueError`
+conditions with their source evidence.
 
 ### 13.4 Stating a fact the prose only says in words
 

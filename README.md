@@ -534,6 +534,7 @@ tracks by audience, each with its own index:
   [derived index](https://kglite.readthedocs.io/en/latest/python/guides/derived-index.html) ·
   [primary store](https://kglite.readthedocs.io/en/latest/python/guides/primary-store.html) ·
   [OKF ingestion](https://kglite.readthedocs.io/en/latest/python/guides/okf.html) ·
+  [help-vault lifecycle](https://kglite.readthedocs.io/en/latest/python/guides/help-vault.html) ·
   [AI agents](https://kglite.readthedocs.io/en/latest/python/guides/ai-agents.html) ·
   [MCP servers](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html) ·
   [MCP skills](https://kglite.readthedocs.io/en/latest/python/guides/mcp-skills.html).

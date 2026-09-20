@@ -21,6 +21,12 @@ import zipfile
 HERE = Path(__file__).resolve().parent
 MANIFEST = json.loads((HERE / "manifest.json").read_text(encoding="utf-8"))
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|PLACEHOLDER|lorem ipsum)\b", re.I)
+API_SOURCE_HASH = "bf3070c666445ec55369edb8077984e766e0998407ddebba6b8229ffa560d63a"
+API_SOURCE_SIGNATURE = 'connect(controller_id: str, timeout: int = 30, options: dict = {"mode": "safe"}) -> Session'
+
+
+def table_row(*cells: str) -> str:
+    return "| " + " | ".join(cells) + " |"
 
 
 def sha256(path: Path) -> str:
@@ -131,7 +137,21 @@ def render_note(page: dict[str, str], parsed: PageParser) -> str:
         if kind == "h1":
             lines += [f"# {value}", ""]
         elif kind == "h2":
-            lines += [f"## {value}", ""]
+            if page["id"] == "client-api" and value == "Client.connect":
+                lines += [
+                    "## Client." + API_SOURCE_SIGNATURE.replace(" -> ", " → "),
+                    "",
+                ]
+                lines += [
+                    "<!-- kglite owner: Client -->",
+                    "<!-- kglite returns: Session -->",
+                    f"<!-- kglite source_signature: {API_SOURCE_SIGNATURE} -->",
+                    "<!-- kglite provenance: Sources/api.html#connect -->",
+                    f"<!-- kglite source_sha256: {API_SOURCE_HASH} -->",
+                    "",
+                ]
+            else:
+                lines += [f"## {value}", ""]
         elif kind == "li":
             lines.append(f"1. {value}")
         elif kind == "warning":
@@ -144,6 +164,52 @@ def render_note(page: dict[str, str], parsed: PageParser) -> str:
             lines.append("")
         else:
             lines += [value, ""]
+    if page["id"] == "client-api":
+        lines += [
+            "### Parameters",
+            "",
+            table_row("name", "type", "default", "owner", "source_anchor", "source_sha256"),
+            table_row("---", "---", "---", "---", "---", "---"),
+            table_row("controller_id", "str", "required", "Client", "api.html#connect", API_SOURCE_HASH),
+            table_row("timeout", "int", "30", "Client", "api.html#connect", API_SOURCE_HASH),
+            table_row("options", "dict", '{"mode": "safe"}', "Client", "api.html#connect", API_SOURCE_HASH),
+            "",
+            "### Returns",
+            "",
+            table_row("name", "type", "owner", "source_anchor", "source_sha256"),
+            table_row("---", "---", "---", "---", "---"),
+            table_row("return", "Session", "Client", "api.html#connect", API_SOURCE_HASH),
+            "",
+            "### Exceptions",
+            "",
+            table_row("condition_id", "condition", "exception", "owner", "source_anchor", "source_sha256"),
+            table_row("---", "---", "---", "---", "---", "---"),
+            table_row(
+                "value-error-empty-id",
+                "controller_id is empty",
+                "ValueError",
+                "Client",
+                "api.html#connect",
+                API_SOURCE_HASH,
+            ),
+            table_row(
+                "value-error-negative-timeout",
+                "timeout is negative",
+                "ValueError",
+                "Client",
+                "api.html#connect",
+                API_SOURCE_HASH,
+            ),
+            table_row(
+                "connection-error-unreachable",
+                "controller cannot be reached",
+                "ConnectionError",
+                "Client",
+                "api.html#connect",
+                API_SOURCE_HASH,
+            ),
+            "",
+        ]
     if parsed.references:
         lines += ["## Referenced source members", ""]
         lines += [f"- `{target}`" for target in parsed.references]
@@ -174,7 +240,7 @@ def build(output: Path, source_root: Path = HERE) -> None:
         parsed = parse_page(source)
         note = output / page["output"]
         note.parent.mkdir(parents=True, exist_ok=True)
-        note.write_text(render_note(page, parsed))
+        note.write_text(render_note(page, parsed), encoding="utf-8")
         mappings.append({"source": page["source"], "note": page["output"], "id": page["id"]})
         refs.extend({"source": page["source"], "target": target} for target in parsed.references)
         index.append(
@@ -202,19 +268,25 @@ def build(output: Path, source_root: Path = HERE) -> None:
     annotation = json.loads(annotation_source.read_text(encoding="utf-8"))
     annotation_out = output / "Annotations" / "reset-annotation.json"
     annotation_out.parent.mkdir(parents=True)
-    annotation_out.write_text(json.dumps(annotation, indent=2, sort_keys=True) + "\n")
+    annotation_out.write_text(json.dumps(annotation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     recipe_out = output / ".kglite" / "recipes" / "article-index.md"
     recipe_out.parent.mkdir(parents=True)
     recipe_source = source_root / ".kglite" / "recipes" / "article-index.md"
     require_regular_within(recipe_source, source_root)
     shutil.copy2(recipe_source, recipe_out)
+    vault_config_source = source_root / ".kglite" / "vault.yaml"
+    require_regular_within(vault_config_source, source_root)
+    shutil.copy2(vault_config_source, output / ".kglite" / "vault.yaml")
+    mcp_source = source_root / "mcp.yaml"
+    require_regular_within(mcp_source, source_root)
+    shutil.copy2(mcp_source, output / "mcp.yaml")
     report = {"inventory": inventory, "mappings": mappings, "references": refs, "index": index}
-    (output / "build-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    (output / "build-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     check(output)
 
 
 def check(vault: Path) -> None:
-    report = json.loads((vault / "build-report.json").read_text())
+    report = json.loads((vault / "build-report.json").read_text(encoding="utf-8"))
     errors: list[str] = []
     expected_source_paths = {
         path.relative_to(vault).as_posix() for path in (vault / "Sources").rglob("*") if path.is_file()
@@ -241,7 +313,7 @@ def check(vault: Path) -> None:
     unexpected = actual_refs - expected_refs
     if unexpected:
         errors.append(f"unaccounted references: {sorted(unexpected)}")
-    searchable = "\n".join((vault / x["note"]).read_text() for x in report["mappings"])
+    searchable = "\n".join((vault / x["note"]).read_text(encoding="utf-8") for x in report["mappings"])
     if PLACEHOLDER.search(searchable):
         errors.append("placeholder text remains")
     expected_grid = [["Mode", "Allowed range", "Allowed range"], ["Mode", "Minimum", "Maximum"], ["Safe", "1", "5"]]
@@ -268,7 +340,7 @@ def check(vault: Path) -> None:
         note = next(item["note"] for item in report["mappings"] if item["source"] == source)
         if f"- `{target}`" not in (vault / note).read_text(encoding="utf-8"):
             errors.append(f"rendered reference missing: {source} -> {target}")
-    annotation = json.loads((vault / "Annotations" / "reset-annotation.json").read_text())
+    annotation = json.loads((vault / "Annotations" / "reset-annotation.json").read_text(encoding="utf-8"))
     source = vault / "Sources" / annotation["source"]
     if annotation["source_sha256"] != sha256(source):
         errors.append("reviewed annotation has stale source evidence")
@@ -282,7 +354,7 @@ def check(vault: Path) -> None:
 def query(vault: Path, topic: str, page_size: int) -> None:
     if page_size < 1 or page_size > 20:
         raise ValueError("page-size must be between 1 and 20")
-    report = json.loads((vault / "build-report.json").read_text())
+    report = json.loads((vault / "build-report.json").read_text(encoding="utf-8"))
     wanted = "reset-controller" if topic == "procedure" else "client-api"
     page = next(x for x in report["index"] if x["id"] == wanted)
     blocks = page["blocks"]

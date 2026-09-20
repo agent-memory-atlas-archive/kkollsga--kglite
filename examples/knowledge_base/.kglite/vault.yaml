@@ -1,0 +1,9 @@
+kglite_vault: 1
+
+structure:
+  sections: {label: Section, edge: HAS_SECTION, parent: PARENT_SECTION, next: NEXT_SECTION}
+  tables:
+    - {under_heading: "Parameters", label: ApiParameter, key_column: name, edge: HAS_PARAMETER}
+    - {under_heading: "Returns", label: ApiReturn, key_column: name, edge: HAS_RETURN}
+    - {under_heading: "Exceptions", label: ApiException, key_column: condition_id, edge: RAISES}
+  key_from_heading: {label: ApiSymbol, property: qualified_name, under_label: Article}

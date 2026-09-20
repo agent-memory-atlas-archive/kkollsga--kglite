@@ -21,6 +21,6 @@
     ["procedure.html", "api.html#connect"],
     ["api.html", "procedure.html"]
   ],
-  "public_roots": ["Articles", "Sources", "Workflows", "Annotations", ".kglite/recipes", "build-report.json"],
+  "public_roots": ["Articles", "Sources", "Workflows", "Annotations", ".kglite/recipes", ".kglite/vault.yaml", "mcp.yaml", "build-report.json"],
   "private_canary": "PRIVATE-CANARY-7F3A"
 }

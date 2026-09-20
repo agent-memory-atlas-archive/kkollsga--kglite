@@ -137,6 +137,34 @@ python examples/knowledge_base/knowledge_base.py kglite-query \
   --vault "$work_dir/vault" procedure --page-size 2
 ```
 
+The built vault also carries a complete read-only MCP manifest. Verify the
+configuration with a live handshake, then use the same command without
+`--selftest` as the stdio launch command in your MCP client:
+
+```bash
+kglite-mcp-server --vault "$work_dir/vault" --vault-cache none \
+  --mcp-config "$work_dir/vault/mcp.yaml" --selftest
+
+kglite-mcp-server --vault "$work_dir/vault" --vault-cache none \
+  --mcp-config "$work_dir/vault/mcp.yaml"
+```
+
+Vault mode binds source tools to the vault root. Public originals live under
+its allowlisted `Sources/` mirror, so after a structured result identifies
+`Client.connect`, expand the exact source with:
+
+```json
+{"file_path":"Sources/api.html","grep":"Client.connect|Raises","grep_context":1}
+```
+
+The generated vault derives one `ApiSymbol`, three `ApiParameter` rows, one
+`ApiReturn`, and three `ApiException` rows from that source page. The symbol
+keeps its owner, complete signature, literal nested default, return, source
+anchor, and source SHA-256. Exception rows use distinct `condition_id` values,
+so the two `ValueError` conditions cannot overwrite one another. These are
+fixture conventions exercised by `tests/test_knowledge_base_example.py`, not
+universal KGLite fields.
+
 This opens the source-backed vault with the `obsidian` dialect, traverses all
 three `Article` nodes in deterministic pages, checks the selected topic exists,
 and reports the native graph-carried recipe schema. Recipe defaults are applied

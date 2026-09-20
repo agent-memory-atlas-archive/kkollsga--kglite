@@ -1,0 +1,8 @@
+name: Synthetic Help Knowledge Base
+skills: true
+
+instructions: |
+  Use graph queries for the article index and extracted API facts. Use
+  read_source with a Sources/... path for exact source expansion before
+  answering when a result is summarized or a warning, default, or exception
+  condition is decisive.

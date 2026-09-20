@@ -69,7 +69,7 @@ def test_finds_repeated_routing_body_without_copying_its_text():
 
 def test_cli_accepts_bare_tools_array_and_records_file_bytes(tmp_path, capsys):
     path = tmp_path / "tools.json"
-    path.write_text(json.dumps(fixture()["result"]["tools"], ensure_ascii=False))
+    path.write_text(json.dumps(fixture()["result"]["tools"], ensure_ascii=False), encoding="utf-8")
 
     assert budget.main([str(path)]) == 0
     report = json.loads(capsys.readouterr().out)
