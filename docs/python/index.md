@@ -47,6 +47,7 @@ guides/import-export
 guides/schema-migrations
 guides/ai-agents
 guides/okf
+guides/help-vault
 guides/recipes
 ```
 

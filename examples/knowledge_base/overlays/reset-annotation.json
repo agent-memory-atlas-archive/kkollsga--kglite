@@ -1,0 +1,9 @@
+{
+  "id": "annotation-reset-owner",
+  "source": "procedure.html",
+  "heading": "Reset a controller",
+  "source_sha256": "b6cb21b4ddbcf13583ee930ca4a0899aba2b73ad7c725bbf7480428d0c325cb2",
+  "status": "reviewed",
+  "precedence": "adds local ownership; never replaces source facts",
+  "annotation": "The support team owns the verification checklist."
+}

@@ -1,0 +1,2 @@
+Record controller ID.
+Wait for Ready after Apply.

@@ -29,6 +29,10 @@ No files to ship alongside the graph? Store the same skill in the `.kgl`
 itself with `graph.set_skill(...)` — see
 [Skills carried in the graph](#skills-carried-in-the-graph).
 
+Building a knowledge base rather than only a skill? Start with the portable
+[Knowledge Bases](https://github.com/kkollsga/kglite/blob/main/KNOWLEDGE_BASES.md)
+guide, then use {doc}`help-vault` for the runnable vault and MCP lifecycle.
+
 ```yaml
 # my_graph_mcp.yaml
 name: my_graph
@@ -269,6 +273,12 @@ starting one. See {doc}`/operators/cli`.
   process serves its new methodology on the next reload rather than at the next
   restart. This is where skills differ from graph-carried recipes, whose
   catalogue is fixed for the session.
+
+For a vault-backed deployment, `rebuild_graph` performs the same skill refresh
+after rebuilding the notes. Recipe queries, parameter schemas and descriptions
+remain fixed at boot, and adding/removing/renaming a recipe `tool:` also changes
+the boot-time router. The canonical per-mode update table is in
+[VAULT.md §8](https://kglite.readthedocs.io/en/latest/reference/vault-format.html#skills-and-recipes-carried-in-the-vault).
 
 ## Frontmatter schema
 

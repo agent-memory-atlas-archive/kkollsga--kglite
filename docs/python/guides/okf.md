@@ -147,6 +147,10 @@ The format is specified in
 [VAULT.md](https://kglite.readthedocs.io/en/latest/reference/vault-format.html),
 which is also the checklist to follow when writing a converter from HTML or any
 other source into a vault. Check a vault with `kglite okf check <dir>`.
+For a portable design guide that does not require KGLite, start with
+[Knowledge Bases](https://github.com/kkollsga/kglite/blob/main/KNOWLEDGE_BASES.md).
+For a complete runnable conversion, reconciliation, serving and sharing
+workflow, follow {doc}`help-vault`.
 
 **Converting HTML help into a vault.** A vendor help corpus — thousands of HTML
 pages, a JSON table of contents, `<meta>` metadata and an image directory — is
@@ -174,11 +178,13 @@ g = okf.open("vault", dialect="obsidian")   # builds it, and caches the graph
 g = okf.open("vault", dialect="obsidian")   # loads the cache; no note is read
 ```
 
-The cache is an ordinary `.kgl` at `.kglite/graph.kgl` inside the vault, so it
-travels with it: commit it and the first open on a new machine costs a `stat`
-of each file instead of a build. `okf.open` rebuilds when the directory has
-moved on, when the cache was written by another version of kglite, when it was
-built with different keywords, or when it belongs to a vault at another path —
+The default cache is an ordinary `.kgl` at `.kglite/graph.kgl` inside the
+vault. It may travel with a vault as an optional accelerator, but it is stamped
+with the canonical source root: a vault copied or moved to another path rebuilds
+once, then subsequent unchanged opens reuse the refreshed cache when it is
+writable. `okf.open` also rebuilds when the directory contents have changed,
+when the cache was written by another version of kglite, when it was built with
+different keywords, or when it belongs to a vault at another path —
 and writes back whatever it had to build, so the next open starts from there.
 Declared `embed:` targets run on the build path too, which is why a cache hit
 still comes back with its vectors.
@@ -186,8 +192,9 @@ still comes back with its vectors.
 **A cache problem never fails an open.** An unreadable cache is a silent miss;
 a cache that cannot be *written* — a read-only vault, a full volume, another
 process mid-write — is skipped just as quietly and costs one more rebuild next
-time. `cache="path/to.kgl"` puts it elsewhere (keep it *outside* the vault, or
-it becomes a file of the vault and invalidates itself) and `cache=False`
+time. `cache="path/to.kgl"` puts it elsewhere (an outside path is recommended
+when the source tree should stay clean or read-only; keep it *outside* the
+vault, or it becomes a file of the vault and invalidates itself) and `cache=False`
 switches it off.
 
 From a terminal the same thing says which of the two happened:

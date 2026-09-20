@@ -13,8 +13,11 @@ applies_when:
 ---
 
 The graph is **derived from the markdown files**, not stored separately. The
-files are canonical: edit a note and the graph rebuilds on the next tool call.
-Never write the graph to change the notes.
+files are canonical: in `--vault` mode, edit a note and the graph rebuilds on
+the next tool call. `rebuild_graph` forces that build immediately. A server
+started with `--graph` serves a prebuilt file instead: rebuild that file from
+the source vault, then call `reload_graph` or restart. Restarting `--graph`
+alone never converts edited notes. Never write the graph to change the notes.
 
 ## Five rules decide what a note becomes
 
@@ -34,9 +37,12 @@ Never write the graph to change the notes.
 
 Optional `.kglite/vault.yaml` declares profile, property types, indexes,
 ontology, embed targets and `structure:`; `.kglite/skills/` and
-`.kglite/recipes/` carry the vault's own agent guidance, re-read on every
-build. The full format spec is `VAULT.md` in the kglite repository — read it
-before inventing a key, not before writing an ordinary note.
+`.kglite/recipes/` carry the vault's own agent guidance and are re-read on every
+build. A rebuilt skill refreshes after the graph swap. The running recipe
+catalogue and named recipe tools are fixed at boot, so recipe query, schema,
+description or `tool:` changes also require a server restart. The full format
+spec is `VAULT.md` in the kglite repository — read it before inventing a key,
+not before writing an ordinary note.
 
 ## What the body becomes
 

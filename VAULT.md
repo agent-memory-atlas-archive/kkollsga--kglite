@@ -8,9 +8,23 @@ the format a converter (HTML, XML, a CMS export) should target.
 Load a vault with `okf.build(path, dialect="obsidian")` in Python, or
 `kglite::okf::build` in Rust. Check one with `kglite okf check <dir>`.
 
-Everything below is normative for the `"obsidian"` dialect. The `"okf"` and
-`"loose"` dialects are a different contract and are unchanged by this document;
-where they differ, this spec says so.
+Sections 1–10 define the **format requirements** for the `"obsidian"` dialect.
+Section 11 is a **recommended converter checklist**, §12 describes
+**operational behavior** for rebuilds and caches, and §13 gives **recommended
+modelling conventions**. A vault need not follow the recommendations to be a
+valid vault. The `"okf"` and `"loose"` dialects are a different contract and
+are unchanged by this document; where they differ, this spec says so.
+
+Choose the shortest route for the job:
+
+- author one note: start with the quick reference below, then use §§2–6;
+- look up exact syntax or precedence: use §§2–10;
+- convert a corpus: use §§11 and 13, then the
+  [worked help-vault tutorial](https://kglite.readthedocs.io/en/latest/python/guides/help-vault.html);
+- design a portable knowledge base without depending on KGLite: start with
+  [Knowledge Bases](https://github.com/kkollsga/kglite/blob/main/KNOWLEDGE_BASES.md), then use this document when targeting
+  the KGLite vault format;
+- serve, update or share a vault: use §12 and the worked tutorial.
 
 ## Quick reference for authors
 
@@ -393,6 +407,16 @@ why they outrank the heading the link happens to sit under.
 
 `heading_edges:` wins over the built-in ladder — which is why a corpus writes
 `heading_edges: {"Related topics": RELATED_TO}` instead of accepting `RELATED`.
+
+The heading ladder classifies text; it does not prove semantics. A neutral
+reference under a heading containing “depend” becomes `DEPENDS_ON`, even when
+the source never asserted a prerequisite. Converters should use
+`[[Target]]{LINKS_TO}` (or `[text](target.md "LINKS_TO")`) for a source-neutral
+reference and reserve stronger types for explicit source evidence. Keep
+different source relations distinct: a vendor table of contents or breadcrumb,
+a GUI entry path, a source-authored related-topic link, API index membership,
+symbol ownership and an execution prerequisite are not interchangeable merely
+because all connect two pages.
 
 **The `{type}` suffix.** It must follow the closing `]]` with nothing between
 them, hold no whitespace, and close on the same line. Its text is normalised
@@ -1222,8 +1246,9 @@ that heading, or the export warns that the table it wrote is prose (§10.10).
 ## 8. Skills and recipes carried in the vault
 
 A vault can carry its own agent guidance, so a server built from it explains
-how to query itself. Both directories are re-read on every build, so editing a
-file is the whole update procedure.
+how to query itself. Both directories are re-read on every **build**. What a
+running server exposes after that build depends on the kind of record and the
+server mode; see the lifecycle table at the end of this section.
 
 A file in either directory that fails validation is **skipped with a warning
 naming the file and the rule, and its siblings load** — the directory is
@@ -1277,9 +1302,13 @@ wrong, there is simply less of it than the author intended.
 
   **`parameters` is checked against the statement, exactly.** Its `properties`
   must name the same set as the `$parameters` the Cypher uses — one undeclared
-  and one unused are both errors, and the message names each — and `required`
-  must list *every* one of those properties: a recipe parameter is never
-  optional. The root carries `type: object`, `properties`, `required` and
+  and one unused are both errors, and the message names each. A property may
+  declare a top-level `default`; only properties **without** defaults belong in
+  `required`, and every such property must appear there exactly. Omission binds
+  the declared default before validation, an explicit value overrides it, and
+  an explicit `null` remains null (and must satisfy the property's type).
+  Defaults nested below a parameter property are rejected. The root carries
+  `type: object`, `properties`, `required` and
   `additionalProperties: false`; all four are required, `type` must be exactly
   `object`, `additionalProperties` must be explicitly `false`, and the only
   other root key allowed is `description`. A file that declares no
@@ -1305,13 +1334,28 @@ wrong, there is simply less of it than the author intended.
   boot naming the owner. The operator can switch the whole mechanism off with
   `extensions.recipe_tools: false`.
 
-  **Expose a curated few.** Every named tool costs its description and its
-  schema in every `tools/list`, which every session pays for whether or not it
-  calls the query; the queries that carry the vault's routine questions earn
-  that, a long tail does not. The catalogue block in `run_recipe_query`'s
+  **Expose a curated few.** Every named tool adds its description and schema to
+  every `tools/list` response. Whether those wire bytes also consume model
+  context depends on the client and its dynamic-discovery strategy; measure the
+  client you deploy. The queries that carry the vault's routine questions earn
+  that surface, a long tail does not. The catalogue block in `run_recipe_query`'s
   description marks the ones that have a tool, so nothing is hidden by leaving
   `tool:` off. Registration is **boot-time**: adding or removing a `tool:`
-  needs the server restarted, not a rebuild.
+  requires a server restart after the changed recipe has been rebuilt into the
+  graph; a rebuild alone is not enough.
+
+### Update lifecycle while serving
+
+| Change | `--vault` | `--graph FILE` |
+|---|---|---|
+| note content, `vault.yaml`, attachments | The watcher rebuilds before the next tool call; `rebuild_graph` forces it now and returns the report. | Rebuild the source vault to `FILE`, then call `reload_graph` (or restart). Restarting alone only reopens `FILE`; it never converts source files. |
+| skill body, description or routing | Rebuild as above; the graph swap re-resolves skills for the session. | Put the changed skill in `FILE`, then `reload_graph`; graph-carried skills re-resolve on that swap. |
+| recipe query, schema or description | Restart after rebuilding. The recipe catalogue is fixed at boot, so `rebuild_graph`/`reload_graph` alone does not replace it. | Put the changed recipe in `FILE`, then restart. |
+| add, remove or rename a recipe `tool:` | Restart after rebuilding; the MCP tool router is fixed at boot. | Put the changed recipe in `FILE`, then restart. |
+
+On any failed rebuild or reload, the previous graph remains active. This table
+describes current server behavior; file edits remain build inputs even when a
+running session needs an additional refresh or restart to expose them.
 
 ## 9. Build report and validation
 
@@ -1330,6 +1374,21 @@ index / text-index / skill / recipe counts `.kglite/` produced, `forced_splits`
 — chunk boundaries the `chunks:` caps had to place inside a block (§7.1) — the
 `embed:` targets declared in `vault.yaml`, and two classified lists of
 findings. The classification is the contract.
+
+This report proves **format validity**, not source fidelity or answer
+completeness. Test those promises separately:
+
+1. **Original bytes available:** inventory every source member, including
+   hidden files, with path, size and SHA-256; map each source page to its note.
+2. **Rendered content preserved:** compare prose, logical table cells, nested
+   blocks, warnings, downloads, images and ordering; list unparsed material.
+3. **Facts queryable:** assert source-backed expected labels, properties and
+   edges, rather than only nonzero counts.
+4. **Answers complete and scoped:** evaluate serving with decisive context and
+   user constraints present. This is a deployment test, not a format test.
+
+The SHA-256 inventory is independent of §12's stat-based cache fingerprint;
+the latter detects rebuild inputs cheaply and is not a byte-integrity proof.
 
 **Errors** — a vault with any of these does not meet this spec:
 
@@ -1571,7 +1630,7 @@ Export writes a vault from a graph: `okf.export(graph, dir)` in Python,
 
 ## 11. Converter checklist
 
-What a converter must emit, in order:
+Recommended converter output, in order:
 
 1. **One `.md` file per source document**, UTF-8, under a directory tree that
    mirrors the hierarchy you want. Use the folder-note layout (§2.3):
@@ -1604,8 +1663,8 @@ What a converter must emit, in order:
    declarative lives here and is re-applied on every rebuild.
 9. **`.kglite/skills/` and `.kglite/recipes/`** when the vault is served to an
    agent (§8). Do not write `.kglite/graph.kgl` by hand — that is the cache
-   `okf.open` / `kglite okf open` maintains (§12); to ship a pre-built vault,
-   run one of those and commit what it leaves.
+   `okf.open` / `kglite okf open` maintains (§12). Treat it as a disposable
+   accelerator: a copy at another path rebuilds once before it can be reused.
 10. **Run `kglite okf check <dir>`.** Zero errors is the bar; add `--strict`
     to your own test suite once the warnings are down to the ones you accept,
     and `--json` when the suite wants the finding lists rather than the text.
@@ -1670,8 +1729,12 @@ the result back. The default cache lives at **`.kglite/graph.kgl`** and is
 excluded from the fingerprint by `okf.is_cache_artifact` — along with its
 `.lock` and `.lock-owner` siblings, the in-flight `graph.kgl.tmp.*` of a save,
 and `.kglite/export-manifest.json` — so writing it does not mark the vault it
-describes as changed. A vault may therefore be *shipped* with its graph, and
-a machine that has never read it serves it without a build.
+describes as changed. A vault may therefore be *shipped* with its graph, and a
+machine opening the same canonical path may reuse it without a build. Copying
+or moving the vault changes that path and deliberately causes one rebuild; if
+the cache is writable, later unchanged opens at the new location reuse the
+refreshed cache. Shipping the cache is an optional, conditional acceleration,
+never a portability guarantee.
 
 Five things make the cache a miss rather than a hit, and every one of them
 rebuilds silently: the file is absent or this build cannot read it, the vault
@@ -1688,6 +1751,8 @@ Relocate the cache with `--cache PATH` / `cache=`, or switch it off with
 `.kglite/graph.kgl` is **not** a cache: every non-hidden file under the root
 is a candidate attachment, so a graph written beside the notes changes the
 vault it describes — keep it in `.kglite/`, or outside the vault entirely.
+An explicit cache path outside the vault is recommended when the source tree
+must stay read-only, clean or independently packaged.
 
 Two consequences worth knowing. Modification times are compared as whole
 seconds, so a file rewritten within the same second to exactly the same length
@@ -1700,8 +1765,13 @@ vectors until the notes behind them change.
 A source corpus already has structure — a table of contents, sections,
 procedures, parameter tables, admonitions. This section says what to write so
 that structure arrives in the graph, and what to avoid writing because it
-arrives as nothing. It is normative in the same sense as the rest: a converter
-that follows it produces a vault this spec describes.
+arrives as nothing. These are recommendations for preserving meaning, not
+additional validity requirements.
+
+For the complete runnable sequence from source inventory through conversion,
+reconciliation, paginated queries, serving and a clean public share, use the
+[worked help-vault tutorial](https://kglite.readthedocs.io/en/latest/python/guides/help-vault.html). Its companion
+example is `examples/knowledge_base/knowledge_base.py`.
 
 > **Frontmatter is the node, headings are the sections, `^blockid` is the
 > citable unit.** Everything below follows from those three.
@@ -1877,5 +1947,15 @@ paragraph a `^block-id` (§5.7).
 3. Read the report's per-label counts against what you know the sample holds. A
    rule that matched nothing is a warning and the fastest defect there is
    (§7.1): the heading regex is wrong, or the tables are still HTML.
-4. Fix the converter, not the vault. Then run the whole corpus, and keep
-   `--strict` in the converter's own test suite (§11.10).
+4. Reconcile the sample against a source inventory and explicit expected facts
+   (§9). Preserve defaults and exception conditions as source text when their
+   expression is nested or quoted; key repeated exceptions by condition and
+   source anchor, not only by exception type.
+5. Fix the converter, not the generated vault. Keep operator workflows,
+   memories and reviewed annotations in separately owned overlays with stable
+   ids, exact source anchors/hashes, precedence and stale-evidence checks.
+6. Then run the whole corpus, and keep `--strict` in the converter's own test
+   suite (§11.10). Traverse every paginated recipe with a stable ordering and
+   continuation, and assert no missing or duplicated ids. A row cap or a
+   non-truncated first response does not prove that arrays, previews, examples
+   or text inside each row are complete.

@@ -9,6 +9,28 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **A portable knowledge-base guide and synthetic worked example.**
+  `KNOWLEDGE_BASES.md` explains how to choose direct Markdown search or a
+  structured backend from the work, preserve original bytes and rendered
+  meaning, expose source-backed facts, keep enrichment and owner memory as
+  removable overlays, build public packages from an allowlist, and evaluate
+  answer quality and final cumulative usage. `examples/knowledge_base/`
+  exercises inventory, conversion, paging, memory correction and deletion,
+  clean sharing, and both direct-Markdown and optional KGLite queries without
+  vendor data or a model account. Its offline interface diagnostic inventories
+  per-tool description and schema bytes plus repeated descriptive blocks from
+  saved MCP `tools/list` JSON, while explicitly avoiding a model-token claim.
+
+### Changed
+
+- **The vault documentation now distinguishes format validity from source and
+  answer completeness.** It corrects recipe defaults, relocated-cache and
+  edit/rebuild/restart guidance; documents source reconciliation, explicit
+  relationship semantics, complete-result envelopes, removable memory and
+  regeneration-safe overlays; and links a runnable help-vault tutorial.
+
 ## [0.17.12] - 2026-09-19
 ### Added
 

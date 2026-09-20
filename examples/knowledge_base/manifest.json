@@ -1,0 +1,26 @@
+{
+  "pages": [
+    {"source": "index.html", "output": "Articles/index.md", "id": "help-index"},
+    {"source": "procedure.html", "output": "Articles/reset-controller.md", "id": "reset-controller"},
+    {"source": "api.html", "output": "Articles/client-api.md", "id": "client-api"}
+  ],
+  "source_inventory": [
+    {"path": "Sources/.catalog-version", "size": 18, "sha256": "d84afe386b60bda0ac0871449050061225ed922af893d86ae4e18370766c901c"},
+    {"path": "Sources/api.html", "size": 521, "sha256": "bf3070c666445ec55369edb8077984e766e0998407ddebba6b8229ffa560d63a"},
+    {"path": "Sources/index.html", "size": 222, "sha256": "5f17be1b72987258730cee69524404da949a6429026d09cf99f32ca218d0a524"},
+    {"path": "Sources/procedure.html", "size": 852, "sha256": "b6cb21b4ddbcf13583ee930ca4a0899aba2b73ad7c725bbf7480428d0c325cb2"},
+    {"path": "Sources/reset-checklist.txt", "size": 50, "sha256": "c98b70efcb73006f8f0ce6b77588c8557b90b2ab9ef9176b4d1a84926ef2b28a"},
+    {"path": "Sources/warning.svg", "size": 169, "sha256": "9ec06353ec4b2c87ede1ee8db8bc7b2ad70d09f6a3d68c924f83e0bf8553f5ed"}
+  ],
+  "required_references": [
+    ["index.html", "procedure.html"],
+    ["index.html", "api.html#connect"],
+    ["procedure.html", "procedure.html"],
+    ["procedure.html", "warning.svg"],
+    ["procedure.html", "reset-checklist.txt"],
+    ["procedure.html", "api.html#connect"],
+    ["api.html", "procedure.html"]
+  ],
+  "public_roots": ["Articles", "Sources", "Workflows", "Annotations", ".kglite/recipes", "build-report.json"],
+  "private_canary": "PRIVATE-CANARY-7F3A"
+}

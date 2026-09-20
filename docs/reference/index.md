@@ -9,6 +9,9 @@ workflows; these pages define callable/query syntax and supported contracts.
   procedures, divergences, and the machine-checked dialect contract.
 - **[Fluent API](fluent-api.md)** — selection, loading, traversal, algorithms,
   mutation, persistence, and introspection methods.
+- **[Building a trustworthy knowledge base](knowledge-bases.md)** — a
+  backend-neutral method for source preservation, structured retrieval,
+  overlays, memory, sharing, and end-to-end evaluation.
 - **[Vault format](vault-format.md)** — the markdown-vault contract the
   `obsidian` dialect reads and writes: layout, frontmatter, links, attachments,
   `vault.yaml`, and the converter checklist.
@@ -26,6 +29,7 @@ workflows; these pages define callable/query syntax and supported contracts.
 
 cypher-reference
 fluent-api
+knowledge-bases
 vault-format
 ../autoapi/index
 ../rust/api-reference
