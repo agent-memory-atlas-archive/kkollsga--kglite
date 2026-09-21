@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -1695,7 +1696,7 @@ class TestToolsAllowlist:
     Two independent things are asserted below, because either alone would be
     weak. Default-off: the token adds nothing to a surface that never opted
     in. Opt-in works: a manifest that *does* say `builtins.github: true`,
-    with the same token, registers all three — which is what stops the
+    with a reachable token, registers all three — which is what stops the
     default-off assertion from passing merely because GitHub registration
     broke entirely. The allowlist arm is now belt-and-braces on top.
     """
@@ -1703,6 +1704,11 @@ class TestToolsAllowlist:
     ALLOWED = {"cypher_query", "graph_overview", "ping"}
     FRAMEWORK_TOOLS = {"expand_response"}
     GITHUB_TOOLS = {"github_api", "github_issues", "screen_stargazers"}
+
+    @pytest.fixture
+    def synthetic_token(self) -> str:
+        """Exercise token presence without a stored credential or live API call."""
+        return "synthetic-test-" + secrets.token_hex(16)
 
     @pytest.fixture
     def deployment(self, tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -1761,7 +1767,9 @@ class TestToolsAllowlist:
         finally:
             client.shutdown()
 
-    def test_an_ambient_github_token_widens_no_surface(self, deployment: tuple[Path, Path, Path, Path]):
+    def test_an_ambient_github_token_widens_no_surface(
+        self, deployment: tuple[Path, Path, Path, Path], synthetic_token: str
+    ):
         """mcp-methods 0.4.5: a reachable token is not an intent to register.
 
         Pre-0.4.5 this same deployment gained `github_api` / `github_issues` /
@@ -1774,7 +1782,7 @@ class TestToolsAllowlist:
 
         # No allowlist at all: the token must not add a thing.
         open_tokenless = self._tool_names(kgl, open_surface)
-        open_with_token = self._tool_names(kgl, open_surface, token="dummy-value")
+        open_with_token = self._tool_names(kgl, open_surface, token=synthetic_token)
         assert open_with_token == open_tokenless, (
             "an ambient GITHUB_TOKEN changed a non-opted-in surface "
             f"(added: {sorted(open_with_token - open_tokenless)}, "
@@ -1787,10 +1795,12 @@ class TestToolsAllowlist:
 
         # Belt-and-braces: the allowlist independently pins the surface, so it
         # holds even if the framework default ever regresses back to token-keyed.
-        assert self._tool_names(kgl, allowed, token="dummy-value") == self._tool_names(kgl, allowed)
-        assert self._tool_names(kgl, allowed, token="dummy-value") == self.ALLOWED | self.FRAMEWORK_TOOLS
+        assert self._tool_names(kgl, allowed, token=synthetic_token) == self._tool_names(kgl, allowed)
+        assert self._tool_names(kgl, allowed, token=synthetic_token) == self.ALLOWED | self.FRAMEWORK_TOOLS
 
-    def test_builtins_github_opt_in_registers_the_github_tools(self, deployment: tuple[Path, Path, Path, Path]):
+    def test_builtins_github_opt_in_registers_the_github_tools(
+        self, deployment: tuple[Path, Path, Path, Path], synthetic_token: str
+    ):
         """The other half of default-off: opting in must actually work.
 
         Without this, `test_an_ambient_github_token_widens_no_surface` would
@@ -1802,7 +1812,7 @@ class TestToolsAllowlist:
         """
         kgl, _, _, github_optin = deployment
 
-        optin_with_token = self._tool_names(kgl, github_optin, token="dummy-value")
+        optin_with_token = self._tool_names(kgl, github_optin, token=synthetic_token)
         assert self.GITHUB_TOOLS <= optin_with_token, (
             "`builtins.github: true` + a reachable token did not register the GitHub tools "
             f"(missing: {sorted(self.GITHUB_TOOLS - optin_with_token)})"
