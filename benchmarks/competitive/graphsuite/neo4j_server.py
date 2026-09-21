@@ -9,9 +9,8 @@ hand-managing a database.
 
 Two flavors, both reusing the one Bolt adapter:
 
-- ``"docker"`` — run ``neo4j:<tag>`` in a container. Uses
-  ``testcontainers[neo4j]`` when installed (the canonical prebuilt
-  harness), else a thin ``docker run`` fallback. Portable and isolated;
+- ``"docker"`` — run ``neo4j:<tag>`` with ``docker run``, publishing Bolt
+  only on the host's loopback interface. Portable and isolated;
   on macOS it pays the Docker-VM tax, so it's the *baseline* Neo4j number.
 - ``"local"`` — launch the natively-installed Neo4j (``neo4j`` on PATH or
   ``$NEO4J_HOME``) against a throwaway ``NEO4J_CONF`` pointing data/logs at
@@ -31,16 +30,14 @@ from __future__ import annotations
 
 import contextlib
 import os
+import secrets
 import shutil
 import socket
 import subprocess
 import tempfile
 import time
 
-# Credentials the provisioners set up and the adapter then reads. Neo4j 5+/
-# 2026.x requires an initial password of at least 8 characters.
 _USER = "neo4j"
-_PASSWORD = "benchmarkpw"
 _DEFAULT_IMAGE = "neo4j:5-community"
 _READY_TIMEOUT_S = 120.0
 
@@ -66,7 +63,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_bolt(uri: str, deadline: float, watch: subprocess.Popen | None = None) -> None:
+def _wait_for_bolt(uri: str, password: str, deadline: float, watch: subprocess.Popen | None = None) -> None:
     """Poll until the driver can verify connectivity, or raise on timeout /
     early child exit."""
     import neo4j
@@ -80,9 +77,8 @@ def _wait_for_bolt(uri: str, deadline: float, watch: subprocess.Popen | None = N
                     tail = watch.stdout.read() or ""
             raise ProvisionError(f"server process exited early (code {watch.returncode})\n{tail[-2000:]}")
         try:
-            drv = neo4j.GraphDatabase.driver(uri, auth=(_USER, _PASSWORD))
-            drv.verify_connectivity()
-            drv.close()
+            with neo4j.GraphDatabase.driver(uri, auth=(_USER, password)) as drv:
+                drv.verify_connectivity()
             return
         except Exception as e:  # not up yet
             last_err = e
@@ -98,12 +94,12 @@ class _EnvScope:
     def __init__(self) -> None:
         self._saved: dict[str, str | None] = {}
 
-    def apply(self, uri: str) -> None:
+    def apply(self, uri: str, password: str) -> None:
         for k in self._KEYS:
             self._saved[k] = os.environ.get(k)
         os.environ["GRAPHSUITE_NEO4J_URI"] = uri
         os.environ["GRAPHSUITE_NEO4J_USER"] = _USER
-        os.environ["GRAPHSUITE_NEO4J_PASSWORD"] = _PASSWORD
+        os.environ["GRAPHSUITE_NEO4J_PASSWORD"] = password
 
     def restore(self) -> None:
         for k, v in self._saved.items():
@@ -124,6 +120,7 @@ class LocalNeo4jServer:
         self._proc: subprocess.Popen | None = None
         self._tmp: str | None = None
         self._env = _EnvScope()
+        self._password = secrets.token_urlsafe(24)
 
     @staticmethod
     def _launcher() -> str | None:
@@ -163,7 +160,7 @@ class LocalNeo4jServer:
         # is Docker-entrypoint-only, so we can't use it here).
         conf = "\n".join(
             [
-                f"server.bolt.listen_address=:{bolt_port}",
+                f"server.bolt.listen_address=127.0.0.1:{bolt_port}",
                 "server.http.enabled=false",
                 "server.https.enabled=false",
                 f"server.directories.data={self._tmp}/data",
@@ -182,7 +179,7 @@ class LocalNeo4jServer:
         admin = self._admin(launcher)
         if admin is not None:
             pw_set = subprocess.run(
-                [admin, "dbms", "set-initial-password", _PASSWORD],
+                [admin, "dbms", "set-initial-password", self._password],
                 env=child_env,
                 capture_output=True,
                 text=True,
@@ -190,7 +187,7 @@ class LocalNeo4jServer:
             if pw_set.returncode != 0:
                 # older single-verb form
                 subprocess.run(
-                    [admin, "set-initial-password", _PASSWORD],
+                    [admin, "set-initial-password", self._password],
                     env=child_env,
                     capture_output=True,
                     text=True,
@@ -205,8 +202,8 @@ class LocalNeo4jServer:
             start_new_session=True,
         )
         uri = f"bolt://127.0.0.1:{bolt_port}"
-        _wait_for_bolt(uri, time.perf_counter() + _READY_TIMEOUT_S, watch=self._proc)
-        self._env.apply(uri)
+        _wait_for_bolt(uri, self._password, time.perf_counter() + _READY_TIMEOUT_S, watch=self._proc)
+        self._env.apply(uri, self._password)
         return uri
 
     def stop(self) -> None:
@@ -234,9 +231,9 @@ class DockerNeo4jServer:
 
     def __init__(self) -> None:
         self._image = os.environ.get("GRAPHSUITE_NEO4J_IMAGE", _DEFAULT_IMAGE)
-        self._container_id: str | None = None  # raw docker run
-        self._tc = None  # testcontainers instance
+        self._container_id: str | None = None
         self._env = _EnvScope()
+        self._password = secrets.token_urlsafe(24)
 
     @staticmethod
     def _docker_up() -> bool:
@@ -256,24 +253,6 @@ class DockerNeo4jServer:
         return True, ""
 
     def start(self) -> str:
-        # Prefer testcontainers (the prebuilt harness) when present; it does
-        # image pull + readiness + teardown for us.
-        try:
-            from testcontainers.neo4j import Neo4jContainer  # type: ignore
-        except Exception:
-            Neo4jContainer = None  # noqa: N806
-
-        if Neo4jContainer is not None:
-            self._tc = Neo4jContainer(self._image, password=_PASSWORD)
-            self._tc.start()
-            host = self._tc.get_container_host_ip()
-            port = self._tc.get_exposed_port(7687)
-            uri = f"bolt://{host}:{port}"
-            _wait_for_bolt(uri, time.perf_counter() + _READY_TIMEOUT_S)
-            self._env.apply(uri)
-            return uri
-
-        # Fallback: raw `docker run` with a host-mapped Bolt port.
         port = _free_port()
         run = subprocess.run(
             [
@@ -282,9 +261,9 @@ class DockerNeo4jServer:
                 "-d",
                 "--rm",
                 "-p",
-                f"{port}:7687",
+                f"127.0.0.1:{port}:7687",
                 "-e",
-                f"NEO4J_AUTH={_USER}/{_PASSWORD}",
+                f"NEO4J_AUTH={_USER}/{self._password}",
                 self._image,
             ],
             capture_output=True,
@@ -295,19 +274,15 @@ class DockerNeo4jServer:
         self._container_id = run.stdout.strip()
         uri = f"bolt://127.0.0.1:{port}"
         try:
-            _wait_for_bolt(uri, time.perf_counter() + _READY_TIMEOUT_S)
+            _wait_for_bolt(uri, self._password, time.perf_counter() + _READY_TIMEOUT_S)
         except Exception:
             self.stop()
             raise
-        self._env.apply(uri)
+        self._env.apply(uri, self._password)
         return uri
 
     def stop(self) -> None:
         self._env.restore()
-        if self._tc is not None:
-            with contextlib.suppress(Exception):
-                self._tc.stop()
-            self._tc = None
         if self._container_id is not None:
             with contextlib.suppress(Exception):
                 subprocess.run(["docker", "rm", "-f", self._container_id], capture_output=True)

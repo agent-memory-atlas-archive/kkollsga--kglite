@@ -52,7 +52,7 @@ jobs:
       any_crates: ${{ steps.check.outputs.any_crates }}
       any_publish: ${{ steps.check.outputs.any_publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check PyPI project storage budget
         run: >-
           python scripts/check_pypi_storage.py
@@ -266,16 +266,17 @@ jobs:
             target: x86_64-apple-darwin
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Python 3.10 (abi3 floor)
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.10'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - name: Force cargo PATH precedence (macOS rustup-init shim workaround)
         # macos-latest images ship a `rustup-init` shim at
@@ -291,7 +292,7 @@ jobs:
         run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         shell: bash
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: ". -> target"
           shared-key: "wheel-${{ matrix.target }}-0922"
@@ -324,7 +325,7 @@ jobs:
           ./.wheel-smoke/bin/python -m pip install wheels/*.whl
           ./.wheel-smoke/bin/python scripts/smoke_installed_wheel.py
       - name: Upload wheels as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: wheels/*.whl
@@ -347,7 +348,7 @@ jobs:
       # arm64 runner and can't run its wheel; the windows cell is a different OS.
       - name: Set up Python 3.14 for the pyarrow-coexistence canary
         if: matrix.target == 'aarch64-apple-darwin'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.14'
       - name: pyarrow-coexistence canary (macOS arm64)
@@ -393,11 +394,11 @@ jobs:
             manylinux: musllinux_1_2
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build abi3 wheel (manylinux/musllinux container)
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
@@ -414,7 +415,7 @@ jobs:
           ./.wheel-smoke/bin/python -m pip install wheels/*.whl
           ./.wheel-smoke/bin/python scripts/smoke_installed_wheel.py
       - name: Upload wheels as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-linux-${{ matrix.target }}
           path: wheels/*.whl
@@ -447,11 +448,11 @@ jobs:
             manylinux: musllinux_1_2
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build abi3 wheel (manylinux/musllinux container)
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
@@ -476,7 +477,7 @@ jobs:
       - name: Inventory wheel contents and entry points
         run: python scripts/check_wheel_artifact.py "wheels/*.whl"
       - name: Upload wheels as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-linux-${{ matrix.target }}
           path: wheels/*.whl
@@ -507,12 +508,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.10'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
       - name: Install Maturin
         run: pip install maturin
       - name: Build sdist
@@ -563,7 +566,7 @@ jobs:
       - name: Upload sdist as artifact
         # Named `wheels-sdist` on purpose: the publish job collects
         # `pattern: wheels-*`, so this needs no change there.
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheels-sdist
           path: dist/*.tar.gz
@@ -596,16 +599,17 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - name: Force cargo PATH precedence (macOS rustup-init shim workaround)
         # See wheels-native's copy of this step for the shim's failure mode.
         if: matrix.os == 'macos-latest'
         run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         shell: bash
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: ". -> target"
           shared-key: "cliwheel-${{ matrix.target }}"
@@ -619,7 +623,7 @@ jobs:
         run: maturin build --release --target ${{ matrix.target }} --out wheels
       - name: Verify wheel license metadata
         run: python scripts/check_wheel_license.py --expected-name kglite-cli --license crates/kglite-cli/LICENSE "crates/kglite-cli/wheels/*.whl"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cli-wheels-${{ matrix.os }}-${{ matrix.target }}
           path: crates/kglite-cli/wheels/*.whl
@@ -646,9 +650,9 @@ jobs:
           - target: x86_64-unknown-linux-musl
             manylinux: musllinux_1_2
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build kglite-cli bin wheel (manylinux/musllinux)
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
@@ -656,7 +660,7 @@ jobs:
           args: --release --out wheels
       - name: Verify wheel license metadata
         run: python scripts/check_wheel_license.py --expected-name kglite-cli --license crates/kglite-cli/LICENSE "crates/kglite-cli/wheels/*.whl"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cli-wheels-linux-${{ matrix.target }}
           path: crates/kglite-cli/wheels/*.whl
@@ -685,8 +689,8 @@ jobs:
           - target: aarch64-unknown-linux-musl
             manylinux: musllinux_1_2
     steps:
-      - uses: actions/checkout@v7
-      - uses: PyO3/maturin-action@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
@@ -694,7 +698,7 @@ jobs:
           args: --release --out wheels
       - name: Verify wheel license metadata
         run: python scripts/check_wheel_license.py --expected-name kglite-cli --license crates/kglite-cli/LICENSE "crates/kglite-cli/wheels/*.whl"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cli-wheels-linux-${{ matrix.target }}
           path: crates/kglite-cli/wheels/*.whl
@@ -732,11 +736,13 @@ jobs:
       contains(fromJSON('["success", "skipped"]'), needs.wheels-sdist.result)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: ". -> target"
           shared-key: "publish-${{ needs.version-check.outputs.version }}"
@@ -823,7 +829,7 @@ jobs:
       id-token: write  # Required for Trusted Publishing
     steps:
       - name: Download all wheel artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: wheels-*
           path: dist
@@ -831,7 +837,7 @@ jobs:
       - name: Display structure of downloaded files
         run: find dist -type f
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           skip-existing: true
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -858,14 +864,14 @@ jobs:
       id-token: write
     steps:
       - name: Download all cli wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: cli-wheels-*
           path: dist
           merge-multiple: true
       - run: ls -la dist
       - name: Publish to PyPI (Trusted Publishing / OIDC)
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist
 
@@ -897,12 +903,12 @@ jobs:
       contents: write
       actions: write  # Dispatch publish_java.yml (tag events from GITHUB_TOKEN can't)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download the published wheels for the release assets
         # Only when this run actually built them; on a repair run that
         # re-published crates alone there is nothing to attach.
         if: needs.publish-pypi.result == 'success'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: wheels-*
           path: dist
@@ -922,7 +928,7 @@ jobs:
           fi
       - name: Create GitHub Release (with changelog)
         if: steps.changelog.outputs.has_notes == 'true'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: dist/*.whl
           body_path: /tmp/release_notes.md
@@ -931,7 +937,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create GitHub Release (auto-generated)
         if: steps.changelog.outputs.has_notes != 'true'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: dist/*.whl
           generate_release_notes: true

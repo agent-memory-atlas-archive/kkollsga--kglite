@@ -70,11 +70,13 @@ jobs:
             library: kglite_c.dll
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: java-native-${{ matrix.platform }}
       - name: Build the C ABI library
@@ -90,7 +92,7 @@ jobs:
           cp "target/release/${{ matrix.library }}" "natives/${{ matrix.platform }}/${{ matrix.library }}"
           ls -l "natives/${{ matrix.platform }}"
       - name: Upload the native as an artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: java-native-${{ matrix.platform }}
           path: natives/${{ matrix.platform }}/${{ matrix.library }}
@@ -110,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check the tag matches the workspace version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -136,12 +138,12 @@ jobs:
           echo "publishing io.github.kkollsga:kglite:$VERSION"
 
       - name: Set up JDK 26
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '26'
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
         with:
           # Pinned, and no wrapper in the repo: kglite-java is built by whatever
           # Gradle the developer has, so CI naming a version is the only place
@@ -149,7 +151,7 @@ jobs:
           gradle-version: '9.7.0'
 
       - name: Download every platform's native
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: java-native-*
           path: downloaded-natives
@@ -200,7 +202,7 @@ jobs:
           unzip -l "$jar" | grep -E 'natives/|META-INF/LICENSE'
 
       - name: Upload the built jars
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: java-jars
           path: kglite-java/build/libs/*.jar

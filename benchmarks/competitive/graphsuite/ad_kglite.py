@@ -773,7 +773,7 @@ class KgliteBoltDocker(KgliteBolt):
         port = _free_port()
         # create (stopped) → copy the graph in → start. Mount-independent.
         create = subprocess.run(
-            ["docker", "create", "-p", f"{port}:7687", self.IMAGE],
+            ["docker", "create", "-p", f"127.0.0.1:{port}:7687", self.IMAGE],
             capture_output=True,
             text=True,
         )

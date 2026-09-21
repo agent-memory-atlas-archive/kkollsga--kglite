@@ -2024,7 +2024,11 @@ def test_ci_stable_toolchain_is_pinned() -> None:
     `make check-toolchain-pin` verifies locally."""
     text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert 'RUST_STABLE: "' in text, "workflow-level RUST_STABLE pin missing"
-    assert "dtolnay/rust-toolchain@stable" not in text, "a job floats on @stable instead of the RUST_STABLE pin"
+    toolchain_steps = [step for job in CI["jobs"].values() for step in _steps_using(job, "dtolnay/rust-toolchain")]
+    assert toolchain_steps, "no Rust toolchain installs found"
+    for step in toolchain_steps:
+        toolchain = step.get("with", {}).get("toolchain")
+        assert toolchain and toolchain != "stable", "a job floats on stable instead of the RUST_STABLE pin"
     # `env` is per workflow file. scheduled.yml referenced the pin without
     # defining it after the 2026-08-26 split, and both stable jobs failed at
     # toolchain install ("'toolchain' is a required input") on every weekly
