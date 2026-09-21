@@ -10,7 +10,7 @@ def test_all_external_workflow_actions_use_full_commit_pins():
     workflows = Path(__file__).resolve().parents[1] / ".github" / "workflows"
     references = []
     for path in sorted(workflows.glob("*.y*ml")):
-        jobs = yaml.safe_load(path.read_text())["jobs"]
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
         for job in jobs.values():
             for step in [job, *job.get("steps", [])]:
                 uses = step.get("uses", "")

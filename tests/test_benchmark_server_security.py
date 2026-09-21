@@ -73,7 +73,7 @@ def test_native_launch_binds_loopback_and_uses_generated_credentials(launch, mon
     try:
         uri = server.start()
         conf_path = Path(popen.call_args.kwargs["env"]["NEO4J_CONF"]) / "neo4j.conf"
-        conf = conf_path.read_text()
+        conf = conf_path.read_text(encoding="utf-8")
         assert "server.bolt.listen_address=127.0.0.1:43123\n" in conf
         assert "server.http.enabled=false\n" in conf
         assert "server.https.enabled=false\n" in conf
