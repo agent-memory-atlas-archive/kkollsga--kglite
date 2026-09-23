@@ -4148,16 +4148,15 @@ impl core::clone::Clone for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::clone(&self) -> kglite::datatypes::values::RelValue
 impl core::cmp::Eq for kglite::datatypes::values::RelValue
 impl core::cmp::Ord for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::cmp(&self, other: &kglite::datatypes::values::RelValue) -> core::cmp::Ordering
+pub fn kglite::datatypes::values::RelValue::cmp(&self, other: &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::eq(&self, other: &kglite::datatypes::values::RelValue) -> bool
+pub fn kglite::datatypes::values::RelValue::eq(&self, other: &Self) -> bool
 impl core::cmp::PartialOrd for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::partial_cmp(&self, other: &kglite::datatypes::values::RelValue) -> core::option::Option<core::cmp::Ordering>
+pub fn kglite::datatypes::values::RelValue::partial_cmp(&self, other: &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
-impl core::marker::StructuralPartialEq for kglite::datatypes::values::RelValue
+pub fn kglite::datatypes::values::RelValue::hash<H: core::hash::Hasher>(&self, state: &mut H)
 impl serde_core::ser::Serialize for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::RelValue
@@ -4922,16 +4921,15 @@ impl core::clone::Clone for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::clone(&self) -> kglite::datatypes::values::RelValue
 impl core::cmp::Eq for kglite::datatypes::values::RelValue
 impl core::cmp::Ord for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::cmp(&self, other: &kglite::datatypes::values::RelValue) -> core::cmp::Ordering
+pub fn kglite::datatypes::values::RelValue::cmp(&self, other: &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::eq(&self, other: &kglite::datatypes::values::RelValue) -> bool
+pub fn kglite::datatypes::values::RelValue::eq(&self, other: &Self) -> bool
 impl core::cmp::PartialOrd for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::partial_cmp(&self, other: &kglite::datatypes::values::RelValue) -> core::option::Option<core::cmp::Ordering>
+pub fn kglite::datatypes::values::RelValue::partial_cmp(&self, other: &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for kglite::datatypes::values::RelValue
-pub fn kglite::datatypes::values::RelValue::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
-impl core::marker::StructuralPartialEq for kglite::datatypes::values::RelValue
+pub fn kglite::datatypes::values::RelValue::hash<H: core::hash::Hasher>(&self, state: &mut H)
 impl serde_core::ser::Serialize for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::RelValue
