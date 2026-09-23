@@ -805,7 +805,9 @@ impl<'a> CypherExecutor<'a> {
         }
         if let Some(path) = row.path_bindings.get(name) {
             return Ok(Value::Path(Box::new(materialize_path_value(
-                path, self.graph,
+                path,
+                self.graph,
+                |edge| self.relationship_incarnation(edge),
             ))));
         }
 

@@ -128,9 +128,17 @@ collected relationship cannot silently target a different edge after slot
 reuse. Rust callers that constructed `RelValue` with a struct literal should
 use `RelValue::new(id, start_id, end_id, rel_type, properties)`; the constructor
 sets the internal identity to absent. Its five arguments match the former
-public fields. Serde omits the identity, and public result publication clears
-it, so serialized values and ordinary result equality retain their established
-shape.
+public fields.
+
+The identity is invisible to every comparison: `PartialEq`, `Eq`, `Hash`,
+`PartialOrd` and `Ord` are hand-written over the five public fields only, so two
+`RelValue`s describing the same edge are one key in a `HashSet`, one group under
+`DISTINCT` and one position under `ORDER BY` whatever identity they carry. Serde
+omits the field, and public result publication clears it. What the identity does
+gate is the small set of operations that write through a relationship value —
+the `db.edge_embeddings.*` procedures and `DELETE` — which compare the token
+explicitly and refuse a value this statement did not bind or whose slot it has
+since retired.
 
 Low-level callers constructing `api::cypher::EdgeBinding` directly must add
 `incarnation: None` to the literal. Match execution supplies a statement token

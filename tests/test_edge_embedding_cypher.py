@@ -373,3 +373,114 @@ def test_failed_statement_leaves_no_store_the_set_created() -> None:
         )
 
     assert _store_state(graph) == [], "a rolled-back set must not leave the store it created"
+
+
+def test_path_relationship_equals_the_bound_relationship_in_a_write_statement() -> None:
+    """The same edge reached two ways is one value, inside a write as outside it.
+
+    The relationship value's equality compared a transient per-statement
+    identity that only a bound variable carried, so ``r = relationships(p)[0]``
+    and ``r IN relationships(p)`` answered ``false`` whenever the statement also
+    wrote -- and answered ``true`` in the read-only form of the same query.
+    """
+    graph = _graph()
+    read = graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' "
+        "RETURN r = relationships(p)[0] AS eq, r IN relationships(p) AS member"
+    ).to_list()
+    assert read == [{"eq": True, "member": True}]
+
+    written = graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' SET a.touched = 1 "
+        "WITH p, r RETURN r = relationships(p)[0] AS eq, r IN relationships(p) AS member"
+    ).to_list()
+    assert written == [{"eq": True, "member": True}]
+
+
+def test_distinct_folds_bound_and_path_relationships_into_one_group() -> None:
+    """``DISTINCT`` counted the same edge twice inside a write statement."""
+    graph = _graph()
+    rows = graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' SET a.touched = 1 "
+        "WITH p, r UNWIND [r, relationships(p)[0]] AS x "
+        "RETURN size(collect(DISTINCT x)) AS distinct_count"
+    ).to_list()
+    assert rows == [{"distinct_count": 1}]
+
+
+def test_membership_against_path_relationships_selects_the_edge_for_delete() -> None:
+    """``WHERE r IN rels DELETE r`` deleted nothing while equality saw identity."""
+    graph = _graph()
+    graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' SET a.touched = 1 "
+        "WITH collect(relationships(p)[0]) AS rels "
+        "MATCH ()-[r:CLAIMS]->() WHERE r IN rels DELETE r RETURN size(rels) AS listed"
+    )
+    remaining = graph.cypher("MATCH ()-[r:CLAIMS]->() RETURN count(*) AS n").to_list()
+    assert remaining == [{"n": 2}]
+
+
+def test_path_relationships_are_accepted_by_set_and_remove() -> None:
+    """Path-derived relationships were refused as not bound by this statement."""
+    graph = _graph()
+    stored = graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' "
+        "WITH p, relationships(p)[0] AS pr "
+        "CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "entries: [{relationship: pr, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
+    ).to_list()
+    assert stored == [{"stored": 1}]
+
+    removed = graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' WITH p "
+        "CALL db.edge_embeddings.remove({type: 'CLAIMS', text_property: 'text', "
+        "relationships: [relationships(p)[0]]}) YIELD removed RETURN removed"
+    ).to_list()
+    assert removed == [{"removed": 1}]
+
+
+def test_variable_length_path_relationships_are_accepted_by_embed() -> None:
+    """A variable-length path's relationships exist only as materialised values.
+
+    There is no bound relationship variable to fall back on, so the refusal made
+    the whole shape unreachable. Both two-hop paths end at the text-less
+    ``(b)-[:CLAIMS]->(c)``, which is skipped, so each row embeds exactly one.
+    """
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    rows = graph.cypher(
+        "MATCH p = (a:Doc)-[:CLAIMS*2..2]->(c:Doc) WITH relationships(p) AS rels "
+        "CALL db.edge_embeddings.embed({type: 'CLAIMS', text_property: 'text', "
+        "relationships: rels}) YIELD embedded RETURN embedded"
+    ).to_list()
+    assert [row["embedded"] for row in rows] == [1, 1]
+
+
+def test_path_relationship_deleted_earlier_in_the_statement_is_refused() -> None:
+    """A retired slot must not be written through the path that named it."""
+    graph = _graph()
+    with pytest.raises(Exception, match="db.edge_embeddings.set"):
+        graph.cypher(
+            "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' DELETE r WITH p "
+            "CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+            "entries: [{relationship: relationships(p)[0], vector: [1.0, 0.0]}]}) "
+            "YIELD stored RETURN stored"
+        )
+    assert _store_state(graph) == []
+
+
+def test_path_relationships_score_inside_a_write_statement() -> None:
+    """``vector_score`` on a projected relationship demands this statement's token."""
+    graph = _graph()
+    graph.cypher(
+        "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
+        "CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
+    )
+    rows = graph.cypher(
+        "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' SET a.touched = 1 "
+        "WITH relationships(p) AS rels UNWIND rels AS rel "
+        "RETURN vector_score(rel, 'text_emb', [1.0, 0.0]) AS score, "
+        "embedding_norm(rel, 'text_emb') AS norm"
+    ).to_list()
+    assert rows == [{"score": 1.0, "norm": 1.0}]

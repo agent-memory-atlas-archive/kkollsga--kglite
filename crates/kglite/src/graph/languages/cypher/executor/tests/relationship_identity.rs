@@ -32,6 +32,21 @@ fn graph_with_one_relationship() -> DirGraph {
     graph
 }
 
+/// Every relationship token reachable inside a value, however nested. The
+/// assertions that a published result carries no token cannot be written as
+/// value comparisons: equality deliberately ignores the field.
+fn relationship_tokens(
+    value: &Value,
+) -> Box<dyn Iterator<Item = Option<crate::datatypes::values::RelationshipIncarnation>> + '_> {
+    match value {
+        Value::Relationship(rel) => Box::new(std::iter::once(rel.incarnation)),
+        Value::Path(path) => Box::new(path.rels.iter().map(|rel| rel.incarnation)),
+        Value::List(items) => Box::new(items.iter().flat_map(relationship_tokens)),
+        Value::Map(map) => Box::new(map.iter().flat_map(|(_, item)| relationship_tokens(item))),
+        _ => Box::new(std::iter::empty()),
+    }
+}
+
 fn run_mutation(graph: &mut DirGraph, query: &str) -> CypherResult {
     let parsed = parser::parse_cypher(query).unwrap();
     super::super::write::execute_mutable(
@@ -172,6 +187,15 @@ fn published_result_recursively_matches_untrusted_relationship_values() {
     };
 
     crate::graph::languages::cypher::result::clear_published_relationship_incarnations(&mut result);
+    // `RelValue`'s equality ignores the incarnation, so the structural
+    // assertions below cannot see whether the token survived. Read the field.
+    assert!(
+        relationship_tokens(&result.rows[0][0])
+            .chain(relationship_tokens(&result.rows[0][1]))
+            .all(|token| token.is_none()),
+        "publication must clear every nested token: {:?}",
+        result.rows[0]
+    );
     assert_eq!(
         result.rows[0][0],
         Value::Relationship(Box::new(expected.clone()))
@@ -218,11 +242,311 @@ fn lazy_public_materialization_scrubs_nested_relationship_tokens() {
 
     let row = crate::graph::languages::cypher::result::materialise_lazy_row(&descriptor, &graph, 0)
         .unwrap();
+    assert!(
+        relationship_tokens(&row[0]).all(|token| token.is_none()),
+        "lazy materialisation must clear every nested token: {row:?}"
+    );
     assert_eq!(
         row,
         vec![Value::List(vec![Value::Path(Box::new(PathValue {
             nodes: vec![],
             rels: vec![expected],
         }))])]
+    );
+}
+
+/// Three nodes in a chain, each hop carrying a distinct `text` property, so a
+/// path over the chain exercises multi-hop materialisation and the embedding
+/// procedures have something to embed.
+fn graph_with_two_hop_chain() -> DirGraph {
+    let mut graph = DirGraph::new();
+    for id in 1..=3 {
+        let node = GraphWrite::add_node(
+            &mut graph.graph,
+            NodeData::new(
+                Value::Int64(id),
+                Value::String(format!("n{id}")),
+                "N".into(),
+                HashMap::new(),
+                &mut graph.interner,
+            ),
+        );
+        graph.type_indices.entry_or_default("N".into()).push(node);
+    }
+    for (source, target, text) in [(0, 1, "alpha"), (1, 2, "beta")] {
+        GraphWrite::add_edge(
+            &mut graph.graph,
+            petgraph::graph::NodeIndex::new(source),
+            petgraph::graph::NodeIndex::new(target),
+            EdgeData::new(
+                "R".into(),
+                HashMap::from([("text".into(), Value::String(text.into()))]),
+                &mut graph.interner,
+            ),
+        );
+    }
+    graph
+}
+
+fn try_mutation(graph: &mut DirGraph, query: &str) -> Result<CypherResult, String> {
+    let parsed = parser::parse_cypher(query).unwrap();
+    super::super::write::execute_mutable(
+        graph,
+        &parsed,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::from_deadline(None),
+    )
+}
+
+/// A relationship reached through the bound variable and the same relationship
+/// reached through `relationships(p)` are the same value. The derived
+/// `PartialEq` compared the transient statement incarnation — present on the
+/// binding, absent on the path — so every one of these answered `false` inside
+/// a write statement while a read statement answered `true` (0.17.12 answered
+/// `true` in both).
+#[test]
+fn path_relationship_equals_the_bound_relationship_inside_a_write_statement() {
+    let mut graph = graph_with_one_relationship();
+    let result = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) SET a.touched = 1 \
+         WITH p, r RETURN r = relationships(p)[0] AS eq, r IN relationships(p) AS member, \
+         [x IN relationships(p) WHERE x = r | x.tag] AS matched",
+    );
+    assert_eq!(
+        result.rows,
+        vec![vec![
+            Value::Boolean(true),
+            Value::Boolean(true),
+            Value::List(vec![Value::String("old".into())]),
+        ]],
+        "{result:?}"
+    );
+}
+
+/// `DISTINCT` and `ORDER BY` are the container contract, and a container has
+/// one notion of "same key": the bound relationship and the path's view of it
+/// must fold into a single group. Both the aggregate and the projection form
+/// counted two.
+#[test]
+fn bound_and_path_relationships_are_one_key_for_distinct_and_ordering() {
+    let mut graph = graph_with_one_relationship();
+    let collected = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) SET a.touched = 1 \
+         WITH p, r UNWIND [r, relationships(p)[0]] AS x \
+         RETURN size(collect(DISTINCT x)) AS distinct_count",
+    );
+    assert_eq!(collected.rows, vec![vec![Value::Int64(1)]], "{collected:?}");
+
+    let mut graph = graph_with_one_relationship();
+    let projected = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) SET a.touched = 1 \
+         WITH p, r UNWIND [r, relationships(p)[0]] AS x \
+         WITH DISTINCT x ORDER BY x RETURN count(*) AS rows",
+    );
+    assert_eq!(projected.rows, vec![vec![Value::Int64(1)]], "{projected:?}");
+}
+
+/// `MATCH ()-[r]->() WHERE r IN rels DELETE r` deleted nothing: the membership
+/// test compared incarnations. The delete itself goes through the ordinary
+/// edge binding, so this asserts only what the predicate selects.
+#[test]
+fn membership_against_a_path_relationship_list_selects_the_bound_edge() {
+    let mut graph = graph_with_one_relationship();
+    let result = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[:R]->(b:N) SET a.touched = 1 \
+         WITH collect(relationships(p)[0]) AS rels \
+         MATCH ()-[r:R]->() WHERE r IN rels DELETE r RETURN size(rels) AS listed",
+    );
+    assert_eq!(result.rows, vec![vec![Value::Int64(1)]], "{result:?}");
+    assert_eq!(
+        result.stats.as_ref().map(|s| s.relationships_deleted),
+        Some(1),
+        "{result:?}"
+    );
+}
+
+/// Path-derived relationships were refused by every write procedure with
+/// "relationship was not bound by this statement" — a false claim: the path
+/// came from this statement's own MATCH. Path materialisation now supplies the
+/// statement token.
+#[test]
+fn path_relationships_are_accepted_by_set_and_remove() {
+    let mut graph = graph_with_two_hop_chain();
+    let stored = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) WHERE a.id = 1 WITH p, relationships(p)[0] AS pr \
+         CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
+    );
+    assert_eq!(stored.rows, vec![vec![Value::Int64(1)]], "{stored:?}");
+
+    let removed = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) WHERE a.id = 1 WITH p \
+         CALL db.edge_embeddings.remove({type:'R', text_property:'text', \
+         relationships:[relationships(p)[0]]}) YIELD removed RETURN removed",
+    );
+    assert_eq!(removed.rows, vec![vec![Value::Int64(1)]], "{removed:?}");
+}
+
+/// The same acceptance for a variable-length path, whose relationships only
+/// ever exist as materialised values — there is no bound variable to fall back
+/// on, so the refusal made the whole shape unreachable.
+#[test]
+fn variable_length_path_relationships_are_accepted_by_set() {
+    let mut graph = graph_with_two_hop_chain();
+    let stored = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH relationships(p) AS rels UNWIND rels AS pr \
+         CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN max(stored) AS stored",
+    );
+    assert_eq!(stored.rows, vec![vec![Value::Int64(2)]], "{stored:?}");
+}
+
+/// `db.edge_embeddings.embed` takes the same values, so the generation path
+/// reaches path relationships too.
+#[test]
+fn path_relationships_are_accepted_by_embed() {
+    let mut graph = graph_with_two_hop_chain();
+    let model = StubEmbedder { dimension: 2 };
+    let service = crate::graph::edge_embedding_generation::EmbeddingExecutionService {
+        model: &model,
+        interrupt: crate::graph::algorithms::Interrupt::from_deadline(None),
+    };
+    let parsed = parser::parse_cypher(
+        "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH relationships(p) AS rels \
+         CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships: rels}) \
+         YIELD embedded RETURN embedded",
+    )
+    .unwrap();
+    let result = super::super::write::execute_mutable_with_csv(
+        &mut graph,
+        &parsed,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::from_deadline(None),
+        super::super::write::MutationLimits {
+            max_work_units: None,
+            row_limit: None,
+        },
+        &super::super::load_csv::CsvImportPolicy::Denied,
+        Some(&service),
+    )
+    .unwrap();
+    assert_eq!(result.rows, vec![vec![Value::Int64(2)]], "{result:?}");
+}
+
+struct StubEmbedder {
+    dimension: usize,
+}
+
+impl crate::graph::embedder::Embedder for StubEmbedder {
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Ok((0..texts.len()).map(|i| vec![i as f32, 1.0]).collect())
+    }
+    fn model_id(&self) -> Option<String> {
+        Some("stub".to_string())
+    }
+    fn load(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn unload(&self) {}
+}
+
+/// A path relationship whose edge was deleted earlier in the same statement is
+/// not written: the hop's slot no longer holds an edge, so the path carries no
+/// relationship for it and the procedure refuses the null.
+#[test]
+fn path_relationship_deleted_earlier_in_the_statement_is_refused() {
+    let mut graph = graph_with_two_hop_chain();
+    let error = try_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) WHERE a.id = 1 DELETE r WITH p \
+         CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: relationships(p)[0], vector:[1.0,0.0]}]}) YIELD stored \
+         RETURN stored",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("db.edge_embeddings.set"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        graph.edge_embeddings.is_empty(),
+        "a refused statement must leave no store"
+    );
+}
+
+/// A relationship that arrived as a query parameter never passed through this
+/// statement's MATCH, so it carries no token and stays refused — the equality
+/// change must not weaken that.
+#[test]
+fn round_tripped_parameter_relationship_is_still_refused() {
+    let mut graph = graph_with_two_hop_chain();
+    let parsed = parser::parse_cypher(
+        "CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: $rel, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
+    )
+    .unwrap();
+    let param = RelValue::new(0, 0, 1, "R".into(), PropMap::default());
+    let error = super::super::write::execute_mutable(
+        &mut graph,
+        &parsed,
+        HashMap::from([(
+            "rel".to_string(),
+            Value::Relationship(Box::new(param.clone())),
+        )]),
+        crate::graph::algorithms::Interrupt::from_deadline(None),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("db.edge_embeddings.set"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        graph.edge_embeddings.is_empty(),
+        "a refused statement must leave no store"
+    );
+}
+
+/// A relationship handed back in as a parameter compares equal to the bound
+/// relationship it describes. The parameter carries no statement token and the
+/// binding does, so the derived equality called them different values: inside a
+/// write statement `WHERE r = $rel` and `WHERE r IN $rels` — the shape a caller
+/// writes after fetching relationships in an earlier query — matched nothing.
+/// Equality is the five public fields; the token only gates writes.
+#[test]
+fn a_parameter_relationship_compares_equal_to_the_bound_relationship() {
+    let mut graph = graph_with_one_relationship();
+    let param = RelValue::new(
+        0,
+        0,
+        1,
+        "R".into(),
+        PropMap::from_pairs(vec![("tag".into(), Value::String("old".into()))]),
+    );
+    let parsed = parser::parse_cypher(
+        "MATCH (a:N)-[r:R]->(b:N) SET a.touched = 1 \
+         RETURN r = $rel AS eq, r IN [$rel] AS member",
+    )
+    .unwrap();
+    let result = super::super::write::execute_mutable(
+        &mut graph,
+        &parsed,
+        HashMap::from([("rel".to_string(), Value::Relationship(Box::new(param)))]),
+        crate::graph::algorithms::Interrupt::from_deadline(None),
+    )
+    .unwrap();
+    assert_eq!(
+        result.rows,
+        vec![vec![Value::Boolean(true), Value::Boolean(true)]],
+        "{result:?}"
     );
 }

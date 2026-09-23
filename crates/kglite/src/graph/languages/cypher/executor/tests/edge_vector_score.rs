@@ -142,3 +142,35 @@ fn collected_and_unwound_relationships_score_like_direct_bindings() {
         vec![Value::Int64(2), Value::Null, Value::Null]
     );
 }
+
+/// Inside a write statement the scalars demand this statement's identity token
+/// on a projected relationship value, and path materialisation supplied none:
+/// scoring a `relationships(p)` element failed with "relationship value was not
+/// bound by this statement" even though the path came from this statement's own
+/// MATCH. The read form above never saw it — there is no token outside a write.
+#[test]
+fn path_relationships_score_inside_a_write_statement() {
+    let mut graph = graph();
+    let parsed = parser::parse_cypher(
+        "MATCH p = (a:N)-[:ASSERTS]->(b:N) WHERE a.id = 1 AND b.id = 2 SET a.touched = 1 \
+         WITH relationships(p) AS rels UNWIND rels AS rel \
+         RETURN id(rel) AS edge, vector_score(rel,'text_emb',[1.0,0.0]) AS score, \
+         embedding_norm(rel,'text_emb') AS norm ORDER BY edge",
+    )
+    .unwrap();
+    let result = execute_mutable(
+        &mut graph,
+        &parsed,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::from_deadline(None),
+    )
+    .unwrap();
+    assert_eq!(
+        result.rows,
+        vec![
+            vec![Value::Int64(0), Value::Float64(1.0), Value::Float64(1.0)],
+            vec![Value::Int64(1), Value::Float64(1.0), Value::Float64(1.0)],
+        ],
+        "{result:?}"
+    );
+}

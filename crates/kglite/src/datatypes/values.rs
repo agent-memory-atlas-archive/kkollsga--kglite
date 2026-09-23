@@ -192,7 +192,7 @@ impl RelationshipIncarnation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelValue {
     pub id: u32,
     pub start_id: u32,
@@ -203,6 +203,65 @@ pub struct RelValue {
     #[doc(hidden)]
     #[serde(skip, default)]
     pub incarnation: Option<RelationshipIncarnation>,
+}
+
+/// The five public fields, in declaration order — the whole comparison key for
+/// `Eq`, `Hash` and `Ord`.
+///
+/// `incarnation` is deliberately excluded. It is a per-statement executor
+/// token that only a binding produced by *this* statement's MATCH carries, so
+/// including it made the same edge unequal to itself depending on the route it
+/// arrived by: inside a write statement `r = relationships(p)[0]` was false,
+/// `r IN relationships(p)` was false, `DISTINCT` over the two counted them
+/// twice, and `WHERE r IN rels DELETE r` deleted nothing. Read statements have
+/// no token at all, so they never saw it — the derive made equality depend on
+/// whether the statement happened to write.
+///
+/// Excluding it means a stale value and a fresh value for the same reused slot
+/// compare equal *as values*. That is deliberate and is 0.17.12 behaviour: the
+/// identity check that keeps a stale value from reaching an edge is the
+/// explicit token comparison in the `db.edge_embeddings.*` procedures
+/// (`edge_embedding_procedures::resolve_rel_value`) and in `DELETE`, not
+/// container equality.
+type RelValueKey<'a> = (u32, u32, u32, &'a str, &'a PropMap);
+
+impl RelValue {
+    #[inline]
+    fn comparison_key(&self) -> RelValueKey<'_> {
+        (
+            self.id,
+            self.start_id,
+            self.end_id,
+            self.rel_type.as_str(),
+            &self.properties,
+        )
+    }
+}
+
+impl PartialEq for RelValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.comparison_key() == other.comparison_key()
+    }
+}
+
+impl Eq for RelValue {}
+
+impl std::hash::Hash for RelValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.comparison_key().hash(state);
+    }
+}
+
+impl PartialOrd for RelValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RelValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.comparison_key().cmp(&other.comparison_key())
+    }
 }
 
 impl RelValue {

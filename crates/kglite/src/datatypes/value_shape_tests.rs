@@ -254,6 +254,54 @@ fn rel_value_ord_ranks_id_start_end_type_then_properties() {
 // PathValue — field order is (nodes, rels)
 // ============================================================================
 
+/// `RelValue` carries a sixth field — the transient statement incarnation —
+/// that `Eq`, `Hash` and `Ord` must all ignore. It is executor-only state, and
+/// while it was part of the derived comparison the *same* edge reached through
+/// a write statement's bound variable and through `relationships(p)` landed in
+/// two `HashSet` buckets, two `DISTINCT` groups and two `sort`+`dedup` runs.
+///
+/// The three containers have to agree with each other as well as with the
+/// field list, so this asserts all three, not just `==`.
+#[test]
+fn rel_value_identity_is_invisible_to_eq_hash_and_ord() {
+    use std::collections::{BTreeSet, HashSet};
+
+    let plain = rel(3, 1, 2, "R", &[("tag", s("old"))]);
+    let mut tokened = plain.clone();
+    tokened.incarnation = Some(crate::datatypes::values::RelationshipIncarnation::new(
+        17, 4,
+    ));
+    let mut other_token = plain.clone();
+    other_token.incarnation = Some(crate::datatypes::values::RelationshipIncarnation::new(
+        17, 5,
+    ));
+
+    assert_eq!(plain, tokened);
+    assert_eq!(tokened, other_token);
+    assert_eq!(plain.cmp(&tokened), Ordering::Equal);
+    assert_eq!(tokened.cmp(&other_token), Ordering::Equal);
+
+    let hashed: HashSet<RelValue> = [plain.clone(), tokened.clone(), other_token.clone()]
+        .into_iter()
+        .collect();
+    assert_eq!(hashed.len(), 1, "HashSet must fold the three into one key");
+
+    let ordered: BTreeSet<RelValue> = [plain.clone(), tokened.clone(), other_token.clone()]
+        .into_iter()
+        .collect();
+    assert_eq!(ordered.len(), 1, "BTreeSet must agree with the HashSet");
+
+    let mut sorted = vec![plain.clone(), tokened, other_token];
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 1, "sort+dedup must agree with both sets");
+
+    // A different edge stays a different key — the change must not collapse
+    // everything onto the five fields' *absence*.
+    let different = rel(4, 1, 2, "R", &[("tag", s("old"))]);
+    assert_ne!(plain, different);
+}
+
 #[test]
 fn path_value_ord_ranks_nodes_before_rels() {
     let n1 = node(1, &["Person"], &[]);

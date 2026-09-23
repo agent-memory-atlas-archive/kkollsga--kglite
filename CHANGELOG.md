@@ -67,8 +67,10 @@ before upgrading.
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
   struct literals must initialize the new internal `incarnation` field to
   `None`. Low-level `EdgeBinding` struct literals also require
-  `incarnation: None`. The query engine clears this transient identity before publishing
-  results, preserving serialized relationship fields and public value equality.
+  `incarnation: None`. `RelValue`'s `PartialEq`, `Eq`, `Hash`, `PartialOrd` and
+  `Ord` are hand-written over the five public fields, so the transient identity
+  changes no comparison, sort order or hash bucket; serde omits it, and the
+  query engine additionally clears it before publishing results.
 
 - Rust durability consumers constructing or matching `api::durable::RawOp`
   must account for the new relationship-embedding variants and the

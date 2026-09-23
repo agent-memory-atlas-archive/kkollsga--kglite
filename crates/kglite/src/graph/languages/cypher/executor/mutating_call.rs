@@ -41,9 +41,14 @@ pub(super) fn execute(
     let mut joined = Vec::new();
     for outer in existing.rows {
         super::check_interrupt(ctx.interrupt)?;
+        // The argument expressions belong to this statement, so they evaluate
+        // under its relationship identities: an inline `relationships(p)[0]`
+        // must carry the statement token the procedures check, and a binding
+        // retired earlier in the statement must read as retired here too.
         let args = CypherExecutor::with_params(graph, ctx.params, ctx.interrupt.deadline)
             .with_cancel(ctx.interrupt.cancel)
             .with_budget(ctx.budget.clone())
+            .with_relationship_identities(Some(ctx.identities.clone()))
             .extract_call_params(&resolved.parameters, &outer)?;
         let rows = dispatch(graph, &name, &args, &resolved, ctx.identities, ctx.service)?;
         ctx.budget.check_work(rows.len(), &format!("CALL {name}"))?;

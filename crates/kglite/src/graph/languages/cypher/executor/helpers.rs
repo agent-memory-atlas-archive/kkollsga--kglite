@@ -1003,13 +1003,10 @@ fn complete_from_type_schema<S: PropertySink>(
 
 /// Materialise an edge into an owned [`RelValue`] suitable for
 /// `Value::Relationship`. Mirrors `materialize_node_value`.
-pub(crate) fn materialize_rel_value(
-    edge_idx: petgraph::graph::EdgeIndex,
-    graph: &crate::graph::DirGraph,
-) -> Option<crate::datatypes::values::RelValue> {
-    materialize_rel_value_with_incarnation(edge_idx, graph, None)
-}
-
+///
+/// `incarnation` is this statement's identity token for the slot, or `None`
+/// for a value that did not come from this statement's own traversal — the
+/// `db.edge_embeddings.*` procedures and `DELETE` refuse the latter.
 pub(crate) fn materialize_rel_value_with_incarnation(
     edge_idx: petgraph::graph::EdgeIndex,
     graph: &crate::graph::DirGraph,
@@ -1051,9 +1048,18 @@ pub(crate) fn materialize_rel_value_with_incarnation(
 ///
 /// Every hop carries its exact edge slot, so parallel relationships and
 /// incoming/undirected traversal retain the relationship actually matched.
+///
+/// `incarnation` supplies the statement's relationship identity token per edge
+/// slot. Without it the path's relationships were indistinguishable from values
+/// that never passed through a MATCH, and the `db.edge_embeddings.*` procedures
+/// refused them with "relationship was not bound by this statement". Callers
+/// outside a statement (none today) pass `|_| None`.
 pub(crate) fn materialize_path_value(
     path: &super::PathBinding,
     graph: &crate::graph::DirGraph,
+    incarnation: impl Fn(
+        petgraph::graph::EdgeIndex,
+    ) -> Option<crate::datatypes::values::RelationshipIncarnation>,
 ) -> crate::datatypes::values::PathValue {
     use crate::datatypes::values::PathValue;
     let mut nodes = Vec::with_capacity(path.path.len() + 1);
@@ -1063,7 +1069,9 @@ pub(crate) fn materialize_path_value(
         nodes.push(src_node);
     }
     for hop in &path.path {
-        if let Some(rel) = materialize_rel_value(hop.edge, graph) {
+        if let Some(rel) =
+            materialize_rel_value_with_incarnation(hop.edge, graph, incarnation(hop.edge))
+        {
             rels.push(rel);
         }
         if let Some(node) = materialize_node_value(hop.node, graph) {
