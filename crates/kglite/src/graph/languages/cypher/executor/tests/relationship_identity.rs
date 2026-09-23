@@ -129,7 +129,7 @@ fn detach_delete_retires_incident_slot_but_fresh_reuse_is_valid() {
         super::super::relationship_identity::StatementRelationshipIdentities::new();
     let stale = identities.capture(edge);
 
-    super::super::write::invalidate_deleted_relationships(
+    super::super::delete_clause::invalidate_deleted_relationships(
         &graph,
         &HashSet::from([source]),
         &HashSet::new(),

@@ -136,6 +136,13 @@ fn replace_edge_section(
     rebuilt
 }
 
+/// The two core data versions are a hard break, not a preference: a reader up
+/// to 0.17.12 rejects v4 outright ("File uses core data version 4 but this
+/// library only supports up to version 3", with an upgrade instruction), which
+/// is the only thing standing between an old reader and silently dropping the
+/// edge vectors. Writing v3 for an edge-vector-free graph keeps those files
+/// readable; writing v4 as soon as vectors exist is what makes the refusal
+/// happen. Changing either value reopens the silent-drop window.
 #[test]
 fn node_only_save_keeps_core_v3_and_edge_save_requires_v4() {
     let node_only = DirGraph::new();

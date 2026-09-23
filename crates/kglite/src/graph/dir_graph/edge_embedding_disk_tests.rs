@@ -121,6 +121,10 @@ fn disk_round_trip_preserves_parallel_and_self_loop_vectors() {
     assert_eq!(mentions.get(self_loop), Some(&[0.5, 0.5][..]));
 }
 
+/// A graph with no edge vectors must keep writing format 2: every reader up to
+/// 0.17.12 refuses a snapshot stamped 3 with "unsupported edge property format
+/// 3", so promoting the format unconditionally would make ordinary graphs
+/// unreadable by installed versions.
 #[test]
 fn node_only_disk_snapshot_stays_format_two_without_sidecar() {
     let tmp = tempfile::tempdir().unwrap();
@@ -138,6 +142,10 @@ fn node_only_disk_snapshot_stays_format_two_without_sidecar() {
     load_file(dir.to_str().unwrap()).unwrap();
 }
 
+/// A declared-but-empty store still carries dimension and metric that only
+/// format 3 records, so the bump is required here even with no vectors left —
+/// and 3 is exactly the value older readers refuse ("unsupported edge property
+/// format 3"), which is what keeps them from silently dropping the store.
 #[test]
 fn empty_declared_edge_store_requires_format_three_and_round_trips() {
     let tmp = tempfile::tempdir().unwrap();

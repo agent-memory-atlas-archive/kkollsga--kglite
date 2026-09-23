@@ -3137,7 +3137,7 @@ that works — never a syntax error, and never a no-op that reports success.
 | `CREATE POINT INDEX` | No point index. Spatial predicates and the spatial-join optimiser work on geometry properties without one |
 | `CREATE VECTOR INDEX` | Vector indexes exist, but need an existing embedding store and HNSW build parameters, so they are created through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
 | `CREATE LOOKUP INDEX` | Label and relationship-type lookup is always indexed automatically (`type_indices`) |
-| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | KGLite indexes node properties only. Relationship properties are queryable, just scanned |
+| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | No DDL form creates a relationship index. Relationship *vector* indexes do exist: built with `CALL db.edge_embeddings.build_index(...)`, listed by `SHOW INDEXES` with `entityType: RELATIONSHIP`, and removed with `DROP INDEX relationship:T.p`. Every other relationship property is queryable, just scanned |
 | `... OPTIONS { ... }` | No index providers or per-index configuration to apply |
 | `CREATE RANGE INDEX ... ON (n.a, n.b)` | The B-tree is single-property. Use a composite equality index, or one `CREATE RANGE INDEX` per property |
 

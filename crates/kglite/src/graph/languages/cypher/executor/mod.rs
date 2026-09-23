@@ -929,6 +929,7 @@ mod columnar_write;
 #[path = "comparison_tristate_tests.rs"]
 mod comparison_tristate_tests;
 pub mod dead_code;
+mod delete_clause;
 mod edge_embedding_procedures;
 mod edge_property_write;
 mod execution_support;
@@ -942,6 +943,7 @@ mod keys_map_tests;
 pub mod load_csv;
 pub mod match_clause;
 pub mod match_execution;
+mod merge_pattern;
 mod mutating_call;
 mod mutation_support;
 mod node_ontology;

@@ -1,5 +1,7 @@
 //! Cypher mutation execution — execute_mutable + per-clause helpers
-//! (execute_create, execute_set, execute_delete, execute_remove, execute_merge).
+//! (execute_create, execute_set, execute_remove, execute_merge). DELETE lives
+//! in [`super::delete_clause`] and MERGE's match arm in
+//! [`super::merge_pattern`].
 
 use super::super::ast::*;
 use super::super::result::*;
@@ -8,15 +10,14 @@ use super::columnar_write::{
 };
 use super::edge_property_write::{remove_edge_property, set_edge_property};
 use super::identity_fields::{
-    check_identity_uniqueness, create_identity, merge_expected_props, remove_write_field,
-    CreatedIdentity, IdentityAliases,
+    check_identity_uniqueness, create_identity, remove_write_field, CreatedIdentity,
+    IdentityAliases,
 };
 use super::set_row::{apply_node_property_set, NodePropertySet, SetMemos};
-use super::write_scope::{
-    enforce_bound_edge_write_scope, enforce_edge_write_scope, enforce_node_write_scope,
-    enforce_write_scope,
-};
-use super::{clause_display_name, schema_ddl, CypherExecutor};
+use super::write_scope::{enforce_edge_write_scope, enforce_node_write_scope, enforce_write_scope};
+use super::{clause_display_name, delete_clause, merge_pattern, schema_ddl, CypherExecutor};
+// The relationship-identity tests address DELETE's slot retirement through the
+// mutation module rather than the clause file that owns it.
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::Interrupt;
 use crate::graph::schema::{DirGraph, EdgeData, InternedKey};
@@ -193,7 +194,10 @@ impl MutationCtx<'_> {
 /// through the read path's [`check_interrupt`](super::check_interrupt), so a
 /// timed-out write says "timed out" and a cancelled one says "cancelled".
 #[inline]
-fn check_interrupt_periodic(interrupt: &Interrupt, iteration: usize) -> Result<(), String> {
+pub(super) fn check_interrupt_periodic(
+    interrupt: &Interrupt,
+    iteration: usize,
+) -> Result<(), String> {
     if iteration & (super::INTERRUPT_POLL_INTERVAL - 1) == 0 {
         super::check_interrupt(interrupt)?;
     }
@@ -436,7 +440,7 @@ fn run_clause_pipeline(
                 GraphWrite::flush_pending_writes(&mut graph.graph);
             }
             Clause::Delete(del) => {
-                execute_delete(
+                delete_clause::execute_delete(
                     graph,
                     del,
                     &result_set,
@@ -733,7 +737,7 @@ fn apply_foreach_body_clause(
             Ok(result_set)
         }
         Clause::Delete(del) => {
-            execute_delete(
+            delete_clause::execute_delete(
                 graph,
                 del,
                 &result_set,
@@ -1251,13 +1255,6 @@ fn value_type_name(v: &Value) -> String {
     v.type_name().to_string()
 }
 
-fn get_create_node_variable(element: &CreateElement) -> Option<&str> {
-    match element {
-        CreateElement::Node(np) => np.variable.as_deref(),
-        _ => None,
-    }
-}
-
 /// Resolve a CREATE edge endpoint at `pos` to its NodeIndex.
 ///
 /// Both error arms are structural (a non-node element at an endpoint position,
@@ -1767,259 +1764,6 @@ fn stamp_node_provenance(graph: &mut DirGraph, nodes_to_stamp: &HashMap<NodeInde
     }
 }
 
-fn execute_delete(
-    graph: &mut DirGraph,
-    delete: &DeleteClause,
-    result_set: &ResultSet,
-    stats: &mut MutationStats,
-    interrupt: &Interrupt,
-    relationship_identities: &mut super::relationship_identity::StatementRelationshipIdentities,
-) -> Result<(), String> {
-    use std::collections::HashSet;
-
-    let mut nodes_to_delete: HashSet<petgraph::graph::NodeIndex> = HashSet::new();
-    // Collected as a set up front because the Phase-2 "node still has
-    // relationships" check must see the WHOLE statement's deletions:
-    // openCypher deletes are statement-atomic, so `DELETE r, n` is legal
-    // when `r` is the only relationship attached to `n`.
-    let mut deleted_edges: HashSet<petgraph::graph::EdgeIndex> = HashSet::new();
-
-    // Phase 1: collect all nodes and edges to delete across all rows, and
-    // authorize each against the role-scoped write whitelist as it is first
-    // seen. Authorization belongs *here*, not at the commit in Phase 3: a
-    // refusal must return before any storage mutation (the refusal-before-
-    // mutation norm stated at `set_row.rs`'s `enforce_write_scope` call), so a
-    // statement whose 500th row is out of scope does not delete the first 499.
-    // The check is per distinct node/edge, not per row — a `HashSet::insert`
-    // that returns false has already been judged.
-    for (row_idx, row) in result_set.rows.iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
-        for expr in &delete.expressions {
-            let var_name = match expr {
-                Expression::Variable(name) => name,
-                other => return Err(format!("DELETE expects variable names, got {:?}", other)),
-            };
-
-            if let Some(&node_idx) = row.node_bindings.get(var_name) {
-                if nodes_to_delete.insert(node_idx) {
-                    enforce_node_write_scope(graph, node_idx)?;
-                }
-            } else if let Some(edge_binding) = row.edge_bindings.get(var_name) {
-                if deleted_edges.insert(edge_binding.edge_index) {
-                    let token = edge_binding.incarnation.ok_or_else(|| {
-                        format!("Relationship '{var_name}' has no statement-local identity")
-                    })?;
-                    if !relationship_identities.accepts(edge_binding.edge_index, token) {
-                        return Err(format!(
-                            "Relationship '{var_name}' is stale after its storage slot was reused"
-                        ));
-                    }
-                    enforce_bound_edge_write_scope(graph, edge_binding)?;
-                }
-            } else {
-                // Not bound to a node/edge. A node or relationship VALUE
-                // (projected by WITH / collect) is still deletable; anything
-                // else is NULL
-                // — e.g. an unmatched OPTIONAL MATCH variable — and
-                // openCypher ignores NULL in DELETE (so the idiomatic
-                // single-statement cascade `MATCH (root) OPTIONAL MATCH
-                // (root)-->(child) DETACH DELETE root, child` works even
-                // when a branch is empty). Skip it.
-                match row.projected.get(var_name) {
-                    Some(Value::NodeRef(i)) => {
-                        let node_idx = petgraph::graph::NodeIndex::new(*i as usize);
-                        if nodes_to_delete.insert(node_idx) {
-                            enforce_node_write_scope(graph, node_idx)?;
-                        }
-                    }
-                    // A materialised node value (`collect(n)` / `RETURN n`) is
-                    // deletable too — this is the load-bearing case for
-                    // `FOREACH (e IN collect(n) | DETACH DELETE e)`, where the
-                    // loop variable is bound in `projected` as a `Value::Node`,
-                    // not a `NodeRef`. Both `NodeValue` constructors
-                    // (`materialize_node_value` + the Variable-resolution path)
-                    // set `id` to the petgraph index, so it resolves the same
-                    // way as `NodeRef`. (Without this arm, DELETE inside FOREACH
-                    // over a collected list was a silent no-op.)
-                    Some(Value::Node(nv)) => {
-                        let node_idx = petgraph::graph::NodeIndex::new(nv.id as usize);
-                        if nodes_to_delete.insert(node_idx) {
-                            enforce_node_write_scope(graph, node_idx)?;
-                        }
-                    }
-                    // A materialised relationship value (`collect(r)` then
-                    // UNWIND, or a `FOREACH` loop variable) is deletable on the
-                    // same grounds as the node arms above. Without it the value
-                    // fell through here and DELETE was a silent no-op: no edge
-                    // removed, no error. It carries its own identity checks
-                    // rather than the binding path's, because a value can
-                    // outlive the slot it names.
-                    Some(Value::Relationship(rel)) => {
-                        let edge_index = petgraph::graph::EdgeIndex::new(rel.id as usize);
-                        if deleted_edges.insert(edge_index) {
-                            let token = rel.incarnation.ok_or_else(|| {
-                                format!(
-                                    "Relationship value '{var_name}' was not bound by this \
-                                     statement"
-                                )
-                            })?;
-                            if !relationship_identities.accepts(edge_index, token) {
-                                return Err(format!(
-                                    "Relationship '{var_name}' is stale after its storage slot \
-                                     was reused"
-                                ));
-                            }
-                            let binding = EdgeBinding {
-                                incarnation: Some(token),
-                                source: petgraph::graph::NodeIndex::new(rel.start_id as usize),
-                                target: petgraph::graph::NodeIndex::new(rel.end_id as usize),
-                                edge_index,
-                            };
-                            // The token is statement-local; a value from
-                            // another graph or a rebuilt slot can still name a
-                            // live edge whose endpoints are not the ones the
-                            // value records. Deleting that edge would remove a
-                            // relationship the caller never selected.
-                            if graph.graph.edge_endpoints(edge_index)
-                                != Some((binding.source, binding.target))
-                            {
-                                return Err(format!(
-                                    "Relationship '{var_name}' no longer occupies the storage \
-                                     slot it names"
-                                ));
-                            }
-                            enforce_bound_edge_write_scope(graph, &binding)?;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Phase 2: for plain DELETE (not DETACH), verify no node keeps edges.
-    // Relationships deleted by THIS statement don't count — openCypher
-    // deletes are statement-atomic, so `MATCH (a)-[r]->(b) DELETE r, a`
-    // succeeds when `r` covers every relationship attached to `a`.
-    if !delete.detach {
-        // Arena guard: node_weight (and the disk backend's edge iteration)
-        // materialize into the query arena (protocol in disk/graph.rs);
-        // scoped so the borrow ends before Phase 3's &mut commits.
-        let _arena_guard = graph.graph.begin_query();
-        for (node_count, &node_idx) in nodes_to_delete.iter().enumerate() {
-            check_interrupt_periodic(interrupt, node_count)?;
-            let has_edges = graph
-                .graph
-                .edges_directed(node_idx, petgraph::Direction::Outgoing)
-                .any(|e| !deleted_edges.contains(&e.id()))
-                || graph
-                    .graph
-                    .edges_directed(node_idx, petgraph::Direction::Incoming)
-                    .any(|e| !deleted_edges.contains(&e.id()));
-            if has_edges {
-                let name = graph
-                    .graph
-                    .node_view(node_idx)
-                    .map(|n| {
-                        n.get_field_ref("name")
-                            .or_else(|| n.get_field_ref("title"))
-                            .map(|v| match v.as_ref() {
-                                // Bare string, not the quoted Display form
-                                // (and never the old Debug `String("…")`).
-                                Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            })
-                            .unwrap_or_else(|| format!("index {}", node_idx.index()))
-                    })
-                    .unwrap_or_else(|| "unknown".to_string());
-                return Err(format!(
-                    "Cannot delete node '{}' because it still has relationships. Use DETACH DELETE to delete the node and all its relationships.",
-                    name
-                ));
-            }
-        }
-    }
-
-    // Retire every relationship slot that this DELETE is about to remove.
-    // DETACH DELETE owns incident edges that do not appear as named bindings,
-    // so collect them while the nodes and their adjacency are still live.
-    // The sparse statement-local generations then distinguish a later CREATE
-    // that reuses one of these physical slots from a retained stale binding.
-    invalidate_deleted_relationships(
-        graph,
-        &nodes_to_delete,
-        &deleted_edges,
-        delete.detach,
-        relationship_identities,
-    )?;
-
-    // Phase 3: infallible commit of the preflighted edge set. Deliberately
-    // non-interruptible: once deletion begins, completing it preserves atomic
-    // statement semantics without an O(graph) rollback checkpoint.
-    for edge_index in deleted_edges.iter().copied() {
-        crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge_index);
-        stats.relationships_deleted += 1;
-    }
-
-    // Phase 3's explicit edge-variable deletes still need cache
-    // invalidation (`detach_delete_nodes` only covers its own edges).
-    if stats.relationships_deleted > 0 {
-        graph.invalidate_edge_type_counts_cache();
-        graph.connection_types.clear();
-    }
-
-    // Phase 4-7: DETACH-delete the nodes — incident edges, the nodes,
-    // and index cleanup. For a plain DELETE, Phase 2 has verified the
-    // nodes carry no edges, so none are removed here. Shared with
-    // `purge_provisional_nodes` via `maintain::detach_delete_nodes`.
-    //
-    // Write scope: the incident edges removed here are **collateral of an
-    // already-authorized node delete** and are deliberately not re-checked per
-    // far endpoint. Re-checking would be both wrong and expensive — wrong
-    // because a node the role may delete cannot be left behind as a dangling
-    // half-edge just because it points at a type the role may not write, and
-    // expensive because it is an O(degree) type resolution per deleted node.
-    // Phase 1 authorized every node in `nodes_to_delete`; that authorization
-    // covers everything attached to them.
-    let (nodes_deleted, edges_removed) =
-        crate::graph::mutation::maintain::detach_delete_nodes(graph, &nodes_to_delete);
-    stats.nodes_deleted += nodes_deleted;
-    stats.relationships_deleted += edges_removed;
-
-    Ok(())
-}
-
-pub(super) fn invalidate_deleted_relationships(
-    graph: &DirGraph,
-    nodes: &std::collections::HashSet<petgraph::graph::NodeIndex>,
-    explicitly_deleted: &std::collections::HashSet<petgraph::graph::EdgeIndex>,
-    detach: bool,
-    identities: &mut super::relationship_identity::StatementRelationshipIdentities,
-) -> Result<(), String> {
-    let mut edges = explicitly_deleted.clone();
-    if detach {
-        let _arena_guard = graph.graph.begin_query();
-        for &node in nodes {
-            edges.extend(
-                graph
-                    .graph
-                    .edges_directed(node, petgraph::Direction::Outgoing)
-                    .map(|edge| edge.id()),
-            );
-            edges.extend(
-                graph
-                    .graph
-                    .edges_directed(node, petgraph::Direction::Incoming)
-                    .map(|edge| edge.id()),
-            );
-        }
-    }
-    for edge in edges {
-        identities.invalidate(edge)?;
-    }
-    Ok(())
-}
-
 fn execute_remove(
     graph: &mut DirGraph,
     remove: &RemoveClause,
@@ -2250,7 +1994,8 @@ fn execute_merge(
                 }
             }
         }
-        let matched = try_match_merge_pattern(graph, &merge.pattern, &new_row, params)?;
+        let matched =
+            merge_pattern::try_match_merge_pattern(graph, &merge.pattern, &new_row, params)?;
 
         if let Some(bound_row) = matched {
             for (var, idx) in &bound_row.node_bindings {
@@ -2312,252 +2057,6 @@ fn execute_merge(
         columns: existing.columns,
         lazy_return_items: None,
     })
-}
-
-/// The property values a relationship MERGE pattern expects, in the pattern's
-/// own spelling.
-///
-/// The node counterpart ([`merge_expected_props`]) canonicalises each key
-/// through the type's identity aliases; relationships have no identity columns,
-/// so a key here always names an ordinary stored property. Endpoint references
-/// are snapshotted for the same reason the node path snapshots them: stored
-/// properties hold resolved values, so an unresolved one would never compare
-/// equal to what is on the edge.
-fn merge_expected_edge_props<'p>(
-    executor: &CypherExecutor<'_>,
-    edge_pat: &'p CreateEdgePattern,
-    row: &ResultRow,
-    graph: &DirGraph,
-) -> Result<Vec<(&'p str, Value)>, String> {
-    edge_pat
-        .properties
-        .iter()
-        .map(|(key, expr)| {
-            let mut value = executor.evaluate_expression(expr, row)?;
-            crate::graph::session::snapshot_property_values(
-                &graph.graph,
-                std::iter::once(&mut value),
-            );
-            Ok((key.as_str(), value))
-        })
-        .collect()
-}
-
-/// Whether a candidate edge carries every property the MERGE pattern spelled,
-/// under the same Cypher predicate equality the node arm applies. A property
-/// the edge does not carry never matches.
-fn edge_matches_all(edge: &EdgeData, expected: &[(&str, Value)]) -> bool {
-    expected.iter().all(|(key, value)| {
-        edge.get_property(key)
-            .is_some_and(|stored| crate::graph::core::filtering::values_equal(stored, value))
-    })
-}
-
-/// Returns the bound row when the pattern already exists, `None` when it does
-/// not (the caller then CREATEs it).
-fn try_match_merge_pattern(
-    graph: &DirGraph,
-    pattern: &CreatePattern,
-    row: &ResultRow,
-    params: &HashMap<String, Value>,
-) -> Result<Option<ResultRow>, String> {
-    let executor = CypherExecutor::with_params(graph, params, None);
-
-    match pattern.elements.len() {
-        1 => {
-            // Node-only MERGE: (var:Label {key: val, ...})
-            if let CreateElement::Node(node_pat) = &pattern.elements[0] {
-                // If variable is already bound from prior MATCH, it's already matched
-                if let Some(ref var) = node_pat.variable {
-                    if let Some(&existing_idx) = row.node_bindings.get(var) {
-                        if graph.graph.node_view(existing_idx).is_some() {
-                            let mut result_row = ResultRow::new();
-                            result_row.node_bindings.insert(var.clone(), existing_idx);
-                            return Ok(Some(result_row));
-                        }
-                    }
-                }
-
-                let label = node_pat.label.as_deref().unwrap_or("Node");
-
-                // The id/property/composite indexes and `type_indices` are
-                // keyed by PRIMARY type. If `label` also occurs as a
-                // secondary label on some node, those structures miss the
-                // secondary-labelled candidates and would falsely report
-                // "no match" → MERGE creates a duplicate. In that case skip
-                // the index short-circuits and scan the full primary∪secondary
-                // candidate set (`nodes_with_label`). The common case (label
-                // has no secondary occurrences) keeps every index fast path.
-                let label_has_secondary = graph.has_secondary_labels
-                    && graph
-                        .secondary_label_index
-                        .contains_key(&crate::graph::schema::InternedKey::from_str(label));
-
-                let expected_props = merge_expected_props(&executor, node_pat, row, graph)?;
-
-                let node_matches_all = |idx: NodeIndex, props: &[(&str, Value)]| -> bool {
-                    if let Some(node) = graph.graph.node_view(idx) {
-                        let node_type = node.node_type_str(&graph.interner);
-                        props.iter().all(|(key, expected)| {
-                            let value =
-                                node.resolved_field(node_type, key, InternedKey::from_str(key));
-                            value.as_deref().is_some_and(|value| {
-                                if *key == "id" {
-                                    // Identity matching keeps its normalization policy;
-                                    // ordinary properties use Cypher predicate equality.
-                                    value == expected
-                                } else {
-                                    crate::graph::core::filtering::values_equal(value, expected)
-                                }
-                            })
-                        })
-                    } else {
-                        false
-                    }
-                };
-
-                let build_result = |idx: NodeIndex| -> ResultRow {
-                    let mut result_row = ResultRow::new();
-                    if let Some(ref var) = node_pat.variable {
-                        result_row.node_bindings.insert(var.clone(), idx);
-                    }
-                    result_row
-                };
-
-                if !label_has_secondary {
-                    // 1. If pattern contains "id" property, use O(1) id_index lookup
-                    if let Some((_, id_value)) = expected_props.iter().find(|(k, _)| *k == "id") {
-                        if let Some(idx) = graph.lookup_by_id_readonly(label, id_value) {
-                            if expected_props.len() == 1 || node_matches_all(idx, &expected_props) {
-                                return Ok(Some(build_result(idx)));
-                            }
-                        }
-                        return Ok(None);
-                    }
-
-                    // 2. Single non-id property: try property index.
-                    // Probed under the pattern's own spelling —
-                    // `lookup_by_index` resolves a type's registered
-                    // title/id alias itself. The old `name`/`title` → `title`
-                    // remap was not that: on a type whose `name` is an
-                    // ordinary stored property distinct from the title, it
-                    // asked the title index a question about `name` and
-                    // MERGE created a duplicate of the node it missed.
-                    if expected_props.len() == 1 {
-                        let (key, ref value) = expected_props[0];
-                        if let Some(candidates) = graph.lookup_by_index(label, key, value) {
-                            for &idx in &candidates {
-                                if node_matches_all(idx, &expected_props) {
-                                    return Ok(Some(build_result(idx)));
-                                }
-                            }
-                            return Ok(None);
-                        }
-                        // No index — fall through to linear scan
-                    }
-
-                    // 3. Multi-property: try composite index
-                    if expected_props.len() >= 2 {
-                        // Composite lookup excludes id/name/title: they use
-                        // special storage, not ordinary property columns.
-                        let mut indexable: Vec<(&str, &Value)> = expected_props
-                            .iter()
-                            .filter(|(k, _)| *k != "id" && *k != "name" && *k != "title")
-                            .map(|(k, v)| (*k, v))
-                            .collect();
-                        if indexable.len() >= 2 {
-                            indexable.sort_by(|a, b| a.0.cmp(b.0));
-                            let names: Vec<String> =
-                                indexable.iter().map(|(k, _)| k.to_string()).collect();
-                            let values: Vec<Value> =
-                                indexable.iter().map(|(_, v)| (*v).clone()).collect();
-                            if let Some(candidates) =
-                                graph.lookup_by_composite_predicate(label, &names, &values)
-                            {
-                                for &idx in &candidates {
-                                    if node_matches_all(idx, &expected_props) {
-                                        return Ok(Some(build_result(idx)));
-                                    }
-                                }
-                                return Ok(None);
-                            }
-                        }
-                    }
-                }
-
-                // 4. Fall back to linear scan (no index covers the pattern, or
-                // `label` has secondary occurrences). `nodes_with_label` unions
-                // primary + secondary candidates (and is the identical
-                // `type_indices` clone when no secondary labels exist).
-                for idx in graph.nodes_with_label(label) {
-                    if node_matches_all(idx, &expected_props) {
-                        return Ok(Some(build_result(idx)));
-                    }
-                }
-                Ok(None)
-            } else {
-                Err("MERGE pattern must start with a node".to_string())
-            }
-        }
-        3 => {
-            // Relationship MERGE: (a)-[r:TYPE]->(b)
-            let source_var = get_create_node_variable(&pattern.elements[0]);
-            let target_var = get_create_node_variable(&pattern.elements[2]);
-
-            let source_idx = source_var
-                .and_then(|v| row.node_bindings.get(v).copied())
-                .ok_or("MERGE path: source node must be bound by prior MATCH")?;
-            let target_idx = target_var
-                .and_then(|v| row.node_bindings.get(v).copied())
-                .ok_or("MERGE path: target node must be bound by prior MATCH")?;
-
-            if let CreateElement::Edge(edge_pat) = &pattern.elements[1] {
-                let (actual_src, actual_tgt) = match edge_pat.direction {
-                    CreateEdgeDirection::Outgoing => (source_idx, target_idx),
-                    CreateEdgeDirection::Incoming => (target_idx, source_idx),
-                };
-
-                let interned_ct = InternedKey::from_str(&edge_pat.connection_type);
-                // The pattern's relationship properties are part of the match,
-                // exactly as the node arm's are. Without them, parallel members
-                // between the same endpoints are indistinguishable and
-                // `edges_directed(..).find(..)` binds whichever one adjacency
-                // yields first — so `MERGE (a)-[r:T {k:0}]->(b)` could bind the
-                // `{k:1}` member and run ON MATCH SET against it, and a pattern
-                // matching no member never reached the CREATE arm.
-                let expected_props = merge_expected_edge_props(&executor, edge_pat, row, graph)?;
-                let matching_edge = graph
-                    .graph
-                    .edges_directed(actual_src, petgraph::Direction::Outgoing)
-                    .find(|e| {
-                        e.target() == actual_tgt
-                            && e.weight().connection_type == interned_ct
-                            && edge_matches_all(e.weight(), &expected_props)
-                    });
-
-                if let Some(edge_ref) = matching_edge {
-                    let mut result_row = ResultRow::new();
-                    if let Some(ref var) = edge_pat.variable {
-                        result_row.edge_bindings.insert(
-                            var.clone(),
-                            EdgeBinding {
-                                incarnation: None,
-                                source: actual_src,
-                                target: actual_tgt,
-                                edge_index: edge_ref.id(),
-                            },
-                        );
-                    }
-                    Ok(Some(result_row))
-                } else {
-                    Ok(None)
-                }
-            } else {
-                Err("Expected edge in MERGE path pattern".to_string())
-            }
-        }
-        _ => Err("MERGE supports single-node or single-edge patterns only".to_string()),
-    }
 }
 
 #[cfg(test)]
