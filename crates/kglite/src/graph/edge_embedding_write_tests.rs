@@ -1,6 +1,7 @@
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
+use crate::graph::storage::mode::StorageMode;
 use crate::graph::storage::recording::{resolve_ops, wrap_for_durability};
 use crate::graph::storage::GraphWrite;
 use crate::graph::wal::{MutationOp, WalFrame};
@@ -251,4 +252,288 @@ fn identical_generated_successor_is_a_true_no_op() {
         install_generated_edge_embeddings(&mut graph, "ASSERTS", "description", batch()).unwrap();
     assert_eq!(report.changed, 0);
     assert_eq!(graph.version(), before);
+}
+
+// ── manual-write rollback ───────────────────────────────────────────────
+//
+// `db.edge_embeddings.set` / `.remove` write through `upsert_edge_embeddings`
+// and `remove_edge_embeddings`. A statement that fails *after* one of those
+// calls must leave the store exactly as it found it — vectors in their dense
+// slot order, text hashes, `model_id`, store existence, and the HNSW index's
+// coverage. Memory and Mapped reverse the write from the undo journal; Disk
+// restores the whole-graph clone, so it is the control that must already pass.
+
+/// Every observable property of the `ASSERTS.description` store, in dense slot
+/// order — slot order is scan order, and scan order decides score ties.
+#[derive(Debug, PartialEq)]
+struct EdgeStoreFacts {
+    dimension: usize,
+    metric: Option<String>,
+    model_id: Option<String>,
+    cells: Vec<(usize, Vec<f32>, Option<u64>)>,
+}
+
+fn store_facts(graph: &DirGraph) -> Option<EdgeStoreFacts> {
+    let store = graph
+        .edge_embeddings
+        .get(&edge_store_key("ASSERTS", "description"))?;
+    Some(EdgeStoreFacts {
+        dimension: store.dimension(),
+        metric: store.metric().map(str::to_owned),
+        model_id: store.model_id().map(str::to_owned),
+        cells: store
+            .edges()
+            .map(|edge| {
+                (
+                    edge.index(),
+                    store
+                        .get(edge)
+                        .expect("a listed edge holds a vector")
+                        .to_vec(),
+                    store.text_hash(edge),
+                )
+            })
+            .collect(),
+    })
+}
+
+/// Index coverage as `db.edge_embeddings.list` reports it. Read *before* any
+/// query: a query on a stale index auto-refreshes through interior
+/// mutability, which would erase the very delta this compares.
+fn index_facts(graph: &DirGraph) -> Vec<vector_index::EdgeVectorIndexStatus> {
+    vector_index::list_edge_vector_indexes(graph)
+}
+
+fn index_query(graph: &DirGraph) -> Option<vector_index::EdgeVectorQueryReport> {
+    vector_index::query_edge_embeddings(
+        graph,
+        "ASSERTS",
+        "description",
+        &[1.0, 0.0],
+        vector_index::EdgeVectorQueryOptions {
+            top_k: 5,
+            exact: false,
+            metric: None,
+        },
+    )
+    .ok()
+}
+
+fn mode_graph(mode: StorageMode) -> (DirGraph, [EdgeIndex; 3]) {
+    let (mut graph, r1, r2) = graph();
+    let (source, target) = graph.graph.edge_endpoints(r1).unwrap();
+    let r3 = GraphWrite::add_edge(
+        &mut graph.graph,
+        source,
+        target,
+        EdgeData::new("ASSERTS".into(), HashMap::new(), &mut graph.interner),
+    );
+    match mode {
+        StorageMode::Memory => {}
+        StorageMode::Mapped => {
+            crate::graph::storage::mode::convert_dir_graph_to_mode(&mut graph, mode).unwrap()
+        }
+        StorageMode::Disk => graph.enable_disk_mode().unwrap(),
+    }
+    (graph, [r1, r2, r3])
+}
+
+/// Two of the three relationships embedded with hashes and a model stamp, and
+/// an HNSW index covering both.
+fn seeded_graph(mode: StorageMode) -> (DirGraph, [EdgeIndex; 3]) {
+    let (mut graph, edges) = mode_graph(mode);
+    install_generated_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        write(
+            2,
+            vec![
+                (edges[0], vec![1.0, 0.0], 11),
+                (edges[1], vec![0.0, 1.0], 22),
+            ],
+            vec![],
+            vec![edges[0], edges[1]],
+        ),
+    )
+    .unwrap();
+    vector_index::build_edge_vector_index(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vector_index::EdgeVectorIndexOptions::default(),
+    )
+    .unwrap();
+    (graph, edges)
+}
+
+#[test]
+fn manual_set_rolls_back_with_its_statement_in_every_storage_mode() {
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let (mut graph, [r1, _r2, r3]) = seeded_graph(mode);
+        let before_facts = store_facts(&graph);
+        let before_index = index_facts(&graph);
+        let before_query = index_query(&graph);
+        let before_version = graph.version();
+
+        let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+        upsert_edge_embeddings(
+            &mut graph,
+            "ASSERTS",
+            "description",
+            // One overwrite of an indexed slot and one append past the
+            // index's watermark: the two shapes `set_embedding` takes.
+            vec![(r1, vec![0.25, 0.75]), (r3, vec![0.6, 0.8])],
+            None,
+        )
+        .unwrap();
+        checkpoint.rollback(&mut graph);
+
+        assert_eq!(store_facts(&graph), before_facts, "{mode:?}");
+        assert_eq!(index_facts(&graph), before_index, "{mode:?}");
+        assert_eq!(index_query(&graph), before_query, "{mode:?}");
+        assert_eq!(graph.version(), before_version, "{mode:?}");
+    }
+}
+
+#[test]
+fn manual_set_that_creates_a_store_leaves_none_behind_after_rollback() {
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let (mut graph, [r1, ..]) = mode_graph(mode);
+        let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+        upsert_edge_embeddings(
+            &mut graph,
+            "ASSERTS",
+            "description",
+            vec![(r1, vec![1.0, 0.0])],
+            Some("cosine"),
+        )
+        .unwrap();
+        checkpoint.rollback(&mut graph);
+
+        assert!(
+            graph.edge_embeddings.is_empty(),
+            "{mode:?}: a rolled-back set must not leave the store it created"
+        );
+    }
+}
+
+#[test]
+fn manual_remove_rolls_back_with_its_statement_in_every_storage_mode() {
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let (mut graph, [r1, ..]) = seeded_graph(mode);
+        let before_facts = store_facts(&graph);
+        let before_index = index_facts(&graph);
+        let before_query = index_query(&graph);
+        let before_version = graph.version();
+
+        let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+        // Slot 0, so the removal also tail-swaps slot 1 down; the restore has
+        // to reverse the swap, not merely re-add the vector.
+        assert_eq!(
+            remove_edge_embeddings(&mut graph, "ASSERTS", "description", &[r1]).unwrap(),
+            1
+        );
+        checkpoint.rollback(&mut graph);
+
+        assert_eq!(store_facts(&graph), before_facts, "{mode:?}");
+        assert_eq!(index_facts(&graph), before_index, "{mode:?}");
+        assert_eq!(index_query(&graph), before_query, "{mode:?}");
+        assert_eq!(graph.version(), before_version, "{mode:?}");
+    }
+}
+
+/// The user-visible shape of the defect: a `CALL db.edge_embeddings.set`
+/// followed by a clause that fails. Unlike the primitive tests above this runs
+/// through `execute_mut`, which is where the statement checkpoint is opened —
+/// so it also proves the manual write happens inside one.
+fn cypher_seeded_graph() -> DirGraph {
+    let mut graph = DirGraph::new();
+    run_cypher(
+        &mut graph,
+        "CREATE (a:Doc {id: 1}), (b:Doc {id: 2}), (c:Doc {id: 3}), \
+         (a)-[:ASSERTS {text: 'alpha'}]->(b), \
+         (a)-[:ASSERTS {text: 'beta'}]->(b), \
+         (b)-[:ASSERTS]->(c)",
+    )
+    .unwrap();
+    let asserts: Vec<EdgeIndex> = graph.graph.edge_indices().take(2).collect();
+    install_generated_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        write(
+            2,
+            vec![
+                (asserts[0], vec![1.0, 0.0], 11),
+                (asserts[1], vec![0.0, 1.0], 22),
+            ],
+            vec![],
+            vec![asserts[0], asserts[1]],
+        ),
+    )
+    .unwrap();
+    vector_index::build_edge_vector_index(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vector_index::EdgeVectorIndexOptions::default(),
+    )
+    .unwrap();
+    graph
+}
+
+fn run_cypher(graph: &mut DirGraph, source: &str) -> Result<(), String> {
+    let params = HashMap::new();
+    crate::graph::session::execute::execute_mut(
+        graph,
+        source,
+        &crate::graph::session::execute::ExecuteOptions::eager(&params),
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+/// `c` still has an incoming `ASSERTS`, so the non-DETACH delete is refused —
+/// a failure *after* the embedding write, not a validation refusal before it.
+const FAILING_TAIL: &str = " MATCH (n:Doc {id: 3}) DELETE n RETURN kept";
+
+#[test]
+fn a_failed_statement_reverses_db_edge_embeddings_set() {
+    let mut graph = cypher_seeded_graph();
+    let before_facts = store_facts(&graph);
+    let before_index = index_facts(&graph);
+    let error = run_cypher(
+        &mut graph,
+        &format!(
+            "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' \
+             CALL db.edge_embeddings.set({{type:'ASSERTS', text_property:'description', \
+             entries:[{{relationship:r, vector:[0.25,0.75]}}]}}) YIELD stored \
+             WITH stored AS kept{FAILING_TAIL}"
+        ),
+    )
+    .expect_err("the delete must fail after the embedding write");
+    assert!(error.contains("DETACH DELETE"), "{error}");
+    assert_eq!(store_facts(&graph), before_facts);
+    assert_eq!(index_facts(&graph), before_index);
+}
+
+#[test]
+fn a_failed_statement_reverses_db_edge_embeddings_remove() {
+    let mut graph = cypher_seeded_graph();
+    let before_facts = store_facts(&graph);
+    let before_index = index_facts(&graph);
+    let error = run_cypher(
+        &mut graph,
+        &format!(
+            "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' \
+             CALL db.edge_embeddings.remove({{type:'ASSERTS', text_property:'description', \
+             relationships:[r]}}) YIELD removed \
+             WITH removed AS kept{FAILING_TAIL}"
+        ),
+    )
+    .expect_err("the delete must fail after the embedding write");
+    assert!(error.contains("DETACH DELETE"), "{error}");
+    assert_eq!(store_facts(&graph), before_facts);
+    assert_eq!(index_facts(&graph), before_index);
 }

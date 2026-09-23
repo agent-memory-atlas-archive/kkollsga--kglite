@@ -87,6 +87,15 @@ use rustc_hash::FxHashSet;
 /// different refresh costs. Callers can override it per index.
 pub const DEFAULT_AUTO_REFRESH_LIMIT: usize = 1000;
 
+/// One slot's index coverage, captured by [`IndexFreshness::capture_slot`] so
+/// a rolled-back write can restore the exact refresh delta instead of leaving
+/// its slot permanently dirty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotCoverage {
+    was_dirty: bool,
+    watermark: u32,
+}
+
 /// Change tracking for one index instance, independent of what the index holds.
 ///
 /// See the module docs for the watermark/dirty-set split and the lock order.
@@ -193,6 +202,33 @@ impl IndexFreshness {
         }
         let mut dirty = self.dirty_set();
         dirty.insert(slot);
+        self.dirty_len.store(dirty.len(), Ordering::Relaxed);
+    }
+
+    /// This slot's coverage as it stands, for a writer that is about to
+    /// [`note_changed`](Self::note_changed) it and may have to take that back.
+    pub(crate) fn capture_slot(&self, slot: u32) -> SlotCoverage {
+        SlotCoverage {
+            was_dirty: self.dirty_set().contains(&slot),
+            watermark: self.watermark(),
+        }
+    }
+
+    /// Reverse one [`note_changed`](Self::note_changed) with the coverage
+    /// [`capture_slot`](Self::capture_slot) recorded before it.
+    ///
+    /// Clearing the bit is only sound while nothing has folded the reversed
+    /// write into the index in the meantime. A refresh inside the same
+    /// statement is visible here as a moved watermark, and is answered by
+    /// marking the slot dirty instead — the over-approximating direction this
+    /// module's producers are always allowed to take (module docs).
+    pub(crate) fn restore_slot(&self, slot: u32, prior: SlotCoverage) {
+        if prior.was_dirty || self.watermark() != prior.watermark {
+            self.note_changed(slot);
+            return;
+        }
+        let mut dirty = self.dirty_set();
+        dirty.remove(&slot);
         self.dirty_len.store(dirty.len(), Ordering::Relaxed);
     }
 

@@ -27,8 +27,11 @@ before upgrading.
 - Cypher relationship embedding management through `db.edge_embeddings.set`,
   `embed`, `list`, `remove`, and `drop`. Writes validate complete selections
   before mutation; generation preserves unselected vectors and stages callback
-  results atomically. `vector_score`, `text_score`, and `embedding_norm` also
-  accept individual relationships, with exact scoring for relationship MATCH.
+  results atomically. Manual `set` and `remove` writes roll back with their
+  statement in every storage mode: a later clause that fails restores the exact
+  prior vectors, source hashes, model identity, store existence and vector
+  index. `vector_score`, `text_score`, and `embedding_norm` also accept
+  individual relationships, with exact scoring for relationship MATCH.
 
 - Durable relationship embedding changes record vectors and provenance together
   with their logical relationship group. A store created, replaced or dropped

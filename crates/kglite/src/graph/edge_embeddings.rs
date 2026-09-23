@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::embeddings::{store_name, text_column_of};
+use crate::graph::index_freshness::SlotCoverage;
 use crate::graph::schema::{DirGraph, EdgeData, EmbeddingStore, InternedKey, RemovedEmbedding};
+use crate::graph::storage::undo::EdgeEmbeddingCellPrior;
 use crate::graph::storage::{GraphRead, GraphWrite};
 
 #[path = "edge_vector_index.rs"]
@@ -339,6 +341,31 @@ impl EdgeEmbeddingStore {
         self.numeric.restore_embedding(edge.index(), removed);
     }
 
+    /// Pre-image of the cell a manual write is about to overwrite, or `None`
+    /// when it will append. O(dimension) — never a store clone.
+    fn manual_cell_prior(&self, edge: EdgeIndex) -> Option<EdgeEmbeddingCellPrior> {
+        self.numeric
+            .cell_pre_image(edge.index())
+            .map(|(cell, coverage)| EdgeEmbeddingCellPrior { cell, coverage })
+    }
+
+    pub(crate) fn restore_cell(
+        &mut self,
+        edge: EdgeIndex,
+        prior: &RemovedEmbedding,
+        coverage: SlotCoverage,
+    ) {
+        self.numeric.restore_cell(edge.index(), prior, coverage);
+    }
+
+    pub(crate) fn pop_appended_cell(&mut self, edge: EdgeIndex) {
+        self.numeric.pop_appended_embedding(edge.index());
+    }
+
+    pub(crate) fn set_model_id(&mut self, model_id: Option<String>) {
+        self.numeric.set_model_id(model_id);
+    }
+
     /// Rewrite physical relationship keys after a topology compaction.
     /// Iterating the old dense slot order preserves exact-search tie order.
     pub(crate) fn remap(&mut self, remap: &EdgeRemap) {
@@ -547,6 +574,7 @@ pub(crate) fn upsert_edge_embeddings(
         text_property,
         changed_edges.iter().copied().map(EdgeIndex::new),
     )?;
+    journal_manual_upsert(graph, &key, store_created, &changed_edges);
 
     let store = graph
         .edge_embeddings
@@ -575,6 +603,59 @@ pub(crate) fn upsert_edge_embeddings(
         changed: changed_edges.len(),
         store_created,
     })
+}
+
+/// Journal enough to reverse one manual upsert.
+///
+/// A store the write *creates* is one `EdgeEmbeddingStoreReplaced { prior:
+/// None }` — removing it discards every cell with it. An existing store gets a
+/// pre-image per changed cell plus the `model_id` the write is about to clear,
+/// and never a store clone: a per-row `CALL db.edge_embeddings.set` over N
+/// relationships stays O(N × dimension).
+///
+/// The `model_id` entry is captured before the cells, so reverse replay lands
+/// the cells first and the stamp last.
+fn journal_manual_upsert(
+    graph: &mut DirGraph,
+    key: &EdgeEmbeddingKey,
+    store_created: bool,
+    changed_edges: &HashSet<usize>,
+) {
+    if graph.graph.undo_journal_mut().is_none() {
+        return;
+    }
+    if store_created {
+        graph
+            .graph
+            .undo_journal_mut()
+            .expect("journal presence checked above")
+            .note_edge_embedding_store_replaced(key.clone(), None);
+        return;
+    }
+    let store = graph
+        .edge_embeddings
+        .get(key)
+        .expect("an existing store is what makes this the non-creating arm");
+    let prior_model_id = store.model_id().map(str::to_owned);
+    let mut cells: Vec<_> = changed_edges
+        .iter()
+        .map(|&raw| {
+            let edge = EdgeIndex::new(raw);
+            (edge, store.manual_cell_prior(edge))
+        })
+        .collect();
+    // `changed_edges` is a hash set; sorting keeps the journal deterministic.
+    cells.sort_unstable_by_key(|(edge, _)| edge.index());
+    let journal = graph
+        .graph
+        .undo_journal_mut()
+        .expect("journal presence checked above");
+    if prior_model_id.is_some() {
+        journal.note_edge_embedding_model_id_replaced(key.clone(), prior_model_id);
+    }
+    for (edge, prior) in cells {
+        journal.note_edge_embedding_cell_replaced(key.clone(), edge, prior);
+    }
 }
 
 fn capture_wal_edge_embedding_bases(
@@ -706,9 +787,30 @@ pub(crate) fn remove_edge_embeddings(
         .edge_embeddings
         .get_mut(&key)
         .expect("validated edge embedding store remains installed");
+    // Taking the index state costs nothing: the first removal below invalidates
+    // it anyway, and the journal is the only way it comes back. Captured before
+    // the cells so reverse replay restores it last, after every
+    // `restore_embedding` has invalidated it again.
+    let prior_index = graph
+        .graph
+        .undo_journal_mut()
+        .is_some()
+        .then(|| store.numeric.take_index_state());
     let mut removed = 0;
+    let mut removed_cells = Vec::new();
     for &edge in edges {
-        removed += usize::from(store.remove(edge).is_some());
+        if let Some(prior) = store.remove(edge) {
+            removed += 1;
+            removed_cells.push((edge, prior));
+        }
+    }
+    if let Some(journal) = graph.graph.undo_journal_mut() {
+        if let Some(prior) = prior_index {
+            journal.note_edge_vector_index_replaced(key.clone(), prior);
+        }
+        for (edge, prior) in removed_cells {
+            journal.note_edge_embedding_removed(key.clone(), edge, prior);
+        }
     }
     if removed > 0 {
         note_wal_edge_embedding_changes(

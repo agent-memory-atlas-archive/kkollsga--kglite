@@ -1,5 +1,5 @@
 use crate::datatypes::values::{FilterCondition, Value};
-use crate::graph::index_freshness::IndexFreshness;
+use crate::graph::index_freshness::{IndexFreshness, SlotCoverage};
 pub use crate::graph::storage::interner::{InternedKey, StringInterner};
 pub(crate) use crate::graph::storage::interner::{
     SerdeDeserializeGuard, SerdeSerializeGuard, StripPropertiesGuard,
@@ -1328,6 +1328,106 @@ impl EmbeddingStore {
         if let Some(hash) = removed.text_hash {
             self.text_hashes.insert(node_index, hash);
         }
+    }
+
+    /// Everything an undo needs to reverse one in-place [`Self::set_embedding`]:
+    /// the vector it is about to overwrite, that vector's slot and text hash,
+    /// and the slot's index coverage. `None` when the store holds no vector
+    /// for `node_index` — the write will append, and
+    /// [`Self::pop_appended_embedding`] is that write's inverse.
+    ///
+    /// O(dimension), never O(store): this is what lets a manual relationship
+    /// vector write be journalled per changed cell rather than by cloning the
+    /// store.
+    pub(crate) fn cell_pre_image(
+        &self,
+        node_index: usize,
+    ) -> Option<(RemovedEmbedding, SlotCoverage)> {
+        let &slot = self.node_to_slot.get(&node_index)?;
+        let start = slot * self.dimension;
+        Some((
+            RemovedEmbedding {
+                slot,
+                vector: self.data[start..start + self.dimension].to_vec(),
+                text_hash: self.text_hashes.get(&node_index).copied(),
+            },
+            self.freshness.capture_slot(slot as u32),
+        ))
+    }
+
+    /// Reverse an in-place [`Self::set_embedding`] with the pre-image
+    /// [`Self::cell_pre_image`] took.
+    ///
+    /// Distinct from [`Self::restore_embedding`], which refills a slot a
+    /// removal *vacated*: an overwrite never vacated one, so reversing it
+    /// through that path would evict this node's own row to the tail and
+    /// leave the store holding it twice.
+    ///
+    /// The HNSW index is deliberately not invalidated. `set_embedding` did not
+    /// drop it either, and the index stores no vectors — its links address the
+    /// buffer this writes back — so the pre-statement index is exactly right
+    /// again once the slot's coverage is restored.
+    pub(crate) fn restore_cell(
+        &mut self,
+        node_index: usize,
+        prior: &RemovedEmbedding,
+        coverage: SlotCoverage,
+    ) {
+        debug_assert_eq!(
+            self.node_to_slot.get(&node_index),
+            Some(&prior.slot),
+            "an overwrite undo may only write back into the slot it overwrote"
+        );
+        self.set_embedding(node_index, &prior.vector);
+        match prior.text_hash {
+            Some(hash) => {
+                self.text_hashes.insert(node_index, hash);
+            }
+            None => {
+                self.text_hashes.remove(&node_index);
+            }
+        }
+        self.freshness.restore_slot(prior.slot as u32, coverage);
+    }
+
+    /// Reverse an appending [`Self::set_embedding`]: pop the tail slot the
+    /// append pushed.
+    ///
+    /// An append always lands at or above the watermark (the watermark is only
+    /// raised to the store's length, and every shrink invalidates the index and
+    /// resets it to zero), so the popped row is one no index covers and the
+    /// index survives. The guard exists for the one way that can stop being
+    /// true — a refresh *inside the same statement* folding the appended slot
+    /// in — where the index would otherwise address a row that is gone.
+    pub(crate) fn pop_appended_embedding(&mut self, node_index: usize) {
+        let Some(&slot) = self.node_to_slot.get(&node_index) else {
+            return;
+        };
+        debug_assert_eq!(
+            slot + 1,
+            self.slot_to_node.len(),
+            "appended cells are undone in reverse capture order, tail first"
+        );
+        if slot + 1 != self.slot_to_node.len() {
+            // Unreachable while replay stays LIFO, but truncating the buffer
+            // under a live row is not a failure mode worth leaving open: take
+            // the tail swap (and the index drop that comes with it) instead.
+            self.remove_embedding(node_index);
+            return;
+        }
+        self.node_to_slot.remove(&node_index);
+        self.text_hashes.remove(&node_index);
+        self.slot_to_node.pop();
+        self.data.truncate(slot * self.dimension);
+        self.norms.pop();
+        if self.freshness.watermark() as usize > slot {
+            self.invalidate_index();
+        }
+    }
+
+    /// Restore the aggregate generated-model stamp a manual write cleared.
+    pub(crate) fn set_model_id(&mut self, model_id: Option<String>) {
+        self.model_id = model_id;
     }
 
     /// Get the embedding slice for a node (by NodeIndex.index()).

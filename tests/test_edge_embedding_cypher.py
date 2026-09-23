@@ -295,3 +295,81 @@ def test_read_subquery_can_return_relationships_to_top_level_embed() -> None:
     ).to_list()
     assert rows == [{"embedded": 1}]
     assert model.calls == [["alpha"]]
+
+
+def _store_state(graph: KnowledgeGraph) -> list[dict]:
+    return graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD count, dimension, metric, model, index_state, delta "
+        "RETURN count, dimension, metric, model, index_state, delta"
+    ).to_list()
+
+
+def _vectors(graph: KnowledgeGraph) -> list[dict]:
+    return graph.cypher(
+        "MATCH ()-[r:CLAIMS]->() "
+        "RETURN r.text AS text, embedding_norm(r,'text_emb') AS norm, "
+        "vector_score(r,'text_emb',[1.0,0.0]) AS score ORDER BY text"
+    ).to_list()
+
+
+def _failing_tail(yielded: str) -> str:
+    """A clause that fails *after* the embedding write above it.
+
+    `c` still has an incoming CLAIMS, so the non-DETACH delete is refused —
+    which is what makes these rollback tests rather than validation tests.
+    """
+    return f"WITH {yielded} AS kept MATCH (n:Doc {{id: 3}}) DELETE n RETURN kept"
+
+
+def test_failed_statement_reverses_a_manual_relationship_vector_set() -> None:
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    _embed(graph, "true", mode="all")
+    graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    before_state = _store_state(graph)
+    before_vectors = _vectors(graph)
+    assert before_state[0]["index_state"] == "online"
+
+    with pytest.raises(kglite.CypherExecutionError):
+        graph.cypher(
+            "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
+            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "entries:[{relationship:r, vector:[0.25, 0.75]}]}) YIELD stored " + _failing_tail("stored")
+        )
+
+    assert _store_state(graph) == before_state
+    assert _vectors(graph) == before_vectors
+
+
+def test_failed_statement_reverses_a_manual_relationship_vector_removal() -> None:
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    _embed(graph, "true", mode="all")
+    graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    before_state = _store_state(graph)
+    before_vectors = _vectors(graph)
+
+    with pytest.raises(kglite.CypherExecutionError):
+        graph.cypher(
+            "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
+            "CALL db.edge_embeddings.remove({type:'CLAIMS', text_property:'text', "
+            "relationships:[r]}) YIELD removed " + _failing_tail("removed")
+        )
+
+    assert _store_state(graph) == before_state
+    assert _vectors(graph) == before_vectors
+
+
+def test_failed_statement_leaves_no_store_the_set_created() -> None:
+    graph = _graph()
+    assert _store_state(graph) == []
+
+    with pytest.raises(kglite.CypherExecutionError):
+        graph.cypher(
+            "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
+            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "entries:[{relationship:r, vector:[1.0, 0.0]}]}) YIELD stored " + _failing_tail("stored")
+        )
+
+    assert _store_state(graph) == [], "a rolled-back set must not leave the store it created"

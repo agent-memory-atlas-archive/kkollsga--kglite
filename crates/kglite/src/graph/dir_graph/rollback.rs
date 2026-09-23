@@ -160,8 +160,12 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // deletion is the only writer that reaches this map inside a statement
     // window (ingest runs outside one), so that entry is the whole story.
     std::mem::swap(&mut a.embeddings, &mut b.embeddings);
-    // Relationship embeddings have the same corpus-sized shape and are
-    // journalled at the graph-level edge-removal choke point.
+    // Relationship embeddings have the same corpus-sized shape. Their undo
+    // story is four entries rather than one: `EdgeEmbeddingRemoved` at the
+    // graph-level edge-removal choke point, `EdgeEmbeddingStoreReplaced` where
+    // a whole store is installed or dropped, and `EdgeEmbeddingCellReplaced` +
+    // `EdgeEmbeddingModelIdReplaced` for the manual writes, which journal per
+    // changed cell so a per-row `db.edge_embeddings.set` never clones a store.
     std::mem::swap(&mut a.edge_embeddings, &mut b.edge_embeddings);
     // O(corpus) — an inverted index over a 100k-document corpus is megabytes of
     // postings, so cloning it per statement is out of the question for exactly
@@ -557,6 +561,26 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
         } => {
             if let Some(store) = graph.edge_embeddings.get_mut(&store_key) {
                 store.restore(edge, &prior);
+            }
+        }
+        UndoEntry::EdgeEmbeddingCellReplaced {
+            store_key,
+            edge,
+            prior,
+        } => {
+            // A store missing here was removed later in the same statement and
+            // put back by an `EdgeEmbeddingStoreReplaced` this replay has yet
+            // to reach; that entry carries the cell already.
+            if let Some(store) = graph.edge_embeddings.get_mut(&store_key) {
+                match prior {
+                    Some(prior) => store.restore_cell(edge, &prior.cell, prior.coverage),
+                    None => store.pop_appended_cell(edge),
+                }
+            }
+        }
+        UndoEntry::EdgeEmbeddingModelIdReplaced { store_key, prior } => {
+            if let Some(store) = graph.edge_embeddings.get_mut(&store_key) {
+                store.set_model_id(prior);
             }
         }
         UndoEntry::EdgeEmbeddingStoreReplaced { store_key, prior } => match prior {

@@ -75,6 +75,7 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use crate::datatypes::Value;
 use crate::graph::edge_embeddings::EdgeEmbeddingStore;
 use crate::graph::features::timeseries::NodeTimeseries;
+use crate::graph::index_freshness::SlotCoverage;
 use crate::graph::schema::{
     CompositeIndexKey, CompositeValue, EdgeData, IndexKey, InternedKey, NodeData, RemovedEmbedding,
     TypeSchema, VectorIndexState,
@@ -177,6 +178,18 @@ pub enum BucketId {
 }
 
 /// One reversible edit. See the module docs for the replay contract.
+/// The pre-image of one relationship vector cell an in-place overwrite
+/// replaced, carried by [`UndoEntry::EdgeEmbeddingCellReplaced`].
+#[derive(Debug)]
+pub struct EdgeEmbeddingCellPrior {
+    /// The vector, its dense slot and its text hash. Shares
+    /// [`RemovedEmbedding`]'s shape, but the slot is still *occupied* — the
+    /// restore writes in place rather than reversing a tail swap.
+    pub cell: RemovedEmbedding,
+    /// That slot's index coverage before the write dirtied it.
+    pub coverage: SlotCoverage,
+}
+
 #[derive(Debug)]
 pub enum UndoEntry {
     /// A node was inserted at `idx`. Undo removes it; `node_type` is kept so
@@ -243,13 +256,40 @@ pub enum UndoEntry {
         node: usize,
         prior: Box<RemovedEmbedding>,
     },
-    /// A relationship's vector was pruned before its physical edge slot was
-    /// freed. Undo restores the exact dense-store slot after the edge itself
-    /// has been restored by the later-captured `EdgeRemoved` entry.
+    /// A relationship's vector left the dense store: pruned before its physical
+    /// edge slot was freed, or removed by `db.edge_embeddings.remove`. Undo
+    /// reverses the removal's tail swap, so a statement's removals rebuild the
+    /// exact pre-statement slot layout — and, for the pruning case, only after
+    /// the later-captured `EdgeRemoved` entry has restored the edge itself.
+    ///
+    /// The store always still exists at replay time: neither writer removes
+    /// one.
     EdgeEmbeddingRemoved {
         store_key: (String, String),
         edge: EdgeIndex,
         prior: Box<RemovedEmbedding>,
+    },
+    /// One relationship vector cell a manual `db.edge_embeddings.set` wrote.
+    ///
+    /// The manual write path is the one that cannot afford a store pre-image:
+    /// a per-row `CALL db.edge_embeddings.set` over N relationships would
+    /// clone the whole store N times. So it journals per changed cell instead,
+    /// which is O(dimension) each — and why this is not
+    /// [`EdgeEmbeddingStoreReplaced`](Self::EdgeEmbeddingStoreReplaced).
+    ///
+    /// `prior: None` means the write appended a vector the store did not hold;
+    /// the undo pops the tail slot back off.
+    EdgeEmbeddingCellReplaced {
+        store_key: (String, String),
+        edge: EdgeIndex,
+        prior: Option<Box<EdgeEmbeddingCellPrior>>,
+    },
+    /// The store-level `model_id` a manual `db.edge_embeddings.set` cleared —
+    /// a manual vector makes the aggregate generated-model provenance unknown,
+    /// and a failed statement has to give the prior stamp back.
+    EdgeEmbeddingModelIdReplaced {
+        store_key: (String, String),
+        prior: Option<String>,
     },
     /// A whole relationship embedding store was installed, replaced, or
     /// dropped by one atomic query operation. `None` means the store did not
@@ -715,6 +755,28 @@ impl UndoJournal {
         });
     }
 
+    pub(crate) fn note_edge_embedding_cell_replaced(
+        &mut self,
+        store_key: (String, String),
+        edge: EdgeIndex,
+        prior: Option<EdgeEmbeddingCellPrior>,
+    ) {
+        self.entries.push(UndoEntry::EdgeEmbeddingCellReplaced {
+            store_key,
+            edge,
+            prior: prior.map(Box::new),
+        });
+    }
+
+    pub(crate) fn note_edge_embedding_model_id_replaced(
+        &mut self,
+        store_key: (String, String),
+        prior: Option<String>,
+    ) {
+        self.entries
+            .push(UndoEntry::EdgeEmbeddingModelIdReplaced { store_key, prior });
+    }
+
     pub(crate) fn note_edge_vector_index_replaced(
         &mut self,
         store_key: (String, String),
@@ -949,6 +1011,140 @@ mod tests {
         ];
         expected.sort_by_key(|(key, _)| key.as_u64());
         assert_eq!(cells, expected);
+    }
+
+    /// The relationship-embedding variants, each asserted on the payload its
+    /// restore reads. Capture order matters as much as payload: the two
+    /// store-level entries are captured *before* the per-cell ones, so reverse
+    /// replay lands the cells first and the wrapper last.
+    #[test]
+    fn manual_relationship_vector_entries_replay_cells_before_their_wrappers() {
+        let key = ("ASSERTS".to_string(), "text_emb".to_string());
+        let freshness = crate::graph::index_freshness::IndexFreshness::covering(4, None);
+        freshness.note_changed(1);
+        let coverage = freshness.capture_slot(1);
+        let clean = freshness.capture_slot(2);
+        let mut journal = UndoJournal::new();
+
+        journal.note_edge_embedding_model_id_replaced(key.clone(), Some("bge-m3".to_string()));
+        journal.note_edge_embedding_cell_replaced(
+            key.clone(),
+            EdgeIndex::new(1),
+            Some(EdgeEmbeddingCellPrior {
+                cell: RemovedEmbedding {
+                    slot: 1,
+                    vector: vec![1.0, 0.0],
+                    text_hash: Some(11),
+                },
+                coverage,
+            }),
+        );
+        journal.note_edge_embedding_cell_replaced(key.clone(), EdgeIndex::new(9), None);
+
+        let replayed: Vec<UndoEntry> = journal.into_replay_order().collect();
+        match &replayed[0] {
+            UndoEntry::EdgeEmbeddingCellReplaced { edge, prior, .. } => {
+                assert_eq!(edge.index(), 9);
+                assert!(prior.is_none(), "an appended cell carries no pre-image");
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        }
+        match &replayed[1] {
+            UndoEntry::EdgeEmbeddingCellReplaced { edge, prior, .. } => {
+                assert_eq!(edge.index(), 1);
+                let prior = prior.as_ref().expect("an overwrite carries its pre-image");
+                assert_eq!(prior.cell.slot, 1);
+                assert_eq!(prior.cell.vector, vec![1.0, 0.0]);
+                assert_eq!(prior.cell.text_hash, Some(11));
+                assert_eq!(prior.coverage, coverage);
+                assert_ne!(
+                    prior.coverage, clean,
+                    "a dirty slot and a clean one must not capture alike"
+                );
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        }
+        match &replayed[2] {
+            UndoEntry::EdgeEmbeddingModelIdReplaced { store_key, prior } => {
+                assert_eq!(store_key, &key);
+                assert_eq!(prior.as_deref(), Some("bge-m3"));
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        }
+    }
+
+    /// A store the statement *created* is journalled as an absent prior, so
+    /// the replay removes it whole rather than restoring an empty one.
+    #[test]
+    fn a_created_relationship_store_is_journalled_as_an_absent_prior() {
+        let key = ("ASSERTS".to_string(), "text_emb".to_string());
+        let mut journal = UndoJournal::new();
+        journal.note_edge_embedding_store_replaced(key.clone(), None);
+        journal.note_edge_embedding_store_replaced(
+            key.clone(),
+            Some(EdgeEmbeddingStore::decoded_fixture(
+                2,
+                [(EdgeIndex::new(0), vec![1.0, 0.0])],
+            )),
+        );
+
+        let replayed: Vec<UndoEntry> = journal.into_replay_order().collect();
+        let priors: Vec<bool> = replayed
+            .iter()
+            .map(|entry| match entry {
+                UndoEntry::EdgeEmbeddingStoreReplaced { store_key, prior } => {
+                    assert_eq!(store_key, &key);
+                    prior.is_some()
+                }
+                other => panic!("unexpected entry: {other:?}"),
+            })
+            .collect();
+        assert_eq!(priors, vec![true, false]);
+    }
+
+    /// The removal and index entries a manual `db.edge_embeddings.remove`
+    /// pairs: one vacated-slot pre-image per cell, and the index state the
+    /// removal invalidated.
+    #[test]
+    fn manual_relationship_removal_journals_its_cells_and_its_index() {
+        let key = ("ASSERTS".to_string(), "text_emb".to_string());
+        let mut journal = UndoJournal::new();
+        journal.note_edge_vector_index_replaced(
+            key.clone(),
+            VectorIndexState {
+                index: None,
+                freshness: crate::graph::index_freshness::IndexFreshness::covering(4, Some(7)),
+            },
+        );
+        journal.note_edge_embedding_removed(
+            key.clone(),
+            EdgeIndex::new(3),
+            RemovedEmbedding {
+                slot: 0,
+                vector: vec![0.0, 1.0],
+                text_hash: Some(22),
+            },
+        );
+
+        let replayed: Vec<UndoEntry> = journal.into_replay_order().collect();
+        match &replayed[0] {
+            UndoEntry::EdgeEmbeddingRemoved { edge, prior, .. } => {
+                assert_eq!(edge.index(), 3);
+                assert_eq!(prior.slot, 0);
+                assert_eq!(prior.text_hash, Some(22));
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        }
+        match &replayed[1] {
+            UndoEntry::EdgeVectorIndexReplaced { prior, .. } => {
+                assert_eq!(prior.freshness.watermark(), 4);
+                assert_eq!(prior.freshness.limit(), 7);
+            }
+            other => panic!(
+                "the index entry must replay last, after every restore that \
+                 invalidated it again: {other:?}"
+            ),
+        }
     }
 
     #[test]
