@@ -634,6 +634,11 @@ CALL db.edge_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
 YIELD dropped
 ```
 
+Every `db.edge_embeddings.*` procedure refuses a parameter it does not read,
+naming the key and listing the ones it accepts — including the per-entry map of
+`set`, whose keys are `relationship` and `vector`. A misspelled option is an
+error, never a silently ignored one.
+
 `db.edge_embeddings.list({type?, text_property?})` reports `entity`, `type`,
 `text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
 `index_state`, pending `delta`, and `unembedded` relationship count.
@@ -708,6 +713,15 @@ properties, use filtered `MATCH` with the exact scalar functions instead.
 > pass a list to have both spellings agree. A `$param` used as the query
 > argument must be bound to a string or a list; plan-time validation reports
 > the type of anything else.
+
+> **The first argument may be a node or relationship *value*, not only a bound
+> variable.** A node or relationship that reaches the scalar through
+> `collect(n)` plus `UNWIND`, `head(...)`, a `CALL { }` column or `nodes(p)` /
+> `relationships(p)` is resolved back to the entity it names and scored exactly
+> as the binding is — `vector_score`, `text_score` and `embedding_norm` alike.
+> A value is a snapshot, so one whose entity has since been deleted, or whose
+> slot has been reused by an entity of another type, scores `null` rather than
+> scoring the new occupant.
 
 > **Retrieval policy.** `vector_score` and `text_score` accept an optional
 > final map: `{exact: true}` forces an exact scan without using or refreshing

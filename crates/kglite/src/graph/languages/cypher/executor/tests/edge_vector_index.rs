@@ -132,3 +132,41 @@ fn query_relationship_keeps_statement_identity_for_outer_mutation() {
         1
     );
 }
+
+/// The per-entry map of `db.edge_embeddings.set` is a config map like any
+/// other, and an unknown key there is the same silent failure: `vecto:`
+/// installed no vector and the call reported `stored`.
+#[test]
+fn an_unknown_key_in_a_set_entry_is_refused() {
+    let mut graph = indexed_graph();
+    let before = graph
+        .edge_embeddings
+        .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+        .unwrap()
+        .len();
+    let query = parser::parse_cypher(
+        "MATCH ()-[r:CLAIMS]->() WHERE r.rank = 0 \
+         CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', \
+         entries:[{relationship:r, vecto:[0.0,1.0]}]}) YIELD stored RETURN stored",
+    )
+    .unwrap();
+    let error = super::super::write::execute_mutable(
+        &mut graph,
+        &query,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::from_deadline(None),
+    )
+    .expect_err("an unknown entry key must be refused");
+    assert!(
+        error.contains("unknown parameter 'vecto'") && error.contains("relationship, vector"),
+        "{error}"
+    );
+    assert_eq!(
+        graph
+            .edge_embeddings
+            .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+            .unwrap()
+            .len(),
+        before
+    );
+}

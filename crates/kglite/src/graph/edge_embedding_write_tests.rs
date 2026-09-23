@@ -537,3 +537,109 @@ fn a_failed_statement_reverses_db_edge_embeddings_remove() {
     assert_eq!(store_facts(&graph), before_facts);
     assert_eq!(index_facts(&graph), before_index);
 }
+
+/// A manual write takes ownership of the cell it writes, and `set_manual`
+/// clears the generated `text_hash` that says otherwise. Selecting the batch by
+/// vector equality alone skipped that clear whenever the caller wrote back a
+/// byte-identical vector, so `embed(mode:'changed')` went on comparing the
+/// generated hash and skipped a relationship the manual write owned.
+#[test]
+fn a_manual_set_of_an_identical_vector_still_clears_the_generated_hash() {
+    let (mut graph, [r1, r2, _]) = seeded_graph(StorageMode::Memory);
+    let report = upsert_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vec![(r1, vec![1.0, 0.0])],
+        None,
+    )
+    .unwrap();
+    assert_eq!(report.changed, 1, "the hash clear is the change");
+
+    let store = &graph.edge_embeddings[&edge_store_key("ASSERTS", "description")];
+    assert_eq!(store.get(r1), Some(&[1.0, 0.0][..]));
+    assert_eq!(store.text_hash(r1), None, "the manual write owns this cell");
+    assert_eq!(
+        store.text_hash(r2),
+        Some(22),
+        "an unselected cell keeps its generated hash"
+    );
+    assert_eq!(store.model_id(), None);
+}
+
+/// The undo journal has to cover the hash-only cells the fix above adds to the
+/// batch, not just the ones whose vector moved.
+#[test]
+fn a_hash_only_manual_set_rolls_back_with_its_statement() {
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let (mut graph, [r1, ..]) = seeded_graph(mode);
+        let before_facts = store_facts(&graph);
+        let before_index = index_facts(&graph);
+        let before_query = index_query(&graph);
+        let before_version = graph.version();
+
+        let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+        upsert_edge_embeddings(
+            &mut graph,
+            "ASSERTS",
+            "description",
+            vec![(r1, vec![1.0, 0.0])],
+            None,
+        )
+        .unwrap();
+        checkpoint.rollback(&mut graph);
+
+        assert_eq!(store_facts(&graph), before_facts, "{mode:?}");
+        assert_eq!(index_facts(&graph), before_index, "{mode:?}");
+        assert_eq!(index_query(&graph), before_query, "{mode:?}");
+        assert_eq!(graph.version(), before_version, "{mode:?}");
+    }
+}
+
+/// A rolled-back relationship delete leaves the HNSW index where it found it.
+/// The prune invalidates the index and the undo's `restore` invalidates it
+/// again, so without the captured state the statement's failure silently
+/// dropped an index it never touched — the vectors came back unindexed and
+/// `list` reported `index_state: 'none'`.
+#[test]
+fn a_rolled_back_relationship_delete_restores_the_vector_index_in_every_storage_mode() {
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let (mut graph, [r1, ..]) = seeded_graph(mode);
+        let before_facts = store_facts(&graph);
+        let before_index = index_facts(&graph);
+        let before_query = index_query(&graph);
+
+        let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+        assert!(
+            remove_edge_with_embeddings(&mut graph, r1).is_some(),
+            "{mode:?}"
+        );
+        checkpoint.rollback(&mut graph);
+
+        assert_eq!(store_facts(&graph), before_facts, "{mode:?}");
+        assert_eq!(index_facts(&graph), before_index, "{mode:?}");
+        assert_eq!(index_query(&graph), before_query, "{mode:?}");
+    }
+}
+
+/// The same defect through the user-visible path: a `DELETE` followed by a
+/// clause that fails.
+#[test]
+fn a_failed_statement_reverses_a_relationship_delete_with_its_vector_index() {
+    let mut graph = cypher_seeded_graph();
+    let before_facts = store_facts(&graph);
+    let before_index = index_facts(&graph);
+    let before_query = index_query(&graph);
+    let error = run_cypher(
+        &mut graph,
+        &format!(
+            "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' DELETE r \
+             WITH 1 AS kept{FAILING_TAIL}"
+        ),
+    )
+    .expect_err("the delete must fail after the relationship delete");
+    assert!(error.contains("DETACH DELETE"), "{error}");
+    assert_eq!(store_facts(&graph), before_facts);
+    assert_eq!(index_facts(&graph), before_index);
+    assert_eq!(index_query(&graph), before_query);
+}

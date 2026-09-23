@@ -120,6 +120,138 @@ before upgrading.
   resolved, checked for statement identity, liveness, endpoints and write scope,
   and deleted; a value carrying no statement identity is refused by name.
 
+- **A generated relationship store records the model that filled it, in every
+  mode.** The default `missing` mode stamped `model: null` on a store it had
+  just created whole, and the mismatch guard reads the *prior* stamp — so a
+  later same-width model was free to mix its vectors into the same store under
+  `mode='changed'` or `mode='missing'`. A pass that finds no vector to keep now
+  records its model, matching the node rule; a store that already holds vectors
+  of unknown provenance stays unknown until a full `mode='all'` pass covers
+  them.
+- **`vector_score`, `text_score` and `embedding_norm` accept a node *value*.** A
+  node arriving as a value rather than as a pattern binding — `collect(n)` plus
+  `UNWIND`, `head(...)`, a `CALL { }` column, `nodes(p)` — was rejected with
+  "first argument must be a node or relationship variable". It is now resolved
+  and scored exactly as the binding is. A value whose slot has since been
+  deleted, or reused by a node of another type, scores `null` rather than
+  erroring or scoring the new occupant.
+- **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
+  `list` did, so a misspelled key left the default in place and the call
+  reported success — `build_index({metric_: 'euclidean'})` built a cosine index
+  and answered `indexed`. The refusal names the key and lists the accepted ones,
+  and covers the per-entry map of `set` (`relationship`, `vector`).
+- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
+  vector is unchanged.** The batch was selected by vector equality alone, so
+  writing back a byte-identical vector left the generated source hash in place
+  and `embed(mode:'changed')` went on skipping a relationship the manual write
+  owned.
+- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
+  deleted node's or relationship's vector invalidates the HNSW index, and the
+  undo's restore invalidates it again, so a statement that failed after a delete
+  put the vectors back and left the index gone (`index_state: 'none'`, every
+  query back on the exact scan). The index state is now journalled with the
+  vectors and restored with them, for node and relationship stores alike.
+- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+  `metric` on the store.** A build with a metric the store did not declare left
+  the store resolving another one, so every later query that named no metric
+  mismatched the index and was served by exact scan while `list` /
+  `embedding_info` reported the unused metric. An explicit metric now becomes
+  the store's metric when the store declares none, and is refused when it
+  contradicts one the store already declares. Recovery and statement rollback
+  restore the metric with the index.
+
+- **`vector_score`, `text_score` and `embedding_norm` accept a node *value*.** A
+  node arriving as a value rather than as a pattern binding — `collect(n)` plus
+  `UNWIND`, `head(...)`, a `CALL { }` column, `nodes(p)` — was rejected with
+  "first argument must be a node or relationship variable". It is now resolved
+  and scored exactly as the binding is. A value whose slot has since been
+  deleted, or reused by a node of another type, scores `null` rather than
+  erroring or scoring the new occupant.
+- **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
+  `list` did, so a misspelled key left the default in place and the call
+  reported success — `build_index({metric_: 'euclidean'})` built a cosine index
+  and answered `indexed`. The refusal names the key and lists the accepted ones,
+  and covers the per-entry map of `set` (`relationship`, `vector`).
+- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
+  vector is unchanged.** The batch was selected by vector equality alone, so
+  writing back a byte-identical vector left the generated source hash in place
+  and `embed(mode:'changed')` went on skipping a relationship the manual write
+  owned.
+- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
+  deleted node's or relationship's vector invalidates the HNSW index, and the
+  undo's restore invalidates it again, so a statement that failed after a delete
+  put the vectors back and left the index gone (`index_state: 'none'`, every
+  query back on the exact scan). The index state is now journalled with the
+  vectors and restored with them, for node and relationship stores alike.
+- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+  `metric` on the store.** A build with a metric the store did not declare left
+  the store resolving another one, so every later query that named no metric
+  mismatched the index and was served by exact scan while `list` /
+  `embedding_info` reported the unused metric. An explicit metric now becomes
+  the store's metric when the store declares none, and is refused when it
+  contradicts one the store already declares. Recovery and statement rollback
+  restore the metric with the index.
+
+- **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
+  `list` did, so a misspelled key left the default in place and the call
+  reported success — `build_index({metric_: 'euclidean'})` built a cosine index
+  and answered `indexed`. The refusal names the key and lists the accepted ones,
+  and covers the per-entry map of `set` (`relationship`, `vector`).
+- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
+  vector is unchanged.** The batch was selected by vector equality alone, so
+  writing back a byte-identical vector left the generated source hash in place
+  and `embed(mode:'changed')` went on skipping a relationship the manual write
+  owned.
+- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
+  deleted node's or relationship's vector invalidates the HNSW index, and the
+  undo's restore invalidates it again, so a statement that failed after a delete
+  put the vectors back and left the index gone (`index_state: 'none'`, every
+  query back on the exact scan). The index state is now journalled with the
+  vectors and restored with them, for node and relationship stores alike.
+- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+  `metric` on the store.** A build with a metric the store did not declare left
+  the store resolving another one, so every later query that named no metric
+  mismatched the index and was served by exact scan while `list` /
+  `embedding_info` reported the unused metric. An explicit metric now becomes
+  the store's metric when the store declares none, and is refused when it
+  contradicts one the store already declares. Recovery and statement rollback
+  restore the metric with the index.
+
+- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
+  vector is unchanged.** The batch was selected by vector equality alone, so
+  writing back a byte-identical vector left the generated source hash in place
+  and `embed(mode:'changed')` went on skipping a relationship the manual write
+  owned.
+- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
+  deleted node's or relationship's vector invalidates the HNSW index, and the
+  undo's restore invalidates it again, so a statement that failed after a delete
+  put the vectors back and left the index gone (`index_state: 'none'`, every
+  query back on the exact scan). The index state is now journalled with the
+  vectors and restored with them, for node and relationship stores alike.
+- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+  `metric` on the store.** A build with a metric the store did not declare left
+  the store resolving another one, so every later query that named no metric
+  mismatched the index and was served by exact scan while `list` /
+  `embedding_info` reported the unused metric. An explicit metric now becomes
+  the store's metric when the store declares none, and is refused when it
+  contradicts one the store already declares. Recovery and statement rollback
+  restore the metric with the index.
+
+- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
+  deleted node's or relationship's vector invalidates the HNSW index, and the
+  undo's restore invalidates it again, so a statement that failed after a delete
+  put the vectors back and left the index gone (`index_state: 'none'`, every
+  query back on the exact scan). The index state is now journalled with the
+  vectors and restored with them, for node and relationship stores alike.
+- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+  `metric` on the store.** A build with a metric the store did not declare left
+  the store resolving another one, so every later query that named no metric
+  mismatched the index and was served by exact scan while `list` /
+  `embedding_info` reported the unused metric. An explicit metric now becomes
+  the store's metric when the store declares none, and is refused when it
+  contradicts one the store already declares. Recovery and statement rollback
+  restore the metric with the index.
+
 - **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
   `metric` on the store.** A build with a metric the store did not declare left
   the store resolving another one, so every later query that named no metric

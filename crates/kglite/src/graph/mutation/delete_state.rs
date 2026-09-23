@@ -28,6 +28,13 @@ use crate::graph::storage::GraphWrite;
 /// or not — inherits it and comes back as a full-similarity top hit from
 /// `vector_search`, on both the scan and the HNSW path.
 ///
+/// The store's HNSW index is journalled with the vectors. `remove_embedding`
+/// invalidates it and the undo's `restore_embedding` invalidates it again, so
+/// without the captured state a rolled-back `DELETE` gave the vectors back and
+/// kept the index dropped — `list_vector_indexes` reporting no index for one
+/// the statement never touched. Taking the state costs nothing on the removing
+/// path, since the removal drops it anyway; a store with no index is skipped.
+///
 /// Costs one hash probe per store, and stores are per `(node_type, property)`
 /// — a handful, independent of graph size. The `is_empty` guard keeps the
 /// overwhelmingly common un-embedded graph at zero cost per deleted node.
@@ -36,15 +43,32 @@ fn prune_doomed_embeddings(graph: &mut DirGraph, node_idx: NodeIndex) {
         return;
     }
     let node = node_idx.index();
-    let removed: Vec<((String, String), _)> = graph
-        .embeddings
-        .iter_mut()
-        .filter_map(|(key, store)| Some((key.clone(), store.remove_embedding(node)?)))
-        .collect();
+    let journalling = graph.graph.undo_journal_mut().is_some();
+    let mut removed: Vec<((String, String), _)> = Vec::new();
+    let mut indexes: Vec<((String, String), _)> = Vec::new();
+    for (key, store) in graph.embeddings.iter_mut() {
+        let prior_index =
+            (journalling && store.has_index()).then(|| (key.clone(), store.take_index_state()));
+        let Some(prior) = store.remove_embedding(node) else {
+            // This store held no vector for the node, so nothing invalidated
+            // its index: give back what the probe took.
+            if let Some((_, state)) = prior_index {
+                store.restore_index_state(state);
+            }
+            continue;
+        };
+        indexes.extend(prior_index);
+        removed.push((key.clone(), prior));
+    }
     if removed.is_empty() {
         return;
     }
     if let Some(journal) = graph.graph.undo_journal_mut() {
+        // Index entries first, so reverse replay lands them last — after every
+        // `restore_embedding` has invalidated the index again.
+        for (store_key, prior) in indexes {
+            journal.note_vector_index_replaced(store_key, prior);
+        }
         for (store_key, prior) in removed {
             journal.note_embedding_removed(store_key, node, prior);
         }

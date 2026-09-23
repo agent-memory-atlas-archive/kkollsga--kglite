@@ -1476,3 +1476,114 @@ fn a_build_metric_contradicting_the_store_is_refused() {
     assert!(store_of(&g).has_index());
     assert_eq!(store_of(&g).metric.as_deref(), Some("cosine"));
 }
+
+/// The node mirror of the relationship manual-write rule: a caller-supplied
+/// vector owns its cell, so `add_embeddings` drops the generated `text_hash`
+/// and the store-wide model stamp even when the vector it writes is
+/// byte-identical to the one already there. Without that, `embed_texts`
+/// (`mode='changed'`) compares the generated hash and skips a node a manual
+/// write took over.
+#[test]
+fn a_manual_add_of_an_identical_vector_clears_the_generated_hash() {
+    let mut g = docs(&[1, 2]);
+    set_embeddings(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        batch(&[(1, [1.0, 0.0]), (2, [0.0, 1.0])]),
+    )
+    .unwrap();
+    {
+        let store = g
+            .embeddings
+            .get_mut(&("Doc".to_string(), "summary_emb".to_string()))
+            .expect("store");
+        store.set_text_hash(0, 11);
+        store.set_text_hash(1, 22);
+        store.model_id = Some("model-a".to_string());
+    }
+
+    add_embeddings(&mut g, "Doc", "summary", None, batch(&[(1, [1.0, 0.0])])).unwrap();
+
+    let store = store_of(&g);
+    assert_eq!(store.get_embedding(0), Some(&[1.0, 0.0][..]));
+    assert_eq!(
+        store.text_hashes.get(&0),
+        None,
+        "the manual write owns this cell"
+    );
+    assert_eq!(
+        store.text_hashes.get(&1),
+        Some(&22),
+        "an unselected cell keeps its generated hash"
+    );
+    assert_eq!(store.model_id, None);
+}
+
+/// The `Doc.summary` store's cells in dense slot order — slot order is scan
+/// order, and scan order decides score ties.
+fn dense_cells(g: &DirGraph) -> Vec<(usize, Vec<f32>)> {
+    let store = store_of(g);
+    store
+        .slot_to_node
+        .iter()
+        .map(|&node| {
+            (
+                node,
+                store.get_embedding(node).expect("dense slot").to_vec(),
+            )
+        })
+        .collect()
+}
+
+fn run_cypher(graph: &mut DirGraph, source: &str) -> Result<(), String> {
+    let params = HashMap::new();
+    crate::graph::session::execute::execute_mut(
+        graph,
+        source,
+        &crate::graph::session::execute::ExecuteOptions::eager(&params),
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+/// A rolled-back node `DELETE` leaves the HNSW index where it found it. The
+/// prune invalidates it and the undo's `restore_embedding` invalidates it
+/// again, so without the captured index state a statement that failed *after*
+/// a delete silently dropped an index it never touched: the vectors came back
+/// and `SHOW INDEXES` reported none built.
+#[test]
+fn a_failed_statement_reverses_a_node_delete_with_its_vector_index() {
+    let mut g = docs(&[1, 2, 3]);
+    // `d3` keeps an incoming relationship, so the second, non-DETACH delete is
+    // refused — a failure *after* the first delete, not a refusal before it.
+    run_cypher(
+        &mut g,
+        "MATCH (a:Doc), (b:Doc) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:LINKS]->(b)",
+    )
+    .unwrap();
+    set_embeddings(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        batch(&[(1, [1.0, 0.0]), (2, [0.0, 1.0]), (3, [0.6, 0.8])]),
+    )
+    .unwrap();
+    build_vector_index(&mut g, "Doc", "summary", None, None, None, None, None).unwrap();
+    let before_index = list_vector_indexes(&g);
+    let before_cells = dense_cells(&g);
+    assert!(before_index[0].built && !before_index[0].stale);
+
+    let error = run_cypher(
+        &mut g,
+        "MATCH (n:Doc) WHERE n.id = 1 DELETE n WITH 1 AS kept \
+         MATCH (m:Doc) WHERE m.id = 3 DELETE m RETURN kept",
+    )
+    .expect_err("the second delete must fail after the first one succeeded");
+    assert!(error.contains("DETACH DELETE"), "{error}");
+
+    assert_eq!(list_vector_indexes(&g), before_index);
+    assert_eq!(dense_cells(&g), before_cells);
+}

@@ -38,6 +38,7 @@
 
 use std::collections::HashMap;
 
+use super::procedure_params::reject_unknown_keys;
 use super::{CypherExecutor, ResultRow};
 use crate::datatypes::values::Value;
 use crate::datatypes::PropMap;
@@ -192,31 +193,6 @@ fn foreign_epoch_error(
     )
 }
 
-/// Reject unknown keys in a procedure's config map.
-///
-/// A silently-ignored key is the failure mode this project has been bitten by
-/// before: `{capacity_: 10}` would leave the default in place and report
-/// success.
-fn reject_unknown_keys(
-    proc_name: &str,
-    params: &HashMap<String, Value>,
-    accepted: &[&str],
-) -> Result<(), String> {
-    for key in params.keys() {
-        if !accepted.iter().any(|name| name == key) {
-            return Err(format!(
-                "{proc_name}: unknown parameter '{key}'. Accepted: {}.",
-                if accepted.is_empty() {
-                    "(none — this procedure takes no parameters)".to_string()
-                } else {
-                    accepted.join(", ")
-                }
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Read `db.cdc.enable`'s `enrichment` argument.
 ///
 /// Absent means [`CdcEnrichment::Off`], and that is deliberate on a re-enable
@@ -285,7 +261,11 @@ pub(crate) fn execute_mutating_procedure(
 ) -> Result<Vec<ResultRow>, String> {
     match proc_name {
         "db.cdc.enable" => {
-            reject_unknown_keys("db.cdc.enable", params, &["capacity", "enrichment"])?;
+            reject_unknown_keys(
+                "db.cdc.enable",
+                params.keys().map(String::as_str),
+                &["capacity", "enrichment"],
+            )?;
             let enrichment = parse_enrichment(params.get("enrichment"))?;
             let capacity = match params.get("capacity") {
                 None | Some(Value::Null) => None,
@@ -314,7 +294,7 @@ pub(crate) fn execute_mutating_procedure(
             })])
         }
         "db.cdc.disable" => {
-            reject_unknown_keys("db.cdc.disable", params, &[])?;
+            reject_unknown_keys("db.cdc.disable", params.keys().map(String::as_str), &[])?;
             let was_enabled = cdc::disable(graph);
             Ok(vec![build_row(yield_items, |column| match column {
                 "enabled" => Some(Value::Boolean(false)),
@@ -359,7 +339,7 @@ pub(super) fn execute_cdc_procedure(
     // answers a consumer must not confuse — but a probe whose entire job is to
     // report whether the log exists cannot make its own subject an error.
     if proc_name == "db.cdc.status" {
-        reject_unknown_keys("db.cdc.status", params, &[])?;
+        reject_unknown_keys("db.cdc.status", params.keys().map(String::as_str), &[])?;
         return Ok(vec![status_row(cdc::status(graph).as_ref(), yield_items)]);
     }
 
@@ -373,7 +353,7 @@ pub(super) fn execute_cdc_procedure(
 
     match proc_name {
         "db.cdc.current" | "db.cdc.earliest" => {
-            reject_unknown_keys(proc_name, params, &[])?;
+            reject_unknown_keys(proc_name, params.keys().map(String::as_str), &[])?;
             // `earliest` is the oldest *retained* change, so the cursor that
             // reads it must sit one before it — a cursor is exclusive.
             let seq = if proc_name == "db.cdc.current" {
@@ -388,7 +368,11 @@ pub(super) fn execute_cdc_procedure(
             })])
         }
         "db.cdc.query" => {
-            reject_unknown_keys("db.cdc.query", params, &["from", "selectors", "maxRows"])?;
+            reject_unknown_keys(
+                "db.cdc.query",
+                params.keys().map(String::as_str),
+                &["from", "selectors", "maxRows"],
+            )?;
             let selectors = match params.get("selectors") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(value) => cdc::parse_selectors(value)?,

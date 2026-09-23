@@ -155,17 +155,21 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     std::mem::swap(&mut a.secondary_label_index, &mut b.secondary_label_index);
     // O(V × dimension) — a 100k × 384 store is 150 MB, so cloning it per
     // statement is out of the question. Its undo story is
-    // `UndoEntry::EmbeddingRemoved`, captured where a node deletion prunes the
-    // node's vector (`mutation::delete_state::prune_doomed_embeddings`); node
-    // deletion is the only writer that reaches this map inside a statement
-    // window (ingest runs outside one), so that entry is the whole story.
+    // `UndoEntry::EmbeddingRemoved` plus `UndoEntry::VectorIndexReplaced`, both
+    // captured where a node deletion prunes the node's vector
+    // (`mutation::delete_state::prune_doomed_embeddings`) — the vector itself
+    // and the HNSW index its removal invalidated. Node deletion is the only
+    // writer that reaches this map inside a statement window (ingest runs
+    // outside one), so those two entries are the whole story.
     std::mem::swap(&mut a.embeddings, &mut b.embeddings);
     // Relationship embeddings have the same corpus-sized shape. Their undo
-    // story is four entries rather than one: `EdgeEmbeddingRemoved` at the
+    // story is five entries rather than one: `EdgeEmbeddingRemoved` at the
     // graph-level edge-removal choke point, `EdgeEmbeddingStoreReplaced` where
-    // a whole store is installed or dropped, and `EdgeEmbeddingCellReplaced` +
+    // a whole store is installed or dropped, `EdgeEmbeddingCellReplaced` +
     // `EdgeEmbeddingModelIdReplaced` for the manual writes, which journal per
-    // changed cell so a per-row `db.edge_embeddings.set` never clones a store.
+    // changed cell so a per-row `db.edge_embeddings.set` never clones a store,
+    // and `EdgeVectorIndexReplaced` for the HNSW index any of those removals
+    // invalidates.
     std::mem::swap(&mut a.edge_embeddings, &mut b.edge_embeddings);
     // O(corpus) — an inverted index over a 100k-document corpus is megabytes of
     // postings, so cloning it per statement is out of the question for exactly
@@ -552,6 +556,11 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             // would invent a dimension.
             if let Some(store) = graph.embeddings.get_mut(&store_key) {
                 store.restore_embedding(node, &prior);
+            }
+        }
+        UndoEntry::VectorIndexReplaced { store_key, prior } => {
+            if let Some(store) = graph.embeddings.get_mut(&store_key) {
+                store.restore_index_state(prior);
             }
         }
         UndoEntry::EdgeEmbeddingRemoved {

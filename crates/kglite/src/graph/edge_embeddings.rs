@@ -396,16 +396,42 @@ impl EdgeEmbeddingStore {
 
 /// Remove one relationship's vectors before its physical slot becomes reusable.
 /// The empty-map guard is the common no-vector fast path.
+///
+/// Inside a statement window the HNSW index is journalled with the vectors.
+/// `remove` invalidates it and the undo's `restore` invalidates it again, so
+/// without the captured state a rolled-back `DELETE` left the graph with its
+/// vectors back and its index gone — `db.edge_embeddings.list` reporting
+/// `index_state: 'none'` for an index the statement never touched. Taking the
+/// state costs nothing on the removing path: the removal drops it anyway.
+/// Stores with no index are skipped — there is nothing to lose, and this runs
+/// once per deleted relationship.
 pub(crate) fn prune_edge_embeddings(graph: &mut DirGraph, edge: EdgeIndex) {
     if graph.edge_embeddings.is_empty() {
         return;
     }
-    let removed: Vec<_> = graph
-        .edge_embeddings
-        .iter_mut()
-        .filter_map(|(key, store)| Some((key.clone(), store.remove(edge)?)))
-        .collect();
+    let journalling = graph.graph.undo_journal_mut().is_some();
+    let mut removed = Vec::new();
+    let mut indexes = Vec::new();
+    for (key, store) in graph.edge_embeddings.iter_mut() {
+        let prior_index = (journalling && store.numeric.has_index())
+            .then(|| (key.clone(), store.numeric.take_index_state()));
+        let Some(prior) = store.remove(edge) else {
+            // Restore what the probe took: this store held no vector for the
+            // edge, so nothing invalidated its index.
+            if let Some((_, state)) = prior_index {
+                store.numeric.restore_index_state(state);
+            }
+            continue;
+        };
+        indexes.extend(prior_index);
+        removed.push((key.clone(), prior));
+    }
     if let Some(journal) = graph.graph.undo_journal_mut() {
+        // Index entries first, so reverse replay lands them last — after every
+        // `restore` has invalidated the index again.
+        for (store_key, prior) in indexes {
+            journal.note_edge_vector_index_replaced(store_key, prior);
+        }
         for (store_key, prior) in removed {
             journal.note_edge_embedding_removed(store_key, edge, prior);
         }
@@ -442,7 +468,8 @@ pub(crate) struct EdgeEmbeddingWriteReport {
     /// Vectors held after the call.
     pub(crate) stored: usize,
     pub(crate) dimension: usize,
-    /// Entries whose vector changed or was newly installed.
+    /// Entries the write touched: a new vector, a changed one, or a cell whose
+    /// generated text hash it cleared.
     pub(crate) changed: usize,
     pub(crate) store_created: bool,
 }
@@ -551,10 +578,19 @@ pub(crate) fn upsert_edge_embeddings(
     }
     drop(_arena_guard);
 
+    // A cell counts as changed when its vector differs **or** when it still
+    // carries a generated `text_hash`: a manual write takes ownership of the
+    // cell, and `set_manual` clears that hash. Filtering on the vector alone
+    // left the hash behind whenever the caller wrote back a byte-identical
+    // vector, and `embed(mode:'changed')` then skipped a relationship the
+    // manual write owned — the vector it compared against was the generated
+    // one only by coincidence.
     let changed_edges: HashSet<_> = entries
         .iter()
         .filter(|(edge, vector)| {
-            existing.and_then(|store| store.get(*edge)) != Some(vector.as_slice())
+            existing.is_none_or(|store| {
+                store.get(*edge) != Some(vector.as_slice()) || store.text_hash(*edge).is_some()
+            })
         })
         .map(|(edge, _)| edge.index())
         .collect();

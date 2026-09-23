@@ -571,3 +571,119 @@ fn an_index_built_with_an_explicit_metric_serves_metric_less_queries() {
         exact.iter().map(|row| row[0].clone()).collect::<Vec<_>>()
     );
 }
+
+// ── Node *values* ────────────────────────────────────────────────────────────
+//
+// A node that reaches the scalar as a value rather than as a pattern binding —
+// `collect(n)` + `UNWIND`, `head(collect(n))`, `nodes(p)`, a `CALL {}` column —
+// used to be refused: the argument was required to be a variable *bound by the
+// MATCH*, and anything else fell through to "first argument must be a node or
+// relationship variable". 0.17.12 answered NULL for the variable-shaped cases
+// and errored for the rest; both lost the score of a node the caller is
+// holding. Every expected value below is hand-computed cosine against the
+// stored unit vectors.
+
+/// `a` is on the x axis and `b` on the y axis, so a query of `[1, 0]` scores
+/// exactly 1.0 and 0.0 — the same numbers the direct binding produces, which
+/// the first column of each row asserts side by side.
+fn axis_docs() -> DirGraph {
+    docs(&[("a", [1.0, 0.0]), ("b", [0.0, 1.0])])
+}
+
+#[test]
+fn collected_and_unwound_node_values_score_like_direct_bindings() {
+    let graph = axis_docs();
+    let rows = rows(
+        &graph,
+        "MATCH (d:Doc) WITH collect(d) AS held UNWIND held AS m \
+         RETURN m.title AS title, vector_score(m, 'summary_emb', [1.0, 0.0]) AS score \
+         ORDER BY title",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(float(&rows[0][1]), 1.0, "{rows:?}");
+    assert_eq!(float(&rows[1][1]), 0.0, "{rows:?}");
+}
+
+#[test]
+fn an_inline_node_expression_scores_without_a_binding() {
+    let graph = axis_docs();
+    let rows = rows(
+        &graph,
+        "MATCH (d:Doc) WHERE d.title = 'a' WITH collect(d) AS held \
+         RETURN vector_score(head(held), 'summary_emb', [1.0, 0.0]) AS score, \
+         vector_score(held[0], 'summary_emb', [0.0, 1.0]) AS flipped, \
+         embedding_norm(head(held), 'summary_emb') AS norm",
+    );
+    assert_eq!(float(&rows[0][0]), 1.0, "{rows:?}");
+    assert_eq!(float(&rows[0][1]), 0.0, "{rows:?}");
+    assert_eq!(float(&rows[0][2]), 1.0, "{rows:?}");
+}
+
+#[test]
+fn a_call_subquery_column_scores_like_a_direct_binding() {
+    let graph = axis_docs();
+    let rows = rows(
+        &graph,
+        "CALL { MATCH (d:Doc) WHERE d.title = 'b' RETURN d AS m } \
+         RETURN vector_score(m, 'summary_emb', [0.0, 1.0]) AS score, \
+         embedding_norm(m, 'summary_emb') AS norm",
+    );
+    assert_eq!(float(&rows[0][0]), 1.0, "{rows:?}");
+    assert_eq!(float(&rows[0][1]), 1.0, "{rows:?}");
+}
+
+#[test]
+fn path_nodes_score_like_direct_bindings() {
+    let mut graph = axis_docs();
+    let a = petgraph::graph::NodeIndex::new(0);
+    let b = petgraph::graph::NodeIndex::new(1);
+    GraphWrite::add_edge(
+        &mut graph.graph,
+        a,
+        b,
+        EdgeData::new("LINKS".into(), HashMap::new(), &mut graph.interner),
+    );
+    let rows = rows(
+        &graph,
+        "MATCH p = (:Doc)-[:LINKS]->(:Doc) UNWIND nodes(p) AS m \
+         RETURN m.title AS title, vector_score(m, 'summary_emb', [1.0, 0.0]) AS score \
+         ORDER BY title",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(float(&rows[0][1]), 1.0, "{rows:?}");
+    assert_eq!(float(&rows[1][1]), 0.0, "{rows:?}");
+}
+
+/// A value is a snapshot, and a snapshot of a node the same statement deleted
+/// names a slot that is dead — or, once `CREATE` hands the freed slot to a
+/// node of another type, one that is live and *wrong*. Either way the score is
+/// NULL: never an error, and never the new occupant's vector.
+#[test]
+fn a_node_value_whose_slot_died_or_changed_type_scores_null() {
+    for tail in [
+        "WITH collect(d) AS held UNWIND held AS m \
+         RETURN vector_score(m, 'summary_emb', [1.0, 0.0]) AS score, \
+         embedding_norm(m, 'summary_emb') AS norm",
+        "WITH collect(d) AS held CREATE (:Other {id: 9}) WITH held UNWIND held AS m \
+         RETURN vector_score(m, 'summary_emb', [1.0, 0.0]) AS score, \
+         embedding_norm(m, 'summary_emb') AS norm",
+    ] {
+        let mut graph = axis_docs();
+        let parsed = parser::parse_cypher(&format!(
+            "MATCH (d:Doc) WHERE d.title = 'a' DELETE d {tail}"
+        ))
+        .unwrap();
+        let result = execute_mutable(
+            &mut graph,
+            &parsed,
+            HashMap::new(),
+            crate::graph::algorithms::Interrupt::from_deadline(None),
+        )
+        .unwrap_or_else(|error| panic!("{tail}: {error}"));
+        assert_eq!(
+            result.rows,
+            vec![vec![Value::Null, Value::Null]],
+            "{tail}: {result:?}"
+        );
+    }
+}

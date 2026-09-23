@@ -484,3 +484,100 @@ def test_path_relationships_score_inside_a_write_statement() -> None:
         "embedding_norm(rel, 'text_emb') AS norm"
     ).to_list()
     assert rows == [{"score": 1.0, "norm": 1.0}]
+
+
+def test_default_mode_stamps_the_model_on_a_store_it_creates() -> None:
+    """A fresh store records the model that filled it, in every mode.
+
+    The default ``missing`` mode wrote ``model: null`` on a store it had just
+    created whole, and the mismatch guard reads the *prior* stamp -- so a later
+    same-width model was free to mix its vectors into the same store.
+    """
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    report = _embed(graph, "r.text IS NOT NULL")
+    assert report["embedded"] == 2
+    assert report["model"] == "model/A"
+    assert _store_state(graph)[0]["model"] == "model/A"
+
+    graph.set_embedder(_Embedder("model/B"))
+    for mode in ("changed", "missing"):
+        with pytest.raises(kglite.CypherExecutionError, match="mode='all'"):
+            _embed(graph, "r.text IS NOT NULL", mode=mode)
+    assert _store_state(graph)[0]["model"] == "model/A"
+
+
+def test_manual_set_of_an_identical_vector_takes_ownership_of_the_cell() -> None:
+    """A manual vector owns its cell even when it equals the generated one.
+
+    The batch was filtered by vector equality, so a byte-identical write never
+    cleared the generated text hash and ``mode='changed'`` went on skipping a
+    relationship the manual write had taken over.
+    """
+    graph = _graph()
+    model = _Embedder("model/A")
+    graph.set_embedder(model)
+    assert _embed(graph, "r.text = 'alpha'", mode="all")["embedded"] == 1
+
+    graph.cypher(
+        "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
+        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
+        params={"vector": model._vector("alpha")},
+    )
+    assert _store_state(graph)[0]["model"] is None
+
+    assert _embed(graph, "r.text = 'alpha'", mode="changed")["embedded"] == 1
+
+
+def test_failed_statement_reverses_a_relationship_delete_with_its_vector_index() -> None:
+    """A rolled-back DELETE leaves the HNSW index where it found it.
+
+    The prune invalidates the index and the undo's restore invalidates it
+    again, so the failed statement silently dropped an index it never touched.
+    """
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    _embed(graph, "true", mode="all")
+    graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    before_state = _store_state(graph)
+    before_vectors = _vectors(graph)
+    assert before_state[0]["index_state"] == "online"
+
+    with pytest.raises(kglite.CypherExecutionError):
+        graph.cypher("MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' DELETE r " + _failing_tail("1"))
+
+    assert _store_state(graph) == before_state
+    assert _vectors(graph) == before_vectors
+
+
+#: Every ``db.edge_embeddings.*`` procedure with the extra required arguments
+#: its call needs beyond ``type``/``text_property``.
+_PROCEDURE_ARGUMENTS = {
+    "set": "entries: []",
+    "remove": "relationships: []",
+    "embed": "relationships: []",
+    "query": "vector: [1.0, 0.0]",
+    "drop": None,
+    "build_index": None,
+    "refresh_index": None,
+    "drop_index": None,
+    "list": None,
+}
+
+
+@pytest.mark.parametrize("procedure", sorted(_PROCEDURE_ARGUMENTS))
+def test_every_edge_embedding_procedure_refuses_an_unknown_parameter(procedure: str) -> None:
+    """Only ``list`` rejected unknown keys; the other eight ignored them.
+
+    A silently-ignored key leaves the default in place and reports success --
+    ``{metric_: 'euclidean'}`` built a cosine index and answered ``indexed``.
+    """
+    graph = _graph()
+    fields = ["type: 'CLAIMS'", "text_property: 'text'"]
+    extra = _PROCEDURE_ARGUMENTS[procedure]
+    if extra is not None:
+        fields.append(extra)
+    fields.append("bogus: 1")
+    with pytest.raises(Exception, match="unknown parameter 'bogus'"):
+        graph.cypher(f"CALL db.edge_embeddings.{procedure}({{{', '.join(fields)}}})")

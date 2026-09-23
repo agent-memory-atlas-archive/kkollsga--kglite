@@ -256,6 +256,17 @@ pub enum UndoEntry {
         node: usize,
         prior: Box<RemovedEmbedding>,
     },
+    /// The node vector index a pruning removal invalidated.
+    ///
+    /// The node twin of [`EdgeVectorIndexReplaced`](Self::EdgeVectorIndexReplaced),
+    /// and needed for the same reason: `remove_embedding` drops the HNSW index
+    /// and `restore_embedding` drops it again, so the vectors a rollback puts
+    /// back would come back unindexed without this. Captured before the cells
+    /// so reverse replay restores it last.
+    VectorIndexReplaced {
+        store_key: (String, String),
+        prior: VectorIndexState,
+    },
     /// A relationship's vector left the dense store: pruned before its physical
     /// edge slot was freed, or removed by `db.edge_embeddings.remove`. Undo
     /// reverses the removal's tail swap, so a statement's removals rebuild the
@@ -730,6 +741,15 @@ impl UndoJournal {
         });
     }
 
+    pub(crate) fn note_vector_index_replaced(
+        &mut self,
+        store_key: (String, String),
+        prior: VectorIndexState,
+    ) {
+        self.entries
+            .push(UndoEntry::VectorIndexReplaced { store_key, prior });
+    }
+
     #[inline]
     pub fn note_edge_embedding_removed(
         &mut self,
@@ -1139,6 +1159,52 @@ mod tests {
             UndoEntry::EdgeVectorIndexReplaced { prior, .. } => {
                 assert_eq!(prior.freshness.watermark(), 4);
                 assert_eq!(prior.freshness.limit(), 7);
+            }
+            other => panic!(
+                "the index entry must replay last, after every restore that \
+                 invalidated it again: {other:?}"
+            ),
+        }
+    }
+
+    /// The node twin of the entry above: a delete's prune journals the index
+    /// state before the vectors, so reverse replay restores the index last —
+    /// after every `restore_embedding` has invalidated it again.
+    #[test]
+    fn node_pruning_journals_its_index_before_its_cells() {
+        let key = ("Doc".to_string(), "summary_emb".to_string());
+        let mut journal = UndoJournal::new();
+        journal.note_vector_index_replaced(
+            key.clone(),
+            VectorIndexState {
+                index: None,
+                freshness: crate::graph::index_freshness::IndexFreshness::covering(3, Some(9)),
+            },
+        );
+        journal.note_embedding_removed(
+            key.clone(),
+            7,
+            RemovedEmbedding {
+                slot: 1,
+                vector: vec![1.0, 0.0],
+                text_hash: Some(33),
+            },
+        );
+
+        let replayed: Vec<UndoEntry> = journal.into_replay_order().collect();
+        match &replayed[0] {
+            UndoEntry::EmbeddingRemoved { node, prior, .. } => {
+                assert_eq!(*node, 7);
+                assert_eq!(prior.slot, 1);
+                assert_eq!(prior.text_hash, Some(33));
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        }
+        match &replayed[1] {
+            UndoEntry::VectorIndexReplaced { store_key, prior } => {
+                assert_eq!(store_key, &key);
+                assert_eq!(prior.freshness.watermark(), 3);
+                assert_eq!(prior.freshness.limit(), 9);
             }
             other => panic!(
                 "the index entry must replay last, after every restore that \

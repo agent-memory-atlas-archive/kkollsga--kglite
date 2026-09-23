@@ -21,6 +21,7 @@ use crate::graph::languages::cypher::result::ResultRow;
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 
+use super::procedure_params::reject_unknown_keys;
 use super::relationship_identity::StatementRelationshipIdentities;
 
 pub(super) fn execute(
@@ -31,6 +32,11 @@ pub(super) fn execute(
     identities: &Arc<Mutex<StatementRelationshipIdentities>>,
     service: Option<&EmbeddingExecutionService<'_>>,
 ) -> Result<Vec<ResultRow>, String> {
+    reject_unknown_keys(
+        &format!("CALL {proc_name}"),
+        params.keys().map(String::as_str),
+        accepted_keys(proc_name),
+    )?;
     let relationship_type = require_string(params, "type", proc_name)?;
     let text_property = require_string(params, "text_property", proc_name)?;
     let values = match proc_name {
@@ -41,6 +47,11 @@ pub(super) fn execute(
                 let Value::Map(pair) = entry else {
                     return Err(format!("CALL {proc_name}: each entry must be a map"));
                 };
+                reject_unknown_keys(
+                    &format!("CALL {proc_name}: entry"),
+                    pair.keys(),
+                    &["relationship", "vector"],
+                )?;
                 let relationship = pair.get("relationship").ok_or_else(|| {
                     format!("CALL {proc_name}: each entry requires 'relationship'")
                 })?;
@@ -168,15 +179,13 @@ pub(super) fn list(
     params: &HashMap<String, Value>,
     yields: &[YieldItem],
 ) -> Result<Vec<ResultRow>, String> {
+    reject_unknown_keys(
+        "CALL db.edge_embeddings.list",
+        params.keys().map(String::as_str),
+        accepted_keys("db.edge_embeddings.list"),
+    )?;
     let type_filter = optional_string(params, "type", "db.edge_embeddings.list")?;
     let property_filter = optional_string(params, "text_property", "db.edge_embeddings.list")?;
-    for key in params.keys() {
-        if key != "type" && key != "text_property" {
-            return Err(format!(
-                "CALL db.edge_embeddings.list: unknown parameter '{key}'"
-            ));
-        }
-    }
     let statuses = crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
         .into_iter()
         .map(|status| {
@@ -253,6 +262,11 @@ pub(super) fn query(
     params: &HashMap<String, Value>,
 ) -> Result<EdgeVectorQueryReport, String> {
     let proc_name = "db.edge_embeddings.query";
+    reject_unknown_keys(
+        &format!("CALL {proc_name}"),
+        params.keys().map(String::as_str),
+        accepted_keys(proc_name),
+    )?;
     let relationship_type = require_string(params, "type", proc_name)?;
     let text_property = require_string(params, "text_property", proc_name)?;
     let vector = numeric_vector(params.get("vector"), proc_name)?;
@@ -270,6 +284,51 @@ pub(super) fn query(
             metric,
         },
     )
+}
+
+/// Every parameter each `db.edge_embeddings.*` procedure reads, by name.
+///
+/// One table rather than a literal at each call site: the nine procedures share
+/// `type`/`text_property` and differ only in their tails, and a list that lived
+/// beside its reader is the kind that goes stale when a parameter is added two
+/// functions away. The strings are also the "Accepted:" line a caller sees, so
+/// they carry `type` and `text_property` even though those are required rather
+/// than optional.
+fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
+    match proc_name {
+        "db.edge_embeddings.set" => &["type", "text_property", "entries", "metric"],
+        "db.edge_embeddings.remove" => &["type", "text_property", "relationships"],
+        "db.edge_embeddings.drop"
+        | "db.edge_embeddings.refresh_index"
+        | "db.edge_embeddings.drop_index"
+        | "db.edge_embeddings.list" => &["type", "text_property"],
+        "db.edge_embeddings.build_index" => &[
+            "type",
+            "text_property",
+            "m",
+            "ef_construction",
+            "ef_search",
+            "metric",
+            "auto_refresh_limit",
+        ],
+        "db.edge_embeddings.embed" => &[
+            "type",
+            "text_property",
+            "relationships",
+            "mode",
+            "batch_size",
+            "metric",
+        ],
+        "db.edge_embeddings.query" => &[
+            "type",
+            "text_property",
+            "vector",
+            "top_k",
+            "exact",
+            "metric",
+        ],
+        other => unreachable!("non-edge-embedding procedure routed here: {other}"),
+    }
 }
 
 fn resolve_relationships(

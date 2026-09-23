@@ -171,3 +171,72 @@ def test_cypher_vector_query_rejects_nonfinite(bad: float) -> None:
             "MATCH (n:Doc) RETURN vector_score(n, 'summary_emb', $query) AS score",
             params={"query": [1.0, bad, 0.0, 0.0]},
         ).to_list()
+
+
+def _axis_docs() -> kglite.KnowledgeGraph:
+    """Two `Doc` nodes on opposite axes, so cosine against `[1, 0]` is 1 and 0."""
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(
+        pd.DataFrame({"id": [0, 1], "title": ["a", "b"], "summary": ["alpha", "beta"]}),
+        "Doc",
+        "id",
+        "title",
+    )
+    graph.set_embeddings("Doc", "summary", {0: [1.0, 0.0], 1: [0.0, 1.0]})
+    return graph
+
+
+def test_node_values_score_like_direct_bindings() -> None:
+    """A node reaching the scalars as a *value* scores, it does not fail.
+
+    `collect(n)` + `UNWIND`, `head(...)`, a `CALL {}` column and `nodes(p)` all
+    hand the scalar a materialised node rather than a pattern binding. That was
+    refused with "first argument must be a node or relationship variable" (and,
+    before that, answered NULL) -- losing the score of a node the caller holds.
+    Every number below is cosine against the stored unit vectors.
+    """
+    graph = _axis_docs()
+    rows = graph.cypher(
+        "MATCH (d:Doc) WITH collect(d) AS held UNWIND held AS m "
+        "RETURN m.title AS title, vector_score(m, 'summary_emb', [1.0, 0.0]) AS score, "
+        "embedding_norm(m, 'summary_emb') AS norm, "
+        "text_score(m, 'summary', [1.0, 0.0]) AS rewritten ORDER BY title"
+    ).to_list()
+    assert rows == [
+        {"title": "a", "score": 1.0, "norm": 1.0, "rewritten": 1.0},
+        {"title": "b", "score": 0.0, "norm": 1.0, "rewritten": 0.0},
+    ]
+
+    inline = graph.cypher(
+        "MATCH (d:Doc) WHERE d.title = 'a' WITH collect(d) AS held "
+        "RETURN vector_score(head(held), 'summary_emb', [1.0, 0.0]) AS score, "
+        "embedding_norm(held[0], 'summary_emb') AS norm"
+    ).to_list()
+    assert inline == [{"score": 1.0, "norm": 1.0}]
+
+    subquery = graph.cypher(
+        "CALL { MATCH (d:Doc) WHERE d.title = 'b' RETURN d AS m } "
+        "RETURN vector_score(m, 'summary_emb', [0.0, 1.0]) AS score"
+    ).to_list()
+    assert subquery == [{"score": 1.0}]
+
+
+def test_path_node_values_score_like_direct_bindings() -> None:
+    graph = _axis_docs()
+    graph.cypher("MATCH (a:Doc), (b:Doc) WHERE a.id = 0 AND b.id = 1 CREATE (a)-[:LINKS]->(b)")
+    rows = graph.cypher(
+        "MATCH p = (:Doc)-[:LINKS]->(:Doc) UNWIND nodes(p) AS m "
+        "RETURN m.title AS title, vector_score(m, 'summary_emb', [1.0, 0.0]) AS score ORDER BY title"
+    ).to_list()
+    assert rows == [{"title": "a", "score": 1.0}, {"title": "b", "score": 0.0}]
+
+
+def test_a_node_value_whose_slot_died_scores_null() -> None:
+    """A value is a snapshot; a snapshot of a deleted node has no score."""
+    graph = _axis_docs()
+    rows = graph.cypher(
+        "MATCH (d:Doc) WHERE d.title = 'a' DELETE d WITH collect(d) AS held UNWIND held AS m "
+        "RETURN vector_score(m, 'summary_emb', [1.0, 0.0]) AS score, "
+        "embedding_norm(m, 'summary_emb') AS norm"
+    ).to_list()
+    assert rows == [{"score": None, "norm": None}]

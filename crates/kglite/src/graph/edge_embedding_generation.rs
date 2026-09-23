@@ -207,6 +207,7 @@ pub(crate) fn embed_selected_relationships(
         requested_model.as_deref(),
         request.mode,
         unselected_vectors_remain,
+        existing.is_some_and(|store| !store.is_empty()),
     );
     let affected = std::mem::take(&mut plan.affected);
     let write = GeneratedEdgeEmbeddingWrite {
@@ -328,13 +329,30 @@ fn plan_selection(
     plan
 }
 
+/// The `model_id` the store carries after this pass, or `None` when no single
+/// model describes every vector it will hold.
+///
+/// `had_existing_vectors` is the node rule's `had_existing_store`
+/// ([`crate::graph::embeddings::embed_property`]) in relationship terms: a pass
+/// that finds no vector to keep owns everything it writes, whatever its mode,
+/// so it stamps. Without that arm a fresh store built in the default `missing`
+/// mode recorded `model: null`, and the `:166` guard — which only fires on a
+/// *known* prior — then let a later same-width model silently mix its vectors
+/// into it.
+///
+/// A store that already holds vectors of unknown or foreign provenance stays
+/// unknown unless a full `all` pass covers every one of them.
 fn final_model_id(
     prior: Option<&str>,
     requested: Option<&str>,
     mode: EmbedMode,
     unselected_vectors_remain: bool,
+    had_existing_vectors: bool,
 ) -> Option<String> {
     if prior.is_some() && prior == requested {
+        return requested.map(str::to_string);
+    }
+    if !had_existing_vectors {
         return requested.map(str::to_string);
     }
     if mode == EmbedMode::All && !unselected_vectors_remain {
@@ -575,21 +593,113 @@ mod tests {
     #[test]
     fn provenance_requires_matching_prior_or_full_all_coverage() {
         assert_eq!(
-            final_model_id(Some("A"), Some("B"), EmbedMode::All, true),
+            final_model_id(Some("A"), Some("B"), EmbedMode::All, true, true),
             None
         );
         assert_eq!(
-            final_model_id(Some("B"), Some("B"), EmbedMode::All, true),
+            final_model_id(Some("B"), Some("B"), EmbedMode::All, true, true),
             Some("B".into())
         );
         assert_eq!(
-            final_model_id(None, Some("B"), EmbedMode::All, false),
+            final_model_id(None, Some("B"), EmbedMode::All, false, false),
             Some("B".into())
         );
+        // A store that already holds vectors of unknown provenance stays
+        // unknown under an incremental pass.
         assert_eq!(
-            final_model_id(None, Some("B"), EmbedMode::Changed, false),
+            final_model_id(None, Some("B"), EmbedMode::Changed, false, true),
             None
         );
+    }
+
+    /// A pass that finds no vector to keep owns every vector it writes, so it
+    /// stamps the model whatever its mode. Before this, the default `missing`
+    /// mode left `model: null` on a store it had just created whole, and the
+    /// mismatch guard — which reads the *prior* stamp — then had nothing to
+    /// compare a later model against.
+    #[test]
+    fn a_fresh_store_records_its_model_in_every_mode() {
+        for mode in [EmbedMode::Missing, EmbedMode::Changed, EmbedMode::All] {
+            assert_eq!(
+                final_model_id(None, Some("B"), mode, false, false),
+                Some("B".into()),
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// End to end through the public entry point: the default mode is
+    /// `missing`, and it must both report and persist the model.
+    #[test]
+    fn default_mode_generation_stamps_the_model_on_a_store_it_creates() {
+        let (mut graph, first, _) = graph_with_parallel_edges();
+        let model = FakeEmbedder::named(2, "A", Reply::Echo);
+        let service = EmbeddingExecutionService {
+            model: &model,
+            interrupt: Interrupt::default(),
+        };
+        let report = embed_selected_relationships(
+            &mut graph,
+            request(
+                vec![SelectedEdgeText {
+                    edge: first,
+                    text: Some("claim".into()),
+                }],
+                EmbedMode::Missing,
+            ),
+            Some(&service),
+        )
+        .unwrap();
+        assert_eq!(report.model_id.as_deref(), Some("A"));
+        let store = &graph.edge_embeddings[&edge_store_key("ASSERTS", "description")];
+        assert_eq!(store.model_id(), Some("A"));
+    }
+
+    /// The point of the stamp: a later same-width model is refused by the
+    /// incremental guard instead of mixing its vectors into the store.
+    #[test]
+    fn a_stamped_fresh_store_refuses_a_later_model_under_every_incremental_mode() {
+        for mode in [EmbedMode::Missing, EmbedMode::Changed] {
+            let (mut graph, first, second) = graph_with_parallel_edges();
+            let first_model = FakeEmbedder::named(2, "A", Reply::Echo);
+            embed_selected_relationships(
+                &mut graph,
+                request(
+                    vec![SelectedEdgeText {
+                        edge: first,
+                        text: Some("claim".into()),
+                    }],
+                    EmbedMode::Missing,
+                ),
+                Some(&EmbeddingExecutionService {
+                    model: &first_model,
+                    interrupt: Interrupt::default(),
+                }),
+            )
+            .unwrap();
+
+            let second_model = FakeEmbedder::named(2, "B", Reply::Echo);
+            let error = embed_selected_relationships(
+                &mut graph,
+                request(
+                    vec![SelectedEdgeText {
+                        edge: second,
+                        text: Some("other".into()),
+                    }],
+                    mode,
+                ),
+                Some(&EmbeddingExecutionService {
+                    model: &second_model,
+                    interrupt: Interrupt::default(),
+                }),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("model 'A'") && error.contains("mode='all'"),
+                "{mode:?}: {error}"
+            );
+            assert_eq!(second_model.loads.load(Ordering::Relaxed), 0);
+        }
     }
 
     #[test]
