@@ -403,6 +403,7 @@ mod tests {
 
     fn rel(id: u32, start_id: u32, end_id: u32) -> RelValue {
         RelValue {
+            incarnation: None,
             id,
             start_id,
             end_id,

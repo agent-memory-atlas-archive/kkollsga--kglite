@@ -571,8 +571,11 @@ impl<'a> CypherExecutor<'a> {
         for (outer_index, outer_row) in outer_rows.into_iter().enumerate() {
             self.check_interrupt_periodic(outer_index)?;
             let params = self.extract_call_params(&clause.parameters, &outer_row)?;
-            let yielded_rows =
-                self.execute_resolved_call_once(proc_name.as_str(), clause, params)?;
+            let yielded_rows = if proc_name == "db.edge_embeddings.list" {
+                super::edge_embedding_procedures::list(self.graph, &params, &clause.yield_items)?
+            } else {
+                self.execute_resolved_call_once(proc_name.as_str(), clause, params)?
+            };
             self.budget.reserve_rows(
                 joined_rows.len(),
                 yielded_rows.len(),

@@ -41,6 +41,7 @@ use crate::graph::languages::cypher::parser;
 
 mod cypher25_clauses;
 mod deadline_rows;
+mod edge_vector_score;
 mod exists_witness;
 mod expressions;
 mod fused_aggregate_labels;
@@ -49,6 +50,7 @@ mod label_predicates;
 mod lists;
 mod mutations;
 mod parallel;
+mod relationship_identity;
 mod score_fuse;
 mod self_loops;
 mod semantics;

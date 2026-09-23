@@ -531,6 +531,9 @@ impl<'a> CypherExecutor<'a> {
 
         // Edge variable
         if let Some(edge) = row.edge_bindings.get(variable) {
+            if !self.relationship_binding_is_current(edge) {
+                return Ok(Value::Null);
+            }
             return Ok(resolve_edge_property(self.graph, edge, property));
         }
 

@@ -235,6 +235,46 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &["removed", "rows"],
     },
     ProcedureSpec {
+        name: "db.edge_embeddings.set",
+        aliases: &[],
+        description: "Atomically upsert vectors for explicitly selected relationships",
+        columns: &["stored", "dimension"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.embed",
+        aliases: &[],
+        description: "Generate vectors for explicitly selected relationships",
+        columns: &["embedded", "skipped", "dimension", "model"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.remove",
+        aliases: &[],
+        description: "Remove vectors from explicitly selected relationships",
+        columns: &["removed"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.drop",
+        aliases: &[],
+        description: "Drop one relationship embedding store",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.list",
+        aliases: &[],
+        description: "List declared relationship embedding stores and their metadata",
+        columns: &[
+            "entity",
+            "type",
+            "text_property",
+            "store",
+            "dimension",
+            "count",
+            "metric",
+            "model",
+            "index_state",
+        ],
+    },
+    ProcedureSpec {
         name: "ontology_audit",
         aliases: &[],
         description: "Scorecard: one row per declared node/edge ontology check, identified by entity_kind plus rule (violations, exempted, total, pct, declared severity). `exempted` counts rows an `exempt` declaration excuses; violations + exempted = everything flagged. {by: 'domain_class'} PARTITIONS each rule into one row per violating domain-side class (they sum back to the rule's violations). {by: 'property'} is a CENSUS of the required_properties/property_types rules: one row per declared property, including those nothing fails, and an entity missing several counts under each — so these rows sum to at least the aggregate, never back to it. One axis at a time; the unasked-for column is Null, as both are without the parameter",
@@ -495,6 +535,10 @@ pub(super) const MUTATING_PROCEDURES: &[&str] = &[
     "db.cdc.disable",
     "table.upsert",
     "table.delete",
+    "db.edge_embeddings.set",
+    "db.edge_embeddings.embed",
+    "db.edge_embeddings.remove",
+    "db.edge_embeddings.drop",
 ];
 
 /// Whether `name` (canonical spelling or alias, any case) is a mutating
@@ -511,7 +555,7 @@ pub(super) fn is_mutating_procedure(name: &str) -> bool {
 /// Neo4j procedure mode for `SHOW PROCEDURES`. KGLite's mutating procedures
 /// change capture configuration rather than data, which is Neo4j's "SCHEMA".
 pub(super) fn procedure_mode(name: &str) -> &'static str {
-    if name.starts_with("table.") {
+    if name.starts_with("table.") || name.starts_with("db.edge_embeddings.") {
         // The table procedures mutate DATA (rows of a property), not
         // capture configuration — Neo4j's WRITE mode, not SCHEMA.
         "WRITE"
@@ -595,11 +639,12 @@ mod tests {
             // verbs change capture configuration (SCHEMA), the table
             // procedures change data (WRITE). Pinned exactly, so a new
             // mutating procedure must declare which it is.
-            let expected_mode = if name.starts_with("table.") {
-                "WRITE"
-            } else {
-                "SCHEMA"
-            };
+            let expected_mode =
+                if name.starts_with("table.") || name.starts_with("db.edge_embeddings.") {
+                    "WRITE"
+                } else {
+                    "SCHEMA"
+                };
             assert_eq!(procedure_mode(name), expected_mode);
         }
         assert!(!is_mutating_procedure("db.cdc.query"));

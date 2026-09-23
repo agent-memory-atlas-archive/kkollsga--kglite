@@ -73,6 +73,7 @@ use std::sync::Arc;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
 use crate::datatypes::Value;
+use crate::graph::edge_embeddings::EdgeEmbeddingStore;
 use crate::graph::features::timeseries::NodeTimeseries;
 use crate::graph::schema::{
     CompositeIndexKey, CompositeValue, EdgeData, IndexKey, InternedKey, NodeData, RemovedEmbedding,
@@ -249,6 +250,13 @@ pub enum UndoEntry {
         store_key: (String, String),
         edge: EdgeIndex,
         prior: Box<RemovedEmbedding>,
+    },
+    /// A whole relationship embedding store was installed, replaced, or
+    /// dropped by one atomic query operation. `None` means the store did not
+    /// exist before the operation.
+    EdgeEmbeddingStoreReplaced {
+        store_key: (String, String),
+        prior: Option<Box<EdgeEmbeddingStore>>,
     },
     /// A node's BM25 document was pruned from `DirGraph::text_indexes` with the
     /// node. Undo marks the slot for re-reading.
@@ -689,6 +697,17 @@ impl UndoJournal {
             store_key,
             edge,
             prior: Box::new(prior),
+        });
+    }
+
+    pub(crate) fn note_edge_embedding_store_replaced(
+        &mut self,
+        store_key: (String, String),
+        prior: Option<EdgeEmbeddingStore>,
+    ) {
+        self.entries.push(UndoEntry::EdgeEmbeddingStoreReplaced {
+            store_key,
+            prior: prior.map(Box::new),
         });
     }
 

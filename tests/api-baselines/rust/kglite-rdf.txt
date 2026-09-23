@@ -918,6 +918,7 @@ impl core::fmt::Debug for kglite::api::cypher::CypherResult
 pub fn kglite::api::cypher::CypherResult::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::cypher::EdgeBinding
 pub kglite::api::cypher::EdgeBinding::edge_index: petgraph::graph_impl::EdgeIndex
+pub kglite::api::cypher::EdgeBinding::incarnation: core::option::Option<crate::datatypes::values::RelationshipIncarnation>
 pub kglite::api::cypher::EdgeBinding::source: petgraph::graph_impl::NodeIndex
 pub kglite::api::cypher::EdgeBinding::target: petgraph::graph_impl::NodeIndex
 impl core::clone::Clone for kglite::api::cypher::EdgeBinding
@@ -1031,6 +1032,7 @@ pub fn kglite::api::cypher::mark_lazy_eligibility(query: &mut kglite::api::cyphe
 pub fn kglite::api::cypher::materialise_lazy(descriptor: &kglite::api::cypher::LazyResultDescriptor, graph: &kglite::api::DirGraph) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<kglite::datatypes::values::Value>>, kglite::error::KgError>
 pub fn kglite::api::cypher::materialise_lazy_range(descriptor: &kglite::api::cypher::LazyResultDescriptor, graph: &kglite::api::DirGraph, range: core::ops::range::Range<usize>) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<kglite::datatypes::values::Value>>, kglite::error::KgError>
 pub fn kglite::api::cypher::materialise_lazy_row(descriptor: &kglite::api::cypher::LazyResultDescriptor, graph: &kglite::api::DirGraph, index: usize) -> core::result::Result<alloc::vec::Vec<kglite::datatypes::values::Value>, kglite::error::KgError>
+pub fn kglite::api::cypher::may_invoke_embedder(query: &kglite::api::cypher::CypherQuery) -> bool
 pub fn kglite::api::cypher::optimize(query: &mut kglite::api::cypher::CypherQuery, graph: &kglite::api::DirGraph, params: &std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>)
 pub fn kglite::api::cypher::parameter_names(query: &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_cypher(query: &str) -> core::result::Result<kglite::api::cypher::CypherQuery, kglite::error::KgError>
@@ -4146,6 +4148,8 @@ pub kglite::api::RelValue::id: u32
 pub kglite::api::RelValue::properties: kglite::datatypes::prop_map::PropMap
 pub kglite::api::RelValue::rel_type: alloc::string::String
 pub kglite::api::RelValue::start_id: u32
+impl kglite::datatypes::values::RelValue
+pub fn kglite::datatypes::values::RelValue::new(id: u32, start_id: u32, end_id: u32, rel_type: alloc::string::String, properties: kglite::datatypes::prop_map::PropMap) -> Self
 impl core::clone::Clone for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::clone(&self) -> kglite::datatypes::values::RelValue
 impl core::cmp::Eq for kglite::datatypes::values::RelValue
@@ -4912,6 +4916,8 @@ pub kglite::datatypes::values::RelValue::id: u32
 pub kglite::datatypes::values::RelValue::properties: kglite::datatypes::prop_map::PropMap
 pub kglite::datatypes::values::RelValue::rel_type: alloc::string::String
 pub kglite::datatypes::values::RelValue::start_id: u32
+impl kglite::datatypes::values::RelValue
+pub fn kglite::datatypes::values::RelValue::new(id: u32, start_id: u32, end_id: u32, rel_type: alloc::string::String, properties: kglite::datatypes::prop_map::PropMap) -> Self
 impl core::clone::Clone for kglite::datatypes::values::RelValue
 pub fn kglite::datatypes::values::RelValue::clone(&self) -> kglite::datatypes::values::RelValue
 impl core::cmp::Eq for kglite::datatypes::values::RelValue

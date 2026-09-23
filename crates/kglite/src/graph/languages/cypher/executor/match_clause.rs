@@ -485,6 +485,7 @@ impl<'a> CypherExecutor<'a> {
                     row.edge_bindings.insert(
                         var,
                         EdgeBinding {
+                            incarnation: self.relationship_incarnation(edge_index),
                             source,
                             target,
                             edge_index,
@@ -635,6 +636,7 @@ impl<'a> CypherExecutor<'a> {
                     row.edge_bindings.insert(
                         var.clone(),
                         EdgeBinding {
+                            incarnation: self.relationship_incarnation(*edge_index),
                             source: *source,
                             target: *target,
                             edge_index: *edge_index,

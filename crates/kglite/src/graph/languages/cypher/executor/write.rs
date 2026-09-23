@@ -98,79 +98,6 @@ pub(crate) fn clause_is_mutation(clause: &Clause) -> bool {
     }
 }
 
-/// Run a mutating table or CDC procedure on the write engine, once per input
-/// row, and inner-join each yielded row back onto its input.
-///
-/// Split out of the clause pipeline, which is at its complexity ceiling.
-fn execute_mutating_call(
-    graph: &mut DirGraph,
-    call: &crate::graph::languages::cypher::ast::CallClause,
-    existing: ResultSet,
-    params: &HashMap<String, Value>,
-    interrupt: &Interrupt,
-    budget: &super::budget::ExecutionBudget,
-) -> Result<ResultSet, String> {
-    let proc_name = call.procedure_name.to_lowercase();
-    // The registry answers "what does this yield?" for both engines, so a bare
-    // CALL expands and an unknown column is refused exactly as on the read path.
-    let yield_items = super::call_clause::resolve_yield_items(
-        &proc_name,
-        &call.procedure_name,
-        &call.yield_items,
-    )?;
-    let resolved_call = crate::graph::languages::cypher::ast::CallClause {
-        procedure_name: call.procedure_name.clone(),
-        parameters: call.parameters.clone(),
-        yield_items,
-    };
-    super::call_clause::reject_call_yield_collisions(&existing, &resolved_call)?;
-
-    let mut columns = existing.columns;
-    super::call_clause::append_call_yield_columns(&mut columns, &resolved_call);
-    let mut joined_rows = Vec::new();
-    for outer_row in existing.rows {
-        super::check_interrupt(interrupt)?;
-        let params_map = {
-            // Expression evaluation is shared with the read executor, but it
-            // must borrow the graph immutably only until this row's arguments
-            // are ready; the procedure invocation below mutates it.
-            let executor = CypherExecutor::with_params(graph, params, interrupt.deadline)
-                .with_cancel(interrupt.cancel)
-                .with_budget(budget.clone());
-            executor.extract_call_params(&resolved_call.parameters, &outer_row)?
-        };
-        let rows = if proc_name.starts_with("table.") {
-            super::table_procedures::execute_table_procedure(
-                graph,
-                &proc_name,
-                &params_map,
-                &resolved_call.yield_items,
-            )?
-        } else {
-            super::cdc_procedures::execute_mutating_procedure(
-                graph,
-                &proc_name,
-                &params_map,
-                &resolved_call.yield_items,
-            )?
-        };
-        budget.check_work(rows.len(), &format!("CALL {proc_name}"))?;
-        budget.reserve_rows(
-            joined_rows.len(),
-            rows.len(),
-            &format!("CALL {proc_name} row join"),
-        )?;
-        for row in rows {
-            joined_rows.push(super::call_clause::join_call_row(&outer_row, row));
-        }
-    }
-    Ok(ResultSet {
-        columns,
-        rows: joined_rows,
-        lazy_return_items: None,
-    })
-}
-
 /// Execute a mutation query — the write-path counterpart of
 /// `CypherExecutor::execute()`.
 pub fn execute_mutable(
@@ -206,6 +133,11 @@ pub(super) struct MutationCtx<'a> {
     pub budget: &'a super::budget::ExecutionBudget,
     pub profiling: bool,
     pub csv_import: &'a super::load_csv::CsvImportPolicy,
+    pub relationship_identities: &'a std::sync::Arc<
+        std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
+    >,
+    pub embedding_service:
+        Option<&'a crate::graph::edge_embedding_generation::EmbeddingExecutionService<'a>>,
     /// Clauses that precede the pipeline being run — non-empty only for the
     /// `LOAD CSV` suffix, where the stripped `LOAD CSV … AS row` still
     /// declares `row` for correlated-subquery import validation.
@@ -288,6 +220,7 @@ pub(crate) fn execute_mutable_bounded(
             row_limit: None,
         },
         &super::load_csv::CsvImportPolicy::Denied,
+        None,
     )
 }
 
@@ -302,6 +235,9 @@ pub(crate) fn execute_mutable_with_csv(
     interrupt: Interrupt,
     limits: MutationLimits,
     csv_import: &super::load_csv::CsvImportPolicy,
+    embedding_service: Option<
+        &crate::graph::edge_embedding_generation::EmbeddingExecutionService<'_>,
+    >,
 ) -> Result<CypherResult, String> {
     // Arena guard for the whole mutation: holds the query count so every
     // materializing read (`get_node` → `node_weight`) inside a mutation clause
@@ -311,6 +247,9 @@ pub(crate) fn execute_mutable_with_csv(
     let budget = super::budget::ExecutionBudget::new(limits.max_work_units);
 
     let diagnostics = std::sync::Mutex::new(QueryDiagnostics::default());
+    let relationship_identities = std::sync::Arc::new(std::sync::Mutex::new(
+        super::relationship_identity::StatementRelationshipIdentities::new(),
+    ));
     let mut stats = MutationStats::default();
     let profiling = query.profile;
     let mut profile_stats: Vec<ClauseStats> = Vec::new();
@@ -327,6 +266,8 @@ pub(crate) fn execute_mutable_with_csv(
             budget: &budget,
             profiling,
             csv_import,
+            relationship_identities: &relationship_identities,
+            embedding_service,
             leading: &query.clauses[..1],
         };
         let source = {
@@ -358,6 +299,8 @@ pub(crate) fn execute_mutable_with_csv(
             budget: &budget,
             profiling,
             csv_import,
+            relationship_identities: &relationship_identities,
+            embedding_service,
             leading: &[],
         };
         run_clause_pipeline(
@@ -493,7 +436,14 @@ fn run_clause_pipeline(
                 GraphWrite::flush_pending_writes(&mut graph.graph);
             }
             Clause::Delete(del) => {
-                execute_delete(graph, del, &result_set, stats, interrupt)?;
+                execute_delete(
+                    graph,
+                    del,
+                    &result_set,
+                    stats,
+                    interrupt,
+                    &mut ctx.relationship_identities.lock().expect("identity lock"),
+                )?;
             }
             Clause::Remove(rem) => {
                 execute_remove(graph, rem, &result_set, stats, interrupt)?;
@@ -520,6 +470,7 @@ fn run_clause_pipeline(
                     stats,
                     interrupt,
                     budget,
+                    ctx.relationship_identities,
                 )?;
                 GraphWrite::flush_pending_writes(&mut graph.graph);
             }
@@ -530,7 +481,8 @@ fn run_clause_pipeline(
                 let executor = CypherExecutor::with_params(graph, params, interrupt.deadline)
                     .with_cancel(interrupt.cancel)
                     .with_budget(budget.clone())
-                    .with_csv_import(ctx.csv_import.clone());
+                    .with_csv_import(ctx.csv_import.clone())
+                    .with_relationship_identities(Some(ctx.relationship_identities.clone()));
                 let declared = ctx.declared_before(clauses, i);
                 result_set = executor.execute_call_subquery(import, body, result_set, &declared)?;
                 ctx.absorb_runtime(&executor);
@@ -543,8 +495,18 @@ fn run_clause_pipeline(
                     &call.procedure_name.to_lowercase(),
                 ) =>
             {
-                result_set =
-                    execute_mutating_call(graph, call, result_set, params, interrupt, budget)?;
+                result_set = super::mutating_call::execute(
+                    graph,
+                    call,
+                    result_set,
+                    super::mutating_call::MutatingCallCtx {
+                        params,
+                        interrupt,
+                        budget,
+                        identities: ctx.relationship_identities,
+                        service: ctx.embedding_service,
+                    },
+                )?;
             }
             // Schema DDL runs here, not on the read engine (see
             // `clause_is_mutation`); the `SHOW` forms classify as reads and
@@ -556,7 +518,8 @@ fn run_clause_pipeline(
                 let executor = CypherExecutor::with_params(graph, params, interrupt.deadline)
                     .with_cancel(interrupt.cancel)
                     .with_budget(budget.clone())
-                    .with_csv_import(ctx.csv_import.clone());
+                    .with_csv_import(ctx.csv_import.clone())
+                    .with_relationship_identities(Some(ctx.relationship_identities.clone()));
                 result_set = if let Clause::Return(r) = clause {
                     // Same ORDER BY scope carry as the read loop: the write
                     // engine dispatches read clauses one at a time and would
@@ -571,15 +534,7 @@ fn run_clause_pipeline(
         }
 
         budget.check_rows(result_set.rows.len(), &clause_display_name(clause))?;
-        let mutation_units = stats
-            .nodes_created
-            .checked_add(stats.relationships_created)
-            .and_then(|n| n.checked_add(stats.properties_set))
-            .and_then(|n| n.checked_add(stats.nodes_deleted))
-            .and_then(|n| n.checked_add(stats.relationships_deleted))
-            .and_then(|n| n.checked_add(stats.properties_removed))
-            .ok_or_else(|| "Mutation work counter overflow".to_string())?;
-        budget.check_work(mutation_units, "mutation clauses")?;
+        super::mutation_support::check_budget(budget, stats)?;
 
         if let Some(s) = start {
             profile_stats.push(ClauseStats {
@@ -591,6 +546,8 @@ fn run_clause_pipeline(
         }
 
         // From here on, `rows.is_empty()` means "zero rows", never "not started".
+        super::mutation_support::stamp_relationships(&mut result_set, ctx.relationship_identities);
+
         stream_established = true;
     }
 
@@ -658,6 +615,9 @@ fn finalize_mutation(
             .with_cancel(interrupt.cancel)
             .with_budget(budget);
         let mut result = executor.finalize_result(result_set)?;
+        crate::graph::languages::cypher::result::clear_published_relationship_incarnations(
+            &mut result,
+        );
         super::stamp_row_limit(&mut result, capped);
         result.stats = Some(stats);
         result.profile = profile;
@@ -693,7 +653,16 @@ fn execute_foreach(
     stats: &mut MutationStats,
     interrupt: &Interrupt,
     budget: &super::budget::ExecutionBudget,
+    relationship_identities: &std::sync::Arc<
+        std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
+    >,
 ) -> Result<(), String> {
+    let body_ctx = ForeachBodyCtx {
+        params,
+        interrupt,
+        budget,
+        relationship_identities,
+    };
     for (row_idx, row) in outer.rows.iter().enumerate() {
         check_interrupt_periodic(interrupt, row_idx)?;
         // Evaluate the list in this row's context (read-only borrow of the
@@ -724,13 +693,20 @@ fn execute_foreach(
                 lazy_return_items: None,
             };
             for bclause in body {
-                elem_set = apply_foreach_body_clause(
-                    graph, bclause, elem_set, params, stats, interrupt, budget,
-                )?;
+                elem_set = apply_foreach_body_clause(graph, bclause, elem_set, stats, &body_ctx)?;
             }
         }
     }
     Ok(())
+}
+
+struct ForeachBodyCtx<'a> {
+    params: &'a HashMap<String, Value>,
+    interrupt: &'a Interrupt,
+    budget: &'a super::budget::ExecutionBudget,
+    relationship_identities: &'a std::sync::Arc<
+        std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
+    >,
 }
 
 /// Apply one clause inside a FOREACH body. Only update clauses and nested
@@ -741,11 +717,13 @@ fn apply_foreach_body_clause(
     graph: &mut DirGraph,
     clause: &Clause,
     result_set: ResultSet,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
-    budget: &super::budget::ExecutionBudget,
+    ctx: &ForeachBodyCtx<'_>,
 ) -> Result<ResultSet, String> {
+    let params = ctx.params;
+    let interrupt = ctx.interrupt;
+    let budget = ctx.budget;
+    let relationship_identities = ctx.relationship_identities;
     // The flush is per element, not per clause: on disk a property read in the
     // same or a later iteration (e.g. `coalesce(n.hits, 0)`) reads the type's
     // column store, which only reflects a staged write once
@@ -762,7 +740,14 @@ fn apply_foreach_body_clause(
             Ok(result_set)
         }
         Clause::Delete(del) => {
-            execute_delete(graph, del, &result_set, stats, interrupt)?;
+            execute_delete(
+                graph,
+                del,
+                &result_set,
+                stats,
+                interrupt,
+                &mut relationship_identities.lock().expect("identity lock"),
+            )?;
             GraphWrite::flush_pending_writes(&mut graph.graph);
             Ok(result_set)
         }
@@ -791,6 +776,7 @@ fn apply_foreach_body_clause(
                 stats,
                 interrupt,
                 budget,
+                relationship_identities,
             )?;
             Ok(result_set)
         }
@@ -1025,6 +1011,7 @@ fn create_pattern_edges(
                 new_row.edge_bindings.insert(
                     var.clone(),
                     EdgeBinding {
+                        incarnation: None,
                         source: actual_source,
                         target: actual_target,
                         edge_index,
@@ -1804,6 +1791,7 @@ fn execute_delete(
     result_set: &ResultSet,
     stats: &mut MutationStats,
     interrupt: &Interrupt,
+    relationship_identities: &mut super::relationship_identity::StatementRelationshipIdentities,
 ) -> Result<(), String> {
     use std::collections::HashSet;
 
@@ -1836,6 +1824,14 @@ fn execute_delete(
                 }
             } else if let Some(edge_binding) = row.edge_bindings.get(var_name) {
                 if deleted_edges.insert(edge_binding.edge_index) {
+                    let token = edge_binding.incarnation.ok_or_else(|| {
+                        format!("Relationship '{var_name}' has no statement-local identity")
+                    })?;
+                    if !relationship_identities.accepts(edge_binding.edge_index, token) {
+                        return Err(format!(
+                            "Relationship '{var_name}' is stale after its storage slot was reused"
+                        ));
+                    }
                     enforce_bound_edge_write_scope(graph, edge_binding)?;
                 }
             } else {
@@ -1917,6 +1913,19 @@ fn execute_delete(
         }
     }
 
+    // Retire every relationship slot that this DELETE is about to remove.
+    // DETACH DELETE owns incident edges that do not appear as named bindings,
+    // so collect them while the nodes and their adjacency are still live.
+    // The sparse statement-local generations then distinguish a later CREATE
+    // that reuses one of these physical slots from a retained stale binding.
+    invalidate_deleted_relationships(
+        graph,
+        &nodes_to_delete,
+        &deleted_edges,
+        delete.detach,
+        relationship_identities,
+    )?;
+
     // Phase 3: infallible commit of the preflighted edge set. Deliberately
     // non-interruptible: once deletion begins, completing it preserves atomic
     // statement semantics without an O(graph) rollback checkpoint.
@@ -1950,6 +1959,37 @@ fn execute_delete(
     stats.nodes_deleted += nodes_deleted;
     stats.relationships_deleted += edges_removed;
 
+    Ok(())
+}
+
+pub(super) fn invalidate_deleted_relationships(
+    graph: &DirGraph,
+    nodes: &std::collections::HashSet<petgraph::graph::NodeIndex>,
+    explicitly_deleted: &std::collections::HashSet<petgraph::graph::EdgeIndex>,
+    detach: bool,
+    identities: &mut super::relationship_identity::StatementRelationshipIdentities,
+) -> Result<(), String> {
+    let mut edges = explicitly_deleted.clone();
+    if detach {
+        let _arena_guard = graph.graph.begin_query();
+        for &node in nodes {
+            edges.extend(
+                graph
+                    .graph
+                    .edges_directed(node, petgraph::Direction::Outgoing)
+                    .map(|edge| edge.id()),
+            );
+            edges.extend(
+                graph
+                    .graph
+                    .edges_directed(node, petgraph::Direction::Incoming)
+                    .map(|edge| edge.id()),
+            );
+        }
+    }
+    for edge in edges {
+        identities.invalidate(edge)?;
+    }
     Ok(())
 }
 
@@ -2425,6 +2465,7 @@ fn try_match_merge_pattern(
                         result_row.edge_bindings.insert(
                             var.clone(),
                             EdgeBinding {
+                                incarnation: None,
                                 source: actual_src,
                                 target: actual_tgt,
                                 edge_index: edge_ref.id(),

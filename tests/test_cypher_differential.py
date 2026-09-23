@@ -132,7 +132,64 @@ def label_mixed_parent_graph():
     return graph
 
 
+@pytest.fixture
+def edge_vector_differential_graph():
+    """Nonempty relationship-vector stores for optimizer equivalence checks."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (a:N{id:1}),(b:N{id:2}),(c:N{id:3}),(x:N{id:4}),(y:N{id:5}),"
+        "(a)-[:R{k:0}]->(b),(a)-[:R{k:1}]->(b),(a)-[:R{k:2}]->(c),"
+        "(b)-[:R{k:3}]->(c),(a)-[:TAG]->(x),(a)-[:TAG]->(y)"
+    )
+    vectors = ([1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [-1.0, 0.0])
+    for key, vector in enumerate(vectors):
+        graph.cypher(
+            "MATCH ()-[r:R]->() WHERE r.k=$key "
+            "CALL db.edge_embeddings.set({type:'R',text_property:'text',"
+            "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
+            params={"key": key, "vector": vector},
+        )
+    metadata = graph.cypher(
+        "CALL db.edge_embeddings.list({type:'R',text_property:'text'}) YIELD count RETURN count"
+    ).to_list()
+    assert metadata == [{"count": 4}], "fixture must install all four relationship vectors"
+    scored = graph.cypher(
+        "MATCH ()-[r:R]->() WHERE r.k=0 RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score"
+    ).to_list()
+    assert scored == [{"score": 1.0}], "fixture must expose a non-null exact score"
+    return graph
+
+
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    (
+        "edge_vector_endpoint_parallel_multiplicity",
+        "edge_vector_differential_graph",
+        "MATCH (a:N)-[r:R]->(b:N) WHERE a.id=1 AND b.id=2 "
+        "RETURN id(r) AS edge,vector_score(r,'text_emb',[1.0,0.0]) AS score ORDER BY edge",
+        None,
+    ),
+    (
+        "edge_vector_join_multiplicity",
+        "edge_vector_differential_graph",
+        "MATCH (a:N)-[r:R]->(b:N) MATCH (a)-[:TAG]->(t) "
+        "RETURN id(r) AS edge,b.id AS target,id(t) AS tag,"
+        "vector_score(r,'text_emb',[1.0,0.0]) AS score ORDER BY edge,tag",
+        None,
+    ),
+    (
+        "edge_vector_desc_limit_exact",
+        "edge_vector_differential_graph",
+        "MATCH ()-[r:R]->() RETURN id(r) AS edge,vector_score(r,'text_emb',[1.0,0.0]) AS score "
+        "ORDER BY score DESC,edge ASC LIMIT 3",
+        None,
+    ),
+    (
+        "edge_vector_asc_limit_exact",
+        "edge_vector_differential_graph",
+        "MATCH ()-[r:R]->() RETURN id(r) AS edge,vector_score(r,'text_emb',[1.0,0.0]) AS score "
+        "ORDER BY score ASC,edge ASC LIMIT 3",
+        None,
+    ),
     # ── fused MATCH … WITH count(): the pattern's own node labels ──
     # `fuse_match_with_aggregate` hands the group node to a peer-count
     # histogram that counts every peer of the edge type. Nothing applied the
@@ -5969,6 +6026,10 @@ ORDERED_CASES = frozenset(
         "text_bm25_top_k",
         "text_bm25_complete_top_k",
         "text_bm25_top_k_stale_over_limit",
+        "edge_vector_endpoint_parallel_multiplicity",
+        "edge_vector_join_multiplicity",
+        "edge_vector_desc_limit_exact",
+        "edge_vector_asc_limit_exact",
     }
 )
 

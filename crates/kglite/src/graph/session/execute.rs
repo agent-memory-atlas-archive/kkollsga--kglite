@@ -20,6 +20,7 @@ use crate::datatypes::Value;
 use crate::error::KgError;
 use crate::graph::dir_graph::rollback::StatementCheckpoint;
 use crate::graph::dir_graph::DirGraph;
+use crate::graph::edge_embedding_generation::EmbeddingExecutionService;
 use crate::graph::embedder::Embedder;
 use crate::graph::languages::cypher;
 use crate::graph::languages::cypher::ast::{
@@ -531,6 +532,13 @@ pub fn execute_mut(
             deadline: opts.deadline,
             cancel: opts.cancel,
         };
+        // Foreign model callbacks are available only to mutable CALL
+        // dispatch. The read executor and its parallel paths never receive
+        // this borrowed service.
+        let embedding_service = opts
+            .embedder
+            .as_deref()
+            .map(|model| EmbeddingExecutionService { model, interrupt });
         // Install the execution-scoped write whitelist for the duration of this
         // mutation, then clear it unconditionally (even on error) so it never
         // leaks into a later execution on the same working copy.
@@ -549,6 +557,7 @@ pub fn execute_mut(
                     row_limit: opts.row_limit,
                 },
                 &opts.csv_import,
+                embedding_service.as_ref(),
             )
         });
         graph.active_write_scope = None;

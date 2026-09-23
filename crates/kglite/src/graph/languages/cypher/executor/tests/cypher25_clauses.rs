@@ -103,6 +103,7 @@ fn load_csv_create_finish_streams_across_batch_boundaries() {
             row_limit: None,
         },
         &super::super::load_csv::CsvImportPolicy::LocalFilesystem,
+        None,
     )
     .unwrap();
     assert!(result.rows.is_empty());

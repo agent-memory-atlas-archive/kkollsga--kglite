@@ -914,6 +914,7 @@ mod natural_json_contract_tests {
 
     fn rel() -> RelValue {
         RelValue {
+            incarnation: None,
             id: 0,
             start_id: 1,
             end_id: 2,

@@ -42,6 +42,7 @@ fn node(id: u32, labels: &[&str], props: &[(&str, Value)]) -> NodeValue {
 
 fn rel(id: u32, start_id: u32, end_id: u32, rel_type: &str, props: &[(&str, Value)]) -> RelValue {
     RelValue {
+        incarnation: None,
         id,
         start_id,
         end_id,

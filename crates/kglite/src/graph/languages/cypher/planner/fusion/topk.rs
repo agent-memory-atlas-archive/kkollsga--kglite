@@ -260,6 +260,10 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
             i += 1;
             continue;
         };
+        if score_call_reads_relationship(&shape.score_call, &query.clauses[..i]) {
+            i += 1;
+            continue;
+        }
         // HNSW ranks highest scores only. Other directions/null placement use
         // the generic top-k path, which retains their complete ordering contract.
         if !shape.descending || shape.nulls != NullsPlacement::First {
@@ -279,6 +283,27 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
         );
         i += 1;
     }
+}
+
+fn score_call_reads_relationship(call: &Expression, preceding: &[Clause]) -> bool {
+    use crate::graph::core::pattern_matching::PatternElement;
+    let Expression::FunctionCall { args, .. } = call else {
+        return false;
+    };
+    let Some(Expression::Variable(variable)) = args.first() else {
+        return false;
+    };
+    preceding.iter().any(|clause| {
+        let matched = match clause {
+            Clause::Match(matched) | Clause::OptionalMatch(matched) => matched,
+            _ => return false,
+        };
+        matched.patterns.iter().any(|pattern| {
+            pattern.elements.iter().any(|element| {
+                matches!(element, PatternElement::Edge(edge) if edge.variable.as_ref() == Some(variable))
+            })
+        })
+    })
 }
 
 /// Detect `RETURN ... text_bm25(...) AS s ... ORDER BY s DESC LIMIT k` and

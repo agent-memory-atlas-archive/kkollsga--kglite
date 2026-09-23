@@ -786,6 +786,7 @@ pub mod api {
         pub use crate::graph::languages::cypher::executor::CypherExecutor;
         pub use crate::graph::languages::cypher::generate_explain_result;
         pub use crate::graph::languages::cypher::is_mutation_query;
+        pub use crate::graph::languages::cypher::may_invoke_embedder;
         pub use crate::graph::languages::cypher::parameter_names;
         /// Parse a Cypher statement into a `CypherQuery`.
         ///

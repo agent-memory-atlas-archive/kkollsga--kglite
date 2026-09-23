@@ -574,6 +574,7 @@ mod tests {
             properties: crate::datatypes::PropMap::new(),
         };
         let rel = RelValue {
+            incarnation: None,
             id: 1,
             start_id: 1,
             end_id: 2,

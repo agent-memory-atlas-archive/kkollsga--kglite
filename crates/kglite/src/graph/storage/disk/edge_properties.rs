@@ -729,6 +729,7 @@ mod tests {
 
     fn sample_relationship() -> RelValue {
         RelValue {
+            incarnation: None,
             id: 9,
             start_id: 7,
             end_id: 8,

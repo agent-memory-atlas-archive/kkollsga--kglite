@@ -133,6 +133,28 @@ fn collect_query_features(query: &CypherQuery, features: &mut QueryFeatures) {
     }
 }
 
+/// Whether executing this parsed statement can invoke the registered embedder.
+///
+/// `text_score()` is rewritten separately because its parameter values decide
+/// whether a callback is needed. This classifier covers procedures whose
+/// callback behavior follows directly from the AST, including nested query
+/// forms. Bindings use it to choose callback-safe mutation orchestration.
+pub fn may_invoke_embedder(query: &CypherQuery) -> bool {
+    query.clauses.iter().any(clause_may_invoke_embedder)
+}
+
+fn clause_may_invoke_embedder(clause: &Clause) -> bool {
+    match clause {
+        Clause::Call(call) => call
+            .procedure_name
+            .eq_ignore_ascii_case("db.edge_embeddings.embed"),
+        Clause::CallSubquery { body, .. } => may_invoke_embedder(body),
+        Clause::Union(union) => may_invoke_embedder(&union.query),
+        Clause::Foreach { body, .. } => body.iter().any(clause_may_invoke_embedder),
+        _ => false,
+    }
+}
+
 /// Parse a query and classify whether it mutates the graph. Returns
 /// `(parsed, is_mutation)`. Convenience for the "every binding
 /// pre-parses to check mutation status before applying its
@@ -211,7 +233,7 @@ mod parameter_name_tests {
 
 #[cfg(test)]
 mod query_feature_tests {
-    use crate::api::cypher::query_features;
+    use crate::api::cypher::{may_invoke_embedder, parse_cypher, query_features};
 
     #[test]
     fn reports_top_level_modes_and_mutation() {
@@ -245,5 +267,26 @@ mod query_feature_tests {
 
         let lookalikes = query_features("RETURN 'LIMIT 200' AS text").unwrap();
         assert!(lookalikes.literal_limits.is_empty());
+    }
+
+    #[test]
+    fn classifies_edge_embedding_callbacks_across_union_branches() {
+        let direct = parse_cypher(
+            "CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             YIELD embedded RETURN embedded",
+        )
+        .unwrap();
+        assert!(may_invoke_embedder(&direct));
+
+        let nested = parse_cypher(
+            "RETURN 0 AS embedded UNION ALL \
+             CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             YIELD embedded RETURN embedded",
+        )
+        .unwrap();
+        assert!(may_invoke_embedder(&nested));
+
+        let unrelated = parse_cypher("CALL db.labels() YIELD label RETURN label").unwrap();
+        assert!(!may_invoke_embedder(&unrelated));
     }
 }

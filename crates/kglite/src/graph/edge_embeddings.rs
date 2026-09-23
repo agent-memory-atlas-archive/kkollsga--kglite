@@ -180,6 +180,12 @@ impl EdgeEmbeddingStore {
         self.numeric.get_embedding(edge.index())
     }
 
+    // The exact relationship scorer lands before the indexed whole-store path.
+    #[allow(dead_code)]
+    pub(crate) fn get_with_norm(&self, edge: EdgeIndex) -> Option<(&[f32], f32)> {
+        self.numeric.get_embedding_with_norm(edge.index())
+    }
+
     pub(crate) fn edges(&self) -> impl Iterator<Item = EdgeIndex> + '_ {
         self.numeric
             .slot_to_node
@@ -409,6 +415,15 @@ pub(crate) struct EdgeEmbeddingWriteReport {
     pub(crate) store_created: bool,
 }
 
+pub(crate) struct GeneratedEdgeEmbeddingWrite {
+    pub(crate) dimension: usize,
+    pub(crate) metric: Option<String>,
+    pub(crate) final_model_id: Option<String>,
+    pub(crate) generated: Vec<(EdgeIndex, Vec<f32>, u64)>,
+    pub(crate) remove_selected: Vec<EdgeIndex>,
+    pub(crate) affected: Vec<EdgeIndex>,
+}
+
 // P4 activates metric validation through the private batch primitive.
 #[cfg_attr(not(test), allow(dead_code))]
 fn validate_metric(metric: Option<&str>) -> Result<(), String> {
@@ -445,8 +460,8 @@ fn validate_live_edge_type(
 
 /// Atomically upsert explicitly selected relationships.
 ///
-/// Kept crate-private until P3 supplies the durable grouped WAL record and P4
-/// resolves Cypher `Relationship` values into the typed indices accepted here.
+/// The query layer resolves Cypher `Relationship` values into the typed indices
+/// accepted here; storage revalidates those identities before mutation.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn upsert_edge_embeddings(
     graph: &mut DirGraph,
@@ -703,6 +718,240 @@ pub(crate) fn remove_edge_embeddings(
     Ok(removed)
 }
 
+pub(crate) fn drop_edge_embedding_store(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    text_property: &str,
+) -> Result<bool, String> {
+    let key = edge_store_key(connection_type, text_property);
+    if !graph.edge_embeddings.contains_key(&key) {
+        return Ok(false);
+    }
+    let affected = live_edges_of_type(graph, connection_type)?;
+    capture_wal_edge_embedding_bases(
+        graph,
+        connection_type,
+        text_property,
+        affected.iter().copied(),
+    )?;
+    let prior = graph.edge_embeddings.remove(&key);
+    if let Some(journal) = graph.graph.undo_journal_mut() {
+        journal.note_edge_embedding_store_replaced(key.clone(), prior);
+    }
+    note_wal_edge_embedding_changes(
+        graph,
+        connection_type,
+        text_property,
+        true,
+        affected.iter().copied(),
+    );
+    if let Some(recording) = graph.graph.recording_mut() {
+        recording.set_edge_embedding_base_capture(!graph.edge_embeddings.is_empty());
+    }
+    graph.bump_version();
+    Ok(true)
+}
+
+pub(crate) fn install_generated_edge_embeddings(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    text_property: &str,
+    write: GeneratedEdgeEmbeddingWrite,
+) -> Result<EdgeEmbeddingWriteReport, String> {
+    validate_generated_write(graph, connection_type, &write)?;
+    let key = edge_store_key(connection_type, text_property);
+    let existing = graph.edge_embeddings.get(&key);
+    let store_created = existing.is_none();
+    let dimension_changed = existing.is_some_and(|store| store.dimension() != write.dimension);
+    if dimension_changed {
+        let affected: HashSet<_> = write.affected.iter().map(|edge| edge.index()).collect();
+        if existing
+            .expect("dimension change requires an existing store")
+            .edges()
+            .any(|edge| !affected.contains(&edge.index()))
+        {
+            return Err("Changing relationship embedding dimension requires coverage of every stored relationship vector".into());
+        }
+    }
+
+    let mut successor = match existing {
+        Some(store) if !dimension_changed => store.clone(),
+        _ => EdgeEmbeddingStore::new(write.dimension, write.metric.as_deref()),
+    };
+    successor.set_wal_metadata(
+        write.dimension,
+        write.metric.clone(),
+        write.final_model_id.clone(),
+    )?;
+    for edge in &write.remove_selected {
+        successor.remove(*edge);
+    }
+    for (edge, vector, hash) in &write.generated {
+        successor.install_wal_vector(*edge, vector, Some(*hash));
+    }
+    let changed = generated_change_count(existing, &write);
+    let metadata_changed = existing.is_none_or(|store| {
+        store.dimension() != write.dimension
+            || store.metric() != write.metric.as_deref()
+            || store.model_id() != write.final_model_id.as_deref()
+    });
+    if changed == 0 && !metadata_changed {
+        return Ok(EdgeEmbeddingWriteReport {
+            stored: existing.map_or(0, EdgeEmbeddingStore::len),
+            dimension: write.dimension,
+            changed: 0,
+            store_created: false,
+        });
+    }
+    if dimension_changed {
+        let actions: HashSet<_> = write
+            .generated
+            .iter()
+            .map(|(edge, _, _)| edge.index())
+            .chain(write.remove_selected.iter().map(|edge| edge.index()))
+            .collect();
+        if actions.len() != write.affected.len() {
+            return Err("Changing relationship embedding dimension requires an action for every affected relationship".into());
+        }
+    }
+    capture_wal_edge_embedding_bases(
+        graph,
+        connection_type,
+        text_property,
+        write.affected.iter().copied(),
+    )?;
+    let stored = successor.len();
+    let prior = graph.edge_embeddings.insert(key.clone(), successor);
+    if let Some(journal) = graph.graph.undo_journal_mut() {
+        journal.note_edge_embedding_store_replaced(key, prior);
+    }
+    note_wal_edge_embedding_changes(
+        graph,
+        connection_type,
+        text_property,
+        true,
+        write.affected.iter().copied(),
+    );
+    graph.bump_version();
+    Ok(EdgeEmbeddingWriteReport {
+        stored,
+        dimension: write.dimension,
+        changed,
+        store_created,
+    })
+}
+
+fn validate_generated_write(
+    graph: &DirGraph,
+    connection_type: &str,
+    write: &GeneratedEdgeEmbeddingWrite,
+) -> Result<(), String> {
+    if write.dimension == 0 {
+        return Err("Embedding vectors must not be empty".into());
+    }
+    validate_metric(write.metric.as_deref())?;
+    let mut affected = HashSet::with_capacity(write.affected.len());
+    let guard = graph.graph.begin_query();
+    for &edge in &write.affected {
+        if !affected.insert(edge.index()) {
+            return Err(format!(
+                "Relationship slot {} appears more than once in the affected batch",
+                edge.index()
+            ));
+        }
+        validate_live_edge_type(graph, edge, connection_type)?;
+    }
+    let mut mutations = HashSet::new();
+    for &(edge, ref vector, _) in &write.generated {
+        validate_generated_member(edge, vector, write.dimension, &affected, &mut mutations)?;
+    }
+    for &edge in &write.remove_selected {
+        if !affected.contains(&edge.index()) {
+            return Err(format!(
+                "Relationship slot {} is not in the affected batch",
+                edge.index()
+            ));
+        }
+        if !mutations.insert(edge.index()) {
+            return Err(format!(
+                "Relationship slot {} appears in more than one generated action",
+                edge.index()
+            ));
+        }
+    }
+    drop(guard);
+    Ok(())
+}
+
+fn validate_generated_member(
+    edge: EdgeIndex,
+    vector: &[f32],
+    dimension: usize,
+    affected: &HashSet<usize>,
+    mutations: &mut HashSet<usize>,
+) -> Result<(), String> {
+    if !affected.contains(&edge.index()) {
+        return Err(format!(
+            "Relationship slot {} is not in the affected batch",
+            edge.index()
+        ));
+    }
+    if !mutations.insert(edge.index()) {
+        return Err(format!(
+            "Relationship slot {} appears more than once in generated output",
+            edge.index()
+        ));
+    }
+    if vector.len() != dimension {
+        return Err(format!(
+            "Embedding for relationship slot {} has dimension {}, expected {dimension}",
+            edge.index(),
+            vector.len()
+        ));
+    }
+    validate_finite_vector(vector).map_err(|error| {
+        format!(
+            "Invalid embedding for relationship slot {}: {error}",
+            edge.index()
+        )
+    })
+}
+
+fn generated_change_count(
+    existing: Option<&EdgeEmbeddingStore>,
+    write: &GeneratedEdgeEmbeddingWrite,
+) -> usize {
+    let generated = write
+        .generated
+        .iter()
+        .filter(|(edge, vector, hash)| {
+            existing.and_then(|store| store.get(*edge)) != Some(vector.as_slice())
+                || existing.and_then(|store| store.text_hash(*edge)) != Some(*hash)
+        })
+        .count();
+    generated
+        + write
+            .remove_selected
+            .iter()
+            .filter(|edge| existing.is_some_and(|store| store.get(**edge).is_some()))
+            .count()
+}
+
+fn live_edges_of_type(graph: &DirGraph, connection_type: &str) -> Result<Vec<EdgeIndex>, String> {
+    let guard = graph.graph.begin_query();
+    let edges = graph
+        .graph
+        .edge_indices()
+        .filter(|edge| {
+            graph.graph.edge_weight(*edge).is_some_and(|weight| {
+                weight.connection_type_str(&graph.interner) == connection_type
+            })
+        })
+        .collect();
+    drop(guard);
+    Ok(edges)
+}
+
 fn note_wal_edge_embedding_changes(
     graph: &mut DirGraph,
     connection_type: &str,
@@ -741,3 +990,7 @@ mod wal_perf_tests;
 #[cfg(test)]
 #[path = "edge_embedding_wal_capture_perf_tests.rs"]
 mod wal_capture_perf_tests;
+
+#[cfg(test)]
+#[path = "edge_embedding_write_tests.rs"]
+mod write_tests;

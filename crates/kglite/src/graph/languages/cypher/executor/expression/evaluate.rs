@@ -110,17 +110,13 @@ impl<'a> CypherExecutor<'a> {
                 list_expr,
                 filter,
                 map_expr,
-            } => self.evaluate_list_comprehension(
-                variable, list_expr, filter, map_expr, row,
-            ),
+            } => self.evaluate_list_comprehension(variable, list_expr, filter, map_expr, row),
 
             Expression::MapProjection { variable, items } => {
                 self.evaluate_map_projection(variable, items, row)
             }
             Expression::MapLiteral(entries) => self.evaluate_map_literal(entries, row),
-            Expression::IndexAccess { expr, index } => {
-                self.evaluate_index_access(expr, index, row)
-            }
+            Expression::IndexAccess { expr, index } => self.evaluate_index_access(expr, index, row),
             Expression::ListSlice { expr, start, end } => {
                 self.evaluate_list_slice(expr, start.as_deref(), end.as_deref(), row)
             }
@@ -164,12 +160,9 @@ impl<'a> CypherExecutor<'a> {
                 patterns,
                 pattern_groups,
                 where_clause,
-            } => self.evaluate_count_subquery(
-                patterns,
-                pattern_groups,
-                where_clause.as_deref(),
-                row,
-            ),
+            } => {
+                self.evaluate_count_subquery(patterns, pattern_groups, where_clause.as_deref(), row)
+            }
         }
     }
 
@@ -322,8 +315,7 @@ impl<'a> CypherExecutor<'a> {
         let mut count = 0usize;
         for row in rows {
             if self.evaluate_predicate_tristate(predicate, row)? == Some(true) {
-                self.budget
-                    .reserve_rows(count, 1, "COUNT subquery WHERE")?;
+                self.budget.reserve_rows(count, 1, "COUNT subquery WHERE")?;
                 count += 1;
             }
         }
@@ -346,9 +338,7 @@ impl<'a> CypherExecutor<'a> {
                     "month" => Value::Int64(date.month() as i64),
                     "day" => Value::Int64(date.day() as i64),
                     "hour" | "minute" | "second" => Value::Int64(0),
-                    "dayOfWeek" => {
-                        Value::Int64(date.weekday().num_days_from_monday() as i64 + 1)
-                    }
+                    "dayOfWeek" => Value::Int64(date.weekday().num_days_from_monday() as i64 + 1),
                     "dayOfYear" => Value::Int64(date.ordinal() as i64),
                     "epochSeconds" => Value::Int64(
                         date.and_hms_opt(0, 0, 0)
@@ -420,9 +410,7 @@ impl<'a> CypherExecutor<'a> {
                 _ => {}
             }
         }
-        if let Ok(datetime) =
-            chrono::NaiveDateTime::parse_from_str(string, "%Y-%m-%dT%H:%M:%S")
-        {
+        if let Ok(datetime) = chrono::NaiveDateTime::parse_from_str(string, "%Y-%m-%dT%H:%M:%S") {
             match property {
                 "year" => return Value::Int64(datetime.year() as i64),
                 "month" => return Value::Int64(datetime.month() as i64),
@@ -566,12 +554,8 @@ impl<'a> CypherExecutor<'a> {
         row: &'r ResultRow,
     ) -> Option<std::borrow::Cow<'r, Value>> {
         match expression {
-            Expression::Variable(name) => {
-                row.projected.get(name).map(std::borrow::Cow::Borrowed)
-            }
-            Expression::Parameter(name) => {
-                self.params.get(name).map(std::borrow::Cow::Borrowed)
-            }
+            Expression::Variable(name) => row.projected.get(name).map(std::borrow::Cow::Borrowed),
+            Expression::Parameter(name) => self.params.get(name).map(std::borrow::Cow::Borrowed),
             Expression::PropertyAccess { variable, property } => {
                 let &idx = row.node_bindings.get(variable)?;
                 let node = self.graph.graph.node_view(idx)?;
@@ -613,9 +597,7 @@ impl<'a> CypherExecutor<'a> {
             row.node_bindings
                 .get(variable)
                 .and_then(|node_index| self.graph.graph.node_view(*node_index))
-                .map(|node| {
-                    Value::String(node.get_node_type_ref(&self.graph.interner).to_string())
-                })
+                .map(|node| Value::String(node.get_node_type_ref(&self.graph.interner).to_string()))
                 .unwrap_or(Value::Null),
         )
     }
@@ -805,11 +787,14 @@ impl<'a> CypherExecutor<'a> {
             })));
         }
         if let Some(edge) = row.edge_bindings.get(name) {
-            if let Some(rel_value) = materialize_rel_value(edge.edge_index, self.graph) {
-                return Ok(Value::Relationship(Box::new(rel_value)));
+            if self.relationship_binding_is_current(edge) {
+                if let Some(rel_value) = crate::graph::languages::cypher::executor::helpers::materialize_rel_value_with_incarnation(edge.edge_index, self.graph, edge.incarnation) {
+                    return Ok(Value::Relationship(Box::new(rel_value)));
+                }
             }
             return Ok(Value::Relationship(Box::new(
                 crate::datatypes::values::RelValue {
+                    incarnation: None,
                     id: edge.edge_index.index() as u32,
                     start_id: edge.source.index() as u32,
                     end_id: edge.target.index() as u32,
@@ -851,17 +836,13 @@ impl<'a> CypherExecutor<'a> {
             }
             BinaryExpression::Divide => arithmetic_div(&left, &right),
             BinaryExpression::Modulo => arithmetic_mod(&left, &right),
-            BinaryExpression::Concat => Ok(
-                crate::graph::core::value_operations::string_concat(&left, &right),
-            ),
+            BinaryExpression::Concat => Ok(crate::graph::core::value_operations::string_concat(
+                &left, &right,
+            )),
         }
     }
 
-    fn evaluate_negation(
-        &self,
-        inner: &Expression,
-        row: &ResultRow,
-    ) -> Result<Value, String> {
+    fn evaluate_negation(&self, inner: &Expression, row: &ResultRow) -> Result<Value, String> {
         arithmetic_negate(&self.evaluate_expression(inner, row)?)
     }
 }

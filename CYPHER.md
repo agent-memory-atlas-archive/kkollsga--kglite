@@ -586,6 +586,64 @@ The embedding store key is `{text_column}_emb` (set via
 `set_embeddings(node_type, text_column, {id: vector})`), so embeddings set on
 the `summary` column are scored as `vector_score(a, 'summary_emb', …)`.
 
+Relationship embeddings use the same scoring functions and canonical store
+names. Manage them from bound relationship values so physical relationship
+IDs never become an application identity:
+
+```cypher
+MATCH (claimant:Claimant)-[r:SUPPORTS]->(claim:Claim)
+WHERE claim.status = 'open'
+WITH collect(r) AS relationships
+CALL db.edge_embeddings.embed({
+  type: 'SUPPORTS', text_property: 'evidence', relationships: relationships,
+  mode: 'changed'
+})
+YIELD embedded, skipped, dimension, model
+RETURN embedded, skipped, dimension, model
+```
+
+`mode: 'missing'` generates only absent vectors; `changed` also refreshes
+vectors whose source text changed; `all` rebuilds the selected slice. In `all`,
+a selected relationship with missing or non-string source text loses its old
+vector. Unselected vectors remain, so a partial rebuild with another model
+reports `model: null` rather than relabeling a mixed store. A dimension change
+is accepted only when the selection covers every vector already stored.
+Selection is validated before the model callback and the write is atomic. The
+source text is read from live graph state, including a `SET r.evidence = ...`
+earlier in the same statement.
+
+The mutating procedure must remain a top-level pipeline clause. A read-only
+`CALL {}` subquery may return collected relationship values to an outer
+top-level `db.edge_embeddings.embed` call. A mutating call placed inside the
+subquery or a `UNION` arm follows the existing write boundary and is rejected
+before the model runs.
+
+Manual management uses the same one-map shape:
+
+```cypher
+CALL db.edge_embeddings.set({
+  type:'SUPPORTS', text_property:'evidence',
+  entries:[{relationship:r, vector:$vector}], metric:'cosine'
+}) YIELD stored, dimension
+
+CALL db.edge_embeddings.remove({
+  type:'SUPPORTS', text_property:'evidence', relationships:relationships
+}) YIELD removed
+
+CALL db.edge_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
+YIELD dropped
+```
+
+`db.edge_embeddings.list({type?, text_property?})` reports `entity`, `type`,
+`text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
+and `index_state`. Relationship scoring in an ordinary `MATCH` is exact:
+`vector_score(r, 'evidence_emb', $vector)` names the canonical store, while
+`text_score(r, 'evidence', $text)` names the source property and embeds the
+query text. `embedding_norm(r, 'evidence_emb')` reads the stored vector. Whole
+type approximate search is exposed separately through explicit index/query
+procedures; these scalar functions continue to obey the surrounding graph
+filters.
+
 > **`vector_score` takes the store name, `text_score` takes the raw column.**
 > `vector_score` names the store directly — `'summary_emb'`. `text_score` names
 > the source *column* — `'summary'` (it resolves to `summary_emb`). That's why

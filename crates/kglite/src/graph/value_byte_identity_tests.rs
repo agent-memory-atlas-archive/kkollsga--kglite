@@ -101,6 +101,7 @@ fn sample_node_value() -> NodeValue {
 
 fn sample_rel_value() -> RelValue {
     RelValue {
+        incarnation: None,
         id: 3,
         start_id: 42,
         end_id: 43,

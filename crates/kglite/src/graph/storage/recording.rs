@@ -412,6 +412,10 @@ impl<G: GraphRead> RecordingGraph<G> {
         self.capture_edge_embedding_bases = enabled;
     }
 
+    pub(crate) fn captures_edge_embedding_bases(&self) -> bool {
+        self.capture_edge_embedding_bases
+    }
+
     pub(crate) fn release_wal_ownership(&mut self) {
         self.wal_owner = false;
     }

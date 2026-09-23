@@ -221,6 +221,9 @@ pub struct CypherExecutor<'a> {
     /// clause, never per row.
     runtime_warnings: Mutex<Vec<String>>,
     runtime_retrieval: Mutex<Vec<RetrievalDiagnostics>>,
+    relationship_identities: Option<
+        std::sync::Arc<std::sync::Mutex<relationship_identity::StatementRelationshipIdentities>>,
+    >,
     /// Holds the disk materialization arenas alive for this executor's
     /// lifetime (arena protocol in `storage/disk/graph.rs`, enforced by a
     /// debug assert). Acquired in the constructor so EVERY read this
@@ -257,6 +260,7 @@ impl<'a> CypherExecutor<'a> {
             csv_import: load_csv::CsvImportPolicy::Denied,
             runtime_warnings: Mutex::new(Vec::new()),
             runtime_retrieval: Mutex::new(Vec::new()),
+            relationship_identities: None,
             _arena_guard: graph.graph.begin_query(),
             row_limit: None,
         }
@@ -318,6 +322,39 @@ impl<'a> CypherExecutor<'a> {
     pub(super) fn with_budget(mut self, budget: ExecutionBudget) -> Self {
         self.budget = budget;
         self
+    }
+
+    fn with_relationship_identities(
+        mut self,
+        identities: Option<
+            std::sync::Arc<
+                std::sync::Mutex<relationship_identity::StatementRelationshipIdentities>,
+            >,
+        >,
+    ) -> Self {
+        self.relationship_identities = identities;
+        self
+    }
+
+    fn relationship_incarnation(
+        &self,
+        edge: petgraph::graph::EdgeIndex,
+    ) -> Option<crate::datatypes::values::RelationshipIncarnation> {
+        self.relationship_identities
+            .as_ref()
+            .map(|identities| identities.lock().expect("identity lock").capture(edge))
+    }
+
+    fn relationship_binding_is_current(&self, edge: &EdgeBinding) -> bool {
+        let Some(identities) = &self.relationship_identities else {
+            return true;
+        };
+        edge.incarnation.is_some_and(|token| {
+            identities
+                .lock()
+                .expect("identity lock")
+                .accepts(edge.edge_index, token)
+        })
     }
 
     /// Bound a producer at one row beyond the configured cap. The extra row
@@ -452,7 +489,11 @@ impl<'a> CypherExecutor<'a> {
     /// idle period reclaims the prior generation; overlapping and nested
     /// queries share the generation without invalidating refs.
     pub fn execute(&self, query: &CypherQuery) -> Result<CypherResult, String> {
-        self.execute_with_cap(query, self.row_limit)
+        let mut result = self.execute_with_cap(query, self.row_limit)?;
+        crate::graph::languages::cypher::result::clear_published_relationship_incarnations(
+            &mut result,
+        );
+        Ok(result)
     }
 
     /// One row per node type: `(type, count)`. Fused form of
@@ -888,6 +929,7 @@ mod columnar_write;
 #[path = "comparison_tristate_tests.rs"]
 mod comparison_tristate_tests;
 pub mod dead_code;
+mod edge_embedding_procedures;
 mod edge_property_write;
 mod execution_support;
 pub mod expression;
@@ -900,6 +942,8 @@ mod keys_map_tests;
 pub mod load_csv;
 pub mod match_clause;
 pub mod match_execution;
+mod mutating_call;
+mod mutation_support;
 mod node_ontology;
 pub(crate) mod ontology_procedures;
 pub(crate) mod ordering;
@@ -907,6 +951,7 @@ mod procedure_registry;
 pub mod refresh_stats;
 pub mod regex_cache;
 mod rel_constraint_ddl;
+mod relationship_identity;
 mod retrieval;
 mod retrieval_diagnostics;
 mod retrieval_text;

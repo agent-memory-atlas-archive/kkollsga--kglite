@@ -931,6 +931,53 @@ impl<'a> CypherExecutor<'a> {
         if error.is_some() {
             return false;
         }
+        if let Some(edge) = row.edge_bindings.get(&spec.variable) {
+            if !self.relationship_binding_is_current(edge) {
+                return false;
+            }
+            let Some(weight) = graph.graph.edge_weight(edge.edge_index) else {
+                return false;
+            };
+            let relationship_type = weight.connection_type_str(&graph.interner);
+            let Some(store) = graph
+                .edge_embeddings
+                .get(&(relationship_type.to_string(), spec.prop_name.clone()))
+            else {
+                error = Some(format!(
+                    "vector_score(): no embedding '{}' found for relationship type '{}'",
+                    spec.prop_name, relationship_type
+                ));
+                return false;
+            };
+            if spec.query_vec.len() != store.dimension() {
+                error = Some(format!("vector_score(): query vector dimension {} does not match embedding dimension {}", spec.query_vec.len(), store.dimension()));
+                return false;
+            }
+            let Some((embedding, norm)) = store.get_with_norm(edge.edge_index) else {
+                return false;
+            };
+            let scorer = if spec.metric.is_some() {
+                spec.scorer
+            } else {
+                let name = store.metric().unwrap_or("cosine");
+                match vs::DistanceMetric::from_name(name) {
+                    Some(vs::DistanceMetric::Cosine) => spec.scorer,
+                    Some(metric) => vs::Scorer::new(metric, &spec.query_vec),
+                    None => {
+                        error = Some(format!("vector_score(): unknown stored metric '{name}'"));
+                        return false;
+                    }
+                }
+            };
+            let score = scorer.score(&spec.query_vec, embedding, norm) as f64;
+            return if spec.greater_than {
+                if spec.inclusive { score >= spec.threshold } else { score > spec.threshold }
+            } else if spec.inclusive {
+                score <= spec.threshold
+            } else {
+                score < spec.threshold
+            };
+        }
         let idx = match row.node_bindings.get(&spec.variable) {
             Some(&idx) => idx,
             None => return false,

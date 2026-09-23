@@ -338,6 +338,7 @@ fn return_path_record_golden() {
     );
 
     let expected_rel = RelValue {
+        incarnation: None,
         id: path.rels[0].id,
         start_id: 0,
         end_id: 1,

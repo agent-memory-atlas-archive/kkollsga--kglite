@@ -201,6 +201,7 @@ fn true_only_dispatch_preserves_entity_identity_with_nullable_properties() {
             properties: properties.clone(),
         };
         let rel = RelValue {
+            incarnation: None,
             id: 1,
             start_id: 1,
             end_id: 1,

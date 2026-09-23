@@ -93,6 +93,7 @@ the `session` module instead.
 | `CypherExecutor` | Execute a planned query against a graph. |
 | `execute_mutable(...)` | Mutation execution path. |
 | `is_mutation_query(&parsed)` | Heuristic: does this query mutate? |
+| `may_invoke_embedder(&parsed)` | Whether the AST contains a callback-capable embedding procedure, including nested query forms. |
 | `generate_explain_result(...)` | Build an EXPLAIN-style plan as a CypherResult. |
 | `CypherQuery`, `CypherResult`, `OutputFormat` | Data types. |
 
@@ -119,6 +120,22 @@ the `sec` / `sodir` / `wikidata` Cargo features) have been removed.
 kglite loads the graphs those loaders produce via the ordinary
 lifecycle API. To ingest RDF directly, use the kept RDF/N-Triples
 loaders.
+
+## Relationship identity migration
+
+Relationship values now carry an executor-only statement incarnation so a
+collected relationship cannot silently target a different edge after slot
+reuse. Rust callers that constructed `RelValue` with a struct literal should
+use `RelValue::new(id, start_id, end_id, rel_type, properties)`; the constructor
+sets the internal identity to absent. Its five arguments match the former
+public fields. Serde omits the identity, and public result publication clears
+it, so serialized values and ordinary result equality retain their established
+shape.
+
+Low-level callers constructing `api::cypher::EdgeBinding` directly must add
+`incarnation: None` to the literal. Match execution supplies a statement token
+internally. Callers that only read `source`, `target`, and `edge_index` require
+no change.
 
 ## Semver
 

@@ -139,9 +139,11 @@ fn may_invoke_embedder(parsed: &mut cypher::CypherQuery, params: &HashMap<String
     if parsed.explain {
         return false;
     }
-    cypher::rewrite_text_score(parsed, params)
-        .map(|rewrite| !rewrite.texts_to_embed.is_empty())
-        .unwrap_or(true)
+    let procedure_callback = cypher::may_invoke_embedder(parsed);
+    procedure_callback
+        || cypher::rewrite_text_score(parsed, params)
+            .map(|rewrite| !rewrite.texts_to_embed.is_empty())
+            .unwrap_or(true)
 }
 
 /// Decoded per-call query options shared by the read and write paths.

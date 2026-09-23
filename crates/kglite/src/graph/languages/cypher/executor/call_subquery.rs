@@ -120,7 +120,8 @@ impl<'a> CypherExecutor<'a> {
             .with_streaming(self.streaming)
             .with_parallel(self.parallel)
             .with_cancel(self.cancel)
-            .with_budget(self.budget.clone());
+            .with_budget(self.budget.clone())
+            .with_relationship_identities(self.relationship_identities.clone());
 
         // Run the body once for the first outer row to learn the subquery's
         // RETURN columns, then check those columns for an outer-scope

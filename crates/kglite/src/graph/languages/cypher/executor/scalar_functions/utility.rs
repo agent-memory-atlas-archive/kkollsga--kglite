@@ -85,24 +85,20 @@ impl<'a> CypherExecutor<'a> {
                     name
                 ))
             }
-            // embedding_norm(node, property) → Float64
-            // Returns the L2 norm of the node's embedding vector.
+            // embedding_norm(entity, property) → Float64
+            // Returns the L2 norm of the entity's embedding vector.
             // Useful for inferring hierarchy depth in Poincaré embeddings
             // (norm close to 0 = root/general, norm close to 1 = leaf/specific).
             "embedding_norm" => {
                 if args.len() != 2 {
-                    return Err("embedding_norm() requires 2 arguments: (node, property)".into());
+                    return Err("embedding_norm() requires 2 arguments: (entity, property)".into());
                 }
-                let node_idx = match &args[0] {
-                    Expression::Variable(var) => match row.node_bindings.get(var) {
-                        Some(&idx) => idx,
-                        None => return Ok(Some(Value::Null)),
-                    },
-                    _ => {
-                        return Err(
-                            "embedding_norm(): first argument must be a node variable".into()
-                        )
-                    }
+                let variable = match &args[0] {
+                    Expression::Variable(var) => var,
+                    _ => return Err(
+                        "embedding_norm(): first argument must be a node or relationship variable"
+                            .into(),
+                    ),
                 };
                 let prop_name = match self.evaluate_expression(&args[1], row)? {
                     Value::String(s) => s,
@@ -113,20 +109,71 @@ impl<'a> CypherExecutor<'a> {
                         )
                     }
                 };
-                let node_type = match self.graph.graph.node_view(node_idx) {
-                    Some(n) => n.node_type_str(&self.graph.interner),
-                    None => return Ok(Some(Value::Null)),
-                };
-                let store = match self.graph.embedding_store(node_type, &prop_name) {
-                    Some(s) => s,
-                    None => {
-                        return Err(format!(
-                            "embedding_norm(): no embedding '{}' found for node type '{}'",
-                            prop_name, node_type
-                        ))
+                let embedding = if let Some(&node_idx) = row.node_bindings.get(variable) {
+                    let node_type = match self.graph.graph.node_view(node_idx) {
+                        Some(n) => n.node_type_str(&self.graph.interner),
+                        None => return Ok(Some(Value::Null)),
+                    };
+                    let store = self
+                        .graph
+                        .embedding_store(node_type, &prop_name)
+                        .ok_or_else(|| {
+                            format!(
+                                "embedding_norm(): no embedding '{}' found for node type '{}'",
+                                prop_name, node_type
+                            )
+                        })?;
+                    store.get_embedding(node_idx.index())
+                } else if let Some(edge) = row.edge_bindings.get(variable) {
+                    if !self.relationship_binding_is_current(edge) {
+                        return Ok(Some(Value::Null));
+                    }
+                    let Some(weight) = self.graph.graph.edge_weight(edge.edge_index) else {
+                        return Ok(Some(Value::Null));
+                    };
+                    let relationship_type = weight.connection_type_str(&self.graph.interner);
+                    let key = (relationship_type.to_string(), prop_name.clone());
+                    let store = self.graph.edge_embeddings.get(&key).ok_or_else(|| {
+                        format!(
+                            "embedding_norm(): no embedding '{}' found for relationship type '{}'",
+                            prop_name, relationship_type
+                        )
+                    })?;
+                    store.get(edge.edge_index)
+                } else if row.path_bindings.contains_key(variable) {
+                    return Err(
+                        "embedding_norm(): first argument must be a node or relationship variable"
+                            .into(),
+                    );
+                } else {
+                    match self.evaluate_expression(&args[0], row)? {
+                        Value::Relationship(relationship) => {
+                            let edge = self.projected_relationship_binding(&relationship)?;
+                            if !self.relationship_binding_is_current(&edge) {
+                                return Ok(Some(Value::Null));
+                            }
+                            let Some(weight) = self.graph.graph.edge_weight(edge.edge_index) else {
+                                return Ok(Some(Value::Null));
+                            };
+                            let relationship_type =
+                                weight.connection_type_str(&self.graph.interner);
+                            let key = (relationship_type.to_string(), prop_name.clone());
+                            let store = self.graph.edge_embeddings.get(&key).ok_or_else(|| {
+                                format!(
+                                    "embedding_norm(): no embedding '{}' found for relationship type '{}'",
+                                    prop_name, relationship_type
+                                )
+                            })?;
+                            store.get(edge.edge_index)
+                        }
+                        Value::Null => return Ok(Some(Value::Null)),
+                        _ => return Err(
+                            "embedding_norm(): first argument must be a node or relationship variable"
+                                .into(),
+                        ),
                     }
                 };
-                match store.get_embedding(node_idx.index()) {
+                match embedding {
                     Some(emb) => {
                         let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         Ok(Value::Float64(norm as f64))
@@ -287,18 +334,39 @@ impl CypherExecutor<'_> {
     fn eval_vector_score(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         if args.len() < 3 || args.len() > 5 {
             return Err(
-                "vector_score() requires 3-5 arguments: (node, property, query_vector [, metric] [, options])"
+                "vector_score() requires 3-5 arguments: (entity, property, query_vector [, metric] [, options])"
                     .into(),
             );
         }
 
-        // Arg 0: node variable → resolve to NodeIndex (changes per row)
-        let node_idx = match &args[0] {
-            Expression::Variable(var) => match row.node_bindings.get(var) {
-                Some(&idx) => idx,
-                None => return Ok(Value::Null),
-            },
-            _ => return Err("vector_score(): first argument must be a node variable".into()),
+        let variable = match &args[0] {
+            Expression::Variable(var) => var,
+            _ => {
+                return Err(
+                    "vector_score(): first argument must be a node or relationship variable".into(),
+                )
+            }
+        };
+
+        if let Some(edge) = row.edge_bindings.get(variable) {
+            return self.eval_edge_vector_score(args, row, *edge);
+        }
+        let Some(&node_idx) = row.node_bindings.get(variable) else {
+            if row.path_bindings.contains_key(variable) {
+                return Err(
+                    "vector_score(): first argument must be a node or relationship variable".into(),
+                );
+            }
+            return match self.evaluate_expression(&args[0], row)? {
+                Value::Relationship(relationship) => {
+                    let edge = self.projected_relationship_binding(&relationship)?;
+                    self.eval_edge_vector_score(args, row, edge)
+                }
+                Value::Null => Ok(Value::Null),
+                _ => Err(
+                    "vector_score(): first argument must be a node or relationship variable".into(),
+                ),
+            };
         };
 
         // Per-row: look up node type → embedding store → compute similarity
@@ -337,6 +405,80 @@ impl CypherExecutor<'_> {
                 let score = c.scorer.score(&c.query_vec, embedding, norm);
                 Ok(Value::Float64(score as f64))
             }
+            None => Ok(Value::Null),
+        }
+    }
+
+    fn projected_relationship_binding(
+        &self,
+        relationship: &crate::datatypes::values::RelValue,
+    ) -> Result<EdgeBinding, String> {
+        let edge = EdgeBinding {
+            source: petgraph::graph::NodeIndex::new(relationship.start_id as usize),
+            target: petgraph::graph::NodeIndex::new(relationship.end_id as usize),
+            edge_index: petgraph::graph::EdgeIndex::new(relationship.id as usize),
+            incarnation: relationship.incarnation,
+        };
+        if self.relationship_identities.is_some() && edge.incarnation.is_none() {
+            return Err("relationship value was not bound by this statement".into());
+        }
+        Ok(edge)
+    }
+
+    fn eval_edge_vector_score(
+        &self,
+        args: &[Expression],
+        row: &ResultRow,
+        edge: EdgeBinding,
+    ) -> Result<Value, String> {
+        if !self.relationship_binding_is_current(&edge) {
+            return Ok(Value::Null);
+        }
+        let Some(weight) = self.graph.graph.edge_weight(edge.edge_index) else {
+            return Ok(Value::Null);
+        };
+        let relationship_type = weight.connection_type_str(&self.graph.interner);
+        let prop_name = match self.evaluate_expression(&args[1], row)? {
+            Value::String(s) => s,
+            _ => {
+                return Err("vector_score(): second argument must be a string property name".into())
+            }
+        };
+        let query_vec = self.extract_float_list(&args[2], row)?;
+        crate::graph::embedding_validation::validate_finite_vector(&query_vec)
+            .map_err(|error| format!("vector_score(): invalid query vector: {error}"))?;
+        let store = self
+            .graph
+            .edge_embeddings
+            .get(&(relationship_type.to_string(), prop_name.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "vector_score(): no embedding '{}' found for relationship type '{}'",
+                    prop_name, relationship_type
+                )
+            })?;
+        Self::check_vector_score_dimension(query_vec.len(), store.dimension())?;
+        let tail = args[3..]
+            .iter()
+            .map(|expr| self.evaluate_expression(expr, row))
+            .collect::<Result<Vec<_>, _>>()?;
+        let options = super::super::vector_options::parse(&tail)?;
+        let metric = match options.metric {
+            Some(metric) => metric,
+            None => vs::DistanceMetric::from_name(store.metric().unwrap_or("cosine")).ok_or_else(
+                || {
+                    format!(
+                        "vector_score(): unknown stored metric '{}'",
+                        store.metric().unwrap_or("cosine")
+                    )
+                },
+            )?,
+        };
+        let scorer = vs::Scorer::new(metric, &query_vec);
+        match store.get_with_norm(edge.edge_index) {
+            Some((embedding, norm)) => Ok(Value::Float64(
+                scorer.score(&query_vec, embedding, norm) as f64,
+            )),
             None => Ok(Value::Null),
         }
     }

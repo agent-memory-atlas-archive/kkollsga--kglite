@@ -223,6 +223,13 @@ impl GraphBackend {
         }
     }
 
+    pub(crate) fn records_edge_embedding_bases(&self) -> Option<bool> {
+        match self {
+            GraphBackend::Recording(recording) => Some(recording.captures_edge_embedding_bases()),
+            _ => None,
+        }
+    }
+
     /// Snapshot the write-capture wrapper without cloning its inner graph.
     pub(crate) fn recording_state(&self) -> Option<RecordingState> {
         match self {

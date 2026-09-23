@@ -660,6 +660,7 @@ mod tests {
         let mut props = std::collections::BTreeMap::new();
         props.insert("weight".to_string(), Value::Int64(3));
         crate::datatypes::values::RelValue {
+            incarnation: None,
             id: 11,
             start_id: 7,
             end_id: 8,

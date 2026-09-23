@@ -257,6 +257,7 @@ pub(crate) enum StatementCheckpoint {
         /// exactly this statement's ops. `None` when the backend captures no
         /// WAL ops.
         recorded_ops: Option<usize>,
+        edge_embedding_base_capture: Option<bool>,
         cdc: Option<CdcCheckpoint>,
     },
     /// Whole-graph clone, for backends and graph shapes outside
@@ -356,11 +357,13 @@ impl StatementCheckpoint {
             };
         }
         let recorded_ops = graph.graph.recorded_ops_len();
+        let edge_embedding_base_capture = graph.graph.records_edge_embedding_bases();
         let shell = Box::new(graph.schema_shell());
         graph.graph.begin_undo();
         Self::Journal {
             shell,
             recorded_ops,
+            edge_embedding_base_capture,
             cdc,
         }
     }
@@ -399,6 +402,7 @@ impl StatementCheckpoint {
             Self::Journal {
                 shell,
                 recorded_ops,
+                edge_embedding_base_capture,
                 cdc,
             } => {
                 let journal = graph.graph.take_undo();
@@ -409,6 +413,11 @@ impl StatementCheckpoint {
                 // describe writes that no longer exist.
                 if let Some(len) = recorded_ops {
                     graph.graph.truncate_recorded_ops(len);
+                }
+                if let (Some(enabled), Some(recording)) =
+                    (edge_embedding_base_capture, graph.graph.recording_mut())
+                {
+                    recording.set_edge_embedding_base_capture(enabled);
                 }
                 graph.restore_schema_shell(*shell);
                 // After the shell restore, so the rebuild reads the
@@ -550,6 +559,14 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
                 store.restore(edge, &prior);
             }
         }
+        UndoEntry::EdgeEmbeddingStoreReplaced { store_key, prior } => match prior {
+            Some(store) => {
+                graph.edge_embeddings.insert(store_key, *store);
+            }
+            None => {
+                graph.edge_embeddings.remove(&store_key);
+            }
+        },
         UndoEntry::TextDocPruned { store_key, node } => {
             // Marking, not restoring: the document is derived from a property
             // this replay is putting back, so the next refresh re-tokenizes it.

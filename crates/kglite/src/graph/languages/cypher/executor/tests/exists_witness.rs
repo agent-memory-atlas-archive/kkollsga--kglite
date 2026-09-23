@@ -43,6 +43,7 @@ fn a_binding_the_executor_cannot_push_down_forbids_the_cap() {
     bound_edge.edge_bindings.insert(
         "r".to_string(),
         EdgeBinding {
+            incarnation: None,
             source: NodeIndex::new(0),
             target: NodeIndex::new(1),
             edge_index: EdgeIndex::new(0),

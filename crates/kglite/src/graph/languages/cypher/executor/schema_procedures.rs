@@ -212,6 +212,7 @@ fn schema_visualization_rows(
                     (id_of.get(source.as_str()), id_of.get(target.as_str()))
                 {
                     relationships.push(Value::Relationship(Box::new(RelValue {
+                        incarnation: None,
                         id: rel_id,
                         start_id,
                         end_id,

@@ -71,6 +71,7 @@ fn raw_nested_shapes_preserve_entity_identity_and_shared_originals() {
         properties: properties.clone(),
     };
     let rel = RelValue {
+        incarnation: None,
         id: 7,
         start_id: 9,
         end_id: 10,

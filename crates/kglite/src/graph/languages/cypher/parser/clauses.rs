@@ -1031,6 +1031,14 @@ impl CypherParser {
                     self.advance();
                     procedure_name.push_str(".delete");
                 }
+                Some(CypherToken::Set) => {
+                    self.advance();
+                    procedure_name.push_str(".set");
+                }
+                Some(CypherToken::Remove) => {
+                    self.advance();
+                    procedure_name.push_str(".remove");
+                }
                 other => {
                     return Err(format!(
                         "Expected identifier after `.` in procedure name, got {}",

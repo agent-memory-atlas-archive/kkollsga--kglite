@@ -208,6 +208,7 @@ impl Resolver<'_> {
 
     fn relationship(&mut self, rel: &RelValue) -> Option<RelValue> {
         self.properties(&rel.properties).map(|properties| RelValue {
+            incarnation: None,
             id: rel.id,
             start_id: rel.start_id,
             end_id: rel.end_id,

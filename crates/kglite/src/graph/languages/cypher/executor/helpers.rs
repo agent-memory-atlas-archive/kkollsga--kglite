@@ -1007,6 +1007,14 @@ pub(crate) fn materialize_rel_value(
     edge_idx: petgraph::graph::EdgeIndex,
     graph: &crate::graph::DirGraph,
 ) -> Option<crate::datatypes::values::RelValue> {
+    materialize_rel_value_with_incarnation(edge_idx, graph, None)
+}
+
+pub(crate) fn materialize_rel_value_with_incarnation(
+    edge_idx: petgraph::graph::EdgeIndex,
+    graph: &crate::graph::DirGraph,
+    incarnation: Option<crate::datatypes::values::RelationshipIncarnation>,
+) -> Option<crate::datatypes::values::RelValue> {
     use crate::datatypes::values::RelValue;
     let edge_data = graph.graph.edge_weight(edge_idx)?;
     let (src, dst) = graph.graph.edge_endpoints(edge_idx)?;
@@ -1029,6 +1037,7 @@ pub(crate) fn materialize_rel_value(
     }
     let properties = PropMap::from_pairs(properties);
     Some(RelValue {
+        incarnation,
         id: edge_idx.index() as u32,
         start_id: src.index() as u32,
         end_id: dst.index() as u32,

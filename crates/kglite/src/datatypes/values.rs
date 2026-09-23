@@ -121,6 +121,30 @@ pub enum Value {
     Timestamp(NaiveDateTime),
 }
 
+impl Value {
+    pub(crate) fn clear_relationship_incarnations(&mut self) {
+        match self {
+            Value::Relationship(rel) => rel.clear_incarnation(),
+            Value::Path(path) => path.rels.iter_mut().for_each(RelValue::clear_incarnation),
+            Value::List(values) => values
+                .iter_mut()
+                .for_each(Value::clear_relationship_incarnations),
+            Value::Map(values) => {
+                let pairs = std::mem::take(values)
+                    .into_pairs()
+                    .into_iter()
+                    .map(|(key, mut value)| {
+                        value.clear_relationship_incarnations();
+                        (key, value)
+                    })
+                    .collect();
+                *values = PropMap::from_pairs(pairs);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Owned, serialisable shape for a node value at the consumer
 /// boundary. Distinct from [`crate::graph::schema::NodeData`], which
 /// is interner-bound (carries `InternedKey` fields tied to the
@@ -151,6 +175,23 @@ pub struct NodeValue {
 /// Owned, serialisable shape for a relationship value. See
 /// [`NodeValue`] for the rationale (interner-decoupled, projection-
 /// boundary-friendly).
+/// Executor-only relationship identity. It is never serialized or exposed on a wire.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RelationshipIncarnation {
+    statement_nonce: u64,
+    generation: u32,
+}
+
+impl RelationshipIncarnation {
+    pub(crate) fn new(statement_nonce: u64, generation: u32) -> Self {
+        Self {
+            statement_nonce,
+            generation,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RelValue {
     pub id: u32,
@@ -158,6 +199,27 @@ pub struct RelValue {
     pub end_id: u32,
     pub rel_type: String,
     pub properties: PropMap,
+    /// Transient executor identity; absent after serde or public result publication.
+    #[doc(hidden)]
+    #[serde(skip, default)]
+    pub incarnation: Option<RelationshipIncarnation>,
+}
+
+impl RelValue {
+    pub fn new(id: u32, start_id: u32, end_id: u32, rel_type: String, properties: PropMap) -> Self {
+        Self {
+            id,
+            start_id,
+            end_id,
+            rel_type,
+            properties,
+            incarnation: None,
+        }
+    }
+
+    pub(crate) fn clear_incarnation(&mut self) {
+        self.incarnation = None;
+    }
 }
 
 /// Owned, serialisable shape for a path value (sequence of nodes +
@@ -1820,6 +1882,7 @@ mod tests {
             properties: PropMap::new(),
         };
         let rel = RelValue {
+            incarnation: None,
             id: 1,
             start_id: 1,
             end_id: 2,

@@ -66,6 +66,10 @@ impl<V> Bindings<V> {
         self.entries.iter().map(|(k, v)| (k, v))
     }
 
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.entries.iter_mut().map(|(_, value)| value)
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -173,6 +177,7 @@ pub struct EdgeBinding {
     pub source: NodeIndex,
     pub target: NodeIndex,
     pub edge_index: EdgeIndex,
+    pub incarnation: Option<crate::datatypes::values::RelationshipIncarnation>,
 }
 
 /// Variable-length path binding
@@ -415,11 +420,9 @@ pub fn materialise_lazy_row(
     // Disk node/edge materialization returns arena-backed references. Keep
     // the arena generation alive until every cell in this row is owned.
     let _arena_guard = graph.graph.begin_query();
-    Ok(materialise_lazy_row_inner(
-        pending_row,
-        &descriptor.return_items,
-        graph,
-    ))
+    let mut row = materialise_lazy_row_inner(pending_row, &descriptor.return_items, graph);
+    clear_published_row(&mut row);
+    Ok(row)
 }
 
 fn materialise_lazy_row_inner(
@@ -507,11 +510,9 @@ pub fn materialise_lazy_range(
         // One guard per row bounds sequential disk-arena growth. Each cell is
         // converted to an owned Value before the guard drops.
         let _arena_guard = graph.graph.begin_query();
-        rows.push(materialise_lazy_row_inner(
-            pending_row,
-            &descriptor.return_items,
-            graph,
-        ));
+        let mut row = materialise_lazy_row_inner(pending_row, &descriptor.return_items, graph);
+        clear_published_row(&mut row);
+        rows.push(row);
     }
     Ok(rows)
 }
@@ -823,5 +824,17 @@ mod nested_timestamp_csv_tests {
             &Value::List(vec![Value::Float64(1.234_567_89)]),
         );
         assert_eq!(actual, "[1.23456789]");
+    }
+}
+
+pub(crate) fn clear_published_relationship_incarnations(result: &mut CypherResult) {
+    for row in &mut result.rows {
+        clear_published_row(row);
+    }
+}
+
+fn clear_published_row(row: &mut [Value]) {
+    for value in row {
+        value.clear_relationship_incarnations();
     }
 }

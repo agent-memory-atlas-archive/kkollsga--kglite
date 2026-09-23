@@ -417,6 +417,61 @@ method. Note the surfaces differ: `text_score()`/`vector_score()` are **Cypher
 functions** (used in `RETURN`/`WHERE`); `search_text()`/`vector_search()` are
 **fluent methods** on a selection.
 
+Relationships use the same Cypher-first path. This claim/evidence example
+embeds an explicit filtered selection and then combines exact semantic scoring
+with the graph pattern:
+
+```python
+class DemoEmbedder:
+    dimension = 2
+    model_id = "demo/v1"
+    def load(self): pass
+    def unload(self): pass
+    def embed(self, texts):
+        return [[float(len(text)), 1.0] for text in texts]
+
+graph.set_embedder(DemoEmbedder())
+graph.cypher("""
+    MATCH (:Claimant)-[r:SUPPORTS]->(c:Claim)
+    WHERE c.status = 'open'
+    WITH collect(r) AS relationships
+    CALL db.edge_embeddings.embed({
+      type:'SUPPORTS', text_property:'evidence',
+      relationships:relationships, mode:'changed'
+    })
+    YIELD embedded RETURN embedded
+""")
+
+rows = graph.cypher("""
+    MATCH (who:Claimant)-[r:SUPPORTS]->(c:Claim)
+    WHERE c.status = 'open'
+    RETURN who.name, c.title,
+           text_score(r, 'evidence', $question) AS score
+    ORDER BY score DESC LIMIT 5
+""", params={'question': 'Which evidence supports this claim?'})
+```
+
+`embed` always acts on the relationships supplied in its map. `mode='all'`
+rebuilds that selected slice; missing/non-string selected source text removes
+an old vector, while unselected vectors remain. The aggregate model is null
+when retained vectors cannot all be attributed to the reported model, and a
+dimension change requires selection coverage of every stored vector. The
+write and model callback are atomic, and same-statement property updates are
+read from current graph state.
+
+Mutating procedures remain top-level pipeline clauses. A read-only `CALL {}`
+subquery may collect native relationship values and return them to an outer
+top-level `db.edge_embeddings.embed` call, preserving statement identity.
+Putting the mutating procedure inside `CALL {}` or a `UNION` arm follows the
+existing Cypher write boundary and is rejected before invoking the model.
+
+Use `vector_score(r, 'evidence_emb', $vector)` for a query vector and
+`text_score(r, 'evidence', $text)` for source-column text. Scoring inside a
+filtered `MATCH` is exact. The separate whole-store ANN procedures are the
+explicit approximate path. Relationship values should stay bound inside the
+statement: physical IDs are graph-local slots, and automatic transfer across
+independently rebuilt graphs is unavailable without a unique application key.
+
 The query argument's type decides how `text_score` reads it — a list is a
 vector, a string is text — so a stringified vector like `'[1.0, 2.0]'` is
 embedded as a 10-character query. Pass a list and both spellings agree.

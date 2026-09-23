@@ -11,6 +11,12 @@ before upgrading.
 
 ### Added
 
+- Cypher relationship embedding management through `db.edge_embeddings.set`,
+  `embed`, `list`, `remove`, and `drop`. Writes validate complete selections
+  before mutation; generation preserves unselected vectors and stages callback
+  results atomically. `vector_score`, `text_score`, and `embedding_norm` also
+  accept individual relationships, with exact scoring for relationship MATCH.
+
 - Durable relationship embedding changes record vectors and provenance together
   with their logical relationship group. Recovery validates and stages the
   complete state before publication, preserving associations between identical
@@ -36,6 +42,12 @@ before upgrading.
 
 ### Changed
 
+- Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
+  struct literals must initialize the new internal `incarnation` field to
+  `None`. Low-level `EdgeBinding` struct literals also require
+  `incarnation: None`. The query engine clears this transient identity before publishing
+  results, preserving serialized relationship fields and public value equality.
+
 - Rust durability consumers constructing or matching `api::durable::RawOp`
   must account for the new relationship-embedding variants and the
   `WalGroup::base_members` field. These physical relationship slots describe
@@ -52,6 +64,10 @@ before upgrading.
   regeneration-safe overlays; and links a runnable help-vault tutorial.
 
 ### Fixed
+
+- Retained relationship bindings no longer expose a replacement edge's
+  properties or embedding scores after deletion and physical-slot reuse.
+  Embedding writes reject stale or fabricated relationship selections.
 
 - Embedding generation now refuses writes through derived durable/CDC handles
   before invoking the model or changing vectors. Python `search_text()` validates

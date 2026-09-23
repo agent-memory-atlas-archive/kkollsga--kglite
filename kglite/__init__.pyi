@@ -7192,6 +7192,25 @@ class KnowledgeGraph:
                 RETURN n.title
             ''', params={'query': 'artificial intelligence'})
 
+            # Generate and score relationship embeddings through Cypher.
+            # The relationship values stay bound inside this statement; their
+            # physical IDs are graph-local slots, not durable application IDs.
+            graph.cypher('''
+                MATCH ()-[r:SUPPORTS]->(c:Claim) WHERE c.status = 'open'
+                WITH collect(r) AS relationships
+                CALL db.edge_embeddings.embed({
+                  type:'SUPPORTS', text_property:'evidence',
+                  relationships:relationships, mode:'changed'
+                })
+                YIELD embedded RETURN embedded
+            ''')
+            evidence = graph.cypher('''
+                MATCH (a)-[r:SUPPORTS]->(c:Claim) WHERE c.status = 'open'
+                RETURN a.name, c.title,
+                       text_score(r, 'evidence', $query) AS score
+                ORDER BY score DESC LIMIT 5
+            ''', params={'query': 'supporting evidence'})
+
             # CALL graph algorithms
             top = graph.cypher('''
                 CALL pagerank() YIELD node, score
