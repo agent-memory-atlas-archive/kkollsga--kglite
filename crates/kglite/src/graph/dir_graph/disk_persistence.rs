@@ -171,6 +171,20 @@ impl DirGraph {
         // collapse it first. Free when the reader has already dropped.
         self.graph.flatten_fork();
 
+        // `from_stable_digraph` packs live heap edges densely in the same
+        // order as petgraph's edge iterator. Preserve sidecar association
+        // when deleted heap slots left holes before this conversion.
+        let edge_remap = if self.edge_embeddings.is_empty() {
+            None
+        } else {
+            let mut remap =
+                crate::graph::edge_embeddings::EdgeRemap::with_bound(self.graph.edge_bound());
+            for (new, old) in self.graph.edge_indices().enumerate() {
+                remap.set(old, petgraph::graph::EdgeIndex::new(new));
+            }
+            Some(remap)
+        };
+
         let disk_graph = match &mut self.graph {
             GraphBackend::Memory(g) => {
                 crate::graph::storage::disk::graph::DiskGraph::from_stable_digraph(
@@ -195,6 +209,9 @@ impl DirGraph {
         .map_err(|e| format!("Failed to create DiskGraph: {}", e))?;
 
         self.graph = GraphBackend::Disk(Box::new(disk_graph));
+        if let Some(remap) = edge_remap {
+            crate::graph::edge_embeddings::remap_edge_embeddings(self, &remap);
+        }
         for (type_key, store) in carried_stores {
             GraphWrite::install_column_store(&mut self.graph, type_key, store);
         }
@@ -243,10 +260,17 @@ impl DirGraph {
     pub fn compact_disk(&mut self) -> Result<usize, String> {
         self.prepare_mutation()
             .map_err(|e| format!("disk mutation lease failed: {e}"))?;
-        match &mut self.graph {
-            GraphBackend::Disk(ref mut dg) => dg.compact().map_err(|e| e.to_string()),
-            _ => Err("compact requires disk mode".to_string()),
+        let (count, remap) = match &mut self.graph {
+            GraphBackend::Disk(ref mut dg) => {
+                dg.compact_with_edge_remap().map_err(|e| e.to_string())?
+            }
+            _ => return Err("compact requires disk mode".to_string()),
+        };
+        if let Some(remap) = remap {
+            let remap = crate::graph::edge_embeddings::EdgeRemap::from_raw(remap);
+            crate::graph::edge_embeddings::remap_edge_embeddings(self, &remap);
         }
+        Ok(count)
     }
 
     /// Save a disk-mode graph to a directory. The directory IS the graph.
@@ -410,8 +434,13 @@ impl DirGraph {
             rewriting = dg.save_disposition(dir)
                 == crate::graph::storage::disk::graph_persist::SaveDisposition::Rewrite;
             if rewriting && dg.has_overflow() {
-                dg.compact()
+                let (_, remap) = dg
+                    .compact_with_edge_remap()
                     .map_err(|e| format!("disk compaction failed: {e}"))?;
+                if let Some(remap) = remap {
+                    let remap = crate::graph::edge_embeddings::EdgeRemap::from_raw(remap);
+                    crate::graph::edge_embeddings::remap_edge_embeddings(self, &remap);
+                }
             }
         }
         // Drop columnar rows no live node points at, so the columns this save

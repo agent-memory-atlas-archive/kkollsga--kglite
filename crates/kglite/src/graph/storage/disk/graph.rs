@@ -1858,9 +1858,15 @@ impl DiskGraph {
     /// writes to pending_edges, clears overflow, and rebuilds CSR.
     /// Returns the number of overflow edges that were merged.
     pub fn compact(&mut self) -> std::io::Result<usize> {
+        self.compact_with_edge_remap().map(|(count, _)| count)
+    }
+
+    /// Compaction plus the physical edge-slot map needed by stores owned one
+    /// layer above `DiskGraph`.
+    pub(crate) fn compact_with_edge_remap(&mut self) -> std::io::Result<(usize, Option<Vec<u32>>)> {
         let overflow_count: usize = self.overflow_out.values().map(|v| v.len()).sum();
         if overflow_count == 0 {
-            return Ok(0);
+            return Ok((0, None));
         }
 
         if self.detach_ended_lineage() {
@@ -1962,7 +1968,7 @@ impl DiskGraph {
             );
         }
 
-        Ok(overflow_count)
+        Ok((overflow_count, Some(idx_remap)))
     }
 
     pub fn lookup_peer_counts(&self, conn_type: u64) -> Option<HashMap<u32, i64>> {

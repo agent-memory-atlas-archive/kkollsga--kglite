@@ -256,13 +256,13 @@ fn apply_edges(
         };
         if state.reset && state.properties.is_some() {
             if let Some(idx) = existing.take() {
-                graph.graph.remove_edge(idx);
+                crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, idx);
             }
         }
         match &state.properties {
             None => {
                 if let Some(idx) = existing {
-                    GraphWrite::remove_edge(&mut graph.graph, idx);
+                    crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, idx);
                 }
             }
             Some(props) => {
@@ -392,7 +392,7 @@ fn replace_group(
         graph.upsert_connection_type_metadata(&key.0, &key.1, &key.3, metadata);
     }
     for edge in existing.into_values().flatten() {
-        graph.graph.remove_edge(edge);
+        crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge);
     }
     for properties in additions {
         let idx = graph

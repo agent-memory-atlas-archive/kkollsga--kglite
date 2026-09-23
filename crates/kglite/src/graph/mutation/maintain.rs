@@ -23,7 +23,7 @@ use crate::graph::schema::{
 };
 use crate::graph::storage::lookups::CombinedTypeLookup;
 use crate::graph::storage::undo::BucketId;
-use crate::graph::storage::{GraphRead, GraphWrite};
+use crate::graph::storage::GraphRead;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1626,7 +1626,7 @@ pub(crate) fn detach_delete_nodes(
         };
         for edge_idx in incident {
             if deleted_edges.insert(edge_idx) {
-                GraphWrite::remove_edge(&mut graph.graph, edge_idx);
+                crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge_idx);
             }
         }
     }
@@ -1933,7 +1933,7 @@ pub fn replace_connections(
         }
         if !to_remove.is_empty() {
             for edge_idx in to_remove {
-                GraphWrite::remove_edge(&mut graph.graph, edge_idx);
+                crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge_idx);
             }
             graph.invalidate_edge_type_counts_cache();
             graph.connection_types.clear();

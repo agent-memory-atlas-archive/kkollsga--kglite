@@ -242,6 +242,14 @@ pub enum UndoEntry {
         node: usize,
         prior: Box<RemovedEmbedding>,
     },
+    /// A relationship's vector was pruned before its physical edge slot was
+    /// freed. Undo restores the exact dense-store slot after the edge itself
+    /// has been restored by the later-captured `EdgeRemoved` entry.
+    EdgeEmbeddingRemoved {
+        store_key: (String, String),
+        edge: EdgeIndex,
+        prior: Box<RemovedEmbedding>,
+    },
     /// A node's BM25 document was pruned from `DirGraph::text_indexes` with the
     /// node. Undo marks the slot for re-reading.
     ///
@@ -666,6 +674,20 @@ impl UndoJournal {
         self.entries.push(UndoEntry::EmbeddingRemoved {
             store_key,
             node,
+            prior: Box::new(prior),
+        });
+    }
+
+    #[inline]
+    pub fn note_edge_embedding_removed(
+        &mut self,
+        store_key: (String, String),
+        edge: EdgeIndex,
+        prior: RemovedEmbedding,
+    ) {
+        self.entries.push(UndoEntry::EdgeEmbeddingRemoved {
+            store_key,
+            edge,
             prior: Box::new(prior),
         });
     }

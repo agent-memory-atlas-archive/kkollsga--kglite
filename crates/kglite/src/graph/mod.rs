@@ -15,6 +15,7 @@ pub mod core;
 pub(crate) mod cow;
 pub mod dir_graph;
 pub mod durability;
+pub(crate) mod edge_embeddings;
 pub mod embedder;
 pub mod embedding_carry;
 pub(crate) mod embedding_validation;

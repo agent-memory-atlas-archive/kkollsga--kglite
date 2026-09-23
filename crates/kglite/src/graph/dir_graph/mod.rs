@@ -8,6 +8,7 @@ use self::index_layer::LayeredIndex;
 use self::range_index_layer::LayeredRangeIndex;
 use crate::datatypes::values::Value;
 use crate::graph::constraints::{NamedConstraint, UniqueConstraintKey};
+use crate::graph::edge_embeddings::EdgeEmbeddingStore;
 use crate::graph::property_types::DeclaredType;
 use crate::graph::schema::{
     CompositeIndexKey, CompositeValue, ConnectionTypeInfo, ConnectivityTriple, EdgeData,
@@ -532,6 +533,12 @@ pub struct DirGraph {
     /// Persisted as a separate section in v2 .kgl files.
     #[serde(skip)]
     pub embeddings: HashMap<(String, String), EmbeddingStore>,
+    /// Sparse relationship embedding stores, keyed independently from node
+    /// stores even when a relationship type and node type share a name.
+    /// Persistence is owned by its required versioned section (Phase 2), not
+    /// the topology derive.
+    #[serde(skip)]
+    pub(crate) edge_embeddings: HashMap<(String, String), EdgeEmbeddingStore>,
     /// Lexical (BM25) text indexes: (node_type, property) -> TextIndexStore.
     /// Opt-in, built explicitly via `build_text_index`, and heap-resident like
     /// the embedding stores beside them — see [`crate::graph::text_indexes`]
@@ -962,6 +969,7 @@ impl DirGraph {
             type_connectivity_cache: Default::default(),
             property_ndv_cache: Arc::new(RwLock::new((0, HashMap::new()))),
             embeddings: HashMap::new(),
+            edge_embeddings: HashMap::new(),
             text_indexes: HashMap::new(),
             timeseries_configs: HashMap::new(),
             timeseries_store: HashMap::new(),
@@ -1041,6 +1049,7 @@ impl DirGraph {
             type_connectivity_cache: Default::default(),
             property_ndv_cache: Arc::new(RwLock::new((0, HashMap::new()))),
             embeddings: HashMap::new(),
+            edge_embeddings: HashMap::new(),
             text_indexes: HashMap::new(),
             timeseries_configs: HashMap::new(),
             timeseries_store: HashMap::new(),
@@ -2062,6 +2071,7 @@ impl DirGraph {
         }
         let old_node_count = self.graph.node_count();
         let old_node_bound = self.graph.node_bound();
+        let old_edge_bound = self.graph.edge_bound();
         // Free *edge* slots are reclaimed by the same rebuild — it re-adds
         // every live edge into a fresh graph — but only if the rebuild runs.
         // Gating the whole pass on the node reading alone made `vacuum()` a
@@ -2132,6 +2142,8 @@ impl DirGraph {
         // The edge ids are collected because relocating a weight needs
         // `&mut old` while `edge_indices()` borrows it.
         let old_edge_ids: Vec<EdgeIndex> = old.edge_indices().collect();
+        let mut old_to_new_edges =
+            crate::graph::edge_embeddings::EdgeRemap::with_bound(old_edge_bound);
         for old_edge_idx in old_edge_ids {
             let Some((src, tgt)) = old.edge_endpoints(old_edge_idx) else {
                 continue;
@@ -2149,11 +2161,12 @@ impl DirGraph {
                 properties: Vec::new(),
             };
             let edge_data = std::mem::replace(slot, vacated);
-            new_graph.add_edge(
+            let new_edge_idx = new_graph.add_edge(
                 NodeIndex::new(new_src as usize),
                 NodeIndex::new(new_tgt as usize),
                 edge_data,
             );
+            old_to_new_edges.set(old_edge_idx, new_edge_idx);
         }
         drop(old);
 
@@ -2167,6 +2180,7 @@ impl DirGraph {
         }
 
         self.remap_embedding_slots(&old_to_new);
+        crate::graph::edge_embeddings::remap_edge_embeddings(self, &old_to_new_edges);
         // Secondary labels live above the backend (labels.rs module doc), so
         // neither the clone loop nor reindex() below can carry them over.
         self.remap_secondary_labels(&old_to_new);

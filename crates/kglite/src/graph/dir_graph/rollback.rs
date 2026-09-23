@@ -160,6 +160,9 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // deletion is the only writer that reaches this map inside a statement
     // window (ingest runs outside one), so that entry is the whole story.
     std::mem::swap(&mut a.embeddings, &mut b.embeddings);
+    // Relationship embeddings have the same corpus-sized shape and are
+    // journalled at the graph-level edge-removal choke point.
+    std::mem::swap(&mut a.edge_embeddings, &mut b.edge_embeddings);
     // O(corpus) — an inverted index over a 100k-document corpus is megabytes of
     // postings, so cloning it per statement is out of the question for exactly
     // the reason the vectors above are. Its undo story is
@@ -536,6 +539,15 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             // would invent a dimension.
             if let Some(store) = graph.embeddings.get_mut(&store_key) {
                 store.restore_embedding(node, &prior);
+            }
+        }
+        UndoEntry::EdgeEmbeddingRemoved {
+            store_key,
+            edge,
+            prior,
+        } => {
+            if let Some(store) = graph.edge_embeddings.get_mut(&store_key) {
+                store.restore(edge, &prior);
             }
         }
         UndoEntry::TextDocPruned { store_key, node } => {

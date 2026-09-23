@@ -862,7 +862,7 @@ impl ConnectionBatchProcessor {
                         continue;
                     }
                     ConflictHandling::Replace => {
-                        GraphWrite::remove_edge(&mut graph.graph, edge_idx);
+                        crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge_idx);
                         let edge_data = EdgeData::new_interned(conn_type_key, conn.properties);
                         let new_id = GraphWrite::add_edge(
                             &mut graph.graph,

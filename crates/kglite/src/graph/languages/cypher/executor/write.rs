@@ -1921,7 +1921,7 @@ fn execute_delete(
     // non-interruptible: once deletion begins, completing it preserves atomic
     // statement semantics without an O(graph) rollback checkpoint.
     for edge_index in deleted_edges.iter().copied() {
-        GraphWrite::remove_edge(&mut graph.graph, edge_index);
+        crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge_index);
         stats.relationships_deleted += 1;
     }
 
