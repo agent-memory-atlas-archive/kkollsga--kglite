@@ -138,7 +138,11 @@ pub const WAL_MAGIC: [u8; 4] = *b"KWAL";
 ///
 /// **v7 → v8** appends relationship embedding metadata, full-group fallback,
 /// and relative-group patch records as tags 18–20. Tags 0–17 remain unchanged.
-pub const WAL_FORMAT_VERSION: u8 = 8;
+///
+/// **v8 → v9** appends the relationship HNSW declaration as tag 21. Without
+/// the header bump a v8 reader could mistake the unknown trailing tag for a
+/// torn tail and silently discard a committed declaration.
+pub const WAL_FORMAT_VERSION: u8 = 9;
 
 /// Oldest WAL format this build can replay. Frames from any version in
 /// `MIN_READABLE_WAL_FORMAT_VERSION..=WAL_FORMAT_VERSION` decode with the
@@ -432,6 +436,18 @@ pub enum MutationOp {
         tgt_type: String,
         tgt_id: Value,
         patch: EdgeGroupEmbeddingPatchWal,
+    },
+    /// Declare or withdraw the rebuildable HNSW index for one relationship
+    /// embedding store. The topology is rebuilt from recovered vectors.
+    SetEdgeVectorIndex {
+        conn_type: String,
+        text_column: String,
+        metric: Option<String>,
+        m: Option<usize>,
+        ef_construction: Option<usize>,
+        ef_search: Option<usize>,
+        auto_refresh_limit: Option<usize>,
+        present: bool,
     },
 }
 
@@ -1444,7 +1460,7 @@ mod tests {
     #[test]
     fn variant_tags_are_stable_on_disk_format() {
         let id = || Value::Int64(1);
-        let cases: [(u8, MutationOp); 21] = [
+        let cases: [(u8, MutationOp); 22] = [
             (
                 0,
                 MutationOp::UpsertNode {
@@ -1651,6 +1667,19 @@ mod tests {
                     },
                 },
             ),
+            (
+                21,
+                MutationOp::SetEdgeVectorIndex {
+                    conn_type: "C".into(),
+                    text_column: "txt".into(),
+                    metric: Some("cosine".into()),
+                    m: Some(16),
+                    ef_construction: Some(100),
+                    ef_search: Some(50),
+                    auto_refresh_limit: Some(1000),
+                    present: true,
+                },
+            ),
         ];
         for (tag, op) in cases {
             let mut buf = Vec::new();
@@ -1690,6 +1719,16 @@ mod tests {
         let bytes = write_wal_version(&frames, MIN_READABLE_WAL_FORMAT_VERSION);
         assert_eq!(bytes[4], 2, "fixture must carry a v2 header");
         assert_eq!(read_frames_all(bytes).unwrap(), frames);
+    }
+
+    #[test]
+    fn immediately_pre_index_headers_remain_readable() {
+        let frames = vec![frame(1)];
+        for version in [7, 8] {
+            let bytes = write_wal_version(&frames, version);
+            assert_eq!(bytes[4], version);
+            assert_eq!(read_frames_all(bytes).unwrap(), frames);
+        }
     }
 
     /// Opening a readable older WAL for append upgrades its header, so the

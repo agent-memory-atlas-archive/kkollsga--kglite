@@ -636,13 +636,42 @@ YIELD dropped
 
 `db.edge_embeddings.list({type?, text_property?})` reports `entity`, `type`,
 `text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
-and `index_state`. Relationship scoring in an ordinary `MATCH` is exact:
+`index_state`, pending `delta`, and `unembedded` relationship count.
+Relationship scoring in an ordinary `MATCH` is exact:
 `vector_score(r, 'evidence_emb', $vector)` names the canonical store, while
 `text_score(r, 'evidence', $text)` names the source property and embeds the
 query text. `embedding_norm(r, 'evidence_emb')` reads the stored vector. Whole
 type approximate search is exposed separately through explicit index/query
 procedures; these scalar functions continue to obey the surrounding graph
 filters.
+
+The explicit whole-store lifecycle and query procedures are:
+
+```cypher
+CALL db.edge_embeddings.build_index({
+  type:'SUPPORTS', text_property:'evidence',
+  m:16, ef_construction:200, ef_search:64, auto_refresh_limit:1000
+}) YIELD indexed, metric, m
+
+CALL db.edge_embeddings.refresh_index({type:'SUPPORTS', text_property:'evidence'})
+YIELD refreshed
+
+CALL db.edge_embeddings.drop_index({type:'SUPPORTS', text_property:'evidence'})
+YIELD dropped
+
+CALL db.edge_embeddings.query({
+  type:'SUPPORTS', text_property:'evidence', vector:$vector,
+  top_k:10, exact:false
+}) YIELD relationship, score, search_method
+```
+
+`top_k` defaults to 10 and `exact` defaults to false. `search_method` is
+`hnsw` only when HNSW served the query, otherwise `exact`; `exact:true` always
+bypasses the index. A requested metric that cannot use the installed index
+falls back to the exact route. The procedure ranks the complete declared
+relationship store before subsequent clauses run, so `WHERE` after `YIELD`
+filters its top-k output. To constrain ranking by endpoints or relationship
+properties, use filtered `MATCH` with the exact scalar functions instead.
 
 > **`vector_score` takes the store name, `text_score` takes the raw column.**
 > `vector_score` names the store directly — `'summary_emb'`. `text_score` names
@@ -3029,8 +3058,8 @@ A read, so it works on a read-only graph. Returns the same rows and columns as
 |---|---|
 | `name` | canonical name — `Label.property` or `Label.(a,b)` |
 | `type` | `PROPERTY` (hash equality or composite), `RANGE` (B-tree), `FULLTEXT` (BM25 text index — see `build_text_index()`), or `VECTOR` (HNSW index over an embedding store — see `build_vector_index()`) |
-| `entityType` | always `NODE` |
-| `labelsOrTypes` | single-element list holding the node type |
+| `entityType` | `NODE`, or `RELATIONSHIP` for an edge-vector HNSW index |
+| `labelsOrTypes` | single-element list holding the node or relationship type |
 | `properties` | indexed property names, sorted for a composite |
 | `state` | `ONLINE`, or `DEFERRED` for an index a `defer_index_rebuild=True` load has declared but not built (any write builds it). Nothing in between — KGLite builds indexes atomically |
 | `stale` | whether the index is behind the graph. `null` on `PROPERTY` / `RANGE` rows, which are maintained on every write and have no staleness to report |
@@ -3057,11 +3086,13 @@ node with no embedding stays invisible to vector search until `embed_texts` /
 `set_embeddings` runs. A `VECTOR` row appears only once an index is built —
 embeddings on their own are reported by `list_embeddings()`.
 
-A vector index is listed under its **source column** (`Doc.summary`), not the
+A node vector index is listed under its **source column** (`Doc.summary`), not the
 store name (`Doc.summary_emb`), so it shares one canonical name with that
 property's other indexes and `DROP INDEX Doc.summary` removes it along with
 them. That drops the accelerator only: the vectors are data, and DDL does not
-delete them.
+delete them. A relationship vector index uses the unambiguous canonical name
+`relationship:SUPPORTS.evidence`, and appears with `entityType: RELATIONSHIP`
+through both `SHOW INDEXES` and `CALL db.indexes()`.
 
 Neo4j 5 also returns `id`, `populationPercent`, `indexProvider`,
 `owningConstraint`, `lastRead`, and `readCount`. KGLite has no equivalent

@@ -398,9 +398,9 @@ pub(crate) enum IndexKind {
     Text,
     /// HNSW approximate-nearest-neighbour index over one embedding store, built
     /// by `build_vector_index`. Reported as Neo4j's `VECTOR`. A store *without*
-    /// one is not listed: it still answers vector queries, by exact scan, and
-    /// belongs to `list_embeddings()` rather than to a listing of installed
-    /// indexes whose every name `DROP INDEX` must accept.
+    /// one is not listed: it still answers vector queries by exact scan and
+    /// belongs to its embedding-store listing rather than to a listing of
+    /// installed indexes.
     Vector,
 }
 
@@ -429,11 +429,12 @@ impl IndexKind {
 /// demands them.
 #[derive(Debug, Clone)]
 pub(crate) struct IndexInfo {
-    /// Stable string ID — `"<node_type>.<property>"` for equality/range,
-    /// `"<node_type>.(<p1>,<p2>,...)"` for composite.
+    /// Stable string ID — `"<node_type>.<property>"` for node equality/range,
+    /// `"<node_type>.(<p1>,<p2>,...)"` for composite, and
+    /// `"relationship:<type>.<property>"` for relationship vectors.
     pub name: String,
     pub kind: IndexKind,
-    /// Always `"NODE"` — KGLite indexes node properties only.
+    /// `"NODE"` or `"RELATIONSHIP"`, matching the indexed entity kind.
     pub entity_type: &'static str,
     /// Node types this index covers — always a single-element vec today.
     pub labels_or_types: Vec<String>,
@@ -473,13 +474,16 @@ pub(crate) struct IndexInfo {
 /// `composite_indices`, `range_indices`, `text_indexes`, `embeddings`). Sorted
 /// by `name` so the output is stable across runs and storage modes.
 ///
-/// One canonical name can therefore carry several rows — a property with a
+/// One node canonical name can therefore carry several rows — a property with a
 /// hash index, a range index, a BM25 index and an embedding store is four
 /// entries under `Label.property`, distinguished by `type`. A `VECTOR` row is
 /// keyed on the *source column* (`summary`), not the store name
 /// (`summary_emb`), so it shares its name with the property's other indexes and
-/// `DROP INDEX Label.summary` reaches all of them; `list_embeddings()` remains
-/// the place to read a store's dimension, metric and model.
+/// `DROP INDEX Label.summary` reaches all node index families;
+/// `list_embeddings()` remains the place to read a node store's dimension,
+/// metric and model. Relationship vector names carry a `relationship:` prefix
+/// to prevent a node label/type collision. Their lifecycle is managed by the
+/// explicit `db.edge_embeddings.*_index` procedures.
 pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
     let mut out: Vec<IndexInfo> = Vec::new();
 
@@ -554,6 +558,25 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             entity_type: "NODE",
             labels_or_types: vec![status.node_type.clone()],
             properties: vec![status.text_column.clone()],
+            state: "ONLINE",
+            stale: Some(status.stale),
+            delta: Some(status.delta),
+            unembedded: Some(status.unembedded),
+        });
+    }
+    for status in crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
+        .into_iter()
+        .filter(|status| status.built)
+    {
+        out.push(IndexInfo {
+            name: format!(
+                "relationship:{}.{}",
+                status.connection_type, status.text_property
+            ),
+            kind: IndexKind::Vector,
+            entity_type: "RELATIONSHIP",
+            labels_or_types: vec![status.connection_type],
+            properties: vec![status.text_property],
             state: "ONLINE",
             stale: Some(status.stale),
             delta: Some(status.delta),
@@ -822,7 +845,15 @@ pub fn compute_schema(graph: &DirGraph) -> SchemaOverview {
                     format!("{}.{} [text]", idx.labels_or_types[0], idx.properties[0])
                 }
                 IndexKind::Vector => {
-                    format!("{}.{} [vector]", idx.labels_or_types[0], idx.properties[0])
+                    let prefix = if idx.entity_type == "RELATIONSHIP" {
+                        "relationship:"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "{prefix}{}.{} [vector]",
+                        idx.labels_or_types[0], idx.properties[0]
+                    )
                 }
             };
             // Suffix only on the state the shapes above cannot express, so the

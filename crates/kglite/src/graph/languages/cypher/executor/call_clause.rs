@@ -571,10 +571,16 @@ impl<'a> CypherExecutor<'a> {
         for (outer_index, outer_row) in outer_rows.into_iter().enumerate() {
             self.check_interrupt_periodic(outer_index)?;
             let params = self.extract_call_params(&clause.parameters, &outer_row)?;
-            let yielded_rows = if proc_name == "db.edge_embeddings.list" {
-                super::edge_embedding_procedures::list(self.graph, &params, &clause.yield_items)?
-            } else {
-                self.execute_resolved_call_once(proc_name.as_str(), clause, params)?
+            let yielded_rows = match proc_name.as_str() {
+                "db.edge_embeddings.list" => super::edge_embedding_procedures::list(
+                    self.graph,
+                    &params,
+                    &clause.yield_items,
+                )?,
+                "db.edge_embeddings.query" => {
+                    self.execute_edge_embedding_query(&params, &clause.yield_items)?
+                }
+                _ => self.execute_resolved_call_once(proc_name.as_str(), clause, params)?,
             };
             self.budget.reserve_rows(
                 joined_rows.len(),
@@ -591,6 +597,68 @@ impl<'a> CypherExecutor<'a> {
             columns,
             lazy_return_items: None,
         })
+    }
+
+    fn execute_edge_embedding_query(
+        &self,
+        params: &HashMap<String, Value>,
+        yields: &[YieldItem],
+    ) -> Result<Vec<ResultRow>, String> {
+        let relationship_type = match params.get("type") {
+            Some(Value::String(value)) => value.as_str(),
+            _ => "",
+        };
+        let report = super::edge_embedding_procedures::query(self.graph, params)?;
+        report
+            .hits
+            .into_iter()
+            .map(|hit| {
+                let current = self.graph.graph.edge_weight(hit.edge).ok_or_else(|| {
+                    format!(
+                        "Relationship embedding query returned deleted slot {}",
+                        hit.edge.index()
+                    )
+                })?;
+                let current_type = current.connection_type_str(&self.graph.interner);
+                if current_type != relationship_type {
+                    return Err(format!(
+                        "Relationship embedding query returned slot {} with type '{}', expected \
+                         '{relationship_type}'",
+                        hit.edge.index(),
+                        current_type
+                    ));
+                }
+                let relationship = super::helpers::materialize_rel_value_with_incarnation(
+                    hit.edge,
+                    self.graph,
+                    self.relationship_incarnation(hit.edge),
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "Relationship embedding query could not materialize slot {}",
+                        hit.edge.index()
+                    )
+                })?;
+                let values = HashMap::from([
+                    ("relationship", Value::Relationship(Box::new(relationship))),
+                    ("score", Value::Float64(hit.score)),
+                    (
+                        "search_method",
+                        Value::String(report.search_method.to_string()),
+                    ),
+                ]);
+                let mut row = ResultRow::new();
+                for item in yields {
+                    if let Some(value) = values.get(item.name.as_str()) {
+                        row.projected.insert(
+                            item.alias.clone().unwrap_or_else(|| item.name.clone()),
+                            value.clone(),
+                        );
+                    }
+                }
+                Ok(row)
+            })
+            .collect()
     }
 
     /// Invoke an already-resolved ordinary procedure once for one input row.

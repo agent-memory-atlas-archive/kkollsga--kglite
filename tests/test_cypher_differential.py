@@ -153,6 +153,10 @@ def edge_vector_differential_graph():
         "CALL db.edge_embeddings.list({type:'R',text_property:'text'}) YIELD count RETURN count"
     ).to_list()
     assert metadata == [{"count": 4}], "fixture must install all four relationship vectors"
+    built = graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'R',text_property:'text'}) YIELD indexed RETURN indexed"
+    ).to_list()
+    assert built == [{"indexed": 4}], "fixture must install a real relationship HNSW index"
     scored = graph.cypher(
         "MATCH ()-[r:R]->() WHERE r.k=0 RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score"
     ).to_list()

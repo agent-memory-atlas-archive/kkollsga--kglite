@@ -15,6 +15,9 @@ use crate::graph::embeddings::{store_name, text_column_of};
 use crate::graph::schema::{DirGraph, EdgeData, EmbeddingStore, InternedKey, RemovedEmbedding};
 use crate::graph::storage::{GraphRead, GraphWrite};
 
+#[path = "edge_vector_index.rs"]
+pub(crate) mod vector_index;
+
 pub(crate) type EdgeEmbeddingKey = (String, String);
 
 const VACANT_EDGE: u32 = u32::MAX;
@@ -180,10 +183,12 @@ impl EdgeEmbeddingStore {
         self.numeric.get_embedding(edge.index())
     }
 
-    // The exact relationship scorer lands before the indexed whole-store path.
-    #[allow(dead_code)]
     pub(crate) fn get_with_norm(&self, edge: EdgeIndex) -> Option<(&[f32], f32)> {
         self.numeric.get_embedding_with_norm(edge.index())
+    }
+
+    pub(crate) fn restore_index_state(&mut self, state: crate::graph::schema::VectorIndexState) {
+        self.numeric.restore_index_state(state);
     }
 
     pub(crate) fn edges(&self) -> impl Iterator<Item = EdgeIndex> + '_ {
@@ -994,3 +999,11 @@ mod wal_capture_perf_tests;
 #[cfg(test)]
 #[path = "edge_embedding_write_tests.rs"]
 mod write_tests;
+
+#[cfg(test)]
+#[path = "edge_vector_index_tests.rs"]
+mod vector_index_tests;
+
+#[cfg(test)]
+#[path = "edge_vector_index_perf_tests.rs"]
+mod vector_index_perf_tests;

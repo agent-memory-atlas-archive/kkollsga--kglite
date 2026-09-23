@@ -107,6 +107,7 @@ enum DeclKey {
     Constraint(EntityKind, String, Vec<String>, ConstraintKind),
     TimeseriesConfig(String),
     VectorIndex(String, String),
+    EdgeVectorIndex(String, String),
 }
 
 #[derive(Default)]
@@ -234,6 +235,11 @@ impl Declarations {
                 text_column,
                 ..
             } => DeclKey::VectorIndex(node_type.clone(), text_column.clone()),
+            MutationOp::SetEdgeVectorIndex {
+                conn_type,
+                text_column,
+                ..
+            } => DeclKey::EdgeVectorIndex(conn_type.clone(), text_column.clone()),
             MutationOp::SetTypeParent { node_type, .. } => DeclKey::Parent(node_type.clone()),
             MutationOp::SetOntology { .. } => DeclKey::Ontology,
             MutationOp::SetSchemaVersion { .. } => DeclKey::SchemaVersion,
@@ -517,6 +523,34 @@ impl Declarations {
                     *auto_refresh_limit,
                 )?;
             }
+        }
+        for op in &self.ops {
+            let MutationOp::SetEdgeVectorIndex {
+                conn_type,
+                text_column,
+                metric,
+                m,
+                ef_construction,
+                ef_search,
+                auto_refresh_limit,
+                present,
+            } = op
+            else {
+                continue;
+            };
+            crate::graph::edge_embeddings::vector_index::apply_edge_vector_index_declaration(
+                graph,
+                conn_type,
+                text_column,
+                crate::graph::edge_embeddings::vector_index::EdgeVectorIndexOptions {
+                    m: *m,
+                    ef_construction: *ef_construction,
+                    ef_search: *ef_search,
+                    metric: metric.clone(),
+                    auto_refresh_limit: *auto_refresh_limit,
+                },
+                *present,
+            )?;
         }
         Ok(())
     }

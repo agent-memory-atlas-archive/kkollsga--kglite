@@ -336,7 +336,7 @@ impl<'a> CypherExecutor<'a> {
         self
     }
 
-    fn relationship_incarnation(
+    pub(super) fn relationship_incarnation(
         &self,
         edge: petgraph::graph::EdgeIndex,
     ) -> Option<crate::datatypes::values::RelationshipIncarnation> {

@@ -11,6 +11,14 @@ before upgrading.
 
 ### Added
 
+- Explicit whole-store relationship vector search through
+  `db.edge_embeddings.query`, with HNSW build/refresh/drop procedures and
+  `search_method` reporting. Missing, stale or incompatible indexes fall back
+  to exact search; relationship MATCH scoring stays exact. Index diagnostics
+  distinguish relationship stores from identically named node stores.
+  Checkpoints retain vectors and provenance; rebuild the derived relationship
+  index after reopening to use HNSW again.
+
 - Cypher relationship embedding management through `db.edge_embeddings.set`,
   `embed`, `list`, `remove`, and `drop`. Writes validate complete selections
   before mutation; generation preserves unselected vectors and stages callback

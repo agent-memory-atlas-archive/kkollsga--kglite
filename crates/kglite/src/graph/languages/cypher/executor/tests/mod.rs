@@ -41,6 +41,7 @@ use crate::graph::languages::cypher::parser;
 
 mod cypher25_clauses;
 mod deadline_rows;
+mod edge_vector_index;
 mod edge_vector_score;
 mod exists_witness;
 mod expressions;

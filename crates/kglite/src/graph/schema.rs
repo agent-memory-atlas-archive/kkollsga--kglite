@@ -1110,6 +1110,13 @@ impl Clone for EmbeddingStore {
 /// lane hands out a guard rather than a reference.
 pub struct HnswRead<'a>(RwLockReadGuard<'a, Option<crate::graph::algorithms::hnsw::HnswIndex>>);
 
+/// Moved rebuildable vector-index state used by statement rollback.
+#[derive(Debug)]
+pub(crate) struct VectorIndexState {
+    pub(crate) index: Option<crate::graph::algorithms::hnsw::HnswIndex>,
+    pub(crate) freshness: IndexFreshness,
+}
+
 impl std::ops::Deref for HnswRead<'_> {
     type Target = crate::graph::algorithms::hnsw::HnswIndex;
 
@@ -1348,6 +1355,28 @@ impl EmbeddingStore {
     pub fn invalidate_index(&mut self) {
         *self.index.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
         self.freshness = IndexFreshness::covering(0, Some(self.freshness.limit()));
+    }
+
+    pub(crate) fn take_index_state(&mut self) -> VectorIndexState {
+        let limit = self.freshness.limit();
+        let index = self
+            .index
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let freshness = std::mem::replace(
+            &mut self.freshness,
+            IndexFreshness::covering(0, Some(limit)),
+        );
+        VectorIndexState { index, freshness }
+    }
+
+    pub(crate) fn restore_index_state(&mut self, state: VectorIndexState) {
+        *self
+            .index
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner()) = state.index;
+        self.freshness = state.freshness;
     }
 
     #[inline]

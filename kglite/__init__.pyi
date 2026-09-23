@@ -7211,6 +7211,21 @@ class KnowledgeGraph:
                 ORDER BY score DESC LIMIT 5
             ''', params={'query': 'supporting evidence'})
 
+            # Explicit whole-store relationship ANN. MATCH scoring above stays
+            # exact; the procedure reports whether HNSW or exact fallback ran.
+            graph.cypher('''
+                CALL db.edge_embeddings.build_index({
+                  type:'SUPPORTS', text_property:'evidence'
+                }) YIELD indexed RETURN indexed
+            ''')
+            nearest = graph.cypher('''
+                CALL db.edge_embeddings.query({
+                  type:'SUPPORTS', text_property:'evidence',
+                  vector:$vector, top_k:10
+                }) YIELD relationship, score, search_method
+                RETURN relationship, score, search_method
+            ''', params={'vector': [0.1, 0.2]})
+
             # CALL graph algorithms
             top = graph.cypher('''
                 CALL pagerank() YIELD node, score

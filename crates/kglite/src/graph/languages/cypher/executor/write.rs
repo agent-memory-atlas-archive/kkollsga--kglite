@@ -460,17 +460,20 @@ fn run_clause_pipeline(
                 list,
                 body,
             } => {
+                let foreach_ctx = ForeachBodyCtx {
+                    params,
+                    interrupt,
+                    budget,
+                    relationship_identities: ctx.relationship_identities,
+                };
                 execute_foreach(
                     graph,
                     variable,
                     list,
                     body,
                     &result_set,
-                    params,
                     stats,
-                    interrupt,
-                    budget,
-                    ctx.relationship_identities,
+                    &foreach_ctx,
                 )?;
                 GraphWrite::flush_pending_writes(&mut graph.graph);
             }
@@ -642,27 +645,18 @@ fn finalize_mutation(
 /// and body bindings do not propagate out. Zero incoming rows means the
 /// body never runs; a standalone FOREACH still runs once, over the implicit
 /// start row the pipeline seeds for it.
-#[allow(clippy::too_many_arguments)]
 fn execute_foreach(
     graph: &mut DirGraph,
     variable: &str,
     list: &Expression,
     body: &[Clause],
     outer: &ResultSet,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
-    budget: &super::budget::ExecutionBudget,
-    relationship_identities: &std::sync::Arc<
-        std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
-    >,
+    ctx: &ForeachBodyCtx<'_>,
 ) -> Result<(), String> {
-    let body_ctx = ForeachBodyCtx {
-        params,
-        interrupt,
-        budget,
-        relationship_identities,
-    };
+    let params = ctx.params;
+    let interrupt = ctx.interrupt;
+    let budget = ctx.budget;
     for (row_idx, row) in outer.rows.iter().enumerate() {
         check_interrupt_periodic(interrupt, row_idx)?;
         // Evaluate the list in this row's context (read-only borrow of the
@@ -693,7 +687,7 @@ fn execute_foreach(
                 lazy_return_items: None,
             };
             for bclause in body {
-                elem_set = apply_foreach_body_clause(graph, bclause, elem_set, stats, &body_ctx)?;
+                elem_set = apply_foreach_body_clause(graph, bclause, elem_set, stats, ctx)?;
             }
         }
     }
@@ -722,7 +716,6 @@ fn apply_foreach_body_clause(
 ) -> Result<ResultSet, String> {
     let params = ctx.params;
     let interrupt = ctx.interrupt;
-    let budget = ctx.budget;
     let relationship_identities = ctx.relationship_identities;
     // The flush is per element, not per clause: on disk a property read in the
     // same or a later iteration (e.g. `coalesce(n.hits, 0)`) reads the type's
@@ -766,18 +759,7 @@ fn apply_foreach_body_clause(
             list,
             body,
         } => {
-            execute_foreach(
-                graph,
-                variable,
-                list,
-                body,
-                &result_set,
-                params,
-                stats,
-                interrupt,
-                budget,
-                relationship_identities,
-            )?;
+            execute_foreach(graph, variable, list, body, &result_set, stats, ctx)?;
             Ok(result_set)
         }
         other => Err(format!(

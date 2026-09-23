@@ -467,8 +467,42 @@ existing Cypher write boundary and is rejected before invoking the model.
 
 Use `vector_score(r, 'evidence_emb', $vector)` for a query vector and
 `text_score(r, 'evidence', $text)` for source-column text. Scoring inside a
-filtered `MATCH` is exact. The separate whole-store ANN procedures are the
-explicit approximate path. Relationship values should stay bound inside the
+filtered `MATCH` is exact. Build and query the separate whole-store HNSW index
+only when the relationship type and source-property store are the intended
+search corpus:
+
+```python
+graph.cypher("""
+    CALL db.edge_embeddings.build_index({
+      type:'SUPPORTS', text_property:'evidence',
+      m:16, ef_construction:200, ef_search:64
+    }) YIELD indexed, metric, m
+    RETURN indexed, metric, m
+""")
+
+nearest = graph.cypher("""
+    CALL db.edge_embeddings.query({
+      type:'SUPPORTS', text_property:'evidence',
+      vector:$query_vector, top_k:10
+    }) YIELD relationship, score, search_method
+    RETURN relationship, score, search_method
+""", params={'query_vector': [0.1, 0.2]})
+```
+
+`search_method` reports `hnsw` only when the index served the query. A missing
+or metric-incompatible index falls back to `exact`; a stale writable index may
+catch up at query entry, while a stale index that cannot catch up also falls
+back. `exact:true` always bypasses HNSW. `refresh_index` incorporates pending index changes and
+`drop_index` removes the index while retaining vectors. `list` reports
+`index_state` (`none`, `online`, or `stale`), pending `delta`, and the number of
+`unembedded` relationships.
+
+The `query` procedure ranks the complete declared store before later clauses
+run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
+constrain HNSW. Use filtered `MATCH` plus `vector_score`/`text_score` when an
+endpoint or relationship predicate must constrain the ranking corpus.
+
+Relationship values should stay bound inside the
 statement: physical IDs are graph-local slots, and automatic transfer across
 independently rebuilt graphs is unavailable without a unique application key.
 

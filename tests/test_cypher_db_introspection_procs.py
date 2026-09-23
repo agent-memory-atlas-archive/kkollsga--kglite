@@ -266,7 +266,17 @@ def test_show_procedures_default_columns(small_graph):
     # Data-mutating procedures report WRITE — the third mode, pinned the
     # same both-ways as SCHEMA above (structured-data epoch, 2026-08-26).
     writing = {name for name, mode in modes.items() if mode == "WRITE"}
-    assert writing == {"table.upsert", "table.delete"}, writing
+    assert writing == {
+        "table.upsert",
+        "table.delete",
+        "db.edge_embeddings.set",
+        "db.edge_embeddings.embed",
+        "db.edge_embeddings.remove",
+        "db.edge_embeddings.drop",
+        "db.edge_embeddings.build_index",
+        "db.edge_embeddings.refresh_index",
+        "db.edge_embeddings.drop_index",
+    }, writing
     assert set(modes.values()) == {"READ", "SCHEMA", "WRITE"}
 
 

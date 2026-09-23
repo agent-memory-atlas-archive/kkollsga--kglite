@@ -77,7 +77,7 @@ use crate::graph::edge_embeddings::EdgeEmbeddingStore;
 use crate::graph::features::timeseries::NodeTimeseries;
 use crate::graph::schema::{
     CompositeIndexKey, CompositeValue, EdgeData, IndexKey, InternedKey, NodeData, RemovedEmbedding,
-    TypeSchema,
+    TypeSchema, VectorIndexState,
 };
 use crate::graph::storage::column_store::ColumnStore;
 
@@ -257,6 +257,10 @@ pub enum UndoEntry {
     EdgeEmbeddingStoreReplaced {
         store_key: (String, String),
         prior: Option<Box<EdgeEmbeddingStore>>,
+    },
+    EdgeVectorIndexReplaced {
+        store_key: (String, String),
+        prior: VectorIndexState,
     },
     /// A node's BM25 document was pruned from `DirGraph::text_indexes` with the
     /// node. Undo marks the slot for re-reading.
@@ -709,6 +713,15 @@ impl UndoJournal {
             store_key,
             prior: prior.map(Box::new),
         });
+    }
+
+    pub(crate) fn note_edge_vector_index_replaced(
+        &mut self,
+        store_key: (String, String),
+        prior: VectorIndexState,
+    ) {
+        self.entries
+            .push(UndoEntry::EdgeVectorIndexReplaced { store_key, prior });
     }
 
     #[inline]

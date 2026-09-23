@@ -189,6 +189,7 @@ impl ReplayPlan {
             | MutationOp::SetTimeseriesConfig { .. }
             | MutationOp::SetEmbeddings { .. }
             | MutationOp::SetVectorIndex { .. }
+            | MutationOp::SetEdgeVectorIndex { .. }
             | MutationOp::SetEdgeEmbeddingStore { .. }
             | MutationOp::ReplaceEdgeGroupEmbeddings { .. }
             | MutationOp::PatchEdgeGroupEmbeddings { .. } => {}

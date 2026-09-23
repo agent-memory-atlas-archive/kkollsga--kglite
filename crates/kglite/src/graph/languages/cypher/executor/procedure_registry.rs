@@ -272,7 +272,33 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
             "metric",
             "model",
             "index_state",
+            "delta",
+            "unembedded",
         ],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.build_index",
+        aliases: &[],
+        description: "Build an HNSW index for one relationship embedding store",
+        columns: &["indexed", "metric", "m"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.refresh_index",
+        aliases: &[],
+        description: "Refresh a relationship vector index from current stored vectors",
+        columns: &["refreshed"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.drop_index",
+        aliases: &[],
+        description: "Drop one relationship vector index while retaining its vectors",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.edge_embeddings.query",
+        aliases: &[],
+        description: "Retrieve the nearest relationships from one whole embedding store",
+        columns: &["relationship", "score", "search_method"],
     },
     ProcedureSpec {
         name: "ontology_audit",
@@ -539,6 +565,9 @@ pub(super) const MUTATING_PROCEDURES: &[&str] = &[
     "db.edge_embeddings.embed",
     "db.edge_embeddings.remove",
     "db.edge_embeddings.drop",
+    "db.edge_embeddings.build_index",
+    "db.edge_embeddings.refresh_index",
+    "db.edge_embeddings.drop_index",
 ];
 
 /// Whether `name` (canonical spelling or alias, any case) is a mutating
@@ -555,7 +584,9 @@ pub(super) fn is_mutating_procedure(name: &str) -> bool {
 /// Neo4j procedure mode for `SHOW PROCEDURES`. KGLite's mutating procedures
 /// change capture configuration rather than data, which is Neo4j's "SCHEMA".
 pub(super) fn procedure_mode(name: &str) -> &'static str {
-    if name.starts_with("table.") || name.starts_with("db.edge_embeddings.") {
+    if name.starts_with("table.")
+        || (name.starts_with("db.edge_embeddings.") && is_mutating_procedure(name))
+    {
         // The table procedures mutate DATA (rows of a property), not
         // capture configuration — Neo4j's WRITE mode, not SCHEMA.
         "WRITE"
@@ -654,6 +685,10 @@ mod tests {
         assert!(!is_mutating_procedure("db.cdc.status"));
         assert_eq!(procedure_mode("db.cdc.status"), "READ");
         assert!(!is_mutating_procedure("db.labels"));
+        for name in ["db.edge_embeddings.list", "db.edge_embeddings.query"] {
+            assert!(!is_mutating_procedure(name));
+            assert_eq!(procedure_mode(name), "READ");
+        }
         assert!(!is_mutating_procedure("no.such.procedure"));
     }
 

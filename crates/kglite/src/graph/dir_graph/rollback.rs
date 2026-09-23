@@ -567,6 +567,11 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
                 graph.edge_embeddings.remove(&store_key);
             }
         },
+        UndoEntry::EdgeVectorIndexReplaced { store_key, prior } => {
+            if let Some(store) = graph.edge_embeddings.get_mut(&store_key) {
+                store.restore_index_state(prior);
+            }
+        }
         UndoEntry::TextDocPruned { store_key, node } => {
             // Marking, not restoring: the document is derived from a property
             // this replay is putting back, so the next refresh re-tokenizes it.

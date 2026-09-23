@@ -8,6 +8,10 @@ use crate::graph::edge_embedding_generation::{
     embed_selected_relationships, EdgeGenerationRequest, EmbeddingExecutionService,
     SelectedEdgeText,
 };
+use crate::graph::edge_embeddings::vector_index::{
+    build_edge_vector_index, drop_edge_vector_index, refresh_edge_vector_index,
+    EdgeVectorIndexOptions, EdgeVectorQueryOptions, EdgeVectorQueryReport,
+};
 use crate::graph::edge_embeddings::{
     drop_edge_embedding_store, remove_edge_embeddings, upsert_edge_embeddings,
 };
@@ -68,6 +72,37 @@ pub(super) fn execute(
         }
         "db.edge_embeddings.drop" => {
             let dropped = drop_edge_embedding_store(graph, &relationship_type, &text_property)?;
+            HashMap::from([("dropped", Value::Boolean(dropped))])
+        }
+        "db.edge_embeddings.build_index" => {
+            let report = build_edge_vector_index(
+                graph,
+                &relationship_type,
+                &text_property,
+                EdgeVectorIndexOptions {
+                    m: optional_positive_usize(params, "m", proc_name)?,
+                    ef_construction: optional_positive_usize(params, "ef_construction", proc_name)?,
+                    ef_search: optional_positive_usize(params, "ef_search", proc_name)?,
+                    metric: optional_string(params, "metric", proc_name)?,
+                    auto_refresh_limit: optional_nonnegative_usize(
+                        params,
+                        "auto_refresh_limit",
+                        proc_name,
+                    )?,
+                },
+            )?;
+            HashMap::from([
+                ("indexed", Value::Int64(report.indexed as i64)),
+                ("metric", Value::String(report.metric)),
+                ("m", Value::Int64(report.m as i64)),
+            ])
+        }
+        "db.edge_embeddings.refresh_index" => {
+            let refreshed = refresh_edge_vector_index(graph, &relationship_type, &text_property)?;
+            HashMap::from([("refreshed", Value::Int64(refreshed as i64))])
+        }
+        "db.edge_embeddings.drop_index" => {
+            let dropped = drop_edge_vector_index(graph, &relationship_type, &text_property)?;
             HashMap::from([("dropped", Value::Boolean(dropped))])
         }
         "db.edge_embeddings.embed" => {
@@ -142,6 +177,15 @@ pub(super) fn list(
             ));
         }
     }
+    let statuses = crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
+        .into_iter()
+        .map(|status| {
+            (
+                (status.connection_type.clone(), status.text_property.clone()),
+                status,
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let mut stores: Vec<_> = graph.edge_embeddings.iter().collect();
     stores.sort_by_key(|(key, _)| (*key).clone());
     Ok(stores
@@ -155,18 +199,16 @@ pub(super) fn list(
                 })
         })
         .map(|((relationship_type, store_name), store)| {
+            let text_property = crate::graph::embeddings::text_column_of(store_name)
+                .expect("edge embedding store names carry the _emb suffix");
+            let status = statuses
+                .get(&(relationship_type.clone(), text_property.to_string()))
+                .expect("every edge embedding store has vector-index status");
             yield_row(
                 HashMap::from([
                     ("entity", Value::String("relationship".into())),
                     ("type", Value::String(relationship_type.clone())),
-                    (
-                        "text_property",
-                        Value::String(
-                            crate::graph::embeddings::text_column_of(store_name)
-                                .expect("edge embedding store names carry the _emb suffix")
-                                .to_string(),
-                        ),
-                    ),
+                    ("text_property", Value::String(text_property.to_string())),
                     ("store", Value::String(store_name.clone())),
                     ("dimension", Value::Int64(store.dimension() as i64)),
                     ("count", Value::Int64(store.len() as i64)),
@@ -184,12 +226,50 @@ pub(super) fn list(
                             .model_id()
                             .map_or(Value::Null, |value| Value::String(value.into())),
                     ),
-                    ("index_state", Value::String("none".into())),
+                    (
+                        "index_state",
+                        Value::String(
+                            if !status.built {
+                                "none"
+                            } else if status.stale {
+                                "stale"
+                            } else {
+                                "online"
+                            }
+                            .into(),
+                        ),
+                    ),
+                    ("delta", Value::Int64(status.delta as i64)),
+                    ("unembedded", Value::Int64(status.unembedded as i64)),
                 ]),
                 yields,
             )
         })
         .collect())
+}
+
+pub(super) fn query(
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+) -> Result<EdgeVectorQueryReport, String> {
+    let proc_name = "db.edge_embeddings.query";
+    let relationship_type = require_string(params, "type", proc_name)?;
+    let text_property = require_string(params, "text_property", proc_name)?;
+    let vector = numeric_vector(params.get("vector"), proc_name)?;
+    let top_k = optional_nonnegative_usize(params, "top_k", proc_name)?.unwrap_or(10);
+    let exact = optional_boolean(params, "exact", proc_name)?.unwrap_or(false);
+    let metric = optional_string(params, "metric", proc_name)?;
+    crate::graph::edge_embeddings::vector_index::query_edge_embeddings(
+        graph,
+        &relationship_type,
+        &text_property,
+        &vector,
+        EdgeVectorQueryOptions {
+            top_k,
+            exact,
+            metric,
+        },
+    )
 }
 
 fn resolve_relationships(
@@ -314,6 +394,35 @@ fn optional_positive_usize(
         Some(Value::Int64(value)) if *value > 0 => Ok(Some(*value as usize)),
         _ => Err(format!(
             "CALL {proc_name}: '{name}' must be a positive integer"
+        )),
+    }
+}
+
+fn optional_nonnegative_usize(
+    params: &HashMap<String, Value>,
+    name: &str,
+    proc_name: &str,
+) -> Result<Option<usize>, String> {
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Int64(value)) if *value >= 0 => Ok(Some(*value as usize)),
+        _ => Err(format!(
+            "CALL {proc_name}: '{name}' must be a non-negative integer"
+        )),
+    }
+}
+
+fn optional_boolean(
+    params: &HashMap<String, Value>,
+    name: &str,
+    proc_name: &str,
+) -> Result<Option<bool>, String> {
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Boolean(value)) => Ok(Some(*value)),
+        Some(value) => Err(format!(
+            "CALL {proc_name}: '{name}' must be a boolean, got {}",
+            value.type_name()
         )),
     }
 }

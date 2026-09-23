@@ -450,6 +450,7 @@ fn mutation_op_has_legacy_reference(op: &MutationOp) -> bool {
         | MutationOp::SetTimeseriesConfig { .. }
         | MutationOp::SetEmbeddings { .. }
         | MutationOp::SetVectorIndex { .. }
+        | MutationOp::SetEdgeVectorIndex { .. }
         | MutationOp::SetEdgeEmbeddingStore { .. }
         | MutationOp::ReplaceEdgeGroupEmbeddings { .. }
         | MutationOp::PatchEdgeGroupEmbeddings { .. } => false,
