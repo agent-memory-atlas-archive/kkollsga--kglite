@@ -183,6 +183,19 @@ before upgrading.
   records the metric as its own journalled metadata change, instead of only
   validating the vectors against the cosine default and leaving a later
   contradicting build unrefused.
+- **Write clauses reuse a node or relationship that arrives as a projected
+  value.** `UNWIND collect(n) AS x`, a `FOREACH` loop variable and a `WITH`
+  that carried an entity forward reach `CREATE`, `MERGE`, `SET` and `REMOVE`
+  as values rather than bindings, and each clause treated the name as unbound:
+  `FOREACH (x IN roots | CREATE (x)-[:S]->(x))` created an anonymous
+  label-less node per element and looped the relationship on it
+  (`nodes_created: 1`), `MERGE (x)` created a duplicate, and `SET x.p = 1` /
+  `SET r.p = 1` / `REMOVE r.p` on a collected node or relationship were
+  refused as "not bound". The value is now resolved to the entity it names,
+  with the same liveness, endpoint and statement-identity checks `DELETE`
+  applies, and the clause writes that entity; a value whose slot has since
+  been deleted or reused by another type is refused rather than recreated.
+
 ## [0.17.12] - 2026-09-19
 ### Added
 

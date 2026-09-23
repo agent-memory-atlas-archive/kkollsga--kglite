@@ -181,3 +181,27 @@ def test_multi_part_create_survives_save_and_reload(g, tmp_path):
     g.save(str(path))
     reloaded = kglite.load(str(path))
     assert census(reloaded) == ([("a", "T"), ("b", "T")], [("b", "E", "a")])
+
+
+# ── projected node values ────────────────────────────────────────────────
+#
+# `UNWIND collect(a) AS x CREATE (x)-[:S]->(:M)` hands CREATE a node *value*.
+# The same fabricated-anonymous-node defect as the cross-part case above,
+# reached through a projection instead of a comma-separated part; asserted the
+# same way, by census and endpoint identity.
+
+
+def test_unwind_create_reuses_the_projected_node_as_an_endpoint(g):
+    g.cypher("CREATE (:T {title: 'a'}), (:T {title: 'b'})")
+    g.cypher("MATCH (n:T) WITH collect(n) AS ns UNWIND ns AS x CREATE (x)-[:S]->(:M {title: 'm'})")
+    assert g.last_mutation_stats["nodes_created"] == 2
+    assert census(g) == (
+        [("a", "T"), ("b", "T"), ("m", "M"), ("m", "M")],
+        [("a", "S", "m"), ("b", "S", "m")],
+    )
+
+
+def test_set_and_remove_write_through_a_projected_relationship(g):
+    g.cypher("CREATE (a:T {title: 'a'})-[:S {q: 2}]->(:T {title: 'b'})")
+    g.cypher("MATCH ()-[e:S]->() WITH collect(e) AS es UNWIND es AS r SET r.p = 1 REMOVE r.q")
+    assert g.cypher("MATCH ()-[r:S]->() RETURN r.p AS p, r.q AS q").to_list() == [{"p": 1, "q": None}]

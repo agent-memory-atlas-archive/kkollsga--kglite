@@ -44,9 +44,19 @@ fn match_node_pattern(
     node_pat: &CreateNodePattern,
     row: &ResultRow,
 ) -> Result<Option<ResultRow>, String> {
-    // If variable is already bound from prior MATCH, it's already matched
+    // If variable is already bound from prior MATCH — or carried in as a
+    // projected node value — it's already matched. Without the projected arm
+    // `UNWIND collect(n) AS x MERGE (x)` reached the CREATE arm and duplicated
+    // the node it was handed.
     if let Some(ref var) = node_pat.variable {
-        if let Some(&existing_idx) = row.node_bindings.get(var) {
+        if let Some(existing_idx) =
+            row.node_bindings
+                .get(var)
+                .copied()
+                .or(super::projected_targets::projected_node_target(
+                    graph, row, var,
+                )?)
+        {
             if graph.graph.node_view(existing_idx).is_some() {
                 let mut result_row = ResultRow::new();
                 result_row.node_bindings.insert(var.clone(), existing_idx);
@@ -197,11 +207,9 @@ fn match_relationship_pattern(
     let source_var = create_node_variable(&pattern.elements[0]);
     let target_var = create_node_variable(&pattern.elements[2]);
 
-    let source_idx = source_var
-        .and_then(|v| row.node_bindings.get(v).copied())
+    let source_idx = merge_endpoint(graph, row, source_var)?
         .ok_or("MERGE path: source node must be bound by prior MATCH")?;
-    let target_idx = target_var
-        .and_then(|v| row.node_bindings.get(v).copied())
+    let target_idx = merge_endpoint(graph, row, target_var)?
         .ok_or("MERGE path: target node must be bound by prior MATCH")?;
 
     let CreateElement::Edge(edge_pat) = &pattern.elements[1] else {
@@ -246,6 +254,23 @@ fn match_relationship_pattern(
         );
     }
     Ok(Some(result_row))
+}
+
+/// One endpoint of a relationship MERGE: a live `node_bindings` entry, or the
+/// node a projected value names. `None` means the endpoint is not bound at
+/// all, which the caller reports — a relationship MERGE cannot invent one.
+fn merge_endpoint(
+    graph: &DirGraph,
+    row: &ResultRow,
+    var: Option<&str>,
+) -> Result<Option<NodeIndex>, String> {
+    let Some(var) = var else {
+        return Ok(None);
+    };
+    if let Some(&idx) = row.node_bindings.get(var) {
+        return Ok(Some(idx));
+    }
+    super::projected_targets::projected_node_target(graph, row, var)
 }
 
 fn create_node_variable(element: &CreateElement) -> Option<&str> {

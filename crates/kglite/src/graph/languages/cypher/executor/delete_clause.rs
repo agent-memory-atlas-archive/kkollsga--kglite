@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 
+use super::projected_targets::projected_edge_binding;
 use super::relationship_identity::StatementRelationshipIdentities;
 use super::write::check_interrupt_periodic;
 use super::write_scope::{enforce_bound_edge_write_scope, enforce_node_write_scope};
@@ -187,33 +188,10 @@ fn collect_projected_relationship(
     targets: &mut DeleteTargets,
     identities: &StatementRelationshipIdentities,
 ) -> Result<(), String> {
-    let edge_index = EdgeIndex::new(rel.id as usize);
-    if !targets.edges.insert(edge_index) {
+    if !targets.edges.insert(EdgeIndex::new(rel.id as usize)) {
         return Ok(());
     }
-    let token = rel.incarnation.ok_or_else(|| {
-        format!("Relationship value '{var_name}' was not bound by this statement")
-    })?;
-    if !identities.accepts(edge_index, token) {
-        return Err(format!(
-            "Relationship '{var_name}' is stale after its storage slot was reused"
-        ));
-    }
-    let binding = EdgeBinding {
-        incarnation: Some(token),
-        source: NodeIndex::new(rel.start_id as usize),
-        target: NodeIndex::new(rel.end_id as usize),
-        edge_index,
-    };
-    // The token is statement-local; a value from another graph or a rebuilt
-    // slot can still name a live edge whose endpoints are not the ones the
-    // value records. Deleting that edge would remove a relationship the caller
-    // never selected.
-    if graph.graph.edge_endpoints(edge_index) != Some((binding.source, binding.target)) {
-        return Err(format!(
-            "Relationship '{var_name}' no longer occupies the storage slot it names"
-        ));
-    }
+    let binding = projected_edge_binding(graph, var_name, rel, identities)?;
     enforce_bound_edge_write_scope(graph, &binding)
 }
 

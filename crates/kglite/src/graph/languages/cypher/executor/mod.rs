@@ -951,6 +951,7 @@ pub(crate) mod ontology_procedures;
 pub(crate) mod ordering;
 mod procedure_params;
 mod procedure_registry;
+mod projected_targets;
 pub mod refresh_stats;
 pub mod regex_cache;
 mod rel_constraint_ddl;

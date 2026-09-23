@@ -104,3 +104,46 @@ def test_foreach_body_rejects_read_clause():
     # A FOREACH body may only contain update clauses; MATCH is rejected at parse.
     with pytest.raises(Exception):
         g.cypher("FOREACH (x IN [1] | MATCH (n) RETURN n)")
+
+
+# ── the loop variable IS the collected entity ────────────────────────────
+
+
+def test_foreach_create_over_collected_nodes_reuses_the_node():
+    """`CREATE (x)-[:S]->(x)` over `collect(a)` loops the relationship on `a`.
+
+    The loop variable reaches CREATE as a projected node value, not a binding,
+    and the clause used to treat that as an unbound name: one anonymous,
+    label-less node per element, with the relationship looped on it.
+    """
+    g = kglite.KnowledgeGraph()
+    g.cypher("CREATE (:N {id: 1}), (:N {id: 2})")
+    g.cypher(
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS roots FOREACH (x IN roots | CREATE (x)-[:S {tag: 'made'}]->(x))"
+    )
+    assert g.last_mutation_stats["nodes_created"] == 0
+    assert g.last_mutation_stats["relationships_created"] == 1
+    assert g.cypher("MATCH (n) RETURN count(n) AS c")[0]["c"] == 2
+    assert g.cypher("MATCH (n)-[:S]->(m) RETURN n.id AS s, m.id AS t").to_list() == [{"s": 1, "t": 1}]
+
+
+def test_foreach_set_over_collected_relationships_writes_each():
+    g = kglite.KnowledgeGraph()
+    g.cypher("CREATE (a:N {id: 1}), (b:N {id: 2}), (a)-[:E {k: 0}]->(b), (a)-[:E {k: 1}]->(b)")
+    g.cypher("MATCH ()-[e:E]->() WITH collect(e) AS es FOREACH (r IN es | SET r.hits = 1)")
+    assert g.last_mutation_stats["properties_set"] == 2
+    assert g.cypher("MATCH ()-[r:E]->() RETURN r.k AS k, r.hits AS hits ORDER BY k").to_list() == [
+        {"k": 0, "hits": 1},
+        {"k": 1, "hits": 1},
+    ]
+
+
+def test_foreach_over_a_deleted_collected_node_is_refused_not_recreated():
+    g = kglite.KnowledgeGraph()
+    g.cypher("CREATE (:N {id: 1}), (:N {id: 2})")
+    with pytest.raises(kglite.CypherExecutionError, match="no longer exists"):
+        g.cypher(
+            "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns "
+            "FOREACH (x IN ns | DELETE x) FOREACH (x IN ns | CREATE (x)-[:S]->(:M))"
+        )
+    assert g.cypher("MATCH (n) RETURN count(n) AS c")[0]["c"] == 2, "the failed statement changed nothing"

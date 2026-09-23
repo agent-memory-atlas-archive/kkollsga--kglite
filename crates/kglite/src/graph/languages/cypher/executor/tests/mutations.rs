@@ -1657,3 +1657,313 @@ fn detach_deleting_a_collected_node_value_counts_its_relationships() {
     assert_eq!(stats.relationships_deleted, 2);
     assert_eq!(graph.graph.edge_count(), 0);
 }
+
+// ── Projected node / relationship values as write targets ──
+//
+// `UNWIND collect(n) AS x`, a FOREACH loop variable and a `WITH` that carried
+// an entity forward all reach a write clause as VALUES, not bindings. Each
+// clause used to treat that as an unbound name: CREATE fabricated a second
+// node, MERGE created, SET / REMOVE refused, DELETE did nothing. Golden
+// expected-value tests, not the differential corpus — both executor paths
+// shared the defect.
+
+fn two_nodes() -> DirGraph {
+    let mut graph = DirGraph::new();
+    run_mut(&mut graph, "CREATE (a:N {id: 1}), (b:N {id: 2})");
+    graph
+}
+
+fn try_mut(graph: &mut DirGraph, q: &str) -> Result<CypherResult, String> {
+    let query = parser::parse_cypher(q).unwrap();
+    execute_mutable(
+        graph,
+        &query,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+}
+
+fn rows(graph: &mut DirGraph, q: &str) -> Vec<Vec<Value>> {
+    run_mut_result(graph, q).rows
+}
+
+const ONE_E: &str =
+    "MATCH (a:N) WHERE a.id = 1 MATCH (b:N) WHERE b.id = 2 CREATE (a)-[e:E {q: 2}]->(b) \
+                     WITH collect(e) AS es";
+
+#[test]
+fn foreach_create_over_collected_nodes_reuses_the_node() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS roots \
+         FOREACH (x IN roots | CREATE (x)-[:S {tag: 'made'}]->(x))",
+    );
+    let stats = result.stats.unwrap();
+    assert_eq!(stats.nodes_created, 0, "the loop variable IS the node");
+    assert_eq!(stats.relationships_created, 1);
+    assert_eq!(graph.graph.node_count(), 2);
+    assert_eq!(
+        rows(&mut graph, "MATCH (n)-[:S]->(m) RETURN n.id, m.id"),
+        vec![vec![Value::Int64(1), Value::Int64(1)]],
+        "a self-loop on the collected node, not on an anonymous one"
+    );
+}
+
+#[test]
+fn unwind_create_reuses_the_projected_node_as_an_endpoint() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:N) WITH collect(a) AS ns UNWIND ns AS x CREATE (x)-[:S]->(:M {id: 9})",
+    );
+    let stats = result.stats.unwrap();
+    assert_eq!(stats.nodes_created, 2, "one :M per row and nothing for x");
+    assert_eq!(stats.relationships_created, 2);
+    assert_eq!(graph.graph.node_count(), 4);
+    assert_eq!(
+        rows(
+            &mut graph,
+            "MATCH (n:N)-[:S]->(:M) RETURN n.id ORDER BY n.id"
+        ),
+        vec![vec![Value::Int64(1)], vec![Value::Int64(2)]]
+    );
+}
+
+#[test]
+fn bare_create_of_a_projected_node_creates_nothing() {
+    let mut graph = two_nodes();
+    for query in [
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns UNWIND ns AS x CREATE (x)",
+        // The bound-variable control the projected form must match.
+        "MATCH (x:N) WHERE x.id = 1 CREATE (x)",
+    ] {
+        let result = run_mut_result(&mut graph, query);
+        assert_eq!(result.stats.unwrap().nodes_created, 0, "{query}");
+        assert_eq!(graph.graph.node_count(), 2, "{query}");
+    }
+}
+
+#[test]
+fn merge_matches_a_projected_node_instead_of_creating() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns UNWIND ns AS x MERGE (x)",
+    );
+    assert_eq!(result.stats.unwrap().nodes_created, 0);
+    assert_eq!(graph.graph.node_count(), 2);
+
+    let merge_edges = "MATCH (a:N) WITH collect(a) AS ns UNWIND ns AS x \
+                       MATCH (b:N) WHERE b.id = 2 MERGE (x)-[:S]->(b)";
+    let first = run_mut_result(&mut graph, merge_edges).stats.unwrap();
+    assert_eq!((first.nodes_created, first.relationships_created), (0, 2));
+    let second = run_mut_result(&mut graph, merge_edges).stats.unwrap();
+    assert_eq!(
+        second.relationships_created, 0,
+        "the second MERGE finds the relationships the first created"
+    );
+    assert_eq!(graph.graph.edge_count(), 2);
+}
+
+#[test]
+fn set_writes_through_a_projected_node() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns UNWIND ns AS x \
+         SET x.p = 1, x:Extra, x += {q: 2}",
+    );
+    assert_eq!(result.stats.unwrap().properties_set, 3);
+    assert_eq!(
+        rows(&mut graph, "MATCH (n:Extra) RETURN n.id, n.p, n.q"),
+        vec![vec![Value::Int64(1), Value::Int64(1), Value::Int64(2)]]
+    );
+
+    // Replace form: keys the map does not mention are cleared, so the
+    // projected target's stored keys have to reach the clear-list.
+    run_mut(
+        &mut graph,
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns FOREACH (x IN ns | SET x = {r: 3})",
+    );
+    assert_eq!(
+        rows(
+            &mut graph,
+            "MATCH (n:N) WHERE n.id = 1 RETURN n.p, n.q, n.r"
+        ),
+        vec![vec![Value::Null, Value::Null, Value::Int64(3)]]
+    );
+}
+
+#[test]
+fn remove_clears_a_property_through_a_projected_node() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:N) WHERE a.id = 1 SET a.p = 5 WITH collect(a) AS ns UNWIND ns AS x REMOVE x.p",
+    );
+    assert_eq!(result.stats.unwrap().properties_removed, 1);
+    assert_eq!(
+        rows(&mut graph, "MATCH (n:N) WHERE n.id = 1 RETURN n.p"),
+        vec![vec![Value::Null]]
+    );
+}
+
+#[test]
+fn a_deleted_projected_node_value_is_refused_not_recreated() {
+    for query in [
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns UNWIND ns AS x DELETE x CREATE (x)-[:S]->(:M)",
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns UNWIND ns AS x DELETE x SET x.p = 1",
+        "MATCH (a:N) WHERE a.id = 1 WITH collect(a) AS ns \
+         FOREACH (x IN ns | DELETE x) FOREACH (x IN ns | CREATE (x)-[:S]->(:M))",
+    ] {
+        let mut graph = two_nodes();
+        let error = try_mut(&mut graph, query).unwrap_err();
+        assert!(
+            error.contains("Node value 'x' no longer exists"),
+            "{query}: {error}"
+        );
+    }
+}
+
+/// A `Value::Node` records its labels, so a value whose slot now holds a node
+/// of another type — a parameter from another graph, a slot rebuilt since the
+/// value was taken — is refused rather than written through.
+#[test]
+fn a_projected_node_value_naming_another_type_is_refused() {
+    let mut graph = two_nodes();
+    let foreign = crate::datatypes::values::NodeValue {
+        id: 0,
+        labels: vec!["Other".to_string()],
+        properties: Default::default(),
+    };
+    let query = parser::parse_cypher("UNWIND $nodes AS x SET x.p = 1").unwrap();
+    let error = execute_mutable(
+        &mut graph,
+        &query,
+        HashMap::from([(
+            "nodes".to_string(),
+            Value::List(vec![Value::Node(Box::new(foreign))]),
+        )]),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap_err();
+    assert!(error.contains("expected :Other, found :N"), "got: {error}");
+    assert_eq!(
+        rows(&mut graph, "MATCH (n:N) RETURN n.p ORDER BY n.id"),
+        vec![vec![Value::Null], vec![Value::Null]]
+    );
+}
+
+#[test]
+fn a_relationship_value_in_a_node_position_is_refused() {
+    let mut graph = two_nodes();
+    let error = try_mut(
+        &mut graph,
+        &format!("{ONE_E} UNWIND es AS x CREATE (x)-[:S]->(:M)"),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("holds a relationship, not a node"),
+        "got: {error}"
+    );
+}
+
+#[test]
+fn set_writes_through_a_projected_relationship() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(&mut graph, &format!("{ONE_E} UNWIND es AS r SET r.p = 1"));
+    assert_eq!(result.stats.unwrap().properties_set, 1);
+    assert_eq!(
+        rows(&mut graph, "MATCH ()-[r:E]->() RETURN r.p, r.q"),
+        vec![vec![Value::Int64(1), Value::Int64(2)]]
+    );
+}
+
+#[test]
+fn set_map_replaces_through_a_projected_relationship() {
+    let mut graph = two_nodes();
+    run_mut(
+        &mut graph,
+        &format!("{ONE_E} UNWIND es AS r SET r = {{p: 1}}"),
+    );
+    assert_eq!(
+        rows(&mut graph, "MATCH ()-[r:E]->() RETURN r.p, r.q"),
+        vec![vec![Value::Int64(1), Value::Null]],
+        "replace form clears the key the map does not mention"
+    );
+}
+
+#[test]
+fn remove_clears_a_property_through_a_projected_relationship() {
+    let mut graph = two_nodes();
+    let result = run_mut_result(&mut graph, &format!("{ONE_E} UNWIND es AS r REMOVE r.q"));
+    assert_eq!(result.stats.unwrap().properties_removed, 1);
+    assert_eq!(
+        rows(&mut graph, "MATCH ()-[r:E]->() RETURN r.q"),
+        vec![vec![Value::Null]]
+    );
+}
+
+#[test]
+fn foreach_set_over_collected_relationships_writes_each() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH ()-[e:T]->() WITH collect(e) AS es FOREACH (r IN es | SET r.hits = 1)",
+    );
+    assert_eq!(result.stats.unwrap().properties_set, 2);
+    assert_eq!(
+        t_edge_census(&graph),
+        vec![(Some(0), Some(1)), (Some(1), Some(1))]
+    );
+}
+
+#[test]
+fn a_deleted_projected_relationship_value_is_refused_by_set() {
+    let mut graph = parallel_edges();
+    let error = try_mut(
+        &mut graph,
+        "MATCH ()-[e:T {k: 0}]->() WITH collect(e) AS es UNWIND es AS r DELETE r SET r.hits = 1",
+    )
+    .unwrap_err();
+    assert!(error.contains("stale"), "got: {error}");
+}
+
+/// The SET twin of the DELETE token refusal above: a relationship value that
+/// arrived as a parameter carries no statement identity and is never a write
+/// target.
+#[test]
+fn a_relationship_value_without_a_statement_token_is_refused_by_set() {
+    let mut graph = parallel_edges();
+    let (source, target) = graph
+        .graph
+        .edge_endpoints(petgraph::graph::EdgeIndex::new(0))
+        .expect("seeded edge");
+    let foreign = crate::datatypes::values::RelValue::new(
+        0,
+        source.index() as u32,
+        target.index() as u32,
+        "T".to_string(),
+        Default::default(),
+    );
+    let query = parser::parse_cypher("UNWIND $rels AS r SET r.hits = 1").unwrap();
+    let error = execute_mutable(
+        &mut graph,
+        &query,
+        HashMap::from([(
+            "rels".to_string(),
+            Value::List(vec![Value::Relationship(Box::new(foreign))]),
+        )]),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("not bound by this statement"),
+        "expected the token refusal, got: {error}"
+    );
+    assert_eq!(
+        t_edge_census(&graph),
+        vec![(Some(0), None), (Some(1), None)]
+    );
+}

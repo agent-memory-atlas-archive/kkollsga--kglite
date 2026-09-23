@@ -13,6 +13,10 @@ use super::identity_fields::{
     check_identity_uniqueness, create_identity, remove_write_field, CreatedIdentity,
     IdentityAliases,
 };
+use super::projected_targets::{
+    is_null_write_target, projected_node_target, promote_projected_relationships,
+    remove_clause_variables, resolve_node_write_target, set_clause_variables,
+};
 use super::set_row::{apply_node_property_set, NodePropertySet, SetMemos};
 use super::write_scope::{enforce_edge_write_scope, enforce_node_write_scope, enforce_write_scope};
 use super::{clause_display_name, delete_clause, merge_pattern, schema_ddl, CypherExecutor};
@@ -385,6 +389,12 @@ fn run_clause_pipeline(
     // unbound node. `leading` is non-empty only for the `LOAD CSV` driver, whose
     // batch rows are an already-established stream.
     let mut stream_established = !ctx.leading.is_empty();
+    let write_ctx = WriteClauseCtx {
+        params,
+        interrupt,
+        budget,
+        relationship_identities: ctx.relationship_identities,
+    };
 
     for (i, clause) in clauses.iter().enumerate() {
         // The mutation is atomic: aborting here discards the in-flight
@@ -431,13 +441,7 @@ fn run_clause_pipeline(
                 result_set = execute_create(graph, create, result_set, params, stats, interrupt)?;
             }
             Clause::Set(set) => {
-                execute_set(graph, set, &result_set, params, stats, interrupt)?;
-                // Flush staged writes so any subsequent clause's reads
-                // (including a trailing RETURN's projection) observe the SET.
-                // On disk, SET stages into `node_mut_cache`; without the flush
-                // the next `node_weight` reads `column_stores` and returns the
-                // pre-SET values.
-                GraphWrite::flush_pending_writes(&mut graph.graph);
+                apply_set_clause(graph, set, &result_set, stats, &write_ctx)?;
             }
             Clause::Delete(del) => {
                 delete_clause::execute_delete(
@@ -450,9 +454,7 @@ fn run_clause_pipeline(
                 )?;
             }
             Clause::Remove(rem) => {
-                execute_remove(graph, rem, &result_set, stats, interrupt)?;
-                // Same rationale as SET — REMOVE stages on disk too.
-                GraphWrite::flush_pending_writes(&mut graph.graph);
+                apply_remove_clause(graph, rem, &result_set, stats, &write_ctx)?;
             }
             Clause::Merge(merge) => {
                 result_set = execute_merge(graph, merge, result_set, params, stats, interrupt)?;
@@ -464,21 +466,7 @@ fn run_clause_pipeline(
                 list,
                 body,
             } => {
-                let foreach_ctx = ForeachBodyCtx {
-                    params,
-                    interrupt,
-                    budget,
-                    relationship_identities: ctx.relationship_identities,
-                };
-                execute_foreach(
-                    graph,
-                    variable,
-                    list,
-                    body,
-                    &result_set,
-                    stats,
-                    &foreach_ctx,
-                )?;
+                execute_foreach(graph, variable, list, body, &result_set, stats, &write_ctx)?;
                 GraphWrite::flush_pending_writes(&mut graph.graph);
             }
             // Correlated CALL { } import validation needs the declared outer
@@ -656,7 +644,7 @@ fn execute_foreach(
     body: &[Clause],
     outer: &ResultSet,
     stats: &mut MutationStats,
-    ctx: &ForeachBodyCtx<'_>,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<(), String> {
     let params = ctx.params;
     let interrupt = ctx.interrupt;
@@ -698,7 +686,9 @@ fn execute_foreach(
     Ok(())
 }
 
-struct ForeachBodyCtx<'a> {
+/// The statement-invariant inputs every write clause shares — built once per
+/// pipeline run and handed to SET / REMOVE and to each FOREACH body clause.
+struct WriteClauseCtx<'a> {
     params: &'a HashMap<String, Value>,
     interrupt: &'a Interrupt,
     budget: &'a super::budget::ExecutionBudget,
@@ -716,7 +706,7 @@ fn apply_foreach_body_clause(
     clause: &Clause,
     result_set: ResultSet,
     stats: &mut MutationStats,
-    ctx: &ForeachBodyCtx<'_>,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<ResultSet, String> {
     let params = ctx.params;
     let interrupt = ctx.interrupt;
@@ -732,8 +722,7 @@ fn apply_foreach_body_clause(
             execute_create(graph, create, result_set, params, stats, interrupt)
         }
         Clause::Set(set) => {
-            execute_set(graph, set, &result_set, params, stats, interrupt)?;
-            GraphWrite::flush_pending_writes(&mut graph.graph);
+            apply_set_clause(graph, set, &result_set, stats, ctx)?;
             Ok(result_set)
         }
         Clause::Delete(del) => {
@@ -749,8 +738,7 @@ fn apply_foreach_body_clause(
             Ok(result_set)
         }
         Clause::Remove(rem) => {
-            execute_remove(graph, rem, &result_set, stats, interrupt)?;
-            GraphWrite::flush_pending_writes(&mut graph.graph);
+            apply_remove_clause(graph, rem, &result_set, stats, ctx)?;
             Ok(result_set)
         }
         Clause::Merge(merge) => {
@@ -815,12 +803,17 @@ fn execute_create(
 
             for (pos, element) in pattern.elements.iter().enumerate() {
                 if let CreateElement::Node(node_pat) = element {
-                    // If the variable is already bound — by a prior MATCH or by
-                    // an earlier part of this same CREATE — this occurrence
-                    // references that node instead of creating a second one.
+                    // If the variable is already bound — by a prior MATCH, by
+                    // an earlier part of this same CREATE, or as a projected
+                    // node VALUE — this occurrence references that node
+                    // instead of creating a second one.
                     if let Some(var) = node_pat.variable.as_deref() {
                         if let Some(&bound) = new_row.node_bindings.get(var) {
                             element_nodes[pos] = Some(bound);
+                            continue;
+                        }
+                        if let Some(projected) = projected_node_target(graph, &new_row, var)? {
+                            element_nodes[pos] = Some(projected);
                             continue;
                         }
                     }
@@ -1293,21 +1286,6 @@ fn auto_timestamp_type_of(graph: &DirGraph, node_idx: NodeIndex) -> Option<Strin
     node_type.filter(|nt| graph.auto_timestamp_for(nt))
 }
 
-/// True when `variable` is a bound-but-null write target on this row —
-/// e.g. an unmatched OPTIONAL MATCH variable (no binding at all) or an
-/// explicit NULL projection. openCypher: SET / REMOVE on a NULL target is
-/// a no-op for that row, mirroring how DELETE already skips NULLs. A
-/// *truly undefined* name never reaches here — the planner's scope
-/// validation (`validate_scope`) rejects it before execution — so any
-/// remaining non-entity target that isn't NULL is a genuine type error
-/// and the caller keeps returning its descriptive error for it.
-fn is_null_write_target(row: &ResultRow, variable: &str) -> bool {
-    !row.node_bindings.contains_key(variable)
-        && !row.edge_bindings.contains_key(variable)
-        && !row.path_bindings.contains_key(variable)
-        && matches!(row.projected.get(variable), None | Some(Value::Null))
-}
-
 /// Every property key currently set on `variable`'s binding — the clear-list
 /// for `SET n = {…}` / `SET r = {…}`.
 fn existing_property_keys(
@@ -1319,7 +1297,19 @@ fn existing_property_keys(
     // (protocol in disk/graph.rs); scoped so the borrow ends before the
     // caller's &mut.
     let _arena_guard = graph.graph.begin_query();
-    if let Some(node_idx) = row.node_bindings.get(variable) {
+    // A projected node value is a `SET x = {…}` target like any bound node, so
+    // its stored keys have to reach the clear-list too — otherwise the replace
+    // form kept every property the map did not mention.
+    let node_target =
+        row.node_bindings
+            .get(variable)
+            .copied()
+            .or_else(|| match row.projected.get(variable) {
+                Some(Value::Node(node)) => Some(NodeIndex::new(node.id as usize)),
+                Some(Value::NodeRef(index)) => Some(NodeIndex::new(*index as usize)),
+                _ => None,
+            });
+    if let Some(node_idx) = node_target.as_ref() {
         let mut keys: Vec<String> = graph
             .graph
             .node_view(*node_idx)
@@ -1447,16 +1437,11 @@ fn execute_property_set_item<'a>(
         return Err("Cannot SET node type via property assignment".to_string());
     }
 
-    // Resolve the node. A null-valued target (OPTIONAL MATCH miss) makes this
-    // row's write a no-op per openCypher.
-    let Some(node_idx) = row.node_bindings.get(variable) else {
-        if is_null_write_target(row, variable) {
-            return Ok(PropSetFlow::SkipRow);
-        }
-        return Err(format!(
-            "Variable '{}' not bound to a node in SET",
-            variable
-        ));
+    // Resolve the node — a live binding or a projected node value. A
+    // null-valued target (OPTIONAL MATCH miss) makes this row's write a no-op
+    // per openCypher.
+    let Some(node_idx) = resolve_node_write_target(graph, row, variable, "SET")? else {
+        return Ok(PropSetFlow::SkipRow);
     };
 
     // Evaluate the expression (borrows graph immutably)
@@ -1470,13 +1455,13 @@ fn execute_property_set_item<'a>(
     let value = if path.is_empty() {
         value
     } else {
-        super::set_path::read_modify(graph, *node_idx, property, path, value, params, row)?
+        super::set_path::read_modify(graph, node_idx, property, path, value, params, row)?
     };
 
     apply_node_property_set(
         graph,
         NodePropertySet {
-            node_idx: *node_idx,
+            node_idx,
             property: property.as_str(),
             value,
         },
@@ -1493,6 +1478,48 @@ pub(super) fn flush_disk_item_writes(graph: &mut DirGraph) {
     if graph.graph.is_disk() {
         GraphWrite::flush_pending_writes(&mut graph.graph);
     }
+}
+
+/// One SET clause over the rows the pipeline handed it, shared by the clause
+/// pipeline and the FOREACH body. Projected relationship values the clause
+/// names become verified bindings first. The flush afterwards is load-bearing
+/// on disk: SET stages into `node_mut_cache`, and without it a later clause's
+/// `node_weight` (a trailing RETURN's projection included) reads
+/// `column_stores` and sees the pre-SET values.
+fn apply_set_clause(
+    graph: &mut DirGraph,
+    set: &SetClause,
+    result_set: &ResultSet,
+    stats: &mut MutationStats,
+    ctx: &WriteClauseCtx<'_>,
+) -> Result<(), String> {
+    let promoted = {
+        let identities = ctx.relationship_identities.lock().expect("identity lock");
+        promote_projected_relationships(graph, result_set, &set_clause_variables(set), &identities)?
+    };
+    let rows = promoted.as_ref().unwrap_or(result_set);
+    execute_set(graph, set, rows, ctx.params, stats, ctx.interrupt)?;
+    GraphWrite::flush_pending_writes(&mut graph.graph);
+    Ok(())
+}
+
+/// [`apply_set_clause`] for REMOVE — same promotion, same disk-staging flush.
+fn apply_remove_clause(
+    graph: &mut DirGraph,
+    remove: &RemoveClause,
+    result_set: &ResultSet,
+    stats: &mut MutationStats,
+    ctx: &WriteClauseCtx<'_>,
+) -> Result<(), String> {
+    let promoted = {
+        let identities = ctx.relationship_identities.lock().expect("identity lock");
+        let variables = remove_clause_variables(remove);
+        promote_projected_relationships(graph, result_set, &variables, &identities)?
+    };
+    let rows = promoted.as_ref().unwrap_or(result_set);
+    execute_remove(graph, remove, rows, stats, ctx.interrupt)?;
+    GraphWrite::flush_pending_writes(&mut graph.graph);
+    Ok(())
 }
 
 fn execute_set(
@@ -1558,6 +1585,7 @@ fn execute_set(
                     };
                     if !row.node_bindings.contains_key(variable)
                         && !row.edge_bindings.contains_key(variable)
+                        && projected_node_target(graph, row, variable)?.is_none()
                     {
                         // Null target (OPTIONAL MATCH miss): no-op for this row.
                         if is_null_write_target(row, variable) {
@@ -1666,15 +1694,9 @@ fn set_node_label(
     nodes_to_stamp: &mut HashMap<NodeIndex, String>,
 ) -> Result<(), String> {
     let (variable, label) = item;
-    let Some(&node_idx) = row.node_bindings.get(variable) else {
-        // Null target (OPTIONAL MATCH miss): no-op for this row.
-        if is_null_write_target(row, variable) {
-            return Ok(());
-        }
-        return Err(format!(
-            "Variable '{}' not bound to a node in SET",
-            variable
-        ));
+    // Null target (OPTIONAL MATCH miss): no-op for this row.
+    let Some(node_idx) = resolve_node_write_target(graph, row, variable, "SET")? else {
+        return Ok(());
     };
     // Adding a secondary label is a write to the node, judged by its *stored*
     // type — the label being added never widens the scope (that is the
@@ -1792,19 +1814,14 @@ fn execute_remove(
 
                     // A null-valued target (OPTIONAL MATCH miss) makes this
                     // row's REMOVE a no-op per openCypher.
-                    let Some(node_idx) = row.node_bindings.get(variable) else {
-                        if is_null_write_target(row, variable) {
-                            continue;
-                        }
-                        return Err(format!(
-                            "Variable '{}' not bound to a node in REMOVE",
-                            variable
-                        ));
+                    let Some(node_idx) = resolve_node_write_target(graph, row, variable, "REMOVE")?
+                    else {
+                        continue;
                     };
 
                     // Read node_type before mutable borrow (for index update)
                     let node_type_str = graph
-                        .node_view(*node_idx)
+                        .node_view(node_idx)
                         .map(|n| n.get_node_type_ref(&graph.interner).to_string())
                         .unwrap_or_default();
 
@@ -1821,7 +1838,7 @@ fn execute_remove(
                     // just vacates it. Planned before the write so a rejection
                     // leaves storage untouched.
                     let constraint_plan = graph
-                        .plan_property_write(&node_type_str, *node_idx, property, None)
+                        .plan_property_write(&node_type_str, node_idx, property, None)
                         .map_err(|violation| violation.to_string())?;
 
                     let is_disk = graph.graph.is_disk();
@@ -1842,7 +1859,7 @@ fn execute_remove(
                             let _arena_guard = graph.graph.begin_query();
                             graph
                                 .graph
-                                .node_weight(*node_idx)
+                                .node_weight(node_idx)
                                 .and_then(|n| n.properties.columnar_row_id())
                         };
                         if let Some(row_id) = columnar_row_id {
@@ -1858,7 +1875,7 @@ fn execute_remove(
                                 MasterCell {
                                     node_type: &node_type_str,
                                     type_key: InternedKey::from_str(&node_type_str),
-                                    node_idx: *node_idx,
+                                    node_idx,
                                     row_id,
                                     key,
                                     value: &Value::Null,
@@ -1870,7 +1887,7 @@ fn execute_remove(
 
                     let removed_value = if let Some(prior) = cleared_via_master {
                         prior
-                    } else if graph.graph.node_weight(*node_idx).is_some() {
+                    } else if graph.graph.node_weight(node_idx).is_some() {
                         if write_field == "name" || write_field == "title" {
                             // Read the *resolved* title (a columnar node keeps
                             // it in its store's reserved column, with the
@@ -1878,17 +1895,17 @@ fn execute_remove(
                             // through the same backend seam a `SET` writes it
                             // through, so the removal reaches the store instead
                             // of nulling an already-null field.
-                            let old = graph.graph.get_node_title(*node_idx).unwrap_or(Value::Null);
-                            GraphWrite::set_node_title(&mut graph.graph, *node_idx, Value::Null);
+                            let old = graph.graph.get_node_title(node_idx).unwrap_or(Value::Null);
+                            GraphWrite::set_node_title(&mut graph.graph, node_idx, Value::Null);
                             let key = InternedKey::from_str("name");
-                            GraphWrite::remove_node_property(&mut graph.graph, *node_idx, key);
+                            GraphWrite::remove_node_property(&mut graph.graph, node_idx, key);
                             (!matches!(old, Value::Null)).then_some(old)
                         } else {
                             // The backend picks the right removal semantics per
                             // storage: disk stages a `Null` write so its flush
                             // propagates the removal; row storage drops the key.
                             let key = InternedKey::from_str(write_field);
-                            GraphWrite::remove_node_property(&mut graph.graph, *node_idx, key)
+                            GraphWrite::remove_node_property(&mut graph.graph, node_idx, key)
                         }
                     } else {
                         None
@@ -1900,7 +1917,7 @@ fn execute_remove(
                         stats.properties_removed += 1;
                         graph.update_property_indices_for_remove(
                             &node_type_str,
-                            *node_idx,
+                            node_idx,
                             property,
                             &old_val,
                         );
@@ -1909,12 +1926,12 @@ fn execute_remove(
                         // and drop the document.
                         crate::graph::index_freshness::write_hooks::note_property_written(
                             graph,
-                            *node_idx,
+                            node_idx,
                             &node_type_str,
                             Some(write_field),
                         );
                     }
-                    graph.apply_property_write_plan(&constraint_plan, *node_idx);
+                    graph.apply_property_write_plan(&constraint_plan, node_idx);
                 }
                 RemoveItem::Label {
                     variable, label, ..
