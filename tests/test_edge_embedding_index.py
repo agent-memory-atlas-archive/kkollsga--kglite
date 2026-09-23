@@ -126,3 +126,44 @@ def test_metric_without_hnsw_support_falls_back_to_exact() -> None:
     rows = _query(graph, top_k=3, metric="poincare")
     assert rows
     assert all(row["search_method"] == "exact" for row in rows)
+
+
+def test_explicit_build_metric_is_recorded_and_serves_metric_less_queries() -> None:
+    """An explicit build metric becomes the store's, so the default route uses it.
+
+    Before the fix the store kept resolving cosine beside a euclidean index, so
+    every ``query`` without ``metric`` mismatched the index and was served by
+    exact scan while ``list`` reported cosine.
+    """
+    graph = _indexed_graph()
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD metric RETURN metric"
+    ).to_list() == [{"metric": "cosine"}]
+
+    built = graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "metric:'euclidean'}) YIELD indexed,metric RETURN indexed,metric"
+    ).to_list()
+    assert built == [{"indexed": 24, "metric": "euclidean"}]
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD metric RETURN metric"
+    ).to_list() == [{"metric": "euclidean"}]
+    assert _query(graph, top_k=3)[0]["search_method"] == "hnsw"
+
+
+def test_build_metric_contradicting_the_store_is_refused() -> None:
+    graph = _indexed_graph()
+    graph.cypher(
+        "MATCH ()-[r:CLAIMS {rank: 0}]->() "
+        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "entries:[{relationship:r, vector:[1.0, 0.0]}], metric:'cosine'}) YIELD stored RETURN stored"
+    )
+    with pytest.raises(kglite.CypherExecutionError, match="declares metric 'cosine'"):
+        graph.cypher(
+            "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+            "metric:'euclidean'}) YIELD indexed RETURN indexed"
+        )
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD metric,index_state RETURN metric,index_state"
+    ).to_list() == [{"metric": "cosine", "index_state": "none"}]

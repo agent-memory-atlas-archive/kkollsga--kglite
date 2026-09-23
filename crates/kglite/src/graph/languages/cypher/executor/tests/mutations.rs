@@ -727,28 +727,17 @@ fn test_merge_on_create_set() {
     assert_eq!(result.stats.as_ref().unwrap().properties_set, 1);
 }
 
-/// **Documented divergence from openCypher, pinned rather than fixed.**
+/// `MERGE` matches the whole relationship pattern, properties included.
 ///
-/// openCypher's `MERGE` matches the *whole* pattern, properties included, so
-/// `MERGE (a)-[:KNOWS {since: 3000}]->(b)` against a stored
-/// `(a)-[:KNOWS {since: 2020}]->(b)` finds no match and creates a second
-/// relationship. KGLite matches on `(source, type, target)` alone and treats
-/// the stored edge as the match, creating nothing and leaving its properties
-/// as they were.
-///
-/// This is not an oversight to fix in passing: "when are two relationships the
-/// same one" is the exact question the deferred multi-edge-semantics program
-/// exists to answer, and it is the same question that keeps
-/// `REQUIRE r.p IS UNIQUE` unsupported. Changing `MERGE` here would settle that
-/// data-model question as a side effect of a constraints change, and would
-/// silently start producing parallel edges for every script relying on the
-/// current behaviour.
-///
-/// So this test asserts what the engine *does*, not what openCypher says. When
-/// the multi-edge program lands, this test is expected to flip — and its
-/// failure is the signal that the divergence was closed deliberately.
+/// A stored `(a)-[:KNOWS {since: 2020}]->(b)` is not a match for
+/// `MERGE (a)-[:KNOWS {since: 3000}]->(b)`, so the statement creates the
+/// relationship its pattern describes and leaves the stored one alone — the
+/// openCypher rule, and the only one under which `ON MATCH SET` can be trusted
+/// to write to the relationship the caller named. The earlier
+/// `(source, type, target)`-only match bound an arbitrary parallel member,
+/// which made `ON MATCH SET` mutate a relationship the pattern excluded.
 #[test]
-fn merge_matches_a_relationship_ignoring_its_properties() {
+fn merge_matches_a_relationship_including_its_properties() {
     let mut graph = DirGraph::new();
     let seed = parser::parse_cypher(
         "CREATE (a:Person {person_id: 1})-[:KNOWS {since: 2020}]->(b:Person {person_id: 2})",
@@ -775,29 +764,32 @@ fn merge_matches_a_relationship_ignoring_its_properties() {
     )
     .unwrap();
 
-    assert_eq!(
-        result.stats.as_ref().unwrap().relationships_created,
-        0,
-        "current behaviour: the pattern's properties do not take part in the match"
-    );
-    assert_eq!(
-        graph.graph.edge_count(),
-        1,
-        "openCypher would have a second relationship here"
-    );
-    // The match branch runs only `ON MATCH SET`, so the pattern's property is
-    // not written onto the matched edge either — the statement is a complete
-    // no-op rather than a silent update.
-    let stored = graph
+    assert_eq!(result.stats.as_ref().unwrap().relationships_created, 1);
+    assert_eq!(graph.graph.edge_count(), 2);
+    // The stored relationship keeps its own property: MERGE created beside it
+    // rather than updating it.
+    let since_values: Vec<Option<Value>> = graph
         .graph
-        .edge_weight(petgraph::graph::EdgeIndex::new(0))
-        .unwrap();
-    let since = stored
-        .properties
-        .iter()
-        .find(|(key, _)| *key == crate::graph::schema::InternedKey::from_str("since"))
-        .map(|(_, value)| value.clone());
-    assert_eq!(since, Some(Value::Int64(2020)));
+        .edge_indices()
+        .filter_map(|idx| graph.graph.edge_weight(idx))
+        .map(|edge| edge.get_property("since").cloned())
+        .collect();
+    assert_eq!(
+        since_values,
+        vec![Some(Value::Int64(2020)), Some(Value::Int64(3000))]
+    );
+
+    // Repeating the statement is now idempotent — the member it created is the
+    // one it matches.
+    let repeat = execute_mutable(
+        &mut graph,
+        &merge,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap();
+    assert_eq!(repeat.stats.as_ref().unwrap().relationships_created, 0);
+    assert_eq!(graph.graph.edge_count(), 2);
 }
 
 #[test]
@@ -1392,4 +1384,276 @@ fn merge_create_arm_inherits_anonymous_endpoint_resolution() {
         err.contains("bound by prior MATCH"),
         "expected the MERGE endpoint-binding error, got: {err}"
     );
+}
+
+// ========================================================================
+// MERGE over parallel relationships, and DELETE of projected relationship
+// values — both wrong-answer classes the differential corpus cannot see.
+// ========================================================================
+
+fn run_mut_result(graph: &mut DirGraph, q: &str) -> CypherResult {
+    let query = parser::parse_cypher(q).unwrap();
+    execute_mutable(
+        graph,
+        &query,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap()
+}
+
+/// Two parallel `:T` edges between the same endpoints, differing only in `k`.
+fn parallel_edges() -> DirGraph {
+    let mut graph = DirGraph::new();
+    run_mut(&mut graph, "CREATE (a:P {id: 1}), (b:P {id: 2})");
+    run_mut(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) CREATE (a)-[:T {k: 0}]->(b)",
+    );
+    run_mut(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) CREATE (a)-[:T {k: 1}]->(b)",
+    );
+    graph
+}
+
+/// Every `(k, hits)` pair on the graph's `:T` edges, ordered by `k`.
+fn t_edge_census(graph: &DirGraph) -> Vec<(Option<i64>, Option<i64>)> {
+    let read = |edge: &crate::graph::schema::EdgeData, key: &str| match edge.get_property(key) {
+        Some(Value::Int64(value)) => Some(*value),
+        _ => None,
+    };
+    let mut rows: Vec<(Option<i64>, Option<i64>)> = graph
+        .graph
+        .edge_indices()
+        .filter_map(|idx| graph.graph.edge_weight(idx))
+        .map(|edge| (read(edge, "k"), read(edge, "hits")))
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// MERGE binds the parallel member its pattern names, not whichever one
+/// adjacency yields first.
+///
+/// With `{k:0}` and `{k:1}` between the same endpoints, `MERGE (a)-[r:T
+/// {k:0}]->(b) ON MATCH SET …` bound the `{k:1}` edge and mutated it: a silent
+/// write to a relationship the caller never named.
+#[test]
+fn merge_binds_the_parallel_member_its_properties_name() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) MERGE (a)-[r:T {k: 0}]->(b) \
+         ON MATCH SET r.hits = coalesce(r.k, -1) + 100 \
+         ON CREATE SET r.hits = -5 RETURN r.k AS k, r.hits AS hits",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_created, 0);
+    assert_eq!(
+        result.rows,
+        vec![vec![Value::Int64(0), Value::Int64(100)]],
+        "the bound relationship is the one the pattern describes"
+    );
+    assert_eq!(
+        t_edge_census(&graph),
+        vec![(Some(0), Some(100)), (Some(1), None)],
+        "the parallel member is untouched"
+    );
+}
+
+/// The same pattern reaches the CREATE arm when no member matches it — the
+/// half of the fix that cannot be seen from the ON MATCH case alone.
+#[test]
+fn merge_creates_when_no_parallel_member_carries_the_patterns_properties() {
+    let mut graph = DirGraph::new();
+    run_mut(&mut graph, "CREATE (a:P {id: 1}), (b:P {id: 2})");
+    run_mut(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) CREATE (a)-[:T {k: 1}]->(b)",
+    );
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) MERGE (a)-[r:T {k: 0}]->(b) \
+         ON MATCH SET r.hits = 100 ON CREATE SET r.hits = -5 RETURN r.k AS k, r.hits AS hits",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_created, 1);
+    assert_eq!(result.rows, vec![vec![Value::Int64(0), Value::Int64(-5)]]);
+    assert_eq!(
+        t_edge_census(&graph),
+        vec![(Some(0), Some(-5)), (Some(1), None)]
+    );
+}
+
+/// The incoming form writes the pattern the same way round: the properties
+/// belong to the relationship, not to the direction it was spelled in.
+///
+/// `{k: 0}` deliberately, not `{k: 1}`: adjacency yields the most recently
+/// added member first, so a pattern naming `{k: 1}` would bind correctly even
+/// with no property filter at all and the test could never go red.
+#[test]
+fn merge_matches_the_named_member_through_an_incoming_pattern() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) MERGE (b)<-[r:T {k: 0}]-(a) \
+         ON MATCH SET r.hits = 7 RETURN r.k AS k",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_created, 0);
+    assert_eq!(result.rows, vec![vec![Value::Int64(0)]]);
+    assert_eq!(
+        t_edge_census(&graph),
+        vec![(Some(0), Some(7)), (Some(1), None)]
+    );
+}
+
+/// Parallel self-loops are the same question with one endpoint: the pattern's
+/// properties still choose the member. (Undirected and variable-length
+/// relationship patterns are rejected by the parser, so `->` and `<-` are the
+/// whole direction surface MERGE has.)
+#[test]
+fn merge_selects_among_parallel_self_loops_by_property() {
+    let mut graph = DirGraph::new();
+    run_mut(&mut graph, "CREATE (a:P {id: 1})");
+    for k in [0, 1] {
+        run_mut(
+            &mut graph,
+            &format!("MATCH (a:P {{id: 1}}) CREATE (a)-[:T {{k: {k}}}]->(a)"),
+        );
+    }
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:P {id: 1}) MERGE (a)-[r:T {k: 0}]->(a) ON MATCH SET r.hits = 9 \
+         RETURN r.k AS k",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_created, 0);
+    assert_eq!(result.rows, vec![vec![Value::Int64(0)]]);
+    assert_eq!(
+        t_edge_census(&graph),
+        vec![(Some(0), Some(9)), (Some(1), None)]
+    );
+}
+
+/// A property the candidate does not carry is not a match, so MERGE creates.
+#[test]
+fn merge_treats_a_property_the_member_lacks_as_a_miss() {
+    let mut graph = DirGraph::new();
+    run_mut(&mut graph, "CREATE (a:P {id: 1}), (b:P {id: 2})");
+    run_mut(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) CREATE (a)-[:T]->(b)",
+    );
+    run_mut(
+        &mut graph,
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) MERGE (a)-[:T {k: 0}]->(b)",
+    );
+    assert_eq!(graph.graph.edge_count(), 2);
+    assert_eq!(t_edge_census(&graph), vec![(None, None), (Some(0), None)]);
+}
+
+/// `UNWIND <relationship values> AS r DELETE r` removes the relationship and
+/// counts it.
+///
+/// A projected relationship value had no arm in DELETE's value fall-through, so
+/// the clause ran to completion without deleting anything and without erroring
+/// — the reported-status class: `collect(r)` then `DELETE r` was a no-op.
+#[test]
+fn deleting_a_collected_relationship_value_removes_the_edge() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH ()-[r:T {k: 0}]->() WITH collect(r) AS rs UNWIND rs AS r DELETE r \
+         RETURN count(*) AS n",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_deleted, 1);
+    assert_eq!(result.rows, vec![vec![Value::Int64(1)]]);
+    assert_eq!(graph.graph.edge_count(), 1);
+    assert_eq!(t_edge_census(&graph), vec![(Some(1), None)]);
+}
+
+/// The same value deleted twice in one statement is one deletion, not two — the
+/// statistic has to match the graph.
+#[test]
+fn a_repeated_relationship_value_is_deleted_once() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH ()-[r:T {k: 0}]->() WITH collect(r) + collect(r) AS rs UNWIND rs AS r \
+         DELETE r RETURN count(*) AS n",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_deleted, 1);
+    assert_eq!(
+        result.rows,
+        vec![vec![Value::Int64(2)]],
+        "two rows, one edge"
+    );
+    assert_eq!(graph.graph.edge_count(), 1);
+}
+
+/// A relationship value that carries no statement token is refused rather than
+/// silently ignored — the check that keeps the new arm from deleting a slot the
+/// value no longer names.
+///
+/// A round-tripped parameter is the shape that reaches this: published results
+/// clear the transient identity, so a relationship handed back in as a
+/// parameter names a physical slot with nothing to say it is still the same
+/// relationship.
+#[test]
+fn a_relationship_value_without_a_statement_token_is_refused() {
+    let mut graph = parallel_edges();
+    let (source, target) = graph
+        .graph
+        .edge_endpoints(petgraph::graph::EdgeIndex::new(0))
+        .expect("seeded edge");
+    let foreign = crate::datatypes::values::RelValue::new(
+        0,
+        source.index() as u32,
+        target.index() as u32,
+        "T".to_string(),
+        Default::default(),
+    );
+    let query = parser::parse_cypher("UNWIND $rels AS r DELETE r RETURN count(*) AS n").unwrap();
+    let error = execute_mutable(
+        &mut graph,
+        &query,
+        HashMap::from([(
+            "rels".to_string(),
+            Value::List(vec![Value::Relationship(Box::new(foreign))]),
+        )]),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("not bound by this statement"),
+        "expected the token refusal, got: {error}"
+    );
+    assert_eq!(graph.graph.edge_count(), 2, "the refusal deletes nothing");
+}
+
+/// A path-derived relationship is deleted like any other bound one.
+#[test]
+fn deleting_a_path_derived_relationship_removes_the_edge() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH p = ()-[:T {k: 0}]->() UNWIND relationships(p) AS r DELETE r RETURN count(*) AS n",
+    );
+    assert_eq!(result.stats.as_ref().unwrap().relationships_deleted, 1);
+    assert_eq!(graph.graph.edge_count(), 1);
+    assert_eq!(t_edge_census(&graph), vec![(Some(1), None)]);
+}
+
+/// The node control for the same fall-through: a collected node value is
+/// DETACH-deletable, and its incident relationships are counted.
+#[test]
+fn detach_deleting_a_collected_node_value_counts_its_relationships() {
+    let mut graph = parallel_edges();
+    let result = run_mut_result(
+        &mut graph,
+        "MATCH (a:P {id: 1}) WITH collect(a) AS ns UNWIND ns AS a DETACH DELETE a \
+         RETURN count(*) AS n",
+    );
+    let stats = result.stats.as_ref().unwrap();
+    assert_eq!(stats.nodes_deleted, 1);
+    assert_eq!(stats.relationships_deleted, 2);
+    assert_eq!(graph.graph.edge_count(), 0);
 }

@@ -276,3 +276,208 @@ fn malformed_wal_index_options_refuse_without_installing_an_index() {
     assert!(result.unwrap_err().contains("greater than 0"));
     assert!(!list_edge_vector_indexes(&recovered)[0].built);
 }
+
+/// Same shape as [`fixture`], but the store is created without a declared
+/// metric — the state `db.edge_embeddings.set` leaves behind when the caller
+/// names no metric, and the one an explicit build metric may claim.
+fn fixture_without_declared_metric() -> (DirGraph, EdgeIndex) {
+    let mut graph = DirGraph::new();
+    let source = GraphWrite::add_node(
+        &mut graph.graph,
+        NodeData::new(
+            Value::Int64(1),
+            Value::String("source".into()),
+            "Doc".into(),
+            HashMap::new(),
+            &mut graph.interner,
+        ),
+    );
+    let mut edges = Vec::new();
+    for ordinal in 0..3 {
+        let target = GraphWrite::add_node(
+            &mut graph.graph,
+            NodeData::new(
+                Value::Int64(ordinal + 2),
+                Value::String(format!("target-{ordinal}")),
+                "Doc".into(),
+                HashMap::new(),
+                &mut graph.interner,
+            ),
+        );
+        edges.push(GraphWrite::add_edge(
+            &mut graph.graph,
+            source,
+            target,
+            EdgeData::new("CLAIMS".into(), HashMap::new(), &mut graph.interner),
+        ));
+    }
+    upsert_edge_embeddings(
+        &mut graph,
+        "CLAIMS",
+        "text",
+        vec![
+            (edges[0], vec![3.0, 0.0]),
+            (edges[1], vec![0.0, 1.0]),
+            (edges[2], vec![-1.0, 0.0]),
+        ],
+        None,
+    )
+    .unwrap();
+    (graph, edges[0])
+}
+
+/// A build metric the store does not contradict becomes the store's metric.
+///
+/// Before the fix the store kept its `None` (which resolves to cosine) beside a
+/// euclidean index, so every metric-less query resolved cosine, failed the
+/// index's metric check and fell back to the exact scan for good — while
+/// `list` reported a metric nothing used.
+#[test]
+fn explicit_build_metric_becomes_the_store_metric_and_serves_default_queries() {
+    let (mut graph, _) = fixture_without_declared_metric();
+    let report = build_edge_vector_index(
+        &mut graph,
+        "CLAIMS",
+        "text",
+        EdgeVectorIndexOptions {
+            metric: Some("euclidean".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.metric, "euclidean");
+
+    let store = graph
+        .edge_embeddings
+        .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+        .unwrap();
+    assert_eq!(store.metric(), Some("euclidean"));
+
+    let served = query_edge_embeddings(
+        &graph,
+        "CLAIMS",
+        "text",
+        &[3.0, 0.0],
+        EdgeVectorQueryOptions {
+            top_k: 2,
+            exact: false,
+            metric: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(served.search_method, "hnsw");
+}
+
+/// The store's declared metric wins over a contradicting build argument, and
+/// says so: the vectors were written under it, and an index answering under
+/// another one is the defect above wearing an explicit store metric.
+#[test]
+fn build_metric_contradicting_the_store_is_refused_and_changes_nothing() {
+    let (mut graph, _, _, _) = fixture();
+    let before = graph.version();
+    let error = build_edge_vector_index(
+        &mut graph,
+        "CLAIMS",
+        "text",
+        EdgeVectorIndexOptions {
+            metric: Some("euclidean".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("declares metric 'cosine'"), "{error}");
+    assert!(error.contains("requested 'euclidean'"), "{error}");
+    assert_eq!(graph.version(), before);
+    assert!(!list_edge_vector_indexes(&graph)[0].built);
+    assert_eq!(
+        graph
+            .edge_embeddings
+            .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+            .unwrap()
+            .metric(),
+        Some("cosine")
+    );
+}
+
+/// The metric a build persists is statement state like any other: a rolled-back
+/// statement leaves the store scoring the way it did before.
+#[test]
+fn rolled_back_build_restores_the_stores_prior_metric() {
+    let (mut graph, _) = fixture_without_declared_metric();
+    let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+    build_edge_vector_index(
+        &mut graph,
+        "CLAIMS",
+        "text",
+        EdgeVectorIndexOptions {
+            metric: Some("euclidean".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        graph
+            .edge_embeddings
+            .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+            .unwrap()
+            .metric(),
+        Some("euclidean")
+    );
+    checkpoint.rollback(&mut graph);
+    assert_eq!(
+        graph
+            .edge_embeddings
+            .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+            .unwrap()
+            .metric(),
+        None
+    );
+    assert!(!list_edge_vector_indexes(&graph)[0].built);
+}
+
+/// Recovery reproduces the store the build left behind, metric included — so a
+/// reopened graph does not go back to resolving cosine against a euclidean
+/// index.
+#[test]
+fn wal_replay_restores_the_metric_the_index_was_built_for() {
+    let (mut recovered, _) = fixture_without_declared_metric();
+    crate::graph::mutation::wal_replay::apply_frames(
+        &mut recovered,
+        &[crate::graph::wal::WalFrame {
+            lsn: 1,
+            ops: vec![crate::graph::wal::MutationOp::SetEdgeVectorIndex {
+                conn_type: "CLAIMS".into(),
+                text_column: "text".into(),
+                metric: Some("euclidean".into()),
+                m: Some(8),
+                ef_construction: Some(32),
+                ef_search: Some(16),
+                auto_refresh_limit: Some(4),
+                present: true,
+            }],
+        }],
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        recovered
+            .edge_embeddings
+            .get(&("CLAIMS".to_string(), "text_emb".to_string()))
+            .unwrap()
+            .metric(),
+        Some("euclidean")
+    );
+    let served = query_edge_embeddings(
+        &recovered,
+        "CLAIMS",
+        "text",
+        &[3.0, 0.0],
+        EdgeVectorQueryOptions {
+            top_k: 2,
+            exact: false,
+            metric: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(served.search_method, "hnsw");
+}

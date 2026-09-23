@@ -1388,3 +1388,91 @@ fn a_written_pass_stamps_the_model_and_the_hashes_a_carry_moves() {
         "the hash beside the vector is the text that produced it"
     );
 }
+
+/// An explicit build metric becomes the store's metric when the store declares
+/// none, so a later metric-less query resolves the metric the index answers
+/// under.
+///
+/// Before the fix the build returned `metric: "euclidean"` and built a
+/// euclidean HNSW while the store kept `None` — which resolves to cosine — so
+/// every metric-less query mismatched the index, fell back to the exact scan
+/// for good, and `list_embeddings` reported the metric nothing used.
+#[test]
+fn an_explicit_build_metric_becomes_the_stores_metric() {
+    let mut g = docs(&[1, 2, 3]);
+    set_embeddings(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        batch(&[(1, [1.0, 0.0]), (2, [0.0, 1.0]), (3, [0.5, 0.5])]),
+    )
+    .unwrap();
+    assert_eq!(store_of(&g).metric, None);
+
+    let report = build_vector_index(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        None,
+        None,
+        Some("euclidean"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(report.metric, "euclidean");
+    assert_eq!(store_of(&g).metric.as_deref(), Some("euclidean"));
+    assert_eq!(
+        list_embeddings(&g)
+            .into_iter()
+            .map(|info| info.metric)
+            .collect::<Vec<_>>(),
+        vec!["euclidean".to_string()]
+    );
+}
+
+/// A build metric the store contradicts is refused rather than silently
+/// producing an index the store's own default scoring cannot use.
+#[test]
+fn a_build_metric_contradicting_the_store_is_refused() {
+    let mut g = docs(&[1, 2]);
+    set_embeddings(
+        &mut g,
+        "Doc",
+        "summary",
+        Some("cosine"),
+        batch(&[(1, [1.0, 0.0]), (2, [0.0, 1.0])]),
+    )
+    .unwrap();
+    let error = build_vector_index(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        None,
+        None,
+        Some("euclidean"),
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("declares metric 'cosine'"), "{error}");
+    assert!(error.contains("requested 'euclidean'"), "{error}");
+    assert!(!store_of(&g).has_index(), "the refusal builds nothing");
+    assert_eq!(store_of(&g).metric.as_deref(), Some("cosine"));
+
+    // The store's own metric still builds, and a metric-less build is unchanged.
+    build_vector_index(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        None,
+        None,
+        Some("cosine"),
+        None,
+    )
+    .unwrap();
+    assert!(store_of(&g).has_index());
+    assert_eq!(store_of(&g).metric.as_deref(), Some("cosine"));
+}

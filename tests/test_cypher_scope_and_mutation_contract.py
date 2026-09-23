@@ -208,3 +208,61 @@ def test_plain_delete_error_names_node_without_debug_formatting():
     graph = _graph()
     with pytest.raises(kglite.CypherExecutionError, match="node 'Ada'"):
         graph.cypher("MATCH (a:Person {id: 1}) DELETE a").to_list()
+
+
+# ── MERGE over parallel relationships, DELETE of projected values ───────
+
+
+def _parallel_edges():
+    """Two parallel ``:T`` relationships, differing only in ``k``."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (a:P {id: 1}), (b:P {id: 2})").to_list()
+    for k in (0, 1):
+        graph.cypher("MATCH (a:P {id: 1}), (b:P {id: 2}) CREATE (a)-[:T {k: $k}]->(b)", params={"k": k}).to_list()
+    return graph
+
+
+def _t_census(graph):
+    return graph.cypher("MATCH ()-[r:T]->() RETURN r.k AS k, r.hits AS hits ORDER BY k").to_list()
+
+
+def test_merge_binds_the_parallel_member_its_properties_name():
+    graph = _parallel_edges()
+    rows = graph.cypher(
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) MERGE (a)-[r:T {k: 0}]->(b) "
+        "ON MATCH SET r.hits = coalesce(r.k, -1) + 100 ON CREATE SET r.hits = -5 "
+        "RETURN r.k AS k, r.hits AS hits"
+    ).to_list()
+    assert rows == [{"k": 0, "hits": 100}]
+    assert _t_census(graph) == [{"k": 0, "hits": 100}, {"k": 1, "hits": None}]
+
+
+def test_merge_creates_when_no_member_carries_the_patterns_properties():
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (a:P {id: 1}), (b:P {id: 2})").to_list()
+    graph.cypher("MATCH (a:P {id: 1}), (b:P {id: 2}) CREATE (a)-[:T {k: 1}]->(b)").to_list()
+    rows = graph.cypher(
+        "MATCH (a:P {id: 1}), (b:P {id: 2}) MERGE (a)-[r:T {k: 0}]->(b) "
+        "ON CREATE SET r.hits = -5 RETURN r.k AS k, r.hits AS hits"
+    ).to_list()
+    assert rows == [{"k": 0, "hits": -5}]
+    assert _t_census(graph) == [{"k": 0, "hits": -5}, {"k": 1, "hits": None}]
+
+
+def test_deleting_a_collected_relationship_value_removes_the_edge():
+    """``collect(r)`` then ``DELETE r`` used to complete without deleting."""
+    graph = _parallel_edges()
+    rows = graph.cypher(
+        "MATCH ()-[r:T {k: 0}]->() WITH collect(r) AS rs UNWIND rs AS r DELETE r RETURN count(*) AS n"
+    ).to_list()
+    assert rows == [{"n": 1}]
+    assert _t_census(graph) == [{"k": 1, "hits": None}]
+
+
+def test_deleting_a_path_derived_relationship_removes_the_edge():
+    graph = _parallel_edges()
+    rows = graph.cypher(
+        "MATCH p = ()-[:T {k: 0}]->() UNWIND relationships(p) AS r DELETE r RETURN count(*) AS n"
+    ).to_list()
+    assert rows == [{"n": 1}]
+    assert _t_census(graph) == [{"k": 1, "hits": None}]

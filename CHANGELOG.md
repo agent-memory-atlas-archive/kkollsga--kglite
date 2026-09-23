@@ -94,6 +94,30 @@ before upgrading.
 
 ### Fixed
 
+- **`MERGE` on a relationship pattern now matches the pattern's relationship
+  properties.** Between endpoints joined by more than one relationship of the
+  type, the clause bound whichever member adjacency yielded first, so
+  `MERGE (a)-[r:T {k: 0}]->(b) ON MATCH SET ...` could write to the `{k: 1}`
+  member. The properties now take part in the match, and a pattern no member
+  carries reaches the create branch — so `MERGE (a)-[:T {k: 0}]->(b)` beside an
+  existing `{k: 1}` relationship creates one rather than reporting a match.
+
+- **`DELETE` of a projected relationship value removes the relationship.**
+  `WITH collect(r) AS rs UNWIND rs AS r DELETE r` matched no arm in the
+  value fall-through, so the clause completed without deleting and without
+  erroring, and `relationships_deleted` counted nothing. The value is now
+  resolved, checked for statement identity, liveness, endpoints and write scope,
+  and deleted; a value carrying no statement identity is refused by name.
+
+- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+  `metric` on the store.** A build with a metric the store did not declare left
+  the store resolving another one, so every later query that named no metric
+  mismatched the index and was served by exact scan while `list` /
+  `embedding_info` reported the unused metric. An explicit metric now becomes
+  the store's metric when the store declares none, and is refused when it
+  contradicts one the store already declares. Recovery and statement rollback
+  restore the metric with the index.
+
 - Retained relationship bindings no longer expose a replacement edge's
   properties or embedding scores after deletion and physical-slot reuse.
   Embedding writes reject stale or fabricated relationship selections.

@@ -1084,7 +1084,9 @@ impl KnowledgeGraph {
     ///     metric: Distance metric to index for — ``'cosine'`` (default),
     ///         ``'dot_product'``, or ``'euclidean'``. ``'poincare'`` is not
     ///         supported (it stays on the exact path). If omitted, uses the
-    ///         store's metric, else ``'cosine'``.
+    ///         store's metric, else ``'cosine'``. An explicit metric becomes
+    ///         the store's metric when the store declares none, and is refused
+    ///         when it contradicts one the store already declares.
     ///     auto_refresh_limit: How many outstanding vectors a query will fold
     ///         into the index inline before it serves the exact scan instead
     ///         (default 1000). Omit on a rebuild to keep the current value.
@@ -1093,7 +1095,8 @@ impl KnowledgeGraph {
     ///     dict: ``{'indexed': int, 'metric': str, 'm': int}`` — vectors indexed.
     ///
     /// Raises:
-    ///     ValueError: if the store doesn't exist or the metric is unsupported.
+    ///     ValueError: if the store doesn't exist, the metric is unsupported,
+    ///         or the metric contradicts the store's own.
     #[pyo3(signature = (node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None))]
     #[allow(clippy::too_many_arguments)]
     fn build_vector_index(

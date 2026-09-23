@@ -109,8 +109,36 @@ pub(crate) fn build_edge_vector_index(
         .clone()
         .or_else(|| store.metric().map(str::to_owned))
         .unwrap_or_else(|| "cosine".to_string());
+    // Indexability first: a metric HNSW cannot serve at all is a more useful
+    // answer than which metric the store prefers.
     let metric = indexable_metric(&metric_name)?;
+    // An explicit metric becomes the store's metric so a later metric-less
+    // query resolves the one the index was built for. Without this the index
+    // answered under one metric while the store still declared another, every
+    // default query mismatched it and fell back to the exact scan, and `list`
+    // reported the metric nothing used. A metric the store already declares
+    // differently is refused rather than overwritten: the vectors were scored
+    // under it.
+    if let (Some(requested), Some(stored)) = (options.metric.as_deref(), store.metric()) {
+        if requested != stored {
+            return Err(format!(
+                "Relationship embedding store '{connection_type}.{text_property}' declares metric \
+                 '{stored}', but this build requested '{requested}'. Build with '{stored}', or \
+                 drop the store and set it again with metric '{requested}'."
+            ));
+        }
+    }
     let params = resolve_params(&options)?;
+    // `db.edge_embeddings.build_index` runs inside a statement window, so the
+    // one field this build writes outside the index state needs an undo story.
+    // `EdgeVectorIndexReplaced` restores the index, not the metric, and there
+    // is no per-field entry for it — so the rare call that actually moves the
+    // metric journals the whole prior store. It is O(store) exactly once per
+    // store: afterwards the store declares a metric, and a later build either
+    // agrees with it or is refused above.
+    let metric_change_prior = (options.metric.is_some()
+        && store.metric() != options.metric.as_deref())
+    .then(|| store.clone());
     let prior = store.numeric.take_index_state();
     if let Some(limit) = options.auto_refresh_limit {
         store.numeric.set_auto_refresh_limit(limit);
@@ -121,8 +149,17 @@ pub(crate) fn build_edge_vector_index(
         store.numeric.restore_index_state(prior);
         return Err(error);
     }
+    // After the build, so a failed build leaves the store's metric alone.
+    if options.metric.is_some() {
+        store.numeric.metric = Some(metric_name.clone());
+    }
     let auto_refresh_limit = store.numeric.auto_refresh_limit();
     if let Some(journal) = graph.graph.undo_journal_mut() {
+        // Pushed first so the reverse-order undo restores the index state, then
+        // the whole prior store — leaving exactly the pre-statement store.
+        if let Some(prior_store) = metric_change_prior {
+            journal.note_edge_embedding_store_replaced(key.clone(), Some(prior_store));
+        }
         journal.note_edge_vector_index_replaced(key.clone(), prior);
     }
     graph.note_declaration(crate::graph::wal::MutationOp::SetEdgeVectorIndex {
@@ -188,7 +225,17 @@ pub(crate) fn apply_edge_vector_index_declaration(
         store.numeric.set_auto_refresh_limit(limit);
     }
     let seed = 0x9E37_79B9_7F4A_7C15 ^ store.len() as u64;
-    store.numeric.build_index(metric, params, seed)
+    let declared = options.metric.clone();
+    store.numeric.build_index(metric, params, seed)?;
+    // Replay reproduces the store the build left behind, metric included.
+    // Unlike the caller-facing path this reconciles rather than refuses: a log
+    // written before the metric was persisted can carry an index metric its
+    // store contradicts, and a recovery that refused it would make the graph
+    // unopenable.
+    if declared.is_some() {
+        store.numeric.metric = declared;
+    }
+    Ok(())
 }
 
 pub(crate) fn drop_edge_vector_index(

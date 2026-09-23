@@ -668,7 +668,11 @@ CALL db.edge_embeddings.query({
 `top_k` defaults to 10 and `exact` defaults to false. `search_method` is
 `hnsw` only when HNSW served the query, otherwise `exact`; `exact:true` always
 bypasses the index. A requested metric that cannot use the installed index
-falls back to the exact route. The procedure ranks the complete declared
+falls back to the exact route. `build_index` takes an optional `metric`: it
+becomes the store's metric when the store declares none — so a later `query`
+that names no metric resolves the one the index answers under — and a `metric`
+that contradicts one the store already declares is refused rather than
+producing an index the default query route cannot use. The procedure ranks the complete declared
 relationship store before subsequent clauses run, so `WHERE` after `YIELD`
 filters its top-k output. To constrain ranking by endpoints or relationship
 properties, use filtered `MATCH` with the exact scalar functions instead.

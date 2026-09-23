@@ -1817,8 +1817,9 @@ fn execute_delete(
                     enforce_bound_edge_write_scope(graph, edge_binding)?;
                 }
             } else {
-                // Not bound to a node/edge. A node VALUE (NodeRef from
-                // WITH / collect) is still deletable; anything else is NULL
+                // Not bound to a node/edge. A node or relationship VALUE
+                // (projected by WITH / collect) is still deletable; anything
+                // else is NULL
                 // — e.g. an unmatched OPTIONAL MATCH variable — and
                 // openCypher ignores NULL in DELETE (so the idiomatic
                 // single-statement cascade `MATCH (root) OPTIONAL MATCH
@@ -1844,6 +1845,50 @@ fn execute_delete(
                         let node_idx = petgraph::graph::NodeIndex::new(nv.id as usize);
                         if nodes_to_delete.insert(node_idx) {
                             enforce_node_write_scope(graph, node_idx)?;
+                        }
+                    }
+                    // A materialised relationship value (`collect(r)` then
+                    // UNWIND, or a `FOREACH` loop variable) is deletable on the
+                    // same grounds as the node arms above. Without it the value
+                    // fell through here and DELETE was a silent no-op: no edge
+                    // removed, no error. It carries its own identity checks
+                    // rather than the binding path's, because a value can
+                    // outlive the slot it names.
+                    Some(Value::Relationship(rel)) => {
+                        let edge_index = petgraph::graph::EdgeIndex::new(rel.id as usize);
+                        if deleted_edges.insert(edge_index) {
+                            let token = rel.incarnation.ok_or_else(|| {
+                                format!(
+                                    "Relationship value '{var_name}' was not bound by this \
+                                     statement"
+                                )
+                            })?;
+                            if !relationship_identities.accepts(edge_index, token) {
+                                return Err(format!(
+                                    "Relationship '{var_name}' is stale after its storage slot \
+                                     was reused"
+                                ));
+                            }
+                            let binding = EdgeBinding {
+                                incarnation: Some(token),
+                                source: petgraph::graph::NodeIndex::new(rel.start_id as usize),
+                                target: petgraph::graph::NodeIndex::new(rel.end_id as usize),
+                                edge_index,
+                            };
+                            // The token is statement-local; a value from
+                            // another graph or a rebuilt slot can still name a
+                            // live edge whose endpoints are not the ones the
+                            // value records. Deleting that edge would remove a
+                            // relationship the caller never selected.
+                            if graph.graph.edge_endpoints(edge_index)
+                                != Some((binding.source, binding.target))
+                            {
+                                return Err(format!(
+                                    "Relationship '{var_name}' no longer occupies the storage \
+                                     slot it names"
+                                ));
+                            }
+                            enforce_bound_edge_write_scope(graph, &binding)?;
                         }
                     }
                     _ => {}
@@ -2269,6 +2314,45 @@ fn execute_merge(
     })
 }
 
+/// The property values a relationship MERGE pattern expects, in the pattern's
+/// own spelling.
+///
+/// The node counterpart ([`merge_expected_props`]) canonicalises each key
+/// through the type's identity aliases; relationships have no identity columns,
+/// so a key here always names an ordinary stored property. Endpoint references
+/// are snapshotted for the same reason the node path snapshots them: stored
+/// properties hold resolved values, so an unresolved one would never compare
+/// equal to what is on the edge.
+fn merge_expected_edge_props<'p>(
+    executor: &CypherExecutor<'_>,
+    edge_pat: &'p CreateEdgePattern,
+    row: &ResultRow,
+    graph: &DirGraph,
+) -> Result<Vec<(&'p str, Value)>, String> {
+    edge_pat
+        .properties
+        .iter()
+        .map(|(key, expr)| {
+            let mut value = executor.evaluate_expression(expr, row)?;
+            crate::graph::session::snapshot_property_values(
+                &graph.graph,
+                std::iter::once(&mut value),
+            );
+            Ok((key.as_str(), value))
+        })
+        .collect()
+}
+
+/// Whether a candidate edge carries every property the MERGE pattern spelled,
+/// under the same Cypher predicate equality the node arm applies. A property
+/// the edge does not carry never matches.
+fn edge_matches_all(edge: &EdgeData, expected: &[(&str, Value)]) -> bool {
+    expected.iter().all(|(key, value)| {
+        edge.get_property(key)
+            .is_some_and(|stored| crate::graph::core::filtering::values_equal(stored, value))
+    })
+}
+
 /// Returns the bound row when the pattern already exists, `None` when it does
 /// not (the caller then CREATEs it).
 fn try_match_merge_pattern(
@@ -2434,11 +2518,21 @@ fn try_match_merge_pattern(
                 };
 
                 let interned_ct = InternedKey::from_str(&edge_pat.connection_type);
+                // The pattern's relationship properties are part of the match,
+                // exactly as the node arm's are. Without them, parallel members
+                // between the same endpoints are indistinguishable and
+                // `edges_directed(..).find(..)` binds whichever one adjacency
+                // yields first — so `MERGE (a)-[r:T {k:0}]->(b)` could bind the
+                // `{k:1}` member and run ON MATCH SET against it, and a pattern
+                // matching no member never reached the CREATE arm.
+                let expected_props = merge_expected_edge_props(&executor, edge_pat, row, graph)?;
                 let matching_edge = graph
                     .graph
                     .edges_directed(actual_src, petgraph::Direction::Outgoing)
                     .find(|e| {
-                        e.target() == actual_tgt && e.weight().connection_type == interned_ct
+                        e.target() == actual_tgt
+                            && e.weight().connection_type == interned_ct
+                            && edge_matches_all(e.weight(), &expected_props)
                     });
 
                 if let Some(edge_ref) = matching_edge {

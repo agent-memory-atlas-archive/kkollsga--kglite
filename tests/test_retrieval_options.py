@@ -106,3 +106,45 @@ def test_false_left_guard_does_not_evaluate_vector_errors(disable_optimizer, pro
         disable_optimizer=disable_optimizer,
     )
     assert result.to_list() == [{"n": 0}]
+
+
+def test_explicit_build_metric_is_recorded_and_serves_metric_less_queries():
+    """An index built with an explicit metric answers a query that names none.
+
+    The store used to keep its own metric (``None`` → cosine) beside a
+    euclidean index, so every metric-less query resolved cosine, reported
+    ``metric_mismatch`` and was served by exact scan for good, while
+    ``embedding_info`` reported the metric nothing used.
+    """
+    g = kglite.KnowledgeGraph()
+    rows = [
+        {"id": i, "title": str(i), "summary": str(i), "x": math.cos(i / 50), "y": math.sin(i / 50)} for i in range(320)
+    ]
+    g.add_nodes(pd.DataFrame(rows), "Doc", "id", "title")
+    g.set_embeddings("Doc", "summary", {r["id"]: [r["x"], r["y"]] for r in rows})
+    assert g.embedding_info("Doc", "summary")["metric"] == "cosine"
+
+    report = g.build_vector_index("Doc", "summary", metric="euclidean")
+    assert report["metric"] == "euclidean"
+    assert g.embedding_info("Doc", "summary")["metric"] == "euclidean"
+    assert g.list_embeddings()[0]["metric"] == "euclidean"
+
+    served = g.cypher(
+        "MATCH (d:Doc) RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 4"
+    )
+    diagnostics = served.diagnostics["retrieval"]
+    assert diagnostics, "the whole-type route must report how it was served"
+    assert diagnostics[0]["actual_mode"] == "hnsw", diagnostics
+    exact = g.cypher(
+        "MATCH (d:Doc) RETURN d.id AS id, "
+        "vector_score(d, 'summary_emb', [1.0,0.0], 'euclidean', {exact:true}) AS s ORDER BY s DESC LIMIT 4"
+    ).to_list()
+    assert [row["id"] for row in served.to_list()] == [row["id"] for row in exact]
+
+
+def test_build_metric_contradicting_the_store_is_refused():
+    g = _graph(indexed=False, metric="cosine")
+    with pytest.raises(ValueError, match="declares metric 'cosine'"):
+        g.build_vector_index("Doc", "summary", metric="euclidean")
+    assert g.embedding_info("Doc", "summary")["metric"] == "cosine"
+    assert g.cypher("SHOW INDEXES").to_list() == []

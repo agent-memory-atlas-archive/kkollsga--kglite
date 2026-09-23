@@ -518,3 +518,56 @@ fn whole_type_exact_entry_sorts_by_second_call_and_caches_distinct_keys() {
     VECTOR_SCORE_PREPARES
         .with(|count| assert_eq!(count.get(), 2, "one preparation per distinct key"));
 }
+
+/// An index built with an explicit metric serves a query that names none.
+///
+/// The route, not just the bookkeeping: before the store recorded the build's
+/// metric, a metric-less query resolved cosine against a euclidean index,
+/// `try_retrieval_entry` reported `metric_mismatch` and returned `None`, and
+/// every such query fell back to the exact scan permanently.
+#[test]
+fn an_index_built_with_an_explicit_metric_serves_metric_less_queries() {
+    let vectors: Vec<_> = (0..128).map(|i| ("doc", [i as f32, 1.0])).collect();
+    let mut graph = docs(&vectors);
+    crate::graph::embeddings::build_vector_index(
+        &mut graph,
+        "Doc",
+        "summary",
+        None,
+        None,
+        None,
+        Some("euclidean"),
+        None,
+    )
+    .unwrap();
+
+    let params = HashMap::new();
+    let mut query = parser::parse_cypher(
+        "MATCH (d:Doc) RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s \
+         ORDER BY s DESC LIMIT 3",
+    )
+    .unwrap();
+    crate::graph::languages::cypher::planner::optimize(&mut query, &graph, &params);
+    let winners = CypherExecutor::with_params(&graph, &params, None)
+        .try_retrieval_entry(&query.clauses)
+        .unwrap()
+        .expect("the index must serve a query that names no metric");
+
+    // Same winners as the exact oracle, scored under the metric the index was
+    // built for rather than the cosine a `None` store metric resolves to.
+    let exact = rows(
+        &graph,
+        "MATCH (d:Doc) RETURN d.id AS id, \
+         vector_score(d, 'summary_emb', [1.0,0.0], 'euclidean', {exact:true}) AS s \
+         ORDER BY s DESC LIMIT 3",
+    );
+    let indexed: Vec<Value> = winners
+        .rows
+        .iter()
+        .map(|row| row.projected.get("id").cloned().expect("id"))
+        .collect();
+    assert_eq!(
+        indexed,
+        exact.iter().map(|row| row[0].clone()).collect::<Vec<_>>()
+    );
+}

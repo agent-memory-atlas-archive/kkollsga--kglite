@@ -339,9 +339,13 @@ where
 /// and are clamped to their valid range. `metric` resolves as explicit
 /// argument, then the store's own metric, then cosine; `"cosine"`,
 /// `"dot_product"` and `"euclidean"` are indexable, and Poincaré scoring stays
-/// on the exact path. The build is deterministic in level assignment but not
-/// in link topology (it is parallel), so assert retrieval behaviour rather
-/// than index bytes.
+/// on the exact path. An explicit `metric` **becomes the store's metric** when
+/// the store declares none, so later metric-less queries resolve the metric the
+/// index was built for; an explicit `metric` that contradicts a metric the store
+/// already declares is refused, because the index and the store's default
+/// scoring cannot disagree without silently disabling the index. The build is
+/// deterministic in level assignment but not in link topology (it is parallel),
+/// so assert retrieval behaviour rather than index bytes.
 ///
 /// `auto_refresh_limit` bounds the vectors a *query* will fold into the index
 /// inline before it falls back to the exact scan instead; `None` keeps whatever
@@ -362,6 +366,26 @@ pub fn build_vector_index(
     metric: Option<&str>,
     auto_refresh_limit: Option<usize>,
 ) -> Result<VectorIndexReport, String> {
+    // Refused here rather than in the shared builder: WAL replay reaches
+    // `build_index_structure` directly, and a log written before the metric was
+    // persisted can carry an index metric its store contradicts. Replay
+    // reconciles that log; a caller is told to pick one.
+    if let (Some(requested), Some(store)) = (
+        metric,
+        graph.embeddings.get(&store_key(node_type, text_column)),
+    ) {
+        if let Some(stored) = store.metric.as_deref() {
+            if stored != requested {
+                return Err(format!(
+                    "Embedding store '{}.{}' declares metric '{stored}', but this build requested \
+                     '{requested}'. Build with '{stored}', or replace the store with \
+                     set_embeddings(metric='{requested}') first.",
+                    node_type,
+                    store_name(text_column),
+                ));
+            }
+        }
+    }
     let report = build_index_structure(
         graph,
         node_type,
@@ -460,6 +484,16 @@ pub(crate) fn build_index_structure(
     // moves it, so rebuilding an index does not quietly restore the default.
     if let Some(limit) = auto_refresh_limit {
         store.set_auto_refresh_limit(limit);
+    }
+    // The index answers under `metric_name`, so the store has to resolve the
+    // same metric for a later query that names none. Leaving the store's
+    // `None` (which resolves to cosine) beside a euclidean index made every
+    // metric-less query mismatch the index and fall back to the exact scan
+    // forever, while `embedding_info` reported cosine. Only an explicit
+    // argument writes here: a metric-less build resolved the store's own
+    // metric, so there is nothing to record.
+    if metric.is_some() {
+        store.metric = Some(metric_name.clone());
     }
     // A deterministic seed keeps level assignment reproducible.
     let seed = 0x9E37_79B9_7F4A_7C15 ^ (indexed as u64);

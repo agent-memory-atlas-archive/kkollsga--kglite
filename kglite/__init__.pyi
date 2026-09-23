@@ -7877,7 +7877,8 @@ class KnowledgeGraph:
         detection).
 
         ``metric`` is the store's **effective** distance metric: the one set via
-        ``set_embeddings(metric=...)`` if any, else ``'cosine'`` (the default
+        ``set_embeddings(metric=...)``, or the explicit ``metric`` a later
+        :meth:`build_vector_index` recorded, else ``'cosine'`` (the default
         search applies). It is never ``None`` for an existing store — a store with
         no explicit metric reports ``'cosine'`` (consistent with
         :meth:`list_embeddings`).
@@ -8277,7 +8278,12 @@ class KnowledgeGraph:
                 for the measured numbers.
             metric: ``'cosine'`` (default), ``'dot_product'``, or ``'euclidean'``.
                 ``'poincare'`` is unsupported (stays exact). If omitted, uses the
-                store's metric, else ``'cosine'``.
+                store's metric, else ``'cosine'``. An explicit metric **becomes
+                the store's metric** when the store declares none, so a later
+                query that names no metric resolves the one the index answers
+                under; an explicit metric that contradicts a metric the store
+                already declares is refused, because an index the store's own
+                default scoring cannot use is a dead index.
             auto_refresh_limit: How many outstanding vectors a query folds into
                 the index inline before it serves the exact scan instead
                 (default 1000). Omit on a rebuild to keep the current value.
@@ -8286,7 +8292,8 @@ class KnowledgeGraph:
             dict: ``{'indexed': int, 'metric': str, 'm': int}``.
 
         Raises:
-            ValueError: if the store doesn't exist or the metric is unsupported.
+            ValueError: if the store doesn't exist, the metric is unsupported,
+                or the metric contradicts the store's own.
                 A ``text_column`` that is itself a store name
                 (``'summary_emb'``) is named as such, with the column that
                 would have worked.
