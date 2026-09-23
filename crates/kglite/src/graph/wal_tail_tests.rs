@@ -201,3 +201,90 @@ fn newly_appeared_file_refuses_empty_recovery() {
     assert!(Wal::open_recovered(path.clone(), SyncMode::Barrier, recovered).is_err());
     assert_eq!(std::fs::read(path).unwrap(), bytes);
 }
+
+/// A frame whose payload is dominated by vectors. The torn-tail rule has to
+/// hold for the edge-embedding ops exactly as for node ops: a truncation that
+/// lands inside a vector drops the frame whole rather than surfacing a short
+/// vector or a store without its members.
+fn edge_embedding_ops() -> Vec<MutationOp> {
+    vec![
+        MutationOp::SetEdgeEmbeddingStore {
+            conn_type: "R".into(),
+            text_column: "text".into(),
+            state: EdgeEmbeddingStoreState::Present {
+                dimension: 4,
+                metric: Some("cosine".into()),
+                model_id: Some("m".into()),
+            },
+        },
+        MutationOp::ReplaceEdgeGroup {
+            conn_type: "R".into(),
+            src_type: "N".into(),
+            src_id: Value::Int64(1),
+            tgt_type: "N".into(),
+            tgt_id: Value::Int64(2),
+            edges: vec![
+                vec![("k".into(), Value::Int64(0))],
+                vec![("k".into(), Value::Int64(1))],
+            ],
+        },
+        MutationOp::ReplaceEdgeGroupEmbeddings {
+            conn_type: "R".into(),
+            src_type: "N".into(),
+            src_id: Value::Int64(1),
+            tgt_type: "N".into(),
+            tgt_id: Value::Int64(2),
+            member_count: 2,
+            stores: vec![EdgeGroupStoreWalState {
+                text_column: "text".into(),
+                members: vec![
+                    Some(EdgeVectorWalState {
+                        vector: vec![0.1, 0.2, 0.3, 0.4],
+                        text_hash: Some(7),
+                    }),
+                    None,
+                ],
+            }],
+        },
+    ]
+}
+
+#[test]
+fn edge_embedding_frames_round_trip_and_a_torn_one_is_discarded_whole() {
+    let frames = vec![
+        node_frame(1),
+        WalFrame {
+            lsn: 2,
+            ops: edge_embedding_ops(),
+        },
+    ];
+    let mut bytes = WAL_MAGIC.to_vec();
+    bytes.push(WAL_FORMAT_VERSION);
+    let intact_prefix = {
+        let mut prefix = bytes.clone();
+        append_frame(&mut prefix, &frames[0]).unwrap();
+        prefix.len()
+    };
+    for frame in &frames {
+        append_frame(&mut bytes, frame).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("graph.kgl-wal");
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(recover(&path).unwrap(), frames);
+
+    // Every cut inside the vector frame — mid-payload, and just short of its
+    // end — recovers exactly the intact prefix, never a partial store.
+    for cut in [
+        intact_prefix + (bytes.len() - intact_prefix) / 2,
+        bytes.len() - 3,
+    ] {
+        std::fs::write(&path, &bytes[..cut]).unwrap();
+        assert_eq!(
+            recover(&path).unwrap(),
+            vec![frames[0].clone()],
+            "cut at {cut} of {}",
+            bytes.len()
+        );
+    }
+}

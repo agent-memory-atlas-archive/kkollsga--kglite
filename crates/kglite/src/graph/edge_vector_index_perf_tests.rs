@@ -226,6 +226,13 @@ fn measure_edge_vector_index_matrix() {
         .sum::<usize>() as f64
         / (QUERIES * TOP_K) as f64;
 
+    // An index that answered quickly by returning the wrong neighbours would
+    // print an excellent row; the recall floor is what makes the timing rows
+    // comparable across runs at all.
+    assert!(
+        edge_recall >= 0.9 && node_recall >= 0.9,
+        "recall@{TOP_K} collapsed: edge {edge_recall:.3}, node {node_recall:.3}"
+    );
     println!("run,entity,method,vectors,dimension,top_k,metric,mean_us,min_us,recall_at_k");
     for (entity, exact, recall) in [
         ("edge", true, 1.0),

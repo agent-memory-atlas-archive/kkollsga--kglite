@@ -163,6 +163,33 @@ fn measure_edge_wal_delta_matrix() {
     for members in [1usize, 10, 100] {
         for dimension in [384usize, 1536] {
             let frames = matrix_frames(members, dimension);
+            // The delta codec's whole claim, independent of profile: a patch
+            // that keeps every cell is far smaller than the full state, a
+            // one-cell patch shrinks below the full state once the group has
+            // members to keep, and over a single member the patch's fixed
+            // overhead (two digests, store names) stays bounded.
+            let one_full = encoded(&frames.one_full).len();
+            let one_delta = encoded(&frames.one_delta).len();
+            let property_full = encoded(&frames.property_full).len();
+            let property_delta = encoded(&frames.property_delta).len();
+            assert!(
+                property_delta * 4 < property_full,
+                "members={members} dimension={dimension}: a keep-everything patch must be a small \
+                 fraction of the full state ({property_delta}/{property_full} B)"
+            );
+            if members >= 10 {
+                assert!(
+                    one_delta * 4 < one_full,
+                    "members={members} dimension={dimension}: a one-cell patch over {members} \
+                     members should be a small fraction of the full state ({one_delta}/{one_full} B)"
+                );
+            } else {
+                assert!(
+                    one_delta < one_full + 256,
+                    "members={members} dimension={dimension}: patch overhead over one member is \
+                     unbounded ({one_delta} vs {one_full} B)"
+                );
+            }
             for (variant, frame) in [
                 ("control", &frames.control),
                 ("property_full", &frames.property_full),

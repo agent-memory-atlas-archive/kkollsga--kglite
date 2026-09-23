@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -10,8 +11,8 @@ import kglite
 from kglite import KnowledgeGraph
 
 
-def _indexed_graph(count: int = 24) -> KnowledgeGraph:
-    graph = KnowledgeGraph()
+def _indexed_graph(count: int = 24, graph: KnowledgeGraph | None = None) -> KnowledgeGraph:
+    graph = graph if graph is not None else KnowledgeGraph()
     graph.cypher("CREATE (:Hub {id: 0})")
     for index in range(count):
         angle = 2.0 * math.pi * index / count
@@ -119,13 +120,27 @@ def test_invalid_query_options_fail_without_mutating_index(extra: dict, message:
 
 
 def test_metric_without_hnsw_support_falls_back_to_exact() -> None:
+    """The fallback must return the metric's own ranking, not merely some rows.
+
+    Asserting truthiness passed for any answer the exact scan produced,
+    including one computed with the index's cosine metric; the rows below are
+    the poincare distances of the 24-point unit circle against ``[1, 0]``: the
+    aligned member at distance 0 and its two neighbours tied one step away.
+    """
     graph = _indexed_graph()
     graph.cypher(
         "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
     )
     rows = _query(graph, top_k=3, metric="poincare")
-    assert rows
-    assert all(row["search_method"] == "exact" for row in rows)
+
+    assert [row["search_method"] for row in rows] == ["exact"] * 3
+    ranks = [row["relationship"]["properties"]["rank"] for row in rows]
+    assert ranks[0] == 0
+    assert set(ranks[1:]) == {1, 23}
+    assert rows[0]["score"] == pytest.approx(0.0, abs=1e-6)
+    assert rows[1]["score"] == pytest.approx(-30.936417, rel=1e-4)
+    assert rows[2]["score"] == pytest.approx(rows[1]["score"])
+    assert rows[0]["score"] > rows[1]["score"]
 
 
 def test_explicit_build_metric_is_recorded_and_serves_metric_less_queries() -> None:
@@ -167,3 +182,216 @@ def test_build_metric_contradicting_the_store_is_refused() -> None:
         "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD metric,index_state RETURN metric,index_state"
     ).to_list() == [{"metric": "cosine", "index_state": "none"}]
+
+
+def _graph_in_mode(mode: str, tmp_path: Path) -> KnowledgeGraph:
+    if mode == "disk":
+        return kglite.open(str(tmp_path / "disk-graph"), storage="disk")
+    return KnowledgeGraph(storage=mode)
+
+
+@pytest.mark.parametrize("mode", ["memory", "mapped", "disk"])
+def test_query_route_serves_every_storage_mode(mode: str, tmp_path: Path) -> None:
+    """The procedure route was only ever exercised on the in-memory backend.
+
+    Mapped and disk keep edge properties in different substrates, and the query
+    resolves a hit back to a public relationship through that substrate, so a
+    backend that lost the mapping would answer with the wrong rows (or none)
+    while every memory-mode test stayed green.
+    """
+    graph = _indexed_graph(6, _graph_in_mode(mode, tmp_path))
+
+    exact = _query(graph, exact=True, top_k=2)
+    assert [row["search_method"] for row in exact] == ["exact", "exact"]
+    assert [row["relationship"]["type"] for row in exact] == ["CLAIMS", "CLAIMS"]
+    assert exact[0]["relationship"]["properties"]["rank"] == 0
+    assert exact[0]["score"] == pytest.approx(1.0)
+    assert exact[1]["score"] == pytest.approx(0.5)
+    assert exact[1]["relationship"]["properties"]["rank"] in {1, 5}
+
+    assert graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+    ).to_list() == [{"indexed": 6}]
+    approximate = _query(graph, top_k=2)
+    assert [row["search_method"] for row in approximate] == ["hnsw", "hnsw"]
+    assert approximate[0]["relationship"]["properties"]["rank"] == 0
+    assert approximate[0]["score"] == pytest.approx(1.0)
+    assert approximate[1]["score"] == pytest.approx(0.5)
+
+
+def test_drop_store_removes_every_vector_and_is_idempotent() -> None:
+    graph = _indexed_graph(3)
+    graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+    )
+
+    assert graph.cypher(
+        "CALL db.edge_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+    ).to_list() == [{"dropped": True}]
+    assert graph.cypher(
+        "CALL db.edge_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+    ).to_list() == [{"dropped": False}]
+    assert graph.cypher("CALL db.edge_embeddings.list() YIELD entity RETURN entity").to_list() == []
+    with pytest.raises(kglite.CypherExecutionError, match="text_emb"):
+        graph.cypher("MATCH ()-[r:CLAIMS]->() RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score")
+    with pytest.raises(kglite.CypherExecutionError, match="No relationship embedding store"):
+        _query(graph, exact=True, top_k=1)
+
+
+def test_failing_statement_restores_a_dropped_store() -> None:
+    graph = _indexed_graph(3)
+    with pytest.raises(kglite.CypherExecutionError, match="division by zero"):
+        graph.cypher(
+            "CALL db.edge_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped "
+            "WITH dropped MATCH (hub:Hub) SET hub.bad = 1/0 RETURN dropped"
+        )
+
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD count,dimension,metric RETURN count,dimension,metric"
+    ).to_list() == [{"count": 3, "dimension": 2, "metric": "cosine"}]
+    assert _query(graph, exact=True, top_k=1)[0]["score"] == pytest.approx(1.0)
+
+
+def test_refresh_index_reports_the_pending_delta_and_clears_it() -> None:
+    """``refreshed: 0`` is the only value the lifecycle test ever saw.
+
+    With ``auto_refresh_limit: 0`` a vector write leaves the index stale rather
+    than folding the change in, so the refresh has real work and must report
+    the count it absorbed.
+    """
+    graph = _indexed_graph(5)
+    graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "auto_refresh_limit:0}) YIELD indexed RETURN indexed"
+    )
+    graph.cypher(
+        "MATCH ()-[r:CLAIMS {rank:0}]->() "
+        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "entries:[{relationship:r, vector:[0.0,1.0]}]}) YIELD stored RETURN stored"
+    )
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD index_state,delta RETURN index_state,delta"
+    ).to_list() == [{"index_state": "stale", "delta": 1}]
+
+    assert graph.cypher(
+        "CALL db.edge_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN refreshed"
+    ).to_list() == [{"refreshed": 1}]
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD index_state,delta RETURN index_state,delta"
+    ).to_list() == [{"index_state": "online", "delta": 0}]
+    assert _query(graph, top_k=1)[0]["relationship"]["properties"]["rank"] == 1
+
+
+def test_drop_index_is_false_when_the_store_carries_no_index() -> None:
+    graph = _indexed_graph(2)
+    assert graph.cypher(
+        "CALL db.edge_embeddings.drop_index({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+    ).to_list() == [{"dropped": False}]
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD index_state,count RETURN index_state,count"
+    ).to_list() == [{"index_state": "none", "count": 2}]
+
+
+def _three_vector_graph() -> KnowledgeGraph:
+    """Unit x, unit y, and a length-2 vector at 53° — so cosine, dot product and
+    euclidean rank the same corpus three different ways."""
+    graph = KnowledgeGraph()
+    graph.cypher(
+        "CREATE (h:Hub {id: 0}), (h)-[:CLAIMS {rank: 1}]->(:Doc {id: 1}), "
+        "(h)-[:CLAIMS {rank: 2}]->(:Doc {id: 2}), (h)-[:CLAIMS {rank: 3}]->(:Doc {id: 3})"
+    )
+    for rank, vector in [(1, [1.0, 0.0]), (2, [0.0, 1.0]), (3, [1.2, 1.6])]:
+        graph.cypher(
+            "MATCH ()-[r:CLAIMS {rank: $rank}]->() "
+            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
+            params={"rank": rank, "vector": vector},
+        )
+    return graph
+
+
+@pytest.mark.parametrize(
+    ("metric", "expected"),
+    [
+        # query [1, 0]: cos = x / |v|, dot = x, euclidean = -|v - q|
+        ("cosine", {1: 1.0, 2: 0.0, 3: 0.6}),
+        ("dot_product", {1: 1.0, 2: 0.0, 3: 1.2}),
+        ("euclidean", {1: 0.0, 2: -math.sqrt(2.0), 3: -math.sqrt(0.04 + 2.56)}),
+    ],
+)
+def test_relationship_scores_are_the_hand_computed_metric_values(metric: str, expected: dict) -> None:
+    """Absolute goldens on a 3-vector corpus, through all three scoring routes.
+
+    The existing tests assert ordering and self-similarity; a metric that
+    silently resolved to another one (cosine for dot on unit vectors, say)
+    kept every one of them green. The length-2 vector separates the metrics,
+    and the three routes must agree with the hand computation, not merely with
+    each other.
+    """
+    graph = _three_vector_graph()
+    scalar = graph.cypher(
+        "MATCH ()-[r:CLAIMS]->() RETURN r.rank AS rank, "
+        "vector_score(r,'text_emb',[1.0,0.0],$metric) AS vector_score, "
+        "text_score(r,'text',[1.0,0.0],$metric) AS text_score ORDER BY rank",
+        params={"metric": metric},
+    ).to_list()
+    assert {row["rank"]: row["vector_score"] for row in scalar} == pytest.approx(expected, abs=1e-6)
+    assert {row["rank"]: row["text_score"] for row in scalar} == pytest.approx(expected, abs=1e-6)
+
+    procedure = graph.cypher(
+        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0,0.0], "
+        "top_k:3, exact:true, metric:$metric}) YIELD relationship, score "
+        "RETURN relationship, score",
+        params={"metric": metric},
+    ).to_list()
+    assert {row["relationship"]["properties"]["rank"]: row["score"] for row in procedure} == pytest.approx(
+        expected, abs=1e-6
+    )
+    assert [row["score"] for row in procedure] == sorted((row["score"] for row in procedure), reverse=True)
+    assert graph.cypher(
+        "MATCH ()-[r:CLAIMS]->() RETURN r.rank AS rank, embedding_norm(r,'text_emb') AS norm ORDER BY rank"
+    ).to_list() == [
+        {"rank": 1, "norm": pytest.approx(1.0)},
+        {"rank": 2, "norm": pytest.approx(1.0)},
+        {"rank": 3, "norm": pytest.approx(2.0)},
+    ]
+
+
+@pytest.mark.parametrize("mode", ["memory", "mapped", "disk"])
+def test_kgl_round_trip_keeps_relationship_vectors_in_every_storage_mode(mode: str, tmp_path: Path) -> None:
+    """Saving and reloading a relationship store must not depend on the backend
+    it was built on: the mapped and disk substrates serialise edge properties
+    through different paths, and only the in-memory round trip was covered."""
+    graph = _indexed_graph(6, _graph_in_mode(mode, tmp_path))
+    graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+    )
+    before_state = graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD entity,count,dimension,metric RETURN entity,count,dimension,metric"
+    ).to_list()
+    before_rows = [
+        (row["relationship"]["properties"]["rank"], row["score"]) for row in _query(graph, exact=True, top_k=6)
+    ]
+    assert before_state == [{"entity": "relationship", "count": 6, "dimension": 2, "metric": "cosine"}]
+
+    checkpoint = tmp_path / f"{mode}.kgl"
+    graph.save(str(checkpoint))
+    reopened = kglite.load(str(checkpoint))
+
+    assert (
+        reopened.cypher(
+            "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+            "YIELD entity,count,dimension,metric RETURN entity,count,dimension,metric"
+        ).to_list()
+        == before_state
+    )
+    after_rows = [
+        (row["relationship"]["properties"]["rank"], row["score"]) for row in _query(reopened, exact=True, top_k=6)
+    ]
+    assert [rank for rank, _ in after_rows] == [rank for rank, _ in before_rows]
+    assert [score for _, score in after_rows] == pytest.approx([score for _, score in before_rows])

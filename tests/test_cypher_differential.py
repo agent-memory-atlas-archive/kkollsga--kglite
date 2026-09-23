@@ -194,6 +194,33 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "ORDER BY score ASC,edge ASC LIMIT 3",
         None,
     ),
+    # `text_score` and `embedding_norm` on a relationship reach the same scalar
+    # dispatch as `vector_score` but through separate arms, and no corpus entry
+    # covered either. The third argument is a literal vector rather than a
+    # question string because this corpus registers no embedder; the arm under
+    # test is the relationship one, which the vector spelling exercises.
+    (
+        "edge_text_score_literal_vector_order",
+        "edge_vector_differential_graph",
+        "MATCH ()-[r:R]->() RETURN id(r) AS edge,text_score(r,'text',[1.0,0.0]) AS score "
+        "ORDER BY score DESC,edge ASC LIMIT 3",
+        None,
+    ),
+    (
+        "edge_embedding_norm_projection",
+        "edge_vector_differential_graph",
+        "MATCH (a:N)-[r:R]->(b:N) RETURN id(r) AS edge,embedding_norm(r,'text_emb') AS norm,"
+        "b.id AS target ORDER BY edge",
+        None,
+    ),
+    (
+        "edge_vector_query_yield_where",
+        "edge_vector_differential_graph",
+        "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
+        "top_k:4,exact:true}) YIELD relationship,score WHERE relationship.k <> 0 "
+        "RETURN relationship.k AS k,score ORDER BY k",
+        None,
+    ),
     # ── fused MATCH … WITH count(): the pattern's own node labels ──
     # `fuse_match_with_aggregate` hands the group node to a peer-count
     # histogram that counts every peer of the edge type. Nothing applied the
@@ -6034,6 +6061,9 @@ ORDERED_CASES = frozenset(
         "edge_vector_join_multiplicity",
         "edge_vector_desc_limit_exact",
         "edge_vector_asc_limit_exact",
+        "edge_text_score_literal_vector_order",
+        "edge_embedding_norm_projection",
+        "edge_vector_query_yield_where",
     }
 )
 

@@ -158,18 +158,58 @@ def test_missing_text_retained_incrementally_and_removed_by_all() -> None:
     )
 
 
+def _vectors_on_alpha_and_beta(graph: KnowledgeGraph) -> None:
+    for text, vector in [("alpha", [1.0, 0.0]), ("beta", [0.0, 1.0])]:
+        graph.cypher(
+            "MATCH ()-[r:CLAIMS {text: $text}]->() "
+            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
+            params={"text": text, "vector": vector},
+        )
+
+
 @pytest.mark.parametrize(
-    "selection",
-    ["[r, r]", "[{id: id(r), type: type(r)}]"],
+    ("selection", "params", "message"),
+    [
+        ("[r, r]", {}, "appears more than once"),
+        ("[{id: id(r), type: type(r)}]", {}, "expected a relationship value"),
+        # A relationship that left the engine as a result row and came back as
+        # a parameter is a map, not a bound relationship — the round trip
+        # strips the statement identity the procedures require.
+        ("$rels", "round_tripped", "expected a relationship value"),
+    ],
 )
-def test_duplicate_and_fabricated_relationship_inputs_are_atomic(selection: str) -> None:
+def test_duplicate_and_fabricated_relationship_inputs_are_atomic(
+    selection: str, params: dict | str, message: str
+) -> None:
     graph = _graph()
-    with pytest.raises(kglite.CypherExecutionError):
+    _vectors_on_alpha_and_beta(graph)
+    if params == "round_tripped":
+        params = {"rels": [graph.cypher("MATCH ()-[r:CLAIMS]->() RETURN r LIMIT 1").to_list()[0]["r"]]}
+    with pytest.raises(kglite.CypherExecutionError, match=message):
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 "
             f"CALL db.edge_embeddings.remove({{type:'CLAIMS', text_property:'text', relationships:{selection}}}) "
-            "YIELD removed RETURN removed"
+            "YIELD removed RETURN removed",
+            params=params,
         )
+    assert graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD count RETURN count"
+    ).to_list() == [{"count": 2}], "a refused selection removes nothing"
+
+
+def test_text_score_with_a_literal_vector_matches_vector_score_on_a_relationship() -> None:
+    graph = _graph()
+    _vectors_on_alpha_and_beta(graph)
+    rows = graph.cypher(
+        "MATCH ()-[r:CLAIMS]->() WHERE r.text IS NOT NULL "
+        "RETURN r.text AS text, text_score(r,'text',[0.6,0.8]) AS text_score, "
+        "vector_score(r,'text_emb',[0.6,0.8]) AS vector_score ORDER BY text"
+    ).to_list()
+    assert rows == [
+        {"text": "alpha", "text_score": pytest.approx(0.6), "vector_score": pytest.approx(0.6)},
+        {"text": "beta", "text_score": pytest.approx(0.8), "vector_score": pytest.approx(0.8)},
+    ]
 
 
 def test_deleted_relationship_binding_is_stale_before_embedding_write() -> None:

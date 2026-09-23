@@ -289,4 +289,38 @@ mod query_feature_tests {
         let unrelated = parse_cypher("CALL db.labels() YIELD label RETURN label").unwrap();
         assert!(!may_invoke_embedder(&unrelated));
     }
+
+    /// The `CallSubquery` arm: a callback hidden inside `CALL { }` still
+    /// needs the embedder lock. The `Foreach` arm cannot be reached from
+    /// Cypher text — the parser admits only update clauses in a FOREACH body,
+    /// so a body can never carry the procedure — and the second query pins
+    /// that a FOREACH of ordinary writes classifies as "no embedder".
+    #[test]
+    fn classifies_edge_embedding_callbacks_inside_call_subqueries_and_foreach() {
+        let subquery = parse_cypher(
+            "MATCH (n:Doc) CALL { WITH n \
+             CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             YIELD embedded RETURN embedded } RETURN n, embedded",
+        )
+        .unwrap();
+        assert!(may_invoke_embedder(&subquery));
+
+        let plain_subquery =
+            parse_cypher("MATCH (n:Doc) CALL { WITH n RETURN n.id AS id } RETURN id").unwrap();
+        assert!(!may_invoke_embedder(&plain_subquery));
+
+        let foreach = parse_cypher(
+            "MATCH (n:Doc) WITH collect(n) AS ns FOREACH (x IN ns | SET x.seen = true)",
+        )
+        .unwrap();
+        assert!(!may_invoke_embedder(&foreach));
+        assert!(
+            parse_cypher(
+                "FOREACH (x IN [1] | CALL db.edge_embeddings.embed({type:'R', \
+                 text_property:'text', relationships:[]}) YIELD embedded RETURN embedded)"
+            )
+            .is_err(),
+            "a FOREACH body admits no CALL, so the Foreach arm is unreachable from text"
+        );
+    }
 }

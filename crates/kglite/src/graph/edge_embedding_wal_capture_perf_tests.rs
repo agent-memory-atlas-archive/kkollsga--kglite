@@ -143,6 +143,19 @@ fn measure_edge_wal_capture_boundary() {
                 capture_stats_ns(&vectors, vector_edges[0], |graph, edge| {
                     vector_capture(graph, edge, dimension)
                 });
+            // The boundary the instrument exists to watch: a property-only
+            // touch of a vector-bearing group must not re-encode its vectors
+            // (delta `Keep`), while a one-vector change must carry at least
+            // that vector. Timing is profile-dependent; these are not.
+            assert!(
+                property_bytes < change_bytes,
+                "members={members} dimension={dimension}: a property touch ({property_bytes} B) \
+                 must be smaller than a vector change ({change_bytes} B)"
+            );
+            assert!(
+                change_bytes > dimension * std::mem::size_of::<f32>(),
+                "members={members} dimension={dimension}: the changed vector is missing from the frame"
+            );
             for (variant, bytes, minimum, mean) in [
                 ("no_vector_property", plain_bytes, plain_min, plain_mean),
                 (

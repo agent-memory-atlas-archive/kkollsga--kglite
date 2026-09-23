@@ -831,6 +831,17 @@ fn measure_full_state_edge_wal_matrix() {
             let control_bytes = encoded(&control).len();
             let property_bytes = encoded(&property).len();
             let one_change_bytes = encoded(&one_change).len();
+            // Full-state frames carry every member's vector: the amplification
+            // over the topology-only control is at least the raw f32 payload.
+            assert!(
+                property_bytes >= control_bytes + members * dimension * std::mem::size_of::<f32>(),
+                "members={members} dimension={dimension}: full-state frame ({property_bytes} B) \
+                 cannot be smaller than control ({control_bytes} B) plus the vectors"
+            );
+            assert_eq!(
+                property_bytes, one_change_bytes,
+                "both full-state frames carry the same member count and width"
+            );
             println!(
                 "{members},{dimension},{control_bytes},{property_bytes},{one_change_bytes},{:.1},{},{},{}",
                 property_bytes as f64 / control_bytes as f64,
