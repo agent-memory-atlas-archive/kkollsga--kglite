@@ -488,6 +488,78 @@ class TestGraphMode:
     """`--graph X.kgl` registers kglite tools + auto-binds the .kgl's parent
     directory as a source root, so source tools are also live."""
 
+    def test_relationship_embedding_public_shape_and_errors(self, tmp_path: Path):
+        fixture = tmp_path / "edge.kgl"
+        graph = kglite.KnowledgeGraph()
+        graph.cypher("CREATE (a:T {id:1})-[:EVIDENCE {text:'heat study'}]->(b:T {id:2})")
+        graph.save(str(fixture))
+        client = _spawn(["--graph", str(fixture), "--writable"])
+        try:
+            written = client.call_tool(
+                "cypher_query",
+                {
+                    "query": """
+                    MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships
+                    CALL db.edge_embeddings.set({type:'EVIDENCE',text_property:'text',
+                      entries:[{relationship:relationships[0],vector:[1.0,0.0]}]})
+                    YIELD stored RETURN stored
+                    """
+                },
+            )
+            assert not _is_error(written), _text_content(written)
+            result = client.call_tool(
+                "cypher_query",
+                {
+                    "query": """
+                    MATCH ()-[r:EVIDENCE]->()
+                    RETURN r AS relationship, vector_score(r,'text_emb',[1.0,0.0]) AS score
+                    """
+                },
+            )
+            text = _text_content(result)
+            assert not _is_error(result), text
+            assert "1 row(s)" in text, text
+            assert "EVIDENCE" in text and "heat study" in text, text
+            assert "\t1\n" in text, text
+            assert "incarnation" not in text
+
+            listed = client.call_tool(
+                "cypher_query",
+                {
+                    "query": "CALL db.edge_embeddings.list({type:'EVIDENCE',"
+                    "text_property:'text'}) YIELD entity,count RETURN entity,count"
+                },
+            )
+            listed_text = _text_content(listed)
+            assert not _is_error(listed), listed_text
+            assert "relationship" in listed_text and "\t1\n" in listed_text, listed_text
+
+            rejected = client.call_tool(
+                "cypher_query",
+                {
+                    "query": """
+                    CALL db.edge_embeddings.remove({type:'EVIDENCE',text_property:'text',
+                      relationships:[{id:0,type:'EVIDENCE'}]}) YIELD removed RETURN removed
+                    """
+                },
+            )
+            assert _is_error(rejected)
+            assert "relationship" in _text_content(rejected).lower()
+
+            removed = client.call_tool(
+                "cypher_query",
+                {
+                    "query": "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships "
+                    "CALL db.edge_embeddings.remove({type:'EVIDENCE',text_property:'text',"
+                    "relationships:relationships}) YIELD removed RETURN removed"
+                },
+            )
+            removed_text = _text_content(removed)
+            assert not _is_error(removed), removed_text
+            assert "\nremoved\n1\n" in removed_text, removed_text
+        finally:
+            client.shutdown()
+
     def test_lists_expected_tools(self, graph_fixture: Path, tmp_path: Path):
         # save_graph is opt-in via `builtins.save_graph: true` since
         # `ff5cc91` (May 17, 2026). Without the manifest the server

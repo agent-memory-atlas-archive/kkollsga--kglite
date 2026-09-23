@@ -502,6 +502,17 @@ run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
 constrain HNSW. Use filtered `MATCH` plus `vector_score`/`text_score` when an
 endpoint or relationship predicate must constrain the ranking corpus.
 
+The network-free
+[`examples/relationship_graphrag.py`](https://github.com/kkollsga/kglite/blob/main/examples/relationship_graphrag.py)
+puts the full workflow together with a deterministic fake embedder: selected
+generation, exact endpoint-filtered claim/evidence ranking, a changed-text
+refresh, provenance inspection, explicit whole-store HNSW retrieval, and a
+save/reopen/re-register/rebuild check. Run it with an explicit scratch output:
+
+```bash
+python examples/relationship_graphrag.py --output /tmp/claims.kgl
+```
+
 Relationship values should stay bound inside the
 statement: physical IDs are graph-local slots, and automatic transfer across
 independently rebuilt graphs is unavailable without a unique application key.

@@ -11,6 +11,11 @@ before upgrading.
 
 ### Added
 
+- A runnable, network-free relationship GraphRAG example in
+  `examples/relationship_graphrag.py` demonstrates claim/evidence selection,
+  embedding generation, filtered scoring, changed-text refresh, explicit HNSW
+  retrieval, and checkpoint reopen with model registration and index rebuild.
+
 - Explicit whole-store relationship vector search through
   `db.edge_embeddings.query`, with HNSW build/refresh/drop procedures and
   `search_method` reporting. Missing, stale or incompatible indexes fall back

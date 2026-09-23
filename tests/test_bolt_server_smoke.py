@@ -98,6 +98,63 @@ def test_bolt_return_relationship_yields_rel_struct(bolt_server):
             assert rel.type == "KNOWS"
 
 
+def test_bolt_relationship_embedding_procedure_and_public_shape(bolt_server):
+    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
+        with driver.session() as session:
+            tx = session.begin_transaction()
+            row = tx.run(
+                """
+                MATCH (:Person {title:'Alice'})-[r:KNOWS]->(:Person {title:'Bob'})
+                WITH collect(r) AS relationships
+                CALL db.edge_embeddings.set({type:'KNOWS',text_property:'context',
+                  entries:[{relationship:relationships[0],vector:[1.0,0.0]}]})
+                YIELD stored
+                MATCH (:Person {title:'Alice'})-[r:KNOWS]->(:Person {title:'Bob'})
+                RETURN r, vector_score(r,'context_emb',[1.0,0.0]) AS score
+                """
+            ).single()
+            assert row is not None
+            assert row["score"] == pytest.approx(1.0)
+            assert isinstance(row["r"], neo4j.graph.Relationship)
+            assert row["r"].type == "KNOWS"
+            assert "incarnation" not in dict(row["r"])
+            tx.commit()
+
+            metadata = session.run(
+                "CALL db.edge_embeddings.list({type:'KNOWS',text_property:'context'}) "
+                "YIELD entity,count RETURN entity,count"
+            ).single()
+            assert metadata is not None
+            assert dict(metadata) == {"entity": "relationship", "count": 1}
+
+            nested = session.run(
+                "MATCH (:Person {title:'Alice'})-[r:KNOWS]->(:Person {title:'Bob'}) "
+                "RETURN {relationship:r,scores:[vector_score(r,'context_emb',[1.0,0.0])]} "
+                "AS payload"
+            ).single()["payload"]
+            assert isinstance(nested["relationship"], neo4j.graph.Relationship)
+            assert nested["scores"] == pytest.approx([1.0])
+
+            tx = session.begin_transaction()
+            with pytest.raises(neo4j.exceptions.Neo4jError, match="relationship"):
+                tx.run(
+                    """
+                    CALL db.edge_embeddings.remove({type:'KNOWS',text_property:'context',
+                      relationships:[{id:0,type:'KNOWS'}]}) YIELD removed RETURN removed
+                    """
+                ).consume()
+            tx.close()
+
+            tx = session.begin_transaction()
+            removed = tx.run(
+                "MATCH ()-[r:KNOWS]->() WITH collect(r) AS relationships "
+                "CALL db.edge_embeddings.remove({type:'KNOWS',text_property:'context', "
+                "relationships:relationships}) YIELD removed RETURN removed"
+            ).single()["removed"]
+            assert removed == 1
+            tx.commit()
+
+
 def test_bolt_transaction_commit_and_rollback(bolt_server):
     """Explicit `tx.run()` + `tx.commit()` / `tx.rollback()`."""
     with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:

@@ -1892,6 +1892,80 @@ fn empty_session() -> *mut KgliteSession {
     session
 }
 
+#[test]
+fn relationship_embeddings_round_trip_through_existing_session_cypher() {
+    let session = empty_session();
+    assert_eq!(
+        try_mutate(
+            session,
+            "CREATE (a:T {id:1})-[:EVIDENCE {text:'heat study'}]->(b:T {id:2})"
+        )
+        .0,
+        KgliteStatusCode::Ok
+    );
+    assert_eq!(
+        try_mutate(
+            session,
+            "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS rs \
+             CALL db.edge_embeddings.set({type:'EVIDENCE',text_property:'text', \
+             entries:[{relationship:rs[0],vector:[1.0,0.0]}]}) \
+             YIELD stored RETURN stored"
+        )
+        .0,
+        KgliteStatusCode::Ok
+    );
+
+    let rows = query_rows(
+        session,
+        "MATCH ()-[r:EVIDENCE]->() RETURN r AS relationship, \
+         vector_score(r,'text_emb',$q) AS score",
+        r#"{"q":[1.0,0.0]}"#,
+    );
+    assert_eq!(rows[0]["score"], serde_json::json!(1.0));
+    let relationship = &rows[0]["relationship"];
+    assert_eq!(relationship["type"], "EVIDENCE");
+    assert_eq!(relationship["properties"]["text"], "heat study");
+    assert!(relationship.get("incarnation").is_none());
+    let listed = query_rows(
+        session,
+        "CALL db.edge_embeddings.list({type:'EVIDENCE',text_property:'text'}) \
+         YIELD entity,count RETURN entity,count",
+        "{}",
+    );
+    assert_eq!(
+        listed,
+        serde_json::json!([{"entity":"relationship","count":1}])
+    );
+
+    let (status, error) = try_mutate(
+        session,
+        "CALL db.edge_embeddings.remove({type:'EVIDENCE',text_property:'text', \
+         relationships:[{id:0,start:0,end:1,type:'EVIDENCE',properties:{}}]}) \
+         YIELD removed RETURN removed",
+    );
+    assert_ne!(status, KgliteStatusCode::Ok);
+    assert!(error.unwrap_or_default().contains("relationship"));
+    assert_eq!(
+        try_mutate(
+            session,
+            "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships \
+             CALL db.edge_embeddings.remove({type:'EVIDENCE',text_property:'text', \
+             relationships:relationships}) YIELD removed RETURN removed"
+        )
+        .0,
+        KgliteStatusCode::Ok
+    );
+    assert_eq!(
+        query_rows(
+            session,
+            "MATCH ()-[r:EVIDENCE]->() RETURN embedding_norm(r,'text_emb') AS norm",
+            "{}"
+        )[0]["norm"],
+        serde_json::Value::Null
+    );
+    unsafe { kglite_session_free(session) };
+}
+
 /// The round trip that matters: a schema declared through the C ABI must come
 /// back out of the C ABI *and be enforced*. Reading it back from
 /// `CALL db.constraints()` proves it was recorded; the rejected duplicate

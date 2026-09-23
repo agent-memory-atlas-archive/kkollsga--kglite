@@ -124,6 +124,7 @@ def test_bolt_adapter_pays_the_first_exec_assessment_before_anything_is_timed(mo
 
     if not _BOLT_BINARY.exists():
         pytest.skip(f"bolt binary not built at {_BOLT_BINARY}")
+    monkeypatch.setattr(ad_kglite, "_BOLT_BINARY", _BOLT_BINARY)
 
     execed: list[str] = []
     real_run = subprocess.run
