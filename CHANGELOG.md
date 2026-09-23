@@ -105,6 +105,28 @@ before upgrading.
 
 ### Fixed
 
+- Retained relationship bindings no longer expose a replacement edge's
+  properties or embedding scores after deletion and physical-slot reuse.
+  Embedding writes reject stale or fabricated relationship selections.
+  Paths hold the same guarantee per hop: `relationships(p)` and a projected
+  path no longer substitute a relationship created into a hop's reused slot,
+  and such a hop is refused by `DELETE` and the `db.edge_embeddings.*`
+  procedures instead of being written.
+
+- Embedding generation now refuses writes through derived durable/CDC handles
+  before invoking the model or changing vectors. Python `search_text()` validates
+  both the number of returned vectors and their declared model dimension.
+- Portable `.kgle` imports validate vector widths and finite coordinates before
+  installing any store. Core embedding copy and import operations now mark real
+  mutations so `Session::transact` publishes them instead of discarding a
+  successful working copy.
+- Snapshot/disk loading and WAL recovery reject malformed embedding coordinates;
+  WAL replay also validates vector widths before installing payloads.
+- Incremental generation rejects a changed known model identity instead of
+  mixing vector spaces under misleading provenance. Manual vector upserts
+  invalidate the affected text hashes and aggregate model attribution;
+  `mode='all'` restores a fully generated store. Managed vector input and query
+  boundaries reject non-finite coordinates before they can corrupt ranking.
 - **`MERGE` on a relationship pattern now matches the pattern's relationship
   properties.** Between endpoints joined by more than one relationship of the
   type, the clause bound whichever member adjacency yielded first, so
@@ -112,14 +134,12 @@ before upgrading.
   member. The properties now take part in the match, and a pattern no member
   carries reaches the create branch — so `MERGE (a)-[:T {k: 0}]->(b)` beside an
   existing `{k: 1}` relationship creates one rather than reporting a match.
-
 - **`DELETE` of a projected relationship value removes the relationship.**
   `WITH collect(r) AS rs UNWIND rs AS r DELETE r` matched no arm in the
   value fall-through, so the clause completed without deleting and without
   erroring, and `relationships_deleted` counted nothing. The value is now
   resolved, checked for statement identity, liveness, endpoints and write scope,
   and deleted; a value carrying no statement identity is refused by name.
-
 - **A generated relationship store records the model that filled it, in every
   mode.** The default `missing` mode stamped `model: null` on a store it had
   just created whole, and the mismatch guard reads the *prior* stamp — so a
@@ -158,132 +178,11 @@ before upgrading.
   `embedding_info` reported the unused metric. An explicit metric now becomes
   the store's metric when the store declares none, and is refused when it
   contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index.
-
-- **`vector_score`, `text_score` and `embedding_norm` accept a node *value*.** A
-  node arriving as a value rather than as a pattern binding — `collect(n)` plus
-  `UNWIND`, `head(...)`, a `CALL { }` column, `nodes(p)` — was rejected with
-  "first argument must be a node or relationship variable". It is now resolved
-  and scored exactly as the binding is. A value whose slot has since been
-  deleted, or reused by a node of another type, scores `null` rather than
-  erroring or scoring the new occupant.
-- **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
-  `list` did, so a misspelled key left the default in place and the call
-  reported success — `build_index({metric_: 'euclidean'})` built a cosine index
-  and answered `indexed`. The refusal names the key and lists the accepted ones,
-  and covers the per-entry map of `set` (`relationship`, `vector`).
-- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
-  vector is unchanged.** The batch was selected by vector equality alone, so
-  writing back a byte-identical vector left the generated source hash in place
-  and `embed(mode:'changed')` went on skipping a relationship the manual write
-  owned.
-- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
-  deleted node's or relationship's vector invalidates the HNSW index, and the
-  undo's restore invalidates it again, so a statement that failed after a delete
-  put the vectors back and left the index gone (`index_state: 'none'`, every
-  query back on the exact scan). The index state is now journalled with the
-  vectors and restored with them, for node and relationship stores alike.
-- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
-  `metric` on the store.** A build with a metric the store did not declare left
-  the store resolving another one, so every later query that named no metric
-  mismatched the index and was served by exact scan while `list` /
-  `embedding_info` reported the unused metric. An explicit metric now becomes
-  the store's metric when the store declares none, and is refused when it
-  contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index.
-
-- **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
-  `list` did, so a misspelled key left the default in place and the call
-  reported success — `build_index({metric_: 'euclidean'})` built a cosine index
-  and answered `indexed`. The refusal names the key and lists the accepted ones,
-  and covers the per-entry map of `set` (`relationship`, `vector`).
-- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
-  vector is unchanged.** The batch was selected by vector equality alone, so
-  writing back a byte-identical vector left the generated source hash in place
-  and `embed(mode:'changed')` went on skipping a relationship the manual write
-  owned.
-- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
-  deleted node's or relationship's vector invalidates the HNSW index, and the
-  undo's restore invalidates it again, so a statement that failed after a delete
-  put the vectors back and left the index gone (`index_state: 'none'`, every
-  query back on the exact scan). The index state is now journalled with the
-  vectors and restored with them, for node and relationship stores alike.
-- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
-  `metric` on the store.** A build with a metric the store did not declare left
-  the store resolving another one, so every later query that named no metric
-  mismatched the index and was served by exact scan while `list` /
-  `embedding_info` reported the unused metric. An explicit metric now becomes
-  the store's metric when the store declares none, and is refused when it
-  contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index.
-
-- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
-  vector is unchanged.** The batch was selected by vector equality alone, so
-  writing back a byte-identical vector left the generated source hash in place
-  and `embed(mode:'changed')` went on skipping a relationship the manual write
-  owned.
-- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
-  deleted node's or relationship's vector invalidates the HNSW index, and the
-  undo's restore invalidates it again, so a statement that failed after a delete
-  put the vectors back and left the index gone (`index_state: 'none'`, every
-  query back on the exact scan). The index state is now journalled with the
-  vectors and restored with them, for node and relationship stores alike.
-- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
-  `metric` on the store.** A build with a metric the store did not declare left
-  the store resolving another one, so every later query that named no metric
-  mismatched the index and was served by exact scan while `list` /
-  `embedding_info` reported the unused metric. An explicit metric now becomes
-  the store's metric when the store declares none, and is refused when it
-  contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index.
-
-- **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
-  deleted node's or relationship's vector invalidates the HNSW index, and the
-  undo's restore invalidates it again, so a statement that failed after a delete
-  put the vectors back and left the index gone (`index_state: 'none'`, every
-  query back on the exact scan). The index state is now journalled with the
-  vectors and restored with them, for node and relationship stores alike.
-- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
-  `metric` on the store.** A build with a metric the store did not declare left
-  the store resolving another one, so every later query that named no metric
-  mismatched the index and was served by exact scan while `list` /
-  `embedding_info` reported the unused metric. An explicit metric now becomes
-  the store's metric when the store declares none, and is refused when it
-  contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index.
-
-- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
-  `metric` on the store.** A build with a metric the store did not declare left
-  the store resolving another one, so every later query that named no metric
-  mismatched the index and was served by exact scan while `list` /
-  `embedding_info` reported the unused metric. An explicit metric now becomes
-  the store's metric when the store declares none, and is refused when it
-  contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index.
-
-- Retained relationship bindings no longer expose a replacement edge's
-  properties or embedding scores after deletion and physical-slot reuse.
-  Embedding writes reject stale or fabricated relationship selections.
-  Paths hold the same guarantee per hop: `relationships(p)` and a projected
-  path no longer substitute a relationship created into a hop's reused slot,
-  and such a hop is refused by `DELETE` and the `db.edge_embeddings.*`
-  procedures instead of being written.
-
-- Embedding generation now refuses writes through derived durable/CDC handles
-  before invoking the model or changing vectors. Python `search_text()` validates
-  both the number of returned vectors and their declared model dimension.
-- Portable `.kgle` imports validate vector widths and finite coordinates before
-  installing any store. Core embedding copy and import operations now mark real
-  mutations so `Session::transact` publishes them instead of discarding a
-  successful working copy.
-- Snapshot/disk loading and WAL recovery reject malformed embedding coordinates;
-  WAL replay also validates vector widths before installing payloads.
-- Incremental generation rejects a changed known model identity instead of
-  mixing vector spaces under misleading provenance. Manual vector upserts
-  invalidate the affected text hashes and aggregate model attribution;
-  `mode='all'` restores a fully generated store. Managed vector input and query
-  boundaries reject non-finite coordinates before they can corrupt ranking.
-
+  restore the metric with the index. A manual `db.edge_embeddings.set` that
+  names a `metric` follows the same rule: on a store that declares none it
+  records the metric as its own journalled metadata change, instead of only
+  validating the vectors against the cosine default and leaving a later
+  contradicting build unrefused.
 ## [0.17.12] - 2026-09-19
 ### Added
 
