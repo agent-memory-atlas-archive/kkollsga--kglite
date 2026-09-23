@@ -994,19 +994,7 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
         None
     };
 
-    let edge_embedding_compressed =
-        if !crate::graph::edge_embeddings::has_persisted_edge_embeddings(graph) {
-            None
-        } else {
-            let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(graph);
-            let raw = codec_ser(codec, &ordered)?;
-            Some(zstd_compress(&raw)?)
-        };
-    let core_version = if edge_embedding_compressed.is_some() {
-        CURRENT_CORE_DATA_VERSION
-    } else {
-        NODE_ONLY_CORE_DATA_VERSION
-    };
+    let (edge_embedding_compressed, core_version) = encode_portable_edge_embeddings(graph, codec)?;
 
     // 4. Compress timeseries if any (BTreeMap view for the same reason).
     let timeseries_compressed = if !graph.timeseries_store.is_empty() {
@@ -1109,35 +1097,21 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
         writer.write_all(section_data)?;
     }
 
-    if let Some(emb_data) = &embedding_compressed {
-        writer.write_all(emb_data)?;
-    }
-
-    if let Some(edge_data) = &edge_embedding_compressed {
-        writer.write_all(edge_data)?;
-    }
-
-    if let Some(ts_data) = &timeseries_compressed {
-        writer.write_all(ts_data)?;
-    }
+    write_optional_section(writer, embedding_compressed.as_deref())?;
+    write_optional_section(writer, edge_embedding_compressed.as_deref())?;
+    write_optional_section(writer, timeseries_compressed.as_deref())?;
 
     // Secondary-label-index section (0.10.5+). Single-label graphs
     // skip this entirely (encode returned None).
-    if let Some(sl_data) = &secondary_labels_compressed {
-        writer.write_all(sl_data)?;
-    }
+    write_optional_section(writer, secondary_labels_compressed.as_deref())?;
 
     // HNSW vector-index section (0.11.0+). Omitted when no store is indexed.
-    if let Some(vi_data) = &vector_index_compressed {
-        writer.write_all(vi_data)?;
-    }
+    write_optional_section(writer, vector_index_compressed.as_deref())?;
 
     // BM25 text-index section (0.16.10+). Omitted when no type is indexed —
     // which is also why its metadata key is skipped at zero: a graph with no
     // text index writes pre-0.16.10 bytes.
-    if let Some(ti_data) = &text_index_compressed {
-        writer.write_all(ti_data)?;
-    }
+    write_optional_section(writer, text_index_compressed.as_deref())?;
 
     // Flush the writer's own buffer. The atomic-save wrapper additionally
     // fsyncs the underlying file; for an in-memory `Vec<u8>` writer this is
@@ -2460,7 +2434,8 @@ use load_options::MAX_LOAD_ENV_VAR;
 
 mod portable_sections;
 use portable_sections::{
-    decode_portable_topology, load_portable_optional_sections, validate_and_rebuild_embedding_norms,
+    decode_portable_topology, encode_portable_edge_embeddings, load_portable_optional_sections,
+    validate_and_rebuild_embedding_norms, write_optional_section,
 };
 mod spill_dirs;
 pub(crate) use spill_dirs::memory_limit_temp_dir;

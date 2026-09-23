@@ -338,8 +338,8 @@
     },
     {
       "path": "crates/kglite/src/graph/storage/disk/graph_persist.rs",
-      "qualified_name": "crate::DiskGraph::seal_to_new_segment",
-      "lines": 243,
+      "qualified_name": "crate::DiskGraph::seal_to_new_segment_with_edge_embeddings",
+      "lines": 247,
       "branches": 43,
       "nesting": 3
     }

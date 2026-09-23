@@ -4,6 +4,28 @@
 
 use super::*;
 
+pub(super) fn encode_portable_edge_embeddings(
+    graph: &DirGraph,
+    codec: serde_codec::CodecVersion,
+) -> io::Result<(Option<Vec<u8>>, u32)> {
+    if !crate::graph::edge_embeddings::has_persisted_edge_embeddings(graph) {
+        return Ok((None, NODE_ONLY_CORE_DATA_VERSION));
+    }
+    let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(graph);
+    let raw = codec_ser(codec, &ordered)?;
+    Ok((Some(zstd_compress(&raw)?), CURRENT_CORE_DATA_VERSION))
+}
+
+pub(super) fn write_optional_section<W: Write>(
+    writer: &mut W,
+    section: Option<&[u8]>,
+) -> io::Result<()> {
+    if let Some(bytes) = section {
+        writer.write_all(bytes)?;
+    }
+    Ok(())
+}
+
 pub(super) fn validate_and_rebuild_embedding_norms(
     embeddings: &mut HashMap<(String, String), EmbeddingStore>,
 ) -> io::Result<()> {

@@ -512,9 +512,9 @@ impl DiskGraph {
     pub fn save_to_dir(
         &mut self,
         target_dir: &Path,
-        interner: &crate::graph::schema::StringInterner,
+        _interner: &crate::graph::schema::StringInterner,
     ) -> std::io::Result<()> {
-        self.save_to_dir_with_edge_embeddings(target_dir, interner, false)
+        self.save_to_dir_with_edge_embeddings(target_dir, _interner, false)
     }
 
     pub(crate) fn save_to_dir_with_edge_embeddings(
