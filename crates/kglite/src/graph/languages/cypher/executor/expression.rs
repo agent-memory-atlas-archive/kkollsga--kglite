@@ -73,12 +73,8 @@ impl<'a> CypherExecutor<'a> {
         row: &ResultRow,
     ) -> Result<Value, String> {
         let mut results: Vec<Value> = Vec::new();
-        for hop in &path.path {
-            let rel_value = super::helpers::materialize_rel_value_with_incarnation(
-                hop.edge,
-                self.graph,
-                self.relationship_incarnation(hop.edge),
-            );
+        for index in 0..path.path.len() {
+            let rel_value = self.materialize_path_relationship(path, index);
 
             let projected_for_var = match &rel_value {
                 Some(rv) => Value::Relationship(Box::new(rv.clone())),

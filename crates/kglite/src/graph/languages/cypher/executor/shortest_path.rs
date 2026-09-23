@@ -193,6 +193,7 @@ impl<'a> CypherExecutor<'a> {
     // hop list; bundling them into a struct would only move the arity.
     #[allow(clippy::too_many_arguments)]
     fn shortest_path_row(
+        &self,
         prior_row: Option<&ResultRow>,
         source_pattern: &NodePattern,
         target_pattern: &NodePattern,
@@ -215,6 +216,7 @@ impl<'a> CypherExecutor<'a> {
         row.path_bindings.insert(
             path_variable.to_string(),
             PathBinding {
+                hop_incarnations: self.capture_path_incarnations(&path),
                 source: source_idx,
                 hops,
                 path,
@@ -284,7 +286,7 @@ impl<'a> CypherExecutor<'a> {
                     // nothing about it. Every other bound has no trail from a
                     // node back to itself that the BFS below could shorten.
                     if includes_zero_length {
-                        all_rows.push(Self::shortest_path_row(
+                        all_rows.push(self.shortest_path_row(
                             prior_row,
                             source_pattern,
                             target_pattern,
@@ -390,7 +392,7 @@ impl<'a> CypherExecutor<'a> {
                 }
 
                 for (path_cost, path_nodes) in exact_paths {
-                    all_rows.push(Self::shortest_path_row(
+                    all_rows.push(self.shortest_path_row(
                         prior_row,
                         source_pattern,
                         target_pattern,

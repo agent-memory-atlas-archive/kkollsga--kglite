@@ -132,6 +132,10 @@ before upgrading.
 - Retained relationship bindings no longer expose a replacement edge's
   properties or embedding scores after deletion and physical-slot reuse.
   Embedding writes reject stale or fabricated relationship selections.
+  Paths hold the same guarantee per hop: `relationships(p)` and a projected
+  path no longer substitute a relationship created into a hop's reused slot,
+  and such a hop is refused by `DELETE` and the `db.edge_embeddings.*`
+  procedures instead of being written.
 
 - Embedding generation now refuses writes through derived durable/CDC handles
   before invoking the model or changing vectors. Python `search_text()` validates

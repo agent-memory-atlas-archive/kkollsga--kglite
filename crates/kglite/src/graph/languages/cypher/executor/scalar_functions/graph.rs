@@ -201,14 +201,8 @@ impl<'a> CypherExecutor<'a> {
                 if let Some(Expression::Variable(var)) = args.first() {
                     if let Some(path) = row.path_bindings.get(var) {
                         let mut items: Vec<Value> = Vec::with_capacity(path.path.len());
-                        for hop in &path.path {
-                            if let Some(rel) =
-                                super::super::helpers::materialize_rel_value_with_incarnation(
-                                    hop.edge,
-                                    self.graph,
-                                    self.relationship_incarnation(hop.edge),
-                                )
-                            {
+                        for index in 0..path.path.len() {
+                            if let Some(rel) = self.materialize_path_relationship(path, index) {
                                 items.push(Value::Relationship(Box::new(rel)));
                             }
                         }

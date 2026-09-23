@@ -1043,23 +1043,90 @@ pub(crate) fn materialize_rel_value_with_incarnation(
     })
 }
 
+/// Materialise the relationship of one path hop, honouring the hop's
+/// bind-time identity token.
+///
+/// A hop names a storage *slot*. When `hop_is_current` reports that the slot
+/// has been retired since the hop was bound — a `DELETE` earlier in the same
+/// write statement, whether or not a `CREATE` has since reused it — the live
+/// edge in that slot is NOT this path's hop, and reading it would present a
+/// relationship the MATCH never selected. The hop then materialises as a
+/// tombstone: the bind-time relationship type and endpoints, no properties,
+/// and the stale token, so every downstream token check (`DELETE`, the
+/// `db.edge_embeddings.*` procedures) refuses it by name.
+///
+/// Mirrors the tombstone [`stale_rel_value`] builds for a retired *edge
+/// binding*; the two must stay the same shape, because `r` and
+/// `relationships(p)[0]` name the same thing.
+fn materialize_path_hop(
+    path: &super::PathBinding,
+    index: usize,
+    hop_source: petgraph::graph::NodeIndex,
+    graph: &crate::graph::DirGraph,
+    hop_is_current: &impl Fn(
+        petgraph::graph::EdgeIndex,
+        Option<crate::datatypes::values::RelationshipIncarnation>,
+    ) -> bool,
+) -> Option<crate::datatypes::values::RelValue> {
+    let hop = path.path.get(index)?;
+    let token = path.hop_incarnation(index);
+    if hop_is_current(hop.edge, token) {
+        return materialize_rel_value_with_incarnation(hop.edge, graph, token);
+    }
+    Some(stale_rel_value(
+        hop.edge,
+        hop_source,
+        hop.node,
+        graph
+            .interner
+            .try_resolve(hop.connection_type)
+            .unwrap_or_default()
+            .to_string(),
+        token,
+    ))
+}
+
+/// The value a relationship reads as once its storage slot has been retired
+/// mid-statement: identity and type as bound, no properties, and whatever
+/// token it was bound with (stale by construction, so the write paths refuse
+/// it with "stale" rather than the vaguer "not bound by this statement").
+///
+/// Emitting *something* is deliberate: `size(relationships(p))` and a row's
+/// arity must not change under the reader's feet, and a retired relationship
+/// is missing its properties, not missing from the path.
+pub(super) fn stale_rel_value(
+    edge: petgraph::graph::EdgeIndex,
+    source: petgraph::graph::NodeIndex,
+    target: petgraph::graph::NodeIndex,
+    rel_type: String,
+    incarnation: Option<crate::datatypes::values::RelationshipIncarnation>,
+) -> crate::datatypes::values::RelValue {
+    crate::datatypes::values::RelValue {
+        incarnation,
+        id: edge.index() as u32,
+        start_id: source.index() as u32,
+        end_id: target.index() as u32,
+        rel_type,
+        properties: PropMap::new(),
+    }
+}
+
 /// Materialise a variable-length [`PathBinding`] into an owned
 /// [`PathValue`] suitable for `Value::Path`.
 ///
 /// Every hop carries its exact edge slot, so parallel relationships and
 /// incoming/undirected traversal retain the relationship actually matched.
 ///
-/// `incarnation` supplies the statement's relationship identity token per edge
-/// slot. Without it the path's relationships were indistinguishable from values
-/// that never passed through a MATCH, and the `db.edge_embeddings.*` procedures
-/// refused them with "relationship was not bound by this statement". Callers
-/// outside a statement (none today) pass `|_| None`.
+/// `hop_is_current` decides, per hop, whether the slot still holds the
+/// relationship the hop was bound to — see [`materialize_path_hop`]. Callers
+/// outside a statement (none today) pass `|_, _| true`.
 pub(crate) fn materialize_path_value(
     path: &super::PathBinding,
     graph: &crate::graph::DirGraph,
-    incarnation: impl Fn(
+    hop_is_current: impl Fn(
         petgraph::graph::EdgeIndex,
-    ) -> Option<crate::datatypes::values::RelationshipIncarnation>,
+        Option<crate::datatypes::values::RelationshipIncarnation>,
+    ) -> bool,
 ) -> crate::datatypes::values::PathValue {
     use crate::datatypes::values::PathValue;
     let mut nodes = Vec::with_capacity(path.path.len() + 1);
@@ -1068,17 +1135,76 @@ pub(crate) fn materialize_path_value(
     if let Some(src_node) = materialize_node_value(path.source, graph) {
         nodes.push(src_node);
     }
-    for hop in &path.path {
-        if let Some(rel) =
-            materialize_rel_value_with_incarnation(hop.edge, graph, incarnation(hop.edge))
-        {
+    let mut hop_source = path.source;
+    for (index, hop) in path.path.iter().enumerate() {
+        if let Some(rel) = materialize_path_hop(path, index, hop_source, graph, &hop_is_current) {
             rels.push(rel);
         }
         if let Some(node) = materialize_node_value(hop.node, graph) {
             nodes.push(node);
         }
+        hop_source = hop.node;
     }
     PathValue { nodes, rels }
+}
+
+impl<'a> super::CypherExecutor<'a> {
+    /// Capture this statement's identity token for every hop of `path`, for
+    /// storage on the [`PathBinding`] the caller is about to insert.
+    ///
+    /// `None` — and no allocation at all — when this executor tracks no
+    /// relationship identities, which is every read statement.
+    pub(super) fn capture_path_incarnations(
+        &self,
+        path: &[crate::graph::core::pattern_matching::PathHop],
+    ) -> Option<Vec<Option<crate::datatypes::values::RelationshipIncarnation>>> {
+        let identities = self.relationship_identities.as_ref()?;
+        let identities = identities.lock().expect("identity lock");
+        Some(
+            path.iter()
+                .map(|hop| Some(identities.capture(hop.edge)))
+                .collect(),
+        )
+    }
+
+    /// Whether a path hop's bind-time token still names the relationship the
+    /// hop was bound to. Always true without identity tracking (a read
+    /// statement cannot retire a slot); false for a tracked hop that has no
+    /// token, on the same "unproven is not current" rule the edge-binding
+    /// check uses.
+    pub(super) fn path_hop_is_current(
+        &self,
+        edge: petgraph::graph::EdgeIndex,
+        token: Option<crate::datatypes::values::RelationshipIncarnation>,
+    ) -> bool {
+        let Some(identities) = &self.relationship_identities else {
+            return true;
+        };
+        token.is_some_and(|token| {
+            identities
+                .lock()
+                .expect("identity lock")
+                .accepts(edge, token)
+        })
+    }
+
+    /// Materialise hop `index` of `path` the way [`materialize_path_value`]
+    /// does, for the callers that emit relationships one hop at a time
+    /// (`relationships(p)` and the list comprehension over it).
+    pub(super) fn materialize_path_relationship(
+        &self,
+        path: &super::PathBinding,
+        index: usize,
+    ) -> Option<crate::datatypes::values::RelValue> {
+        let hop_source = if index == 0 {
+            path.source
+        } else {
+            path.path.get(index - 1)?.node
+        };
+        materialize_path_hop(path, index, hop_source, self.graph, &|edge, token| {
+            self.path_hop_is_current(edge, token)
+        })
+    }
 }
 
 /// Resolve a string-keyed subscript (`container[key]`) against a map-like

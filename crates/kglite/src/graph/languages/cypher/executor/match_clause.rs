@@ -464,6 +464,7 @@ impl<'a> CypherExecutor<'a> {
             row.path_bindings.insert(
                 "__fixed_path".to_string(),
                 PathBinding {
+                    hop_incarnations: self.capture_path_incarnations(&path),
                     source,
                     hops: path.len(),
                     path,
@@ -495,8 +496,15 @@ impl<'a> CypherExecutor<'a> {
                 MatchBinding::VariableLengthPath {
                     source, hops, path, ..
                 } => {
-                    row.path_bindings
-                        .insert(var, PathBinding { source, hops, path });
+                    row.path_bindings.insert(
+                        var,
+                        PathBinding {
+                            hop_incarnations: self.capture_path_incarnations(&path),
+                            source,
+                            hops,
+                            path,
+                        },
+                    );
                 }
             }
         }
@@ -616,6 +624,7 @@ impl<'a> CypherExecutor<'a> {
             row.path_bindings.insert(
                 "__fixed_path".to_string(),
                 PathBinding {
+                    hop_incarnations: self.capture_path_incarnations(path),
                     source: *source,
                     hops: path.len(),
                     path: path.clone(),
@@ -649,6 +658,7 @@ impl<'a> CypherExecutor<'a> {
                     row.path_bindings.insert(
                         var.clone(),
                         PathBinding {
+                            hop_incarnations: self.capture_path_incarnations(path),
                             source: *source,
                             hops: *hops,
                             path: path.clone(),
@@ -691,6 +701,7 @@ impl<'a> CypherExecutor<'a> {
             let single = node_vars.first()?;
             let source_idx = row.node_bindings.get(single)?;
             return Some(PathBinding {
+                hop_incarnations: self.capture_path_incarnations(&[]),
                 source: *source_idx,
                 hops: 0,
                 path: Vec::new(),
@@ -702,6 +713,14 @@ impl<'a> CypherExecutor<'a> {
         let source_idx = row.node_bindings.get(node_vars[0])?;
 
         let mut path = Vec::with_capacity(edge_vars.len());
+        // Take each hop's token from the edge binding it is synthesised from,
+        // rather than re-capturing: the binding already holds the token as of
+        // the clause that bound it, and a re-capture would silently re-point a
+        // hop at whatever now occupies the slot.
+        let mut hop_incarnations = self
+            .relationship_identities
+            .as_ref()
+            .map(|_| Vec::with_capacity(edge_vars.len()));
         for (i, edge_var) in edge_vars.iter().enumerate() {
             let node_idx = row.node_bindings.get(node_vars[i + 1])?;
             let binding_name = edge_var
@@ -713,6 +732,9 @@ impl<'a> CypherExecutor<'a> {
                 // returns None.
                 .unwrap_or_else(|| format!("__anon_edge_{}", edge_element_indices[i] + 1));
             let edge = row.edge_bindings.get(&binding_name)?;
+            if let Some(tokens) = hop_incarnations.as_mut() {
+                tokens.push(edge.incarnation);
+            }
             path.push(crate::graph::core::pattern_matching::PathHop {
                 node: *node_idx,
                 edge: edge.edge_index,
@@ -725,6 +747,7 @@ impl<'a> CypherExecutor<'a> {
         }
 
         Some(PathBinding {
+            hop_incarnations,
             source: *source_idx,
             hops: edge_vars.len(),
             path,

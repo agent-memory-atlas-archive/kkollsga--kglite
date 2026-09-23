@@ -461,8 +461,8 @@ impl crate::graph::embedder::Embedder for StubEmbedder {
 }
 
 /// A path relationship whose edge was deleted earlier in the same statement is
-/// not written: the hop's slot no longer holds an edge, so the path carries no
-/// relationship for it and the procedure refuses the null.
+/// not written: the hop's bind-time token no longer names what occupies the
+/// slot, so the hop materialises as a tombstone and the procedure refuses it.
 #[test]
 fn path_relationship_deleted_earlier_in_the_statement_is_refused() {
     let mut graph = graph_with_two_hop_chain();
@@ -549,4 +549,168 @@ fn a_parameter_relationship_compares_equal_to_the_bound_relationship() {
         vec![vec![Value::Boolean(true), Value::Boolean(true)]],
         "{result:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Path hop identity (P3b)
+// ---------------------------------------------------------------------------
+
+/// The hop a MATCH bound is the hop the path keeps. A `DELETE` + `CREATE` that
+/// reuses the storage slot inside the same statement used to be invisible to
+/// the path: materialisation read the slot at *use* time and stamped the
+/// *current* token, so `relationships(p)` handed back the replacement edge —
+/// properties and all — as a member of a path that never matched it.
+#[test]
+fn path_hop_does_not_follow_a_reused_relationship_slot() {
+    let mut graph = graph_with_one_relationship();
+    let result = run_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh'}]->(b) \
+         WITH p, relationships(p) AS rels, relationships(p)[0] AS pr \
+         RETURN size(rels) AS n, pr.tag AS tag, pr.type AS rel_type",
+    );
+    assert_eq!(result.rows.len(), 1, "{result:?}");
+    assert_eq!(result.rows[0][0], Value::Int64(1), "{result:?}");
+    assert_eq!(result.rows[0][1], Value::Null, "{result:?}");
+    assert_eq!(result.rows[0][2], Value::String("R".into()), "{result:?}");
+}
+
+/// The same substituted hop must not reach a write procedure. Before the hop
+/// carried its bind-time token the procedure saw the *current* token for the
+/// slot, accepted it, and wrote the replacement edge's vector.
+#[test]
+fn stale_path_hop_is_refused_by_edge_embedding_set() {
+    let mut graph = graph_with_one_relationship();
+    let error = try_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh'}]->(b) \
+         WITH p CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: relationships(p)[0], vector:[1.0,0.0]}]}) YIELD stored \
+         RETURN stored",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("stale"),
+        "expected a stale refusal, got: {error}"
+    );
+    assert!(
+        graph.edge_embeddings.is_empty(),
+        "a refused statement must leave no store"
+    );
+}
+
+/// `DELETE` on the substituted hop is the destructive twin of the write
+/// procedure: accepting it would delete an edge the MATCH never selected.
+#[test]
+fn stale_path_hop_is_refused_by_delete() {
+    let mut graph = graph_with_one_relationship();
+    let error = try_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh'}]->(b) \
+         WITH p, relationships(p)[0] AS pr DELETE pr RETURN 1 AS done",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("stale"),
+        "expected a stale refusal, got: {error}"
+    );
+}
+
+/// A path bound *after* the reuse names the fresh edge, and writes to it.
+#[test]
+fn path_bound_after_the_reuse_sees_the_fresh_relationship() {
+    let mut graph = graph_with_one_relationship();
+    let result = run_mutation(
+        &mut graph,
+        "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh', text:'t'}]->(b) \
+         WITH a MATCH p = (a)-[:R]->() WITH p, relationships(p)[0] AS pr \
+         CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored \
+         RETURN pr.tag AS tag, stored",
+    );
+    assert_eq!(
+        result.rows,
+        vec![vec![Value::String("fresh".into()), Value::Int64(1)]],
+        "{result:?}"
+    );
+}
+
+/// A read statement has no identity tracking at all: every hop token is absent
+/// and `relationships(p)` still materialises the live edge. This is the cell
+/// that proves the fix costs the read path nothing observable.
+#[test]
+fn read_statement_path_relationships_are_unchanged() {
+    let graph = graph_with_one_relationship();
+    let parsed = parser::parse_cypher(
+        "MATCH p = (a:N)-[r:R]->(b:N) WITH r, p, relationships(p)[0] AS pr \
+         RETURN r = pr AS eq, size(relationships(p)) AS n, pr AS rel",
+    )
+    .unwrap();
+    let params = HashMap::new();
+    let executor = CypherExecutor::with_params(&graph, &params, None);
+    let result = executor.execute(&parsed).unwrap();
+    assert_eq!(result.rows.len(), 1, "{result:?}");
+    assert_eq!(result.rows[0][0], Value::Boolean(true), "{result:?}");
+    assert_eq!(result.rows[0][1], Value::Int64(1), "{result:?}");
+    let Value::Relationship(rel) = &result.rows[0][2] else {
+        panic!("expected a relationship, got {:?}", result.rows[0][2])
+    };
+    assert_eq!(rel.rel_type, "R");
+    assert_eq!(
+        rel.properties.get("tag"),
+        Some(&Value::String("old".into()))
+    );
+}
+
+/// Every hop of a variable-length path carries its own bind-time token, so
+/// retiring one hop's slot leaves the other hop writable and the retired one
+/// refused — not the whole path, and not the replacement edge.
+#[test]
+fn variable_length_path_hops_carry_per_hop_tokens() {
+    let mut graph = graph_with_two_hop_chain();
+    let error = try_mutation(
+        &mut graph,
+        "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH p \
+         MATCH (x:N)-[r:R]->(y:N) WHERE x.id = 1 DELETE r \
+         CREATE (x)-[:R {text:'fresh'}]->(y) WITH p UNWIND relationships(p) AS pr \
+         CALL db.edge_embeddings.set({type:'R', text_property:'text', \
+         entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("stale"),
+        "expected a stale refusal, got: {error}"
+    );
+}
+
+/// A `FOREACH` that creates relationships, then a `MATCH` over them in the same
+/// statement: the path is bound after the creation, so its hops are current and
+/// the write procedure accepts them.
+#[test]
+fn path_matched_after_a_foreach_create_is_writable() {
+    let mut graph = graph_with_one_relationship();
+    let result = run_mutation(
+        &mut graph,
+        "MATCH (a:N)-[:R]->(b:N) \
+         FOREACH (i IN [1] | CREATE (a)-[:S {text:'made'}]->(b)) \
+         WITH 1 AS ignored MATCH p = (:N)-[:S]->(:N) WITH p, relationships(p)[0] AS pr \
+         CALL db.edge_embeddings.set({type:'S', text_property:'text', \
+         entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
+    );
+    assert_eq!(result.rows, vec![vec![Value::Int64(1)]], "{result:?}");
+}
+
+/// The same for `MERGE`: the created relationship is only reachable through a
+/// path bound after it, and the path's hop must be writable.
+#[test]
+fn path_matched_after_a_merge_is_writable() {
+    let mut graph = graph_with_one_relationship();
+    let result = run_mutation(
+        &mut graph,
+        "MATCH (a:N)-[:R]->(b:N) MERGE (a)-[m:S {text:'merged'}]->(b) \
+         WITH 1 AS ignored MATCH p = (:N)-[:S]->(:N) WITH p, relationships(p)[0] AS pr \
+         CALL db.edge_embeddings.set({type:'S', text_property:'text', \
+         entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
+    );
+    assert_eq!(result.rows, vec![vec![Value::Int64(1)]], "{result:?}");
 }

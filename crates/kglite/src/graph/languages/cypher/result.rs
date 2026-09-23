@@ -186,6 +186,34 @@ pub struct PathBinding {
     pub source: NodeIndex,
     pub hops: usize,
     pub path: Vec<PathHop>,
+    /// This statement's relationship identity token for each hop, captured
+    /// when the hop was bound — the path's counterpart to
+    /// [`EdgeBinding::incarnation`], and load-bearing for the same reason: a
+    /// hop names a storage *slot*, and a `DELETE` + `CREATE` inside one write
+    /// statement can hand that slot to a different relationship. Reading the
+    /// slot's token at *use* time silently re-pointed the path at the
+    /// replacement; the bind-time token makes the retired hop read as stale.
+    ///
+    /// `None` for a path built without identity tracking — every read
+    /// statement, where no slot can be retired mid-statement — so the read
+    /// path allocates nothing per path binding. Per-hop `None` inside a
+    /// tracked path means "bound by a clause that had no token yet";
+    /// `mutation_support::stamp_relationships` fills those at clause end,
+    /// exactly as it stamps edge bindings created by CREATE/MERGE.
+    pub hop_incarnations: Option<Vec<Option<crate::datatypes::values::RelationshipIncarnation>>>,
+}
+
+impl PathBinding {
+    /// The bind-time token for hop `index`, or `None` when this path carries
+    /// no identity tracking.
+    pub fn hop_incarnation(
+        &self,
+        index: usize,
+    ) -> Option<crate::datatypes::values::RelationshipIncarnation> {
+        self.hop_incarnations
+            .as_ref()
+            .and_then(|tokens| tokens.get(index).copied().flatten())
+    }
 }
 
 impl ResultRow {

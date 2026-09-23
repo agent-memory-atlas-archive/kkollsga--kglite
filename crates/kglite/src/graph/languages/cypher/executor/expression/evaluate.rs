@@ -793,21 +793,20 @@ impl<'a> CypherExecutor<'a> {
                 }
             }
             return Ok(Value::Relationship(Box::new(
-                crate::datatypes::values::RelValue {
-                    incarnation: None,
-                    id: edge.edge_index.index() as u32,
-                    start_id: edge.source.index() as u32,
-                    end_id: edge.target.index() as u32,
-                    rel_type: String::new(),
-                    properties: PropMap::new(),
-                },
+                crate::graph::languages::cypher::executor::helpers::stale_rel_value(
+                    edge.edge_index,
+                    edge.source,
+                    edge.target,
+                    String::new(),
+                    None,
+                ),
             )));
         }
         if let Some(path) = row.path_bindings.get(name) {
             return Ok(Value::Path(Box::new(materialize_path_value(
                 path,
                 self.graph,
-                |edge| self.relationship_incarnation(edge),
+                |edge, token| self.path_hop_is_current(edge, token),
             ))));
         }
 
