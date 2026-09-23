@@ -434,6 +434,29 @@ impl Declarations {
 /// and the vector index is rebuilt from the vectors installed here.
 impl Declarations {
     pub fn install_payloads(&self, graph: &mut DirGraph) -> Result<(), String> {
+        // Validate every persisted vector before installing any payload. A
+        // corrupt later store must not leave earlier timeseries or vectors
+        // partially replayed into the caller's graph.
+        for ((node_type, text_column), payload) in &self.stores {
+            if !payload.present {
+                continue;
+            }
+            for (_, vector, _) in &payload.entries {
+                if vector.len() != payload.dimension {
+                    return Err(format!(
+                        "Invalid embedding payload '{node_type}.{text_column}': declared \
+                         dimension {} but found vector dimension {}",
+                        payload.dimension,
+                        vector.len()
+                    ));
+                }
+                crate::graph::embedding_validation::validate_finite_vector(vector).map_err(
+                    |error| {
+                        format!("Invalid embedding payload '{node_type}.{text_column}': {error}")
+                    },
+                )?;
+            }
+        }
         for ((node_type, id), timeseries) in &self.timeseries {
             graph.build_id_index(node_type);
             // An id that resolves to nothing belonged to a node the same log

@@ -96,6 +96,10 @@ impl DirGraph {
             stores_copied += 1;
         }
 
+        if stores_copied > 0 {
+            self.bump_version();
+        }
+
         (stores_copied, vectors_copied, vectors_skipped)
     }
 
@@ -220,6 +224,7 @@ mod tests {
     use super::*;
     use crate::datatypes::Value;
     use crate::graph::schema::NodeData;
+    use crate::graph::session::Session;
     use crate::graph::storage::GraphWrite;
     use std::collections::HashMap;
 
@@ -274,6 +279,48 @@ mod tests {
             dst_store.get_embedding(dst_idx.index()),
             Some(&[2.0f32, 0.0][..])
         );
+    }
+
+    /// `Session::transact` publishes a working graph only when its version
+    /// changed. Carrying a store through that public path must therefore mark
+    /// the mutation, or the closure reports success while its new store is
+    /// discarded with the transaction fork.
+    #[test]
+    fn copy_embeddings_from_publishes_inside_session_transaction() {
+        let mut src = graph_with_docs(&[1]);
+        let src_idx = src.lookup_by_id_readonly("Doc", &Value::Int64(1)).unwrap();
+        let mut store = EmbeddingStore::new(2);
+        store.set_embedding(src_idx.index(), &[1.0, 2.0]);
+        src.embeddings
+            .insert(("Doc".to_string(), "summary_emb".to_string()), store);
+
+        let session = Session::new(graph_with_docs(&[1]));
+        let before = session.version();
+        let copied = session
+            .transact::<_, ()>(|working| Ok(working.copy_embeddings_from(&src)))
+            .unwrap();
+
+        assert_eq!(copied, (1, 1, 0));
+        assert_eq!(session.version(), before + 1);
+        let snapshot = session.snapshot();
+        let dst_idx = snapshot
+            .lookup_by_id_readonly("Doc", &Value::Int64(1))
+            .unwrap();
+        assert_eq!(
+            snapshot.embeddings[&("Doc".to_string(), "summary_emb".to_string())]
+                .get_embedding(dst_idx.index()),
+            Some(&[1.0, 2.0][..])
+        );
+    }
+
+    #[test]
+    fn copying_no_stores_is_a_true_no_op() {
+        let src = graph_with_docs(&[1]);
+        let mut dst = graph_with_docs(&[1]);
+        let before = dst.version();
+
+        assert_eq!(dst.copy_embeddings_from(&src), (0, 0, 0));
+        assert_eq!(dst.version(), before);
     }
 
     /// A `vacuum` moves every surviving node to a new index, and this is the

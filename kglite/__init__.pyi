@@ -229,7 +229,7 @@ class EmbeddingModel(Protocol):
     :meth:`KnowledgeGraph.embedding_info` (``model``). An embedder *without* it
     works exactly the same, but the store records ``model=None`` — so a model
     swap can't be detected from the store alone. Add a ``model_id`` to your
-    embedder to light up provenance / model-swap detection.
+    embedder to record and validate known generated-store provenance.
 
     This lets models manage heavyweight resources (GPU memory, large weights)
     on demand.  A common pattern is to implement a cooldown in ``unload()``
@@ -246,7 +246,9 @@ class EmbeddingModel(Protocol):
                 self._model_name = model_name
                 self._model = None
                 self._timer = None
-                self.dimension = 384  # known ahead of time, or set in load()
+                # Final registration metadata. KGLite snapshots dimension and
+                # model identity when set_embedder() is called.
+                self.dimension = 384
 
             def load(self):
                 if self._timer:
@@ -254,7 +256,6 @@ class EmbeddingModel(Protocol):
                     self._timer = None
                 if self._model is None:
                     self._model = SentenceTransformer(self._model_name)
-                    self.dimension = self._model.get_sentence_embedding_dimension()
 
             def unload(self, cooldown=60):
                 def _release():
@@ -7643,13 +7644,13 @@ class KnowledgeGraph:
         stores holding the same text.
 
         The whole batch is resolved and dimension-checked before anything is
-        written, so a rejected call leaves the store exactly as it was.
+        written, and every coordinate must be finite, so a rejected call leaves
+        the store exactly as it was.
 
         Call ``save()`` to persist the store: embedding stores ride the
         checkpoint. A store records the vectors, dimension and metric you
-        supply here; :meth:`embed_texts` additionally records the model id and
-        per-node text hashes that let a later ``embed_texts(mode='changed')``
-        re-embed only what changed.
+        supply here and has no generated-model or source-text provenance;
+        :meth:`embed_texts` adds those fields for generated vectors.
 
         For incremental ingest where you want to add to an existing store
         without a read-merge-write round-trip, use :meth:`add_embeddings`.
@@ -7692,12 +7693,15 @@ class KnowledgeGraph:
         (``title_field``/``id_field`` column names), ``id``/``title``, or a
         structural alias — and keys the store by the spelling you pass. The
         whole batch is resolved and dimension-checked before anything is
-        written, so a rejected call leaves the store exactly as it was.
+        written, and every coordinate must be finite, so a rejected call leaves
+        the store exactly as it was.
 
         Call ``save()`` to persist the store: embedding stores ride the
         checkpoint. A store records the vectors, dimension and metric you
         supply here; :meth:`embed_texts` additionally records the model id and
-        per-node text hashes.
+        per-node text hashes. A real manual upsert clears the affected rows'
+        text hashes and makes store-wide model provenance unknown. A batch
+        containing only unknown IDs writes nothing and leaves it unchanged.
 
         Args:
             node_type: The node type (e.g. ``'Article'``).
@@ -7738,7 +7742,8 @@ class KnowledgeGraph:
 
         Args:
             text_column: Source text column name (e.g. ``'summary'``).
-            query_vector: The query embedding vector.
+            query_vector: The query embedding vector. Every coordinate must be
+                finite; NaN and either infinity are rejected.
             top_k: Number of results to return (default 10).
             metric: ``'cosine'``, ``'dot_product'``, ``'euclidean'``, or ``'poincare'``.
                 If omitted, uses the unique metric stored by embedding stores
@@ -7815,7 +7820,7 @@ class KnowledgeGraph:
         """The vector dimension of the ``(node_type, text_column)`` embedding
         store, or ``None`` if none exists.
 
-        A cheap, direct way to detect an embedder/model change without
+        A cheap, direct way to detect an embedder dimension change without
         bookkeeping: compare it against your model's dimension before
         re-embedding. ``embed_texts`` / ``add_embeddings`` reject a dimension
         mismatch (re-embed with ``mode='all'`` to rebuild at a new dimension).
@@ -7832,11 +7837,10 @@ class KnowledgeGraph:
         ``None`` if no store exists.
 
         Returns a dict with ``dimension``, ``count`` (vectors stored), ``model``
-        (the embedder id stamped at ``embed_texts`` time, or ``None`` for vectors
-        supplied directly via ``add_embeddings``), ``metric``, and ``hashed`` (how
-        many vectors carry a source-text hash, used by
-        ``embed_texts(mode='changed')`` for change-detection). Detect a model swap
-        or a partially-hashed store without external bookkeeping.
+        (a known model shared by every vector, or ``None`` for unknown/mixed
+        provenance), ``metric``, and ``hashed`` (how many vectors carry a
+        source-text hash, used by ``embed_texts(mode='changed')`` for change
+        detection).
 
         ``metric`` is the store's **effective** distance metric: the one set via
         ``set_embeddings(metric=...)`` if any, else ``'cosine'`` (the default
@@ -8040,7 +8044,12 @@ class KnowledgeGraph:
         the currently registered model binding when the handle is created.
         Replacing or unbinding the source model does not alter an existing
         handle. The captured object itself is shared rather than deep-copied,
-        so later changes to mutable model state remain visible through it.
+        so ordinary mutable runtime state remains visible through it.
+        ``dimension`` and the optional ``model_id`` / ``model_name`` are
+        exceptions: KGLite snapshots them at registration as immutable identity
+        metadata. Set their final values before this call; changing them later,
+        including from ``load()``, does not change validation or recorded
+        provenance. Register the model again to adopt new metadata.
 
         If the model has optional ``load()`` / ``unload()`` methods, they are
         called automatically around each embedding operation.
@@ -8078,10 +8087,13 @@ class KnowledgeGraph:
         resolves to none of those raises ``ValueError`` rather than silently
         embedding nothing.
 
-        The store also records, per node, a hash of the embedded text and (when
-        the embedder names it) the model id — so a later
-        ``embed_texts(mode='changed')`` can re-embed exactly the nodes whose
-        text changed, and :meth:`embedding_info` can report provenance.
+        The store also records per-node source-text hashes and, when every
+        retained vector has known common provenance, a model id. Incremental
+        generation refuses when a store names a different model or the current
+        model is unnamed; use ``mode='all'`` to rebuild. An unknown/mixed store
+        can be incrementally refreshed by any model but remains ``model=None``.
+        Only ``mode='all'`` restores named aggregate provenance. Model output
+        coordinates must be finite.
 
         Shows a tqdm progress bar by default (requires ``tqdm``).
 

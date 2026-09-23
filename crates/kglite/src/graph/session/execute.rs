@@ -979,6 +979,7 @@ fn embed_into_params(
         .map(|(_, t)| t.clone())
         .collect();
     let embed_result = model.embed(&texts);
+    let dimension = model.dimension();
     model.unload();
     let embeddings: Vec<Vec<f32>> = embed_result.map_err(|message| KgError::CypherExecution {
         message,
@@ -993,6 +994,24 @@ fn embed_into_params(
             ),
             position: None,
         });
+    }
+    for vector in &embeddings {
+        if vector.len() != dimension {
+            return Err(KgError::CypherExecution {
+                message: format!(
+                    "text_score: model returned a vector of dimension {} (expected {})",
+                    vector.len(),
+                    dimension
+                ),
+                position: None,
+            });
+        }
+        crate::graph::embedding_validation::validate_finite_vector(vector).map_err(|error| {
+            KgError::CypherExecution {
+                message: format!("text_score: model returned an invalid vector: {error}"),
+                position: None,
+            }
+        })?;
     }
     let mut params = opts.params.clone();
     for (i, (param_name, _)) in rewrite.texts_to_embed.iter().enumerate() {

@@ -301,11 +301,11 @@ fn route_stores<'a>(
 
 /// Whether "every node in the graph" covers every slot of `store`.
 ///
-/// Removing a node does not prune its embedding, so a store can hold slots for
-/// nodes that no longer exist; those are *not* covered by the whole graph and
-/// the caller must fall back to an explicit membership set. Costs O(#store)
-/// existence probes rather than the O(#candidates) set build that proof would
-/// otherwise need — which is the entire point of the whole-graph fast path.
+/// Validate store slots instead of deriving coverage from node counts alone.
+/// This keeps the fast path correct for stores assembled by persistence or
+/// internal maintenance, while ordinary node deletion eagerly prunes its slot.
+/// Costs O(#store) existence probes rather than the O(#candidates) set build
+/// that proof would otherwise need.
 fn whole_graph_covers_store(graph: &DirGraph, store: &EmbeddingStore) -> bool {
     let bound = GraphRead::node_bound(&graph.graph);
     if GraphRead::node_count(&graph.graph) == bound {
@@ -372,6 +372,8 @@ pub fn vector_search(
     query_vector: &[f32],
     options: &VectorSearchOptions,
 ) -> Result<Vec<VectorSearchResult>, String> {
+    crate::graph::embedding_validation::validate_finite_vector(query_vector)
+        .map_err(|error| format!("Invalid query vector: {error}"))?;
     let VectorSearchOptions {
         top_k,
         metric,
@@ -610,8 +612,8 @@ fn unmatched_store_error(
 /// changes the score formula).
 ///
 /// Returns `None` to signal "fall back to an exact scan" when a selective filter
-/// leaves fewer than `top_k` survivors — guaranteeing correctness when the
-/// filter is tight enough that the index's over-fetch wasn't sufficient.
+/// leaves fewer than `top_k` survivors, avoiding an underfilled result. When
+/// enough survivors remain, their selection is still approximate by contract.
 ///
 /// Exact whole-store coverage is deliberately factored into
 /// [`store_is_fully_selected`]. Any future fast path that scans the embedding

@@ -14,7 +14,8 @@ class Embedder:
         self._model_name = model_name
         self._model = None
         self._timer = None
-        self.dimension = 384  # set in load() if unknown
+        # Final registration metadata: set_embedder() snapshots this value.
+        self.dimension = 384
 
     def load(self):
         """Called automatically before embedding. Loads model on demand."""
@@ -24,7 +25,6 @@ class Embedder:
             self._timer = None
         if self._model is None:
             self._model = SentenceTransformer(self._model_name)
-            self.dimension = self._model.get_sentence_embedding_dimension()
 
     def unload(self, cooldown=60):
         """Called automatically after embedding. Releases after cooldown."""
@@ -55,9 +55,10 @@ results = graph.select("Article").search_text("summary", "machine learning", top
 
 - **Auto-naming:** text column `"summary"` → embedding store key `"summary_emb"` (auto-derived)
 - **Incremental, three modes:** `embed_texts(mode=…)` — `'missing'` (default) embeds only nodes without a vector; `'changed'` also re-embeds nodes whose **text changed** since the last pass (a per-node content hash is stored to detect this); `'all'` rebuilds the whole store.
+- **Model provenance:** an incremental pass over a store named for model A requires the registered model to name itself A. Model B or an unnamed model is refused before model work; use `mode='all'` to rebuild and assign the current model identity. An unknown/mixed store can be incrementally refreshed, but stays `model=None`; only a full rebuild restores named aggregate provenance.
 - **Progress bar:** shows a tqdm progress bar by default. Disable with `show_progress=False`.
 - **Load/unload lifecycle:** if the model has optional `load()` / `unload()` methods, they are called automatically before and after each embedding operation.
-- **Provenance:** if the embedder exposes a `model_id` / `model_name` attribute, it's stamped onto the store; `embedding_info()` surfaces it so a model swap is detectable. The model object itself is **not** saved with `save()` — call `set_embedder()` again after deserializing.
+- **Registration metadata:** `set_embedder()` snapshots `dimension` and the optional `model_id` / `model_name`. Set their final values before registration and register again to adopt changed metadata. The model object itself is **not** saved with `save()` — call `set_embedder()` again after deserializing.
 
 ```python
 # Add new articles, then re-embed — only new ones are processed
@@ -146,20 +147,25 @@ entire store (e.g. re-embedding everything with a new model).
 Both calls require `text_column` to name a property that exists on the node
 type (`id`, `title` and `type` are always accepted) — the guard that catches
 passing the store name `'summary_emb'` where the column name `'summary'`
-belongs. Both resolve every id and check every dimension before writing, so a
-rejected batch leaves the store as it was, and both count ids that match no
-node in `skipped`.
+belongs. Both resolve every id, check every dimension, and reject NaN or
+infinite coordinates before writing, so a rejected batch leaves the store as
+it was. Both count ids that match no node in `skipped`.
 
 A store built this way records exactly what you supply: the vectors, their
 dimension, and the metric. `embed_texts()` additionally records the embedder's
-`model_id` and per-node text hashes, which is what lets
-`embed_texts(mode='changed')` re-embed only the rows whose text moved — over a
-raw-vector store it re-embeds every row.
+`model_id` and per-node text hashes. A real `add_embeddings()` upsert into a
+generated store clears the affected rows' hashes and changes aggregate model
+provenance to `None`; a batch containing only unknown IDs changes neither.
+Incremental generation over unknown/mixed provenance uses text freshness only
+and keeps `model=None`. Use `mode='all'` to restore one named model provenance.
 
 Call `save()` to persist a store: embeddings ride the checkpoint, so a durable
 graph writes them at `save()` rather than per-call.
 
 ### Vector Search
+
+Query vectors must contain only finite coordinates; NaN and either infinity
+are rejected before exact or indexed scoring.
 
 Each hit is a dict with `id`, `title`, `type`, `score`, **and all node
 properties**. `score` is always present (every metric), and properties are

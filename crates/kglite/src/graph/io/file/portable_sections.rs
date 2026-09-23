@@ -9,6 +9,8 @@ pub(super) fn validate_and_rebuild_embedding_norms(
 ) -> io::Result<()> {
     for store in embeddings.values_mut() {
         store.validate_shape().map_err(invalid_data)?;
+        crate::graph::embedding_validation::validate_finite_vector(&store.data)
+            .map_err(|error| invalid_data(error.to_string()))?;
         store.rebuild_norms();
     }
     Ok(())
@@ -94,4 +96,22 @@ pub(super) fn load_portable_optional_sections(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_nonfinite_embedding_is_rejected_before_norm_rebuild() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut store = EmbeddingStore::new(2);
+            store.set_embedding(0, &[1.0, bad]);
+            let mut stores = HashMap::from([(("Doc".into(), "text_emb".into()), store)]);
+
+            let error = validate_and_rebuild_embedding_norms(&mut stores).unwrap_err();
+
+            assert!(error.to_string().contains("must be finite"));
+        }
+    }
 }

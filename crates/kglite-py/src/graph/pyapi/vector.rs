@@ -896,6 +896,10 @@ impl KnowledgeGraph {
         show_progress: Option<bool>,
         mode: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        // Refuse derived durable/CDC handles before loading or invoking the
+        // model. `commit_wal()` retains the same guard after mutation as
+        // defense in depth, but it cannot undo an already-installed store.
+        self.check_durable_owner()?;
         let model = self.get_embedder_or_error()?;
         let mode = match mode.unwrap_or("missing") {
             "missing" => EmbedMode::Missing,
@@ -1002,6 +1006,7 @@ impl KnowledgeGraph {
         exact: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
         let model = self.get_embedder_or_error()?;
+        let model_dimension = model.dimension();
 
         model
             .load()
@@ -1013,13 +1018,20 @@ impl KnowledgeGraph {
         model.unload();
         let embeddings = embed_result.map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
-        if embeddings.is_empty() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "model.embed() returned an empty list",
-            ));
+        if embeddings.len() != 1 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "search_text: model.embed() returned {} vectors for 1 texts",
+                embeddings.len()
+            )));
         }
 
         let query_vector = embeddings.into_iter().next().unwrap();
+        if query_vector.len() != model_dimension {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "search_text: model.embed() returned vector width {}, expected registered model dimension {model_dimension}",
+                query_vector.len()
+            )));
+        }
 
         self.vector_search(
             py,

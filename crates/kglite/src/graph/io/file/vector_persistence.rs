@@ -3,6 +3,7 @@
 use super::{codec_deser, codec_ser, MAX_CODEC_BYTES};
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::hnsw::HnswIndex;
+use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::index_freshness::IndexFreshness;
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
@@ -248,6 +249,35 @@ fn decode_embedding_file_payload(
         .map_err(|e| io::Error::other(format!("Failed to deserialize embedding data: {e}")))
 }
 
+fn validate_exported_embedding_stores(stores: &[ExportedEmbeddingStore]) -> io::Result<()> {
+    for store in stores {
+        for (entry, (_, vector, _)) in store.entries.iter().enumerate() {
+            if vector.len() != store.dimension {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Invalid embedding in store '{}.{}' at entry {entry}: expected width {}, got {}",
+                        store.node_type,
+                        store.text_column,
+                        store.dimension,
+                        vector.len()
+                    ),
+                ));
+            }
+            validate_finite_vector(vector).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Invalid embedding in store '{}.{}' at entry {entry}: {error}",
+                        store.node_type, store.text_column
+                    ),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Export embeddings to a standalone .kgle file, keyed by node ID.
 pub fn export_embeddings_to_file(
     graph: &DirGraph,
@@ -365,6 +395,9 @@ pub fn import_embeddings_from_file(graph: &mut DirGraph, path: &str) -> io::Resu
     }
 
     let exported_stores = decode_embedding_file_payload(&buf, version)?;
+    // Preflight the complete payload before touching graph indexes or stores:
+    // a malformed later store must not leave earlier stores installed.
+    validate_exported_embedding_stores(&exported_stores)?;
 
     let mut total_imported = 0usize;
     let mut total_skipped = 0usize;
@@ -414,6 +447,10 @@ pub fn import_embeddings_from_file(graph: &mut DirGraph, path: &str) -> io::Resu
         total_skipped += skipped;
     }
 
+    if stores_count > 0 {
+        graph.bump_version();
+    }
+
     Ok(ImportStats {
         stores: stores_count,
         imported: total_imported,
@@ -425,6 +462,10 @@ pub fn import_embeddings_from_file(graph: &mut DirGraph, path: &str) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::schema::{EmbeddingStore, NodeData};
+    use crate::graph::session::Session;
+    use crate::graph::storage::GraphWrite;
+    use tempfile::NamedTempFile;
 
     fn fixture_store() -> ExportedEmbeddingStore {
         ExportedEmbeddingStore {
@@ -449,6 +490,178 @@ mod tests {
         }
         bytes.extend_from_slice(&compressed);
         bytes
+    }
+
+    fn graph_with_doc_and_embedding(vector: &[f32]) -> DirGraph {
+        let mut graph = DirGraph::new();
+        let node = NodeData::new(
+            Value::UniqueId(7),
+            Value::String("doc".to_string()),
+            "Doc".to_string(),
+            HashMap::new(),
+            &mut graph.interner,
+        );
+        let idx = GraphWrite::add_node(&mut graph.graph, node);
+        graph
+            .type_indices
+            .entry_or_default("Doc".to_string())
+            .push(idx);
+        graph.build_id_index("Doc");
+
+        let mut store = EmbeddingStore::new(vector.len());
+        store.set_embedding(idx.index(), vector);
+        graph
+            .embeddings
+            .insert(("Doc".to_string(), "summary_emb".to_string()), store);
+        graph
+    }
+
+    fn write_embedding_file(stores: Vec<ExportedEmbeddingStore>) -> NamedTempFile {
+        let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &stores).unwrap();
+        let bytes = embedding_file(
+            KGLE_VERSION,
+            Some(serde_codec::CodecVersion::PostcardV1.tag()),
+            &payload,
+        );
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        file
+    }
+
+    /// Every decoded store must pass shape validation before the first store
+    /// is installed. Otherwise an invalid later store makes the operation
+    /// fail only after an earlier valid store has already replaced live data.
+    #[test]
+    fn malformed_vector_width_rejects_the_whole_import_atomically() {
+        let stores = vec![
+            ExportedEmbeddingStore {
+                entries: vec![(Value::UniqueId(7), vec![1.0, 2.0], None)],
+                ..fixture_store()
+            },
+            ExportedEmbeddingStore {
+                text_column: "body".to_string(),
+                dimension: 2,
+                entries: vec![(Value::UniqueId(7), vec![3.0], None)],
+                ..fixture_store()
+            },
+        ];
+        let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &stores).unwrap();
+        let bytes = embedding_file(
+            KGLE_VERSION,
+            Some(serde_codec::CodecVersion::PostcardV1.tag()),
+            &payload,
+        );
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+
+        let mut graph = graph_with_doc_and_embedding(&[9.0, 9.0]);
+        let error = match import_embeddings_from_file(&mut graph, file.path().to_str().unwrap()) {
+            Ok(_) => panic!("a vector whose width differs from its store must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let idx = graph
+            .lookup_by_id_readonly("Doc", &Value::UniqueId(7))
+            .unwrap();
+        assert_eq!(
+            graph.embeddings[&("Doc".to_string(), "summary_emb".to_string())]
+                .get_embedding(idx.index()),
+            Some(&[9.0, 9.0][..]),
+            "a valid store preceding the malformed one must not be installed"
+        );
+        assert!(
+            !graph
+                .embeddings
+                .contains_key(&("Doc".to_string(), "body_emb".to_string())),
+            "the malformed store must not be installed"
+        );
+    }
+
+    #[test]
+    fn non_finite_vector_is_rejected_before_import() {
+        let stores = vec![ExportedEmbeddingStore {
+            entries: vec![(Value::UniqueId(7), vec![f32::NAN, 2.0], None)],
+            ..fixture_store()
+        }];
+        let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &stores).unwrap();
+        let bytes = embedding_file(
+            KGLE_VERSION,
+            Some(serde_codec::CodecVersion::PostcardV1.tag()),
+            &payload,
+        );
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+
+        let mut graph = graph_with_doc_and_embedding(&[9.0, 9.0]);
+        let error = match import_embeddings_from_file(&mut graph, file.path().to_str().unwrap()) {
+            Ok(_) => panic!("a non-finite vector must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("must be finite"));
+        let idx = graph
+            .lookup_by_id_readonly("Doc", &Value::UniqueId(7))
+            .unwrap();
+        assert_eq!(
+            graph.embeddings[&("Doc".to_string(), "summary_emb".to_string())]
+                .get_embedding(idx.index()),
+            Some(&[9.0, 9.0][..])
+        );
+    }
+
+    #[test]
+    fn embedding_import_publishes_inside_session_transaction() {
+        let file = write_embedding_file(vec![fixture_store()]);
+        let mut graph = graph_with_doc_and_embedding(&[9.0, 9.0]);
+        graph.embeddings.clear();
+        let session = Session::new(graph);
+        let before = session.version();
+
+        let stats = session
+            .transact(|working| import_embeddings_from_file(working, file.path().to_str().unwrap()))
+            .unwrap();
+
+        assert_eq!(stats.stores, 1);
+        assert_eq!(stats.imported, 1);
+        assert_eq!(session.version(), before + 1);
+        let snapshot = session.snapshot();
+        let idx = snapshot
+            .lookup_by_id_readonly("Doc", &Value::UniqueId(7))
+            .unwrap();
+        assert_eq!(
+            snapshot.embeddings[&("Doc".to_string(), "summary_emb".to_string())]
+                .get_embedding(idx.index()),
+            Some(&[0.25, 0.75][..])
+        );
+    }
+
+    #[test]
+    fn embedding_import_without_a_matching_vector_is_a_true_no_op() {
+        let unmatched = ExportedEmbeddingStore {
+            entries: vec![(Value::UniqueId(999), vec![0.25, 0.75], None)],
+            ..fixture_store()
+        };
+        let empty = ExportedEmbeddingStore {
+            entries: Vec::new(),
+            ..fixture_store()
+        };
+
+        for exported in [unmatched, empty] {
+            let file = write_embedding_file(vec![exported]);
+            let mut graph = graph_with_doc_and_embedding(&[9.0, 9.0]);
+            graph.embeddings.clear();
+            let before = graph.version();
+
+            let stats =
+                import_embeddings_from_file(&mut graph, file.path().to_str().unwrap()).unwrap();
+
+            assert_eq!(stats.stores, 0);
+            assert_eq!(stats.imported, 0);
+            assert_eq!(graph.version(), before);
+            assert!(graph.embeddings.is_empty());
+        }
     }
 
     /// A payload whose recorded coverage disagrees with the topology it ships

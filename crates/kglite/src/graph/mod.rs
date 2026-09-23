@@ -17,6 +17,7 @@ pub mod dir_graph;
 pub mod durability;
 pub mod embedder;
 pub mod embedding_carry;
+pub(crate) mod embedding_validation;
 pub mod embeddings;
 pub mod explore;
 pub mod features;

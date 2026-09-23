@@ -1267,6 +1267,27 @@ fn embedding_payloads_replay_with_their_provenance() {
 }
 
 #[test]
+fn malformed_embedding_payload_is_rejected_before_payload_installation() {
+    for vector in [vec![1.0], vec![1.0, f32::NAN]] {
+        let mut g = DirGraph::new();
+        let frames = vec![frame(
+            1,
+            vec![
+                upsert_node(1, "Alice", vec![]),
+                set_series(1, &[1.0]),
+                vectors(vec![(1, vector, None)], EmbeddingWrite::Replace),
+            ],
+        )];
+
+        let error = apply_frames(&mut g, &frames, 0).unwrap_err();
+
+        assert!(error.to_string().contains("Invalid embedding payload"));
+        assert!(store(&g).is_none());
+        assert!(stored_series(&mut g, 1).is_none());
+    }
+}
+
+#[test]
 fn upserted_embedding_batches_accumulate_across_frames() {
     // `add_embeddings` logs its own batch, not the whole store — so the fold
     // has to add them up rather than keep the last one.

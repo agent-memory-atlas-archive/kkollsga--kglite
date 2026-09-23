@@ -376,6 +376,8 @@ impl CypherExecutor<'_> {
             }
         };
         let query_vec = self.extract_float_list(&args[2], row)?;
+        crate::graph::embedding_validation::validate_finite_vector(&query_vec)
+            .map_err(|error| format!("vector_score(): invalid query vector: {error}"))?;
         let tail = args[3..]
             .iter()
             .map(|expr| self.evaluate_expression(expr, row))

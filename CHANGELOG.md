@@ -25,11 +25,32 @@ before upgrading.
 
 ### Changed
 
+- Python embedding models must expose their final dimension and model identity
+  before `set_embedder()`: those attributes are captured at registration. The
+  lazy-loading example and shared-model documentation now state this contract.
+
 - **The vault documentation now distinguishes format validity from source and
   answer completeness.** It corrects recipe defaults, relocated-cache and
   edit/rebuild/restart guidance; documents source reconciliation, explicit
   relationship semantics, complete-result envelopes, removable memory and
   regeneration-safe overlays; and links a runnable help-vault tutorial.
+
+### Fixed
+
+- Embedding generation now refuses writes through derived durable/CDC handles
+  before invoking the model or changing vectors. Python `search_text()` validates
+  both the number of returned vectors and their declared model dimension.
+- Portable `.kgle` imports validate vector widths and finite coordinates before
+  installing any store. Core embedding copy and import operations now mark real
+  mutations so `Session::transact` publishes them instead of discarding a
+  successful working copy.
+- Snapshot/disk loading and WAL recovery reject malformed embedding coordinates;
+  WAL replay also validates vector widths before installing payloads.
+- Incremental generation rejects a changed known model identity instead of
+  mixing vector spaces under misleading provenance. Manual vector upserts
+  invalidate the affected text hashes and aggregate model attribution;
+  `mode='all'` restores a fully generated store. Managed vector input and query
+  boundaries reject non-finite coordinates before they can corrupt ranking.
 
 ## [0.17.12] - 2026-09-19
 ### Added
