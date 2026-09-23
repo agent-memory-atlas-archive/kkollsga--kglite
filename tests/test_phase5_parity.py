@@ -99,10 +99,9 @@ def test_graph_copy_cow_correctness_mapped():
 #: current host).
 BINARY_SIZE_BASELINES = {
     "darwin": 25_411_008,  # 0.17.12 darwin baseline
-    "linux": 28_810_000,  # estimate: the post-code_tree Linux estimate (30.2 MB)
-    # scaled by the same −4.6% the macOS loader removal measured. Both
-    # removals deliberately recaptured DOWNWARD so the +10% budget guards
-    # the real binary. Refresh with the real value on the next CI run.
+    # Published 0.17.12 manylinux2014 x86_64 wheel member
+    # `kglite/kglite.abi3.so`; artifact identity is recorded in the history below.
+    "linux": 31_188_600,
 }
 
 
@@ -556,11 +555,18 @@ def test_binary_size_regression():
         recipe `default:` binding and the dialect stamp in the `.kgl` header.
 
 
-      - 0.17.12:       25,411,008 bytes (≈24.2 MB, +82,752 / +0.3%): `okf::cache`
+      - 0.17.12:       25,411,008 bytes macOS (≈24.2 MB, +82,752 / +0.3%): `okf::cache`
         (`open`, `CachePolicy`, `Opened`, the cache-artifact predicate and two
         provenance stamps), the named recipe tool routes and the catalogue
         budget renderer, plus the `tool` field carried through the recipe
         record, its Python binding and the CLI `okf open` subcommand.
+        The published manylinux2014 x86_64 abi3 wheel's stripped
+        `kglite/kglite.abi3.so` is 31,188,600 bytes (wheel SHA-256
+        `9ac59f03e81dea8bd59d87f68057f8f4113529c3bb29a1ff1baf27bf94196b53`).
+        CI measures the bare Ubuntu host's pre-wheel `target/release` output,
+        so linker/glibc and auditwheel differences prevent byte identity; the
+        released member replaces the prior unverified Linux estimate as the
+        closest reproducible user-artifact baseline.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
