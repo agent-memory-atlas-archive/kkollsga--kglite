@@ -643,3 +643,76 @@ fn a_failed_statement_reverses_a_relationship_delete_with_its_vector_index() {
     assert_eq!(index_facts(&graph), before_index);
     assert_eq!(index_query(&graph), before_query);
 }
+
+/// An explicit `metric` on a manual write becomes the store's metric when the
+/// store declares none, exactly as `build_index` records one — otherwise a
+/// store created without a metric never declares one, the build-time
+/// contradiction check has nothing to compare against, and a default query
+/// route mismatches the index it just built.
+#[test]
+fn a_manual_set_with_an_explicit_metric_stamps_an_undeclared_store() {
+    let (mut graph, r1, r2) = graph();
+    upsert_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vec![(r1, vec![1.0, 0.0])],
+        None,
+    )
+    .unwrap();
+    let key = edge_store_key("ASSERTS", "description");
+    assert_eq!(graph.edge_embeddings[&key].metric(), None);
+
+    let version = graph.version();
+    let report = upsert_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vec![(r1, vec![1.0, 0.0])],
+        Some("cosine"),
+    )
+    .unwrap();
+    assert_eq!(graph.edge_embeddings[&key].metric(), Some("cosine"));
+    assert_eq!(report.changed, 0, "the vector itself did not move");
+    assert!(graph.version() > version, "a metadata move is a mutation");
+
+    // The declared metric now makes a contradicting build refuse.
+    let error = vector_index::build_edge_vector_index(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vector_index::EdgeVectorIndexOptions {
+            metric: Some("euclidean".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("declares metric 'cosine'"), "{error}");
+
+    // A statement that stamps the metric and then fails restores the store.
+    upsert_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "note",
+        vec![(r2, vec![0.0, 1.0])],
+        None,
+    )
+    .unwrap();
+    let note_key = edge_store_key("ASSERTS", "note");
+    let checkpoint = crate::graph::dir_graph::rollback::StatementCheckpoint::open(&mut graph);
+    upsert_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "note",
+        vec![(r2, vec![0.0, 1.0])],
+        Some("cosine"),
+    )
+    .unwrap();
+    assert_eq!(graph.edge_embeddings[&note_key].metric(), Some("cosine"));
+    checkpoint.rollback(&mut graph);
+    assert_eq!(graph.edge_embeddings[&note_key].metric(), None);
+    assert_eq!(
+        graph.edge_embeddings[&note_key].get(r2),
+        Some(&[0.0, 1.0][..])
+    );
+}

@@ -594,7 +594,14 @@ pub(crate) fn upsert_edge_embeddings(
         })
         .map(|(edge, _)| edge.index())
         .collect();
-    if changed_edges.is_empty() {
+    // An explicit metric on a store that declares none becomes the store's
+    // metric (the same rule `build_index` applies), so a later build that
+    // contradicts it is refused instead of silently building an index the
+    // default query route cannot use. The move is metadata: it counts as a
+    // change on its own, and it journals the whole prior store once — it can
+    // happen at most once per store, because afterwards the metric is declared.
+    let stamps_metric = existing.is_some_and(|store| store.metric().is_none()) && metric.is_some();
+    if changed_edges.is_empty() && !stamps_metric {
         return Ok(EdgeEmbeddingWriteReport {
             stored: existing.map_or(0, EdgeEmbeddingStore::len),
             dimension: expected_dimension,
@@ -610,7 +617,14 @@ pub(crate) fn upsert_edge_embeddings(
         text_property,
         changed_edges.iter().copied().map(EdgeIndex::new),
     )?;
-    journal_manual_upsert(graph, &key, store_created, &changed_edges);
+    if stamps_metric {
+        let prior = graph.edge_embeddings.get(&key).cloned();
+        if let Some(journal) = graph.graph.undo_journal_mut() {
+            journal.note_edge_embedding_store_replaced(key.clone(), prior);
+        }
+    } else {
+        journal_manual_upsert(graph, &key, store_created, &changed_edges);
+    }
 
     let store = graph
         .edge_embeddings
@@ -623,6 +637,9 @@ pub(crate) fn upsert_edge_embeddings(
     }
     // A manual write makes aggregate generated-model provenance unknown.
     store.numeric.model_id = None;
+    if stamps_metric {
+        store.numeric.metric = metric.map(str::to_owned);
+    }
     let stored = store.len();
     note_wal_edge_embedding_changes(
         graph,
