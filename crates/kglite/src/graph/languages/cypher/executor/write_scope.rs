@@ -12,6 +12,10 @@
 //!   scope, because nothing here reads a pattern label.
 //! - A **relationship** write is allowed iff **at least one endpoint's stored
 //!   type is in scope** (rationale on [`enforce_edge_write_scope`]).
+//! - A write covering a whole **relationship type** — relationship index DDL,
+//!   which has no edge to read endpoints from — applies that same rule to the
+//!   endpoint types the graph has recorded for the type
+//!   ([`enforce_relationship_type_write_scope`]).
 //! - `DETACH DELETE`'s incident-edge collateral is authorized by the node
 //!   delete and not re-checked per far endpoint (note at the
 //!   `detach_delete_nodes` call in `write::execute_delete`).
@@ -120,6 +124,42 @@ pub(super) fn enforce_edge_write_scope(
         rel_type,
         source_type,
         target_type,
+        allowed_write_set(scope)
+    ))
+}
+
+/// Enforce the write whitelist against a write that covers a **whole
+/// relationship type** rather than one edge — today the relationship vector
+/// index DDL (`DROP INDEX relationship:T.p`), which has no endpoint pair to
+/// judge because it has no edge.
+///
+/// The same one-endpoint rule as [`enforce_edge_write_scope`], lifted from the
+/// edge to its type: at least one node type the graph has recorded on either
+/// end of `rel_type` must be in scope. A relationship type with no recorded
+/// endpoints is refused — nothing establishes standing over it, and the node
+/// whitelist can never contain a relationship type, so passing `rel_type` to
+/// [`enforce_write_scope`] would refuse every caller including the owner.
+pub(super) fn enforce_relationship_type_write_scope(
+    graph: &DirGraph,
+    rel_type: &str,
+) -> Result<(), String> {
+    let Some(scope) = &graph.active_write_scope else {
+        return Ok(());
+    };
+    if let Some(info) = graph.connection_type_metadata.get(rel_type) {
+        if info
+            .source_types
+            .iter()
+            .chain(info.target_types.iter())
+            .any(|node_type| scope.contains(node_type))
+        {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "write scope violation: relationship type '{}' has no endpoint type in the allowed \
+         write set ({})",
+        rel_type,
         allowed_write_set(scope)
     ))
 }

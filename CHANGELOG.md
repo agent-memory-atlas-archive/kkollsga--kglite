@@ -22,7 +22,12 @@ before upgrading.
   to exact search; relationship MATCH scoring stays exact. Index diagnostics
   distinguish relationship stores from identically named node stores.
   Checkpoints retain vectors and provenance; rebuild the derived relationship
-  index after reopening to use HNSW again.
+  index after reopening to use HNSW again. `DROP INDEX` accepts the qualified
+  name `SHOW INDEXES` prints for one (`relationship:SUPPORTS.evidence`, bare or
+  backticked), drops the accelerator rather than the vectors, and judges the
+  statement against the relationship type's endpoint types when a write scope
+  is active; `IF EXISTS` is a no-op only when nothing carries the name, never
+  over an index still installed.
 
 - Cypher relationship embedding management through `db.edge_embeddings.set`,
   `embed`, `list`, `remove`, and `drop`. Writes validate complete selections
@@ -47,8 +52,14 @@ before upgrading.
 
 - Relationship embedding stores persist their vectors, source hashes, model
   identity and metric in portable snapshots and disk generations, including
-  declared empty stores. Files containing these stores require an edge-aware
-  reader; node-only output retains its existing format.
+  declared empty stores. Node-only output retains its existing format, so files
+  without relationship embedding stores stay readable by older releases. A file
+  that carries them does not: a `.kgl` snapshot is written at core data version
+  4 and a disk generation at edge property format 3, and 0.17.12 refuses each
+  by name — "File uses core data version 4 but this library only supports up to
+  version 3. Please upgrade kglite." and "unsupported edge property format 3".
+  The refusal is the point; nothing is silently discarded, and upgrading the
+  reader is the whole migration.
 
 - **A portable knowledge-base guide and synthetic worked example.**
   `KNOWLEDGE_BASES.md` explains how to choose direct Markdown search or a

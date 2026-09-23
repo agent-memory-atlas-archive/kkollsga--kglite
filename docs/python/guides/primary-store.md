@@ -409,8 +409,10 @@ setup no longer has to happen in Python or Rust. What to watch:
   rejected, because the B-tree is single-property.
 - **Index names are not persisted; constraint names are.** An index name is
   accepted for portability and then discarded — index names here are canonical
-  and derived (`Label.property`, `Label.(a,b)`). So `DROP INDEX` wants that dotted
-  canonical name, or the descriptor form `DROP INDEX FOR (n:Label) ON (n.prop)`.
+  and derived (`Label.property`, `Label.(a,b)`, and `relationship:TYPE.property`
+  for a relationship vector index). So `DROP INDEX` wants that derived
+  canonical name, or — for a node index — the descriptor form
+  `DROP INDEX FOR (n:Label) ON (n.prop)`.
   **The trap:** dropping by a name you chose fails, and adding `IF EXISTS` to that
   same statement turns the failure into a silent no-op that leaves your index in
   place. `SHOW INDEXES` prints the canonical name, and its output pastes straight

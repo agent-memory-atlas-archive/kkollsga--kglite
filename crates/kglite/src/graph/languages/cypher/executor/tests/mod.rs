@@ -4,6 +4,8 @@
 //! source-quality ceiling. Shared helpers and the imports every submodule
 //! needs live here; each submodule pulls them in with `use super::*`.
 //!
+//! - [`drop_index`] — `DROP INDEX` against the names `SHOW INDEXES` prints,
+//!   node and relationship, and what `IF EXISTS` may report as a no-op
 //! - [`exists_witness`] — which `EXISTS { … }` subqueries may stop at one match
 //! - [`expressions`] — comparison, arithmetic, coercion, CASE, parameters
 //! - [`fused_aggregate_labels`] — the fused `MATCH … WITH …, count(…)` path
@@ -41,6 +43,7 @@ use crate::graph::languages::cypher::parser;
 
 mod cypher25_clauses;
 mod deadline_rows;
+mod drop_index;
 mod edge_vector_index;
 mod edge_vector_score;
 mod exists_witness;

@@ -3053,6 +3053,26 @@ index, a B-tree index and a BM25 text index shows three `SHOW INDEXES` rows
 sharing a `name`, distinguished by `type` (`PROPERTY`, `RANGE`, `FULLTEXT`).
 `DROP INDEX <name>` removes every structure under that name.
 
+A relationship vector index is named `relationship:TYPE.property`, and that
+name pastes in unquoted too:
+
+```cypher
+DROP INDEX relationship:SUPPORTS.evidence;              -- works
+DROP INDEX `relationship:SUPPORTS.evidence` IF EXISTS;  -- also works
+```
+
+It drops the HNSW accelerator and keeps the vectors, exactly as the node vector
+arm does — `db.edge_embeddings.drop_index` is the same operation under a
+different name. The prefix keeps a node label and a relationship type apart, so
+a `Doc.text` node index and a `relationship:Doc.text` relationship index are
+addressed, and dropped, independently. There is no descriptor form for a
+relationship index: `DROP INDEX FOR ()-[r:T]-() ON (r.p)` is rejected with the
+rest of relationship index DDL.
+
+`IF EXISTS` is a no-op only when **nothing carries the name**. A name `SHOW
+INDEXES` printed always drops something, or the statement errors — it never
+reports success over an index that is still installed.
+
 #### `SHOW INDEXES`
 
 A read, so it works on a read-only graph. Returns the same rows and columns as

@@ -221,12 +221,25 @@ impl CypherParser {
     /// The name in `DROP INDEX <name>`.
     ///
     /// KGLite's canonical index names contain a dot (`Person.age`,
-    /// `Person.(city,age)`), which Cypher would otherwise require backticks to
-    /// write. Reassembling the dotted form here means `SHOW INDEXES` output can
-    /// be pasted straight into `DROP INDEX` — backticked names still work, since
-    /// the tokenizer hands those over as one identifier.
+    /// `Person.(city,age)`) and, for a relationship vector index, a leading
+    /// entity qualifier (`relationship:SUPPORTS.evidence`) — punctuation Cypher
+    /// would otherwise require backticks to write. Reassembling both shapes
+    /// here means `SHOW INDEXES` output can be pasted straight into `DROP
+    /// INDEX`; backticked names still work, since the tokenizer hands those
+    /// over as one identifier.
     fn take_drop_index_name(&mut self) -> Result<String, String> {
         let mut name = self.expect_name("index name after DROP INDEX")?;
+
+        // The qualifier colon. Unambiguous here: the only other colon this
+        // statement could open is Neo4j 3.x's `DROP INDEX ON :Label(prop)`,
+        // intercepted by the `ON` check in `parse_drop_schema_ddl` before any
+        // name is read.
+        if self.check(&CypherToken::Colon) {
+            self.advance();
+            name.push(':');
+            name.push_str(&self.expect_name("type name after an index-name qualifier")?);
+        }
+
         if !self.check(&CypherToken::Dot) {
             return Ok(name);
         }
@@ -956,6 +969,27 @@ mod tests {
                 ));
             }
             other => panic!("parsed as {other:?}"),
+        }
+    }
+
+    /// Every canonical spelling `SHOW INDEXES` prints has to survive the round
+    /// trip unquoted, punctuation and all — that is what the name grammar is
+    /// for, and a shape it cannot read is a name the reader cannot paste back.
+    #[test]
+    fn drop_index_reads_every_canonical_name_spelling() {
+        for name in [
+            "Person.email",
+            "Person.(city,age)",
+            "relationship:SUPPORTS.evidence",
+        ] {
+            match schema(&format!("DROP INDEX {name}")) {
+                SchemaCommand::DropIndex(drop) => assert_eq!(
+                    drop.selector,
+                    DropIndexSelector::Name(name.to_string()),
+                    "for `{name}`"
+                ),
+                other => panic!("`{name}` parsed as {other:?}"),
+            }
         }
     }
 
