@@ -544,11 +544,11 @@ impl KnowledgeGraph {
             if raw.is_empty() || !durable {
                 return Ok(());
             }
-            // Secondary labels are read back through `dir` because they are
-            // not backend state — see `resolve_ops`.
-            kglite_core::api::durable::resolve_ops(&raw, &dir.graph, &dir.interner, |idx| {
-                dir.secondary_label_names(idx)
-            })
+            // The whole `DirGraph`, not its backend: secondary labels and the
+            // relationship embedding stores both live above the backend, and a
+            // frame resolved without them logs vector state as absent — see
+            // `resolve_ops`.
+            kglite_core::api::durable::resolve_ops(&raw, dir)
         };
         let ds = self
             .lifecycle

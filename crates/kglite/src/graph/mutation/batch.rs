@@ -1128,9 +1128,7 @@ mod wal_amplification_tests {
             GraphBackend::Recording(rg) => rg.take_ops(),
             _ => unreachable!("wrapped in Recording above"),
         };
-        let ops = resolve_ops(&raw, &dir.graph, &dir.interner, |idx| {
-            dir.secondary_label_names(idx)
-        });
+        let ops = resolve_ops(&raw, &dir);
         // The call declares `name` as the title spelling, which is one
         // type-level op for the whole call — a constant, not amplification.
         let declarations = ops

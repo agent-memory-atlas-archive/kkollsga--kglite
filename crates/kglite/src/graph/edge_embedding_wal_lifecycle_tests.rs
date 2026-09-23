@@ -1,9 +1,7 @@
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
-use crate::graph::storage::recording::{
-    resolve_ops_with_edge_embeddings, wrap_for_durability, RawOp,
-};
+use crate::graph::storage::recording::{resolve_ops, wrap_for_durability, RawOp};
 use crate::graph::storage::GraphWrite;
 use crate::graph::wal::MutationOp;
 use std::collections::HashMap;
@@ -96,7 +94,7 @@ fn first_store_creation_enables_later_property_delta_without_reopen() {
     note_group(&mut graph, edge);
     set_revision(&mut graph, edge, 2);
     let raw = take_raw(&mut graph);
-    let ops = resolve_ops_with_edge_embeddings(&raw, &graph);
+    let ops = resolve_ops(&raw, &graph);
     assert!(ops
         .iter()
         .any(|op| matches!(op, MutationOp::PatchEdgeGroupEmbeddings { .. })));
@@ -122,7 +120,7 @@ fn repeated_group_touches_resolve_one_topology_and_one_embedding_op() {
     note_group(&mut graph, edge);
     set_revision(&mut graph, edge, 2);
     let raw = take_raw(&mut graph);
-    let ops = resolve_ops_with_edge_embeddings(&raw, &graph);
+    let ops = resolve_ops(&raw, &graph);
     let topology = ops
         .iter()
         .filter(|op| matches!(op, MutationOp::ReplaceEdgeGroup { .. }))
@@ -166,7 +164,7 @@ fn dropped_store_still_closes_the_touched_group_embedding_state() {
         .remove(&edge_store_key("ASSERTS", "description"));
     note_group(&mut writer, edge);
 
-    let ops = resolve_ops_with_edge_embeddings(&take_raw(&mut writer), &writer);
+    let ops = resolve_ops(&take_raw(&mut writer), &writer);
     assert!(ops.iter().any(|op| matches!(
         op,
         MutationOp::SetEdgeEmbeddingStore {

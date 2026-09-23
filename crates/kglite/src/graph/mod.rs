@@ -46,6 +46,13 @@ pub mod wal;
 #[path = "value_byte_identity_tests.rs"]
 mod value_byte_identity_tests;
 
+// Declared here rather than beside the other edge-embedding test modules in
+// `edge_embeddings.rs`: these cases drive `Session::open_durable` and the WAL,
+// not the embedding store's own seam, so nothing in them is `super::`-scoped.
+#[cfg(test)]
+#[path = "edge_embedding_durable_recovery_tests.rs"]
+mod edge_embedding_durable_recovery_tests;
+
 // Re-export DirGraph at the graph-mod top level — matches the
 // path the executor / planner / blueprint code uses
 // (`crate::graph::DirGraph`). Actual definition lives in

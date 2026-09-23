@@ -259,4 +259,21 @@ impl ReplayPlan {
     pub fn edge_types(&self) -> HashSet<String> {
         self.edges.iter().map(|(key, _)| key.0.clone()).collect()
     }
+
+    /// Relationship types named by this plan's embedding events. Bounds the
+    /// base capture in `capture_edge_embedding_state`, which has to record base
+    /// groups for a type whose first store this log creates and which therefore
+    /// has no store to find it by.
+    pub fn embedding_conn_types(&self) -> std::collections::BTreeSet<String> {
+        use super::edge_embeddings::OrderedEdgeEmbeddingEvent as Event;
+        self.edge_embedding_events
+            .iter()
+            .map(|event| match event {
+                Event::ReplaceTopology { key, .. }
+                | Event::ReplaceEmbeddings { key, .. }
+                | Event::PatchEmbeddings { key, .. } => key.conn_type.clone(),
+                Event::SetStore { key, .. } => key.conn_type.clone(),
+            })
+            .collect()
+    }
 }

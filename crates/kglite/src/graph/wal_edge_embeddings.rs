@@ -55,6 +55,16 @@ pub enum EdgeGroupMemberPatchWal {
 pub struct EdgeGroupEmbeddingPatchWal {
     pub base_digest: EdgeEmbeddingGroupDigest,
     pub result_digest: EdgeEmbeddingGroupDigest,
+    /// Sorted store set the writer's `base_digest` was taken over — the set as
+    /// of *before* this commit, so a store created by this commit is in
+    /// [`Self::stores`] but not here.
+    ///
+    /// Carried so a base disagreement decodes as a named error naming both
+    /// sets. Without it the only symptom is `base digest mismatch`, a hash
+    /// comparison that says nothing about *what* disagreed, and the reopen
+    /// fails permanently with no way to tell a genuinely corrupt log from a
+    /// writer and reader that scoped the base differently.
+    pub base_stores: Vec<String>,
     /// Complete, sorted source-column order for every member's `cells`.
     pub stores: Vec<String>,
     /// Final member order; omitted prior ordinals are deletions.

@@ -1,7 +1,7 @@
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
-use crate::graph::storage::recording::{resolve_ops_with_edge_embeddings, wrap_for_durability};
+use crate::graph::storage::recording::{resolve_ops, wrap_for_durability};
 use crate::graph::storage::GraphWrite;
 use crate::graph::wal::{EdgeGroupMemberPatchWal, EdgeVectorCellPatchWal, MutationOp, WalFrame};
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ fn parallel_group() -> (DirGraph, EdgeIndex, EdgeIndex) {
 
 fn resolve_and_replay(writer: &mut DirGraph, checkpoint: &mut DirGraph) -> Vec<MutationOp> {
     let raw = writer.graph.recording_mut().unwrap().take_ops();
-    let ops = resolve_ops_with_edge_embeddings(&raw, writer);
+    let ops = resolve_ops(&raw, writer);
     crate::graph::mutation::wal_replay::apply_frames(
         checkpoint,
         &[WalFrame {

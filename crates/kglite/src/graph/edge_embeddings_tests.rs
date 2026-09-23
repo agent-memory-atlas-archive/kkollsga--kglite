@@ -1,7 +1,7 @@
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
-use crate::graph::storage::recording::{resolve_ops_with_edge_embeddings, wrap_for_durability};
+use crate::graph::storage::recording::{resolve_ops, wrap_for_durability};
 use crate::graph::storage::GraphWrite;
 use crate::graph::wal::WalFrame;
 use std::collections::HashMap;
@@ -467,7 +467,7 @@ fn durable_group_snapshot_replays_parallel_vectors_properties_and_provenance() {
     )
     .unwrap();
     let raw = writer.graph.recording_mut().unwrap().take_ops();
-    let ops = resolve_ops_with_edge_embeddings(&raw, &writer);
+    let ops = resolve_ops(&raw, &writer);
     assert!(ops.iter().any(|op| matches!(
         op,
         crate::graph::wal::MutationOp::SetEdgeEmbeddingStore { .. }

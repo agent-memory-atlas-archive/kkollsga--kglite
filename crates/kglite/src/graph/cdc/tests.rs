@@ -1036,7 +1036,7 @@ fn cdc_metadata_does_not_change_legacy_wal_payload() {
         (CaptureOrigin::Update, Some(Box::new(before))),
     ] {
         let raw = [RawOp::UpsertNode(idx, origin, image)];
-        let ops = resolve_ops(&raw, &graph.graph, &graph.interner, |_| Vec::new());
+        let ops = resolve_ops(&raw, &graph);
         assert_eq!(ops, expected, "CDC metadata must not enter the legacy op");
         assert_eq!(
             encode(ops),

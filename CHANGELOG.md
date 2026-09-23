@@ -31,10 +31,16 @@ before upgrading.
   accept individual relationships, with exact scoring for relationship MATCH.
 
 - Durable relationship embedding changes record vectors and provenance together
-  with their logical relationship group. Recovery validates and stages the
-  complete state before publication, preserving associations between identical
-  parallel relationships and rejecting incompatible histories atomically.
-  Compact group records reference unchanged vectors with validated state digests.
+  with their logical relationship group. A store created, replaced or dropped
+  inside a durable window recovers with its vectors, dimension, metric and model
+  identity — including the first store on a relationship type, a second store on
+  a type that already has one, and a store whose relationship gains or loses a
+  parallel member in the same window. Reopening a `.kgl` checkpoint resumes the
+  compact group records, which reference unchanged vectors through state digests
+  validated against the store set they were taken over. Recovery validates and
+  stages the complete state before publication, preserving associations between
+  identical parallel relationships and rejecting incompatible histories
+  atomically.
 
 - Relationship embedding stores persist their vectors, source hashes, model
   identity and metric in portable snapshots and disk generations, including
@@ -65,6 +71,11 @@ before upgrading.
   must account for the new relationship-embedding variants and the
   `WalGroup::base_members` field. These physical relationship slots describe
   transaction-local capture state, not persistent external identifiers.
+
+- Rust durability consumers now call `api::durable::resolve_ops(&raw, dir)` with
+  the whole `DirGraph`; the backend-plus-label-closure form is gone. Secondary
+  labels and relationship embedding stores both live above the backend, and a
+  frame resolved without them records relationship vector state as absent.
 
 - Python embedding models must expose their final dimension and model identity
   before `set_embedder()`: those attributes are captured at registration. The

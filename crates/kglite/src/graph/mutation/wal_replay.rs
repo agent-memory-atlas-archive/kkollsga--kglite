@@ -80,7 +80,8 @@ pub(crate) fn prepare_replay(
         .prepare_mutation()
         .map_err(|e| format!("disk mutation lease failed: {e}"))?;
     working.materialize_indexes();
-    let initial_edge_embeddings = capture_edge_embedding_state(&working)?;
+    let initial_edge_embeddings =
+        capture_edge_embedding_state(&working, &plan.embedding_conn_types())?;
     let before = validate::ConstraintState::capture(&working, &plan, &Default::default());
     let created = install::apply(&mut working, &plan)?;
     let embedded_groups: BTreeSet<_> = plan
@@ -94,17 +95,10 @@ pub(crate) fn prepare_replay(
             _ => None,
         })
         .collect();
-    let embedding_events: Vec<_> = plan
-        .edge_embedding_events
-        .iter()
-        .filter(|event| match event {
-            edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. } => {
-                embedded_groups.contains(key)
-            }
-            _ => true,
-        })
-        .cloned()
-        .collect();
+    // Every topology record is kept, paired or not: an unpaired one still moves
+    // its group's members, and the next record's base is digested over them.
+    // Which ones park a base is decided by position, inside the interpreter.
+    let embedding_events = plan.edge_embedding_events.clone();
     if let Some(key) = plan
         .edge_embedding_events
         .iter()
@@ -156,8 +150,20 @@ pub(crate) fn prepare_replay(
     Ok((Some(working), plan.max_lsn))
 }
 
+/// The checkpoint's relationship embedding state, as the base every patch in
+/// `frames` is resolved against.
+///
+/// `touched_conn_types` names the relationship types the plan's embedding
+/// events mention. A type with **no store at checkpoint** still needs its base
+/// groups recorded, because a commit that creates the type's first store
+/// digests its base over the group's members as they were before the commit —
+/// members that are already there. Skipping them leaves replay's base with
+/// empty properties where capture's had rows, and the patch is refused. The set
+/// bounds the extra scan to the types a frame actually touched; a reopen whose
+/// log mentions no embeddings pays nothing.
 fn capture_edge_embedding_state(
     graph: &DirGraph,
+    touched_conn_types: &BTreeSet<String>,
 ) -> Result<edge_embeddings::LogicalEdgeEmbeddingState, String> {
     let mut state = edge_embeddings::LogicalEdgeEmbeddingState::default();
     for ((conn_type, property), store) in &graph.edge_embeddings {
@@ -175,7 +181,7 @@ fn capture_edge_embedding_state(
             },
         );
     }
-    if state.stores.is_empty() {
+    if state.stores.is_empty() && touched_conn_types.is_empty() {
         return Ok(state);
     }
 
@@ -193,7 +199,7 @@ fn capture_edge_embedding_state(
             .filter(|key| key.conn_type == conn_type)
             .cloned()
             .collect();
-        if matching.is_empty() {
+        if matching.is_empty() && !touched_conn_types.contains(conn_type) {
             continue;
         }
         let (source, target) = graph

@@ -1659,6 +1659,7 @@ mod tests {
                     patch: EdgeGroupEmbeddingPatchWal {
                         base_digest: [1; 32],
                         result_digest: [2; 32],
+                        base_stores: vec!["txt".into()],
                         stores: vec!["txt".into()],
                         members: vec![EdgeGroupMemberPatchWal::Prior {
                             prior_ordinal: 0,

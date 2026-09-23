@@ -54,6 +54,26 @@ impl<G: GraphRead> RecordingGraph<G> {
         let Some(kind) = self.inner.edge_weight(idx).map(|e| e.connection_type) else {
             return;
         };
+        self.note_wal_group_of(source, target, kind);
+    }
+
+    /// [`note_wal_group`](Self::note_wal_group) for a group named directly
+    /// rather than through one of its members.
+    ///
+    /// `add_edge` calls this **before** inserting, because the base a patch is
+    /// digested against is the group as of before the commit. Noting the group
+    /// through the new edge afterwards snapshots a base that already contains
+    /// it, and replay — which reconstructs the base from the prior commit —
+    /// then reads the frame as a base-digest mismatch and refuses the reopen.
+    pub(crate) fn note_wal_group_of(
+        &mut self,
+        source: NodeIndex,
+        target: NodeIndex,
+        kind: InternedKey,
+    ) {
+        if !self.wal_owner {
+            return;
+        }
         let Some((src_type, src_id)) = self
             .inner
             .node_type_of(source)
@@ -470,6 +490,13 @@ fn borrowed_store_state<'a>(
         .collect()
 }
 
+/// The base a `PatchEdgeGroupEmbeddings` digests, which is the group as of
+/// **before** this commit — so it is scoped to the stores that existed before
+/// it. A store created in the same commit is in `stores` (the final set) but
+/// not in `base.base_stores`, and including it digests a column replay's base
+/// cannot have, which decodes as `patch base digest mismatch` and fails the
+/// reopen permanently. With no base touch at all there is nothing to scope
+/// against, so the final set stands.
 fn borrowed_base_store_state<'a>(
     stores: &[(&'a str, &'a EdgeEmbeddingStore)],
     member_slots: &[EdgeIndex],
@@ -477,6 +504,9 @@ fn borrowed_base_store_state<'a>(
 ) -> Vec<crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeGroupStore<'a>> {
     stores
         .iter()
+        .filter(|(name, _)| {
+            base.is_none_or(|base| base.base_stores.iter().any(|existing| existing == name))
+        })
         .map(|(name, store)| {
             let members = member_slots
                 .iter()
@@ -571,6 +601,10 @@ fn patch_group(
     let borrowed = borrowed_store_state(stores, member_slots);
     let borrowed_base = borrowed_base_store_state(stores, member_slots, base);
     let store_names: Vec<_> = stores.iter().map(|(name, _)| (*name).to_string()).collect();
+    let base_store_names: Vec<_> = borrowed_base
+        .iter()
+        .map(|store| store.text_column.to_string())
+        .collect();
     let members = member_slots
         .iter()
         .enumerate()
@@ -603,6 +637,7 @@ fn patch_group(
         patch: EdgeGroupEmbeddingPatchWal {
             base_digest,
             result_digest,
+            base_stores: base_store_names,
             stores: store_names,
             members,
         },

@@ -825,14 +825,41 @@ pub fn wrap_for_durability(
 /// Unmarked raw sequences retain the v2/v3 resolver used by standalone capture
 /// consumers. This does not transform CDC's raw events or before-images.
 ///
-/// `secondary_labels` reads the final label set from `DirGraph`, above the
-/// backend. Node/group slots are only hints in the v4 path; captured logical
-/// identities prevent deletion/reuse from redirecting a prior touch.
-pub fn resolve_ops(
+/// Takes the whole [`DirGraph`](crate::graph::schema::DirGraph), not a backend
+/// plus a label closure, because two of the things a frame must carry live
+/// *above* the backend: the final secondary-label set, and the relationship
+/// embedding stores a group's vector state is read from. A resolver given only
+/// the backend cannot see the stores, so it emits a topology-only
+/// `ReplaceEdgeGroup` that replay refuses and an `EdgeEmbeddingStoreState::
+/// Absent` that replay obeys by deleting the store — which is how the Python
+/// wheel lost every relationship vector written inside a durable window.
+/// One resolver, so no caller can pick the blind one by accident.
+///
+/// Node/group slots are only hints in the v4 path; captured logical identities
+/// prevent deletion/reuse from redirecting a prior touch.
+pub fn resolve_ops(raw: &[RawOp], dir: &crate::graph::schema::DirGraph) -> Vec<MutationOp> {
+    resolve_against(
+        raw,
+        &dir.graph,
+        &dir.interner,
+        |idx| dir.secondary_label_names(idx),
+        Some(&dir.edge_embeddings),
+    )
+}
+
+/// [`resolve_ops`] against a bare backend, for the unit tests that drive a
+/// `RecordingGraph` with no `DirGraph` above it.
+fn resolve_against(
     raw: &[RawOp],
     graph: &impl GraphRead,
     interner: &StringInterner,
     secondary_labels: impl Fn(NodeIndex) -> Vec<String>,
+    edge_embeddings: Option<
+        &std::collections::HashMap<
+            crate::graph::edge_embeddings::EdgeEmbeddingKey,
+            crate::graph::edge_embeddings::EdgeEmbeddingStore,
+        >,
+    >,
 ) -> Vec<MutationOp> {
     if raw.iter().any(|op| {
         matches!(
@@ -843,7 +870,7 @@ pub fn resolve_ops(
                 | RawOp::WalEdgeEmbeddingBase(_)
         )
     }) {
-        return wal_capture::resolve(raw, graph, interner, secondary_labels, None);
+        return wal_capture::resolve(raw, graph, interner, secondary_labels, edge_embeddings);
     }
     let mut out = Vec::with_capacity(raw.len());
     for op in raw {
@@ -923,20 +950,6 @@ pub fn resolve_ops(
         }
     }
     out
-}
-
-/// Resolve durable capture with relationship embedding state available.
-pub(crate) fn resolve_ops_with_edge_embeddings(
-    raw: &[RawOp],
-    dir: &crate::graph::schema::DirGraph,
-) -> Vec<MutationOp> {
-    wal_capture::resolve(
-        raw,
-        &dir.graph,
-        &dir.interner,
-        |idx| dir.secondary_label_names(idx),
-        Some(&dir.edge_embeddings),
-    )
 }
 
 /// A node's logical `(node_type, id)`, or `None` if it is gone.
@@ -1456,8 +1469,9 @@ impl<G: GraphWrite> GraphWrite for RecordingGraph<G> {
 
     #[inline]
     fn add_edge(&mut self, a: NodeIndex, b: NodeIndex, data: EdgeData) -> EdgeIndex {
+        // Before the insert, not after: see `note_wal_group_of`.
+        self.note_wal_group_of(a, b, data.connection_type);
         let eidx = self.inner.add_edge(a, b, data);
-        self.note_wal_group(eidx);
         self.forget_slot(BeforeSlot::Edge(edge_slot(eidx)));
         self.ops
             .push(RawOp::UpsertEdge(eidx, CaptureOrigin::Create, None));
@@ -1593,15 +1607,15 @@ mod tests {
 
     /// `resolve_ops` for the majority of tests, which drive a bare
     /// `RecordingGraph` with no `DirGraph` above it and therefore no label
-    /// index. Named rather than inlined so "this graph has no secondary
-    /// labels" is an assertion about the fixture, not an anonymous
-    /// `|_| vec![]`.
+    /// index and no embedding stores. Named rather than inlined so "this graph
+    /// has no secondary labels" is an assertion about the fixture, not an
+    /// anonymous `|_| vec![]`.
     fn resolve_unlabelled(
         raw: &[RawOp],
         graph: &impl GraphRead,
         interner: &StringInterner,
     ) -> Vec<MutationOp> {
-        resolve_ops(raw, graph, interner, |_| Vec::new())
+        resolve_against(raw, graph, interner, |_| Vec::new(), None)
     }
 
     // ── write capture + resolution ───────────────────────────────────
@@ -1780,10 +1794,16 @@ mod tests {
         let raw = rg.take_ops();
         assert_eq!(raw.len(), 2, "each choke-point call buffers a raw op");
 
-        let ops = resolve_ops(&raw, &rg, &interner, |idx| {
-            assert_eq!(idx, node);
-            vec!["Employee".to_string(), "Manager".to_string()]
-        });
+        let ops = resolve_against(
+            &raw,
+            &rg,
+            &interner,
+            |idx| {
+                assert_eq!(idx, node);
+                vec!["Employee".to_string(), "Manager".to_string()]
+            },
+            None,
+        );
         let expected = MutationOp::SetNodeLabels {
             node_type: "Person".into(),
             id: Value::UniqueId(1),
@@ -1812,7 +1832,7 @@ mod tests {
         rg.note_node_labels(a);
         rg.remove_node(a);
         let raw = rg.take_ops();
-        let ops = resolve_ops(&raw, &rg, &interner, |_| vec!["Employee".to_string()]);
+        let ops = resolve_against(&raw, &rg, &interner, |_| vec!["Employee".to_string()], None);
         assert_eq!(
             ops,
             vec![MutationOp::RemoveNode {

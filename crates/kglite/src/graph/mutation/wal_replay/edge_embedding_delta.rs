@@ -28,14 +28,15 @@ impl DeltaInterpreter {
 
     pub(super) fn interpret(
         mut self,
-        events: impl IntoIterator<Item = OrderedEdgeEmbeddingEvent>,
+        events: Vec<OrderedEdgeEmbeddingEvent>,
     ) -> Result<LogicalEdgeEmbeddingState, String> {
-        for event in events {
+        let records_base = base_recording_flags(&events);
+        for (event, records_base) in events.into_iter().zip(records_base) {
             match event {
                 OrderedEdgeEmbeddingEvent::PatchEmbeddings { key, patch } => {
                     self.apply_patch(key, patch)?;
                 }
-                event => self.apply_full(event)?,
+                event => self.apply_full(event, records_base)?,
             }
         }
         if !self.pending_bases.is_empty() {
@@ -45,9 +46,19 @@ impl DeltaInterpreter {
         Ok(self.state)
     }
 
-    fn apply_full(&mut self, event: OrderedEdgeEmbeddingEvent) -> Result<(), String> {
+    fn apply_full(
+        &mut self,
+        event: OrderedEdgeEmbeddingEvent,
+        records_base: bool,
+    ) -> Result<(), String> {
         match &event {
-            OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. } => {
+            // A topology record with no embedding record of its own still moves
+            // the group's members, and the *next* record's base is the group as
+            // this one leaves it. Only a paired one parks a base — parking an
+            // unpaired one would make the pair that follows read as consecutive
+            // topology, and dropping it outright would leave the properties the
+            // next base digests one commit stale.
+            OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. } if records_base => {
                 let before = self
                     .state
                     .groups
@@ -61,6 +72,7 @@ impl DeltaInterpreter {
                     ));
                 }
             }
+            OrderedEdgeEmbeddingEvent::ReplaceTopology { .. } => {}
             OrderedEdgeEmbeddingEvent::ReplaceEmbeddings { key, .. } => {
                 if self.pending_bases.remove(key).is_none() {
                     return Err(format!(
@@ -102,6 +114,19 @@ impl DeltaInterpreter {
 
         if group_digest(&current)? == patch.result_digest {
             return Ok(());
+        }
+        // Before the digest, because the digest cannot say *what* disagreed.
+        // The writer scoped its base to the stores that existed before the
+        // commit; if replay reconstructed a different set the two are hashing
+        // different shapes, and naming both sides is the difference between a
+        // diagnosable recovery refusal and an opaque one.
+        let base_stores: Vec<_> = base.stores.keys().cloned().collect();
+        if patch.base_stores != base_stores {
+            return Err(format!(
+                "relationship embedding patch for '{}' was written against base stores {:?} \
+                 but recovery reconstructed {base_stores:?}",
+                key.conn_type, patch.base_stores
+            ));
         }
         if group_digest(&base)? != patch.base_digest {
             return Err(format!(
@@ -187,6 +212,41 @@ impl DeltaInterpreter {
         self.state.groups.insert(key, result);
         Ok(())
     }
+}
+
+/// Which `ReplaceTopology` events are the base for an embedding record.
+///
+/// A topology record is paired when the next record naming the same group is
+/// that group's `ReplaceEmbeddings`/`PatchEmbeddings`. Pairing is by position,
+/// not by group membership anywhere in the log: a log that touches a group's
+/// properties while its type has no store, and only later gains one, carries
+/// both an unpaired and a paired record for the same key.
+fn base_recording_flags(events: &[OrderedEdgeEmbeddingEvent]) -> Vec<bool> {
+    let group_key = |event: &OrderedEdgeEmbeddingEvent| match event {
+        OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. }
+        | OrderedEdgeEmbeddingEvent::ReplaceEmbeddings { key, .. }
+        | OrderedEdgeEmbeddingEvent::PatchEmbeddings { key, .. } => Some(key.clone()),
+        OrderedEdgeEmbeddingEvent::SetStore { .. } => None,
+    };
+    events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. } = event else {
+                return false;
+            };
+            events[index + 1..]
+                .iter()
+                .find(|later| group_key(later).as_ref() == Some(key))
+                .is_some_and(|later| {
+                    matches!(
+                        later,
+                        OrderedEdgeEmbeddingEvent::ReplaceEmbeddings { .. }
+                            | OrderedEdgeEmbeddingEvent::PatchEmbeddings { .. }
+                    )
+                })
+        })
+        .collect()
 }
 
 fn require_cell_count(expected: usize, actual: usize) -> Result<(), String> {
@@ -397,6 +457,7 @@ mod tests {
         EdgeGroupEmbeddingPatchWal {
             base_digest: group_digest(base).unwrap(),
             result_digest: group_digest(result).unwrap(),
+            base_stores: base.stores.keys().cloned().collect(),
             stores: vec!["description".into()],
             members,
         }
@@ -484,7 +545,7 @@ mod tests {
         let after = group(2, &[0.1, 0.9], &[0.4, 0.6]);
         let initial = state(2, [(k.clone(), before.clone())]);
         let delta = DeltaInterpreter::from_state(initial.clone())
-            .interpret([
+            .interpret(vec![
                 OrderedEdgeEmbeddingEvent::ReplaceTopology {
                     key: k.clone(),
                     edges: props(2),
@@ -506,7 +567,7 @@ mod tests {
             ])
             .unwrap();
         let oracle = initial
-            .interpret([
+            .interpret(vec![
                 OrderedEdgeEmbeddingEvent::ReplaceTopology {
                     key: k.clone(),
                     edges: props(2),
@@ -613,7 +674,7 @@ mod tests {
         bad.base_digest[0] ^= 0xff;
         let initial = state(2, [(k.clone(), before)]);
         let error = DeltaInterpreter::from_state(initial)
-            .interpret([
+            .interpret(vec![
                 OrderedEdgeEmbeddingEvent::ReplaceTopology {
                     key: k.clone(),
                     edges: props(2),
@@ -627,7 +688,7 @@ mod tests {
         assert!(error.contains("base digest mismatch"));
         let already = state(2, [(k.clone(), after.clone())]);
         let replayed = DeltaInterpreter::from_state(already.clone())
-            .interpret([
+            .interpret(vec![
                 OrderedEdgeEmbeddingEvent::ReplaceTopology {
                     key: k.clone(),
                     edges: props(2),
@@ -650,7 +711,7 @@ mod tests {
             stores: BTreeMap::from([("description".into(), vec![cell(&[0.9, 0.1]), None])]),
         };
         let delta = DeltaInterpreter::from_state(state(2, [(k.clone(), before.clone())]))
-            .interpret([
+            .interpret(vec![
                 OrderedEdgeEmbeddingEvent::ReplaceTopology {
                     key: k.clone(),
                     edges: props(1),
@@ -681,20 +742,49 @@ mod tests {
             key: k.clone(),
             edges: props(2),
         };
+        let declare = OrderedEdgeEmbeddingEvent::SetStore {
+            key: store_key(),
+            state: EdgeEmbeddingStoreState::Present {
+                dimension: 2,
+                metric: Some("cosine".into()),
+                model_id: None,
+            },
+        };
+        let paired = patch(
+            &before,
+            &after,
+            vec![
+                prior(0, EdgeVectorCellPatchWal::Keep),
+                prior(
+                    1,
+                    EdgeVectorCellPatchWal::Replace(cell(&[0.4, 0.6]).unwrap()),
+                ),
+            ],
+        );
+        // The store declaration lands between a topology record and the
+        // embedding record it is the base for, so the base was taken over one
+        // store set and the patch is read against another.
         let error = DeltaInterpreter::from_state(initial.clone())
-            .interpret([
+            .interpret(vec![
                 topology.clone(),
-                OrderedEdgeEmbeddingEvent::SetStore {
-                    key: store_key(),
-                    state: EdgeEmbeddingStoreState::Present {
-                        dimension: 2,
-                        metric: Some("cosine".into()),
-                        model_id: None,
-                    },
+                declare.clone(),
+                OrderedEdgeEmbeddingEvent::PatchEmbeddings {
+                    key: k.clone(),
+                    patch: paired,
                 },
             ])
             .unwrap_err();
-        assert!(error.contains("between topology and embedding state"));
+        assert!(
+            error.contains("between topology and embedding state"),
+            "unexpected error: {error}"
+        );
+
+        // The same two records with nothing depending on the topology are a
+        // legitimate history: a property write on a group whose type has no
+        // store yet, and a later commit that declares one.
+        DeltaInterpreter::from_state(initial.clone())
+            .interpret(vec![topology.clone(), declare])
+            .expect("an unpaired topology record parks no base");
 
         let mut noncanonical = patch(
             &before,
@@ -709,7 +799,7 @@ mod tests {
         );
         noncanonical.stores.push("description".into());
         let error = DeltaInterpreter::from_state(initial)
-            .interpret([
+            .interpret(vec![
                 topology,
                 OrderedEdgeEmbeddingEvent::PatchEmbeddings {
                     key: k,

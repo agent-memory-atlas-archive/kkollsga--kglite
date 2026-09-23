@@ -232,7 +232,16 @@ fn finish_recovered_open(
         let _ = rg.take_ops();
     }
     // Admission was validated before the writer-open/publication boundary.
+    // The flag `recording::wrap_for_durability` would have set is set here
+    // instead, for the same reason: a recovered open has already validated, so
+    // it wraps the backend directly. Missing it left base capture off on every
+    // reopen of a graph that has relationship stores, which made the compact
+    // patch frames dead code there — every commit re-sent every vector.
+    let capture_edge_embedding_bases = !dir.edge_embeddings.is_empty();
     dir.graph.wrap_for_durability();
+    if let Some(recording) = dir.graph.recording_mut() {
+        recording.set_edge_embedding_base_capture(capture_edge_embedding_bases);
+    }
     Ok((wal, max_lsn + 1))
 }
 
@@ -540,9 +549,7 @@ mod recording_over_a_fork_tests {
         );
         let ops = {
             let dir = writer.as_ref();
-            resolve_ops(&raw, &dir.graph, &dir.interner, |idx| {
-                dir.secondary_label_names(idx)
-            })
+            resolve_ops(&raw, dir)
         };
         wal.append(&WalFrame { lsn: next_lsn, ops }).unwrap();
         wal.sync().unwrap();

@@ -1276,7 +1276,7 @@ pub fn kglite::api::durable::ensure_recovered(checkpoint_path: &std::path::Path,
 pub fn kglite::api::durable::open_log(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, checkpoint_path: &std::path::Path, level: kglite::api::durable::DurabilityLevel) -> core::result::Result<core::option::Option<(kglite::api::durable::Wal, u64)>, kglite::api::durable::DurableOpenError>
 pub fn kglite::api::durable::prepare_save_as_target(checkpoint_path: &std::path::Path, level: kglite::api::durable::DurabilityLevel) -> core::result::Result<core::option::Option<kglite::api::durable::Wal>, kglite::api::durable::DurableOpenError>
 pub fn kglite::api::durable::recover(path: &std::path::Path) -> core::io::error::Result<alloc::vec::Vec<kglite::api::durable::WalFrame>>
-pub fn kglite::api::durable::resolve_ops(raw: &[kglite::api::durable::RawOp], graph: &impl kglite::api::GraphRead, interner: &kglite::api::StringInterner, secondary_labels: impl core::ops::function::Fn(petgraph::graph_impl::NodeIndex) -> alloc::vec::Vec<alloc::string::String>) -> alloc::vec::Vec<kglite::graph::wal::MutationOp>
+pub fn kglite::api::durable::resolve_ops(raw: &[kglite::api::durable::RawOp], dir: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::graph::wal::MutationOp>
 pub fn kglite::api::durable::wal_path(checkpoint: &std::path::Path) -> std::path::PathBuf
 pub fn kglite::api::durable::wrap_for_durability(dir: &mut kglite::api::DirGraph) -> core::result::Result<(), kglite::api::durable::DurableOpenError>
 pub mod kglite::api::embeddings

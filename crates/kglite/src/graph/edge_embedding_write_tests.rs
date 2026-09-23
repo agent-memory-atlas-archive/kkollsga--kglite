@@ -1,7 +1,7 @@
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
-use crate::graph::storage::recording::{resolve_ops_with_edge_embeddings, wrap_for_durability};
+use crate::graph::storage::recording::{resolve_ops, wrap_for_durability};
 use crate::graph::storage::GraphWrite;
 use crate::graph::wal::{MutationOp, WalFrame};
 
@@ -158,7 +158,7 @@ fn drop_records_absence_and_disables_capture_after_last_store() {
     assert!(drop_edge_embedding_store(&mut writer, "ASSERTS", "description").unwrap());
     assert!(!drop_edge_embedding_store(&mut writer, "ASSERTS", "description").unwrap());
     let raw = writer.graph.recording_mut().unwrap().take_ops();
-    let ops = resolve_ops_with_edge_embeddings(&raw, &writer);
+    let ops = resolve_ops(&raw, &writer);
     assert!(ops.iter().any(|op| matches!(
         op,
         MutationOp::SetEdgeEmbeddingStore {

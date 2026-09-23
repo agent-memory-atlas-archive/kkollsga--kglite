@@ -89,6 +89,7 @@ fn matrix_frames(members: usize, dimension: usize) -> MatrixFrames {
             patch: EdgeGroupEmbeddingPatchWal {
                 base_digest: digest_group_state(&base_properties, &base_stores).unwrap(),
                 result_digest: digest_group_state(&final_properties, result_stores).unwrap(),
+                base_stores: vec!["text".into()],
                 stores: vec!["text".into()],
                 members: (0..members)
                     .map(|member| EdgeGroupMemberPatchWal::Prior {

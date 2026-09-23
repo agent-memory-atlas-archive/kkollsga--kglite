@@ -1,7 +1,7 @@
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
-use crate::graph::storage::recording::{resolve_ops_with_edge_embeddings, wrap_for_durability};
+use crate::graph::storage::recording::{resolve_ops, wrap_for_durability};
 use crate::graph::storage::GraphWrite;
 use crate::graph::wal::{append_frame, WalFrame};
 use std::collections::HashMap;
@@ -77,7 +77,7 @@ fn property_capture(mut graph: DirGraph, edge: EdgeIndex) -> WalFrame {
     let raw = graph.graph.recording_mut().unwrap().take_ops();
     WalFrame {
         lsn: 1,
-        ops: resolve_ops_with_edge_embeddings(&raw, &graph),
+        ops: resolve_ops(&raw, &graph),
     }
 }
 
@@ -94,7 +94,7 @@ fn vector_capture(mut graph: DirGraph, edge: EdgeIndex, dimension: usize) -> Wal
     let raw = graph.graph.recording_mut().unwrap().take_ops();
     WalFrame {
         lsn: 1,
-        ops: resolve_ops_with_edge_embeddings(&raw, &graph),
+        ops: resolve_ops(&raw, &graph),
     }
 }
 

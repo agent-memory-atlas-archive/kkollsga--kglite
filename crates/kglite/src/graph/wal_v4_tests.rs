@@ -46,9 +46,7 @@ fn frame(graph: &mut DirGraph, lsn: u64) -> WalFrame {
     );
     WalFrame {
         lsn,
-        ops: resolve_ops(&raw, &graph.graph, &graph.interner, |idx| {
-            graph.secondary_label_names(idx)
-        }),
+        ops: resolve_ops(&raw, graph),
     }
 }
 fn edges(graph: &DirGraph) -> Vec<(i64, i64, Value)> {

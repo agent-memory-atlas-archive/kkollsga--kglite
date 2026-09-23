@@ -69,7 +69,7 @@ use std::sync::{Arc, Mutex};
 use super::transaction::Session;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::durability;
-use crate::graph::storage::recording::resolve_ops_with_edge_embeddings;
+use crate::graph::storage::recording::resolve_ops;
 use crate::graph::storage::GraphRead;
 use crate::graph::wal::{DurabilityLevel, Wal, WalFrame};
 
@@ -285,7 +285,7 @@ impl Session {
         }
         // Secondary labels are read back through `working` because they are not
         // backend state — see `resolve_ops`.
-        let ops = resolve_ops_with_edge_embeddings(&raw, working);
+        let ops = resolve_ops(&raw, working);
         #[cfg(test)]
         if ds.fail_append {
             return Err("injected WAL append failure".to_string());

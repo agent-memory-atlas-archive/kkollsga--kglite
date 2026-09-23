@@ -32,6 +32,8 @@ claims to test — the OS-crash and power-loss cases that separate
 ``"normal"`` from ``"full"``.
 """
 
+import inspect
+import json
 import os
 import signal
 import subprocess
@@ -2648,3 +2650,220 @@ def test_recovered_payloads_survive_the_next_checkpoint(tmp_path, storage):
     g = _open(tmp_path / "app.kgl", "memory")
     assert g.time_index(1) == ["2020-01-01", "2020-02-01"]
     assert g.embedding_info("Co", "txt")["count"] == 2
+
+
+# ── relationship embedding stores, recovered from a checkpoint ───────
+
+# Every case below starts from a saved ``.kgl`` checkpoint and crashes the child
+# before the next one, so the reopened state comes only from WAL replay through
+# the recovered-open path. Two things make this the acceptance gate rather than
+# a duplicate of the Rust seams: the checkpoint means base capture has to be
+# turned on by the *recovered* open, and the wheel resolves its own frames — a
+# resolver that cannot see the relationship stores logs a topology-only group
+# (replay refuses it and the reopen fails permanently, for good) and a store
+# state of "absent" (replay obeys it and the vectors are gone).
+
+_CLAIMS_SEED = (
+    "CREATE (a:Doc {id: 1, summary: 'sa'}), (b:Doc {id: 2, summary: 'sb'}) "
+    "CREATE (a)-[:CLAIMS {text: 'alpha', k: 1}]->(b)"
+)
+
+_CLAIMS_SEED_PARALLEL = _CLAIMS_SEED + " CREATE (a)-[:CLAIMS {text: 'beta', k: 2}]->(b)"
+
+
+def _set_vector(k: int, vector: str, text_property: str = "text") -> str:
+    return (
+        f"MATCH ()-[r:CLAIMS]->() WHERE r.k = {k} WITH collect(r) AS rs "
+        f"CALL db.edge_embeddings.set({{type: 'CLAIMS', text_property: '{text_property}', "
+        f"entries: [{{relationship: rs[0], vector: {vector}}}]}}) YIELD stored RETURN stored"
+    )
+
+
+class _Py(str):
+    """A child step written out as Python source instead of being wrapped in
+    ``g.cypher(...)``."""
+
+
+#: Two dimensions, deterministic, and *named* — a model-less embedder reports
+#: ``model: None`` in both arms, so a replay that dropped the provenance stamp
+#: would still compare equal.
+_EDGE_EMBEDDER = _Py(
+    """class EdgeStub:
+    dimension = 2
+    model_id = "durable/edge-stub"
+
+    def embed(self, texts):
+        return [[float(sum(t.encode())), float(len(t))] for t in texts]
+
+g.set_embedder(EdgeStub())"""
+)
+
+
+def edge_state(g):
+    """Relationship store metadata, member properties and per-member vector
+    probes, in a form two processes can compare.
+
+    The vector probes are a norm and a cosine against a fixed axis, which
+    together pin a two-dimensional vector: a store that comes back present but
+    empty, or with its members' vectors permuted, differs here while a count
+    alone would not. Rounded because the values cross a JSON boundary.
+    """
+    stores = g.cypher(
+        "CALL db.edge_embeddings.list() YIELD type, text_property, dimension, count, model "
+        "RETURN type, text_property, dimension, count, model ORDER BY text_property"
+    ).to_list()
+    members = g.cypher("MATCH ()-[r:CLAIMS]->() RETURN r.k AS k, r.note AS note ORDER BY r.k").to_list()
+    vectors = {}
+    for row in stores:
+        vectors[row["text_property"]] = [
+            [
+                probe["k"],
+                None if probe["n"] is None else round(probe["n"], 6),
+                None if probe["a"] is None else round(probe["a"], 6),
+            ]
+            for probe in g.cypher(
+                "MATCH ()-[r:CLAIMS]->() RETURN r.k AS k, "
+                "embedding_norm(r, $store) AS n, "
+                "vector_score(r, $store, [1.0, 0.0]) AS a ORDER BY r.k",
+                params={"store": row["text_property"] + "_emb"},
+            ).to_list()
+        ]
+    return {
+        "stores": stores,
+        "members": members,
+        "vectors": vectors,
+        "node_stores": sorted(list(store) for store in g.list_embeddings()),
+    }
+
+
+def _crash_child_state(tmp_path, steps, storage: str) -> dict:
+    """``_crash_child`` that also hands back the state the child held when it
+    died, so the parent can require recovery to reproduce it exactly — the same
+    reader source runs on both sides of the crash."""
+    body = "\n".join(
+        [
+            "import json",
+            inspect.getsource(edge_state),
+            "g = open_durable()",
+            *(step if isinstance(step, _Py) else f"g.cypher({step!r})" for step in steps),
+            "print(json.dumps(edge_state(g)), flush=True)",
+        ]
+    )
+    script = _child_script(tmp_path, body, storage, "os._exit(0)")
+    done = subprocess.run([PYBIN, "-c", script], check=True, env=dict(os.environ), capture_output=True, text=True)
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+#: ``(id, seed, checkpoint queries, child steps, the stores the child must end
+#: with)``. That last field is the non-vacuity guard: without it a shape whose
+#: write silently did nothing would "recover" an empty state and pass.
+_EDGE_CRASH_SHAPES = [
+    ("first_store_set", _CLAIMS_SEED, (), [_set_vector(1, "[1.0, 0.0]")], [("text", 1)]),
+    (
+        "first_store_embed",
+        _CLAIMS_SEED,
+        (),
+        [
+            _EDGE_EMBEDDER,
+            "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs "
+            "CALL db.edge_embeddings.embed({type: 'CLAIMS', text_property: 'text', "
+            "relationships: rs, mode: 'all'}) YIELD embedded RETURN embedded",
+        ],
+        [("text", 1)],
+    ),
+    (
+        "second_store",
+        _CLAIMS_SEED,
+        (_set_vector(1, "[1.0, 0.0]"),),
+        [_set_vector(1, "[0.5, 0.5]", "note")],
+        [("note", 1), ("text", 1)],
+    ),
+    (
+        "property_only",
+        _CLAIMS_SEED,
+        (_set_vector(1, "[1.0, 0.0]"),),
+        ["MATCH ()-[r:CLAIMS]->() SET r.note = 'edited'"],
+        [("text", 1)],
+    ),
+    (
+        "vector_update",
+        _CLAIMS_SEED,
+        (_set_vector(1, "[1.0, 0.0]"),),
+        [_set_vector(1, "[0.0, 1.0]")],
+        [("text", 1)],
+    ),
+    (
+        "delete_member_then_property",
+        _CLAIMS_SEED_PARALLEL,
+        (_set_vector(1, "[1.0, 0.0]"), _set_vector(2, "[0.0, 1.0]")),
+        [
+            "MATCH ()-[r:CLAIMS]->() WHERE r.k = 2 DELETE r",
+            "MATCH ()-[r:CLAIMS]->() SET r.note = 'edited'",
+        ],
+        [("text", 1)],
+    ),
+    (
+        "drop_store",
+        _CLAIMS_SEED,
+        (_set_vector(1, "[1.0, 0.0]"),),
+        ["CALL db.edge_embeddings.drop({type: 'CLAIMS', text_property: 'text'}) YIELD dropped RETURN dropped"],
+        [],
+    ),
+    (
+        "create_then_embed",
+        _CLAIMS_SEED,
+        (_set_vector(1, "[1.0, 0.0]"),),
+        [
+            "MATCH (a:Doc {id: 1}), (b:Doc {id: 2}) CREATE (a)-[:CLAIMS {text: 'gamma', k: 2}]->(b)",
+            _set_vector(2, "[0.25, 0.75]"),
+        ],
+        [("text", 2)],
+    ),
+    (
+        "build_index",
+        _CLAIMS_SEED,
+        (_set_vector(1, "[1.0, 0.0]"),),
+        [
+            _set_vector(1, "[0.6, 0.8]"),
+            "CALL db.edge_embeddings.build_index({type: 'CLAIMS', text_property: 'text'}) YIELD indexed RETURN indexed",
+        ],
+        [("text", 1)],
+    ),
+    # The control. Node stores travel as their own WAL declaration, so a fix
+    # that repaired relationships by breaking nodes passes every case above and
+    # fails this one.
+    (
+        "node_store_control",
+        _CLAIMS_SEED,
+        (),
+        [_Py('g.set_embeddings("Doc", "summary", {1: [0.6, 0.8]})')],
+        [],
+    ),
+]
+
+
+@pytest.mark.parametrize("storage", DURABLE_STORAGE_MODES)
+@pytest.mark.parametrize(
+    "seed,checkpoint,steps,expected_stores",
+    [shape[1:] for shape in _EDGE_CRASH_SHAPES],
+    ids=[shape[0] for shape in _EDGE_CRASH_SHAPES],
+)
+def test_relationship_vectors_survive_a_crash_from_a_checkpoint(
+    tmp_path, storage, seed, checkpoint, steps, expected_stores
+):
+    path = tmp_path / "app.kgl"
+    kwargs = {"storage": storage} if storage != "memory" else {}
+    parent = kglite.open(str(path), durable=False, **kwargs)
+    parent.cypher(seed)
+    for query in checkpoint:
+        parent.cypher(query)
+    parent.save()
+    del parent  # hand the write lease over; see the note at the top
+
+    live = _crash_child_state(tmp_path, steps, storage)
+    assert [(row["text_property"], row["count"]) for row in live["stores"]] == expected_stores, (
+        f"the child's own state is this case's fixture, not its finding: {live}"
+    )
+
+    recovered = edge_state(_open(path, storage))
+    assert recovered == live, "recovery must reproduce exactly the state the writer held"
