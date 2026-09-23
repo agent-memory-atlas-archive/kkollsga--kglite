@@ -89,7 +89,7 @@ def _workflow_facts() -> tuple[list[str], list[str]]:
     return python_versions, wheel_targets
 
 
-def _engine_facts() -> tuple[list[str], int, int, str]:
+def _engine_facts() -> tuple[list[str], int, int, int, str]:
     mode_path = REPO_ROOT / "crates" / "kglite" / "src" / "graph" / "storage" / "mode.rs"
     mode_source = mode_path.read_text(encoding="utf-8")
     as_str = re.search(
@@ -109,14 +109,15 @@ def _engine_facts() -> tuple[list[str], int, int, str]:
     magic_versions = [int(value) for value in re.findall(r"const V(\d+)_MAGIC:", magic_source)]
     file_source = (io_dir / "file.rs").read_text(encoding="utf-8")
     core = re.search(r"CURRENT_CORE_DATA_VERSION:\s*u32\s*=\s*(\d+)", file_source)
-    if not magic_versions or core is None:
+    node_only_core = re.search(r"NODE_ONLY_CORE_DATA_VERSION:\s*u32\s*=\s*(\d+)", file_source)
+    if not magic_versions or core is None or node_only_core is None:
         raise ValueError("persistence version constants not found")
 
     spatial = "crates/kglite/src/graph/languages/cypher/executor/spatial_join.rs"
     spatial_source = (REPO_ROOT / spatial).read_text(encoding="utf-8")
     if "RTree::<" not in spatial_source:
         raise ValueError("spatial join no longer constructs an RTree")
-    return modes, max(magic_versions), int(core.group(1)), spatial
+    return modes, max(magic_versions), int(node_only_core.group(1)), int(core.group(1)), spatial
 
 
 def _benchmark_facts() -> dict[str, Any]:
@@ -146,7 +147,7 @@ def render() -> str:
     version, members = _workspace_facts()
     requires_python, extras, classifiers = _python_facts()
     ci_pythons, wheel_targets = _workflow_facts()
-    modes, container_version, core_version, spatial_source = _engine_facts()
+    modes, container_version, node_core_version, max_core_version, spatial_source = _engine_facts()
     benchmark = _benchmark_facts()
 
     lines = [
@@ -186,7 +187,9 @@ def render() -> str:
             "## Engine contracts",
             "",
             f"- User storage modes: {', '.join(f'`{mode}`' for mode in modes)}",
-            f"- Snapshot container/core versions: RGF v{container_version} / core v{core_version}",
+            f"- Snapshot container: RGF v{container_version}; writer core v{node_core_version} for "
+            f"node-only graphs and v{max_core_version} for graphs declaring relationship "
+            f"embedding stores (reader supports through v{max_core_version})",
             f"- Spatial candidate index: per-query `rstar::RTree` in `{spatial_source}`",
             "- Disk publication pointer: `CURRENT` selects an immutable generation.",
             "",

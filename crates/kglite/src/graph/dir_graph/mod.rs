@@ -2465,3 +2465,6 @@ mod fork_apportionment_tests;
 
 #[cfg(test)]
 mod disk_snapshot_tests;
+
+#[cfg(test)]
+mod edge_embedding_disk_tests;

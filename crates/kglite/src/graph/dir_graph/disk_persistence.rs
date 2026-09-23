@@ -332,6 +332,9 @@ impl DirGraph {
     pub(crate) fn write_disk_snapshot(&mut self, dir: &std::path::Path) -> Result<(), String> {
         self.consolidate_disk_for_save(dir)?;
 
+        let edge_embeddings_required =
+            crate::graph::edge_embeddings::has_persisted_edge_embeddings(self);
+
         // save_to_dir needs &mut access so the edge-property store can
         // drop its base mmap before overwriting.
         let dg = match &mut self.graph {
@@ -342,7 +345,7 @@ impl DirGraph {
         // `save_to_dir` runs `clear_arenas` internally, which drains
         // `node_mut_cache` via the clone-apply-replace flush, updating
         // each mutated type's Arc in `DiskGraph.column_stores`.
-        dg.save_to_dir(dir, &self.interner)
+        dg.save_to_dir_with_edge_embeddings(dir, &self.interner, edge_embeddings_required)
             .map_err(|e| format!("DiskGraph save failed: {}", e))?;
         // No mirror to refresh: `DiskGraph` *is* the owner of the column
         // stores, so the sidecar writer below reads the same `Arc`s
@@ -402,6 +405,16 @@ impl DirGraph {
         if !self.embeddings.is_empty() {
             let ordered: std::collections::BTreeMap<_, _> = self.embeddings.iter().collect();
             write_compressed_disk_serde(dir, "embeddings.bin.zst", &ordered, "embeddings")?;
+        }
+
+        if edge_embeddings_required {
+            let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(self);
+            write_compressed_disk_serde(
+                dir,
+                "edge_embeddings.bin.zst",
+                &ordered,
+                "edge embeddings",
+            )?;
         }
 
         if !self.timeseries_store.is_empty() {

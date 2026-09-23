@@ -11,6 +11,7 @@
 //   [section]  topology.zst — graph structure WITHOUT node properties
 //   [section]  columns_<Type>.zst — one per node type, packed column data
 //   [section]  embeddings.zst (optional)
+//   [section]  edge_embeddings.zst (required for core v4; absent from core v3)
 //   [section]  timeseries.zst (optional)
 //   [section]  secondary_labels.zst (optional)
 //   [section]  vector_index.zst (optional, rebuildable)
@@ -61,8 +62,10 @@ use crate::serde_codec;
 const MAX_CODEC_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DISK_SERDE_MAGIC: &[u8; 8] = b"KGLDSC1\0";
 
-/// Current core data version. Bump ONLY when NodeData, EdgeData, or Value enum changes.
-/// This is independent of metadata — metadata uses JSON and handles changes via serde defaults.
+/// Highest core data version this reader accepts. Writers select v3 for
+/// node-only graphs and v4 when relationship embedding declarations are
+/// present, because an older reader must reject rather than silently discard
+/// the required relationship-vector section.
 ///
 /// 0.9.52: bumped to 2 — the `Value` enum gained five structured
 /// variants (Node, Relationship, Path, List, Map).
@@ -74,7 +77,8 @@ const DISK_SERDE_MAGIC: &[u8; 8] = b"KGLDSC1\0";
 /// embeddings is rejected with a rebuild-and-re-embed message (see
 /// `EMBED_FORMAT_BREAK_MSG`). Embeddings are a rebuildable cache, so this
 /// is a deliberate, contained break — not a whole-graph format break.
-const CURRENT_CORE_DATA_VERSION: u32 = 3;
+const NODE_ONLY_CORE_DATA_VERSION: u32 = 3;
+const CURRENT_CORE_DATA_VERSION: u32 = 4;
 
 /// The first core-data version whose embeddings section carries the
 /// `model_id` + `text_hashes` fields. A file below this with a non-empty
@@ -112,6 +116,7 @@ const EMBED_PROVENANCE_MIN_VERSION: u32 = 3;
 // Canonical `section_digests` keys for the fixed sections.
 const TOPOLOGY_SECTION: &str = "topology";
 const EMBEDDINGS_SECTION: &str = "embeddings";
+const EDGE_EMBEDDINGS_SECTION: &str = "edge_embeddings";
 const TIMESERIES_SECTION: &str = "timeseries";
 const SECONDARY_LABELS_SECTION: &str = "secondary_labels";
 const VECTOR_INDEX_SECTION: &str = "vector_index";
@@ -367,6 +372,8 @@ pub(crate) struct FileMetadata {
     /// Compressed size of the embedding section (0 if none).
     #[serde(default)]
     embeddings_compressed_size: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    edge_embeddings_compressed_size: u64,
     /// Compressed size of the timeseries section (0 if none).
     #[serde(default)]
     timeseries_compressed_size: u64,
@@ -434,8 +441,12 @@ impl FileMetadata {
     /// Build metadata from a DirGraph, leaving section sizes at zero (the
     /// caller fills them in after compression).
     pub(crate) fn from_graph(graph: &DirGraph) -> Self {
+        Self::from_graph_version(graph, NODE_ONLY_CORE_DATA_VERSION)
+    }
+
+    fn from_graph_version(graph: &DirGraph, core_data_version: u32) -> Self {
         FileMetadata {
-            core_data_version: CURRENT_CORE_DATA_VERSION,
+            core_data_version,
             library_version: env!("CARGO_PKG_VERSION").to_string(),
             schema_definition: graph.schema_definition.clone(),
             property_index_keys: graph.property_index_keys.clone(),
@@ -483,6 +494,7 @@ impl FileMetadata {
             topology_compressed_size: 0,
             column_sections: Vec::new(),
             embeddings_compressed_size: 0,
+            edge_embeddings_compressed_size: 0,
             timeseries_compressed_size: 0,
             secondary_labels_compressed_size: 0,
             vector_index_compressed_size: 0,
@@ -895,7 +907,7 @@ fn build_section_digests(
     topology: &[u8],
     column_meta: &[PortableColumnSection],
     column_data: &[Vec<u8>],
-    optional: [(&str, Option<&[u8]>); 5],
+    optional: [(&str, Option<&[u8]>); 6],
 ) -> BTreeMap<String, u32> {
     let mut digests = BTreeMap::new();
     digests.insert(TOPOLOGY_SECTION.to_string(), section_digest(topology));
@@ -982,6 +994,20 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
         None
     };
 
+    let edge_embedding_compressed =
+        if !crate::graph::edge_embeddings::has_persisted_edge_embeddings(graph) {
+            None
+        } else {
+            let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(graph);
+            let raw = codec_ser(codec, &ordered)?;
+            Some(zstd_compress(&raw)?)
+        };
+    let core_version = if edge_embedding_compressed.is_some() {
+        CURRENT_CORE_DATA_VERSION
+    } else {
+        NODE_ONLY_CORE_DATA_VERSION
+    };
+
     // 4. Compress timeseries if any (BTreeMap view for the same reason).
     let timeseries_compressed = if !graph.timeseries_store.is_empty() {
         let ordered: std::collections::BTreeMap<_, _> = graph.timeseries_store.iter().collect();
@@ -1016,6 +1042,10 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
         &column_sections_data,
         [
             (EMBEDDINGS_SECTION, embedding_compressed.as_deref()),
+            (
+                EDGE_EMBEDDINGS_SECTION,
+                edge_embedding_compressed.as_deref(),
+            ),
             (TIMESERIES_SECTION, timeseries_compressed.as_deref()),
             (
                 SECONDARY_LABELS_SECTION,
@@ -1025,11 +1055,15 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
             (TEXT_INDEX_SECTION, text_index_compressed.as_deref()),
         ],
     );
-    let mut metadata = FileMetadata::from_graph(graph);
+    let mut metadata = FileMetadata::from_graph_version(graph, core_version);
     metadata.section_digests = section_digests;
     metadata.topology_compressed_size = topology_compressed.len() as u64;
     metadata.column_sections = column_sections_meta;
     metadata.embeddings_compressed_size = embedding_compressed
+        .as_ref()
+        .map(|b| b.len() as u64)
+        .unwrap_or(0);
+    metadata.edge_embeddings_compressed_size = edge_embedding_compressed
         .as_ref()
         .map(|b| b.len() as u64)
         .unwrap_or(0);
@@ -1064,7 +1098,7 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     // metadata_length (4B). The codec byte prevents implicit byte sniffing.
     writer.write_all(&V6_MAGIC)?;
     writer.write_all(&[codec.tag()])?;
-    writer.write_all(&CURRENT_CORE_DATA_VERSION.to_le_bytes())?;
+    writer.write_all(&core_version.to_le_bytes())?;
     writer.write_all(&(metadata_json.len() as u32).to_le_bytes())?;
     writer.write_all(&metadata_json)?;
 
@@ -1077,6 +1111,10 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
 
     if let Some(emb_data) = &embedding_compressed {
         writer.write_all(emb_data)?;
+    }
+
+    if let Some(edge_data) = &edge_embedding_compressed {
+        writer.write_all(edge_data)?;
     }
 
     if let Some(ts_data) = &timeseries_compressed {
@@ -1842,6 +1880,36 @@ fn load_disk_sidecars(dir: &std::path::Path, graph: &mut DirGraph) -> io::Result
         graph.embeddings = embeddings;
     }
 
+    let edge_emb_path = dir.join("edge_embeddings.bin.zst");
+    let edge_embeddings_required =
+        crate::graph::storage::disk::graph_persist::edge_embeddings_required(dir)?;
+    if edge_embeddings_required {
+        if !edge_emb_path.is_file() {
+            return Err(corrupt_sidecar_error(
+                "edge_embeddings.bin.zst",
+                &invalid_data("required relationship-embedding sidecar is missing"),
+            ));
+        }
+        let decoded = (|| -> io::Result<
+            BTreeMap<
+                crate::graph::edge_embeddings::EdgeEmbeddingKey,
+                crate::graph::edge_embeddings::PersistedEdgeEmbeddingStore,
+            >,
+        > {
+            let compressed = std::fs::read(&edge_emb_path)?;
+            let bytes = zstd_decompress(&compressed)?;
+            decode_disk_serde(&bytes, bytes.capacity() as u64)
+                .map_err(|error| invalid_data(error.to_string()))
+        })()
+        .map_err(|error| corrupt_sidecar_error("edge_embeddings.bin.zst", &error))?;
+        let stores =
+            crate::graph::edge_embeddings::validate_decoded_edge_embedding_stores(graph, decoded)
+                .map_err(|error| {
+                corrupt_sidecar_error("edge_embeddings.bin.zst", &invalid_data(error))
+            })?;
+        graph.edge_embeddings = stores;
+    }
+
     let ts_path = dir.join("timeseries.bin.zst");
     if ts_path.exists() {
         graph.timeseries_store = (|| -> io::Result<HashMap<usize, NodeTimeseries>> {
@@ -1938,6 +2006,7 @@ fn load_portable_container(
 struct PortableSectionPlan {
     columns: Vec<PortableColumnSection>,
     embeddings: u64,
+    edge_embeddings: u64,
     timeseries: u64,
     secondary_labels: u64,
     vector_index: u64,
@@ -2292,6 +2361,24 @@ fn load_portable_columnar(
     }
     let (metadata, mut sections) =
         parse_portable_metadata(buf, format_name, metadata_len, metadata_start)?;
+    if metadata.core_data_version != core_version {
+        return Err(invalid_data(
+            "portable header and metadata core-data versions disagree",
+        ));
+    }
+    match core_version {
+        CURRENT_CORE_DATA_VERSION if metadata.edge_embeddings_compressed_size == 0 => {
+            return Err(invalid_data(
+                "core data version 4 requires a non-empty edge_embeddings section",
+            ));
+        }
+        0..=NODE_ONLY_CORE_DATA_VERSION if metadata.edge_embeddings_compressed_size != 0 => {
+            return Err(invalid_data(
+                "edge_embeddings section requires core data version 4",
+            ));
+        }
+        _ => {}
+    }
     // The ceiling is checked here, on the metadata side of the decode: a load
     // refused for memory must not first allocate the memory. See
     // `LoadOptions::max_load_bytes`.
@@ -2394,6 +2481,9 @@ use vector_persistence::{decode_vector_indexes, encode_vector_indexes};
 pub use vector_persistence::{
     export_embeddings_to_file, import_embeddings_from_file, EmbeddingExportFilter, ImportStats,
 };
+#[cfg(test)]
+#[path = "file/edge_embedding_persistence_tests.rs"]
+mod edge_embedding_persistence_tests;
 #[cfg(test)]
 #[path = "file_deferred_index_tests.rs"]
 mod file_deferred_index_tests;

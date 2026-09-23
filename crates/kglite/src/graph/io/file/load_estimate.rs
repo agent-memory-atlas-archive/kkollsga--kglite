@@ -322,6 +322,7 @@ pub(super) fn estimate_from_metadata(metadata: &FileMetadata) -> LoadMemoryEstim
     }
     for optional in [
         metadata.embeddings_compressed_size,
+        metadata.edge_embeddings_compressed_size,
         metadata.timeseries_compressed_size,
         metadata.secondary_labels_compressed_size,
         metadata.vector_index_compressed_size,

@@ -11,6 +11,11 @@ before upgrading.
 
 ### Added
 
+- Relationship embedding stores persist their vectors, source hashes, model
+  identity and metric in portable snapshots and disk generations, including
+  declared empty stores. Files containing these stores require an edge-aware
+  reader; node-only output retains its existing format.
+
 - **A portable knowledge-base guide and synthetic worked example.**
   `KNOWLEDGE_BASES.md` explains how to choose direct Markdown search or a
   structured backend from the work, preserve original bytes and rendered

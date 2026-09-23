@@ -31,6 +31,7 @@ pub(super) fn decode_portable_topology(
     let plan = PortableSectionPlan {
         columns: metadata.column_sections.clone(),
         embeddings: metadata.embeddings_compressed_size,
+        edge_embeddings: metadata.edge_embeddings_compressed_size,
         timeseries: metadata.timeseries_compressed_size,
         secondary_labels: metadata.secondary_labels_compressed_size,
         vector_index: metadata.vector_index_compressed_size,
@@ -62,6 +63,19 @@ pub(super) fn load_portable_optional_sections(
             codec_deser(codec, &raw, raw.capacity() as u64)?;
         validate_and_rebuild_embedding_norms(&mut embeddings)?;
         dir_graph.embeddings = embeddings;
+    }
+    if plan.edge_embeddings > 0 {
+        let compressed = sections.take(plan.edge_embeddings, EDGE_EMBEDDINGS_SECTION)?;
+        let raw = zstd_decompress(compressed)?;
+        let decoded: std::collections::BTreeMap<
+            crate::graph::edge_embeddings::EdgeEmbeddingKey,
+            crate::graph::edge_embeddings::PersistedEdgeEmbeddingStore,
+        > = codec_deser(codec, &raw, raw.capacity() as u64)?;
+        dir_graph.edge_embeddings =
+            crate::graph::edge_embeddings::validate_decoded_edge_embedding_stores(
+                dir_graph, decoded,
+            )
+            .map_err(|error| invalid_data(format!("edge_embeddings {error}")))?;
     }
     if plan.timeseries > 0 {
         let compressed = sections.take(plan.timeseries, TIMESERIES_SECTION)?;

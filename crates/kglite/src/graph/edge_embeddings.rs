@@ -1,21 +1,21 @@
 //! Typed relationship embedding storage and validated private mutation primitives.
 //!
-//! Prepared for P1. This module deliberately exposes `EdgeIndex`, never a raw
-//! integer or `NodeIndex`, at its mutation/query boundary. The shared numeric
-//! store remains an implementation detail.
+//! Every mutation, snapshot codec and later query path crosses this module's
+//! typed boundary as an `EdgeIndex`, never a raw integer or `NodeIndex`. The
+//! shared numeric store remains an implementation detail.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use petgraph::graph::EdgeIndex;
 use serde::{Deserialize, Serialize};
 
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::embedding_validation::validate_finite_vector;
-use crate::graph::embeddings::store_name;
+use crate::graph::embeddings::{store_name, text_column_of};
 use crate::graph::schema::{DirGraph, EdgeData, EmbeddingStore, RemovedEmbedding};
 use crate::graph::storage::{GraphRead, GraphWrite};
 
-type EdgeEmbeddingKey = (String, String);
+pub(crate) type EdgeEmbeddingKey = (String, String);
 
 const VACANT_EDGE: u32 = u32::MAX;
 
@@ -48,7 +48,7 @@ impl EdgeRemap {
 
 // P4 activates the canonical typed store-key constructor.
 #[cfg_attr(not(test), allow(dead_code))]
-fn edge_store_key(connection_type: &str, text_property: &str) -> EdgeEmbeddingKey {
+pub(crate) fn edge_store_key(connection_type: &str, text_property: &str) -> EdgeEmbeddingKey {
     (connection_type.to_string(), store_name(text_property))
 }
 
@@ -62,7 +62,86 @@ pub(crate) struct EdgeEmbeddingStore {
     numeric: EmbeddingStore,
 }
 
-// P2/P4 consume these typed construction and lookup methods; P1 owns their tested foundation.
+#[derive(Serialize)]
+pub(crate) struct PersistedEdgeEmbeddingStoreRef<'a> {
+    dimension: usize,
+    data: &'a [f32],
+    edge_slots: &'a [usize],
+    metric: Option<&'a str>,
+    model_id: Option<&'a str>,
+    text_hashes: &'a HashMap<usize, u64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PersistedEdgeEmbeddingStore {
+    dimension: usize,
+    data: Vec<f32>,
+    edge_slots: Vec<usize>,
+    metric: Option<String>,
+    model_id: Option<String>,
+    text_hashes: HashMap<usize, u64>,
+}
+
+#[cfg(test)]
+impl PersistedEdgeEmbeddingStore {
+    pub(crate) fn fixture(
+        dimension: usize,
+        data: Vec<f32>,
+        edge_slots: Vec<usize>,
+        metric: Option<String>,
+        model_id: Option<String>,
+        text_hashes: HashMap<usize, u64>,
+    ) -> Self {
+        Self {
+            dimension,
+            data,
+            edge_slots,
+            metric,
+            model_id,
+            text_hashes,
+        }
+    }
+}
+
+pub(crate) fn has_persisted_edge_embeddings(graph: &DirGraph) -> bool {
+    !graph.edge_embeddings.is_empty()
+}
+
+pub(crate) fn persisted_edge_embedding_stores(
+    graph: &DirGraph,
+) -> BTreeMap<&EdgeEmbeddingKey, PersistedEdgeEmbeddingStoreRef<'_>> {
+    graph
+        .edge_embeddings
+        .iter()
+        .map(|(key, store)| (key, store.persisted()))
+        .collect()
+}
+
+pub(crate) fn validate_decoded_edge_embedding_stores(
+    graph: &DirGraph,
+    decoded: BTreeMap<EdgeEmbeddingKey, PersistedEdgeEmbeddingStore>,
+) -> Result<HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>, String> {
+    if decoded.is_empty() {
+        return Err("required payload contains no stores".to_string());
+    }
+    let mut stores = HashMap::with_capacity(decoded.len());
+    let arena_guard = graph.graph.begin_query();
+    for ((relationship_type, property), payload) in decoded {
+        let mut store = EdgeEmbeddingStore::from_persisted(payload).map_err(|error| {
+            format!("store '{relationship_type}.{property}' is invalid: {error}")
+        })?;
+        store
+            .validate_for_graph(graph, &relationship_type, &property)
+            .map_err(|error| {
+                format!("store '{relationship_type}.{property}' is invalid: {error}")
+            })?;
+        stores.insert((relationship_type, property), store);
+    }
+    drop(arena_guard);
+    Ok(stores)
+}
+
+// Persistence and query execution share these typed construction and lookup methods.
 #[cfg_attr(not(test), allow(dead_code))]
 impl EdgeEmbeddingStore {
     pub(crate) fn new(dimension: usize, metric: Option<&str>) -> Self {
@@ -89,6 +168,14 @@ impl EdgeEmbeddingStore {
         self.numeric.metric.as_deref()
     }
 
+    pub(crate) fn model_id(&self) -> Option<&str> {
+        self.numeric.model_id.as_deref()
+    }
+
+    pub(crate) fn text_hash(&self, edge: EdgeIndex) -> Option<u64> {
+        self.numeric.text_hashes.get(&edge.index()).copied()
+    }
+
     pub(crate) fn get(&self, edge: EdgeIndex) -> Option<&[f32]> {
         self.numeric.get_embedding(edge.index())
     }
@@ -101,9 +188,103 @@ impl EdgeEmbeddingStore {
             .map(EdgeIndex::new)
     }
 
+    pub(crate) fn persisted(&self) -> PersistedEdgeEmbeddingStoreRef<'_> {
+        PersistedEdgeEmbeddingStoreRef {
+            dimension: self.numeric.dimension,
+            data: &self.numeric.data,
+            edge_slots: &self.numeric.slot_to_node,
+            metric: self.numeric.metric.as_deref(),
+            model_id: self.numeric.model_id.as_deref(),
+            text_hashes: &self.numeric.text_hashes,
+        }
+    }
+
+    pub(crate) fn from_persisted(payload: PersistedEdgeEmbeddingStore) -> Result<Self, String> {
+        let mut numeric = EmbeddingStore::new(payload.dimension);
+        numeric.data = payload.data;
+        numeric.slot_to_node = payload.edge_slots;
+        numeric.metric = payload.metric;
+        numeric.model_id = payload.model_id;
+        numeric.text_hashes = payload.text_hashes;
+        for (slot, &edge) in numeric.slot_to_node.iter().enumerate() {
+            if numeric.node_to_slot.insert(edge, slot).is_some() {
+                return Err(format!("relationship slot {edge} appears more than once"));
+            }
+        }
+        Ok(Self { numeric })
+    }
+
+    /// Validate a decoded persisted store before it is installed on a graph.
+    pub(crate) fn validate_for_graph(
+        &mut self,
+        graph: &DirGraph,
+        relationship_type: &str,
+        embedding_property: &str,
+    ) -> Result<(), String> {
+        if relationship_type.is_empty() {
+            return Err("relationship type is empty".to_string());
+        }
+        if text_column_of(embedding_property).is_none() {
+            return Err(format!(
+                "embedding property '{embedding_property}' is not a canonical *_emb store name"
+            ));
+        }
+        if self.numeric.dimension == 0 {
+            return Err("embedding dimension is zero".to_string());
+        }
+        self.numeric
+            .validate_shape()
+            .map_err(|error| error.to_string())?;
+        validate_finite_vector(&self.numeric.data).map_err(|error| error.to_string())?;
+        for &raw in self.numeric.text_hashes.keys() {
+            if !self.numeric.node_to_slot.contains_key(&raw) {
+                return Err(format!("source hash names absent relationship slot {raw}"));
+            }
+        }
+        for edge in self.edges() {
+            let data = graph
+                .graph
+                .edge_weight(edge)
+                .ok_or_else(|| format!("relationship slot {} is not live", edge.index()))?;
+            let actual = data.connection_type_str(&graph.interner);
+            if actual != relationship_type {
+                return Err(format!(
+                    "relationship slot {} has type '{actual}', expected '{relationship_type}'",
+                    edge.index()
+                ));
+            }
+            let (source, target) = graph
+                .graph
+                .edge_endpoints(edge)
+                .ok_or_else(|| format!("relationship slot {} has no endpoints", edge.index()))?;
+            if graph.graph.node_weight(source).is_none()
+                || graph.graph.node_weight(target).is_none()
+            {
+                return Err(format!(
+                    "relationship slot {} has a dead endpoint",
+                    edge.index()
+                ));
+            }
+        }
+        self.numeric.rebuild_norms();
+        Ok(())
+    }
+
     fn set_manual(&mut self, edge: EdgeIndex, vector: &[f32]) {
         self.numeric.set_embedding(edge.index(), vector);
         self.numeric.text_hashes.remove(&edge.index());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decoded_fixture(
+        dimension: usize,
+        entries: impl IntoIterator<Item = (EdgeIndex, Vec<f32>)>,
+    ) -> Self {
+        let mut store = Self::new(dimension, None);
+        for (edge, vector) in entries {
+            store.numeric.set_embedding(edge.index(), &vector);
+        }
+        store
     }
 
     pub(crate) fn remove(&mut self, edge: EdgeIndex) -> Option<RemovedEmbedding> {

@@ -84,8 +84,24 @@ fn validate_disk_format(meta: &DiskGraphMeta) -> std::io::Result<crate::serde_co
             "disk graph snapshot",
         ));
     }
+    if meta.edge_properties_format > 3 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "unsupported edge property format {}",
+                meta.edge_properties_format
+            ),
+        ));
+    }
     crate::serde_codec::CodecVersion::from_tag(meta.serde_codec_version)
         .map_err(std::io::Error::other)
+}
+
+pub(crate) fn edge_embeddings_required(dir: &Path) -> std::io::Result<bool> {
+    let meta_str = std::fs::read_to_string(dir.join("disk_graph_meta.json"))?;
+    let meta: DiskGraphMeta = serde_json::from_str(&meta_str).map_err(std::io::Error::other)?;
+    validate_disk_format(&meta)?;
+    Ok(meta.edge_properties_format == 3)
 }
 
 type OverflowEdges = (HashMap<u32, Vec<CsrEdge>>, HashMap<u32, Vec<CsrEdge>>);
@@ -342,13 +358,14 @@ impl DiskGraph {
         let segment_dir = self.active_write_dir();
         let root = segment_dir.parent().unwrap_or(segment_dir);
         let edge_props_meta = EdgePropertyStore::meta_for(segment_dir);
-        self.write_metadata_to(root, edge_props_meta)
+        self.write_metadata_to(root, edge_props_meta, false)
     }
 
     fn write_metadata_to(
         &self,
         dir: &Path,
         edge_props_meta: EdgePropertyStoreMeta,
+        edge_embeddings_required: bool,
     ) -> std::io::Result<()> {
         let meta = DiskGraphMeta {
             serde_codec_version: crate::serde_codec::CURRENT_CODEC.tag(),
@@ -367,7 +384,7 @@ impl DiskGraph {
             has_tombstones: self.has_tombstones,
             // Fresh graphs use Postcard columnar slots; anything below 2 is
             // a pre-0.14 snapshot and is rejected on load.
-            edge_properties_format: 2,
+            edge_properties_format: if edge_embeddings_required { 3 } else { 2 },
             edge_properties_meta: edge_props_meta,
             // Fresh saves always emit the segmented layout.
             csr_layout_version: CURRENT_CSR_LAYOUT_VERSION,
@@ -495,7 +512,16 @@ impl DiskGraph {
     pub fn save_to_dir(
         &mut self,
         target_dir: &Path,
+        interner: &crate::graph::schema::StringInterner,
+    ) -> std::io::Result<()> {
+        self.save_to_dir_with_edge_embeddings(target_dir, interner, false)
+    }
+
+    pub(crate) fn save_to_dir_with_edge_embeddings(
+        &mut self,
+        target_dir: &Path,
         _interner: &crate::graph::schema::StringInterner,
+        edge_embeddings_required: bool,
     ) -> std::io::Result<()> {
         // Drain mutation caches: `edge_mut_cache` → `edge_properties`, and
         // `node_mut_cache` → `self.column_stores` via clone-apply-replace.
@@ -507,7 +533,8 @@ impl DiskGraph {
         // The orchestration layer uses this exact decision before calling us
         // so overflow compaction and the eventual write shape cannot drift.
         if self.save_disposition(target_dir) == SaveDisposition::Seal {
-            let _seg_id = self.seal_to_new_segment(target_dir)?;
+            let _seg_id = self
+                .seal_to_new_segment_with_edge_embeddings(target_dir, edge_embeddings_required)?;
             return Ok(());
         }
 
@@ -621,7 +648,7 @@ impl DiskGraph {
         manifest.save_to(target_dir)?;
         self.segment_manifest = manifest;
 
-        self.write_metadata_to(target_dir, edge_props_meta)?;
+        self.write_metadata_to(target_dir, edge_props_meta, edge_embeddings_required)?;
 
         // After a full save everything up to node_count is accounted for
         // in the single-segment on-disk state, so bump the watermark: a
@@ -671,6 +698,14 @@ impl DiskGraph {
     /// segments, so typed-edge matches, peer aggregates, and
     /// `edge_weight()` all work correctly on sealed edges.
     pub fn seal_to_new_segment(&mut self, root: &Path) -> std::io::Result<u32> {
+        self.seal_to_new_segment_with_edge_embeddings(root, false)
+    }
+
+    fn seal_to_new_segment_with_edge_embeddings(
+        &mut self,
+        root: &Path,
+        edge_embeddings_required: bool,
+    ) -> std::io::Result<u32> {
         use super::csr::{CsrEdge, DiskNodeSlot, EdgeEndpoints};
 
         let tail_lo = self.sealed_nodes_bound;
@@ -909,7 +944,7 @@ impl DiskGraph {
         // behaviour here since seal_to_new_segment doesn't rewrite
         // edge_properties.
         let edge_props_meta = EdgePropertyStore::meta_for(&self.data_dir);
-        self.write_metadata_to(root, edge_props_meta)?;
+        self.write_metadata_to(root, edge_props_meta, edge_embeddings_required)?;
 
         Ok(next_id)
     }

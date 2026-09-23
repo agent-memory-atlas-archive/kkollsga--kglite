@@ -506,7 +506,8 @@ impl EdgePropertyStore {
 
     /// Open the store from a directory.
     /// - `format_version` comes from `DiskGraphMeta.edge_properties_format`
-    ///   (2 = Postcard columnar).
+    ///   (2 = Postcard columnar; 3 uses the same bytes and requires the
+    ///   graph-level relationship-embedding sidecar).
     /// - `meta` provides the file lengths needed to mmap the columnar files.
     /// - `_interner` is retained by the storage boundary; current columnar
     ///   payloads store raw u64 hashes and never touch it.
@@ -521,7 +522,7 @@ impl EdgePropertyStore {
                 "edge-property store",
             ));
         }
-        if format_version > 2 {
+        if format_version > 3 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unsupported edge property format {format_version}"),
