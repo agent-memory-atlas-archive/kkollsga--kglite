@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::embeddings::{store_name, text_column_of};
-use crate::graph::schema::{DirGraph, EdgeData, EmbeddingStore, RemovedEmbedding};
+use crate::graph::schema::{DirGraph, EdgeData, EmbeddingStore, InternedKey, RemovedEmbedding};
 use crate::graph::storage::{GraphRead, GraphWrite};
 
 pub(crate) type EdgeEmbeddingKey = (String, String);
@@ -275,6 +275,39 @@ impl EdgeEmbeddingStore {
         self.numeric.text_hashes.remove(&edge.index());
     }
 
+    pub(crate) fn set_wal_metadata(
+        &mut self,
+        dimension: usize,
+        metric: Option<String>,
+        model_id: Option<String>,
+    ) -> Result<(), String> {
+        if !self.is_empty() && self.dimension() != dimension {
+            return Err(format!(
+                "cannot change a non-empty relationship embedding store from dimension {} to {dimension}",
+                self.dimension()
+            ));
+        }
+        self.numeric.dimension = dimension;
+        self.numeric.metric = metric;
+        self.numeric.model_id = model_id;
+        Ok(())
+    }
+
+    pub(crate) fn install_wal_vector(
+        &mut self,
+        edge: EdgeIndex,
+        vector: &[f32],
+        text_hash: Option<u64>,
+    ) {
+        self.numeric.set_embedding(edge.index(), vector);
+        match text_hash {
+            Some(hash) => self.numeric.set_text_hash(edge.index(), hash),
+            None => {
+                self.numeric.text_hashes.remove(&edge.index());
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn decoded_fixture(
         dimension: usize,
@@ -425,12 +458,6 @@ pub(crate) fn upsert_edge_embeddings(
     if entries.is_empty() {
         return Ok(EdgeEmbeddingWriteReport::default());
     }
-    if graph.records_payloads() {
-        return Err(
-            "Relationship embedding writes require grouped WAL support; use a non-durable graph"
-                .to_string(),
-        );
-    }
     validate_metric(metric)?;
 
     let key = edge_store_key(connection_type, text_property);
@@ -494,6 +521,13 @@ pub(crate) fn upsert_edge_embeddings(
     }
 
     let store_created = existing.is_none();
+    capture_wal_edge_embedding_bases(
+        graph,
+        connection_type,
+        text_property,
+        changed_edges.iter().copied().map(EdgeIndex::new),
+    )?;
+
     let store = graph
         .edge_embeddings
         .entry(key)
@@ -506,6 +540,13 @@ pub(crate) fn upsert_edge_embeddings(
     // A manual write makes aggregate generated-model provenance unknown.
     store.numeric.model_id = None;
     let stored = store.len();
+    note_wal_edge_embedding_changes(
+        graph,
+        connection_type,
+        text_property,
+        true,
+        entries.iter().map(|(edge, _)| *edge),
+    );
     graph.bump_version();
 
     Ok(EdgeEmbeddingWriteReport {
@@ -514,6 +555,90 @@ pub(crate) fn upsert_edge_embeddings(
         changed: changed_edges.len(),
         store_created,
     })
+}
+
+fn capture_wal_edge_embedding_bases(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    text_property: &str,
+    changed_edges: impl IntoIterator<Item = EdgeIndex>,
+) -> Result<(), String> {
+    if !graph.records_payloads() {
+        return Ok(());
+    }
+    let changed: HashSet<_> = changed_edges.into_iter().collect();
+    let guard = graph.graph.begin_query();
+    let mut endpoint_groups = BTreeMap::new();
+    for &edge in &changed {
+        let endpoints = graph
+            .graph
+            .edge_endpoints(edge)
+            .ok_or_else(|| format!("relationship slot {} has no endpoints", edge.index()))?;
+        endpoint_groups.entry(endpoints).or_insert(edge);
+    }
+    let mut touches = Vec::with_capacity(endpoint_groups.len());
+    let connection_key = InternedKey::from_str(connection_type);
+    for ((source, target), _) in endpoint_groups {
+        let mut members: Vec<_> = graph
+            .graph
+            .edges_connecting(source, target)
+            .filter(|edge| edge.connection_type() == connection_key)
+            .map(|edge| edge.id())
+            .collect();
+        members.sort_unstable_by_key(|edge| edge.index());
+        let mut base_stores = graph
+            .edge_embeddings
+            .keys()
+            .filter(|(kind, _)| kind == connection_type)
+            .map(|(_, property)| {
+                text_column_of(property)
+                    .expect("edge embedding store keys are canonical")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        base_stores.sort_unstable();
+        let source_data = graph.graph.node_view(source).unwrap();
+        let target_data = graph.graph.node_view(target).unwrap();
+        let prior_cells = changed
+            .iter()
+            .filter(|edge| members.contains(edge))
+            .map(
+                |&edge| crate::graph::storage::recording::EdgeEmbeddingPriorCell {
+                    edge,
+                    text_column: text_property.to_string(),
+                    state: graph
+                        .edge_embeddings
+                        .get(&edge_store_key(connection_type, text_property))
+                        .and_then(|store| {
+                            store
+                                .get(edge)
+                                .map(|vector| crate::graph::wal::EdgeVectorWalState {
+                                    vector: vector.to_vec(),
+                                    text_hash: store.text_hash(edge),
+                                })
+                        }),
+                },
+            )
+            .collect();
+        touches.push(crate::graph::storage::recording::EdgeEmbeddingBaseTouch {
+            conn_type: InternedKey::from_str(connection_type),
+            src_type: source_data.node_type(),
+            src_id: source_data.id().into_owned(),
+            tgt_type: target_data.node_type(),
+            tgt_id: target_data.id().into_owned(),
+            base_stores,
+            prior_cells,
+        });
+    }
+    drop(guard);
+    let recording = graph
+        .graph
+        .recording_mut()
+        .expect("records_payloads requires a recording backend");
+    for touch in touches {
+        recording.note_wal_edge_embedding_base(touch);
+    }
+    Ok(())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -526,13 +651,6 @@ pub(crate) fn remove_edge_embeddings(
     if edges.is_empty() {
         return Ok(0);
     }
-    if graph.records_payloads() {
-        return Err(
-            "Relationship embedding writes require grouped WAL support; use a non-durable graph"
-                .to_string(),
-        );
-    }
-
     let mut seen = HashSet::with_capacity(edges.len());
     let _arena_guard = graph.graph.begin_query();
     for &edge in edges {
@@ -547,19 +665,79 @@ pub(crate) fn remove_edge_embeddings(
     drop(_arena_guard);
 
     let key = edge_store_key(connection_type, text_property);
-    let Some(store) = graph.edge_embeddings.get_mut(&key) else {
+    let Some(store) = graph.edge_embeddings.get(&key) else {
         return Ok(0);
     };
+    let changed: Vec<_> = edges
+        .iter()
+        .copied()
+        .filter(|edge| store.get(*edge).is_some())
+        .collect();
+    if changed.is_empty() {
+        return Ok(0);
+    }
+    capture_wal_edge_embedding_bases(
+        graph,
+        connection_type,
+        text_property,
+        changed.iter().copied(),
+    )?;
+    let store = graph
+        .edge_embeddings
+        .get_mut(&key)
+        .expect("validated edge embedding store remains installed");
     let mut removed = 0;
     for &edge in edges {
         removed += usize::from(store.remove(edge).is_some());
     }
     if removed > 0 {
+        note_wal_edge_embedding_changes(
+            graph,
+            connection_type,
+            text_property,
+            false,
+            edges.iter().copied(),
+        );
         graph.bump_version();
     }
     Ok(removed)
 }
 
+fn note_wal_edge_embedding_changes(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    text_property: &str,
+    store_changed: bool,
+    edges: impl IntoIterator<Item = EdgeIndex>,
+) {
+    let Some(recording) = graph.graph.recording_mut() else {
+        return;
+    };
+    recording.set_edge_embedding_base_capture(true);
+    if store_changed {
+        recording.note_wal_edge_embedding_store(connection_type, text_property);
+    }
+    for edge in edges {
+        recording.note_wal_group(edge);
+    }
+}
+
 #[cfg(test)]
 #[path = "edge_embeddings_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "edge_embedding_wal_capture_tests.rs"]
+mod wal_capture_tests;
+
+#[cfg(test)]
+#[path = "edge_embedding_wal_lifecycle_tests.rs"]
+mod wal_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "edge_embedding_wal_perf_tests.rs"]
+mod wal_perf_tests;
+
+#[cfg(test)]
+#[path = "edge_embedding_wal_capture_perf_tests.rs"]
+mod wal_capture_perf_tests;

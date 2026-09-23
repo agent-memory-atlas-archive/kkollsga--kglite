@@ -11,11 +11,18 @@
 //! Neither failure nor an error opening the resumed WAL publishes the workspace.
 
 use crate::datatypes::Value;
-use crate::graph::schema::DirGraph;
+use crate::graph::schema::{DirGraph, EdgeData};
+use crate::graph::storage::{GraphRead, GraphWrite};
 use crate::graph::wal::{MutationOp, WalFrame};
+use petgraph::graph::{EdgeIndex, NodeIndex};
+use std::collections::BTreeSet;
 
 #[path = "wal_replay/declarations.rs"]
 mod declarations;
+#[path = "wal_replay/edge_embedding_delta.rs"]
+pub(crate) mod edge_embedding_delta;
+#[path = "wal_replay/edge_embeddings.rs"]
+pub(crate) mod edge_embeddings;
 #[path = "wal_replay/install.rs"]
 mod install;
 #[path = "wal_replay/plan.rs"]
@@ -73,8 +80,64 @@ pub(crate) fn prepare_replay(
         .prepare_mutation()
         .map_err(|e| format!("disk mutation lease failed: {e}"))?;
     working.materialize_indexes();
+    let initial_edge_embeddings = capture_edge_embedding_state(&working)?;
     let before = validate::ConstraintState::capture(&working, &plan, &Default::default());
     let created = install::apply(&mut working, &plan)?;
+    let embedded_groups: BTreeSet<_> = plan
+        .edge_embedding_events
+        .iter()
+        .filter_map(|event| match event {
+            edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceEmbeddings { key, .. }
+            | edge_embeddings::OrderedEdgeEmbeddingEvent::PatchEmbeddings { key, .. } => {
+                Some(key.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let embedding_events: Vec<_> = plan
+        .edge_embedding_events
+        .iter()
+        .filter(|event| match event {
+            edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. } => {
+                embedded_groups.contains(key)
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    if let Some(key) = plan
+        .edge_embedding_events
+        .iter()
+        .find_map(|event| match event {
+            edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. }
+                if initial_edge_embeddings
+                    .stores
+                    .keys()
+                    .any(|store| store.conn_type == key.conn_type)
+                    && !embedded_groups.contains(key) =>
+            {
+                Some(key)
+            }
+            _ => None,
+        })
+    {
+        return Err(format!(
+            "WAL relationship group '{}' changes topology without complete relationship embedding state; recovery cannot infer vector identity",
+            key.conn_type
+        ));
+    }
+    let has_edge_embedding_payload = embedding_events.iter().any(|event| {
+        !matches!(
+            event,
+            edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceTopology { .. }
+        )
+    });
+    if has_edge_embedding_payload {
+        let final_edge_embeddings =
+            edge_embedding_delta::DeltaInterpreter::from_state(initial_edge_embeddings)
+                .interpret(embedding_events.clone())?;
+        install_edge_embedding_state(&mut working, &final_edge_embeddings, &embedding_events)?;
+    }
     let after = validate::ConstraintState::capture(&working, &plan, &created);
     before.validate_successor(&after)?;
     working.reindex();
@@ -91,6 +154,244 @@ pub(crate) fn prepare_replay(
     plan.declarations.install_payloads(&mut working)?;
     working.bump_version();
     Ok((Some(working), plan.max_lsn))
+}
+
+fn capture_edge_embedding_state(
+    graph: &DirGraph,
+) -> Result<edge_embeddings::LogicalEdgeEmbeddingState, String> {
+    let mut state = edge_embeddings::LogicalEdgeEmbeddingState::default();
+    for ((conn_type, property), store) in &graph.edge_embeddings {
+        let text_column = crate::graph::embeddings::text_column_of(property)
+            .ok_or_else(|| format!("invalid relationship embedding store key '{property}'"))?;
+        state.stores.insert(
+            edge_embeddings::LogicalStoreKey {
+                conn_type: conn_type.clone(),
+                text_column: text_column.to_string(),
+            },
+            edge_embeddings::LogicalStoreMetadata {
+                dimension: store.dimension(),
+                metric: store.metric().map(str::to_string),
+                model_id: store.model_id().map(str::to_string),
+            },
+        );
+    }
+    if state.stores.is_empty() {
+        return Ok(state);
+    }
+
+    let guard = graph.begin_read_pass();
+    let mut edges: Vec<_> = graph.graph.edge_indices().collect();
+    edges.sort_unstable_by_key(|edge| edge.index());
+    for edge in edges {
+        let Some(weight) = graph.graph.edge_weight(edge) else {
+            continue;
+        };
+        let conn_type = weight.connection_type_str(&graph.interner);
+        let matching: Vec<_> = state
+            .stores
+            .keys()
+            .filter(|key| key.conn_type == conn_type)
+            .cloned()
+            .collect();
+        if matching.is_empty() {
+            continue;
+        }
+        let (source, target) = graph
+            .graph
+            .edge_endpoints(edge)
+            .ok_or_else(|| format!("relationship slot {} has no endpoints", edge.index()))?;
+        let source_node = graph
+            .graph
+            .node_view(source)
+            .ok_or_else(|| format!("relationship slot {} has a dead source", edge.index()))?;
+        let target_node = graph
+            .graph
+            .node_view(target)
+            .ok_or_else(|| format!("relationship slot {} has a dead target", edge.index()))?;
+        let key = edge_embeddings::LogicalGroupKey {
+            conn_type: conn_type.to_string(),
+            src_type: source_node.node_type_str(&graph.interner).to_string(),
+            src_id: source_node.id().into_owned(),
+            tgt_type: target_node.node_type_str(&graph.interner).to_string(),
+            tgt_id: target_node.id().into_owned(),
+        };
+        let group = state.groups.entry(key).or_insert_with(|| {
+            let stores = matching
+                .iter()
+                .map(|key| (key.text_column.clone(), Vec::new()))
+                .collect();
+            edge_embeddings::LogicalGroupState {
+                properties: Vec::new(),
+                stores,
+            }
+        });
+        group.properties.push(
+            weight
+                .properties_cloned(&graph.interner)
+                .into_iter()
+                .collect(),
+        );
+        for store_key in matching {
+            let store = &graph.edge_embeddings[&crate::graph::edge_embeddings::edge_store_key(
+                &store_key.conn_type,
+                &store_key.text_column,
+            )];
+            group
+                .stores
+                .get_mut(&store_key.text_column)
+                .expect("all matching stores were initialized")
+                .push(
+                    store
+                        .get(edge)
+                        .map(|vector| crate::graph::wal::EdgeVectorWalState {
+                            vector: vector.to_vec(),
+                            text_hash: store.text_hash(edge),
+                        }),
+                );
+        }
+    }
+    drop(guard);
+    state.validate_complete()?;
+    Ok(state)
+}
+
+fn install_edge_embedding_state(
+    graph: &mut DirGraph,
+    state: &edge_embeddings::LogicalEdgeEmbeddingState,
+    events: &[edge_embeddings::OrderedEdgeEmbeddingEvent],
+) -> Result<(), String> {
+    let final_keys: BTreeSet<_> = state
+        .stores
+        .keys()
+        .map(|key| crate::graph::edge_embeddings::edge_store_key(&key.conn_type, &key.text_column))
+        .collect();
+    graph
+        .edge_embeddings
+        .retain(|key, _| final_keys.contains(key));
+    for (key, metadata) in &state.stores {
+        let physical_key =
+            crate::graph::edge_embeddings::edge_store_key(&key.conn_type, &key.text_column);
+        if graph
+            .edge_embeddings
+            .get(&physical_key)
+            .is_some_and(|store| store.dimension() != metadata.dimension)
+        {
+            graph.edge_embeddings.insert(
+                physical_key.clone(),
+                crate::graph::edge_embeddings::EdgeEmbeddingStore::new(
+                    metadata.dimension,
+                    metadata.metric.as_deref(),
+                ),
+            );
+        }
+        let store = graph
+            .edge_embeddings
+            .entry(physical_key)
+            .or_insert_with(|| {
+                crate::graph::edge_embeddings::EdgeEmbeddingStore::new(
+                    metadata.dimension,
+                    metadata.metric.as_deref(),
+                )
+            });
+        store.set_wal_metadata(
+            metadata.dimension,
+            metadata.metric.clone(),
+            metadata.model_id.clone(),
+        )?;
+    }
+
+    let touched: BTreeSet<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceTopology { key, .. }
+            | edge_embeddings::OrderedEdgeEmbeddingEvent::ReplaceEmbeddings { key, .. }
+            | edge_embeddings::OrderedEdgeEmbeddingEvent::PatchEmbeddings { key, .. } => {
+                Some(key.clone())
+            }
+            edge_embeddings::OrderedEdgeEmbeddingEvent::SetStore { .. } => None,
+        })
+        .collect();
+    for key in touched {
+        let group = state
+            .groups
+            .get(&key)
+            .ok_or_else(|| format!("missing final relationship group '{}'", key.conn_type))?;
+        reinstall_edge_embedding_group(graph, &key, group)?;
+    }
+    Ok(())
+}
+
+fn reinstall_edge_embedding_group(
+    graph: &mut DirGraph,
+    key: &edge_embeddings::LogicalGroupKey,
+    group: &edge_embeddings::LogicalGroupState,
+) -> Result<(), String> {
+    let endpoints = find_logical_node(graph, &key.src_type, &key.src_id).zip(find_logical_node(
+        graph,
+        &key.tgt_type,
+        &key.tgt_id,
+    ));
+    let Some((source, target)) = endpoints else {
+        return if group.properties.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "relationship embedding group '{}' has missing endpoints",
+                key.conn_type
+            ))
+        };
+    };
+    let kind = graph.interner.get_or_intern(&key.conn_type);
+    let existing: Vec<EdgeIndex> = {
+        let guard = graph.begin_read_pass();
+        let edges = graph
+            .graph
+            .edges_connecting(source, target)
+            .filter(|edge| edge.weight().connection_type == kind)
+            .map(|edge| edge.id())
+            .collect();
+        drop(guard);
+        edges
+    };
+    for edge in existing {
+        crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge);
+    }
+    for (member, properties) in group.properties.iter().enumerate() {
+        let properties = properties
+            .iter()
+            .map(|(name, value)| (graph.interner.get_or_intern(name), value.clone()))
+            .collect();
+        let edge = graph
+            .graph
+            .add_edge(source, target, EdgeData::new_interned(kind, properties));
+        for (text_column, cells) in &group.stores {
+            let Some(vector) = &cells[member] else {
+                continue;
+            };
+            graph
+                .edge_embeddings
+                .get_mut(&crate::graph::edge_embeddings::edge_store_key(
+                    &key.conn_type,
+                    text_column,
+                ))
+                .expect("validated logical store exists")
+                .install_wal_vector(edge, &vector.vector, vector.text_hash);
+        }
+    }
+    graph.graph.flush_pending_writes();
+    Ok(())
+}
+
+fn find_logical_node(graph: &DirGraph, node_type: &str, id: &Value) -> Option<NodeIndex> {
+    let guard = graph.begin_read_pass();
+    let found = graph.graph.node_indices().find(|&node| {
+        graph.graph.node_type_of(node).is_some_and(|kind| {
+            graph.interner.resolve(kind) == node_type
+                && graph.graph.get_node_id(node).as_ref() == Some(id)
+        })
+    });
+    drop(guard);
+    found
 }
 
 /// A property NodeRef in an old WAL records only a physical u32 slot, without
@@ -148,7 +449,10 @@ fn mutation_op_has_legacy_reference(op: &MutationOp) -> bool {
         | MutationOp::SetNodeTimeseries { .. }
         | MutationOp::SetTimeseriesConfig { .. }
         | MutationOp::SetEmbeddings { .. }
-        | MutationOp::SetVectorIndex { .. } => false,
+        | MutationOp::SetVectorIndex { .. }
+        | MutationOp::SetEdgeEmbeddingStore { .. }
+        | MutationOp::ReplaceEdgeGroupEmbeddings { .. }
+        | MutationOp::PatchEdgeGroupEmbeddings { .. } => false,
     }
 }
 

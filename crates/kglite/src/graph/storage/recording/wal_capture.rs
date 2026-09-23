@@ -3,7 +3,12 @@
 //! slot without checking its captured logical identity.
 use super::*;
 use crate::graph::core::iterators::GraphEdgeRef;
-use std::collections::HashSet;
+use crate::graph::edge_embeddings::{EdgeEmbeddingKey, EdgeEmbeddingStore};
+use crate::graph::wal::{
+    EdgeEmbeddingStoreState, EdgeGroupEmbeddingPatchWal, EdgeGroupMemberPatchWal,
+    EdgeGroupStoreWalState, EdgeVectorCellPatchWal, EdgeVectorWalState,
+};
+use std::collections::{HashMap, HashSet};
 
 type NodeKey = (InternedKey, Value);
 type GroupKey = (InternedKey, NodeKey, NodeKey);
@@ -39,7 +44,7 @@ impl<G: GraphRead> RecordingGraph<G> {
         }
     }
 
-    pub(super) fn note_wal_group(&mut self, idx: EdgeIndex) {
+    pub(crate) fn note_wal_group(&mut self, idx: EdgeIndex) {
         if !self.wal_owner {
             return;
         }
@@ -63,6 +68,15 @@ impl<G: GraphRead> RecordingGraph<G> {
         else {
             return;
         };
+        let mut base_members = if self.capture_edge_embedding_bases {
+            group_members(&self.inner, source, target, kind)
+                .into_iter()
+                .map(|edge| (edge.id(), edge.weight().properties.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        base_members.sort_unstable_by_key(|(edge, _)| edge.index());
         self.ops.push(RawOp::WalGroup {
             source,
             target,
@@ -71,7 +85,23 @@ impl<G: GraphRead> RecordingGraph<G> {
             src_id,
             tgt_type,
             tgt_id,
+            base_members,
         });
+    }
+
+    pub(crate) fn note_wal_edge_embedding_store(&mut self, conn_type: &str, text_column: &str) {
+        if self.wal_owner {
+            self.ops.push(RawOp::WalEdgeEmbeddingStore {
+                conn_type: conn_type.to_string(),
+                text_column: text_column.to_string(),
+            });
+        }
+    }
+
+    pub(crate) fn note_wal_edge_embedding_base(&mut self, touch: EdgeEmbeddingBaseTouch) {
+        if self.wal_owner {
+            self.ops.push(RawOp::WalEdgeEmbeddingBase(Box::new(touch)));
+        }
     }
 
     pub(super) fn note_wal_incident_groups(&mut self, idx: NodeIndex) {
@@ -108,24 +138,29 @@ fn remember<'a, K: Eq + std::hash::Hash + Clone, V>(
     map.entry(key).or_insert_with(initial)
 }
 
-pub(super) fn resolve(
-    raw: &[RawOp],
-    graph: &impl GraphRead,
-    interner: &StringInterner,
-    labels: impl Fn(NodeIndex) -> Vec<String>,
-) -> Vec<MutationOp> {
-    let mut nodes: HashMap<NodeKey, NodeTouch> = HashMap::new();
-    let mut node_order = Vec::new();
-    let mut groups: HashMap<GroupKey, (NodeIndex, NodeIndex)> = HashMap::new();
-    let mut group_order = Vec::new();
-    // Declarations carry their own payload, so they are passed through in
-    // capture order rather than normalized against final state. They lead the
-    // frame because that is where `add_nodes` issues its identity-field
-    // declaration — a prologue ahead of the rows it describes.
-    let mut declarations = Vec::new();
-    for op in raw {
+type GroupTouch = (
+    NodeIndex,
+    NodeIndex,
+    Vec<(EdgeIndex, Vec<(InternedKey, Value)>)>,
+);
+
+#[derive(Default)]
+struct WalTouches {
+    nodes: HashMap<NodeKey, NodeTouch>,
+    node_order: Vec<NodeKey>,
+    groups: HashMap<GroupKey, GroupTouch>,
+    group_order: Vec<GroupKey>,
+    declarations: Vec<MutationOp>,
+    embedding_stores: Vec<(String, String)>,
+    seen_embedding_stores: HashSet<(String, String)>,
+    removed_groups: HashSet<GroupKey>,
+    embedding_bases: HashMap<GroupKey, EdgeEmbeddingBaseTouch>,
+}
+
+impl WalTouches {
+    fn capture(&mut self, op: &RawOp) {
         match op {
-            RawOp::Declaration(op) => declarations.push((**op).clone()),
+            RawOp::Declaration(op) => self.declarations.push((**op).clone()),
             RawOp::WalNode {
                 idx,
                 node_type,
@@ -133,8 +168,8 @@ pub(super) fn resolve(
                 reset,
             } => {
                 let touch = remember(
-                    &mut nodes,
-                    &mut node_order,
+                    &mut self.nodes,
+                    &mut self.node_order,
                     (*node_type, id.clone()),
                     NodeTouch::default,
                 );
@@ -143,13 +178,27 @@ pub(super) fn resolve(
             }
             RawOp::RemoveNode { node_type, id, .. } => {
                 let touch = remember(
-                    &mut nodes,
-                    &mut node_order,
+                    &mut self.nodes,
+                    &mut self.node_order,
                     (*node_type, id.clone()),
                     NodeTouch::default,
                 );
                 touch.idx = None;
                 touch.reset = true;
+            }
+            RawOp::RemoveEdge {
+                conn_type,
+                src_type,
+                src_id,
+                tgt_type,
+                tgt_id,
+                ..
+            } => {
+                self.removed_groups.insert((
+                    *conn_type,
+                    (*src_type, src_id.clone()),
+                    (*tgt_type, tgt_id.clone()),
+                ));
             }
             RawOp::WalGroup {
                 source,
@@ -159,34 +208,118 @@ pub(super) fn resolve(
                 src_id,
                 tgt_type,
                 tgt_id,
+                base_members,
             } => {
                 let key = (
                     *conn_type,
                     (*src_type, src_id.clone()),
                     (*tgt_type, tgt_id.clone()),
                 );
-                *remember(&mut groups, &mut group_order, key, || (*source, *target)) =
-                    (*source, *target);
+                let touch = remember(&mut self.groups, &mut self.group_order, key, || {
+                    (*source, *target, base_members.clone())
+                });
+                touch.0 = *source;
+                touch.1 = *target;
             }
+            RawOp::WalEdgeEmbeddingStore {
+                conn_type,
+                text_column,
+            } => {
+                let key = (conn_type.clone(), text_column.clone());
+                if self.seen_embedding_stores.insert(key.clone()) {
+                    self.embedding_stores.push(key);
+                }
+            }
+            RawOp::WalEdgeEmbeddingBase(touch) => self.merge_embedding_base(touch),
             _ => {}
         }
     }
-    let matches = |idx: NodeIndex, key: &NodeKey| {
-        graph.node_type_of(idx) == Some(key.0) && graph.get_node_id(idx).as_ref() == Some(&key.1)
-    };
-    let endpoint = |key: &NodeKey, hint: NodeIndex| {
-        let idx = nodes.get(key).map_or(Some(hint), |touch| touch.idx)?;
-        matches(idx, key).then_some(idx)
-    };
-    let mut out = Vec::with_capacity(declarations.len() + nodes.len() + groups.len());
-    out.append(&mut declarations);
-    for key in node_order {
-        let touch = &nodes[&key];
-        let idx = touch.idx.filter(|idx| matches(*idx, &key));
+
+    fn merge_embedding_base(&mut self, touch: &EdgeEmbeddingBaseTouch) {
+        let key = (
+            touch.conn_type,
+            (touch.src_type, touch.src_id.clone()),
+            (touch.tgt_type, touch.tgt_id.clone()),
+        );
+        let Some(base) = self.embedding_bases.get_mut(&key) else {
+            self.embedding_bases.insert(key, touch.clone());
+            return;
+        };
+        for prior in &touch.prior_cells {
+            if !base.prior_cells.iter().any(|existing| {
+                existing.edge == prior.edge && existing.text_column == prior.text_column
+            }) {
+                base.prior_cells.push(prior.clone());
+            }
+        }
+    }
+}
+
+pub(super) fn resolve(
+    raw: &[RawOp],
+    graph: &impl GraphRead,
+    interner: &StringInterner,
+    labels: impl Fn(NodeIndex) -> Vec<String>,
+    edge_embeddings: Option<&HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>>,
+) -> Vec<MutationOp> {
+    let mut touches = WalTouches::default();
+    for op in raw {
+        touches.capture(op);
+    }
+    let mut out = std::mem::take(&mut touches.declarations);
+    emit_store_ops(&mut out, &touches, edge_embeddings);
+    emit_node_ops(&mut out, &touches, graph, interner, labels);
+    for key in &touches.group_order {
+        emit_group_ops(&mut out, key, &touches, graph, interner, edge_embeddings);
+    }
+    out
+}
+
+fn emit_store_ops(
+    out: &mut Vec<MutationOp>,
+    touches: &WalTouches,
+    edge_embeddings: Option<&HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>>,
+) {
+    for (conn_type, text_column) in &touches.embedding_stores {
+        let state = edge_embeddings
+            .and_then(|stores| {
+                stores.get(&crate::graph::edge_embeddings::edge_store_key(
+                    conn_type,
+                    text_column,
+                ))
+            })
+            .map_or(EdgeEmbeddingStoreState::Absent, |store| {
+                EdgeEmbeddingStoreState::Present {
+                    dimension: store.dimension(),
+                    metric: store.metric().map(str::to_string),
+                    model_id: store.model_id().map(str::to_string),
+                }
+            });
+        out.push(MutationOp::SetEdgeEmbeddingStore {
+            conn_type: conn_type.clone(),
+            text_column: text_column.clone(),
+            state,
+        });
+    }
+}
+
+fn emit_node_ops(
+    out: &mut Vec<MutationOp>,
+    touches: &WalTouches,
+    graph: &impl GraphRead,
+    interner: &StringInterner,
+    labels: impl Fn(NodeIndex) -> Vec<String>,
+) {
+    for key in &touches.node_order {
+        let touch = &touches.nodes[key];
+        let idx = touch.idx.filter(|idx| {
+            graph.node_type_of(*idx) == Some(key.0)
+                && graph.get_node_id(*idx).as_ref() == Some(&key.1)
+        });
         if let Some(node) = idx.and_then(|idx| graph.node_view(idx)) {
             out.push(MutationOp::ReplaceNodeState {
                 node_type: interner.resolve(key.0).into(),
-                id: key.1,
+                id: key.1.clone(),
                 title: node.title().into_owned(),
                 properties: node.properties_cloned(interner).into_iter().collect(),
                 labels: labels(idx.expect("live node")),
@@ -195,38 +328,323 @@ pub(super) fn resolve(
         } else {
             out.push(MutationOp::RemoveNode {
                 node_type: interner.resolve(key.0).into(),
-                id: key.1,
+                id: key.1.clone(),
             });
         }
     }
-    for key in group_order {
-        let (source, target) = groups[&key];
-        let mut edges = Vec::new();
-        if let (Some(source), Some(target)) = (endpoint(&key.1, source), endpoint(&key.2, target)) {
-            // Physical slots provide a deterministic order within this commit;
-            // replay preserves every map, including equal parallel members.
-            let mut members: Vec<_> = group_members(graph, source, target, key.0)
-                .into_iter()
-                .map(|e| {
-                    (
-                        e.id().index(),
-                        e.weight().properties_cloned(interner).into_iter().collect(),
-                    )
+}
+
+fn endpoint(
+    graph: &impl GraphRead,
+    touches: &WalTouches,
+    key: &NodeKey,
+    hint: NodeIndex,
+) -> Option<NodeIndex> {
+    let idx = touches
+        .nodes
+        .get(key)
+        .map_or(Some(hint), |touch| touch.idx)?;
+    (graph.node_type_of(idx) == Some(key.0) && graph.get_node_id(idx).as_ref() == Some(&key.1))
+        .then_some(idx)
+}
+
+fn current_group(
+    graph: &impl GraphRead,
+    interner: &StringInterner,
+    touches: &WalTouches,
+    key: &GroupKey,
+) -> (Vec<EdgeIndex>, Vec<Vec<(String, Value)>>) {
+    let (source, target, _) = &touches.groups[key];
+    let Some((source, target)) =
+        endpoint(graph, touches, &key.1, *source).zip(endpoint(graph, touches, &key.2, *target))
+    else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut members: Vec<_> = group_members(graph, source, target, key.0)
+        .into_iter()
+        .map(|edge| {
+            (
+                edge.id(),
+                edge.weight()
+                    .properties_cloned(interner)
+                    .into_iter()
+                    .collect(),
+            )
+        })
+        .collect();
+    members.sort_unstable_by_key(|(edge, _)| edge.index());
+    members.into_iter().unzip()
+}
+
+fn emit_group_ops(
+    out: &mut Vec<MutationOp>,
+    key: &GroupKey,
+    touches: &WalTouches,
+    graph: &impl GraphRead,
+    interner: &StringInterner,
+    edge_embeddings: Option<&HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>>,
+) {
+    let (member_slots, edges) = current_group(graph, interner, touches, key);
+    out.push(MutationOp::ReplaceEdgeGroup {
+        conn_type: interner.resolve(key.0).into(),
+        src_type: interner.resolve(key.1 .0).into(),
+        src_id: key.1 .1.clone(),
+        tgt_type: interner.resolve(key.2 .0).into(),
+        tgt_id: key.2 .1.clone(),
+        edges: edges.clone(),
+    });
+    let Some(all_stores) = edge_embeddings else {
+        return;
+    };
+    let conn_type = interner.resolve(key.0);
+    let matching = matching_stores(all_stores, conn_type);
+    let metadata_touched = touches
+        .seen_embedding_stores
+        .iter()
+        .any(|(kind, _)| kind == conn_type);
+    if matching.is_empty() && !metadata_touched {
+        return;
+    }
+    let base_members = &touches.groups[key].2;
+    let can_patch = !matching.is_empty()
+        && base_members
+            .iter()
+            .map(|(edge, _)| *edge)
+            .eq(member_slots.iter().copied())
+        && !touches.removed_groups.contains(key)
+        && (!metadata_touched || touches.embedding_bases.contains_key(key));
+    let op = if can_patch {
+        patch_group(key, touches, interner, edges, &member_slots, &matching)
+    } else {
+        full_group(
+            key,
+            interner,
+            member_slots.len(),
+            owned_store_state(&matching, &member_slots),
+        )
+    };
+    out.push(op);
+}
+
+fn matching_stores<'a>(
+    stores: &'a HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>,
+    conn_type: &str,
+) -> Vec<(&'a str, &'a EdgeEmbeddingStore)> {
+    let mut matching: Vec<_> = stores
+        .iter()
+        .filter(|((kind, _), _)| kind == conn_type)
+        .map(|((_, property), store)| {
+            (
+                crate::graph::embeddings::text_column_of(property)
+                    .expect("edge embedding keys are canonical"),
+                store,
+            )
+        })
+        .collect();
+    matching.sort_unstable_by_key(|(name, _)| *name);
+    matching
+}
+
+fn borrowed_store_state<'a>(
+    stores: &[(&'a str, &'a EdgeEmbeddingStore)],
+    member_slots: &[EdgeIndex],
+) -> Vec<crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeGroupStore<'a>> {
+    stores
+        .iter()
+        .map(|(name, store)| {
+            let members = member_slots
+                .iter()
+                .map(|edge| {
+                    store.get(*edge).map(|vector| {
+            crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeVectorCell {
+                vector, text_hash: store.text_hash(*edge),
+            }
+        })
                 })
                 .collect();
-            members.sort_unstable_by_key(|(idx, _)| *idx);
-            edges.extend(members.into_iter().map(|(_, props)| props));
+            crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeGroupStore {
+                text_column: name,
+                members,
+            }
+        })
+        .collect()
+}
+
+fn borrowed_base_store_state<'a>(
+    stores: &[(&'a str, &'a EdgeEmbeddingStore)],
+    member_slots: &[EdgeIndex],
+    base: Option<&'a EdgeEmbeddingBaseTouch>,
+) -> Vec<crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeGroupStore<'a>> {
+    stores
+        .iter()
+        .map(|(name, store)| {
+            let members = member_slots
+                .iter()
+                .map(|edge| {
+                    let prior = base.and_then(|base| {
+                        base.prior_cells.iter().find(|prior| {
+                            prior.edge == *edge && prior.text_column == *name
+                        })
+                    });
+                    if let Some(prior) = prior {
+                        prior.state.as_ref().map(|state| {
+                            crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeVectorCell {
+                                vector: &state.vector,
+                                text_hash: state.text_hash,
+                            }
+                        })
+                    } else {
+                        store.get(*edge).map(|vector| {
+                            crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeVectorCell {
+                                vector,
+                                text_hash: store.text_hash(*edge),
+                            }
+                        })
+                    }
+                })
+                .collect();
+            crate::graph::mutation::wal_replay::edge_embedding_delta::BorrowedEdgeGroupStore {
+                text_column: name,
+                members,
+            }
+        })
+        .collect()
+}
+
+fn owned_store_state(
+    stores: &[(&str, &EdgeEmbeddingStore)],
+    member_slots: &[EdgeIndex],
+) -> Vec<EdgeGroupStoreWalState> {
+    stores
+        .iter()
+        .map(|(name, store)| EdgeGroupStoreWalState {
+            text_column: (*name).to_string(),
+            members: member_slots
+                .iter()
+                .map(|edge| {
+                    store.get(*edge).map(|vector| EdgeVectorWalState {
+                        vector: vector.to_vec(),
+                        text_hash: store.text_hash(*edge),
+                    })
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn full_group(
+    key: &GroupKey,
+    interner: &StringInterner,
+    member_count: usize,
+    stores: Vec<EdgeGroupStoreWalState>,
+) -> MutationOp {
+    MutationOp::ReplaceEdgeGroupEmbeddings {
+        conn_type: interner.resolve(key.0).into(),
+        src_type: interner.resolve(key.1 .0).into(),
+        src_id: key.1 .1.clone(),
+        tgt_type: interner.resolve(key.2 .0).into(),
+        tgt_id: key.2 .1.clone(),
+        member_count,
+        stores,
+    }
+}
+
+fn patch_group(
+    key: &GroupKey,
+    touches: &WalTouches,
+    interner: &StringInterner,
+    result_properties: Vec<Vec<(String, Value)>>,
+    member_slots: &[EdgeIndex],
+    stores: &[(&str, &EdgeEmbeddingStore)],
+) -> MutationOp {
+    let base = touches.embedding_bases.get(key);
+    let base_properties: Vec<_> = touches.groups[key]
+        .2
+        .iter()
+        .map(|(_, properties)| {
+            properties
+                .iter()
+                .map(|(name, value)| (interner.resolve(*name).to_string(), value.clone()))
+                .collect()
+        })
+        .collect();
+    let borrowed = borrowed_store_state(stores, member_slots);
+    let borrowed_base = borrowed_base_store_state(stores, member_slots, base);
+    let store_names: Vec<_> = stores.iter().map(|(name, _)| (*name).to_string()).collect();
+    let members = member_slots
+        .iter()
+        .enumerate()
+        .map(|(ordinal, edge)| EdgeGroupMemberPatchWal::Prior {
+            prior_ordinal: ordinal as u32,
+            cells: stores
+                .iter()
+                .map(|(name, store)| patch_cell(base, *edge, name, store))
+                .collect(),
+        })
+        .collect();
+    let base_digest =
+        crate::graph::mutation::wal_replay::edge_embedding_delta::digest_borrowed_group_state(
+            &base_properties,
+            &borrowed_base,
+        )
+        .expect("captured values are encodable");
+    let result_digest =
+        crate::graph::mutation::wal_replay::edge_embedding_delta::digest_borrowed_group_state(
+            &result_properties,
+            &borrowed,
+        )
+        .expect("captured values are encodable");
+    MutationOp::PatchEdgeGroupEmbeddings {
+        conn_type: interner.resolve(key.0).into(),
+        src_type: interner.resolve(key.1 .0).into(),
+        src_id: key.1 .1.clone(),
+        tgt_type: interner.resolve(key.2 .0).into(),
+        tgt_id: key.2 .1.clone(),
+        patch: EdgeGroupEmbeddingPatchWal {
+            base_digest,
+            result_digest,
+            stores: store_names,
+            members,
+        },
+    }
+}
+
+fn patch_cell(
+    base: Option<&EdgeEmbeddingBaseTouch>,
+    edge: EdgeIndex,
+    store_name: &str,
+    store: &EdgeEmbeddingStore,
+) -> EdgeVectorCellPatchWal {
+    let final_vector = store.get(edge);
+    let final_hash = store.text_hash(edge);
+    let prior = base.and_then(|base| {
+        base.prior_cells
+            .iter()
+            .find(|prior| prior.edge == edge && prior.text_column == store_name)
+            .map(|prior| prior.state.as_ref())
+    });
+    if let Some(prior) = prior {
+        if prior.map(|state| (state.vector.as_slice(), state.text_hash))
+            == final_vector.map(|vector| (vector, final_hash))
+        {
+            return EdgeVectorCellPatchWal::Keep;
         }
-        out.push(MutationOp::ReplaceEdgeGroup {
-            conn_type: interner.resolve(key.0).into(),
-            src_type: interner.resolve(key.1 .0).into(),
-            src_id: key.1 .1,
-            tgt_type: interner.resolve(key.2 .0).into(),
-            tgt_id: key.2 .1,
-            edges,
+        return final_vector.map_or(EdgeVectorCellPatchWal::Clear, |vector| {
+            EdgeVectorCellPatchWal::Replace(EdgeVectorWalState {
+                vector: vector.to_vec(),
+                text_hash: final_hash,
+            })
         });
     }
-    out
+    if base.is_some_and(|base| !base.base_stores.iter().any(|name| name == store_name)) {
+        return final_vector.map_or(EdgeVectorCellPatchWal::Clear, |vector| {
+            EdgeVectorCellPatchWal::Replace(EdgeVectorWalState {
+                vector: vector.to_vec(),
+                text_hash: final_hash,
+            })
+        });
+    }
+    EdgeVectorCellPatchWal::Keep
 }
 
 fn group_members<'a>(

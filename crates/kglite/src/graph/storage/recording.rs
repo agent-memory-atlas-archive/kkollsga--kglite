@@ -165,7 +165,39 @@ pub enum RawOp {
         src_id: Value,
         tgt_type: InternedKey,
         tgt_id: Value,
+        /// Ordered live physical members before this touch. Delta WAL may
+        /// reference them only when the final slots match and no removal was
+        /// captured for the group; otherwise resolution emits full state.
+        base_members: Vec<(EdgeIndex, Vec<(InternedKey, Value)>)>,
     },
+    /// WAL-only relationship embedding store touch. The complete final
+    /// metadata is resolved from `DirGraph` at commit, alongside group state.
+    WalEdgeEmbeddingStore {
+        conn_type: String,
+        text_column: String,
+    },
+    /// First-touch vector state for a relationship group changed through the
+    /// typed embedding seam. Unchanged cells remain referenced by ordinal;
+    /// selected prior cells are enough to distinguish Keep/Replace/Clear.
+    WalEdgeEmbeddingBase(Box<EdgeEmbeddingBaseTouch>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeEmbeddingBaseTouch {
+    pub conn_type: InternedKey,
+    pub src_type: InternedKey,
+    pub src_id: Value,
+    pub tgt_type: InternedKey,
+    pub tgt_id: Value,
+    pub base_stores: Vec<String>,
+    pub prior_cells: Vec<EdgeEmbeddingPriorCell>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeEmbeddingPriorCell {
+    pub edge: EdgeIndex,
+    pub text_column: String,
+    pub state: Option<crate::graph::wal::EdgeVectorWalState>,
 }
 
 /// Where an entity's first-touch image lives in the op buffer.
@@ -209,7 +241,11 @@ fn op_image(op: &RawOp) -> Option<&BeforeImage> {
         | RawOp::SetNodeLabels(_, before)
         | RawOp::RemoveNode { before, .. }
         | RawOp::RemoveEdge { before, .. } => before.as_deref(),
-        RawOp::WalNode { .. } | RawOp::WalGroup { .. } | RawOp::Declaration(_) => None,
+        RawOp::WalNode { .. }
+        | RawOp::WalGroup { .. }
+        | RawOp::WalEdgeEmbeddingStore { .. }
+        | RawOp::WalEdgeEmbeddingBase(_)
+        | RawOp::Declaration(_) => None,
     }
 }
 
@@ -221,7 +257,11 @@ fn op_image_mut(op: &mut RawOp) -> Option<&mut BeforeImage> {
         | RawOp::SetNodeLabels(_, before)
         | RawOp::RemoveNode { before, .. }
         | RawOp::RemoveEdge { before, .. } => before.as_deref_mut(),
-        RawOp::WalNode { .. } | RawOp::WalGroup { .. } | RawOp::Declaration(_) => None,
+        RawOp::WalNode { .. }
+        | RawOp::WalGroup { .. }
+        | RawOp::WalEdgeEmbeddingStore { .. }
+        | RawOp::WalEdgeEmbeddingBase(_)
+        | RawOp::Declaration(_) => None,
     }
 }
 
@@ -265,6 +305,9 @@ pub struct RecordingGraph<G: GraphRead> {
     /// Preserved by `Clone` (a fork of a durable graph is still under durable
     /// ownership) and never serialized.
     wal_owner: bool,
+    /// Whether relationship touches need pre-mutation member state for compact
+    /// vector WAL. False keeps ordinary durable graphs on the old cheap path.
+    capture_edge_embedding_bases: bool,
     /// Whether writes capture a before-image.
     ///
     /// Off by default and set only by `cdc::enable` under
@@ -311,6 +354,7 @@ pub struct RecordingGraph<G: GraphRead> {
 pub(crate) struct RecordingState {
     ops: Vec<RawOp>,
     wal_owner: bool,
+    capture_edge_embedding_bases: bool,
     capture_before: bool,
     before_touched: HashMap<BeforeSlot, ImageSite>,
     pending_before: Option<(BeforeSlot, Box<BeforeImage>)>,
@@ -322,6 +366,7 @@ impl<G: GraphRead> RecordingGraph<G> {
         RecordingState {
             ops: self.ops.clone(),
             wal_owner: self.wal_owner,
+            capture_edge_embedding_bases: self.capture_edge_embedding_bases,
             capture_before: self.capture_before,
             before_touched: self.before_touched.clone(),
             pending_before: self.pending_before.clone(),
@@ -332,6 +377,7 @@ impl<G: GraphRead> RecordingGraph<G> {
     pub(crate) fn restore_state(&mut self, state: RecordingState) {
         self.ops = state.ops;
         self.wal_owner = state.wal_owner;
+        self.capture_edge_embedding_bases = state.capture_edge_embedding_bases;
         self.capture_before = state.capture_before;
         self.before_touched = state.before_touched;
         self.pending_before = state.pending_before;
@@ -347,6 +393,7 @@ impl<G: GraphRead> RecordingGraph<G> {
             inner,
             ops: Vec::new(),
             wal_owner: false,
+            capture_edge_embedding_bases: false,
             capture_before: false,
             before_touched: HashMap::new(),
             pending_before: None,
@@ -359,6 +406,10 @@ impl<G: GraphRead> RecordingGraph<G> {
     #[inline]
     pub(crate) fn claim_wal_ownership(&mut self) {
         self.wal_owner = true;
+    }
+
+    pub(crate) fn set_edge_embedding_base_capture(&mut self, enabled: bool) {
+        self.capture_edge_embedding_bases = enabled;
     }
 
     pub(crate) fn release_wal_ownership(&mut self) {
@@ -735,6 +786,7 @@ impl<G: GraphRead + Clone> Clone for RecordingGraph<G> {
             // Ownership follows the data: a fork of a durably-owned graph
             // commits into the same log.
             wal_owner: self.wal_owner,
+            capture_edge_embedding_bases: self.capture_edge_embedding_bases,
         }
     }
 }
@@ -756,7 +808,11 @@ pub fn wrap_for_durability(
     dir: &mut crate::graph::dir_graph::DirGraph,
 ) -> Result<(), crate::graph::durability::DurableOpenError> {
     crate::graph::durability::validate_durable_identities(dir)?;
+    let capture_edge_embedding_bases = !dir.edge_embeddings.is_empty();
     dir.graph.wrap_for_durability();
+    if let Some(recording) = dir.graph.recording_mut() {
+        recording.set_edge_embedding_base_capture(capture_edge_embedding_bases);
+    }
     Ok(())
 }
 
@@ -774,16 +830,24 @@ pub fn resolve_ops(
     interner: &StringInterner,
     secondary_labels: impl Fn(NodeIndex) -> Vec<String>,
 ) -> Vec<MutationOp> {
-    if raw
-        .iter()
-        .any(|op| matches!(op, RawOp::WalNode { .. } | RawOp::WalGroup { .. }))
-    {
-        return wal_capture::resolve(raw, graph, interner, secondary_labels);
+    if raw.iter().any(|op| {
+        matches!(
+            op,
+            RawOp::WalNode { .. }
+                | RawOp::WalGroup { .. }
+                | RawOp::WalEdgeEmbeddingStore { .. }
+                | RawOp::WalEdgeEmbeddingBase(_)
+        )
+    }) {
+        return wal_capture::resolve(raw, graph, interner, secondary_labels, None);
     }
     let mut out = Vec::with_capacity(raw.len());
     for op in raw {
         match op {
-            RawOp::WalNode { .. } | RawOp::WalGroup { .. } => unreachable!("handled above"),
+            RawOp::WalNode { .. }
+            | RawOp::WalGroup { .. }
+            | RawOp::WalEdgeEmbeddingStore { .. }
+            | RawOp::WalEdgeEmbeddingBase(_) => unreachable!("handled above"),
             // Already resolved: nothing to read back off the graph. Reachable
             // here when a call declared something but wrote no rows, so no
             // logical-identity marker joined it in the buffer.
@@ -855,6 +919,20 @@ pub fn resolve_ops(
         }
     }
     out
+}
+
+/// Resolve durable capture with relationship embedding state available.
+pub(crate) fn resolve_ops_with_edge_embeddings(
+    raw: &[RawOp],
+    dir: &crate::graph::schema::DirGraph,
+) -> Vec<MutationOp> {
+    wal_capture::resolve(
+        raw,
+        &dir.graph,
+        &dir.interner,
+        |idx| dir.secondary_label_names(idx),
+        Some(&dir.edge_embeddings),
+    )
 }
 
 /// A node's logical `(node_type, id)`, or `None` if it is gone.

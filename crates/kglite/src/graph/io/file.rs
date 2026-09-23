@@ -2447,6 +2447,10 @@ pub use save_guard::SaveError;
 mod text_index_persistence;
 use text_index_persistence::{decode_text_indexes_after_normalization, encode_text_indexes};
 
+#[cfg(test)]
+#[path = "file/edge_embedding_persistence_tests.rs"]
+mod edge_embedding_persistence_tests;
+
 mod vector_persistence;
 
 // Return type of the exported export_embeddings_to_file; nothing in-crate names it.
@@ -2456,9 +2460,6 @@ use vector_persistence::{decode_vector_indexes, encode_vector_indexes};
 pub use vector_persistence::{
     export_embeddings_to_file, import_embeddings_from_file, EmbeddingExportFilter, ImportStats,
 };
-#[cfg(test)]
-#[path = "file/edge_embedding_persistence_tests.rs"]
-mod edge_embedding_persistence_tests;
 #[cfg(test)]
 #[path = "file_deferred_index_tests.rs"]
 mod file_deferred_index_tests;

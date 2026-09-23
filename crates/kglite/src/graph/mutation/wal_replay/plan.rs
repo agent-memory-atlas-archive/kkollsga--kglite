@@ -37,6 +37,7 @@ pub(super) struct ReplayPlan {
     /// it into some node's state, and the op would be logged but never
     /// applied — indistinguishable from not logging it at all.
     pub declarations: Declarations,
+    pub edge_embedding_events: Vec<super::edge_embeddings::OrderedEdgeEmbeddingEvent>,
     pub max_lsn: u64,
 }
 
@@ -49,6 +50,9 @@ impl ReplayPlan {
         for frame in frames.iter().filter(|frame| frame.lsn > after) {
             plan.max_lsn = plan.max_lsn.max(frame.lsn);
             for op in &frame.ops {
+                if let Some(event) = super::edge_embeddings::event_from_op(op) {
+                    plan.edge_embedding_events.push(event);
+                }
                 plan.fold_op(op);
             }
         }
@@ -184,7 +188,10 @@ impl ReplayPlan {
             | MutationOp::SetNodeTimeseries { .. }
             | MutationOp::SetTimeseriesConfig { .. }
             | MutationOp::SetEmbeddings { .. }
-            | MutationOp::SetVectorIndex { .. } => {}
+            | MutationOp::SetVectorIndex { .. }
+            | MutationOp::SetEdgeEmbeddingStore { .. }
+            | MutationOp::ReplaceEdgeGroupEmbeddings { .. }
+            | MutationOp::PatchEdgeGroupEmbeddings { .. } => {}
         }
     }
 
@@ -230,7 +237,10 @@ impl ReplayPlan {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty() && self.edges.is_empty() && self.declarations.is_empty()
+        self.nodes.is_empty()
+            && self.edges.is_empty()
+            && self.declarations.is_empty()
+            && self.edge_embedding_events.is_empty()
     }
 
     pub fn node_types(&self) -> HashSet<String> {

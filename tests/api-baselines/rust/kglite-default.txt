@@ -1104,7 +1104,12 @@ pub kglite::api::durable::RawOp::RemoveNode::node_type: kglite::api::InternedKey
 pub kglite::api::durable::RawOp::SetNodeLabels(petgraph::graph_impl::NodeIndex, core::option::Option<alloc::boxed::Box<kglite::api::durable::BeforeImage>>)
 pub kglite::api::durable::RawOp::UpsertEdge(petgraph::graph_impl::EdgeIndex, kglite::api::durable::CaptureOrigin, core::option::Option<alloc::boxed::Box<kglite::api::durable::BeforeImage>>)
 pub kglite::api::durable::RawOp::UpsertNode(petgraph::graph_impl::NodeIndex, kglite::api::durable::CaptureOrigin, core::option::Option<alloc::boxed::Box<kglite::api::durable::BeforeImage>>)
+pub kglite::api::durable::RawOp::WalEdgeEmbeddingBase(alloc::boxed::Box<kglite::graph::storage::recording::EdgeEmbeddingBaseTouch>)
+pub kglite::api::durable::RawOp::WalEdgeEmbeddingStore
+pub kglite::api::durable::RawOp::WalEdgeEmbeddingStore::conn_type: alloc::string::String
+pub kglite::api::durable::RawOp::WalEdgeEmbeddingStore::text_column: alloc::string::String
 pub kglite::api::durable::RawOp::WalGroup
+pub kglite::api::durable::RawOp::WalGroup::base_members: alloc::vec::Vec<(petgraph::graph_impl::EdgeIndex, alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>)>
 pub kglite::api::durable::RawOp::WalGroup::conn_type: kglite::api::InternedKey
 pub kglite::api::durable::RawOp::WalGroup::source: petgraph::graph_impl::NodeIndex
 pub kglite::api::durable::RawOp::WalGroup::src_id: kglite::datatypes::values::Value

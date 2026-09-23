@@ -11,6 +11,12 @@ before upgrading.
 
 ### Added
 
+- Durable relationship embedding changes record vectors and provenance together
+  with their logical relationship group. Recovery validates and stages the
+  complete state before publication, preserving associations between identical
+  parallel relationships and rejecting incompatible histories atomically.
+  Compact group records reference unchanged vectors with validated state digests.
+
 - Relationship embedding stores persist their vectors, source hashes, model
   identity and metric in portable snapshots and disk generations, including
   declared empty stores. Files containing these stores require an edge-aware
@@ -29,6 +35,11 @@ before upgrading.
   saved MCP `tools/list` JSON, while explicitly avoiding a model-token claim.
 
 ### Changed
+
+- Rust durability consumers constructing or matching `api::durable::RawOp`
+  must account for the new relationship-embedding variants and the
+  `WalGroup::base_members` field. These physical relationship slots describe
+  transaction-local capture state, not persistent external identifiers.
 
 - Python embedding models must expose their final dimension and model identity
   before `set_embedder()`: those attributes are captured at registration. The

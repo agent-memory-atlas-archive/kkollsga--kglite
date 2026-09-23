@@ -203,7 +203,11 @@ pub(super) fn events_from_raw(
         match op {
             // A declaration changes no entity, so it publishes no event; the
             // rows it describes carry their own.
-            RawOp::WalNode { .. } | RawOp::WalGroup { .. } | RawOp::Declaration(_) => {}
+            RawOp::WalNode { .. }
+            | RawOp::WalGroup { .. }
+            | RawOp::WalEdgeEmbeddingStore { .. }
+            | RawOp::WalEdgeEmbeddingBase(_)
+            | RawOp::Declaration(_) => {}
             RawOp::UpsertNode(idx, origin, before) => stage_upsert(
                 &mut entries,
                 &mut slots,
