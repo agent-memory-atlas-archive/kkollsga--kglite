@@ -644,7 +644,9 @@ top-level `db.edge_embeddings.embed` call. A mutating call placed inside the
 subquery or a `UNION` arm follows the existing write boundary and is rejected
 before the model runs.
 
-Manual management uses the same one-map shape:
+Manual management uses the same one-map shape. A `vector` may be a Python
+list or a numpy row; a numeric 1-D or 2-D array parameter is read from its
+bytes, so numpy rows bind fastest in a batched `UNWIND $batch … set` ingest:
 
 ```cypher
 CALL db.edge_embeddings.set({

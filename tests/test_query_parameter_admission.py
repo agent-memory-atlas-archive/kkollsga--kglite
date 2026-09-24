@@ -144,3 +144,70 @@ def test_a_timezone_aware_datetime_parameter_binds_as_naive_utc():
     # preserve one.
     naive = datetime.datetime(2024, 3, 9, 14, 30, 5, 123456)
     assert graph.cypher("RETURN $v AS v", params={"v": naive}).to_list()[0]["v"] == naive
+
+
+NUMERIC_ARRAYS = [
+    np.array([[1.5, -0.1], [3e38, 6e-8]], dtype=np.float32),
+    np.array([0.1, -2.5, 6e-8, -0.0], dtype=np.float16),
+    np.array([[0.1, 2.0**-1074], [-1e308, 0.0]]),
+    np.array([-128, 127], dtype=np.int8),
+    np.array([[-(2**63), 2**63 - 1]], dtype=np.int64),
+    np.array([0, 2**32 - 1], dtype=np.uint32),
+    np.arange(24, dtype=np.float32).reshape(4, 6)[:, ::2],
+    np.asfortranarray(np.arange(6, dtype=np.int16).reshape(2, 3)),
+    np.zeros((0, 3), dtype=np.float32),
+    np.zeros((2, 0)),
+    np.arange(8, dtype=np.float32).reshape(2, 2, 2),
+    np.array([1.5, 2.0], dtype=">f4"),
+    np.array([True, False]),
+]
+
+
+@pytest.mark.parametrize("array", NUMERIC_ARRAYS, ids=lambda a: f"{a.dtype.str}-{a.shape}")
+def test_ndarray_parameter_equals_its_tolist(query_surface, array):
+    """The ndarray fast path binds exactly what `tolist()` would, bit for bit."""
+    actual = roundtrip(query_surface, array)
+    expected = array.tolist()
+    assert actual == expected
+    assert np.array(actual, dtype=np.float64).tobytes() == np.array(expected, dtype=np.float64).tobytes()
+
+
+def test_uint64_ndarray_past_int64_is_still_refused(query_surface):
+    with pytest.raises(OverflowError, match=r"value.*\[1\]"):
+        roundtrip(query_surface, np.array([1, 2**63], dtype=np.uint64))
+
+
+ROW_INGEST = (
+    "UNWIND $batch AS e MATCH (:Hub)-[r:T]->(:Doc {id: e.id}) "
+    "WITH collect({relationship: r, vector: e.vector}) AS entries "
+)
+ARRAY_INGEST = (
+    "UNWIND range(0, size($ids) - 1) AS i MATCH (:Hub)-[r:T]->(:Doc {id: $ids[i]}) "
+    "WITH collect({relationship: r, vector: $vectors[i]}) AS entries "
+)
+
+
+def _ingest(unwind, params):
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:Hub {id: 0})")
+    graph.cypher("UNWIND range(1, 6) AS i MATCH (h:Hub {id: 0}) CREATE (h)-[:T]->(:Doc {id: i})")
+    rows = graph.cypher(
+        unwind + "CALL db.edge_embeddings.set({type: 'T', text_property: 'summary', entries: entries}) "
+        "YIELD stored RETURN stored",
+        params=params,
+    ).to_list()
+    return rows, graph.relationship_embeddings("T", "summary")
+
+
+def test_float_lists_numpy_rows_and_2d_array_ingest_identical_relationship_stores():
+    vectors = np.random.default_rng(7).standard_normal((6, 5), dtype=np.float32)
+    ids = list(range(1, 7))
+    as_lists = _ingest(ROW_INGEST, {"batch": [{"id": i, "vector": vectors[i - 1].tolist()} for i in ids]})
+    as_rows = _ingest(ROW_INGEST, {"batch": [{"id": i, "vector": vectors[i - 1]} for i in ids]})
+    as_array = _ingest(ARRAY_INGEST, {"ids": ids, "vectors": vectors})
+    assert as_lists == as_rows == as_array
+    assert as_lists[0] == [{"stored": 6}]
+    assert [row["vector"] for row in as_lists[1]] == vectors.tolist()
+    graph = kglite.KnowledgeGraph()
+    unwound = graph.cypher("UNWIND $v AS row RETURN row", params={"v": vectors}).to_list()
+    assert [r["row"] for r in unwound] == vectors.tolist()

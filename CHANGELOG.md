@@ -285,6 +285,15 @@ before upgrading.
   with more than one relationship, which used to search along the first
   relationship only and return the middle node as NULL.
 
+- Numeric Cypher query parameters convert without a Python call per element:
+  Python `float`/`int`/`list`/`dict` values skip the numpy type lookups, and a
+  1-D or 2-D numpy array of float16/32/64, int8-64 or uint8-32 is read from its
+  bytes instead of through `tolist()` (same values; other arrays unchanged).
+  Binding vectors is 5-12x faster, and the batched
+  `UNWIND $batch … CALL db.edge_embeddings.set` ingest with numpy row vectors
+  now runs at 0.6-0.9x the node `set_embeddings` time (was 4.3-4.7x). The
+  same fast paths apply to Python values the other methods convert.
+
 ### Fixed
 
 - A multi-node `MATCH` now starts from the end pinned by an `id` (or

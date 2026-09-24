@@ -22,6 +22,11 @@ Three shapes, mirroring the node harness:
   three stores that split the 10k x 128 query corpus, against the
   single-store query on the same total (its twin is the single store, not a
   node path). ``min``.
+* **Vector parameter conversion** — one 5000 x 128 ingest batch bound as a
+  Cypher parameter (float lists, and one 2-D float32 array) and unwound,
+  against ``set_embeddings`` storing the same floats from numpy rows. The
+  conversion is the part of a ``db.edge_embeddings.set`` batch that the node
+  writer does not share; ``min``.
 * **Ingest through the embedder** — ``db.edge_embeddings.embed`` filling a
   fresh store from a deterministic model (twin: ``embed_texts``). Each round
   ingests into a fresh graph, a once-per-event cost, so the **mean** of
@@ -56,6 +61,9 @@ SCAN_ROUNDS = 30
 SEARCH_ROUNDS = 100
 SEARCH_WARMUP_ROUNDS = 20
 INGEST_ROUNDS = 3
+PARAM_ROWS = 5_000
+PARAM_DIMENSION = 128
+PARAM_ROUNDS = 20
 #: Relationship path may cost at most this multiple of its node twin.
 MAX_RATIO = 1.5
 
@@ -372,3 +380,37 @@ def test_bench_edge_embed_ingest_20k_384(benchmark):
         {"node_twin_mean_s": node_mean, "edge_over_node": edge_mean / node_mean, "statistic": "mean-of-first-writes"}
     )
     assert edge_mean <= MAX_RATIO * node_mean, f"relationship ingest {edge_mean / node_mean:.2f}x its node twin"
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("shape", ["float_lists", "array_2d"])
+def test_bench_edge_param_vectors_5k_128(benchmark, shape):
+    """Binding one ingest batch's vectors as a parameter against the node writer storing them."""
+    vectors = _vectors(PARAM_ROWS, PARAM_DIMENSION, seed=20_260_927)
+    param = vectors.tolist() if shape == "float_lists" else vectors
+    graph = kglite.KnowledgeGraph()
+
+    def convert():
+        return graph.cypher("UNWIND $batch AS e RETURN count(e) AS c", params={"batch": param}).to_list()
+
+    nodes = kglite.KnowledgeGraph()
+    nodes.add_nodes(
+        pd.DataFrame(
+            {
+                "id": np.arange(PARAM_ROWS, dtype=np.int64),
+                "title": [f"d{i}" for i in range(PARAM_ROWS)],
+                "summary": [f"text {i}" for i in range(PARAM_ROWS)],
+            }
+        ),
+        "Doc",
+        "id",
+        "title",
+    )
+    rows = dict(enumerate(vectors))
+    node_min = _min_seconds(lambda: nodes.set_embeddings("Doc", "summary", rows, metric="cosine"), PARAM_ROUNDS)
+
+    result = benchmark.pedantic(convert, rounds=PARAM_ROUNDS, iterations=1, warmup_rounds=3)
+    assert result == [{"c": PARAM_ROWS}]
+    param_min = benchmark.stats.stats.min
+    benchmark.extra_info.update({"node_twin_min_s": node_min, "param_over_node": param_min / node_min})
+    assert param_min <= MAX_RATIO * node_min, f"parameter conversion {param_min / node_min:.2f}x the node writer"

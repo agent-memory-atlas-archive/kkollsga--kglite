@@ -6,7 +6,7 @@ use super::values::Value;
 use pyo3::exceptions::{PyOverflowError, PyRecursionError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyDate, PyDateTime, PyDict, PyFloat, PyInt, PyList, PyTuple, PyTzInfo, PyTzInfoAccess,
+    PyBytes, PyDate, PyDateTime, PyDict, PyFloat, PyInt, PyList, PyTuple, PyTzInfo, PyTzInfoAccess,
 };
 
 const MAX_CONTAINER_DEPTH: usize = 64;
@@ -47,6 +47,15 @@ impl ConversionState {
         Ok(())
     }
 
+    /// Refuse, as the `tolist()` route would, a decoded ndarray whose nested
+    /// lists would push the active path past the depth limit.
+    fn admit_nested_lists(&self, levels: usize) -> Result<(), ConversionLimit> {
+        if self.active.len() + levels > MAX_CONTAINER_DEPTH {
+            return Err(ConversionLimit::Depth);
+        }
+        Ok(())
+    }
+
     fn with_container<T>(
         &mut self,
         identity: usize,
@@ -79,6 +88,79 @@ pub(super) fn is_numpy_ndarray(value: &Bound<'_, PyAny>) -> bool {
             .ok()
             .and_then(|m| m.extract::<String>().ok())
             .is_some_and(|m| m == "numpy" || m.starts_with("numpy."))
+}
+
+/// A native-order numeric ndarray of rank 1 or 2 decoded from `tobytes()`
+/// (C order, so strides do not matter) into what `tolist()` would have
+/// produced, plus the number of list levels that result nests. `None` sends
+/// the array down the `tolist()` route unchanged: other dtypes (bool, uint64,
+/// object, datetime, …), non-native byte order, and ranks 0 or 3+.
+///
+/// Values are identical to `tolist()`: floats widen to f64 exactly, and
+/// every admitted integer dtype fits i64 (uint64 is excluded because
+/// `tolist()` can yield an int past i64::MAX, which each caller reports in
+/// its own way).
+fn decode_numeric_ndarray(value: &Bound<'_, PyAny>) -> Option<(Value, usize)> {
+    let dtype = value.getattr("dtype").ok()?;
+    let byteorder: String = dtype.getattr("byteorder").ok()?.extract().ok()?;
+    if byteorder != "=" && byteorder != "|" {
+        return None;
+    }
+    let kind: String = dtype.getattr("kind").ok()?.extract().ok()?;
+    let itemsize: usize = dtype.getattr("itemsize").ok()?.extract().ok()?;
+    let decode: fn(&[u8]) -> Value = match (kind.as_str(), itemsize) {
+        ("f", 2) => |b| Value::Float64(f16_bits_to_f64(u16::from_ne_bytes([b[0], b[1]]))),
+        ("f", 4) => |b| Value::Float64(f64::from(f32::from_ne_bytes(b.try_into().unwrap()))),
+        ("f", 8) => |b| Value::Float64(f64::from_ne_bytes(b.try_into().unwrap())),
+        ("i", 1) => |b| Value::Int64(i64::from(i8::from_ne_bytes([b[0]]))),
+        ("i", 2) => |b| Value::Int64(i64::from(i16::from_ne_bytes([b[0], b[1]]))),
+        ("i", 4) => |b| Value::Int64(i64::from(i32::from_ne_bytes(b.try_into().unwrap()))),
+        ("i", 8) => |b| Value::Int64(i64::from_ne_bytes(b.try_into().unwrap())),
+        ("u", 1) => |b| Value::Int64(i64::from(b[0])),
+        ("u", 2) => |b| Value::Int64(i64::from(u16::from_ne_bytes([b[0], b[1]]))),
+        ("u", 4) => |b| Value::Int64(i64::from(u32::from_ne_bytes(b.try_into().unwrap()))),
+        _ => return None,
+    };
+    let shape: Vec<usize> = value.getattr("shape").ok()?.extract().ok()?;
+    if shape.len() != 1 && shape.len() != 2 {
+        return None;
+    }
+    let bytes = value.call_method0("tobytes").ok()?;
+    let bytes = bytes.cast::<PyBytes>().ok()?.as_bytes();
+    let row = |chunk: &[u8]| Value::List(chunk.chunks_exact(itemsize).map(decode).collect());
+    if shape.len() == 1 {
+        return Some((row(bytes), 1));
+    }
+    // An empty outer axis yields `[]` from `tolist()`: no inner lists nest.
+    if shape[0] == 0 {
+        return Some((Value::List(Vec::new()), 1));
+    }
+    let row_bytes = shape[1] * itemsize;
+    let rows = if row_bytes == 0 {
+        vec![Value::List(Vec::new()); shape[0]]
+    } else {
+        bytes.chunks_exact(row_bytes).map(row).collect()
+    };
+    Some((Value::List(rows), 2))
+}
+
+/// IEEE half-precision bits to the f64 of the same value, as numpy's
+/// `npy_halfbits_to_doublebits` widens (NaN payload shifted, not replaced).
+fn f16_bits_to_f64(bits: u16) -> f64 {
+    let sign = u64::from(bits & 0x8000) << 48;
+    let exponent = (bits >> 10) & 0x1f;
+    let mantissa = u64::from(bits & 0x03ff);
+    let magnitude = match exponent {
+        0 if mantissa == 0 => 0,
+        // Subnormal: exact as mantissa * 2^-24.
+        0 => {
+            let value = (mantissa as f64) * (-24f64).exp2();
+            return if sign == 0 { value } else { -value };
+        }
+        0x1f => 0x7ff0_0000_0000_0000 | (mantissa << 42),
+        _ => ((u64::from(exponent) + 1008) << 52) | (mantissa << 42),
+    };
+    f64::from_bits(sign | magnitude)
 }
 
 pub fn py_value_to_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -187,6 +269,27 @@ fn convert_query_value(
     if value.is_none() {
         return Ok(Value::Null);
     }
+    // Exact builtin types skip the numpy type-name lookups below, which cost
+    // a `__module__` string round trip per element of every list parameter.
+    // Subclasses (and `bool`, which is not an exact `int`) take the full chain.
+    if value.is_exact_instance_of::<PyFloat>() {
+        return value
+            .extract::<f64>()
+            .map(Value::Float64)
+            .map_err(QueryConversionError::Python);
+    }
+    if value.is_exact_instance_of::<PyInt>() {
+        return value
+            .extract::<i64>()
+            .map(Value::Int64)
+            .map_err(|_| QueryConversionError::IntegerOverflow);
+    }
+    if let Ok(list) = value.cast_exact::<PyList>() {
+        return convert_query_list(list, state);
+    }
+    if let Ok(dict) = value.cast_exact::<PyDict>() {
+        return convert_query_dict(dict, state);
+    }
     if value.is_instance_of::<pyo3::types::PyBool>() {
         if let Ok(boolean) = value.extract::<bool>() {
             return Ok(Value::Boolean(boolean));
@@ -194,6 +297,12 @@ fn convert_query_value(
     }
     if is_numpy_ndarray(value) {
         return state.with_query_container(value.as_ptr() as usize, |state| {
+            if let Some((decoded, levels)) = decode_numeric_ndarray(value) {
+                state
+                    .admit_nested_lists(levels)
+                    .map_err(QueryConversionError::Limit)?;
+                return Ok(decoded);
+            }
             let as_list = value.call_method0("tolist")?;
             convert_query_value(&as_list, state)
         });
@@ -255,30 +364,10 @@ fn convert_query_value(
         }
     }
     if let Ok(dict) = value.cast::<PyDict>() {
-        return state.with_query_container(value.as_ptr() as usize, |state| {
-            let mut pairs = Vec::with_capacity(dict.len());
-            for (key, child) in dict.iter() {
-                let key: String = key.extract()?;
-                let converted = convert_query_value(&child, state)
-                    .map_err(|error| QueryConversionError::AtKey(key.clone(), Box::new(error)))?;
-                pairs.push((kglite_core::datatypes::PropKey::from(key), converted));
-            }
-            Ok(Value::Map(kglite_core::datatypes::PropMap::from_pairs(
-                pairs,
-            )))
-        });
+        return convert_query_dict(dict, state);
     }
     if let Ok(list) = value.cast::<PyList>() {
-        return state.with_query_container(value.as_ptr() as usize, |state| {
-            list.iter()
-                .enumerate()
-                .map(|(index, child)| {
-                    convert_query_value(&child, state)
-                        .map_err(|error| QueryConversionError::AtIndex(index, Box::new(error)))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(Value::List)
-        });
+        return convert_query_list(list, state);
     }
     if let Ok(tuple) = value.cast::<PyTuple>() {
         return state.with_query_container(value.as_ptr() as usize, |state| {
@@ -307,9 +396,59 @@ fn convert_query_value(
     Err(QueryConversionError::Unsupported(type_name))
 }
 
+fn convert_query_dict(
+    dict: &Bound<'_, PyDict>,
+    state: &mut ConversionState,
+) -> Result<Value, QueryConversionError> {
+    state.with_query_container(dict.as_ptr() as usize, |state| {
+        let mut pairs = Vec::with_capacity(dict.len());
+        for (key, child) in dict.iter() {
+            let key: String = key.extract()?;
+            let converted = convert_query_value(&child, state)
+                .map_err(|error| QueryConversionError::AtKey(key.clone(), Box::new(error)))?;
+            pairs.push((kglite_core::datatypes::PropKey::from(key), converted));
+        }
+        Ok(Value::Map(kglite_core::datatypes::PropMap::from_pairs(
+            pairs,
+        )))
+    })
+}
+
+fn convert_query_list(
+    list: &Bound<'_, PyList>,
+    state: &mut ConversionState,
+) -> Result<Value, QueryConversionError> {
+    state.with_query_container(list.as_ptr() as usize, |state| {
+        list.iter()
+            .enumerate()
+            .map(|(index, child)| {
+                convert_query_value(&child, state)
+                    .map_err(|error| QueryConversionError::AtIndex(index, Box::new(error)))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::List)
+    })
+}
+
 fn convert_value(value: &Bound<'_, PyAny>, state: &mut ConversionState) -> PyResult<Value> {
     if value.is_none() {
         return Ok(Value::Null);
+    }
+    // Exact builtin types first, as in `convert_query_value`. An exact int
+    // past i64 falls through: the chain below widens it to Float64.
+    if value.is_exact_instance_of::<PyFloat>() {
+        return value.extract::<f64>().map(Value::Float64);
+    }
+    if value.is_exact_instance_of::<PyInt>() {
+        if let Ok(i) = value.extract::<i64>() {
+            return Ok(Value::Int64(i));
+        }
+    }
+    if let Ok(list) = value.cast_exact::<PyList>() {
+        return convert_list(list, state);
+    }
+    if let Ok(dict) = value.cast_exact::<PyDict>() {
+        return state.with_container(value.as_ptr() as usize, |state| convert_dict(dict, state));
     }
     // bool is an int subclass; size-one ndarray can extract as a scalar.
     if value.is_instance_of::<pyo3::types::PyBool>() {
@@ -319,6 +458,10 @@ fn convert_value(value: &Bound<'_, PyAny>, state: &mut ConversionState) -> PyRes
     }
     if is_numpy_ndarray(value) {
         return state.with_container(value.as_ptr() as usize, |state| {
+            if let Some((decoded, levels)) = decode_numeric_ndarray(value) {
+                state.admit_nested_lists(levels)?;
+                return Ok(decoded);
+            }
             let as_list = value.call_method0("tolist")?;
             convert_value(&as_list, state)
         });
@@ -348,12 +491,7 @@ fn convert_value(value: &Bound<'_, PyAny>, state: &mut ConversionState) -> PyRes
         return state.with_container(value.as_ptr() as usize, |state| convert_dict(dict, state));
     }
     if let Ok(list) = value.cast::<PyList>() {
-        return state.with_container(value.as_ptr() as usize, |state| {
-            list.iter()
-                .map(|item| convert_value(&item, state))
-                .collect::<PyResult<Vec<_>>>()
-                .map(Value::List)
-        });
+        return convert_list(list, state);
     }
     if let Ok(tuple) = value.cast::<PyTuple>() {
         return state.with_container(value.as_ptr() as usize, |state| {
@@ -365,6 +503,15 @@ fn convert_value(value: &Bound<'_, PyAny>, state: &mut ConversionState) -> PyRes
         });
     }
     Ok(Value::Null)
+}
+
+fn convert_list(list: &Bound<'_, PyList>, state: &mut ConversionState) -> PyResult<Value> {
+    state.with_container(list.as_ptr() as usize, |state| {
+        list.iter()
+            .map(|item| convert_value(&item, state))
+            .collect::<PyResult<Vec<_>>>()
+            .map(Value::List)
+    })
 }
 
 fn convert_dict(dict: &Bound<'_, PyDict>, state: &mut ConversionState) -> PyResult<Value> {
@@ -477,6 +624,223 @@ mod tests {
                 Value::List(vec![Value::List(vec![Value::Int64(1)])])
             );
             assert!(state.active.is_empty());
+        });
+    }
+
+    fn eval<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyAny> {
+        let code = std::ffi::CString::new(code).unwrap();
+        py.eval(&code, None, None).unwrap()
+    }
+
+    /// `None` when the embedded interpreter has no numpy (the Rust CI job);
+    /// the Python suite covers the same paths there.
+    fn numpy(py: Python<'_>) -> Option<Bound<'_, PyModule>> {
+        let module = py.import("numpy").ok();
+        if module.is_none() {
+            eprintln!("numpy not importable in the embedded interpreter; skipping");
+        }
+        module
+    }
+
+    fn query(value: &Bound<'_, PyAny>) -> Result<Value, QueryConversionError> {
+        convert_query_value(value, &mut ConversionState::default())
+    }
+
+    fn ingest(value: &Bound<'_, PyAny>) -> Value {
+        convert_value(value, &mut ConversionState::default()).unwrap()
+    }
+
+    #[test]
+    fn exact_builtins_convert_on_the_fast_path() {
+        Python::initialize();
+        Python::attach(|py| {
+            let value = eval(py, "[1.5, -2, [0.25], {'k': 3}]");
+            let expected = Value::List(vec![
+                Value::Float64(1.5),
+                Value::Int64(-2),
+                Value::List(vec![Value::Float64(0.25)]),
+                Value::Map(kglite_core::datatypes::PropMap::from_pairs(vec![(
+                    kglite_core::datatypes::PropKey::from("k".to_string()),
+                    Value::Int64(3),
+                )])),
+            ]);
+            assert!(query(&value).ok() == Some(expected.clone()));
+            assert_eq!(ingest(&value), expected);
+        });
+    }
+
+    #[test]
+    fn subclasses_bool_and_wide_ints_keep_the_generic_chain() {
+        Python::initialize();
+        Python::attach(|py| {
+            let float_subclass = eval(py, "type('F', (float,), {})(2.5)");
+            let int_subclass = eval(py, "type('I', (int,), {})(7)");
+            let list_subclass = eval(py, "type('L', (list,), {})([1])");
+            for (value, expected) in [
+                (float_subclass, Value::Float64(2.5)),
+                (int_subclass, Value::Int64(7)),
+                (list_subclass, Value::List(vec![Value::Int64(1)])),
+                (eval(py, "True"), Value::Boolean(true)),
+            ] {
+                assert!(query(&value).ok() == Some(expected.clone()));
+                assert_eq!(ingest(&value), expected);
+            }
+            let wide = eval(py, "2**63");
+            assert!(matches!(
+                query(&wide),
+                Err(QueryConversionError::IntegerOverflow)
+            ));
+            assert_eq!(ingest(&wide), Value::Float64(9_223_372_036_854_775_808.0));
+            let aware = eval(
+                py,
+                "__import__('datetime').datetime(2024, 1, 1, 12, tzinfo=__import__('datetime').timezone(__import__('datetime').timedelta(hours=2)))",
+            );
+            let noon_utc = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+                .unwrap()
+                .and_hms_opt(10, 0, 0)
+                .unwrap();
+            assert!(query(&aware).ok() == Some(Value::Timestamp(noon_utc)));
+            assert_eq!(ingest(&aware), Value::Timestamp(noon_utc));
+        });
+    }
+
+    #[test]
+    fn half_precision_widens_as_numpy_does() {
+        assert_eq!(f16_bits_to_f64(0x3c00), 1.0);
+        assert_eq!(f16_bits_to_f64(0xc000), -2.0);
+        assert_eq!(f16_bits_to_f64(0x7bff), 65504.0);
+        assert_eq!(f16_bits_to_f64(0x0001), (-24f64).exp2());
+        assert_eq!(f16_bits_to_f64(0x83ff), -1023.0 * (-24f64).exp2());
+        assert_eq!(f16_bits_to_f64(0x8000).to_bits(), (-0.0f64).to_bits());
+        assert_eq!(f16_bits_to_f64(0x7c00), f64::INFINITY);
+        assert_eq!(f16_bits_to_f64(0xfc00), f64::NEG_INFINITY);
+        assert_eq!(f16_bits_to_f64(0x7e00).to_bits(), 0x7ff8_0000_0000_0000);
+    }
+
+    #[test]
+    fn numeric_ndarrays_decode_identically_to_tolist() {
+        Python::initialize();
+        Python::attach(|py| {
+            let Some(np) = numpy(py) else { return };
+            let locals = pyo3::types::PyDict::new(py);
+            locals.set_item("np", &np).unwrap();
+            let arrays = [
+                "np.array([[1.5, -0.1], [3e38, float('nan')]], dtype=np.float32)",
+                "np.array([0.1, -2.5, float('inf'), 6e-8, -0.0], dtype=np.float16)",
+                "np.array([[0.1, 2.0**-1074], [-1e308, 0.0]])",
+                "np.array([-128, 127], dtype=np.int8)",
+                "np.array([[-32768], [32767]], dtype=np.int16)",
+                "np.array([-2**31, 2**31 - 1], dtype=np.int32)",
+                "np.array([[-2**63, 2**63 - 1]], dtype=np.int64)",
+                "np.array([0, 255], dtype=np.uint8)",
+                "np.array([0, 65535], dtype=np.uint16)",
+                "np.array([[0, 2**32 - 1]], dtype=np.uint32)",
+                "np.zeros((0, 3), dtype=np.float32)",
+                "np.zeros((2, 0), dtype=np.float64)",
+                "np.zeros(0, dtype=np.int64)",
+                // Non-contiguous and Fortran-order views decode in C order.
+                "np.arange(24, dtype=np.float32).reshape(4, 6)[:, ::2]",
+                "np.asfortranarray(np.arange(6, dtype=np.int32).reshape(2, 3))",
+                "np.arange(10, dtype=np.float64)[::-3]",
+            ];
+            for code in arrays {
+                let code_c = std::ffi::CString::new(code).unwrap();
+                let array = py.eval(&code_c, None, Some(&locals)).unwrap();
+                assert!(decode_numeric_ndarray(&array).is_some(), "{code}");
+                let via_tolist = ingest(&array.call_method0("tolist").unwrap());
+                let fast = ingest(&array);
+                assert_eq!(format!("{fast:?}"), format!("{via_tolist:?}"), "{code}");
+                let queried = query(&array).ok().expect(code);
+                assert_eq!(format!("{queried:?}"), format!("{via_tolist:?}"), "{code}");
+            }
+        });
+    }
+
+    #[test]
+    fn other_ndarrays_and_numpy_scalars_keep_the_tolist_route() {
+        Python::initialize();
+        Python::attach(|py| {
+            let Some(np) = numpy(py) else { return };
+            let locals = pyo3::types::PyDict::new(py);
+            locals.set_item("np", &np).unwrap();
+            let run = |code: &str| {
+                let code = std::ffi::CString::new(code).unwrap();
+                py.eval(&code, None, Some(&locals)).unwrap()
+            };
+            for code in [
+                "np.arange(8, dtype=np.float32).reshape(2, 2, 2)",
+                "np.array([1, 'a'], dtype=object)",
+                "np.array([True, False])",
+                "np.array([1, 2], dtype=np.uint64)",
+                "np.array([1.5], dtype='>f4')",
+                "np.float32(1.5).reshape(())",
+            ] {
+                let array = run(code);
+                assert!(decode_numeric_ndarray(&array).is_none(), "{code}");
+            }
+            assert!(
+                query(&run("np.arange(8, dtype=np.float32).reshape(2, 2, 2)")).ok()
+                    == Some(ingest(&run(
+                        "np.arange(8, dtype=np.float32).reshape(2, 2, 2).tolist()"
+                    )))
+            );
+            assert!(
+                query(&run("np.array([1.5], dtype='>f4')")).ok()
+                    == Some(Value::List(vec![Value::Float64(1.5)]))
+            );
+            assert!(matches!(
+                query(&run("np.array([2**63], dtype=np.uint64)")),
+                Err(QueryConversionError::AtIndex(0, inner))
+                    if matches!(*inner, QueryConversionError::IntegerOverflow)
+            ));
+            assert!(query(&run("np.bool_(True)")).ok() == Some(Value::Boolean(true)));
+            assert!(query(&run("np.int64(-5)")).ok() == Some(Value::Int64(-5)));
+            assert!(query(&run("np.float32(0.5)")).ok() == Some(Value::Float64(0.5)));
+            assert!(matches!(
+                query(&run("np.uint64(2**63)")),
+                Err(QueryConversionError::IntegerOverflow)
+            ));
+            if let Ok(pandas) = py.import("pandas") {
+                let nat = pandas.getattr("NaT").unwrap();
+                assert!(query(&nat).ok() == Some(Value::Null));
+            }
+        });
+    }
+
+    #[test]
+    fn decoded_ndarray_spends_the_depth_budget_of_its_tolist_route() {
+        Python::initialize();
+        Python::attach(|py| {
+            let Some(np) = numpy(py) else { return };
+            let locals = pyo3::types::PyDict::new(py);
+            locals.set_item("np", &np).unwrap();
+            for code in [
+                "np.zeros((2, 3), dtype=np.float32)",
+                "np.zeros((0, 3), dtype=np.float32)",
+                "np.zeros(3, dtype=np.int64)",
+            ] {
+                let code_c = std::ffi::CString::new(code).unwrap();
+                let array = py.eval(&code_c, None, Some(&locals)).unwrap();
+                // `[array.tolist()]` nests exactly the containers the
+                // ndarray-then-tolist route enters.
+                let reference = PyList::new(py, [array.call_method0("tolist").unwrap()]).unwrap();
+                for used in MAX_CONTAINER_DEPTH - 4..=MAX_CONTAINER_DEPTH {
+                    let outcome = |value: &Bound<'_, PyAny>| {
+                        let mut state = ConversionState {
+                            active: vec![usize::MAX; used],
+                        };
+                        let ingest_ok = convert_value(value, &mut state).is_ok();
+                        let query_ok = convert_query_value(value, &mut state).is_ok();
+                        assert_eq!(state.active.len(), used);
+                        (ingest_ok, query_ok)
+                    };
+                    assert_eq!(
+                        outcome(&array),
+                        outcome(reference.as_any()),
+                        "{code} at depth {used}"
+                    );
+                }
+            }
         });
     }
 }
