@@ -14,6 +14,7 @@ round-trip. Phase 1+ expands per-area as new trait methods are added.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import random
 import tempfile
@@ -672,3 +673,259 @@ def test_soft_alias_index_parity(tmp_path):
         graph.save(snapshot)
         reloaded = __import__("kglite").load(snapshot)
         assert probe(reloaded) == expected, f"{mode}: reload changed an answer"
+
+
+# ─── Relationship embedding stores ─────────────────────────────────────────
+#
+# Relationship vectors live in a store keyed by physical edge slot, resolved
+# through each backend's edge-property substrate, and disk saves remap slots.
+# The battery below is the relationship counterpart of the node oracle above,
+# with **absolute** expected values computed by an independent Python oracle
+# over the fixture's deterministic edge list: a defect all three modes share
+# passes a pure cross-mode comparison, so agreement alone is not the contract.
+
+
+class _ParityEmbedder:
+    """Deterministic stub: one vector per text, so `text_score` is reproducible."""
+
+    dimension = 3
+    model_id = "parity/stub"
+
+    def load(self) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
+
+    @staticmethod
+    def vector(text: str) -> list[float]:
+        return [float(sum(text.encode()) % 17 + 1), 1.0, 0.5]
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self.vector(text) for text in texts]
+
+
+_REL_QUERY = [1.0, 1.0, 1.0]
+_REL_TOP_K = 15
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b)) / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
+
+
+def _relationship_oracle() -> list[tuple[int, int, list[float]]]:
+    """(src, dst, vector) for every RELATED edge, in the fixture's insertion order.
+
+    The vector rule keeps vectors near-distinct (7·11·13·17 = 17017 combinations
+    over 4000 edges): with hundreds of identical vectors HNSW recall on the
+    fixture collapsed to 12/15 and varied between runs, which says nothing
+    about storage parity. True parallel duplicates (same src, dst) still tie.
+    """
+    n, edge_count = N_NODES, N_NODES * 2
+    return [
+        (s, d, [float(s % 7) + 0.01 * float(s % 13), float(d % 11) + 0.01 * float(d % 17), 1.0])
+        for s, d in (((i * 2654435761) % n, ((i + 1) * 40503) % n) for i in range(edge_count))
+    ]
+
+
+def _relationship_battery(kg: KnowledgeGraph) -> dict:
+    """Every read the oracle compares, on one graph, as plain data."""
+    listed = _rows(
+        kg.cypher(
+            "CALL db.edge_embeddings.list({type:'RELATED', text_property:'text'}) "
+            "YIELD entity,count,dimension,metric,model,index_state,delta "
+            "RETURN entity,count,dimension,metric,model,index_state,delta"
+        )
+    )
+    exact = kg.cypher(
+        "CALL db.edge_embeddings.query({type:'RELATED', text_property:'text', vector:$q, "
+        "top_k:$k, exact:true}) YIELD relationship, score, search_method "
+        "RETURN relationship.text AS text, score, search_method",
+        params={"q": _REL_QUERY, "k": _REL_TOP_K},
+    ).to_list()
+    approximate = kg.cypher(
+        "CALL db.edge_embeddings.query({type:'RELATED', text_property:'text', vector:$q, "
+        "top_k:$k}) YIELD relationship, score, search_method "
+        "RETURN relationship.text AS text, score, search_method",
+        params={"q": _REL_QUERY, "k": _REL_TOP_K},
+    ).to_list()
+    per_row = kg.cypher(
+        "MATCH (a:Entity)-[r:RELATED]->(b:Entity) WHERE a.eid < 40 "
+        "RETURN a.eid AS s, b.eid AS t, r.text AS text, "
+        "vector_score(r,'text_emb',$q) AS score, embedding_norm(r,'text_emb') AS norm, "
+        "text_score(r,'text','probe') AS text_score ORDER BY s, t, score, text",
+        params={"q": _REL_QUERY},
+    ).to_list()
+    ids = kg.cypher("MATCH ()-[r:RELATED]->() RETURN count(r) AS c, min(id(r)) AS lo, max(id(r)) AS hi").to_list()
+    indexes = _rows(kg.cypher("SHOW INDEXES"))
+    return {
+        "listed": listed,
+        "exact_scores": [round(row["score"], 4) for row in exact],
+        "exact_members": sorted((round(row["score"], 4), row["text"]) for row in exact),
+        "exact_raw_order": [row["text"] for row in exact],
+        "exact_route": {row["search_method"] for row in exact},
+        "approx_scores": [round(row["score"], 4) for row in approximate],
+        "approx_route": {row["search_method"] for row in approximate},
+        "per_row": [
+            {
+                **row,
+                "score": round(row["score"], 4),
+                "norm": round(row["norm"], 4),
+                "text_score": round(row["text_score"], 4),
+            }
+            for row in per_row
+        ],
+        "ids": ids,
+        "indexes": indexes,
+    }
+
+
+def _seed_relationship_store(kg: KnowledgeGraph) -> None:
+    kg.set_embedder(_ParityEmbedder())
+    kg.cypher(
+        "MATCH (a:Entity)-[r:RELATED]->(b:Entity) SET r.text = 'edge ' + toString(a.eid) + ' to ' + toString(b.eid)"
+    )
+    kg.cypher(
+        "MATCH (a:Entity)-[r:RELATED]->(b:Entity) "
+        "WITH collect({relationship: r, vector: ["
+        "toFloat(a.eid % 7) + 0.01 * toFloat(a.eid % 13), "
+        "toFloat(b.eid % 11) + 0.01 * toFloat(b.eid % 17), 1.0]}) AS entries "
+        "CALL db.edge_embeddings.set({type:'RELATED', text_property:'text', entries: entries}) "
+        "YIELD stored RETURN stored"
+    )
+    kg.cypher(
+        "CALL db.edge_embeddings.build_index({type:'RELATED', text_property:'text'}) YIELD indexed RETURN indexed"
+    )
+
+
+def test_relationship_embedding_parity(tmp_path):
+    """Relationship vectors: list, exact and HNSW top-k, per-row scoring,
+    identity aggregates, index reporting, write → stale → refresh, rollback,
+    and a `.kgl` round trip — identical across modes AND equal to the oracle."""
+    import kglite
+
+    graphs = {
+        "memory": _build_graph("memory"),
+        "mapped": _build_graph("mapped"),
+        "disk": _build_graph("disk", path=str(tmp_path / "kg_disk")),
+    }
+    for kg in graphs.values():
+        _seed_relationship_store(kg)
+
+    # ── absolute goldens from the independent oracle ──
+    oracle = _relationship_oracle()
+    expected_count = len(oracle)
+    expected_scores = sorted((_cosine(v, _REL_QUERY) for _, _, v in oracle), reverse=True)[:_REL_TOP_K]
+    expected_scores = [round(score, 4) for score in expected_scores]
+    probe = _ParityEmbedder.vector("probe")
+    expected_rows = sorted(
+        (
+            {
+                "s": s,
+                "t": d,
+                "text": f"edge {s} to {d}",
+                "score": round(_cosine(v, _REL_QUERY), 4),
+                "norm": round(math.sqrt(sum(x * x for x in v)), 4),
+                "text_score": round(_cosine(v, probe), 4),
+            }
+            for s, d, v in oracle
+            if s < 40
+        ),
+        key=lambda row: (row["s"], row["t"], row["score"], row["text"]),
+    )
+
+    before = {mode: _relationship_battery(kg) for mode, kg in graphs.items()}
+    for mode, battery in before.items():
+        assert battery["listed"] == [
+            {
+                "entity": "relationship",
+                "count": expected_count,
+                "dimension": 3,
+                "metric": "cosine",
+                "model": None,
+                "index_state": "online",
+                "delta": 0,
+            }
+        ], mode
+        assert battery["exact_scores"] == expected_scores, mode
+        assert battery["exact_route"] == {"exact"}, mode
+        assert battery["approx_route"] == {"hnsw"}, mode
+        # The approximate arm is held to route, ordering, the exact best at
+        # rank 1 and a recall floor — member identity is not a contract of an
+        # approximate index, and true parallel duplicates still tie.
+        approx = battery["approx_scores"]
+        assert approx == sorted(approx, reverse=True) and len(approx) == _REL_TOP_K, mode
+        assert approx[0] == expected_scores[0], mode
+        assert sum(score >= expected_scores[-1] - 1e-6 for score in approx) >= 0.9 * _REL_TOP_K, mode
+        assert battery["per_row"] == expected_rows, mode
+        assert battery["ids"][0]["c"] == expected_count, mode
+        assert [(row["name"], row["type"], row["entityType"], row["state"]) for row in battery["indexes"]] == [
+            ("relationship:RELATED.text", "VECTOR", "RELATIONSHIP", "ONLINE")
+        ], mode
+    comparable = lambda battery: {key: value for key, value in battery.items() if not key.startswith("approx")}  # noqa: E731
+    for mode in ("mapped", "disk"):
+        assert comparable(before[mode]) == comparable(before["memory"]), f"{mode} diverges from memory before save"
+
+    # ── write → stale delta → refresh; a failing statement rolls a remove back ──
+    for mode, kg in graphs.items():
+        kg.cypher(
+            "MATCH (a:Entity {eid: 1})-[r:RELATED]->() WITH collect(r)[0] AS r "
+            "CALL db.edge_embeddings.set({type:'RELATED', text_property:'text', "
+            "entries:[{relationship: r, vector: [9.0, 9.0, 9.0]}]}) YIELD stored RETURN stored"
+        )
+        state = kg.cypher(
+            "CALL db.edge_embeddings.list({type:'RELATED', text_property:'text'}) "
+            "YIELD index_state, delta RETURN index_state, delta"
+        ).to_list()
+        assert state == [{"index_state": "stale", "delta": 1}], mode
+        assert kg.cypher(
+            "CALL db.edge_embeddings.refresh_index({type:'RELATED', text_property:'text'}) "
+            "YIELD refreshed RETURN refreshed"
+        ).to_list() == [{"refreshed": 1}], mode
+        with pytest.raises(kglite.CypherExecutionError, match="division by zero"):
+            kg.cypher(
+                "MATCH (a:Entity {eid: 2})-[r:RELATED]->() WITH collect(r) AS rs "
+                "CALL db.edge_embeddings.remove({type:'RELATED', text_property:'text', relationships: rs}) "
+                "YIELD removed WITH removed MATCH (n:Topic {tid: 0}) SET n.bad = 1/0 RETURN removed"
+            )
+        assert kg.cypher(
+            "CALL db.edge_embeddings.list({type:'RELATED', text_property:'text'}) "
+            "YIELD count, index_state, delta RETURN count, index_state, delta"
+        ).to_list() == [{"count": expected_count, "index_state": "online", "delta": 0}], mode
+
+    # ── `.kgl` round trip from every mode: the index and the vectors reload ──
+    after = {}
+    for mode, kg in graphs.items():
+        path = tmp_path / f"{mode}.kgl"
+        kg.save(str(path))
+        reloaded = kglite.load(str(path))
+        reloaded.set_embedder(_ParityEmbedder())
+        after[mode] = _relationship_battery(reloaded)
+    reference = {mode: _relationship_battery(kg) for mode, kg in graphs.items()}
+    # A memory or mapped graph writes a `.kgl`, which carries the HNSW index
+    # (plan D4); a disk graph's `save()` writes a disk generation directory,
+    # and generations persist neither node nor relationship indexes — the
+    # node path reports `has_vector_index() == False` after the same round
+    # trip. Vectors, scores and identity must still agree everywhere.
+    expected_reload_index = {"memory": "online", "mapped": "online", "disk": "none"}
+    volatile = ("index_state", "delta")
+    for mode in STORAGE_MODES:
+        listed = after[mode]["listed"]
+        assert listed[0]["index_state"] == expected_reload_index[mode], f"{mode}: {listed}"
+        assert {k: v for k, v in listed[0].items() if k not in volatile} == {
+            k: v for k, v in reference[mode]["listed"][0].items() if k not in volatile
+        }, mode
+        assert after[mode]["exact_members"] == reference[mode]["exact_members"], mode
+        assert after[mode]["per_row"] == reference[mode]["per_row"], mode
+        assert after[mode]["ids"][0]["c"] == expected_count, mode
+        expected_indexes = [] if mode == "disk" else [("relationship:RELATED.text", "VECTOR", "RELATIONSHIP", "ONLINE")]
+        assert [
+            (r["name"], r["type"], r["entityType"], r["state"]) for r in after[mode]["indexes"]
+        ] == expected_indexes, mode
+    reloaded_comparable = lambda battery: {  # noqa: E731
+        k: v for k, v in battery.items() if k not in ("approx_scores", "approx_route", "listed", "indexes")
+    }
+    for mode in ("mapped", "disk"):
+        assert reloaded_comparable(after[mode]) == reloaded_comparable(after["memory"]), (
+            f"{mode} checkpoint diverges from the memory `.kgl` after reload"
+        )

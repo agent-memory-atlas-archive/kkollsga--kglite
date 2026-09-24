@@ -333,6 +333,9 @@
   "tests/test_storage_parity.py::test_relationship_constraint_parity": {
     "owner": "storage-parity"
   },
+  "tests/test_storage_parity.py::test_relationship_embedding_parity": {
+    "owner": "storage-parity"
+  },
   "tests/test_storage_parity.py::test_cdc_mode_parity": {
     "owner": "storage-parity"
   },
