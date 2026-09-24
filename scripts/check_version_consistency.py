@@ -2085,6 +2085,21 @@ def run_notify(
 #: Add an entry when a release removes or changes a public symbol; never edit
 #: an existing release's set to mean "the current release".
 BREAKING_SYMBOLS_BY_VERSION: dict[str, list[str]] = {
+    # 0.18.0 — the relationship-embedding programs (semver-major set, shipped
+    # in a minor per project policy): externally-constructible structs gained
+    # fields, RawOp gained WAL variants and a field, and four api fns changed
+    # arity.
+    "0.18.0": [
+        "TextScoreRewrite",
+        "RelValue",
+        "ImportStats",
+        "EdgeBinding",
+        "RawOp",
+        "import_embeddings_from_file",
+        "export_embeddings_to_file",
+        "embed_property",
+        "resolve_ops",
+    ],
     # 0.17.2 — PassCtx gained private initial_scope/global_scope fields, so
     # downstream Rust code can no longer construct it with a struct literal.
     "0.17.2": [

@@ -6,7 +6,7 @@ Regenerate with `python scripts/render_docs_facts.py`. CI checks this file for d
 
 ## Workspace
 
-- Shared package version: `0.17.12`
+- Shared package version: `0.18.0`
 - Workspace crates:
   - `kglite` — `crates/kglite/Cargo.toml`
   - `kglite-bolt-server` — `crates/kglite-bolt-server/Cargo.toml`
@@ -59,11 +59,11 @@ Regenerate with `python scripts/render_docs_facts.py`. CI checks this file for d
 
 ## Current tracked benchmark capture
 
-- Captured: `2026-09-19T18:55:41.076177+00:00`
-- Source commit: `cff144e37407e8105d845bca5b0d7070b8b7a386` (dirty: `true`)
+- Captured: `2026-09-24T19:11:39.672831+00:00`
+- Source commit: `027560ec6768ef526d32bb90f74b7067fd5937c2` (dirty: `true`)
 - Platform: `Darwin 25.6.0 arm64`
 - CPU: `Apple M4`
 - Python: `CPython 3.14.3`
 - pytest-benchmark schema/plugin version: `5.2.3`
 - Recorded benchmarks: `37`
-- Reference qualification: `accepted`; approved comparison capture: `0_17_12.json`
+- Reference qualification: `pending`; approved comparison capture: `0_17_12.json`

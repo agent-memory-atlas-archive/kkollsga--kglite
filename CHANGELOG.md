@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-24
+
 ### Added
 
 - Node embedding stores and node text indexes through Cypher, mirroring the
@@ -253,6 +255,19 @@ before upgrading.
   relation type in one `types:` call.
 
 ### Changed
+
+- **Rust API, `make semver-check` against 0.17.12 (4 major findings, shipped
+  in this minor per project policy).** Externally-constructible structs gained
+  public fields — `TextScoreRewrite.text_score_stores`, `RelValue.incarnation`,
+  `EdgeBinding.incarnation`, `ImportStats.relationships` — so struct literals
+  need the new field; `RawOp` gained the `WalRelationshipEmbeddingStore` /
+  `WalRelationshipEmbeddingBase` variants and `WalGroup.base_members`, so
+  exhaustive matches need arms; `api::io::import_embeddings_from_file` (3
+  parameters), `api::io::export_embeddings_to_file` (4),
+  `api::embeddings::embed_property` (7) and `api::durable::resolve_ops` (2)
+  changed arity. Unpublished names that never shipped were renamed without
+  notice (`db.edge_*` → `db.relationship_*`, `list_edge_embeddings`,
+  `EdgeEmbeddingStoreInfo`, `EdgeCarryStats`).
 
 - Every embedding and text-index procedure — `db.node_embeddings.*`,
   `db.relationship_embeddings.*`, `db.embeddings.*`, `db.node_text_index.*`,

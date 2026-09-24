@@ -98,7 +98,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: (run on each platform; the script writes whichever entry matches the
 #: current host).
 BINARY_SIZE_BASELINES = {
-    "darwin": 25_411_008,  # 0.17.12 darwin baseline
+    "darwin": 26_337_920,  # 0.18.0 darwin baseline
     # Published 0.17.12 manylinux2014 x86_64 wheel member
     # `kglite/kglite.abi3.so`; artifact identity is recorded in the history below.
     "linux": 31_188_600,
@@ -568,6 +568,9 @@ def test_binary_size_regression():
         released member replaces the prior unverified Linux estimate as the
         closest reproducible user-artifact baseline.
 
+
+      - 0.18.0:       26,337,920 bytes (≈25.1 MB). +926,912 (+3.6%) over 0.17.12: the relationship-embedding programs — relationship vector stores, HNSW and BM25 indexes with .kgl/.kgle persistence, the node and relationship embedding procedure namespaces and their routers, the Python/Rust relationship writers, cross-type retrieval, the fused null-filter and WITH-shaped top-k routes, and the bound-value planner anchors.
+
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
     drilldown, run `cargo bloat --release --crates --filter kglite`.
@@ -599,7 +602,7 @@ def test_binary_size_regression():
     gate = int(baseline * 1.10)
     assert size <= gate, (
         f"{bin_path.name} = {size:,} bytes > gate {gate:,} "
-        f"(+10% over 0.17.12 {platform_key} baseline {baseline:,}). "
+        f"(+10% over 0.18.0 {platform_key} baseline {baseline:,}). "
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )
