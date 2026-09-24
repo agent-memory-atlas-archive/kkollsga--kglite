@@ -240,6 +240,19 @@ before upgrading.
   freed node slot. The rollback now marks every slot such a refresh folded
   in; `SHOW INDEXES` reports the index stale, and the next read re-reads the
   restored text, giving the pre-statement scores.
+- **`describe()` shows relationship embedding stores.** A graph whose vectors
+  lived on relationships described itself as having none: the connection map
+  gave no sign of them, the `<semantic>` hint was hidden when only
+  relationship stores existed, and the Cypher reference never named
+  `db.edge_embeddings.*`. The `<conn>` line now carries
+  `embeddings="col(dim=D,count=N)"`, `describe(connections=['T'])` lists
+  `<embeddings text_col= dim= count=/>` like a node type does, the
+  `<semantic>` hint appears for either entity and spells
+  `vector_score(r, …)` / `db.edge_embeddings.query` for relationships, and
+  `describe(cypher=True)` documents every `db.edge_embeddings.*` procedure.
+  Graphs without relationship stores describe exactly as before.
+
+
 
 ## [0.17.12] - 2026-09-19
 ### Added

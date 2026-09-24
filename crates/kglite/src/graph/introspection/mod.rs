@@ -18,6 +18,7 @@ pub mod capabilities;
 pub mod connectivity;
 pub mod debugging;
 pub mod describe;
+pub(crate) mod embeddings_view;
 pub mod reporting;
 pub mod schema_overview;
 pub(crate) mod skills_section;

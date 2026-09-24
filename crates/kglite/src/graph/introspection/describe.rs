@@ -19,6 +19,7 @@ use super::connectivity::{
     compute_type_connectivity, derive_edge_counts_from_triples, neighbors_from_triples,
     TypeConnectivityIndex,
 };
+use super::embeddings_view::{conn_embeddings_attr, semantic_hint, write_conn_embeddings};
 use super::schema_overview::{
     compute_all_neighbors_schemas, compute_connected_type_pairs, compute_connected_types,
     compute_connection_type_stats, compute_join_candidates, compute_property_stats, compute_sample,
@@ -362,13 +363,14 @@ fn write_connection_map(
                 targets.join(",")
             };
             xml.push_str(&format!(
-                "    <conn type=\"{}\" count=\"{}\" from=\"{}\" to=\"{}\"{}{}/>\n",
+                "    <conn type=\"{}\" count=\"{}\" from=\"{}\" to=\"{}\"{}{}{}/>\n",
                 xml_escape(&ct.connection_type),
                 ct.count,
                 from_str,
                 to_str,
                 props_attr,
                 temporal_attr,
+                conn_embeddings_attr(graph, &ct.connection_type),
             ));
         }
         if hidden > 0 {
@@ -603,12 +605,13 @@ fn write_connections_overview(xml: &mut String, graph: &DirGraph, surface: Descr
         };
 
         xml.push_str(&format!(
-            "  <conn type=\"{}\" count=\"{}\" from=\"{}\" to=\"{}\"{}/>\n",
+            "  <conn type=\"{}\" count=\"{}\" from=\"{}\" to=\"{}\"{}{}/>\n",
             xml_escape(&ct.connection_type),
             ct.count,
             from_str,
             to_str,
             props_attr,
+            conn_embeddings_attr(graph, &ct.connection_type),
         ));
     }
     if capped {
@@ -738,6 +741,7 @@ fn write_connections_detail(
             }
         }
 
+        write_conn_embeddings(xml, graph, topic);
         xml.push_str("    <samples>\n");
         for sample in &acc.samples {
             let src_label = graph
@@ -824,10 +828,8 @@ fn write_extensions(xml: &mut String, graph: &DirGraph, surface: DescribeSurface
     if has_embeddings && !graph.text_indexes.is_empty() {
         xml.push_str("    <hybrid hint=\"score_fuse(text_bm25(n, 'prop', $q), vector_score(n, 'col_emb', $qv)) — one score from both lanes (weights: a trailing list, e.g. [0.7, 0.3]). A lane that cannot see a row scores null and drops out of the average rather than zeroing it; all lanes absent = null. Rank with ORDER BY … DESC LIMIT k.\"/>\n");
     }
-    if has_embeddings {
-        xml.push_str(
-            "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); embedding_norm(n, 'col') — L2 norm (hierarchy depth in Poincaré space)\"/>\n",
-        );
+    if let Some(hint) = semantic_hint(graph) {
+        xml.push_str(&hint);
     }
     xml.push_str("    <algorithms hint=\"CALL proc() YIELD node, col — score (pagerank/betweenness/degree/closeness), community (louvain/leiden/label_propagation), component (connected_components), coreness (k_core), coefficient (clustering_coefficient), cluster (cluster), dependency_count (ready_set — nodes whose outgoing-E dependencies all satisfy a `done` predicate). Algorithms take optional {node_type, relationship} scoping.\"/>\n");
     xml.push_str("    <rules hint=\"CALL proc(...) YIELD ... — structural validators. Unary: orphan_node, self_loop, missing_required_edge, missing_inbound_edge, duplicate_title, duplicate_id, null_property. Pair: cycle_2step, inverse_violation, parallel_edges. Schema: type_domain_violation, type_range_violation, edge_property_violation (ontology property checks). Cardinality: cardinality_violation. Triple: transitivity_violation. Projection: outline({root, root_type?, edge}) YIELD node, depth, parent_id, node_type, node_id_type, parent_type, parent_id_type, node_token, parent_token (BFS tree; tokens are result-local identity keys; render via kglite.outline). Compose with WHERE/RETURN/aggregation as normal Cypher rows.\"/>\n");
