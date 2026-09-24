@@ -698,7 +698,7 @@
         },
         "embedding_diagnostics": {
           "kind": "method",
-          "signature": "(self, /, node_type=None)"
+          "signature": "(self, /, node_type=None, *, relationship_type=None)"
         },
         "embedding_dim": {
           "kind": "method",
@@ -706,7 +706,7 @@
         },
         "embedding_info": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column)"
+          "signature": "(self, /, node_type, text_column, *, entity='node')"
         },
         "embeddings": {
           "kind": "method",

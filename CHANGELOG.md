@@ -83,6 +83,20 @@ before upgrading.
   embedded before execution. The missing-embedder error now names the
   procedure as well as `text_score()`.
 
+- `list_embeddings()` and `embedding_diagnostics()` now report relationship
+  embedding stores as well as node stores. Every row carries an additive
+  `entity` key (`'node'` or `'relationship'`); relationship rows name their
+  type under `relationship_type` (never `node_type`) and, in diagnostics,
+  count `relationships_with_property` / `relationships_embedded`. Unfiltered
+  diagnostics scan every node and relationship type, so string relationship
+  properties surface as `embeddable` candidates like node columns; the new
+  keyword `relationship_type=` narrows to one relationship type. `embedding_info()`
+  takes a keyword-only `entity='node' | 'relationship'` so a node type and a
+  relationship type sharing a name stay unambiguous. Rust gains
+  `api::embeddings::{list_edge_embeddings, embedding_info,
+  embedding_diagnostics}`; the C ABI listing stays node-only (use
+  `db.edge_embeddings.list`).
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
@@ -226,8 +240,6 @@ before upgrading.
   freed node slot. The rollback now marks every slot such a refresh folded
   in; `SHOW INDEXES` reports the index stale, and the next read re-reads the
   restored text, giving the pre-statement scores.
-
-
 
 ## [0.17.12] - 2026-09-19
 ### Added

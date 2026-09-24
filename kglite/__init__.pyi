@@ -7838,15 +7838,30 @@ class KnowledgeGraph:
         ...
 
     def list_embeddings(self) -> list[dict[str, Any]]:
-        """List all embedding stores in the graph.
+        """List every embedding store in the graph: node stores first, then
+        relationship stores.
 
         Returns:
-            List of dicts with ``node_type``, ``text_column``, ``store_name``,
+            List of dicts. Every row carries ``entity`` (``'node'`` or
+            ``'relationship'``). Node rows name their type under ``node_type``;
+            relationship rows name theirs under ``relationship_type`` and never
+            carry ``node_type``, so code that reads ``row['node_type']`` must
+            check ``entity`` first. Both carry ``text_column``, ``store_name``,
             ``dimension``, ``count`` and ``metric``. ``text_column`` is the
             source column this API takes (``'summary'``); ``store_name`` is the
             store the column is held in (``'summary_emb'``) — the spelling
             Cypher's ``vector_score()`` takes. ``metric`` is the store's own
-            metric, or ``'cosine'`` when it recorded none.
+            metric, or ``'cosine'`` when it recorded none. Relationship rows are
+            sorted by type and store; node-row order is unspecified.
+
+        Example::
+
+            for row in g.list_embeddings():
+                owner = row.get("node_type") or row["relationship_type"]
+                print(row["entity"], owner, row["store_name"], row["count"])
+
+        ``db.edge_embeddings.list`` reports the same relationship stores from
+        Cypher, with index state.
         """
         ...
 
@@ -7866,11 +7881,30 @@ class KnowledgeGraph:
         """
         ...
 
-    def embedding_info(self, node_type: str, text_column: str) -> dict[str, Any] | None:
+    def embedding_info(
+        self,
+        node_type: str,
+        text_column: str,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> dict[str, Any] | None:
         """Provenance for the ``(node_type, text_column)`` embedding store, or
         ``None`` if no store exists.
 
-        Returns a dict with ``dimension``, ``count`` (vectors stored), ``model``
+        Args:
+            node_type: The node type — or, with ``entity='relationship'``, the
+                relationship type — the store is keyed on.
+            text_column: The source column (``'summary'``, not ``'summary_emb'``).
+            entity: Keyword-only. ``'node'`` (default) reads the node store;
+                ``'relationship'`` reads the relationship store. A node type and
+                a relationship type may share a name, so the entity is never
+                inferred.
+
+        Raises:
+            ArgumentError: ``entity`` is neither ``'node'`` nor ``'relationship'``.
+
+        Returns a dict keyed ``node_type`` (or ``relationship_type`` for a
+        relationship store), ``text_column``, ``dimension``, ``count`` (vectors stored), ``model``
         (a known model shared by every vector, or ``None`` for unknown/mixed
         provenance), ``metric``, and ``hashed`` (how many vectors carry a
         source-text hash, used by ``embed_texts(mode='changed')`` for change
@@ -7885,6 +7919,11 @@ class KnowledgeGraph:
 
         The ``model`` is populated when the embedder exposes a ``model_id`` /
         ``model_name`` attribute (or is the built-in fastembed backend).
+
+        Example::
+
+            g.embedding_info("SUPPORTS", "evidence")                         # node store
+            g.embedding_info("SUPPORTS", "evidence", entity="relationship")  # relationship store
         """
         ...
 
@@ -7911,16 +7950,22 @@ class KnowledgeGraph:
         """
         ...
 
-    def embedding_diagnostics(self, node_type: Optional[str] = None) -> list[dict[str, Any]]:
-        """Diagnose embedding coverage per (node_type, text_column).
+    def embedding_diagnostics(
+        self,
+        node_type: Optional[str] = None,
+        *,
+        relationship_type: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Diagnose embedding coverage per (type, text_column), for nodes and
+        relationships.
 
         Companion to ``list_embeddings()``. Surfaces three states:
 
-        - ``"embedded"``: a store exists and at least one node has the
-          underlying property.
-        - ``"embeddable"``: nodes have a string-typed property but no
+        - ``"embedded"``: a store exists and at least one node (or
+          relationship) has the underlying property.
+        - ``"embeddable"``: elements have a string-typed property but no
           embedding store has been created or restored.
-        - ``"store_orphan"``: a store exists but no node in the current
+        - ``"store_orphan"``: a store exists but no element in the current
           graph has the underlying property — the symptom
           ``import_embeddings()`` warns about when keys mismatch.
 
@@ -7936,19 +7981,36 @@ class KnowledgeGraph:
                           if d["length_stats"]["mean_length"] >= 20
                           and d["length_stats"]["distinct_ratio"] < 1.0]
 
+        Scope: with neither filter, every node type and every relationship
+        type is scanned, so string properties on relationships surface as
+        ``"embeddable"`` candidates exactly as node columns do. This visits
+        every node and every relationship and may be expensive on large graphs
+        — pass a filter to scope it. Naming one filter scans only that entity;
+        naming both scans both.
+
         Args:
             node_type: Optional filter. When set, only that node type is
-                scanned. When ``None``, every type in the graph is scanned
-                — may be expensive on graphs with millions of nodes.
+                scanned, and no relationship rows are reported unless
+                ``relationship_type`` is also given.
+            relationship_type: Keyword-only filter. When set, only that
+                relationship type is scanned, and no node rows are reported
+                unless ``node_type`` is also given.
+
+        Raises:
+            ValueError: ``node_type`` or ``relationship_type`` names a type the
+                graph does not have.
 
         Returns:
-            List of dicts with: ``node_type``, ``text_column``,
-            ``embedding_key`` (= ``f"{text_column}_emb"``),
-            ``nodes_with_property``, ``nodes_embedded``,
-            ``dimension`` (or ``None``), ``metric`` (or ``None``),
-            ``status``, and ``length_stats`` with
+            List of dicts, node rows first, then relationship rows, each sorted
+            by type and column. Every row carries ``entity`` (``'node'`` or
+            ``'relationship'``), ``text_column``, ``embedding_key``
+            (= ``f"{text_column}_emb"``), ``dimension`` (or ``None``),
+            ``metric`` (or ``None``), ``status``, and ``length_stats`` with
             ``mean_length`` / ``max_length`` / ``distinct_count`` /
-            ``distinct_ratio``.
+            ``distinct_ratio``. Node rows add ``node_type``,
+            ``nodes_with_property`` and ``nodes_embedded``; relationship rows
+            add ``relationship_type``, ``relationships_with_property`` and
+            ``relationships_embedded``.
         """
         ...
 

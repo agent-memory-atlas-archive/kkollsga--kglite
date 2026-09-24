@@ -267,39 +267,30 @@ impl KnowledgeGraph {
         self.inner.embeddings.get(&key).map(|s| s.dimension)
     }
 
-    /// Provenance for the `(node_type, text_column)` embedding store, or
-    /// ``None`` if no store exists.
-    ///
-    /// Returns a dict with ``dimension``, ``count`` (vectors stored),
-    /// ``model`` (the embedder id stamped at `embed_texts` time, or ``None``
-    /// for vectors supplied directly), ``metric``, and ``hashed`` (how many
-    /// vectors carry a source-text hash for `embed_texts(mode='changed')`
-    /// change-detection). Lets a caller detect a model swap or a partially-
-    /// hashed store without external bookkeeping.
+    /// Provenance for one node or relationship embedding store, or None.
+    #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn embedding_info(
         &self,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
+        entity: &str,
     ) -> PyResult<Py<PyAny>> {
-        let key = kglite_core::api::embeddings::store_key(node_type, text_column);
-        match self.inner.embeddings.get(&key) {
-            None => Ok(py.None()),
-            Some(store) => {
-                let d = PyDict::new(py);
-                d.set_item("node_type", node_type)?;
-                d.set_item("text_column", text_column)?;
-                d.set_item("dimension", store.dimension)?;
-                d.set_item("count", store.len())?;
-                d.set_item("model", store.model_id.clone())?;
-                // Report the *effective* metric: a store created by `embed_texts`
-                // (or imported pre-provenance) carries no explicit metric, but
-                // search falls back to cosine — report what search uses, not `None`.
-                d.set_item("metric", store.metric.as_deref().unwrap_or("cosine"))?;
-                d.set_item("hashed", store.text_hashes.len())?;
-                d.into_py_any(py)
-            }
-        }
+        use kglite_core::api::embeddings::{embedding_info, EmbeddingEntity};
+        let entity =
+            EmbeddingEntity::parse(entity).map_err(crate::error_py::ArgumentError::new_err)?;
+        let Some(info) = embedding_info(&self.inner, entity, node_type, text_column) else {
+            return Ok(py.None());
+        };
+        let d = PyDict::new(py);
+        d.set_item(type_key(info.entity), info.type_name)?;
+        d.set_item("text_column", info.text_column)?;
+        d.set_item("dimension", info.dimension)?;
+        d.set_item("count", info.count)?;
+        d.set_item("model", info.model)?;
+        d.set_item("metric", info.metric)?;
+        d.set_item("hashed", info.hashed)?;
+        d.into_py_any(py)
     }
 
     /// Copy every embedding store from `other` into this graph, matching
@@ -338,18 +329,25 @@ impl KnowledgeGraph {
         d.into_py_any(py)
     }
 
-    /// List all embedding stores in the graph.
-    ///
-    /// Returns:
-    ///     List of dicts with 'node_type', 'text_column', 'store_name',
-    ///     'dimension', 'count', 'metric'. ``text_column`` is what this API
-    ///     takes ('summary'); ``store_name`` is what Cypher's ``vector_score``
-    ///     takes ('summary_emb').
+    /// List every embedding store: node stores, then relationship stores.
     fn list_embeddings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use kglite_core::api::embeddings::{list_edge_embeddings, list_embeddings};
         let py_list = PyList::empty(py);
-        for info in kglite_core::api::embeddings::list_embeddings(&self.inner) {
+        for info in list_embeddings(&self.inner) {
             let dict = PyDict::new(py);
+            dict.set_item("entity", "node")?;
             dict.set_item("node_type", info.node_type)?;
+            dict.set_item("text_column", info.text_column)?;
+            dict.set_item("store_name", info.store_name)?;
+            dict.set_item("dimension", info.dimension)?;
+            dict.set_item("count", info.count)?;
+            dict.set_item("metric", info.metric)?;
+            py_list.append(dict)?;
+        }
+        for info in list_edge_embeddings(&self.inner) {
+            let dict = PyDict::new(py);
+            dict.set_item("entity", "relationship")?;
+            dict.set_item("relationship_type", info.relationship_type)?;
             dict.set_item("text_column", info.text_column)?;
             dict.set_item("store_name", info.store_name)?;
             dict.set_item("dimension", info.dimension)?;
@@ -360,204 +358,43 @@ impl KnowledgeGraph {
         py_list.into_py_any(py)
     }
 
-    /// Diagnose embedding coverage per (node_type, text_column).
-    ///
-    /// Surfaces three states the silent-drop case maps to:
-    ///
-    /// - ``"embedded"``: an embedding store exists and at least one node
-    ///   has the underlying property.
-    /// - ``"embeddable"``: nodes have a string-typed property but no
-    ///   embedding store has been created or restored.
-    /// - ``"store_orphan"``: an embedding store exists but no node in
-    ///   the current graph has the underlying property — the symptom
-    ///   ``import_embeddings()`` warns about when keys mismatch.
-    ///
-    /// Each row also carries a ``length_stats`` dict so callers can
-    /// filter on string-length distribution + cardinality before
-    /// committing to embed a column. ISO timestamps, status enums, and
-    /// fully-unique identifiers are surfaced with the same status but
-    /// distinguishable by their ``length_stats``:
-    ///
-    /// - ``mean_length`` / ``max_length``: average and max byte length of
-    ///   non-null values. Sub-20-byte means usually indicate flags,
-    ///   timestamps, or short codes (poor embedding candidates).
-    /// - ``distinct_count``: number of unique values seen.
-    /// - ``distinct_ratio``: ``distinct_count / value_count``. A ratio
-    ///   of 1.0 means every value is unique (likely an identifier).
-    ///
-    /// Args:
-    ///     node_type: Optional. When set, only that node type is scanned.
-    ///         When ``None``, every type in the graph is scanned (may be
-    ///         expensive on graphs with millions of nodes — pass a type
-    ///         to scope the scan).
-    ///
-    /// Returns:
-    ///     List of dicts with: ``node_type``, ``text_column``,
-    ///     ``embedding_key`` (= ``f"{text_column}_emb"``),
-    ///     ``nodes_with_property``, ``nodes_embedded``,
-    ///     ``dimension`` (or ``None``), ``metric`` (or ``None``),
-    ///     ``status``, and ``length_stats``.
-    #[pyo3(signature = (node_type=None))]
+    /// Diagnose embedding coverage per (type, text column) for nodes and relationships.
+    #[pyo3(signature = (node_type=None, *, relationship_type=None))]
     fn embedding_diagnostics(
         &self,
         py: Python<'_>,
         node_type: Option<&str>,
+        relationship_type: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
-        use crate::datatypes::values::Value;
-        use std::collections::HashSet;
-
-        // Validate the filter type up front so unknown types fail loudly
-        // instead of silently returning an empty list.
-        if let Some(t) = node_type {
-            if !self.inner.type_indices.contains_key(t) {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Node type '{}' does not exist in the graph",
-                    t
-                )));
-            }
-        }
-
-        #[derive(Default)]
-        struct Stats<'a> {
-            nodes_with_property: usize,
-            total_length: usize,
-            max_length: usize,
-            distinct: HashSet<String>,
-            store: Option<&'a kglite_core::api::storage::EmbeddingStore>,
-        }
-        let mut by_key: std::collections::BTreeMap<(String, String), Stats<'_>> =
-            std::collections::BTreeMap::new();
-
-        let types_to_scan: Vec<String> = match node_type {
-            Some(t) => vec![t.to_string()],
-            None => self.inner.type_indices.keys().map(String::from).collect(),
-        };
-
-        // First pass: count string-typed properties per node type. Skips
-        // builtin columns (id / title / type) — those are handled below
-        // when an embedding store keys against them.
-        //
-        // Use `properties_cloned()`, not `property_iter()`: the latter yields
-        // *nothing* for `PropertyStorage::Columnar` — the durable shape every
-        // node's properties land in — which produced `nodes_with_property=0`
-        // for every columnarised graph and flipped a healthy steady-state
-        // graph's status to `store_orphan`.
-        for type_name in &types_to_scan {
-            let type_indices = match self.inner.type_indices.get(type_name) {
-                Some(ix) => ix,
-                None => continue,
-            };
-            for nidx in type_indices.iter() {
-                let node = match self.inner.graph.node_view(nidx) {
-                    Some(n) => n,
-                    None => continue,
-                };
-                for (key, value) in node.properties_cloned(&self.inner.interner) {
-                    if let Value::String(s) = value {
-                        let entry = by_key.entry((type_name.clone(), key)).or_default();
-                        let len = s.len();
-                        entry.nodes_with_property += 1;
-                        entry.total_length += len;
-                        if len > entry.max_length {
-                            entry.max_length = len;
-                        }
-                        entry.distinct.insert(s);
-                    }
-                }
-            }
-        }
-
-        // Second pass: attach embedding store info, and add entries for
-        // stores whose underlying column had no corresponding string
-        // property (e.g. builtin columns like `title`, or actual orphans
-        // after an import_embeddings silent-drop).
-        for ((store_type, store_name), store) in &self.inner.embeddings {
-            if let Some(t) = node_type {
-                if store_type != t {
-                    continue;
-                }
-            }
-            let text_column = store_name
-                .strip_suffix("_emb")
-                .unwrap_or(store_name.as_str())
-                .to_string();
-            let entry = by_key
-                .entry((store_type.clone(), text_column.clone()))
-                .or_default();
-            entry.store = Some(store);
-            // Treat builtin columns as universally present so we don't
-            // mis-flag a `title_emb` store as a store_orphan.
-            if matches!(text_column.as_str(), "id" | "title" | "type")
-                && entry.nodes_with_property == 0
-            {
-                if let Some(type_indices) = self.inner.type_indices.get(store_type) {
-                    entry.nodes_with_property = type_indices.len();
-                }
-            }
-        }
-
+        use kglite_core::api::embeddings::{embedding_diagnostics, EmbeddingEntity};
+        let rows = embedding_diagnostics(&self.inner, node_type, relationship_type)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         let py_list = PyList::empty(py);
-        for ((type_name, text_column), stats) in by_key {
-            // Drop entries that ended up with no signal at all (no
-            // property, no store) — they happen when a non-string slot
-            // shows up via the schema scan path.
-            if stats.nodes_with_property == 0 && stats.store.is_none() {
-                continue;
-            }
+        for row in rows {
+            let (with_key, embedded_key) = match row.entity {
+                EmbeddingEntity::Node => ("nodes_with_property", "nodes_embedded"),
+                EmbeddingEntity::Relationship => {
+                    ("relationships_with_property", "relationships_embedded")
+                }
+            };
             let dict = PyDict::new(py);
-            dict.set_item("node_type", &type_name)?;
-            dict.set_item("text_column", &text_column)?;
-            dict.set_item(
-                "embedding_key",
-                kglite_core::api::embeddings::store_name(&text_column),
-            )?;
-            dict.set_item("nodes_with_property", stats.nodes_with_property)?;
-            let nodes_embedded = stats.store.map(|s| s.len()).unwrap_or(0);
-            dict.set_item("nodes_embedded", nodes_embedded)?;
-            let status = if stats.store.is_none() {
-                "embeddable"
-            } else if stats.nodes_with_property == 0 {
-                "store_orphan"
-            } else {
-                "embedded"
-            };
-            dict.set_item("status", status)?;
-            match stats.store {
-                Some(s) => {
-                    dict.set_item("dimension", s.dimension)?;
-                    dict.set_item(
-                        "metric",
-                        s.metric.clone().unwrap_or_else(|| "cosine".to_string()),
-                    )?;
-                }
-                None => {
-                    dict.set_item("dimension", py.None())?;
-                    dict.set_item("metric", py.None())?;
-                }
-            }
-
+            dict.set_item("entity", row.entity.as_str())?;
+            dict.set_item(type_key(row.entity), row.type_name)?;
+            dict.set_item("text_column", row.text_column)?;
+            dict.set_item("embedding_key", row.embedding_key)?;
+            dict.set_item(with_key, row.with_property)?;
+            dict.set_item(embedded_key, row.embedded)?;
+            dict.set_item("status", row.status.as_str())?;
+            dict.set_item("dimension", row.dimension)?;
+            dict.set_item("metric", row.metric)?;
             let length_stats = PyDict::new(py);
-            let distinct_count = stats.distinct.len();
-            let mean_length = if stats.nodes_with_property > 0 {
-                stats.total_length as f64 / stats.nodes_with_property as f64
-            } else {
-                0.0
-            };
-            let distinct_ratio = if stats.nodes_with_property > 0 {
-                distinct_count as f64 / stats.nodes_with_property as f64
-            } else {
-                0.0
-            };
-            length_stats.set_item("mean_length", mean_length)?;
-            length_stats.set_item("max_length", stats.max_length)?;
-            length_stats.set_item("distinct_count", distinct_count)?;
-            length_stats.set_item("distinct_ratio", distinct_ratio)?;
+            length_stats.set_item("mean_length", row.length_stats.mean_length)?;
+            length_stats.set_item("max_length", row.length_stats.max_length)?;
+            length_stats.set_item("distinct_count", row.length_stats.distinct_count)?;
+            length_stats.set_item("distinct_ratio", row.length_stats.distinct_ratio)?;
             dict.set_item("length_stats", length_stats)?;
-
             py_list.append(dict)?;
         }
-
         py_list.into_py_any(py)
     }
 
@@ -1258,4 +1095,12 @@ fn open_progress_bar<'py>(
     kwargs.set_item("desc", desc).ok()?;
     kwargs.set_item("unit", "text").ok()?;
     factory.call((), Some(&kwargs)).ok()
+}
+
+/// The row key that names a store's type: `node_type` or `relationship_type`.
+fn type_key(entity: kglite_core::api::embeddings::EmbeddingEntity) -> &'static str {
+    match entity {
+        kglite_core::api::embeddings::EmbeddingEntity::Node => "node_type",
+        kglite_core::api::embeddings::EmbeddingEntity::Relationship => "relationship_type",
+    }
 }

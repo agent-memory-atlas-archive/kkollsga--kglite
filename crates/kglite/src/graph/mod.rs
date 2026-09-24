@@ -19,6 +19,7 @@ pub(crate) mod edge_embedding_generation;
 pub(crate) mod edge_embeddings;
 pub mod embedder;
 pub mod embedding_carry;
+pub mod embedding_inventory;
 pub(crate) mod embedding_validation;
 pub mod embeddings;
 pub mod explore;

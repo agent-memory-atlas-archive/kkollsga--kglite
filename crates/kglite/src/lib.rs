@@ -361,7 +361,17 @@ pub mod api {
     /// vectors and their text hashes — so it lives here and the bindings pass
     /// their own concerns in through `EmbedHooks` (a progress bar, releasing
     /// the GIL around the model call).
+    ///
+    /// The read-side inventory covers both entities: `list_embeddings` lists
+    /// node stores, `list_edge_embeddings` relationship stores, and
+    /// `embedding_info` / `embedding_diagnostics` take an explicit
+    /// [`EmbeddingEntity`](embeddings::EmbeddingEntity) or scope, because a node
+    /// type and a relationship type may share a name.
     pub mod embeddings {
+        pub use crate::graph::embedding_inventory::{
+            embedding_diagnostics, embedding_info, list_edge_embeddings, EdgeEmbeddingStoreInfo,
+            EmbeddingCoverage, EmbeddingDiagnostic, EmbeddingEntity, EmbeddingInfo, LengthStats,
+        };
         pub use crate::graph::embeddings::{
             add_embeddings, build_vector_index, drop_vector_index, embed_property,
             has_vector_index, list_embeddings, list_vector_indexes, refresh_vector_index,
