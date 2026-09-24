@@ -105,6 +105,7 @@ def test_bolt_relationship_embedding_procedure_and_public_shape(bolt_server):
             row = tx.run(
                 """
                 MATCH (:Person {title:'Alice'})-[r:KNOWS]->(:Person {title:'Bob'})
+                SET r.context = 'Alice knows Bob'
                 WITH collect(r) AS relationships
                 CALL db.relationship_embeddings.set({type:'KNOWS',text_column:'context',
                   entries:[{relationship:relationships[0],vector:[1.0,0.0]}]})
