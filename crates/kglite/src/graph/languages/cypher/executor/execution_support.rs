@@ -310,6 +310,10 @@ pub(super) struct TextBm25Cache {
     /// type is scored by the uncached path — correct, and slower only in the
     /// exotic query that scores two types through one call.
     pub(super) node_type: String,
+    /// Whether `node_type` names a relationship type: the entry was prepared
+    /// against the relationship text index, and a node row must not reuse it
+    /// (a node type and a relationship type may share a name).
+    pub(super) relationship: bool,
     /// The property and query arguments this entry was prepared for, or `None`
     /// when at least one of them is row-dependent and the entry must not be
     /// reused at all.

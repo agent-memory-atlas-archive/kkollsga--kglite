@@ -932,6 +932,7 @@ pub mod dead_code;
 mod delete_clause;
 mod edge_embedding_procedures;
 mod edge_property_write;
+mod edge_text_index_procedures;
 mod execution_support;
 pub mod expression;
 pub mod helpers;

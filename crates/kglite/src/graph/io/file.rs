@@ -17,6 +17,8 @@
 //   [section]  vector_index.zst (optional, rebuildable)
 //   [section]  text_index.zst (optional, rebuildable)
 //   [section]  edge_vector_index.zst (optional, rebuildable; core v4 only)
+//   [section]  edge_text_index.zst (optional, rebuildable; ignored by readers
+//              that predate it)
 //
 // v6 vs v5: the section layout, metadata schema and codec are unchanged. What
 // v6 adds is a per-column encoding choice inside the packed column sections —
@@ -406,6 +408,10 @@ pub(crate) struct FileMetadata {
     /// Relationship HNSW section size (`edge_vector_persistence`); skipped at zero.
     #[serde(default, skip_serializing_if = "is_zero")]
     edge_vector_index_compressed_size: u64,
+    /// Relationship BM25 section size (`text_index_persistence`); skipped at
+    /// zero, so a graph without one writes the bytes it wrote before.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    edge_text_index_compressed_size: u64,
     /// CRC32 (IEEE) of each section's **compressed** bytes, keyed by canonical
     /// section name (see [`column_section_key`] and the "Section integrity"
     /// note above).
@@ -505,6 +511,7 @@ impl FileMetadata {
             vector_index_compressed_size: 0,
             text_index_compressed_size: 0,
             edge_vector_index_compressed_size: 0,
+            edge_text_index_compressed_size: 0,
             section_digests: BTreeMap::new(),
             // Persist edge type counts if cache is warm (no O(E) scan if cold)
             edge_type_counts: if graph.has_edge_type_counts_cache() {
@@ -913,7 +920,7 @@ fn build_section_digests(
     topology: &[u8],
     column_meta: &[PortableColumnSection],
     column_data: &[Vec<u8>],
-    optional: [(&str, Option<&[u8]>); 7],
+    optional: [(&str, Option<&[u8]>); 8],
 ) -> BTreeMap<String, u32> {
     let mut digests = BTreeMap::new();
     digests.insert(TOPOLOGY_SECTION.to_string(), section_digest(topology));
@@ -1031,6 +1038,7 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     };
 
     let edge_vector_index_compressed = encode_edge_vector_index_section(graph)?;
+    let edge_text_index_compressed = encode_edge_text_index_section(graph)?;
 
     let section_digests = build_section_digests(
         &topology_compressed,
@@ -1053,6 +1061,10 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
                 EDGE_VECTOR_INDEX_SECTION,
                 edge_vector_index_compressed.as_deref(),
             ),
+            (
+                EDGE_TEXT_INDEX_SECTION,
+                edge_text_index_compressed.as_deref(),
+            ),
         ],
     );
     let mut metadata = FileMetadata::from_graph_version(graph, core_version);
@@ -1066,6 +1078,7 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     metadata.vector_index_compressed_size = compressed_len(&vector_index_compressed);
     metadata.text_index_compressed_size = compressed_len(&text_index_compressed);
     metadata.edge_vector_index_compressed_size = compressed_len(&edge_vector_index_compressed);
+    metadata.edge_text_index_compressed_size = compressed_len(&edge_text_index_compressed);
 
     // Canonical JSON: round-trip through serde_json::Value so that all
     // HashMap<String, T> fields (nested at any depth) emit with sorted keys.
@@ -1109,6 +1122,9 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     write_optional_section(writer, text_index_compressed.as_deref())?;
     // Relationship HNSW section — omitted, key and all, when nothing is indexed.
     write_optional_section(writer, edge_vector_index_compressed.as_deref())?;
+    // Relationship BM25 section — last, so a reader that predates it stops
+    // before these bytes and never looks at them.
+    write_optional_section(writer, edge_text_index_compressed.as_deref())?;
 
     // Flush the writer's own buffer. The atomic-save wrapper additionally
     // fsyncs the underlying file; for an in-memory `Vec<u8>` writer this is
@@ -1983,6 +1999,7 @@ struct PortableSectionPlan {
     vector_index: u64,
     text_index: u64,
     edge_vector_index: u64,
+    edge_text_index: u64,
 }
 
 fn parse_portable_metadata<'a>(
@@ -2445,7 +2462,10 @@ mod save_guard;
 pub use save_guard::SaveError;
 
 mod text_index_persistence;
-use text_index_persistence::{decode_text_indexes_after_normalization, encode_text_indexes};
+use text_index_persistence::{
+    decode_edge_text_indexes, decode_text_indexes_after_normalization,
+    encode_edge_text_index_section, encode_text_indexes, EDGE_TEXT_INDEX_SECTION,
+};
 
 #[cfg(test)]
 #[path = "file/edge_embedding_persistence_tests.rs"]

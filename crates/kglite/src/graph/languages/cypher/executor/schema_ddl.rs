@@ -532,7 +532,7 @@ fn execute_drop_index(graph: &mut DirGraph, drop: &DropIndex) -> Result<Mutation
     };
 
     let dropped = if entity_type == "RELATIONSHIP" {
-        drop_relationship_vector_index(graph, &label, &properties)?
+        drop_relationship_indexes(graph, &label, &properties)?
     } else {
         drop_node_indexes(graph, &label, &properties)?
     };
@@ -594,27 +594,32 @@ fn drop_node_indexes(
 /// not a node label, and whose drop therefore may not be judged against the
 /// node write whitelist.
 ///
-/// Routed to the same entry point as `db.edge_embeddings.drop_index`, so the
-/// drop is journalled for statement rollback and reaches the WAL declaration
-/// identically. Vectors are untouched, exactly as on the node vector arm.
-fn drop_relationship_vector_index(
+/// [`drop_node_indexes`]' one-name-many-structures rule, applied to the two
+/// relationship families: the HNSW vector index and the BM25 text index are
+/// both listed as `relationship:Type.property`, so both go. Each is routed to
+/// the same entry point as its procedure (`db.edge_embeddings.drop_index`,
+/// `db.edge_text_index.drop`), so both drops are journalled for statement
+/// rollback, and the vector one reaches the WAL declaration identically.
+/// Vectors are untouched, exactly as on the node vector arm.
+fn drop_relationship_indexes(
     graph: &mut DirGraph,
     rel_type: &str,
     properties: &[String],
 ) -> Result<usize, String> {
     let [property] = properties else {
         return Err(format!(
-            "index '{}' names {} properties; a relationship vector index covers exactly one.",
+            "index '{}' names {} properties; a relationship index covers exactly one.",
             qualified_index_name("RELATIONSHIP", rel_type, properties),
             properties.len()
         ));
     };
     super::write_scope::enforce_relationship_type_write_scope(graph, rel_type)?;
-    Ok(usize::from(
-        crate::graph::edge_embeddings::vector_index::drop_edge_vector_index(
-            graph, rel_type, property,
-        )?,
-    ))
+    let vector = crate::graph::edge_embeddings::vector_index::drop_edge_vector_index(
+        graph, rel_type, property,
+    )?;
+    let text =
+        crate::graph::text_indexes::edge_text::drop_edge_text_index(graph, rel_type, property);
+    Ok(usize::from(vector) + usize::from(text))
 }
 
 /// `DROP INDEX <name>` where `<name>` matches no installed index.
@@ -708,7 +713,8 @@ fn node_label(target: &DdlTarget, statement: &str) -> Result<String, String> {
              node properties only, and KGLite has no relationship *property* index to build on \
              type '{rel_type}' — relationship properties are still queryable, they are scanned \
              rather than indexed. A relationship *vector* index is built by \
-             `CALL db.edge_embeddings.build_index` and addressed by its canonical name, as \
+             `CALL db.edge_embeddings.build_index`, a relationship BM25 index by \
+             `CALL db.edge_text_index.build`, and either is addressed by its canonical name, as \
              `DROP INDEX relationship:{rel_type}.<property>`."
         )),
     }

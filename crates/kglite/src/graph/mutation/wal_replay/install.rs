@@ -274,12 +274,16 @@ fn apply_edges(
                     if let Some(edge) = graph.graph.edge_weight_mut(idx) {
                         edge.properties = properties;
                     }
+                    crate::graph::index_freshness::write_hooks::note_edge_property_written(
+                        graph, idx, None,
+                    );
                 } else {
                     let idx = graph.graph.add_edge(
                         source,
                         target,
                         EdgeData::new_interned(connection_type, properties),
                     );
+                    crate::graph::index_freshness::write_hooks::note_edge_created(graph, idx);
                     created.edges.insert(idx);
                 }
                 let metadata = props
@@ -398,6 +402,7 @@ fn replace_group(
         let idx = graph
             .graph
             .add_edge(source, target, EdgeData::new_interned(kind, properties));
+        crate::graph::index_freshness::write_hooks::note_edge_created(graph, idx);
         created.edges.insert(idx);
     }
     graph.graph.flush_pending_writes();

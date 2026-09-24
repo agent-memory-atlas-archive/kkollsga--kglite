@@ -481,9 +481,11 @@ pub(crate) struct IndexInfo {
 /// (`summary_emb`), so it shares its name with the property's other indexes and
 /// `DROP INDEX Label.summary` reaches all node index families;
 /// `list_embeddings()` remains the place to read a node store's dimension,
-/// metric and model. Relationship vector names carry a `relationship:` prefix
-/// to prevent a node label/type collision. Their lifecycle is managed by the
-/// explicit `db.edge_embeddings.*_index` procedures.
+/// metric and model. Relationship vector and text names carry a
+/// `relationship:` prefix to prevent a node label/type collision. Their
+/// lifecycle is managed by the explicit `db.edge_embeddings.*_index` and
+/// `db.edge_text_index.*` procedures, and `DROP INDEX relationship:T.p`
+/// removes both.
 pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
     let mut out: Vec<IndexInfo> = Vec::new();
 
@@ -541,6 +543,21 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             state: "ONLINE",
             stale: Some(store.is_stale(graph)),
             delta: Some(store.delta_size(graph)),
+            unembedded: None,
+        });
+    }
+    for (rel_type, property, store) in
+        crate::graph::text_indexes::edge_text::list_edge_text_indexes(graph)
+    {
+        out.push(IndexInfo {
+            name: format!("relationship:{rel_type}.{property}"),
+            kind: IndexKind::Text,
+            entity_type: "RELATIONSHIP",
+            labels_or_types: vec![rel_type.to_string()],
+            properties: vec![property.to_string()],
+            state: "ONLINE",
+            stale: Some(store.edge_is_stale(graph)),
+            delta: Some(store.edge_delta_size(graph)),
             unembedded: None,
         });
     }
@@ -841,17 +858,19 @@ pub fn compute_schema(graph: &DirGraph) -> SchemaOverview {
                 IndexKind::Range => {
                     format!("{}.{} [range]", idx.labels_or_types[0], idx.properties[0])
                 }
-                IndexKind::Text => {
-                    format!("{}.{} [text]", idx.labels_or_types[0], idx.properties[0])
-                }
-                IndexKind::Vector => {
+                IndexKind::Text | IndexKind::Vector => {
                     let prefix = if idx.entity_type == "RELATIONSHIP" {
                         "relationship:"
                     } else {
                         ""
                     };
+                    let tag = if idx.kind == IndexKind::Text {
+                        "text"
+                    } else {
+                        "vector"
+                    };
                     format!(
-                        "{prefix}{}.{} [vector]",
+                        "{prefix}{}.{} [{tag}]",
                         idx.labels_or_types[0], idx.properties[0]
                     )
                 }

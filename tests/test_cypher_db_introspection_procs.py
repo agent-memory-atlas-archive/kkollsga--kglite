@@ -257,12 +257,19 @@ def test_show_procedures_default_columns(small_graph):
     assert {"pagerank", "db.labels", "list_procedures"} <= names
 
     # `mode` is READ for everything that only reads, and Neo4j's "SCHEMA" for
-    # the procedures that change capture configuration rather than data. The
-    # set is pinned both ways: a procedure that starts mutating without saying
-    # so, and a read procedure mislabelled as schema-changing, both fail here.
+    # the procedures that change capture configuration or build/drop an index
+    # rather than change data. The set is pinned both ways: a procedure that
+    # starts mutating without saying so, and a read procedure mislabelled as
+    # schema-changing, both fail here.
     modes = dict(zip(df["name"], df["mode"]))
     schema_changing = {name for name, mode in modes.items() if mode == "SCHEMA"}
-    assert schema_changing == {"db.cdc.enable", "db.cdc.disable"}, schema_changing
+    assert schema_changing == {
+        "db.cdc.enable",
+        "db.cdc.disable",
+        "db.edge_text_index.build",
+        "db.edge_text_index.refresh",
+        "db.edge_text_index.drop",
+    }, schema_changing
     # Data-mutating procedures report WRITE — the third mode, pinned the
     # same both-ways as SCHEMA above (structured-data epoch, 2026-08-26).
     writing = {name for name, mode in modes.items() if mode == "WRITE"}

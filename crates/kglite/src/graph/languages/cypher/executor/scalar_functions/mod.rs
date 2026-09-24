@@ -9,6 +9,7 @@ use super::*;
 use crate::datatypes::values::Value;
 
 mod collection;
+mod edge_text;
 mod function_registry;
 mod graph;
 mod numeric;

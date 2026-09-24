@@ -423,7 +423,7 @@ fn require_list<'a>(
     }
 }
 
-fn require_string(
+pub(super) fn require_string(
     params: &HashMap<String, Value>,
     name: &str,
     proc_name: &str,
@@ -438,7 +438,7 @@ fn require_string(
     }
 }
 
-fn optional_string(
+pub(super) fn optional_string(
     params: &HashMap<String, Value>,
     name: &str,
     proc_name: &str,
@@ -467,7 +467,7 @@ fn optional_positive_usize(
     }
 }
 
-fn optional_nonnegative_usize(
+pub(super) fn optional_nonnegative_usize(
     params: &HashMap<String, Value>,
     name: &str,
     proc_name: &str,
@@ -496,7 +496,7 @@ fn optional_boolean(
     }
 }
 
-fn yield_row(values: HashMap<&str, Value>, yields: &[YieldItem]) -> ResultRow {
+pub(super) fn yield_row(values: HashMap<&str, Value>, yields: &[YieldItem]) -> ResultRow {
     let mut row = ResultRow::new();
     for item in yields {
         if let Some(value) = values.get(item.name.as_str()) {

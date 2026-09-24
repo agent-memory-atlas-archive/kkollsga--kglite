@@ -99,6 +99,25 @@ before upgrading.
   `api::embeddings::{list_edge_embeddings, embedding_info,
   embedding_diagnostics}`; the C ABI listing stays node-only (use
   `db.edge_embeddings.list`).
+- **BM25 text indexes over relationships.** `CALL
+  db.edge_text_index.build({type, property, auto_refresh_limit?})`, `.refresh`,
+  `.drop` and `.list` manage a lexical index over one relationship type's
+  string (or string-list) property, and `text_bm25(r, property, query)` now
+  scores a relationship — a `MATCH` binding or a relationship value such as the
+  `relationship` column of `db.edge_embeddings.query` — with the node lane's
+  semantics (`0.0` no shared word, `null` no document). `SET`, `REMOVE`,
+  `CREATE`/`MERGE` (including a relationship that reuses a deleted one's slot),
+  `add_connections` and deletes keep it current, caught up at the next query
+  within `auto_refresh_limit`; a failed statement's writes, builds and drops
+  are rolled back out of it. `score_fuse(text_bm25(r, …), vector_score(r, …))`
+  ranks relationships hybrid. `SHOW INDEXES` lists it as
+  `relationship:T.p` (`FULLTEXT`, `RELATIONSHIP`), and `DROP INDEX
+  relationship:T.p` now drops the relationship text index together with a
+  relationship vector index on the same property. Saved in `.kgl` as a new
+  optional section that earlier releases skip; dropped by `vacuum()`; refused
+  on disk-backed graphs; like the node text index, not recorded in the
+  write-ahead log.
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing

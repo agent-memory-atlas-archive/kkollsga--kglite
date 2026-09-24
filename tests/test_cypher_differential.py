@@ -164,6 +164,22 @@ def edge_vector_differential_graph():
     return graph
 
 
+@pytest.fixture
+def edge_text_differential_graph():
+    """A relationship BM25 index with distinct scores, for optimizer equivalence checks."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (a:N{id:1}),(b:N{id:2}),(c:N{id:3}),"
+        "(a)-[:R{k:0,body:'quick brown fox'}]->(b),(a)-[:R{k:1,body:'quick quick fox jumps'}]->(b),"
+        "(a)-[:R{k:2,body:'slow turtle'}]->(c),(b)-[:R{k:3,body:'fox'}]->(c)"
+    )
+    built = graph.cypher(
+        "CALL db.edge_text_index.build({type:'R',property:'body'}) YIELD indexed RETURN indexed"
+    ).to_list()
+    assert built == [{"indexed": 4}], "fixture must install a real relationship text index"
+    return graph
+
+
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     (
         "edge_vector_endpoint_parallel_multiplicity",
@@ -245,6 +261,22 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
         "top_k:4,exact:true}) YIELD relationship WHERE startNode(relationship).id = 1 "
         "RETURN relationship.k AS k,type(relationship) AS t,endNode(relationship).id AS e",
+        None,
+    ),
+    # `text_bm25` over relationships: the text top-k fusion claims the
+    # RETURN/ORDER BY/LIMIT shape and must decline it for a relationship
+    # variable (its index path reads node bindings), and a WHERE on the score
+    # is the filter shape the passes move.
+    (
+        "edge_text_bm25_order_limit",
+        "edge_text_differential_graph",
+        "MATCH ()-[r:R]->() RETURN r.k AS k, text_bm25(r,'body','quick fox') AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_text_bm25_where_filter",
+        "edge_text_differential_graph",
+        "MATCH (a:N)-[r:R]->(b:N) WHERE text_bm25(r,'body','fox') > 0 AND a.id = 1 RETURN r.k AS k, b.id AS b",
         None,
     ),
     # ── fused MATCH … WITH count(): the pattern's own node labels ──

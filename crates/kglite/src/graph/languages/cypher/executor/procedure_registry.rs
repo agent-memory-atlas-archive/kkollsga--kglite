@@ -301,6 +301,40 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &["relationship", "score", "search_method"],
     },
     ProcedureSpec {
+        name: "db.edge_text_index.build",
+        aliases: &[],
+        description: "Build (or rebuild) a BM25 text index over one relationship type's string property, for text_bm25(r, property, query)",
+        columns: &["indexed", "skipped", "terms"],
+    },
+    ProcedureSpec {
+        name: "db.edge_text_index.refresh",
+        aliases: &[],
+        description: "Fold every relationship change since the last build or refresh into a relationship text index",
+        columns: &["refreshed"],
+    },
+    ProcedureSpec {
+        name: "db.edge_text_index.drop",
+        aliases: &[],
+        description: "Drop one relationship text index",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.edge_text_index.list",
+        aliases: &[],
+        description: "List relationship text indexes and their freshness",
+        columns: &[
+            "entity",
+            "type",
+            "property",
+            "documents",
+            "terms",
+            "skipped",
+            "index_state",
+            "delta",
+            "auto_refresh_limit",
+        ],
+    },
+    ProcedureSpec {
         name: "ontology_audit",
         aliases: &[],
         description: "Scorecard: one row per declared node/edge ontology check, identified by entity_kind plus rule (violations, exempted, total, pct, declared severity). `exempted` counts rows an `exempt` declaration excuses; violations + exempted = everything flagged. {by: 'domain_class'} PARTITIONS each rule into one row per violating domain-side class (they sum back to the rule's violations). {by: 'property'} is a CENSUS of the required_properties/property_types rules: one row per declared property, including those nothing fails, and an entity missing several counts under each — so these rows sum to at least the aggregate, never back to it. One axis at a time; the unasked-for column is Null, as both are without the parameter",
@@ -568,6 +602,9 @@ pub(super) const MUTATING_PROCEDURES: &[&str] = &[
     "db.edge_embeddings.build_index",
     "db.edge_embeddings.refresh_index",
     "db.edge_embeddings.drop_index",
+    "db.edge_text_index.build",
+    "db.edge_text_index.refresh",
+    "db.edge_text_index.drop",
 ];
 
 /// Whether `name` (canonical spelling or alias, any case) is a mutating
@@ -581,8 +618,10 @@ pub(super) fn is_mutating_procedure(name: &str) -> bool {
         .any(|mutating| mutating.eq_ignore_ascii_case(spec.name))
 }
 
-/// Neo4j procedure mode for `SHOW PROCEDURES`. KGLite's mutating procedures
-/// change capture configuration rather than data, which is Neo4j's "SCHEMA".
+/// Neo4j procedure mode for `SHOW PROCEDURES`. The table and relationship
+/// embedding procedures change data (Neo4j's "WRITE"); every other mutating
+/// procedure changes capture configuration or builds/drops an index, which is
+/// Neo4j's "SCHEMA".
 pub(super) fn procedure_mode(name: &str) -> &'static str {
     if name.starts_with("table.")
         || (name.starts_with("db.edge_embeddings.") && is_mutating_procedure(name))
@@ -666,10 +705,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("MUTATING_PROCEDURES names unknown procedure {name}"));
             assert_eq!(spec.name, *name, "use the canonical spelling");
             assert!(is_mutating_procedure(name));
-            // Two mutating families, two honest modes: the CDC lifecycle
-            // verbs change capture configuration (SCHEMA), the table
-            // procedures change data (WRITE). Pinned exactly, so a new
-            // mutating procedure must declare which it is.
+            // Two honest modes: the CDC lifecycle verbs and the relationship
+            // text-index lifecycle change configuration or index state
+            // (SCHEMA), the table and relationship-embedding procedures change
+            // data (WRITE). Pinned exactly, so a new mutating procedure must
+            // declare which it is.
             let expected_mode =
                 if name.starts_with("table.") || name.starts_with("db.edge_embeddings.") {
                     "WRITE"

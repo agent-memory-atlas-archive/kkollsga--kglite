@@ -211,16 +211,17 @@ impl CypherExecutor<'_> {
         let node_idx = match &args[0] {
             Expression::Variable(var) => match row.node_bindings.get(var) {
                 Some(&idx) => idx,
-                None => return Ok(Value::Null),
+                None => return self.eval_text_bm25_non_node(args, row),
             },
-            _ => return Err("text_bm25(): first argument must be a node variable".into()),
+            _ => return self.eval_text_bm25_non_node(args, row),
         };
         let node_type = match self.graph.graph.node_view(node_idx) {
             Some(n) => n.node_type_str(&self.graph.interner),
             None => return Ok(Value::Null),
         };
         if let Some(cache) = self.tb_cache.get() {
-            if cache.node_type == node_type
+            if !cache.relationship
+                && cache.node_type == node_type
                 && cache.keys.as_ref().is_some_and(|(property, query)| {
                     property.matches(&args[1]) && query.matches(&args[2])
                 })
@@ -722,6 +723,7 @@ impl CypherExecutor<'_> {
         drop(view);
         Ok(TextBm25Cache {
             node_type: node_type.to_string(),
+            relationship: false,
             keys: ArgKey::of(&args[1]).zip(ArgKey::of(&args[2])),
             query_text,
             prepared,

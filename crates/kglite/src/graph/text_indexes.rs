@@ -94,22 +94,30 @@ fn document_text<'a>(
             let Value::List(items) = value.as_ref() else {
                 return None;
             };
-            let mut text = String::new();
-            for item in items {
-                match item {
-                    Value::String(part) => {
-                        if !text.is_empty() {
-                            text.push(' ');
-                        }
-                        text.push_str(part);
-                    }
-                    Value::Null => {}
-                    _ => return None,
-                }
-            }
-            Some(Cow::Owned(text))
+            join_text_list(items).map(Cow::Owned)
         }
     }
+}
+
+/// A list's one document: string members joined by a space, null members
+/// skipped, and `None` — no document at all — when any member is neither.
+/// Shared by the node and relationship readers so the two cannot disagree on
+/// what a list document is.
+fn join_text_list(items: &[Value]) -> Option<String> {
+    let mut text = String::new();
+    for item in items {
+        match item {
+            Value::String(part) => {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(part);
+            }
+            Value::Null => {}
+            _ => return None,
+        }
+    }
+    Some(text)
 }
 
 /// The index key for a `(node_type, property)` pair.
@@ -829,6 +837,10 @@ pub fn list_text_indexes(graph: &DirGraph) -> Vec<(&str, &str, &TextIndexStore)>
     out.sort_unstable_by_key(|(node_type, property, _)| (*node_type, *property));
     out
 }
+
+/// Relationship text indexes: the same store, keyed by edge slot.
+#[path = "edge_text_indexes.rs"]
+pub(crate) mod edge_text;
 
 #[cfg(test)]
 #[path = "text_indexes_tests.rs"]

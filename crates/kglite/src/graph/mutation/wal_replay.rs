@@ -370,6 +370,7 @@ fn reinstall_edge_embedding_group(
         let edge = graph
             .graph
             .add_edge(source, target, EdgeData::new_interned(kind, properties));
+        crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge);
         for (text_column, cells) in &group.stores {
             let Some(vector) = &cells[member] else {
                 continue;

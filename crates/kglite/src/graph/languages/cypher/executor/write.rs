@@ -985,6 +985,7 @@ fn create_pattern_edges(
             );
             let edge_index =
                 GraphWrite::add_edge(&mut graph.graph, actual_source, actual_target, edge_data);
+            crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge_index);
 
             if let Some(ref var) = edge_pat.variable {
                 new_row.edge_bindings.insert(
@@ -1660,10 +1661,10 @@ fn execute_set(
     // Edge freshness provenance: bump the reserved keys (updated_at + caller
     // git_sha/modified_by) once per modified edge of an opted-in type.
     if !edges_to_stamp.is_empty() {
-        let interned: Vec<(InternedKey, Value)> = graph
-            .provenance_props()
-            .into_iter()
-            .map(|(k, v)| (graph.interner.get_or_intern(k), v))
+        let provenance = graph.provenance_props();
+        let interned: Vec<(InternedKey, Value)> = provenance
+            .iter()
+            .map(|(k, v)| (graph.interner.get_or_intern(k), v.clone()))
             .collect();
         for edge_index in &edges_to_stamp {
             if let Some(EdgeData {
@@ -1678,6 +1679,13 @@ fn execute_set(
                         edge_props.push((*key, val.clone()));
                     }
                 }
+            }
+            for (name, _) in &provenance {
+                crate::graph::index_freshness::write_hooks::note_edge_property_written(
+                    graph,
+                    *edge_index,
+                    Some(name),
+                );
             }
         }
     }

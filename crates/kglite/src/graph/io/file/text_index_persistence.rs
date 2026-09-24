@@ -49,6 +49,16 @@ use std::io;
 pub(super) const TEXT_INDEX_MAGIC: &[u8; 8] = b"KGLTIDX1";
 const TEXT_INDEX_FORMAT_VERSION: u32 = 1;
 
+/// The relationship twin's own section (`edge_text_index`): the same payload
+/// shape, with `node_type` holding the relationship type, under its own magic
+/// so a node-only reader never meets a relationship entry. A separate section
+/// rather than a v2 of `KGLTIDX1` because a reader that refused an unknown
+/// payload version would then drop the *node* indexes too; a reader that does
+/// not know this section never takes it — its metadata key and trailing bytes
+/// are ignored (the metadata struct accepts unknown keys and the section
+/// cursor never checks for leftover bytes).
+pub(super) const EDGE_TEXT_INDEX_MAGIC: &[u8; 8] = b"KGLRTIDX";
+
 /// One index held open for the duration of an encode. The read guard is what
 /// keeps a concurrent catch-up from renumbering the dictionary mid-write.
 struct HeldIndex<'a> {
@@ -112,7 +122,28 @@ struct PersistedTextIndex {
 /// `save_graph`.
 pub(super) fn encode_text_indexes(graph: &DirGraph) -> io::Result<Option<Vec<u8>>> {
     // Already sorted by (node_type, property) — the one enumeration order.
-    let stores = text_indexes::list_text_indexes(graph);
+    encode_payload(text_indexes::list_text_indexes(graph), TEXT_INDEX_MAGIC)
+}
+
+/// Canonical `section_digests` key of the relationship text-index section.
+pub(super) const EDGE_TEXT_INDEX_SECTION: &str = "edge_text_index";
+
+/// The compressed relationship text-index section ([`encode_text_indexes`]
+/// under [`EDGE_TEXT_INDEX_MAGIC`]), or `None` when no relationship type is
+/// indexed.
+pub(super) fn encode_edge_text_index_section(graph: &DirGraph) -> io::Result<Option<Vec<u8>>> {
+    encode_payload(
+        text_indexes::edge_text::list_edge_text_indexes(graph),
+        EDGE_TEXT_INDEX_MAGIC,
+    )?
+    .map(|payload| super::zstd_compress(&payload))
+    .transpose()
+}
+
+fn encode_payload(
+    stores: Vec<(&str, &str, &text_indexes::TextIndexStore)>,
+    magic: &[u8; 8],
+) -> io::Result<Option<Vec<u8>>> {
     if stores.is_empty() {
         return Ok(None);
     }
@@ -161,7 +192,7 @@ pub(super) fn encode_text_indexes(graph: &DirGraph) -> io::Result<Option<Vec<u8>
         .collect();
     let body = codec_ser(serde_codec::CodecVersion::PostcardV1, &entries)?;
     let mut payload = Vec::with_capacity(12 + body.len());
-    payload.extend_from_slice(TEXT_INDEX_MAGIC);
+    payload.extend_from_slice(magic);
     payload.extend_from_slice(&TEXT_INDEX_FORMAT_VERSION.to_le_bytes());
     payload.extend_from_slice(&body);
     Ok(Some(payload))
@@ -187,24 +218,67 @@ pub(super) fn decode_text_indexes_after_normalization(
     decode_text_indexes_impl(payload, graph, Some(effects));
 }
 
+/// The entries of a payload framed under `magic`, or `None` for anything this
+/// build cannot read — a rebuildable cache is skipped, never a load failure.
+fn decode_entries(payload: &[u8], magic: &[u8; 8]) -> Option<Vec<PersistedTextIndex>> {
+    if payload.len() < 12 || &payload[..8] != magic {
+        return None;
+    }
+    let ver = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    if ver != TEXT_INDEX_FORMAT_VERSION {
+        return None;
+    }
+    let codec = serde_codec::CodecVersion::PostcardV1;
+    codec_deser(codec, &payload[12..], (payload.len() - 12) as u64).ok()
+}
+
+/// Decode the relationship text-index section. Best-effort exactly as the node
+/// section is; additionally skips everything on a disk-backed graph (which
+/// refuses to build one) and any entry whose relationship type is gone or
+/// whose `(type, property)` cells legacy normalization rewrote.
+pub(super) fn decode_edge_text_indexes(
+    payload: &[u8],
+    graph: &mut DirGraph,
+    effects: &super::legacy_references::NormalizationEffects,
+) {
+    if crate::graph::storage::GraphRead::is_disk(&graph.graph) {
+        return;
+    }
+    let Some(entries) = decode_entries(payload, EDGE_TEXT_INDEX_MAGIC) else {
+        return;
+    };
+    for entry in entries {
+        if effects.invalidates_edge_text_index(&entry.node_type, &entry.property)
+            || entry.resolved_field != entry.property
+            || entry.dirty.iter().any(|slot| *slot >= entry.watermark)
+            || !graph.has_connection_type(&entry.node_type)
+        {
+            continue;
+        }
+        let index = TextIndex::from_terms(entry.terms, &entry.empty_docs);
+        if index.validate().is_err() {
+            continue;
+        }
+        let freshness = IndexFreshness::restored(entry.watermark, entry.limit, &entry.dirty);
+        text_indexes::edge_text::attach_persisted_edge_text_index(
+            graph,
+            &entry.node_type,
+            &entry.property,
+            index,
+            freshness,
+            entry.skipped,
+        );
+    }
+}
+
 fn decode_text_indexes_impl(
     payload: &[u8],
     graph: &mut DirGraph,
     effects: Option<&super::legacy_references::NormalizationEffects>,
 ) {
-    if payload.len() < 12 || &payload[..8] != TEXT_INDEX_MAGIC {
-        return;
-    }
-    let ver = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
-    if ver != TEXT_INDEX_FORMAT_VERSION {
+    let Some(entries) = decode_entries(payload, TEXT_INDEX_MAGIC) else {
         return; // rebuildable cache: skip anything this build cannot read
-    }
-    let codec = serde_codec::CodecVersion::PostcardV1;
-    let entries: Vec<PersistedTextIndex> =
-        match codec_deser(codec, &payload[12..], (payload.len() - 12) as u64) {
-            Ok(entries) => entries,
-            Err(_) => return,
-        };
+    };
     for entry in entries {
         if effects.is_some_and(|effects| {
             effects.invalidates_text_index(&entry.node_type, &entry.property, &entry.resolved_field)

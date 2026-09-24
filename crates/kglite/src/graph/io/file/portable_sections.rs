@@ -64,6 +64,7 @@ pub(super) fn decode_portable_topology(
         vector_index: metadata.vector_index_compressed_size,
         text_index: metadata.text_index_compressed_size,
         edge_vector_index: metadata.edge_vector_index_compressed_size,
+        edge_text_index: metadata.edge_text_index_compressed_size,
     };
     let mut dir_graph = DirGraph::from_graph(graph);
     dir_graph.interner = interner;
@@ -143,6 +144,14 @@ pub(super) fn load_portable_optional_sections(
         let compressed = sections.take(plan.edge_vector_index, EDGE_VECTOR_INDEX_SECTION)?;
         if let Ok(raw) = zstd_decompress(compressed) {
             edge_vector_persistence::decode_edge_vector_indexes(&raw, dir_graph);
+        }
+    }
+    if plan.edge_text_index > 0 {
+        // The node text section's split: framing failures propagate, an
+        // unreadable payload is skipped.
+        let compressed = sections.take(plan.edge_text_index, EDGE_TEXT_INDEX_SECTION)?;
+        if let Ok(raw) = zstd_decompress(compressed) {
+            decode_edge_text_indexes(&raw, dir_graph, normalization_effects);
         }
     }
     Ok(())

@@ -550,6 +550,13 @@ pub struct DirGraph {
     /// is: it is corpus-sized, so a statement checkpoint must not clone it.
     #[serde(skip)]
     pub text_indexes: HashMap<(String, String), crate::graph::text_indexes::TextIndexStore>,
+    /// Relationship BM25 text indexes: (relationship_type, property) ->
+    /// TextIndexStore keyed by edge slot — see
+    /// [`crate::graph::text_indexes::edge_text`]. Parked by `swap_data_scale` like
+    /// `text_indexes`.
+    #[serde(skip)]
+    pub(crate) edge_text_indexes:
+        HashMap<(String, String), crate::graph::text_indexes::TextIndexStore>,
     /// Timeseries configuration per node type: type_name → TimeseriesConfig.
     /// Declares composite key labels and known channels for auto-resolution.
     #[serde(default)]
@@ -971,6 +978,7 @@ impl DirGraph {
             embeddings: HashMap::new(),
             edge_embeddings: HashMap::new(),
             text_indexes: HashMap::new(),
+            edge_text_indexes: HashMap::new(),
             timeseries_configs: HashMap::new(),
             timeseries_store: HashMap::new(),
             temporal_node_configs: HashMap::new(),
@@ -1051,6 +1059,7 @@ impl DirGraph {
             embeddings: HashMap::new(),
             edge_embeddings: HashMap::new(),
             text_indexes: HashMap::new(),
+            edge_text_indexes: HashMap::new(),
             timeseries_configs: HashMap::new(),
             timeseries_store: HashMap::new(),
             temporal_node_configs: HashMap::new(),
@@ -2191,6 +2200,9 @@ impl DirGraph {
         // maintenance call. Same call the HNSW index gets one line above, for
         // the same reason: rebuild after a vacuum.
         self.text_indexes.clear();
+        // Relationship text indexes are keyed by edge slot, which the remap
+        // above renumbered just as wholesale: dropped for the same reason.
+        self.edge_text_indexes.clear();
         self.reindex();
 
         // Rebuild the columnar stores: the old ones carry orphaned rows from

@@ -330,6 +330,21 @@ pub enum UndoEntry {
         store_key: (String, String),
         node: usize,
     },
+    /// A relationship's BM25 document was pruned with the relationship. The
+    /// edge twin of [`TextDocPruned`](Self::TextDocPruned): undo marks the
+    /// slot for re-reading, and carries no pre-image for the same reason.
+    EdgeTextDocPruned {
+        store_key: (String, String),
+        edge: usize,
+    },
+    /// A whole relationship text index was built, rebuilt or dropped inside a
+    /// statement (`db.edge_text_index.build` / `.drop`, `DROP INDEX`). `prior`
+    /// is the store it displaced — *moved* here, never cloned — or `None`
+    /// when there was none, and undo puts it back or removes the key.
+    EdgeTextIndexReplaced {
+        store_key: (String, String),
+        prior: Option<Box<crate::graph::text_indexes::TextIndexStore>>,
+    },
     /// One cell of a type's master `ColumnStore` is about to be overwritten.
     /// `prior` is the value that cell held before the statement's write; undo
     /// writes it back.
@@ -810,6 +825,22 @@ impl UndoJournal {
     pub fn note_text_doc_pruned(&mut self, store_key: (String, String), node: usize) {
         self.entries
             .push(UndoEntry::TextDocPruned { store_key, node });
+    }
+
+    pub(crate) fn note_edge_text_doc_pruned(&mut self, store_key: (String, String), edge: usize) {
+        self.entries
+            .push(UndoEntry::EdgeTextDocPruned { store_key, edge });
+    }
+
+    pub(crate) fn note_edge_text_index_replaced(
+        &mut self,
+        store_key: (String, String),
+        prior: Option<crate::graph::text_indexes::TextIndexStore>,
+    ) {
+        self.entries.push(UndoEntry::EdgeTextIndexReplaced {
+            store_key,
+            prior: prior.map(Box::new),
+        });
     }
 }
 

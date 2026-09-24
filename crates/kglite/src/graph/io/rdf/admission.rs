@@ -56,5 +56,6 @@ fn has_index_state(graph: &DirGraph) -> bool {
         || !graph.composite_index_keys.is_empty()
         || !graph.range_index_keys.is_empty()
         || !graph.text_indexes.is_empty()
+        || !graph.edge_text_indexes.is_empty()
         || !graph.embeddings.is_empty()
 }

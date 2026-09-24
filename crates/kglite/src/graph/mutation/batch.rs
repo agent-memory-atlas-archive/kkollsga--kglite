@@ -870,6 +870,9 @@ impl ConnectionBatchProcessor {
                             conn.target_idx,
                             edge_data,
                         );
+                        crate::graph::index_freshness::write_hooks::note_edge_created(
+                            graph, new_id,
+                        );
                         // Update the lookup so any later chunk entry with
                         // the same (src, tgt) hits the freshly-created edge,
                         // not the removed one.
@@ -894,6 +897,9 @@ impl ConnectionBatchProcessor {
                             }
                             stats.connections_created += 1;
                         }
+                        crate::graph::index_freshness::write_hooks::note_edge_property_written(
+                            graph, edge_idx, None,
+                        );
                     }
                     ConflictHandling::Preserve => {
                         let interned_props = conn.properties;
@@ -909,6 +915,9 @@ impl ConnectionBatchProcessor {
                             }
                             stats.connections_created += 1;
                         }
+                        crate::graph::index_freshness::write_hooks::note_edge_property_written(
+                            graph, edge_idx, None,
+                        );
                     }
                     ConflictHandling::Sum => {
                         let interned_props = conn.properties;
@@ -928,6 +937,9 @@ impl ConnectionBatchProcessor {
                             }
                             stats.connections_created += 1;
                         }
+                        crate::graph::index_freshness::write_hooks::note_edge_property_written(
+                            graph, edge_idx, None,
+                        );
                     }
                 }
             } else {
@@ -938,6 +950,7 @@ impl ConnectionBatchProcessor {
                     conn.target_idx,
                     edge_data,
                 );
+                crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
                 // Within-chunk dedup: later iterations targeting the same
                 // (src, tgt) resolve to this edge via Update/Preserve/Sum.
                 // Skipped for the initial-load path, whose lookup stays empty.

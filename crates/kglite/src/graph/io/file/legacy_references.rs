@@ -36,6 +36,10 @@ pub(super) struct NormalizationBudget {
 #[derive(Default)]
 pub(super) struct NormalizationEffects {
     invalidated_text_fields: HashSet<(String, String)>,
+    /// `(relationship type, property)` keys whose cells normalization
+    /// rewrote, so a persisted relationship text index over them is skipped
+    /// rather than attached with documents the rewrite may have changed.
+    invalidated_edge_text_fields: HashSet<(InternedKey, InternedKey)>,
 }
 
 impl NormalizationEffects {
@@ -50,6 +54,13 @@ impl NormalizationEffects {
             || self
                 .invalidated_text_fields
                 .contains(&(node_type.to_string(), resolved_field.to_string()))
+    }
+
+    pub(super) fn invalidates_edge_text_index(&self, rel_type: &str, property: &str) -> bool {
+        self.invalidated_edge_text_fields.contains(&(
+            InternedKey::from_str(rel_type),
+            InternedKey::from_str(property),
+        ))
     }
 }
 
@@ -69,8 +80,25 @@ pub(super) fn normalize_complete_snapshot(
     let before = capture_complete_constraints(graph);
 
     let (typed_indexes, global_indexes) = invalidated_indexes(graph, &nodes);
+    let invalidated_edge_text_fields = {
+        let _guard = graph.begin_read_pass();
+        edges
+            .iter()
+            .filter_map(|change| {
+                let rel_type = graph.graph.edge_weight(change.index)?.connection_type;
+                Some(
+                    change
+                        .properties
+                        .iter()
+                        .map(move |(key, _)| (rel_type, *key)),
+                )
+            })
+            .flatten()
+            .collect()
+    };
     let effects = NormalizationEffects {
         invalidated_text_fields: typed_indexes.clone(),
+        invalidated_edge_text_fields,
     };
 
     snapshot_property_values(

@@ -525,7 +525,7 @@ graph.cypher("""
 | `longitude(point)` | Extract longitude from point |
 | `valid_at(e, date, 'from', 'to')` | Temporal point-in-time filter (nodes or edges) |
 | `valid_during(e, start, end, 'from', 'to')` | Temporal range overlap filter |
-| `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's indexed text against a query string. Needs `build_text_index(node_type, property)`; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
+| `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's — or relationship's — indexed text against a query string. Needs `build_text_index(node_type, property)` for a node, `CALL db.edge_text_index.build({type, property})` for a relationship; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
 | `text_score(n, prop, query)` | Semantic similarity. A **list** `query` is scored directly as your query vector; a **string** `query` is embedded first (requires `set_embedder()`) |
 | `text_score(n, prop, query, metric)` | With explicit metric (`'cosine'`, `'dot_product'`, `'euclidean'`, `'poincare'`) |
 | `vector_score(n, prop, vector [, metric] [, options])` | Semantic similarity against a pre-computed embedding vector (pass a list of floats directly, no `set_embedder()` needed) |
@@ -836,6 +836,68 @@ corpus — so `auto_refresh_limit` bounds a document *count*, not a duration.
 Past roughly 1500 documents, folding costs more than rebuilding the index
 outright and the catch-up rebuilds instead: a refresh costs the cheaper of the
 two and never more than one rebuild, whatever the limit is set to.
+
+### Lexical search over relationships — `db.edge_text_index.*`
+
+`text_bm25(r, 'property', 'query text')` ranks a relationship exactly as it
+ranks a node, over a BM25 index on one relationship type's property. The
+relationship index's lifecycle is in Cypher, like the relationship vector
+index's, so every binding reaches it:
+
+```cypher
+CALL db.edge_text_index.build({type:'SUPPORTS', property:'evidence', auto_refresh_limit:1000})
+YIELD indexed, skipped, terms
+
+CALL db.edge_text_index.refresh({type:'SUPPORTS', property:'evidence'}) YIELD refreshed
+
+CALL db.edge_text_index.drop({type:'SUPPORTS', property:'evidence'}) YIELD dropped
+
+CALL db.edge_text_index.list({type:'SUPPORTS'})
+YIELD entity, type, property, documents, terms, skipped, index_state, delta, auto_refresh_limit
+```
+
+```cypher
+MATCH (c:Claimant)-[r:SUPPORTS]->(claim:Claim)
+RETURN claim.title, text_bm25(r, 'evidence', 'water damage') AS score
+ORDER BY score DESC LIMIT 10
+```
+
+| Procedure | Yields | Notes |
+|---|---|---|
+| `db.edge_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index. Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
+| `db.edge_text_index.refresh({type, property})` | `refreshed` | Folds in every change since the last build or refresh, whatever the limit; refuses a missing index |
+| `db.edge_text_index.drop({type, property})` | `dropped` | `false` when there was no such index |
+| `db.edge_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Read-only; one row per index, sorted |
+
+The semantics are the node lane's: `0.0` for no shared word, `null` for a
+relationship the index holds no document for, an error naming
+`db.edge_text_index.build` when no index exists, and writes (`SET`, `REMOVE`,
+`CREATE`/`MERGE` of a relationship — including one that reuses a deleted
+relationship's storage slot — and `add_connections`) folded in at the next
+query within `auto_refresh_limit`. A deleted relationship's document is removed
+at the delete. The first argument may be a `MATCH` binding or a relationship
+value (`collect(r)[0]`, `UNWIND`, a `CALL { }` column, the `relationship`
+column of `db.edge_embeddings.query`); a binding deleted earlier in the same
+statement scores `null`. `build`, `drop` and any catch-up a statement did are
+undone when the statement fails.
+
+The index is listed by `SHOW INDEXES` as `relationship:SUPPORTS.evidence`,
+type `FULLTEXT`, entityType `RELATIONSHIP`, and `DROP INDEX
+relationship:SUPPORTS.evidence` removes it — together with a relationship
+vector index on the same property, the node rule that one index name covers
+every structure registered under it. It persists in `.kgl` (a section that
+older readers skip) and is dropped by `vacuum()`. Memory and mapped storage
+only: a disk-backed graph refuses to build one. Like the node text index it is
+not recorded in the write-ahead log, so on a durable graph an index built after
+the last checkpoint is absent after reopen until rebuilt.
+
+Hybrid ranking works over relationships unchanged:
+
+```cypher
+MATCH ()-[r:SUPPORTS]->()
+RETURN r, score_fuse(text_bm25(r, 'evidence', $q), vector_score(r, 'evidence_emb', $qv)) AS score
+ORDER BY score DESC LIMIT 10
+```
 
 ### Fusing the lexical and semantic lanes — `score_fuse`
 
@@ -3085,17 +3147,18 @@ index, a B-tree index and a BM25 text index shows three `SHOW INDEXES` rows
 sharing a `name`, distinguished by `type` (`PROPERTY`, `RANGE`, `FULLTEXT`).
 `DROP INDEX <name>` removes every structure under that name.
 
-A relationship vector index is named `relationship:TYPE.property`, and that
-name pastes in unquoted too:
+A relationship vector index and a relationship BM25 index are both named
+`relationship:TYPE.property`, and that name pastes in unquoted too:
 
 ```cypher
 DROP INDEX relationship:SUPPORTS.evidence;              -- works
 DROP INDEX `relationship:SUPPORTS.evidence` IF EXISTS;  -- also works
 ```
 
-It drops the HNSW accelerator and keeps the vectors, exactly as the node vector
-arm does — `db.edge_embeddings.drop_index` is the same operation under a
-different name. The prefix keeps a node label and a relationship type apart, so
+It drops every relationship structure under the name — the HNSW accelerator
+(keeping the vectors, exactly as the node vector arm does) and the BM25 index;
+`db.edge_embeddings.drop_index` and `db.edge_text_index.drop` are the same
+operations one structure at a time. The prefix keeps a node label and a relationship type apart, so
 a `Doc.text` node index and a `relationship:Doc.text` relationship index are
 addressed, and dropped, independently. There is no descriptor form for a
 relationship index: `DROP INDEX FOR ()-[r:T]-() ON (r.p)` is rejected with the
@@ -3169,7 +3232,7 @@ that works — never a syntax error, and never a no-op that reports success.
 | `CREATE POINT INDEX` | No point index. Spatial predicates and the spatial-join optimiser work on geometry properties without one |
 | `CREATE VECTOR INDEX` | Vector indexes exist, but need an existing embedding store and HNSW build parameters, so they are created through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
 | `CREATE LOOKUP INDEX` | Label and relationship-type lookup is always indexed automatically (`type_indices`) |
-| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | No DDL form creates a relationship index. Relationship *vector* indexes do exist: built with `CALL db.edge_embeddings.build_index(...)`, listed by `SHOW INDEXES` with `entityType: RELATIONSHIP`, and removed with `DROP INDEX relationship:T.p`. Every other relationship property is queryable, just scanned |
+| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | No DDL form creates a relationship index. Relationship *vector* and *BM25 text* indexes do exist: built with `CALL db.edge_embeddings.build_index(...)` / `CALL db.edge_text_index.build(...)`, listed by `SHOW INDEXES` with `entityType: RELATIONSHIP`, and removed with `DROP INDEX relationship:T.p`. Every other relationship property is queryable, just scanned |
 | `... OPTIONS { ... }` | No index providers or per-index configuration to apply |
 | `CREATE RANGE INDEX ... ON (n.a, n.b)` | The B-tree is single-property. Use a composite equality index, or one `CREATE RANGE INDEX` per property |
 

@@ -189,6 +189,12 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // the one fallible step after it (`dropped == 0 && !if_exists`) is
     // reachable only when nothing was dropped.
     std::mem::swap(&mut a.text_indexes, &mut b.text_indexes);
+    // Relationship text indexes: the same corpus-sized shape and the same
+    // re-mark story (`UndoEntry::EdgeTextDocPruned` at the edge-removal choke
+    // point, the statement-claims window below), plus
+    // `UndoEntry::EdgeTextIndexReplaced` because their build and drop run
+    // inside Cypher and can be followed by a failing clause.
+    std::mem::swap(&mut a.edge_text_indexes, &mut b.edge_text_indexes);
     std::mem::swap(&mut a.timeseries_store, &mut b.timeseries_store);
     // Parked because its inner map holds one entry per node of a constrained
     // type, so cloning it would put an O(constrained-nodes) copy back on every
@@ -372,7 +378,11 @@ impl StatementCheckpoint {
         let edge_embedding_base_capture = graph.graph.records_edge_embedding_bases();
         let shell = Box::new(graph.schema_shell());
         graph.graph.begin_undo();
-        for store in graph.text_indexes.values() {
+        for store in graph
+            .text_indexes
+            .values()
+            .chain(graph.edge_text_indexes.values())
+        {
             store.begin_statement();
         }
         Self::Journal {
@@ -397,7 +407,11 @@ impl StatementCheckpoint {
                 // holds the new state. CDC configuration is published only
                 // after that succeeds.
                 graph.graph.take_undo();
-                for store in graph.text_indexes.values() {
+                for store in graph
+                    .text_indexes
+                    .values()
+                    .chain(graph.edge_text_indexes.values())
+                {
                     store.end_statement();
                 }
                 if let Some(cdc) = cdc {
@@ -430,7 +444,11 @@ impl StatementCheckpoint {
                 // `text_indexes` is parked, so each store here is the live one
                 // a mid-statement refresh may have folded the reversed writes
                 // into; re-mark what it claimed.
-                for store in graph.text_indexes.values() {
+                for store in graph
+                    .text_indexes
+                    .values()
+                    .chain(graph.edge_text_indexes.values())
+                {
                     store.rollback_statement();
                 }
                 // Ops the failed statement buffered for the write-ahead log
@@ -621,6 +639,19 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
                 store.restore_index_state(prior);
             }
         }
+        UndoEntry::EdgeTextDocPruned { store_key, edge } => {
+            if let Some(store) = graph.edge_text_indexes.get(&store_key) {
+                store.note_edge_slot_changed(petgraph::graph::EdgeIndex::new(edge));
+            }
+        }
+        UndoEntry::EdgeTextIndexReplaced { store_key, prior } => match prior {
+            Some(store) => {
+                graph.edge_text_indexes.insert(store_key, *store);
+            }
+            None => {
+                graph.edge_text_indexes.remove(&store_key);
+            }
+        },
         UndoEntry::TextDocPruned { store_key, node } => {
             // Marking, not restoring: the document is derived from a property
             // this replay is putting back, so the next refresh re-tokenizes it.

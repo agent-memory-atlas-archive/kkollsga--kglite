@@ -580,6 +580,11 @@ impl<'a> CypherExecutor<'a> {
                 "db.edge_embeddings.query" => {
                     self.execute_edge_embedding_query(&params, &clause.yield_items)?
                 }
+                "db.edge_text_index.list" => super::edge_text_index_procedures::list(
+                    self.graph,
+                    &params,
+                    &clause.yield_items,
+                )?,
                 _ => self.execute_resolved_call_once(proc_name.as_str(), clause, params)?,
             };
             self.budget.reserve_rows(

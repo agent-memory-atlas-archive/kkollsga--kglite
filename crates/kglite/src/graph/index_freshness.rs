@@ -384,7 +384,10 @@ impl FreshnessDelta {
 /// that way: work that a graph without an index can observe does not belong
 /// below this line.
 pub(crate) mod write_hooks {
-    use petgraph::graph::NodeIndex;
+    use petgraph::graph::{EdgeIndex, NodeIndex};
+
+    use crate::graph::schema::InternedKey;
+    use crate::graph::storage::GraphRead;
 
     use crate::graph::dir_graph::DirGraph;
 
@@ -496,6 +499,55 @@ pub(crate) mod write_hooks {
             // re-resolve to answer a question whose wrong answer is one
             // redundant rebuild.
             disk.note_index_property_written(node.index() as u32, Some(node_type));
+        }
+    }
+
+    /// Whether any relationship text index exists — the relationship lane's
+    /// own gate, so node-only indexing costs relationship writes nothing and
+    /// the reverse.
+    #[inline]
+    pub(crate) fn any_edge_text_index(graph: &DirGraph) -> bool {
+        !graph.edge_text_indexes.is_empty()
+    }
+
+    /// A relationship was created at `edge` — the recycled-slot check. Every
+    /// creation funnel that can run while a relationship text index exists
+    /// calls this *after* the edge is in the graph (its type is read from it).
+    #[inline]
+    pub(crate) fn note_edge_created(graph: &DirGraph, edge: EdgeIndex) {
+        if !any_edge_text_index(graph) {
+            return;
+        }
+        note_work();
+        if let Some(data) = graph.graph.edge_weight(edge) {
+            crate::graph::text_indexes::edge_text::note_edge_created(
+                graph,
+                edge,
+                data.connection_type,
+            );
+        }
+    }
+
+    /// A property of the relationship at `edge` was written, or its whole
+    /// property list replaced (`field: None`). Called after the write, once
+    /// the mutable borrow is released.
+    #[inline]
+    pub(crate) fn note_edge_property_written(
+        graph: &DirGraph,
+        edge: EdgeIndex,
+        field: Option<&str>,
+    ) {
+        if !any_edge_text_index(graph) {
+            return;
+        }
+        note_work();
+        if let Some(data) = graph.graph.edge_weight(edge) {
+            crate::graph::text_indexes::edge_text::note_edge_property_written(
+                graph,
+                edge,
+                data.connection_type,
+                field.map(InternedKey::from_str),
+            );
         }
     }
 }
