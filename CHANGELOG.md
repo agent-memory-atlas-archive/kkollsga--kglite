@@ -18,8 +18,9 @@ before upgrading.
 
 - Explicit whole-store relationship vector search through
   `db.edge_embeddings.query`, with HNSW build/refresh/drop procedures and
-  `search_method` reporting. Missing, stale or incompatible indexes fall back
-  to exact search; relationship MATCH scoring stays exact. Index diagnostics
+  `search_method` reporting. Missing or incompatible indexes, and stale ones
+  that cannot catch up (over their refresh limit, or on a read-only graph),
+  fall back to exact search. Index diagnostics
   distinguish relationship stores from identically named node stores.
   `.kgl` checkpoints retain vectors, provenance and the built HNSW index, so a
   reloaded store answers through HNSW with the same pending delta it was saved
@@ -39,7 +40,8 @@ before upgrading.
   statement in every storage mode: a later clause that fails restores the exact
   prior vectors, source hashes, model identity, store existence and vector
   index. `vector_score`, `text_score`, and `embedding_norm` also accept
-  individual relationships, with exact scoring for relationship MATCH.
+  individual relationships, scored exactly row by row; the `ORDER BY … DESC
+  LIMIT k` top-k shape is served from the store (see the top-k entry below).
 
 - Durable relationship embedding changes record vectors and provenance together
   with their logical relationship group. A store created, replaced or dropped
@@ -121,6 +123,7 @@ before upgrading.
   log: on a durable graph, a text index built after the last checkpoint is
   absent after a crash and must be rebuilt, while vector indexes are logged
   and survive. The text-search guide now states this for both.
+
 - **Relationship vector top-k is served from the store.** `MATCH (a)-[r:T]->(b)
   RETURN …, vector_score(r, 'p_emb', $q) AS s ORDER BY s DESC LIMIT k` now
   takes the same fused route as its node twin: a plain single-type scan whose
@@ -129,10 +132,14 @@ before upgrading.
   `db.edge_embeddings.query`) with endpoints bound for the k winners only,
   instead of scoring every row. 100k relationships × 384 dimensions: 195 ms →
   4.3 ms, the node twin's cost; the exact `db.edge_embeddings.query` route
-  also got faster (it no longer sorts every hit to keep the top k). Other shapes (a `WHERE`, extra patterns) use the
-  index with an over-fetch filtered to the matched rows, as nodes do. Results
-  are unchanged, including tie order: when scores tie at the cut the query
-  keeps its previous route. `db.edge_embeddings.embed`'s default `batch_size`
+  also got faster (it no longer sorts every hit to keep the top k). Other
+  shapes (a `WHERE`, extra patterns) use the index with an over-fetch filtered
+  to the matched rows, as nodes do. Without an online index the results are
+  exactly the previous ones, tie order included (when scores tie at the cut
+  the query keeps its previous route); with one, the answer comes from HNSW
+  and is approximate, as the node top-k is. Pass `{exact:true}` as the score
+  call's final argument to keep the exact answer; `diagnostics.retrieval`
+  reports the route. `db.edge_embeddings.embed`'s default `batch_size`
   is now 256, matching `embed_texts`.
 
 ### Changed
@@ -154,6 +161,20 @@ before upgrading.
   the whole `DirGraph`; the backend-plus-label-closure form is gone. Secondary
   labels and relationship embedding stores both live above the backend, and a
   frame resolved without them records relationship vector state as absent.
+
+- Rust callers of `api::io::export_embeddings_to_file` and
+  `import_embeddings_from_file` pass a `&RelationshipKeys` (an empty map when
+  no relationship store has parallel members); `ExportStats` gains
+  `relationship_stores` / `relationship_embeddings` and `ImportStats` a
+  `relationships: EdgeCarryStats` field. `ExportStats` is now re-exported from
+  `api::io`, beside the new `RelationshipKeys`, `EdgeCarryStats` and
+  `EmbeddingCopyReport` (returned by
+  `DirGraph::copy_embeddings_with_relationships_from`). `api::embeddings` gains
+  `list_edge_embeddings`, `embedding_info`, `embedding_diagnostics` and their
+  types (`EdgeEmbeddingStoreInfo`, `EmbeddingInfo`, `EmbeddingDiagnostic`,
+  `EmbeddingEntity`, `EmbeddingCoverage`, `LengthStats`); the new structs are
+  `#[non_exhaustive]`. `list_embeddings` and `EmbeddingStoreInfo` are
+  unchanged and stay node-only.
 
 - Python embedding models must expose their final dimension and model identity
   before `set_embedder()`: those attributes are captured at registration. The
@@ -305,7 +326,9 @@ before upgrading.
   `<lexical>` and `<hybrid>` hints likewise appear for relationship text
   indexes, and `describe(cypher=True)` documents every `db.edge_embeddings.*`
   and `db.edge_text_index.*` procedure. Graphs without relationship stores or
-  indexes describe exactly as before.
+  indexes gain no relationship text. The node `<semantic>` hint and the Cypher
+  functions topic now spell `embedding_norm(n, 'col_emb')`, the store name the
+  function takes; they said `'col'`, which errors.
 
 - **`export_embeddings()`, `import_embeddings()` and `copy_embeddings_from()`
   no longer drop relationship embedding stores silently.** They walked node

@@ -495,8 +495,8 @@ graph.cypher("""
 | `labels(n)` | Node labels as a list, primary type first |
 | `degree(n)` | Node's total edge count (in + out; a self-loop counts twice) — e.g. `WHERE degree(n) > 100` to find hubs |
 | `inDegree(n)` / `outDegree(n)` | Node's incoming / outgoing edge count |
-| `keys(n)` / `keys(r)` / `keys(map)` | Sorted property names of a node or relationship, or entry names of a map — `keys(properties(n))` and `keys({a: 1, b: 2})` both work (as JSON list) |
-| `properties(n)` / `properties(r)` | Full property map of a node or relationship (as JSON map) |
+| `keys(n)` / `keys(r)` / `keys(map)` | Sorted property names of a node or relationship, or entry names of a map — `keys(properties(n))` and `keys({a: 1, b: 2})` both work (as JSON list). A relationship's keys also include `type` |
+| `properties(n)` / `properties(r)` | Full property map of a node or relationship (as JSON map); a relationship's map also carries its `type` |
 | `start_node(r)` | Source node of a bound relationship; supports dotted access: `start_node(r).name` |
 | `end_node(r)` | Target node of a bound relationship; supports dotted access: `end_node(r).name` |
 | `date(str)` / `datetime(str)` | Parse a date / ISO-8601 datetime string (`date('2020-01-15')`, `datetime('2020-01-15T10:30:00Z')`) |
@@ -634,6 +634,12 @@ CALL db.edge_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
 YIELD dropped
 ```
 
+`set` yields `stored`, the number of vectors the store holds after the call —
+not the number this call wrote, which no column reports — and `dimension`, the
+store's width. Called once per row, `stored` is therefore a running total. The
+node `set_embeddings` / `add_embeddings` report their `embeddings_stored` the
+same way.
+
 Every `db.edge_embeddings.*` procedure refuses a parameter it does not read,
 naming the key and listing the ones it accepts — including the per-entry map of
 `set`, whose keys are `relationship` and `vector`. A misspelled option is an
@@ -642,13 +648,31 @@ error, never a silently ignored one.
 `db.edge_embeddings.list({type?, text_property?})` reports `entity`, `type`,
 `text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
 `index_state`, pending `delta`, and `unembedded` relationship count.
-Relationship scoring in an ordinary `MATCH` is exact:
-`vector_score(r, 'evidence_emb', $vector)` names the canonical store, while
-`text_score(r, 'evidence', $text)` names the source property and embeds the
-query text. `embedding_norm(r, 'evidence_emb')` reads the stored vector. Whole
-type approximate search is exposed separately through explicit index/query
-procedures; these scalar functions continue to obey the surrounding graph
-filters.
+In an ordinary `MATCH`, `vector_score(r, 'evidence_emb', $vector)` names the
+canonical store, while `text_score(r, 'evidence', $text)` names the source
+property and embeds the query text. `embedding_norm(r, 'evidence_emb')` reads
+the stored vector. Scored per row, they are exact and obey the surrounding
+graph filters.
+
+The top-k shape — `RETURN … vector_score(r, …) AS s ORDER BY s DESC LIMIT k`,
+or the same with `text_score` — is served from the store, as it is for nodes:
+
+- **Plain pattern.** A plain single-type pattern (no `WHERE`, no property
+  maps) whose every relationship of the type is embedded goes straight to the
+  store: through HNSW when an online index serves the metric, otherwise by an
+  exact scan.
+- **Any other shape.** It scores its matched rows. With an online index this
+  goes through HNSW with a 4× over-fetch filtered to those rows, falling back
+  to the exact top-k when the filter underfills.
+
+An HNSW answer is approximate; pass `{exact:true}` as the final argument to
+force the exact route. When scores tie at the cut, the ordinary pipeline
+answers, so the order is the one the unfused query gives.
+`diagnostics.retrieval` reports the route, with store
+`relationship:TYPE.property_emb`, and `disabled_passes=
+['fuse_vector_score_order_limit']` turns the fusion off for nodes and
+relationships alike. `db.edge_embeddings.query` below ranks a whole store
+without a pattern.
 
 The explicit whole-store lifecycle and query procedures are:
 
@@ -2145,9 +2169,9 @@ for row in graph.cypher("CALL db.schema() YIELD nodeType, properties RETURN node
 
 | Column | KGLite value |
 |--------|--------------|
-| `name` | `"<NodeType>.<property>"` (equality / range / text) or `"<NodeType>.(p1,p2,...)"` (composite) |
+| `name` | `"<NodeType>.<property>"` (equality / range / text) or `"<NodeType>.(p1,p2,...)"` (composite); `"relationship:<Type>.<property>"` for a relationship vector or BM25 index |
 | `type` | `"PROPERTY"` for equality + composite indexes; `"RANGE"` for B-tree range indexes; `"FULLTEXT"` for a BM25 text index built by `build_text_index()`; `"VECTOR"` for an HNSW index built by `build_vector_index()` |
-| `entityType` | Always `"NODE"` — relationship indexes are not yet supported |
+| `entityType` | `"NODE"`, or `"RELATIONSHIP"` for a relationship vector or BM25 index |
 | `labelsOrTypes` | `[node_type]` — single-element list |
 | `properties` | `[property]` for equality/range/text/vector; `[p1, p2, ...]` for composite |
 | `state` | `"ONLINE"`, or `"DEFERRED"` on a graph loaded with `kglite.load(path, defer_index_rebuild=True)` — the index is declared but not yet built, and any write builds it. There is no `POPULATING` in between: a KGLite index is built atomically |
@@ -3175,15 +3199,15 @@ A read, so it works on a read-only graph. Returns the same rows and columns as
 
 | Column | Value |
 |---|---|
-| `name` | canonical name — `Label.property` or `Label.(a,b)` |
+| `name` | canonical name — `Label.property`, `Label.(a,b)`, or `relationship:TYPE.property` for a relationship index |
 | `type` | `PROPERTY` (hash equality or composite), `RANGE` (B-tree), `FULLTEXT` (BM25 text index — see `build_text_index()`), or `VECTOR` (HNSW index over an embedding store — see `build_vector_index()`) |
-| `entityType` | `NODE`, or `RELATIONSHIP` for an edge-vector HNSW index |
+| `entityType` | `NODE`, or `RELATIONSHIP` for a relationship vector or BM25 index |
 | `labelsOrTypes` | single-element list holding the node or relationship type |
 | `properties` | indexed property names, sorted for a composite |
 | `state` | `ONLINE`, or `DEFERRED` for an index a `defer_index_rebuild=True` load has declared but not built (any write builds it). Nothing in between — KGLite builds indexes atomically |
 | `stale` | whether the index is behind the graph. `null` on `PROPERTY` / `RANGE` rows, which are maintained on every write and have no staleness to report |
 | `delta` | how many documents (or vectors) the index would re-read to catch up — an upper bound. `null` alongside a `null` `stale` |
-| `unembedded` | `VECTOR` rows only: nodes of the type carrying no vector at all. `null` on every other row |
+| `unembedded` | `VECTOR` rows only: nodes (or relationships) of the type carrying no vector at all. `null` on every other row |
 
 `stale` / `delta` are KGLite-specific and describe the catch-up contract both
 opt-in index kinds share: the index does not follow writes eagerly, it records
@@ -4097,7 +4121,8 @@ compatible subset.
 Ordinary query results and `PROFILE` carry `diagnostics.retrieval`: distinct
 executed vector ranking routes, with `requested_policy` (`auto`, `exact`, or
 `per_row`), `actual_mode` (`hnsw` or `exact`), `fallback_reason`, and an optional
-`store` (`Type.embedding_property`). Reasons include `forced_exact`, `no_index`,
+`store` (`Type.embedding_property`, or `relationship:TYPE.embedding_property`
+for a relationship store). Reasons include `forced_exact`, `no_index`,
 `stale_index`, `metric_mismatch`, `filtered_underfill`, `row_coverage`,
 `row_dependent_selectors`, and `ordering_requires_exact`. A missing store means
 that execution did not establish one common store. Identical nested routes are

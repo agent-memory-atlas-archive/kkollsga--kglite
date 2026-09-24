@@ -6,7 +6,7 @@
 //! detail view, and in the self-closing `<conn>` map lines they become an
 //! additive `embeddings="text_col(dim=D,count=N)"` attribute, so a parser that
 //! reads those lines sees no new element. A graph without relationship stores
-//! renders byte-identically to before.
+//! gets no relationship attribute, element or hint text.
 
 use crate::graph::embeddings::text_column_of;
 use crate::graph::schema::DirGraph;
@@ -56,12 +56,12 @@ pub(super) fn write_conn_embeddings(xml: &mut String, graph: &DirGraph, connecti
     }
 }
 
-const NODE_SEMANTIC: &str = "text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); embedding_norm(n, 'col') — L2 norm (hierarchy depth in Poincaré space)";
+const NODE_SEMANTIC: &str = "text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space)";
 
-const RELATIONSHIP_SEMANTIC: &str = "relationships: vector_score(r, 'col_emb', $v) / text_score(r, 'col', 'query'|[...]) score a matched relationship exactly; CALL db.edge_embeddings.query({type:'T', text_property:'col', vector:$v | text:'query', top_k:10}) YIELD relationship, score, search_method ranks a whole store (HNSW once db.edge_embeddings.build_index has run)";
+const RELATIONSHIP_SEMANTIC: &str = "relationships: vector_score(r, 'col_emb', $v) / text_score(r, 'col', 'query'|[...]) score a matched relationship (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed; {exact:true} forces exact); CALL db.edge_embeddings.query({type:'T', text_property:'col', vector:$v | text:'query', top_k:10}) YIELD relationship, score, search_method ranks a whole store (HNSW once db.edge_embeddings.build_index has run)";
 
 /// The `<semantic>` hint line, when the graph carries a node or a relationship
-/// store. A node-only graph gets exactly its historical line.
+/// store. A node-only graph gets the node line alone.
 pub(super) fn semantic_hint(graph: &DirGraph) -> Option<String> {
     hint_line(
         "semantic",

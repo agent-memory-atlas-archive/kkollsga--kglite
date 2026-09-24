@@ -75,8 +75,9 @@ fn line_with<'a>(xml: &'a str, needle: &str) -> &'a str {
 const CONN_LINE: &str = "<conn type=\"SUPPORTS\" count=\"2\" from=\"SUPPORTS\" to=\"SUPPORTS\" \
     properties=\"body:String\" embeddings=\"body(dim=2,count=1)\"/>";
 
-/// Byte-identical to the hint every node-only graph has always carried.
-const NODE_SEMANTIC_LINE: &str = "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); embedding_norm(n, 'col') — L2 norm (hierarchy depth in Poincaré space)\"/>";
+/// The node-only hint, pinned byte-for-byte (`embedding_norm` takes the store
+/// name, `'col_emb'` — the raw column spelling was a false claim).
+const NODE_SEMANTIC_LINE: &str = "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space)\"/>";
 
 #[test]
 fn the_inventory_map_names_the_relationship_store_on_its_conn_line() {
@@ -129,7 +130,7 @@ fn a_graph_with_both_entities_names_both_spellings() {
 }
 
 #[test]
-fn graphs_without_relationship_stores_render_exactly_as_before() {
+fn graphs_without_relationship_stores_render_only_the_node_hints() {
     let node_only = inventory(&graph(true, false));
     assert_eq!(line_with(&node_only, "<semantic "), NODE_SEMANTIC_LINE);
     assert!(!node_only.contains("embeddings=\""));

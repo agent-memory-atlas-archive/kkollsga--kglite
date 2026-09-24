@@ -63,7 +63,7 @@ When the curated facade proves stable in the field, we cut 1.0 and the pre-1.0
 | `save_graph(&mut arc, path)` | `kglite::api::io::save_graph` | Write an `Arc<DirGraph>` → `Result<(), String>`. |
 | `write_kgl` / `write_kgl_with(..., fsync)` | `kglite::api::io::write_kgl*` | Atomic (temp+rename) + durable (`fsync`) `.kgl` write. `write_kgl_with` toggles the flush. |
 | `write_kgl_to(&graph, &mut writer)` | `kglite::api::io::write_kgl_to` | Serialize the `.kgl` byte stream into any `Write` (backs `to_bytes`). |
-| `export_embeddings_to_file(&graph, path, filter, &keys)` | `kglite::api::io::export_embeddings_to_file` | Write node and relationship embedding stores to a standalone `.kgle` file. Node-only exports are `.kgle` version 3; an export carrying relationship stores is version 4. |
+| `export_embeddings_to_file(&graph, path, filter, &keys)` | `kglite::api::io::export_embeddings_to_file` | Write node and relationship embedding stores to a standalone `.kgle` file → `ExportStats`. Node-only exports are `.kgle` version 3; an export carrying relationship stores is version 4. |
 | `import_embeddings_from_file(&mut graph, path, &keys)` | `kglite::api::io::import_embeddings_from_file` | Install a `.kgle` file's stores by node id and relationship address → `ImportStats` (its `relationships` field is an `EdgeCarryStats`). |
 | `RelationshipKeys`, `EdgeCarryStats`, `EmbeddingCopyReport` | `kglite::api::io::*` | The relationship carry: `RelationshipKeys` maps a relationship type to the key property that tells a parallel group's members apart. |
 
@@ -89,7 +89,7 @@ import or copy then writes nothing. `embedding_dim`, `replace_connections`,
 | `list_embeddings(&graph)` → `Vec<EmbeddingStoreInfo>` | Node stores only. The C ABI publishes its `node_type` field verbatim, so relationship stores are not folded in. |
 | `list_edge_embeddings(&graph)` → `Vec<EdgeEmbeddingStoreInfo>` | Relationship stores, sorted by type and store. |
 | `embedding_info(&graph, EmbeddingEntity, type, column)` | Provenance for one store (dimension, count, model, effective metric, hashed). `EmbeddingEntity::{Node, Relationship}` is explicit because a node type and a relationship type may share a name. |
-| `embedding_diagnostics(&graph, node_type, relationship_type)` | Coverage rows (`EmbeddingDiagnostic`: embedded / embeddable / store-orphan, with `LengthStats`) for node and relationship types. With no filter, every node type and every relationship type is scanned. |
+| `embedding_diagnostics(&graph, node_type, relationship_type)` | Coverage rows (`EmbeddingDiagnostic`: an `EmbeddingCoverage` of embedded / embeddable / store-orphan, with `LengthStats`) for node and relationship types. With no filter, every node type and every relationship type is scanned. |
 
 Relationship vectors are written and queried through Cypher
 (`db.edge_embeddings.*`, `vector_score(r, …)`, `text_score(r, …)`). Every

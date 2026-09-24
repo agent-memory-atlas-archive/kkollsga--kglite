@@ -384,8 +384,9 @@ exists.
 **Freshness.** Writes (`SET`, `REMOVE`, `CREATE` or `MERGE` of a relationship,
 including one that reuses a deleted relationship's storage slot, and
 `add_connections`) are folded in at the next query within
-`auto_refresh_limit`. Past it, rows score `null` until
-`db.edge_text_index.refresh` runs. A deleted relationship's document is removed
+`auto_refresh_limit`. Past it, the query serves what the index holds — a
+relationship whose text changed scores its old text, one created since scores
+`null` — and warns, until `db.edge_text_index.refresh` runs. A deleted relationship's document is removed
 at the delete. `list` and `SHOW INDEXES` report `stale` and `delta` exactly as
 for nodes.
 

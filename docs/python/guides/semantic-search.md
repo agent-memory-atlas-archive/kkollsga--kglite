@@ -469,10 +469,16 @@ Putting the mutating procedure inside `CALL {}` or a `UNION` arm follows the
 existing Cypher write boundary and is rejected before invoking the model.
 
 Use `vector_score(r, 'evidence_emb', $vector)` for a query vector and
-`text_score(r, 'evidence', $text)` for source-column text. Scoring inside a
-filtered `MATCH` is exact. Build and query the separate whole-store HNSW index
-only when the relationship type and source-property store are the intended
-search corpus:
+`text_score(r, 'evidence', $text)` for source-column text. Scored per row inside
+a filtered `MATCH`, they are exact. The top-k shape `ORDER BY vector_score(r, …)
+DESC LIMIT k` (or `text_score`) is served from the store, as for nodes: a plain
+single-type pattern whose every relationship is embedded goes straight to the
+store, and any other shape scores its matched rows. Either way the query runs
+through HNSW when an index is online. That answer is approximate; pass
+`{exact:true}` as the final argument to force exact. Ties at the cut are
+answered by the ordinary pipeline, and `diagnostics["retrieval"]` reports the
+route. Build and query the separate whole-store HNSW index only when the
+relationship type and source-property store are the intended search corpus:
 
 ```python
 graph.cypher("""

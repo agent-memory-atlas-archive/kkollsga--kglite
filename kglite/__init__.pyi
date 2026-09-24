@@ -7699,7 +7699,8 @@ class KnowledgeGraph:
                 ``'euclidean'``, or ``'poincare'``. Persisted with ``save()``.
 
         Returns:
-            Dict with ``embeddings_stored``, ``dimension``, and ``skipped``.
+            Dict with ``embeddings_stored`` (vectors in the store after the
+            call), ``dimension``, and ``skipped``.
         """
         ...
 
