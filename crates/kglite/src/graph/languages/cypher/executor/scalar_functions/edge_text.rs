@@ -136,7 +136,8 @@ impl<'a> CypherExecutor<'a> {
                 };
                 self.warn(format!(
                     "relationship text index '{rel_type}.{prop_name}' is stale: up to {} \
-                     documents are unindexed, {reason} — those rows score null. Refresh with \
+                     documents are unindexed, {reason} — a new relationship scores null and a \
+                     changed one scores its previously indexed text. Refresh with \
                      CALL db.edge_text_index.refresh({{type: '{rel_type}', property: \
                      '{prop_name}'}}).",
                     store.edge_delta_size(self.graph),

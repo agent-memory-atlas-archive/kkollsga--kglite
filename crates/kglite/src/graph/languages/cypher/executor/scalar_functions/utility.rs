@@ -701,8 +701,9 @@ impl CypherExecutor<'_> {
                     )
                 };
                 self.warn(format!(
-                    "text index '{}.{}' is stale: up to {} documents are unindexed, {} — those \
-                     rows score null. Rebuild with build_text_index('{}', '{}').",
+                    "text index '{}.{}' is stale: up to {} documents are unindexed, {} — a new \
+                     node scores null and a changed one scores its previously indexed text. \
+                     Rebuild with build_text_index('{}', '{}').",
                     node_type,
                     prop_name,
                     store.delta_size(self.graph),
