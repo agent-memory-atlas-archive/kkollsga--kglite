@@ -60,7 +60,10 @@ before upgrading.
   4 and a disk generation at edge property format 3, and 0.17.12 refuses each
   by name — "File uses core data version 4 but this library only supports up to
   version 3. Please upgrade kglite." and "unsupported edge property format 3".
-  The refusal is the point; nothing is silently discarded, and upgrading the
+  A `.kgle` embedding export that carries relationship stores is written as
+  version 4, which 0.17.12 refuses as "Embedding file version 4 is newer than
+  supported version 3. Please upgrade kglite."; a node-only export stays the
+  byte-identical version 3. The refusal is the point; nothing is silently discarded, and upgrading the
   reader is the whole migration.
 
 - **A portable knowledge-base guide and synthetic worked example.**
@@ -96,7 +99,6 @@ before upgrading.
   `api::embeddings::{list_edge_embeddings, embedding_info,
   embedding_diagnostics}`; the C ABI listing stays node-only (use
   `db.edge_embeddings.list`).
-
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
@@ -251,8 +253,20 @@ before upgrading.
   `vector_score(r, …)` / `db.edge_embeddings.query` for relationships, and
   `describe(cypher=True)` documents every `db.edge_embeddings.*` procedure.
   Graphs without relationship stores describe exactly as before.
-
-
+- **`export_embeddings()`, `import_embeddings()` and `copy_embeddings_from()`
+  no longer drop relationship embedding stores silently.** They walked node
+  stores only, so a graph whose vectors lived on relationships exported,
+  imported or copied as if it had none while reporting success. Relationship
+  vectors now travel by address — relationship type plus the `(type, id)` of
+  both endpoints — with their source-text hashes and model id. A parallel
+  group (several relationships of a type between the same endpoints) travels
+  only under a key property named in the new keyword-only
+  `relationship_keys={'TYPE': 'property'}`, unique within every group; a group
+  no usable key distinguishes, on either side, raises `ArgumentError` naming
+  the type, endpoints and member count, and nothing is written. Relationships
+  the target lacks are counted as skipped. The report dicts gain
+  `relationship_*` counters; node-only reports keep their keys and values. A
+  durable graph journals the import.
 
 ## [0.17.12] - 2026-09-19
 ### Added

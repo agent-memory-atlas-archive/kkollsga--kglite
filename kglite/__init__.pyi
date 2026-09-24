@@ -7927,8 +7927,14 @@ class KnowledgeGraph:
         """
         ...
 
-    def copy_embeddings_from(self, other: "KnowledgeGraph") -> dict[str, int]:
-        """Copy every embedding store from ``other`` into this graph, by node id.
+    def copy_embeddings_from(
+        self,
+        other: "KnowledgeGraph",
+        *,
+        relationship_keys: dict[str, str] | None = None,
+    ) -> dict[str, int]:
+        """Copy every node and relationship embedding store from ``other`` into
+        this graph, by node id.
 
         The one-call answer to the "rebuild a fresh graph from a source of truth
         on each load, keep the vectors" workflow: build the new graph, then
@@ -7939,13 +7945,37 @@ class KnowledgeGraph:
         matching node here are skipped (counted). Replaces the manual
         ``embeddings()`` → ``add_embeddings()`` → ``embed_texts()`` carry.
 
+        **Relationship stores** travel by address, not by slot: each vector is
+        matched to the relationship of the same type between the nodes with the
+        same ``(type, id)`` endpoints. A *parallel group* — two or more
+        relationships of the type between the same endpoints — is carried only
+        under a key property you name per type in ``relationship_keys``, whose
+        value must be unique within every group. A group without a usable key
+        (none named, a member missing the property, a repeated value), on either
+        side, raises :class:`ArgumentError` naming the type, the endpoints and
+        the member count, and nothing is written. Member order never matters, so
+        a graph that rebuilt a group in another order still gets each vector on
+        the right member. Source-text hashes and the model id travel with the
+        vectors.
+
+        Args:
+            other: The graph to copy from.
+            relationship_keys: Keyword-only. ``{relationship_type: property}``
+                naming the key that tells a parallel group's members apart.
+
+        Raises:
+            ArgumentError: A relationship vector sits in a parallel group no
+                usable key distinguishes; nothing is copied.
+
         Returns:
-            Dict with ``stores_copied``, ``vectors_copied``, ``vectors_skipped``.
+            Dict with ``stores_copied``, ``vectors_copied``, ``vectors_skipped``
+            (node stores, as before) and ``relationship_stores_copied``,
+            ``relationship_vectors_copied``, ``relationship_vectors_skipped``.
 
         Example::
 
             new = build_graph_from_source()          # fresh, no vectors
-            new.copy_embeddings_from(old)             # carry vectors by id
+            new.copy_embeddings_from(old, relationship_keys={"SUPPORTS": "uid"})
             new.embed_texts("Doc", "summary", mode="changed")  # fill only the new/changed
         """
         ...
@@ -8018,28 +8048,84 @@ class KnowledgeGraph:
         self,
         path: str,
         node_types: Union[list[str], dict[str, list[str]], None] = None,
+        *,
+        relationship_keys: dict[str, str] | None = None,
     ) -> dict[str, int]:
-        """Export embeddings to a standalone ``.kgle`` file, keyed by node ID.
+        """Export node and relationship embeddings to a standalone ``.kgle``
+        file, keyed by node ID.
+
+        **Relationship stores** travel by address, not by slot: each vector is
+        matched to the relationship of the same type between the nodes with the
+        same ``(type, id)`` endpoints. A *parallel group* — two or more
+        relationships of the type between the same endpoints — is carried only
+        under a key property you name per type in ``relationship_keys``, whose
+        value must be unique within every group. A group without a usable key
+        (none named, a member missing the property, a repeated value), on either
+        side, raises :class:`ArgumentError` naming the type, the endpoints and
+        the member count, and nothing is written. Member order never matters, so
+        a graph that rebuilt a group in another order still gets each vector on
+        the right member. Source-text hashes and the model id travel with the
+        vectors.
+
+        **Format.** A file with only node stores is written as ``.kgle``
+        version 3, byte-for-byte as before, so every reader since 0.14 reads it.
+        A file carrying relationship stores is version 4; kglite 0.17.12 and
+        older refuse it by version ("Embedding file version 4 is newer than
+        supported version 3. Please upgrade kglite.") rather than misread it.
 
         Args:
             path: Output ``.kgle`` file path.
-            node_types: Optional filter.
+            node_types: Optional filter over **node** stores. Passing one
+                exports only the selected node stores and no relationship store.
 
-                - ``None`` (default): export all stores.
-                - ``list[str]``: only stores whose ``node_type`` is in the list.
+                - ``None`` (default): export all node and relationship stores.
+                - ``list[str]``: only node stores whose ``node_type`` is in the list.
                 - ``dict[str, list[str]]``: per-type list of text columns to export.
+            relationship_keys: Keyword-only. ``{relationship_type: property}``
+                naming each parallel group's key. The file records it, so the
+                import need not repeat it.
+
+        Raises:
+            ArgumentError: A relationship vector sits in a parallel group no
+                usable key distinguishes; no file is written.
 
         Returns:
-            Dict with ``stores`` (count of stores written) and
-            ``embeddings`` (total embedding vectors written).
+            Dict with ``stores`` / ``embeddings`` (node stores and vectors, as
+            before) and ``relationship_stores`` / ``relationship_embeddings``.
+
+        Example::
+
+            g.export_embeddings("vectors.kgle", relationship_keys={"SUPPORTS": "uid"})
         """
         ...
 
-    def import_embeddings(self, path: str) -> dict[str, int]:
-        """Import embeddings from a ``.kgle`` file.
+    def import_embeddings(
+        self,
+        path: str,
+        *,
+        relationship_keys: dict[str, str] | None = None,
+    ) -> dict[str, int]:
+        """Import node and relationship embeddings from a ``.kgle`` file.
 
         Matches embeddings to nodes by ``(node_type, node_id)``. Embeddings
         whose node ID doesn't exist in the current graph are skipped.
+
+        **Relationship stores** travel by address, not by slot: each vector is
+        matched to the relationship of the same type between the nodes with the
+        same ``(type, id)`` endpoints. A *parallel group* — two or more
+        relationships of the type between the same endpoints — is carried only
+        under a key property you name per type in ``relationship_keys``, whose
+        value must be unique within every group (the exporter's key is
+        recorded in the file and used unless you name another). A group without a usable key
+        (none named, a member missing the property, a repeated value), on either
+        side, raises :class:`ArgumentError` naming the type, the endpoints and
+        the member count, and nothing is written. Member order never matters, so
+        a graph that rebuilt a group in another order still gets each vector on
+        the right member. Source-text hashes and the model id travel with the
+        vectors.
+
+        A durable graph (``open(..., durable=...)``) journals the import, so it
+        survives a crash like any other committed write.
 
         When all embeddings — or whole per-type stores — fail to match,
         a ``UserWarning`` is emitted to surface the silent-drop case. This
@@ -8050,6 +8136,13 @@ class KnowledgeGraph:
         Args:
             path: Path to a ``.kgle`` file previously created by
                 ``export_embeddings()``.
+            relationship_keys: Keyword-only. ``{relationship_type: property}``
+                overriding the key the file recorded for a type.
+
+        Raises:
+            ArgumentError: A relationship vector meets a parallel group in this
+                graph that no usable key distinguishes; nothing is imported.
+            OSError: The file is unreadable, malformed, or from a newer format.
 
         Returns:
             Dict with:
@@ -8060,6 +8153,11 @@ class KnowledgeGraph:
             - ``dropped_stores``: number of per-type stores in the file that
               contained entries but had zero matches (so the store was
               not inserted).
+            - ``relationship_stores``, ``relationship_imported``,
+              ``relationship_skipped``, ``relationship_dropped_stores``: the
+              same four counts for relationship stores (a relationship the
+              graph lacks counts as skipped; a warning is emitted when none
+              matched).
         """
         ...
 

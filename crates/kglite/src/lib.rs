@@ -571,6 +571,13 @@ pub mod api {
     /// disk subset export.
     pub mod io {
         pub use crate::graph::durability::same_checkpoint_path;
+        /// Relationship embedding carry for the embedding export / import and
+        /// `copy_embeddings_with_relationships_from`: relationship stores travel
+        /// by endpoint ids, and `RelationshipKeys` names the key property that
+        /// tells a parallel group's members apart.
+        pub use crate::graph::edge_embeddings::carry::{
+            EdgeCarryStats, EmbeddingCopyReport, RelationshipKeys,
+        };
         pub use crate::graph::io::export::{
             to_csv, to_csv_dir, to_d3_json, to_gexf, to_graphml, to_text,
         };

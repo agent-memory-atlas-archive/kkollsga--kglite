@@ -3,6 +3,10 @@
 use super::{codec_deser, codec_ser, MAX_CODEC_BYTES};
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::hnsw::HnswIndex;
+use crate::graph::edge_embeddings::carry::{
+    extract_edge_stores, install_edge_stores, resolve_edge_stores, CarriedEdgeStore,
+    EdgeCarryStats, RelationshipKeys,
+};
 use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::index_freshness::IndexFreshness;
 use crate::graph::schema::{DirGraph, EmbeddingStore};
@@ -202,8 +206,21 @@ pub(super) fn attach_decoded_index(store: &mut EmbeddingStore, entry: PersistedV
 
 /// Magic bytes for the embedding export format.
 const KGLE_MAGIC: [u8; 4] = *b"KGLE";
-/// v3 selects Postcard and includes store/vector provenance.
-const KGLE_VERSION: u32 = 3;
+/// v3 selects Postcard and includes store/vector provenance. A node-only export
+/// still writes exactly v3, so older readers keep reading it.
+const KGLE_NODE_ONLY_VERSION: u32 = 3;
+/// v4 adds relationship stores ([`KgleV4Payload`]). Written only when the
+/// export carries one; 0.17.12 and older refuse it by version number
+/// ("newer than supported version 3") instead of misreading it.
+const KGLE_VERSION: u32 = 4;
+
+/// The v4 payload root: node stores as in v3, then relationship stores
+/// addressed by endpoint ids (see `edge_embeddings::carry`).
+#[derive(Serialize, Deserialize)]
+struct KgleV4Payload {
+    nodes: Vec<ExportedEmbeddingStore>,
+    relationships: Vec<CarriedEdgeStore>,
+}
 
 /// A single embedding store serialized with node IDs (not internal indices).
 /// v2 adds provenance: the store `metric`/`model_id` and a per-entry text hash,
@@ -234,6 +251,9 @@ pub enum EmbeddingExportFilter {
 pub struct ExportStats {
     pub stores: usize,
     pub embeddings: usize,
+    /// Relationship stores written (the file is v4 when this is non-zero).
+    pub relationship_stores: usize,
+    pub relationship_embeddings: usize,
 }
 
 pub struct ImportStats {
@@ -247,21 +267,47 @@ pub struct ImportStats {
     /// different node IDs or types — the count of such stores would
     /// otherwise be invisible to callers.
     pub dropped_stores: usize,
+    /// The relationship-store carry (all zero for a v3 file).
+    pub relationships: EdgeCarryStats,
 }
 
-fn decode_embedding_file_payload(
+/// The decoded payload of any readable version: v3 carries node stores only.
+struct DecodedEmbeddingFile {
+    nodes: Vec<ExportedEmbeddingStore>,
+    relationships: Vec<CarriedEdgeStore>,
+}
+
+fn decode_embedding_file_payload(buf: &[u8], version: u32) -> io::Result<DecodedEmbeddingFile> {
+    match version {
+        KGLE_NODE_ONLY_VERSION => Ok(DecodedEmbeddingFile {
+            nodes: decode_embedding_file_body(buf, version)?,
+            relationships: Vec::new(),
+        }),
+        KGLE_VERSION => {
+            let root: KgleV4Payload = decode_embedding_file_body(buf, version)?;
+            Ok(DecodedEmbeddingFile {
+                nodes: root.nodes,
+                relationships: root.relationships,
+            })
+        }
+        newer if newer > KGLE_VERSION => Err(io::Error::other(format!(
+            "Embedding file version {newer} is newer than supported version {KGLE_VERSION}. \
+             Please upgrade kglite."
+        ))),
+        older => Err(super::pre_014_bincode_error(
+            format!(".kgle embedding file v{older}").as_str(),
+        )),
+    }
+}
+
+fn decode_embedding_file_body<T: serde::de::DeserializeOwned>(
     buf: &[u8],
     version: u32,
-) -> io::Result<Vec<ExportedEmbeddingStore>> {
-    if version < KGLE_VERSION {
-        return Err(super::pre_014_bincode_error(
-            format!(".kgle embedding file v{version}").as_str(),
-        ));
-    }
+) -> io::Result<T> {
     if buf.len() < 9 {
-        return Err(io::Error::other(
-            "Embedding file v3 is truncated before its codec tag.",
-        ));
+        return Err(io::Error::other(format!(
+            "Embedding file v{version} is truncated before its codec tag."
+        )));
     }
     let codec = serde_codec::CodecVersion::from_tag(buf[8])
         .map_err(|e| io::Error::other(format!("Invalid .kgle codec tag: {e}")))?;
@@ -276,6 +322,13 @@ fn decode_embedding_file_payload(
     }
     codec_deser(codec, &payload, payload.capacity() as u64)
         .map_err(|e| io::Error::other(format!("Failed to deserialize embedding data: {e}")))
+}
+
+/// An ambiguous relationship is the caller's to resolve (name a key), so it is
+/// `InvalidInput` rather than a file error; bindings surface it as an argument
+/// error.
+fn carry_refusal(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
 fn validate_exported_embedding_stores(stores: &[ExportedEmbeddingStore]) -> io::Result<()> {
@@ -312,7 +365,15 @@ pub fn export_embeddings_to_file(
     graph: &DirGraph,
     path: &str,
     filter: Option<&EmbeddingExportFilter>,
+    relationship_keys: &RelationshipKeys,
 ) -> io::Result<ExportStats> {
+    // Relationship stores first: a parallel group without a usable key refuses
+    // the whole export before a byte is written. A node-type filter selects
+    // node stores only, so it exports no relationship store.
+    let relationships = match filter {
+        Some(_) => Vec::new(),
+        None => extract_edge_stores(graph, relationship_keys).map_err(carry_refusal)?,
+    };
     // Arena guard: node_weight materializes on the disk backend
     // (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
@@ -375,15 +436,31 @@ pub fn export_embeddings_to_file(
         });
     }
 
-    // Write: magic + version + codec tag + gzip(codec(stores)).
+    let relationship_stores = relationships.len();
+    let relationship_embeddings = relationships.iter().map(|s| s.entries.len()).sum();
+    let node_stores = exported_stores.len();
+    let (version, payload) = if relationships.is_empty() {
+        let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &exported_stores);
+        (KGLE_NODE_ONLY_VERSION, payload)
+    } else {
+        let root = KgleV4Payload {
+            nodes: exported_stores,
+            relationships,
+        };
+        (
+            KGLE_VERSION,
+            codec_ser(serde_codec::CodecVersion::PostcardV1, &root),
+        )
+    };
+    let payload =
+        payload.map_err(|e| io::Error::other(format!("Failed to serialize embeddings: {e}")))?;
+
+    // Write: magic + version + codec tag + gzip(codec(payload)).
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     writer.write_all(&KGLE_MAGIC)?;
-    writer.write_all(&KGLE_VERSION.to_le_bytes())?;
+    writer.write_all(&version.to_le_bytes())?;
     writer.write_all(&[serde_codec::CodecVersion::PostcardV1.tag()])?;
-
-    let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &exported_stores)
-        .map_err(|e| io::Error::other(format!("Failed to serialize embeddings: {e}")))?;
     let mut gz = GzEncoder::new(&mut writer, Compression::new(3));
     gz.write_all(&payload)?;
     gz.finish()?;
@@ -391,13 +468,19 @@ pub fn export_embeddings_to_file(
     writer.flush()?;
 
     Ok(ExportStats {
-        stores: exported_stores.len(),
+        stores: node_stores,
         embeddings: total_embeddings,
+        relationship_stores,
+        relationship_embeddings,
     })
 }
 
 /// Import embeddings from a .kgle file, resolving node IDs to current graph indices.
-pub fn import_embeddings_from_file(graph: &mut DirGraph, path: &str) -> io::Result<ImportStats> {
+pub fn import_embeddings_from_file(
+    graph: &mut DirGraph,
+    path: &str,
+    relationship_keys: &RelationshipKeys,
+) -> io::Result<ImportStats> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut buf = Vec::new();
@@ -416,17 +499,14 @@ pub fn import_embeddings_from_file(graph: &mut DirGraph, path: &str) -> io::Resu
         ));
     }
     let version = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
-    if version > KGLE_VERSION {
-        return Err(io::Error::other(format!(
-            "Embedding file version {} is newer than supported version {}. Please upgrade kglite.",
-            version, KGLE_VERSION,
-        )));
-    }
-
-    let exported_stores = decode_embedding_file_payload(&buf, version)?;
+    let decoded = decode_embedding_file_payload(&buf, version)?;
+    let exported_stores = decoded.nodes;
     // Preflight the complete payload before touching graph indexes or stores:
-    // a malformed later store must not leave earlier stores installed.
+    // a malformed later store must not leave earlier stores installed, and an
+    // ambiguous relationship refuses the whole import.
     validate_exported_embedding_stores(&exported_stores)?;
+    let relationships = resolve_edge_stores(graph, decoded.relationships, relationship_keys)
+        .map_err(carry_refusal)?;
 
     let mut total_imported = 0usize;
     let mut total_skipped = 0usize;
@@ -479,12 +559,14 @@ pub fn import_embeddings_from_file(graph: &mut DirGraph, path: &str) -> io::Resu
     if stores_count > 0 {
         graph.bump_version();
     }
+    let relationships = install_edge_stores(graph, relationships).map_err(io::Error::other)?;
 
     Ok(ImportStats {
         stores: stores_count,
         imported: total_imported,
         skipped: total_skipped,
         dropped_stores,
+        relationships,
     })
 }
 
@@ -548,7 +630,7 @@ mod tests {
     fn write_embedding_file(stores: Vec<ExportedEmbeddingStore>) -> NamedTempFile {
         let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &stores).unwrap();
         let bytes = embedding_file(
-            KGLE_VERSION,
+            KGLE_NODE_ONLY_VERSION,
             Some(serde_codec::CodecVersion::PostcardV1.tag()),
             &payload,
         );
@@ -576,7 +658,7 @@ mod tests {
         ];
         let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &stores).unwrap();
         let bytes = embedding_file(
-            KGLE_VERSION,
+            KGLE_NODE_ONLY_VERSION,
             Some(serde_codec::CodecVersion::PostcardV1.tag()),
             &payload,
         );
@@ -584,7 +666,11 @@ mod tests {
         file.write_all(&bytes).unwrap();
 
         let mut graph = graph_with_doc_and_embedding(&[9.0, 9.0]);
-        let error = match import_embeddings_from_file(&mut graph, file.path().to_str().unwrap()) {
+        let error = match import_embeddings_from_file(
+            &mut graph,
+            file.path().to_str().unwrap(),
+            &RelationshipKeys::new(),
+        ) {
             Ok(_) => panic!("a vector whose width differs from its store must be rejected"),
             Err(error) => error,
         };
@@ -615,7 +701,7 @@ mod tests {
         }];
         let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &stores).unwrap();
         let bytes = embedding_file(
-            KGLE_VERSION,
+            KGLE_NODE_ONLY_VERSION,
             Some(serde_codec::CodecVersion::PostcardV1.tag()),
             &payload,
         );
@@ -623,7 +709,11 @@ mod tests {
         file.write_all(&bytes).unwrap();
 
         let mut graph = graph_with_doc_and_embedding(&[9.0, 9.0]);
-        let error = match import_embeddings_from_file(&mut graph, file.path().to_str().unwrap()) {
+        let error = match import_embeddings_from_file(
+            &mut graph,
+            file.path().to_str().unwrap(),
+            &RelationshipKeys::new(),
+        ) {
             Ok(_) => panic!("a non-finite vector must be rejected"),
             Err(error) => error,
         };
@@ -649,7 +739,13 @@ mod tests {
         let before = session.version();
 
         let stats = session
-            .transact(|working| import_embeddings_from_file(working, file.path().to_str().unwrap()))
+            .transact(|working| {
+                import_embeddings_from_file(
+                    working,
+                    file.path().to_str().unwrap(),
+                    &RelationshipKeys::new(),
+                )
+            })
             .unwrap();
 
         assert_eq!(stats.stores, 1);
@@ -683,8 +779,12 @@ mod tests {
             graph.embeddings.clear();
             let before = graph.version();
 
-            let stats =
-                import_embeddings_from_file(&mut graph, file.path().to_str().unwrap()).unwrap();
+            let stats = import_embeddings_from_file(
+                &mut graph,
+                file.path().to_str().unwrap(),
+                &RelationshipKeys::new(),
+            )
+            .unwrap();
 
             assert_eq!(stats.stores, 0);
             assert_eq!(stats.imported, 0);
@@ -741,6 +841,69 @@ mod tests {
         );
     }
 
+    /// A node-only export is byte-for-byte the v3 file it always was: header
+    /// version 3, then the gzip of the node stores alone. Readers up to 0.17.12
+    /// accept exactly these bytes, so a v4 header here would lock them out of
+    /// files that carry nothing they cannot read.
+    #[test]
+    fn a_node_only_export_writes_the_v3_bytes() {
+        let graph = graph_with_doc_and_embedding(&[0.25, 0.75]);
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap();
+        let stats =
+            export_embeddings_to_file(&graph, path, None, &RelationshipKeys::new()).unwrap();
+        assert_eq!(
+            (stats.relationship_stores, stats.relationship_embeddings),
+            (0, 0)
+        );
+
+        let expected_stores = vec![ExportedEmbeddingStore {
+            node_type: "Doc".to_string(),
+            text_column: "summary".to_string(),
+            dimension: 2,
+            metric: None,
+            model_id: None,
+            entries: vec![(Value::UniqueId(7), vec![0.25, 0.75], None)],
+        }];
+        let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &expected_stores).unwrap();
+        let expected = embedding_file(
+            3,
+            Some(serde_codec::CodecVersion::PostcardV1.tag()),
+            &payload,
+        );
+        assert_eq!(std::fs::read(path).unwrap(), expected);
+    }
+
+    /// The reader matches versions exactly: v3 and v4 decode, a newer file is
+    /// refused as newer, and only a genuinely older one gets the pre-0.14
+    /// message. A `version < current` rule would call every v3 file pre-0.14.
+    #[test]
+    fn the_reader_matches_each_version_explicitly() {
+        let tag = Some(serde_codec::CodecVersion::PostcardV1.tag());
+        let v4 = KgleV4Payload {
+            nodes: vec![fixture_store()],
+            relationships: Vec::new(),
+        };
+        let payload = codec_ser(serde_codec::CodecVersion::PostcardV1, &v4).unwrap();
+        let decoded = decode_embedding_file_payload(&embedding_file(4, tag, &payload), 4).unwrap();
+        assert_eq!(decoded.nodes[0].node_type, "Doc");
+        assert!(decoded.relationships.is_empty());
+
+        let newer = decode_embedding_file_payload(&embedding_file(5, tag, &payload), 5)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            newer.contains("version 5 is newer than supported version 4"),
+            "{newer}"
+        );
+        let older = decode_embedding_file_payload(&embedding_file(2, tag, &payload), 2)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(older.contains("pre-0.14"), "{older}");
+    }
+
     #[test]
     fn pre_014_embedding_payload_is_rejected() {
         let stores = vec![fixture_store()];
@@ -760,7 +923,7 @@ mod tests {
             Some(serde_codec::CodecVersion::PostcardV1.tag()),
             &postcard_payload,
         );
-        let decoded = decode_embedding_file_payload(&current, 3).unwrap();
+        let decoded = decode_embedding_file_payload(&current, 3).unwrap().nodes;
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].node_type, "Doc");
         assert_eq!(decoded[0].text_column, "summary");

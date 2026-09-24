@@ -20,6 +20,8 @@ use crate::graph::storage::{GraphRead, GraphWrite};
 #[path = "edge_vector_index.rs"]
 pub(crate) mod vector_index;
 
+#[path = "edge_embedding_carry.rs"]
+pub(crate) mod carry;
 pub(crate) type EdgeEmbeddingKey = (String, String);
 
 const VACANT_EDGE: u32 = u32::MAX;

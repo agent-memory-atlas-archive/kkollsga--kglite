@@ -514,9 +514,24 @@ with an explicit scratch output:
 python examples/relationship_graphrag.py --output /tmp/claims.kgl
 ```
 
-Relationship values should stay bound inside the
-statement: physical IDs are graph-local slots, and automatic transfer across
-independently rebuilt graphs is unavailable without a unique application key.
+Relationship values should stay bound inside the statement: physical IDs are
+graph-local slots. To carry relationship vectors to an independently rebuilt
+graph, use `export_embeddings()` / `import_embeddings()` or
+`copy_embeddings_from()`. Each vector is matched by relationship type and the
+`(type, id)` of both endpoints. Where several relationships of one type
+connect the same two nodes, name a property that is unique within each such
+group, and each vector lands on the right member whatever order the rebuild
+created them in:
+
+```python
+old.export_embeddings("vectors.kgle", relationship_keys={"SUPPORTS": "uid"})
+new.import_embeddings("vectors.kgle")  # the file records the key
+```
+
+A group with no usable key is refused by name (type, endpoints, member count)
+rather than guessed at, and nothing is written. An export that carries
+relationship stores is `.kgle` version 4, which kglite 0.17.12 and older
+refuse by version; a node-only export stays version 3.
 
 The query argument's type decides how `text_score` reads it — a list is a
 vector, a string is text — so a stringified vector like `'[1.0, 2.0]'` is

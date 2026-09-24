@@ -293,24 +293,13 @@ impl KnowledgeGraph {
         d.into_py_any(py)
     }
 
-    /// Copy every embedding store from `other` into this graph, matching
-    /// vectors by node id.
-    ///
-    /// The one-call answer to the "rebuild a fresh graph from a source of
-    /// truth on each load, keep the vectors" workflow: build the new graph,
-    /// then `new.copy_embeddings_from(old)`. Vectors land on the new nodes that
-    /// share an id, carrying each store's dimension, metric, model id, and
-    /// per-node text hashes — so a following `embed_texts(mode='changed')`
-    /// re-embeds only genuinely-new/changed text. Vectors whose id has no
-    /// matching node here are skipped (counted). Replaces the manual
-    /// `embeddings()` → `add_embeddings()` → `embed_texts()` carry.
-    ///
-    /// Returns a dict with ``stores_copied``, ``vectors_copied``, and
-    /// ``vectors_skipped``.
+    /// Copy every node and relationship embedding store from `other` into this graph.
+    #[pyo3(signature = (other, *, relationship_keys=None))]
     fn copy_embeddings_from(
         &mut self,
         py: Python<'_>,
         other: &Bound<'_, KnowledgeGraph>,
+        relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
         // Mirror extend()'s safe shape: clone the source Arc first (so a
         // self-copy doesn't double-borrow), then mutate self.
@@ -319,13 +308,19 @@ impl KnowledgeGraph {
             Err(_) => Arc::clone(&self.inner),
         };
         self.check_durable_owner()?;
+        let keys = relationship_keys.unwrap_or_default();
         let g = crate::graph::get_graph_mut(&mut self.inner);
-        let (stores, vectors, skipped) = g.copy_embeddings_from(&src_arc);
+        let report = g
+            .copy_embeddings_with_relationships_from(&src_arc, &keys)
+            .map_err(crate::error_py::ArgumentError::new_err)?;
         self.commit_wal()?;
         let d = PyDict::new(py);
-        d.set_item("stores_copied", stores)?;
-        d.set_item("vectors_copied", vectors)?;
-        d.set_item("vectors_skipped", skipped)?;
+        d.set_item("stores_copied", report.stores_copied)?;
+        d.set_item("vectors_copied", report.vectors_copied)?;
+        d.set_item("vectors_skipped", report.vectors_skipped)?;
+        d.set_item("relationship_stores_copied", report.relationships.stores)?;
+        d.set_item("relationship_vectors_copied", report.relationships.carried)?;
+        d.set_item("relationship_vectors_skipped", report.relationships.skipped)?;
         d.into_py_any(py)
     }
 
@@ -409,26 +404,14 @@ impl KnowledgeGraph {
         self.commit_wal()
     }
 
-    /// Export embeddings to a standalone .kgle file.
-    ///
-    /// Exported embeddings are keyed by node ID, so they survive graph rebuilds.
-    ///
-    /// Args:
-    ///     path: File path to write (typically ending in .kgle)
-    ///     node_types: Optional filter. Can be:
-    ///         - None: export all embeddings
-    ///         - list[str]: export all embedding stores for these node types
-    ///         - dict[str, list[str]]: export specific (node_type -> [text_columns]) pairs.
-    ///           An empty list means all properties for that type.
-    ///
-    /// Returns:
-    ///     Dict with 'stores' (int) and 'embeddings' (int) counts.
-    #[pyo3(signature = (path, node_types=None))]
+    /// Export node and relationship embeddings to a standalone .kgle file.
+    #[pyo3(signature = (path, node_types=None, *, relationship_keys=None))]
     fn export_embeddings(
         &self,
         py: Python<'_>,
         path: &str,
         node_types: Option<Bound<'_, PyAny>>,
+        relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
         let filter = match &node_types {
             None => None,
@@ -454,36 +437,34 @@ impl KnowledgeGraph {
 
         let inner = self.inner.clone();
         let path_owned = path.to_string();
+        let keys = relationship_keys.unwrap_or_default();
         let stats = py
-            .detach(move || file::export_embeddings_to_file(&inner, &path_owned, filter.as_ref()))
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
+            .detach(move || {
+                file::export_embeddings_to_file(&inner, &path_owned, filter.as_ref(), &keys)
+            })
+            .map_err(embedding_file_error)?;
 
         let result = PyDict::new(py);
         result.set_item("stores", stats.stores)?;
         result.set_item("embeddings", stats.embeddings)?;
+        result.set_item("relationship_stores", stats.relationship_stores)?;
+        result.set_item("relationship_embeddings", stats.relationship_embeddings)?;
         result.into_py_any(py)
     }
 
-    /// Import embeddings from a .kgle file.
-    ///
-    /// Matches embeddings to nodes by (node_type, node_id). Embeddings whose
-    /// node ID doesn't exist in the current graph are skipped. When all
-    /// embeddings (or all stores) are skipped — a strong signal that the
-    /// .kgle file was exported from a graph with different IDs or types —
-    /// a ``UserWarning`` is emitted so the silent-drop case becomes visible.
-    ///
-    /// Args:
-    ///     path: Path to a .kgle file previously created by export_embeddings.
-    ///
-    /// Returns:
-    ///     Dict with 'stores' (int), 'imported' (int), 'skipped' (int), and
-    ///     'dropped_stores' (int) counts. ``dropped_stores`` is the number
-    ///     of per-type stores that contained entries but had zero matches.
-    fn import_embeddings(&mut self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
+    /// Import node and relationship embeddings from a .kgle file.
+    #[pyo3(signature = (path, *, relationship_keys=None))]
+    fn import_embeddings(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        relationship_keys: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
+        let keys = relationship_keys.unwrap_or_default();
         let g = get_graph_mut(&mut self.inner);
-        let stats = file::import_embeddings_from_file(g, path)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
+        let stats =
+            file::import_embeddings_from_file(g, path, &keys).map_err(embedding_file_error)?;
         self.commit_wal()?;
 
         // Surface the silent-drop cases as a UserWarning: visible by default,
@@ -520,11 +501,32 @@ impl KnowledgeGraph {
             );
         }
 
+        let relationships = &stats.relationships;
+        if relationships.carried == 0 && relationships.skipped > 0 {
+            let msg = format!(
+                "import_embeddings('{}'): imported 0 relationship embeddings, skipped {} — \
+                 no relationship in the file connects nodes of this graph by the same \
+                 type and endpoint ids.",
+                path, relationships.skipped
+            );
+            let cmsg = std::ffi::CString::new(msg).unwrap_or_default();
+            let _ = PyErr::warn(
+                py,
+                py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
+                cmsg.as_c_str(),
+                1,
+            );
+        }
+
         let result = PyDict::new(py);
         result.set_item("stores", stats.stores)?;
         result.set_item("imported", stats.imported)?;
         result.set_item("skipped", stats.skipped)?;
         result.set_item("dropped_stores", stats.dropped_stores)?;
+        result.set_item("relationship_stores", relationships.stores)?;
+        result.set_item("relationship_imported", relationships.carried)?;
+        result.set_item("relationship_skipped", relationships.skipped)?;
+        result.set_item("relationship_dropped_stores", relationships.dropped_stores)?;
         result.into_py_any(py)
     }
 
@@ -1102,5 +1104,16 @@ fn type_key(entity: kglite_core::api::embeddings::EmbeddingEntity) -> &'static s
     match entity {
         kglite_core::api::embeddings::EmbeddingEntity::Node => "node_type",
         kglite_core::api::embeddings::EmbeddingEntity::Relationship => "relationship_type",
+    }
+}
+
+/// An ambiguous relationship carry is the caller's to resolve (it names a
+/// key), so it is an `ArgumentError`; anything else about the file stays an
+/// `IOError`.
+fn embedding_file_error(error: std::io::Error) -> PyErr {
+    if error.kind() == std::io::ErrorKind::InvalidInput {
+        crate::error_py::ArgumentError::new_err(error.to_string())
+    } else {
+        PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string())
     }
 }

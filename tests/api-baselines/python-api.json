@@ -598,7 +598,7 @@
         },
         "copy_embeddings_from": {
           "kind": "method",
-          "signature": "(self, /, other)"
+          "signature": "(self, /, other, *, relationship_keys=None)"
         },
         "count": {
           "kind": "method",
@@ -746,7 +746,7 @@
         },
         "export_embeddings": {
           "kind": "method",
-          "signature": "(self, /, path, node_types=None)"
+          "signature": "(self, /, path, node_types=None, *, relationship_keys=None)"
         },
         "export_recipes": {
           "kind": "method",
@@ -830,7 +830,7 @@
         },
         "import_embeddings": {
           "kind": "method",
-          "signature": "(self, /, path)"
+          "signature": "(self, /, path, *, relationship_keys=None)"
         },
         "import_recipes": {
           "kind": "method",
