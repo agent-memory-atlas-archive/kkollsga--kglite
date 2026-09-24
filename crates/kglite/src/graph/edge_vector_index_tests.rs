@@ -481,3 +481,32 @@ fn wal_replay_restores_the_metric_the_index_was_built_for() {
     .unwrap();
     assert_eq!(served.search_method, "hnsw");
 }
+
+/// A refresh with no index to refresh refuses, naming the store and the build
+/// call. It answered `0` — "nothing outstanding" — which is exactly what an
+/// agent reads after a relationship delete has dropped the index to `none`.
+#[test]
+fn refresh_without_an_index_refuses_and_names_the_build_call() {
+    let (mut graph, _, _, _) = fixture();
+    let error = refresh_edge_vector_index(&graph, "CLAIMS", "text").unwrap_err();
+    assert!(error.contains("'CLAIMS.text_emb'"), "{error}");
+    assert!(
+        error.contains("db.edge_embeddings.build_index({type: 'CLAIMS', text_property: 'text'})"),
+        "{error}"
+    );
+
+    build_edge_vector_index(
+        &mut graph,
+        "CLAIMS",
+        "text",
+        EdgeVectorIndexOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(refresh_edge_vector_index(&graph, "CLAIMS", "text"), Ok(0));
+    assert!(drop_edge_vector_index(&mut graph, "CLAIMS", "text").unwrap());
+    assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text").is_err());
+
+    // Read-only does not turn the refusal back into a silent zero.
+    graph.read_only = true;
+    assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text").is_err());
+}

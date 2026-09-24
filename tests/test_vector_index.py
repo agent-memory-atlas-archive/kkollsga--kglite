@@ -652,7 +652,8 @@ class TestFreshnessUx:
         assert g.refresh_vector_index("Doc", "summary") == 5
         assert _vector_row(g)["stale"] is False
         assert g.refresh_vector_index("Doc", "summary") == 0
-        assert g.refresh_vector_index("Doc", "nope") == 0
+        with pytest.raises(ValueError, match="no embedding store 'Doc.nope_emb'"):
+            g.refresh_vector_index("Doc", "nope")
 
     def test_a_partly_covered_index_survives_save_and_load(self):
         g, _ = _build_graph(n=600)

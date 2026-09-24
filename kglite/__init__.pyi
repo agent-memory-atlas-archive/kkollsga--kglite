@@ -8409,8 +8409,11 @@ class KnowledgeGraph:
         into an embedding run.
 
         What *does* drop the index is a change to the slot layout the index
-        addresses: deleting an embedded node (the delete prunes its vector),
-        rolling that delete back, and ``vacuum()``. Rebuild after those.
+        addresses: deleting an embedded node (the delete prunes its vector) and
+        a ``vacuum()`` that compacts after a delete. Rebuild after those —
+        :meth:`refresh_vector_index` refuses while no index is built. A delete
+        that a failed statement or a rolled-back transaction undoes leaves the
+        index in place.
 
         The selection does not have to be ``node_type``: while only one node
         type carries ``text_column``, a whole-graph search on a multi-type
@@ -8478,12 +8481,21 @@ class KnowledgeGraph:
     def refresh_vector_index(self, node_type: str, text_column: str) -> int:
         """Fold every outstanding vector into the HNSW index now.
 
-        Returns how many vectors were folded in — ``0`` when the index is
-        already current, when none is built (catch-up never builds one), or on a
-        read-only graph. Queries do this on their own while the outstanding
-        delta stays under ``auto_refresh_limit``; call this to pay the cost at a
-        moment of your choosing, or to bring a larger delta back in one
-        incremental step instead of rebuilding the whole index.
+        Queries do this on their own while the outstanding delta stays under
+        ``auto_refresh_limit``; call this to pay the cost at a moment of your
+        choosing, or to bring a larger delta back in one incremental step
+        instead of rebuilding the whole index. Catch-up never builds an index:
+        deleting an embedded node, or a ``vacuum()`` that compacts, drops it,
+        and only :meth:`build_vector_index` brings it back.
+
+        Returns:
+            int: how many vectors were folded in — ``0`` when the index is
+            already current, or on a read-only graph.
+
+        Raises:
+            ValueError: if ``(node_type, text_column)`` has no embedding store,
+                or the store has no index to refresh. The message names the
+                ``build_vector_index(...)`` call to run.
         """
         ...
 

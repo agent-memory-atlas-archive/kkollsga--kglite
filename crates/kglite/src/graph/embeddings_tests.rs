@@ -330,7 +330,7 @@ fn a_vector_write_becomes_a_catch_up_delta() {
     assert_eq!(store_of(&g).delta_size(), 2);
     assert_eq!(store_of(&g).indexed_slots(), 2, "not yet caught up");
 
-    assert_eq!(refresh_vector_index(&g, "Doc", "summary"), Some(2));
+    assert_eq!(refresh_vector_index(&g, "Doc", "summary"), Ok(2));
     assert!(!store_of(&g).index_is_stale());
     assert_eq!(store_of(&g).indexed_slots(), 3);
 }
@@ -357,9 +357,48 @@ fn catch_up_never_embeds_an_unembedded_node() {
     assert_eq!(status[0].delta, 0, "and is therefore not a delta");
     assert!(!status[0].stale);
 
-    refresh_vector_index(&g, "Doc", "summary");
+    refresh_vector_index(&g, "Doc", "summary").unwrap();
     assert_eq!(store_of(&g).len(), 2, "the refresh embedded nothing");
     assert_eq!(list_vector_indexes(&g)[0].unembedded, 1);
+}
+
+/// A refresh with no index to refresh refuses, naming the store and the build
+/// call. It answered `0` — "nothing outstanding" — which is what an agent read
+/// after a node delete had dropped the index; a missing store answered `0` too.
+#[test]
+fn refresh_vector_index_refuses_without_an_index_or_a_store() {
+    let mut g = docs(&[1, 2, 3]);
+    set_embeddings(
+        &mut g,
+        "Doc",
+        "summary",
+        None,
+        batch(&[(1, [1.0, 0.0]), (2, [0.0, 1.0])]),
+    )
+    .unwrap();
+    let error = refresh_vector_index(&g, "Doc", "summary").unwrap_err();
+    assert!(
+        error.contains("no vector index on 'Doc.summary_emb'"),
+        "{error}"
+    );
+    assert!(
+        error.contains("build_vector_index('Doc', 'summary')"),
+        "{error}"
+    );
+    let error = refresh_vector_index(&g, "Doc", "nope").unwrap_err();
+    assert!(
+        error.contains("no embedding store 'Doc.nope_emb'"),
+        "{error}"
+    );
+
+    build_vector_index(&mut g, "Doc", "summary", None, None, None, None, None).unwrap();
+    assert_eq!(refresh_vector_index(&g, "Doc", "summary"), Ok(0));
+    assert!(drop_vector_index(&mut g, "Doc", "summary"));
+    assert!(refresh_vector_index(&g, "Doc", "summary").is_err());
+
+    // Read-only does not turn the refusal back into a silent zero.
+    g.read_only = true;
+    assert!(refresh_vector_index(&g, "Doc", "summary").is_err());
 }
 
 /// The ceiling is the caller's, and a rebuild keeps it.
@@ -943,7 +982,7 @@ fn a_read_only_graph_serves_the_exact_scan_instead_of_catching_up() {
     add_embeddings(&mut g, "Doc", "summary", None, added).unwrap();
     g.read_only = true;
 
-    assert_eq!(refresh_vector_index(&g, "Doc", "summary"), Some(0));
+    assert_eq!(refresh_vector_index(&g, "Doc", "summary"), Ok(0));
     let queries = corpus(3, 8, 11);
     let _ = recall_at_k(&g, &vectors, &queries, 5);
     assert!(

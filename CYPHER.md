@@ -694,6 +694,17 @@ CALL db.edge_embeddings.query({
 }) YIELD relationship, score, search_method
 ```
 
+`refresh_index` folds pending changes into a built index and never builds
+one: with no index it refuses, naming the `build_index` call, rather than
+yielding `refreshed: 0`. Deletes are why that matters. `SET` and `CREATE`
+leave an index `online`, but deleting an embedded relationship — `DELETE r`,
+or `DETACH DELETE` of either endpoint — drops it to `index_state: 'none'`
+until `build_index` runs again, exactly as deleting an embedded node drops the
+node index; so does a `vacuum()` that compacts after a delete (a no-op on
+disk). Deleting a relationship the store holds no vector for, and a delete
+that a failed statement or a rolled-back transaction undoes, leave it in
+place. Until the rebuild, `query` and the fused top-k answer by exact scan.
+
 The query can also be text: `text:'…'` (a string literal or a `$parameter`
 bound to a string) in place of `vector`. Before execution the statement
 embeds it once with the registered embedder, exactly as `text_score` embeds

@@ -186,6 +186,19 @@ before upgrading.
   relationship semantics, complete-result envelopes, removable memory and
   regeneration-safe overlays; and links a runnable help-vault tutorial.
 
+- **Refreshing a vector index that does not exist now refuses instead of
+  answering `0`.** `refresh_vector_index(node_type, text_column)` raises
+  `ValueError` when the store has no index (or there is no store), and
+  `CALL db.edge_embeddings.refresh_index(...)` refuses instead of yielding
+  `{refreshed: 0}`; both messages name the store and the build call. A `0`
+  read as "nothing outstanding" after a delete had dropped the index. The Rust
+  `kglite::api::embeddings::refresh_vector_index` now returns
+  `Result<usize, String>` instead of `Option<usize>`. The semantic-search
+  guide, `CYPHER.md` and `describe()` now state which mutations drop a
+  relationship index — deleting an embedded relationship or either endpoint,
+  or a `vacuum()` that compacts — and correct the node claim that a
+  rolled-back delete drops it (it leaves the index in place).
+
 ### Fixed
 
 - Retained relationship bindings no longer expose a replacement edge's
@@ -344,7 +357,6 @@ before upgrading.
   the target lacks are counted as skipped. The report dicts gain
   `relationship_*` counters; node-only reports keep their keys and values. A
   durable graph journals the import.
-
 ## [0.17.12] - 2026-09-19
 ### Added
 

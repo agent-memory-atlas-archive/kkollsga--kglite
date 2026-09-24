@@ -116,6 +116,10 @@ fn a_graph_with_only_relationship_stores_gets_the_semantic_hint() {
     assert!(semantic.contains("vector_score(r, 'col_emb'"), "{semantic}");
     assert!(semantic.contains("db.edge_embeddings.query"), "{semantic}");
     assert!(
+        semantic.contains("deleting an embedded relationship or an endpoint drops that index"),
+        "the delete contract: {semantic}"
+    );
+    assert!(
         !semantic.contains("text_score(n,"),
         "no node store, so no node spelling: {semantic}"
     );
@@ -169,6 +173,14 @@ fn the_cypher_reference_names_the_relationship_embedding_procedures() {
         );
     }
     assert!(proc_line.contains("text:"), "P5's text option: {proc_line}");
+    assert!(
+        proc_line.contains("refresh_index refuses when no index is built"),
+        "{proc_line}"
+    );
+    assert!(
+        proc_line.contains("DETACH DELETE of either endpoint"),
+        "the delete contract: {proc_line}"
+    );
     assert!(
         !proc_line.contains("text_bm25"),
         "the lexical lane is not documented before it ships"

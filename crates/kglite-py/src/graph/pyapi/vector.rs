@@ -899,9 +899,10 @@ impl KnowledgeGraph {
     /// which is correct and slower, until you rebuild. Catch-up only ever
     /// indexes vectors that exist; a node with no embedding is reported by
     /// ``SHOW INDEXES`` as ``unembedded`` and is never embedded by a query.
-    /// Deleting an embedded node, ``compact()`` and a rolled-back delete still
-    /// drop the index outright — each of them moves the slot layout the index
-    /// addresses — so rebuild after those.
+    /// Deleting an embedded node, and a ``vacuum()`` that compacts after a
+    /// delete, still drop the index outright — each moves the slot layout the
+    /// index addresses — so rebuild after those. A delete that a failed
+    /// statement or a rolled-back transaction undoes leaves the index in place.
     ///
     /// The selection does **not** have to be that one node type: as long as
     /// only one type carries ``text_column``, a whole-graph search (or any
@@ -1001,21 +1002,11 @@ impl KnowledgeGraph {
         ))
     }
 
-    /// Fold every outstanding vector into the HNSW index now, instead of
-    /// waiting for a query to do it.
-    ///
-    /// Returns the number of vectors folded in — ``0`` when the index is
-    /// already current, when none is built (catch-up never builds one), or on
-    /// a read-only graph. Queries do this on their own while the delta stays
-    /// under ``auto_refresh_limit``; call it explicitly to pay the cost at a
-    /// moment of your choosing, or to bring an over-limit delta back in one
-    /// step without a rebuild.
+    /// Fold every outstanding vector into the HNSW index now; refuses when no index is built.
     #[pyo3(signature = (node_type, text_column))]
     fn refresh_vector_index(&self, node_type: &str, text_column: &str) -> PyResult<usize> {
-        Ok(
-            kglite_core::api::embeddings::refresh_vector_index(&self.inner, node_type, text_column)
-                .unwrap_or(0),
-        )
+        kglite_core::api::embeddings::refresh_vector_index(&self.inner, node_type, text_column)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 }
 

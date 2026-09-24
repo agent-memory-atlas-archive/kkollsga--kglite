@@ -556,17 +556,39 @@ pub fn has_vector_index(graph: &DirGraph, node_type: &str, text_column: &str) ->
 }
 
 /// Fold every outstanding vector into the HNSW index over
-/// `(node_type, text_column)`, returning how many slots it touched.
+/// `(node_type, text_column)`, returning how many slots it touched (`0` when
+/// the index is current, or on a read-only graph).
 ///
-/// `None` when no store exists. This is the explicit form of the catch-up a
-/// query performs on its own when the delta is under the index's ceiling; the
-/// decision itself is `EmbeddingStore::can_auto_refresh`.
-pub fn refresh_vector_index(graph: &DirGraph, node_type: &str, text_column: &str) -> Option<usize> {
-    let store = graph.embeddings.get(&store_key(node_type, text_column))?;
-    if graph.read_only {
-        return Some(0);
+/// Refuses when there is no store or no index: answering `0` there read as
+/// "nothing outstanding" after a delete had dropped the index. This is the
+/// explicit form of the catch-up a query performs on its own when the delta is
+/// under the index's ceiling; the decision itself is
+/// `EmbeddingStore::can_auto_refresh`.
+pub fn refresh_vector_index(
+    graph: &DirGraph,
+    node_type: &str,
+    text_column: &str,
+) -> Result<usize, String> {
+    let store_label = format!("{node_type}.{}", store_name(text_column));
+    let Some(store) = graph.embeddings.get(&store_key(node_type, text_column)) else {
+        return Err(format!(
+            "refresh_vector_index: no embedding store '{store_label}'. Embed \
+             '{node_type}.{text_column}' first (embed_texts / set_embeddings), then \
+             build_vector_index('{node_type}', '{text_column}')."
+        ));
+    };
+    if !store.has_index() {
+        return Err(format!(
+            "refresh_vector_index: no vector index on '{store_label}' to refresh — \
+             none was built, or a delete of an embedded node (or a vacuum()) \
+             dropped it. Build one with build_vector_index('{node_type}', \
+             '{text_column}')."
+        ));
     }
-    Some(store.refresh_index())
+    if graph.read_only {
+        return Ok(0);
+    }
+    Ok(store.refresh_index())
 }
 
 /// What `SHOW INDEXES` reports about one embedding store.

@@ -1497,7 +1497,7 @@ pub fn kglite::api::embeddings::has_vector_index(graph: &kglite::api::DirGraph, 
 pub fn kglite::api::embeddings::list_edge_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::EdgeEmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::EmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_vector_indexes(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::VectorIndexStatus>
-pub fn kglite::api::embeddings::refresh_vector_index(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> core::option::Option<usize>
+pub fn kglite::api::embeddings::refresh_vector_index(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::embeddings::resolve_source_column<'a>(graph: &'a kglite::api::DirGraph, node_type: &str, text_column: &'a str) -> core::result::Result<&'a str, alloc::string::String>
 pub fn kglite::api::embeddings::set_embeddings<I, V>(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, metric: core::option::Option<&str>, entries: I) -> core::result::Result<kglite::api::embeddings::EmbeddingIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = (kglite::datatypes::values::Value, V)>, V: core::convert::AsRef<[f32]>
 pub fn kglite::api::embeddings::store_key(node_type: &str, text_column: &str) -> (alloc::string::String, alloc::string::String)

@@ -262,7 +262,11 @@ automatically. Key points:
   scan — correct, and slower — until you rebuild or call
   `refresh_vector_index(...)`. What *does* drop the index is a change to the
   slot layout it addresses: deleting an embedded node (the delete prunes its
-  vector), rolling that delete back, and `vacuum()`. Rebuild after those.
+  vector), and a `vacuum()` that compacts after a delete (on disk `vacuum()` is
+  a no-op). Rebuild after those: `refresh_vector_index(...)` folds in a delta
+  but never builds, so it refuses while no index is built, naming the
+  `build_vector_index(...)` call. A delete that a failed statement or a
+  rolled-back transaction undoes leaves the index in place.
   `SHOW INDEXES` reports `stale` / `delta`, plus `unembedded` — the nodes with
   no vector at all, which catch-up never embeds. Check with
   `has_vector_index(...)`, remove with `drop_vector_index(...)`.
@@ -512,6 +516,17 @@ back. `exact:true` always bypasses HNSW. `refresh_index` incorporates pending in
 a reloaded graph answers through HNSW immediately and reports the same pending
 delta it was saved with; a disk-mode graph's directory keeps no index, as for
 nodes.
+
+Deletes drop the relationship index, as they drop the node index. `SET` and
+`CREATE` leave it `online`; deleting an embedded relationship — `DELETE r`, or
+`DETACH DELETE` of either endpoint, embedded or not — takes `index_state` to
+`none` until `build_index` runs again, and so does a `vacuum()` that compacts
+after a delete (on disk `vacuum()` is a no-op). Deleting a relationship the
+store holds no vector for leaves the index alone, and so does a delete that a
+failed statement or a rolled-back transaction undoes. Until the rebuild,
+queries answer by the exact scan. `refresh_index` folds pending changes into an
+index but never builds one, so with no index it refuses, naming the
+`build_index` call, rather than answering `{refreshed: 0}`.
 
 From Python, `list_embeddings()` and `embedding_diagnostics()` report
 relationship stores as `entity='relationship'` rows. `embedding_info(type, col,

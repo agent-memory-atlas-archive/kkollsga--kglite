@@ -205,6 +205,18 @@ pub(crate) fn refresh_edge_vector_index(
         .ok_or_else(|| {
             format!("No relationship embedding store '{connection_type}.{text_property}'")
         })?;
+    // Refused rather than answered `0`: a delete of an embedded relationship
+    // or an endpoint drops the index, and `0` read as "nothing outstanding".
+    if !store.numeric.has_index() {
+        return Err(format!(
+            "no vector index on relationship store '{connection_type}.{}' to refresh — \
+             none was built, or a delete of an embedded relationship or an endpoint \
+             (or a vacuum()) dropped it. Build one with CALL \
+             db.edge_embeddings.build_index({{type: '{connection_type}', text_property: \
+             '{text_property}'}}).",
+            crate::graph::embeddings::store_name(text_property),
+        ));
+    }
     if graph.read_only {
         return Ok(0);
     }
