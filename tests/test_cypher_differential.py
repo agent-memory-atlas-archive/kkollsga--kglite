@@ -234,6 +234,19 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "RETURN relationship.k AS k,score",
         {"q": [1.0, 0.0]},
     ),
+    # Accessors on a yielded relationship *value* under a WHERE the passes may
+    # move. This entry guards optimiser divergence only: the value-arm defect
+    # that returned null for `type`/`startNode`/`endNode` here was shared by
+    # both paths, so its safety net is the goldens in
+    # `test_relationship_value_accessors.py`.
+    (
+        "edge_vector_query_relationship_accessors",
+        "edge_vector_differential_graph",
+        "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
+        "top_k:4,exact:true}) YIELD relationship WHERE startNode(relationship).id = 1 "
+        "RETURN relationship.k AS k,type(relationship) AS t,endNode(relationship).id AS e",
+        None,
+    ),
     # ── fused MATCH … WITH count(): the pattern's own node labels ──
     # `fuse_match_with_aggregate` hands the group node to a peer-count
     # histogram that counts every peer of the edge type. Nothing applied the

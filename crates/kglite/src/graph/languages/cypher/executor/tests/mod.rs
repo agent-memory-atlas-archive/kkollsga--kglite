@@ -14,6 +14,8 @@
 //! - [`identifiers`] — quoted-identifier escaping (the injection class)
 //! - [`label_predicates`] — parenthesised label checks vs node patterns
 //! - [`lists`] — list parsing, slicing, sizing, and quantifier predicates
+//! - [`relationship_value_accessors`] — `type`/`startNode`/`endNode`/`keys`/
+//!   `properties` on relationship values, not just MATCH bindings
 //! - [`score_fuse`] — the retrieval-fusion scalar: absent lanes, weights, fold
 //! - [`semantics`] — absolute goldens for expression semantics (duplicate
 //!   result columns, `datetime()` time/zone, integer overflow and div-by-zero)
@@ -55,6 +57,7 @@ mod lists;
 mod mutations;
 mod parallel;
 mod relationship_identity;
+mod relationship_value_accessors;
 mod score_fuse;
 mod self_loops;
 mod semantics;

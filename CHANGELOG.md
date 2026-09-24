@@ -205,6 +205,17 @@ before upgrading.
   with the same liveness, endpoint and statement-identity checks `DELETE`
   applies, and the clause writes that entity; a value whose slot has since
   been deleted or reused by another type is refused rather than recreated.
+- **`type()`, `startNode()`, `endNode()`, `keys()` and `properties()` read
+  relationship values, not just `MATCH` bindings.** On a relationship that
+  arrived as a value — the `relationship` column of
+  `db.edge_embeddings.query`, `collect(r)[0]`, `UNWIND`, `relationships(p)[i]`,
+  a `CALL { }` column — all five returned null in every storage mode, so
+  `YIELD relationship RETURN startNode(relationship)` could not say which
+  nodes a retrieved relationship connects. They now answer from the value.
+  A relationship binding deleted earlier in the same statement whose storage
+  slot a `CREATE` then reused no longer reports the new relationship's type,
+  endpoints or properties through these functions; it reads as null, as its
+  property access already did.
 
 ## [0.17.12] - 2026-09-19
 ### Added

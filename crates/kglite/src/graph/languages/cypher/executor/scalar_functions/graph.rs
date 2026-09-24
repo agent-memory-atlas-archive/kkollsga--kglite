@@ -96,70 +96,128 @@ impl<'a> CypherExecutor<'a> {
                 return Some(Value::List(keys.into_iter().map(Value::String).collect()));
             }
         }
-        // Materialised node value (collect()[0] etc.) → its keys.
-        if let Ok(Value::Node(nv)) = self.evaluate_expression(arg, row) {
-            let mut keys: Vec<String> = nv.properties.keys().map(str::to_string).collect();
-            keys.sort();
-            keys.dedup();
-            return Some(Value::List(keys.into_iter().map(Value::String).collect()));
-        }
-        if let Expression::Variable(var) = arg {
-            if let Some(edge) = row.edge_bindings.get(var) {
-                if let Some(edge_data) = {
-                    let g = &self.graph.graph;
-                    g.edge_weight(edge.edge_index)
-                } {
-                    let mut keys: Vec<String> = vec!["type".to_string()];
-                    keys.extend(
-                        edge_data
-                            .property_keys(&self.graph.interner)
-                            .filter(|k| !crate::graph::schema::is_reserved_provenance_key(k))
-                            .map(String::from),
-                    );
-                    keys.sort();
-                    return Some(Value::List(keys.into_iter().map(Value::String).collect()));
-                }
+        match self.evaluate_expression(arg, row).ok()? {
+            // Materialised node value (collect()[0] etc.) → its keys.
+            Value::Node(nv) => {
+                let mut keys: Vec<String> = nv.properties.keys().map(str::to_string).collect();
+                keys.sort();
+                keys.dedup();
+                Some(Value::List(keys.into_iter().map(Value::String).collect()))
             }
-        }
-        // keys(map) — openCypher's third argument family, and the one that
-        // makes `keys(properties(n))` work. `PropMap` holds its entries sorted
-        // and de-duplicated, so the key names are a projection, not a sort.
-        // Evaluated last so a bound node or relationship never reaches it.
-        if let Ok(Value::Map(map)) = self.evaluate_expression(arg, row) {
-            return Some(Value::List(
+            // A bound relationship evaluates to its materialised value too, so
+            // bindings and values share one arm and one staleness rule.
+            Value::Relationship(rel) => {
+                let props = self.relationship_value_properties(&rel)?;
+                Some(Value::List(
+                    props.keys().map(|k| Value::String(k.to_string())).collect(),
+                ))
+            }
+            // keys(map) — openCypher's third argument family, and the one that
+            // makes `keys(properties(n))` work. `PropMap` holds its entries
+            // sorted and de-duplicated, so the key names are a projection.
+            Value::Map(map) => Some(Value::List(
                 map.keys().map(|k| Value::String(k.to_string())).collect(),
-            ));
+            )),
+            _ => None,
         }
-        None
     }
 
-    /// `properties(r)` for a bound relationship: its user properties plus the
-    /// synthetic `type` entry, in one `PropMap`.
-    ///
-    /// Built as a pair buffer and sorted once, and walked over the stored pairs
-    /// directly: the old shape resolved each key and then called
-    /// `get_property(name)`, which re-hashed the name and rescanned the pair
-    /// vector to find the value it had just walked past.
-    fn edge_properties_map(&self, edge_data: &crate::graph::schema::EdgeData) -> PropMap {
-        let mut props: Vec<(PropKey, Value)> = Vec::with_capacity(edge_data.properties.len() + 1);
-        props.push((
-            PropKey::from("type"),
-            Value::String(
-                edge_data
-                    .connection_type_str(&self.graph.interner)
-                    .to_string(),
-            ),
-        ));
-        for (ik, val) in &edge_data.properties {
-            let Some(key) = self.graph.interner.try_resolve(*ik) else {
-                continue;
-            };
-            if crate::graph::schema::is_reserved_provenance_key(key) {
-                continue; // engine metadata, not user data
-            }
-            props.push((PropKey::from(key), val.clone()));
+    /// `properties(r)` for a relationship value: its user properties plus the
+    /// synthetic `type` entry. `None` when the type is unresolvable — the
+    /// token-only value of a binding whose slot was retired mid-statement,
+    /// which names no live relationship. A user property called `type` wins,
+    /// as it always has for bindings (`from_pairs` keeps the last duplicate).
+    fn relationship_value_properties(
+        &self,
+        rel: &crate::datatypes::values::RelValue,
+    ) -> Option<PropMap> {
+        let rel_type = self.relationship_value_type(rel)?;
+        let mut props: Vec<(PropKey, Value)> = Vec::with_capacity(rel.properties.len() + 1);
+        props.push((PropKey::from("type"), Value::String(rel_type)));
+        props.extend(
+            rel.properties
+                .iter()
+                .map(|(key, value)| (PropKey::from(key), value.clone())),
+        );
+        Some(PropMap::from_pairs(props))
+    }
+
+    /// The type of a relationship value. A value carries its type, so a
+    /// snapshot keeps reporting it after its slot is deleted. An empty type is
+    /// the token-only shape a retired binding materialises as: resolve it
+    /// through the live slot only while that slot is still the relationship
+    /// the value was bound to.
+    fn relationship_value_type(&self, rel: &crate::datatypes::values::RelValue) -> Option<String> {
+        if !rel.rel_type.is_empty() {
+            return Some(rel.rel_type.clone());
         }
-        PropMap::from_pairs(props)
+        let edge = self.projected_relationship_binding(rel).ok()?;
+        self.current_edge_type(&edge)
+    }
+
+    /// The type of the live edge a binding names; `None` once the slot has
+    /// been retired since the bind (deleted, or deleted and reused by another
+    /// relationship — reading it then would report the replacement).
+    fn current_edge_type(&self, edge: &EdgeBinding) -> Option<String> {
+        if !self.relationship_binding_is_current(edge) {
+            return None;
+        }
+        let edge_data = self.graph.graph.edge_weight(edge.edge_index)?;
+        Some(
+            edge_data
+                .connection_type_str(&self.graph.interner)
+                .to_string(),
+        )
+    }
+
+    /// `type(r)` for a binding or a relationship value.
+    fn eval_type_fn(&self, args: &[Expression], row: &ResultRow) -> Option<Value> {
+        let arg = args.first()?;
+        if let Expression::Variable(var) = arg {
+            if let Some(edge) = row.edge_bindings.get(var) {
+                return self.current_edge_type(edge).map(Value::String);
+            }
+        }
+        match self.evaluate_expression(arg, row).ok()? {
+            Value::Relationship(rel) => self.relationship_value_type(&rel).map(Value::String),
+            _ => None,
+        }
+    }
+
+    /// `startNode(r)` / `endNode(r)` for a binding or a relationship value, as
+    /// a `NodeRef` to the endpoint in the graph's own direction.
+    ///
+    /// A binding reads the live slot, not `EdgeBinding.source`: the binding
+    /// stores the pattern's left endpoint, which is not the edge's graph source
+    /// when the matcher anchored on the right endpoint and walked incoming. A
+    /// value reads its own `start_id`/`end_id`, which the materialiser took
+    /// from the slot — except in the token-only shape of a retired binding,
+    /// whose ids are the pattern's, so that shape resolves like a binding.
+    fn eval_endpoint_fn(&self, args: &[Expression], row: &ResultRow, start: bool) -> Option<Value> {
+        let arg = args.first()?;
+        let bound = match arg {
+            Expression::Variable(var) => row.edge_bindings.get(var).copied(),
+            _ => None,
+        };
+        let edge = match bound {
+            Some(edge) => edge,
+            None => match self.evaluate_expression(arg, row).ok()? {
+                Value::Relationship(rel) if !rel.rel_type.is_empty() => {
+                    let node = if start { rel.start_id } else { rel.end_id };
+                    let idx = petgraph::graph::NodeIndex::new(node as usize);
+                    self.graph.graph.node_view(idx)?;
+                    return Some(Value::NodeRef(node));
+                }
+                Value::Relationship(rel) => self.projected_relationship_binding(&rel).ok()?,
+                _ => return None,
+            },
+        };
+        if !self.relationship_binding_is_current(&edge) {
+            return None;
+        }
+        let (src, tgt) = self.graph.graph.edge_endpoints(edge.edge_index)?;
+        let node = if start { src } else { tgt };
+        Some(Value::NodeRef(node.index() as u32))
     }
 
     pub(super) fn eval_graph_fn(
@@ -211,24 +269,7 @@ impl<'a> CypherExecutor<'a> {
                 }
                 Ok(Value::Null)
             }
-            "type" => {
-                // type(r) returns the relationship type
-                if let Some(Expression::Variable(var)) = args.first() {
-                    if let Some(edge) = row.edge_bindings.get(var) {
-                        if let Some(edge_data) = {
-                            let g = &self.graph.graph;
-                            g.edge_weight(edge.edge_index)
-                        } {
-                            return Ok(Some(Value::String(
-                                edge_data
-                                    .connection_type_str(&self.graph.interner)
-                                    .to_string(),
-                            )));
-                        }
-                    }
-                }
-                Ok(Value::Null)
-            }
+            "type" => Ok(self.eval_type_fn(args, row).unwrap_or(Value::Null)),
             "elementid" => Ok(self.eval_element_id(args, row).unwrap_or(Value::Null)),
             "id" => return self.eval_id_fn(args, row),
             // shortest_path_length(a, b) → undirected BFS hop count
@@ -370,8 +411,8 @@ impl<'a> CypherExecutor<'a> {
                 // Reusing the materializer keeps the two in lockstep across
                 // backends — including the columnar (disk/mapped) metadata
                 // walk that a bare `property_keys()` loop here would miss.
-                // For relationships, includes `type` + every user-set
-                // edge property.
+                // For relationships (bound or value), includes `type` + every
+                // user-set edge property.
                 if args.len() != 1 {
                     return Err("properties() requires 1 argument: a node or relationship".into());
                 }
@@ -381,52 +422,22 @@ impl<'a> CypherExecutor<'a> {
                         return Ok(Some(Value::Map(node_value.properties)));
                     }
                 }
-                // Materialised node value (collect()[0] etc.) → its property map.
-                if let Ok(Value::Node(nv)) = self.evaluate_expression(arg, row) {
-                    return Ok(Some(Value::Map(nv.properties)));
+                // Materialised node value (collect()[0] etc.) → its property
+                // map; a relationship binding or value → its map plus `type`.
+                match self.evaluate_expression(arg, row) {
+                    Ok(Value::Node(nv)) => Ok(Value::Map(nv.properties)),
+                    Ok(Value::Relationship(rel)) => Ok(self
+                        .relationship_value_properties(&rel)
+                        .map_or(Value::Null, Value::Map)),
+                    _ => Ok(Value::Null),
                 }
-                if let Expression::Variable(var) = arg {
-                    if let Some(edge) = row.edge_bindings.get(var.as_str()) {
-                        if let Some(edge_data) = {
-                            let g = &self.graph.graph;
-                            g.edge_weight(edge.edge_index)
-                        } {
-                            return Ok(Some(Value::Map(self.edge_properties_map(edge_data))));
-                        }
-                    }
-                }
-                Ok(Value::Null)
             }
-            "start_node" | "startnode" => {
-                // start_node(r) / startNode(r) → source node of the
-                // bound relationship in the graph. Look up via
-                // `edge_index` rather than `EdgeBinding.source` —
-                // the binding stores the pattern's left endpoint,
-                // which is *not* the same as the edge's graph source
-                // when the matcher anchored on the right endpoint and
-                // walked incoming.
-                if let Some(Expression::Variable(var)) = args.first() {
-                    if let Some(edge) = row.edge_bindings.get(var.as_str()) {
-                        if let Some((src, _)) = self.graph.graph.edge_endpoints(edge.edge_index) {
-                            return Ok(Some(Value::NodeRef(src.index() as u32)));
-                        }
-                    }
-                }
-                Ok(Value::Null)
-            }
-            "end_node" | "endnode" => {
-                // end_node(r) / endNode(r) → target node of the
-                // bound relationship in the graph. See `start_node`
-                // above for the reason we go through `edge_index`.
-                if let Some(Expression::Variable(var)) = args.first() {
-                    if let Some(edge) = row.edge_bindings.get(var.as_str()) {
-                        if let Some((_, tgt)) = self.graph.graph.edge_endpoints(edge.edge_index) {
-                            return Ok(Some(Value::NodeRef(tgt.index() as u32)));
-                        }
-                    }
-                }
-                Ok(Value::Null)
-            }
+            "start_node" | "startnode" => Ok(self
+                .eval_endpoint_fn(args, row, true)
+                .unwrap_or(Value::Null)),
+            "end_node" | "endnode" => Ok(self
+                .eval_endpoint_fn(args, row, false)
+                .unwrap_or(Value::Null)),
             // ── Text predicates (0.8.20) ──────────────────────────────
             _ => return Ok(None),
         };

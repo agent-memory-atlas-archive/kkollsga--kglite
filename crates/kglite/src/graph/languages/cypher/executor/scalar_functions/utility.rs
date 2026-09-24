@@ -471,7 +471,7 @@ impl CypherExecutor<'_> {
             .then_some((node_idx, node_type))
     }
 
-    fn projected_relationship_binding(
+    pub(super) fn projected_relationship_binding(
         &self,
         relationship: &crate::datatypes::values::RelValue,
     ) -> Result<EdgeBinding, String> {
