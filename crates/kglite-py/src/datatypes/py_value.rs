@@ -90,37 +90,101 @@ pub(super) fn is_numpy_ndarray(value: &Bound<'_, PyAny>) -> bool {
             .is_some_and(|m| m == "numpy" || m.starts_with("numpy."))
 }
 
+/// A numeric ndarray element type the `tobytes()` decoders admit: native (or
+/// byte-order-free) float16/32/64, int8–64 and uint8–32. Every other dtype —
+/// bool, uint64, object, datetime, a non-native byte order — reads as `None`
+/// and keeps its caller's slower route. uint64 is excluded because `tolist()`
+/// can yield an int past i64::MAX, which each caller reports in its own way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericElement {
+    F16,
+    F32,
+    F64,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+}
+
+impl NumericElement {
+    /// The one dtype check both decoders share.
+    fn of_dtype(dtype: &Bound<'_, PyAny>) -> Option<Self> {
+        let byteorder: String = dtype.getattr("byteorder").ok()?.extract().ok()?;
+        if byteorder != "=" && byteorder != "|" {
+            return None;
+        }
+        let kind: String = dtype.getattr("kind").ok()?.extract().ok()?;
+        let itemsize: usize = dtype.getattr("itemsize").ok()?.extract().ok()?;
+        Some(match (kind.as_str(), itemsize) {
+            ("f", 2) => Self::F16,
+            ("f", 4) => Self::F32,
+            ("f", 8) => Self::F64,
+            ("i", 1) => Self::I8,
+            ("i", 2) => Self::I16,
+            ("i", 4) => Self::I32,
+            ("i", 8) => Self::I64,
+            ("u", 1) => Self::U8,
+            ("u", 2) => Self::U16,
+            ("u", 4) => Self::U32,
+            _ => return None,
+        })
+    }
+
+    fn itemsize(self) -> usize {
+        match self {
+            Self::I8 | Self::U8 => 1,
+            Self::F16 | Self::I16 | Self::U16 => 2,
+            Self::F32 | Self::I32 | Self::U32 => 4,
+            Self::F64 | Self::I64 => 8,
+        }
+    }
+
+    /// Exactly what `tolist()` yields: floats widen to f64, integers to i64.
+    fn value_decoder(self) -> fn(&[u8]) -> Value {
+        match self {
+            Self::F16 => |b| Value::Float64(f16_bits_to_f64(u16::from_ne_bytes([b[0], b[1]]))),
+            Self::F32 => |b| Value::Float64(f64::from(f32::from_ne_bytes(b.try_into().unwrap()))),
+            Self::F64 => |b| Value::Float64(f64::from_ne_bytes(b.try_into().unwrap())),
+            Self::I8 => |b| Value::Int64(i64::from(i8::from_ne_bytes([b[0]]))),
+            Self::I16 => |b| Value::Int64(i64::from(i16::from_ne_bytes([b[0], b[1]]))),
+            Self::I32 => |b| Value::Int64(i64::from(i32::from_ne_bytes(b.try_into().unwrap()))),
+            Self::I64 => |b| Value::Int64(i64::from_ne_bytes(b.try_into().unwrap())),
+            Self::U8 => |b| Value::Int64(i64::from(b[0])),
+            Self::U16 => |b| Value::Int64(i64::from(u16::from_ne_bytes([b[0], b[1]]))),
+            Self::U32 => |b| Value::Int64(i64::from(u32::from_ne_bytes(b.try_into().unwrap()))),
+        }
+    }
+
+    /// Exactly what extracting each element as a Python float and narrowing
+    /// it to f32 yields — the `Vec<f32>` extraction this replaces.
+    fn f32_decoder(self) -> fn(&[u8]) -> f32 {
+        match self {
+            Self::F16 => |b| f16_bits_to_f64(u16::from_ne_bytes([b[0], b[1]])) as f32,
+            Self::F32 => |b| f32::from_ne_bytes(b.try_into().unwrap()),
+            Self::F64 => |b| f64::from_ne_bytes(b.try_into().unwrap()) as f32,
+            Self::I8 => |b| f64::from(i8::from_ne_bytes([b[0]])) as f32,
+            Self::I16 => |b| f64::from(i16::from_ne_bytes([b[0], b[1]])) as f32,
+            Self::I32 => |b| f64::from(i32::from_ne_bytes(b.try_into().unwrap())) as f32,
+            Self::I64 => |b| i64::from_ne_bytes(b.try_into().unwrap()) as f64 as f32,
+            Self::U8 => |b| f64::from(b[0]) as f32,
+            Self::U16 => |b| f64::from(u16::from_ne_bytes([b[0], b[1]])) as f32,
+            Self::U32 => |b| f64::from(u32::from_ne_bytes(b.try_into().unwrap())) as f32,
+        }
+    }
+}
+
 /// A native-order numeric ndarray of rank 1 or 2 decoded from `tobytes()`
 /// (C order, so strides do not matter) into what `tolist()` would have
 /// produced, plus the number of list levels that result nests. `None` sends
-/// the array down the `tolist()` route unchanged: other dtypes (bool, uint64,
-/// object, datetime, …), non-native byte order, and ranks 0 or 3+.
-///
-/// Values are identical to `tolist()`: floats widen to f64 exactly, and
-/// every admitted integer dtype fits i64 (uint64 is excluded because
-/// `tolist()` can yield an int past i64::MAX, which each caller reports in
-/// its own way).
+/// the array down the `tolist()` route unchanged: dtypes [`NumericElement`]
+/// does not admit, and ranks 0 or 3+.
 fn decode_numeric_ndarray(value: &Bound<'_, PyAny>) -> Option<(Value, usize)> {
-    let dtype = value.getattr("dtype").ok()?;
-    let byteorder: String = dtype.getattr("byteorder").ok()?.extract().ok()?;
-    if byteorder != "=" && byteorder != "|" {
-        return None;
-    }
-    let kind: String = dtype.getattr("kind").ok()?.extract().ok()?;
-    let itemsize: usize = dtype.getattr("itemsize").ok()?.extract().ok()?;
-    let decode: fn(&[u8]) -> Value = match (kind.as_str(), itemsize) {
-        ("f", 2) => |b| Value::Float64(f16_bits_to_f64(u16::from_ne_bytes([b[0], b[1]]))),
-        ("f", 4) => |b| Value::Float64(f64::from(f32::from_ne_bytes(b.try_into().unwrap()))),
-        ("f", 8) => |b| Value::Float64(f64::from_ne_bytes(b.try_into().unwrap())),
-        ("i", 1) => |b| Value::Int64(i64::from(i8::from_ne_bytes([b[0]]))),
-        ("i", 2) => |b| Value::Int64(i64::from(i16::from_ne_bytes([b[0], b[1]]))),
-        ("i", 4) => |b| Value::Int64(i64::from(i32::from_ne_bytes(b.try_into().unwrap()))),
-        ("i", 8) => |b| Value::Int64(i64::from_ne_bytes(b.try_into().unwrap())),
-        ("u", 1) => |b| Value::Int64(i64::from(b[0])),
-        ("u", 2) => |b| Value::Int64(i64::from(u16::from_ne_bytes([b[0], b[1]]))),
-        ("u", 4) => |b| Value::Int64(i64::from(u32::from_ne_bytes(b.try_into().unwrap()))),
-        _ => return None,
-    };
+    let element = NumericElement::of_dtype(&value.getattr("dtype").ok()?)?;
+    let itemsize = element.itemsize();
+    let decode = element.value_decoder();
     let shape: Vec<usize> = value.getattr("shape").ok()?.extract().ok()?;
     if shape.len() != 1 && shape.len() != 2 {
         return None;
@@ -142,6 +206,55 @@ fn decode_numeric_ndarray(value: &Bound<'_, PyAny>) -> Option<(Value, usize)> {
         bytes.chunks_exact(row_bytes).map(row).collect()
     };
     Some((Value::List(rows), 2))
+}
+
+/// Decodes many embedding rows to `Vec<f32>`, one Python object at a time,
+/// taking 1-D numeric ndarrays through `tobytes()` instead of one float
+/// extraction per element. The ndarray type and each distinct dtype object are
+/// checked once and remembered (numpy reuses one dtype object per builtin
+/// type), so a batch of same-typed rows costs three Python calls per row.
+/// Anything else — a list, a 2-D array, an unadmitted dtype — is extracted as
+/// before, with the error that extraction has always raised.
+#[derive(Default)]
+pub struct F32Rows {
+    ndarray_type: Option<usize>,
+    dtype: Option<(Py<PyAny>, Option<NumericElement>)>,
+}
+
+impl F32Rows {
+    pub fn extract(&mut self, value: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
+        match self.decode_ndarray(value) {
+            Some(vector) => Ok(vector),
+            None => value.extract(),
+        }
+    }
+
+    fn decode_ndarray(&mut self, value: &Bound<'_, PyAny>) -> Option<Vec<f32>> {
+        let value_type = value.get_type().as_ptr() as usize;
+        if self.ndarray_type != Some(value_type) {
+            if !is_numpy_ndarray(value) {
+                return None;
+            }
+            self.ndarray_type = Some(value_type);
+        }
+        let dtype = value.getattr("dtype").ok()?;
+        let element = match &self.dtype {
+            Some((cached, element)) if cached.is(&dtype) => *element,
+            _ => {
+                let element = NumericElement::of_dtype(&dtype);
+                self.dtype = Some((dtype.unbind(), element));
+                element
+            }
+        }?;
+        let ndim: usize = value.getattr("ndim").ok()?.extract().ok()?;
+        if ndim != 1 {
+            return None;
+        }
+        let bytes = value.call_method0("tobytes").ok()?;
+        let bytes = bytes.cast::<PyBytes>().ok()?.as_bytes();
+        let decode = element.f32_decoder();
+        Some(bytes.chunks_exact(element.itemsize()).map(decode).collect())
+    }
 }
 
 /// IEEE half-precision bits to the f64 of the same value, as numpy's
@@ -752,6 +865,57 @@ mod tests {
                 assert_eq!(format!("{fast:?}"), format!("{via_tolist:?}"), "{code}");
                 let queried = query(&array).ok().expect(code);
                 assert_eq!(format!("{queried:?}"), format!("{via_tolist:?}"), "{code}");
+            }
+        });
+    }
+
+    #[test]
+    fn f32_rows_decode_ndarrays_exactly_as_float_extraction_does() {
+        Python::initialize();
+        Python::attach(|py| {
+            let Some(np) = numpy(py) else { return };
+            let locals = pyo3::types::PyDict::new(py);
+            locals.set_item("np", &np).unwrap();
+            let run = |code: &str| {
+                let code = std::ffi::CString::new(code).unwrap();
+                py.eval(&code, None, Some(&locals)).unwrap()
+            };
+            let mut rows = F32Rows::default();
+            for code in [
+                "np.array([1.5, -0.1, 3e38, float('nan'), float('inf')], dtype=np.float32)",
+                "np.array([0.1, 1e-40, -1e308, 2.0**-1074, 1/3])",
+                "np.array([0.1, -2.5, 6e-8, -0.0], dtype=np.float16)",
+                "np.array([-128, 127], dtype=np.int8)",
+                "np.array([-32768, 32767], dtype=np.int16)",
+                "np.array([-2**31, 2**31 - 1], dtype=np.int32)",
+                "np.array([-2**63, 2**63 - 1, 2**53 + 1], dtype=np.int64)",
+                "np.array([0, 255], dtype=np.uint8)",
+                "np.array([0, 65535], dtype=np.uint16)",
+                "np.array([0, 2**32 - 1], dtype=np.uint32)",
+                "np.zeros(0, dtype=np.float32)",
+                "np.arange(12, dtype=np.float64)[::-3]",
+                // Rows of a 2-D array are 1-D views: the common numpy-rows shape.
+                "np.arange(6, dtype=np.float32).reshape(2, 3)[1]",
+                // Not decoded — extracted as before.
+                "np.array([True, False])",
+                "np.array([1, 2], dtype=np.uint64)",
+                "np.array([1.5, 2.5], dtype='>f4')",
+                "[1.5, 2, -0.25]",
+            ] {
+                let value = run(code);
+                let expected: Vec<f32> = value.extract().expect(code);
+                let decoded = rows.extract(&value).expect(code);
+                let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&decoded), bits(&expected), "{code}");
+            }
+            for code in [
+                "np.arange(4, dtype=np.float32).reshape(2, 2)",
+                "np.array(['a'], dtype=object)",
+            ] {
+                let value = run(code);
+                let expected = value.extract::<Vec<f32>>().unwrap_err().to_string();
+                let error = rows.extract(&value).unwrap_err().to_string();
+                assert_eq!(error, expected, "{code}");
             }
         });
     }

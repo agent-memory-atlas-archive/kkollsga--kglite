@@ -190,7 +190,7 @@ ARRAY_INGEST = (
 def _ingest(unwind, params):
     graph = kglite.KnowledgeGraph()
     graph.cypher("CREATE (:Hub {id: 0})")
-    graph.cypher("UNWIND range(1, 6) AS i MATCH (h:Hub {id: 0}) CREATE (h)-[:T]->(:Doc {id: i})")
+    graph.cypher("UNWIND range(1, 6) AS i MATCH (h:Hub {id: 0}) CREATE (h)-[:T {summary: 's'}]->(:Doc {id: i})")
     rows = graph.cypher(
         unwind + "CALL db.edge_embeddings.set({type: 'T', text_property: 'summary', entries: entries}) "
         "YIELD stored RETURN stored",

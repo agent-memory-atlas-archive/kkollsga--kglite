@@ -227,7 +227,9 @@ impl KnowledgeGraph {
     ///
     /// With StableDiGraph, deletions leave holes in the internal storage.
     /// Over time, this wastes memory and degrades iteration performance.
-    /// vacuum() rebuilds the graph with contiguous indices, then rebuilds all indexes.
+    /// vacuum() rebuilds the graph with contiguous indices; a compaction that
+    /// reclaims tombstones drops every vector and text index, node and
+    /// relationship, so rebuild the ones you need afterwards.
     ///
     /// The current selection is **carried through** the compaction: nodes that
     /// survived keep their place in it at their new indices, and nodes the

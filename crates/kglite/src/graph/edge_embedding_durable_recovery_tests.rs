@@ -292,7 +292,7 @@ fn a_second_store_on_a_type_that_already_has_one_survives_a_crash() {
         run(
             &session,
             "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs \
-             CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'note', \
+             CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'k', \
              entries: [{relationship: rs[0], vector: [0.5, 0.5]}]}) YIELD stored RETURN stored",
         );
     }
@@ -303,7 +303,7 @@ fn a_second_store_on_a_type_that_already_has_one_survives_a_crash() {
         "the pre-existing store must be untouched"
     );
     assert_eq!(
-        store_state(&recovered, "note").map(|state| state.cells),
+        store_state(&recovered, "k").map(|state| state.cells),
         Some(vec![(1, Some(vec![0.5, 0.5]), None)]),
         "the store added inside the durable window must come back with its vectors"
     );

@@ -18,7 +18,7 @@ def _indexed_graph(count: int = 24, graph: KnowledgeGraph | None = None) -> Know
     for index in range(count):
         angle = 2.0 * math.pi * index / count
         graph.cypher(
-            "MATCH (hub:Hub {id: 0}) CREATE (hub)-[:CLAIMS {rank: $rank}]->(:Doc {id: $rank})",
+            "MATCH (hub:Hub {id: 0}) CREATE (hub)-[:CLAIMS {rank: $rank, text: 't'}]->(:Doc {id: $rank})",
             params={"rank": index},
         )
         graph.cypher(
@@ -302,8 +302,8 @@ def _three_vector_graph() -> KnowledgeGraph:
     euclidean rank the same corpus three different ways."""
     graph = KnowledgeGraph()
     graph.cypher(
-        "CREATE (h:Hub {id: 0}), (h)-[:CLAIMS {rank: 1}]->(:Doc {id: 1}), "
-        "(h)-[:CLAIMS {rank: 2}]->(:Doc {id: 2}), (h)-[:CLAIMS {rank: 3}]->(:Doc {id: 3})"
+        "CREATE (h:Hub {id: 0}), (h)-[:CLAIMS {rank: 1, text: 't'}]->(:Doc {id: 1}), "
+        "(h)-[:CLAIMS {rank: 2, text: 't'}]->(:Doc {id: 2}), (h)-[:CLAIMS {rank: 3, text: 't'}]->(:Doc {id: 3})"
     )
     for rank, vector in [(1, [1.0, 0.0]), (2, [0.0, 1.0]), (3, [1.2, 1.6])]:
         graph.cypher(

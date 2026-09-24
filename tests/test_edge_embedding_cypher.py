@@ -724,3 +724,117 @@ def test_query_unknown_parameter_refusal_lists_text() -> None:
     graph = _graph()
     with pytest.raises(Exception, match=r"Accepted: type, types, text_property, vector, text, top_k"):
         graph.cypher("CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0, 0.0], bogus:1})")
+
+
+# ── Errors a user can act on ────────────────────────────────────────────────
+# A blank-slate user test found `set`/`embed` creating a store for a property no
+# relationship carries, and vector-write errors naming an internal slot number.
+
+
+def _no_claims_store(graph: KnowledgeGraph) -> None:
+    assert _store_state(graph) == []
+    assert [row for row in graph.list_embeddings() if row["entity"] == "relationship"] == []
+    assert "embeddings=" not in graph.describe(connections=["CLAIMS"])
+
+
+@pytest.mark.parametrize("procedure", ["set", "embed"])
+def test_a_text_property_no_relationship_carries_is_refused_before_a_store_exists(
+    procedure: str,
+) -> None:
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    if procedure == "set":
+        call = (
+            "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 CALL db.edge_embeddings.set("
+            "{type:'CLAIMS', text_property:'txet', entries:[{relationship:r, vector:[1.0, 0.0]}]}) "
+            "YIELD stored RETURN stored"
+        )
+    else:
+        call = (
+            "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs CALL db.edge_embeddings.embed("
+            "{type:'CLAIMS', text_property:'txet', relationships: rs}) YIELD embedded RETURN embedded"
+        )
+    with pytest.raises(kglite.CypherExecutionError) as error:
+        graph.cypher(call)
+    message = str(error.value)
+    assert f"CALL db.edge_embeddings.{procedure}" in message
+    assert "Text property 'txet' not found on any 'CLAIMS' relationship" in message
+    assert "'CLAIMS' relationships carry: text" in message
+    graph.cypher("MATCH ()-[r:CLAIMS]->() RETURN count(r)")  # the graph still answers
+    assert [row for row in graph.list_embeddings() if row.get("text_column") == "txet"] == []
+    assert "txet" not in graph.describe(connections=["CLAIMS"])
+
+
+def test_a_property_only_some_relationships_carry_is_still_accepted() -> None:
+    graph = _graph()
+    graph.set_embedder(_Embedder("model/A"))
+    # The third CLAIMS relationship carries no `text`; two do.
+    assert _embed(graph)["embedded"] == 2
+
+
+def _claims_set(graph: KnowledgeGraph, entries: str, params: dict | None = None) -> None:
+    graph.cypher(
+        "MATCH (:Doc {id: 1})-[r:CLAIMS]->(:Doc {id: 2}) WITH collect(r) AS rs "
+        f"CALL db.edge_embeddings.set({{type:'CLAIMS', text_property:'text', entries:{entries}}}) "
+        "YIELD stored RETURN stored",
+        params=params or {},
+    )
+
+
+@pytest.mark.parametrize(
+    ("entries", "params", "expected"),
+    [
+        (
+            "[{relationship: rs[0], vector: [1.0, 0.0]}, {relationship: rs[1], vector: [1.0]}]",
+            None,
+            "Embedding for relationship (Doc id=1)-[:CLAIMS]->(Doc id=2) (entries[1]) has dimension 1, expected 2",
+        ),
+        (
+            "[{relationship: rs[0], vector: $v}]",
+            {"v": [float("nan"), 0.0]},
+            "Invalid embedding for relationship (Doc id=1)-[:CLAIMS]->(Doc id=2) (entries[0]): "
+            "vector coordinate 0 must be finite",
+        ),
+        (
+            "[{relationship: rs[0], vector: [1.0, 0.0]}, {relationship: rs[0], vector: [0.0, 1.0]}]",
+            None,
+            "relationship (Doc id=1)-[:CLAIMS]->(Doc id=2) appears more than once (entries[0] and entries[1])",
+        ),
+    ],
+    ids=["dimension", "non-finite", "repeated"],
+)
+def test_vector_write_errors_name_the_relationship_not_a_slot(entries: str, params: dict | None, expected: str) -> None:
+    graph = _graph()
+    with pytest.raises(kglite.CypherExecutionError) as error:
+        _claims_set(graph, entries, params)
+    message = str(error.value)
+    assert expected in message
+    assert "slot" not in message
+    _no_claims_store(graph)
+
+
+def test_embedder_output_errors_name_the_relationship_not_a_slot() -> None:
+    class _WrongDimension(_Embedder):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    graph = _graph()
+    graph.set_embedder(_WrongDimension("model/A"))
+    with pytest.raises(kglite.CypherExecutionError) as error:
+        _embed(graph, "r.text = 'alpha'")
+    message = str(error.value)
+    assert "(Doc id=1)-[:CLAIMS]->(Doc id=2)" in message
+    assert "slot" not in message
+
+
+def test_a_relationship_deleted_earlier_is_named_by_position_not_slot() -> None:
+    graph = _graph()
+    with pytest.raises(kglite.CypherExecutionError) as error:
+        graph.cypher(
+            "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 DELETE r "
+            "CALL db.edge_embeddings.remove({type:'CLAIMS', text_property:'text', relationships:[r]}) "
+            "YIELD removed RETURN removed"
+        )
+    message = str(error.value)
+    assert "relationships[0]" in message and "deleted" in message
+    assert "slot" not in message

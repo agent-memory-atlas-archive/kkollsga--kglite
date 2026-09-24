@@ -91,16 +91,10 @@ fn describe_group(
     target: NodeIndex,
     members: usize,
 ) -> String {
-    let node = |index: NodeIndex| {
-        graph.graph.node_view(index).map_or_else(
-            || "?".to_string(),
-            |view| format!("{} id={}", view.node_type_str(&graph.interner), view.id()),
-        )
-    };
     format!(
         "{members} '{relationship_type}' relationships connect ({}) to ({})",
-        node(source),
-        node(target)
+        super::describe_endpoint(graph, source),
+        super::describe_endpoint(graph, target)
     )
 }
 

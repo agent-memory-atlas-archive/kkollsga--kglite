@@ -2775,8 +2775,8 @@ _EDGE_CRASH_SHAPES = [
         "second_store",
         _CLAIMS_SEED,
         (_set_vector(1, "[1.0, 0.0]"),),
-        [_set_vector(1, "[0.5, 0.5]", "note")],
-        [("note", 1), ("text", 1)],
+        [_set_vector(1, "[0.5, 0.5]", "k")],
+        [("k", 1), ("text", 1)],
     ),
     (
         "property_only",

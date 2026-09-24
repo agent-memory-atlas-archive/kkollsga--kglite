@@ -171,8 +171,8 @@ def edge_vector_differential_graph():
     graph = kglite.KnowledgeGraph()
     graph.cypher(
         "CREATE (a:N{id:1}),(b:N{id:2}),(c:N{id:3}),(x:N{id:4}),(y:N{id:5}),"
-        "(a)-[:R{k:0}]->(b),(a)-[:R{k:1}]->(b),(a)-[:R{k:2}]->(c),"
-        "(b)-[:R{k:3}]->(c),(a)-[:TAG]->(x),(a)-[:TAG]->(y)"
+        "(a)-[:R{k:0,text:'t0'}]->(b),(a)-[:R{k:1,text:'t1'}]->(b),(a)-[:R{k:2,text:'t2'}]->(c),"
+        "(b)-[:R{k:3,text:'t3'}]->(c),(a)-[:TAG]->(x),(a)-[:TAG]->(y)"
     )
     vectors = ([1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [-1.0, 0.0])
     for key, vector in enumerate(vectors):
@@ -204,8 +204,8 @@ def edge_vector_exact_graph():
     graph = kglite.KnowledgeGraph()
     graph.cypher(
         "CREATE (a:N{id:1}),(b:N{id:2}),(c:N{id:3}),"
-        "(a)-[:R{k:0}]->(b),(a)-[:R{k:1}]->(b),(a)-[:R{k:2}]->(c),(b)-[:R{k:3}]->(c),"
-        "(b)-[:R{k:4}]->(a)"
+        "(a)-[:R{k:0,text:'t0'}]->(b),(a)-[:R{k:1,text:'t1'}]->(b),(a)-[:R{k:2,text:'t2'}]->(c),(b)-[:R{k:3,text:'t3'}]->(c),"
+        "(b)-[:R{k:4,text:'t4'}]->(a)"
     )
     vectors = ([1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [-1.0, 0.0], [0.5, 0.5])
     for key, vector in enumerate(vectors):
@@ -223,7 +223,7 @@ def edge_vector_sparse_graph(edge_vector_exact_graph):
     """The exact-route store plus one unembedded `:R` relationship, which
     scores NULL and ranks first under DESC — a population the store alone
     cannot serve."""
-    edge_vector_exact_graph.cypher("MATCH (a:N{id:1}),(c:N{id:3}) CREATE (a)-[:R{k:5}]->(c)")
+    edge_vector_exact_graph.cypher("MATCH (a:N{id:1}),(c:N{id:3}) CREATE (a)-[:R{k:5,text:'t5'}]->(c)")
     return edge_vector_exact_graph
 
 
@@ -237,7 +237,7 @@ def edge_vector_cross_type_graph():
     edges = [("R", 0, 0.1, 2), ("S", 1, 0.5, 3), ("Q", 2, 0.9, 2), ("R", 3, 1.3, 3), ("S", 4, 1.7, 2), ("Q", 5, 2.4, 3)]
     for rel_type, key, angle, target in edges:
         graph.cypher(
-            f"MATCH (a:N{{id:1}}),(b:N{{id:$target}}) CREATE (a)-[r:{rel_type}{{k:$key}}]->(b) "
+            f"MATCH (a:N{{id:1}}),(b:N{{id:$target}}) CREATE (a)-[r:{rel_type}{{k:$key,text:'t'}}]->(b) "
             f"WITH r CALL db.edge_embeddings.set({{type:'{rel_type}',text_property:'text',"
             "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
             params={"key": key, "target": target, "vector": [math.cos(angle), math.sin(angle)]},

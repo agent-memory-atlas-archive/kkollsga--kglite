@@ -946,9 +946,15 @@ impl CypherExecutor<'_> {
         prop_name: &str,
     ) -> String {
         if let Some(property) = self.text_score_property(prop_name) {
+            let base =
+                format!("{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on node type '{node_type}'");
+            if let Some(hint) = store_name_hint(property, 'n', |store| {
+                self.graph.embedding_store(node_type, store).is_some()
+            }) {
+                return format!("{base}. {hint}");
+            }
             return format!(
-                "{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on node type '{node_type}'. \
-                 Embed it first with embed_texts('{node_type}', '{property}')."
+                "{base}. Embed it first with embed_texts('{node_type}', '{property}')."
             );
         }
         let base = format!("{NO_EMBEDDING_PREFIX}{prop_name}' found for node type '{node_type}'");
@@ -968,18 +974,37 @@ impl CypherExecutor<'_> {
         relationship_type: &str,
         prop_name: &str,
     ) -> String {
-        match self.text_score_property(prop_name) {
-            Some(property) => format!(
-                "{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on relationship type \
-                 '{relationship_type}'. Embed it first with MATCH ()-[r:{relationship_type}]->() \
-                 WITH collect(r) AS rs CALL db.edge_embeddings.embed({{type: \
-                 '{relationship_type}', text_property: '{property}', relationships: rs}})."
-            ),
-            None => format!(
+        let store_exists = |store: &str| {
+            self.graph
+                .edge_embeddings
+                .contains_key(&(relationship_type.to_string(), store.to_string()))
+        };
+        let Some(property) = self.text_score_property(prop_name) else {
+            let base = format!(
                 "{NO_EMBEDDING_PREFIX}{prop_name}' found for relationship type \
                  '{relationship_type}'"
-            ),
+            );
+            let suffixed = crate::graph::embeddings::store_name(prop_name);
+            return if store_exists(&suffixed) {
+                format!(
+                    "{base}. Did you mean '{suffixed}'? vector_score() takes the embedding \
+                     store name; text_score(r, '{prop_name}', <query text>) takes the text column."
+                )
+            } else {
+                base
+            };
+        };
+        let base = format!(
+            "{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on relationship type '{relationship_type}'"
+        );
+        if let Some(hint) = store_name_hint(property, 'r', store_exists) {
+            return format!("{base}. {hint}");
         }
+        format!(
+            "{base}. Embed it first with MATCH ()-[r:{relationship_type}]->() \
+             WITH collect(r) AS rs CALL db.edge_embeddings.embed({{type: \
+             '{relationship_type}', text_property: '{property}', relationships: rs}})."
+        )
     }
 
     /// The source property a `text_score` call wrote, when `store` is one the
@@ -993,6 +1018,25 @@ impl CypherExecutor<'_> {
             .any(|listed| matches!(listed, Value::String(s) if s == store))
             .then(|| store.strip_suffix("_emb").unwrap_or(store))
     }
+}
+
+/// The remedy for `text_score(x, '<store name>', …)`: the caller wrote an
+/// existing store's name where its text column belongs. Offering the usual
+/// "embed it first" remedy there would embed a property named after the store
+/// and create an empty `<store>_emb`, after which the query returns null.
+/// `None` when `property` is not the name of an existing store.
+fn store_name_hint(
+    property: &str,
+    variable: char,
+    store_exists: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let column = crate::graph::embeddings::text_column_of(property)?;
+    store_exists(property).then(|| {
+        format!(
+            "'{property}' is the embedding store of '{column}'. Did you mean '{column}'? \
+             text_score({variable}, '{column}', <query text>) takes the text column."
+        )
+    })
 }
 
 /// `embedding_norm`'s tail: the L2 norm of a vector, or `Null` for an entity

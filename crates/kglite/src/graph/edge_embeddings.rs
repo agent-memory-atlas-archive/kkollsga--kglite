@@ -4,9 +4,9 @@
 //! typed boundary as an `EdgeIndex`, never a raw integer or `NodeIndex`. The
 //! shared numeric store remains an implementation detail.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use petgraph::graph::EdgeIndex;
+use petgraph::graph::{EdgeIndex, NodeIndex};
 use serde::{Deserialize, Serialize};
 
 use crate::graph::algorithms::vector::DistanceMetric;
@@ -487,6 +487,79 @@ pub(crate) struct GeneratedEdgeEmbeddingWrite {
     pub(crate) affected: Vec<EdgeIndex>,
 }
 
+/// A node as relationship errors name it: `Label id=<id>` (string ids quoted).
+pub(crate) fn describe_endpoint(graph: &DirGraph, node: NodeIndex) -> String {
+    let _arena_guard = graph.graph.begin_query();
+    graph.graph.node_view(node).map_or_else(
+        || "?".to_string(),
+        |view| format!("{} id={}", view.node_type_str(&graph.interner), view.id()),
+    )
+}
+
+/// A relationship as its user sees it — `(Doc id=1)-[:CITES]->(Doc id=2)` —
+/// for errors. The physical slot is an engine detail no user can look up.
+pub(crate) fn describe_relationship(graph: &DirGraph, edge: EdgeIndex) -> String {
+    let _arena_guard = graph.graph.begin_query();
+    let Some(weight) = graph.graph.edge_weight(edge) else {
+        return "a deleted relationship".to_string();
+    };
+    let relationship_type = weight.connection_type_str(&graph.interner);
+    match graph.graph.edge_endpoints(edge) {
+        Some((source, target)) => format!(
+            "({})-[:{relationship_type}]->({})",
+            describe_endpoint(graph, source),
+            describe_endpoint(graph, target)
+        ),
+        None => format!("a '{relationship_type}' relationship"),
+    }
+}
+
+/// Refuse to create a relationship store for a text property that no
+/// relationship of the type carries — the relationship twin of
+/// [`crate::graph::embeddings::resolve_source_column`]. Such a store can never
+/// hold a generated vector, yet it would be listed and described like a real
+/// one. An existing store is accepted unchecked: this guards creation only.
+pub(crate) fn require_carried_text_property(
+    graph: &DirGraph,
+    connection_type: &str,
+    text_property: &str,
+) -> Result<(), String> {
+    if graph
+        .edge_embeddings
+        .contains_key(&edge_store_key(connection_type, text_property))
+    {
+        return Ok(());
+    }
+    let type_key = InternedKey::from_str(connection_type);
+    let _arena_guard = graph.graph.begin_query();
+    let mut carried = BTreeSet::new();
+    for edge in graph.graph.edge_indices() {
+        let Some(weight) = graph.graph.edge_weight(edge) else {
+            continue;
+        };
+        if weight.connection_type != type_key {
+            continue;
+        }
+        if weight.get_property(text_property).is_some() {
+            return Ok(());
+        }
+        carried.extend(weight.property_keys(&graph.interner).map(str::to_string));
+    }
+    let mut message = format!(
+        "Text property '{text_property}' not found on any '{connection_type}' relationship. \
+         text_property names the relationship property holding the text (e.g. 'context'), \
+         not the embedding store name."
+    );
+    if !carried.is_empty() {
+        let carried: Vec<_> = carried.into_iter().collect();
+        message.push_str(&format!(
+            " '{connection_type}' relationships carry: {}.",
+            carried.join(", ")
+        ));
+    }
+    Err(message)
+}
+
 // P4 activates metric validation through the private batch primitive.
 #[cfg_attr(not(test), allow(dead_code))]
 fn validate_metric(metric: Option<&str>) -> Result<(), String> {
@@ -557,7 +630,9 @@ pub(crate) fn upsert_edge_embeddings(
 
     let mut seen = HashSet::with_capacity(entries.len());
     let _arena_guard = graph.graph.begin_query();
-    for (edge, vector) in &entries {
+    // `entries` is the caller's list in order, so a position names the entry
+    // the way `db.edge_embeddings.set({entries: …})` spelled it.
+    for (position, (edge, vector)) in entries.iter().enumerate() {
         if !seen.insert(edge.index()) {
             return Err(format!(
                 "Relationship slot {} appears more than once in the batch",
@@ -567,16 +642,16 @@ pub(crate) fn upsert_edge_embeddings(
         validate_live_edge_type(graph, *edge, connection_type)?;
         if vector.len() != expected_dimension {
             return Err(format!(
-                "Embedding for relationship slot {} has dimension {}, expected {}",
-                edge.index(),
+                "Embedding for relationship {} (entries[{position}]) has dimension {}, expected {}",
+                describe_relationship(graph, *edge),
                 vector.len(),
                 expected_dimension
             ));
         }
         validate_finite_vector(vector).map_err(|error| {
             format!(
-                "Invalid embedding for relationship slot {}: {error}",
-                edge.index()
+                "Invalid embedding for relationship {} (entries[{position}]): {error}",
+                describe_relationship(graph, *edge)
             )
         })?;
     }

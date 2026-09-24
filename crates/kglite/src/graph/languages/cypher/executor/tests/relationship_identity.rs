@@ -63,7 +63,7 @@ fn stale_binding_cannot_read_reused_slot_or_its_embedding() {
     let mut graph = graph_with_one_relationship();
     let result = run_mutation(
         &mut graph,
-        "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh'}]->(b) \
+        "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh', text:'t'}]->(b) \
          WITH r, fresh CALL db.edge_embeddings.set({type:'R', text_property:'text', \
          entries:[{relationship:fresh, vector:[1.0,0.0]}]}) YIELD stored \
          RETURN r.tag AS stale_tag, fresh.tag AS fresh_tag, r AS stale, \
@@ -88,7 +88,7 @@ fn optimized_vector_score_where_does_not_keep_stale_reused_slot() {
     let mut graph = graph_with_one_relationship();
     let result = run_mutation(
         &mut graph,
-        "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R]->(b) \
+        "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {text:'t'}]->(b) \
          WITH r, fresh CALL db.edge_embeddings.set({type:'R', text_property:'text', \
          entries:[{relationship:fresh, vector:[1.0,0.0]}]}) YIELD stored \
          WITH r WHERE vector_score(r,'text_emb',[1.0,0.0]) > 0.5 RETURN r",
@@ -590,7 +590,7 @@ fn stale_path_hop_is_refused_by_edge_embedding_set() {
     )
     .unwrap_err();
     assert!(
-        error.contains("stale"),
+        error.contains("entries[0] is a 'R' relationship deleted or replaced earlier"),
         "expected a stale refusal, got: {error}"
     );
     assert!(
@@ -678,7 +678,7 @@ fn variable_length_path_hops_carry_per_hop_tokens() {
     )
     .unwrap_err();
     assert!(
-        error.contains("stale"),
+        error.contains("deleted or replaced earlier in this statement"),
         "expected a stale refusal, got: {error}"
     );
 }

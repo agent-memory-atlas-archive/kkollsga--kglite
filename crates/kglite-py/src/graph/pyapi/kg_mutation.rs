@@ -618,9 +618,10 @@ fn extract_embedding_pairs<'py>(
     for emb_col in embedding_columns {
         let series = data.get_item(emb_col)?;
         let mut pairs = Vec::with_capacity(nrows);
+        let mut rows = py_in::F32Rows::default();
         for i in 0..nrows {
             let id_val = py_in::py_value_to_value(&id_series.get_item(i)?)?;
-            let emb_val: Vec<f32> = series.get_item(i)?.extract()?;
+            let emb_val = rows.extract(&series.get_item(i)?)?;
             pairs.push((id_val, emb_val));
         }
         result.push((emb_col.clone(), pairs));

@@ -22,7 +22,8 @@ def _graph() -> KnowledgeGraph:
     graph.cypher("CREATE (:Doc {id: 0, text: 'hub'})")
     for index, vector in enumerate(VECTORS[:2], start=1):
         graph.cypher(
-            "MATCH (hub:Doc {id: 0}) CREATE (hub)-[:CLAIMS {rank: $rank}]->(:Doc {id: $rank, text: $text})",
+            "MATCH (hub:Doc {id: 0}) "
+            "CREATE (hub)-[:CLAIMS {rank: $rank, text: $text}]->(:Doc {id: $rank, text: $text})",
             params={"rank": index, "text": f"body {index}"},
         )
         graph.cypher(

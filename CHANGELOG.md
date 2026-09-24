@@ -196,6 +196,21 @@ before upgrading.
 
 ### Changed
 
+- Relationship-vector write errors name the relationship as you see it —
+  its type and endpoint ids, `(Doc id=12)-[:CITES]->(Entity id="x")` — and,
+  for `db.edge_embeddings.set`, its position in `entries` (`entries[3]`),
+  instead of an internal slot number: a wrong dimension, a non-finite
+  coordinate, an embedder that returns a wrong-width vector, a relationship
+  listed twice (both positions named), and a relationship deleted or replaced
+  earlier in the same statement (`relationships[0] is a 'CITES' relationship
+  deleted or replaced earlier in this statement`, replacing `… slot N is
+  stale`).
+- `set_embeddings()`, `add_embeddings()` and the embedding columns of
+  `add_nodes()` read a 1-D numpy row (float16/32/64, int8–64, uint8–32) from
+  its bytes instead of one Python float per element: 200 000 × 128 float32 rows
+  now store in 0.09 s instead of 0.63 s, faster than the same rows as Python
+  lists (0.15 s). Stored values are unchanged.
+
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
   struct literals must initialize the new internal `incarnation` field to
   `None`. Low-level `EdgeBinding` struct literals also require
@@ -302,6 +317,24 @@ before upgrading.
   property that one later `CREATE`/`SET` gives an integer now reports `mixed`
   (node and relationship alike, and after save/load) instead of `Int64`. A
   full-column rewrite still reports its one type.
+
+- `db.edge_embeddings.set` and `db.edge_embeddings.embed` refuse a
+  `text_property` that no relationship of the type carries, before any store
+  exists — `Text property 'contxt' not found on any 'CITES' relationship`,
+  followed by the properties the type does carry — as the node
+  `set_embeddings()` / `embed_texts()` refuse an unknown column. A misspelling
+  used to create an empty (`embed`) or orphan (`set`) store that `describe()`
+  and `list_embeddings()` then reported. A property at least one relationship
+  carries, or a store that already exists, is accepted as before. **Breaking
+  for manual vectors stored under a name no relationship carries:** store them
+  under a property the relationships have.
+- `text_score(r, 'context_emb', …)` — the store name where the text column
+  belongs — no longer recommends embedding `context_emb` (which created an
+  empty `context_emb_emb` store and left the query returning null); when the
+  `context` store exists it says `Did you mean 'context'?` and that
+  `text_score` takes the text column. The node form does the same, and a
+  relationship `vector_score(r, 'context', …)` now suggests `'context_emb'` as
+  the node form already did.
 
 - A multi-node `MATCH` now starts from the end pinned by an `id` (or
   indexed) equality or an already-bound variable, whichever end it is written

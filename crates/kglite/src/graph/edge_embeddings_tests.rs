@@ -886,3 +886,50 @@ fn extend_preserves_target_vector_and_never_copies_source_store() {
     assert_eq!(store.get(target_edge), Some(&[1.0, 0.0][..]));
     assert_ne!(store.get(target_edge), Some(&[0.0, 1.0][..]));
 }
+
+#[test]
+fn a_store_for_a_property_no_relationship_carries_is_refused_until_one_does() {
+    let (mut graph, r1, _, _) = graph_with_parallel_edges();
+    let error = require_carried_text_property(&graph, "ASSERTS", "description").unwrap_err();
+    assert!(
+        error.starts_with("Text property 'description' not found on any 'ASSERTS' relationship."),
+        "{error}"
+    );
+    let key = graph.interner.get_or_intern("description");
+    graph
+        .graph
+        .edge_weight_mut(r1)
+        .unwrap()
+        .properties
+        .push((key, Value::String("a claim".into())));
+    require_carried_text_property(&graph, "ASSERTS", "description").unwrap();
+    // Another type carrying the property does not admit this one.
+    assert!(require_carried_text_property(&graph, "MENTIONS", "description").is_err());
+}
+
+#[test]
+fn an_existing_store_is_accepted_without_a_carrier() {
+    let (mut graph, r1, _, _) = graph_with_parallel_edges();
+    upsert_edge_embeddings(
+        &mut graph,
+        "ASSERTS",
+        "description",
+        vec![(r1, vec![1.0])],
+        None,
+    )
+    .unwrap();
+    require_carried_text_property(&graph, "ASSERTS", "description").unwrap();
+}
+
+#[test]
+fn a_relationship_is_described_by_type_and_endpoint_ids() {
+    let (graph, r1, _, other) = graph_with_parallel_edges();
+    assert_eq!(
+        describe_relationship(&graph, r1),
+        "(Doc id=1)-[:ASSERTS]->(Doc id=2)"
+    );
+    assert_eq!(
+        describe_relationship(&graph, other),
+        "(Doc id=1)-[:MENTIONS]->(Doc id=1)"
+    );
+}

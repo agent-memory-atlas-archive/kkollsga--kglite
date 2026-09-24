@@ -13,7 +13,8 @@ use crate::graph::edge_embeddings::vector_index::{
     refresh_edge_vector_index, EdgeStoreQueryHit, EdgeVectorIndexOptions, EdgeVectorQueryOptions,
 };
 use crate::graph::edge_embeddings::{
-    drop_edge_embedding_store, remove_edge_embeddings, upsert_edge_embeddings,
+    describe_relationship, drop_edge_embedding_store, remove_edge_embeddings,
+    require_carried_text_property, upsert_edge_embeddings, EdgeEmbeddingWriteReport,
 };
 use crate::graph::embeddings::EmbedMode;
 use crate::graph::languages::cypher::ast::YieldItem;
@@ -41,32 +42,12 @@ pub(super) fn execute(
     let text_property = require_string(params, "text_property", proc_name)?;
     let values = match proc_name {
         "db.edge_embeddings.set" => {
-            let entries = require_list(params, "entries", proc_name)?;
-            let mut resolved = Vec::with_capacity(entries.len());
-            for entry in entries {
-                let Value::Map(pair) = entry else {
-                    return Err(format!("CALL {proc_name}: each entry must be a map"));
-                };
-                reject_unknown_keys(
-                    &format!("CALL {proc_name}: entry"),
-                    pair.keys(),
-                    &["relationship", "vector"],
-                )?;
-                let relationship = pair.get("relationship").ok_or_else(|| {
-                    format!("CALL {proc_name}: each entry requires 'relationship'")
-                })?;
-                let edge =
-                    resolve_relationship(relationship, &relationship_type, identities, proc_name)?;
-                let vector = numeric_vector(pair.get("vector"), proc_name)?;
-                resolved.push((edge, vector));
-            }
-            let metric = optional_string(params, "metric", proc_name)?;
-            let report = upsert_edge_embeddings(
+            let report = execute_set(
                 graph,
+                params,
                 &relationship_type,
                 &text_property,
-                resolved,
-                metric.as_deref(),
+                identities,
             )?;
             HashMap::from([
                 ("stored", Value::Int64(report.stored as i64)),
@@ -77,6 +58,7 @@ pub(super) fn execute(
             let relationships = require_list(params, "relationships", proc_name)?;
             let edges =
                 resolve_relationships(relationships, &relationship_type, identities, proc_name)?;
+            reject_repeated(graph, &edges, "relationships", proc_name)?;
             let removed =
                 remove_edge_embeddings(graph, &relationship_type, &text_property, &edges)?;
             HashMap::from([("removed", Value::Int64(removed as i64))])
@@ -119,14 +101,15 @@ pub(super) fn execute(
         "db.edge_embeddings.embed" => {
             let relationships = require_list(params, "relationships", proc_name)?;
             let mut selected = Vec::with_capacity(relationships.len());
-            for value in relationships {
+            for (position, value) in relationships.iter().enumerate() {
                 let Value::Relationship(relationship) = value else {
                     return Err(format!(
                         "CALL {proc_name}: 'relationships' must contain relationships"
                     ));
                 };
+                let at = ListPosition("relationships", position);
                 let edge =
-                    resolve_rel_value(relationship, &relationship_type, identities, proc_name)?;
+                    resolve_rel_value(relationship, &relationship_type, identities, proc_name, at)?;
                 let text = graph
                     .graph
                     .edge_weight(edge)
@@ -136,6 +119,12 @@ pub(super) fn execute(
                         _ => None,
                     });
                 selected.push(SelectedEdgeText { edge, text });
+            }
+            let edges: Vec<_> = selected.iter().map(|item| item.edge).collect();
+            reject_repeated(graph, &edges, "relationships", proc_name)?;
+            if !selected.is_empty() {
+                require_carried_text_property(graph, &relationship_type, &text_property)
+                    .map_err(|error| format!("CALL {proc_name}: {error}"))?;
             }
             let mode = match optional_string(params, "mode", proc_name)?.as_deref() {
                 None | Some("missing") => EmbedMode::Missing,
@@ -418,6 +407,83 @@ fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     }
 }
 
+fn execute_set(
+    graph: &mut DirGraph,
+    params: &HashMap<String, Value>,
+    relationship_type: &str,
+    text_property: &str,
+    identities: &Arc<Mutex<StatementRelationshipIdentities>>,
+) -> Result<EdgeEmbeddingWriteReport, String> {
+    let proc_name = "db.edge_embeddings.set";
+    let entries = require_list(params, "entries", proc_name)?;
+    let mut resolved = Vec::with_capacity(entries.len());
+    for (position, entry) in entries.iter().enumerate() {
+        let Value::Map(pair) = entry else {
+            return Err(format!("CALL {proc_name}: each entry must be a map"));
+        };
+        reject_unknown_keys(
+            &format!("CALL {proc_name}: entry"),
+            pair.keys(),
+            &["relationship", "vector"],
+        )?;
+        let relationship = pair
+            .get("relationship")
+            .ok_or_else(|| format!("CALL {proc_name}: each entry requires 'relationship'"))?;
+        let at = ListPosition("entries", position);
+        let edge =
+            resolve_relationship(relationship, relationship_type, identities, proc_name, at)?;
+        let vector = numeric_vector(pair.get("vector"), proc_name)?;
+        resolved.push((edge, vector));
+    }
+    let edges: Vec<_> = resolved.iter().map(|(edge, _)| *edge).collect();
+    reject_repeated(graph, &edges, "entries", proc_name)?;
+    if !resolved.is_empty() {
+        require_carried_text_property(graph, relationship_type, text_property)
+            .map_err(|error| format!("CALL {proc_name}: {error}"))?;
+    }
+    let metric = optional_string(params, "metric", proc_name)?;
+    upsert_edge_embeddings(
+        graph,
+        relationship_type,
+        text_property,
+        resolved,
+        metric.as_deref(),
+    )
+}
+
+/// Where a relationship sat in the list a procedure was given, as the caller
+/// spelled it: `entries[2]`, `relationships[0]`.
+#[derive(Clone, Copy)]
+struct ListPosition(&'static str, usize);
+
+impl std::fmt::Display for ListPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}[{}]", self.0, self.1)
+    }
+}
+
+/// Refuse a relationship listed twice, naming it and both positions. The
+/// storage layer refuses repeats too, but it only knows the physical slot.
+fn reject_repeated(
+    graph: &DirGraph,
+    edges: &[EdgeIndex],
+    list: &'static str,
+    proc_name: &str,
+) -> Result<(), String> {
+    let mut first_seen = HashMap::with_capacity(edges.len());
+    for (position, edge) in edges.iter().enumerate() {
+        if let Some(first) = first_seen.insert(edge.index(), position) {
+            return Err(format!(
+                "CALL {proc_name}: relationship {} appears more than once ({} and {})",
+                describe_relationship(graph, *edge),
+                ListPosition(list, first),
+                ListPosition(list, position)
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn resolve_relationships(
     values: &[Value],
     relationship_type: &str,
@@ -426,7 +492,11 @@ fn resolve_relationships(
 ) -> Result<Vec<EdgeIndex>, String> {
     values
         .iter()
-        .map(|value| resolve_relationship(value, relationship_type, identities, proc_name))
+        .enumerate()
+        .map(|(position, value)| {
+            let at = ListPosition("relationships", position);
+            resolve_relationship(value, relationship_type, identities, proc_name, at)
+        })
         .collect()
 }
 
@@ -435,11 +505,12 @@ fn resolve_relationship(
     relationship_type: &str,
     identities: &Arc<Mutex<StatementRelationshipIdentities>>,
     proc_name: &str,
+    at: ListPosition,
 ) -> Result<EdgeIndex, String> {
     let Value::Relationship(relationship) = value else {
         return Err(format!("CALL {proc_name}: expected a relationship value"));
     };
-    resolve_rel_value(relationship, relationship_type, identities, proc_name)
+    resolve_rel_value(relationship, relationship_type, identities, proc_name, at)
 }
 
 fn resolve_rel_value(
@@ -447,10 +518,11 @@ fn resolve_rel_value(
     relationship_type: &str,
     identities: &Arc<Mutex<StatementRelationshipIdentities>>,
     proc_name: &str,
+    at: ListPosition,
 ) -> Result<EdgeIndex, String> {
     if relationship.rel_type != relationship_type {
         return Err(format!(
-            "CALL {proc_name}: relationship has type '{}', expected '{relationship_type}'",
+            "CALL {proc_name}: {at} has type '{}', expected '{relationship_type}'",
             relationship.rel_type
         ));
     }
@@ -464,8 +536,9 @@ fn resolve_rel_value(
         .accepts(edge, token)
     {
         return Err(format!(
-            "CALL {proc_name}: relationship slot {} is stale",
-            edge.index()
+            "CALL {proc_name}: {at} is a '{}' relationship deleted or replaced earlier in \
+             this statement",
+            relationship.rel_type
         ));
     }
     Ok(edge)

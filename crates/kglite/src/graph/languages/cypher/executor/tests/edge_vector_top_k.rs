@@ -36,9 +36,9 @@ fn corpus(embed_all: bool) -> DirGraph {
         &mut graph,
         "CREATE (h:Hub {id: 0}), (a:Doc {id: 1}), (b:Doc {id: 2}), (c:Doc {id: 3}), \
          (d:Doc {id: 4}), (e:Doc {id: 5}), (f:Doc {id: 6}), \
-         (h)-[:C {k: 3}]->(c), (h)-[:C {k: 1}]->(a), (h)-[:C {k: 5}]->(e), \
-         (h)-[:C {k: 2}]->(b), (h)-[:C {k: 6}]->(f), (h)-[:C {k: 4}]->(d), \
-         (a)-[:C {k: 7}]->(b), (a)-[:T {k: 8}]->(c)",
+         (h)-[:C {k: 3, text: 't3'}]->(c), (h)-[:C {k: 1, text: 't1'}]->(a), (h)-[:C {k: 5, text: 't5'}]->(e), \
+         (h)-[:C {k: 2, text: 't2'}]->(b), (h)-[:C {k: 6, text: 't6'}]->(f), (h)-[:C {k: 4, text: 't4'}]->(d), \
+         (a)-[:C {k: 7, text: 't7'}]->(b), (a)-[:T {k: 8, text: 't8'}]->(c)",
     );
     let vectors = [
         (1, "[1.0, 0.2]"),
@@ -303,7 +303,7 @@ fn cross_type_corpus(mixed_metric: bool) -> DirGraph {
         run(
             &mut graph,
             &format!(
-                "MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: {k}}}]->(:Doc {{id: {k}}}) \
+                "MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: {k}, text: 't'}}]->(:Doc {{id: {k}}}) \
                  WITH r CALL db.edge_embeddings.set({{type:'{rel_type}', text_property:'text', \
                  entries:[{{relationship:r, vector:[{}, {}]}}]{metric}}}) YIELD stored RETURN stored",
                 angle.cos(),

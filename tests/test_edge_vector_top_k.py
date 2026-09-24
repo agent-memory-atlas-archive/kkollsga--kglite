@@ -24,8 +24,8 @@ def _graph(*, indexed: bool = False, sparse: bool = False) -> KnowledgeGraph:
     graph.cypher(
         "CREATE (h:Hub {id: 0}), (a:Doc {id: 1}), (b:Doc {id: 2}), (c:Doc {id: 3}), "
         "(d:Doc {id: 4}), (e:Doc {id: 5}), (f:Doc {id: 6}), "
-        "(h)-[:C {k: 3}]->(c), (h)-[:C {k: 1}]->(a), (h)-[:C {k: 5}]->(e), "
-        "(h)-[:C {k: 2}]->(b), (h)-[:C {k: 6}]->(f), (h)-[:C {k: 4}]->(d)"
+        "(h)-[:C {k: 3, text: 't'}]->(c), (h)-[:C {k: 1, text: 't'}]->(a), (h)-[:C {k: 5, text: 't'}]->(e), "
+        "(h)-[:C {k: 2, text: 't'}]->(b), (h)-[:C {k: 6, text: 't'}]->(f), (h)-[:C {k: 4, text: 't'}]->(d)"
     )
     for k, vector in VECTORS.items():
         if sparse and k == 6:

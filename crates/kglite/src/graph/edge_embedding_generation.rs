@@ -11,7 +11,8 @@ use petgraph::graph::EdgeIndex;
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::algorithms::Interrupt;
 use crate::graph::edge_embeddings::{
-    edge_store_key, install_generated_edge_embeddings, GeneratedEdgeEmbeddingWrite,
+    describe_relationship, edge_store_key, install_generated_edge_embeddings,
+    GeneratedEdgeEmbeddingWrite,
 };
 use crate::graph::embedder::Embedder;
 use crate::graph::embeddings::EmbedMode;
@@ -84,6 +85,7 @@ impl EmbeddingExecutionService<'_> {
     /// Loads at most once and unloads on every exit after a successful load.
     fn generate(
         &self,
+        graph: &DirGraph,
         pending: &[Pending],
         batch_size: usize,
     ) -> Result<Vec<(EdgeIndex, Vec<f32>, u64)>, String> {
@@ -114,15 +116,15 @@ impl EmbeddingExecutionService<'_> {
                 for (item, vector) in batch.iter().zip(vectors) {
                     if vector.len() != dimension {
                         return Err(format!(
-                            "embedder returned a {}-d vector for relationship slot {}, expected {dimension}",
+                            "embedder returned a {}-d vector for relationship {}, expected {dimension}",
                             vector.len(),
-                            item.edge.index()
+                            describe_relationship(graph, item.edge)
                         ));
                     }
                     if vector.iter().any(|value| !value.is_finite()) {
                         return Err(format!(
-                            "embedder returned a non-finite vector for relationship slot {}",
-                            item.edge.index()
+                            "embedder returned a non-finite vector for relationship {}",
+                            describe_relationship(graph, item.edge)
                         ));
                     }
                     generated.push((item.edge, vector, item.text_hash));
@@ -201,7 +203,7 @@ pub(crate) fn embed_selected_relationships(
     }
 
     let mut plan = plan_selection(existing, &request.selected, request.mode);
-    let generated = service.generate(&plan.pending, request.batch_size)?;
+    let generated = service.generate(graph, &plan.pending, request.batch_size)?;
     let final_model_id = final_model_id(
         existing.and_then(|store| store.model_id()),
         requested_model.as_deref(),
@@ -531,7 +533,7 @@ mod tests {
             model: &model,
             interrupt: Interrupt::default(),
         };
-        let generated = service.generate(&pending(3), 2).unwrap();
+        let generated = service.generate(&DirGraph::new(), &pending(3), 2).unwrap();
         assert_eq!(generated.len(), 3);
         assert_eq!(model.loads.load(Ordering::Relaxed), 1);
         assert_eq!(model.embeds.load(Ordering::Relaxed), 2);
@@ -551,7 +553,7 @@ mod tests {
                 model: &model,
                 interrupt: Interrupt::default(),
             };
-            assert!(service.generate(&pending(2), 2).is_err());
+            assert!(service.generate(&DirGraph::new(), &pending(2), 2).is_err());
             assert_eq!(model.loads.load(Ordering::Relaxed), 1);
             assert_eq!(model.unloads.load(Ordering::Relaxed), 1);
         }
@@ -568,7 +570,7 @@ mod tests {
                 cancel: Some(&CANCELLED),
             },
         };
-        assert!(service.generate(&pending(1), 1).is_err());
+        assert!(service.generate(&DirGraph::new(), &pending(1), 1).is_err());
         assert_eq!(model.loads.load(Ordering::Relaxed), 0);
         assert_eq!(model.embeds.load(Ordering::Relaxed), 0);
         assert_eq!(model.unloads.load(Ordering::Relaxed), 0);
@@ -585,7 +587,10 @@ mod tests {
                 cancel: Some(&CANCELLED),
             },
         };
-        assert!(service.generate(&[], 1).unwrap().is_empty());
+        assert!(service
+            .generate(&DirGraph::new(), &[], 1)
+            .unwrap()
+            .is_empty());
         assert_eq!(model.loads.load(Ordering::Relaxed), 0);
         assert_eq!(model.unloads.load(Ordering::Relaxed), 0);
     }

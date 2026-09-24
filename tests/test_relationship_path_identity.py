@@ -34,7 +34,7 @@ def test_path_hop_does_not_follow_a_reused_relationship_slot() -> None:
 
 def test_stale_path_hop_is_refused_by_edge_embedding_set() -> None:
     graph = _graph()
-    with pytest.raises(kglite.CypherExecutionError, match="stale"):
+    with pytest.raises(kglite.CypherExecutionError, match="deleted or replaced earlier in this statement"):
         graph.cypher(
             "MATCH p = (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag: 'fresh'}]->(b) "
             "WITH p CALL db.edge_embeddings.set({type: 'R', text_property: 'text', "
@@ -84,7 +84,7 @@ def test_variable_length_path_hops_carry_per_hop_tokens() -> None:
         "CREATE (a:N {id: 1}), (b:N {id: 2}), (c:N {id: 3}), "
         "(a)-[:R {text: 'alpha'}]->(b), (b)-[:R {text: 'beta'}]->(c)"
     )
-    with pytest.raises(kglite.CypherExecutionError, match="stale"):
+    with pytest.raises(kglite.CypherExecutionError, match="deleted or replaced earlier in this statement"):
         graph.cypher(
             "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH p "
             "MATCH (x:N)-[r:R]->(y:N) WHERE x.id = 1 DELETE r "

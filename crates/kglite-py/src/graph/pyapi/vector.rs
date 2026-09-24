@@ -1052,11 +1052,9 @@ fn marshal_embedding_batch(
     embeddings: &Bound<'_, PyDict>,
 ) -> PyResult<Vec<(kglite_core::api::Value, Vec<f32>)>> {
     let mut entries = Vec::with_capacity(embeddings.len());
+    let mut rows = py_in::F32Rows::default();
     for (key, value) in embeddings.iter() {
-        entries.push((
-            py_in::py_value_to_value(&key)?,
-            value.extract::<Vec<f32>>()?,
-        ));
+        entries.push((py_in::py_value_to_value(&key)?, rows.extract(&value)?));
     }
     Ok(entries)
 }

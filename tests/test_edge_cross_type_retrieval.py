@@ -42,7 +42,7 @@ def _graph(
     for rel_type, k, angle in EDGES:
         metric = (metrics or {}).get(rel_type)
         graph.cypher(
-            f"MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: $k}}]->(:Doc {{id: $k}}) "
+            f"MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: $k, text: 't'}}]->(:Doc {{id: $k}}) "
             f"WITH r CALL db.edge_embeddings.set({{type: '{rel_type}', text_property: 'text', "
             "entries: [{relationship: r, vector: $v}], metric: $metric}) YIELD stored RETURN stored",
             params={"k": k, "v": [math.cos(angle), math.sin(angle)], "metric": metric},
@@ -114,7 +114,7 @@ def test_ties_across_stores_order_by_type_then_slot() -> None:
     graph.cypher("CREATE (:Hub {id: 0})")
     for rel_type, k in [("Z", 1), ("M", 2), ("Z", 3), ("M", 4)]:
         graph.cypher(
-            f"MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: $k}}]->(:Doc) "
+            f"MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: $k, text: 't'}}]->(:Doc) "
             f"WITH r CALL db.edge_embeddings.set({{type: '{rel_type}', text_property: 'text', "
             "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored",
             params={"k": k},
