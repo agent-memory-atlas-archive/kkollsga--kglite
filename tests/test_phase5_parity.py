@@ -569,7 +569,12 @@ def test_binary_size_regression():
         closest reproducible user-artifact baseline.
 
 
-      - 0.18.0:       26,337,920 bytes (≈25.1 MB). +926,912 (+3.6%) over 0.17.12: the relationship-embedding programs — relationship vector stores, HNSW and BM25 indexes with .kgl/.kgle persistence, the node and relationship embedding procedure namespaces and their routers, the Python/Rust relationship writers, cross-type retrieval, the fused null-filter and WITH-shaped top-k routes, and the bound-value planner anchors.
+      - 0.18.0:       26,337,920 bytes (≈25.1 MB). +926,912 (+3.6%) over 0.17.12: the
+        relationship-embedding programs — relationship vector stores, HNSW and BM25
+        indexes with .kgl/.kgle persistence, the node and relationship embedding
+        procedure namespaces and their routers, the Python/Rust relationship writers,
+        cross-type retrieval, the fused null-filter and WITH-shaped top-k routes, and
+        the bound-value planner anchors.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
