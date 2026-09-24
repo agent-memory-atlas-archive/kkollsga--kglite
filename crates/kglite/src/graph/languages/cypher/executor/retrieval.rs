@@ -48,21 +48,24 @@ pub(super) enum RetrievalPopulation<'r> {
         store: &'r EmbeddingStore,
         variable: &'r str,
     },
+    /// Materialised rows addressed by embedding slot: position `i` is the row
+    /// `slot_rows[i]` that binds slot `i`'s node, in row order.
+    RowsBySlot {
+        rows: &'r ResultSet,
+        slot_rows: &'r [usize],
+    },
 }
 
-/// How a type's nodes relate to one embedding store, from one ordered walk.
-enum StoreCoverage {
-    /// Every node is embedded and node `i` is slot `i`.
-    Ordered,
-    /// The store's slots are the type's embedded nodes in type order; the
-    /// other nodes score NULL. `unembedded` holds the first `limit` of their
-    /// positions in the type, `unembedded_count` all of them.
-    Partial {
-        unembedded: Vec<usize>,
-        unembedded_count: usize,
-    },
-    /// Anything else: the established route answers.
-    Unordered,
+/// How a population's nodes relate to one embedding store, from one ordered
+/// walk: the store's slots must be the population's embedded nodes, in
+/// population order, each once; every other node is of the store's type and
+/// scores NULL.
+struct StoreCoverage {
+    /// Position of the node bound to each slot, in slot order.
+    slot_positions: Vec<usize>,
+    /// The first `limit` positions of NULL-scoring nodes.
+    unembedded: Vec<usize>,
+    unembedded_count: usize,
 }
 
 impl RetrievalPopulation<'_> {
@@ -71,6 +74,7 @@ impl RetrievalPopulation<'_> {
             Self::Rows(rows) => rows.rows.len(),
             Self::WholeType { nodes, .. } => nodes.len(),
             Self::StoreSlots { store, .. } => store.len(),
+            Self::RowsBySlot { slot_rows, .. } => slot_rows.len(),
         }
     }
 
@@ -94,6 +98,9 @@ impl RetrievalPopulation<'_> {
                     petgraph::graph::NodeIndex::new(store.slot_to_node[index]),
                 );
                 std::borrow::Cow::Owned(row)
+            }
+            Self::RowsBySlot { rows, slot_rows } => {
+                std::borrow::Cow::Borrowed(&rows.rows[slot_rows[index]])
             }
         }
     }
@@ -194,13 +201,8 @@ impl<'a> CypherExecutor<'a> {
     }
 
     /// The node arm's entry: `MATCH (n:T)` ranked by `vector_score(n, …)` and
-    /// served from `T`'s store without materialising the type. The store's
-    /// slots must be the type's embedded nodes in type order (one walk proves
-    /// it), which makes slot order the order the pattern would produce them
-    /// in, so ties rank exactly as the unfused query ranks them. Nodes without
-    /// a vector score NULL: under `non_null_only` they are not candidates;
-    /// otherwise they rank first under DESC, in type order, and the store
-    /// answers the rest.
+    /// served from `T`'s store without materialising the type
+    /// ([`Self::try_store_served_top_k`] over the whole type).
     fn try_vector_retrieval_entry(
         &self,
         matched: &MatchClause,
@@ -226,23 +228,69 @@ impl<'a> CypherExecutor<'a> {
         let Some(population) = self.plain_retrieval_population(matched)? else {
             return Ok(None);
         };
-        let RetrievalPopulation::WholeType {
-            nodes,
-            variable,
-            node_type,
-        } = &population
-        else {
-            unreachable!("plain retrieval population is a whole type");
+        let top = FusedTopK {
+            return_clause,
+            score_item_index,
+            descending: true,
+            limit,
+            non_null_only,
         };
         let score_expr = self.fold_constants_expr(score_call);
-        let seed = population.row(0);
-        let Some(args) = self.constant_vector_args(&score_expr, &seed)? else {
-            return Ok(None);
-        };
-        if args.variable != *variable {
+        Ok(self
+            .try_store_served_top_k(&score_expr, top, &population)?
+            .map(|(result, info)| {
+                self.record_retrieval(info);
+                result
+            }))
+    }
+
+    /// A node population served from its type's store — the whole type (the
+    /// entry) or the rows a MATCH materialised (the per-clause route PROFILE
+    /// takes), one implementation so both report the same route. The store's
+    /// slots must be the population's embedded nodes in population order (one
+    /// walk proves it), which makes slot order row order, so ties rank as the
+    /// unfused query ranks them. Nodes without a vector score NULL: under
+    /// `non_null_only` they are not candidates; otherwise they rank first
+    /// under DESC, in row order, and the store answers the rest. `None` hands
+    /// the clause to the established route, and for materialised rows it also
+    /// declines what that route already serves (full coverage, `non_null_only`).
+    fn try_store_served_top_k(
+        &self,
+        score_expr: &Expression,
+        top: FusedTopK<'_>,
+        population: &RetrievalPopulation<'_>,
+    ) -> Result<Option<(ResultSet, RetrievalDiagnostics)>, String> {
+        let FusedTopK {
+            return_clause,
+            score_item_index,
+            descending,
+            limit,
+            non_null_only,
+        } = top;
+        if !descending || limit == 0 || population.len() == 0 {
             return Ok(None);
         }
-        let Some(store) = self.graph.embedding_store(node_type, &args.property) else {
+        let rows_population = matches!(population, RetrievalPopulation::Rows(_));
+        if rows_population && non_null_only {
+            return Ok(None);
+        }
+        let seed = population.row(0);
+        let Some(args) = self.constant_vector_args(score_expr, &seed)? else {
+            return Ok(None);
+        };
+        let Some(&first) = seed.node_bindings.get(&args.variable) else {
+            return Ok(None);
+        };
+        let Some(view) = self.graph.graph.node_view(first) else {
+            return Ok(None);
+        };
+        let node_type = view.node_type_str(&self.graph.interner).to_string();
+        if let RetrievalPopulation::WholeType { node_type: t, .. } = population {
+            if *t != node_type {
+                return Ok(None);
+            }
+        }
+        let Some(store) = self.graph.embedding_store(&node_type, &args.property) else {
             return Ok(None);
         };
         let exact = args.options.exact || !store.has_index();
@@ -251,21 +299,28 @@ impl<'a> CypherExecutor<'a> {
         if store.len() == 0 || (!exact && store.index_is_stale()) {
             return Ok(None);
         }
-        let (unembedded, unembedded_count) = match self.store_coverage(nodes, store, limit)? {
-            StoreCoverage::Ordered => (Vec::new(), 0),
-            StoreCoverage::Partial {
-                unembedded,
-                unembedded_count,
-            } => (unembedded, unembedded_count),
-            StoreCoverage::Unordered => return Ok(None),
+        let Some(coverage) =
+            self.store_coverage(population, &args.variable, &node_type, store, limit)?
+        else {
+            return Ok(None);
         };
+        if rows_population && coverage.unembedded_count == 0 {
+            return Ok(None);
+        }
         let nulls = if non_null_only {
             0
         } else {
-            unembedded_count.min(limit)
+            coverage.unembedded_count.min(limit)
         };
-        let slots = RetrievalPopulation::StoreSlots { store, variable };
-        let ranked = if nulls == limit {
+        let variable = args.variable.as_str();
+        let slots = match population {
+            RetrievalPopulation::Rows(rows) => RetrievalPopulation::RowsBySlot {
+                rows,
+                slot_rows: &coverage.slot_positions,
+            },
+            _ => RetrievalPopulation::StoreSlots { store, variable },
+        };
+        let (ranked, info) = if nulls == limit {
             let mut info = RetrievalDiagnostics::exact("row_coverage");
             info.store = Some(format!("{node_type}.{}", args.property));
             let empty = ResultSet {
@@ -276,9 +331,9 @@ impl<'a> CypherExecutor<'a> {
             (empty, info)
         } else if exact {
             let result = self.exact_vector_entry(
-                &score_expr,
+                score_expr,
                 limit - nulls,
-                (store, node_type),
+                (store, &node_type),
                 &slots,
                 return_clause,
                 score_item_index,
@@ -296,85 +351,83 @@ impl<'a> CypherExecutor<'a> {
             }
             (result, info)
         } else {
-            let top = FusedTopK {
-                return_clause,
-                score_item_index,
-                descending: true,
+            let ranked_top = FusedTopK {
                 limit: limit - nulls,
-                non_null_only,
+                ..top
             };
-            match self.try_hnsw_fused_top_k(&score_expr, top, &slots)? {
+            match self.try_hnsw_fused_top_k(score_expr, ranked_top, &slots)? {
                 HnswOutcome::Indexed(result, info) => (result, info),
                 HnswOutcome::Exact(_) => return Ok(None),
             }
         };
-        let (ranked, info) = ranked;
-        let result = if nulls == 0 {
-            ranked
-        } else {
-            let null_rows = ResultSet {
-                rows: unembedded[..nulls]
-                    .iter()
-                    .map(|&position| {
-                        let mut row = ResultRow::new();
-                        row.node_bindings.insert(
-                            (*variable).to_owned(),
-                            nodes.get(position).expect("walked type position"),
-                        );
-                        row
-                    })
-                    .collect(),
-                columns: Vec::new(),
-                lazy_return_items: None,
-            };
-            let mut result = self.project_retrieval_winners(
-                (0..nulls).map(|position| (position, Value::Null)),
-                &score_expr,
-                &RetrievalPopulation::Rows(&null_rows),
-                return_clause,
-                score_item_index,
-            )?;
-            result.rows.extend(ranked.rows);
-            result
-        };
-        self.record_retrieval(info);
-        Ok(Some(result))
+        if nulls == 0 {
+            return Ok(Some((ranked, info)));
+        }
+        let mut result = self.project_retrieval_winners(
+            coverage.unembedded[..nulls]
+                .iter()
+                .map(|&position| (position, Value::Null)),
+            score_expr,
+            population,
+            return_clause,
+            score_item_index,
+        )?;
+        result.rows.extend(ranked.rows);
+        Ok(Some((result, info)))
     }
 
-    /// One walk over the type's nodes and the store's slots in step: the
-    /// slots must name the type's embedded nodes in type order.
+    /// One walk over the population's nodes and the store's slots in step.
+    /// `None` when the slots are not the population's embedded nodes in
+    /// population order, each bound once, or when a NULL-scoring node is not
+    /// a live node of `node_type` outside the store.
     fn store_coverage(
         &self,
-        nodes: &TypeNodesRef<'_>,
+        population: &RetrievalPopulation<'_>,
+        variable: &str,
+        node_type: &str,
         store: &EmbeddingStore,
         limit: usize,
-    ) -> Result<StoreCoverage, String> {
-        let mut slot = 0;
-        let mut unembedded = Vec::new();
-        let mut unembedded_count = 0;
-        for (position, node) in nodes.iter().enumerate() {
+    ) -> Result<Option<StoreCoverage>, String> {
+        let nodes: Box<dyn Iterator<Item = Option<petgraph::graph::NodeIndex>> + '_> =
+            match population {
+                RetrievalPopulation::WholeType { nodes, .. } => Box::new(nodes.iter().map(Some)),
+                RetrievalPopulation::Rows(rows) => Box::new(
+                    rows.rows
+                        .iter()
+                        .map(|row| row.node_bindings.get(variable).copied()),
+                ),
+                _ => return Ok(None),
+            };
+        let mut coverage = StoreCoverage {
+            slot_positions: Vec::with_capacity(store.len()),
+            unembedded: Vec::new(),
+            unembedded_count: 0,
+        };
+        for (position, node) in nodes.enumerate() {
             if position % INTERRUPT_POLL_INTERVAL == 0 {
                 self.check_deadline()?;
             }
-            if store.slot_to_node.get(slot) == Some(&node.index()) {
-                slot += 1;
+            let Some(node) = node else {
+                return Ok(None);
+            };
+            if store.slot_to_node.get(coverage.slot_positions.len()) == Some(&node.index()) {
+                coverage.slot_positions.push(position);
                 continue;
             }
-            unembedded_count += 1;
-            if unembedded.len() < limit {
-                unembedded.push(position);
+            let of_type = self
+                .graph
+                .graph
+                .node_view(node)
+                .is_some_and(|view| view.node_type_str(&self.graph.interner) == node_type);
+            if !of_type || store.node_to_slot.contains_key(&node.index()) {
+                return Ok(None);
+            }
+            coverage.unembedded_count += 1;
+            if coverage.unembedded.len() < limit {
+                coverage.unembedded.push(position);
             }
         }
-        Ok(if slot != store.len() {
-            StoreCoverage::Unordered
-        } else if unembedded_count == 0 {
-            StoreCoverage::Ordered
-        } else {
-            StoreCoverage::Partial {
-                unembedded,
-                unembedded_count,
-            }
-        })
+        Ok((coverage.slot_positions.len() == store.len()).then_some(coverage))
     }
 
     /// Exact top-`limit` of the whole store, projected over `population`,
@@ -674,17 +727,17 @@ impl<'a> CypherExecutor<'a> {
                     None => return Ok(HnswOutcome::Exact(info.fallback("row_coverage"))),
                 }
             }
-            RetrievalPopulation::WholeType { nodes, .. } => {
-                if !matches!(
-                    self.store_coverage(nodes, store, 0)?,
-                    StoreCoverage::Ordered
-                ) {
+            RetrievalPopulation::WholeType { .. } => {
+                let ordered = self
+                    .store_coverage(population, &args.variable, &node_type, store, 0)?
+                    .is_some_and(|coverage| coverage.unembedded_count == 0);
+                if !ordered {
                     return Ok(HnswOutcome::Exact(info.fallback("row_coverage")));
                 }
                 None
             }
-            // The entry proved slot order is pattern order.
-            RetrievalPopulation::StoreSlots { .. } => None,
+            // The caller proved slot order is row order.
+            RetrievalPopulation::StoreSlots { .. } | RetrievalPopulation::RowsBySlot { .. } => None,
         };
         info.store = Some(format!("{node_type}.{}", args.property));
 
@@ -847,11 +900,15 @@ impl<'a> CypherExecutor<'a> {
         // every row (the same opt-in approximate path the fluent API auto-uses).
         // Declines to the exact scan below whenever it isn't applicable (no index, unsupported metric, filtered+underfilled,
         // mixed types, duplicate node bindings, ASC order).
-        match self.try_hnsw_fused_top_k(
-            &score_expr,
-            top,
-            &RetrievalPopulation::Rows(&result_set),
-        )? {
+        // Rows that are a node type with unembedded members, in type order:
+        // the entry's store-served route, so PROFILE (which skips the entry)
+        // reports what the ordinary query does.
+        let rows = RetrievalPopulation::Rows(&result_set);
+        if let Some((rs, info)) = self.try_store_served_top_k(&score_expr, top, &rows)? {
+            self.record_retrieval(info);
+            return Ok(rs);
+        }
+        match self.try_hnsw_fused_top_k(&score_expr, top, &rows)? {
             HnswOutcome::Indexed(rs, info) => {
                 self.record_retrieval(info);
                 return Ok(rs);

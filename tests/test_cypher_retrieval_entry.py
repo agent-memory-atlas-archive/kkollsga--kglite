@@ -82,7 +82,13 @@ def test_entry_declines_do_not_change_rows(shape):
         query = query.replace("[1.0,0.0])", "[1.0,0.0], {exact:true})")
     elif shape == "node":
         query = query.replace("d.title AS title", "d AS node")
-    assert _same_routes(graph, query)
+    rows = _same_routes(graph, query)
+    assert rows
+    if shape == "missing":
+        # PROFILE skips the entry; the per-clause route must still serve the
+        # unembedded node first from the type walk and the rest from the store.
+        assert (rows[0]["id"], rows[0]["s"]) == (9001, None)
+        assert graph.cypher("PROFILE " + query).diagnostics["retrieval"][0]["actual_mode"] == "hnsw"
 
 
 @pytest.mark.parametrize(

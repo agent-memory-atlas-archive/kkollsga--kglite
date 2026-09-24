@@ -96,7 +96,16 @@ def test_index_cannot_hide_rows_in_diagnostics(scenario):
         g.cypher("CREATE (:Doc {id:9001, title:'missing', summary:'missing'})")
     else:
         query = query.replace("RETURN", "UNWIND [1,2] AS x RETURN")
-    result = g.cypher(query)
-    assert result.diagnostics["retrieval"][0]["fallback_reason"] == "row_coverage"
-    assert result.diagnostics["retrieval"][0]["actual_mode"] == "exact"
+    for prefix in ["", "PROFILE "]:
+        result = g.cypher(prefix + query)
+        rows = result.to_list()
+        assert len(rows) == len(g.cypher(query, disable_optimizer=True).to_list())
+        record = result.diagnostics["retrieval"][0]
+        if scenario == "unembedded":
+            # Served from the store, but the unembedded node is not hidden: it
+            # scores NULL and ranks first under DESC, as the unfused pipeline has it.
+            assert rows[0]["s"] is None
+            assert (record["actual_mode"], record["fallback_reason"]) == ("hnsw", None)
+        else:
+            assert (record["actual_mode"], record["fallback_reason"]) == ("exact", "row_coverage")
     assert _graph().cypher("RETURN 1 AS n").diagnostics["retrieval"] == []
