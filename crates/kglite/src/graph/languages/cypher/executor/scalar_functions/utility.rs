@@ -1002,7 +1002,7 @@ impl CypherExecutor<'_> {
         }
         format!(
             "{base}. Embed it first with MATCH ()-[r:{relationship_type}]->() \
-             WITH collect(r) AS rs CALL db.edge_embeddings.embed({{type: \
+             WITH collect(r) AS rs CALL db.relationship_embeddings.embed({{type: \
              '{relationship_type}', text_property: '{property}', relationships: rs}})."
         )
     }

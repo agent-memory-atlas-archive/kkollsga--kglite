@@ -597,8 +597,8 @@ fn drop_node_indexes(
 /// [`drop_node_indexes`]' one-name-many-structures rule, applied to the two
 /// relationship families: the HNSW vector index and the BM25 text index are
 /// both listed as `relationship:Type.property`, so both go. Each is routed to
-/// the same entry point as its procedure (`db.edge_embeddings.drop_index`,
-/// `db.edge_text_index.drop`), so both drops are journalled for statement
+/// the same entry point as its procedure (`db.relationship_embeddings.drop_index`,
+/// `db.relationship_text_index.drop`), so both drops are journalled for statement
 /// rollback, and the vector one reaches the WAL declaration identically.
 /// Vectors are untouched, exactly as on the node vector arm.
 fn drop_relationship_indexes(
@@ -713,8 +713,8 @@ fn node_label(target: &DdlTarget, statement: &str) -> Result<String, String> {
              node properties only, and KGLite has no relationship *property* index to build on \
              type '{rel_type}' — relationship properties are still queryable, they are scanned \
              rather than indexed. A relationship *vector* index is built by \
-             `CALL db.edge_embeddings.build_index`, a relationship BM25 index by \
-             `CALL db.edge_text_index.build`, and either is addressed by its canonical name, as \
+             `CALL db.relationship_embeddings.build_index`, a relationship BM25 index by \
+             `CALL db.relationship_text_index.build`, and either is addressed by its canonical name, as \
              `DROP INDEX relationship:{rel_type}.<property>`."
         )),
     }

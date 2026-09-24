@@ -26,6 +26,7 @@ kglite.KnowledgeGraph.describe
 # The overloads are correct for type-checking but structurally differ from runtime.
 kglite.KnowledgeGraph.sample
 kglite.KnowledgeGraph.embeddings
+kglite.KnowledgeGraph.node_embeddings
 
 # Re-exports: KnowledgeGraph is imported into the dataset wrappers, so stubtest
 # re-checks the same class through each importing module. The underlying issues

@@ -45,11 +45,11 @@ impl EmbeddingEntity {
 }
 
 /// One relationship embedding store's descriptor, as reported by
-/// [`list_edge_embeddings`]. The relationship counterpart of
+/// [`list_relationship_embeddings`]. The relationship counterpart of
 /// [`EmbeddingStoreInfo`](super::embeddings::EmbeddingStoreInfo).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct EdgeEmbeddingStoreInfo {
+pub struct RelationshipEmbeddingStoreInfo {
     /// The relationship type the store is keyed on.
     pub relationship_type: String,
     /// The source property the vectors describe (the store name without `_emb`).
@@ -65,13 +65,13 @@ pub struct EdgeEmbeddingStoreInfo {
 }
 
 /// Every relationship embedding store, sorted by `(relationship type, store)`.
-pub fn list_edge_embeddings(graph: &DirGraph) -> Vec<EdgeEmbeddingStoreInfo> {
-    let mut rows: Vec<EdgeEmbeddingStoreInfo> = graph
+pub fn list_relationship_embeddings(graph: &DirGraph) -> Vec<RelationshipEmbeddingStoreInfo> {
+    let mut rows: Vec<RelationshipEmbeddingStoreInfo> = graph
         .edge_embeddings
         .iter()
         .map(|((relationship_type, name), store)| {
             let numeric = store.index_store();
-            EdgeEmbeddingStoreInfo {
+            RelationshipEmbeddingStoreInfo {
                 relationship_type: relationship_type.clone(),
                 text_column: text_column_of(name).unwrap_or(name).to_string(),
                 store_name: name.clone(),

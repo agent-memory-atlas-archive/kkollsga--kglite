@@ -133,7 +133,7 @@ def _json_scalar(value: Any) -> Any:
     JSON, JSON has no temporal type, and silently writing ``datetime`` as
     ISO-8601 text would demote a temporal to a string property — a silent
     degradation, which is the one outcome that matrix exists to keep out. Load
-    temporals through ``add_nodes``/``add_connections``, which type them, or
+    temporals through ``add_nodes``/``add_relationships``, which type them, or
     pass the ISO-8601 string yourself and convert with Cypher ``datetime()``.
 
     Missing values are the exception: ``pd.NaT`` carries no temporal value to

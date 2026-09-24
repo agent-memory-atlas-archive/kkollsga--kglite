@@ -118,11 +118,11 @@ fn index_names(graph: &DirGraph) -> Vec<String> {
         .collect()
 }
 
-/// `index_state` as `db.edge_embeddings.list` reports it for the one store.
+/// `index_state` as `db.relationship_embeddings.list` reports it for the one store.
 fn edge_index_state(graph: &DirGraph) -> String {
     let result = read(
         graph,
-        "CALL db.edge_embeddings.list({type:'CLAIMS'}) YIELD index_state RETURN index_state",
+        "CALL db.relationship_embeddings.list({type:'CLAIMS'}) YIELD index_state RETURN index_state",
     );
     assert_eq!(result.rows.len(), 1, "{result:?}");
     match &result.rows[0][0] {

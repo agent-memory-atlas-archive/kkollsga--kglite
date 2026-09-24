@@ -231,7 +231,14 @@ where
     V: AsRef<[f32]>,
 {
     let key = store_key(node_type, text_column);
-    let prepared = prepare(graph, node_type, text_column, None, entries)?;
+    let prepared = prepare(
+        graph,
+        node_type,
+        text_column,
+        None,
+        entries,
+        lookup_id(node_type),
+    )?;
 
     let Some(dim) = prepared.dimension else {
         return Ok(EmbeddingIngestReport {
@@ -284,11 +291,62 @@ where
     I: IntoIterator<Item = (Value, V)>,
     V: AsRef<[f32]>,
 {
-    let key = store_key(node_type, text_column);
-    let existing_dim = graph.embeddings.get(&key).map(|s| s.dimension);
-    let store_existed = existing_dim.is_some();
-    let prepared = prepare(graph, node_type, text_column, existing_dim, entries)?;
+    let existing_dim = graph
+        .embeddings
+        .get(&store_key(node_type, text_column))
+        .map(|s| s.dimension);
+    let prepared = prepare(
+        graph,
+        node_type,
+        text_column,
+        existing_dim,
+        entries,
+        lookup_id(node_type),
+    )?;
+    upsert_prepared(graph, node_type, text_column, metric, prepared)
+}
 
+/// [`add_embeddings`] for nodes a query already bound: `entries` name nodes by
+/// slot, so no id is looked up. The `db.node_embeddings.set` write path — same
+/// column check, dimension rule, provenance and WAL record as the id-keyed
+/// call, because it is the same code past the key resolution.
+pub(crate) fn add_node_vectors(
+    graph: &mut DirGraph,
+    node_type: &str,
+    text_column: &str,
+    metric: Option<&str>,
+    entries: Vec<(NodeIndex, Vec<f32>)>,
+) -> Result<EmbeddingIngestReport, String> {
+    let existing_dim = graph
+        .embeddings
+        .get(&store_key(node_type, text_column))
+        .map(|s| s.dimension);
+    let prepared = prepare(
+        graph,
+        node_type,
+        text_column,
+        existing_dim,
+        entries,
+        |_, node| Some(node),
+    )?;
+    upsert_prepared(graph, node_type, text_column, metric, prepared)
+}
+
+/// The id resolver [`set_embeddings`] / [`add_embeddings`] hand [`prepare`].
+fn lookup_id(node_type: &str) -> impl Fn(&DirGraph, Value) -> Option<NodeIndex> + '_ {
+    move |graph, id| graph.lookup_by_id_readonly(node_type, &id)
+}
+
+/// The write half of an upsert, once every entry is resolved and checked.
+fn upsert_prepared<V: AsRef<[f32]>>(
+    graph: &mut DirGraph,
+    node_type: &str,
+    text_column: &str,
+    metric: Option<&str>,
+    prepared: Prepared<V>,
+) -> Result<EmbeddingIngestReport, String> {
+    let key = store_key(node_type, text_column);
+    let store_existed = graph.embeddings.contains_key(&key);
     let Some(dim) = prepared.dimension else {
         return Ok(EmbeddingIngestReport {
             skipped: prepared.skipped,
@@ -654,18 +712,20 @@ struct Prepared<V> {
     skipped: usize,
 }
 
-/// Validate the node type and source column, resolve every id, and check
-/// every dimension. `constraint` is an existing store's dimension, which
+/// Validate the node type and source column, resolve every key through
+/// `resolve` (an id lookup, or the slot a query bound), and check every
+/// dimension. `constraint` is an existing store's dimension, which
 /// incoming vectors must match; `None` infers it from the first vector.
-fn prepare<I, V>(
+fn prepare<I, K, V>(
     graph: &mut DirGraph,
     node_type: &str,
     text_column: &str,
     constraint: Option<usize>,
     entries: I,
+    resolve: impl Fn(&DirGraph, K) -> Option<NodeIndex>,
 ) -> Result<Prepared<V>, String>
 where
-    I: IntoIterator<Item = (Value, V)>,
+    I: IntoIterator<Item = (K, V)>,
     V: AsRef<[f32]>,
 {
     // Disk arena guard (owned; no-op on memory/mapped) — the column probe and
@@ -697,7 +757,7 @@ where
     for (id, vector) in incoming {
         crate::graph::embedding_validation::validate_finite_vector(vector.as_ref())
             .map_err(|error| format!("Invalid embedding: {error}"))?;
-        let Some(node_idx) = graph.lookup_by_id(node_type, &id) else {
+        let Some(node_idx) = resolve(graph, id) else {
             skipped += 1;
             continue;
         };
@@ -939,6 +999,9 @@ pub fn embed_property(
     let requested_model_id = model.model_id();
     let (mut found, store_dimension, had_existing_store) = {
         let graph: &DirGraph = graph;
+        // Disk arena guard over every node read below — the column probe as
+        // well as the scan; a no-op on the memory backend most callers use.
+        let _arena_guard = graph.begin_read_pass();
         let node_indices: Vec<NodeIndex> = graph
             .type_indices
             .get(node_type)
@@ -973,8 +1036,6 @@ pub fn embed_property(
                 )));
             }
         }
-        // Disk arena guard; a no-op on the memory backend most callers use.
-        let _arena_guard = graph.begin_read_pass();
         let found = collect_embed_candidates(
             graph,
             &node_indices,
@@ -1163,6 +1224,9 @@ fn embed_batches(
     }
     Ok(())
 }
+
+#[path = "node_embedding_selection.rs"]
+pub(crate) mod selection;
 
 #[cfg(test)]
 #[path = "embeddings_tests.rs"]

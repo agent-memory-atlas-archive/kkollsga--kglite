@@ -408,7 +408,7 @@ impl EdgeEmbeddingStore {
 /// Inside a statement window the HNSW index is journalled with the vectors.
 /// `remove` invalidates it and the undo's `restore` invalidates it again, so
 /// without the captured state a rolled-back `DELETE` left the graph with its
-/// vectors back and its index gone — `db.edge_embeddings.list` reporting
+/// vectors back and its index gone — `db.relationship_embeddings.list` reporting
 /// `index_state: 'none'` for an index the statement never touched. Taking the
 /// state costs nothing on the removing path: the removal drops it anyway.
 /// Stores with no index are skipped — there is nothing to lose, and this runs
@@ -623,7 +623,7 @@ pub(crate) fn upsert_edge_embeddings(
 
 /// [`upsert_edge_embeddings`] with the name the caller gave its list, so a
 /// per-entry error reads `rows[3]` for `set_relationship_embeddings` and
-/// `entries[3]` for `db.edge_embeddings.set`.
+/// `entries[3]` for `db.relationship_embeddings.set`.
 pub(crate) fn upsert_edge_embeddings_listed(
     graph: &mut DirGraph,
     connection_type: &str,
@@ -833,7 +833,7 @@ pub(crate) fn replace_edge_embeddings_listed(
 /// A store the write *creates* is one `EdgeEmbeddingStoreReplaced { prior:
 /// None }` — removing it discards every cell with it. An existing store gets a
 /// pre-image per changed cell plus the `model_id` the write is about to clear,
-/// and never a store clone: a per-row `CALL db.edge_embeddings.set` over N
+/// and never a store clone: a per-row `CALL db.relationship_embeddings.set` over N
 /// relationships stays O(N × dimension).
 ///
 /// The `model_id` entry is captured before the cells, so reverse replay lands

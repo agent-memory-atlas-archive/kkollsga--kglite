@@ -1,5 +1,5 @@
 """`set_relationship_embeddings()` and `embed_relationship_texts()`: the Python
-write twins of `db.edge_embeddings.set` / `.embed`, and `types:` on `embed`.
+write twins of `db.relationship_embeddings.set` / `.embed`, and `types:` on `embed`.
 
 Every vector is checked against what `relationship_embeddings()` reads back,
 and the generated path against the Cypher procedure run on a twin graph.
@@ -122,10 +122,12 @@ def test_set_replaces_the_store_and_add_keeps_what_it_does_not_name(mode: str, t
 def test_set_discards_the_index_and_metric_as_a_replaced_node_store_does(tmp_path: Path) -> None:
     graph = _graph("memory", tmp_path)
     graph.set_relationship_embeddings("SUPPORTS", "evidence", {(2, 10): [0.3, 0.1]}, metric="euclidean")
-    graph.cypher("CALL db.edge_embeddings.build_index({type:'SUPPORTS', text_property:'evidence'}) YIELD indexed")
+    graph.cypher(
+        "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'evidence'}) YIELD indexed"
+    )
     graph.set_relationship_embeddings("SUPPORTS", "evidence", {(1, 10): [1.0, 0.0]})
     listed = graph.cypher(
-        "CALL db.edge_embeddings.list({type:'SUPPORTS'}) YIELD count, metric, index_state "
+        "CALL db.relationship_embeddings.list({type:'SUPPORTS'}) YIELD count, metric, index_state "
         "RETURN count, metric, index_state"
     ).to_list()
     assert listed == [{"count": 1, "metric": "cosine", "index_state": "none"}]
@@ -194,10 +196,12 @@ def test_numpy_rows_and_float_lists_store_identical_bits(tmp_path: Path) -> None
 def test_add_upserts_and_keeps_the_index_as_a_delta(tmp_path: Path) -> None:
     graph = _graph("memory", tmp_path)
     graph.add_relationship_embeddings("SUPPORTS", "evidence", {(2, 10): [0.3, 0.1]}, metric="euclidean")
-    graph.cypher("CALL db.edge_embeddings.build_index({type:'SUPPORTS', text_property:'evidence'}) YIELD indexed")
+    graph.cypher(
+        "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'evidence'}) YIELD indexed"
+    )
     graph.add_relationship_embeddings("SUPPORTS", "evidence", {(1, 10): [1.0, 0.0]})
     listed = graph.cypher(
-        "CALL db.edge_embeddings.list({type:'SUPPORTS'}) YIELD count, metric, model, index_state, delta "
+        "CALL db.relationship_embeddings.list({type:'SUPPORTS'}) YIELD count, metric, model, index_state, delta "
         "RETURN count, metric, model, index_state, delta"
     ).to_list()
     assert listed == [{"count": 2, "metric": "euclidean", "model": None, "index_state": "stale", "delta": 1}]
@@ -264,13 +268,14 @@ def test_endpoint_types_are_required_once_the_type_connects_several(tmp_path: Pa
     assert _by_uid(graph) == {"z": [1.0, 0.0]}
 
 
-# ── embed_relationship_texts and db.edge_embeddings.embed ────────────────────
+# ── embed_relationship_texts and db.relationship_embeddings.embed ────────────────────
 
 
 def _cypher_embed(graph: KnowledgeGraph, mode: str = "missing") -> list[dict]:
     return graph.cypher(
         "MATCH ()-[r:SUPPORTS]->() WITH collect(r) AS rs "
-        "CALL db.edge_embeddings.embed({type:'SUPPORTS', text_property:'evidence', relationships: rs, mode: $mode}) "
+        "CALL db.relationship_embeddings.embed({type:'SUPPORTS', text_property:'evidence', relationships: rs, mode: "
+        "$mode}) "
         "YIELD embedded, skipped, dimension, model RETURN embedded, skipped, dimension, model",
         params={"mode": mode},
     ).to_list()
@@ -353,14 +358,14 @@ def test_types_embeds_each_listed_type_as_its_own_call_would() -> None:
     together, apart = _typed_graph(), _typed_graph()
     row = together.cypher(
         "MATCH ()-[r:CITES|REFUTES]->() WITH collect(r) AS rs "
-        "CALL db.edge_embeddings.embed({types:['REFUTES','CITES'], text_property:'ctx', relationships: rs}) "
+        "CALL db.relationship_embeddings.embed({types:['REFUTES','CITES'], text_property:'ctx', relationships: rs}) "
         "YIELD embedded, skipped, dimension, model RETURN embedded, skipped, dimension, model"
     ).to_list()
     assert row == [{"embedded": 3, "skipped": 0, "dimension": 2, "model": "stub/writers"}]
     per_type = [
         apart.cypher(
             f"MATCH ()-[r:{rel}]->() WITH collect(r) AS rs "
-            f"CALL db.edge_embeddings.embed({{type:'{rel}', text_property:'ctx', relationships: rs}}) "
+            f"CALL db.relationship_embeddings.embed({{type:'{rel}', text_property:'ctx', relationships: rs}}) "
             "YIELD embedded RETURN embedded"
         ).to_list()[0]["embedded"]
         for rel in ("CITES", "REFUTES")
@@ -374,7 +379,7 @@ def test_types_refusals() -> None:
     graph = _typed_graph()
     call = (
         "MATCH ()-[r:CITES|MENTIONS]->() WITH collect(r) AS rs "
-        "CALL db.edge_embeddings.embed({{{params}, text_property:'ctx', relationships: rs}}) "
+        "CALL db.relationship_embeddings.embed({{{params}, text_property:'ctx', relationships: rs}}) "
         "YIELD embedded RETURN embedded"
     )
     with pytest.raises(kglite.CypherExecutionError, match="has type 'MENTIONS', expected one of 'CITES', 'REFUTES'"):

@@ -23,7 +23,7 @@ def _indexed_graph(count: int = 24, graph: KnowledgeGraph | None = None) -> Know
         )
         graph.cypher(
             "MATCH ()-[r:CLAIMS {rank: $rank}]->() "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
             "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
             params={"rank": index, "vector": [math.cos(angle), math.sin(angle)]},
         )
@@ -35,7 +35,7 @@ def _query(graph: KnowledgeGraph, **options: object) -> list[dict]:
     fields = ["type:'CLAIMS'", "text_property:'text'", "vector:$vector"]
     fields.extend(f"{name}:${name}" for name in options)
     return graph.cypher(
-        f"CALL db.edge_embeddings.query({{{', '.join(fields)}}}) "
+        f"CALL db.relationship_embeddings.query({{{', '.join(fields)}}}) "
         "YIELD relationship, score, search_method "
         "RETURN relationship, score, search_method",
         params={"vector": vector, **options},
@@ -60,12 +60,12 @@ def test_index_lifecycle_and_hnsw_route_are_reported() -> None:
     assert _query(graph, top_k=1)[0]["search_method"] == "exact"
 
     built = graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text', "
         "m:8, ef_construction:64, ef_search:32}) YIELD indexed,metric,m RETURN indexed,metric,m"
     ).to_list()
     assert built == [{"indexed": 24, "metric": "cosine", "m": 8}]
     metadata = graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD index_state,delta,unembedded RETURN index_state,delta,unembedded"
     ).to_list()
     assert metadata == [{"index_state": "online", "delta": 0, "unembedded": 0}]
@@ -73,10 +73,11 @@ def test_index_lifecycle_and_hnsw_route_are_reported() -> None:
     assert _query(graph, top_k=3, exact=True)[0]["search_method"] == "exact"
 
     assert graph.cypher(
-        "CALL db.edge_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN refreshed"
+        "CALL db.relationship_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN "
+        "refreshed"
     ).to_list() == [{"refreshed": 0}]
     assert graph.cypher(
-        "CALL db.edge_embeddings.drop_index({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+        "CALL db.relationship_embeddings.drop_index({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": True}]
     assert _query(graph, top_k=1)[0]["search_method"] == "exact"
 
@@ -86,7 +87,7 @@ def test_query_where_filters_candidates_after_whole_store_top_k() -> None:
     winner = _query(graph, exact=True, top_k=1)
     assert winner[0]["relationship"]["properties"]["rank"] == 0
     rows = graph.cypher(
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', "
         "vector:[1.0,0.0], top_k:1, exact:true}) "
         "YIELD relationship,score WHERE relationship.rank <> 0 "
         "RETURN relationship,score"
@@ -111,12 +112,14 @@ def test_query_where_filters_candidates_after_whole_store_top_k() -> None:
 def test_invalid_query_options_fail_without_mutating_index(extra: dict, message: str) -> None:
     graph = _indexed_graph()
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     with pytest.raises(kglite.CypherExecutionError, match=message):
         _query(graph, top_k=3, **extra)
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD index_state RETURN index_state"
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD index_state RETURN "
+        "index_state"
     ).to_list() == [{"index_state": "online"}]
 
 
@@ -130,7 +133,8 @@ def test_metric_without_hnsw_support_falls_back_to_exact() -> None:
     """
     graph = _indexed_graph()
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     rows = _query(graph, top_k=3, metric="poincare")
 
@@ -153,16 +157,16 @@ def test_explicit_build_metric_is_recorded_and_serves_metric_less_queries() -> N
     """
     graph = _indexed_graph()
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD metric RETURN metric"
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD metric RETURN metric"
     ).to_list() == [{"metric": "cosine"}]
 
     built = graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text', "
         "metric:'euclidean'}) YIELD indexed,metric RETURN indexed,metric"
     ).to_list()
     assert built == [{"indexed": 24, "metric": "euclidean"}]
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD metric RETURN metric"
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD metric RETURN metric"
     ).to_list() == [{"metric": "euclidean"}]
     assert _query(graph, top_k=3)[0]["search_method"] == "hnsw"
 
@@ -171,16 +175,16 @@ def test_build_metric_contradicting_the_store_is_refused() -> None:
     graph = _indexed_graph()
     graph.cypher(
         "MATCH ()-[r:CLAIMS {rank: 0}]->() "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
         "entries:[{relationship:r, vector:[1.0, 0.0]}], metric:'cosine'}) YIELD stored RETURN stored"
     )
     with pytest.raises(kglite.CypherExecutionError, match="declares metric 'cosine'"):
         graph.cypher(
-            "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text', "
             "metric:'euclidean'}) YIELD indexed RETURN indexed"
         )
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD metric,index_state RETURN metric,index_state"
     ).to_list() == [{"metric": "cosine", "index_state": "none"}]
 
@@ -211,7 +215,8 @@ def test_query_route_serves_every_storage_mode(mode: str, tmp_path: Path) -> Non
     assert exact[1]["relationship"]["properties"]["rank"] in {1, 5}
 
     assert graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     ).to_list() == [{"indexed": 6}]
     approximate = _query(graph, top_k=2)
     assert [row["search_method"] for row in approximate] == ["hnsw", "hnsw"]
@@ -223,16 +228,17 @@ def test_query_route_serves_every_storage_mode(mode: str, tmp_path: Path) -> Non
 def test_drop_store_removes_every_vector_and_is_idempotent() -> None:
     graph = _indexed_graph(3)
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
 
     assert graph.cypher(
-        "CALL db.edge_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+        "CALL db.relationship_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": True}]
     assert graph.cypher(
-        "CALL db.edge_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+        "CALL db.relationship_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": False}]
-    assert graph.cypher("CALL db.edge_embeddings.list() YIELD entity RETURN entity").to_list() == []
+    assert graph.cypher("CALL db.relationship_embeddings.list() YIELD entity RETURN entity").to_list() == []
     with pytest.raises(kglite.CypherExecutionError, match="text_emb"):
         graph.cypher("MATCH ()-[r:CLAIMS]->() RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score")
     with pytest.raises(kglite.CypherExecutionError, match="No relationship embedding store"):
@@ -243,12 +249,12 @@ def test_failing_statement_restores_a_dropped_store() -> None:
     graph = _indexed_graph(3)
     with pytest.raises(kglite.CypherExecutionError, match="division by zero"):
         graph.cypher(
-            "CALL db.edge_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped "
+            "CALL db.relationship_embeddings.drop({type:'CLAIMS', text_property:'text'}) YIELD dropped "
             "WITH dropped MATCH (hub:Hub) SET hub.bad = 1/0 RETURN dropped"
         )
 
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD count,dimension,metric RETURN count,dimension,metric"
     ).to_list() == [{"count": 3, "dimension": 2, "metric": "cosine"}]
     assert _query(graph, exact=True, top_k=1)[0]["score"] == pytest.approx(1.0)
@@ -263,24 +269,25 @@ def test_refresh_index_reports_the_pending_delta_and_clears_it() -> None:
     """
     graph = _indexed_graph(5)
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text', "
         "auto_refresh_limit:0}) YIELD indexed RETURN indexed"
     )
     graph.cypher(
         "MATCH ()-[r:CLAIMS {rank:0}]->() "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
         "entries:[{relationship:r, vector:[0.0,1.0]}]}) YIELD stored RETURN stored"
     )
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD index_state,delta RETURN index_state,delta"
     ).to_list() == [{"index_state": "stale", "delta": 1}]
 
     assert graph.cypher(
-        "CALL db.edge_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN refreshed"
+        "CALL db.relationship_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN "
+        "refreshed"
     ).to_list() == [{"refreshed": 1}]
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD index_state,delta RETURN index_state,delta"
     ).to_list() == [{"index_state": "online", "delta": 0}]
     assert _query(graph, top_k=1)[0]["relationship"]["properties"]["rank"] == 1
@@ -289,10 +296,10 @@ def test_refresh_index_reports_the_pending_delta_and_clears_it() -> None:
 def test_drop_index_is_false_when_the_store_carries_no_index() -> None:
     graph = _indexed_graph(2)
     assert graph.cypher(
-        "CALL db.edge_embeddings.drop_index({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
+        "CALL db.relationship_embeddings.drop_index({type:'CLAIMS', text_property:'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": False}]
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD index_state,count RETURN index_state,count"
     ).to_list() == [{"index_state": "none", "count": 2}]
 
@@ -308,7 +315,7 @@ def _three_vector_graph() -> KnowledgeGraph:
     for rank, vector in [(1, [1.0, 0.0]), (2, [0.0, 1.0]), (3, [1.2, 1.6])]:
         graph.cypher(
             "MATCH ()-[r:CLAIMS {rank: $rank}]->() "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
             "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
             params={"rank": rank, "vector": vector},
         )
@@ -344,7 +351,7 @@ def test_relationship_scores_are_the_hand_computed_metric_values(metric: str, ex
     assert {row["rank"]: row["text_score"] for row in scalar} == pytest.approx(expected, abs=1e-6)
 
     procedure = graph.cypher(
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0,0.0], "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0,0.0], "
         "top_k:3, exact:true, metric:$metric}) YIELD relationship, score "
         "RETURN relationship, score",
         params={"metric": metric},
@@ -369,10 +376,11 @@ def test_kgl_round_trip_keeps_relationship_vectors_in_every_storage_mode(mode: s
     through different paths, and only the in-memory round trip was covered."""
     graph = _indexed_graph(6, _graph_in_mode(mode, tmp_path))
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     before_state = graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD entity,count,dimension,metric RETURN entity,count,dimension,metric"
     ).to_list()
     before_rows = [
@@ -386,7 +394,7 @@ def test_kgl_round_trip_keeps_relationship_vectors_in_every_storage_mode(mode: s
 
     assert (
         reopened.cypher(
-            "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+            "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
             "YIELD entity,count,dimension,metric RETURN entity,count,dimension,metric"
         ).to_list()
         == before_state
@@ -400,7 +408,7 @@ def test_kgl_round_trip_keeps_relationship_vectors_in_every_storage_mode(mode: s
 
 def _index_status(graph: KnowledgeGraph) -> list[dict]:
     return graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD index_state,delta RETURN index_state,delta"
     ).to_list()
 
@@ -419,7 +427,8 @@ def test_kgl_round_trip_keeps_the_relationship_hnsw_index_online(source: str, st
     never writes a `.kgl` (see the disk-generation test below)."""
     graph = _indexed_graph(6, _graph_in_mode(source, tmp_path))
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     exact = [row["relationship"]["properties"]["rank"] for row in _query(graph, exact=True, top_k=6)]
 
@@ -442,18 +451,18 @@ def test_kgl_round_trip_keeps_a_stale_relationship_index_delta(storage: str, tmp
     replaced vector's old neighbourhood and never see the new one."""
     graph = _indexed_graph(5)
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text', "
         "auto_refresh_limit:0}) YIELD indexed RETURN indexed"
     )
     graph.cypher(
         "MATCH ()-[r:CLAIMS {rank:0}]->() "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
         "entries:[{relationship:r, vector:[0.0,1.0]}]}) YIELD stored RETURN stored"
     )
     graph.cypher("MATCH (hub:Hub {id: 0}) CREATE (hub)-[:CLAIMS {rank: 99}]->(:Doc {id: 99})")
     graph.cypher(
         "MATCH ()-[r:CLAIMS {rank:99}]->() "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
         "entries:[{relationship:r, vector:[1.0,0.0]}]}) YIELD stored RETURN stored"
     )
     assert _index_status(graph) == [{"index_state": "stale", "delta": 2}]
@@ -464,7 +473,8 @@ def test_kgl_round_trip_keeps_a_stale_relationship_index_delta(storage: str, tmp
 
     assert _index_status(reopened) == [{"index_state": "stale", "delta": 2}]
     assert reopened.cypher(
-        "CALL db.edge_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN refreshed"
+        "CALL db.relationship_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN "
+        "refreshed"
     ).to_list() == [{"refreshed": 2}]
     assert _index_status(reopened) == [{"index_state": "online", "delta": 0}]
     top = _query(reopened, top_k=1)[0]
@@ -481,7 +491,8 @@ def test_disk_generation_reopen_does_not_persist_the_relationship_index(tmp_path
     directory = tmp_path / "disk.kgl"
     graph = _indexed_graph(6, _graph_in_mode("disk", tmp_path))
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     graph.save(str(directory))
     del graph
@@ -503,7 +514,8 @@ def test_kgl_without_a_relationship_index_carries_no_edge_vector_index_section()
     unindexed = _indexed_graph(3)
     indexed = _indexed_graph(3)
     indexed.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
 
     for graph in (node_only, unindexed):

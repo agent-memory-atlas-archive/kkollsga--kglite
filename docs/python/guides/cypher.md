@@ -81,7 +81,7 @@ once, makes one rollback-checkpoint decision, and bumps the graph version once
 insert stays O(1) instead of triggering a rebuild. Issuing the same writes as N
 separate `CREATE` calls pays all of that N times over. The
 [Data Loading guide](data-loading.md#write-throughput--pick-the-coarsest-path-that-fits)
-has the measured per-row costs and the coarser `add_nodes` / `add_connections`
+has the measured per-row costs and the coarser `add_nodes` / `add_relationships`
 rung above this one.
 
 ## Transactions
@@ -510,7 +510,7 @@ surviving cohort.
 ## Edge provenance via reified nodes
 
 kglite enforces at-most-one edge per `(source, target, edge_type)`.
-A second `add_connections` (or `MERGE`) for the same triple updates
+A second `add_relationships` (or `MERGE`) for the same triple updates
 the existing edge's properties rather than creating a parallel one.
 That keeps the storage layer dense — but if you need to track *who
 applied the edge, when, and why*, you need provenance per

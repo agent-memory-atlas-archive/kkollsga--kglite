@@ -454,11 +454,15 @@
         },
         "add_embeddings": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, embeddings, metric=None)"
+          "signature": "(self, /, node_type, text_column, embeddings, metric=None, *, entity='node', relationship_keys=None)"
         },
         "add_label": {
           "kind": "method",
           "signature": "(self, /, node_type, ids, label)"
+        },
+        "add_node_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, embeddings, metric=None)"
         },
         "add_nodes": {
           "kind": "method",
@@ -475,6 +479,18 @@
         "add_relationship_embeddings": {
           "kind": "method",
           "signature": "(self, /, relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None)"
+        },
+        "add_relationships": {
+          "kind": "method",
+          "signature": "(self, /, data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid='warn')"
+        },
+        "add_relationships_bulk": {
+          "kind": "method",
+          "signature": "(self, /, connections, *, git_sha=None, modified_by=None)"
+        },
+        "add_relationships_from_source": {
+          "kind": "method",
+          "signature": "(self, /, connections, *, git_sha=None, modified_by=None)"
         },
         "add_timeseries": {
           "kind": "method",
@@ -516,13 +532,21 @@
           "kind": "method",
           "signature": "(self, /, node_types=None)"
         },
+        "build_node_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None)"
+        },
+        "build_relationship_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None)"
+        },
         "build_text_index": {
           "kind": "method",
           "signature": "(self, /, node_type, property, auto_refresh_limit=None)"
         },
         "build_vector_index": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None)"
+          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, entity='node')"
         },
         "calculate": {
           "kind": "method",
@@ -628,6 +652,10 @@
           "kind": "method",
           "signature": "(self, /, node_type, property)"
         },
+        "create_relationships": {
+          "kind": "method",
+          "signature": "(self, /, connection_type, keep_selection=None, conflict_handling=None, properties=None, source_type=None, target_type=None)"
+        },
         "cypher": {
           "kind": "method",
           "signature": "(self, /, query, *, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=True, parallel=False, disable_optimizer=False, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None)"
@@ -680,9 +708,17 @@
           "kind": "method",
           "signature": "(self, /, node_type, property)"
         },
+        "drop_node_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column)"
+        },
         "drop_range_index": {
           "kind": "method",
           "signature": "(self, /, node_type, property)"
+        },
+        "drop_relationship_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column)"
         },
         "drop_text_index": {
           "kind": "method",
@@ -690,7 +726,11 @@
         },
         "drop_vector_index": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column)"
+          "signature": "(self, /, node_type, text_column, *, entity='node')"
+        },
+        "embed_node_texts": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None)"
         },
         "embed_relationship_texts": {
           "kind": "method",
@@ -698,7 +738,7 @@
         },
         "embed_texts": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None)"
+          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None, *, entity='node', metric=None)"
         },
         "embedding": {
           "kind": "method",
@@ -718,7 +758,7 @@
         },
         "embeddings": {
           "kind": "method",
-          "signature": "(self, /, node_type_or_text_column, text_column=None)"
+          "signature": "(self, /, node_type_or_text_column, text_column=None, *, entity='node', relationship_keys=None)"
         },
         "enable_disk_mode": {
           "kind": "method",
@@ -820,6 +860,14 @@
           "kind": "method",
           "signature": "(self, /, node_type, property)"
         },
+        "has_node_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column)"
+        },
+        "has_relationship_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column)"
+        },
         "has_schema": {
           "kind": "method",
           "signature": "(self, /)"
@@ -830,7 +878,7 @@
         },
         "has_vector_index": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column)"
+          "signature": "(self, /, node_type, text_column, *, entity='node')"
         },
         "ids": {
           "kind": "method",
@@ -948,6 +996,10 @@
           "kind": "method",
           "signature": "(self, /, node_type, node_id)"
         },
+        "node_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, node_type_or_text_column, text_column=None)"
+        },
         "node_type_counts": {
           "kind": "method",
           "signature": "(self, /)"
@@ -996,9 +1048,17 @@
           "kind": "method",
           "signature": "(self, /)"
         },
-        "refresh_vector_index": {
+        "refresh_node_vector_index": {
           "kind": "method",
           "signature": "(self, /, node_type, text_column)"
+        },
+        "refresh_relationship_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column)"
+        },
+        "refresh_vector_index": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, *, entity='node')"
         },
         "reindex": {
           "kind": "method",
@@ -1007,6 +1067,14 @@
         "relationship_embeddings": {
           "kind": "method",
           "signature": "(self, /, relationship_type, text_column, *, relationship_keys=None)"
+        },
+        "relationship_types": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "relationships": {
+          "kind": "method",
+          "signature": "(self, /, indices=None, parent_info=None, include_node_properties=None, flatten_single_parent=True)"
         },
         "remove_embeddings": {
           "kind": "method",
@@ -1017,6 +1085,10 @@
           "signature": "(self, /, node_type, ids, label)"
         },
         "replace_connections": {
+          "kind": "method",
+          "signature": "(self, /, data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid='warn')"
+        },
+        "replace_relationships": {
           "kind": "method",
           "signature": "(self, /, data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid='warn')"
         },
@@ -1098,7 +1170,7 @@
         },
         "set_embeddings": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, embeddings, metric=None)"
+          "signature": "(self, /, node_type, text_column, embeddings, metric=None, *, entity='node', relationship_keys=None)"
         },
         "set_instructions": {
           "kind": "method",
@@ -1107,6 +1179,10 @@
         "set_memory_limit": {
           "kind": "method",
           "signature": "(self, /, limit_bytes, spill_dir=None)"
+        },
+        "set_node_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, embeddings, metric=None)"
         },
         "set_parent_type": {
           "kind": "method",

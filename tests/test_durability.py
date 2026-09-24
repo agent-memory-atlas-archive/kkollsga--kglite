@@ -2674,7 +2674,7 @@ _CLAIMS_SEED_PARALLEL = _CLAIMS_SEED + " CREATE (a)-[:CLAIMS {text: 'beta', k: 2
 def _set_vector(k: int, vector: str, text_property: str = "text") -> str:
     return (
         f"MATCH ()-[r:CLAIMS]->() WHERE r.k = {k} WITH collect(r) AS rs "
-        f"CALL db.edge_embeddings.set({{type: 'CLAIMS', text_property: '{text_property}', "
+        f"CALL db.relationship_embeddings.set({{type: 'CLAIMS', text_property: '{text_property}', "
         f"entries: [{{relationship: rs[0], vector: {vector}}}]}}) YIELD stored RETURN stored"
     )
 
@@ -2709,7 +2709,7 @@ def edge_state(g):
     alone would not. Rounded because the values cross a JSON boundary.
     """
     stores = g.cypher(
-        "CALL db.edge_embeddings.list() YIELD type, text_property, dimension, count, model "
+        "CALL db.relationship_embeddings.list() YIELD type, text_property, dimension, count, model "
         "RETURN type, text_property, dimension, count, model ORDER BY text_property"
     ).to_list()
     members = g.cypher("MATCH ()-[r:CLAIMS]->() RETURN r.k AS k, r.note AS note ORDER BY r.k").to_list()
@@ -2766,7 +2766,7 @@ _EDGE_CRASH_SHAPES = [
         [
             _EDGE_EMBEDDER,
             "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs "
-            "CALL db.edge_embeddings.embed({type: 'CLAIMS', text_property: 'text', "
+            "CALL db.relationship_embeddings.embed({type: 'CLAIMS', text_property: 'text', "
             "relationships: rs, mode: 'all'}) YIELD embedded RETURN embedded",
         ],
         [("text", 1)],
@@ -2806,7 +2806,7 @@ _EDGE_CRASH_SHAPES = [
         "drop_store",
         _CLAIMS_SEED,
         (_set_vector(1, "[1.0, 0.0]"),),
-        ["CALL db.edge_embeddings.drop({type: 'CLAIMS', text_property: 'text'}) YIELD dropped RETURN dropped"],
+        ["CALL db.relationship_embeddings.drop({type: 'CLAIMS', text_property: 'text'}) YIELD dropped RETURN dropped"],
         [],
     ),
     (
@@ -2825,7 +2825,8 @@ _EDGE_CRASH_SHAPES = [
         (_set_vector(1, "[1.0, 0.0]"),),
         [
             _set_vector(1, "[0.6, 0.8]"),
-            "CALL db.edge_embeddings.build_index({type: 'CLAIMS', text_property: 'text'}) YIELD indexed RETURN indexed",
+            "CALL db.relationship_embeddings.build_index({type: 'CLAIMS', text_property: 'text'}) YIELD indexed RETURN "
+            "indexed",
         ],
         [("text", 1)],
     ),

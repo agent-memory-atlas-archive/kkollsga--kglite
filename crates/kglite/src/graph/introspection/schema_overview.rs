@@ -483,8 +483,8 @@ pub(crate) struct IndexInfo {
 /// `list_embeddings()` remains the place to read a node store's dimension,
 /// metric and model. Relationship vector and text names carry a
 /// `relationship:` prefix to prevent a node label/type collision. Their
-/// lifecycle is managed by the explicit `db.edge_embeddings.*_index` and
-/// `db.edge_text_index.*` procedures, and `DROP INDEX relationship:T.p`
+/// lifecycle is managed by the explicit `db.relationship_embeddings.*_index` and
+/// `db.relationship_text_index.*` procedures, and `DROP INDEX relationship:T.p`
 /// removes both.
 pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
     let mut out: Vec<IndexInfo> = Vec::new();
@@ -556,8 +556,8 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             labels_or_types: vec![rel_type.to_string()],
             properties: vec![property.to_string()],
             state: "ONLINE",
-            stale: Some(store.edge_is_stale(graph)),
-            delta: Some(store.edge_delta_size(graph)),
+            stale: Some(store.relationship_is_stale(graph)),
+            delta: Some(store.relationship_delta_size(graph)),
             unembedded: None,
         });
     }

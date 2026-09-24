@@ -11,7 +11,7 @@ The adapter mirrors knwler's own ``create_network``: an entity's id is
 become one relationship type per knwler relation type, documents link to their
 chunks through ``CONTAINS``, and an endpoint that names no entity is an error,
 not a silently created stub. The payoff is one ranked query across every
-relation type (``db.edge_embeddings.query`` with no ``type``).
+relation type (``db.relationship_embeddings.query`` with no ``type``).
 
 Network-free: the embedder is a keyword stand-in. Run it with::
 
@@ -191,7 +191,8 @@ def run(question: str = "evolution by natural selection") -> dict:
     for rel_type in relation_types:
         graph.cypher(
             f"MATCH ()-[r:{rel_type}]->() WITH collect(r) AS rs "
-            f"CALL db.edge_embeddings.embed({{type: '{rel_type}', text_property: 'description', relationships: rs}}) "
+            f"CALL db.relationship_embeddings.embed({{type: '{rel_type}', text_property: 'description', relationships: "
+            f"rs}}) "
             "YIELD embedded RETURN embedded"
         )
     counts = {
@@ -199,7 +200,7 @@ def run(question: str = "evolution by natural selection") -> dict:
         for row in graph.cypher("MATCH (n) RETURN labels(n)[0] AS label, count(*) AS n").to_list()
     }
     ranked = graph.cypher(
-        "CALL db.edge_embeddings.query({text_property: 'description', text: $question, top_k: 3}) "
+        "CALL db.relationship_embeddings.query({text_property: 'description', text: $question, top_k: 3}) "
         "YIELD relationship, score, type "
         "RETURN startNode(relationship).name AS source, type, endNode(relationship).name AS target, score",
         params={"question": question},

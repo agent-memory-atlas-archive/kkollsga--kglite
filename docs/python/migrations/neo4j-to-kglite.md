@@ -187,7 +187,7 @@ There are three routes; pick by what you already have.
 ### Route 1 — query the source database directly, bulk-load via pandas
 
 Query the source database with the `neo4j` driver, pull rows into a
-pandas DataFrame, and bulk-load with `add_nodes` / `add_connections`.
+pandas DataFrame, and bulk-load with `add_nodes` / `add_relationships`.
 
 ```python
 import pandas as pd
@@ -212,7 +212,7 @@ with src.session() as s:
         for r in s.run("MATCH (a:Person)-[:KNOWS]->(b:Person) "
                        "RETURN a.id AS a, b.id AS b")
     ])
-graph.add_connections(knows, connection_type="KNOWS",
+graph.add_relationships(knows, connection_type="KNOWS",
                       source_type="Person", source_id_field="src",
                       target_type="Person", target_id_field="tgt")
 
@@ -221,7 +221,7 @@ graph.save("my-graph.kgl")
 
 `add_nodes` auto-detects string vs integer ids from the column dtype
 and supports a `column_types=` override for spatial/temporal columns;
-`add_connections` can take a Cypher `query=` instead of a DataFrame.
+`add_relationships` can take a Cypher `query=` instead of a DataFrame.
 See the [data-loading guide](../guides/data-loading.md).
 
 ### Route 2 — dump to CSV, then `LOAD CSV` (no pandas needed)
@@ -285,7 +285,7 @@ the server side already. See
 ### Route 3 — pandas between export and load
 
 Still the best fit when you want typing control, column renaming, or
-cleanup in between: `pd.read_csv` → `add_nodes` / `add_connections`,
+cleanup in between: `pd.read_csv` → `add_nodes` / `add_relationships`,
 using the same calls as Route 1.
 
 ## Cypher dialect divergence

@@ -5,7 +5,7 @@ use crate::datatypes::values::Value;
 use crate::graph::algorithms::hnsw::HnswIndex;
 use crate::graph::edge_embeddings::carry::{
     extract_edge_stores, install_edge_stores, resolve_edge_stores, CarriedEdgeStore,
-    EdgeCarryStats, RelationshipKeys,
+    RelationshipCarryStats, RelationshipKeys,
 };
 use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::index_freshness::IndexFreshness;
@@ -268,7 +268,7 @@ pub struct ImportStats {
     /// otherwise be invisible to callers.
     pub dropped_stores: usize,
     /// The relationship-store carry (all zero for a v3 file).
-    pub relationships: EdgeCarryStats,
+    pub relationships: RelationshipCarryStats,
 }
 
 /// The decoded payload of any readable version: v3 carries node stores only.

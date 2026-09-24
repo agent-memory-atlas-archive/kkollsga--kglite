@@ -8,7 +8,7 @@
 // edge walk the d3/graphml exporters use) and builds an
 // `nx.MultiDiGraph`. The reverse direction (`from_networkx`) is pure
 // Python in `kglite/networkx_interop.py` — it bulk-loads via the
-// DataFrame fast paths (`add_nodes` / `add_connections`).
+// DataFrame fast paths (`add_nodes` / `add_relationships`).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};

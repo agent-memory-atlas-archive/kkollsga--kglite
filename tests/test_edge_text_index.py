@@ -1,4 +1,4 @@
-"""Relationship BM25 text indexes: `db.edge_text_index.*` and `text_bm25(r, …)`.
+"""Relationship BM25 text indexes: `db.relationship_text_index.*` and `text_bm25(r, …)`.
 
 Every freshness assertion compares against a rebuilt index on a copy of the
 same graph — BM25 scores move with the corpus, so "the same corpus scores the
@@ -15,7 +15,7 @@ from kglite import KnowledgeGraph
 
 MODES = ["memory", "mapped"]
 
-BUILD = "CALL db.edge_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed"
+BUILD = "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed"
 SCORES = "MATCH ()-[r:CLAIMS]->() RETURN r.k AS k, text_bm25(r, 'text', $q) AS s ORDER BY k"
 
 
@@ -48,7 +48,7 @@ def _row(graph: KnowledgeGraph) -> dict:
 
 
 def _stale(graph: KnowledgeGraph) -> bool:
-    return graph.cypher("CALL db.edge_text_index.list() YIELD index_state RETURN index_state").to_list() == [
+    return graph.cypher("CALL db.relationship_text_index.list() YIELD index_state RETURN index_state").to_list() == [
         {"index_state": "stale"}
     ]
 
@@ -62,14 +62,14 @@ def test_lifecycle_build_query_refresh_drop(mode) -> None:
     graph.cypher("MATCH ()-[r:CLAIMS {k: 2}]->() SET r.text = 'marmoset marmoset'")
     assert _stale(graph)
     assert graph.cypher(
-        "CALL db.edge_text_index.refresh({type: 'CLAIMS', property: 'text'}) YIELD refreshed RETURN refreshed"
+        "CALL db.relationship_text_index.refresh({type: 'CLAIMS', property: 'text'}) YIELD refreshed RETURN refreshed"
     ).to_list() == [{"refreshed": 1}]
     assert not _stale(graph)
     assert _scores(graph, "marmoset") == _rebuilt(graph, "marmoset")
     assert graph.cypher(
-        "CALL db.edge_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped"
+        "CALL db.relationship_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": True}]
-    with pytest.raises(Exception, match="db.edge_text_index.build"):
+    with pytest.raises(Exception, match="db.relationship_text_index.build"):
         _scores(graph, "marmoset")
 
 
@@ -108,7 +108,9 @@ def test_freshness_after_add_connections(mode, conflict) -> None:
         "Doc",
         "dst",
     )
-    graph.cypher("CALL db.edge_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed")
+    graph.cypher(
+        "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed"
+    )
     graph.add_connections(
         pd.DataFrame({"src": [1, 1], "dst": [2, 3], "text": ["zebra words", "zebra again"]}),
         "CLAIMS",
@@ -123,7 +125,9 @@ def test_freshness_after_add_connections(mode, conflict) -> None:
         "text_bm25(r, 'text', 'zebra') AS s ORDER BY a, b"
     )
     copy = graph.copy()
-    copy.cypher("CALL db.edge_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed")
+    copy.cypher(
+        "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed"
+    )
     assert graph.cypher(query).to_list() == copy.cypher(query).to_list()
 
 
@@ -163,7 +167,9 @@ def test_save_and_load_keep_the_index(mode, tmp_path) -> None:
 
 def test_save_without_an_index_writes_no_section(tmp_path) -> None:
     graph = _graph("memory")
-    graph.cypher("CALL db.edge_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped")
+    graph.cypher(
+        "CALL db.relationship_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped"
+    )
     path = tmp_path / "g.kgl"
     graph.save(str(path))
     assert b"edge_text_index" not in path.read_bytes()
@@ -173,11 +179,12 @@ def test_save_without_an_index_writes_no_section(tmp_path) -> None:
 def test_show_indexes_and_drop_index(mode) -> None:
     graph = _graph(mode)
     graph.cypher(
-        "MATCH ()-[r:CLAIMS]->() CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "MATCH ()-[r:CLAIMS]->() CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'text', "
         "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN count(*)"
     )
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type: 'CLAIMS', text_property: 'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type: 'CLAIMS', text_property: 'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     rows = graph.cypher("SHOW INDEXES").to_list()
     kinds = sorted(row["type"] for row in rows if row["name"] == "relationship:CLAIMS.text")
@@ -189,7 +196,7 @@ def test_show_indexes_and_drop_index(mode) -> None:
     assert graph.cypher("SHOW INDEXES").to_list() == []
     # The vectors stay; only the two accelerators went.
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type: 'CLAIMS'}) YIELD count, index_state RETURN count, index_state"
+        "CALL db.relationship_embeddings.list({type: 'CLAIMS'}) YIELD count, index_state RETURN count, index_state"
     ).to_list() == [{"count": 3, "index_state": "none"}]
 
 
@@ -197,11 +204,11 @@ def test_show_indexes_and_drop_index(mode) -> None:
 def test_text_bm25_on_edge_embeddings_query_values(mode) -> None:
     graph = _graph(mode)
     graph.cypher(
-        "MATCH ()-[r:CLAIMS]->() CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "MATCH ()-[r:CLAIMS]->() CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'text', "
         "entries: [{relationship: r, vector: [toFloat(r.k), 1.0]}]}) YIELD stored RETURN count(*)"
     )
     rows = graph.cypher(
-        "CALL db.edge_embeddings.query({type: 'CLAIMS', text_property: 'text', vector: [0.0, 1.0], "
+        "CALL db.relationship_embeddings.query({type: 'CLAIMS', text_property: 'text', vector: [0.0, 1.0], "
         "top_k: 3, exact: true}) YIELD relationship "
         "RETURN relationship.k AS k, text_bm25(relationship, 'text', 'marmoset') AS s ORDER BY k"
     ).to_list()
@@ -212,7 +219,7 @@ def test_text_bm25_on_edge_embeddings_query_values(mode) -> None:
 def test_hybrid_score_fuse_over_relationships(mode) -> None:
     graph = _graph(mode)
     graph.cypher(
-        "MATCH ()-[r:CLAIMS]->() CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "MATCH ()-[r:CLAIMS]->() CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'text', "
         "entries: [{relationship: r, vector: [toFloat(r.k), 1.0]}]}) YIELD stored RETURN count(*)"
     )
     rows = graph.cypher(

@@ -65,7 +65,7 @@ pub(crate) struct CarriedEdgeEntry {
 /// What a relationship carry did, summed over stores.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct EdgeCarryStats {
+pub struct RelationshipCarryStats {
     /// Stores installed on the target graph.
     pub stores: usize,
     /// Vectors installed.
@@ -392,8 +392,8 @@ fn resolve_one(
 pub(crate) fn install_edge_stores(
     dst: &mut DirGraph,
     resolved: Vec<ResolvedEdgeStore>,
-) -> Result<EdgeCarryStats, String> {
-    let mut stats = EdgeCarryStats::default();
+) -> Result<RelationshipCarryStats, String> {
+    let mut stats = RelationshipCarryStats::default();
     for resolved in resolved {
         stats.skipped += resolved.skipped;
         if resolved.members.is_empty() {
@@ -468,7 +468,7 @@ pub struct EmbeddingCopyReport {
     pub stores_copied: usize,
     pub vectors_copied: usize,
     pub vectors_skipped: usize,
-    pub relationships: EdgeCarryStats,
+    pub relationships: RelationshipCarryStats,
 }
 
 impl DirGraph {

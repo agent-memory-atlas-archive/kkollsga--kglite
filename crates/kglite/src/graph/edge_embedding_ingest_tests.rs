@@ -1,6 +1,6 @@
 //! Endpoint-addressed relationship writes: row resolution and its refusals,
 //! the shared store rules (dimension, metric, provenance, index freshness),
-//! and the embed pass against the selection path `db.edge_embeddings.embed`
+//! and the embed pass against the selection path `db.relationship_embeddings.embed`
 //! runs.
 
 use std::cell::Cell;

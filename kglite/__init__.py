@@ -266,7 +266,7 @@ def attach_rows(graph, parent_type, parent_id, data, *, row_type, edge_type, key
     df.insert(0, "_row_id", row_ids)
     graph.add_nodes(df, row_type, "_row_id", node_title_field=key)
     edges = pd.DataFrame({"src": [parent_id] * len(row_ids), "dst": row_ids})
-    graph.add_connections(edges, edge_type, parent_type, "src", row_type, "dst")
+    graph.add_relationships(edges, edge_type, parent_type, "src", row_type, "dst")
     return len(row_ids)
 
 

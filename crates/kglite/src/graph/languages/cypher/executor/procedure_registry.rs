@@ -235,31 +235,231 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &["removed", "rows"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.set",
+        name: "db.node_embeddings.set",
+        aliases: &[],
+        description: "Atomically upsert vectors for explicitly selected nodes (entries: [{node: n, vector: [...]}])",
+        columns: &["stored", "dimension"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.embed",
+        aliases: &[],
+        description: "Generate vectors for explicitly selected nodes (nodes: collect(n)) with the registered embedder",
+        columns: &["embedded", "skipped", "dimension", "model"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.remove",
+        aliases: &[],
+        description: "Remove vectors from explicitly selected nodes",
+        columns: &["removed"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.drop",
+        aliases: &[],
+        description: "Drop one node embedding store",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.list",
+        aliases: &[],
+        description: "List node embedding stores and their metadata",
+        columns: &[
+            "entity",
+            "type",
+            "text_property",
+            "store",
+            "dimension",
+            "count",
+            "metric",
+            "model",
+            "index_state",
+            "delta",
+            "unembedded",
+        ],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.build_index",
+        aliases: &[],
+        description: "Build an HNSW index for one node embedding store",
+        columns: &["indexed", "metric", "m"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.refresh_index",
+        aliases: &[],
+        description: "Refresh a node vector index from current stored vectors",
+        columns: &["refreshed"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.drop_index",
+        aliases: &[],
+        description: "Drop one node vector index while retaining its vectors",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.node_embeddings.query",
+        aliases: &[],
+        description: "Retrieve the nearest nodes from one or several whole embedding stores (type, types, or every store for text_property), merged into one top-k, by query vector or by text the registered embedder embeds",
+        columns: &["node", "score", "search_method", "type"],
+    },
+    ProcedureSpec {
+        name: "db.node_text_index.build",
+        aliases: &[],
+        description: "Build (or rebuild) a BM25 text index over one node type's string property, for text_bm25(n, property, query)",
+        columns: &["indexed", "skipped", "terms"],
+    },
+    ProcedureSpec {
+        name: "db.node_text_index.refresh",
+        aliases: &[],
+        description: "Fold every node change since the last build or refresh into a node text index",
+        columns: &["refreshed"],
+    },
+    ProcedureSpec {
+        name: "db.node_text_index.drop",
+        aliases: &[],
+        description: "Drop one node text index",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.node_text_index.list",
+        aliases: &[],
+        description: "List node text indexes and their freshness",
+        columns: &[
+            "entity",
+            "type",
+            "property",
+            "documents",
+            "terms",
+            "skipped",
+            "index_state",
+            "delta",
+            "auto_refresh_limit",
+        ],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.set",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.set, entity:'relationship' runs db.relationship_embeddings.set",
+        columns: &["stored", "dimension"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.embed",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.embed, entity:'relationship' runs db.relationship_embeddings.embed",
+        columns: &["embedded", "skipped", "dimension", "model"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.remove",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.remove, entity:'relationship' runs db.relationship_embeddings.remove",
+        columns: &["removed"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.drop",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.drop, entity:'relationship' runs db.relationship_embeddings.drop",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.list",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.list, entity:'relationship' runs db.relationship_embeddings.list",
+        columns: &[
+            "entity",
+            "type",
+            "text_property",
+            "store",
+            "dimension",
+            "count",
+            "metric",
+            "model",
+            "index_state",
+            "delta",
+            "unembedded",
+        ],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.build_index",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.build_index, entity:'relationship' runs db.relationship_embeddings.build_index",
+        columns: &["indexed", "metric", "m"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.refresh_index",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.refresh_index, entity:'relationship' runs db.relationship_embeddings.refresh_index",
+        columns: &["refreshed"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.drop_index",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.drop_index, entity:'relationship' runs db.relationship_embeddings.drop_index",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.embeddings.query",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_embeddings.query, entity:'relationship' runs db.relationship_embeddings.query (the relationship route yields relationship in place of node)",
+        columns: &["node", "score", "search_method", "type"],
+    },
+    ProcedureSpec {
+        name: "db.text_index.build",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_text_index.build, entity:'relationship' runs db.relationship_text_index.build",
+        columns: &["indexed", "skipped", "terms"],
+    },
+    ProcedureSpec {
+        name: "db.text_index.refresh",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_text_index.refresh, entity:'relationship' runs db.relationship_text_index.refresh",
+        columns: &["refreshed"],
+    },
+    ProcedureSpec {
+        name: "db.text_index.drop",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_text_index.drop, entity:'relationship' runs db.relationship_text_index.drop",
+        columns: &["dropped"],
+    },
+    ProcedureSpec {
+        name: "db.text_index.list",
+        aliases: &[],
+        description: "Router: entity:'node' (default) runs db.node_text_index.list, entity:'relationship' runs db.relationship_text_index.list",
+        columns: &[
+            "entity",
+            "type",
+            "property",
+            "documents",
+            "terms",
+            "skipped",
+            "index_state",
+            "delta",
+            "auto_refresh_limit",
+        ],
+    },
+    ProcedureSpec {
+        name: "db.relationship_embeddings.set",
         aliases: &[],
         description: "Atomically upsert vectors for explicitly selected relationships",
         columns: &["stored", "dimension"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.embed",
+        name: "db.relationship_embeddings.embed",
         aliases: &[],
         description: "Generate vectors for explicitly selected relationships",
         columns: &["embedded", "skipped", "dimension", "model"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.remove",
+        name: "db.relationship_embeddings.remove",
         aliases: &[],
         description: "Remove vectors from explicitly selected relationships",
         columns: &["removed"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.drop",
+        name: "db.relationship_embeddings.drop",
         aliases: &[],
         description: "Drop one relationship embedding store",
         columns: &["dropped"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.list",
+        name: "db.relationship_embeddings.list",
         aliases: &[],
         description: "List declared relationship embedding stores and their metadata",
         columns: &[
@@ -277,49 +477,49 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         ],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.build_index",
+        name: "db.relationship_embeddings.build_index",
         aliases: &[],
         description: "Build an HNSW index for one relationship embedding store",
         columns: &["indexed", "metric", "m"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.refresh_index",
+        name: "db.relationship_embeddings.refresh_index",
         aliases: &[],
         description: "Refresh a relationship vector index from current stored vectors",
         columns: &["refreshed"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.drop_index",
+        name: "db.relationship_embeddings.drop_index",
         aliases: &[],
         description: "Drop one relationship vector index while retaining its vectors",
         columns: &["dropped"],
     },
     ProcedureSpec {
-        name: "db.edge_embeddings.query",
+        name: "db.relationship_embeddings.query",
         aliases: &[],
         description: "Retrieve the nearest relationships from one or several whole embedding stores (type, types, or every store for text_property), merged into one top-k, by query vector or by text the registered embedder embeds",
         columns: &["relationship", "score", "search_method", "type"],
     },
     ProcedureSpec {
-        name: "db.edge_text_index.build",
+        name: "db.relationship_text_index.build",
         aliases: &[],
         description: "Build (or rebuild) a BM25 text index over one relationship type's string property, for text_bm25(r, property, query)",
         columns: &["indexed", "skipped", "terms"],
     },
     ProcedureSpec {
-        name: "db.edge_text_index.refresh",
+        name: "db.relationship_text_index.refresh",
         aliases: &[],
         description: "Fold every relationship change since the last build or refresh into a relationship text index",
         columns: &["refreshed"],
     },
     ProcedureSpec {
-        name: "db.edge_text_index.drop",
+        name: "db.relationship_text_index.drop",
         aliases: &[],
         description: "Drop one relationship text index",
         columns: &["dropped"],
     },
     ProcedureSpec {
-        name: "db.edge_text_index.list",
+        name: "db.relationship_text_index.list",
         aliases: &[],
         description: "List relationship text indexes and their freshness",
         columns: &[
@@ -585,7 +785,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
 /// engine. Everything else in [`PROCEDURES`] is a read.
 ///
 /// A name list rather than a field on [`ProcedureSpec`] because a field would
-/// have to be spelled out by all 51 entries to say "READ" 49 times; the drift
+/// have to be spelled out by every entry, most of them to say "READ"; the drift
 /// this file exists to prevent is closed instead by
 /// `every_mutating_procedure_is_registered`, which fails if a name here has no
 /// spec. Two consumers read it: [`clause_is_mutation`](super::write::clause_is_mutation),
@@ -595,16 +795,36 @@ pub(super) const MUTATING_PROCEDURES: &[&str] = &[
     "db.cdc.disable",
     "table.upsert",
     "table.delete",
-    "db.edge_embeddings.set",
-    "db.edge_embeddings.embed",
-    "db.edge_embeddings.remove",
-    "db.edge_embeddings.drop",
-    "db.edge_embeddings.build_index",
-    "db.edge_embeddings.refresh_index",
-    "db.edge_embeddings.drop_index",
-    "db.edge_text_index.build",
-    "db.edge_text_index.refresh",
-    "db.edge_text_index.drop",
+    "db.node_embeddings.set",
+    "db.node_embeddings.embed",
+    "db.node_embeddings.remove",
+    "db.node_embeddings.drop",
+    "db.node_embeddings.build_index",
+    "db.node_embeddings.refresh_index",
+    "db.node_embeddings.drop_index",
+    "db.embeddings.set",
+    "db.embeddings.embed",
+    "db.embeddings.remove",
+    "db.embeddings.drop",
+    "db.embeddings.build_index",
+    "db.embeddings.refresh_index",
+    "db.embeddings.drop_index",
+    "db.node_text_index.build",
+    "db.node_text_index.refresh",
+    "db.node_text_index.drop",
+    "db.text_index.build",
+    "db.text_index.refresh",
+    "db.text_index.drop",
+    "db.relationship_embeddings.set",
+    "db.relationship_embeddings.embed",
+    "db.relationship_embeddings.remove",
+    "db.relationship_embeddings.drop",
+    "db.relationship_embeddings.build_index",
+    "db.relationship_embeddings.refresh_index",
+    "db.relationship_embeddings.drop_index",
+    "db.relationship_text_index.build",
+    "db.relationship_text_index.refresh",
+    "db.relationship_text_index.drop",
 ];
 
 /// Whether `name` (canonical spelling or alias, any case) is a mutating
@@ -618,14 +838,25 @@ pub(super) fn is_mutating_procedure(name: &str) -> bool {
         .any(|mutating| mutating.eq_ignore_ascii_case(spec.name))
 }
 
-/// Neo4j procedure mode for `SHOW PROCEDURES`. The table and relationship
-/// embedding procedures change data (Neo4j's "WRITE"); every other mutating
-/// procedure changes capture configuration or builds/drops an index, which is
+/// The three embedding-store namespaces: node, relationship, and the router.
+const EMBEDDING_NAMESPACES: [&str; 3] = [
+    "db.node_embeddings.",
+    "db.relationship_embeddings.",
+    "db.embeddings.",
+];
+
+fn in_embedding_namespace(name: &str) -> bool {
+    EMBEDDING_NAMESPACES
+        .iter()
+        .any(|namespace| name.starts_with(namespace))
+}
+
+/// Neo4j procedure mode for `SHOW PROCEDURES`. The table and embedding-store
+/// procedures change data (Neo4j's "WRITE"); every other mutating procedure
+/// changes capture configuration or builds/drops a text index, which is
 /// Neo4j's "SCHEMA".
 pub(super) fn procedure_mode(name: &str) -> &'static str {
-    if name.starts_with("table.")
-        || (name.starts_with("db.edge_embeddings.") && is_mutating_procedure(name))
-    {
+    if name.starts_with("table.") || (in_embedding_namespace(name) && is_mutating_procedure(name)) {
         // The table procedures mutate DATA (rows of a property), not
         // capture configuration — Neo4j's WRITE mode, not SCHEMA.
         "WRITE"
@@ -710,12 +941,11 @@ mod tests {
             // (SCHEMA), the table and relationship-embedding procedures change
             // data (WRITE). Pinned exactly, so a new mutating procedure must
             // declare which it is.
-            let expected_mode =
-                if name.starts_with("table.") || name.starts_with("db.edge_embeddings.") {
-                    "WRITE"
-                } else {
-                    "SCHEMA"
-                };
+            let expected_mode = if name.starts_with("table.") || in_embedding_namespace(name) {
+                "WRITE"
+            } else {
+                "SCHEMA"
+            };
             assert_eq!(procedure_mode(name), expected_mode);
         }
         assert!(!is_mutating_procedure("db.cdc.query"));
@@ -725,7 +955,16 @@ mod tests {
         assert!(!is_mutating_procedure("db.cdc.status"));
         assert_eq!(procedure_mode("db.cdc.status"), "READ");
         assert!(!is_mutating_procedure("db.labels"));
-        for name in ["db.edge_embeddings.list", "db.edge_embeddings.query"] {
+        for name in [
+            "db.relationship_embeddings.list",
+            "db.relationship_embeddings.query",
+            "db.node_embeddings.list",
+            "db.node_embeddings.query",
+            "db.embeddings.list",
+            "db.embeddings.query",
+            "db.node_text_index.list",
+            "db.text_index.list",
+        ] {
             assert!(!is_mutating_procedure(name));
             assert_eq!(procedure_mode(name), "READ");
         }

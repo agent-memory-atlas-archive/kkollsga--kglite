@@ -431,7 +431,7 @@ every value, so `ORDER BY score DESC LIMIT k` returns the unembedded entities
 form, or `r` for a relationship) to the `MATCH`: it drops those rows and keeps
 the store route, HNSW included. Written after the projection as
 `WITH … WHERE score IS NOT NULL` it leaves the fused route and scores every row.
-`vector_search()`, `search_text()` and `db.edge_embeddings.query` rank stored
+`vector_search()`, `search_text()` and `db.relationship_embeddings.query` rank stored
 vectors only and never return an unembedded entity.
 
 `vector_score` is the Cypher counterpart of the fluent `vector_search()`
@@ -457,7 +457,7 @@ graph.cypher("""
     MATCH (:Claimant)-[r:SUPPORTS]->(c:Claim)
     WHERE c.status = 'open'
     WITH collect(r) AS relationships
-    CALL db.edge_embeddings.embed({
+    CALL db.relationship_embeddings.embed({
       type:'SUPPORTS', text_property:'evidence',
       relationships:relationships, mode:'changed'
     })
@@ -493,7 +493,7 @@ gets its own pass. For vectors computed outside the graph, see
 
 Mutating procedures remain top-level pipeline clauses. A read-only `CALL {}`
 subquery may collect native relationship values and return them to an outer
-top-level `db.edge_embeddings.embed` call, preserving statement identity.
+top-level `db.relationship_embeddings.embed` call, preserving statement identity.
 Putting the mutating procedure inside `CALL {}` or a `UNION` arm follows the
 existing Cypher write boundary and is rejected before invoking the model.
 
@@ -511,7 +511,7 @@ relationship type and source-property store are the intended search corpus:
 
 ```python
 graph.cypher("""
-    CALL db.edge_embeddings.build_index({
+    CALL db.relationship_embeddings.build_index({
       type:'SUPPORTS', text_property:'evidence',
       m:16, ef_construction:200, ef_search:64
     }) YIELD indexed, metric, m
@@ -519,7 +519,7 @@ graph.cypher("""
 """)
 
 nearest = graph.cypher("""
-    CALL db.edge_embeddings.query({
+    CALL db.relationship_embeddings.query({
       type:'SUPPORTS', text_property:'evidence',
       vector:$query_vector, top_k:10
     }) YIELD relationship, score, search_method
@@ -597,7 +597,7 @@ but a named key that is missing or repeated within a group is refused.
 The write side takes the same address, in the node API's two forms:
 `set_relationship_embeddings()` replaces the store (like `set_embeddings()`)
 and `add_relationship_embeddings()` upserts into it (like `add_embeddings()`
-and `db.edge_embeddings.set`). They are the bulk route for vectors you computed
+and `db.relationship_embeddings.set`). They are the bulk route for vectors you computed
 yourself — a numpy matrix from an external model, or rows read above and
 modified — without a per-row query. Key a dict by
 `(source_id, target_id)` when the relationship type has one source and one
@@ -618,8 +618,32 @@ graph.set_relationship_embeddings("SUPPORTS", "evidence", rows, relationship_key
 
 A parallel group written without a key, an endpoint pair no relationship of
 the type connects, or a vector of the wrong width is refused by row, naming the
-relationship, and nothing is written. `db.edge_embeddings.set` remains the
+relationship, and nothing is written. `db.relationship_embeddings.set` remains the
 in-query route, for relationships a `MATCH` binds.
+
+Every embedding method has a node spelling, a relationship spelling, and a
+generic router that picks one with `entity=` — `"node"` by default, so every
+existing node call is unchanged:
+
+| Router (`entity="node"` default) | Node route | Relationship route |
+|---|---|---|
+| `set_embeddings` | `set_node_embeddings` | `set_relationship_embeddings` |
+| `add_embeddings` | `add_node_embeddings` | `add_relationship_embeddings` |
+| `embed_texts` | `embed_node_texts` | `embed_relationship_texts` |
+| `embeddings` | `node_embeddings` | `relationship_embeddings` |
+| `build_vector_index` | `build_node_vector_index` | `build_relationship_vector_index` |
+| `refresh_vector_index` / `drop_vector_index` / `has_vector_index` | `…_node_vector_index` | `…_relationship_vector_index` |
+
+```python
+graph.add_embeddings("SUPPORTS", "evidence", rows, entity="relationship")
+graph.build_vector_index("SUPPORTS", "evidence", entity="relationship")
+```
+
+A router behaves exactly as the method it routes to. It accepts both routes'
+keywords and refuses, by name, one the chosen route does not take —
+`relationship_keys` on a node call, for instance. The relationship index
+methods share their code path with `db.relationship_embeddings.build_index` /
+`.refresh_index` / `.drop_index`.
 
 The `query` procedure ranks the complete declared store before later clauses
 run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
@@ -636,7 +660,7 @@ Every row yields `type` and its own `search_method`:
 
 ```python
 rows = graph.cypher("""
-    CALL db.edge_embeddings.query({text_property:'description', text:$q, top_k:5})
+    CALL db.relationship_embeddings.query({text_property:'description', text:$q, top_k:5})
     YIELD relationship, score, type, search_method
     RETURN type, relationship.description AS description, score, search_method
 """, params={'q': 'who founded the company?'})
@@ -744,7 +768,7 @@ RELATION_TYPES = ["founded", "works_at", "created", "sailed_on", "explored", "in
 for rel_type in RELATION_TYPES:
     graph.cypher(
         f"MATCH ()-[r:{rel_type}]->() WITH collect(r) AS rs "
-        f"CALL db.edge_embeddings.embed({{type: '{rel_type}', text_property: 'description', relationships: rs}}) "
+        f"CALL db.relationship_embeddings.embed({{type: '{rel_type}', text_property: 'description', relationships: rs}}) "
         "YIELD embedded RETURN embedded"
     )
 ```

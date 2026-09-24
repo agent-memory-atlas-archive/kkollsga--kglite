@@ -11,6 +11,8 @@
 //! - [`fused_aggregate_labels`] — the fused `MATCH … WITH …, count(…)` path
 //!   keeping the pattern's node labels and its first-MATCH row multiplicity
 //! - [`mutations`] — CREATE / SET / DELETE / REMOVE / MERGE and index upkeep
+//! - [`node_embedding_procedures`] — `db.node_embeddings.*`,
+//!   `db.node_text_index.*` and the `db.embeddings.*` / `db.text_index.*` routers
 //! - [`identifiers`] — quoted-identifier escaping (the injection class)
 //! - [`inline_map_expressions`] — `MATCH (d {id: row[0]})`: inline-map values
 //!   written with the expression grammar a `CREATE` map accepts
@@ -63,6 +65,7 @@ mod inline_map_expressions;
 mod label_predicates;
 mod lists;
 mod mutations;
+mod node_embedding_procedures;
 mod parallel;
 mod relationship_identity;
 mod relationship_property_precedence;

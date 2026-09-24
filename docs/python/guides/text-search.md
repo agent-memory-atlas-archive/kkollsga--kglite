@@ -342,7 +342,7 @@ relationships. On a durable graph (`kglite.open(path, durable=...)`), building
 one is not a logged write: the index reaches disk only with the next checkpoint
 (`save()`). After a crash, the reopened graph recovers every logged write, but a
 text index built since the last checkpoint is gone. Check with
-`has_text_index()` (nodes) or `CALL db.edge_text_index.list()` (relationships),
+`has_text_index()` (nodes) or `CALL db.relationship_text_index.list()` (relationships),
 then rebuild. A vector index is logged, so it survives the same crash.
 
 ## Relationship text indexes
@@ -356,7 +356,7 @@ through `cypher()`:
 
 ```python
 graph.cypher("""
-    CALL db.edge_text_index.build({type:'SUPPORTS', property:'evidence'})
+    CALL db.relationship_text_index.build({type:'SUPPORTS', property:'evidence'})
     YIELD indexed, skipped, terms RETURN indexed, skipped, terms
 """)
 
@@ -369,24 +369,24 @@ rows = graph.cypher("""
 
 `text_bm25(r, 'property', 'query')` scores a relationship bound by `MATCH`, or a
 relationship *value*: `collect(r)[0]`, `UNWIND`, a `CALL { }` column, or the
-`relationship` column of `db.edge_embeddings.query`. It returns `0.0` for a
+`relationship` column of `db.relationship_embeddings.query`. It returns `0.0` for a
 relationship sharing no word with the query, `null` for one the index holds no
-document for, and an error naming `db.edge_text_index.build` when no index
+document for, and an error naming `db.relationship_text_index.build` when no index
 exists.
 
 | Procedure | Yields |
 |---|---|
-| `db.edge_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` |
-| `db.edge_text_index.refresh({type, property})` | `refreshed` |
-| `db.edge_text_index.drop({type, property})` | `dropped` (`false` when there was no index) |
-| `db.edge_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` |
+| `db.relationship_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` |
+| `db.relationship_text_index.refresh({type, property})` | `refreshed` |
+| `db.relationship_text_index.drop({type, property})` | `dropped` (`false` when there was no index) |
+| `db.relationship_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` |
 
 **Freshness.** Writes (`SET`, `REMOVE`, `CREATE` or `MERGE` of a relationship,
 including one that reuses a deleted relationship's storage slot, and
-`add_connections`) are folded in at the next query within
+`add_relationships`) are folded in at the next query within
 `auto_refresh_limit`. Past it, the query serves what the index holds — a
 relationship whose text changed scores its old text, one created since scores
-`null` — and warns, until `db.edge_text_index.refresh` runs. A deleted relationship's document is removed
+`null` — and warns, until `db.relationship_text_index.refresh` runs. A deleted relationship's document is removed
 at the delete. `list` and `SHOW INDEXES` report `stale` and `delta` exactly as
 for nodes.
 

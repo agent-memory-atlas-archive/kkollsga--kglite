@@ -60,7 +60,7 @@ expensive = alice.traverse(
 )
 
 # Get connection information
-alice.connections(include_node_properties=True)
+alice.relationships(include_node_properties=True)
 ```
 
 ### Comparison Operations

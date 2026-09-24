@@ -205,8 +205,8 @@ pub(super) fn events_from_raw(
             // rows it describes carry their own.
             RawOp::WalNode { .. }
             | RawOp::WalGroup { .. }
-            | RawOp::WalEdgeEmbeddingStore { .. }
-            | RawOp::WalEdgeEmbeddingBase(_)
+            | RawOp::WalRelationshipEmbeddingStore { .. }
+            | RawOp::WalRelationshipEmbeddingBase(_)
             | RawOp::Declaration(_) => {}
             RawOp::UpsertNode(idx, origin, before) => stage_upsert(
                 &mut entries,

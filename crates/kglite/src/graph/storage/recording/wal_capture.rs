@@ -111,7 +111,7 @@ impl<G: GraphRead> RecordingGraph<G> {
 
     pub(crate) fn note_wal_edge_embedding_store(&mut self, conn_type: &str, text_column: &str) {
         if self.wal_owner {
-            self.ops.push(RawOp::WalEdgeEmbeddingStore {
+            self.ops.push(RawOp::WalRelationshipEmbeddingStore {
                 conn_type: conn_type.to_string(),
                 text_column: text_column.to_string(),
             });
@@ -120,7 +120,8 @@ impl<G: GraphRead> RecordingGraph<G> {
 
     pub(crate) fn note_wal_edge_embedding_base(&mut self, touch: EdgeEmbeddingBaseTouch) {
         if self.wal_owner {
-            self.ops.push(RawOp::WalEdgeEmbeddingBase(Box::new(touch)));
+            self.ops
+                .push(RawOp::WalRelationshipEmbeddingBase(Box::new(touch)));
         }
     }
 
@@ -241,7 +242,7 @@ impl WalTouches {
                 touch.0 = *source;
                 touch.1 = *target;
             }
-            RawOp::WalEdgeEmbeddingStore {
+            RawOp::WalRelationshipEmbeddingStore {
                 conn_type,
                 text_column,
             } => {
@@ -250,7 +251,7 @@ impl WalTouches {
                     self.embedding_stores.push(key);
                 }
             }
-            RawOp::WalEdgeEmbeddingBase(touch) => self.merge_embedding_base(touch),
+            RawOp::WalRelationshipEmbeddingBase(touch) => self.merge_embedding_base(touch),
             _ => {}
         }
     }

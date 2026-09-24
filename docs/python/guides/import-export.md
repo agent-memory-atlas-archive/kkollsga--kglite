@@ -214,7 +214,7 @@ def export_parquet(graph, out_dir):
     for node_type in graph.node_types:
         graph.select(node_type).to_df().to_parquet(out / 'nodes' / f'{node_type}.parquet')
 
-    for conn in graph.connection_types():
+    for conn in graph.relationship_types():
         ct = conn['type']
         df = graph.cypher(f"""
             MATCH (a)-[r:{ct}]->(b)
@@ -444,7 +444,7 @@ documents. Their exports load through three routes:
   connection per relation type, `Document-[:CONTAINS]->Chunk` is added, and
   `on_missing_endpoint='error'` refuses a relation whose endpoint names no
   entity. It then embeds every relation type and ranks across all of them with
-  one `db.edge_embeddings.query` that names no `type` (see
+  one `db.relationship_embeddings.query` that names no `type` (see
   [relationship retrieval across types](semantic-search.md)).
 
 One limitation shapes all three routes. A relationship type cannot come from a

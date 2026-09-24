@@ -1,7 +1,7 @@
 //! What the bulk loaders do with an input row — or a column — they cannot use
 //! as given.
 //!
-//! `add_nodes` and `add_connections` have always *tolerated* bad input: a row
+//! `add_nodes` and `add_relationships` have always *tolerated* bad input: a row
 //! whose id will not key a node is dropped, a heterogeneous object column is
 //! stringified, and the caller learns about it from a `UserWarning` and the
 //! returned report. That is the right default for an exploratory load and the

@@ -90,7 +90,7 @@ def generate(
             g.add_nodes(pd.read_csv(staged / csv), ntype, id_col, title_col)
         for etype, csv, src_type, dst_type in _EDGES:
             df = pd.read_csv(staged / csv)
-            g.add_connections(df, etype, src_type, "src", dst_type, "dst")
+            g.add_relationships(df, etype, src_type, "src", dst_type, "dst")
         return g
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

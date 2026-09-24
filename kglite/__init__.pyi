@@ -1178,7 +1178,7 @@ def open(
         durable graph, writing through such a handle — including ``save()`` and
         ``sync()`` on it — raises ``ValueError`` rather than silently reaching
         neither the log nor the original. That fences off the selection-based
-        fluent mutations (``add_properties``, ``create_connections``,
+        fluent mutations (``add_properties``, ``create_relationships``,
         ``calculate(store_as=...)``, ``count(store_as=...)``,
         ``collect_children(store_as=...)``, ``unique_values(store_as=...)``,
         ``set_property``), because a selection is itself a derived handle;
@@ -2111,7 +2111,7 @@ class KnowledgeGraph:
                 ``add_nodes`` call that omits ``managed_reload`` writes a
                 ``runtime`` type normally, nothing stops a runtime writer
                 (Cypher, or another loader call) from mutating or deleting
-                ``managed`` nodes, and :meth:`add_connections` is not covered
+                ``managed`` nodes, and :meth:`add_relationships` is not covered
                 at all. Use ``write_scope`` on the Cypher path when the goal
                 is to *refuse* out-of-role writes rather than to keep a
                 well-behaved rebuild in its lane.
@@ -2177,7 +2177,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def add_connections(
+    def add_relationships(
         self,
         data: Optional[pd.DataFrame],
         connection_type: str,
@@ -2197,7 +2197,10 @@ class KnowledgeGraph:
         modified_by: Optional[str] = None,
         on_invalid: Literal["warn", "error", "skip"] = "warn",
     ) -> dict[str, Any]:
-        """Add connections (edges) between existing nodes.
+        """Add relationships (edges) between existing nodes.
+
+        ``add_connections`` is a permanent pointer to this method (a
+        connection is a relationship).
 
         DataFrame scalar conversion follows :meth:`add_nodes`, including exact
         declared integer strings and aware timestamp normalization to naive UTC.
@@ -2207,11 +2210,11 @@ class KnowledgeGraph:
 
         Example (from DataFrame)::
 
-            graph.add_connections(df, 'KNOWS', 'Person', 'src_id', 'Person', 'tgt_id')
+            graph.add_relationships(df, 'KNOWS', 'Person', 'src_id', 'Person', 'tgt_id')
 
         Example (from Cypher query)::
 
-            graph.add_connections(
+            graph.add_relationships(
                 None, 'ENCLOSES', 'Play', 'play_id', 'StructuralElement', 'struct_id',
                 query=\"\"\"
                     MATCH (p:Play), (s:StructuralElement)
@@ -2222,7 +2225,7 @@ class KnowledgeGraph:
 
         Example (query with extra properties)::
 
-            graph.add_connections(
+            graph.add_relationships(
                 None, 'HC_IN_FORMATION', 'Discovery', 'src', 'Stratigraphy', 'tgt',
                 query='MATCH ... RETURN d.id AS src, s.id AS tgt',
                 extra_properties={'hc_rank': 1},
@@ -2274,7 +2277,30 @@ class KnowledgeGraph:
         """
         ...
 
-    def replace_connections(
+    def add_connections(
+        self,
+        data: Optional[pd.DataFrame],
+        connection_type: str,
+        source_type: str,
+        source_id_field: str,
+        target_type: str,
+        target_id_field: str,
+        source_title_field: Optional[str] = None,
+        target_title_field: Optional[str] = None,
+        columns: Optional[list[str]] = None,
+        skip_columns: Optional[list[str]] = None,
+        conflict_handling: Optional[str] = None,
+        column_types: Optional[dict[str, str]] = None,
+        query: Optional[str] = None,
+        extra_properties: Optional[dict[str, Any]] = None,
+        git_sha: Optional[str] = None,
+        modified_by: Optional[str] = None,
+        on_invalid: Literal["warn", "error", "skip"] = "warn",
+    ) -> dict[str, Any]:
+        """Pointer to :meth:`add_relationships`, the primary spelling; a connection is a relationship."""
+        ...
+
+    def replace_relationships(
         self,
         data: Optional[pd.DataFrame],
         connection_type: str,
@@ -2296,7 +2322,7 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Replace a node's outgoing edges of a given type, then add new ones — an atomic edge upsert.
 
-        Unlike :meth:`add_connections` (add-only), this **prunes first**: for
+        Unlike :meth:`add_relationships` (add-only), this **prunes first**: for
         every source node present in ``data`` (or the ``query`` result), its
         existing edges *of* ``connection_type`` are removed, then the edges the
         input describes are added. Edges from sources not in the input, and
@@ -2308,11 +2334,11 @@ class KnowledgeGraph:
         ``MENTIONS`` of exactly these documents is this list"::
 
             # First sync: doc 1 -> [A, B]
-            graph.replace_connections(df_ab, 'MENTIONS', 'Doc', 'doc', 'Entity', 'ent')
+            graph.replace_relationships(df_ab, 'MENTIONS', 'Doc', 'doc', 'Entity', 'ent')
             # Re-sync doc 1 -> [B, C]: the stale 1->A edge is pruned, 1->C added.
-            graph.replace_connections(df_bc, 'MENTIONS', 'Doc', 'doc', 'Entity', 'ent')
+            graph.replace_relationships(df_bc, 'MENTIONS', 'Doc', 'doc', 'Entity', 'ent')
 
-        Accepts every argument :meth:`add_connections` does (including ``query``
+        Accepts every argument :meth:`add_relationships` does (including ``query``
         mode and ``extra_properties``), with identical semantics; only the
         prune-first behaviour differs.
 
@@ -2351,6 +2377,29 @@ class KnowledgeGraph:
         """
         ...
 
+    def replace_connections(
+        self,
+        data: Optional[pd.DataFrame],
+        connection_type: str,
+        source_type: str,
+        source_id_field: str,
+        target_type: str,
+        target_id_field: str,
+        source_title_field: Optional[str] = None,
+        target_title_field: Optional[str] = None,
+        columns: Optional[list[str]] = None,
+        skip_columns: Optional[list[str]] = None,
+        conflict_handling: Optional[str] = None,
+        column_types: Optional[dict[str, str]] = None,
+        query: Optional[str] = None,
+        extra_properties: Optional[dict[str, Any]] = None,
+        git_sha: Optional[str] = None,
+        modified_by: Optional[str] = None,
+        on_invalid: Literal["warn", "error", "skip"] = "warn",
+    ) -> dict[str, Any]:
+        """Pointer to :meth:`replace_relationships`, the primary spelling; a connection is a relationship."""
+        ...
+
     def extend(
         self,
         other: "KnowledgeGraph",
@@ -2386,7 +2435,7 @@ class KnowledgeGraph:
             unless currently null.
           - ``'sum'`` — adds numeric property values on **edges**; for
             **node** properties it acts as ``update`` (matches
-            ``add_nodes`` / ``add_connections`` ``'sum'`` semantics).
+            ``add_nodes`` / ``add_relationships`` ``'sum'`` semantics).
 
         - **Secondary labels** (multi-label, since 0.10.5) are *unioned* onto
           the matched/created node — never removed. Idempotent.
@@ -2401,7 +2450,7 @@ class KnowledgeGraph:
         - **Edges** dedup on ``(connection_type, source, target)``: an edge
           that already exists here is **not** duplicated — its properties merge
           per ``conflict_handling``. Exact-duplicate edges present in both
-          graphs are created once, not twice (mirrors ``add_connections``'
+          graphs are created once, not twice (mirrors ``add_relationships``'
           dedup so a merge never silently doubles shared edges).
 
         Scope limits (v1):
@@ -2415,7 +2464,7 @@ class KnowledgeGraph:
         - **Self-extend** (``g.extend(g)``) is a no-op for creation: every
           node/edge already matches itself, so the result is a property merge
           against self (a no-op under every mode but ``'replace'``).
-        - **Locks.** Like ``add_nodes`` / ``add_connections``, this bulk path
+        - **Locks.** Like ``add_nodes`` / ``add_relationships``, this bulk path
           does not consult ``schema_locked`` / ``read_only`` (those gate the
           Cypher write path only).
 
@@ -2451,6 +2500,24 @@ class KnowledgeGraph:
         """
         ...
 
+    def add_relationships_bulk(
+        self,
+        connections: list[dict[str, Any]],
+        *,
+        git_sha: Optional[str] = None,
+        modified_by: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Add multiple relationship types at once.
+
+        Each dict must contain ``source_type``, ``target_type``,
+        ``connection_name``, and ``data`` (DataFrame with ``source_id``/``target_id`` columns).
+        ``git_sha`` and ``modified_by`` apply to every opted-in edge type.
+
+        Returns:
+            Mapping of ``connection_name`` to count of connections created.
+        """
+        ...
+
     def add_connections_bulk(
         self,
         connections: list[dict[str, Any]],
@@ -2458,11 +2525,21 @@ class KnowledgeGraph:
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
     ) -> dict[str, int]:
-        """Add multiple connection types at once.
+        """Pointer to :meth:`add_relationships_bulk`, the primary spelling; a connection is a relationship."""
+        ...
 
-        Each dict must contain ``source_type``, ``target_type``,
-        ``connection_name``, and ``data`` (DataFrame with ``source_id``/``target_id`` columns).
-        ``git_sha`` and ``modified_by`` apply to every opted-in edge type.
+    def add_relationships_from_source(
+        self,
+        connections: list[dict[str, Any]],
+        *,
+        git_sha: Optional[str] = None,
+        modified_by: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Add relationships, auto-filtering to types already loaded in the graph.
+
+        Same spec format as :meth:`add_relationships_bulk`, but silently skips
+        relationship specs whose source or target type is not in the graph.
+        ``git_sha`` and ``modified_by`` apply to every loaded opted-in edge type.
 
         Returns:
             Mapping of ``connection_name`` to count of connections created.
@@ -2476,15 +2553,7 @@ class KnowledgeGraph:
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
     ) -> dict[str, int]:
-        """Add connections, auto-filtering to types already loaded in the graph.
-
-        Same spec format as :meth:`add_connections_bulk`, but silently skips
-        connection specs whose source or target type is not in the graph.
-        ``git_sha`` and ``modified_by`` apply to every loaded opted-in edge type.
-
-        Returns:
-            Mapping of ``connection_name`` to count of connections created.
-        """
+        """Pointer to :meth:`add_relationships_from_source`, the primary spelling; a connection is a relationship."""
         ...
 
     # ====================================================================
@@ -3085,8 +3154,8 @@ class KnowledgeGraph:
         index and BM25 text index in the graph — node and relationship, on
         types that saw no delete too — because each addresses the old slots.
         Rebuild them with :meth:`build_vector_index`,
-        ``CALL db.edge_embeddings.build_index(...)``, :meth:`build_text_index`
-        and ``CALL db.edge_text_index.build(...)``.
+        ``CALL db.relationship_embeddings.build_index(...)``, :meth:`build_text_index`
+        and ``CALL db.relationship_text_index.build(...)``.
 
         The current selection is **carried through** the compaction: selected
         nodes that survived keep their place at their new indices, and nodes
@@ -3436,14 +3505,14 @@ class KnowledgeGraph:
         """
         ...
 
-    def connections(
+    def relationships(
         self,
         indices: Optional[list[int]] = None,
         parent_info: Optional[bool] = None,
         include_node_properties: Optional[bool] = None,
         flatten_single_parent: bool = True,
     ) -> dict[str, Any]:
-        """Get connections for selected nodes.
+        """Get the relationships of the selected nodes.
 
         Args:
             indices: Specific node indices to query.
@@ -3457,6 +3526,16 @@ class KnowledgeGraph:
             For parent, selected-node, and endpoint key behavior, see
             :ref:`presentation-dictionary-keys`.
         """
+        ...
+
+    def connections(
+        self,
+        indices: Optional[list[int]] = None,
+        parent_info: Optional[bool] = None,
+        include_node_properties: Optional[bool] = None,
+        flatten_single_parent: bool = True,
+    ) -> dict[str, Any]:
+        """Pointer to :meth:`relationships`, the primary spelling; a connection is a relationship."""
         ...
 
     def titles(
@@ -3725,7 +3804,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def create_connections(
+    def create_relationships(
         self,
         connection_type: str,
         keep_selection: Optional[bool] = None,
@@ -3734,7 +3813,7 @@ class KnowledgeGraph:
         source_type: Optional[str] = None,
         target_type: Optional[str] = None,
     ) -> KnowledgeGraph:
-        """Create connections from the traversal hierarchy.
+        """Create relationships from the traversal hierarchy.
 
         By default, creates edges from the top-level ancestor (first
         traversal level) to the leaf nodes (last level). Use
@@ -3762,7 +3841,7 @@ class KnowledgeGraph:
             graph.select('A') \\
                 .traverse('REL_AB') \\
                 .traverse('REL_BC') \\
-                .create_connections('A_TO_C',
+                .create_relationships('A_TO_C',
                     properties={'B': ['score']})
 
         Note:
@@ -3772,6 +3851,18 @@ class KnowledgeGraph:
             unlogged — use :meth:`cypher`, which expresses the same write and is
             logged. See :func:`kglite.open`.
         """
+        ...
+
+    def create_connections(
+        self,
+        connection_type: str,
+        keep_selection: Optional[bool] = None,
+        conflict_handling: Optional[str] = None,
+        properties: Optional[dict[str, list[str]]] = None,
+        source_type: Optional[str] = None,
+        target_type: Optional[str] = None,
+    ) -> KnowledgeGraph:
+        """Pointer to :meth:`create_relationships`, the primary spelling; a connection is a relationship."""
         ...
 
     def add_properties(
@@ -4091,7 +4182,7 @@ class KnowledgeGraph:
         Computed lazily: first access walks every edge once (O(E));
         subsequent reads return a cached snapshot in O(triples)
         (typically <100 entries). Cypher relationship creation/deletion and
-        Python ``add_connections`` invalidate the cache.
+        Python ``add_relationships`` invalidate the cache.
 
         Returns:
             A list of 4-tuples ``[(src_type, edge_type, tgt_type, count), ...]``.
@@ -4243,7 +4334,7 @@ class KnowledgeGraph:
 
             g = KnowledgeGraph()
             g.add_nodes(...)
-            g.add_connections(...)
+            g.add_relationships(...)
             g.rebuild_caches()   # one-time O(E) pass
             g.save("graph.kgl")  # persists warm cache
         """
@@ -4265,12 +4356,16 @@ class KnowledgeGraph:
         """
         ...
 
-    def connection_types(self) -> list[dict[str, Any]]:
-        """Return all connection types with counts and endpoint type sets.
+    def relationship_types(self) -> list[dict[str, Any]]:
+        """Return all relationship types with counts and endpoint type sets.
 
         Returns:
             List of dicts with ``type``, ``count``, ``source_types``, ``target_types``.
         """
+        ...
+
+    def connection_types(self) -> list[dict[str, Any]]:
+        """Pointer to :meth:`relationship_types`, the primary spelling; a connection is a relationship."""
         ...
 
     def properties(self, node_type: str, max_values: int = 20) -> dict[str, dict[str, Any]]:
@@ -5279,7 +5374,7 @@ class KnowledgeGraph:
                 A node entry may also set ``auto_timestamp: True`` to opt that
                 type into **freshness provenance**: every applicable write
                 (including Cypher ``CREATE``/``INSERT``/``SET``/``MERGE`` and
-                ``add_nodes`` / ``add_connections``) auto-stamps an
+                ``add_nodes`` / ``add_relationships``) auto-stamps an
                 ``updated_at`` timestamp, plus the caller-supplied ``git_sha`` /
                 ``modified_by`` when provided. It is off by default (writes stay
                 deterministic) and independent of ``layer`` / ``lock_schema``::
@@ -7165,7 +7260,7 @@ class KnowledgeGraph:
                 * **Outside the perimeter**, deliberately: relationship
                   *constraint* DDL, ``db.cdc.enable``/``db.cdc.disable``,
                   and the bulk loaders :meth:`add_nodes` /
-                  :meth:`add_connections` — ``write_scope`` is a
+                  :meth:`add_relationships` — ``write_scope`` is a
                   per-Cypher-execution concept and does not reach the
                   Python loader API.
 
@@ -7231,7 +7326,7 @@ class KnowledgeGraph:
             graph.cypher('''
                 MATCH ()-[r:SUPPORTS]->(c:Claim) WHERE c.status = 'open'
                 WITH collect(r) AS relationships
-                CALL db.edge_embeddings.embed({
+                CALL db.relationship_embeddings.embed({
                   type:'SUPPORTS', text_property:'evidence',
                   relationships:relationships, mode:'changed'
                 })
@@ -7247,12 +7342,12 @@ class KnowledgeGraph:
             # Explicit whole-store relationship ANN. MATCH scoring above stays
             # exact; the procedure reports whether HNSW or exact fallback ran.
             graph.cypher('''
-                CALL db.edge_embeddings.build_index({
+                CALL db.relationship_embeddings.build_index({
                   type:'SUPPORTS', text_property:'evidence'
                 }) YIELD indexed RETURN indexed
             ''')
             nearest = graph.cypher('''
-                CALL db.edge_embeddings.query({
+                CALL db.relationship_embeddings.query({
                   type:'SUPPORTS', text_property:'evidence',
                   vector:$vector, top_k:10
                 }) YIELD relationship, score, search_method
@@ -7680,7 +7775,7 @@ class KnowledgeGraph:
 
     # ── Embedding / Vector Search ──────────────────────────────────────────
 
-    def set_embeddings(
+    def set_node_embeddings(
         self,
         node_type: str,
         text_column: str,
@@ -7737,7 +7832,54 @@ class KnowledgeGraph:
         """
         ...
 
-    def add_embeddings(
+    def set_embeddings(
+        self,
+        node_type: str,
+        text_column: str,
+        embeddings: dict[Any, Sequence[float]] | list[dict[str, Any]],
+        metric: Optional[str] = None,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        """Replace an embedding store — a node type's by default, a relationship type's with
+        ``entity="relationship"``.
+
+        Routes to :meth:`set_node_embeddings` (``entity="node"``, the default) or
+        :meth:`set_relationship_embeddings` (``entity="relationship"``) and behaves exactly as
+        the method it routes to — same result, same errors. On the
+        relationship route the first argument is the relationship type.
+        A keyword only the other route takes is refused by name.
+
+        Example::
+
+            graph.set_embeddings("Doc", "summary", {1: [0.1, 0.2]})
+            graph.set_embeddings("CITES", "context", {(1, 2): [0.1, 0.2]},
+                        entity="relationship")
+
+        Args:
+            node_type: The node type, or the relationship type on the
+                relationship route.
+            text_column: Source text column name (e.g. ``'summary'``).
+            embeddings: As :meth:`set_node_embeddings` takes them (``{id: vector}``) or
+                as :meth:`set_relationship_embeddings` takes them (endpoint-tuple keys or row
+                dicts).
+            metric: As the routed method takes it.
+            entity: ``"node"`` (default) or ``"relationship"``.
+            relationship_keys: Relationship route only — see
+                :meth:`set_relationship_embeddings`.
+
+        Returns:
+            The routed method's result dict.
+
+        Raises:
+            TypeError: ``relationship_keys`` on a node call.
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as the routed method.
+        """
+        ...
+
+    def add_node_embeddings(
         self,
         node_type: str,
         text_column: str,
@@ -7785,6 +7927,54 @@ class KnowledgeGraph:
             Dict with ``embeddings_stored`` (total in store after the
             upsert), ``dimension``, ``skipped`` (unknown ids), and
             ``store_created`` (``True`` iff this call created the store).
+        """
+        ...
+
+    def add_embeddings(
+        self,
+        node_type: str,
+        text_column: str,
+        embeddings: dict[Any, Sequence[float]] | list[dict[str, Any]],
+        metric: Optional[str] = None,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        """Add or update vectors in an embedding store without discarding
+        it — a node type's by default, a relationship type's with
+        ``entity="relationship"``.
+
+        Routes to :meth:`add_node_embeddings` (``entity="node"``, the default) or
+        :meth:`add_relationship_embeddings` (``entity="relationship"``) and behaves exactly as
+        the method it routes to — same result, same errors. On the
+        relationship route the first argument is the relationship type.
+        A keyword only the other route takes is refused by name.
+
+        Example::
+
+            graph.add_embeddings("Doc", "summary", {1: [0.1, 0.2]})
+            graph.add_embeddings("CITES", "context", {(1, 2): [0.1, 0.2]},
+                        entity="relationship")
+
+        Args:
+            node_type: The node type, or the relationship type on the
+                relationship route.
+            text_column: Source text column name (e.g. ``'summary'``).
+            embeddings: As :meth:`add_node_embeddings` takes them (``{id: vector}``) or
+                as :meth:`add_relationship_embeddings` takes them (endpoint-tuple keys or row
+                dicts).
+            metric: As the routed method takes it.
+            entity: ``"node"`` (default) or ``"relationship"``.
+            relationship_keys: Relationship route only — see
+                :meth:`add_relationship_embeddings`.
+
+        Returns:
+            The routed method's result dict.
+
+        Raises:
+            TypeError: ``relationship_keys`` on a node call.
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as the routed method.
         """
         ...
 
@@ -7894,7 +8084,7 @@ class KnowledgeGraph:
                 owner = row.get("node_type") or row["relationship_type"]
                 print(row["entity"], owner, row["store_name"], row["count"])
 
-        ``db.edge_embeddings.list`` reports the same relationship stores from
+        ``db.relationship_embeddings.list`` reports the same relationship stores from
         Cypher, with index state.
         """
         ...
@@ -8205,7 +8395,7 @@ class KnowledgeGraph:
         ...
 
     @overload
-    def embeddings(self, node_type_or_text_column: str, text_column: str) -> dict[Any, list[float]]:
+    def node_embeddings(self, node_type_or_text_column: str, text_column: str) -> dict[Any, list[float]]:
         """Retrieve all embeddings for a node type.
 
         The first parameter carries one of two meanings, which is why it is
@@ -8227,7 +8417,7 @@ class KnowledgeGraph:
         ...
 
     @overload
-    def embeddings(self, node_type_or_text_column: str) -> dict[Any, list[float]]:
+    def node_embeddings(self, node_type_or_text_column: str) -> dict[Any, list[float]]:
         """Retrieve embeddings for nodes in the current selection.
 
         With no selection active this covers the whole graph (the same
@@ -8246,6 +8436,88 @@ class KnowledgeGraph:
                 be dropped from the dict. Call the two-arg form
                 ``embeddings(node_type, text_column)`` once per type — it
                 keys a single type's id namespace.
+        """
+        ...
+
+    @overload
+    def embeddings(
+        self,
+        node_type_or_text_column: str,
+        text_column: str,
+        *,
+        entity: Literal["node"] = "node",
+    ) -> dict[Any, list[float]]:
+        """Read a node type's vectors — :meth:`node_embeddings`' two-argument
+        form, which this routes to by default.
+
+        ``entity="relationship"`` routes to :meth:`relationship_embeddings`
+        instead (the overload below); a keyword only the other route takes
+        is refused by name.
+
+        Args:
+            node_type_or_text_column: The node type (e.g. 'Article').
+            text_column: Source text column name (e.g. 'summary').
+            entity: ``"node"`` (default).
+
+        Returns:
+            Dict mapping node IDs to embedding vectors.
+        """
+        ...
+
+    @overload
+    def embeddings(
+        self,
+        node_type_or_text_column: str,
+        *,
+        entity: Literal["node"] = "node",
+    ) -> dict[Any, list[float]]:
+        """Read the current selection's node vectors — :meth:`node_embeddings`'
+        one-argument form, which this routes to by default.
+
+        Args:
+            node_type_or_text_column: Source text column name (e.g. 'summary').
+            entity: ``"node"`` (default).
+
+        Returns:
+            Dict mapping node IDs to embedding vectors.
+
+        Raises:
+            ArgumentError: as :meth:`node_embeddings` — the selection spans
+                two node types sharing an id.
+        """
+        ...
+
+    @overload
+    def embeddings(
+        self,
+        node_type_or_text_column: str,
+        text_column: str,
+        *,
+        entity: Literal["relationship"],
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[dict[str, Any]]:
+        """Read a relationship store as rows — routes to
+        :meth:`relationship_embeddings`, and behaves exactly as it does.
+
+        Example::
+
+            rows = graph.embeddings("CITES", "context", entity="relationship")
+
+        Args:
+            node_type_or_text_column: The relationship type (e.g. 'CITES').
+            text_column: Source text property (e.g. 'context').
+            entity: ``"relationship"``.
+            relationship_keys: See :meth:`relationship_embeddings`.
+
+        Returns:
+            One row dict per stored vector.
+
+        Raises:
+            TypeError: ``text_column`` is missing, or ``relationship_keys`` is
+                passed on a node call.
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as
+                :meth:`relationship_embeddings`.
         """
         ...
 
@@ -8337,13 +8609,13 @@ class KnowledgeGraph:
         :meth:`set_embeddings`, and the write-side twin of
         :meth:`relationship_embeddings`.
 
-        The store is the one ``db.edge_embeddings.*``, ``vector_score(r, …)``
+        The store is the one ``db.relationship_embeddings.*``, ``vector_score(r, …)``
         and :meth:`relationship_embeddings` use. Relationships you do not name
         are left with no vector, and the old store's metric and HNSW index go
         with it, as for a replaced node store. To extend a store instead, use
         :meth:`add_relationship_embeddings` (an upsert, like ``CALL
-        db.edge_embeddings.set``). Use these methods for bulk loads;
-        ``db.edge_embeddings.set`` writes relationships a query has just
+        db.relationship_embeddings.set``). Use these methods for bulk loads;
+        ``db.relationship_embeddings.set`` writes relationships a query has just
         matched.
 
         ``embeddings`` takes one of two shapes:
@@ -8439,7 +8711,7 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Add or update relationship vectors without discarding the existing
         store — the relationship twin of :meth:`add_embeddings`, and the bulk
-        twin of ``CALL db.edge_embeddings.set``, which upserts the same way.
+        twin of ``CALL db.relationship_embeddings.set``, which upserts the same way.
 
         Differs from :meth:`set_relationship_embeddings` (which replaces the
         store) by upserting into the ``(relationship_type,
@@ -8453,7 +8725,7 @@ class KnowledgeGraph:
         provenance becomes unknown (:meth:`embedding_info` ``model`` is
         ``None``), as for :meth:`add_embeddings`. A built HNSW index is kept and
         the new vectors are its delta, folded in by the next query or
-        ``db.edge_embeddings.refresh_index``. Call ``save()`` to persist.
+        ``db.relationship_embeddings.refresh_index``. Call ``save()`` to persist.
 
         Args:
             relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
@@ -8519,7 +8791,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def embed_texts(
+    def embed_node_texts(
         self,
         node_type: str,
         text_column: str,
@@ -8589,6 +8861,52 @@ class KnowledgeGraph:
         """
         ...
 
+    def embed_texts(
+        self,
+        node_type: str,
+        text_column: str,
+        batch_size: int = 256,
+        show_progress: bool = True,
+        mode: str | None = None,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        metric: str | None = None,
+    ) -> dict[str, int]:
+        """Embed a text column with the registered model — for a node type by
+        default, a relationship type with ``entity="relationship"``.
+
+        Routes to :meth:`embed_node_texts` (``entity="node"``, the default) or
+        :meth:`embed_relationship_texts` (``entity="relationship"``) and behaves exactly as
+        the method it routes to — same result, same errors. On the
+        relationship route the first argument is the relationship type.
+        A keyword only the other route takes is refused by name.
+
+        Example::
+
+            graph.embed_texts("Article", "summary")
+            graph.embed_texts("CITES", "context", entity="relationship")
+
+        Args:
+            node_type: The node type, or the relationship type on the
+                relationship route.
+            text_column: The column holding the text to embed.
+            batch_size: Texts per ``model.embed()`` call (default 256).
+            show_progress: Show a tqdm progress bar (default ``True``).
+            mode: ``'missing'`` (default), ``'changed'`` or ``'all'``.
+            entity: ``"node"`` (default) or ``"relationship"``.
+            metric: Relationship route only — see
+                :meth:`embed_relationship_texts`.
+
+        Returns:
+            The routed method's result dict.
+
+        Raises:
+            TypeError: ``metric`` on a node call.
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as the routed method.
+        """
+        ...
+
     def embed_relationship_texts(
         self,
         relationship_type: str,
@@ -8606,7 +8924,7 @@ class KnowledgeGraph:
         relationship's ``text_column`` property, calls ``model.embed()`` in
         batches, and stores the vectors in ``(relationship_type,
         "{text_column}_emb")`` with per-relationship source-text hashes and the
-        model id — exactly what ``CALL db.edge_embeddings.embed`` stores when
+        model id — exactly what ``CALL db.relationship_embeddings.embed`` stores when
         given every relationship of the type. Relationships with a missing,
         non-string or empty value are skipped. Model output coordinates must
         be finite.
@@ -8630,7 +8948,7 @@ class KnowledgeGraph:
             show_progress: Show a tqdm progress bar (default ``True``);
                 silently none when ``tqdm`` is not installed.
             metric: The distance metric to record on the store, as
-                ``db.edge_embeddings.embed``'s ``metric`` does.
+                ``db.relationship_embeddings.embed``'s ``metric`` does.
 
         Returns:
             Dict with ``embedded``, ``skipped`` (no text), ``skipped_existing``,
@@ -8701,7 +9019,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def build_vector_index(
+    def build_node_vector_index(
         self,
         node_type: str,
         text_column: str,
@@ -8797,7 +9115,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def drop_vector_index(self, node_type: str, text_column: str) -> bool:
+    def drop_node_vector_index(self, node_type: str, text_column: str) -> bool:
         """Drop the HNSW index for an embedding store (search reverts to exact).
 
         The vectors are untouched — this drops the accelerator, not the data.
@@ -8805,7 +9123,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def refresh_vector_index(self, node_type: str, text_column: str) -> int:
+    def refresh_node_vector_index(self, node_type: str, text_column: str) -> int:
         """Fold every outstanding vector into the HNSW index now.
 
         Queries do this on their own while the outstanding delta stays under
@@ -8827,9 +9145,139 @@ class KnowledgeGraph:
         """
         ...
 
-    def has_vector_index(self, node_type: str, text_column: str) -> bool:
+    def has_node_vector_index(self, node_type: str, text_column: str) -> bool:
         """Whether an HNSW index is currently built over the
         ``(node_type, text_column)`` embedding store."""
+        ...
+
+    def build_relationship_vector_index(
+        self,
+        relationship_type: str,
+        text_column: str,
+        m: int | None = None,
+        ef_construction: int | None = None,
+        ef_search: int | None = None,
+        metric: str | None = None,
+        auto_refresh_limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Build an HNSW index over a relationship embedding store — the
+        relationship twin of :meth:`build_node_vector_index`, and the Python
+        route to ``CALL db.relationship_embeddings.build_index``, which it
+        shares a code path with.
+
+        The index serves ``db.relationship_embeddings.query`` and
+        ``ORDER BY vector_score(r, …) DESC LIMIT k``. Later vector writes are
+        folded in at query entry while the delta stays under
+        ``auto_refresh_limit``; deleting an embedded relationship (or either
+        endpoint) drops the index, and so does a ``vacuum()`` that compacts.
+
+        Args:
+            relationship_type: The relationship type (e.g. ``'CITES'``).
+            text_column: Source text property (the store is
+                ``'{text_column}_emb'``).
+            m: Max neighbours per node on upper layers (default 16).
+            ef_construction: Build-time search width (default 200).
+            ef_search: Default query-time search width (default 64).
+            metric: ``'cosine'`` (default), ``'dot_product'`` or
+                ``'euclidean'``; if omitted, the store's metric. An explicit
+                metric becomes the store's when it declares none, and is
+                refused when it contradicts the store's own.
+            auto_refresh_limit: Outstanding vectors a query folds in before it
+                serves the exact scan instead (default 1000).
+
+        Returns:
+            dict: ``{'indexed': int, 'metric': str, 'm': int}``.
+
+        Raises:
+            ValueError: no such relationship store, an unsupported metric, or
+                one that contradicts the store's own.
+        """
+        ...
+
+    def drop_relationship_vector_index(self, relationship_type: str, text_column: str) -> bool:
+        """Drop the HNSW index over a relationship embedding store — the
+        relationship twin of :meth:`drop_node_vector_index`. The vectors stay.
+        Returns ``True`` if an index was dropped, ``False`` if none existed."""
+        ...
+
+    def refresh_relationship_vector_index(self, relationship_type: str, text_column: str) -> int:
+        """Fold every outstanding vector into a relationship store's HNSW index
+        now — the relationship twin of :meth:`refresh_node_vector_index`.
+
+        Returns:
+            int: vectors folded in — ``0`` when current, or on a read-only
+            graph.
+
+        Raises:
+            ValueError: no such relationship store, or no index built over it.
+        """
+        ...
+
+    def has_relationship_vector_index(self, relationship_type: str, text_column: str) -> bool:
+        """Whether an HNSW index is currently built over the
+        ``(relationship_type, text_column)`` relationship embedding store."""
+        ...
+
+    def build_vector_index(
+        self,
+        node_type: str,
+        text_column: str,
+        m: int | None = None,
+        ef_construction: int | None = None,
+        ef_search: int | None = None,
+        metric: str | None = None,
+        auto_refresh_limit: int | None = None,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> dict[str, Any]:
+        """Build an HNSW index over an embedding store — a node store by
+        default, a relationship store with ``entity="relationship"``.
+
+        Routes to :meth:`build_node_vector_index` (``entity="node"``, the
+        default) or :meth:`build_relationship_vector_index`
+        (``entity="relationship"``) with every argument unchanged, and behaves
+        exactly as the method it routes to.
+
+        Raises:
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as the routed method.
+        """
+        ...
+
+    def drop_vector_index(
+        self,
+        node_type: str,
+        text_column: str,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> bool:
+        """Drop an HNSW index — routes to :meth:`drop_node_vector_index`
+        (default) or, with ``entity="relationship"``,
+        :meth:`drop_relationship_vector_index`."""
+        ...
+
+    def refresh_vector_index(
+        self,
+        node_type: str,
+        text_column: str,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> int:
+        """Fold outstanding vectors into an HNSW index — routes to
+        :meth:`refresh_node_vector_index` (default) or, with
+        ``entity="relationship"``, :meth:`refresh_relationship_vector_index`."""
+        ...
+
+    def has_vector_index(
+        self,
+        node_type: str,
+        text_column: str,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> bool:
+        """Whether an HNSW index is built — routes to
+        :meth:`has_node_vector_index` (default) or, with
+        ``entity="relationship"``, :meth:`has_relationship_vector_index`."""
         ...
 
     def build_text_index(

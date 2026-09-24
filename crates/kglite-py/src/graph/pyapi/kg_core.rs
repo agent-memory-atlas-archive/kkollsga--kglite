@@ -339,9 +339,8 @@ impl KnowledgeGraph {
         })
     }
 
-    /// Return all connection types with counts and endpoint type sets.
-    #[pyo3(name = "connection_types")]
-    fn connection_types_info(&self) -> PyResult<Py<PyAny>> {
+    /// Every relationship type with its count and endpoint node types.
+    pub(super) fn relationship_types(&self) -> PyResult<Py<PyAny>> {
         let stats = introspection::compute_connection_type_stats(&self.inner);
         Python::attach(|py| {
             let result_list = PyList::empty(py);

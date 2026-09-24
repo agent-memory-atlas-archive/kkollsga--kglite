@@ -3,7 +3,7 @@
 //! inside it so the node path is untouched.
 //!
 //! A relationship arrives as a MATCH binding or as a value (`collect(r)[0]`,
-//! `UNWIND`, the `relationship` column of `db.edge_embeddings.query`, a
+//! `UNWIND`, the `relationship` column of `db.relationship_embeddings.query`, a
 //! `CALL { }` column). A value resolves through
 //! `projected_relationship_binding`, and either shape goes through
 //! `relationship_binding_is_current`, so a binding whose slot was retired and
@@ -94,9 +94,9 @@ impl<'a> CypherExecutor<'a> {
         };
         let view = store.read();
         let score = if store.generation() == cache.generation {
-            view.score_edge(edge, &cache.prepared)
+            view.score_relationship(edge, &cache.prepared)
         } else {
-            view.score_edge(edge, &view.prepare_query(query_text))
+            view.score_relationship(edge, &view.prepare_query(query_text))
         };
         Ok(score.map_or(Value::Null, Value::Float64))
     }
@@ -122,8 +122,8 @@ impl<'a> CypherExecutor<'a> {
         let Some(store) = edge_text_index_store(self.graph, rel_type, &prop_name) else {
             return Err(missing_edge_text_index_error(rel_type, &prop_name));
         };
-        if store.edge_is_stale(self.graph) {
-            if !self.graph.read_only && store.edge_can_auto_refresh(self.graph) {
+        if store.relationship_is_stale(self.graph) {
+            if !self.graph.read_only && store.relationship_can_auto_refresh(self.graph) {
                 refresh_edge_text_index(self.graph, rel_type, &prop_name);
             } else {
                 let reason = if self.graph.read_only {
@@ -138,9 +138,9 @@ impl<'a> CypherExecutor<'a> {
                     "relationship text index '{rel_type}.{prop_name}' is stale: up to {} \
                      documents are unindexed, {reason} — a new relationship scores null and a \
                      changed one scores its previously indexed text. Refresh with \
-                     CALL db.edge_text_index.refresh({{type: '{rel_type}', property: \
+                     CALL db.relationship_text_index.refresh({{type: '{rel_type}', property: \
                      '{prop_name}'}}).",
-                    store.edge_delta_size(self.graph),
+                    store.relationship_delta_size(self.graph),
                 ));
             }
         }
@@ -170,7 +170,7 @@ impl<'a> CypherExecutor<'a> {
 fn missing_edge_text_index_error(rel_type: &str, prop_name: &str) -> String {
     format!(
         "text_bm25(): no text index on '{rel_type}.{prop_name}' (relationship). BM25 ranking \
-         is opt-in — build one with CALL db.edge_text_index.build({{type: '{rel_type}', \
+         is opt-in — build one with CALL db.relationship_text_index.build({{type: '{rel_type}', \
          property: '{prop_name}'}})."
     )
 }

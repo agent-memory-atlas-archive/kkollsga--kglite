@@ -11,13 +11,28 @@ before upgrading.
 
 ### Added
 
+- Node embedding stores and node text indexes through Cypher, mirroring the
+  relationship procedures: `db.node_embeddings.set`, `embed`, `list`,
+  `remove`, `drop`, `build_index`, `refresh_index`, `drop_index` and `query`
+  (entries are `{node: n, vector: [...]}`, `embed` takes `nodes:
+  collect(n)`, `query` yields `node, score, search_method, type` and merges
+  several stores as the relationship query does), and
+  `db.node_text_index.build`, `refresh`, `drop` and `list`. They write the
+  stores `set_embeddings` / `embed_texts` / `build_vector_index` /
+  `build_text_index` write, with the same refusals, and roll back with a
+  failing statement. The routers `db.embeddings.*` and `db.text_index.*` take
+  `entity: 'node' | 'relationship'` (default `'node'`) and run the specific
+  procedure; a parameter only the other entity takes is refused naming it.
+
+- Relationship vocabulary in Python: every embedding method has a `*_node_*` spelling, a `*_relationship_*` spelling (plus new `build_/refresh_/drop_/has_relationship_vector_index`), and a generic router that picks one with `entity=` (default `"node"`, so node calls are unchanged). A keyword the chosen route does not take raises `TypeError`. Loaders and fluent methods are now spelled `add_relationships`, `add_relationships_bulk`, `add_relationships_from_source`, `replace_relationships`, `create_relationships`, `relationships()` and `relationship_types()`; the `connection` names remain permanent pointers. Loader warnings and errors say `add_relationships(...)` and 'relationship spec'.
+
 - A runnable, network-free relationship GraphRAG example in
   `examples/relationship_graphrag.py` demonstrates claim/evidence selection,
   embedding generation, filtered scoring, changed-text refresh, explicit HNSW
   retrieval, and checkpoint reopen with model registration.
 
 - Explicit whole-store relationship vector search through
-  `db.edge_embeddings.query`, with HNSW build/refresh/drop procedures and
+  `db.relationship_embeddings.query`, with HNSW build/refresh/drop procedures and
   `search_method` reporting. Missing or incompatible indexes, and stale ones
   that cannot catch up (over their refresh limit, or on a read-only graph),
   fall back to exact search. Index diagnostics
@@ -33,7 +48,7 @@ before upgrading.
   is active; `IF EXISTS` is a no-op only when nothing carries the name, never
   over an index still installed.
 
-- Cypher relationship embedding management through `db.edge_embeddings.set`,
+- Cypher relationship embedding management through `db.relationship_embeddings.set`,
   `embed`, `list`, `remove`, and `drop`. Writes validate complete selections
   before mutation; generation preserves unselected vectors and stages callback
   results atomically. Manual `set` and `remove` writes roll back with their
@@ -81,7 +96,7 @@ before upgrading.
   per-tool description and schema bytes plus repeated descriptive blocks from
   saved MCP `tools/list` JSON, while explicitly avoiding a model-token claim.
 
-- **`db.edge_embeddings.query` accepts a text query.** `text:'…'` or
+- **`db.relationship_embeddings.query` accepts a text query.** `text:'…'` or
   `text:$param` in place of `vector` embeds the query once with the registered
   embedder before execution — the same route `text_score()` uses, outside the
   graph lock — and ranks relationships against that vector. `text` with
@@ -99,16 +114,16 @@ before upgrading.
   keyword `relationship_type=` narrows to one relationship type. `embedding_info()`
   takes a keyword-only `entity='node' | 'relationship'` so a node type and a
   relationship type sharing a name stay unambiguous. Rust gains
-  `api::embeddings::{list_edge_embeddings, embedding_info,
+  `api::embeddings::{list_relationship_embeddings, embedding_info,
   embedding_diagnostics}`; the C ABI listing stays node-only (use
-  `db.edge_embeddings.list`).
+  `db.relationship_embeddings.list`).
 
 - **BM25 text indexes over relationships.** `CALL
-  db.edge_text_index.build({type, property, auto_refresh_limit?})`, `.refresh`,
+  db.relationship_text_index.build({type, property, auto_refresh_limit?})`, `.refresh`,
   `.drop` and `.list` manage a lexical index over one relationship type's
   string (or string-list) property, and `text_bm25(r, property, query)` now
   scores a relationship — a `MATCH` binding or a relationship value such as the
-  `relationship` column of `db.edge_embeddings.query` — with the node lane's
+  `relationship` column of `db.relationship_embeddings.query` — with the node lane's
   semantics (`0.0` no shared word, `null` no document). `SET`, `REMOVE`,
   `CREATE`/`MERGE` (including a relationship that reuses a deleted one's slot),
   `add_connections` and deletes keep it current, caught up at the next query
@@ -129,9 +144,9 @@ before upgrading.
   takes the same fused route as its node twin: a plain single-type scan whose
   relationships are all embedded is answered from the relationship store (HNSW
   when an index is online, exact otherwise — the routes of
-  `db.edge_embeddings.query`) with endpoints bound for the k winners only,
+  `db.relationship_embeddings.query`) with endpoints bound for the k winners only,
   instead of scoring every row. 100k relationships × 384 dimensions: 195 ms →
-  4.3 ms, the node twin's cost; the exact `db.edge_embeddings.query` route
+  4.3 ms, the node twin's cost; the exact `db.relationship_embeddings.query` route
   also got faster (it no longer sorts every hit to keep the top k). Other
   shapes (a `WHERE`, extra patterns) use the index with an over-fetch filtered
   to the matched rows, as nodes do. Without an online index the results are
@@ -139,11 +154,11 @@ before upgrading.
   the query keeps its previous route); with one, the answer comes from HNSW
   and is approximate, as the node top-k is. Pass `{exact:true}` as the score
   call's final argument to keep the exact answer; `diagnostics.retrieval`
-  reports the route. `db.edge_embeddings.embed`'s default `batch_size`
+  reports the route. `db.relationship_embeddings.embed`'s default `batch_size`
   is now 256, matching `embed_texts`.
 
 - **Relationship retrieval across several relationship types.**
-  `CALL db.edge_embeddings.query` takes `types: [...]` in place of `type`, or
+  `CALL db.relationship_embeddings.query` takes `types: [...]` in place of `type`, or
   neither (every relationship store for `text_property`), and merges the
   stores' answers into one top-k ordered by score, then relationship type,
   then relationship slot. Every row now also yields `type`, and
@@ -193,8 +208,8 @@ before upgrading.
   bytes. `embed_relationship_texts(relationship_type, text_column, *, mode=…)`
   embeds every relationship of a type with the registered model, as
   `embed_texts()` does for nodes. They share the validation and store path of
-  `db.edge_embeddings.set` (an upsert) / `.embed`, with the same refusals;
-  `db.edge_embeddings.embed` also takes `types: [...]` in place of `type`.
+  `db.relationship_embeddings.set` (an upsert) / `.embed`, with the same refusals;
+  `db.relationship_embeddings.embed` also takes `types: [...]` in place of `type`.
   Rust: `kglite::api::embeddings::{set_relationship_embeddings,
   add_relationship_embeddings, embed_relationship_texts}`.
 
@@ -212,9 +227,23 @@ before upgrading.
 
 ### Changed
 
+- The relationship embedding and text-index procedures are named
+  `db.relationship_embeddings.*` and `db.relationship_text_index.*`; the
+  `db.edge_embeddings.*` / `db.edge_text_index.*` spellings they had during
+  development were never released and are not accepted. The unreleased Rust
+  items follow: `api::embeddings::list_relationship_embeddings` /
+  `RelationshipEmbeddingStoreInfo`, `api::io::RelationshipCarryStats`, the
+  `TextIndexStore` relationship methods (`score_relationship`,
+  `refresh_relationships`, `relationship_delta_size`, `relationship_is_stale`,
+  `relationship_can_auto_refresh`), and the
+  `RawOp::WalRelationshipEmbedding{Store,Base}` variants. `api::embeddings`
+  also gains `build_/refresh_/drop_/has_relationship_vector_index`.
+  `describe()`'s `<conn>` element and the `r.connection_type` key keep their
+  names as synonyms for the relationship type.
+
 - Relationship-vector write errors name the relationship as you see it —
   its type and endpoint ids, `(Doc id=12)-[:CITES]->(Entity id="x")` — and,
-  for `db.edge_embeddings.set`, its position in `entries` (`entries[3]`),
+  for `db.relationship_embeddings.set`, its position in `entries` (`entries[3]`),
   instead of an internal slot number: a wrong dimension, a non-finite
   coordinate, an embedder that returns a wrong-width vector, a relationship
   listed twice (both positions named), and a relationship deleted or replaced
@@ -249,12 +278,12 @@ before upgrading.
   `import_embeddings_from_file` pass a `&RelationshipKeys` (an empty map when
   no relationship store has parallel members); `ExportStats` gains
   `relationship_stores` / `relationship_embeddings` and `ImportStats` a
-  `relationships: EdgeCarryStats` field. `ExportStats` is now re-exported from
-  `api::io`, beside the new `RelationshipKeys`, `EdgeCarryStats` and
+  `relationships: RelationshipCarryStats` field. `ExportStats` is now re-exported from
+  `api::io`, beside the new `RelationshipKeys`, `RelationshipCarryStats` and
   `EmbeddingCopyReport` (returned by
   `DirGraph::copy_embeddings_with_relationships_from`). `api::embeddings` gains
-  `list_edge_embeddings`, `embedding_info`, `embedding_diagnostics` and their
-  types (`EdgeEmbeddingStoreInfo`, `EmbeddingInfo`, `EmbeddingDiagnostic`,
+  `list_relationship_embeddings`, `embedding_info`, `embedding_diagnostics` and their
+  types (`RelationshipEmbeddingStoreInfo`, `EmbeddingInfo`, `EmbeddingDiagnostic`,
   `EmbeddingEntity`, `EmbeddingCoverage`, `LengthStats`); the new structs are
   `#[non_exhaustive]`. `list_embeddings` and `EmbeddingStoreInfo` are
   unchanged and stay node-only.
@@ -272,7 +301,7 @@ before upgrading.
 - **Refreshing a vector index that does not exist now refuses instead of
   answering `0`.** `refresh_vector_index(node_type, text_column)` raises
   `ValueError` when the store has no index (or there is no store), and
-  `CALL db.edge_embeddings.refresh_index(...)` refuses instead of yielding
+  `CALL db.relationship_embeddings.refresh_index(...)` refuses instead of yielding
   `{refreshed: 0}`; both messages name the store and the build call. A `0`
   read as "nothing outstanding" after a delete had dropped the index. The Rust
   `kglite::api::embeddings::refresh_vector_index` now returns
@@ -323,18 +352,22 @@ before upgrading.
   1-D or 2-D numpy array of float16/32/64, int8-64 or uint8-32 is read from its
   bytes instead of through `tolist()` (same values; other arrays unchanged).
   Binding vectors is 5-12x faster, and the batched
-  `UNWIND $batch … CALL db.edge_embeddings.set` ingest with numpy row vectors
+  `UNWIND $batch … CALL db.relationship_embeddings.set` ingest with numpy row vectors
   now runs at 0.6-0.9x the node `set_embeddings` time (was 4.3-4.7x). The
   same fast paths apply to Python values the other methods convert.
 
 ### Fixed
+
+- `embed_texts()` on a disk-backed graph read the source column's node
+  views outside a disk query guard (a debug build panicked on it); the column
+  probe now runs under the same guard as the text scan.
 
 - `describe()` no longer types a property from its last write: a string
   property that one later `CREATE`/`SET` gives an integer now reports `mixed`
   (node and relationship alike, and after save/load) instead of `Int64`. A
   full-column rewrite still reports its one type.
 
-- `db.edge_embeddings.set` and `db.edge_embeddings.embed` refuse a
+- `db.relationship_embeddings.set` and `db.relationship_embeddings.embed` refuse a
   `text_property` that no relationship of the type carries, before any store
   exists — `Text property 'contxt' not found on any 'CITES' relationship`,
   followed by the properties the type does carry — as the node
@@ -365,7 +398,7 @@ before upgrading.
   Embedding writes reject stale or fabricated relationship selections.
   Paths hold the same guarantee per hop: `relationships(p)` and a projected
   path no longer substitute a relationship created into a hop's reused slot,
-  and such a hop is refused by `DELETE` and the `db.edge_embeddings.*`
+  and such a hop is refused by `DELETE` and the `db.relationship_embeddings.*`
   procedures instead of being written.
 
 - Embedding generation now refuses writes through derived durable/CDC handles
@@ -418,13 +451,13 @@ before upgrading.
   deleted, or reused by a node of another type, scores `null` rather than
   erroring or scoring the new occupant.
 
-- **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
+- **Every `db.relationship_embeddings.*` procedure refuses an unknown parameter.** Only
   `list` did, so a misspelled key left the default in place and the call
   reported success — `build_index({metric_: 'euclidean'})` built a cosine index
   and answered `indexed`. The refusal names the key and lists the accepted ones,
   and covers the per-entry map of `set` (`relationship`, `vector`).
 
-- **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
+- **A manual `db.relationship_embeddings.set` takes ownership of its cell even when the
   vector is unchanged.** The batch was selected by vector equality alone, so
   writing back a byte-identical vector left the generated source hash in place
   and `embed(mode:'changed')` went on skipping a relationship the manual write
@@ -437,14 +470,14 @@ before upgrading.
   query back on the exact scan). The index state is now journalled with the
   vectors and restored with them, for node and relationship stores alike.
 
-- **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
+- **`build_vector_index` / `db.relationship_embeddings.build_index` record an explicit
   `metric` on the store.** A build with a metric the store did not declare left
   the store resolving another one, so every later query that named no metric
   mismatched the index and was served by exact scan while `list` /
   `embedding_info` reported the unused metric. An explicit metric now becomes
   the store's metric when the store declares none, and is refused when it
   contradicts one the store already declares. Recovery and statement rollback
-  restore the metric with the index. A manual `db.edge_embeddings.set` that
+  restore the metric with the index. A manual `db.relationship_embeddings.set` that
   names a `metric` follows the same rule: on a store that declares none it
   records the metric as its own journalled metadata change, instead of only
   validating the vectors against the cosine default and leaving a later
@@ -466,7 +499,7 @@ before upgrading.
 - **`type()`, `startNode()`, `endNode()`, `keys()` and `properties()` read
   relationship values, not just `MATCH` bindings.** On a relationship that
   arrived as a value — the `relationship` column of
-  `db.edge_embeddings.query`, `collect(r)[0]`, `UNWIND`, `relationships(p)[i]`,
+  `db.relationship_embeddings.query`, `collect(r)[0]`, `UNWIND`, `relationships(p)[i]`,
   a `CALL { }` column — all five returned null in every storage mode, so
   `YIELD relationship RETURN startNode(relationship)` could not say which
   nodes a retrieved relationship connects. They now answer from the value.
@@ -490,14 +523,14 @@ before upgrading.
   lived on relationships described itself as having none: the connection map
   gave no sign of them, the `<semantic>` hint was hidden when only
   relationship stores existed, and the Cypher reference never named
-  `db.edge_embeddings.*`. The `<conn>` line now carries
+  `db.relationship_embeddings.*`. The `<conn>` line now carries
   `embeddings="col(dim=D,count=N)"`, `describe(connections=['T'])` lists
   `<embeddings text_col= dim= count=/>` like a node type does, the
   `<semantic>` hint appears for either entity and spells
-  `vector_score(r, …)` / `db.edge_embeddings.query` for relationships, the
+  `vector_score(r, …)` / `db.relationship_embeddings.query` for relationships, the
   `<lexical>` and `<hybrid>` hints likewise appear for relationship text
-  indexes, and `describe(cypher=True)` documents every `db.edge_embeddings.*`
-  and `db.edge_text_index.*` procedure. Graphs without relationship stores or
+  indexes, and `describe(cypher=True)` documents every `db.relationship_embeddings.*`
+  and `db.relationship_text_index.*` procedure. Graphs without relationship stores or
   indexes gain no relationship text. The node `<semantic>` hint and the Cypher
   functions topic now spell `embedding_norm(n, 'col_emb')`, the store name the
   function takes; they said `'col'`, which errors.
@@ -548,7 +581,7 @@ before upgrading.
   embedding 's_emb' found for node type 'D'". It now reports
   "text_score(): no embedding for property 's' on node type 'D'" and says how
   to embed it: `embed_texts('D', 's')` for nodes, `MATCH ()-[r:C]->() WITH
-  collect(r) AS rs CALL db.edge_embeddings.embed({type, text_property,
+  collect(r) AS rs CALL db.relationship_embeddings.embed({type, text_property,
   relationships: rs})` for relationships. This
   holds in projections, WHERE filters and fused top-k. A direct
   `vector_score()` call keeps its store-name message.

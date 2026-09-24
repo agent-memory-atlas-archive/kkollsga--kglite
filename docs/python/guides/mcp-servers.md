@@ -1172,7 +1172,7 @@ The CLI's `--graph` validator accepts both shapes — a `.kgl` file
 OR a directory containing `disk_graph_meta.json` (the disk-graph
 sentinel). For your own data, the API is
 `kglite.KnowledgeGraph(storage="disk", path="/data/graph/")` for
-the constructor and `g.add_nodes(...) / g.add_connections(...)`
+the constructor and `g.add_nodes(...) / g.add_relationships(...)`
 for population.
 
 Manifests work the same way for both shapes. For example,

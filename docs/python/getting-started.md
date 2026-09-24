@@ -58,7 +58,7 @@ graph.add_nodes(
 
 # Edges — one row per edge, columns name the endpoints.
 edges_df = pd.DataFrame({"src": [1001, 1002], "tgt": [1002, 1003]})
-graph.add_connections(
+graph.add_relationships(
     data=edges_df,
     connection_type="KNOWS",
     source_type="Person",
@@ -95,7 +95,7 @@ Serving concurrent readers? Share a
 `graph.freeze()` snapshot — immutable and lock-free across threads (see
 {doc}`/concepts/concurrency`).
 
-That's the loop: shape DataFrames → `add_nodes` / `add_connections` →
+That's the loop: shape DataFrames → `add_nodes` / `add_relationships` →
 Cypher → save. {doc}`guides/data-loading` covers conflict handling
 (`update` / `replace` / `skip` / `preserve` / `sum`), incremental
 loads, hierarchies, and N-Triples / CSV ingest.
@@ -116,7 +116,7 @@ graph.cypher("""
 """)
 ```
 
-For thousands of rows, `add_nodes` / `add_connections` is 50–100×
+For thousands of rows, `add_nodes` / `add_relationships` is 50–100×
 faster — every Cypher CREATE goes through the parser; the bulk path
 goes straight to the columnar store.
 

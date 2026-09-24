@@ -64,7 +64,7 @@ def _embed(graph: KnowledgeGraph) -> KnowledgeGraph:
     graph.set_embedder(TinyEmbedder())
     graph.cypher(
         "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', relationships:rs, mode:'all'}) "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', relationships:rs, mode:'all'}) "
         "YIELD embedded RETURN embedded"
     )
     return graph
@@ -90,7 +90,7 @@ def _scores(graph: KnowledgeGraph) -> dict[str, list[float]]:
 
 def _listed(graph: KnowledgeGraph) -> list[dict]:
     return graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD count, dimension, model RETURN count, dimension, model"
     ).to_list()
 
@@ -122,7 +122,8 @@ def test_export_import_round_trip_lands_each_vector_on_its_twin(mode: str, tmp_p
     target.set_embedder(TinyEmbedder())
     again = target.cypher(
         "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', relationships:rs, mode:'changed'}) "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', relationships:rs, "
+        "mode:'changed'}) "
         "YIELD embedded RETURN embedded"
     ).to_list()
     assert again == [{"embedded": 0}], "a lost text hash would re-embed every relationship"

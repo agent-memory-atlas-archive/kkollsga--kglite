@@ -256,7 +256,7 @@ fn identical_generated_successor_is_a_true_no_op() {
 
 // ── manual-write rollback ───────────────────────────────────────────────
 //
-// `db.edge_embeddings.set` / `.remove` write through `upsert_edge_embeddings`
+// `db.relationship_embeddings.set` / `.remove` write through `upsert_edge_embeddings`
 // and `remove_edge_embeddings`. A statement that fails *after* one of those
 // calls must leave the store exactly as it found it — vectors in their dense
 // slot order, text hashes, `model_id`, store existence, and the HNSW index's
@@ -297,7 +297,7 @@ fn store_facts(graph: &DirGraph) -> Option<EdgeStoreFacts> {
     })
 }
 
-/// Index coverage as `db.edge_embeddings.list` reports it. Read *before* any
+/// Index coverage as `db.relationship_embeddings.list` reports it. Read *before* any
 /// query: a query on a stale index auto-refreshes through interior
 /// mutability, which would erase the very delta this compares.
 fn index_facts(graph: &DirGraph) -> Vec<vector_index::EdgeVectorIndexStatus> {
@@ -443,7 +443,7 @@ fn manual_remove_rolls_back_with_its_statement_in_every_storage_mode() {
     }
 }
 
-/// The user-visible shape of the defect: a `CALL db.edge_embeddings.set`
+/// The user-visible shape of the defect: a `CALL db.relationship_embeddings.set`
 /// followed by a clause that fails. Unlike the primitive tests above this runs
 /// through `execute_mut`, which is where the statement checkpoint is opened —
 /// so it also proves the manual write happens inside one.
@@ -507,7 +507,7 @@ fn a_failed_statement_reverses_db_edge_embeddings_set() {
         &mut graph,
         &format!(
             "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' \
-             CALL db.edge_embeddings.set({{type:'ASSERTS', text_property:'description', \
+             CALL db.relationship_embeddings.set({{type:'ASSERTS', text_property:'description', \
              entries:[{{relationship:r, vector:[0.25,0.75]}}]}}) YIELD stored \
              WITH stored AS kept{FAILING_TAIL}"
         ),
@@ -527,7 +527,7 @@ fn a_failed_statement_reverses_db_edge_embeddings_remove() {
         &mut graph,
         &format!(
             "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' \
-             CALL db.edge_embeddings.remove({{type:'ASSERTS', text_property:'description', \
+             CALL db.relationship_embeddings.remove({{type:'ASSERTS', text_property:'description', \
              relationships:[r]}}) YIELD removed \
              WITH removed AS kept{FAILING_TAIL}"
         ),

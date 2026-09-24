@@ -49,7 +49,7 @@ fn graph(node_store: bool, edge_store: bool) -> DirGraph {
         run(
             &mut graph,
             "MATCH ()-[r:SUPPORTS {body: 'edge text'}]->() \
-             CALL db.edge_embeddings.set({type:'SUPPORTS', text_property:'body', \
+             CALL db.relationship_embeddings.set({type:'SUPPORTS', text_property:'body', \
              entries:[{relationship:r, vector:[0.6, 0.8]}]}) YIELD stored RETURN stored",
         );
     }
@@ -114,7 +114,10 @@ fn a_graph_with_only_relationship_stores_gets_the_semantic_hint() {
     let xml = inventory(&graph(false, true));
     let semantic = line_with(&xml, "<semantic ");
     assert!(semantic.contains("vector_score(r, 'col_emb'"), "{semantic}");
-    assert!(semantic.contains("db.edge_embeddings.query"), "{semantic}");
+    assert!(
+        semantic.contains("db.relationship_embeddings.query"),
+        "{semantic}"
+    );
     assert!(
         semantic.contains("deleting an embedded relationship or an endpoint drops that index"),
         "the delete contract: {semantic}"
@@ -130,7 +133,10 @@ fn a_graph_with_both_entities_names_both_spellings() {
     let xml = inventory(&graph(true, true));
     let semantic = line_with(&xml, "<semantic ");
     assert!(semantic.contains("text_score(n, 'col'"), "{semantic}");
-    assert!(semantic.contains("db.edge_embeddings.query"), "{semantic}");
+    assert!(
+        semantic.contains("db.relationship_embeddings.query"),
+        "{semantic}"
+    );
 }
 
 #[test]
@@ -155,7 +161,7 @@ fn the_cypher_reference_names_the_relationship_embedding_procedures() {
     let mut request = DescribeRequest::new(DescribeSurface::Python);
     request.cypher = &CypherDetail::Overview;
     let overview = compute_description(&graph, &request).unwrap();
-    let proc_line = line_with(&overview, "<proc name=\"db.edge_embeddings.*\"");
+    let proc_line = line_with(&overview, "<proc name=\"db.relationship_embeddings.*\"");
     for name in [
         "set",
         "embed",
@@ -168,7 +174,7 @@ fn the_cypher_reference_names_the_relationship_embedding_procedures() {
         "drop_index",
     ] {
         assert!(
-            proc_line.contains(&format!("db.edge_embeddings.{name}(")),
+            proc_line.contains(&format!("db.relationship_embeddings.{name}(")),
             "{name} missing: {proc_line}"
         );
     }
@@ -191,7 +197,10 @@ fn the_cypher_reference_names_the_relationship_embedding_procedures() {
     let functions = compute_description(&graph, &request).unwrap();
     let group = line_with(&functions, "<group name=\"relationship_semantic\"");
     assert!(group.contains("vector_score(r, 'col_emb'"), "{group}");
-    assert!(group.contains("db.edge_embeddings.query"), "{group}");
+    assert!(
+        group.contains("db.relationship_embeddings.query"),
+        "{group}"
+    );
 }
 
 /// The three contracts a blank-slate user test found stated too narrowly or
@@ -229,7 +238,7 @@ fn the_semantic_topics_state_null_ordering_vacuum_and_delta() {
 
     request.cypher = &CypherDetail::Overview;
     let overview = compute_description(&graph, &request).unwrap();
-    let proc_line = line_with(&overview, "<proc name=\"db.edge_embeddings.*\"");
+    let proc_line = line_with(&overview, "<proc name=\"db.relationship_embeddings.*\"");
     assert!(
         proc_line.contains("a vacuum() that compacts drops every vector index"),
         "{proc_line}"
@@ -253,7 +262,7 @@ fn with_text_indexes(mut graph: DirGraph, node: bool, edge: bool) -> DirGraph {
     if edge {
         run(
             &mut graph,
-            "CALL db.edge_text_index.build({type:'SUPPORTS', property:'body'}) \
+            "CALL db.relationship_text_index.build({type:'SUPPORTS', property:'body'}) \
              YIELD indexed RETURN indexed",
         );
     }
@@ -265,7 +274,10 @@ fn a_relationship_text_index_alone_gets_the_lexical_hint() {
     let xml = inventory(&with_text_indexes(graph(false, false), false, true));
     let lexical = line_with(&xml, "<lexical ");
     assert!(lexical.contains("text_bm25(r, 'prop'"), "{lexical}");
-    assert!(lexical.contains("db.edge_text_index.build"), "{lexical}");
+    assert!(
+        lexical.contains("db.relationship_text_index.build"),
+        "{lexical}"
+    );
     assert!(!lexical.contains("text_bm25(n,"), "{lexical}");
     assert!(!xml.contains("<hybrid "), "one lane is not hybrid:\n{xml}");
 }
@@ -291,10 +303,10 @@ fn the_cypher_reference_names_the_relationship_text_index_procedures() {
     let mut request = DescribeRequest::new(DescribeSurface::Python);
     request.cypher = &CypherDetail::Overview;
     let overview = compute_description(&graph, &request).unwrap();
-    let proc_line = line_with(&overview, "<proc name=\"db.edge_text_index.*\"");
+    let proc_line = line_with(&overview, "<proc name=\"db.relationship_text_index.*\"");
     for name in ["build", "refresh", "drop", "list"] {
         assert!(
-            proc_line.contains(&format!("db.edge_text_index.{name}(")),
+            proc_line.contains(&format!("db.relationship_text_index.{name}(")),
             "{name} missing: {proc_line}"
         );
     }
@@ -307,7 +319,10 @@ fn the_cypher_reference_names_the_relationship_text_index_procedures() {
     let functions = compute_description(&graph, &request).unwrap();
     let lexical = line_with(&functions, "<group name=\"lexical\"");
     assert!(lexical.contains("text_bm25(r, 'prop'"), "{lexical}");
-    assert!(lexical.contains("db.edge_text_index.build"), "{lexical}");
+    assert!(
+        lexical.contains("db.relationship_text_index.build"),
+        "{lexical}"
+    );
 }
 
 // ── index presence, both entities ─────────────────────────────────────
@@ -322,7 +337,7 @@ fn with_vector_indexes(mut graph: DirGraph, node: bool, edge: bool) -> DirGraph 
     if edge {
         run(
             &mut graph,
-            "CALL db.edge_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) \
+            "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) \
              YIELD indexed RETURN indexed",
         );
     }

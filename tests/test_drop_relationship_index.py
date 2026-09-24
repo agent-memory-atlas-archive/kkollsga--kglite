@@ -28,12 +28,13 @@ def _graph() -> KnowledgeGraph:
         )
         graph.cypher(
             "MATCH ()-[r:CLAIMS {rank: $rank}]->() "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
             "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
             params={"rank": index, "vector": vector},
         )
     graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
     graph.set_embeddings("Doc", "text", {0: VECTORS[0], 1: VECTORS[1], 2: VECTORS[2]})
     graph.build_vector_index("Doc", "text")
@@ -45,7 +46,9 @@ def _index_names(graph: KnowledgeGraph) -> list[str]:
 
 
 def _edge_index_state(graph: KnowledgeGraph) -> str:
-    rows = graph.cypher("CALL db.edge_embeddings.list({type:'CLAIMS'}) YIELD index_state RETURN index_state").to_list()
+    rows = graph.cypher(
+        "CALL db.relationship_embeddings.list({type:'CLAIMS'}) YIELD index_state RETURN index_state"
+    ).to_list()
     assert len(rows) == 1, rows
     return rows[0]["index_state"]
 
@@ -69,7 +72,7 @@ def test_relationship_index_drops_under_every_spelling_of_its_printed_name(state
     assert _index_names(graph) == ["Doc.text"]
     assert _edge_index_state(graph) == "none"
     # The accelerator goes; the vectors are data and stay.
-    stores = graph.cypher("CALL db.edge_embeddings.list({type:'CLAIMS'}) YIELD count RETURN count").to_list()
+    stores = graph.cypher("CALL db.relationship_embeddings.list({type:'CLAIMS'}) YIELD count RETURN count").to_list()
     assert stores == [{"count": 2}]
 
 

@@ -70,8 +70,9 @@ graph.add_nodes(df, 'Production', 'field_id', 'field_name',
         'units': {'oil': 'MSm3', 'gas': 'BSm3'},
     })
 
-# Load connections (edges)
-graph.add_connections(df, 'WORKS_AT',
+# Load relationships (edges); add_connections and the other
+# connection-named methods are permanent pointers to these
+graph.add_relationships(df, 'WORKS_AT',
     source_type='Person', source_id_field='person_id',
     target_type='Company', target_id_field='company_id')
 
@@ -80,18 +81,18 @@ graph.add_nodes_bulk([
     {'node_type': 'Person', 'unique_id_field': 'id', 'data': people_df},
     {'node_type': 'Company', 'unique_id_field': 'id', 'data': companies_df},
 ])
-graph.add_connections_bulk([
+graph.add_relationships_bulk([
     {'source_type': 'Person', 'target_type': 'Company',
      'connection_name': 'WORKS_AT', 'data': works_df},
 ])
 
-# Auto-filtering — silently skips connections whose types are not loaded
+# Auto-filtering — silently skips relationships whose types are not loaded
 connection_specs = [{
     'connection_name': 'WORKS_AT', 'source_type': 'Person',
     'target_type': 'Company', 'source_id_field': 'person_id',
     'target_id_field': 'company_id', 'data': works_df,
 }]
-graph.add_connections_from_source(connection_specs)
+graph.add_relationships_from_source(connection_specs)
 ```
 
 ### Blueprint Loading
@@ -763,27 +764,27 @@ expanded = graph.select('Person').where({'name': 'Alice'}).expand(hops=2)
 ```python
 # After A → B → C traversal, create direct A → C edges
 graph.select('A').traverse('REL_AB').traverse('REL_BC') \
-    .create_connections('A_TO_C')
+    .create_relationships('A_TO_C')
 
 # Copy properties from intermediate B nodes onto the new edges
 graph.select('A').traverse('REL_AB').traverse('REL_BC') \
-    .create_connections('A_TO_C', properties={'B': ['score', 'weight']})
+    .create_relationships('A_TO_C', properties={'B': ['score', 'weight']})
 
 # Empty list = copy ALL properties from that type
 graph.select('A').traverse('REL_AB').traverse('REL_BC') \
-    .create_connections('A_TO_C', properties={'B': []})
+    .create_relationships('A_TO_C', properties={'B': []})
 
 # Copy from multiple node types
 graph.select('A').traverse('REL_AB').traverse('REL_BC') \
-    .create_connections('A_TO_C', properties={'A': ['name'], 'B': ['score']})
+    .create_relationships('A_TO_C', properties={'A': ['name'], 'B': ['score']})
 
 # Override source/target (connect B → C instead of A → C)
 graph.select('A').traverse('REL_AB').traverse('REL_BC') \
-    .create_connections('B_TO_C', source_type='B', target_type='C')
+    .create_relationships('B_TO_C', source_type='B', target_type='C')
 
 # Conflict handling
 graph.select('A').traverse('REL_AB').traverse('REL_BC') \
-    .create_connections('A_TO_C', conflict_handling='skip')
+    .create_relationships('A_TO_C', conflict_handling='skip')
 ```
 
 ---
@@ -1313,7 +1314,7 @@ graph.neighbors_schema('Person')
 #  'incoming': [...]}
 
 # Connection types with counts
-graph.connection_types()
+graph.relationship_types()
 
 # Quick sample
 graph.sample('Person', n=5)

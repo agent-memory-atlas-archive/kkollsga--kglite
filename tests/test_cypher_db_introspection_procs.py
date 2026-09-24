@@ -266,9 +266,11 @@ def test_show_procedures_default_columns(small_graph):
     assert schema_changing == {
         "db.cdc.enable",
         "db.cdc.disable",
-        "db.edge_text_index.build",
-        "db.edge_text_index.refresh",
-        "db.edge_text_index.drop",
+        *(
+            f"db.{namespace}.{op}"
+            for namespace in ("node_text_index", "relationship_text_index", "text_index")
+            for op in ("build", "refresh", "drop")
+        ),
     }, schema_changing
     # Data-mutating procedures report WRITE — the third mode, pinned the
     # same both-ways as SCHEMA above (structured-data epoch, 2026-08-26).
@@ -276,13 +278,19 @@ def test_show_procedures_default_columns(small_graph):
     assert writing == {
         "table.upsert",
         "table.delete",
-        "db.edge_embeddings.set",
-        "db.edge_embeddings.embed",
-        "db.edge_embeddings.remove",
-        "db.edge_embeddings.drop",
-        "db.edge_embeddings.build_index",
-        "db.edge_embeddings.refresh_index",
-        "db.edge_embeddings.drop_index",
+        *(
+            f"db.{namespace}.{op}"
+            for namespace in ("node_embeddings", "relationship_embeddings", "embeddings")
+            for op in (
+                "set",
+                "embed",
+                "remove",
+                "drop",
+                "build_index",
+                "refresh_index",
+                "drop_index",
+            )
+        ),
     }, writing
     assert set(modes.values()) == {"READ", "SCHEMA", "WRITE"}
 

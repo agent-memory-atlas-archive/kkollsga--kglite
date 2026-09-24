@@ -733,19 +733,19 @@ def _relationship_battery(kg: KnowledgeGraph) -> dict:
     """Every read the oracle compares, on one graph, as plain data."""
     listed = _rows(
         kg.cypher(
-            "CALL db.edge_embeddings.list({type:'RELATED', text_property:'text'}) "
+            "CALL db.relationship_embeddings.list({type:'RELATED', text_property:'text'}) "
             "YIELD entity,count,dimension,metric,model,index_state,delta "
             "RETURN entity,count,dimension,metric,model,index_state,delta"
         )
     )
     exact = kg.cypher(
-        "CALL db.edge_embeddings.query({type:'RELATED', text_property:'text', vector:$q, "
+        "CALL db.relationship_embeddings.query({type:'RELATED', text_property:'text', vector:$q, "
         "top_k:$k, exact:true}) YIELD relationship, score, search_method "
         "RETURN relationship.text AS text, score, search_method",
         params={"q": _REL_QUERY, "k": _REL_TOP_K},
     ).to_list()
     approximate = kg.cypher(
-        "CALL db.edge_embeddings.query({type:'RELATED', text_property:'text', vector:$q, "
+        "CALL db.relationship_embeddings.query({type:'RELATED', text_property:'text', vector:$q, "
         "top_k:$k}) YIELD relationship, score, search_method "
         "RETURN relationship.text AS text, score, search_method",
         params={"q": _REL_QUERY, "k": _REL_TOP_K},
@@ -791,11 +791,12 @@ def _seed_relationship_store(kg: KnowledgeGraph) -> None:
         "WITH collect({relationship: r, vector: ["
         "toFloat(a.eid % 7) + 0.01 * toFloat(a.eid % 13), "
         "toFloat(b.eid % 11) + 0.01 * toFloat(b.eid % 17), 1.0]}) AS entries "
-        "CALL db.edge_embeddings.set({type:'RELATED', text_property:'text', entries: entries}) "
+        "CALL db.relationship_embeddings.set({type:'RELATED', text_property:'text', entries: entries}) "
         "YIELD stored RETURN stored"
     )
     kg.cypher(
-        "CALL db.edge_embeddings.build_index({type:'RELATED', text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'RELATED', text_property:'text'}) YIELD indexed RETURN "
+        "indexed"
     )
 
 
@@ -871,26 +872,26 @@ def test_relationship_embedding_parity(tmp_path):
     for mode, kg in graphs.items():
         kg.cypher(
             "MATCH (a:Entity {eid: 1})-[r:RELATED]->() WITH collect(r)[0] AS r "
-            "CALL db.edge_embeddings.set({type:'RELATED', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'RELATED', text_property:'text', "
             "entries:[{relationship: r, vector: [9.0, 9.0, 9.0]}]}) YIELD stored RETURN stored"
         )
         state = kg.cypher(
-            "CALL db.edge_embeddings.list({type:'RELATED', text_property:'text'}) "
+            "CALL db.relationship_embeddings.list({type:'RELATED', text_property:'text'}) "
             "YIELD index_state, delta RETURN index_state, delta"
         ).to_list()
         assert state == [{"index_state": "stale", "delta": 1}], mode
         assert kg.cypher(
-            "CALL db.edge_embeddings.refresh_index({type:'RELATED', text_property:'text'}) "
+            "CALL db.relationship_embeddings.refresh_index({type:'RELATED', text_property:'text'}) "
             "YIELD refreshed RETURN refreshed"
         ).to_list() == [{"refreshed": 1}], mode
         with pytest.raises(kglite.CypherExecutionError, match="division by zero"):
             kg.cypher(
                 "MATCH (a:Entity {eid: 2})-[r:RELATED]->() WITH collect(r) AS rs "
-                "CALL db.edge_embeddings.remove({type:'RELATED', text_property:'text', relationships: rs}) "
+                "CALL db.relationship_embeddings.remove({type:'RELATED', text_property:'text', relationships: rs}) "
                 "YIELD removed WITH removed MATCH (n:Topic {tid: 0}) SET n.bad = 1/0 RETURN removed"
             )
         assert kg.cypher(
-            "CALL db.edge_embeddings.list({type:'RELATED', text_property:'text'}) "
+            "CALL db.relationship_embeddings.list({type:'RELATED', text_property:'text'}) "
             "YIELD count, index_state, delta RETURN count, index_state, delta"
         ).to_list() == [{"count": expected_count, "index_state": "online", "delta": 0}], mode
 

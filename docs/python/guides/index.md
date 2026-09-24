@@ -9,7 +9,7 @@ three, in this order:
 
 | | |
 |---|---|
-| {doc}`data-loading` | Shape DataFrames, bulk-load with `add_nodes` / `add_connections`, conflict handling, hierarchies. The day-1 "I have a CSV, now what?" answer. |
+| {doc}`data-loading` | Shape DataFrames, bulk-load with `add_nodes` / `add_relationships`, conflict handling, hierarchies. The day-1 "I have a CSV, now what?" answer. |
 | {doc}`inline-records` | Build directly from JSON/dicts with `from_records`, including explicit missing-endpoint policy. |
 | {doc}`cypher` | The query surface — MATCH/WHERE/RETURN, aggregations, subqueries, mutations. Every other guide leans on this one. |
 | {doc}`mcp-servers` | Ship the graph to Claude / Cursor / any MCP-capable agent. The bundled `kglite-mcp-server` CLI + the YAML manifest for adding custom tools without forking. |

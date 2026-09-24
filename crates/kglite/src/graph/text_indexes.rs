@@ -732,7 +732,12 @@ pub fn build_text_index(
         skipped,
         terms: store.terms(),
     };
-    graph.text_indexes.insert(key_pair, store);
+    let prior = graph.text_indexes.insert(key_pair.clone(), store);
+    // Inside a statement (`db.node_text_index.build`) a later clause can
+    // fail; the journal puts the displaced index back.
+    if let Some(journal) = graph.graph.undo_journal_mut() {
+        journal.note_text_index_replaced(key_pair, prior);
+    }
     graph.bump_version();
     Ok(report)
 }
@@ -784,11 +789,13 @@ pub fn refresh_text_index(graph: &DirGraph, node_type: &str, property: &str) -> 
 /// Drop the text index for `(node_type, property)`. Returns whether one
 /// existed.
 pub fn drop_text_index(graph: &mut DirGraph, node_type: &str, property: &str) -> bool {
-    let removed = graph
-        .text_indexes
-        .remove(&index_key(node_type, property))
-        .is_some();
+    let key = index_key(node_type, property);
+    let prior = graph.text_indexes.remove(&key);
+    let removed = prior.is_some();
     if removed {
+        if let Some(journal) = graph.graph.undo_journal_mut() {
+            journal.note_text_index_replaced(key, prior);
+        }
         graph.bump_version();
     }
     removed

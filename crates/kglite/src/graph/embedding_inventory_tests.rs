@@ -84,10 +84,10 @@ fn relationship_listing_is_separate_from_the_node_listing() {
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].dimension, 3);
 
-    let edges = list_edge_embeddings(&graph);
+    let edges = list_relationship_embeddings(&graph);
     assert_eq!(
         edges,
-        vec![EdgeEmbeddingStoreInfo {
+        vec![RelationshipEmbeddingStoreInfo {
             relationship_type: "SUPPORTS".into(),
             text_column: "body".into(),
             store_name: "body_emb".into(),

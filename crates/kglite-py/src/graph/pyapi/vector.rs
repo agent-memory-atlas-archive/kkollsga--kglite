@@ -23,22 +23,9 @@ const SELECTION_ID_KEY: NodeKeyGuard<'static> = NodeKeyGuard {
 
 #[pymethods]
 impl KnowledgeGraph {
-    /// Store embeddings for nodes of the given type.
-    ///
-    /// **Replaces** any existing store for ``(node_type, "{text_column}_emb")``.
-    /// For incremental ingest where multiple batches must coexist, use
-    /// ``add_embeddings()`` instead (it upserts without clobbering — no
-    /// read-merge-write needed at the call site).
-    ///
-    /// Args:
-    ///     node_type: The node type (e.g. 'Article')
-    ///     text_column: Source column name (e.g. 'summary'). Stored as '{text_column}_emb'.
-    ///     embeddings: Dict mapping node IDs to embedding vectors (list of floats)
-    ///
-    /// Returns:
-    ///     dict: {'embeddings_stored': int, 'dimension': int, 'skipped': int}
+    /// Replace the embedding store of a node type with vectors keyed by node id.
     #[pyo3(signature = (node_type, text_column, embeddings, metric=None))]
-    fn set_embeddings(
+    pub(super) fn set_node_embeddings(
         &mut self,
         py: Python<'_>,
         node_type: &str,
@@ -67,27 +54,9 @@ impl KnowledgeGraph {
         Ok(result.into())
     }
 
-    /// Add or update embeddings for nodes of the given type without
-    /// discarding the existing store.
-    ///
-    /// Differs from ``set_embeddings`` (which replaces the store) by
-    /// upserting entries into an existing ``(node_type, "{text_column}_emb")``
-    /// store. If no store exists yet, behaves like ``set_embeddings`` —
-    /// the first call creates one; subsequent calls extend it.
-    ///
-    /// Use this for incremental ingest workflows where multiple
-    /// ``add_nodes`` + embedding batches need to coexist without a
-    /// read-merge-write cycle through the user's process.
-    ///
-    /// Args:
-    ///     node_type: The node type (e.g. 'Article')
-    ///     text_column: Source column name (e.g. 'summary'). Stored as '{text_column}_emb'.
-    ///     embeddings: Dict mapping node IDs to embedding vectors (list of floats).
-    ///
-    /// Returns:
-    ///     dict: {'embeddings_stored': int, 'dimension': int, 'skipped': int, 'store_created': bool}
+    /// Upsert node vectors keyed by id into a node type's embedding store, creating it if absent.
     #[pyo3(signature = (node_type, text_column, embeddings, metric=None))]
-    fn add_embeddings(
+    pub(super) fn add_node_embeddings(
         &mut self,
         py: Python<'_>,
         node_type: &str,
@@ -326,7 +295,7 @@ impl KnowledgeGraph {
 
     /// List every embedding store: node stores, then relationship stores.
     fn list_embeddings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        use kglite_core::api::embeddings::{list_edge_embeddings, list_embeddings};
+        use kglite_core::api::embeddings::{list_embeddings, list_relationship_embeddings};
         let py_list = PyList::empty(py);
         for info in list_embeddings(&self.inner) {
             let dict = PyDict::new(py);
@@ -339,7 +308,7 @@ impl KnowledgeGraph {
             dict.set_item("metric", info.metric)?;
             py_list.append(dict)?;
         }
-        for info in list_edge_embeddings(&self.inner) {
+        for info in list_relationship_embeddings(&self.inner) {
             let dict = PyDict::new(py);
             dict.set_item("entity", "relationship")?;
             dict.set_item("relationship_type", info.relationship_type)?;
@@ -530,24 +499,9 @@ impl KnowledgeGraph {
         result.into_py_any(py)
     }
 
-    /// Retrieve embeddings for nodes.
-    ///
-    /// Can be called in two ways:
-    ///   - ``embeddings(node_type, text_column)`` — returns all embeddings of that type
-    ///   - ``embeddings(text_column)`` — returns embeddings for the current selection
-    ///
-    /// Args:
-    ///     text_column: Source column name (e.g. 'summary'). Resolves to '{text_column}_emb'.
-    ///
-    /// Returns:
-    ///     Dict mapping node IDs to embedding vectors (list of floats).
-    ///
-    /// Raises:
-    ///     ArgumentError: The one-arg form's selection spans two node types
-    ///         sharing an id. Ids are unique per type only; call the two-arg
-    ///         form once per type instead.
+    /// Read node vectors by id: a whole node type's store, or the current selection's.
     #[pyo3(signature = (node_type_or_text_column, text_column=None))]
-    fn embeddings(
+    pub(super) fn node_embeddings(
         &self,
         py: Python<'_>,
         node_type_or_text_column: &str,
@@ -661,7 +615,7 @@ impl KnowledgeGraph {
 
     /// Every vector in a relationship store, addressed by endpoint ids, as rows for an edge list and edge-feature matrix.
     #[pyo3(signature = (relationship_type, text_column, *, relationship_keys=None))]
-    fn relationship_embeddings(
+    pub(super) fn relationship_embeddings(
         &self,
         py: Python<'_>,
         relationship_type: &str,
@@ -725,42 +679,9 @@ impl KnowledgeGraph {
         Ok(())
     }
 
-    /// Embed a text column for all nodes of a given type.
-    ///
-    /// Uses the model registered via ``set_embedder()``.  Reads each node's
-    /// ``text_column`` property, calls ``model.embed()`` in batches, and stores
-    /// the resulting vectors as ``{text_column}_emb``.  Nodes with missing or
-    /// non-string text values are skipped.
-    ///
-    /// Args:
-    ///     node_type: The node type to embed (e.g. ``'Article'``).
-    ///     text_column: The column holding the text to embed. Resolves as
-    ///         ``set_embeddings`` resolves it — a stored property, an identity
-    ///         alias (a ``title_field='name'`` type embeds its titles under
-    ///         ``'name'``), the canonical ``id``/``title``, or a structural
-    ///         alias. A column that resolves to none of those raises.
-    ///     batch_size: Number of texts per ``model.embed()`` call (default 256).
-    ///     show_progress: Show a tqdm progress bar (default ``True``).
-    ///         Requires ``tqdm`` to be installed; silently falls back to no
-    ///         progress bar if it is not available.
-    ///     mode: Which nodes to embed —
-    ///         ``'missing'`` (default): only nodes without an embedding yet;
-    ///         ``'changed'``: nodes missing an embedding *or* whose text changed
-    ///         since the last embed (detected via a stored per-node content
-    ///         hash) — the incremental re-embed;
-    ///         ``'all'``: re-embed every node, rebuilding the store fresh.
-    ///
-    /// Returns:
-    ///     Dict with ``embedded``, ``skipped``, ``skipped_existing``,
-    ///     ``reembedded_changed``, and ``dimension``.
-    ///
-    /// Raises:
-    ///     ValueError: if ``node_type`` does not exist in the graph (the same
-    ///         complaint ``set_embeddings`` makes — raised before the model is
-    ///         loaded), if ``text_column`` resolves to no readable column, or
-    ///         if ``mode`` is not one of the three names.
+    /// Embed a text column for every node of a type with the registered model.
     #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None))]
-    fn embed_texts(
+    pub(super) fn embed_node_texts(
         &mut self,
         py: Python<'_>,
         node_type: &str,
@@ -918,62 +839,11 @@ impl KnowledgeGraph {
         )
     }
 
-    /// Build an HNSW approximate-nearest-neighbour index over an embedding store
-    /// so subsequent vector searches scale sub-linearly on large stores.
-    ///
-    /// Opt-in (like ``create_index``): without it, search is an exact brute-force
-    /// scan. Once built, ``vector_search`` / ``search_text`` auto-use the index
-    /// for queries covering most of a large store; pass ``exact=True`` to force
-    /// an exact scan.
-    ///
-    /// Later vector writes (``add_embeddings`` / ``embed_texts`` /
-    /// ``set_embeddings``) do **not** drop the index: they are recorded, and the
-    /// next vector query folds them in — while the outstanding delta stays at or
-    /// under ``auto_refresh_limit``. A larger delta is served by the exact scan,
-    /// which is correct and slower, until you rebuild. Catch-up only ever
-    /// indexes vectors that exist; a node with no embedding is reported by
-    /// ``SHOW INDEXES`` as ``unembedded`` and is never embedded by a query.
-    /// Deleting an embedded node, and a ``vacuum()`` that compacts after a
-    /// delete, still drop the index outright — each moves the slot layout the
-    /// index addresses — so rebuild after those. A delete that a failed
-    /// statement or a rolled-back transaction undoes leaves the index in place.
-    ///
-    /// The selection does **not** have to be that one node type: as long as
-    /// only one type carries ``text_column``, a whole-graph search (or any
-    /// selection spanning other types) still uses the index. When two or more
-    /// types carry the same column, only a selection of a single one of them
-    /// does — a selection spanning both is ranked by exact scan so neither
-    /// type's rows can be dropped.
-    ///
-    /// Args:
-    ///     node_type: The node type (e.g. ``'Article'``).
-    ///     text_column: Source column name (e.g. ``'summary'``; the store is
-    ///         ``'{text_column}_emb'``).
-    ///     m: Max neighbours per node on upper layers (default 16). Higher →
-    ///         better recall + larger index.
-    ///     ef_construction: Build-time search width (default 200). Higher →
-    ///         better graph, slower build.
-    ///     ef_search: Default query-time search width (default 64). Higher →
-    ///         better recall, slower query.
-    ///     metric: Distance metric to index for — ``'cosine'`` (default),
-    ///         ``'dot_product'``, or ``'euclidean'``. ``'poincare'`` is not
-    ///         supported (it stays on the exact path). If omitted, uses the
-    ///         store's metric, else ``'cosine'``. An explicit metric becomes
-    ///         the store's metric when the store declares none, and is refused
-    ///         when it contradicts one the store already declares.
-    ///     auto_refresh_limit: How many outstanding vectors a query will fold
-    ///         into the index inline before it serves the exact scan instead
-    ///         (default 1000). Omit on a rebuild to keep the current value.
-    ///
-    /// Returns:
-    ///     dict: ``{'indexed': int, 'metric': str, 'm': int}`` — vectors indexed.
-    ///
-    /// Raises:
-    ///     ValueError: if the store doesn't exist, the metric is unsupported,
-    ///         or the metric contradicts the store's own.
+    /// Build an HNSW index over a node embedding store so vector search scales on large stores.
     #[pyo3(signature = (node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None))]
+    // One Rust argument per HNSW knob the Python signature exposes.
     #[allow(clippy::too_many_arguments)]
-    fn build_vector_index(
+    pub(super) fn build_node_vector_index(
         &mut self,
         py: Python<'_>,
         node_type: &str,
@@ -1011,11 +881,13 @@ impl KnowledgeGraph {
         Ok(result.into())
     }
 
-    /// Drop the HNSW index for an embedding store (search reverts to exact
-    /// brute-force). The vectors are untouched. No-op if no index exists.
-    /// Returns ``True`` if one was dropped.
+    /// Drop the HNSW index over a node embedding store (the vectors stay); True if one was dropped.
     #[pyo3(signature = (node_type, text_column))]
-    fn drop_vector_index(&mut self, node_type: &str, text_column: &str) -> PyResult<bool> {
+    pub(super) fn drop_node_vector_index(
+        &mut self,
+        node_type: &str,
+        text_column: &str,
+    ) -> PyResult<bool> {
         self.check_durable_owner()?;
         let dropped = kglite_core::api::embeddings::drop_vector_index(
             get_graph_mut(&mut self.inner),
@@ -1026,9 +898,13 @@ impl KnowledgeGraph {
         Ok(dropped)
     }
 
-    /// Whether an HNSW index is currently built over an embedding store.
+    /// Whether an HNSW index is currently built over a node embedding store.
     #[pyo3(signature = (node_type, text_column))]
-    fn has_vector_index(&self, node_type: &str, text_column: &str) -> PyResult<bool> {
+    pub(super) fn has_node_vector_index(
+        &self,
+        node_type: &str,
+        text_column: &str,
+    ) -> PyResult<bool> {
         Ok(kglite_core::api::embeddings::has_vector_index(
             &self.inner,
             node_type,
@@ -1036,9 +912,13 @@ impl KnowledgeGraph {
         ))
     }
 
-    /// Fold every outstanding vector into the HNSW index now; refuses when no index is built.
+    /// Fold every outstanding vector into a node store's HNSW index now; refuses when no index is built.
     #[pyo3(signature = (node_type, text_column))]
-    fn refresh_vector_index(&self, node_type: &str, text_column: &str) -> PyResult<usize> {
+    pub(super) fn refresh_node_vector_index(
+        &self,
+        node_type: &str,
+        text_column: &str,
+    ) -> PyResult<usize> {
         kglite_core::api::embeddings::refresh_vector_index(&self.inner, node_type, text_column)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }

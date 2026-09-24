@@ -94,7 +94,7 @@ intact frames *after* it is named as mid-file damage and reports how much
 committed work is being discarded — the log cannot be trusted past corruption,
 so that is a storage problem to investigate rather than a routine restart. Every
 way of changing a graph is logged, not only Cypher — `add_nodes`,
-`add_connections`, label changes, and committed transactions included. `save()`
+`add_relationships`, label changes, and committed transactions included. `save()`
 is separately atomic and `fsync`ed, so a reader never observes a torn file.
 
 `storage="disk"` is the exception: a disk graph commits by publishing an
@@ -231,7 +231,7 @@ a write whose value disagrees with the property type the node type has actually
 recorded.
 
 **A large bulk load *is* all-or-nothing for everything the loader can refuse.**
-`add_nodes` and `add_connections` decide every refusal in a single pass before
+`add_nodes` and `add_relationships` decide every refusal in a single pass before
 the first row is written: the constraint gate checks the whole input up front,
 and `on_invalid="error"` scans it for rows with an unusable id in the same way.
 Both raise with nothing written, at any input size. Rows are still flushed to the
@@ -468,7 +468,7 @@ A downstream clause that must see the whole result—an aggregate, `ORDER BY`,
 `SKIP`/`OFFSET`/`LIMIT`, `DISTINCT`, a set operation, `cluster()`, or a `CALL`
 subquery—cannot be batched without changing the answer, so those queries take a
 single capped pass and fail at 1,000,000 rows naming the clause that forced it,
-rather than exhausting memory. `add_nodes` / `add_connections`,
+rather than exhausting memory. `add_nodes` / `add_relationships`,
 {doc}`blueprints`, and the CLI's `.import` remain the higher-throughput routes.
 
 **Migrations are a convention plus a CLI verb, not a framework.** There is a

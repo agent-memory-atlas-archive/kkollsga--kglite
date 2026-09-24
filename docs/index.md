@@ -35,7 +35,7 @@ engine. The `.kgl` file format is portable across all bindings.
 the engine targets an explicitly documented openCypher-compatible subset
 (including three-valued NULL logic), checked with independently authored local
 contracts and optional Neo4j differential runs. DataFrame
-loaders `add_nodes()` / `add_connections()` exist to get bulk data
+loaders `add_nodes()` / `add_relationships()` exist to get bulk data
 in; once it's in, you query with Cypher.
 
 | | |

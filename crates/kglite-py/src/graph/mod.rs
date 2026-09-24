@@ -740,12 +740,12 @@ impl KnowledgeGraph {
                 };
                 let msg = if result.connections_skipped > 0 {
                     format!(
-                        "add_connections('{}'): {} of {} rows skipped.{}",
+                        "add_relationships('{}'): {} of {} rows skipped.{}",
                         connection_type, result.connections_skipped, total, detail
                     )
                 } else {
                     format!(
-                        "add_connections('{}'): completed with errors.{}",
+                        "add_relationships('{}'): completed with errors.{}",
                         connection_type, detail
                     )
                 };
@@ -762,7 +762,7 @@ impl KnowledgeGraph {
             // created stub nodes, so surface it the same way.
             if result.stubs_vivified > 0 {
                 let msg = format!(
-                    "add_connections('{}'): {} stub node(s) vivified for missing endpoints — \
+                    "add_relationships('{}'): {} stub node(s) vivified for missing endpoints — \
                      call purge_provisional() to drop any left unpromoted.",
                     connection_type, result.stubs_vivified
                 );

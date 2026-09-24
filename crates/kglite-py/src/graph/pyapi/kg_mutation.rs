@@ -97,7 +97,7 @@ fn collect_bulk_connection_names(
         let required = |key: &str| -> PyResult<Bound<'_, PyAny>> {
             spec.get_item(key)?.ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
-                    "Missing '{key}' in connection spec"
+                    "Missing '{key}' in relationship spec"
                 ))
             })
         };
@@ -117,11 +117,11 @@ fn collect_bulk_connection_names(
 }
 
 /// Build the internal DataFrame for a connection ingest from a pandas
-/// frame (the `data` mode shared by `add_connections` and
-/// `replace_connections`). Returns the columnar DataFrame plus any
+/// frame (the `data` mode shared by `add_relationships` and
+/// `replace_relationships`). Returns the columnar DataFrame plus any
 /// temporal-edge config auto-detected from `validFrom`/`validTo` column
 /// types — the caller merges that into `graph.temporal_edge_configs`.
-// Mirrors add_connections' keyword surface one-to-one; a params struct would
+// Mirrors add_relationships' keyword surface one-to-one; a params struct would
 // just re-spell the pyo3 signature.
 #[allow(clippy::too_many_arguments)]
 fn build_connection_df_from_pandas(
@@ -210,7 +210,7 @@ fn build_connection_df_from_query(
     }
     .map_err(|e| {
         crate::error_py::kg_to_pyerr(crate::error::KgError::CypherExecution {
-            message: format!("Cypher execution error in connection query: {}", e),
+            message: format!("Cypher execution error in relationship query: {}", e),
             position: None,
         })
     })?;
@@ -285,7 +285,7 @@ fn validate_connection_input_mode(
     Ok(())
 }
 
-/// Parse the `query=` form of `add_connections` / `replace_connections`,
+/// Parse the `query=` form of `add_relationships` / `replace_relationships`,
 /// enforcing the two things this entry point requires of it: the query must be
 /// read-only, and it must not reference parameters — this route accepts none.
 ///
@@ -310,8 +310,8 @@ fn parse_read_only_connection_query(query: &str) -> PyResult<cypher::CypherQuery
     Ok(parsed)
 }
 
-/// Shared body of `add_connections` (replace=false) and
-/// `replace_connections` (replace=true). The two methods are identical
+/// Shared body of `add_relationships` (replace=false) and
+/// `replace_relationships` (replace=true). The two methods are identical
 /// except for the core call: `replace` first prunes the existing edges
 /// of `connection_type` from the source nodes present in the input, so
 /// the result is "set this node's edges of this type to exactly this
@@ -361,7 +361,7 @@ fn write_connections(
 
         refuse_unusable_rows_if_asked(
             on_invalid,
-            "add_connections",
+            "add_relationships",
             &df_result,
             &[&source_id_field, &target_id_field],
             None,
@@ -435,7 +435,7 @@ fn write_connections(
     )?;
     refuse_unusable_rows_if_asked(
         on_invalid,
-        "add_connections",
+        "add_relationships",
         &df_result,
         &[&source_id_field, &target_id_field],
         Some(data),
@@ -1279,7 +1279,7 @@ impl KnowledgeGraph {
     ///     title kept unless currently null.
     ///   - ``'sum'`` — adds numeric property values on **edges**; for
     ///     **node** properties it acts as ``update`` (matches
-    ///     ``ConflictHandling::Sum`` in ``add_nodes`` / ``add_connections``).
+    ///     ``ConflictHandling::Sum`` in ``add_nodes`` / ``add_relationships``).
     ///
     /// - **Secondary labels** (multi-label) are *unioned*
     ///   onto the matched/created node — never removed. Idempotent.
@@ -1296,7 +1296,7 @@ impl KnowledgeGraph {
     ///   properties merge per ``conflict_handling``. Exact-duplicate
     ///   edges present in both graphs are therefore created once, not
     ///   twice. (This is stricter than petgraph's raw parallel-edge
-    ///   capability, mirroring ``add_connections``' dedup so a merge
+    ///   capability, mirroring ``add_relationships``' dedup so a merge
     ///   never silently doubles shared edges.)
     ///
     /// Scope limits (v1)
@@ -1312,7 +1312,7 @@ impl KnowledgeGraph {
     ///   is property-merge-against-self (a no-op under every mode but
     ///   ``replace``, which rewrites each node with its own values).
     ///   Reported as 0 created, N updated.
-    /// - **Locks.** Like ``add_nodes`` / ``add_connections``, this bulk
+    /// - **Locks.** Like ``add_nodes`` / ``add_relationships``, this bulk
     ///   path does not consult ``schema_locked`` / ``read_only`` (those
     ///   gate the Cypher write path only).
     ///
@@ -1376,11 +1376,11 @@ impl KnowledgeGraph {
         build_extend_report_dict(py, &result)
     }
 
-    /// Add connections from a DataFrame or read-only Cypher query.
+    /// Add relationships from a DataFrame or read-only Cypher query.
     #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn"))]
     // The public Python loader supports DataFrame and query modes with optional controls.
     #[allow(clippy::too_many_arguments)]
-    fn add_connections(
+    pub(super) fn add_relationships(
         &mut self,
         py: Python<'_>,
         data: Option<&Bound<'_, PyAny>>,
@@ -1425,55 +1425,11 @@ impl KnowledgeGraph {
         )
     }
 
-    /// Replace a node's outgoing edges of a given type, then add the
-    /// supplied edges — an atomic edge upsert.
-    ///
-    /// Unlike `add_connections` (add-only), this **prunes** first: for
-    /// every source node that appears in `data` (or the `query` result),
-    /// its existing edges *of `connection_type`* are removed, then the
-    /// edges described by the input are added. Edges from sources not in
-    /// the input, and edges of other types from the same sources, are
-    /// untouched. The prune + add run in one call, so there is no
-    /// clear-then-add window that could leave a node edgeless on failure.
-    ///
-    /// Use it to re-sync a derived edge set — "the current MENTIONS of
-    /// exactly these documents are this list" — idempotently:
-    ///
-    /// ```python
-    /// # First sync: doc 1 → [A, B]
-    /// graph.replace_connections(df_ab, "MENTIONS", "Doc", "doc", "Entity", "ent")
-    /// # Re-sync doc 1 → [B, C]: the stale 1→A edge is pruned, 1→C added.
-    /// graph.replace_connections(df_bc, "MENTIONS", "Doc", "doc", "Entity", "ent")
-    /// ```
-    ///
-    /// Accepts every argument `add_connections` does (including `query`
-    /// mode and `extra_properties`) with identical semantics; only the
-    /// prune-first behaviour differs.
-    ///
-    /// Args:
-    ///     data: DataFrame containing connection data, or None when using query.
-    ///     connection_type: Label for the connection type to replace (e.g. 'MENTIONS').
-    ///     source_type: Node type of the source nodes.
-    ///     source_id_field: Column containing source node IDs.
-    ///     target_type: Node type of the target nodes.
-    ///     target_id_field: Column containing target node IDs.
-    ///     source_title_field: Optional column to update source node titles.
-    ///     target_title_field: Optional column to update target node titles.
-    ///     columns: Optional edge-property whitelist (data mode only). None keeps all
-    ///         non-skipped DataFrame columns, matching add_nodes.
-    ///     skip_columns: Columns to exclude from edge properties (data mode only).
-    ///     conflict_handling: 'update' (default), 'replace', 'skip', 'preserve',
-    ///         or 'sum'.
-    ///     column_types: Override column type detection (data mode only).
-    ///     query: Cypher query string (alternative to data). Must be read-only.
-    ///     extra_properties: Static properties stamped onto every edge (query mode only).
-    ///
-    /// Returns:
-    ///     dict with 'connections_created', 'connections_skipped',
-    ///     'processing_time_ms', 'has_errors', and optionally 'errors'.
+    /// Replace each input source node's relationships of a type with the input's — an atomic edge upsert.
     #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn"))]
+    // The same loader arguments add_relationships takes.
     #[allow(clippy::too_many_arguments)]
-    fn replace_connections(
+    pub(super) fn replace_relationships(
         &mut self,
         py: Python<'_>,
         data: Option<&Bound<'_, PyAny>>,
@@ -1757,41 +1713,16 @@ impl KnowledgeGraph {
         Ok(result_dict.into())
     }
 
-    /// Add multiple connection types at once from a list of connection specifications.
-    ///
-    /// This enables bulk loading of connections from data sources that provide
-    /// standardized connection specifications with 'source_id' and 'target_id' columns.
-    ///
-    /// Args:
-    ///     connections: List of dicts, each containing:
-    ///         - 'source_type': str - Node type of source nodes
-    ///         - 'target_type': str - Node type of target nodes
-    ///         - 'connection_name': str - The connection/edge type
-    ///         - 'data': DataFrame - Must have 'source_id' and 'target_id' columns
-    ///
-    /// Returns:
-    ///     Dict mapping connection_name to count of connections added
-    ///
-    /// Example:
-    ///     ```python
-    ///     connections = [
-    ///         {'source_type': 'Person', 'target_type': 'Company',
-    ///          'connection_name': 'WORKS_AT', 'data': works_df},
-    ///         {'source_type': 'Person', 'target_type': 'Person',
-    ///          'connection_name': 'KNOWS', 'data': knows_df},
-    ///     ]
-    ///     stats = graph.add_connections_bulk(connections)
-    ///     # {'WORKS_AT': 500, 'KNOWS': 1200}
-    ///     ```
+    /// Load several relationship types at once from a list of specs.
     #[pyo3(signature = (connections, *, git_sha=None, modified_by=None))]
-    fn add_connections_bulk(
+    pub(super) fn add_relationships_bulk(
         &mut self,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.add_connections_internal(
+        self.add_relationships_internal(
             py,
             connections,
             false,
@@ -1800,41 +1731,16 @@ impl KnowledgeGraph {
         )
     }
 
-    /// Add connections, automatically filtering to only those where
-    /// both source and target node types exist in the graph.
-    ///
-    /// This enables data sources to provide ALL possible connections,
-    /// and kglite selects only the valid ones based on loaded node types.
-    ///
-    /// Args:
-    ///     connections: List of dicts, each containing:
-    ///         - 'source_type': str - Node type of source nodes
-    ///         - 'target_type': str - Node type of target nodes
-    ///         - 'connection_name': str - The connection/edge type
-    ///         - 'data': DataFrame - Must have 'source_id' and 'target_id' columns
-    ///
-    /// Returns:
-    ///     Dict mapping connection_name to count of connections added
-    ///     (only includes connections that were actually loaded)
-    ///
-    /// Example:
-    ///     ```python
-    ///     # Data source provides all possible connections
-    ///     all_connections = data_source.get_all_connections()
-    ///
-    ///     # Graph only has Person and Company loaded; connections involving
-    ///     # other node types are skipped.
-    ///     stats = graph.add_connections_from_source(all_connections)
-    ///     ```
+    /// Load relationship specs, skipping those whose source or target node type is not loaded.
     #[pyo3(signature = (connections, *, git_sha=None, modified_by=None))]
-    fn add_connections_from_source(
+    pub(super) fn add_relationships_from_source(
         &mut self,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.add_connections_internal(
+        self.add_relationships_internal(
             py,
             connections,
             true,
@@ -1845,13 +1751,12 @@ impl KnowledgeGraph {
 }
 
 /// Plain `impl`, deliberately outside `#[pymethods]`: this is the Rust-side
-/// body shared by [`KnowledgeGraph::add_connections_bulk`] and
-/// [`KnowledgeGraph::add_connections_from_source`]. Inside a `#[pymethods]`
+/// body shared by [`KnowledgeGraph::add_relationships_bulk`] and
+/// [`KnowledgeGraph::add_relationships_from_source`]. Inside a `#[pymethods]`
 /// block PyO3 would export it as a public Python method that
 /// `kglite/__init__.pyi` does not declare.
 impl KnowledgeGraph {
-    /// Internal helper for bulk connection loading
-    fn add_connections_internal(
+    fn add_relationships_internal(
         &mut self,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
@@ -1876,7 +1781,7 @@ impl KnowledgeGraph {
                 .get_item("source_type")?
                 .ok_or_else(|| {
                     PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                        "Missing 'source_type' in connection spec",
+                        "Missing 'source_type' in relationship spec",
                     )
                 })?
                 .extract()?;
@@ -1884,7 +1789,7 @@ impl KnowledgeGraph {
                 .get_item("target_type")?
                 .ok_or_else(|| {
                     PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                        "Missing 'target_type' in connection spec",
+                        "Missing 'target_type' in relationship spec",
                     )
                 })?
                 .extract()?;
@@ -1892,13 +1797,13 @@ impl KnowledgeGraph {
                 .get_item("connection_name")?
                 .ok_or_else(|| {
                     PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                        "Missing 'connection_name' in connection spec",
+                        "Missing 'connection_name' in relationship spec",
                     )
                 })?
                 .extract()?;
             let data = spec.get_item("data")?.ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(
-                    "Missing 'data' in connection spec".to_string(),
+                    "Missing 'data' in relationship spec".to_string(),
                 ))
             })?;
 
@@ -1918,7 +1823,7 @@ impl KnowledgeGraph {
             if !all_columns.contains(&source_id_field) {
                 return Err(crate::error_py::kg_to_pyerr(
                     crate::error::KgError::Argument(format!(
-                    "Connection spec for '{}' missing required 'source_id' column. Available: [{}]",
+                    "Relationship spec for '{}' missing required 'source_id' column. Available: [{}]",
                     connection_name,
                     all_columns.join(", ")
                 )),
@@ -1927,7 +1832,7 @@ impl KnowledgeGraph {
             if !all_columns.contains(&target_id_field) {
                 return Err(crate::error_py::kg_to_pyerr(
                     crate::error::KgError::Argument(format!(
-                    "Connection spec for '{}' missing required 'target_id' column. Available: [{}]",
+                    "Relationship spec for '{}' missing required 'target_id' column. Available: [{}]",
                     connection_name,
                     all_columns.join(", ")
                 )),

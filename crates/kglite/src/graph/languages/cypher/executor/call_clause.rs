@@ -572,15 +572,30 @@ impl<'a> CypherExecutor<'a> {
             self.check_interrupt_periodic(outer_index)?;
             let params = self.extract_call_params(&clause.parameters, &outer_row)?;
             let yielded_rows = match proc_name.as_str() {
-                "db.edge_embeddings.list" => super::edge_embedding_procedures::list(
+                "db.relationship_embeddings.list" => super::edge_embedding_procedures::list(
                     self.graph,
                     &params,
                     &clause.yield_items,
                 )?,
-                "db.edge_embeddings.query" => {
+                "db.relationship_embeddings.query" => {
                     self.execute_edge_embedding_query(&params, &clause.yield_items)?
                 }
-                "db.edge_text_index.list" => super::edge_text_index_procedures::list(
+                "db.node_embeddings.list" => super::node_embedding_procedures::list(
+                    self.graph,
+                    &params,
+                    &clause.yield_items,
+                )?,
+                "db.node_embeddings.query" => super::node_embedding_procedures::query(
+                    self.graph,
+                    &params,
+                    &clause.yield_items,
+                )?,
+                "db.node_text_index.list" => super::node_text_index_procedures::list(
+                    self.graph,
+                    &params,
+                    &clause.yield_items,
+                )?,
+                "db.relationship_text_index.list" => super::edge_text_index_procedures::list(
                     self.graph,
                     &params,
                     &clause.yield_items,

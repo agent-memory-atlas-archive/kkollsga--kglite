@@ -9,6 +9,7 @@ use crate::graph::algorithms::hnsw::HnswParams;
 use crate::graph::algorithms::vector::{self as vs, DistanceMetric};
 use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::schema::DirGraph;
+use crate::graph::schema::EmbeddingStore;
 use crate::graph::storage::GraphRead;
 
 #[derive(Debug, Clone, Default)]
@@ -108,6 +109,72 @@ pub(crate) fn list_edge_vector_indexes(graph: &DirGraph) -> Vec<EdgeVectorIndexS
     statuses
 }
 
+/// Build an HNSW index over a relationship store — the relationship twin of
+/// [`build_vector_index`](crate::graph::embeddings::build_vector_index).
+// Every argument is one HNSW tuning knob or the catch-up ceiling, exactly as
+// the node twin's list; a struct would diverge from that signature.
+#[allow(clippy::too_many_arguments)]
+pub fn build_relationship_vector_index(
+    graph: &mut DirGraph,
+    relationship_type: &str,
+    text_column: &str,
+    m: Option<usize>,
+    ef_construction: Option<usize>,
+    ef_search: Option<usize>,
+    metric: Option<&str>,
+    auto_refresh_limit: Option<usize>,
+) -> Result<crate::graph::embeddings::VectorIndexReport, String> {
+    let report = build_edge_vector_index(
+        graph,
+        relationship_type,
+        text_column,
+        EdgeVectorIndexOptions {
+            m,
+            ef_construction,
+            ef_search,
+            metric: metric.map(str::to_string),
+            auto_refresh_limit,
+        },
+    )?;
+    Ok(crate::graph::embeddings::VectorIndexReport {
+        indexed: report.indexed,
+        metric: report.metric,
+        m: report.m,
+    })
+}
+
+/// Drop a relationship store's HNSW index, keeping its vectors; `false` when
+/// none was built.
+pub fn drop_relationship_vector_index(
+    graph: &mut DirGraph,
+    relationship_type: &str,
+    text_column: &str,
+) -> Result<bool, String> {
+    drop_edge_vector_index(graph, relationship_type, text_column)
+}
+
+/// Whether an HNSW index is currently built over a relationship store.
+pub fn has_relationship_vector_index(
+    graph: &DirGraph,
+    relationship_type: &str,
+    text_column: &str,
+) -> bool {
+    graph
+        .edge_embeddings
+        .get(&edge_store_key(relationship_type, text_column))
+        .is_some_and(|store| store.numeric.has_index())
+}
+
+/// Fold every outstanding vector into a relationship store's HNSW index;
+/// refuses when there is no store or no index.
+pub fn refresh_relationship_vector_index(
+    graph: &DirGraph,
+    relationship_type: &str,
+    text_column: &str,
+) -> Result<usize, String> {
+    refresh_edge_vector_index(graph, relationship_type, text_column)
+}
+
 pub(crate) fn build_edge_vector_index(
     graph: &mut DirGraph,
     connection_type: &str,
@@ -143,7 +210,7 @@ pub(crate) fn build_edge_vector_index(
         }
     }
     let params = resolve_params(&options)?;
-    // `db.edge_embeddings.build_index` runs inside a statement window, so the
+    // `db.relationship_embeddings.build_index` runs inside a statement window, so the
     // one field this build writes outside the index state needs an undo story.
     // `EdgeVectorIndexReplaced` restores the index, not the metric, and there
     // is no per-field entry for it — so the rare call that actually moves the
@@ -212,7 +279,7 @@ pub(crate) fn refresh_edge_vector_index(
             "no vector index on relationship store '{connection_type}.{}' to refresh — \
              none was built, or a delete of an embedded relationship or an endpoint \
              (or a vacuum()) dropped it. Build one with CALL \
-             db.edge_embeddings.build_index({{type: '{connection_type}', text_property: \
+             db.relationship_embeddings.build_index({{type: '{connection_type}', text_property: \
              '{text_property}'}}).",
             crate::graph::embeddings::store_name(text_property),
         ));
@@ -347,16 +414,8 @@ pub(crate) struct EdgeStoreQueryHit {
 }
 
 /// Rank the `text_property` stores of every type in `types` against one query
-/// and merge them into a single top-k.
-///
-/// Each store answers on its own route — HNSW when its index is online and
-/// serves the metric, exact otherwise — for its own best `top_k`; the merged
-/// order is score descending, then relationship type, then relationship slot,
-/// a total order. Refused when a type has no such store, when the query's
-/// dimension differs from a store's, and — unless the caller names one
-/// `metric` for all of them — when two stores declare different metrics: their
-/// scores are not on one scale, and a merged ranking would interleave them as
-/// if they were.
+/// and merge them into a single top-k — [`rank_dense_stores`] over the
+/// relationship stores, refused when a named type has no such store.
 pub(crate) fn query_edge_embedding_stores(
     graph: &DirGraph,
     types: &[String],
@@ -374,24 +433,75 @@ pub(crate) fn query_edge_embedding_stores(
             .ok_or_else(|| {
                 format!("No relationship embedding store '{rel_type}.{text_property}'")
             })?;
-        if query.len() != store.dimension() {
+        stores.push((rel_type.as_str(), &store.numeric));
+    }
+    Ok(rank_dense_stores(
+        "Relationship",
+        &stores,
+        text_property,
+        query,
+        &options,
+        graph.read_only,
+    )?
+    .into_iter()
+    .map(|hit| EdgeStoreQueryHit {
+        rel_type: hit.type_name,
+        edge: EdgeIndex::new(hit.target),
+        score: hit.score,
+        search_method: hit.search_method,
+    })
+    .collect())
+}
+
+/// One hit of [`rank_dense_stores`]: the type whose store answered, the
+/// store's target slot (a node or an edge index), and the route it took.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DenseStoreHit {
+    pub(crate) type_name: String,
+    pub(crate) target: usize,
+    pub(crate) score: f64,
+    pub(crate) search_method: &'static str,
+}
+
+/// Rank several dense stores — one per type, all for one text property —
+/// against one query and merge them into a single top-k. The shared core of
+/// `db.node_embeddings.query` and `db.relationship_embeddings.query`; `entity`
+/// (`"Node"` / `"Relationship"`) names the stores in its refusals.
+///
+/// Each store answers on its own route — HNSW when its index is online and
+/// serves the metric, exact otherwise — for its own best `top_k`; the merged
+/// order is score descending, then type, then slot, a total order. Refused
+/// when the query's dimension differs from a store's, and — unless the caller
+/// names one `metric` for all of them — when two stores declare different
+/// metrics: their scores are not on one scale, and a merged ranking would
+/// interleave them as if they were.
+pub(crate) fn rank_dense_stores(
+    entity: &str,
+    stores: &[(&str, &EmbeddingStore)],
+    text_property: &str,
+    query: &[f32],
+    options: &EdgeVectorQueryOptions,
+    read_only: bool,
+) -> Result<Vec<DenseStoreHit>, String> {
+    for (type_name, store) in stores {
+        if query.len() != store.dimension {
             return Err(format!(
-                "Query dimension {} does not match store dimension {} of '{rel_type}.{text_property}'",
+                "Query dimension {} does not match store dimension {} of '{type_name}.{text_property}'",
                 query.len(),
-                store.dimension()
+                store.dimension
             ));
         }
-        stores.push((rel_type.as_str(), store));
     }
     if options.metric.is_none() {
-        let declared = |store: &EdgeEmbeddingStore| store.metric().unwrap_or("cosine").to_string();
+        let declared =
+            |store: &EmbeddingStore| store.metric.as_deref().unwrap_or("cosine").to_string();
         if let Some(&(first_type, first)) = stores.first() {
             if let Some(&(other_type, other)) = stores
                 .iter()
                 .find(|(_, store)| declared(store) != declared(first))
             {
                 return Err(format!(
-                    "Relationship embedding stores '{first_type}.{text_property}' (metric '{}') \
+                    "{entity} embedding stores '{first_type}.{text_property}' (metric '{}') \
                      and '{other_type}.{text_property}' (metric '{}') score under different \
                      metrics, so one merged ranking would compare scores on different scales. \
                      Query the types separately, or pass metric to score every store under one.",
@@ -402,32 +512,32 @@ pub(crate) fn query_edge_embedding_stores(
         }
     }
     let mut hits = Vec::new();
-    for (rel_type, store) in stores {
-        if options.top_k == 0 || store.is_empty() {
+    for &(type_name, store) in stores {
+        if options.top_k == 0 || store.len() == 0 {
             continue;
         }
-        let metric = resolve_query_metric(store, options.metric.as_deref())?;
-        let report = query_store(
+        let metric = resolve_dense_metric(store, options.metric.as_deref())?;
+        let (ranked, search_method) = query_dense_store(
             store,
             query,
             options.top_k,
             options.exact,
             metric,
-            graph.read_only,
+            read_only,
         );
-        hits.extend(report.hits.into_iter().map(|hit| EdgeStoreQueryHit {
-            rel_type: rel_type.to_string(),
-            edge: hit.edge,
-            score: hit.score,
-            search_method: report.search_method,
+        hits.extend(ranked.into_iter().map(|(target, score)| DenseStoreHit {
+            type_name: type_name.to_string(),
+            target,
+            score,
+            search_method,
         }));
     }
     hits.sort_by(|left, right| {
         right
             .score
             .total_cmp(&left.score)
-            .then_with(|| left.rel_type.cmp(&right.rel_type))
-            .then_with(|| left.edge.index().cmp(&right.edge.index()))
+            .then_with(|| left.type_name.cmp(&right.type_name))
+            .then_with(|| left.target.cmp(&right.target))
     });
     hits.truncate(options.top_k);
     Ok(hits)
@@ -445,32 +555,57 @@ pub(crate) fn query_store(
     metric: DistanceMetric,
     read_only: bool,
 ) -> EdgeVectorQueryReport {
-    if top_k == 0 || store.is_empty() {
-        return EdgeVectorQueryReport {
-            hits: vec![],
-            search_method: "exact",
-        };
+    let (hits, search_method) =
+        query_dense_store(&store.numeric, query, top_k, exact, metric, read_only);
+    EdgeVectorQueryReport {
+        hits: hits
+            .into_iter()
+            .map(|(target, score)| EdgeVectorQueryHit {
+                edge: EdgeIndex::new(target),
+                score,
+            })
+            .collect(),
+        search_method,
+    }
+}
+
+/// One dense store's best `top_k` as `(target slot, score)`, and the route that
+/// answered: `"hnsw"` when an online index serving `metric` did, else
+/// `"exact"`.
+pub(crate) fn query_dense_store(
+    store: &EmbeddingStore,
+    query: &[f32],
+    top_k: usize,
+    exact: bool,
+    metric: DistanceMetric,
+    read_only: bool,
+) -> (Vec<(usize, f64)>, &'static str) {
+    if top_k == 0 || store.len() == 0 {
+        return (vec![], "exact");
     }
     if !exact {
         if let Some(hits) = query_index(store, query, top_k, metric, read_only) {
-            return EdgeVectorQueryReport {
-                hits,
-                search_method: "hnsw",
-            };
+            return (hits, "hnsw");
         }
     }
-    EdgeVectorQueryReport {
-        hits: query_exact(store, query, top_k, metric),
-        search_method: "exact",
-    }
+    (query_exact(store, query, top_k, metric), "exact")
+}
+
+/// The metric a dense store's query scores under: `requested`, else the
+/// store's declared metric, else cosine.
+pub(crate) fn resolve_dense_metric(
+    store: &EmbeddingStore,
+    requested: Option<&str>,
+) -> Result<DistanceMetric, String> {
+    let name = requested.or(store.metric.as_deref()).unwrap_or("cosine");
+    DistanceMetric::from_name(name).ok_or_else(|| format!("Unknown metric '{name}'"))
 }
 
 pub(crate) fn resolve_query_metric(
     store: &EdgeEmbeddingStore,
     requested: Option<&str>,
 ) -> Result<DistanceMetric, String> {
-    let name = requested.or(store.metric()).unwrap_or("cosine");
-    DistanceMetric::from_name(name).ok_or_else(|| format!("Unknown metric '{name}'"))
+    resolve_dense_metric(&store.numeric, requested)
 }
 
 fn indexable_metric(name: &str) -> Result<DistanceMetric, String> {
@@ -503,27 +638,26 @@ fn resolve_params(options: &EdgeVectorIndexOptions) -> Result<HnswParams, String
 }
 
 fn query_exact(
-    store: &EdgeEmbeddingStore,
+    store: &EmbeddingStore,
     query: &[f32],
     top_k: usize,
     metric: DistanceMetric,
-) -> Vec<EdgeVectorQueryHit> {
+) -> Vec<(usize, f64)> {
     let scorer = vs::Scorer::new(metric, query);
     let mut hits = store
-        .numeric
         .slot_to_node
         .iter()
         .enumerate()
-        .map(|(slot, &edge)| {
-            let start = slot * store.numeric.dimension;
-            EdgeVectorQueryHit {
-                edge: EdgeIndex::new(edge),
-                score: scorer.score(
+        .map(|(slot, &target)| {
+            let start = slot * store.dimension;
+            (
+                target,
+                scorer.score(
                     query,
-                    &store.numeric.data[start..start + store.numeric.dimension],
-                    store.numeric.norms[slot],
+                    &store.data[start..start + store.dimension],
+                    store.norms[slot],
                 ) as f64,
-            }
+            )
         })
         .collect::<Vec<_>>();
     sort_and_truncate(&mut hits, top_k);
@@ -531,13 +665,13 @@ fn query_exact(
 }
 
 fn query_index(
-    store: &EdgeEmbeddingStore,
+    store: &EmbeddingStore,
     query: &[f32],
     top_k: usize,
     metric: DistanceMetric,
     read_only: bool,
-) -> Option<Vec<EdgeVectorQueryHit>> {
-    let index = store.numeric.index_for_query(read_only)?;
+) -> Option<Vec<(usize, f64)>> {
+    let index = store.index_for_query(read_only)?;
     if crate::graph::algorithms::hnsw::HnswMetric::from_distance(metric) != Some(index.metric()) {
         return None;
     }
@@ -549,37 +683,37 @@ fn query_index(
         query_norm,
         top_k,
         Some(ef),
-        &store.numeric.data,
-        &store.numeric.norms,
+        &store.data,
+        &store.norms,
     );
     let mut hits = raw
         .into_iter()
         .map(|(slot, _)| {
             let slot = slot as usize;
-            let start = slot * store.numeric.dimension;
-            EdgeVectorQueryHit {
-                edge: EdgeIndex::new(store.numeric.slot_to_node[slot]),
-                score: scorer.score(
+            let start = slot * store.dimension;
+            (
+                store.slot_to_node[slot],
+                scorer.score(
                     query,
-                    &store.numeric.data[start..start + store.numeric.dimension],
-                    store.numeric.norms[slot],
+                    &store.data[start..start + store.dimension],
+                    store.norms[slot],
                 ) as f64,
-            }
+            )
         })
         .collect::<Vec<_>>();
     sort_and_truncate(&mut hits, top_k);
     Some(hits)
 }
 
-/// Best `top_k` first: score descending, then edge index ascending — a total
+/// Best `top_k` first: score descending, then target slot ascending — a total
 /// order, so the result is deterministic. Partitions before sorting, so an
 /// exact scan over a large store sorts `top_k` hits rather than all of them.
-fn sort_and_truncate(hits: &mut Vec<EdgeVectorQueryHit>, top_k: usize) {
-    let order = |left: &EdgeVectorQueryHit, right: &EdgeVectorQueryHit| {
+fn sort_and_truncate(hits: &mut Vec<(usize, f64)>, top_k: usize) {
+    let order = |left: &(usize, f64), right: &(usize, f64)| {
         right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.edge.index().cmp(&right.edge.index()))
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
     };
     if top_k < hits.len() {
         hits.select_nth_unstable_by(top_k, order);

@@ -9,12 +9,12 @@
 ///
 /// A silently-ignored key is the failure mode this project has been bitten by
 /// before: `{capacity_: 10}` would leave the default in place and report
-/// success, and `db.edge_embeddings.build_index({metric_: 'euclidean'})` would
+/// success, and `db.relationship_embeddings.build_index({metric_: 'euclidean'})` would
 /// build a cosine index and answer "indexed".
 ///
 /// `keys` is an iterator rather than one map type because the same rule has to
 /// cover a procedure's own `HashMap` parameters and a `PropMap` nested inside
-/// one of them (`db.edge_embeddings.set`'s per-entry map).
+/// one of them (`db.relationship_embeddings.set`'s per-entry map).
 pub(super) fn reject_unknown_keys<'k>(
     proc_name: &str,
     keys: impl IntoIterator<Item = &'k str>,

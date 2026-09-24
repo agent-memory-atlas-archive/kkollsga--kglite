@@ -1007,7 +1007,7 @@ fn complete_from_type_schema<S: PropertySink>(
 ///
 /// `incarnation` is this statement's identity token for the slot, or `None`
 /// for a value that did not come from this statement's own traversal — the
-/// `db.edge_embeddings.*` procedures and `DELETE` refuse the latter.
+/// `db.relationship_embeddings.*` procedures and `DELETE` refuse the latter.
 pub(crate) fn materialize_rel_value_with_incarnation(
     edge_idx: petgraph::graph::EdgeIndex,
     graph: &crate::graph::DirGraph,
@@ -1054,7 +1054,7 @@ pub(crate) fn materialize_rel_value_with_incarnation(
 /// relationship the MATCH never selected. The hop then materialises as a
 /// tombstone: the bind-time relationship type and endpoints, no properties,
 /// and the stale token, so every downstream token check (`DELETE`, the
-/// `db.edge_embeddings.*` procedures) refuses it by name.
+/// `db.relationship_embeddings.*` procedures) refuses it by name.
 ///
 /// Mirrors the tombstone [`stale_rel_value`] builds for a retired *edge
 /// binding*; the two must stay the same shape, because `r` and

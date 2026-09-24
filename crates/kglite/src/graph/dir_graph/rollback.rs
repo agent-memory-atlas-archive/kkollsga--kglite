@@ -158,16 +158,18 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // `UndoEntry::EmbeddingRemoved` plus `UndoEntry::VectorIndexReplaced`, both
     // captured where a node deletion prunes the node's vector
     // (`mutation::delete_state::prune_doomed_embeddings`) — the vector itself
-    // and the HNSW index its removal invalidated. Node deletion is the only
-    // writer that reaches this map inside a statement window (ingest runs
-    // outside one), so those two entries are the whole story.
+    // and the HNSW index its removal invalidated. The other writer inside a
+    // statement window is the `db.node_embeddings.*` procedures (binding
+    // ingest runs outside one), which journal the whole prior store once per
+    // statement (`UndoEntry::NodeEmbeddingStoreReplaced`) before their first
+    // write.
     std::mem::swap(&mut a.embeddings, &mut b.embeddings);
     // Relationship embeddings have the same corpus-sized shape. Their undo
     // story is five entries rather than one: `EdgeEmbeddingRemoved` at the
     // graph-level edge-removal choke point, `EdgeEmbeddingStoreReplaced` where
     // a whole store is installed or dropped, `EdgeEmbeddingCellReplaced` +
     // `EdgeEmbeddingModelIdReplaced` for the manual writes, which journal per
-    // changed cell so a per-row `db.edge_embeddings.set` never clones a store,
+    // changed cell so a per-row `db.relationship_embeddings.set` never clones a store,
     // and `EdgeVectorIndexReplaced` for the HNSW index any of those removals
     // invalidates.
     std::mem::swap(&mut a.edge_embeddings, &mut b.edge_embeddings);
@@ -184,10 +186,10 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // while the checkpoint is open (`TextIndexStore::begin_statement`), and
     // `StatementCheckpoint::rollback` re-marks them, so the next refresh
     // re-reads the restored text and drops a rolled-back creation's
-    // document. `DROP INDEX` removing a text index is whole-index
-    // DDL and unjournalled, on the same argument as the three families above:
-    // the one fallible step after it (`dropped == 0 && !if_exists`) is
-    // reachable only when nothing was dropped.
+    // document. A whole-index build or drop inside a statement
+    // (`db.node_text_index.build` / `.drop`, `DROP INDEX`) can be followed by
+    // a failing clause, so `build_text_index` / `drop_text_index` journal
+    // `UndoEntry::TextIndexReplaced` with the store they displaced.
     std::mem::swap(&mut a.text_indexes, &mut b.text_indexes);
     // Relationship text indexes: the same corpus-sized shape and the same
     // re-mark story (`UndoEntry::EdgeTextDocPruned` at the edge-removal choke
@@ -644,6 +646,22 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
                 store.note_edge_slot_changed(petgraph::graph::EdgeIndex::new(edge));
             }
         }
+        UndoEntry::NodeEmbeddingStoreReplaced { store_key, prior } => match prior {
+            Some(store) => {
+                graph.embeddings.insert(store_key, *store);
+            }
+            None => {
+                graph.embeddings.remove(&store_key);
+            }
+        },
+        UndoEntry::TextIndexReplaced { store_key, prior } => match prior {
+            Some(store) => {
+                graph.text_indexes.insert(store_key, *store);
+            }
+            None => {
+                graph.text_indexes.remove(&store_key);
+            }
+        },
         UndoEntry::EdgeTextIndexReplaced { store_key, prior } => match prior {
             Some(store) => {
                 graph.edge_text_indexes.insert(store_key, *store);

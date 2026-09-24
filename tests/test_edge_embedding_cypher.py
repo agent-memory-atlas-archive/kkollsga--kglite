@@ -55,7 +55,7 @@ def _embed(graph: KnowledgeGraph, where: str = "true", **options: object) -> dic
     rows = graph.cypher(
         f"MATCH ()-[r:CLAIMS]->() WHERE {where} "
         "WITH collect(r) AS relationships "
-        f"CALL db.edge_embeddings.embed({{{', '.join(fields)}}}) "
+        f"CALL db.relationship_embeddings.embed({{{', '.join(fields)}}}) "
         "YIELD embedded, skipped, dimension, model "
         "RETURN embedded, skipped, dimension, model",
         params=options,
@@ -101,7 +101,7 @@ def test_list_reports_relationship_store_metadata() -> None:
     graph.set_embedder(_Embedder("model/A"))
     _embed(graph, "r.text = 'alpha'", mode="all")
     rows = graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD entity, type, text_property, store, dimension, count, metric, model, index_state "
         "RETURN entity, type, text_property, store, dimension, count, metric, model, index_state"
     ).to_list()
@@ -135,7 +135,7 @@ def test_missing_text_retained_incrementally_and_removed_by_all() -> None:
     graph = _graph()
     graph.cypher(
         "MATCH ()-[r:CLAIMS]->() WHERE r.text IS NULL WITH collect(r) AS relationships "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
         "entries:[{relationship:relationships[0], vector:[1.0, 0.0]}]}) "
         "YIELD stored RETURN stored"
     )
@@ -162,7 +162,7 @@ def _vectors_on_alpha_and_beta(graph: KnowledgeGraph) -> None:
     for text, vector in [("alpha", [1.0, 0.0]), ("beta", [0.0, 1.0])]:
         graph.cypher(
             "MATCH ()-[r:CLAIMS {text: $text}]->() "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
             "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
             params={"text": text, "vector": vector},
         )
@@ -189,12 +189,13 @@ def test_duplicate_and_fabricated_relationship_inputs_are_atomic(
     with pytest.raises(kglite.CypherExecutionError, match=message):
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 "
-            f"CALL db.edge_embeddings.remove({{type:'CLAIMS', text_property:'text', relationships:{selection}}}) "
+            f"CALL db.relationship_embeddings.remove({{type:'CLAIMS', text_property:'text', "
+            f"relationships:{selection}}}) "
             "YIELD removed RETURN removed",
             params=params,
         )
     assert graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD count RETURN count"
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) YIELD count RETURN count"
     ).to_list() == [{"count": 2}], "a refused selection removes nothing"
 
 
@@ -217,7 +218,7 @@ def test_deleted_relationship_binding_is_stale_before_embedding_write() -> None:
     with pytest.raises(kglite.CypherExecutionError, match="stale|relationship"):
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 DELETE r "
-            "CALL db.edge_embeddings.remove({type:'CLAIMS', text_property:'text', relationships:[r]}) "
+            "CALL db.relationship_embeddings.remove({type:'CLAIMS', text_property:'text', relationships:[r]}) "
             "YIELD removed RETURN removed"
         )
 
@@ -230,7 +231,7 @@ def test_callback_failure_unloads_and_rolls_back_preceding_write() -> None:
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' SET r.marker = 1 "
             "WITH collect(r) AS relationships "
-            "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', "
             "relationships:relationships, mode:'all'}) "
             "YIELD embedded RETURN embedded"
         )
@@ -249,7 +250,7 @@ def test_embed_reads_source_text_after_same_statement_set() -> None:
     rows = graph.cypher(
         "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
         "SET r.text = 'updated' WITH collect(r) AS relationships "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', "
         "relationships:relationships, mode:'all'}) "
         "YIELD embedded RETURN embedded"
     ).to_list()
@@ -289,7 +290,7 @@ def test_callback_can_read_committed_state_but_reentrant_write_is_rejected() -> 
     rows = session.execute(
         "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
         "WITH collect(r) AS relationships "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', "
         "relationships:relationships, mode:'all'}) "
         "YIELD embedded RETURN embedded"
     ).to_list()
@@ -301,13 +302,13 @@ def test_callback_can_read_committed_state_but_reentrant_write_is_rejected() -> 
     [
         "CALL { MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
         "WITH collect(r) AS relationships "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', "
         "relationships:relationships, mode:'all'}) "
         "YIELD embedded RETURN embedded } RETURN embedded",
         "RETURN 0 AS embedded UNION ALL "
         "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
         "WITH collect(r) AS relationships "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', "
         "relationships:relationships, mode:'all'}) "
         "YIELD embedded RETURN embedded",
     ],
@@ -329,7 +330,7 @@ def test_read_subquery_can_return_relationships_to_top_level_embed() -> None:
     rows = graph.cypher(
         "CALL { MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
         "RETURN collect(r) AS relationships } "
-        "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'text', "
         "relationships:relationships, mode:'all'}) "
         "YIELD embedded RETURN embedded"
     ).to_list()
@@ -339,7 +340,7 @@ def test_read_subquery_can_return_relationships_to_top_level_embed() -> None:
 
 def _store_state(graph: KnowledgeGraph) -> list[dict]:
     return graph.cypher(
-        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "CALL db.relationship_embeddings.list({type:'CLAIMS', text_property:'text'}) "
         "YIELD count, dimension, metric, model, index_state, delta "
         "RETURN count, dimension, metric, model, index_state, delta"
     ).to_list()
@@ -366,7 +367,7 @@ def test_failed_statement_reverses_a_manual_relationship_vector_set() -> None:
     graph = _graph()
     graph.set_embedder(_Embedder("model/A"))
     _embed(graph, "true", mode="all")
-    graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    graph.cypher("CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
     before_state = _store_state(graph)
     before_vectors = _vectors(graph)
     assert before_state[0]["index_state"] == "online"
@@ -374,7 +375,7 @@ def test_failed_statement_reverses_a_manual_relationship_vector_set() -> None:
     with pytest.raises(kglite.CypherExecutionError):
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
             "entries:[{relationship:r, vector:[0.25, 0.75]}]}) YIELD stored " + _failing_tail("stored")
         )
 
@@ -386,14 +387,14 @@ def test_failed_statement_reverses_a_manual_relationship_vector_removal() -> Non
     graph = _graph()
     graph.set_embedder(_Embedder("model/A"))
     _embed(graph, "true", mode="all")
-    graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    graph.cypher("CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
     before_state = _store_state(graph)
     before_vectors = _vectors(graph)
 
     with pytest.raises(kglite.CypherExecutionError):
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
-            "CALL db.edge_embeddings.remove({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.remove({type:'CLAIMS', text_property:'text', "
             "relationships:[r]}) YIELD removed " + _failing_tail("removed")
         )
 
@@ -408,7 +409,7 @@ def test_failed_statement_leaves_no_store_the_set_created() -> None:
     with pytest.raises(kglite.CypherExecutionError):
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
             "entries:[{relationship:r, vector:[1.0, 0.0]}]}) YIELD stored " + _failing_tail("stored")
         )
 
@@ -466,14 +467,14 @@ def test_path_relationships_are_accepted_by_set_and_remove() -> None:
     stored = graph.cypher(
         "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' "
         "WITH p, relationships(p)[0] AS pr "
-        "CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'text', "
         "entries: [{relationship: pr, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
     ).to_list()
     assert stored == [{"stored": 1}]
 
     removed = graph.cypher(
         "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' WITH p "
-        "CALL db.edge_embeddings.remove({type: 'CLAIMS', text_property: 'text', "
+        "CALL db.relationship_embeddings.remove({type: 'CLAIMS', text_property: 'text', "
         "relationships: [relationships(p)[0]]}) YIELD removed RETURN removed"
     ).to_list()
     assert removed == [{"removed": 1}]
@@ -490,7 +491,7 @@ def test_variable_length_path_relationships_are_accepted_by_embed() -> None:
     graph.set_embedder(_Embedder("model/A"))
     rows = graph.cypher(
         "MATCH p = (a:Doc)-[:CLAIMS*2..2]->(c:Doc) WITH relationships(p) AS rels "
-        "CALL db.edge_embeddings.embed({type: 'CLAIMS', text_property: 'text', "
+        "CALL db.relationship_embeddings.embed({type: 'CLAIMS', text_property: 'text', "
         "relationships: rels}) YIELD embedded RETURN embedded"
     ).to_list()
     assert [row["embedded"] for row in rows] == [1, 1]
@@ -499,10 +500,10 @@ def test_variable_length_path_relationships_are_accepted_by_embed() -> None:
 def test_path_relationship_deleted_earlier_in_the_statement_is_refused() -> None:
     """A retired slot must not be written through the path that named it."""
     graph = _graph()
-    with pytest.raises(Exception, match="db.edge_embeddings.set"):
+    with pytest.raises(Exception, match="db.relationship_embeddings.set"):
         graph.cypher(
             "MATCH p = (a:Doc)-[r:CLAIMS]->(b:Doc) WHERE r.text = 'alpha' DELETE r WITH p "
-            "CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+            "CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'text', "
             "entries: [{relationship: relationships(p)[0], vector: [1.0, 0.0]}]}) "
             "YIELD stored RETURN stored"
         )
@@ -514,7 +515,7 @@ def test_path_relationships_score_inside_a_write_statement() -> None:
     graph = _graph()
     graph.cypher(
         "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
-        "CALL db.edge_embeddings.set({type: 'CLAIMS', text_property: 'text', "
+        "CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'text', "
         "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
     )
     rows = graph.cypher(
@@ -561,7 +562,7 @@ def test_manual_set_of_an_identical_vector_takes_ownership_of_the_cell() -> None
 
     graph.cypher(
         "MATCH ()-[r:CLAIMS]->() WHERE r.text = 'alpha' "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
         "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
         params={"vector": model._vector("alpha")},
     )
@@ -579,7 +580,7 @@ def test_failed_statement_reverses_a_relationship_delete_with_its_vector_index()
     graph = _graph()
     graph.set_embedder(_Embedder("model/A"))
     _embed(graph, "true", mode="all")
-    graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    graph.cypher("CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
     before_state = _store_state(graph)
     before_vectors = _vectors(graph)
     assert before_state[0]["index_state"] == "online"
@@ -591,7 +592,7 @@ def test_failed_statement_reverses_a_relationship_delete_with_its_vector_index()
     assert _vectors(graph) == before_vectors
 
 
-#: Every ``db.edge_embeddings.*`` procedure with the extra required arguments
+#: Every ``db.relationship_embeddings.*`` procedure with the extra required arguments
 #: its call needs beyond ``type``/``text_property``.
 _PROCEDURE_ARGUMENTS = {
     "set": "entries: []",
@@ -620,10 +621,10 @@ def test_every_edge_embedding_procedure_refuses_an_unknown_parameter(procedure: 
         fields.append(extra)
     fields.append("bogus: 1")
     with pytest.raises(Exception, match="unknown parameter 'bogus'"):
-        graph.cypher(f"CALL db.edge_embeddings.{procedure}({{{', '.join(fields)}}})")
+        graph.cypher(f"CALL db.relationship_embeddings.{procedure}({{{', '.join(fields)}}})")
 
 
-# ── db.edge_embeddings.query({text: …}) ─────────────────────────────────────
+# ── db.relationship_embeddings.query({text: …}) ─────────────────────────────────────
 # Preparation rewrites `text` into `vector: $__ts_N` and embeds it once with the
 # registered embedder, exactly as it embeds a `text_score` query. These are the
 # golden checks for the text spelling; the differential corpus registers no
@@ -648,16 +649,16 @@ def _embedded_graph() -> tuple[KnowledgeGraph, _Embedder]:
 def test_query_text_equals_the_vector_query_with_the_embedders_vector(indexed: bool) -> None:
     graph, model = _embedded_graph()
     if indexed:
-        graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+        graph.cypher("CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
     exact = "true" if not indexed else "false"
     by_text = graph.cypher(
-        f"CALL db.edge_embeddings.query({{type:'CLAIMS', text_property:'text', text:$q, exact:{exact}}}) "
+        f"CALL db.relationship_embeddings.query({{type:'CLAIMS', text_property:'text', text:$q, exact:{exact}}}) "
         + _QUERY_ROWS,
         params={"q": "alpha"},
     ).to_list()
     assert model.calls == [["alpha"]], "the query text is embedded exactly once"
     by_vector = graph.cypher(
-        f"CALL db.edge_embeddings.query({{type:'CLAIMS', text_property:'text', vector:$v, exact:{exact}}}) "
+        f"CALL db.relationship_embeddings.query({{type:'CLAIMS', text_property:'text', vector:$v, exact:{exact}}}) "
         + _QUERY_ROWS,
         params={"v": model._vector("alpha")},
     ).to_list()
@@ -671,7 +672,7 @@ def test_query_text_literal_through_a_session_write_is_embedded_once() -> None:
     graph, model = _embedded_graph()
     session = graph.session()
     rows = session.execute(
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', text:'beta', top_k:1}) "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', text:'beta', top_k:1}) "
         "YIELD relationship SET relationship.hit = true RETURN relationship.text AS text"
     ).to_list()
     assert rows == [{"text": "beta"}]
@@ -691,7 +692,7 @@ def test_query_text_refuses_a_second_query_or_a_non_text_value(options: str, mes
     graph, model = _embedded_graph()
     with pytest.raises(Exception, match=message):
         graph.cypher(
-            f"CALL db.edge_embeddings.query({{type:'CLAIMS', text_property:'text', {options}}}) "
+            f"CALL db.relationship_embeddings.query({{type:'CLAIMS', text_property:'text', {options}}}) "
             "YIELD relationship RETURN relationship",
             params={"q": [1.0, 0.0]},
         )
@@ -703,7 +704,7 @@ def test_query_text_from_a_row_is_refused() -> None:
     with pytest.raises(Exception, match="cannot depend on a row"):
         graph.cypher(
             "WITH 'alpha' AS t "
-            "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', text:t}) "
+            "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', text:t}) "
             "YIELD relationship RETURN relationship"
         )
     assert model.calls == []
@@ -712,10 +713,10 @@ def test_query_text_from_a_row_is_refused() -> None:
 def test_query_text_without_an_embedder_names_the_procedure() -> None:
     graph = _graph()
     _vectors_on_alpha_and_beta(graph)
-    message = r"db\.edge_embeddings\.query\(\{text: \.\.\.\}\) requires a registered embedding model"
+    message = r"db\.relationship_embeddings\.query\(\{text: \.\.\.\}\) requires a registered embedding model"
     with pytest.raises(Exception, match=message):
         graph.cypher(
-            "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', text:'alpha'}) "
+            "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', text:'alpha'}) "
             "YIELD relationship RETURN relationship"
         )
 
@@ -723,7 +724,9 @@ def test_query_text_without_an_embedder_names_the_procedure() -> None:
 def test_query_unknown_parameter_refusal_lists_text() -> None:
     graph = _graph()
     with pytest.raises(Exception, match=r"Accepted: type, types, text_property, vector, text, top_k"):
-        graph.cypher("CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0, 0.0], bogus:1})")
+        graph.cypher(
+            "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0, 0.0], bogus:1})"
+        )
 
 
 # ── Errors a user can act on ────────────────────────────────────────────────
@@ -745,19 +748,19 @@ def test_a_text_property_no_relationship_carries_is_refused_before_a_store_exist
     graph.set_embedder(_Embedder("model/A"))
     if procedure == "set":
         call = (
-            "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 CALL db.edge_embeddings.set("
+            "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 CALL db.relationship_embeddings.set("
             "{type:'CLAIMS', text_property:'txet', entries:[{relationship:r, vector:[1.0, 0.0]}]}) "
             "YIELD stored RETURN stored"
         )
     else:
         call = (
-            "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs CALL db.edge_embeddings.embed("
+            "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs CALL db.relationship_embeddings.embed("
             "{type:'CLAIMS', text_property:'txet', relationships: rs}) YIELD embedded RETURN embedded"
         )
     with pytest.raises(kglite.CypherExecutionError) as error:
         graph.cypher(call)
     message = str(error.value)
-    assert f"CALL db.edge_embeddings.{procedure}" in message
+    assert f"CALL db.relationship_embeddings.{procedure}" in message
     assert "Text property 'txet' not found on any 'CLAIMS' relationship" in message
     assert "'CLAIMS' relationships carry: text" in message
     graph.cypher("MATCH ()-[r:CLAIMS]->() RETURN count(r)")  # the graph still answers
@@ -775,7 +778,7 @@ def test_a_property_only_some_relationships_carry_is_still_accepted() -> None:
 def _claims_set(graph: KnowledgeGraph, entries: str, params: dict | None = None) -> None:
     graph.cypher(
         "MATCH (:Doc {id: 1})-[r:CLAIMS]->(:Doc {id: 2}) WITH collect(r) AS rs "
-        f"CALL db.edge_embeddings.set({{type:'CLAIMS', text_property:'text', entries:{entries}}}) "
+        f"CALL db.relationship_embeddings.set({{type:'CLAIMS', text_property:'text', entries:{entries}}}) "
         "YIELD stored RETURN stored",
         params=params or {},
     )
@@ -832,7 +835,7 @@ def test_a_relationship_deleted_earlier_is_named_by_position_not_slot() -> None:
     with pytest.raises(kglite.CypherExecutionError) as error:
         graph.cypher(
             "MATCH ()-[r:CLAIMS]->() WITH r LIMIT 1 DELETE r "
-            "CALL db.edge_embeddings.remove({type:'CLAIMS', text_property:'text', relationships:[r]}) "
+            "CALL db.relationship_embeddings.remove({type:'CLAIMS', text_property:'text', relationships:[r]}) "
             "YIELD removed RETURN removed"
         )
     message = str(error.value)

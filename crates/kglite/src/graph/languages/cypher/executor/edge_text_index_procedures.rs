@@ -1,4 +1,4 @@
-//! `db.edge_text_index.*` — lifecycle of relationship BM25 indexes, in Cypher.
+//! `db.relationship_text_index.*` — lifecycle of relationship BM25 indexes, in Cypher.
 //!
 //! The node text index is built from a binding (`build_text_index`); the
 //! relationship lane follows the relationship *vector* lane instead and puts
@@ -6,7 +6,7 @@
 //! `cypher_query` with no binding-side method. Querying needs no procedure:
 //! `text_bm25(r, 'property', 'query')` scores a relationship binding or value.
 //!
-//! Conventions shared with `db.edge_embeddings.*`: one accepted-key table read
+//! Conventions shared with `db.relationship_embeddings.*`: one accepted-key table read
 //! by the shared unknown-key refusal, `type` names the relationship type, a
 //! drop of an absent index yields `dropped: false` rather than erroring.
 
@@ -40,7 +40,7 @@ pub(super) fn execute(
     let rel_type = require_string(params, "type", proc_name)?;
     let property = require_string(params, "property", proc_name)?;
     let values = match proc_name {
-        "db.edge_text_index.build" => {
+        "db.relationship_text_index.build" => {
             let limit = optional_nonnegative_usize(params, "auto_refresh_limit", proc_name)?;
             let report = build_edge_text_index(graph, &rel_type, &property, limit)
                 .map_err(|error| format!("CALL {proc_name}: {error}"))?;
@@ -50,19 +50,19 @@ pub(super) fn execute(
                 ("terms", Value::Int64(report.terms as i64)),
             ])
         }
-        "db.edge_text_index.refresh" => {
+        "db.relationship_text_index.refresh" => {
             let refreshed =
                 refresh_edge_text_index(graph, &rel_type, &property).ok_or_else(|| {
                     format!(
                         "CALL {proc_name}: no relationship text index on \
                          '{rel_type}.{property}'. Build one with CALL \
-                         db.edge_text_index.build({{type: '{rel_type}', property: \
+                         db.relationship_text_index.build({{type: '{rel_type}', property: \
                          '{property}'}})."
                     )
                 })?;
             HashMap::from([("refreshed", Value::Int64(refreshed as i64))])
         }
-        "db.edge_text_index.drop" => {
+        "db.relationship_text_index.drop" => {
             let dropped = drop_edge_text_index(graph, &rel_type, &property);
             HashMap::from([("dropped", Value::Boolean(dropped))])
         }
@@ -71,13 +71,13 @@ pub(super) fn execute(
     Ok(vec![yield_row(values, yields)])
 }
 
-/// `db.edge_text_index.list({type?, property?})` — one row per index, sorted.
+/// `db.relationship_text_index.list({type?, property?})` — one row per index, sorted.
 pub(super) fn list(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
     yields: &[YieldItem],
 ) -> Result<Vec<ResultRow>, String> {
-    let proc_name = "db.edge_text_index.list";
+    let proc_name = "db.relationship_text_index.list";
     reject_unknown_keys(
         &format!("CALL {proc_name}"),
         params.keys().map(String::as_str),
@@ -96,7 +96,7 @@ pub(super) fn list(
                     .is_none_or(|wanted| wanted == *property)
         })
         .map(|(rel_type, property, store)| {
-            let stale = store.edge_is_stale(graph);
+            let stale = store.relationship_is_stale(graph);
             yield_row(
                 HashMap::from([
                     ("entity", Value::String("relationship".into())),
@@ -109,7 +109,10 @@ pub(super) fn list(
                         "index_state",
                         Value::String(if stale { "stale" } else { "online" }.into()),
                     ),
-                    ("delta", Value::Int64(store.edge_delta_size(graph) as i64)),
+                    (
+                        "delta",
+                        Value::Int64(store.relationship_delta_size(graph) as i64),
+                    ),
                     (
                         "auto_refresh_limit",
                         Value::Int64(store.auto_refresh_limit() as i64),
@@ -121,14 +124,14 @@ pub(super) fn list(
         .collect())
 }
 
-/// Every parameter each `db.edge_text_index.*` procedure reads — also the
+/// Every parameter each `db.relationship_text_index.*` procedure reads — also the
 /// "Accepted:" line of the unknown-key refusal.
-fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
+pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
-        "db.edge_text_index.build" => &["type", "property", "auto_refresh_limit"],
-        "db.edge_text_index.refresh" | "db.edge_text_index.drop" | "db.edge_text_index.list" => {
-            &["type", "property"]
-        }
+        "db.relationship_text_index.build" => &["type", "property", "auto_refresh_limit"],
+        "db.relationship_text_index.refresh"
+        | "db.relationship_text_index.drop"
+        | "db.relationship_text_index.list" => &["type", "property"],
         other => unreachable!("non-edge-text-index procedure routed here: {other}"),
     }
 }

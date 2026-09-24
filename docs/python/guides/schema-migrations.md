@@ -194,7 +194,7 @@ MATCH (c:Contractor) DETACH DELETE c;
 Practical advice for this shape of migration:
 
 - **Enumerate the edge types first.** `describe()` or
-  `graph.connections()` will tell you which relationship types actually touch
+  `graph.relationships()` will tell you which relationship types actually touch
   the type you are replacing. A type you forget is silently dropped at step 4 —
   no error, just missing relationships.
 - **Copy edge properties explicitly.** As in step 2 above; `CREATE

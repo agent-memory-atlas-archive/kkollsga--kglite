@@ -9,7 +9,7 @@
 //!   store: every relationship of the type is embedded and satisfies the
 //!   pattern's endpoint labels. Served by `edge_vector_index::query_store` (HNSW
 //!   when an index is online and the metric matches, exact scan otherwise —
-//!   the same routes `db.edge_embeddings.query` takes), with RETURN projected
+//!   the same routes `db.relationship_embeddings.query` takes), with RETURN projected
 //!   and endpoints bound for the k winners only. The pattern is never
 //!   materialised, which is the whole saving.
 //! - **Rows** — anything else reaches the clause as materialised rows. With an
@@ -448,7 +448,7 @@ impl<'a> CypherExecutor<'a> {
                     self.warn(format!(
                         "relationship vector index '{}.{}' is behind its store by {} vectors, \
                          over its auto_refresh_limit of {} — this query was served by exact \
-                         scan. Refresh with CALL db.edge_embeddings.refresh_index.",
+                         scan. Refresh with CALL db.relationship_embeddings.refresh_index.",
                         covered.rel_type,
                         args.property,
                         numeric.delta_size(),

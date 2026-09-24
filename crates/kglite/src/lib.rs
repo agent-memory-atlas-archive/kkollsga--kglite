@@ -367,10 +367,10 @@ pub mod api {
     /// `add_relationship_embeddings` upserts into one (as `set_embeddings` /
     /// `add_embeddings` do for nodes), and `embed_relationship_texts` computes
     /// the vectors — the entry points beside
-    /// `db.edge_embeddings.set` / `.embed`, sharing their store paths.
+    /// `db.relationship_embeddings.set` / `.embed`, sharing their store paths.
     ///
     /// The read-side inventory covers both entities: `list_embeddings` lists
-    /// node stores, `list_edge_embeddings` relationship stores, and
+    /// node stores, `list_relationship_embeddings` relationship stores, and
     /// `embedding_info` / `embedding_diagnostics` take an explicit
     /// [`EmbeddingEntity`](embeddings::EmbeddingEntity) or scope, because a node
     /// type and a relationship type may share a name.
@@ -379,16 +379,22 @@ pub mod api {
         pub use crate::graph::edge_embeddings::carry::{
             relationship_embeddings, RelationshipEmbedding, RelationshipKeys,
         };
-        /// Write a relationship store by endpoint ids — replace it or upsert
-        /// into it with given vectors, or embed every relationship's text
-        /// through a bound `Embedder`.
         pub use crate::graph::edge_embeddings::ingest::{
             add_relationship_embeddings, embed_relationship_texts, set_relationship_embeddings,
             RelationshipIngestReport, RelationshipVector,
         };
+        /// Write a relationship store by endpoint ids — replace it or upsert
+        /// into it with given vectors, or embed every relationship's text
+        /// through a bound `Embedder`.
+        /// The HNSW lifecycle of a relationship store, as the node twins.
+        pub use crate::graph::edge_embeddings::vector_index::{
+            build_relationship_vector_index, drop_relationship_vector_index,
+            has_relationship_vector_index, refresh_relationship_vector_index,
+        };
         pub use crate::graph::embedding_inventory::{
-            embedding_diagnostics, embedding_info, list_edge_embeddings, EdgeEmbeddingStoreInfo,
-            EmbeddingCoverage, EmbeddingDiagnostic, EmbeddingEntity, EmbeddingInfo, LengthStats,
+            embedding_diagnostics, embedding_info, list_relationship_embeddings, EmbeddingCoverage,
+            EmbeddingDiagnostic, EmbeddingEntity, EmbeddingInfo, LengthStats,
+            RelationshipEmbeddingStoreInfo,
         };
         pub use crate::graph::embeddings::{
             add_embeddings, build_vector_index, drop_vector_index, embed_property,
@@ -594,7 +600,7 @@ pub mod api {
         /// by endpoint ids, and `RelationshipKeys` names the key property that
         /// tells a parallel group's members apart.
         pub use crate::graph::edge_embeddings::carry::{
-            EdgeCarryStats, EmbeddingCopyReport, RelationshipKeys,
+            EmbeddingCopyReport, RelationshipCarryStats, RelationshipKeys,
         };
         pub use crate::graph::io::export::{
             to_csv, to_csv_dir, to_d3_json, to_gexf, to_graphml, to_text,

@@ -14,7 +14,7 @@ pip install "kglite[pandas]"
 ### 1. Shape your tables
 
 Two flat tables — one row per node, one row per edge — is enough.
-The columns you'll point `add_nodes` / `add_connections` at:
+The columns you'll point `add_nodes` / `add_relationships` at:
 
 ```python
 import pandas as pd
@@ -57,7 +57,7 @@ the original column name or the canonical `id` / `title`.
 ### 3. Load edges
 
 ```python
-graph.add_connections(
+graph.add_relationships(
     orders,
     connection_type="ORDERED",
     source_type="User",      source_id_field="user_id",
@@ -66,7 +66,7 @@ graph.add_connections(
 )
 ```
 
-The two `(type, id_field)` pairs tell `add_connections` how to
+The two `(type, id_field)` pairs tell `add_relationships` how to
 look up endpoints in the existing nodes. Any other columns ride
 along as edge properties.
 
@@ -157,7 +157,13 @@ graph.select('User').where({'id': 1001})                   # Also OK — canonic
 # {'id': 1001, 'title': 'Alice', 'type': 'User', ...}  — NOT 'user_id' or 'name'
 ```
 
-## `add_connections` — parameter reference
+## `add_relationships` — parameter reference
+
+The `connection`-named methods (`add_connections`, `add_connections_bulk`,
+`add_connections_from_source`, `replace_connections`, `create_connections`,
+`connections()`, `connection_types()`) are permanent pointers to their
+`relationship`-named twins — a connection is a relationship, and either
+spelling calls the same code.
 
 Past the six required positional arguments
 (`data, connection_type, source_type, source_id_field, target_type,
@@ -176,23 +182,23 @@ To connect same-type nodes (org charts, taxonomies), set both to
 the same value — see the Hierarchies section below for when this is the
 right move.
 
-### `replace_connections` — atomic edge upsert
+### `replace_relationships` — atomic edge upsert
 
-`add_connections` is add-only. To **re-sync** a node's edges of a given type to
+`add_relationships` is add-only. To **re-sync** a node's edges of a given type to
 exactly a new set — "the current `MENTIONS` of these documents is now this list"
-— use `replace_connections`. For every source node present in the input, it
+— use `replace_relationships`. For every source node present in the input, it
 prunes that source's existing edges *of `connection_type`*, then adds the
 supplied ones, in one call (validate-before-prune, so a malformed input leaves
 the graph intact). Edges from sources not in the input, and edges of other types
 from the same sources, are untouched. It takes the same arguments as
-`add_connections` (including `query=` mode).
+`add_relationships` (including `query=` mode).
 
 ```python
 # First sync: doc 1 → [A, B]
-g.replace_connections(df_ab, "MENTIONS", "Doc", "doc", "Entity", "ent")
+g.replace_relationships(df_ab, "MENTIONS", "Doc", "doc", "Entity", "ent")
 # Re-sync doc 1 → [B, C]: the stale 1→A edge is pruned, 1→C added — idempotent,
 # no race-prone manual DELETE-then-re-add.
-g.replace_connections(df_bc, "MENTIONS", "Doc", "doc", "Entity", "ent")
+g.replace_relationships(df_bc, "MENTIONS", "Doc", "doc", "Entity", "ent")
 ```
 
 ## Loading in passes
@@ -277,7 +283,7 @@ parent_of    = pd.DataFrame({
     "child":  ["google",   "calico",   "youtube"],
 })
 graph.add_nodes(companies_df, "Company", "id", "name")
-graph.add_connections(parent_of, "PARENT_OF",
+graph.add_relationships(parent_of, "PARENT_OF",
                       "Company", "parent", "Company", "child")
 
 # Now Cypher walks the tree:
@@ -361,7 +367,7 @@ an in-memory graph of 50 k nodes with 12 declared properties:
 
 | How you write | Cost per row |
 |---|---|
-| `add_nodes` / `add_connections` (bulk) | ≈ 1 µs |
+| `add_nodes` / `add_relationships` (bulk) | ≈ 1 µs |
 | One statement, many rows (`UNWIND $rows AS r CREATE …`) | ≈ 1–2 µs |
 | One statement per row | ≈ 3 µs (`CREATE`), ≈ 4–5 µs (`MATCH … SET`) |
 

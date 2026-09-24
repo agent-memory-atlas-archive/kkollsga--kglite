@@ -220,7 +220,7 @@ pub struct RelValue {
 /// Excluding it means a stale value and a fresh value for the same reused slot
 /// compare equal *as values*. That is deliberate and is 0.17.12 behaviour: the
 /// identity check that keeps a stale value from reaching an edge is the
-/// explicit token comparison in the `db.edge_embeddings.*` procedures
+/// explicit token comparison in the `db.relationship_embeddings.*` procedures
 /// (`edge_embedding_procedures::resolve_rel_value`) and in `DELETE`, not
 /// container equality.
 type RelValueKey<'a> = (u32, u32, u32, &'a str, &'a PropMap);

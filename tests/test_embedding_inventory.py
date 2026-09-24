@@ -46,7 +46,7 @@ def _same_name_graph(graph: KnowledgeGraph | None = None) -> KnowledgeGraph:
     graph.set_embeddings("SUPPORTS", "body", {1: [1.0, 0.0, 0.0], 2: [0.0, 1.0, 0.0]})
     graph.cypher(
         "MATCH ()-[r:SUPPORTS]->() "
-        "CALL db.edge_embeddings.set({type:'SUPPORTS', text_property:'body', "
+        "CALL db.relationship_embeddings.set({type:'SUPPORTS', text_property:'body', "
         "entries:[{relationship:r, vector:[0.6, 0.8]}], metric:'dot_product'}) "
         "YIELD stored RETURN stored"
     )

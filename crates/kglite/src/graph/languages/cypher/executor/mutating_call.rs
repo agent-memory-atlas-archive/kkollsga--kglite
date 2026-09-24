@@ -76,9 +76,13 @@ fn dispatch(
 ) -> Result<Vec<ResultRow>, String> {
     if name.starts_with("table.") {
         super::table_procedures::execute_table_procedure(graph, name, params, &call.yield_items)
-    } else if name.starts_with("db.edge_text_index.") {
+    } else if name.starts_with("db.relationship_text_index.") {
         super::edge_text_index_procedures::execute(graph, name, params, &call.yield_items)
-    } else if name.starts_with("db.edge_embeddings.") {
+    } else if name.starts_with("db.node_text_index.") {
+        super::node_text_index_procedures::execute(graph, name, params, &call.yield_items)
+    } else if name.starts_with("db.node_embeddings.") {
+        super::node_embedding_procedures::execute(graph, name, params, &call.yield_items, service)
+    } else if name.starts_with("db.relationship_embeddings.") {
         super::edge_embedding_procedures::execute(
             graph,
             name,

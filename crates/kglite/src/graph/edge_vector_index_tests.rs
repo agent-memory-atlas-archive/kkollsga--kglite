@@ -278,7 +278,7 @@ fn malformed_wal_index_options_refuse_without_installing_an_index() {
 }
 
 /// Same shape as [`fixture`], but the store is created without a declared
-/// metric — the state `db.edge_embeddings.set` leaves behind when the caller
+/// metric — the state `db.relationship_embeddings.set` leaves behind when the caller
 /// names no metric, and the one an explicit build metric may claim.
 fn fixture_without_declared_metric() -> (DirGraph, EdgeIndex) {
     let mut graph = DirGraph::new();
@@ -491,7 +491,9 @@ fn refresh_without_an_index_refuses_and_names_the_build_call() {
     let error = refresh_edge_vector_index(&graph, "CLAIMS", "text").unwrap_err();
     assert!(error.contains("'CLAIMS.text_emb'"), "{error}");
     assert!(
-        error.contains("db.edge_embeddings.build_index({type: 'CLAIMS', text_property: 'text'})"),
+        error.contains(
+            "db.relationship_embeddings.build_index({type: 'CLAIMS', text_property: 'text'})"
+        ),
         "{error}"
     );
 

@@ -615,10 +615,10 @@ impl KnowledgeGraph {
         })
     }
 
-    /// Get connections for selected nodes.
+    /// The relationships of the selected nodes, grouped by parent.
     #[pyo3(signature = (indices=None, parent_info=None, include_node_properties=None,
                         flatten_single_parent=true))]
-    fn connections(
+    pub(super) fn relationships(
         &self,
         indices: Option<Vec<usize>>,
         parent_info: Option<bool>,
@@ -1060,36 +1060,11 @@ impl KnowledgeGraph {
         Ok(new_kg)
     }
 
-    /// Create derived edges from the selection chain into a new
-    /// connection type.
-    ///
-    /// **Important — fluent-chain mutation semantics:** The Cypher
-    /// engine (`g.cypher("CREATE ...")`) mutates the graph in place,
-    /// but `create_connections` follows the fluent pattern: each
-    /// chain step (`select`, `traverse`, ...) clones the graph's
-    /// `Arc<DirGraph>` handle, and `create_connections` writes to
-    /// that handle. Discarding the return value loses the writes.
-    /// Always **assign** the result back to keep mutations:
-    ///
-    /// ```python
-    /// # WRONG — discards the mutated graph:
-    /// g.select("Person").traverse("WORKS_AT").create_connections("PERSON_AT")
-    ///
-    /// # RIGHT — assign to retain mutations:
-    /// g = g.select("Person").traverse("WORKS_AT").create_connections("PERSON_AT")
-    /// ```
-    ///
-    /// Or for many cases, the simpler form is to use Cypher with
-    /// `add_connections(query=...)`:
-    ///
-    /// ```python
-    /// rows = g.cypher("MATCH (p:Person)-[:WORKS_AT]->(c:Company) "
-    ///                 "RETURN DISTINCT p.id AS pid, c.id AS cid").to_df()
-    /// g.add_connections(data=rows, connection_type="PERSON_AT", ...)
-    /// ```
+    /// Materialise direct relationships from the selection chain; assign the returned graph to keep them.
     #[pyo3(signature = (connection_type, keep_selection=None, conflict_handling=None, properties=None, source_type=None, target_type=None))]
+    // One Rust argument per Python keyword.
     #[allow(clippy::too_many_arguments)]
-    fn create_connections(
+    pub(super) fn create_relationships(
         &mut self,
         py: Python<'_>,
         connection_type: String,
@@ -1114,7 +1089,7 @@ impl KnowledgeGraph {
         // Detect the "chain temp" case before we mutate. With the inner Arc
         // shared (refcount > 1), the upcoming `Arc::make_mut` clones and the
         // mutation lands on that clone, so a caller who does not capture the
-        // return value (`g.select(...).create_connections(...)` without
+        // return value (`g.select(...).create_relationships(...)` without
         // assigning back) silently loses it.
         if Arc::strong_count(&self.inner) > 1 {
             let warning_module = py.import("warnings")?;
@@ -1122,10 +1097,10 @@ impl KnowledgeGraph {
                 "warn",
                 (
                     format!(
-                        "create_connections('{}') was called on a chained graph view \
+                        "create_relationships('{}') was called on a chained graph view \
                          (Arc refcount={}). The mutation lands on a temporary clone — \
-                         either capture the return value (`g = g.select(...).create_connections('{}')`) \
-                         or use the equivalent `add_connections(data=cypher_result, ...)` form. \
+                         either capture the return value (`g = g.select(...).create_relationships('{}')`) \
+                         or use the equivalent `add_relationships(data=cypher_result, ...)` form. \
                          The original graph variable will NOT see these edges.",
                         connection_type,
                         Arc::strong_count(&self.inner),
@@ -1737,7 +1712,7 @@ impl KnowledgeGraph {
     ///
     /// First call computes O(E); subsequent calls are O(triples)
     /// against the cached snapshot. Edge mutations (Cypher CREATE /
-    /// DELETE, Python `add_connections`) invalidate the cache.
+    /// DELETE, Python `add_relationships`) invalidate the cache.
     ///
     /// Each row is a 4-tuple: `(src_type, edge_type, tgt_type, count)`.
     fn label_pair_counts(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

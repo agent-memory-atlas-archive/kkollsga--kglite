@@ -1,5 +1,5 @@
 //! Rewriting simplifications — fold OR→IN, push LIMIT/DISTINCT into MATCH,
-//! rewrite text_score and `db.edge_embeddings.query`'s `text` option.
+//! rewrite text_score and the embedding `query` procedures' `text` option.
 
 use super::super::ast::*;
 use crate::datatypes::values::Value;
@@ -648,7 +648,8 @@ pub const TEXT_SCORE_STORES_PARAM: &str = "__ts_stores";
 
 /// Walk the AST and rewrite all `text_score(node, col, query_text)` calls
 /// to `vector_score(node, col_emb, $__ts_N)`, and every
-/// `db.edge_embeddings.query({text: query_text})` option to
+/// `db.node_embeddings.query` / `db.relationship_embeddings.query`
+/// `{text: query_text}` option to
 /// `vector: $__ts_N`.
 ///
 /// The query argument can be a string literal or a `$parameter` bound to a
@@ -676,8 +677,11 @@ pub fn rewrite_text_score(
     })
 }
 
-/// The one procedure whose `text:` option the rewrite embeds.
-const EDGE_EMBEDDINGS_QUERY: &str = "db.edge_embeddings.query";
+/// The procedures whose `text:` option the rewrite embeds.
+const EMBEDDING_QUERIES: [&str; 2] = [
+    "db.node_embeddings.query",
+    "db.relationship_embeddings.query",
+];
 
 struct TextScoreCollector {
     counter: usize,
@@ -843,18 +847,18 @@ impl TextScoreCollector {
         Ok(())
     }
 
-    /// A procedure call: `db.edge_embeddings.query`'s `text:` is rewritten into
+    /// A procedure call: an embedding `query`'s `text:` is rewritten into
     /// a `vector:` parameter first, then every argument expression as usual.
     fn rewrite_call(
         &mut self,
         call: &mut CallClause,
         params: &HashMap<String, Value>,
     ) -> Result<(), String> {
-        if call
-            .procedure_name
-            .eq_ignore_ascii_case(EDGE_EMBEDDINGS_QUERY)
+        if let Some(procedure) = EMBEDDING_QUERIES
+            .iter()
+            .find(|name| call.procedure_name.eq_ignore_ascii_case(name))
         {
-            self.rewrite_edge_query_text(&mut call.parameters, params)?;
+            self.rewrite_query_text(procedure, &mut call.parameters, params)?;
         }
         for (_, expression) in &mut call.parameters {
             self.rewrite_expr(expression, params)?;
@@ -935,12 +939,14 @@ impl TextScoreCollector {
         Ok(())
     }
 
-    /// Rewrite `db.edge_embeddings.query({…, text: q})` into `{…, vector:
+    /// Rewrite `db.node_embeddings.query({…, text: q})` (or the relationship
+    /// twin) into `{…, vector:
     /// $__ts_N}` so the caller embeds `q` like a `text_score` query. The text
     /// must be a statement constant: the embedding happens before execution,
     /// when no row exists to evaluate a row-dependent expression against.
-    fn rewrite_edge_query_text(
+    fn rewrite_query_text(
         &mut self,
+        procedure: &str,
         parameters: &mut [(String, Expression)],
         params: &HashMap<String, Value>,
     ) -> Result<(), String> {
@@ -949,7 +955,7 @@ impl TextScoreCollector {
         };
         if parameters.iter().any(|(key, _)| key == "vector") {
             return Err(format!(
-                "CALL {EDGE_EMBEDDINGS_QUERY}: 'text' and 'vector' are mutually exclusive; \
+                "CALL {procedure}: 'text' and 'vector' are mutually exclusive; \
                  pass the query as text to embed, or as a vector"
             ));
         }
@@ -959,19 +965,15 @@ impl TextScoreCollector {
                 Some(Value::String(text)) => text.clone(),
                 Some(_) => {
                     return Err(format!(
-                        "CALL {EDGE_EMBEDDINGS_QUERY}: parameter ${name} for 'text' must be \
+                        "CALL {procedure}: parameter ${name} for 'text' must be \
                          a string; pass a query vector as 'vector'"
                     ))
                 }
-                None => {
-                    return Err(format!(
-                        "CALL {EDGE_EMBEDDINGS_QUERY}: parameter ${name} not found"
-                    ))
-                }
+                None => return Err(format!("CALL {procedure}: parameter ${name} not found")),
             },
             _ => {
                 return Err(format!(
-                    "CALL {EDGE_EMBEDDINGS_QUERY}: 'text' must be a string literal or a \
+                    "CALL {procedure}: 'text' must be a string literal or a \
                      $parameter; it is embedded once before execution, so it cannot depend \
                      on a row"
                 ))

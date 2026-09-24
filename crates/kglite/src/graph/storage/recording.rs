@@ -172,14 +172,14 @@ pub enum RawOp {
     },
     /// WAL-only relationship embedding store touch. The complete final
     /// metadata is resolved from `DirGraph` at commit, alongside group state.
-    WalEdgeEmbeddingStore {
+    WalRelationshipEmbeddingStore {
         conn_type: String,
         text_column: String,
     },
     /// First-touch vector state for a relationship group changed through the
     /// typed embedding seam. Unchanged cells remain referenced by ordinal;
     /// selected prior cells are enough to distinguish Keep/Replace/Clear.
-    WalEdgeEmbeddingBase(Box<EdgeEmbeddingBaseTouch>),
+    WalRelationshipEmbeddingBase(Box<EdgeEmbeddingBaseTouch>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -243,8 +243,8 @@ fn op_image(op: &RawOp) -> Option<&BeforeImage> {
         | RawOp::RemoveEdge { before, .. } => before.as_deref(),
         RawOp::WalNode { .. }
         | RawOp::WalGroup { .. }
-        | RawOp::WalEdgeEmbeddingStore { .. }
-        | RawOp::WalEdgeEmbeddingBase(_)
+        | RawOp::WalRelationshipEmbeddingStore { .. }
+        | RawOp::WalRelationshipEmbeddingBase(_)
         | RawOp::Declaration(_) => None,
     }
 }
@@ -259,8 +259,8 @@ fn op_image_mut(op: &mut RawOp) -> Option<&mut BeforeImage> {
         | RawOp::RemoveEdge { before, .. } => before.as_deref_mut(),
         RawOp::WalNode { .. }
         | RawOp::WalGroup { .. }
-        | RawOp::WalEdgeEmbeddingStore { .. }
-        | RawOp::WalEdgeEmbeddingBase(_)
+        | RawOp::WalRelationshipEmbeddingStore { .. }
+        | RawOp::WalRelationshipEmbeddingBase(_)
         | RawOp::Declaration(_) => None,
     }
 }
@@ -866,8 +866,8 @@ fn resolve_against(
             op,
             RawOp::WalNode { .. }
                 | RawOp::WalGroup { .. }
-                | RawOp::WalEdgeEmbeddingStore { .. }
-                | RawOp::WalEdgeEmbeddingBase(_)
+                | RawOp::WalRelationshipEmbeddingStore { .. }
+                | RawOp::WalRelationshipEmbeddingBase(_)
         )
     }) {
         return wal_capture::resolve(raw, graph, interner, secondary_labels, edge_embeddings);
@@ -877,8 +877,8 @@ fn resolve_against(
         match op {
             RawOp::WalNode { .. }
             | RawOp::WalGroup { .. }
-            | RawOp::WalEdgeEmbeddingStore { .. }
-            | RawOp::WalEdgeEmbeddingBase(_) => unreachable!("handled above"),
+            | RawOp::WalRelationshipEmbeddingStore { .. }
+            | RawOp::WalRelationshipEmbeddingBase(_) => unreachable!("handled above"),
             // Already resolved: nothing to read back off the graph. Reachable
             // here when a call declared something but wrote no rows, so no
             // logical-identity marker joined it in the buffer.

@@ -1,5 +1,5 @@
 //! Relationship-embedding writers — `set_` replaces a store, `add_` upserts
-//! (as `db.edge_embeddings.set` does), `embed_` generates — over
+//! (as `db.relationship_embeddings.set` does), `embed_` generates — over
 //! `kglite::api::embeddings`.
 
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ const ROW_KEYS: [&str; 6] = [
 impl KnowledgeGraph {
     /// Replace a relationship store with vectors addressed by endpoint ids — the relationship twin of set_embeddings.
     #[pyo3(signature = (relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None))]
-    fn set_relationship_embeddings(
+    pub(super) fn set_relationship_embeddings(
         &mut self,
         py: Python<'_>,
         relationship_type: &str,
@@ -55,7 +55,7 @@ impl KnowledgeGraph {
 
     /// Upsert relationship vectors addressed by endpoint ids — the relationship twin of add_embeddings.
     #[pyo3(signature = (relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None))]
-    fn add_relationship_embeddings(
+    pub(super) fn add_relationship_embeddings(
         &mut self,
         py: Python<'_>,
         relationship_type: &str,
@@ -82,7 +82,7 @@ impl KnowledgeGraph {
     #[pyo3(signature = (relationship_type, text_column, *, mode=None, batch_size=256, show_progress=true, metric=None))]
     // One Rust argument per Python keyword, as embed_texts has.
     #[allow(clippy::too_many_arguments)]
-    fn embed_relationship_texts(
+    pub(super) fn embed_relationship_texts(
         &mut self,
         py: Python<'_>,
         relationship_type: &str,
@@ -152,6 +152,92 @@ impl KnowledgeGraph {
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
         result.set_item("dimension", outcome.dimension)?;
         Ok(result.into())
+    }
+
+    /// Build an HNSW index over a relationship embedding store — the relationship twin of build_node_vector_index.
+    #[pyo3(signature = (relationship_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None))]
+    // One Rust argument per HNSW knob, as build_node_vector_index has.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn build_relationship_vector_index(
+        &mut self,
+        py: Python<'_>,
+        relationship_type: &str,
+        text_column: &str,
+        m: Option<usize>,
+        ef_construction: Option<usize>,
+        ef_search: Option<usize>,
+        metric: Option<&str>,
+        auto_refresh_limit: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        self.check_durable_owner()?;
+        let g = get_graph_mut(&mut self.inner);
+        let report = py
+            .detach(|| {
+                kglite_core::api::embeddings::build_relationship_vector_index(
+                    g,
+                    relationship_type,
+                    text_column,
+                    m,
+                    ef_construction,
+                    ef_search,
+                    metric,
+                    auto_refresh_limit,
+                )
+            })
+            .map_err(PyValueError::new_err)?;
+        self.commit_wal()?;
+        let result = PyDict::new(py);
+        result.set_item("indexed", report.indexed)?;
+        result.set_item("metric", report.metric)?;
+        result.set_item("m", report.m)?;
+        Ok(result.into())
+    }
+
+    /// Drop the HNSW index over a relationship embedding store (the vectors stay); True if one was dropped.
+    #[pyo3(signature = (relationship_type, text_column))]
+    pub(super) fn drop_relationship_vector_index(
+        &mut self,
+        relationship_type: &str,
+        text_column: &str,
+    ) -> PyResult<bool> {
+        self.check_durable_owner()?;
+        let dropped = kglite_core::api::embeddings::drop_relationship_vector_index(
+            get_graph_mut(&mut self.inner),
+            relationship_type,
+            text_column,
+        )
+        .map_err(PyValueError::new_err)?;
+        self.commit_wal()?;
+        Ok(dropped)
+    }
+
+    /// Whether an HNSW index is currently built over a relationship embedding store.
+    #[pyo3(signature = (relationship_type, text_column))]
+    pub(super) fn has_relationship_vector_index(
+        &self,
+        relationship_type: &str,
+        text_column: &str,
+    ) -> bool {
+        kglite_core::api::embeddings::has_relationship_vector_index(
+            &self.inner,
+            relationship_type,
+            text_column,
+        )
+    }
+
+    /// Fold every outstanding vector into a relationship store's HNSW index now; refuses when no index is built.
+    #[pyo3(signature = (relationship_type, text_column))]
+    pub(super) fn refresh_relationship_vector_index(
+        &self,
+        relationship_type: &str,
+        text_column: &str,
+    ) -> PyResult<usize> {
+        kglite_core::api::embeddings::refresh_relationship_vector_index(
+            &self.inner,
+            relationship_type,
+            text_column,
+        )
+        .map_err(PyValueError::new_err)
     }
 }
 
@@ -329,7 +415,7 @@ fn embed_error(error: EmbedError, relationship_type: &str, text_column: &str) ->
              '{relationship_type}.{text_column}_emb' relationship store is {store}-d — embedding \
              the rest would mix dimensions and corrupt search. Re-embed with mode='all' to \
              rebuild at the new dimension, or drop the store first with CALL \
-             db.edge_embeddings.drop({{type: '{relationship_type}', text_property: \
+             db.relationship_embeddings.drop({{type: '{relationship_type}', text_property: \
              '{text_column}'}})."
         )),
         EmbedError::Column(message) | EmbedError::Output(message) => PyValueError::new_err(message),

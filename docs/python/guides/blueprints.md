@@ -1,6 +1,6 @@
 # Blueprints
 
-Build a complete knowledge graph from CSV files using a declarative JSON blueprint. Instead of writing `add_nodes` / `add_connections` calls, describe your data in JSON — `from_blueprint()` handles the rest.
+Build a complete knowledge graph from CSV files using a declarative JSON blueprint. Instead of writing `add_nodes` / `add_relationships` calls, describe your data in JSON — `from_blueprint()` handles the rest.
 
 ```python
 import kglite

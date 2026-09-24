@@ -15,7 +15,7 @@
 //!   (`edge_embeddings::remove_edge_with_embeddings`), and journals
 //!   `UndoEntry::EdgeTextDocPruned` so a rolled-back delete re-marks the slot,
 //!   exactly as `prune_doomed_text_docs` does for nodes.
-//! - **Lifecycle runs inside Cypher** (`db.edge_text_index.*`), so unlike the
+//! - **Lifecycle runs inside Cypher** (`db.relationship_text_index.*`), so unlike the
 //!   node lane a build or drop can be followed by a failing clause:
 //!   both journal `UndoEntry::EdgeTextIndexReplaced`, moving (not cloning) the
 //!   prior store into the journal.
@@ -110,28 +110,28 @@ fn build_over_type(
 
 impl TextIndexRead<'_> {
     /// BM25 score of one relationship, or `None` when it has no document.
-    pub fn score_edge(&self, edge: EdgeIndex, query: &PreparedQuery) -> Option<f64> {
+    pub fn score_relationship(&self, edge: EdgeIndex, query: &PreparedQuery) -> Option<f64> {
         let slot = edge_slot(edge);
         self.0.contains_doc(slot).then(|| self.0.score(slot, query))
     }
 }
 
 impl TextIndexStore {
-    /// Documents the next [`Self::refresh_edges`] would re-read — the edge
+    /// Documents the next [`Self::refresh_relationships`] would re-read — the edge
     /// twin of [`Self::delta_size`].
-    pub fn edge_delta_size(&self, graph: &DirGraph) -> usize {
+    pub fn relationship_delta_size(&self, graph: &DirGraph) -> usize {
         self.freshness.delta_size(edge_bound(graph))
     }
 
     /// Whether the graph's relationships have moved past what this index
     /// covers.
-    pub fn edge_is_stale(&self, graph: &DirGraph) -> bool {
+    pub fn relationship_is_stale(&self, graph: &DirGraph) -> bool {
         self.freshness.is_stale(edge_bound(graph))
     }
 
     /// Whether the outstanding relationship delta is within the inline-refresh
     /// ceiling.
-    pub fn edge_can_auto_refresh(&self, graph: &DirGraph) -> bool {
+    pub fn relationship_can_auto_refresh(&self, graph: &DirGraph) -> bool {
         self.freshness.within_limit(edge_bound(graph))
     }
 
@@ -153,7 +153,7 @@ impl TextIndexStore {
     /// twin of [`Self::refresh`]: the same lock order, the same fold / batch /
     /// rebuild arms and crossover, reading each slot's relationship instead of
     /// its node.
-    pub fn refresh_edges(&self, graph: &DirGraph, rel_type: &str) -> usize {
+    pub fn refresh_relationships(&self, graph: &DirGraph, rel_type: &str) -> usize {
         if graph.read_only {
             return 0;
         }
@@ -248,7 +248,7 @@ pub(crate) fn build_edge_text_index(
 ) -> Result<TextIndexReport, String> {
     if GraphRead::is_disk(&graph.graph) {
         return Err(format!(
-            "db.edge_text_index.build({{type: '{rel_type}', property: '{property}'}}) is not \
+            "db.relationship_text_index.build({{type: '{rel_type}', property: '{property}'}}) is not \
              supported on a disk-backed graph: the BM25 index is heap-resident, and building one \
              over a graph sized for the disk backend is the memory cliff that backend exists to \
              avoid. Use the default (in-memory) or 'mapped' storage mode."
@@ -256,7 +256,7 @@ pub(crate) fn build_edge_text_index(
     }
     if !graph.has_connection_type(rel_type) {
         return Err(format!(
-            "Unknown relationship type '{rel_type}'. db.edge_text_index.build indexes one \
+            "Unknown relationship type '{rel_type}'. db.relationship_text_index.build indexes one \
              relationship type's property; CALL db.relationshipTypes() lists the types that exist."
         ));
     }
@@ -302,7 +302,7 @@ pub(crate) fn refresh_edge_text_index(
     property: &str,
 ) -> Option<usize> {
     let store = edge_text_index_store(graph, rel_type, property)?;
-    Some(store.refresh_edges(graph, rel_type))
+    Some(store.refresh_relationships(graph, rel_type))
 }
 
 /// Drop the relationship text index over `(rel_type, property)`. Returns

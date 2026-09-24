@@ -38,7 +38,7 @@ surface at a glance — most of what you'd reach for is here, in-process:
 | **Parameters** | values `$p`, and **names**: dynamic labels / relationship types `(n:$label)`, `(n:$(label))`, `-[:$type]->` — see [Parameters](#parameters) |
 | **Aggregation** | `count` / `sum` / `avg` / `min` / `max` / `collect` / `percentile_cont` / `mode` / `stdev` …, `DISTINCT`, `HAVING`, window functions (`OVER`, `PARTITION BY`, ranking) |
 | **Procedures** (`CALL`) | centralities (pagerank, betweenness, closeness, degree), community (louvain, leiden, label propagation), components, k-core, clustering, `triangle_count` / `transitivity`, `eccentricity` / `diameter`, `ready_set` (dependency frontier), `shortest_path_length`, `kg_knn`, structural validators (`duplicate_title`, `cycle_2step`, `parallel_edges`, …) |
-| **Vector + text** | `vector_score(…)` (HNSW index, exact fallback), `text_score(…)` (query vector, or query text via a pluggable embedder), `text_bm25(…)` (lexical BM25 over `build_text_index`, or `db.edge_text_index.build` for relationships), `score_fuse(…)` (combine the lanes into one score) — hybrid semantic, lexical and structural in one query |
+| **Vector + text** | `vector_score(…)` (HNSW index, exact fallback), `text_score(…)` (query vector, or query text via a pluggable embedder), `text_bm25(…)` (lexical BM25 over `build_text_index`, or `db.relationship_text_index.build` for relationships), `score_fuse(…)` (combine the lanes into one score) — hybrid semantic, lexical and structural in one query |
 | **Spatial** | `point(…)`, `distance(…)`, `wkt_within` / `intersects`, buffer / hull / union, k-NN — see [Spatial](#spatial-functions) |
 | **Temporal** | `date()` / `datetime()` / `localdatetime()`, `duration(…)`, `duration.between`, date arithmetic, `valid_at` / `valid_during` — see [Temporal](#temporal-functions) |
 | **Value types** | int, float, string, bool, **date**, **timestamp** (date + time), duration, point, list, map, node, relationship, path |
@@ -238,8 +238,9 @@ graph.cypher("MATCH ()-[r:RATED]->(m) RETURN m.title, r.score ORDER BY r.score D
 ```
 
 A stored property always wins, as it does on a node. A relationship with no
-property of that name answers `r.type` (and `r.connection_type`) with its
-type, `r.id` with `id(r)`, and `r.start` / `r.start_id` / `` r.`end` `` /
+property of that name answers `r.type` (and `r.connection_type`, kept as a
+synonym — as is the `<conn>` element in `describe()` — for the relationship
+type) with its type, `r.id` with `id(r)`, and `r.start` / `r.start_id` / `` r.`end` `` /
 `r.end_id` with the endpoint ids (`id(startNode(r))`, `id(endNode(r))`; `end`
 is a reserved word, so it is backticked). A relationship
 that stores `type` or `id`, as graphs imported from LLM extractors often do,
@@ -550,7 +551,7 @@ graph.cypher("""
 | `longitude(point)` | Extract longitude from point |
 | `valid_at(e, date, 'from', 'to')` | Temporal point-in-time filter (nodes or edges) |
 | `valid_during(e, start, end, 'from', 'to')` | Temporal range overlap filter |
-| `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's — or relationship's — indexed text against a query string. Needs `build_text_index(node_type, property)` for a node, `CALL db.edge_text_index.build({type, property})` for a relationship; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
+| `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's — or relationship's — indexed text against a query string. Needs `build_text_index(node_type, property)` for a node, `CALL db.relationship_text_index.build({type, property})` for a relationship; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
 | `text_score(n, prop, query)` | Semantic similarity. A **list** `query` is scored directly as your query vector; a **string** `query` is embedded first (requires `set_embedder()`) |
 | `text_score(n, prop, query, metric)` | With explicit metric (`'cosine'`, `'dot_product'`, `'euclidean'`, `'poincare'`) |
 | `vector_score(n, prop, vector [, metric] [, options])` | Semantic similarity against a pre-computed embedding vector (pass a list of floats directly, no `set_embedder()` needed) |
@@ -612,6 +613,35 @@ The embedding store key is `{text_column}_emb` (set via
 `set_embeddings(node_type, text_column, {id: vector})`), so embeddings set on
 the `summary` column are scored as `vector_score(a, 'summary_emb', …)`.
 
+Stores are managed in Cypher at three tiers. `db.node_embeddings.*` and
+`db.relationship_embeddings.*` are the specific namespaces — the same nine
+procedures (`set`, `embed`, `list`, `remove`, `drop`, `build_index`,
+`refresh_index`, `drop_index`, `query`) with the same map parameters, a list
+of nodes where the other holds relationships — and `db.node_text_index.*` /
+`db.relationship_text_index.*` are their BM25 twins (`build`, `refresh`,
+`drop`, `list`). `db.embeddings.*` and `db.text_index.*` are routers: they
+take the union of both parameter sets plus `entity: 'node' | 'relationship'`
+(a string literal) and run the specific procedure, **node by default**. A
+parameter only the other entity takes is refused naming it (``CALL
+db.embeddings.remove({type:'CITES', …, relationships: rs})`` → "`relationships`
+belongs to entity:'relationship'").
+
+```cypher
+// Node vectors from a query: the store set_embeddings / embed_texts write.
+MATCH (d:Doc) WHERE d.lang = 'en'
+WITH collect(d) AS docs
+CALL db.node_embeddings.embed({type: 'Doc', text_property: 'summary', nodes: docs})
+YIELD embedded RETURN embedded
+
+// Whole-store top-k, several node types merged (text: needs set_embedder()).
+CALL db.embeddings.query({text_property: 'summary', text: 'graph databases', top_k: 5})
+YIELD node, score, type RETURN type, node.title, score
+```
+
+`db.node_embeddings.set` takes `entries: [{node: n, vector: [...]}]` and
+upserts through `add_embeddings`' path; its writes, like every procedure
+here, roll back with a statement that fails later.
+
 Relationship embeddings use the same scoring functions and canonical store
 names. Manage them from bound relationship values so physical relationship
 IDs never become an application identity:
@@ -620,7 +650,7 @@ IDs never become an application identity:
 MATCH (claimant:Claimant)-[r:SUPPORTS]->(claim:Claim)
 WHERE claim.status = 'open'
 WITH collect(r) AS relationships
-CALL db.edge_embeddings.embed({
+CALL db.relationship_embeddings.embed({
   type: 'SUPPORTS', text_property: 'evidence', relationships: relationships,
   mode: 'changed'
 })
@@ -649,7 +679,7 @@ selection, call `embed_relationship_texts(type, text_property, mode=…)`.
 
 The mutating procedure must remain a top-level pipeline clause. A read-only
 `CALL {}` subquery may return collected relationship values to an outer
-top-level `db.edge_embeddings.embed` call. A mutating call placed inside the
+top-level `db.relationship_embeddings.embed` call. A mutating call placed inside the
 subquery or a `UNION` arm follows the existing write boundary and is rejected
 before the model runs.
 
@@ -658,16 +688,16 @@ list or a numpy row; a numeric 1-D or 2-D array parameter is read from its
 bytes, so numpy rows bind fastest in a batched `UNWIND $batch … set` ingest:
 
 ```cypher
-CALL db.edge_embeddings.set({
+CALL db.relationship_embeddings.set({
   type:'SUPPORTS', text_property:'evidence',
   entries:[{relationship:r, vector:$vector}], metric:'cosine'
 }) YIELD stored, dimension
 
-CALL db.edge_embeddings.remove({
+CALL db.relationship_embeddings.remove({
   type:'SUPPORTS', text_property:'evidence', relationships:relationships
 }) YIELD removed
 
-CALL db.edge_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
+CALL db.relationship_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
 YIELD dropped
 ```
 
@@ -686,7 +716,7 @@ store's width. Called once per row, `stored` is therefore a running total. The
 node `set_embeddings` / `add_embeddings` report their `embeddings_stored` the
 same way.
 
-Every `db.edge_embeddings.*` procedure refuses a parameter it does not read,
+Every `db.relationship_embeddings.*` procedure refuses a parameter it does not read,
 naming the key and listing the ones it accepts — including the per-entry map of
 `set`, whose keys are `relationship` and `vector`. A misspelled option is an
 error, never a silently ignored one. `set` and `embed` refuse a
@@ -696,7 +726,7 @@ node `set_embeddings()` / `embed_texts()` give an unknown column — so a
 misspelling never creates an empty store. Store manual vectors under a
 property the relationships have.
 
-`db.edge_embeddings.list({type?, text_property?})` reports `entity`, `type`,
+`db.relationship_embeddings.list({type?, text_property?})` reports `entity`, `type`,
 `text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
 `index_state`, pending `delta`, and `unembedded` relationship count. `delta`
 counts the stored vectors the index does not hold, so with no index built it
@@ -742,24 +772,24 @@ no vector scores `null` and so comes **first** under `DESC`; add
 `relationship:TYPE.property_emb` — a comma-separated list sorted by
 relationship type when several stores were merged — and `disabled_passes=
 ['fuse_vector_score_order_limit']` turns the fusion off for nodes and
-relationships alike. `db.edge_embeddings.query` below ranks a whole store
+relationships alike. `db.relationship_embeddings.query` below ranks a whole store
 without a pattern.
 
 The explicit whole-store lifecycle and query procedures are:
 
 ```cypher
-CALL db.edge_embeddings.build_index({
+CALL db.relationship_embeddings.build_index({
   type:'SUPPORTS', text_property:'evidence',
   m:16, ef_construction:200, ef_search:64, auto_refresh_limit:1000
 }) YIELD indexed, metric, m
 
-CALL db.edge_embeddings.refresh_index({type:'SUPPORTS', text_property:'evidence'})
+CALL db.relationship_embeddings.refresh_index({type:'SUPPORTS', text_property:'evidence'})
 YIELD refreshed
 
-CALL db.edge_embeddings.drop_index({type:'SUPPORTS', text_property:'evidence'})
+CALL db.relationship_embeddings.drop_index({type:'SUPPORTS', text_property:'evidence'})
 YIELD dropped
 
-CALL db.edge_embeddings.query({
+CALL db.relationship_embeddings.query({
   type:'SUPPORTS', text_property:'evidence', vector:$vector,
   top_k:10, exact:false
 }) YIELD relationship, score, search_method
@@ -786,7 +816,7 @@ its query, and scores the resulting vector — so the text route ranks the same
 relationships as passing that vector yourself:
 
 ```cypher
-CALL db.edge_embeddings.query({
+CALL db.relationship_embeddings.query({
   type:'SUPPORTS', text_property:'evidence', text:$question, top_k:10
 }) YIELD relationship, score
 ```
@@ -800,7 +830,7 @@ then relationship slot, so the order is deterministic. Each row also yields
 `type`, the hit's relationship type, and its own `search_method`:
 
 ```cypher
-CALL db.edge_embeddings.query({
+CALL db.relationship_embeddings.query({
   types:['SUPPORTS','REFUTES'], text_property:'evidence', vector:$vector, top_k:10
 }) YIELD relationship, score, type, search_method
 ```
@@ -909,7 +939,7 @@ properties, use filtered `MATCH` with the exact scalar functions instead.
 > `WITH … AS s WHERE s IS NOT NULL`, leaves the fused route and scores every row
 > exactly; `ORDER BY s DESC NULLS LAST` also puts them last, by exact execution
 > (`ordering_requires_exact`). `vector_search`, `search_text` and
-> `db.edge_embeddings.query` rank the stored vectors only, so they never return
+> `db.relationship_embeddings.query` rank the stored vectors only, so they never return
 > an unembedded entity.
 
 ### Lexical search — `text_bm25`
@@ -925,6 +955,10 @@ The index is **opt-in and explicit**, like `build_vector_index`:
 ```python
 graph.build_text_index("Article", "body")     # Python; every binding has it
 ```
+
+In Cypher the same index is `CALL db.node_text_index.build({type: 'Article',
+property: 'body'})` (also `refresh`, `drop`, `list`; `db.text_index.*` routes
+to it by default).
 
 ```cypher
 // Rank the corpus, best first.
@@ -989,7 +1023,7 @@ Past roughly 1500 documents, folding costs more than rebuilding the index
 outright and the catch-up rebuilds instead: a refresh costs the cheaper of the
 two and never more than one rebuild, whatever the limit is set to.
 
-### Lexical search over relationships — `db.edge_text_index.*`
+### Lexical search over relationships — `db.relationship_text_index.*`
 
 `text_bm25(r, 'property', 'query text')` ranks a relationship exactly as it
 ranks a node, over a BM25 index on one relationship type's property. The
@@ -997,14 +1031,14 @@ relationship index's lifecycle is in Cypher, like the relationship vector
 index's, so every binding reaches it:
 
 ```cypher
-CALL db.edge_text_index.build({type:'SUPPORTS', property:'evidence', auto_refresh_limit:1000})
+CALL db.relationship_text_index.build({type:'SUPPORTS', property:'evidence', auto_refresh_limit:1000})
 YIELD indexed, skipped, terms
 
-CALL db.edge_text_index.refresh({type:'SUPPORTS', property:'evidence'}) YIELD refreshed
+CALL db.relationship_text_index.refresh({type:'SUPPORTS', property:'evidence'}) YIELD refreshed
 
-CALL db.edge_text_index.drop({type:'SUPPORTS', property:'evidence'}) YIELD dropped
+CALL db.relationship_text_index.drop({type:'SUPPORTS', property:'evidence'}) YIELD dropped
 
-CALL db.edge_text_index.list({type:'SUPPORTS'})
+CALL db.relationship_text_index.list({type:'SUPPORTS'})
 YIELD entity, type, property, documents, terms, skipped, index_state, delta, auto_refresh_limit
 ```
 
@@ -1016,20 +1050,20 @@ ORDER BY score DESC LIMIT 10
 
 | Procedure | Yields | Notes |
 |---|---|---|
-| `db.edge_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index. Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
-| `db.edge_text_index.refresh({type, property})` | `refreshed` | Folds in every change since the last build or refresh, whatever the limit; refuses a missing index |
-| `db.edge_text_index.drop({type, property})` | `dropped` | `false` when there was no such index |
-| `db.edge_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Read-only; one row per index, sorted |
+| `db.relationship_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index. Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
+| `db.relationship_text_index.refresh({type, property})` | `refreshed` | Folds in every change since the last build or refresh, whatever the limit; refuses a missing index |
+| `db.relationship_text_index.drop({type, property})` | `dropped` | `false` when there was no such index |
+| `db.relationship_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Read-only; one row per index, sorted |
 
 The semantics are the node lane's: `0.0` for no shared word, `null` for a
 relationship the index holds no document for, an error naming
-`db.edge_text_index.build` when no index exists, and writes (`SET`, `REMOVE`,
+`db.relationship_text_index.build` when no index exists, and writes (`SET`, `REMOVE`,
 `CREATE`/`MERGE` of a relationship — including one that reuses a deleted
 relationship's storage slot — and `add_connections`) folded in at the next
 query within `auto_refresh_limit`. A deleted relationship's document is removed
 at the delete. The first argument may be a `MATCH` binding or a relationship
 value (`collect(r)[0]`, `UNWIND`, a `CALL { }` column, the `relationship`
-column of `db.edge_embeddings.query`); a binding deleted earlier in the same
+column of `db.relationship_embeddings.query`); a binding deleted earlier in the same
 statement scores `null`. `build`, `drop` and any catch-up a statement did are
 undone when the statement fails.
 
@@ -3324,7 +3358,7 @@ DROP INDEX `relationship:SUPPORTS.evidence` IF EXISTS;  -- also works
 
 It drops every relationship structure under the name — the HNSW accelerator
 (keeping the vectors, exactly as the node vector arm does) and the BM25 index;
-`db.edge_embeddings.drop_index` and `db.edge_text_index.drop` are the same
+`db.relationship_embeddings.drop_index` and `db.relationship_text_index.drop` are the same
 operations one structure at a time. The prefix keeps a node label and a relationship type apart, so
 a `Doc.text` node index and a `relationship:Doc.text` relationship index are
 addressed, and dropped, independently. There is no descriptor form for a
@@ -3399,7 +3433,7 @@ that works — never a syntax error, and never a no-op that reports success.
 | `CREATE POINT INDEX` | No point index. Spatial predicates and the spatial-join optimiser work on geometry properties without one |
 | `CREATE VECTOR INDEX` | Vector indexes exist, but need an existing embedding store and HNSW build parameters, so they are created through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
 | `CREATE LOOKUP INDEX` | Label and relationship-type lookup is always indexed automatically (`type_indices`) |
-| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | No DDL form creates a relationship index. Relationship *vector* and *BM25 text* indexes do exist: built with `CALL db.edge_embeddings.build_index(...)` / `CALL db.edge_text_index.build(...)`, listed by `SHOW INDEXES` with `entityType: RELATIONSHIP`, and removed with `DROP INDEX relationship:T.p`. Every other relationship property is queryable, just scanned |
+| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | No DDL form creates a relationship index. Relationship *vector* and *BM25 text* indexes do exist: built with `CALL db.relationship_embeddings.build_index(...)` / `CALL db.relationship_text_index.build(...)`, listed by `SHOW INDEXES` with `entityType: RELATIONSHIP`, and removed with `DROP INDEX relationship:T.p`. Every other relationship property is queryable, just scanned |
 | `... OPTIONS { ... }` | No index providers or per-index configuration to apply |
 | `CREATE RANGE INDEX ... ON (n.a, n.b)` | The B-tree is single-property. Use a composite equality index, or one `CREATE RANGE INDEX` per property |
 

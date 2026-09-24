@@ -241,7 +241,7 @@ fn a_yielded_relationship_reads_its_stored_id() {
     // Pre-fix: [0, 'REL'] — knwler's `relation.id` came back as the slot.
     assert_rows(
         &graph,
-        "CALL db.edge_embeddings.query({type:'REL', text_property:'text', vector:[1.0, 0.0], \
+        "CALL db.relationship_embeddings.query({type:'REL', text_property:'text', vector:[1.0, 0.0], \
          top_k:1, exact:true}) YIELD relationship RETURN relationship.id, relationship.type",
         vec![vec![s("user-7"), s("user-type")]],
     );

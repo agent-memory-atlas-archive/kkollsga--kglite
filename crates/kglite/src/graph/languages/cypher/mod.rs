@@ -145,9 +145,12 @@ pub fn may_invoke_embedder(query: &CypherQuery) -> bool {
 
 fn clause_may_invoke_embedder(clause: &Clause) -> bool {
     match clause {
-        Clause::Call(call) => call
-            .procedure_name
-            .eq_ignore_ascii_case("db.edge_embeddings.embed"),
+        Clause::Call(call) => [
+            "db.node_embeddings.embed",
+            "db.relationship_embeddings.embed",
+        ]
+        .iter()
+        .any(|name| call.procedure_name.eq_ignore_ascii_case(name)),
         Clause::CallSubquery { body, .. } => may_invoke_embedder(body),
         Clause::Union(union) => may_invoke_embedder(&union.query),
         Clause::Foreach { body, .. } => body.iter().any(clause_may_invoke_embedder),
@@ -272,7 +275,7 @@ mod query_feature_tests {
     #[test]
     fn classifies_edge_embedding_callbacks_across_union_branches() {
         let direct = parse_cypher(
-            "CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+            "CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
              YIELD embedded RETURN embedded",
         )
         .unwrap();
@@ -280,7 +283,7 @@ mod query_feature_tests {
 
         let nested = parse_cypher(
             "RETURN 0 AS embedded UNION ALL \
-             CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
              YIELD embedded RETURN embedded",
         )
         .unwrap();
@@ -299,7 +302,7 @@ mod query_feature_tests {
     fn classifies_edge_embedding_callbacks_inside_call_subqueries_and_foreach() {
         let subquery = parse_cypher(
             "MATCH (n:Doc) CALL { WITH n \
-             CALL db.edge_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
              YIELD embedded RETURN embedded } RETURN n, embedded",
         )
         .unwrap();
@@ -316,7 +319,7 @@ mod query_feature_tests {
         assert!(!may_invoke_embedder(&foreach));
         assert!(
             parse_cypher(
-                "FOREACH (x IN [1] | CALL db.edge_embeddings.embed({type:'R', \
+                "FOREACH (x IN [1] | CALL db.relationship_embeddings.embed({type:'R', \
                  text_property:'text', relationships:[]}) YIELD embedded RETURN embedded)"
             )
             .is_err(),

@@ -3,7 +3,7 @@
 The reverse direction (``KnowledgeGraph.to_networkx()``) lives in Rust
 (``crates/kglite-py/src/graph/pyapi/networkx.rs``). This module is the
 import side — pure Python, bulk-loading via the DataFrame fast paths
-(``add_nodes`` / ``add_connections``) so it stays O(n + e).
+(``add_nodes`` / ``add_relationships``) so it stays O(n + e).
 """
 
 from __future__ import annotations
@@ -337,7 +337,7 @@ def _collect_edges(
 ) -> dict[tuple[str, str, str], list[dict]]:
     """Group edges by (connection_type, source_type, target_type).
 
-    ``add_connections`` is keyed on a single (src_type, edge_type, tgt_type)
+    ``add_relationships`` is keyed on a single (src_type, edge_type, tgt_type)
     triple, so we bucket accordingly. Each bucket carries its own property
     columns.
     """
@@ -545,7 +545,7 @@ def from_networkx(
     edges_by_key = _collect_edges(nx_graph, key_mode, type_of_node, spec)
     for (ctype, stype, ttype), rows in edges_by_key.items():
         df = _ingestion_frame(rows, ("src", "tgt"))
-        g.add_connections(
+        g.add_relationships(
             df,
             ctype,
             stype,

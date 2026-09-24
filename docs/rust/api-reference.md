@@ -64,8 +64,8 @@ When the curated facade proves stable in the field, we cut 1.0 and the pre-1.0
 | `write_kgl` / `write_kgl_with(..., fsync)` | `kglite::api::io::write_kgl*` | Atomic (temp+rename) + durable (`fsync`) `.kgl` write. `write_kgl_with` toggles the flush. |
 | `write_kgl_to(&graph, &mut writer)` | `kglite::api::io::write_kgl_to` | Serialize the `.kgl` byte stream into any `Write` (backs `to_bytes`). |
 | `export_embeddings_to_file(&graph, path, filter, &keys)` | `kglite::api::io::export_embeddings_to_file` | Write node and relationship embedding stores to a standalone `.kgle` file → `ExportStats`. Node-only exports are `.kgle` version 3; an export carrying relationship stores is version 4. |
-| `import_embeddings_from_file(&mut graph, path, &keys)` | `kglite::api::io::import_embeddings_from_file` | Install a `.kgle` file's stores by node id and relationship address → `ImportStats` (its `relationships` field is an `EdgeCarryStats`). |
-| `RelationshipKeys`, `EdgeCarryStats`, `EmbeddingCopyReport` | `kglite::api::io::*` | The relationship carry: `RelationshipKeys` maps a relationship type to the key property that tells a parallel group's members apart. |
+| `import_embeddings_from_file(&mut graph, path, &keys)` | `kglite::api::io::import_embeddings_from_file` | Install a `.kgle` file's stores by node id and relationship address → `ImportStats` (its `relationships` field is an `RelationshipCarryStats`). |
+| `RelationshipKeys`, `RelationshipCarryStats`, `EmbeddingCopyReport` | `kglite::api::io::*` | The relationship carry: `RelationshipKeys` maps a relationship type to the key property that tells a parallel group's members apart. |
 
 `DirGraph::copy_embeddings_from(&src)` carries node embedding stores across a
 rebuild by node id. `DirGraph::copy_embeddings_with_relationships_from(&src,
@@ -87,17 +87,17 @@ import or copy then writes nothing. `embedding_dim`, `replace_connections`,
 | `set_embeddings` / `add_embeddings` / `embed_property` | Write node vectors: replace a store, upsert into one, or compute them through a bound `Embedder`. |
 | `build_vector_index` / `refresh_vector_index` / `drop_vector_index` / `has_vector_index` / `list_vector_indexes` | Node HNSW index lifecycle. A built index is saved in `.kgl` (node and relationship alike); disk generations keep neither. `refresh_vector_index` returns `Result<usize, String>`: the vectors it folded in (`0` when current or read-only), or an error when the store or its index does not exist — it never builds one. |
 | `list_embeddings(&graph)` → `Vec<EmbeddingStoreInfo>` | Node stores only. The C ABI publishes its `node_type` field verbatim, so relationship stores are not folded in. |
-| `list_edge_embeddings(&graph)` → `Vec<EdgeEmbeddingStoreInfo>` | Relationship stores, sorted by type and store. |
+| `list_relationship_embeddings(&graph)` → `Vec<RelationshipEmbeddingStoreInfo>` | Relationship stores, sorted by type and store. |
 | `embedding_info(&graph, EmbeddingEntity, type, column)` | Provenance for one store (dimension, count, model, effective metric, hashed). `EmbeddingEntity::{Node, Relationship}` is explicit because a node type and a relationship type may share a name. |
 | `relationship_embeddings(&graph, relationship_type, text_column, &RelationshipKeys)` → `Result<Vec<RelationshipEmbedding>, String>` | Every vector in a relationship store, addressed by endpoint `(type, id)` and ordered by source, target, key, slot — the edge-list plus edge-feature shape. Parallel relationships are told apart by the key property named for their type in `RelationshipKeys`; a named key missing on a member, or repeated within a group, is refused by name. |
-| `set_relationship_embeddings` / `add_relationship_embeddings` `(&mut graph, relationship_type, text_column, rows, &RelationshipKeys, metric)` → `Result<RelationshipIngestReport, String>` | Write relationship vectors, each `RelationshipVector` addressed as `relationship_embeddings` reads it back: endpoint `(type, id)` pairs (the types may be `None` when the relationship type has one source and one target node type) plus a key for a parallel-group member. `set_` **replaces** the store (old vectors, metric, provenance and HNSW index discarded), as `set_embeddings` does for nodes; `add_` **upserts**, as `add_embeddings` and `db.edge_embeddings.set` do (same store path, dimension, metric and provenance rules as the procedure). Every row is resolved first; a row naming no relationship, an ambiguous parallel group, a key a member lacks or repeats, or two rows naming one relationship is refused by its position. `From<RelationshipEmbedding>` makes read-modify-write a round trip. |
-| `embed_relationship_texts(&mut graph, relationship_type, text_column, EmbedMode, &dyn Embedder, &EmbedHooks, metric)` → `Result<EmbedOutcome, EmbedError>` | Embed every relationship of a type through a bound `Embedder` — the relationship twin of `embed_property`, and the pass `db.edge_embeddings.embed` runs over every relationship of the type. Records the model id and per-relationship text hashes. |
+| `set_relationship_embeddings` / `add_relationship_embeddings` `(&mut graph, relationship_type, text_column, rows, &RelationshipKeys, metric)` → `Result<RelationshipIngestReport, String>` | Write relationship vectors, each `RelationshipVector` addressed as `relationship_embeddings` reads it back: endpoint `(type, id)` pairs (the types may be `None` when the relationship type has one source and one target node type) plus a key for a parallel-group member. `set_` **replaces** the store (old vectors, metric, provenance and HNSW index discarded), as `set_embeddings` does for nodes; `add_` **upserts**, as `add_embeddings` and `db.relationship_embeddings.set` do (same store path, dimension, metric and provenance rules as the procedure). Every row is resolved first; a row naming no relationship, an ambiguous parallel group, a key a member lacks or repeats, or two rows naming one relationship is refused by its position. `From<RelationshipEmbedding>` makes read-modify-write a round trip. |
+| `embed_relationship_texts(&mut graph, relationship_type, text_column, EmbedMode, &dyn Embedder, &EmbedHooks, metric)` → `Result<EmbedOutcome, EmbedError>` | Embed every relationship of a type through a bound `Embedder` — the relationship twin of `embed_property`, and the pass `db.relationship_embeddings.embed` runs over every relationship of the type. Records the model id and per-relationship text hashes. |
 | `embedding_diagnostics(&graph, node_type, relationship_type)` | Coverage rows (`EmbeddingDiagnostic`: an `EmbeddingCoverage` of embedded / embeddable / store-orphan, with `LengthStats`) for node and relationship types. With no filter, every node type and every relationship type is scanned. |
 
-Relationship vectors are queried through Cypher (`db.edge_embeddings.query`,
+Relationship vectors are queried through Cypher (`db.relationship_embeddings.query`,
 `vector_score(r, …)`, `text_score(r, …)`), which every binding reaches through
 the query pipeline. They are written either in a query
-(`db.edge_embeddings.set` / `.embed` over bound relationships) or in bulk
+(`db.relationship_embeddings.set` / `.embed` over bound relationships) or in bulk
 through the two writers above, which share the procedures' store path.
 
 ## Schema introspection
@@ -166,7 +166,7 @@ The identity is invisible to every comparison: `PartialEq`, `Eq`, `Hash`,
 `DISTINCT` and one position under `ORDER BY` whatever identity they carry. Serde
 omits the field, and public result publication clears it. What the identity does
 gate is the small set of operations that write through a relationship value —
-the `db.edge_embeddings.*` procedures and `DELETE` — which compare the token
+the `db.relationship_embeddings.*` procedures and `DELETE` — which compare the token
 explicitly and refuse a value this statement did not bind or whose slot it has
 since retired.
 

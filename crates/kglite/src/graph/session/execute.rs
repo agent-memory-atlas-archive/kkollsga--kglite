@@ -832,7 +832,7 @@ fn prepare(
     cypher::emit_query_warnings(&warnings);
 
     // Rewrites `text_score(...)` calls to `vector_score(...)` and
-    // `db.edge_embeddings.query`'s `text` option to `vector`, collecting the
+    // the embedding `query` procedures' `text` option to `vector`, collecting the
     // texts to embed alongside.
     let rewrite = cypher::rewrite_text_score(&mut parsed, opts.params).map_err(|message| {
         KgError::CypherExecution {
@@ -996,7 +996,8 @@ fn embed_into_params(
         .as_ref()
         .ok_or_else(|| KgError::CypherExecution {
             message: "Embedding query text for text_score() or \
-                      CALL db.edge_embeddings.query({text: ...}) requires a registered \
+                      CALL db.node_embeddings.query / db.relationship_embeddings.query({text: ...}) \
+                      requires a registered \
                       embedding model. \
                       Call g.set_embedder(model) first (Python) or pass an embedder \
                       via ExecuteOptions::embedder (downstream Rust consumers), \

@@ -506,7 +506,7 @@ KgliteStatusCode kglite_session_build_vector_index(struct KgliteSession *session
  * not listed here, because each row names its type under `node_type`; read
  * them through Cypher instead, with
  * [`kglite_session_execute_read`](crate::kglite_session_execute_read) and
- * `CALL db.edge_embeddings.list() YIELD type, text_property, store, dimension,
+ * `CALL db.relationship_embeddings.list() YIELD type, text_property, store, dimension,
  * count, metric, model, index_state`. Reads a snapshot, so it takes no write
  * lock and never forks.
  *

@@ -178,16 +178,16 @@ def edge_vector_differential_graph():
     for key, vector in enumerate(vectors):
         graph.cypher(
             "MATCH ()-[r:R]->() WHERE r.k=$key "
-            "CALL db.edge_embeddings.set({type:'R',text_property:'text',"
+            "CALL db.relationship_embeddings.set({type:'R',text_property:'text',"
             "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
             params={"key": key, "vector": vector},
         )
     metadata = graph.cypher(
-        "CALL db.edge_embeddings.list({type:'R',text_property:'text'}) YIELD count RETURN count"
+        "CALL db.relationship_embeddings.list({type:'R',text_property:'text'}) YIELD count RETURN count"
     ).to_list()
     assert metadata == [{"count": 4}], "fixture must install all four relationship vectors"
     built = graph.cypher(
-        "CALL db.edge_embeddings.build_index({type:'R',text_property:'text'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'R',text_property:'text'}) YIELD indexed RETURN indexed"
     ).to_list()
     assert built == [{"indexed": 4}], "fixture must install a real relationship HNSW index"
     scored = graph.cypher(
@@ -211,7 +211,7 @@ def edge_vector_exact_graph():
     for key, vector in enumerate(vectors):
         graph.cypher(
             "MATCH ()-[r:R]->() WHERE r.k=$key "
-            "CALL db.edge_embeddings.set({type:'R',text_property:'text',"
+            "CALL db.relationship_embeddings.set({type:'R',text_property:'text',"
             "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
             params={"key": key, "vector": vector},
         )
@@ -238,13 +238,13 @@ def edge_vector_cross_type_graph():
     for rel_type, key, angle, target in edges:
         graph.cypher(
             f"MATCH (a:N{{id:1}}),(b:N{{id:$target}}) CREATE (a)-[r:{rel_type}{{k:$key,text:'t'}}]->(b) "
-            f"WITH r CALL db.edge_embeddings.set({{type:'{rel_type}',text_property:'text',"
+            f"WITH r CALL db.relationship_embeddings.set({{type:'{rel_type}',text_property:'text',"
             "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
             params={"key": key, "target": target, "vector": [math.cos(angle), math.sin(angle)]},
         )
     for rel_type in ("R", "S"):
         graph.cypher(
-            f"CALL db.edge_embeddings.build_index({{type:'{rel_type}',text_property:'text'}}) "
+            f"CALL db.relationship_embeddings.build_index({{type:'{rel_type}',text_property:'text'}}) "
             "YIELD indexed RETURN indexed"
         )
     return graph
@@ -260,7 +260,7 @@ def edge_text_differential_graph():
         "(a)-[:R{k:2,body:'slow turtle'}]->(c),(b)-[:R{k:3,body:'fox'}]->(c)"
     )
     built = graph.cypher(
-        "CALL db.edge_text_index.build({type:'R',property:'body'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_text_index.build({type:'R',property:'body'}) YIELD indexed RETURN indexed"
     ).to_list()
     assert built == [{"indexed": 4}], "fixture must install a real relationship text index"
     return graph
@@ -343,12 +343,12 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     (
         "edge_vector_query_yield_where",
         "edge_vector_differential_graph",
-        "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
+        "CALL db.relationship_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
         "top_k:4,exact:true}) YIELD relationship,score WHERE relationship.k <> 0 "
         "RETURN relationship.k AS k,score ORDER BY k",
         None,
     ),
-    # `db.edge_embeddings.query({text: $q})` is rewritten at preparation into
+    # `db.relationship_embeddings.query({text: $q})` is rewritten at preparation into
     # `vector: $__ts_N`, a parameter bound to the embedded list. This corpus
     # registers no embedder, so it can exercise only the vector spelling: the
     # post-rewrite shape, a `vector` parameter feeding the passes. The text
@@ -356,7 +356,7 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     (
         "edge_vector_query_vector_parameter",
         "edge_vector_differential_graph",
-        "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:$q,top_k:3}) "
+        "CALL db.relationship_embeddings.query({type:'R',text_property:'text',vector:$q,top_k:3}) "
         "YIELD relationship,score WITH relationship,score ORDER BY score DESC, relationship.k "
         "RETURN relationship.k AS k,score",
         {"q": [1.0, 0.0]},
@@ -369,9 +369,44 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     (
         "edge_vector_query_relationship_accessors",
         "edge_vector_differential_graph",
-        "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
+        "CALL db.relationship_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
         "top_k:4,exact:true}) YIELD relationship WHERE startNode(relationship).id = 1 "
         "RETURN relationship.k AS k,type(relationship) AS t,endNode(relationship).id AS e",
+        None,
+    ),
+    # `db.node_embeddings.query` — the node twin, ranked by the same dense-store
+    # core — and the `db.embeddings.*` router, which the parser resolves to the
+    # specific procedure before any pass runs (node by default, relationship on
+    # `entity`). A YIELD-WHERE and an ORDER BY over the yielded node.
+    (
+        "node_vector_query_yield_where",
+        "vector_order_graph",
+        "CALL db.node_embeddings.query({type:'Doc',text_property:'summary',vector:[1.0,0.0],"
+        "top_k:3,exact:true}) YIELD node,score WHERE node.id <> 0 "
+        "RETURN node.id AS id,score ORDER BY id",
+        None,
+    ),
+    (
+        "node_vector_query_vector_parameter_every_store",
+        "vector_order_graph",
+        "CALL db.node_embeddings.query({text_property:'summary',vector:$q,top_k:2}) "
+        "YIELD node,score,type WITH node,score,type ORDER BY score DESC, node.id "
+        "RETURN node.id AS id,score,type",
+        {"q": [0.0, 1.0]},
+    ),
+    (
+        "router_vector_query_default_node",
+        "vector_order_graph",
+        "CALL db.embeddings.query({type:'Doc',text_property:'summary',vector:[1.0,0.0],top_k:2}) "
+        "YIELD node,score WHERE score > 0 RETURN node.id AS id,score",
+        None,
+    ),
+    (
+        "router_vector_query_relationship_entity",
+        "edge_vector_differential_graph",
+        "CALL db.embeddings.query({entity:'relationship',type:'R',text_property:'text',"
+        "vector:[1.0,0.0],top_k:4,exact:true}) YIELD relationship,score "
+        "WHERE relationship.k <> 0 RETURN relationship.k AS k,score ORDER BY k",
         None,
     ),
     # `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships: the

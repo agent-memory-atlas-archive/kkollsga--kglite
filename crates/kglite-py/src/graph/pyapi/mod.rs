@@ -7,6 +7,8 @@
 
 pub mod algorithms;
 pub mod blueprint;
+pub mod connection_pointers;
+pub mod embedding_routes;
 pub mod export;
 pub mod frozen;
 pub mod indexes;

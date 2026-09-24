@@ -38,14 +38,14 @@ pub(super) fn execute(
         params.keys().map(String::as_str),
         accepted_keys(proc_name),
     )?;
-    if proc_name == "db.edge_embeddings.embed" {
+    if proc_name == "db.relationship_embeddings.embed" {
         let values = execute_embed(graph, params, identities, service)?;
         return Ok(vec![yield_row(values, yields)]);
     }
     let relationship_type = require_string(params, "type", proc_name)?;
     let text_property = require_string(params, "text_property", proc_name)?;
     let values = match proc_name {
-        "db.edge_embeddings.set" => {
+        "db.relationship_embeddings.set" => {
             let report = execute_set(
                 graph,
                 params,
@@ -58,7 +58,7 @@ pub(super) fn execute(
                 ("dimension", Value::Int64(report.dimension as i64)),
             ])
         }
-        "db.edge_embeddings.remove" => {
+        "db.relationship_embeddings.remove" => {
             let relationships = require_list(params, "relationships", proc_name)?;
             let edges =
                 resolve_relationships(relationships, &relationship_type, identities, proc_name)?;
@@ -67,11 +67,11 @@ pub(super) fn execute(
                 remove_edge_embeddings(graph, &relationship_type, &text_property, &edges)?;
             HashMap::from([("removed", Value::Int64(removed as i64))])
         }
-        "db.edge_embeddings.drop" => {
+        "db.relationship_embeddings.drop" => {
             let dropped = drop_edge_embedding_store(graph, &relationship_type, &text_property)?;
             HashMap::from([("dropped", Value::Boolean(dropped))])
         }
-        "db.edge_embeddings.build_index" => {
+        "db.relationship_embeddings.build_index" => {
             let report = build_edge_vector_index(
                 graph,
                 &relationship_type,
@@ -94,11 +94,11 @@ pub(super) fn execute(
                 ("m", Value::Int64(report.m as i64)),
             ])
         }
-        "db.edge_embeddings.refresh_index" => {
+        "db.relationship_embeddings.refresh_index" => {
             let refreshed = refresh_edge_vector_index(graph, &relationship_type, &text_property)?;
             HashMap::from([("refreshed", Value::Int64(refreshed as i64))])
         }
-        "db.edge_embeddings.drop_index" => {
+        "db.relationship_embeddings.drop_index" => {
             let dropped = drop_edge_vector_index(graph, &relationship_type, &text_property)?;
             HashMap::from([("dropped", Value::Boolean(dropped))])
         }
@@ -113,12 +113,13 @@ pub(super) fn list(
     yields: &[YieldItem],
 ) -> Result<Vec<ResultRow>, String> {
     reject_unknown_keys(
-        "CALL db.edge_embeddings.list",
+        "CALL db.relationship_embeddings.list",
         params.keys().map(String::as_str),
-        accepted_keys("db.edge_embeddings.list"),
+        accepted_keys("db.relationship_embeddings.list"),
     )?;
-    let type_filter = optional_string(params, "type", "db.edge_embeddings.list")?;
-    let property_filter = optional_string(params, "text_property", "db.edge_embeddings.list")?;
+    let type_filter = optional_string(params, "type", "db.relationship_embeddings.list")?;
+    let property_filter =
+        optional_string(params, "text_property", "db.relationship_embeddings.list")?;
     let statuses = crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
         .into_iter()
         .map(|status| {
@@ -194,7 +195,7 @@ pub(super) fn query(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
 ) -> Result<Vec<EdgeStoreQueryHit>, String> {
-    let proc_name = "db.edge_embeddings.query";
+    let proc_name = "db.relationship_embeddings.query";
     reject_unknown_keys(
         &format!("CALL {proc_name}"),
         params.keys().map(String::as_str),
@@ -236,7 +237,7 @@ fn query_types(
     proc_name: &str,
 ) -> Result<Vec<String>, String> {
     let omit_hint = format!("or omit it to rank every '{text_property}' store");
-    if let Some(types) = named_types(params, proc_name, &omit_hint)? {
+    if let Some(types) = named_types(params, proc_name, &omit_hint, "relationship")? {
         return Ok(types);
     }
     let mut types: Vec<String> = graph
@@ -261,17 +262,18 @@ fn query_types(
 /// list (sorted, duplicates dropped); `None` when it names neither. The two
 /// are mutually exclusive, and an empty list is refused with `empty_hint` as
 /// the alternative the caller has.
-fn named_types(
+pub(super) fn named_types(
     params: &HashMap<String, Value>,
     proc_name: &str,
     empty_hint: &str,
+    entity: &str,
 ) -> Result<Option<Vec<String>>, String> {
     let listed = match params.get("types") {
         None | Some(Value::Null) => None,
         Some(Value::List(items)) => Some(items),
         Some(value) => {
             return Err(format!(
-                "CALL {proc_name}: 'types' must be a list of relationship types, got {}",
+                "CALL {proc_name}: 'types' must be a list of {entity} types, got {}",
                 value.type_name()
             ))
         }
@@ -284,7 +286,7 @@ fn named_types(
         (Some(_), Some(_)) => {
             return Err(format!(
                 "CALL {proc_name}: 'type' and 'types' are mutually exclusive; name one \
-                 relationship type, or a list of them"
+                 {entity} type, or a list of them"
             ))
         }
         (Some(single), None) => vec![single],
@@ -303,7 +305,7 @@ fn named_types(
             }
             if types.is_empty() {
                 return Err(format!(
-                    "CALL {proc_name}: 'types' is empty; name at least one relationship type, \
+                    "CALL {proc_name}: 'types' is empty; name at least one {entity} type, \
                      {empty_hint}"
                 ));
             }
@@ -316,7 +318,7 @@ fn named_types(
     Ok(Some(types))
 }
 
-/// `db.edge_embeddings.embed`: one generation pass per named type over the
+/// `db.relationship_embeddings.embed`: one generation pass per named type over the
 /// relationships of that type in the list, reported as one row — `embedded`
 /// and `skipped` summed, `dimension` and `model` the value the passes share
 /// (null when they differ). Every relationship must be of a named type.
@@ -326,8 +328,8 @@ fn execute_embed(
     identities: &Arc<Mutex<StatementRelationshipIdentities>>,
     service: Option<&EmbeddingExecutionService<'_>>,
 ) -> Result<HashMap<&'static str, Value>, String> {
-    let proc_name = "db.edge_embeddings.embed";
-    let types = named_types(params, proc_name, "or pass type")?
+    let proc_name = "db.relationship_embeddings.embed";
+    let types = named_types(params, proc_name, "or pass type", "relationship")?
         .ok_or_else(|| format!("CALL {proc_name}: missing parameter 'type'"))?;
     let text_property = require_string(params, "text_property", proc_name)?;
     let relationships = require_list(params, "relationships", proc_name)?;
@@ -375,16 +377,7 @@ fn execute_embed(
                 .map_err(|error| format!("CALL {proc_name}: {error}"))?;
         }
     }
-    let mode = match optional_string(params, "mode", proc_name)?.as_deref() {
-        None | Some("missing") => EmbedMode::Missing,
-        Some("changed") => EmbedMode::Changed,
-        Some("all") => EmbedMode::All,
-        Some(other) => {
-            return Err(format!(
-                "CALL {proc_name}: unknown mode '{other}'; use missing, changed, or all"
-            ))
-        }
-    };
+    let mode = embed_mode(params, proc_name)?;
     let batch_size = optional_positive_usize(params, "batch_size", proc_name)?.unwrap_or(256);
     let metric = optional_string(params, "metric", proc_name)?;
     let mut reports = Vec::with_capacity(types.len());
@@ -440,7 +433,22 @@ fn execute_embed(
     ]))
 }
 
-/// Every parameter each `db.edge_embeddings.*` procedure reads, by name.
+/// An `embed` procedure's `mode`: `missing` (the default), `changed` or `all`.
+pub(super) fn embed_mode(
+    params: &HashMap<String, Value>,
+    proc_name: &str,
+) -> Result<EmbedMode, String> {
+    match optional_string(params, "mode", proc_name)?.as_deref() {
+        None | Some("missing") => Ok(EmbedMode::Missing),
+        Some("changed") => Ok(EmbedMode::Changed),
+        Some("all") => Ok(EmbedMode::All),
+        Some(other) => Err(format!(
+            "CALL {proc_name}: unknown mode '{other}'; use missing, changed, or all"
+        )),
+    }
+}
+
+/// Every parameter each `db.relationship_embeddings.*` procedure reads, by name.
 ///
 /// One table rather than a literal at each call site: the nine procedures share
 /// `type`/`text_property` (`query` and `embed` also take `types`) and differ
@@ -448,15 +456,15 @@ fn execute_embed(
 /// that goes stale when a parameter is added two functions away. The strings
 /// are also the "Accepted:" line a caller sees, so they carry the required
 /// names as well as the optional ones.
-fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
+pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
-        "db.edge_embeddings.set" => &["type", "text_property", "entries", "metric"],
-        "db.edge_embeddings.remove" => &["type", "text_property", "relationships"],
-        "db.edge_embeddings.drop"
-        | "db.edge_embeddings.refresh_index"
-        | "db.edge_embeddings.drop_index"
-        | "db.edge_embeddings.list" => &["type", "text_property"],
-        "db.edge_embeddings.build_index" => &[
+        "db.relationship_embeddings.set" => &["type", "text_property", "entries", "metric"],
+        "db.relationship_embeddings.remove" => &["type", "text_property", "relationships"],
+        "db.relationship_embeddings.drop"
+        | "db.relationship_embeddings.refresh_index"
+        | "db.relationship_embeddings.drop_index"
+        | "db.relationship_embeddings.list" => &["type", "text_property"],
+        "db.relationship_embeddings.build_index" => &[
             "type",
             "text_property",
             "m",
@@ -465,7 +473,7 @@ fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
             "metric",
             "auto_refresh_limit",
         ],
-        "db.edge_embeddings.embed" => &[
+        "db.relationship_embeddings.embed" => &[
             "type",
             "types",
             "text_property",
@@ -477,7 +485,7 @@ fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         // `text` never reaches `query`: preparation rewrites it into `vector`
         // (`planner::simplification::rewrite_text_score`). It is listed so the
         // "Accepted:" line names every spelling a caller may write.
-        "db.edge_embeddings.query" => &[
+        "db.relationship_embeddings.query" => &[
             "type",
             "types",
             "text_property",
@@ -498,7 +506,7 @@ fn execute_set(
     text_property: &str,
     identities: &Arc<Mutex<StatementRelationshipIdentities>>,
 ) -> Result<EdgeEmbeddingWriteReport, String> {
-    let proc_name = "db.edge_embeddings.set";
+    let proc_name = "db.relationship_embeddings.set";
     let entries = require_list(params, "entries", proc_name)?;
     let mut resolved = Vec::with_capacity(entries.len());
     for (position, entry) in entries.iter().enumerate() {
@@ -538,7 +546,7 @@ fn execute_set(
 /// Where a relationship sat in the list a procedure was given, as the caller
 /// spelled it: `entries[2]`, `relationships[0]`.
 #[derive(Clone, Copy)]
-struct ListPosition(&'static str, usize);
+pub(super) struct ListPosition(pub(super) &'static str, pub(super) usize);
 
 impl std::fmt::Display for ListPosition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -628,7 +636,7 @@ fn resolve_rel_value(
     Ok(edge)
 }
 
-fn numeric_vector(value: Option<&Value>, proc_name: &str) -> Result<Vec<f32>, String> {
+pub(super) fn numeric_vector(value: Option<&Value>, proc_name: &str) -> Result<Vec<f32>, String> {
     let Some(Value::List(values)) = value else {
         return Err(format!("CALL {proc_name}: 'vector' must be a numeric list"));
     };
@@ -642,7 +650,7 @@ fn numeric_vector(value: Option<&Value>, proc_name: &str) -> Result<Vec<f32>, St
         .collect()
 }
 
-fn require_list<'a>(
+pub(super) fn require_list<'a>(
     params: &'a HashMap<String, Value>,
     name: &str,
     proc_name: &str,
@@ -687,7 +695,7 @@ pub(super) fn optional_string(
     }
 }
 
-fn optional_positive_usize(
+pub(super) fn optional_positive_usize(
     params: &HashMap<String, Value>,
     name: &str,
     proc_name: &str,
@@ -715,7 +723,7 @@ pub(super) fn optional_nonnegative_usize(
     }
 }
 
-fn optional_boolean(
+pub(super) fn optional_boolean(
     params: &HashMap<String, Value>,
     name: &str,
     proc_name: &str,

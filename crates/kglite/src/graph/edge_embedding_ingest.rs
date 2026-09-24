@@ -1,5 +1,5 @@
 //! Bulk relationship-vector writes addressed by endpoints — the binding
-//! entry points beside `db.edge_embeddings.set` and `.embed`.
+//! entry points beside `db.relationship_embeddings.set` and `.embed`.
 //!
 //! A row names its relationship the way [`relationship_embeddings`] reads one
 //! back: `(source type, source id, target type, target id)` plus, for a
@@ -90,7 +90,7 @@ pub struct RelationshipIngestReport {
 /// rows do not name are left without one. The dimension is the first
 /// vector's, `metric` the new store's metric (cosine when `None`), and the
 /// store records no model id or text hashes. Use
-/// [`add_relationship_embeddings`] (or `db.edge_embeddings.set`, which also
+/// [`add_relationship_embeddings`] (or `db.relationship_embeddings.set`, which also
 /// upserts) to extend a store instead.
 ///
 /// Every row is resolved before anything is written, and a row that does not
@@ -129,7 +129,7 @@ where
 /// Upsert `rows` into the `(relationship_type, "{text_column}_emb")` store,
 /// creating it if needed — the relationship twin of the node
 /// [`add_embeddings`](crate::graph::embeddings::add_embeddings), and the
-/// endpoint-addressed twin of `db.edge_embeddings.set`, with the same rules.
+/// endpoint-addressed twin of `db.relationship_embeddings.set`, with the same rules.
 ///
 /// Relationships the rows do not name keep their vectors. An existing store's
 /// dimension is authoritative; `metric` is the new store's metric, is refused
@@ -200,13 +200,13 @@ impl From<super::EdgeEmbeddingWriteReport> for RelationshipIngestReport {
 /// Embed `text_column` for every relationship of `relationship_type` through
 /// `model` — the relationship twin of
 /// [`embed_property`](crate::graph::embeddings::embed_property), and the same
-/// pass `db.edge_embeddings.embed` runs over a selection holding every
+/// pass `db.relationship_embeddings.embed` runs over a selection holding every
 /// relationship of the type.
 ///
 /// `mode` selects as it does for nodes: `Missing` embeds relationships with no
 /// vector, `Changed` also those whose text no longer matches the stored hash,
 /// `All` re-embeds every one (and removes the vector of one whose text is
-/// gone). `metric` is recorded on the store as `db.edge_embeddings.embed`'s
+/// gone). `metric` is recorded on the store as `db.relationship_embeddings.embed`'s
 /// `metric` is. `hooks` supplies the batch size, a wrapper around each model
 /// call and progress callbacks; `load_when_idle` is not consulted — a pass with
 /// nothing to embed never loads the model, and reports the model's declared

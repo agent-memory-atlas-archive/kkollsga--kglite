@@ -1,6 +1,6 @@
 //! Relationship embedding generation: select relationships, read their text,
 //! run the registered model over what needs it, and install the result as one
-//! generated write. `db.edge_embeddings.embed` drives it with a Cypher
+//! generated write. `db.relationship_embeddings.embed` drives it with a Cypher
 //! selection; `api::embeddings::embed_relationship_texts` with every
 //! relationship of a type.
 
@@ -383,7 +383,7 @@ fn plan_selection(
 ///
 /// A store that already holds vectors of unknown or foreign provenance stays
 /// unknown unless a full `all` pass covers every one of them.
-fn final_model_id(
+pub(crate) fn final_model_id(
     prior: Option<&str>,
     requested: Option<&str>,
     mode: EmbedMode,

@@ -1,7 +1,7 @@
 """Relationship-embedding cells paired with their node twins.
 
 Not a core cell: CI runs ``test_bench_core.py`` unmodified under the
-published 0.13.2 wheel, where ``db.edge_embeddings.*`` does not exist, so a
+published 0.13.2 wheel, where ``db.relationship_embeddings.*`` does not exist, so a
 relationship cell can never live there. Each cell here instead carries a
 **self-contained ratio guard** against a twin measured in the same process
 (its node twin, or for the parameter cell its sibling shape), which needs no
@@ -15,18 +15,18 @@ Three shapes, mirroring the node harness:
 * **Exact scan scoring** — every relationship of a type scored against a raw
   query vector through ``vector_score`` (twin:
   ``test_bench_vector_score_scan_100k_384``). Deterministic, ``min``.
-* **Store query, exact vs HNSW** — ``db.edge_embeddings.query`` on a
+* **Store query, exact vs HNSW** — ``db.relationship_embeddings.query`` on a
   10k x 128 store with a recall@10 oracle computed outside the timed region
   (twin: ``test_bench_hnsw_search`` / ``test_bench_exact_vector_search``).
   ``min``.
-* **Cross-type query** — ``db.edge_embeddings.query({types: [...]})`` over
+* **Cross-type query** — ``db.relationship_embeddings.query({types: [...]})`` over
   three stores that split the 10k x 128 query corpus, against the
   single-store query on the same total (its twin is the single store, not a
   node path). ``min``.
 * **Vector parameter conversion** — one 5000 x 128 ingest batch bound as a
   Cypher parameter and unwound, as a 2-D float32 array against the same values
   as float lists: the array's bytes route must not be slower (1.05x). ``min``.
-* **Ingest through the embedder** — ``db.edge_embeddings.embed`` filling a
+* **Ingest through the embedder** — ``db.relationship_embeddings.embed`` filling a
   fresh store from a deterministic model (twin: ``embed_texts``). Each round
   ingests into a fresh graph, a once-per-event cost, so the **mean** of
   first writes is the statistic (Performance protocol item 4a).
@@ -92,7 +92,7 @@ def _twin_graphs(n: int, dimension: int, seed: int) -> tuple[kglite.KnowledgeGra
     """A node store and a relationship store holding the same vectors.
 
     The relationship graph hangs one ``CLAIMS`` edge per document off a hub,
-    and the vectors are installed through ``db.edge_embeddings.set`` in
+    and the vectors are installed through ``db.relationship_embeddings.set`` in
     batches (a single 100k-entry parameter list is a ~1 GB transient).
     """
     vectors = _vectors(n, dimension, seed)
@@ -126,7 +126,8 @@ def _twin_graphs(n: int, dimension: int, seed: int) -> tuple[kglite.KnowledgeGra
         stored = edges.cypher(
             "UNWIND $batch AS entry MATCH (:Hub)-[r:CLAIMS]->(:Doc {id: entry.id}) "
             "WITH collect({relationship: r, vector: entry.vector}) AS entries "
-            "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'summary', entries: entries, metric:'cosine'}) "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'summary', entries: entries, "
+            "metric:'cosine'}) "
             "YIELD stored RETURN stored",
             params={"batch": batch},
         ).to_list()
@@ -146,14 +147,16 @@ def query_twins():
     nodes, edges, vectors = _twin_graphs(QUERY_N, QUERY_DIMENSION, seed=20_260_925)
     nodes.build_vector_index("Doc", "summary")
     assert edges.cypher(
-        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'summary'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'summary'}) YIELD indexed RETURN "
+        "indexed"
     ).to_list() == [{"indexed": QUERY_N}]
     return nodes, edges, vectors
 
 
 def _edge_query(edges: kglite.KnowledgeGraph, query: list[float], *, exact: bool) -> list[int]:
     rows = edges.cypher(
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'summary', vector:$q, top_k:$k, exact:$exact}) "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'summary', vector:$q, top_k:$k, "
+        "exact:$exact}) "
         "YIELD relationship, search_method RETURN endNode(relationship).id AS end, search_method",
         params={"q": query, "k": TOP_K, "exact": exact},
     ).to_list()
@@ -177,7 +180,8 @@ def test_bench_edge_vector_score_scan_100k_384(benchmark, scan_twins):
     ).to_list()
     assert edge_scan()[0]["id"] == SCAN_N // 2, "the self-hit must rank first"
     store_route = lambda: edges.cypher(  # noqa: E731
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'summary', vector:$q, top_k:10, exact:true}) "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'summary', vector:$q, top_k:10, "
+        "exact:true}) "
         "YIELD relationship, score RETURN endNode(relationship).id AS id, score",
         params={"q": query},
     ).to_list()
@@ -201,7 +205,7 @@ def test_bench_edge_vector_score_scan_100k_384(benchmark, scan_twins):
 @pytest.mark.benchmark
 @pytest.mark.parametrize("exact", [True, False], ids=["exact", "hnsw"])
 def test_bench_edge_query_10k_128(benchmark, query_twins, exact):
-    """``db.edge_embeddings.query`` against the node ``vector_search`` twin, with a recall oracle."""
+    """``db.relationship_embeddings.query`` against the node ``vector_search`` twin, with a recall oracle."""
     nodes, edges, vectors = query_twins
     query_ids = [QUERY_N // 4 + 37 * i for i in range(20)]
     if not exact:
@@ -262,12 +266,12 @@ def cross_type_graph(query_twins):
             graph.cypher(
                 f"UNWIND $batch AS entry MATCH (:Hub)-[r:{rel_type}]->(:Doc {{id: entry.id}}) "
                 "WITH collect({relationship: r, vector: entry.vector}) AS entries "
-                f"CALL db.edge_embeddings.set({{type:'{rel_type}', text_property:'summary', entries: entries, "
+                f"CALL db.relationship_embeddings.set({{type:'{rel_type}', text_property:'summary', entries: entries, "
                 "metric:'cosine'}) YIELD stored RETURN stored",
                 params={"batch": batch},
             )
         graph.cypher(
-            f"CALL db.edge_embeddings.build_index({{type:'{rel_type}', text_property:'summary'}}) "
+            f"CALL db.relationship_embeddings.build_index({{type:'{rel_type}', text_property:'summary'}}) "
             "YIELD indexed RETURN indexed"
         )
     return graph
@@ -275,7 +279,8 @@ def cross_type_graph(query_twins):
 
 def _cross_type_query(graph: kglite.KnowledgeGraph, query: list[float], *, exact: bool) -> list[int]:
     rows = graph.cypher(
-        "CALL db.edge_embeddings.query({types:$types, text_property:'summary', vector:$q, top_k:$k, exact:$exact}) "
+        "CALL db.relationship_embeddings.query({types:$types, text_property:'summary', vector:$q, top_k:$k, "
+        "exact:$exact}) "
         "YIELD relationship, search_method RETURN endNode(relationship).id AS end, search_method",
         params={"types": list(CROSS_TYPES), "q": query, "k": TOP_K, "exact": exact},
     ).to_list()
@@ -334,7 +339,7 @@ class _MatrixEmbedder:
 
 @pytest.mark.benchmark
 def test_bench_edge_embed_ingest_20k_384(benchmark):
-    """Fresh-store ingest through ``db.edge_embeddings.embed`` against ``embed_texts``."""
+    """Fresh-store ingest through ``db.relationship_embeddings.embed`` against ``embed_texts``."""
     vectors = _vectors(INGEST_N, INGEST_DIMENSION, seed=20_260_926)
     frame = pd.DataFrame(
         {
@@ -368,7 +373,7 @@ def test_bench_edge_embed_ingest_20k_384(benchmark):
     def edge_ingest(g: kglite.KnowledgeGraph):
         return g.cypher(
             "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs "
-            "CALL db.edge_embeddings.embed({type:'CLAIMS', text_property:'summary', "
+            "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'summary', "
             "relationships: rs, mode:'missing'}) "
             "YIELD embedded RETURN embedded"
         ).to_list()

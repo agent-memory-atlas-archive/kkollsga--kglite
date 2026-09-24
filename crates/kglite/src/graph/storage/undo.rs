@@ -268,7 +268,7 @@ pub enum UndoEntry {
         prior: VectorIndexState,
     },
     /// A relationship's vector left the dense store: pruned before its physical
-    /// edge slot was freed, or removed by `db.edge_embeddings.remove`. Undo
+    /// edge slot was freed, or removed by `db.relationship_embeddings.remove`. Undo
     /// reverses the removal's tail swap, so a statement's removals rebuild the
     /// exact pre-statement slot layout — and, for the pruning case, only after
     /// the later-captured `EdgeRemoved` entry has restored the edge itself.
@@ -280,10 +280,10 @@ pub enum UndoEntry {
         edge: EdgeIndex,
         prior: Box<RemovedEmbedding>,
     },
-    /// One relationship vector cell a manual `db.edge_embeddings.set` wrote.
+    /// One relationship vector cell a manual `db.relationship_embeddings.set` wrote.
     ///
     /// The manual write path is the one that cannot afford a store pre-image:
-    /// a per-row `CALL db.edge_embeddings.set` over N relationships would
+    /// a per-row `CALL db.relationship_embeddings.set` over N relationships would
     /// clone the whole store N times. So it journals per changed cell instead,
     /// which is O(dimension) each — and why this is not
     /// [`EdgeEmbeddingStoreReplaced`](Self::EdgeEmbeddingStoreReplaced).
@@ -295,7 +295,7 @@ pub enum UndoEntry {
         edge: EdgeIndex,
         prior: Option<Box<EdgeEmbeddingCellPrior>>,
     },
-    /// The store-level `model_id` a manual `db.edge_embeddings.set` cleared —
+    /// The store-level `model_id` a manual `db.relationship_embeddings.set` cleared —
     /// a manual vector makes the aggregate generated-model provenance unknown,
     /// and a failed statement has to give the prior stamp back.
     EdgeEmbeddingModelIdReplaced {
@@ -312,6 +312,15 @@ pub enum UndoEntry {
     EdgeVectorIndexReplaced {
         store_key: (String, String),
         prior: VectorIndexState,
+    },
+    /// A node embedding store as it stood before a statement's first
+    /// `db.node_embeddings.*` write to it — the whole store, vectors and
+    /// index, cloned once per store per statement (the node procedures'
+    /// writes are store-wide, unlike the relationship lane's per-cell ones).
+    /// `None` when the store did not exist; undo puts it back or removes it.
+    NodeEmbeddingStoreReplaced {
+        store_key: (String, String),
+        prior: Option<Box<crate::graph::schema::EmbeddingStore>>,
     },
     /// A node's BM25 document was pruned from `DirGraph::text_indexes` with the
     /// node. Undo marks the slot for re-reading.
@@ -338,10 +347,17 @@ pub enum UndoEntry {
         edge: usize,
     },
     /// A whole relationship text index was built, rebuilt or dropped inside a
-    /// statement (`db.edge_text_index.build` / `.drop`, `DROP INDEX`). `prior`
+    /// statement (`db.relationship_text_index.build` / `.drop`, `DROP INDEX`). `prior`
     /// is the store it displaced — *moved* here, never cloned — or `None`
     /// when there was none, and undo puts it back or removes the key.
     EdgeTextIndexReplaced {
+        store_key: (String, String),
+        prior: Option<Box<crate::graph::text_indexes::TextIndexStore>>,
+    },
+    /// A whole node text index built, rebuilt or dropped inside a statement
+    /// (`db.node_text_index.build` / `.drop`). `prior` is the store it
+    /// displaced — moved here, never cloned — or `None` when there was none.
+    TextIndexReplaced {
         store_key: (String, String),
         prior: Option<Box<crate::graph::text_indexes::TextIndexStore>>,
     },
@@ -579,6 +595,9 @@ pub struct UndoJournal {
     /// the same reason: the first capture is the only one that carries the
     /// pre-statement state.
     appended_types: FxHashSet<InternedKey>,
+    /// Node embedding stores whose pre-statement state is already captured:
+    /// the capture is a whole-store clone, so only the first one is paid.
+    captured_node_stores: HashSet<(String, String)>,
 }
 
 impl UndoJournal {
@@ -830,6 +849,33 @@ impl UndoJournal {
     pub(crate) fn note_edge_text_doc_pruned(&mut self, store_key: (String, String), edge: usize) {
         self.entries
             .push(UndoEntry::EdgeTextDocPruned { store_key, edge });
+    }
+
+    /// Journal `prior` as the node store's pre-statement state unless an
+    /// earlier write in this statement already did. `prior` runs only on the
+    /// first touch, so a per-row procedure clones the store once.
+    pub(crate) fn note_node_embedding_store_touched(
+        &mut self,
+        store_key: &(String, String),
+        prior: impl FnOnce() -> Option<crate::graph::schema::EmbeddingStore>,
+    ) {
+        if self.captured_node_stores.insert(store_key.clone()) {
+            self.entries.push(UndoEntry::NodeEmbeddingStoreReplaced {
+                store_key: store_key.clone(),
+                prior: prior().map(Box::new),
+            });
+        }
+    }
+
+    pub(crate) fn note_text_index_replaced(
+        &mut self,
+        store_key: (String, String),
+        prior: Option<crate::graph::text_indexes::TextIndexStore>,
+    ) {
+        self.entries.push(UndoEntry::TextIndexReplaced {
+            store_key,
+            prior: prior.map(Box::new),
+        });
     }
 
     pub(crate) fn note_edge_text_index_replaced(
@@ -1153,7 +1199,7 @@ mod tests {
         assert_eq!(priors, vec![true, false]);
     }
 
-    /// The removal and index entries a manual `db.edge_embeddings.remove`
+    /// The removal and index entries a manual `db.relationship_embeddings.remove`
     /// pairs: one vacated-slot pre-image per cell, and the index state the
     /// removal invalidated.
     #[test]

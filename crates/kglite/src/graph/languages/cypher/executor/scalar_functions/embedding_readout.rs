@@ -3,7 +3,7 @@
 //!
 //! The read-out twin of `vector_score` / `embedding_norm`: the same first
 //! argument (a MATCH binding, or a node / relationship value from `collect`,
-//! `UNWIND`, a `CALL { }` column or `db.edge_embeddings.query`), the same
+//! `UNWIND`, a `CALL { }` column or `db.relationship_embeddings.query`), the same
 //! store-name second argument, and the same split between "this entity has no
 //! vector" (`null`) and "its type has no such store" (an error naming the type
 //! and the source property). Its point is composition:

@@ -2,7 +2,7 @@
 
 Before this, a graph whose vectors lived on relationships described itself as
 having no embeddings at all: no store on the connection map, no `<semantic>`
-hint, and a Cypher reference that never named `db.edge_embeddings.*`. An
+hint, and a Cypher reference that never named `db.relationship_embeddings.*`. An
 agent reading that description could not discover the feature.
 """
 
@@ -35,7 +35,7 @@ def _graph(node_store: bool, edge_store: bool, graph: KnowledgeGraph | None = No
     if edge_store:
         graph.cypher(
             "MATCH ()-[r:SUPPORTS {body: 'edge text'}]->() "
-            "CALL db.edge_embeddings.set({type:'SUPPORTS', text_property:'body', "
+            "CALL db.relationship_embeddings.set({type:'SUPPORTS', text_property:'body', "
             "entries:[{relationship:r, vector:[0.6, 0.8]}]}) YIELD stored RETURN stored"
         )
     return graph
@@ -93,7 +93,7 @@ def test_semantic_hint_appears_for_either_entity(
     assert hint is not None
     assert ("text_score(n, 'col'" in hint) is expect_node
     assert ("vector_score(r, 'col_emb'" in hint) is expect_relationship
-    assert ("db.edge_embeddings.query" in hint) is expect_relationship
+    assert ("db.relationship_embeddings.query" in hint) is expect_relationship
 
 
 def test_graphs_without_relationship_stores_have_no_embeddings_attribute() -> None:
@@ -105,9 +105,9 @@ def test_graphs_without_relationship_stores_have_no_embeddings_attribute() -> No
 
 def test_cypher_reference_names_the_relationship_procedures() -> None:
     reference = KnowledgeGraph().describe(cypher=True)
-    (proc,) = [e for e in ET.fromstring(reference).iter("proc") if e.get("name") == "db.edge_embeddings.*"]
+    (proc,) = [e for e in ET.fromstring(reference).iter("proc") if e.get("name") == "db.relationship_embeddings.*"]
     for name in ("set", "embed", "list", "remove", "drop", "query", "build_index", "refresh_index", "drop_index"):
-        assert f"db.edge_embeddings.{name}(" in proc.text
+        assert f"db.relationship_embeddings.{name}(" in proc.text
     functions = ET.fromstring(KnowledgeGraph().describe(cypher=["functions"]))
     (group,) = [e for e in functions.iter("group") if e.get("name") == "relationship_semantic"]
     assert "vector_score(r, 'col_emb'" in group.text
@@ -139,12 +139,15 @@ def _indexed(graph: KnowledgeGraph, *, node_hnsw=False, edge_hnsw=False, node_bm
         graph.build_vector_index("SUPPORTS", "body")
     if edge_hnsw:
         graph.cypher(
-            "CALL db.edge_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) YIELD indexed RETURN indexed"
+            "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) YIELD indexed RETURN "
+            "indexed"
         )
     if node_bm25:
         graph.build_text_index("SUPPORTS", "body")
     if edge_bm25:
-        graph.cypher("CALL db.edge_text_index.build({type:'SUPPORTS', property:'body'}) YIELD indexed RETURN indexed")
+        graph.cypher(
+            "CALL db.relationship_text_index.build({type:'SUPPORTS', property:'body'}) YIELD indexed RETURN indexed"
+        )
     return graph
 
 

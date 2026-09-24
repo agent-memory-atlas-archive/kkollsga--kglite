@@ -19,7 +19,7 @@ the guarantees you need are different, and so are the limits.
 Four steps. Only the last one is in your application's request path.
 
 1. **Extract** from the system of record.
-2. **Build** a graph with `add_nodes` / `add_connections` (or `from_records`).
+2. **Build** a graph with `add_nodes` / `add_relationships` (or `from_records`).
 3. **Publish** it — `save()` to a `.kgl` file, or hand out a `freeze()` snapshot.
 4. **Query** it with Cypher, from your app, a notebook, or an agent.
 
@@ -37,7 +37,7 @@ def build(conn) -> kglite.KnowledgeGraph:
     )
 
     reports = pd.read_sql("SELECT src, tgt FROM reporting_line", conn)
-    graph.add_connections(
+    graph.add_relationships(
         reports, connection_type="REPORTS_TO",
         source_type="Person", source_id_field="src",
         target_type="Person", target_id_field="tgt",
@@ -107,7 +107,7 @@ graph = kglite.open("people.kgl")   # loads if present, creates if not
 ## Incremental refresh instead of a full rebuild
 
 When a full extract is too expensive, re-assert only what changed.
-`add_nodes` / `add_connections` take a `conflict_handling` mode that decides how
+`add_nodes` / `add_relationships` take a `conflict_handling` mode that decides how
 an incoming record meets an existing one:
 
 ```python
@@ -201,7 +201,7 @@ The returned report carries the usual keys plus `skipped_runtime_layer=True`,
 Note what the layer is: a lane the *batch writer* opts into, not a perimeter
 the engine enforces. An `add_nodes` call that omits `managed_reload` writes a
 `runtime` type normally, nothing gates the live writer out of `managed` types,
-and `add_connections` is not covered at all. When the goal is to *refuse*
+and `add_relationships` is not covered at all. When the goal is to *refuse*
 out-of-role writes, `write_scope` on the Cypher path is the mechanism that does
 it — the agent-facing side of that is in {doc}`ai-agents`.
 
@@ -234,7 +234,7 @@ be a replica, and a replica is a much more expensive thing to operate.
 
 ## See also
 
-- {doc}`data-loading` — the `add_nodes` / `add_connections` surface in full.
+- {doc}`data-loading` — the `add_nodes` / `add_relationships` surface in full.
 - {doc}`blueprints` — declare the extract-to-graph mapping once, in config,
   when you rebuild the same shape repeatedly.
 - {doc}`primary-store` — the other side of the coin: what holds when the graph

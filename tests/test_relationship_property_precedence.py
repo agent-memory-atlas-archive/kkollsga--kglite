@@ -146,12 +146,12 @@ def test_knwler_relation_id_round_trips_through_yield_relationship():
     graph.set_embedder(_Embedder())
     graph.cypher(
         "MATCH ()-[r:RELATION]->() WITH collect(r) AS rs "
-        "CALL db.edge_embeddings.embed({type:'RELATION', text_property:'description', relationships: rs}) "
+        "CALL db.relationship_embeddings.embed({type:'RELATION', text_property:'description', relationships: rs}) "
         "YIELD embedded RETURN embedded"
     )
     got = rows(
         graph,
-        "CALL db.edge_embeddings.query({type:'RELATION', text_property:'description', text:'alpha', top_k:1}) "
+        "CALL db.relationship_embeddings.query({type:'RELATION', text_property:'description', text:'alpha', top_k:1}) "
         "YIELD relationship, score "
         "RETURN relationship.id AS id, relationship.type AS type, type(relationship) AS rel_type",
     )

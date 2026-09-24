@@ -31,7 +31,7 @@ PRODUCERS = {
     "call_subquery": "CALL { MATCH ()-[r:CLAIMS]->() RETURN collect(r)[0] AS rel } WITH rel",
     "path_relationship": "MATCH p = ()-[:CLAIMS]->() WITH relationships(p)[0] AS rel",
     "edge_embeddings_query": (
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'rank', "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'rank', "
         "vector:[1.0,0.0], top_k:1, exact:true}) YIELD relationship WITH relationship AS rel"
     ),
 }
@@ -49,7 +49,7 @@ def _graph(mode: str, tmp_path) -> KnowledgeGraph:
     graph.cypher("CREATE (a:Doc {id: 1}), (b:Doc {id: 2}), (b)-[:CLAIMS {rank: 7}]->(a)")
     stored = graph.cypher(
         "MATCH ()-[r:CLAIMS]->() "
-        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'rank', "
+        "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'rank', "
         "entries:[{relationship:r, vector:[1.0,0.0]}]}) YIELD stored RETURN stored"
     ).to_list()
     assert stored == [{"stored": 1}], "fixture must store the relationship vector"
@@ -68,7 +68,7 @@ def test_accessors_on_relationship_values(mode, producer, tmp_path):
 def test_edge_embeddings_query_yield_names_its_endpoints(mode, tmp_path):
     graph = _graph(mode, tmp_path)
     rows = graph.cypher(
-        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'rank', "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'rank', "
         "vector:[1.0,0.0], top_k:1, exact:true}) YIELD relationship "
         "RETURN type(relationship) AS t, startNode(relationship).id AS s, "
         "endNode(relationship).id AS e"

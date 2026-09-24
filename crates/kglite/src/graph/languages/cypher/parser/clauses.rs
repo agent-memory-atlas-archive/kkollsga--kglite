@@ -1062,6 +1062,11 @@ impl CypherParser {
             Vec::new()
         };
         self.expect(&CypherToken::RParen)?;
+        let mut parameters = parameters;
+        crate::graph::languages::cypher::executor::procedure_router::route(
+            &mut procedure_name,
+            &mut parameters,
+        )?;
 
         // YIELD is optional: a standalone `CALL proc()` returns every
         // declared column in declared order (Neo4j semantics; the executor

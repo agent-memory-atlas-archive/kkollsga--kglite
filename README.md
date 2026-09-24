@@ -39,7 +39,7 @@ graph.add_nodes(people, node_type="Person", unique_id_field="id", node_title_fie
 
 # Bulk-load relationships the same way.
 knows = pd.DataFrame({"src": ["alice", "bob"], "tgt": ["bob", "eve"]})
-graph.add_connections(knows, connection_type="KNOWS",
+graph.add_relationships(knows, connection_type="KNOWS",
                       source_type="Person", source_id_field="src",
                       target_type="Person", target_id_field="tgt")
 
@@ -209,7 +209,7 @@ Wikidata slice, a SQL warehouse, a RAG corpus, or a parsed codebase.
   for a Norwegian-Supreme-Court walk-through.
 - 📊 **Business data → queryable graph.** Any tabular source (SQL, CSV, Parquet,
   REST API responses, pandas DataFrames) goes straight in via `add_nodes(df,
-  ...)` and `add_connections(df, ...)`. Layer a graph on your warehouse and the
+  ...)` and `add_relationships(df, ...)`. Layer a graph on your warehouse and the
   agent reasons over the relationships without you writing a server. **→
   [Data Loading guide](https://kglite.readthedocs.io/en/latest/python/guides/data-loading.html).**
 - 🌐 **Public datasets.** Loaders for **SEC EDGAR** filings, **Wikidata** (the
@@ -488,7 +488,7 @@ The [`examples/`](https://github.com/kkollsga/kglite/tree/main/examples)
 directory has runnable, self-contained artifacts:
 
 - **[`csv_to_graph.py`](https://github.com/kkollsga/kglite/blob/main/examples/csv_to_graph.py)**:
-  `pd.read_csv` → `add_nodes` / `add_connections` on a tiny org chart. The
+  `pd.read_csv` → `add_nodes` / `add_relationships` on a tiny org chart. The
   fastest way in.
 - **[`legal_graph.py`](https://github.com/kkollsga/kglite/blob/main/examples/legal_graph.py)**:
   end-to-end pandas → graph with laws, regulations, court decisions, citation edges.

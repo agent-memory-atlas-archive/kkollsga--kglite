@@ -43,7 +43,7 @@ fn claims_graph() -> DirGraph {
     );
     run(
         &mut graph,
-        "CALL db.edge_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed",
+        "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'text'}) YIELD indexed RETURN indexed",
     );
     graph
 }
@@ -103,7 +103,7 @@ fn build_reports_and_scores_like_the_node_lane() {
     );
     let rows = run(
         &mut graph,
-        "CALL db.edge_text_index.build({type: 'CLAIMS', property: 'text'}) \
+        "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'text'}) \
          YIELD indexed, skipped, terms RETURN indexed, skipped, terms",
     );
     assert_eq!(
@@ -121,7 +121,7 @@ fn build_refuses_unknown_type_and_all_absent_property() {
     let mut graph = claims_graph();
     let error = run_err(
         &mut graph,
-        "CALL db.edge_text_index.build({type: 'NOPE', property: 'text'}) YIELD indexed RETURN indexed",
+        "CALL db.relationship_text_index.build({type: 'NOPE', property: 'text'}) YIELD indexed RETURN indexed",
     );
     assert!(
         error.contains("Unknown relationship type 'NOPE'"),
@@ -129,7 +129,7 @@ fn build_refuses_unknown_type_and_all_absent_property() {
     );
     let error = run_err(
         &mut graph,
-        "CALL db.edge_text_index.build({type: 'CLAIMS', property: 'missing'}) YIELD indexed RETURN indexed",
+        "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'missing'}) YIELD indexed RETURN indexed",
     );
     assert!(
         error.contains("No 'CLAIMS' relationship carries text"),
@@ -137,7 +137,7 @@ fn build_refuses_unknown_type_and_all_absent_property() {
     );
     let error = run_err(
         &mut graph,
-        "CALL db.edge_text_index.build({type: 'CLAIMS', property: 'text', bogus: 1}) YIELD indexed RETURN indexed",
+        "CALL db.relationship_text_index.build({type: 'CLAIMS', property: 'text', bogus: 1}) YIELD indexed RETURN indexed",
     );
     assert!(error.contains("Accepted:"), "{error}");
 }
@@ -149,7 +149,10 @@ fn text_bm25_without_an_index_names_the_build_procedure() {
         &mut graph,
         "MATCH ()-[r:TAG]->() RETURN text_bm25(r, 'text', 'quick') AS s",
     );
-    assert!(error.contains("db.edge_text_index.build"), "{error}");
+    assert!(
+        error.contains("db.relationship_text_index.build"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -159,10 +162,10 @@ fn set_and_remove_are_folded_in_at_query_entry() {
         &mut graph,
         "MATCH ()-[r:CLAIMS {k: 2}]->() SET r.text = 'zebra quick'",
     );
-    assert!(store(&graph).edge_is_stale(&graph));
+    assert!(store(&graph).relationship_is_stale(&graph));
     assert_matches_rebuild(&graph, "zebra");
     assert!(
-        !store(&graph).edge_is_stale(&graph),
+        !store(&graph).relationship_is_stale(&graph),
         "the read refreshed it"
     );
 
@@ -178,7 +181,7 @@ fn a_write_to_another_property_leaves_the_index_current() {
         &mut graph,
         "MATCH ()-[r:CLAIMS {k: 1}]->() SET r.weight = 3",
     );
-    assert!(!store(&graph).edge_is_stale(&graph));
+    assert!(!store(&graph).relationship_is_stale(&graph));
 }
 
 #[test]
@@ -188,7 +191,7 @@ fn delete_prunes_and_a_parallel_member_in_the_reused_slot_is_indexed() {
     run(&mut graph, "MATCH ()-[r:CLAIMS {k: 1}]->() DELETE r");
     assert_eq!(store(&graph).documents(), before - 1);
     assert!(
-        !store(&graph).edge_is_stale(&graph),
+        !store(&graph).relationship_is_stale(&graph),
         "deletion is not staleness"
     );
     // The next relationship takes the freed slot: below the watermark, so only
@@ -198,7 +201,7 @@ fn delete_prunes_and_a_parallel_member_in_the_reused_slot_is_indexed() {
         "MATCH (a:Doc {id: 1}), (b:Doc {id: 2}) \
          CREATE (a)-[:CLAIMS {k: 9, text: 'zebra zebra'}]->(b)",
     );
-    assert!(store(&graph).edge_is_stale(&graph));
+    assert!(store(&graph).relationship_is_stale(&graph));
     assert!(matches!(score_of(&scores(&graph, "zebra"), 9), Value::Float64(s) if s > 0.0));
     assert_matches_rebuild(&graph, "zebra");
 }
@@ -268,7 +271,7 @@ fn a_failed_statement_leaves_pre_statement_scores() {
          WITH r, text_bm25(r, 'text', 'zebra') AS s RETURN s, 1 / 0 AS boom",
     );
     assert!(
-        store(&graph).edge_is_stale(&graph),
+        store(&graph).relationship_is_stale(&graph),
         "the refresh the failed statement did must be re-done"
     );
     assert_eq!(scores(&graph, "zebra"), before);
@@ -283,7 +286,7 @@ fn a_rolled_back_delete_restores_the_document() {
         &mut graph,
         "MATCH ()-[r:CLAIMS {k: 1}]->() DELETE r WITH 1 AS x RETURN 1 / 0 AS boom",
     );
-    assert!(store(&graph).edge_is_stale(&graph));
+    assert!(store(&graph).relationship_is_stale(&graph));
     assert_eq!(scores(&graph, "marmoset"), before);
 }
 
@@ -292,13 +295,13 @@ fn build_and_drop_inside_a_failed_statement_are_undone() {
     let mut graph = claims_graph();
     run_err(
         &mut graph,
-        "CALL db.edge_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped \
+        "CALL db.relationship_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped \
          RETURN dropped, 1 / 0 AS boom",
     );
     assert!(edge_text_index_store(&graph, "CLAIMS", "text").is_some());
     run_err(
         &mut graph,
-        "CALL db.edge_text_index.build({type: 'TAG', property: 'text'}) YIELD indexed \
+        "CALL db.relationship_text_index.build({type: 'TAG', property: 'text'}) YIELD indexed \
          RETURN indexed, 1 / 0 AS boom",
     );
     assert!(edge_text_index_store(&graph, "TAG", "text").is_none());
@@ -309,7 +312,7 @@ fn drop_and_list() {
     let mut graph = claims_graph();
     let rows = run(
         &mut graph,
-        "CALL db.edge_text_index.list() YIELD entity, type, property, documents, index_state \
+        "CALL db.relationship_text_index.list() YIELD entity, type, property, documents, index_state \
          RETURN entity, type, property, documents, index_state",
     );
     assert_eq!(
@@ -324,12 +327,12 @@ fn drop_and_list() {
     );
     let dropped = run(
         &mut graph,
-        "CALL db.edge_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped",
+        "CALL db.relationship_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped",
     );
     assert_eq!(dropped, vec![vec![Value::Boolean(true)]]);
     let again = run(
         &mut graph,
-        "CALL db.edge_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped",
+        "CALL db.relationship_text_index.drop({type: 'CLAIMS', property: 'text'}) YIELD dropped RETURN dropped",
     );
     assert_eq!(again, vec![vec![Value::Boolean(false)]]);
 }
