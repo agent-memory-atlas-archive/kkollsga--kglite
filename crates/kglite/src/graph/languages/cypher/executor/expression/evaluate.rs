@@ -383,17 +383,13 @@ impl<'a> CypherExecutor<'a> {
                     .cloned()
                     .unwrap_or(Value::Null))
             }
-            Value::Relationship(relationship) => Ok(match property {
-                "id" => Value::Int64(relationship.id as i64),
-                "type" => Value::String(relationship.rel_type.clone()),
-                "start" | "start_id" => Value::Int64(relationship.start_id as i64),
-                "end" | "end_id" => Value::Int64(relationship.end_id as i64),
-                other => relationship
-                    .properties
-                    .get(other)
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            }),
+            Value::Relationship(relationship) => Ok(
+                crate::graph::core::relationship_property::relationship_value_property(
+                    self.graph,
+                    relationship,
+                    property,
+                ),
+            ),
             Value::Map(map) => Ok(map.get(property).cloned().unwrap_or(Value::Null)),
             _ => Ok(Value::Null),
         }

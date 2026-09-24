@@ -14,6 +14,8 @@
 //! - [`identifiers`] — quoted-identifier escaping (the injection class)
 //! - [`label_predicates`] — parenthesised label checks vs node patterns
 //! - [`lists`] — list parsing, slicing, sizing, and quantifier predicates
+//! - [`relationship_property_precedence`] — `r.<key>` reads the stored
+//!   property first and the envelope (`type`, `id`, endpoints) as the fallback
 //! - [`relationship_value_accessors`] — `type`/`startNode`/`endNode`/`keys`/
 //!   `properties` on relationship values, not just MATCH bindings
 //! - [`score_fuse`] — the retrieval-fusion scalar: absent lanes, weights, fold
@@ -60,6 +62,7 @@ mod lists;
 mod mutations;
 mod parallel;
 mod relationship_identity;
+mod relationship_property_precedence;
 mod relationship_value_accessors;
 mod score_fuse;
 mod self_loops;

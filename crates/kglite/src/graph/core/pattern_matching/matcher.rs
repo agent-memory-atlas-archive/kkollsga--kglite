@@ -1,5 +1,6 @@
 use crate::datatypes::values::Value;
 use crate::graph::core::filtering::{compare_values, str_values_equal, values_equal};
+use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::dir_graph::indexes::predicate_queries::string_index_hits;
 use crate::graph::languages::cypher::executor::budget::MatchCeiling;
 use crate::graph::languages::cypher::result::Bindings;
@@ -2058,7 +2059,6 @@ impl<'a> PatternExecutor<'a> {
                 // below) never happens. Reads edge properties, so it
                 // materialises the edge (lazy on disk) only when a filter exists.
                 if let Some(ref filter) = edge_pattern.edge_filter {
-                    let edge_data = edge.weight();
                     let edge_source = edge.source();
                     let edge_target = edge.target();
                     // Map the matcher's `direction` onto "is the peer
@@ -2075,7 +2075,7 @@ impl<'a> PatternExecutor<'a> {
                         peer_is_start,
                         edge_source,
                         edge_target,
-                        &|prop: &str| edge_data.get_property(prop).cloned(),
+                        &|prop: &str| edge_ref_property(self.graph, &edge, prop),
                     );
                     if !keep {
                         continue;

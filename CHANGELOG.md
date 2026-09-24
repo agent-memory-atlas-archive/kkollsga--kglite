@@ -212,6 +212,30 @@ before upgrading.
   relationship index — deleting an embedded relationship or either endpoint,
   or a `vacuum()` that compacts — and correct the node claim that a
   rolled-back delete drops it (it leaves the index in place).
+- **`r.type`, `r.id` and the endpoint keys read a relationship's stored
+  property first, in every clause.** They now follow the rule `n.type`
+  follows on a node: a stored property wins, and a relationship without one
+  falls back to its envelope. The envelope gives `type` / `connection_type`
+  as `type(r)`, `id` as `id(r)`, and `start` / `start_id` / `end` / `end_id` as
+  `id(startNode(r))` / `id(endNode(r))`. Before, a MATCH variable returned the
+  relationship type for `r.type` in RETURN, WITH and ORDER BY, while a WHERE
+  the planner pushed into the matcher read the stored `type`. So
+  `WHERE r.type = 'x' RETURN r.type = 'x'` kept the row and answered `false`.
+  A relationship value from `collect`, `UNWIND`, `relationships(p)` or
+  `YIELD relationship` ignored stored `id`, `type`, `start` and `end`. As a
+  result, knwler's `relation.id` came back as the storage slot. Graphs that
+  store any of these keys on relationships now read them back. Queries over
+  relationships without them return what they did before, with three
+  exceptions:
+  - on a MATCH variable, `r.id`, `r.start` and `r.end` now give the envelope
+    value instead of `null`;
+  - on a relationship value, `start` and `end` give the endpoint's node id
+    instead of its internal index;
+  - `connection_type` now falls back on values as well as on MATCH variables.
+
+  `type(r)`, `id(r)`, `properties(r)`, `keys(r)` and the Python relationship
+  dict (`id`, `start`, `end`, `type`, `properties`) are unchanged.
+
 ### Fixed
 
 - Retained relationship bindings no longer expose a replacement edge's

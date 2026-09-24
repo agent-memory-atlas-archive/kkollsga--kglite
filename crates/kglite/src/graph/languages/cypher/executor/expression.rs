@@ -580,17 +580,11 @@ impl<'a> CypherExecutor<'a> {
             }
             // Value::Relationship in projected — same idea.
             if let Value::Relationship(rel_val) = val {
-                return Ok(match property {
-                    "id" => Value::Int64(rel_val.id as i64),
-                    "type" => Value::String(rel_val.rel_type.clone()),
-                    "start" | "start_id" => Value::Int64(rel_val.start_id as i64),
-                    "end" | "end_id" => Value::Int64(rel_val.end_id as i64),
-                    other => rel_val
-                        .properties
-                        .get(other)
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                });
+                return Ok(
+                    crate::graph::core::relationship_property::relationship_value_property(
+                        self.graph, rel_val, property,
+                    ),
+                );
             }
             // Value::Map in projected — key access (e.g. for properties(n))
             if let Value::Map(map) = val {

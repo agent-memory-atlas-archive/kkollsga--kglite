@@ -7,6 +7,7 @@ use crate::graph::core::pattern_matching::{
     EdgeDirection, EdgePattern, MatchBinding, NodePattern, Pattern, PatternElement,
     PatternExecutor, PatternMatch, PropertyMatcher,
 };
+use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::parallel::{self, ParallelInterrupt};
 use crate::graph::schema::InternedKey;
 use crate::graph::storage::{ColumnStore, GraphRead, NodeView};
@@ -1329,7 +1330,7 @@ impl<'a> CypherExecutor<'a> {
                         peer_is_start,
                         edge_source,
                         edge_target,
-                        &|prop: &str| edge_data.get_property(prop).cloned(),
+                        &|prop: &str| edge_ref_property(self.graph, &edge_ref, prop),
                     ) {
                         continue;
                     }

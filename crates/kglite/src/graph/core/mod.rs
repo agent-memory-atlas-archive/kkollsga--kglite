@@ -12,6 +12,7 @@ pub mod iterators;
 pub mod membership;
 pub(crate) mod numeric_sum;
 pub mod pattern_matching;
+pub mod relationship_property;
 pub mod statistics;
 pub mod traversal;
 pub mod value_operations;

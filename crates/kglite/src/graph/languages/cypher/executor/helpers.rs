@@ -6,6 +6,7 @@ use super::super::ast::*;
 use super::super::result::*;
 use crate::datatypes::values::Value;
 use crate::datatypes::{PropKey, PropMap};
+use crate::graph::core::relationship_property::{relationship_property, RelationshipEnvelope};
 use crate::graph::schema::{soft_alias_fallback, DirGraph, InternedKey, SoftAliasFallback};
 use crate::graph::storage::{GraphRead, NodeView};
 use std::collections::{HashMap, HashSet};
@@ -531,20 +532,20 @@ fn resolve_node_property_resolved(
 }
 
 pub fn resolve_edge_property(graph: &DirGraph, edge: &EdgeBinding, property: &str) -> Value {
-    let g = &graph.graph;
-    if let Some(edge_data) = g.edge_weight(edge.edge_index) {
-        match property {
-            "type" | "connection_type" => {
-                Value::String(edge_data.connection_type_str(&graph.interner).to_string())
-            }
-            _ => edge_data
-                .get_property(property)
-                .cloned()
-                .unwrap_or(Value::Null),
-        }
-    } else {
-        Value::Null
-    }
+    let Some(edge_data) = graph.graph.edge_weight(edge.edge_index) else {
+        return Value::Null;
+    };
+    relationship_property(
+        graph,
+        edge_data.get_property(property).cloned(),
+        property,
+        RelationshipEnvelope {
+            id: edge.edge_index.index(),
+            rel_type: edge_data.connection_type_str(&graph.interner),
+            source: edge.source,
+            target: edge.target,
+        },
+    )
 }
 
 pub(super) fn node_to_map_value(node: NodeView<'_>) -> Value {
