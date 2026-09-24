@@ -51,7 +51,7 @@ pub(super) fn execute(
         return Ok(vec![yield_row(values, yields)]);
     }
     let node_type = require_string(params, "type", proc_name)?;
-    let text_property = require_string(params, "text_property", proc_name)?;
+    let text_property = require_string(params, "text_column", proc_name)?;
     let values = match proc_name {
         "db.node_embeddings.set" => execute_set(graph, params, &node_type, &text_property)?,
         "db.node_embeddings.remove" => {
@@ -180,7 +180,7 @@ fn execute_embed(
     let proc_name = "db.node_embeddings.embed";
     let types = named_types(params, proc_name, "or pass type", "node")?
         .ok_or_else(|| format!("CALL {proc_name}: missing parameter 'type'"))?;
-    let text_property = require_string(params, "text_property", proc_name)?;
+    let text_property = require_string(params, "text_column", proc_name)?;
     let listed = require_list(params, "nodes", proc_name)?;
     let mut selected: Vec<Vec<NodeIndex>> = vec![Vec::new(); types.len()];
     let mut all = Vec::with_capacity(listed.len());
@@ -272,7 +272,7 @@ fn execute_embed(
     ]))
 }
 
-/// `db.node_embeddings.list({type?, text_property?})`: the relationship
+/// `db.node_embeddings.list({type?, text_column?})`: the relationship
 /// listing's columns, one row per node store, sorted.
 pub(super) fn list(
     graph: &DirGraph,
@@ -286,7 +286,7 @@ pub(super) fn list(
         accepted_keys(proc_name),
     )?;
     let type_filter = optional_string(params, "type", proc_name)?;
-    let property_filter = optional_string(params, "text_property", proc_name)?;
+    let property_filter = optional_string(params, "text_column", proc_name)?;
     Ok(embeddings::list_vector_indexes(graph)
         .into_iter()
         .filter(|status| {
@@ -312,7 +312,7 @@ pub(super) fn list(
                 HashMap::from([
                     ("entity", Value::String("node".into())),
                     ("type", Value::String(status.node_type.clone())),
-                    ("text_property", Value::String(status.text_column.clone())),
+                    ("text_column", Value::String(status.text_column.clone())),
                     (
                         "store",
                         Value::String(embeddings::store_name(&status.text_column)),
@@ -338,7 +338,7 @@ pub(super) fn list(
 }
 
 /// `db.node_embeddings.query`: the relationship query's ranking over node
-/// stores — `type`, `types`, or every store for `text_property` — yielding
+/// stores — `type`, `types`, or every store for `text_column` — yielding
 /// `node, score, search_method, type`.
 pub(super) fn query(
     graph: &DirGraph,
@@ -357,7 +357,7 @@ pub(super) fn query(
              skipped query preparation, so pass the query as 'vector'"
         ));
     }
-    let text_property = require_string(params, "text_property", proc_name)?;
+    let text_property = require_string(params, "text_column", proc_name)?;
     let omit_hint = format!("or omit it to rank every '{text_property}' store");
     let types = match named_types(params, proc_name, &omit_hint, "node")? {
         Some(types) => types,
@@ -370,7 +370,7 @@ pub(super) fn query(
                 .collect();
             if types.is_empty() {
                 return Err(format!(
-                    "CALL {proc_name}: no node embedding store for text_property \
+                    "CALL {proc_name}: no node embedding store for text_column \
                      '{text_property}'"
                 ));
             }
@@ -434,15 +434,15 @@ fn hit_row(hit: DenseStoreHit, yields: &[YieldItem]) -> ResultRow {
 /// `relationship`.
 pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
-        "db.node_embeddings.set" => &["type", "text_property", "entries", "metric"],
-        "db.node_embeddings.remove" => &["type", "text_property", "nodes"],
+        "db.node_embeddings.set" => &["type", "text_column", "entries", "metric"],
+        "db.node_embeddings.remove" => &["type", "text_column", "nodes"],
         "db.node_embeddings.drop"
         | "db.node_embeddings.refresh_index"
         | "db.node_embeddings.drop_index"
-        | "db.node_embeddings.list" => &["type", "text_property"],
+        | "db.node_embeddings.list" => &["type", "text_column"],
         "db.node_embeddings.build_index" => &[
             "type",
-            "text_property",
+            "text_column",
             "m",
             "ef_construction",
             "ef_search",
@@ -452,7 +452,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         "db.node_embeddings.embed" => &[
             "type",
             "types",
-            "text_property",
+            "text_column",
             "nodes",
             "mode",
             "batch_size",
@@ -463,7 +463,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         "db.node_embeddings.query" => &[
             "type",
             "types",
-            "text_property",
+            "text_column",
             "vector",
             "text",
             "top_k",

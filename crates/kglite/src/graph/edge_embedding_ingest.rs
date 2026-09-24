@@ -212,7 +212,7 @@ impl From<super::EdgeEmbeddingWriteReport> for RelationshipIngestReport {
 /// nothing to embed never loads the model, and reports the model's declared
 /// dimension. The store records the model id and per-relationship text hashes.
 ///
-/// Errors carry the node pass's kinds: `Column` for a text property no
+/// Errors carry the node pass's kinds: `Column` for a text column no
 /// relationship of the type carries when no store exists — a relationship type
 /// the graph does not have included — `Dimension` for a
 /// model whose width contradicts retained vectors, `Model` for the model

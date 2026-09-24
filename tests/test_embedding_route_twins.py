@@ -65,7 +65,7 @@ def _graph(*, embedder: bool = True) -> KnowledgeGraph:
 def _procedure(graph: KnowledgeGraph, vector, top_k: int, types=None) -> list[tuple]:
     selector = "" if types is None else "types: $types, "
     rows = graph.cypher(
-        "CALL db.relationship_embeddings.query({" + selector + "text_property: 'evidence', vector: $v, "
+        "CALL db.relationship_embeddings.query({" + selector + "text_column: 'evidence', vector: $v, "
         "top_k: $k}) YIELD relationship, score, type "
         "RETURN startNode(relationship).id AS s, endNode(relationship).id AS t, relationship.uid AS uid, "
         "type AS type, score",
@@ -239,16 +239,16 @@ def test_refresh_without_an_index_names_the_method_from_python_and_the_procedure
     with pytest.raises(
         kglite.CypherExecutionError,
         match=r"Build one with CALL db\.relationship_embeddings\.build_index\("
-        r"\{type: 'SUPPORTS', text_property: 'evidence'\}\)",
+        r"\{type: 'SUPPORTS', text_column: 'evidence'\}\)",
     ):
-        graph.cypher("CALL db.relationship_embeddings.refresh_index({type: 'SUPPORTS', text_property: 'evidence'})")
+        graph.cypher("CALL db.relationship_embeddings.refresh_index({type: 'SUPPORTS', text_column: 'evidence'})")
     with pytest.raises(ValueError, match=r"Build one with build_vector_index\('Claimant', 'note'\)\."):
         graph.refresh_node_vector_index("Claimant", "note")
     with pytest.raises(
         kglite.CypherExecutionError,
-        match=r"Build one with CALL db\.node_embeddings\.build_index\(\{type: 'Claimant', text_property: 'note'\}\)",
+        match=r"Build one with CALL db\.node_embeddings\.build_index\(\{type: 'Claimant', text_column: 'note'\}\)",
     ):
-        graph.cypher("CALL db.node_embeddings.refresh_index({type: 'Claimant', text_property: 'note'})")
+        graph.cypher("CALL db.node_embeddings.refresh_index({type: 'Claimant', text_column: 'note'})")
 
 
 def test_build_over_a_missing_store_names_the_store_and_the_writer() -> None:
@@ -258,9 +258,9 @@ def test_build_over_a_missing_store_names_the_store_and_the_writer() -> None:
     with pytest.raises(ValueError, match=r"Write one first with embed_relationship_texts\('WROTE', 'x'\)"):
         KnowledgeGraph().build_relationship_vector_index("WROTE", "x")
     with pytest.raises(kglite.CypherExecutionError, match=r"Did you mean 'evidence'\?"):
-        graph.cypher("CALL db.relationship_embeddings.build_index({type: 'SUPPORTS', text_property: 'evidnce'})")
+        graph.cypher("CALL db.relationship_embeddings.build_index({type: 'SUPPORTS', text_column: 'evidnce'})")
     with pytest.raises(kglite.CypherExecutionError, match=r"Write one first with CALL db\.node_embeddings\.embed"):
-        KnowledgeGraph().cypher("CALL db.node_embeddings.build_index({type: 'Doc', text_property: 'x'})")
+        KnowledgeGraph().cypher("CALL db.node_embeddings.build_index({type: 'Doc', text_column: 'x'})")
 
 
 def test_relationship_readers_suggest_the_column() -> None:
@@ -269,17 +269,16 @@ def test_relationship_readers_suggest_the_column() -> None:
         graph.relationship_embeddings("SUPPORTS", "evidnce")
     with pytest.raises(kglite.CypherExecutionError, match=r"Did you mean 'evidence'\?"):
         graph.cypher(
-            "CALL db.relationship_embeddings.query({type: 'SUPPORTS', text_property: 'evidnce', vector: [1.0, 0.0]}) "
+            "CALL db.relationship_embeddings.query({type: 'SUPPORTS', text_column: 'evidnce', vector: [1.0, 0.0]}) "
             "YIELD score RETURN score"
         )
     with pytest.raises(
         kglite.CypherExecutionError,
-        match=r"no relationship embedding store for text_property 'note'\. 'note' is a node embedding store "
+        match=r"no relationship embedding store for text_column 'note'\. 'note' is a node embedding store "
         r"\(on Claimant\) — use db\.node_embeddings\.\*",
     ):
         graph.cypher(
-            "CALL db.relationship_embeddings.query({text_property: 'note', vector: [1.0, 0.0]}) "
-            "YIELD score RETURN score"
+            "CALL db.relationship_embeddings.query({text_column: 'note', vector: [1.0, 0.0]}) YIELD score RETURN score"
         )
 
 
@@ -365,7 +364,7 @@ def test_an_incremental_relationship_pass_keeps_the_store_metric() -> None:
     with pytest.raises(kglite.CypherExecutionError, match=r"Store metric is 'euclidean'"):
         graph.cypher(
             "MATCH ()-[r:SUPPORTS]->() WITH collect(r) AS rs CALL db.relationship_embeddings.embed({type: "
-            "'SUPPORTS', text_property: 'evidence', relationships: rs, mode: 'missing', metric: 'dot_product'}) "
+            "'SUPPORTS', text_column: 'evidence', relationships: rs, mode: 'missing', metric: 'dot_product'}) "
             "YIELD embedded RETURN embedded"
         )
     graph.embed_relationship_texts("SUPPORTS", "evidence", show_progress=False, mode="all", metric="cosine")

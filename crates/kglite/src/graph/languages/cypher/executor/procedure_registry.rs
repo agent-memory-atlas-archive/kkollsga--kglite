@@ -265,7 +265,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &[
             "entity",
             "type",
-            "text_property",
+            "text_column",
             "store",
             "dimension",
             "count",
@@ -297,13 +297,13 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "db.node_embeddings.query",
         aliases: &[],
-        description: "Retrieve the nearest nodes from one or several whole embedding stores (type, types, or every store for text_property), merged into one top-k, by query vector or by text the registered embedder embeds",
+        description: "Retrieve the nearest nodes from one or several whole embedding stores (type, types, or every store for text_column), merged into one top-k, by query vector or by text the registered embedder embeds",
         columns: &["node", "score", "search_method", "type"],
     },
     ProcedureSpec {
         name: "db.node_text_index.build",
         aliases: &[],
-        description: "Build (or rebuild) a BM25 text index over one node type's string property, for text_bm25(n, property, query)",
+        description: "Build (or rebuild) a BM25 text index over one node type's string property (text_column), for text_bm25(n, text_column, query)",
         columns: &["indexed", "skipped", "terms"],
     },
     ProcedureSpec {
@@ -325,7 +325,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &[
             "entity",
             "type",
-            "property",
+            "text_column",
             "documents",
             "terms",
             "skipped",
@@ -365,7 +365,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &[
             "entity",
             "type",
-            "text_property",
+            "text_column",
             "store",
             "dimension",
             "count",
@@ -425,7 +425,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &[
             "entity",
             "type",
-            "property",
+            "text_column",
             "documents",
             "terms",
             "skipped",
@@ -465,7 +465,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &[
             "entity",
             "type",
-            "text_property",
+            "text_column",
             "store",
             "dimension",
             "count",
@@ -497,13 +497,13 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "db.relationship_embeddings.query",
         aliases: &[],
-        description: "Retrieve the nearest relationships from one or several whole embedding stores (type, types, or every store for text_property), merged into one top-k, by query vector or by text the registered embedder embeds",
+        description: "Retrieve the nearest relationships from one or several whole embedding stores (type, types, or every store for text_column), merged into one top-k, by query vector or by text the registered embedder embeds",
         columns: &["relationship", "score", "search_method", "type"],
     },
     ProcedureSpec {
         name: "db.relationship_text_index.build",
         aliases: &[],
-        description: "Build (or rebuild) a BM25 text index over one relationship type's string property, for text_bm25(r, property, query)",
+        description: "Build (or rebuild) a BM25 text index over one relationship type's string property (text_column), for text_bm25(r, text_column, query)",
         columns: &["indexed", "skipped", "terms"],
     },
     ProcedureSpec {
@@ -525,7 +525,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &[
             "entity",
             "type",
-            "property",
+            "text_column",
             "documents",
             "terms",
             "skipped",

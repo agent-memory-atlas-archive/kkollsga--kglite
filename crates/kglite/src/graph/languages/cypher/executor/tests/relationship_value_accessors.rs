@@ -111,7 +111,7 @@ fn unwound_relationship_value() {
 fn edge_embeddings_query_relationship_column() {
     assert_accessors(
         &claims_graph(),
-        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', \
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_column:'text', \
          vector:[1.0,0.0], top_k:1, exact:true}) YIELD relationship WITH relationship AS rel",
     );
 }

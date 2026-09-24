@@ -378,7 +378,7 @@ through `cypher()`:
 
 ```python
 graph.cypher("""
-    CALL db.relationship_text_index.build({type:'SUPPORTS', property:'evidence'})
+    CALL db.relationship_text_index.build({type:'SUPPORTS', text_column:'evidence'})
     YIELD indexed, skipped, terms RETURN indexed, skipped, terms
 """)
 
@@ -398,10 +398,10 @@ exists.
 
 | Procedure | Yields |
 |---|---|
-| `db.relationship_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` |
-| `db.relationship_text_index.refresh({type, property})` | `refreshed` |
-| `db.relationship_text_index.drop({type, property})` | `dropped` (`false` when there was no index) |
-| `db.relationship_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` |
+| `db.relationship_text_index.build({type, text_column, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` |
+| `db.relationship_text_index.refresh({type, text_column})` | `refreshed` |
+| `db.relationship_text_index.drop({type, text_column})` | `dropped` (`false` when there was no index) |
+| `db.relationship_text_index.list({type?, text_column?})` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` |
 
 **Freshness.** Writes (`SET`, `REMOVE`, `CREATE` or `MERGE` of a relationship,
 including one that reuses a deleted relationship's storage slot, and

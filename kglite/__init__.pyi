@@ -7327,7 +7327,7 @@ class KnowledgeGraph:
                 MATCH ()-[r:SUPPORTS]->(c:Claim) WHERE c.status = 'open'
                 WITH collect(r) AS relationships
                 CALL db.relationship_embeddings.embed({
-                  type:'SUPPORTS', text_property:'evidence',
+                  type:'SUPPORTS', text_column:'evidence',
                   relationships:relationships, mode:'changed'
                 })
                 YIELD embedded RETURN embedded
@@ -7343,12 +7343,12 @@ class KnowledgeGraph:
             # exact; the procedure reports whether HNSW or exact fallback ran.
             graph.cypher('''
                 CALL db.relationship_embeddings.build_index({
-                  type:'SUPPORTS', text_property:'evidence'
+                  type:'SUPPORTS', text_column:'evidence'
                 }) YIELD indexed RETURN indexed
             ''')
             nearest = graph.cypher('''
                 CALL db.relationship_embeddings.query({
-                  type:'SUPPORTS', text_property:'evidence',
+                  type:'SUPPORTS', text_column:'evidence',
                   vector:$vector, top_k:10
                 }) YIELD relationship, score, search_method
                 RETURN relationship, score, search_method
@@ -8107,7 +8107,7 @@ class KnowledgeGraph:
                 "context", query_vec, types=["CITES", "SUPPORTS"])
 
         Args:
-            text_column: Source text property (e.g. ``'context'``; the stores
+            text_column: Source text column (e.g. ``'context'``; the stores
                 are ``'context_emb'``).
             query_vector: The query vector; every coordinate must be finite.
             top_k: Hits to return (default 10).
@@ -8411,7 +8411,7 @@ class KnowledgeGraph:
             List of dicts, node rows first, then relationship rows, each sorted
             by type and column. Every row carries ``entity`` (``'node'`` or
             ``'relationship'``), ``text_column``, ``embedding_key``
-            (= ``f"{text_column}_emb"``), ``dimension`` (or ``None``),
+            (the store name, ``f"{text_column}_emb"``), ``dimension`` (or ``None``),
             ``metric`` (or ``None``), ``status``, and ``length_stats`` with
             ``mean_length`` / ``max_length`` / ``distinct_count`` /
             ``distinct_ratio``. Node rows add ``node_type``,
@@ -8561,7 +8561,7 @@ class KnowledgeGraph:
 
         Args:
             relationship_type: The relationship type (e.g. ``'CITES'``).
-            text_column: Source text property (e.g. ``'context'``).
+            text_column: Source text column (e.g. ``'context'``).
 
         Raises:
             ValueError: no ``(relationship_type, text_column)`` store exists;
@@ -8610,6 +8610,12 @@ class KnowledgeGraph:
 
         Returns:
             Dict mapping node IDs to embedding vectors.
+
+        Raises:
+            ValueError: No ``(node_type, text_column)`` store exists — as
+                :meth:`embedding` refuses it, naming the type's stores or a
+                near miss (the store name ``'summary_emb'`` passed for the
+                column, a relationship store, a typo).
 
         Relationship stores are read with :meth:`relationship_embeddings`,
         which addresses each vector by its endpoints.
@@ -8661,6 +8667,9 @@ class KnowledgeGraph:
 
         Returns:
             Dict mapping node IDs to embedding vectors.
+
+        Raises:
+            ValueError: as :meth:`node_embeddings` — no such store.
         """
         ...
 
@@ -8705,7 +8714,7 @@ class KnowledgeGraph:
 
         Args:
             node_type_or_text_column: The relationship type (e.g. 'CITES').
-            text_column: Source text property (e.g. 'context').
+            text_column: Source text column (e.g. 'context').
             entity: ``"relationship"``.
             relationship_keys: See :meth:`relationship_embeddings`.
 
@@ -8845,7 +8854,7 @@ class KnowledgeGraph:
 
         Args:
             relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
-            text_column: Source text property (e.g. ``'evidence'``; the store
+            text_column: Source text column (e.g. ``'evidence'``; the store
                 is ``'evidence_emb'``).
             relationship_keys: Per relationship type, the property that tells
                 a parallel group's members apart.
@@ -9188,7 +9197,7 @@ class KnowledgeGraph:
         *,
         metric: str | None = None,
     ) -> dict[str, int]:
-        """Embed a text property for every relationship of a type — the
+        """Embed a text column for every relationship of a type — the
         relationship twin of :meth:`embed_texts`.
 
         Uses the model registered via :meth:`set_embedder`. Reads each
@@ -9510,7 +9519,7 @@ class KnowledgeGraph:
 
         Args:
             relationship_type: The relationship type (e.g. ``'CITES'``).
-            text_column: Source text property (the store is
+            text_column: Source text column (the store is
                 ``'{text_column}_emb'``).
             m: Max neighbours per node on upper layers (default 16).
             ef_construction: Build-time search width (default 200).
@@ -9623,7 +9632,7 @@ class KnowledgeGraph:
         property: str,
         auto_refresh_limit: Optional[int] = None,
     ) -> dict[str, Any]:
-        """Build a BM25 lexical index over a node type's text property, for
+        """Build a BM25 lexical index over a node type's text column, for
         keyword/full-text ranking.
 
         Query it with the Cypher scalar ``text_bm25(n, '<property>', '<query

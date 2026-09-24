@@ -106,7 +106,7 @@ def test_bolt_relationship_embedding_procedure_and_public_shape(bolt_server):
                 """
                 MATCH (:Person {title:'Alice'})-[r:KNOWS]->(:Person {title:'Bob'})
                 WITH collect(r) AS relationships
-                CALL db.relationship_embeddings.set({type:'KNOWS',text_property:'context',
+                CALL db.relationship_embeddings.set({type:'KNOWS',text_column:'context',
                   entries:[{relationship:relationships[0],vector:[1.0,0.0]}]})
                 YIELD stored
                 MATCH (:Person {title:'Alice'})-[r:KNOWS]->(:Person {title:'Bob'})
@@ -121,7 +121,7 @@ def test_bolt_relationship_embedding_procedure_and_public_shape(bolt_server):
             tx.commit()
 
             metadata = session.run(
-                "CALL db.relationship_embeddings.list({type:'KNOWS',text_property:'context'}) "
+                "CALL db.relationship_embeddings.list({type:'KNOWS',text_column:'context'}) "
                 "YIELD entity,count RETURN entity,count"
             ).single()
             assert metadata is not None
@@ -139,7 +139,7 @@ def test_bolt_relationship_embedding_procedure_and_public_shape(bolt_server):
             with pytest.raises(neo4j.exceptions.Neo4jError, match="relationship"):
                 tx.run(
                     """
-                    CALL db.relationship_embeddings.remove({type:'KNOWS',text_property:'context',
+                    CALL db.relationship_embeddings.remove({type:'KNOWS',text_column:'context',
                       relationships:[{id:0,type:'KNOWS'}]}) YIELD removed RETURN removed
                     """
                 ).consume()
@@ -148,7 +148,7 @@ def test_bolt_relationship_embedding_procedure_and_public_shape(bolt_server):
             tx = session.begin_transaction()
             removed = tx.run(
                 "MATCH ()-[r:KNOWS]->() WITH collect(r) AS relationships "
-                "CALL db.relationship_embeddings.remove({type:'KNOWS',text_property:'context', "
+                "CALL db.relationship_embeddings.remove({type:'KNOWS',text_column:'context', "
                 "relationships:relationships}) YIELD removed RETURN removed"
             ).single()["removed"]
             assert removed == 1

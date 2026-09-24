@@ -49,7 +49,7 @@ fn graph(node_store: bool, edge_store: bool) -> DirGraph {
         run(
             &mut graph,
             "MATCH ()-[r:SUPPORTS {body: 'edge text'}]->() \
-             CALL db.relationship_embeddings.set({type:'SUPPORTS', text_property:'body', \
+             CALL db.relationship_embeddings.set({type:'SUPPORTS', text_column:'body', \
              entries:[{relationship:r, vector:[0.6, 0.8]}]}) YIELD stored RETURN stored",
         );
     }
@@ -77,7 +77,7 @@ const CONN_LINE: &str = "<conn type=\"SUPPORTS\" count=\"2\" from=\"SUPPORTS\" t
 
 /// The node-only hint, pinned byte-for-byte (`embedding_norm` takes the store
 /// name, `'col_emb'` — the raw column spelling was a false claim).
-const NODE_SEMANTIC_LINE: &str = "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); vector_score(n, 'col_emb', $v) scores against a vector (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space); CALL db.node_embeddings.query({type:'T' | types:['A','B'], text_property:'col', vector:$v | text:'query', top_k:10}) YIELD node, score, search_method, type ranks whole stores, and db.node_embeddings.set / .embed / .build_index / .list manage them in a query (db.embeddings.* routes by entity); describe(cypher=['node_semantic']) has the details\"/>";
+const NODE_SEMANTIC_LINE: &str = "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); vector_score(n, 'col_emb', $v) scores against a vector (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space); CALL db.node_embeddings.query({type:'T' | types:['A','B'], text_column:'col', vector:$v | text:'query', top_k:10}) YIELD node, score, search_method, type ranks whole stores, and db.node_embeddings.set / .embed / .build_index / .list manage them in a query (db.embeddings.* routes by entity); describe(cypher=['node_semantic']) has the details\"/>";
 
 #[test]
 fn the_inventory_map_names_the_relationship_store_on_its_conn_line() {
@@ -226,6 +226,39 @@ fn the_semantic_topics_state_null_ordering_vacuum_and_delta() {
         "{relationship}"
     );
     assert!(relationship.contains("sorts null first"), "{relationship}");
+    // The filter is served from the store; a node type with unembedded
+    // members is answered from its store, a relationship type by row scan.
+    assert!(
+        node.contains("is served from the store at the store procedure's cost"),
+        "{node}"
+    );
+    assert!(
+        node.contains(
+            "the null-scored nodes first in type order, then the store's ranking; \
+             row_coverage is reported only when all k rows are null or the store's order \
+             differs from the type's"
+        ),
+        "{node}"
+    );
+    assert!(
+        relationship.contains("is served from the store at the store procedure's cost"),
+        "{relationship}"
+    );
+    assert!(
+        relationship.contains(
+            "a type whose relationships are not all embedded is answered by row scan \
+             (row_coverage)"
+        ),
+        "{relationship}"
+    );
+    assert!(
+        relationship.contains(
+            "WITH r, vector_score(r, …) AS s ORDER BY s DESC LIMIT k RETURN startNode(r)… \
+             is served the same way, and an undirected (a)-[r:T]-(b) uses the index, \
+             returning each relationship once per orientation"
+        ),
+        "{relationship}"
+    );
 
     let topics = CypherDetail::Topics(vec!["relationship_semantic".to_string()]);
     request.cypher = &topics;
@@ -262,7 +295,7 @@ fn with_text_indexes(mut graph: DirGraph, node: bool, edge: bool) -> DirGraph {
     if edge {
         run(
             &mut graph,
-            "CALL db.relationship_text_index.build({type:'SUPPORTS', property:'body'}) \
+            "CALL db.relationship_text_index.build({type:'SUPPORTS', text_column:'body'}) \
              YIELD indexed RETURN indexed",
         );
     }
@@ -337,7 +370,7 @@ fn with_vector_indexes(mut graph: DirGraph, node: bool, edge: bool) -> DirGraph 
     if edge {
         run(
             &mut graph,
-            "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) \
+            "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_column:'body'}) \
              YIELD indexed RETURN indexed",
         );
     }
@@ -391,10 +424,10 @@ fn a_bm25_index_is_shown_on_both_entities() {
     let detail = describe_with(&graph, &ConnectionDetail::Topics(vec!["SUPPORTS".into()]));
     assert_eq!(
         line_with(&detail, "<text_index "),
-        "    <text_index property=\"body\"/>"
+        "    <text_index text_col=\"body\"/>"
     );
     assert!(
-        node_detail(&graph).contains("<text_index property=\"body\"/>"),
+        node_detail(&graph).contains("<text_index text_col=\"body\"/>"),
         "{}",
         node_detail(&graph)
     );
@@ -434,7 +467,7 @@ fn relationship_semantic_is_a_direct_topic_matching_the_functions_group() {
     );
     let summary = line_with(&xml, "<summary>");
     assert!(
-        summary.contains("Stores are per (relationship type, text property)"),
+        summary.contains("Stores are per (relationship type, text column)"),
         "{summary}"
     );
     assert!(xml.contains("types:['A','B']"), "{xml}");
@@ -465,7 +498,7 @@ fn relationship_semantic_is_a_direct_topic_matching_the_functions_group() {
     // The per-graph hint says once how stores are keyed and ranked across types.
     let semantic = line_with(&inventory(&self::graph(false, true)), "<semantic ").to_string();
     assert!(
-        semantic.contains("stores are per relationship type and text property"),
+        semantic.contains("stores are per relationship type and text column"),
         "{semantic}"
     );
     assert!(

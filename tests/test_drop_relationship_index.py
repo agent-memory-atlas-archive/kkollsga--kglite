@@ -28,13 +28,12 @@ def _graph() -> KnowledgeGraph:
         )
         graph.cypher(
             "MATCH ()-[r:CLAIMS {rank: $rank}]->() "
-            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_column:'text', "
             "entries:[{relationship:r, vector:$vector}]}) YIELD stored RETURN stored",
             params={"rank": index, "vector": vector},
         )
     graph.cypher(
-        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
-        "indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_column:'text'}) YIELD indexed RETURN indexed"
     )
     graph.set_embeddings("Doc", "text", {0: VECTORS[0], 1: VECTORS[1], 2: VECTORS[2]})
     graph.build_vector_index("Doc", "text")

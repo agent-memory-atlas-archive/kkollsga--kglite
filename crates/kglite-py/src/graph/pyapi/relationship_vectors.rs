@@ -80,7 +80,7 @@ impl KnowledgeGraph {
         )
     }
 
-    /// Embed a text property for every relationship of a type with the registered model.
+    /// Embed a text column for every relationship of a type with the registered model.
     #[pyo3(signature = (relationship_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None))]
     // One Rust argument per Python keyword, as embed_node_texts has.
     #[allow(clippy::too_many_arguments)]

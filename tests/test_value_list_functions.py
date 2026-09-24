@@ -21,7 +21,7 @@ def graph() -> kglite.KnowledgeGraph:
     g.cypher("CREATE (a:Doc:Extra {id: 1, title: 'a', w: 5})-[:R {k: 'x', n: 1}]->(b:Doc {id: 2, title: 'b'})")
     g.set_embeddings("Doc", "title", {1: [1.0, 0.0], 2: [0.0, 1.0]})
     g.cypher(
-        "MATCH ()-[r:R]->() CALL db.relationship_embeddings.set({type: 'R', text_property: 'k', "
+        "MATCH ()-[r:R]->() CALL db.relationship_embeddings.set({type: 'R', text_column: 'k', "
         "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
     )
     return g
@@ -36,7 +36,7 @@ NODE_SOURCES = {
     "map_field": "MATCH (a:Doc {id: 1}) WITH {n: a} AS m WITH m.n AS x ",
     "path_node": "MATCH p = (:Doc {id: 1})-[:R]->() WITH nodes(p)[0] AS x ",
     "procedure": (
-        "CALL db.node_embeddings.query({type: 'Doc', text_property: 'title', vector: [1.0, 0.0], "
+        "CALL db.node_embeddings.query({type: 'Doc', text_column: 'title', vector: [1.0, 0.0], "
         "top_k: 1}) YIELD node WITH node AS x "
     ),
     "subquery": "CALL { MATCH (a:Doc {id: 1}) RETURN a AS x } WITH x ",
@@ -64,7 +64,7 @@ REL_SOURCES = {
     "map_field": "MATCH ()-[r:R]->() WITH {e: r} AS m WITH m.e AS x ",
     "path_relationship": "MATCH p = ()-[:R]->() WITH relationships(p)[0] AS x ",
     "procedure": (
-        "CALL db.relationship_embeddings.query({type: 'R', text_property: 'k', vector: [1.0, 0.0], "
+        "CALL db.relationship_embeddings.query({type: 'R', text_column: 'k', vector: [1.0, 0.0], "
         "top_k: 1}) YIELD relationship WITH relationship AS x "
     ),
     "subquery": "CALL { MATCH ()-[r:R]->() RETURN r AS x } WITH x ",

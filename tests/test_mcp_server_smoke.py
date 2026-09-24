@@ -500,7 +500,7 @@ class TestGraphMode:
                 {
                     "query": """
                     MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships
-                    CALL db.relationship_embeddings.set({type:'EVIDENCE',text_property:'text',
+                    CALL db.relationship_embeddings.set({type:'EVIDENCE',text_column:'text',
                       entries:[{relationship:relationships[0],vector:[1.0,0.0]}]})
                     YIELD stored RETURN stored
                     """
@@ -527,7 +527,7 @@ class TestGraphMode:
                 "cypher_query",
                 {
                     "query": "CALL db.relationship_embeddings.list({type:'EVIDENCE',"
-                    "text_property:'text'}) YIELD entity,count RETURN entity,count"
+                    "text_column:'text'}) YIELD entity,count RETURN entity,count"
                 },
             )
             listed_text = _text_content(listed)
@@ -538,7 +538,7 @@ class TestGraphMode:
                 "cypher_query",
                 {
                     "query": """
-                    CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_property:'text',
+                    CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_column:'text',
                       relationships:[{id:0,type:'EVIDENCE'}]}) YIELD removed RETURN removed
                     """
                 },
@@ -550,7 +550,7 @@ class TestGraphMode:
                 "cypher_query",
                 {
                     "query": "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships "
-                    "CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_property:'text',"
+                    "CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_column:'text',"
                     "relationships:relationships}) YIELD removed RETURN removed"
                 },
             )

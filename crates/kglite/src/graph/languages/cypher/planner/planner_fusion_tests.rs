@@ -428,7 +428,7 @@ fn first_call_parameters(query: &CypherQuery) -> &Vec<(String, Expression)> {
 fn edge_embeddings_query_text_rewrites_into_a_vector_parameter() {
     let params = HashMap::new();
     let (query, texts) = rewrite_ts(
-        "CALL db.relationship_embeddings.query({type:'R', text_property:'text', text:'hello', top_k:3}) \
+        "CALL db.relationship_embeddings.query({type:'R', text_column:'text', text:'hello', top_k:3}) \
          YIELD relationship RETURN relationship",
         &params,
     )
@@ -439,7 +439,7 @@ fn edge_embeddings_query_text_rewrites_into_a_vector_parameter() {
         .iter()
         .map(|(key, _)| key.as_str())
         .collect();
-    assert_eq!(keys, ["type", "text_property", "vector", "top_k"]);
+    assert_eq!(keys, ["type", "text_column", "vector", "top_k"]);
     assert!(matches!(
         &first_call_parameters(&query)[2].1,
         Expression::Parameter(p) if p == "__ts_0"
@@ -451,7 +451,7 @@ fn edge_embeddings_query_text_parameter_shares_a_text_score_embedding() {
     let mut params = HashMap::new();
     params.insert("q".to_string(), Value::String("hello".to_string()));
     let (query, texts) = rewrite_ts(
-        "CALL db.relationship_embeddings.QUERY({type:'R', text_property:'text', text:$q}) \
+        "CALL db.relationship_embeddings.QUERY({type:'R', text_column:'text', text:$q}) \
          YIELD relationship RETURN text_score(relationship, 'text', 'hello') AS s",
         &params,
     )
@@ -472,7 +472,7 @@ fn edge_embeddings_query_text_parameter_shares_a_text_score_embedding() {
 fn edge_embeddings_query_text_inside_a_subquery_is_rewritten() {
     let params = HashMap::new();
     let (_, texts) = rewrite_ts(
-        "CALL { CALL db.relationship_embeddings.query({type:'R', text_property:'text', text:'inner'}) \
+        "CALL { CALL db.relationship_embeddings.query({type:'R', text_column:'text', text:'inner'}) \
          YIELD relationship RETURN relationship } RETURN relationship",
         &params,
     )
@@ -483,7 +483,7 @@ fn edge_embeddings_query_text_inside_a_subquery_is_rewritten() {
 #[test]
 fn edge_embeddings_query_text_with_vector_is_refused() {
     let err = rewrite_ts(
-        "CALL db.relationship_embeddings.query({type:'R', text_property:'text', text:'q', \
+        "CALL db.relationship_embeddings.query({type:'R', text_column:'text', text:'q', \
          vector:[1.0, 0.0]}) YIELD relationship RETURN relationship",
         &HashMap::new(),
     )
@@ -497,7 +497,7 @@ fn edge_embeddings_query_text_with_vector_is_refused() {
 #[test]
 fn edge_embeddings_query_row_dependent_text_is_refused() {
     let err = rewrite_ts(
-        "WITH 'q' AS t CALL db.relationship_embeddings.query({type:'R', text_property:'text', text:t}) \
+        "WITH 'q' AS t CALL db.relationship_embeddings.query({type:'R', text_column:'text', text:t}) \
          YIELD relationship RETURN relationship",
         &HashMap::new(),
     )
@@ -516,14 +516,14 @@ fn edge_embeddings_query_text_parameter_must_be_a_string() {
         Value::List(vec![Value::Float64(1.0), Value::Float64(0.0)]),
     );
     let err = rewrite_ts(
-        "CALL db.relationship_embeddings.query({type:'R', text_property:'text', text:$q}) \
+        "CALL db.relationship_embeddings.query({type:'R', text_column:'text', text:$q}) \
          YIELD relationship RETURN relationship",
         &params,
     )
     .unwrap_err();
     assert!(err.contains("must be a string"), "unexpected error: {err}");
     let err = rewrite_ts(
-        "CALL db.relationship_embeddings.query({type:'R', text_property:'text', text:$missing}) \
+        "CALL db.relationship_embeddings.query({type:'R', text_column:'text', text:$missing}) \
          YIELD relationship RETURN relationship",
         &HashMap::new(),
     )
@@ -534,7 +534,7 @@ fn edge_embeddings_query_text_parameter_must_be_a_string() {
 #[test]
 fn edge_embeddings_query_vector_spelling_collects_nothing() {
     let (query, texts) = rewrite_ts(
-        "CALL db.relationship_embeddings.query({type:'R', text_property:'text', vector:[1.0, 0.0]}) \
+        "CALL db.relationship_embeddings.query({type:'R', text_column:'text', vector:[1.0, 0.0]}) \
          YIELD relationship RETURN relationship",
         &HashMap::new(),
     )

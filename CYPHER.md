@@ -551,7 +551,7 @@ graph.cypher("""
 | `longitude(point)` | Extract longitude from point |
 | `valid_at(e, date, 'from', 'to')` | Temporal point-in-time filter (nodes or edges) |
 | `valid_during(e, start, end, 'from', 'to')` | Temporal range overlap filter |
-| `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's — or relationship's — indexed text against a query string. Needs `build_text_index(node_type, property)` for a node, `CALL db.relationship_text_index.build({type, property})` for a relationship; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
+| `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's — or relationship's — indexed text against a query string. Needs `build_text_index(node_type, property)` for a node, `CALL db.relationship_text_index.build({type, text_column})` for a relationship; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
 | `text_score(n, prop, query)` | Semantic similarity. A **list** `query` is scored directly as your query vector; a **string** `query` is embedded first (requires `set_embedder()`) |
 | `text_score(n, prop, query, metric)` | With explicit metric (`'cosine'`, `'dot_product'`, `'euclidean'`, `'poincare'`) |
 | `vector_score(n, prop, vector [, metric] [, options])` | Semantic similarity against a pre-computed embedding vector (pass a list of floats directly, no `set_embedder()` needed) |
@@ -609,7 +609,7 @@ ORDER BY score DESC
 LIMIT 5
 ```
 
-The embedding store key is `{text_column}_emb` (set via
+The embedding store name is `{text_column}_emb` (set via
 `set_embeddings(node_type, text_column, {id: vector})`), so embeddings set on
 the `summary` column are scored as `vector_score(a, 'summary_emb', …)`.
 
@@ -630,11 +630,11 @@ belongs to entity:'relationship'").
 // Node vectors from a query: the store set_embeddings / embed_texts write.
 MATCH (d:Doc) WHERE d.lang = 'en'
 WITH collect(d) AS docs
-CALL db.node_embeddings.embed({type: 'Doc', text_property: 'summary', nodes: docs})
+CALL db.node_embeddings.embed({type: 'Doc', text_column: 'summary', nodes: docs})
 YIELD embedded RETURN embedded
 
 // Whole-store top-k, several node types merged (text: needs set_embedder()).
-CALL db.embeddings.query({text_property: 'summary', text: 'graph databases', top_k: 5})
+CALL db.embeddings.query({text_column: 'summary', text: 'graph databases', top_k: 5})
 YIELD node, score, type RETURN type, node.title, score
 ```
 
@@ -651,7 +651,7 @@ MATCH (claimant:Claimant)-[r:SUPPORTS]->(claim:Claim)
 WHERE claim.status = 'open'
 WITH collect(r) AS relationships
 CALL db.relationship_embeddings.embed({
-  type: 'SUPPORTS', text_property: 'evidence', relationships: relationships,
+  type: 'SUPPORTS', text_column: 'evidence', relationships: relationships,
   mode: 'changed'
 })
 YIELD embedded, skipped, dimension, model
@@ -675,7 +675,7 @@ that type, exactly as a separate call per type would, and every relationship in
 exclusive). The call still yields one row: `embedded` and `skipped` summed over
 the types, `dimension` and `model` the value the passes share, `null` when they
 differ. To embed every relationship of a type from Python, without a
-selection, call `embed_relationship_texts(type, text_property, mode=…)`.
+selection, call `embed_relationship_texts(type, text_column, mode=…)`.
 
 The mutating procedure must remain a top-level pipeline clause. A read-only
 `CALL {}` subquery may return collected relationship values to an outer
@@ -689,21 +689,21 @@ bytes, so numpy rows bind fastest in a batched `UNWIND $batch … set` ingest:
 
 ```cypher
 CALL db.relationship_embeddings.set({
-  type:'SUPPORTS', text_property:'evidence',
+  type:'SUPPORTS', text_column:'evidence',
   entries:[{relationship:r, vector:$vector}], metric:'cosine'
 }) YIELD stored, dimension
 
 CALL db.relationship_embeddings.remove({
-  type:'SUPPORTS', text_property:'evidence', relationships:relationships
+  type:'SUPPORTS', text_column:'evidence', relationships:relationships
 }) YIELD removed
 
-CALL db.relationship_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
+CALL db.relationship_embeddings.drop({type:'SUPPORTS', text_column:'evidence'})
 YIELD dropped
 ```
 
 `set` upserts the relationships a query has bound. For a bulk load — vectors
 computed outside the graph for thousands of relationships — use the Python
-`add_relationship_embeddings(type, text_property, {(source_id, target_id):
+`add_relationship_embeddings(type, text_column, {(source_id, target_id):
 vector, …})`, the same upsert, or `set_relationship_embeddings(…)`, which
 replaces the store as the node `set_embeddings` does (Rust:
 `kglite::api::embeddings::{add,set}_relationship_embeddings`). Both address
@@ -720,14 +720,14 @@ Every `db.relationship_embeddings.*` procedure refuses a parameter it does not r
 naming the key and listing the ones it accepts — including the per-entry map of
 `set`, whose keys are `relationship` and `vector`. A misspelled option is an
 error, never a silently ignored one. `set` and `embed` refuse a
-`text_property` that no relationship of `type` carries (unless its store
+`text_column` that no relationship of `type` carries (unless its store
 already exists), naming the properties the type does carry — the refusal the
 node `set_embeddings()` / `embed_texts()` give an unknown column — so a
 misspelling never creates an empty store. Store manual vectors under a
 property the relationships have.
 
-`db.relationship_embeddings.list({type?, text_property?})` reports `entity`, `type`,
-`text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
+`db.relationship_embeddings.list({type?, text_column?})` reports `entity`, `type`,
+`text_column`, canonical `store`, `dimension`, `count`, `metric`, `model`,
 `index_state`, pending `delta`, and `unembedded` relationship count. `delta`
 counts the stored vectors the index does not hold, so with no index built it
 equals `count`.
@@ -745,7 +745,11 @@ or the same with `text_score` — is served from the store, as it is for nodes:
 - **Plain pattern.** A plain single-type pattern (no `WHERE`, no property
   maps) whose every relationship of the type is embedded goes straight to the
   store: through HNSW when an online index serves the metric, otherwise by an
-  exact scan.
+  exact scan. A `WHERE vector_score(r, …) IS NOT NULL` filter keeps it there.
+- **`WITH` before the sort.** `MATCH ()-[r:T]->() WITH r, vector_score(r, …)
+  AS s ORDER BY s DESC LIMIT k RETURN startNode(r)…` is served the same way.
+- **Undirected.** `(a)-[r:T]-(b)` uses the index too, and returns each
+  relationship once per orientation, as the unfused pattern matches it.
 - **Any other shape.** It scores its matched rows. With an online index this
   goes through HNSW with a 4× over-fetch filtered to those rows, falling back
   to the exact top-k when the filter underfills.
@@ -768,7 +772,7 @@ ties**: when several rows score the same at the cut, which of them make the top
 `k`, and their order, can differ between the HNSW route and the exact or
 unfused one — the scores returned are the same. A relationship with
 no vector scores `null` and so comes **first** under `DESC`; add
-`WHERE vector_score(r, …) IS NOT NULL`, which keeps the store route (see
+`WHERE vector_score(r, …) IS NOT NULL`, which is served from the store (see
 **Unembedded rows come first under `DESC`** below).
 `diagnostics.retrieval` reports the route, with store
 `relationship:TYPE.property_emb` — a comma-separated list sorted by
@@ -781,18 +785,18 @@ The explicit whole-store lifecycle and query procedures are:
 
 ```cypher
 CALL db.relationship_embeddings.build_index({
-  type:'SUPPORTS', text_property:'evidence',
+  type:'SUPPORTS', text_column:'evidence',
   m:16, ef_construction:200, ef_search:64, auto_refresh_limit:1000
 }) YIELD indexed, metric, m
 
-CALL db.relationship_embeddings.refresh_index({type:'SUPPORTS', text_property:'evidence'})
+CALL db.relationship_embeddings.refresh_index({type:'SUPPORTS', text_column:'evidence'})
 YIELD refreshed
 
-CALL db.relationship_embeddings.drop_index({type:'SUPPORTS', text_property:'evidence'})
+CALL db.relationship_embeddings.drop_index({type:'SUPPORTS', text_column:'evidence'})
 YIELD dropped
 
 CALL db.relationship_embeddings.query({
-  type:'SUPPORTS', text_property:'evidence', vector:$vector,
+  type:'SUPPORTS', text_column:'evidence', vector:$vector,
   top_k:10, exact:false
 }) YIELD relationship, score, search_method
 ```
@@ -819,13 +823,13 @@ relationships as passing that vector yourself:
 
 ```cypher
 CALL db.relationship_embeddings.query({
-  type:'SUPPORTS', text_property:'evidence', text:$question, top_k:10
+  type:'SUPPORTS', text_column:'evidence', text:$question, top_k:10
 }) YIELD relationship, score
 ```
 
 **Several types at once.** `types:['SUPPORTS','REFUTES']` in place of `type`
 ranks those stores together, and leaving out both `type` and `types` ranks
-every relationship store for `text_property`. Each store answers on its own
+every relationship store for `text_column`. Each store answers on its own
 route (HNSW when its index is online, exact otherwise) for its own `top_k`,
 and the rows merge into one `top_k`: score descending, then relationship type,
 then relationship slot, so the order is deterministic. Each row also yields
@@ -833,12 +837,12 @@ then relationship slot, so the order is deterministic. Each row also yields
 
 ```cypher
 CALL db.relationship_embeddings.query({
-  types:['SUPPORTS','REFUTES'], text_property:'evidence', vector:$vector, top_k:10
+  types:['SUPPORTS','REFUTES'], text_column:'evidence', vector:$vector, top_k:10
 }) YIELD relationship, score, type, search_method
 ```
 
 A named type with no such store is refused by name, and so is `type` together
-with `types`, an empty `types`, or a `text_property` no store carries. Stores
+with `types`, an empty `types`, or a `text_column` no store carries. Stores
 that declare different metrics refuse the merge, naming both: their scores
 are not on one scale. Pass `metric` to score every store under one metric, or
 query the types separately. `text:` works the same way across types.
@@ -923,9 +927,13 @@ properties, use filtered `MATCH` with the exact scalar functions instead.
 > **Unembedded rows come first under `DESC`.** `vector_score` and `text_score`
 > are `null` for a node or relationship the store holds no vector for, and
 > openCypher sorts `null` above every value — so `ORDER BY s DESC LIMIT k`
-> fills its first rows with unembedded entities, and because the store does
-> not cover every matched row the planner answers by row scan
-> (`fallback_reason: 'row_coverage'`). Drop them in the `MATCH`'s own `WHERE`:
+> fills its first rows with unembedded entities. A node type with unembedded
+> members is still answered from its store — the null-scored nodes first, in
+> the type's order, then the store's ranking — and reports
+> `fallback_reason: 'row_coverage'` only when all `k` rows are null or the
+> store's order differs from the type's. A relationship type with unembedded
+> members is answered by row scan and reports `row_coverage`. To leave the
+> unembedded rows out, filter them in the `MATCH`'s own `WHERE`:
 >
 > ```cypher
 > MATCH (n:Doc) WHERE vector_score(n, 'body_emb', $q) IS NOT NULL
@@ -935,7 +943,8 @@ properties, use filtered `MATCH` with the exact scalar functions instead.
 > RETURN a.title, b.title, vector_score(r, 'evidence_emb', $q) AS s ORDER BY s DESC LIMIT 10
 > ```
 >
-> The filter keeps the store route — HNSW once an index is online, with
+> The filter is served from the store at the cost of the store procedure, not
+> by scoring every row — HNSW once an index is online, with
 > `diagnostics.retrieval` naming the store — for nodes and relationships alike
 > (the `text_score` form too). The same test written after the projection,
 > `WITH … AS s WHERE s IS NOT NULL`, leaves the fused route and scores every row
@@ -959,7 +968,7 @@ graph.build_text_index("Article", "body")     # Python; every binding has it
 ```
 
 In Cypher the same index is `CALL db.node_text_index.build({type: 'Article',
-property: 'body'})` (also `refresh`, `drop`, `list`; `db.text_index.*` routes
+text_column: 'body'})` (also `refresh`, `drop`, `list`; `db.text_index.*` routes
 to it by default).
 
 ```cypher
@@ -1033,12 +1042,12 @@ relationship index's lifecycle is in Cypher, like the relationship vector
 index's, so every binding reaches it:
 
 ```cypher
-CALL db.relationship_text_index.build({type:'SUPPORTS', property:'evidence', auto_refresh_limit:1000})
+CALL db.relationship_text_index.build({type:'SUPPORTS', text_column:'evidence', auto_refresh_limit:1000})
 YIELD indexed, skipped, terms
 
-CALL db.relationship_text_index.refresh({type:'SUPPORTS', property:'evidence'}) YIELD refreshed
+CALL db.relationship_text_index.refresh({type:'SUPPORTS', text_column:'evidence'}) YIELD refreshed
 
-CALL db.relationship_text_index.drop({type:'SUPPORTS', property:'evidence'}) YIELD dropped
+CALL db.relationship_text_index.drop({type:'SUPPORTS', text_column:'evidence'}) YIELD dropped
 
 CALL db.relationship_text_index.list({type:'SUPPORTS'})
 YIELD entity, type, property, documents, terms, skipped, index_state, delta, auto_refresh_limit
@@ -1052,10 +1061,10 @@ ORDER BY score DESC LIMIT 10
 
 | Procedure | Yields | Notes |
 |---|---|---|
-| `db.relationship_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index. Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
-| `db.relationship_text_index.refresh({type, property})` | `refreshed` | Folds in every change since the last build or refresh, whatever the limit; refuses a missing index |
-| `db.relationship_text_index.drop({type, property})` | `dropped` | `false` when there was no such index |
-| `db.relationship_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Read-only; one row per index, sorted |
+| `db.relationship_text_index.build({type, text_column, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index. Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
+| `db.relationship_text_index.refresh({type, text_column})` | `refreshed` | Folds in every change since the last build or refresh, whatever the limit; refuses a missing index |
+| `db.relationship_text_index.drop({type, text_column})` | `dropped` | `false` when there was no such index |
+| `db.relationship_text_index.list({type?, text_column?})` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Read-only; one row per index, sorted |
 
 The semantics are the node lane's: `0.0` for no shared word, `null` for a
 relationship the index holds no document for, an error naming

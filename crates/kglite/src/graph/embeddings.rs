@@ -679,6 +679,38 @@ pub fn node_embedding(
         .map(<[f32]>::to_vec))
 }
 
+/// Every vector in the `(node_type, text_column)` store as `(node id, vector)`
+/// pairs, in unspecified order. Refused by name when there is no such store,
+/// as [`node_embedding`] is, so a misspelt column or a store name is never an
+/// empty answer.
+pub fn node_embeddings(
+    graph: &DirGraph,
+    node_type: &str,
+    text_column: &str,
+) -> Result<Vec<(Value, Vec<f32>)>, String> {
+    let store = graph
+        .embeddings
+        .get(&store_key(node_type, text_column))
+        .ok_or_else(|| {
+            crate::graph::embedding_hints::missing_store_error(
+                graph,
+                EmbeddingEntity::Node,
+                node_type,
+                text_column,
+                Surface::Method,
+            )
+        })?;
+    Ok(store
+        .node_to_slot
+        .keys()
+        .filter_map(|&node_index| {
+            let vector = store.get_embedding(node_index)?;
+            let node = graph.graph.node_view(NodeIndex::new(node_index))?;
+            Some((node.id().into_owned(), vector.to_vec()))
+        })
+        .collect())
+}
+
 /// Whether a store exists for `(node_type, text_column)` at all.
 pub fn store_exists(graph: &DirGraph, node_type: &str, text_column: &str) -> bool {
     graph

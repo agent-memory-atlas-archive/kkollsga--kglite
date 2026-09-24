@@ -57,7 +57,7 @@ fn whole_store_query_filters_after_top_k_and_match_remains_exact() {
     let graph = indexed_graph();
     let queried = run(
         &graph,
-        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', \
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_column:'text', \
          vector:[1.0,0.0], top_k:1, exact:true}) YIELD relationship,score \
          WHERE relationship.rank <> 0 RETURN relationship,score",
     );
@@ -109,9 +109,9 @@ fn edge_vector_index_introspection_uses_relationship_entity_kind() {
 fn query_relationship_keeps_statement_identity_for_outer_mutation() {
     let mut graph = indexed_graph();
     let query = parser::parse_cypher(
-        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'text', \
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_column:'text', \
          vector:[1.0,0.0], top_k:1, exact:true}) YIELD relationship AS r \
-         WITH r CALL db.relationship_embeddings.remove({type:'CLAIMS', text_property:'text', \
+         WITH r CALL db.relationship_embeddings.remove({type:'CLAIMS', text_column:'text', \
          relationships:[r]}) YIELD removed RETURN removed",
     )
     .unwrap();
@@ -146,7 +146,7 @@ fn an_unknown_key_in_a_set_entry_is_refused() {
         .len();
     let query = parser::parse_cypher(
         "MATCH ()-[r:CLAIMS]->() WHERE r.rank = 0 \
-         CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'CLAIMS', text_column:'text', \
          entries:[{relationship:r, vecto:[0.0,1.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap();

@@ -23,7 +23,7 @@ class RelationshipEmbeddingTest {
                     "CREATE (a:T {id:1})-[:EVIDENCE {text:'heat study'}]->(b:T {id:2})");
             graph.cypher(
                     "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS rs "
-                            + "CALL db.relationship_embeddings.set({type:'EVIDENCE',text_property:'text',"
+                            + "CALL db.relationship_embeddings.set({type:'EVIDENCE',text_column:'text',"
                             + "entries:[{relationship:rs[0],vector:$v}]}) "
                             + "YIELD stored RETURN stored",
                     Map.of("v", new float[] {1.0f, 0.0f}));
@@ -39,7 +39,7 @@ class RelationshipEmbeddingTest {
             assertEquals(
                     List.of(Map.of("entity", "relationship", "count", 1L)),
                     graph.query(
-                            "CALL db.relationship_embeddings.list({type:'EVIDENCE',text_property:'text'}) "
+                            "CALL db.relationship_embeddings.list({type:'EVIDENCE',text_column:'text'}) "
                                     + "YIELD entity,count RETURN entity,count"));
             graph.save(path);
         }
@@ -58,7 +58,7 @@ class RelationshipEmbeddingTest {
                     graph.cypher(
                             "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships "
                                     + "CALL db.relationship_embeddings.remove({type:'EVIDENCE',"
-                                    + "text_property:'text',relationships:relationships}) "
+                                    + "text_column:'text',relationships:relationships}) "
                                     + "YIELD removed RETURN removed"));
         }
     }
@@ -70,7 +70,7 @@ class RelationshipEmbeddingTest {
             KgliteException error = assertThrows(
                     KgliteException.class,
                     () -> graph.cypher(
-                            "CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_property:'text',"
+                            "CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_column:'text',"
                                     + "relationships:[{id:0,type:'EVIDENCE'}]}) "
                                     + "YIELD removed RETURN removed"));
             assertTrue(error.getMessage().contains("relationship"), error.getMessage());

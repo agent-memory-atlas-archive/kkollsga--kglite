@@ -126,7 +126,7 @@ def _twin_graphs(n: int, dimension: int, seed: int) -> tuple[kglite.KnowledgeGra
         stored = edges.cypher(
             "UNWIND $batch AS entry MATCH (:Hub)-[r:CLAIMS]->(:Doc {id: entry.id}) "
             "WITH collect({relationship: r, vector: entry.vector}) AS entries "
-            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'summary', entries: entries, "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_column:'summary', entries: entries, "
             "metric:'cosine'}) "
             "YIELD stored RETURN stored",
             params={"batch": batch},
@@ -147,7 +147,7 @@ def query_twins():
     nodes, edges, vectors = _twin_graphs(QUERY_N, QUERY_DIMENSION, seed=20_260_925)
     nodes.build_vector_index("Doc", "summary")
     assert edges.cypher(
-        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'summary'}) YIELD indexed RETURN "
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_column:'summary'}) YIELD indexed RETURN "
         "indexed"
     ).to_list() == [{"indexed": QUERY_N}]
     return nodes, edges, vectors
@@ -155,7 +155,7 @@ def query_twins():
 
 def _edge_query(edges: kglite.KnowledgeGraph, query: list[float], *, exact: bool) -> list[int]:
     rows = edges.cypher(
-        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'summary', vector:$q, top_k:$k, "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_column:'summary', vector:$q, top_k:$k, "
         "exact:$exact}) "
         "YIELD relationship, search_method RETURN endNode(relationship).id AS end, search_method",
         params={"q": query, "k": TOP_K, "exact": exact},
@@ -180,7 +180,7 @@ def test_bench_edge_vector_score_scan_100k_384(benchmark, scan_twins):
     ).to_list()
     assert edge_scan()[0]["id"] == SCAN_N // 2, "the self-hit must rank first"
     store_route = lambda: edges.cypher(  # noqa: E731
-        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_property:'summary', vector:$q, top_k:10, "
+        "CALL db.relationship_embeddings.query({type:'CLAIMS', text_column:'summary', vector:$q, top_k:10, "
         "exact:true}) "
         "YIELD relationship, score RETURN endNode(relationship).id AS id, score",
         params={"q": query},
@@ -266,12 +266,12 @@ def cross_type_graph(query_twins):
             graph.cypher(
                 f"UNWIND $batch AS entry MATCH (:Hub)-[r:{rel_type}]->(:Doc {{id: entry.id}}) "
                 "WITH collect({relationship: r, vector: entry.vector}) AS entries "
-                f"CALL db.relationship_embeddings.set({{type:'{rel_type}', text_property:'summary', entries: entries, "
+                f"CALL db.relationship_embeddings.set({{type:'{rel_type}', text_column:'summary', entries: entries, "
                 "metric:'cosine'}) YIELD stored RETURN stored",
                 params={"batch": batch},
             )
         graph.cypher(
-            f"CALL db.relationship_embeddings.build_index({{type:'{rel_type}', text_property:'summary'}}) "
+            f"CALL db.relationship_embeddings.build_index({{type:'{rel_type}', text_column:'summary'}}) "
             "YIELD indexed RETURN indexed"
         )
     return graph
@@ -279,7 +279,7 @@ def cross_type_graph(query_twins):
 
 def _cross_type_query(graph: kglite.KnowledgeGraph, query: list[float], *, exact: bool) -> list[int]:
     rows = graph.cypher(
-        "CALL db.relationship_embeddings.query({types:$types, text_property:'summary', vector:$q, top_k:$k, "
+        "CALL db.relationship_embeddings.query({types:$types, text_column:'summary', vector:$q, top_k:$k, "
         "exact:$exact}) "
         "YIELD relationship, search_method RETURN endNode(relationship).id AS end, search_method",
         params={"types": list(CROSS_TYPES), "q": query, "k": TOP_K, "exact": exact},
@@ -373,7 +373,7 @@ def test_bench_edge_embed_ingest_20k_384(benchmark):
     def edge_ingest(g: kglite.KnowledgeGraph):
         return g.cypher(
             "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs "
-            "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_property:'summary', "
+            "CALL db.relationship_embeddings.embed({type:'CLAIMS', text_column:'summary', "
             "relationships: rs, mode:'missing'}) "
             "YIELD embedded RETURN embedded"
         ).to_list()

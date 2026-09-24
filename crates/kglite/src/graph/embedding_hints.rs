@@ -34,7 +34,7 @@ fn procedure_family(entity: EmbeddingEntity) -> &'static str {
 
 fn procedure_call(entity: EmbeddingEntity, name: &str, ty: &str, col: &str) -> String {
     format!(
-        "CALL {}.{name}({{type: '{ty}', text_property: '{col}'}})",
+        "CALL {}.{name}({{type: '{ty}', text_column: '{col}'}})",
         procedure_family(entity)
     )
 }
@@ -63,7 +63,7 @@ impl Surface {
                 )
             }
             (Self::Cypher, _) => format!(
-                "CALL {family}.embed or {family}.set with {{type: '{ty}', text_property: '{col}'}}",
+                "CALL {family}.embed or {family}.set with {{type: '{ty}', text_column: '{col}'}}",
                 family = procedure_family(entity)
             ),
         }

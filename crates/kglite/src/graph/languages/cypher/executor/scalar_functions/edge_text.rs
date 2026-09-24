@@ -138,7 +138,7 @@ impl<'a> CypherExecutor<'a> {
                     "relationship text index '{rel_type}.{prop_name}' is stale: up to {} \
                      documents are unindexed, {reason} — a new relationship scores null and a \
                      changed one scores its previously indexed text. Refresh with \
-                     CALL db.relationship_text_index.refresh({{type: '{rel_type}', property: \
+                     CALL db.relationship_text_index.refresh({{type: '{rel_type}', text_column: \
                      '{prop_name}'}}).",
                     store.relationship_delta_size(self.graph),
                 ));

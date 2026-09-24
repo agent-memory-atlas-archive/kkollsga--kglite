@@ -310,7 +310,7 @@ fn validate_request_syntax(request: &EdgeGenerationRequest) -> Result<(), String
         return Err("relationship type must not be empty".into());
     }
     if request.text_property.is_empty() {
-        return Err("text property must not be empty".into());
+        return Err("text_column must not be empty".into());
     }
     if request.batch_size == 0 {
         return Err("batch_size must be greater than zero".into());

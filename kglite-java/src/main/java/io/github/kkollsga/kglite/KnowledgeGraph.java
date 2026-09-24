@@ -756,7 +756,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * @param nodeType   the node type to key the store on; it must exist in the
      *     graph, and {@code textColumn} must name a property present on it
      * @param textColumn the source column name (for example {@code "body"}); the
-     *     store key is {@code "{textColumn}_emb"}
+     *     store name is {@code "{textColumn}_emb"}
      * @param byId       vectors keyed by node id. Iteration order fixes the
      *     stored slot order, so a {@link java.util.LinkedHashMap} gives a
      *     reproducible {@code .kgl} across runs. An empty map is a no-op batch.
@@ -782,7 +782,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * it.
      *
      * @param nodeType   the node type to key the store on
-     * @param textColumn the source column name; the store key is
+     * @param textColumn the source column name; the store name is
      *     {@code "{textColumn}_emb"}
      * @param byId       vectors keyed by node id; an empty map is a no-op batch
      * @param metric     the distance metric: {@code "cosine"},
@@ -811,7 +811,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * every later vector shares it. Call {@link #save(Path)} to persist it.
      *
      * @param nodeType   the node type to key the store on
-     * @param textColumn the source column name; the store key is
+     * @param textColumn the source column name; the store name is
      *     {@code "{textColumn}_emb"}
      * @param byId       vectors keyed by node id; an empty map is a no-op batch
      * @return the ingest report; {@code store_created} is {@code true} on the
@@ -834,7 +834,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * metric. Call {@link #save(Path)} to persist it.
      *
      * @param nodeType   the node type to key the store on
-     * @param textColumn the source column name; the store key is
+     * @param textColumn the source column name; the store name is
      *     {@code "{textColumn}_emb"}
      * @param byId       vectors keyed by node id; an empty map is a no-op batch
      * @param metric     the distance metric for the store when this batch
@@ -865,7 +865,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * checkpoint alongside the store.
      *
      * @param nodeType   the node type the store is keyed on
-     * @param textColumn the source column name; the store key is
+     * @param textColumn the source column name; the store name is
      *     {@code "{textColumn}_emb"}
      * @return the index report: {@code indexed}, {@code metric}, {@code m}
      * @throws KgliteException if the store does not exist yet, or its metric is
@@ -887,7 +887,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * can set one and default the rest.
      *
      * @param nodeType       the node type the store is keyed on
-     * @param textColumn     the source column name; the store key is
+     * @param textColumn     the source column name; the store name is
      *     {@code "{textColumn}_emb"}
      * @param m              max neighbours per node above layer 0; {@code 0} uses
      *     the engine default

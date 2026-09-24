@@ -441,14 +441,14 @@ documents. Their exports load through three routes:
   (`documents`, `chunks`, and a `graph` with `clusters`). The runnable,
   network-free
   [`examples/knwler_import.py`](https://github.com/kkollsga/kglite/blob/main/examples/knwler_import.py)
-  turns either shape into a `from_records` spec. Entity ids are `name::type`,
+  turns either shape into a `from_records` spec. An `Entity` node's id is `name::type`,
   as knwler's own `create_network` builds them. Relations are grouped into one
   connection per relation type, with endpoint types taken from each relation's
   `source_type` / `target_type`; `Document-[:CONTAINS]->Chunk`,
   `Chunk-[:HAS_ENTITY]->Entity` and, for a consolidated export,
   `Entity-[:BELONGS_TO]->Cluster` are added, and
   `on_missing_endpoint='error'` refuses a relation whose endpoint names no
-  entity. It then embeds every relation type in one
+  `Entity` node. It then embeds every relation type in one
   `db.relationship_embeddings.embed({types: …})` call and ranks across all of
   them with one `db.relationship_embeddings.query` that names no `type` (see
   [relationship retrieval across types](semantic-search.md)). knwler's own

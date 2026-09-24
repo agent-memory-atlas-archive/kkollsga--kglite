@@ -135,10 +135,19 @@ class TestSetGetEmbeddings:
         assert embs[2] == [0.0, 1.0, 0.0]
 
     def test_embeddings_two_arg_nonexistent(self, graph_with_embeddings):
-        """Two-arg form returns empty dict for nonexistent store."""
+        """The two-arg form refuses a store that doesn't exist (it answered {},
+        the same as an empty store) with embedding()'s message, on every route."""
         graph = graph_with_embeddings
-        embs = graph.embeddings("Article", "nonexistent")
-        assert embs == {}
+        message = r"No node embedding store 'Article\.nonexistent'\. Node embedding stores of 'Article': summary\."
+        for read in (
+            lambda: graph.embeddings("Article", "nonexistent"),
+            lambda: graph.embeddings("Article", "nonexistent", entity="node"),
+            lambda: graph.node_embeddings("Article", "nonexistent"),
+        ):
+            with pytest.raises(ValueError, match=message):
+                read()
+        with pytest.raises(ValueError, match=r"No node embedding store 'Article\.summary_emb'"):
+            graph.embeddings("Article", "summary_emb")
 
     def test_embedding_single_node(self, graph_with_embeddings):
         """embedding(node_type, text_column, node_id) returns one vector."""

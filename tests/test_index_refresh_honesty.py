@@ -20,10 +20,10 @@ from kglite import KnowledgeGraph
 
 MODES = ["memory", "mapped", "disk"]
 EDGE_REFRESH = (
-    "CALL db.relationship_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed "
+    "CALL db.relationship_embeddings.refresh_index({type:'CLAIMS', text_column:'text'}) YIELD refreshed "
     "RETURN refreshed"
 )
-EDGE_BUILD_CALL = "db.relationship_embeddings.build_index({type: 'CLAIMS', text_property: 'text'})"
+EDGE_BUILD_CALL = "db.relationship_embeddings.build_index({type: 'CLAIMS', text_column: 'text'})"
 
 
 def _empty(mode: str, tmp_path: Path) -> KnowledgeGraph:
@@ -44,7 +44,7 @@ def _graph(mode: str, tmp_path: Path, count: int = 8, *, indexed: bool = True) -
         )
         graph.cypher(
             "MATCH ()-[r:CLAIMS {rank: $i}]->() "
-            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_property:'text', "
+            "CALL db.relationship_embeddings.set({type:'CLAIMS', text_column:'text', "
             "entries:[{relationship:r, vector:$v}]}) YIELD stored RETURN stored",
             params={"i": i, "v": vectors[i]},
         )
@@ -52,7 +52,7 @@ def _graph(mode: str, tmp_path: Path, count: int = 8, *, indexed: bool = True) -
     if indexed:
         graph.build_vector_index("Doc", "summary")
         graph.cypher(
-            "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+            "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_column:'text'}) YIELD indexed RETURN "
             "indexed"
         )
     return graph
@@ -113,7 +113,7 @@ class TestRelationshipRefresh:
             graph.cypher(EDGE_REFRESH)
         assert EDGE_BUILD_CALL in str(info.value)
         graph.cypher(
-            "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
+            "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_column:'text'}) YIELD indexed RETURN "
             "indexed"
         )
         assert graph.cypher(EDGE_REFRESH).to_list() == [{"refreshed": 0}]
@@ -199,8 +199,7 @@ def test_vacuum_after_a_delete_drops_every_index_except_on_disk(mode: str, node_
     assert _state(graph) == (True, "none")
     graph.build_vector_index("Doc", "summary")
     graph.cypher(
-        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN "
-        "indexed"
+        "CALL db.relationship_embeddings.build_index({type:'CLAIMS', text_column:'text'}) YIELD indexed RETURN indexed"
     )
     assert _state(graph) == (True, "online")
     graph.vacuum()

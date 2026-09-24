@@ -507,7 +507,7 @@ fn a_failed_statement_reverses_db_edge_embeddings_set() {
         &mut graph,
         &format!(
             "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' \
-             CALL db.relationship_embeddings.set({{type:'ASSERTS', text_property:'description', \
+             CALL db.relationship_embeddings.set({{type:'ASSERTS', text_column:'description', \
              entries:[{{relationship:r, vector:[0.25,0.75]}}]}}) YIELD stored \
              WITH stored AS kept{FAILING_TAIL}"
         ),
@@ -527,7 +527,7 @@ fn a_failed_statement_reverses_db_edge_embeddings_remove() {
         &mut graph,
         &format!(
             "MATCH ()-[r:ASSERTS]->() WHERE r.text = 'alpha' \
-             CALL db.relationship_embeddings.remove({{type:'ASSERTS', text_property:'description', \
+             CALL db.relationship_embeddings.remove({{type:'ASSERTS', text_column:'description', \
              relationships:[r]}}) YIELD removed \
              WITH removed AS kept{FAILING_TAIL}"
         ),

@@ -48,7 +48,7 @@ class _Stub:
 def _set_docs(graph: KnowledgeGraph, namespace: str = "db.node_embeddings") -> list[dict]:
     return graph.cypher(
         "UNWIND $rows AS row MATCH (d:Doc {id: row.id}) "
-        f"CALL {namespace}.set({{type: 'Doc', text_property: 'text', "
+        f"CALL {namespace}.set({{type: 'Doc', text_column: 'text', "
         "entries: [{node: d, vector: row.vector}]}) YIELD stored, dimension "
         "RETURN max(stored) AS stored, max(dimension) AS dimension",
         params={"rows": [{"id": key, "vector": vector} for key, vector in VECTORS.items()]},
@@ -71,7 +71,7 @@ def test_embed_writes_what_embed_texts_writes(mode: str, tmp_path: Path) -> None
     by_procedure.set_embedder(_Stub())
     report = by_procedure.cypher(
         "MATCH (d:Doc) WITH collect(d) AS docs "
-        "CALL db.node_embeddings.embed({type: 'Doc', text_property: 'text', nodes: docs}) "
+        "CALL db.node_embeddings.embed({type: 'Doc', text_column: 'text', nodes: docs}) "
         "YIELD embedded, skipped, dimension, model RETURN embedded, skipped, dimension, model"
     ).to_list()
     assert report == [{"embedded": 4, "skipped": 0, "dimension": 2, "model": "stub/v1"}]
@@ -86,7 +86,7 @@ def test_index_lifecycle_matches_the_python_methods(tmp_path: Path) -> None:
     graph = _graph("memory", tmp_path)
     _set_docs(graph)
     built = graph.cypher(
-        "CALL db.node_embeddings.build_index({type: 'Doc', text_property: 'text', m: 8}) "
+        "CALL db.node_embeddings.build_index({type: 'Doc', text_column: 'text', m: 8}) "
         "YIELD indexed, metric, m RETURN indexed, metric, m"
     ).to_list()
     twin = _graph("memory", tmp_path, "twin")
@@ -100,14 +100,14 @@ def test_index_lifecycle_matches_the_python_methods(tmp_path: Path) -> None:
     ).to_list()
     assert listed == [{"entity": "node", "count": 4, "index_state": "online", "delta": 0}]
     assert graph.cypher(
-        "CALL db.node_embeddings.refresh_index({type: 'Doc', text_property: 'text'}) YIELD refreshed RETURN refreshed"
+        "CALL db.node_embeddings.refresh_index({type: 'Doc', text_column: 'text'}) YIELD refreshed RETURN refreshed"
     ).to_list() == [{"refreshed": twin.refresh_vector_index("Doc", "text")}]
     assert graph.cypher(
-        "CALL db.node_embeddings.drop_index({type: 'Doc', text_property: 'text'}) YIELD dropped RETURN dropped"
+        "CALL db.node_embeddings.drop_index({type: 'Doc', text_column: 'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": twin.drop_vector_index("Doc", "text")}]
     assert not graph.has_vector_index("Doc", "text")
     with pytest.raises(kglite.CypherExecutionError, match="no vector index"):
-        graph.cypher("CALL db.node_embeddings.refresh_index({type: 'Doc', text_property: 'text'}) YIELD refreshed")
+        graph.cypher("CALL db.node_embeddings.refresh_index({type: 'Doc', text_column: 'text'}) YIELD refreshed")
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -115,7 +115,7 @@ def test_query_rows_equal_vector_search(mode: str, tmp_path: Path) -> None:
     graph = _graph(mode, tmp_path)
     _set_docs(graph)
     rows = graph.cypher(
-        "CALL db.node_embeddings.query({type: 'Doc', text_property: 'text', vector: [1.0, 0.1], top_k: 3, exact: "
+        "CALL db.node_embeddings.query({type: 'Doc', text_column: 'text', vector: [1.0, 0.1], top_k: 3, exact: "
         "true}) "
         "YIELD node, score, search_method, type RETURN node.id AS id, score, search_method, type"
     ).to_list()
@@ -131,7 +131,7 @@ def test_query_merges_types_and_refuses_mixed_metrics(tmp_path: Path) -> None:
     _set_docs(graph)
     graph.add_embeddings("Note", "text", {10: [0.9, 0.2], 11: [0.1, 1.0]})
     merged = graph.cypher(
-        "CALL db.node_embeddings.query({text_property: 'text', vector: [1.0, 0.0], top_k: 3}) "
+        "CALL db.node_embeddings.query({text_column: 'text', vector: [1.0, 0.0], top_k: 3}) "
         "YIELD node, type RETURN node.id AS id, type"
     ).to_list()
     assert merged == [
@@ -142,7 +142,7 @@ def test_query_merges_types_and_refuses_mixed_metrics(tmp_path: Path) -> None:
     graph.set_embeddings("Note", "text", {10: [0.9, 0.2]}, metric="euclidean")
     with pytest.raises(kglite.CypherExecutionError, match="score under different metrics"):
         graph.cypher(
-            "CALL db.node_embeddings.query({types: ['Doc', 'Note'], text_property: 'text', vector: [1.0, 0.0]}) "
+            "CALL db.node_embeddings.query({types: ['Doc', 'Note'], text_column: 'text', vector: [1.0, 0.0]}) "
             "YIELD node RETURN node"
         )
 
@@ -152,11 +152,11 @@ def test_query_text_is_embedded_with_the_registered_model(tmp_path: Path) -> Non
     graph.set_embedder(_Stub())
     graph.embed_texts("Doc", "text", show_progress=False)
     by_text = graph.cypher(
-        "CALL db.embeddings.query({type: 'Doc', text_property: 'text', text: 'gamma ray burst', top_k: 2}) "
+        "CALL db.embeddings.query({type: 'Doc', text_column: 'text', text: 'gamma ray burst', top_k: 2}) "
         "YIELD node, score RETURN node.id AS id, score"
     ).to_list()
     by_vector = graph.cypher(
-        "CALL db.node_embeddings.query({type: 'Doc', text_property: 'text', vector: $v, top_k: 2}) "
+        "CALL db.node_embeddings.query({type: 'Doc', text_column: 'text', vector: $v, top_k: 2}) "
         "YIELD node, score RETURN node.id AS id, score",
         params={"v": _Stub().embed(["gamma ray burst"])[0]},
     ).to_list()
@@ -168,31 +168,57 @@ def test_remove_and_drop(tmp_path: Path) -> None:
     _set_docs(graph)
     assert graph.cypher(
         "MATCH (d:Doc) WHERE d.id IN [1, 2] WITH collect(d) AS ds "
-        "CALL db.node_embeddings.remove({type: 'Doc', text_property: 'text', nodes: ds}) YIELD removed RETURN removed"
+        "CALL db.node_embeddings.remove({type: 'Doc', text_column: 'text', nodes: ds}) YIELD removed RETURN removed"
     ).to_list() == [{"removed": 2}]
     assert sorted(graph.embeddings("Doc", "text")) == [3, 4]
     assert graph.cypher(
-        "CALL db.node_embeddings.drop({type: 'Doc', text_property: 'text'}) YIELD dropped RETURN dropped"
+        "CALL db.node_embeddings.drop({type: 'Doc', text_column: 'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": True}]
     assert graph.embedding_info("Doc", "text") is None
+
+
+@pytest.mark.parametrize(
+    ("procedure", "old_key"),
+    [
+        ("db.node_embeddings.list", "text_property"),
+        ("db.relationship_embeddings.list", "text_property"),
+        ("db.embeddings.list", "text_property"),
+        ("db.node_embeddings.drop", "text_property"),
+        ("db.relationship_embeddings.drop", "text_property"),
+        ("db.node_text_index.list", "property"),
+        ("db.relationship_text_index.list", "property"),
+        ("db.text_index.list", "property"),
+        ("db.node_text_index.drop", "property"),
+    ],
+)
+def test_the_source_text_key_is_text_column_on_every_family(procedure: str, old_key: str, tmp_path: Path) -> None:
+    """One key names the source text column on every embedding and text-index
+    procedure; the other spellings are unknown parameters whose refusal names
+    ``text_column``."""
+    graph = _graph("memory", tmp_path)
+    column = "dropped" if procedure.endswith(".drop") else "type"
+    with pytest.raises(
+        kglite.CypherExecutionError, match=rf"unknown parameter '{old_key}'\. Accepted: type, text_column"
+    ):
+        graph.cypher(f"CALL {procedure}({{type: 'Doc', {old_key}: 'text'}}) YIELD {column} RETURN {column}")
 
 
 def test_refusals_name_what_the_node_writer_names(tmp_path: Path) -> None:
     graph = _graph("memory", tmp_path)
     with pytest.raises(kglite.CypherExecutionError, match=r"Source column 'summary' not found on any 'Doc' node"):
         graph.cypher(
-            "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: 'summary', "
+            "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: 'summary', "
             "entries: [{node: d, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
         )
-    with pytest.raises(kglite.CypherExecutionError, match=r"'bogus'.*Accepted: type, text_property, entries, metric"):
+    with pytest.raises(kglite.CypherExecutionError, match=r"'bogus'.*Accepted: type, text_column, entries, metric"):
         graph.cypher(
-            "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: 'text', "
+            "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: 'text', "
             "entries: [{node: d, vector: [1.0, 0.0]}], bogus: 1}) YIELD stored RETURN stored"
         )
     with pytest.raises(kglite.CypherExecutionError, match="requires a registered embedder"):
         graph.cypher(
             "MATCH (d:Doc) WITH collect(d) AS ds CALL db.node_embeddings.embed({type: 'Doc', "
-            "text_property: 'text', nodes: ds}) YIELD embedded RETURN embedded"
+            "text_column: 'text', nodes: ds}) YIELD embedded RETURN embedded"
         )
     assert graph.embedding_info("Doc", "text") is None
 
@@ -203,9 +229,9 @@ def test_a_failed_statement_leaves_the_store_as_it_was(tmp_path: Path) -> None:
     before = graph.embeddings("Doc", "text")
     with pytest.raises(kglite.CypherExecutionError):
         graph.cypher(
-            "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: 'text', "
+            "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: 'text', "
             "entries: [{node: d, vector: [5.0, 5.0]}]}) YIELD stored "
-            "WITH d CALL db.node_embeddings.set({type: 'Doc', text_property: 'text', "
+            "WITH d CALL db.node_embeddings.set({type: 'Doc', text_column: 'text', "
             "entries: [{node: d, vector: [1.0, 2.0, 3.0]}]}) YIELD stored RETURN stored"
         )
     assert graph.embeddings("Doc", "text") == before
@@ -215,7 +241,7 @@ def test_a_failed_statement_leaves_the_store_as_it_was(tmp_path: Path) -> None:
 def test_node_text_index_matches_build_text_index(mode: str, tmp_path: Path) -> None:
     by_procedure = _graph(mode, tmp_path, "procedure")
     built = by_procedure.cypher(
-        "CALL db.node_text_index.build({type: 'Doc', property: 'text'}) YIELD indexed, skipped, terms "
+        "CALL db.node_text_index.build({type: 'Doc', text_column: 'text'}) YIELD indexed, skipped, terms "
         "RETURN indexed, skipped, terms"
     ).to_list()
     by_method = _graph(mode, tmp_path, "method")
@@ -224,11 +250,11 @@ def test_node_text_index_matches_build_text_index(mode: str, tmp_path: Path) -> 
     query = "MATCH (d:Doc) RETURN d.id AS id, text_bm25(d, 'text', 'beta ray') AS s ORDER BY id"
     assert by_procedure.cypher(query).to_list() == by_method.cypher(query).to_list()
     assert by_procedure.cypher(
-        "CALL db.node_text_index.list({type: 'Doc'}) YIELD entity, property, documents RETURN entity, property, "
+        "CALL db.node_text_index.list({type: 'Doc'}) YIELD entity, text_column, documents RETURN entity, text_column, "
         "documents"
-    ).to_list() == [{"entity": "node", "property": "text", "documents": 4}]
+    ).to_list() == [{"entity": "node", "text_column": "text", "documents": 4}]
     assert by_procedure.cypher(
-        "CALL db.node_text_index.drop({type: 'Doc', property: 'text'}) YIELD dropped RETURN dropped"
+        "CALL db.node_text_index.drop({type: 'Doc', text_column: 'text'}) YIELD dropped RETURN dropped"
     ).to_list() == [{"dropped": True}]
     assert not by_procedure.has_text_index("Doc", "text")
 
@@ -241,7 +267,7 @@ def test_the_router_defaults_to_the_node_namespace(tmp_path: Path) -> None:
     assert routed.embeddings("Doc", "text") == specific.embeddings("Doc", "text")
     assert routed.list_embeddings() == specific.list_embeddings()
     query = (
-        "CALL {ns}.query({{type: 'Doc', text_property: 'text', vector: [1.0, 0.0], top_k: 2}}) "
+        "CALL {ns}.query({{type: 'Doc', text_column: 'text', vector: [1.0, 0.0], top_k: 2}}) "
         "YIELD node, score RETURN node.id AS id, score"
     )
     assert (
@@ -258,25 +284,25 @@ def test_the_router_routes_relationships_on_entity(tmp_path: Path) -> None:
         (specific, "db.relationship_embeddings", ""),
     ):
         graph.cypher(
-            f"MATCH ()-[r:CITES]->() CALL {namespace}.set({{{entity}type: 'CITES', text_property: 'text', "
+            f"MATCH ()-[r:CITES]->() CALL {namespace}.set({{{entity}type: 'CITES', text_column: 'text', "
             "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored"
         )
         graph.cypher(
-            f"CALL {namespace.replace('embeddings', 'text_index')}.build({{{entity}type: 'CITES', property: 'text'}}) "
-            f"YIELD indexed RETURN indexed"
+            f"CALL {namespace.replace('embeddings', 'text_index')}.build({{{entity}type: 'CITES', "
+            f"text_column: 'text'}}) YIELD indexed RETURN indexed"
         )
     assert routed.relationship_embeddings("CITES", "text") == specific.relationship_embeddings("CITES", "text")
     assert routed.embedding_info("Doc", "text") is None
     listing = (
-        "CALL {ns}.list({{{entity}type: 'CITES'}}) YIELD entity, type, property, documents RETURN entity, type, "
-        "property, documents"
+        "CALL {ns}.list({{{entity}type: 'CITES'}}) YIELD entity, type, text_column, documents RETURN entity, type, "
+        "text_column, documents"
     )
     assert (
         routed.cypher(listing.format(ns="db.text_index", entity="entity: 'relationship', ")).to_list()
         == specific.cypher(listing.format(ns="db.relationship_text_index", entity="")).to_list()
     )
     rel_query = (
-        "CALL {ns}.query({{{entity}type: 'CITES', text_property: 'text', vector: [1.0, 0.0]}}) "
+        "CALL {ns}.query({{{entity}type: 'CITES', text_column: 'text', vector: [1.0, 0.0]}}) "
         "YIELD relationship, score RETURN type(relationship) AS t, score"
     )
     assert routed.cypher(rel_query.format(ns="db.embeddings", entity="entity: 'relationship', ")).to_list() == (
@@ -288,13 +314,13 @@ def test_a_keyword_of_the_other_entity_is_refused_naming_it(tmp_path: Path) -> N
     graph = _graph("memory", tmp_path)
     with pytest.raises(kglite.CypherSyntaxError, match=r"`relationships` belongs to entity:'relationship'"):
         graph.cypher(
-            "MATCH ()-[r:CITES]->() CALL db.embeddings.remove({type: 'CITES', text_property: 'text', "
+            "MATCH ()-[r:CITES]->() CALL db.embeddings.remove({type: 'CITES', text_column: 'text', "
             "relationships: [r]}) YIELD removed RETURN removed"
         )
     with pytest.raises(kglite.CypherSyntaxError, match=r"`nodes` belongs to entity:'node'"):
         graph.cypher(
             "MATCH (d:Doc) CALL db.embeddings.remove({entity: 'relationship', type: 'CITES', "
-            "text_property: 'text', nodes: [d]}) YIELD removed RETURN removed"
+            "text_column: 'text', nodes: [d]}) YIELD removed RETURN removed"
         )
     with pytest.raises(kglite.CypherSyntaxError, match=r"'entity' must be the string literal"):
         graph.cypher("CALL db.embeddings.list({entity: $e}) YIELD type RETURN type", params={"e": "node"})

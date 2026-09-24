@@ -57,7 +57,7 @@ fn corpus(embed_all: bool) -> DirGraph {
             &mut graph,
             &format!(
                 "MATCH ()-[r:C {{k: {k}}}]->() CALL db.relationship_embeddings.set({{type:'C', \
-                 text_property:'text', entries:[{{relationship:r, vector:{vector}}}]}}) \
+                 text_column:'text', entries:[{{relationship:r, vector:{vector}}}]}}) \
                  YIELD stored RETURN stored"
             ),
         );
@@ -177,7 +177,7 @@ fn an_indexed_store_is_served_through_hnsw() {
     let mut graph = corpus(true);
     run(
         &mut graph,
-        "CALL db.relationship_embeddings.build_index({type:'C', text_property:'text'}) YIELD indexed RETURN indexed",
+        "CALL db.relationship_embeddings.build_index({type:'C', text_column:'text'}) YIELD indexed RETURN indexed",
     );
     let fused = assert_same(
         &graph,
@@ -304,7 +304,7 @@ fn cross_type_corpus(mixed_metric: bool) -> DirGraph {
             &mut graph,
             &format!(
                 "MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: {k}, text: 't'}}]->(:Doc {{id: {k}}}) \
-                 WITH r CALL db.relationship_embeddings.set({{type:'{rel_type}', text_property:'text', \
+                 WITH r CALL db.relationship_embeddings.set({{type:'{rel_type}', text_column:'text', \
                  entries:[{{relationship:r, vector:[{}, {}]}}]{metric}}}) YIELD stored RETURN stored",
                 angle.cos(),
                 angle.sin()
@@ -381,7 +381,7 @@ fn indexed_stores_merge_through_hnsw_on_both_routes() {
         run(
             &mut graph,
             &format!(
-                "CALL db.relationship_embeddings.build_index({{type:'{rel_type}', text_property:'text'}}) \
+                "CALL db.relationship_embeddings.build_index({{type:'{rel_type}', text_column:'text'}}) \
                  YIELD indexed RETURN indexed"
             ),
         );
@@ -393,7 +393,7 @@ fn indexed_stores_merge_through_hnsw_on_both_routes() {
         .any(|record| record.actual_mode == "exact"));
     run(
         &mut graph,
-        "CALL db.relationship_embeddings.build_index({type:'D', text_property:'text'}) YIELD indexed RETURN indexed",
+        "CALL db.relationship_embeddings.build_index({type:'D', text_column:'text'}) YIELD indexed RETURN indexed",
     );
     for pattern in ["()-[r:A|B|D]->()", "()-[r]->()"] {
         let fused = assert_same(&graph, &cross_query(pattern, 4));

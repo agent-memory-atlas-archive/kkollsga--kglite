@@ -53,7 +53,7 @@ def test_relationship_message_names_text_score_and_the_property(graph, query):
     # The remedy must run as written: embed() requires `relationships`.
     assert (
         "MATCH ()-[r:R]->() WITH collect(r) AS rs CALL db.relationship_embeddings.embed("
-        "{type: 'R', text_property: 's', relationships: rs})" in message
+        "{type: 'R', text_column: 's', relationships: rs})" in message
     )
     assert "vector_score" not in message and "s_emb" not in message
 
@@ -73,7 +73,7 @@ def test_vector_score_keeps_its_store_terms(graph):
 def embedded(graph):
     graph.set_embeddings("D", "s", {"a": [1.0, 0.0], "b": [0.0, 1.0]})
     graph.cypher(
-        "MATCH ()-[r:R]->() CALL db.relationship_embeddings.set({type:'R', text_property:'s', "
+        "MATCH ()-[r:R]->() CALL db.relationship_embeddings.set({type:'R', text_column:'s', "
         "entries:[{relationship:r, vector:[1.0, 0.0]}]}) YIELD stored RETURN stored"
     )
     return graph

@@ -46,7 +46,7 @@ def _graph(mode: str, tmp_path: Path) -> KnowledgeGraph:
         graph.cypher(
             "MATCH (s:Claimant {id: $s}), (t:Claim {id: $t}) "
             "CREATE (s)-[r:SUPPORTS {k: $k, uid: $uid, evidence: 'e'}]->(t) "
-            "WITH r CALL db.relationship_embeddings.set({type: 'SUPPORTS', text_property: 'evidence', "
+            "WITH r CALL db.relationship_embeddings.set({type: 'SUPPORTS', text_column: 'evidence', "
             "entries: [{relationship: r, vector: $v}]}) YIELD stored RETURN stored",
             params={"s": source, "t": target, "k": k, "uid": uid, "v": [math.cos(angle), math.sin(angle)]},
         )
@@ -250,7 +250,7 @@ def test_the_documented_edge_list_example_runs_on_mixed_id_types(source: str, tm
     for k, (claimant, claim) in enumerate([(1, "c10"), (1, "c20"), (2, "c10")], start=1):
         graph.cypher(
             "MATCH (s:Claimant {id: $s}), (t:Claim {id: $t}) CREATE (s)-[r:SUPPORTS {uid: $uid, evidence: 'e'}]->(t) "
-            "WITH r CALL db.relationship_embeddings.set({type: 'SUPPORTS', text_property: 'evidence', "
+            "WITH r CALL db.relationship_embeddings.set({type: 'SUPPORTS', text_column: 'evidence', "
             "entries: [{relationship: r, vector: $v}]}) YIELD stored RETURN stored",
             params={"s": claimant, "t": claim, "uid": f"u{k}", "v": [1.0, float(k)]},
         )

@@ -53,7 +53,7 @@ results = graph.select("Article").search_text("summary", "machine learning", top
 
 **Key details:**
 
-- **Auto-naming:** text column `"summary"` → embedding store key `"summary_emb"` (auto-derived)
+- **Auto-naming:** text column `"summary"` → store name `"summary_emb"` (auto-derived)
 - **Incremental, three modes:** `embed_texts(mode=…)` — `'missing'` (default) embeds only nodes without a vector; `'changed'` also re-embeds nodes whose **text changed** since the last pass (a per-node content hash is stored to detect this); `'all'` rebuilds the whole store.
 - **Model provenance:** an incremental pass over a store named for model A requires the registered model to name itself A. Model B or an unnamed model is refused before model work; use `mode='all'` to rebuild and assign the current model identity. An unknown/mixed store can be incrementally refreshed, but stays `model=None`; only a full rebuild restores named aggregate provenance.
 - **Progress bar:** shows a tqdm progress bar by default. Disable with `show_progress=False`.
@@ -426,10 +426,14 @@ graph.cypher("MATCH (n:Article) RETURN text_score(n, 'summary', $q) AS s",
 **Filter out unembedded rows before a `DESC` top-k.** A node or relationship
 the store holds no vector for scores `null`, and openCypher sorts `null` above
 every value, so `ORDER BY score DESC LIMIT k` returns the unembedded entities
-*first* (and answers by row scan, `fallback_reason: 'row_coverage'`). Add
+*first*. A node type with unembedded members is still answered from its store —
+the null-scored nodes first, in the type's order, then the store's ranking — and
+reports `fallback_reason: 'row_coverage'` only when all `k` rows are null or the
+store's order differs from the type's; a relationship type with unembedded
+members is answered by row scan (`row_coverage`). Add
 `WHERE vector_score(n, 'summary_emb', $q) IS NOT NULL` (or the `text_score`
-form, or `r` for a relationship) to the `MATCH`: it drops those rows and keeps
-the store route, HNSW included. Written after the projection as
+form, or `r` for a relationship) to the `MATCH`: it drops those rows and is
+served from the store at the cost of the store procedure, HNSW included. Written after the projection as
 `WITH … WHERE score IS NOT NULL` it leaves the fused route and scores every row.
 `vector_search()`, `search_text()` and `db.relationship_embeddings.query` rank stored
 vectors only and never return an unembedded entity.
@@ -458,7 +462,7 @@ graph.cypher("""
     WHERE c.status = 'open'
     WITH collect(r) AS relationships
     CALL db.relationship_embeddings.embed({
-      type:'SUPPORTS', text_property:'evidence',
+      type:'SUPPORTS', text_column:'evidence',
       relationships:relationships, mode:'changed'
     })
     YIELD embedded RETURN embedded
@@ -502,7 +506,11 @@ Use `vector_score(r, 'evidence_emb', $vector)` for a query vector and
 a filtered `MATCH`, they are exact. The top-k shape `ORDER BY vector_score(r, …)
 DESC LIMIT k` (or `text_score`) is served from the store, as for nodes: a plain
 single-type pattern whose every relationship is embedded goes straight to the
-store, and any other shape scores its matched rows. Either way the query runs
+store (a `WHERE … IS NOT NULL` filter on the score keeps it there), and any
+other shape scores its matched rows. `WITH r, vector_score(r, …) AS s ORDER BY s
+DESC LIMIT k RETURN startNode(r)…` is served the same way, and an undirected
+`(a)-[r:T]-(b)` uses the index too, returning each relationship once per
+orientation. Either way the query runs
 through HNSW when an index is online. That answer is approximate; pass
 `{exact:true}` as the final argument to force exact. Ties at the cut are
 answered by the ordinary pipeline, and `diagnostics["retrieval"]` reports the
@@ -512,7 +520,7 @@ relationship type and source-property store are the intended search corpus:
 ```python
 graph.cypher("""
     CALL db.relationship_embeddings.build_index({
-      type:'SUPPORTS', text_property:'evidence',
+      type:'SUPPORTS', text_column:'evidence',
       m:16, ef_construction:200, ef_search:64
     }) YIELD indexed, metric, m
     RETURN indexed, metric, m
@@ -520,7 +528,7 @@ graph.cypher("""
 
 nearest = graph.cypher("""
     CALL db.relationship_embeddings.query({
-      type:'SUPPORTS', text_property:'evidence',
+      type:'SUPPORTS', text_column:'evidence',
       vector:$query_vector, top_k:10
     }) YIELD relationship, score, search_method
     RETURN relationship, score, search_method
@@ -684,13 +692,13 @@ A graph that spreads its relations over many relationship types — one per
 predicate, as knowledge-graph extractors produce — can be ranked as one corpus.
 `types:['created', 'works_at']` in place of `type` ranks those stores together,
 and leaving out both `type` and `types` ranks every relationship store for
-`text_property`. Each store answers on its own route and the answers merge into
+`text_column`. Each store answers on its own route and the answers merge into
 one `top_k`, ordered by score, then relationship type, then relationship slot.
 Every row yields `type` and its own `search_method`:
 
 ```python
 rows = graph.cypher("""
-    CALL db.relationship_embeddings.query({text_property:'description', text:$q, top_k:5})
+    CALL db.relationship_embeddings.query({text_column:'description', text:$q, top_k:5})
     YIELD relationship, score, type, search_method
     RETURN type, relationship.description AS description, score, search_method
 """, params={'q': 'who founded the company?'})
@@ -754,13 +762,14 @@ embedded as a 10-character query. Pass a list and both spellings agree.
 #### Relationship communities
 
 Graph RAG pipelines such as Microsoft GraphRAG, LightRAG and knwler answer
-broad questions from *communities*: clusters of the entity graph, each with a
+broad questions from *communities*: clusters of the extracted graph, each with a
 summary. They answer from the community summary and from the relations inside
 that community. kglite has no native relationship clustering. The whole recipe
 is Cypher over node communities, and every snippet below runs as written
 (`tests/test_relationship_community_recipe.py` executes this section).
 
-Start with an entity graph whose relations carry a `description` and a
+Start with a graph of extracted names (nodes labelled `Entity`, as Graph RAG
+extractors call them) whose relations carry a `description` and a
 `strength`, and embed the descriptions per relationship type. The embedder here
 is a network-free stand-in; use a real model in practice:
 
@@ -807,13 +816,13 @@ RELATION_TYPES = ["founded", "works_at", "created", "sailed_on", "explored", "in
 for rel_type in RELATION_TYPES:
     graph.cypher(
         f"MATCH ()-[r:{rel_type}]->() WITH collect(r) AS rs "
-        f"CALL db.relationship_embeddings.embed({{type: '{rel_type}', text_property: 'description', relationships: rs}}) "
+        f"CALL db.relationship_embeddings.embed({{type: '{rel_type}', text_column: 'description', relationships: rs}}) "
         "YIELD embedded RETURN embedded"
     )
 ```
 
-**1. Detect communities over the entity graph**, weighted by relation
-strength, and store each entity's community as a property. `CALL leiden`
+**1. Detect communities over the `Entity` nodes**, weighted by relation
+strength, and store each node's community as a property. `CALL leiden`
 takes the same parameters as `CALL louvain`; the [graph algorithms
 guide](graph-algorithms.md#community-detection) covers both:
 

@@ -1907,7 +1907,7 @@ fn relationship_embeddings_round_trip_through_existing_session_cypher() {
         try_mutate(
             session,
             "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS rs \
-             CALL db.relationship_embeddings.set({type:'EVIDENCE',text_property:'text', \
+             CALL db.relationship_embeddings.set({type:'EVIDENCE',text_column:'text', \
              entries:[{relationship:rs[0],vector:[1.0,0.0]}]}) \
              YIELD stored RETURN stored"
         )
@@ -1928,7 +1928,7 @@ fn relationship_embeddings_round_trip_through_existing_session_cypher() {
     assert!(relationship.get("incarnation").is_none());
     let listed = query_rows(
         session,
-        "CALL db.relationship_embeddings.list({type:'EVIDENCE',text_property:'text'}) \
+        "CALL db.relationship_embeddings.list({type:'EVIDENCE',text_column:'text'}) \
          YIELD entity,count RETURN entity,count",
         "{}",
     );
@@ -1939,7 +1939,7 @@ fn relationship_embeddings_round_trip_through_existing_session_cypher() {
 
     let (status, error) = try_mutate(
         session,
-        "CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_property:'text', \
+        "CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_column:'text', \
          relationships:[{id:0,start:0,end:1,type:'EVIDENCE',properties:{}}]}) \
          YIELD removed RETURN removed",
     );
@@ -1949,7 +1949,7 @@ fn relationship_embeddings_round_trip_through_existing_session_cypher() {
         try_mutate(
             session,
             "MATCH ()-[r:EVIDENCE]->() WITH collect(r) AS relationships \
-             CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_property:'text', \
+             CALL db.relationship_embeddings.remove({type:'EVIDENCE',text_column:'text', \
              relationships:relationships}) YIELD removed RETURN removed"
         )
         .0,

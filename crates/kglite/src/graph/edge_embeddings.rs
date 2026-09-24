@@ -522,7 +522,7 @@ pub(crate) fn describe_relationship(graph: &DirGraph, edge: EdgeIndex) -> String
     }
 }
 
-/// Refuse to create a relationship store for a text property that no
+/// Refuse to create a relationship store for a text column that no
 /// relationship of the type carries — the relationship twin of
 /// [`crate::graph::embeddings::resolve_source_column`]. Such a store can never
 /// hold a generated vector, yet it would be listed and described like a real
@@ -554,8 +554,8 @@ pub(crate) fn require_carried_text_property(
         carried.extend(weight.property_keys(&graph.interner).map(str::to_string));
     }
     let mut message = format!(
-        "Text property '{text_property}' not found on any '{connection_type}' relationship. \
-         text_property names the relationship property holding the text (e.g. 'context'), \
+        "Text column '{text_property}' not found on any '{connection_type}' relationship. \
+         text_column names the relationship property holding the text (e.g. 'context'), \
          not the embedding store name."
     );
     if !carried.is_empty() {
@@ -777,7 +777,7 @@ fn validate_manual_entries(
     Ok(())
 }
 
-/// Replace the whole `(connection_type, text_property)` store with `entries`
+/// Replace the whole `(connection_type, text_column)` store with `entries`
 /// — the relationship twin of the node `set_embeddings`. The prior store, its
 /// vectors, provenance and HNSW index are discarded; the new store holds only
 /// `entries`, takes its dimension from the first vector and `metric` as its

@@ -57,7 +57,7 @@ def _rel_graph(*, embedded, indexed: bool) -> KnowledgeGraph:
     graph.set_relationship_embeddings("C", "t", {(i, i + 1): VECTORS[i].tolist() for i in embedded})
     if indexed:
         graph.cypher(
-            "CALL db.relationship_embeddings.build_index({type: 'C', text_property: 't'}) YIELD indexed RETURN indexed"
+            "CALL db.relationship_embeddings.build_index({type: 'C', text_column: 't'}) YIELD indexed RETURN indexed"
         )
     return graph
 

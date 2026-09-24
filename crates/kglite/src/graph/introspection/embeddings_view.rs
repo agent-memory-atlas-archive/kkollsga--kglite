@@ -12,7 +12,7 @@
 //! index exists (a graph without one renders byte-identically): an HNSW index
 //! adds `index="hnsw"` to the `<embeddings/>` element (`,hnsw` inside the
 //! `<conn>` attribute's parentheses), and a BM25 text index is a
-//! `<text_index property="p"/>` element (a `text_index="p,…"` attribute on the
+//! `<text_index text_col="p"/>` element (a `text_index="p,…"` attribute on the
 //! `<conn>` line).
 
 use std::collections::HashMap;
@@ -90,7 +90,7 @@ fn text_index_properties<V>(
     properties
 }
 
-/// `<text_index property="p"/>` lines for one type's BM25 indexes.
+/// `<text_index text_col="p"/>` lines for one type's BM25 indexes.
 fn write_text_indexes<V>(
     xml: &mut String,
     indent: &str,
@@ -99,7 +99,7 @@ fn write_text_indexes<V>(
 ) {
     for property in text_index_properties(indexes, type_name) {
         xml.push_str(&format!(
-            "{indent}<text_index property=\"{}\"/>\n",
+            "{indent}<text_index text_col=\"{}\"/>\n",
             xml_escape(&property)
         ));
     }
@@ -152,9 +152,9 @@ pub(super) fn write_node_embeddings(
     write_text_indexes(xml, &child, &graph.text_indexes, node_type);
 }
 
-const NODE_SEMANTIC: &str = "text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); vector_score(n, 'col_emb', $v) scores against a vector (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space); CALL db.node_embeddings.query({type:'T' | types:['A','B'], text_property:'col', vector:$v | text:'query', top_k:10}) YIELD node, score, search_method, type ranks whole stores, and db.node_embeddings.set / .embed / .build_index / .list manage them in a query (db.embeddings.* routes by entity); describe(cypher=['node_semantic']) has the details";
+const NODE_SEMANTIC: &str = "text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); vector_score(n, 'col_emb', $v) scores against a vector (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space); CALL db.node_embeddings.query({type:'T' | types:['A','B'], text_column:'col', vector:$v | text:'query', top_k:10}) YIELD node, score, search_method, type ranks whole stores, and db.node_embeddings.set / .embed / .build_index / .list manage them in a query (db.embeddings.* routes by entity); describe(cypher=['node_semantic']) has the details";
 
-const RELATIONSHIP_SEMANTIC: &str = "relationships: vector_score(r, 'col_emb', $v) / text_score(r, 'col', 'query'|[...]) score a matched relationship, and embedding(r, 'col_emb') returns its stored vector (vector_score(r2, 'col_emb', embedding(r1, 'col_emb')) is relationship-to-relationship similarity) (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed; {exact:true} forces exact); CALL db.relationship_embeddings.query({type:'T' | types:['A','B'], text_property:'col', vector:$v | text:'query', top_k:10}) YIELD relationship, score, search_method, type ranks a whole store (HNSW once db.relationship_embeddings.build_index has run; stores are per relationship type and text property — types:['A','B'], or neither type nor types, ranks several merged into one top-k, and MATCH ()-[r:A|B]->() … ORDER BY vector_score(r, …) DESC LIMIT k merges when every type carries the store; describe(cypher=['relationship_semantic']) has the details; deleting an embedded relationship or an endpoint drops that index to none until build_index runs again, and refresh_index refuses while there is none)";
+const RELATIONSHIP_SEMANTIC: &str = "relationships: vector_score(r, 'col_emb', $v) / text_score(r, 'col', 'query'|[...]) score a matched relationship, and embedding(r, 'col_emb') returns its stored vector (vector_score(r2, 'col_emb', embedding(r1, 'col_emb')) is relationship-to-relationship similarity) (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed; {exact:true} forces exact); CALL db.relationship_embeddings.query({type:'T' | types:['A','B'], text_column:'col', vector:$v | text:'query', top_k:10}) YIELD relationship, score, search_method, type ranks a whole store (HNSW once db.relationship_embeddings.build_index has run; stores are per relationship type and text column — types:['A','B'], or neither type nor types, ranks several merged into one top-k, and MATCH ()-[r:A|B]->() … ORDER BY vector_score(r, …) DESC LIMIT k merges when every type carries the store; describe(cypher=['relationship_semantic']) has the details; deleting an embedded relationship or an endpoint drops that index to none until build_index runs again, and refresh_index refuses while there is none)";
 
 /// The `<semantic>` hint line, when the graph carries a node or a relationship
 /// store. A node-only graph gets the node line alone.
@@ -170,7 +170,7 @@ pub(super) fn semantic_hint(graph: &DirGraph) -> Option<String> {
 
 const NODE_LEXICAL: &str = "text_bm25(n, 'prop', 'query text') — BM25 relevance of the node's indexed text; 0.0 = indexed but shares no word with the query, null = no document for that row. Build with build_text_index(node_type, property).";
 
-const RELATIONSHIP_LEXICAL: &str = "relationships: text_bm25(r, 'prop', 'query text') over an index built with CALL db.relationship_text_index.build({type:'T', property:'prop'})";
+const RELATIONSHIP_LEXICAL: &str = "relationships: text_bm25(r, 'prop', 'query text') over an index built with CALL db.relationship_text_index.build({type:'T', text_column:'prop'})";
 
 const NODE_HYBRID: &str = "score_fuse(text_bm25(n, 'prop', $q), vector_score(n, 'col_emb', $qv)) — one score from both lanes (weights: a trailing list, e.g. [0.7, 0.3]). A lane that cannot see a row scores null and drops out of the average rather than zeroing it; all lanes absent = null. Rank with ORDER BY … DESC LIMIT k.";
 

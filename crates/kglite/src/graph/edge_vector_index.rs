@@ -471,7 +471,7 @@ pub(crate) struct EdgeStoreQueryHit {
     pub(crate) search_method: &'static str,
 }
 
-/// Rank the `text_property` stores of every type in `types` against one query
+/// Rank the `text_column` stores of every type in `types` against one query
 /// and merge them into a single top-k — [`rank_dense_stores`] over the
 /// relationship stores, refused when a named type has no such store.
 pub(crate) fn query_edge_embedding_stores(
@@ -528,7 +528,7 @@ pub(crate) struct DenseStoreHit {
     pub(crate) search_method: &'static str,
 }
 
-/// Rank several dense stores — one per type, all for one text property —
+/// Rank several dense stores — one per type, all for one text column —
 /// against one query and merge them into a single top-k. The shared core of
 /// `db.node_embeddings.query` and `db.relationship_embeddings.query`; `entity`
 /// (`"Node"` / `"Relationship"`) names the stores in its refusals.

@@ -275,7 +275,7 @@ mod query_feature_tests {
     #[test]
     fn classifies_edge_embedding_callbacks_across_union_branches() {
         let direct = parse_cypher(
-            "CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+            "CALL db.relationship_embeddings.embed({type:'R', text_column:'text', relationships:[]}) \
              YIELD embedded RETURN embedded",
         )
         .unwrap();
@@ -283,7 +283,7 @@ mod query_feature_tests {
 
         let nested = parse_cypher(
             "RETURN 0 AS embedded UNION ALL \
-             CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             CALL db.relationship_embeddings.embed({type:'R', text_column:'text', relationships:[]}) \
              YIELD embedded RETURN embedded",
         )
         .unwrap();
@@ -302,7 +302,7 @@ mod query_feature_tests {
     fn classifies_edge_embedding_callbacks_inside_call_subqueries_and_foreach() {
         let subquery = parse_cypher(
             "MATCH (n:Doc) CALL { WITH n \
-             CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships:[]}) \
+             CALL db.relationship_embeddings.embed({type:'R', text_column:'text', relationships:[]}) \
              YIELD embedded RETURN embedded } RETURN n, embedded",
         )
         .unwrap();
@@ -320,7 +320,7 @@ mod query_feature_tests {
         assert!(
             parse_cypher(
                 "FOREACH (x IN [1] | CALL db.relationship_embeddings.embed({type:'R', \
-                 text_property:'text', relationships:[]}) YIELD embedded RETURN embedded)"
+                 text_column:'text', relationships:[]}) YIELD embedded RETURN embedded)"
             )
             .is_err(),
             "a FOREACH body admits no CALL, so the Foreach arm is unreachable from text"

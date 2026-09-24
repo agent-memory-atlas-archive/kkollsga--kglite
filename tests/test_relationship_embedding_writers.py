@@ -122,9 +122,7 @@ def test_set_replaces_the_store_and_add_keeps_what_it_does_not_name(mode: str, t
 def test_set_discards_the_index_and_metric_as_a_replaced_node_store_does(tmp_path: Path) -> None:
     graph = _graph("memory", tmp_path)
     graph.set_relationship_embeddings("SUPPORTS", "evidence", {(2, 10): [0.3, 0.1]}, metric="euclidean")
-    graph.cypher(
-        "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'evidence'}) YIELD indexed"
-    )
+    graph.cypher("CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_column:'evidence'}) YIELD indexed")
     graph.set_relationship_embeddings("SUPPORTS", "evidence", {(1, 10): [1.0, 0.0]})
     listed = graph.cypher(
         "CALL db.relationship_embeddings.list({type:'SUPPORTS'}) YIELD count, metric, index_state "
@@ -196,9 +194,7 @@ def test_numpy_rows_and_float_lists_store_identical_bits(tmp_path: Path) -> None
 def test_add_upserts_and_keeps_the_index_as_a_delta(tmp_path: Path) -> None:
     graph = _graph("memory", tmp_path)
     graph.add_relationship_embeddings("SUPPORTS", "evidence", {(2, 10): [0.3, 0.1]}, metric="euclidean")
-    graph.cypher(
-        "CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_property:'evidence'}) YIELD indexed"
-    )
+    graph.cypher("CALL db.relationship_embeddings.build_index({type:'SUPPORTS', text_column:'evidence'}) YIELD indexed")
     graph.add_relationship_embeddings("SUPPORTS", "evidence", {(1, 10): [1.0, 0.0]})
     listed = graph.cypher(
         "CALL db.relationship_embeddings.list({type:'SUPPORTS'}) YIELD count, metric, model, index_state, delta "
@@ -237,7 +233,7 @@ def test_refusals_name_the_row_and_its_relationship(tmp_path: Path) -> None:
             "evidence",
             [{"source": 1, "target": 10, "vector": [1, 0]}, {"source": 1, "target": 10, "vector": [0, 1]}],
         )
-    with pytest.raises(ValueError, match="Text property 'evidense' not found on any 'SUPPORTS' relationship"):
+    with pytest.raises(ValueError, match="Text column 'evidense' not found on any 'SUPPORTS' relationship"):
         graph.set_relationship_embeddings("SUPPORTS", "evidense", {(1, 10): [1.0, 0.0]})
     assert graph.list_embeddings() == [], "every refusal left the graph untouched"
 
@@ -274,7 +270,7 @@ def test_endpoint_types_are_required_once_the_type_connects_several(tmp_path: Pa
 def _cypher_embed(graph: KnowledgeGraph, mode: str = "missing") -> list[dict]:
     return graph.cypher(
         "MATCH ()-[r:SUPPORTS]->() WITH collect(r) AS rs "
-        "CALL db.relationship_embeddings.embed({type:'SUPPORTS', text_property:'evidence', relationships: rs, mode: "
+        "CALL db.relationship_embeddings.embed({type:'SUPPORTS', text_column:'evidence', relationships: rs, mode: "
         "$mode}) "
         "YIELD embedded, skipped, dimension, model RETURN embedded, skipped, dimension, model",
         params={"mode": mode},
@@ -325,7 +321,7 @@ def test_embed_relationship_texts_refusals(tmp_path: Path) -> None:
     graph.set_embedder(_Stub())
     with pytest.raises(ValueError, match="unknown mode"):
         graph.embed_relationship_texts("SUPPORTS", "evidence", mode="some", show_progress=False)
-    with pytest.raises(ValueError, match="Text property 'evidense' not found on any 'SUPPORTS' relationship"):
+    with pytest.raises(ValueError, match="Text column 'evidense' not found on any 'SUPPORTS' relationship"):
         graph.embed_relationship_texts("SUPPORTS", "evidense", show_progress=False)
     with pytest.raises(ValueError, match="not found on any 'CITES' relationship"):
         graph.embed_relationship_texts("CITES", "evidence", show_progress=False)
@@ -358,14 +354,14 @@ def test_types_embeds_each_listed_type_as_its_own_call_would() -> None:
     together, apart = _typed_graph(), _typed_graph()
     row = together.cypher(
         "MATCH ()-[r:CITES|REFUTES]->() WITH collect(r) AS rs "
-        "CALL db.relationship_embeddings.embed({types:['REFUTES','CITES'], text_property:'ctx', relationships: rs}) "
+        "CALL db.relationship_embeddings.embed({types:['REFUTES','CITES'], text_column:'ctx', relationships: rs}) "
         "YIELD embedded, skipped, dimension, model RETURN embedded, skipped, dimension, model"
     ).to_list()
     assert row == [{"embedded": 3, "skipped": 0, "dimension": 2, "model": "stub/writers"}]
     per_type = [
         apart.cypher(
             f"MATCH ()-[r:{rel}]->() WITH collect(r) AS rs "
-            f"CALL db.relationship_embeddings.embed({{type:'{rel}', text_property:'ctx', relationships: rs}}) "
+            f"CALL db.relationship_embeddings.embed({{type:'{rel}', text_column:'ctx', relationships: rs}}) "
             "YIELD embedded RETURN embedded"
         ).to_list()[0]["embedded"]
         for rel in ("CITES", "REFUTES")
@@ -379,7 +375,7 @@ def test_types_refusals() -> None:
     graph = _typed_graph()
     call = (
         "MATCH ()-[r:CITES|MENTIONS]->() WITH collect(r) AS rs "
-        "CALL db.relationship_embeddings.embed({{{params}, text_property:'ctx', relationships: rs}}) "
+        "CALL db.relationship_embeddings.embed({{{params}, text_column:'ctx', relationships: rs}}) "
         "YIELD embedded RETURN embedded"
     )
     with pytest.raises(kglite.CypherExecutionError, match="has type 'MENTIONS', expected one of 'CITES', 'REFUTES'"):

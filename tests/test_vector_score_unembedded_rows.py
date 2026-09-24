@@ -34,12 +34,12 @@ def _relationships() -> KnowledgeGraph:
     )
     for k, vector in VECTORS.items():
         graph.cypher(
-            "MATCH ()-[r:C {k: $k}]->() CALL db.relationship_embeddings.set({type: 'C', text_property: 't', "
+            "MATCH ()-[r:C {k: $k}]->() CALL db.relationship_embeddings.set({type: 'C', text_column: 't', "
             "entries: [{relationship: r, vector: $v}]}) YIELD stored RETURN stored",
             params={"k": k, "v": vector},
         )
     graph.cypher(
-        "CALL db.relationship_embeddings.build_index({type: 'C', text_property: 't'}) YIELD indexed RETURN indexed"
+        "CALL db.relationship_embeddings.build_index({type: 'C', text_column: 't'}) YIELD indexed RETURN indexed"
     )
     return graph
 
@@ -85,7 +85,7 @@ def test_the_filter_drops_unembedded_relationships_and_keeps_the_store_route() -
 
 def test_the_procedure_never_returns_an_unembedded_relationship() -> None:
     rows = _relationships().cypher(
-        "CALL db.relationship_embeddings.query({type: 'C', text_property: 't', vector: $q, top_k: 5}) "
+        "CALL db.relationship_embeddings.query({type: 'C', text_column: 't', vector: $q, top_k: 5}) "
         "YIELD relationship RETURN relationship.k AS k",
         params={"q": QUERY},
     )

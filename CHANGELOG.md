@@ -119,7 +119,7 @@ before upgrading.
   `db.relationship_embeddings.list`).
 
 - **BM25 text indexes over relationships.** `CALL
-  db.relationship_text_index.build({type, property, auto_refresh_limit?})`, `.refresh`,
+  db.relationship_text_index.build({type, text_column, auto_refresh_limit?})`, `.refresh`,
   `.drop` and `.list` manage a lexical index over one relationship type's
   string (or string-list) property, and `text_bm25(r, property, query)` now
   scores a relationship — a `MATCH` binding or a relationship value such as the
@@ -159,7 +159,7 @@ before upgrading.
 
 - **Relationship retrieval across several relationship types.**
   `CALL db.relationship_embeddings.query` takes `types: [...]` in place of `type`, or
-  neither (every relationship store for `text_property`), and merges the
+  neither (every relationship store for `text_column`), and merges the
   stores' answers into one top-k ordered by score, then relationship type,
   then relationship slot. Every row now also yields `type`, and
   `search_method` is reported per row. A named type without a store is
@@ -217,7 +217,7 @@ before upgrading.
   an HNSW index shows `index="hnsw"` on its `<embeddings/>` element, for node
   types and relationship types alike. On a relationship `<conn>` line the
   attribute reads `embeddings="col(dim=D,count=N,hnsw)"`. A BM25 text index
-  shows as `<text_index property="p"/>` (`text_index="p"` on the `<conn>`
+  shows as `<text_index text_col="p"/>` (`text_index="p"` on the `<conn>`
   line). Before, an agent could not tell whether a query would be served by
   an index. Nothing new is rendered when no index exists. Node stores are
   listed in column order (they were in hash order). The relationship
@@ -253,6 +253,23 @@ before upgrading.
   relation type in one `types:` call.
 
 ### Changed
+
+- Every embedding and text-index procedure — `db.node_embeddings.*`,
+  `db.relationship_embeddings.*`, `db.embeddings.*`, `db.node_text_index.*`,
+  `db.relationship_text_index.*`, `db.text_index.*` — names the source text
+  column with one key, `text_column`, the name the Python methods already use;
+  the `list` procedures yield it as `text_column`. The `text_property` (and, on
+  the text-index procedures, `property`) spelling these procedures had during
+  development was never released and is now an unknown parameter, refused with
+  the accepted keys listed. `describe()` shows a text index as
+  `<text_index text_col="p"/>`, matching the `<embeddings text_col=…>` element.
+
+- `embeddings(node_type, text_column)` and `node_embeddings(node_type,
+  text_column)` refuse a store that does not exist with `ValueError`, naming
+  the type's stores or the near miss (a typo, the `_emb` store name passed for
+  the column, a relationship store), as `embedding()` and `remove_embeddings()`
+  do. They returned `{}`, the same answer as an empty store, so a misspelt
+  column read as "no vectors". The one-argument selection form is unchanged.
 
 - The relationship embedding and text-index procedures are named
   `db.relationship_embeddings.*` and `db.relationship_text_index.*`; the
@@ -415,8 +432,8 @@ before upgrading.
   full-column rewrite still reports its one type.
 
 - `db.relationship_embeddings.set` and `db.relationship_embeddings.embed` refuse a
-  `text_property` that no relationship of the type carries, before any store
-  exists — `Text property 'contxt' not found on any 'CITES' relationship`,
+  `text_column` that no relationship of the type carries, before any store
+  exists — `Text column 'contxt' not found on any 'CITES' relationship`,
   followed by the properties the type does carry — as the node
   `set_embeddings()` / `embed_texts()` refuse an unknown column. A misspelling
   used to create an empty (`embed`) or orphan (`set`) store that `describe()`
@@ -628,7 +645,7 @@ before upgrading.
   embedding 's_emb' found for node type 'D'". It now reports
   "text_score(): no embedding for property 's' on node type 'D'" and says how
   to embed it: `embed_texts('D', 's')` for nodes, `MATCH ()-[r:C]->() WITH
-  collect(r) AS rs CALL db.relationship_embeddings.embed({type, text_property,
+  collect(r) AS rs CALL db.relationship_embeddings.embed({type, text_column,
   relationships: rs})` for relationships. This
   holds in projections, WHERE filters and fused top-k. A direct
   `vector_score()` call keeps its store-name message.

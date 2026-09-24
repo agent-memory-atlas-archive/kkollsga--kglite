@@ -892,7 +892,7 @@ fn a_store_for_a_property_no_relationship_carries_is_refused_until_one_does() {
     let (mut graph, r1, _, _) = graph_with_parallel_edges();
     let error = require_carried_text_property(&graph, "ASSERTS", "description").unwrap_err();
     assert!(
-        error.starts_with("Text property 'description' not found on any 'ASSERTS' relationship."),
+        error.starts_with("Text column 'description' not found on any 'ASSERTS' relationship."),
         "{error}"
     );
     let key = graph.interner.get_or_intern("description");

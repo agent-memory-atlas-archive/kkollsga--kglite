@@ -108,7 +108,7 @@ fn remedies_are_spelled_for_the_surface() {
     );
     assert_eq!(
         Surface::Cypher.build_index(NODE, "Doc", "text"),
-        "CALL db.node_embeddings.build_index({type: 'Doc', text_property: 'text'})"
+        "CALL db.node_embeddings.build_index({type: 'Doc', text_column: 'text'})"
     );
     assert!(
         no_index_to_refresh(REL, "CITES", "context", Surface::Method)
@@ -116,7 +116,7 @@ fn remedies_are_spelled_for_the_surface() {
     );
     assert!(
         no_index_to_refresh(NODE, "Doc", "text", Surface::Cypher).ends_with(
-            "Build one with CALL db.node_embeddings.build_index({type: 'Doc', text_property: \
+            "Build one with CALL db.node_embeddings.build_index({type: 'Doc', text_column: \
              'text'})."
         )
     );

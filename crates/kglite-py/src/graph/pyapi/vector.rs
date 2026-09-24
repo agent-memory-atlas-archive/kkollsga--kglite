@@ -479,22 +479,15 @@ impl KnowledgeGraph {
         let result = PyDict::new(py);
 
         if let Some(col) = text_column {
-            let key = kglite_core::api::embeddings::store_key(node_type_or_text_column, col);
-            let store = match self.inner.embeddings.get(&key) {
-                Some(s) => s,
-                None => return result.into_py_any(py),
-            };
-
-            for (&node_index, &_slot) in &store.node_to_slot {
-                if let Some(embedding) = store.get_embedding(node_index) {
-                    if let Some(node) = self.inner.graph.node_view(NodeIndex::new(node_index)) {
-                        let py_id = py_out::value_to_py(py, &node.id())?;
-                        let py_vec = PyList::new(py, embedding)?;
-                        result.set_item(py_id, py_vec)?;
-                    }
-                }
+            let rows = kglite_core::api::embeddings::node_embeddings(
+                &self.inner,
+                node_type_or_text_column,
+                col,
+            )
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            for (id, vector) in rows {
+                result.set_item(py_out::value_to_py(py, &id)?, PyList::new(py, vector)?)?;
             }
-
             return result.into_py_any(py);
         }
 

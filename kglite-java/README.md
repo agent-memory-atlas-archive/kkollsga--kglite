@@ -200,7 +200,7 @@ void main() {
         graph.cypher("CREATE (:Note {id: 1, title: 'a', body: 'rust'})");
         graph.cypher("CREATE (:Note {id: 2, title: 'b', body: 'java'})");
 
-        // One float[] per node, keyed by n.id. The store key is "body_emb".
+        // One float[] per node, keyed by n.id. The store name is "body_emb".
         graph.setEmbeddings("Note", "body", Map.of(
                 1, new float[] {1.0f, 0.0f},
                 2, new float[] {0.0f, 1.0f}));

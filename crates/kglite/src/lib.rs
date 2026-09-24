@@ -407,9 +407,10 @@ pub mod api {
         pub use crate::graph::embeddings::{
             add_embeddings, build_vector_index, drop_vector_index, embed_property,
             has_vector_index, list_embeddings, list_vector_indexes, node_embedding,
-            refresh_vector_index, remove_embeddings, resolve_source_column, set_embeddings,
-            store_key, store_name, EmbedBatchFn, EmbedError, EmbedHooks, EmbedMode, EmbedOutcome,
-            EmbeddingIngestReport, EmbeddingStoreInfo, VectorIndexReport, VectorIndexStatus,
+            node_embeddings, refresh_vector_index, remove_embeddings, resolve_source_column,
+            set_embeddings, store_key, store_name, EmbedBatchFn, EmbedError, EmbedHooks, EmbedMode,
+            EmbedOutcome, EmbeddingIngestReport, EmbeddingStoreInfo, VectorIndexReport,
+            VectorIndexStatus,
         };
     }
 

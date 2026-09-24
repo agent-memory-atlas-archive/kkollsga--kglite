@@ -1584,6 +1584,7 @@ pub fn kglite::api::embeddings::list_embeddings(graph: &kglite::api::DirGraph) -
 pub fn kglite::api::embeddings::list_relationship_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::RelationshipEmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_vector_indexes(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::VectorIndexStatus>
 pub fn kglite::api::embeddings::node_embedding(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str, id: &kglite::datatypes::values::Value) -> core::result::Result<core::option::Option<alloc::vec::Vec<f32>>, alloc::string::String>
+pub fn kglite::api::embeddings::node_embeddings(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> core::result::Result<alloc::vec::Vec<(kglite::datatypes::values::Value, alloc::vec::Vec<f32>)>, alloc::string::String>
 pub fn kglite::api::embeddings::refresh_relationship_vector_index(graph: &kglite::api::DirGraph, relationship_type: &str, text_column: &str) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::embeddings::refresh_vector_index(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::embeddings::relationship_embedding(graph: &kglite::api::DirGraph, relationship_type: &str, text_column: &str, address: &kglite::api::embeddings::RelationshipVector, keys: &kglite::api::embeddings::RelationshipKeys) -> core::result::Result<core::option::Option<alloc::vec::Vec<f32>>, alloc::string::String>

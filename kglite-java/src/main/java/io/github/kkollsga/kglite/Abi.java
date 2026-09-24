@@ -430,7 +430,7 @@ final class Abi {
      *     store), {@code false} calls {@code add_embeddings} (upsert)
      * @param session    the session handle
      * @param nodeType   the node type to key the store on
-     * @param textColumn the source column; the store key is {@code "{col}_emb"}
+     * @param textColumn the source column; the store name is {@code "{col}_emb"}
      * @param byId       vectors keyed by node id; an empty map is a no-op batch
      * @param metric     the distance metric, or {@code null} for cosine
      * @return the ingest report, parsed from the ABI's JSON

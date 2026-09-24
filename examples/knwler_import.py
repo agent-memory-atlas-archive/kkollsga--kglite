@@ -16,14 +16,14 @@ The documents below reproduce the per-document shape with contents written for
 this example; no knwler file is copied. :func:`consolidate` builds the
 consolidated shape from them the way knwler's consolidation merges entities.
 
-The adapter mirrors knwler's own ``create_network``: an entity's id is
-``name::type``, so the same name under two types stays two entities. Relations
+The adapter mirrors knwler's own ``create_network``: an ``Entity`` node's id is
+``name::type``, so the same name under two types stays two nodes. Relations
 become one relationship type per knwler relation type (endpoint types come
 from the relation's own ``source_type`` / ``target_type``, else from the
 document's entities), documents link to their chunks through ``CONTAINS``,
-chunks to the entities they mention through ``HAS_ENTITY``, and entities to
-their clusters through ``BELONGS_TO``. An endpoint that names no entity is an
-error, not a silently created stub. The payoff is one ranked query across every
+chunks to the ``Entity`` nodes they mention through ``HAS_ENTITY``, and those
+nodes to their clusters through ``BELONGS_TO``. An endpoint that names no
+``Entity`` node is an error, not a silently created stub. The payoff is one ranked query across every
 relation type (``db.relationship_embeddings.query`` with no ``type``).
 
 Network-free: the embedder is a keyword stand-in. Run it with::
@@ -324,7 +324,7 @@ def run(question: str = "evolution by natural selection", data: dict | list[dict
     relation_types = sorted({relation["type"] for relation in raw_relations})
     graph.cypher(
         "MATCH ()-[r]->() WHERE type(r) IN $types WITH collect(r) AS rs "
-        "CALL db.relationship_embeddings.embed({types: $types, text_property: 'description', relationships: rs}) "
+        "CALL db.relationship_embeddings.embed({types: $types, text_column: 'description', relationships: rs}) "
         "YIELD embedded RETURN embedded",
         params={"types": relation_types},
     )
@@ -333,7 +333,7 @@ def run(question: str = "evolution by natural selection", data: dict | list[dict
         for row in graph.cypher("MATCH (n) RETURN labels(n)[0] AS label, count(*) AS n").to_list()
     }
     ranked = graph.cypher(
-        "CALL db.relationship_embeddings.query({text_property: 'description', text: $question, top_k: 3}) "
+        "CALL db.relationship_embeddings.query({text_column: 'description', text: $question, top_k: 3}) "
         "YIELD relationship, score, type "
         "RETURN startNode(relationship).name AS source, type, endNode(relationship).name AS target, score",
         params={"question": question},

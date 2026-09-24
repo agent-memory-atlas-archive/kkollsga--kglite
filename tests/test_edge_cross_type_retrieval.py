@@ -1,7 +1,7 @@
 """Cross-type relationship retrieval: several relationship stores ranked as one.
 
 `db.relationship_embeddings.query` takes `types: [...]`, or — with neither `type` nor
-`types` — every store for `text_property`, and merges the stores' top-k into
+`types` — every store for `text_column`, and merges the stores' top-k into
 one ranking. The fused `vector_score(r, …) ORDER BY … DESC LIMIT k` does the
 same for a type alternation `[r:A|B]` and an untyped `[r]` when every type in
 play carries the store. Every answer here is checked against a brute-force
@@ -43,13 +43,13 @@ def _graph(
         metric = (metrics or {}).get(rel_type)
         graph.cypher(
             f"MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: $k, text: 't'}}]->(:Doc {{id: $k}}) "
-            f"WITH r CALL db.relationship_embeddings.set({{type: '{rel_type}', text_property: 'text', "
+            f"WITH r CALL db.relationship_embeddings.set({{type: '{rel_type}', text_column: 'text', "
             "entries: [{relationship: r, vector: $v}], metric: $metric}) YIELD stored RETURN stored",
             params={"k": k, "v": [math.cos(angle), math.sin(angle)], "metric": metric},
         )
     for rel_type in indexed:
         graph.cypher(
-            f"CALL db.relationship_embeddings.build_index({{type: '{rel_type}', text_property: 'text'}}) "
+            f"CALL db.relationship_embeddings.build_index({{type: '{rel_type}', text_column: 'text'}}) "
             "YIELD indexed RETURN indexed"
         )
     return graph
@@ -67,7 +67,7 @@ def _oracle(types: set[str], vector: list[float], k: int) -> list[tuple[str, int
 
 
 def _call(graph: KnowledgeGraph, selector: str, k: int = 4, extra: str = "") -> list[dict]:
-    fields = [f for f in (selector, "text_property: 'text'", "vector: $v", f"top_k: {k}", extra) if f]
+    fields = [f for f in (selector, "text_column: 'text'", "vector: $v", f"top_k: {k}", extra) if f]
     return graph.cypher(
         f"CALL db.relationship_embeddings.query({{{', '.join(fields)}}}) "
         "YIELD relationship, score, search_method, type "
@@ -115,7 +115,7 @@ def test_ties_across_stores_order_by_type_then_slot() -> None:
     for rel_type, k in [("Z", 1), ("M", 2), ("Z", 3), ("M", 4)]:
         graph.cypher(
             f"MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: $k, text: 't'}}]->(:Doc) "
-            f"WITH r CALL db.relationship_embeddings.set({{type: '{rel_type}', text_property: 'text', "
+            f"WITH r CALL db.relationship_embeddings.set({{type: '{rel_type}', text_column: 'text', "
             "entries: [{relationship: r, vector: [1.0, 0.0]}]}) YIELD stored RETURN stored",
             params={"k": k},
         )
@@ -140,7 +140,7 @@ def test_text_spelling_ranks_across_types() -> None:
     graph = _graph()
     graph.set_embedder(Embedder())
     rows = graph.cypher(
-        "CALL db.relationship_embeddings.query({types: ['A', 'B', 'D'], text_property: 'text', text: 'anything', "
+        "CALL db.relationship_embeddings.query({types: ['A', 'B', 'D'], text_column: 'text', text: 'anything', "
         "top_k: 3}) "
         "YIELD relationship, type RETURN relationship.k AS k, type"
     ).to_list()
@@ -164,10 +164,9 @@ def test_bad_type_selections_are_refused(selector: str, message: str) -> None:
 
 def test_a_property_with_no_store_is_refused() -> None:
     graph = _graph()
-    with pytest.raises(kglite.CypherExecutionError, match="no relationship embedding store for text_property 'nope'"):
+    with pytest.raises(kglite.CypherExecutionError, match="no relationship embedding store for text_column 'nope'"):
         graph.cypher(
-            "CALL db.relationship_embeddings.query({text_property: 'nope', vector: [1.0, 0.0]}) YIELD score RETURN "
-            "score"
+            "CALL db.relationship_embeddings.query({text_column: 'nope', vector: [1.0, 0.0]}) YIELD score RETURN score"
         )
 
 

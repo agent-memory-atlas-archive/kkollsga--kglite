@@ -45,7 +45,7 @@ pub(super) fn execute(
         return Ok(vec![yield_row(values, yields)]);
     }
     let relationship_type = require_string(params, "type", proc_name)?;
-    let text_property = require_string(params, "text_property", proc_name)?;
+    let text_property = require_string(params, "text_column", proc_name)?;
     let values = match proc_name {
         "db.relationship_embeddings.set" => {
             let report = execute_set(
@@ -126,7 +126,7 @@ pub(super) fn list(
     )?;
     let type_filter = optional_string(params, "type", "db.relationship_embeddings.list")?;
     let property_filter =
-        optional_string(params, "text_property", "db.relationship_embeddings.list")?;
+        optional_string(params, "text_column", "db.relationship_embeddings.list")?;
     let statuses = crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
         .into_iter()
         .map(|status| {
@@ -158,7 +158,7 @@ pub(super) fn list(
                 HashMap::from([
                     ("entity", Value::String("relationship".into())),
                     ("type", Value::String(relationship_type.clone())),
-                    ("text_property", Value::String(text_property.to_string())),
+                    ("text_column", Value::String(text_property.to_string())),
                     ("store", Value::String(store_name.clone())),
                     ("dimension", Value::Int64(store.dimension() as i64)),
                     ("count", Value::Int64(store.len() as i64)),
@@ -214,7 +214,7 @@ pub(super) fn query(
              skipped query preparation, so pass the query as 'vector'"
         ));
     }
-    let text_property = require_string(params, "text_property", proc_name)?;
+    let text_property = require_string(params, "text_column", proc_name)?;
     let types = query_types(graph, params, &text_property, proc_name)?;
     let vector = numeric_vector(params.get("vector"), proc_name)?;
     let top_k = optional_nonnegative_usize(params, "top_k", proc_name)?.unwrap_or(10);
@@ -236,7 +236,7 @@ pub(super) fn query(
 
 /// The relationship types a `query` ranks: `type` alone, the `types` list
 /// (sorted, duplicates dropped), or — with neither — every type that has a
-/// `text_property` store. A named type without a store is refused later, by
+/// `text_column` store. A named type without a store is refused later, by
 /// name, when its store is looked up.
 fn query_types(
     graph: &DirGraph,
@@ -258,7 +258,7 @@ fn query_types(
         .collect();
     if types.is_empty() {
         return Err(format!(
-            "CALL {proc_name}: no relationship embedding store for text_property \
+            "CALL {proc_name}: no relationship embedding store for text_column \
              '{text_property}'.{}",
             missing_column_hint(
                 graph,
@@ -345,7 +345,7 @@ fn execute_embed(
     let proc_name = "db.relationship_embeddings.embed";
     let types = named_types(params, proc_name, "or pass type", "relationship")?
         .ok_or_else(|| format!("CALL {proc_name}: missing parameter 'type'"))?;
-    let text_property = require_string(params, "text_property", proc_name)?;
+    let text_property = require_string(params, "text_column", proc_name)?;
     let relationships = require_list(params, "relationships", proc_name)?;
     let mut selected: Vec<Vec<SelectedEdgeText>> = vec![Vec::new(); types.len()];
     let mut edges = Vec::with_capacity(relationships.len());
@@ -465,22 +465,22 @@ pub(super) fn embed_mode(
 /// Every parameter each `db.relationship_embeddings.*` procedure reads, by name.
 ///
 /// One table rather than a literal at each call site: the nine procedures share
-/// `type`/`text_property` (`query` and `embed` also take `types`) and differ
+/// `type`/`text_column` (`query` and `embed` also take `types`) and differ
 /// only in their tails, and a list that lived beside its reader is the kind
 /// that goes stale when a parameter is added two functions away. The strings
 /// are also the "Accepted:" line a caller sees, so they carry the required
 /// names as well as the optional ones.
 pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
-        "db.relationship_embeddings.set" => &["type", "text_property", "entries", "metric"],
-        "db.relationship_embeddings.remove" => &["type", "text_property", "relationships"],
+        "db.relationship_embeddings.set" => &["type", "text_column", "entries", "metric"],
+        "db.relationship_embeddings.remove" => &["type", "text_column", "relationships"],
         "db.relationship_embeddings.drop"
         | "db.relationship_embeddings.refresh_index"
         | "db.relationship_embeddings.drop_index"
-        | "db.relationship_embeddings.list" => &["type", "text_property"],
+        | "db.relationship_embeddings.list" => &["type", "text_column"],
         "db.relationship_embeddings.build_index" => &[
             "type",
-            "text_property",
+            "text_column",
             "m",
             "ef_construction",
             "ef_search",
@@ -490,7 +490,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         "db.relationship_embeddings.embed" => &[
             "type",
             "types",
-            "text_property",
+            "text_column",
             "relationships",
             "mode",
             "batch_size",
@@ -502,7 +502,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         "db.relationship_embeddings.query" => &[
             "type",
             "types",
-            "text_property",
+            "text_column",
             "vector",
             "text",
             "top_k",

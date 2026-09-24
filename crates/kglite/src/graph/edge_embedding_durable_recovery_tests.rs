@@ -39,7 +39,7 @@ const SEED_PARALLEL: &str =
 fn set_vector(k: i64, vector: &str) -> String {
     format!(
         "MATCH ()-[r:CLAIMS]->() WHERE r.k = {k} WITH collect(r) AS rs \
-         CALL db.relationship_embeddings.set({{type: 'CLAIMS', text_property: 'text', \
+         CALL db.relationship_embeddings.set({{type: 'CLAIMS', text_column: 'text', \
          entries: [{{relationship: rs[0], vector: {vector}}}]}}) \
          YIELD stored RETURN stored"
     )
@@ -263,7 +263,7 @@ fn a_first_store_created_by_embed_survives_a_crash() {
         run_embedding(
             &session,
             "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs \
-             CALL db.relationship_embeddings.embed({type: 'CLAIMS', text_property: 'text', \
+             CALL db.relationship_embeddings.embed({type: 'CLAIMS', text_column: 'text', \
              relationships: rs, mode: 'all'}) YIELD embedded RETURN embedded",
         );
     }
@@ -292,7 +292,7 @@ fn a_second_store_on_a_type_that_already_has_one_survives_a_crash() {
         run(
             &session,
             "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs \
-             CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'k', \
+             CALL db.relationship_embeddings.set({type: 'CLAIMS', text_column: 'k', \
              entries: [{relationship: rs[0], vector: [0.5, 0.5]}]}) YIELD stored RETURN stored",
         );
     }
@@ -393,7 +393,7 @@ fn dropping_a_store_inside_the_durable_window_survives_a_crash() {
         let session = open(fixture.path());
         run(
             &session,
-            "CALL db.relationship_embeddings.drop({type: 'CLAIMS', text_property: 'text'}) \
+            "CALL db.relationship_embeddings.drop({type: 'CLAIMS', text_column: 'text'}) \
              YIELD dropped RETURN dropped",
         );
     }
@@ -438,7 +438,7 @@ fn building_a_vector_index_then_crashing_recovers_the_vectors() {
         run(&session, &set_vector(1, "[0.6, 0.8]"));
         run(
             &session,
-            "CALL db.relationship_embeddings.build_index({type: 'CLAIMS', text_property: 'text'}) \
+            "CALL db.relationship_embeddings.build_index({type: 'CLAIMS', text_column: 'text'}) \
              YIELD indexed RETURN indexed",
         );
     }
@@ -452,7 +452,7 @@ fn building_a_vector_index_then_crashing_recovers_the_vectors() {
     let snapshot = recovered.snapshot();
     let rows = execute_read(
         &snapshot,
-        "CALL db.relationship_embeddings.list({type: 'CLAIMS', text_property: 'text'}) \
+        "CALL db.relationship_embeddings.list({type: 'CLAIMS', text_column: 'text'}) \
          YIELD count RETURN count",
         &options,
     )
@@ -590,13 +590,13 @@ fn capture_and_replay_agree_over_a_random_write_sequence() {
                 3 => run(
                     &session,
                     "MATCH ()-[r:CLAIMS]->() WITH collect(r) AS rs \
-                     CALL db.relationship_embeddings.set({type: 'CLAIMS', text_property: 'note', \
+                     CALL db.relationship_embeddings.set({type: 'CLAIMS', text_column: 'note', \
                      entries: [{relationship: rs[0], vector: [0.5, 0.5]}]}) \
                      YIELD stored RETURN stored",
                 ),
                 _ => run(
                     &session,
-                    "CALL db.relationship_embeddings.drop({type: 'CLAIMS', text_property: 'note'}) \
+                    "CALL db.relationship_embeddings.drop({type: 'CLAIMS', text_column: 'note'}) \
                      YIELD dropped RETURN dropped",
                 ),
             }

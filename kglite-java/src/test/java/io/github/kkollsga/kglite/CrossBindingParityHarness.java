@@ -39,17 +39,17 @@ final class CrossBindingParityHarness {
 
     // ---- shared cross-binding contract ------------------------------------
     // Python (the pytest) mirrors these exactly. Only the query vector, metric,
-    // node type and store key must agree across the two languages for the
+    // node type and store name must agree across the two languages for the
     // comparison to be meaningful; the per-node vectors below are this side's
     // WRITE payload and are duplicated in the pytest only for readability.
 
     /** Node type the store is keyed on. */
     static final String NODE_TYPE = "Note";
 
-    /** Source column; the store key is {@code body_emb}. */
+    /** Source column; the store name is {@code body_emb}. */
     static final String TEXT_COLUMN = "body";
 
-    /** The store key {@code vector_score} reads. */
+    /** The store name {@code vector_score} reads. */
     static final String STORE = "body_emb";
 
     /** Distance metric, agreed across both bindings. */

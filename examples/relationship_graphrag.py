@@ -62,7 +62,7 @@ def run(output: Path) -> None:
         """
         MATCH (:Claim)-[r:ASSERTS]->(:Evidence)
         WITH collect(r) AS relationships
-        CALL db.relationship_embeddings.embed({type:'ASSERTS',text_property:'description',
+        CALL db.relationship_embeddings.embed({type:'ASSERTS',text_column:'description',
           relationships:relationships,mode:'all'})
         YIELD embedded, skipped, dimension, model
         RETURN embedded, skipped, dimension, model
@@ -80,7 +80,7 @@ def run(output: Path) -> None:
         MATCH (:Claim {id:'c1'})-[r:ASSERTS]->(:Evidence {id:'e2'})
         SET r.description = 'warm and windy conditions increased evaporation rate'
         WITH collect(r) AS relationships
-        CALL db.relationship_embeddings.embed({type:'ASSERTS',text_property:'description',
+        CALL db.relationship_embeddings.embed({type:'ASSERTS',text_column:'description',
           relationships:relationships,mode:'changed'})
         YIELD embedded, skipped RETURN embedded, skipped
         """
@@ -88,17 +88,17 @@ def run(output: Path) -> None:
     assert refreshed == {"embedded": 1, "skipped": 0}
 
     provenance = graph.cypher(
-        "CALL db.relationship_embeddings.list({type:'ASSERTS',text_property:'description'}) "
+        "CALL db.relationship_embeddings.list({type:'ASSERTS',text_column:'description'}) "
         "YIELD count,dimension,model RETURN count,dimension,model"
     ).to_list()
     assert provenance == [{"count": 3, "dimension": 4, "model": TinyEmbedder.model_id}]
 
     graph.cypher(
-        "CALL db.relationship_embeddings.build_index({type:'ASSERTS',text_property:'description'}) YIELD indexed "
+        "CALL db.relationship_embeddings.build_index({type:'ASSERTS',text_column:'description'}) YIELD indexed "
         "RETURN indexed"
     )
     approximate = graph.cypher(
-        "CALL db.relationship_embeddings.query({type:'ASSERTS',text_property:'description',"
+        "CALL db.relationship_embeddings.query({type:'ASSERTS',text_column:'description',"
         "vector:$vector,top_k:2}) YIELD relationship,score,search_method "
         "RETURN relationship,score,search_method",
         params={"vector": TinyEmbedder().embed(["evidence that heat increases evaporation"])[0]},
@@ -113,12 +113,12 @@ def run(output: Path) -> None:
     # The `.kgl` carries the HNSW index, so the reopened store answers through
     # it without a rebuild.
     state = reopened.cypher(
-        "CALL db.relationship_embeddings.list({type:'ASSERTS',text_property:'description'}) "
+        "CALL db.relationship_embeddings.list({type:'ASSERTS',text_column:'description'}) "
         "YIELD index_state RETURN index_state"
     ).to_list()
     assert state == [{"index_state": "online"}]
     reopened_rows = reopened.cypher(
-        "CALL db.relationship_embeddings.query({type:'ASSERTS',text_property:'description',"
+        "CALL db.relationship_embeddings.query({type:'ASSERTS',text_column:'description',"
         "vector:$vector,top_k:2}) YIELD search_method RETURN search_method",
         params={"vector": TinyEmbedder().embed(["evidence that heat increases evaporation"])[0]},
     ).to_list()

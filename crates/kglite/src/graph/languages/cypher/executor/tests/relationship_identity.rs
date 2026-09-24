@@ -64,7 +64,7 @@ fn stale_binding_cannot_read_reused_slot_or_its_embedding() {
     let result = run_mutation(
         &mut graph,
         "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh', text:'t'}]->(b) \
-         WITH r, fresh CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         WITH r, fresh CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship:fresh, vector:[1.0,0.0]}]}) YIELD stored \
          RETURN r.tag AS stale_tag, fresh.tag AS fresh_tag, r AS stale, \
          vector_score(r,'text_emb',[1.0,0.0]) AS stale_score, \
@@ -89,7 +89,7 @@ fn optimized_vector_score_where_does_not_keep_stale_reused_slot() {
     let result = run_mutation(
         &mut graph,
         "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {text:'t'}]->(b) \
-         WITH r, fresh CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         WITH r, fresh CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship:fresh, vector:[1.0,0.0]}]}) YIELD stored \
          WITH r WHERE vector_score(r,'text_emb',[1.0,0.0]) > 0.5 RETURN r",
     );
@@ -379,7 +379,7 @@ fn path_relationships_are_accepted_by_set_and_remove() {
     let stored = run_mutation(
         &mut graph,
         "MATCH p = (a:N)-[r:R]->(b:N) WHERE a.id = 1 WITH p, relationships(p)[0] AS pr \
-         CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
     );
     assert_eq!(stored.rows, vec![vec![Value::Int64(1)]], "{stored:?}");
@@ -387,7 +387,7 @@ fn path_relationships_are_accepted_by_set_and_remove() {
     let removed = run_mutation(
         &mut graph,
         "MATCH p = (a:N)-[r:R]->(b:N) WHERE a.id = 1 WITH p \
-         CALL db.relationship_embeddings.remove({type:'R', text_property:'text', \
+         CALL db.relationship_embeddings.remove({type:'R', text_column:'text', \
          relationships:[relationships(p)[0]]}) YIELD removed RETURN removed",
     );
     assert_eq!(removed.rows, vec![vec![Value::Int64(1)]], "{removed:?}");
@@ -402,7 +402,7 @@ fn variable_length_path_relationships_are_accepted_by_set() {
     let stored = run_mutation(
         &mut graph,
         "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH relationships(p) AS rels UNWIND rels AS pr \
-         CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN max(stored) AS stored",
     );
     assert_eq!(stored.rows, vec![vec![Value::Int64(2)]], "{stored:?}");
@@ -420,7 +420,7 @@ fn path_relationships_are_accepted_by_embed() {
     };
     let parsed = parser::parse_cypher(
         "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH relationships(p) AS rels \
-         CALL db.relationship_embeddings.embed({type:'R', text_property:'text', relationships: rels}) \
+         CALL db.relationship_embeddings.embed({type:'R', text_column:'text', relationships: rels}) \
          YIELD embedded RETURN embedded",
     )
     .unwrap();
@@ -469,7 +469,7 @@ fn path_relationship_deleted_earlier_in_the_statement_is_refused() {
     let error = try_mutation(
         &mut graph,
         "MATCH p = (a:N)-[r:R]->(b:N) WHERE a.id = 1 DELETE r WITH p \
-         CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: relationships(p)[0], vector:[1.0,0.0]}]}) YIELD stored \
          RETURN stored",
     )
@@ -491,7 +491,7 @@ fn path_relationship_deleted_earlier_in_the_statement_is_refused() {
 fn round_tripped_parameter_relationship_is_still_refused() {
     let mut graph = graph_with_two_hop_chain();
     let parsed = parser::parse_cypher(
-        "CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+        "CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: $rel, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap();
@@ -584,7 +584,7 @@ fn stale_path_hop_is_refused_by_edge_embedding_set() {
     let error = try_mutation(
         &mut graph,
         "MATCH p = (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh'}]->(b) \
-         WITH p CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         WITH p CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: relationships(p)[0], vector:[1.0,0.0]}]}) YIELD stored \
          RETURN stored",
     )
@@ -624,7 +624,7 @@ fn path_bound_after_the_reuse_sees_the_fresh_relationship() {
         &mut graph,
         "MATCH (a:N)-[r:R]->(b:N) DELETE r CREATE (a)-[fresh:R {tag:'fresh', text:'t'}]->(b) \
          WITH a MATCH p = (a)-[:R]->() WITH p, relationships(p)[0] AS pr \
-         CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored \
          RETURN pr.tag AS tag, stored",
     );
@@ -673,7 +673,7 @@ fn variable_length_path_hops_carry_per_hop_tokens() {
         "MATCH p = (a:N)-[:R*2..2]->(c:N) WITH p \
          MATCH (x:N)-[r:R]->(y:N) WHERE x.id = 1 DELETE r \
          CREATE (x)-[:R {text:'fresh'}]->(y) WITH p UNWIND relationships(p) AS pr \
-         CALL db.relationship_embeddings.set({type:'R', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'R', text_column:'text', \
          entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap_err();
@@ -694,7 +694,7 @@ fn path_matched_after_a_foreach_create_is_writable() {
         "MATCH (a:N)-[:R]->(b:N) \
          FOREACH (i IN [1] | CREATE (a)-[:S {text:'made'}]->(b)) \
          WITH 1 AS ignored MATCH p = (:N)-[:S]->(:N) WITH p, relationships(p)[0] AS pr \
-         CALL db.relationship_embeddings.set({type:'S', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'S', text_column:'text', \
          entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
     );
     assert_eq!(result.rows, vec![vec![Value::Int64(1)]], "{result:?}");
@@ -709,7 +709,7 @@ fn path_matched_after_a_merge_is_writable() {
         &mut graph,
         "MATCH (a:N)-[:R]->(b:N) MERGE (a)-[m:S {text:'merged'}]->(b) \
          WITH 1 AS ignored MATCH p = (:N)-[:S]->(:N) WITH p, relationships(p)[0] AS pr \
-         CALL db.relationship_embeddings.set({type:'S', text_property:'text', \
+         CALL db.relationship_embeddings.set({type:'S', text_column:'text', \
          entries:[{relationship: pr, vector:[1.0,0.0]}]}) YIELD stored RETURN stored",
     );
     assert_eq!(result.rows, vec![vec![Value::Int64(1)]], "{result:?}");

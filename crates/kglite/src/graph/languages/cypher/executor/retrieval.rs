@@ -703,7 +703,7 @@ impl<'a> CypherExecutor<'a> {
                         "vector index '{}.{}' is behind its store by {} vectors, over its \
                          auto_refresh_limit of {} — this query was served by exact scan. \
                          Refresh with CALL db.node_embeddings.refresh_index({{type: '{}', \
-                         text_property: '{}'}}) to restore the index path.",
+                         text_column: '{}'}}) to restore the index path.",
                         node_type,
                         args.property,
                         store.delta_size(),

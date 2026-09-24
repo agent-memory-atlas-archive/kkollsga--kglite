@@ -248,7 +248,7 @@ pub(crate) fn build_edge_text_index(
 ) -> Result<TextIndexReport, String> {
     if GraphRead::is_disk(&graph.graph) {
         return Err(format!(
-            "db.relationship_text_index.build({{type: '{rel_type}', property: '{property}'}}) is not \
+            "db.relationship_text_index.build({{type: '{rel_type}', text_column: '{property}'}}) is not \
              supported on a disk-backed graph: the BM25 index is heap-resident, and building one \
              over a graph sized for the disk backend is the memory cliff that backend exists to \
              avoid. Use the default (in-memory) or 'mapped' storage mode."

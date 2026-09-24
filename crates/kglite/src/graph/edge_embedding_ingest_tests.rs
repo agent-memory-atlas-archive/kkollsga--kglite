@@ -503,7 +503,7 @@ fn a_text_property_no_relationship_carries_is_refused() {
     )
     .unwrap_err();
     assert!(
-        error.starts_with("Text property 'txet' not found on any 'CLAIMS' relationship"),
+        error.starts_with("Text column 'txet' not found on any 'CLAIMS' relationship"),
         "{error}"
     );
     let empty =

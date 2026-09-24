@@ -30,7 +30,7 @@ pub(super) fn execute(
         accepted_keys(proc_name),
     )?;
     let node_type = require_string(params, "type", proc_name)?;
-    let property = require_string(params, "property", proc_name)?;
+    let property = require_string(params, "text_column", proc_name)?;
     let values = match proc_name {
         "db.node_text_index.build" => {
             let limit = optional_nonnegative_usize(params, "auto_refresh_limit", proc_name)?;
@@ -46,7 +46,7 @@ pub(super) fn execute(
             let refreshed = refresh_text_index(graph, &node_type, &property).ok_or_else(|| {
                 format!(
                     "CALL {proc_name}: no node text index on '{node_type}.{property}'. Build \
-                     one with CALL db.node_text_index.build({{type: '{node_type}', property: \
+                     one with CALL db.node_text_index.build({{type: '{node_type}', text_column: \
                      '{property}'}})."
                 )
             })?;
@@ -61,7 +61,7 @@ pub(super) fn execute(
     Ok(vec![yield_row(values, yields)])
 }
 
-/// `db.node_text_index.list({type?, property?})` — one row per index, sorted.
+/// `db.node_text_index.list({type?, text_column?})` — one row per index, sorted.
 pub(super) fn list(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
@@ -74,7 +74,7 @@ pub(super) fn list(
         accepted_keys(proc_name),
     )?;
     let type_filter = optional_string(params, "type", proc_name)?;
-    let property_filter = optional_string(params, "property", proc_name)?;
+    let property_filter = optional_string(params, "text_column", proc_name)?;
     Ok(list_text_indexes(graph)
         .into_iter()
         .filter(|(node_type, property, _)| {
@@ -91,7 +91,7 @@ pub(super) fn list(
                 HashMap::from([
                     ("entity", Value::String("node".into())),
                     ("type", Value::String(node_type.to_string())),
-                    ("property", Value::String(property.to_string())),
+                    ("text_column", Value::String(property.to_string())),
                     ("documents", Value::Int64(store.documents() as i64)),
                     ("terms", Value::Int64(store.terms() as i64)),
                     ("skipped", Value::Int64(store.skipped() as i64)),
@@ -115,9 +115,9 @@ pub(super) fn list(
 /// "Accepted:" line of the unknown-key refusal.
 pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
-        "db.node_text_index.build" => &["type", "property", "auto_refresh_limit"],
+        "db.node_text_index.build" => &["type", "text_column", "auto_refresh_limit"],
         "db.node_text_index.refresh" | "db.node_text_index.drop" | "db.node_text_index.list" => {
-            &["type", "property"]
+            &["type", "text_column"]
         }
         other => unreachable!("non-node-text-index procedure routed here: {other}"),
     }

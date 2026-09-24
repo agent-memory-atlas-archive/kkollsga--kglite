@@ -493,7 +493,7 @@ fn refresh_without_an_index_refuses_and_names_the_build_call() {
     assert!(error.contains("'CLAIMS.text_emb'"), "{error}");
     assert!(
         error.contains(
-            "db.relationship_embeddings.build_index({type: 'CLAIMS', text_property: 'text'})"
+            "db.relationship_embeddings.build_index({type: 'CLAIMS', text_column: 'text'})"
         ),
         "{error}"
     );

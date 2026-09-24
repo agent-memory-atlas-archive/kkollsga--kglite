@@ -31,14 +31,13 @@ def _graph(*, indexed: bool = False, sparse: bool = False) -> KnowledgeGraph:
         if sparse and k == 6:
             continue
         graph.cypher(
-            "MATCH ()-[r:C {k: $k}]->() CALL db.relationship_embeddings.set({type: 'C', text_property: 'text', "
+            "MATCH ()-[r:C {k: $k}]->() CALL db.relationship_embeddings.set({type: 'C', text_column: 'text', "
             "entries: [{relationship: r, vector: $v}]}) YIELD stored RETURN stored",
             params={"k": k, "v": vector},
         )
     if indexed:
         graph.cypher(
-            "CALL db.relationship_embeddings.build_index({type: 'C', text_property: 'text'}) YIELD indexed RETURN "
-            "indexed"
+            "CALL db.relationship_embeddings.build_index({type: 'C', text_column: 'text'}) YIELD indexed RETURN indexed"
         )
     return graph
 

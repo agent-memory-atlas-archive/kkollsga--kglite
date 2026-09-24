@@ -78,7 +78,7 @@ fn vectors(graph: &DirGraph, node_type: &str) -> Vec<(i64, Vec<f32>)> {
 }
 
 const SET_DOCS: &str = "MATCH (d:Doc) WITH collect(d) AS ds \
-    CALL db.node_embeddings.set({type: 'Doc', text_property: 'text', entries: \
+    CALL db.node_embeddings.set({type: 'Doc', text_column: 'text', entries: \
     [{node: ds[0], vector: [1.0, 0.0]}, {node: ds[1], vector: [0.0, 1.0]}, \
     {node: ds[2], vector: [0.6, 0.8]}]}) YIELD stored, dimension RETURN stored, dimension";
 
@@ -114,7 +114,7 @@ fn set_refuses_what_the_relationship_twin_refuses() {
     let mut graph = graph();
     let unknown = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: \
          'text', entries: [{node: d, vector: [1.0]}], metrc: 'cosine'}) YIELD stored RETURN stored",
     )
     .unwrap_err();
@@ -125,7 +125,7 @@ fn set_refuses_what_the_relationship_twin_refuses() {
 
     let missing_column = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: \
          'summary', entries: [{node: d, vector: [1.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap_err();
@@ -136,7 +136,7 @@ fn set_refuses_what_the_relationship_twin_refuses() {
 
     let wrong_type = mutate(
         &mut graph,
-        "MATCH (n:Note {id: 10}) CALL db.node_embeddings.set({type: 'Doc', text_property: \
+        "MATCH (n:Note {id: 10}) CALL db.node_embeddings.set({type: 'Doc', text_column: \
          'text', entries: [{node: n, vector: [1.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap_err();
@@ -147,7 +147,7 @@ fn set_refuses_what_the_relationship_twin_refuses() {
 
     let repeated = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: \
          'text', entries: [{node: d, vector: [1.0]}, {node: d, vector: [2.0]}]}) \
          YIELD stored RETURN stored",
     )
@@ -160,7 +160,7 @@ fn set_refuses_what_the_relationship_twin_refuses() {
     mutate(&mut graph, SET_DOCS).unwrap();
     let metric = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: \
          'text', entries: [{node: d, vector: [1.0, 0.0]}], metric: 'euclidean'}) \
          YIELD stored RETURN stored",
     )
@@ -178,9 +178,9 @@ fn a_failing_later_clause_rolls_the_node_store_back() {
     let before = vectors(&graph, "Doc");
     let error = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 1}) CALL db.node_embeddings.set({type: 'Doc', text_column: \
          'text', entries: [{node: d, vector: [9.0, 9.0]}]}) YIELD stored \
-         WITH d CALL db.node_embeddings.set({type: 'Doc', text_property: 'text', \
+         WITH d CALL db.node_embeddings.set({type: 'Doc', text_column: 'text', \
          entries: [{node: d, vector: [1.0, 2.0, 3.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap_err();
@@ -189,8 +189,8 @@ fn a_failing_later_clause_rolls_the_node_store_back() {
 
     let error = mutate(
         &mut graph,
-        "CALL db.node_embeddings.drop({type: 'Doc', text_property: 'text'}) YIELD dropped \
-         WITH dropped CALL db.node_embeddings.set({type: 'Doc', text_property: 'text', \
+        "CALL db.node_embeddings.drop({type: 'Doc', text_column: 'text'}) YIELD dropped \
+         WITH dropped CALL db.node_embeddings.set({type: 'Doc', text_column: 'text', \
          entries: 'nope'}) YIELD stored RETURN stored",
     )
     .unwrap_err();
@@ -221,7 +221,7 @@ fn embed_generates_for_the_selection_and_refuses_without_a_model() {
     let result = mutate_with(
         &mut graph,
         "MATCH (d:Doc) WHERE d.id < 3 WITH collect(d) AS ds \
-         CALL db.node_embeddings.embed({type: 'Doc', text_property: 'text', nodes: ds}) \
+         CALL db.node_embeddings.embed({type: 'Doc', text_column: 'text', nodes: ds}) \
          YIELD embedded, skipped, dimension, model RETURN embedded, skipped, dimension, model",
         std::sync::Arc::new(Stub),
     )
@@ -242,7 +242,7 @@ fn embed_generates_for_the_selection_and_refuses_without_a_model() {
 
     let missing = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 3}) CALL db.node_embeddings.embed({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 3}) CALL db.node_embeddings.embed({type: 'Doc', text_column: \
          'text', nodes: [d]}) YIELD embedded RETURN embedded",
     )
     .unwrap_err();
@@ -254,7 +254,7 @@ fn embed_generates_for_the_selection_and_refuses_without_a_model() {
     let wrong_type = mutate_with(
         &mut graph,
         "MATCH (n:Note) WITH collect(n) AS ns CALL db.node_embeddings.embed({type: 'Doc', \
-         text_property: 'text', nodes: ns}) YIELD embedded RETURN embedded",
+         text_column: 'text', nodes: ns}) YIELD embedded RETURN embedded",
         std::sync::Arc::new(Stub),
     )
     .unwrap_err();
@@ -266,7 +266,7 @@ fn embed_generates_for_the_selection_and_refuses_without_a_model() {
     let both = mutate_with(
         &mut graph,
         "MATCH (n) WHERE n:Doc OR n:Note WITH collect(n) AS ns \
-         CALL db.node_embeddings.embed({types: ['Doc', 'Note'], text_property: 'text', \
+         CALL db.node_embeddings.embed({types: ['Doc', 'Note'], text_column: 'text', \
          nodes: ns}) YIELD embedded RETURN embedded",
         std::sync::Arc::new(Stub),
     )
@@ -281,9 +281,9 @@ fn the_index_lifecycle_and_list_mirror_the_node_writer() {
     mutate(&mut graph, SET_DOCS).unwrap();
     let listed = read(
         &graph,
-        "CALL db.node_embeddings.list({type: 'Doc'}) YIELD entity, type, text_property, store, \
+        "CALL db.node_embeddings.list({type: 'Doc'}) YIELD entity, type, text_column, store, \
          dimension, count, metric, index_state, delta, unembedded \
-         RETURN entity, type, text_property, store, dimension, count, metric, index_state, \
+         RETURN entity, type, text_column, store, dimension, count, metric, index_state, \
          delta, unembedded",
     )
     .unwrap();
@@ -304,7 +304,7 @@ fn the_index_lifecycle_and_list_mirror_the_node_writer() {
     );
     let refused = mutate(
         &mut graph,
-        "CALL db.node_embeddings.refresh_index({type: 'Doc', text_property: 'text'}) \
+        "CALL db.node_embeddings.refresh_index({type: 'Doc', text_column: 'text'}) \
          YIELD refreshed RETURN refreshed",
     )
     .unwrap_err();
@@ -312,7 +312,7 @@ fn the_index_lifecycle_and_list_mirror_the_node_writer() {
 
     let built = mutate(
         &mut graph,
-        "CALL db.node_embeddings.build_index({type: 'Doc', text_property: 'text', m: 8}) \
+        "CALL db.node_embeddings.build_index({type: 'Doc', text_column: 'text', m: 8}) \
          YIELD indexed, metric, m RETURN indexed, metric, m",
     )
     .unwrap();
@@ -327,13 +327,13 @@ fn the_index_lifecycle_and_list_mirror_the_node_writer() {
     assert!(embeddings::has_vector_index(&graph, "Doc", "text"));
     mutate(
         &mut graph,
-        "CALL db.node_embeddings.refresh_index({type: 'Doc', text_property: 'text'}) \
+        "CALL db.node_embeddings.refresh_index({type: 'Doc', text_column: 'text'}) \
          YIELD refreshed RETURN refreshed",
     )
     .unwrap();
     let dropped = mutate(
         &mut graph,
-        "CALL db.node_embeddings.drop_index({type: 'Doc', text_property: 'text'}) \
+        "CALL db.node_embeddings.drop_index({type: 'Doc', text_column: 'text'}) \
          YIELD dropped RETURN dropped",
     )
     .unwrap();
@@ -342,7 +342,7 @@ fn the_index_lifecycle_and_list_mirror_the_node_writer() {
 
     let removed = mutate(
         &mut graph,
-        "MATCH (d:Doc {id: 2}) CALL db.node_embeddings.remove({type: 'Doc', text_property: \
+        "MATCH (d:Doc {id: 2}) CALL db.node_embeddings.remove({type: 'Doc', text_column: \
          'text', nodes: [d]}) YIELD removed RETURN removed",
     )
     .unwrap();
@@ -351,7 +351,7 @@ fn the_index_lifecycle_and_list_mirror_the_node_writer() {
 
     let dropped = mutate(
         &mut graph,
-        "CALL db.node_embeddings.drop({type: 'Doc', text_property: 'text'}) YIELD dropped \
+        "CALL db.node_embeddings.drop({type: 'Doc', text_column: 'text'}) YIELD dropped \
          RETURN dropped",
     )
     .unwrap();
@@ -365,7 +365,7 @@ fn query_ranks_one_or_several_stores_and_refuses_mixed_metrics() {
     mutate(&mut graph, SET_DOCS).unwrap();
     let single = read(
         &graph,
-        "CALL db.node_embeddings.query({type: 'Doc', text_property: 'text', \
+        "CALL db.node_embeddings.query({type: 'Doc', text_column: 'text', \
          vector: [1.0, 0.0], top_k: 2}) YIELD node, score, search_method, type \
          RETURN node.id, score, search_method, type",
     )
@@ -378,13 +378,13 @@ fn query_ranks_one_or_several_stores_and_refuses_mixed_metrics() {
     mutate(
         &mut graph,
         "MATCH (n:Note) WITH collect(n) AS ns CALL db.node_embeddings.set({type: 'Note', \
-         text_property: 'text', entries: [{node: ns[0], vector: [0.9, 0.1]}, \
+         text_column: 'text', entries: [{node: ns[0], vector: [0.9, 0.1]}, \
          {node: ns[1], vector: [0.0, 1.0]}]}) YIELD stored RETURN stored",
     )
     .unwrap();
     let merged = read(
         &graph,
-        "CALL db.node_embeddings.query({text_property: 'text', vector: [1.0, 0.0], top_k: 3}) \
+        "CALL db.node_embeddings.query({text_column: 'text', vector: [1.0, 0.0], top_k: 3}) \
          YIELD node, type RETURN node.id, type",
     )
     .unwrap();
@@ -401,15 +401,15 @@ fn query_ranks_one_or_several_stores_and_refuses_mixed_metrics() {
     mutate(
         &mut mixed,
         "MATCH (n:Note) WITH collect(n) AS ns CALL db.node_embeddings.drop({type: 'Note', \
-         text_property: 'text'}) YIELD dropped WITH ns \
-         CALL db.node_embeddings.set({type: 'Note', text_property: 'text', \
+         text_column: 'text'}) YIELD dropped WITH ns \
+         CALL db.node_embeddings.set({type: 'Note', text_column: 'text', \
          entries: [{node: ns[0], vector: [0.9, 0.1]}], metric: 'euclidean'}) \
          YIELD stored RETURN stored",
     )
     .unwrap();
     let refused = read(
         &mixed,
-        "CALL db.node_embeddings.query({types: ['Doc', 'Note'], text_property: 'text', \
+        "CALL db.node_embeddings.query({types: ['Doc', 'Note'], text_column: 'text', \
          vector: [1.0, 0.0]}) YIELD node RETURN node",
     )
     .unwrap_err();
@@ -419,7 +419,7 @@ fn query_ranks_one_or_several_stores_and_refuses_mixed_metrics() {
     );
     let missing = read(
         &mixed,
-        "CALL db.node_embeddings.query({type: 'Nope', text_property: 'text', \
+        "CALL db.node_embeddings.query({type: 'Nope', text_column: 'text', \
          vector: [1.0, 0.0]}) YIELD node RETURN node",
     )
     .unwrap_err();
@@ -434,15 +434,15 @@ fn node_text_index_lifecycle_and_rollback() {
     let mut graph = graph();
     let built = mutate(
         &mut graph,
-        "CALL db.node_text_index.build({type: 'Doc', property: 'text'}) \
+        "CALL db.node_text_index.build({type: 'Doc', text_column: 'text'}) \
          YIELD indexed, skipped RETURN indexed, skipped",
     )
     .unwrap();
     assert_eq!(built.rows, vec![vec![Value::Int64(3), Value::Int64(0)]]);
     let listed = read(
         &graph,
-        "CALL db.node_text_index.list() YIELD entity, type, property, documents \
-         RETURN entity, type, property, documents",
+        "CALL db.node_text_index.list() YIELD entity, type, text_column, documents \
+         RETURN entity, type, text_column, documents",
     )
     .unwrap();
     assert_eq!(
@@ -456,7 +456,7 @@ fn node_text_index_lifecycle_and_rollback() {
     );
     let refused = mutate(
         &mut graph,
-        "CALL db.node_text_index.refresh({type: 'Note', property: 'text'}) \
+        "CALL db.node_text_index.refresh({type: 'Note', text_column: 'text'}) \
          YIELD refreshed RETURN refreshed",
     )
     .unwrap_err();
@@ -467,8 +467,8 @@ fn node_text_index_lifecycle_and_rollback() {
 
     let error = mutate(
         &mut graph,
-        "CALL db.node_text_index.drop({type: 'Doc', property: 'text'}) YIELD dropped \
-         WITH dropped CALL db.node_text_index.build({type: 'Nope', property: 'text'}) \
+        "CALL db.node_text_index.drop({type: 'Doc', text_column: 'text'}) YIELD dropped \
+         WITH dropped CALL db.node_text_index.build({type: 'Nope', text_column: 'text'}) \
          YIELD indexed RETURN indexed",
     )
     .unwrap_err();
@@ -492,7 +492,7 @@ fn the_router_defaults_to_nodes_and_routes_relationships() {
     mutate(
         &mut graph,
         "MATCH ()-[r:CITES]->() CALL db.embeddings.set({entity: 'relationship', type: 'CITES', \
-         text_property: 'text', entries: [{relationship: r, vector: [1.0, 0.0]}]}) \
+         text_column: 'text', entries: [{relationship: r, vector: [1.0, 0.0]}]}) \
          YIELD stored RETURN stored",
     )
     .unwrap();
@@ -501,13 +501,13 @@ fn the_router_defaults_to_nodes_and_routes_relationships() {
 
     let node_rows = read(
         &graph,
-        "CALL db.embeddings.query({type: 'Doc', text_property: 'text', vector: [1.0, 0.0]}) \
+        "CALL db.embeddings.query({type: 'Doc', text_column: 'text', vector: [1.0, 0.0]}) \
          YIELD node, score RETURN node.id, score",
     )
     .unwrap();
     let specific = read(
         &graph,
-        "CALL db.node_embeddings.query({type: 'Doc', text_property: 'text', \
+        "CALL db.node_embeddings.query({type: 'Doc', text_column: 'text', \
          vector: [1.0, 0.0]}) YIELD node, score RETURN node.id, score",
     )
     .unwrap();
@@ -515,7 +515,7 @@ fn the_router_defaults_to_nodes_and_routes_relationships() {
     let relationship_rows = read(
         &graph,
         "CALL db.embeddings.query({entity: 'relationship', type: 'CITES', \
-         text_property: 'text', vector: [1.0, 0.0]}) YIELD relationship, score \
+         text_column: 'text', vector: [1.0, 0.0]}) YIELD relationship, score \
          RETURN type(relationship), score",
     )
     .unwrap();
@@ -525,7 +525,7 @@ fn the_router_defaults_to_nodes_and_routes_relationships() {
     let belongs = mutate(
         &mut graph,
         "MATCH ()-[r:CITES]->() CALL db.embeddings.remove({type: 'CITES', \
-         text_property: 'text', relationships: [r]}) YIELD removed RETURN removed",
+         text_column: 'text', relationships: [r]}) YIELD removed RETURN removed",
     )
     .unwrap_err();
     assert!(
@@ -543,7 +543,7 @@ fn the_router_defaults_to_nodes_and_routes_relationships() {
     );
     let text = mutate(
         &mut graph,
-        "CALL db.text_index.build({entity: 'relationship', type: 'CITES', property: 'text'}) \
+        "CALL db.text_index.build({entity: 'relationship', type: 'CITES', text_column: 'text'}) \
          YIELD indexed RETURN indexed",
     )
     .unwrap();
