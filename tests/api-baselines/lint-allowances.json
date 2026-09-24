@@ -349,10 +349,6 @@
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/io/file.rs::mod:file_deferred_index_tests::unused_imports",
-      "classification": "boundary"
-    },
-    {
       "identity": "crates/kglite/src/graph/io/ntriples/column_builder.rs::fn:flush_type_entries:fn flush_type_entries( type_name: &str, entries: &[BufferedEntry], writers: &mut HashMap<String, TypeWriter>, mmap: &mut MmapMut, row_ids: &mut Vec<(petgraph::graph::NodeIndex, u32)>, ) -> usize::clippy::too_many_arguments",
       "classification": "transitional"
     },

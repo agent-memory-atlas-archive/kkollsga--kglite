@@ -24,9 +24,10 @@ before upgrading.
   `.kgl` checkpoints retain vectors, provenance and the built HNSW index, so a
   reloaded store answers through HNSW with the same pending delta it was saved
   with; disk generations persist neither the node nor the relationship index.
-  `DROP INDEX` accepts the qualified
-  name `SHOW INDEXES` prints for one (`relationship:SUPPORTS.evidence`, bare or
-  backticked), drops the accelerator rather than the vectors, and judges the
+  `DROP INDEX` accepts the qualified name `SHOW INDEXES` prints for a
+  relationship index (`relationship:SUPPORTS.evidence`, bare or backticked) and
+  drops every relationship structure under it — the HNSW accelerator (the
+  vectors stay) and a BM25 text index on the same property. It judges the
   statement against the relationship type's endpoint types when a write scope
   is active; `IF EXISTS` is a no-op only when nothing carries the name, never
   over an index still installed.
@@ -63,8 +64,8 @@ before upgrading.
   A `.kgle` embedding export that carries relationship stores is written as
   version 4, which 0.17.12 refuses as "Embedding file version 4 is newer than
   supported version 3. Please upgrade kglite."; a node-only export stays the
-  byte-identical version 3. The refusal is the point; nothing is silently discarded, and upgrading the
-  reader is the whole migration.
+  byte-identical version 3. The refusal is the point; nothing is silently
+  discarded, and upgrading the reader is the whole migration.
 
 - **A portable knowledge-base guide and synthetic worked example.**
   `KNOWLEDGE_BASES.md` explains how to choose direct Markdown search or a
@@ -99,6 +100,7 @@ before upgrading.
   `api::embeddings::{list_edge_embeddings, embedding_info,
   embedding_diagnostics}`; the C ABI listing stays node-only (use
   `db.edge_embeddings.list`).
+
 - **BM25 text indexes over relationships.** `CALL
   db.edge_text_index.build({type, property, auto_refresh_limit?})`, `.refresh`,
   `.drop` and `.list` manage a lexical index over one relationship type's
@@ -112,11 +114,13 @@ before upgrading.
   are rolled back out of it. `score_fuse(text_bm25(r, …), vector_score(r, …))`
   ranks relationships hybrid. `SHOW INDEXES` lists it as
   `relationship:T.p` (`FULLTEXT`, `RELATIONSHIP`), and `DROP INDEX
-  relationship:T.p` now drops the relationship text index together with a
-  relationship vector index on the same property. Saved in `.kgl` as a new
-  optional section that earlier releases skip; dropped by `vacuum()`; refused
-  on disk-backed graphs; like the node text index, not recorded in the
-  write-ahead log.
+  relationship:T.p` drops it together with a relationship vector index on the
+  same property. Saved in `.kgl` as a new optional section that earlier
+  releases skip; dropped by `vacuum()`; refused on disk-backed graphs.
+  Neither text index — node or relationship — is recorded in the write-ahead
+  log: on a durable graph, a text index built after the last checkpoint is
+  absent after a crash and must be rebuilt, while vector indexes are logged
+  and survive. The text-search guide now states this for both.
 
 ### Changed
 
@@ -161,17 +165,21 @@ before upgrading.
 - Embedding generation now refuses writes through derived durable/CDC handles
   before invoking the model or changing vectors. Python `search_text()` validates
   both the number of returned vectors and their declared model dimension.
+
 - Portable `.kgle` imports validate vector widths and finite coordinates before
   installing any store. Core embedding copy and import operations now mark real
   mutations so `Session::transact` publishes them instead of discarding a
   successful working copy.
+
 - Snapshot/disk loading and WAL recovery reject malformed embedding coordinates;
   WAL replay also validates vector widths before installing payloads.
+
 - Incremental generation rejects a changed known model identity instead of
   mixing vector spaces under misleading provenance. Manual vector upserts
   invalidate the affected text hashes and aggregate model attribution;
   `mode='all'` restores a fully generated store. Managed vector input and query
   boundaries reject non-finite coordinates before they can corrupt ranking.
+
 - **`MERGE` on a relationship pattern now matches the pattern's relationship
   properties.** Between endpoints joined by more than one relationship of the
   type, the clause bound whichever member adjacency yielded first, so
@@ -179,12 +187,14 @@ before upgrading.
   member. The properties now take part in the match, and a pattern no member
   carries reaches the create branch — so `MERGE (a)-[:T {k: 0}]->(b)` beside an
   existing `{k: 1}` relationship creates one rather than reporting a match.
+
 - **`DELETE` of a projected relationship value removes the relationship.**
   `WITH collect(r) AS rs UNWIND rs AS r DELETE r` matched no arm in the
   value fall-through, so the clause completed without deleting and without
   erroring, and `relationships_deleted` counted nothing. The value is now
   resolved, checked for statement identity, liveness, endpoints and write scope,
   and deleted; a value carrying no statement identity is refused by name.
+
 - **A generated relationship store records the model that filled it, in every
   mode.** The default `missing` mode stamped `model: null` on a store it had
   just created whole, and the mismatch guard reads the *prior* stamp — so a
@@ -193,6 +203,7 @@ before upgrading.
   records its model, matching the node rule; a store that already holds vectors
   of unknown provenance stays unknown until a full `mode='all'` pass covers
   them.
+
 - **`vector_score`, `text_score` and `embedding_norm` accept a node *value*.** A
   node arriving as a value rather than as a pattern binding — `collect(n)` plus
   `UNWIND`, `head(...)`, a `CALL { }` column, `nodes(p)` — was rejected with
@@ -200,22 +211,26 @@ before upgrading.
   and scored exactly as the binding is. A value whose slot has since been
   deleted, or reused by a node of another type, scores `null` rather than
   erroring or scoring the new occupant.
+
 - **Every `db.edge_embeddings.*` procedure refuses an unknown parameter.** Only
   `list` did, so a misspelled key left the default in place and the call
   reported success — `build_index({metric_: 'euclidean'})` built a cosine index
   and answered `indexed`. The refusal names the key and lists the accepted ones,
   and covers the per-entry map of `set` (`relationship`, `vector`).
+
 - **A manual `db.edge_embeddings.set` takes ownership of its cell even when the
   vector is unchanged.** The batch was selected by vector equality alone, so
   writing back a byte-identical vector left the generated source hash in place
   and `embed(mode:'changed')` went on skipping a relationship the manual write
   owned.
+
 - **A rolled-back `DELETE` keeps the vector index it never touched.** Pruning a
   deleted node's or relationship's vector invalidates the HNSW index, and the
   undo's restore invalidates it again, so a statement that failed after a delete
   put the vectors back and left the index gone (`index_state: 'none'`, every
   query back on the exact scan). The index state is now journalled with the
   vectors and restored with them, for node and relationship stores alike.
+
 - **`build_vector_index` / `db.edge_embeddings.build_index` record an explicit
   `metric` on the store.** A build with a metric the store did not declare left
   the store resolving another one, so every later query that named no metric
@@ -228,6 +243,7 @@ before upgrading.
   records the metric as its own journalled metadata change, instead of only
   validating the vectors against the cosine default and leaving a later
   contradicting build unrefused.
+
 - **Write clauses reuse a node or relationship that arrives as a projected
   value.** `UNWIND collect(n) AS x`, a `FOREACH` loop variable and a `WITH`
   that carried an entity forward reach `CREATE`, `MERGE`, `SET` and `REMOVE`
@@ -240,6 +256,7 @@ before upgrading.
   with the same liveness, endpoint and statement-identity checks `DELETE`
   applies, and the clause writes that entity; a value whose slot has since
   been deleted or reused by another type is refused rather than recreated.
+
 - **`type()`, `startNode()`, `endNode()`, `keys()` and `properties()` read
   relationship values, not just `MATCH` bindings.** On a relationship that
   arrived as a value — the `relationship` column of
@@ -251,6 +268,7 @@ before upgrading.
   slot a `CREATE` then reused no longer reports the new relationship's type,
   endpoints or properties through these functions; it reads as null, as its
   property access already did.
+
 - **A failed write statement no longer leaves its text in a BM25 index.**
   `text_bm25` catches its index up when a query reaches it, so a statement
   that wrote the indexed property (or created a node of the indexed type),
@@ -261,6 +279,7 @@ before upgrading.
   freed node slot. The rollback now marks every slot such a refresh folded
   in; `SHOW INDEXES` reports the index stale, and the next read re-reads the
   restored text, giving the pre-statement scores.
+
 - **`describe()` shows relationship embedding stores.** A graph whose vectors
   lived on relationships described itself as having none: the connection map
   gave no sign of them, the `<semantic>` hint was hidden when only
@@ -269,9 +288,12 @@ before upgrading.
   `embeddings="col(dim=D,count=N)"`, `describe(connections=['T'])` lists
   `<embeddings text_col= dim= count=/>` like a node type does, the
   `<semantic>` hint appears for either entity and spells
-  `vector_score(r, …)` / `db.edge_embeddings.query` for relationships, and
-  `describe(cypher=True)` documents every `db.edge_embeddings.*` procedure.
-  Graphs without relationship stores describe exactly as before.
+  `vector_score(r, …)` / `db.edge_embeddings.query` for relationships, the
+  `<lexical>` and `<hybrid>` hints likewise appear for relationship text
+  indexes, and `describe(cypher=True)` documents every `db.edge_embeddings.*`
+  and `db.edge_text_index.*` procedure. Graphs without relationship stores or
+  indexes describe exactly as before.
+
 - **`export_embeddings()`, `import_embeddings()` and `copy_embeddings_from()`
   no longer drop relationship embedding stores silently.** They walked node
   stores only, so a graph whose vectors lived on relationships exported,

@@ -2473,12 +2473,10 @@ mod edge_embedding_persistence_tests;
 
 mod vector_persistence;
 
-// Return type of the exported export_embeddings_to_file; nothing in-crate names it.
-#[allow(unused_imports)]
-pub use vector_persistence::ExportStats;
 use vector_persistence::{decode_vector_indexes, encode_vector_indexes};
 pub use vector_persistence::{
-    export_embeddings_to_file, import_embeddings_from_file, EmbeddingExportFilter, ImportStats,
+    export_embeddings_to_file, import_embeddings_from_file, EmbeddingExportFilter, ExportStats,
+    ImportStats,
 };
 #[cfg(test)]
 #[path = "file_deferred_index_tests.rs"]

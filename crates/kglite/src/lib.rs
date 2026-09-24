@@ -614,7 +614,7 @@ pub mod api {
         /// Embedding-vector file export / import.
         pub use crate::graph::io::file::{
             export_embeddings_to_file, import_embeddings_from_file, EmbeddingExportFilter,
-            ImportStats,
+            ExportStats, ImportStats,
         };
         /// `.kgl` load / save (the canonical persistence format). `save_graph`
         /// and `save_graph_with` are the single save dispatch and report

@@ -337,12 +337,83 @@ rebuildable cache, not a format break: a graph with no text index writes
 byte-identical files to before, older files load unchanged, and a section a
 build cannot read is skipped rather than refused (rebuild it in that case).
 
-A text index is **not** recorded in the write-ahead log. On a durable graph
-(`kglite.open(path, durable=...)`), building one is not a logged write: the
-index reaches disk only with the next checkpoint (`save()`). After a
-crash, the reopened graph recovers every logged write, but a text index built
-since the last checkpoint is gone. Check with `has_text_index()` and rebuild with
-`build_text_index()`. A vector index is logged, so it survives the same crash.
+A text index is **not** recorded in the write-ahead log, on nodes or on
+relationships. On a durable graph (`kglite.open(path, durable=...)`), building
+one is not a logged write: the index reaches disk only with the next checkpoint
+(`save()`). After a crash, the reopened graph recovers every logged write, but a
+text index built since the last checkpoint is gone. Check with
+`has_text_index()` (nodes) or `CALL db.edge_text_index.list()` (relationships),
+then rebuild. A vector index is logged, so it survives the same crash.
+
+## Relationship text indexes
+
+A relationship property can carry a BM25 index too: evidence on a `SUPPORTS`
+edge, a quote on a `CITES` edge. The relationship index is the node index's
+twin: the same document rule (a string, or a list of strings and nulls joined),
+the same scoring, and the same freshness contract. Its lifecycle lives in
+Cypher, as the relationship vector index's does, so every binding reaches it
+through `cypher()`:
+
+```python
+graph.cypher("""
+    CALL db.edge_text_index.build({type:'SUPPORTS', property:'evidence'})
+    YIELD indexed, skipped, terms RETURN indexed, skipped, terms
+""")
+
+rows = graph.cypher("""
+    MATCH (who:Claimant)-[r:SUPPORTS]->(c:Claim)
+    RETURN who.name, c.title, text_bm25(r, 'evidence', 'water damage') AS score
+    ORDER BY score DESC LIMIT 10
+""").to_df()
+```
+
+`text_bm25(r, 'property', 'query')` scores a relationship bound by `MATCH`, or a
+relationship *value*: `collect(r)[0]`, `UNWIND`, a `CALL { }` column, or the
+`relationship` column of `db.edge_embeddings.query`. It returns `0.0` for a
+relationship sharing no word with the query, `null` for one the index holds no
+document for, and an error naming `db.edge_text_index.build` when no index
+exists.
+
+| Procedure | Yields |
+|---|---|
+| `db.edge_text_index.build({type, property, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` |
+| `db.edge_text_index.refresh({type, property})` | `refreshed` |
+| `db.edge_text_index.drop({type, property})` | `dropped` (`false` when there was no index) |
+| `db.edge_text_index.list({type?, property?})` | `entity`, `type`, `property`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` |
+
+**Freshness.** Writes (`SET`, `REMOVE`, `CREATE` or `MERGE` of a relationship,
+including one that reuses a deleted relationship's storage slot, and
+`add_connections`) are folded in at the next query within
+`auto_refresh_limit`. Past it, rows score `null` until
+`db.edge_text_index.refresh` runs. A deleted relationship's document is removed
+at the delete. `list` and `SHOW INDEXES` report `stale` and `delta` exactly as
+for nodes.
+
+**Rollback.** `build`, `drop`, and any catch-up a statement triggered are undone
+when that statement fails, so the index never keeps words from a write that did
+not happen.
+
+**Naming and dropping.** `SHOW INDEXES` lists the index as
+`relationship:SUPPORTS.evidence`, type `FULLTEXT`, `entityType` `RELATIONSHIP`.
+`DROP INDEX relationship:SUPPORTS.evidence` removes every relationship
+structure under that name, the BM25 index and a relationship vector index on
+the same property alike.
+
+**Storage.** The index is saved in the `.kgl`, and a reloaded graph keeps it.
+`vacuum()` drops it; rebuild after vacuuming. Memory and mapped storage only:
+a disk-backed graph refuses to build one, for the same reason it refuses a node
+text index.
+
+Both relationship lanes fuse exactly as node lanes do:
+
+```python
+graph.cypher("""
+    MATCH ()-[r:SUPPORTS]->()
+    RETURN r, score_fuse(text_bm25(r, 'evidence', $q),
+                         vector_score(r, 'evidence_emb', $qv)) AS score
+    ORDER BY score DESC LIMIT 10
+""", params={"q": "water damage", "qv": query_vector})
+```
 
 ## Both lanes in one query
 
