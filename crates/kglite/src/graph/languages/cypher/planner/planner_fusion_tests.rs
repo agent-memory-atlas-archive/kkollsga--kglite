@@ -387,6 +387,141 @@ fn test_text_score_unknown_parameter_still_errors() {
     assert!(err.contains("not found"), "unexpected error: {err}");
 }
 
+// `db.edge_embeddings.query({text: …})` joins the same rewrite: `text` becomes
+// `vector: $__ts_N`, so the Session embeds it once, outside the graph lock,
+// exactly as it embeds a `text_score` query.
+
+/// The parameter map of the first `CALL` clause, in written order.
+fn first_call_parameters(query: &CypherQuery) -> &Vec<(String, Expression)> {
+    query
+        .clauses
+        .iter()
+        .find_map(|clause| match clause {
+            Clause::Call(call) => Some(&call.parameters),
+            _ => None,
+        })
+        .expect("fixture has a CALL clause")
+}
+
+#[test]
+fn edge_embeddings_query_text_rewrites_into_a_vector_parameter() {
+    let params = HashMap::new();
+    let (query, texts) = rewrite_ts(
+        "CALL db.edge_embeddings.query({type:'R', text_property:'text', text:'hello', top_k:3}) \
+         YIELD relationship RETURN relationship",
+        &params,
+    )
+    .unwrap();
+
+    assert_eq!(texts, vec![("__ts_0".to_string(), "hello".to_string())]);
+    let keys: Vec<&str> = first_call_parameters(&query)
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect();
+    assert_eq!(keys, ["type", "text_property", "vector", "top_k"]);
+    assert!(matches!(
+        &first_call_parameters(&query)[2].1,
+        Expression::Parameter(p) if p == "__ts_0"
+    ));
+}
+
+#[test]
+fn edge_embeddings_query_text_parameter_shares_a_text_score_embedding() {
+    let mut params = HashMap::new();
+    params.insert("q".to_string(), Value::String("hello".to_string()));
+    let (query, texts) = rewrite_ts(
+        "CALL db.edge_embeddings.QUERY({type:'R', text_property:'text', text:$q}) \
+         YIELD relationship RETURN text_score(relationship, 'text', 'hello') AS s",
+        &params,
+    )
+    .unwrap();
+
+    assert_eq!(
+        texts,
+        vec![("__ts_0".to_string(), "hello".to_string())],
+        "one distinct text is embedded once, whichever spelling asked for it"
+    );
+    assert!(matches!(
+        &first_call_parameters(&query)[2],
+        (key, Expression::Parameter(p)) if key == "vector" && p == "__ts_0"
+    ));
+}
+
+#[test]
+fn edge_embeddings_query_text_inside_a_subquery_is_rewritten() {
+    let params = HashMap::new();
+    let (_, texts) = rewrite_ts(
+        "CALL { CALL db.edge_embeddings.query({type:'R', text_property:'text', text:'inner'}) \
+         YIELD relationship RETURN relationship } RETURN relationship",
+        &params,
+    )
+    .unwrap();
+    assert_eq!(texts, vec![("__ts_0".to_string(), "inner".to_string())]);
+}
+
+#[test]
+fn edge_embeddings_query_text_with_vector_is_refused() {
+    let err = rewrite_ts(
+        "CALL db.edge_embeddings.query({type:'R', text_property:'text', text:'q', \
+         vector:[1.0, 0.0]}) YIELD relationship RETURN relationship",
+        &HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("'text' and 'vector'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn edge_embeddings_query_row_dependent_text_is_refused() {
+    let err = rewrite_ts(
+        "WITH 'q' AS t CALL db.edge_embeddings.query({type:'R', text_property:'text', text:t}) \
+         YIELD relationship RETURN relationship",
+        &HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("string literal or a $parameter"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn edge_embeddings_query_text_parameter_must_be_a_string() {
+    let mut params = HashMap::new();
+    params.insert(
+        "q".to_string(),
+        Value::List(vec![Value::Float64(1.0), Value::Float64(0.0)]),
+    );
+    let err = rewrite_ts(
+        "CALL db.edge_embeddings.query({type:'R', text_property:'text', text:$q}) \
+         YIELD relationship RETURN relationship",
+        &params,
+    )
+    .unwrap_err();
+    assert!(err.contains("must be a string"), "unexpected error: {err}");
+    let err = rewrite_ts(
+        "CALL db.edge_embeddings.query({type:'R', text_property:'text', text:$missing}) \
+         YIELD relationship RETURN relationship",
+        &HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(err.contains("not found"), "unexpected error: {err}");
+}
+
+#[test]
+fn edge_embeddings_query_vector_spelling_collects_nothing() {
+    let (query, texts) = rewrite_ts(
+        "CALL db.edge_embeddings.query({type:'R', text_property:'text', vector:[1.0, 0.0]}) \
+         YIELD relationship RETURN relationship",
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert!(texts.is_empty());
+    assert_eq!(first_call_parameters(&query)[2].0, "vector");
+}
+
 // ============================================================================
 // NDV selectivity on identity fields
 // ============================================================================

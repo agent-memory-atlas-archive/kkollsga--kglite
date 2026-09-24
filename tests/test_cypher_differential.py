@@ -221,6 +221,19 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "RETURN relationship.k AS k,score ORDER BY k",
         None,
     ),
+    # `db.edge_embeddings.query({text: $q})` is rewritten at preparation into
+    # `vector: $__ts_N`, a parameter bound to the embedded list. This corpus
+    # registers no embedder, so it can exercise only the vector spelling: the
+    # post-rewrite shape, a `vector` parameter feeding the passes. The text
+    # spelling is covered by golden tests in `test_edge_embedding_cypher.py`.
+    (
+        "edge_vector_query_vector_parameter",
+        "edge_vector_differential_graph",
+        "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:$q,top_k:3}) "
+        "YIELD relationship,score WITH relationship,score ORDER BY score DESC, relationship.k "
+        "RETURN relationship.k AS k,score",
+        {"q": [1.0, 0.0]},
+    ),
     # ── fused MATCH … WITH count(): the pattern's own node labels ──
     # `fuse_match_with_aggregate` hands the group node to a peer-count
     # histogram that counts every peer of the edge type. Nothing applied the

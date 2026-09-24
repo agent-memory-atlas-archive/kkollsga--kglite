@@ -1,5 +1,5 @@
 //! Rewriting simplifications — fold OR→IN, push LIMIT/DISTINCT into MATCH,
-//! rewrite text_score.
+//! rewrite text_score and `db.edge_embeddings.query`'s `text` option.
 
 use super::super::ast::*;
 use crate::datatypes::values::Value;
@@ -638,7 +638,9 @@ pub struct TextScoreRewrite {
 }
 
 /// Walk the AST and rewrite all `text_score(node, col, query_text)` calls
-/// to `vector_score(node, col_emb, $__ts_N)`.
+/// to `vector_score(node, col_emb, $__ts_N)`, and every
+/// `db.edge_embeddings.query({text: query_text})` option to
+/// `vector: $__ts_N`.
 ///
 /// The query argument can be a string literal or a `$parameter` bound to a
 /// string — that text is collected so the caller can embed it and inject the
@@ -662,6 +664,9 @@ pub fn rewrite_text_score(
         texts_to_embed: collector.texts_to_embed,
     })
 }
+
+/// The one procedure whose `text:` option the rewrite embeds.
+const EDGE_EMBEDDINGS_QUERY: &str = "db.edge_embeddings.query";
 
 struct TextScoreCollector {
     counter: usize,
@@ -783,6 +788,12 @@ impl TextScoreCollector {
                 }
             }
             Clause::Call(call) => {
+                if call
+                    .procedure_name
+                    .eq_ignore_ascii_case(EDGE_EMBEDDINGS_QUERY)
+                {
+                    self.rewrite_edge_query_text(&mut call.parameters, params)?;
+                }
                 for (_, expression) in &mut call.parameters {
                     self.rewrite_expr(expression, params)?;
                 }
@@ -864,6 +875,55 @@ impl TextScoreCollector {
         if let Some(query_text) = query_text {
             args[2] = Expression::Parameter(self.param_for_text(query_text));
         }
+        Ok(())
+    }
+
+    /// Rewrite `db.edge_embeddings.query({…, text: q})` into `{…, vector:
+    /// $__ts_N}` so the caller embeds `q` like a `text_score` query. The text
+    /// must be a statement constant: the embedding happens before execution,
+    /// when no row exists to evaluate a row-dependent expression against.
+    fn rewrite_edge_query_text(
+        &mut self,
+        parameters: &mut [(String, Expression)],
+        params: &HashMap<String, Value>,
+    ) -> Result<(), String> {
+        let Some(text_at) = parameters.iter().position(|(key, _)| key == "text") else {
+            return Ok(());
+        };
+        if parameters.iter().any(|(key, _)| key == "vector") {
+            return Err(format!(
+                "CALL {EDGE_EMBEDDINGS_QUERY}: 'text' and 'vector' are mutually exclusive; \
+                 pass the query as text to embed, or as a vector"
+            ));
+        }
+        let query_text = match &parameters[text_at].1 {
+            Expression::Literal(Value::String(text)) => text.clone(),
+            Expression::Parameter(name) => match params.get(name.as_str()) {
+                Some(Value::String(text)) => text.clone(),
+                Some(_) => {
+                    return Err(format!(
+                        "CALL {EDGE_EMBEDDINGS_QUERY}: parameter ${name} for 'text' must be \
+                         a string; pass a query vector as 'vector'"
+                    ))
+                }
+                None => {
+                    return Err(format!(
+                        "CALL {EDGE_EMBEDDINGS_QUERY}: parameter ${name} not found"
+                    ))
+                }
+            },
+            _ => {
+                return Err(format!(
+                    "CALL {EDGE_EMBEDDINGS_QUERY}: 'text' must be a string literal or a \
+                     $parameter; it is embedded once before execution, so it cannot depend \
+                     on a row"
+                ))
+            }
+        };
+        parameters[text_at] = (
+            "vector".to_string(),
+            Expression::Parameter(self.param_for_text(query_text)),
+        );
         Ok(())
     }
 

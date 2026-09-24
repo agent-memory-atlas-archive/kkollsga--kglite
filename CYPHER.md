@@ -670,6 +670,24 @@ CALL db.edge_embeddings.query({
 }) YIELD relationship, score, search_method
 ```
 
+The query can also be text: `text:'…'` (a string literal or a `$parameter`
+bound to a string) in place of `vector`. Before execution the statement
+embeds it once with the registered embedder, exactly as `text_score` embeds
+its query, and scores the resulting vector — so the text route ranks the same
+relationships as passing that vector yourself:
+
+```cypher
+CALL db.edge_embeddings.query({
+  type:'SUPPORTS', text_property:'evidence', text:$question, top_k:10
+}) YIELD relationship, score
+```
+
+`text` needs `set_embedder()` (or `ExecuteOptions::embedder` from Rust);
+without one the call is refused. `text` together with `vector` is refused, and
+so is a row-dependent text such as `WITH q AS t … {text: t}` — the query is
+embedded before any row exists, so it must be a statement constant. As with
+`text_score`, the model is not compared with the one that built the store.
+
 `top_k` defaults to 10 and `exact` defaults to false. `search_method` is
 `hnsw` only when HNSW served the query, otherwise `exact`; `exact:true` always
 bypasses the index. A requested metric that cannot use the installed index

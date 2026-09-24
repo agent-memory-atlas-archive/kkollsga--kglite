@@ -73,6 +73,14 @@ before upgrading.
   per-tool description and schema bytes plus repeated descriptive blocks from
   saved MCP `tools/list` JSON, while explicitly avoiding a model-token claim.
 
+- **`db.edge_embeddings.query` accepts a text query.** `text:'…'` or
+  `text:$param` in place of `vector` embeds the query once with the registered
+  embedder before execution — the same route `text_score()` uses, outside the
+  graph lock — and ranks relationships against that vector. `text` with
+  `vector` is refused, and so is a text computed from a row, which cannot be
+  embedded before execution. The missing-embedder error now names the
+  procedure as well as `text_score()`.
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing

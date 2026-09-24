@@ -267,6 +267,12 @@ pub(super) fn query(
         params.keys().map(String::as_str),
         accepted_keys(proc_name),
     )?;
+    if params.contains_key("text") {
+        return Err(format!(
+            "CALL {proc_name}: 'text' reached execution unembedded; this execution path \
+             skipped query preparation, so pass the query as 'vector'"
+        ));
+    }
     let relationship_type = require_string(params, "type", proc_name)?;
     let text_property = require_string(params, "text_property", proc_name)?;
     let vector = numeric_vector(params.get("vector"), proc_name)?;
@@ -319,10 +325,14 @@ fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
             "batch_size",
             "metric",
         ],
+        // `text` never reaches `query`: preparation rewrites it into `vector`
+        // (`planner::simplification::rewrite_text_score`). It is listed so the
+        // "Accepted:" line names every spelling a caller may write.
         "db.edge_embeddings.query" => &[
             "type",
             "text_property",
             "vector",
+            "text",
             "top_k",
             "exact",
             "metric",

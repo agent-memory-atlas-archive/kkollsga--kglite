@@ -831,7 +831,8 @@ fn prepare(
     let warnings: Arc<[String]> = collected.into_messages().into();
     cypher::emit_query_warnings(&warnings);
 
-    // Rewrites `text_score(...)` calls to `vector_score(...)`, collecting the
+    // Rewrites `text_score(...)` calls to `vector_score(...)` and
+    // `db.edge_embeddings.query`'s `text` option to `vector`, collecting the
     // texts to embed alongside.
     let rewrite = cypher::rewrite_text_score(&mut parsed, opts.params).map_err(|message| {
         KgError::CypherExecution {
@@ -972,9 +973,12 @@ fn embed_into_params(
         .embedder
         .as_ref()
         .ok_or_else(|| KgError::CypherExecution {
-            message: "text_score() requires a registered embedding model. \
+            message: "Embedding query text for text_score() or \
+                      CALL db.edge_embeddings.query({text: ...}) requires a registered \
+                      embedding model. \
                       Call g.set_embedder(model) first (Python) or pass an embedder \
-                      via ExecuteOptions::embedder (downstream Rust consumers)."
+                      via ExecuteOptions::embedder (downstream Rust consumers), \
+                      or pass the query as a vector."
                 .to_string(),
             position: None,
         })?;

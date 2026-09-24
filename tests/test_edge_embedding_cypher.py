@@ -621,3 +621,106 @@ def test_every_edge_embedding_procedure_refuses_an_unknown_parameter(procedure: 
     fields.append("bogus: 1")
     with pytest.raises(Exception, match="unknown parameter 'bogus'"):
         graph.cypher(f"CALL db.edge_embeddings.{procedure}({{{', '.join(fields)}}})")
+
+
+# ── db.edge_embeddings.query({text: …}) ─────────────────────────────────────
+# Preparation rewrites `text` into `vector: $__ts_N` and embeds it once with the
+# registered embedder, exactly as it embeds a `text_score` query. These are the
+# golden checks for the text spelling; the differential corpus registers no
+# embedder, so it can exercise only the vector spelling.
+
+_QUERY_ROWS = (
+    "YIELD relationship, score, search_method "
+    "RETURN relationship.text AS text, score, search_method ORDER BY score DESC, text"
+)
+
+
+def _embedded_graph() -> tuple[KnowledgeGraph, _Embedder]:
+    graph = _graph()
+    model = _Embedder("model/A")
+    graph.set_embedder(model)
+    assert _embed(graph)["embedded"] == 2
+    model.calls.clear()
+    return graph, model
+
+
+@pytest.mark.parametrize("indexed", [False, True], ids=["exact", "after_build_index"])
+def test_query_text_equals_the_vector_query_with_the_embedders_vector(indexed: bool) -> None:
+    graph, model = _embedded_graph()
+    if indexed:
+        graph.cypher("CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'})")
+    exact = "true" if not indexed else "false"
+    by_text = graph.cypher(
+        f"CALL db.edge_embeddings.query({{type:'CLAIMS', text_property:'text', text:$q, exact:{exact}}}) "
+        + _QUERY_ROWS,
+        params={"q": "alpha"},
+    ).to_list()
+    assert model.calls == [["alpha"]], "the query text is embedded exactly once"
+    by_vector = graph.cypher(
+        f"CALL db.edge_embeddings.query({{type:'CLAIMS', text_property:'text', vector:$v, exact:{exact}}}) "
+        + _QUERY_ROWS,
+        params={"v": model._vector("alpha")},
+    ).to_list()
+    assert by_text == by_vector
+    assert [row["text"] for row in by_text] == ["alpha", "beta"]
+    assert by_text[0]["score"] == pytest.approx(1.0)
+    assert {row["search_method"] for row in by_text} == {"hnsw" if indexed else "exact"}
+
+
+def test_query_text_literal_through_a_session_write_is_embedded_once() -> None:
+    graph, model = _embedded_graph()
+    session = graph.session()
+    rows = session.execute(
+        "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', text:'beta', top_k:1}) "
+        "YIELD relationship SET relationship.hit = true RETURN relationship.text AS text"
+    ).to_list()
+    assert rows == [{"text": "beta"}]
+    assert model.calls == [["beta"]]
+    assert session.execute("MATCH ()-[r:CLAIMS {hit: true}]->() RETURN r.text AS text").to_list() == [{"text": "beta"}]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ("text:'alpha', vector:[1.0, 0.0]", "'text' and 'vector' are mutually exclusive"),
+        ("text:[1.0, 0.0]", "'text' must be a string literal or a \\$parameter"),
+        ("text:$q", "parameter \\$q for 'text' must be a string"),
+    ],
+)
+def test_query_text_refuses_a_second_query_or_a_non_text_value(options: str, message: str) -> None:
+    graph, model = _embedded_graph()
+    with pytest.raises(Exception, match=message):
+        graph.cypher(
+            f"CALL db.edge_embeddings.query({{type:'CLAIMS', text_property:'text', {options}}}) "
+            "YIELD relationship RETURN relationship",
+            params={"q": [1.0, 0.0]},
+        )
+    assert model.calls == []
+
+
+def test_query_text_from_a_row_is_refused() -> None:
+    graph, model = _embedded_graph()
+    with pytest.raises(Exception, match="cannot depend on a row"):
+        graph.cypher(
+            "WITH 'alpha' AS t "
+            "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', text:t}) "
+            "YIELD relationship RETURN relationship"
+        )
+    assert model.calls == []
+
+
+def test_query_text_without_an_embedder_names_the_procedure() -> None:
+    graph = _graph()
+    _vectors_on_alpha_and_beta(graph)
+    message = r"db\.edge_embeddings\.query\(\{text: \.\.\.\}\) requires a registered embedding model"
+    with pytest.raises(Exception, match=message):
+        graph.cypher(
+            "CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', text:'alpha'}) "
+            "YIELD relationship RETURN relationship"
+        )
+
+
+def test_query_unknown_parameter_refusal_lists_text() -> None:
+    graph = _graph()
+    with pytest.raises(Exception, match=r"Accepted: type, text_property, vector, text, top_k"):
+        graph.cypher("CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0, 0.0], bogus:1})")
