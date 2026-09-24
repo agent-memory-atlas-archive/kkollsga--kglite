@@ -1419,7 +1419,8 @@ impl DirGraph {
         }
     }
 
-    /// Upsert connection type metadata — merges property types and accumulates type pairs.
+    /// Upsert connection type metadata — merges property types (see
+    /// [`ConnectionTypeInfo::record_property_type`]) and accumulates type pairs.
     pub fn upsert_connection_type_metadata(
         &mut self,
         conn_type: &str,
@@ -1433,9 +1434,7 @@ impl DirGraph {
         if let Some(existing) = self.connection_type_metadata.get(conn_type) {
             if existing.source_types.contains(source_type)
                 && existing.target_types.contains(target_type)
-                && prop_types
-                    .iter()
-                    .all(|(k, v)| existing.property_types.get(k) == Some(v))
+                && prop_types.iter().all(|(k, v)| existing.records(k, v))
             {
                 return;
             }
@@ -1451,7 +1450,7 @@ impl DirGraph {
         entry.source_types.insert(source_type.to_string());
         entry.target_types.insert(target_type.to_string());
         for (k, v) in prop_types {
-            entry.property_types.insert(k, v);
+            entry.record_property_type(k, v);
         }
     }
 

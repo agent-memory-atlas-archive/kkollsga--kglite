@@ -563,8 +563,9 @@ print(vec.refresh_vector_index("Article", "body"))
 ```
 
 What still drops a vector index is a change to the slot layout it addresses:
-deleting an embedded node, and a `vacuum()` that compacts after a delete.
-Rebuild after those — `refresh_vector_index()` refuses while no index is
+deleting an embedded node, and a `vacuum()` that compacts, which drops every
+vector index in the graph — node and relationship, on types that saw no delete
+too. Rebuild after those — `refresh_vector_index()` refuses while no index is
 built. A delete that a failed statement or a rolled-back transaction undoes
 leaves the index in place.
 

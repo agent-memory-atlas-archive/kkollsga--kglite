@@ -3077,8 +3077,16 @@ class KnowledgeGraph:
         With StableDiGraph, deletions leave holes in the internal storage.
         Over time, this wastes memory and degrades iteration performance.
         ``vacuum()`` rebuilds the graph with contiguous indices, then rebuilds
-        all indexes, and rebuilds the property columns to drop the rows that
-        deleted nodes left behind.
+        the property indexes, and rebuilds the property columns to drop the rows
+        that deleted nodes left behind.
+
+        A vacuum that compacts (``tombstones_removed > 0``, whether called here
+        or run by auto-vacuum after a large delete) **drops** every HNSW vector
+        index and BM25 text index in the graph — node and relationship, on
+        types that saw no delete too — because each addresses the old slots.
+        Rebuild them with :meth:`build_vector_index`,
+        ``CALL db.edge_embeddings.build_index(...)``, :meth:`build_text_index`
+        and ``CALL db.edge_text_index.build(...)``.
 
         The current selection is **carried through** the compaction: selected
         nodes that survived keep their place at their new indices, and nodes
@@ -8095,8 +8103,8 @@ class KnowledgeGraph:
 
         **Format.** A file with only node stores is written as ``.kgle``
         version 3, byte-for-byte as before, so every reader since 0.14 reads it.
-        A file carrying relationship stores is version 4; kglite 0.17.12 and
-        older refuse it by version ("Embedding file version 4 is newer than
+        A file carrying relationship stores is version 4; released versions up
+        to 0.17.12 refuse it by version ("Embedding file version 4 is newer than
         supported version 3. Please upgrade kglite.") rather than misread it.
 
         Args:
@@ -8286,14 +8294,17 @@ class KnowledgeGraph:
 
             import numpy as np
             rows = graph.relationship_embeddings("SUPPORTS", "evidence")
-            index = {node_id: i for i, node_id in enumerate(sorted(
-                {r["source"] for r in rows} | {r["target"] for r in rows}))}
-            edge_index = np.array([[index[r["source"]] for r in rows],
-                                   [index[r["target"]] for r in rows]])
+            src = [(r["source_type"], r["source"]) for r in rows]
+            dst = [(r["target_type"], r["target"]) for r in rows]
+            index = {node: i for i, node in enumerate(dict.fromkeys(src + dst))}
+            edge_index = np.array([[index[n] for n in src],
+                                   [index[n] for n in dst]])
             edge_attr = np.array([r["vector"] for r in rows], dtype=np.float32)
 
-        Ids are unique per node type only; key ``index`` by
-        ``(r["source_type"], r["source"])`` when the endpoints span types.
+        Ids are unique per node type only, so ``index`` keys on
+        ``(type, id)``; it numbers nodes in row order rather than sorting them,
+        because one graph can hold integer and string ids and Python does not
+        order the two.
 
         Args:
             relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
@@ -8495,7 +8506,10 @@ class KnowledgeGraph:
 
         What *does* drop the index is a change to the slot layout the index
         addresses: deleting an embedded node (the delete prunes its vector) and
-        a ``vacuum()`` that compacts after a delete. Rebuild after those —
+        a ``vacuum()`` that compacts (it reports ``tombstones_removed > 0``,
+        explicit or automatic), which drops **every** vector index in the graph
+        — node and relationship, on types that saw no delete too. Rebuild
+        after those —
         :meth:`refresh_vector_index` refuses while no index is built. A delete
         that a failed statement or a rolled-back transaction undoes leaves the
         index in place.
@@ -8570,8 +8584,9 @@ class KnowledgeGraph:
         ``auto_refresh_limit``; call this to pay the cost at a moment of your
         choosing, or to bring a larger delta back in one incremental step
         instead of rebuilding the whole index. Catch-up never builds an index:
-        deleting an embedded node, or a ``vacuum()`` that compacts, drops it,
-        and only :meth:`build_vector_index` brings it back.
+        deleting an embedded node drops it, a ``vacuum()`` that compacts drops
+        every vector index in the graph, and only :meth:`build_vector_index`
+        brings one back.
 
         Returns:
             int: how many vectors were folded in — ``0`` when the index is

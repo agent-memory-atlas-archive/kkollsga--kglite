@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 import re
+import textwrap
 
 import pytest
 
@@ -44,7 +45,7 @@ def _graph(mode: str, tmp_path: Path) -> KnowledgeGraph:
     for k, source, target, uid, angle in EDGES:
         graph.cypher(
             "MATCH (s:Claimant {id: $s}), (t:Claim {id: $t}) "
-            "CREATE (s)-[r:SUPPORTS {k: $k, uid: $uid}]->(t) "
+            "CREATE (s)-[r:SUPPORTS {k: $k, uid: $uid, evidence: 'e'}]->(t) "
             "WITH r CALL db.edge_embeddings.set({type: 'SUPPORTS', text_property: 'evidence', "
             "entries: [{relationship: r, vector: $v}]}) YIELD stored RETURN stored",
             params={"s": source, "t": target, "k": k, "uid": uid, "v": [math.cos(angle), math.sin(angle)]},
@@ -222,3 +223,39 @@ def test_a_missing_store_raises_in_a_fused_where(mode: str, query: str, message:
     graph = _graph(mode, tmp_path)
     with pytest.raises(kglite.CypherExecutionError, match=re.escape(message)):
         graph.cypher(query)
+
+
+def _documented_edge_list_snippets() -> dict[str, str]:
+    """The PyG edge-list example from the stub docstring and the guide, verbatim."""
+    root = Path(__file__).parents[1]
+    stub = (root / "kglite" / "__init__.pyi").read_text(encoding="utf-8")
+    body = stub[stub.index("def relationship_embeddings(") :]
+    block = body[body.index("edge features::") :].split("\n\n")[1]
+    guide = (root / "docs" / "python" / "guides" / "semantic-search.md").read_text(encoding="utf-8")
+    fenced = next(
+        chunk.split("```", 1)[0]
+        for chunk in guide.split("```python\n")[1:]
+        if "relationship_embeddings(" in chunk.split("```", 1)[0]
+    )
+    return {"stub": textwrap.dedent(block), "guide": fenced}
+
+
+@pytest.mark.parametrize("source", ["stub", "guide"])
+def test_the_documented_edge_list_example_runs_on_mixed_id_types(source: str, tmp_path: Path) -> None:
+    """Integer claimant ids beside string claim ids: sorting the raw ids raised
+    `TypeError: '<' not supported between instances of 'str' and 'int'`."""
+    pytest.importorskip("numpy")
+    graph = KnowledgeGraph()
+    graph.cypher("CREATE (:Claimant {id: 1}), (:Claimant {id: 2}), (:Claim {id: 'c10'}), (:Claim {id: 'c20'})")
+    for k, (claimant, claim) in enumerate([(1, "c10"), (1, "c20"), (2, "c10")], start=1):
+        graph.cypher(
+            "MATCH (s:Claimant {id: $s}), (t:Claim {id: $t}) CREATE (s)-[r:SUPPORTS {uid: $uid, evidence: 'e'}]->(t) "
+            "WITH r CALL db.edge_embeddings.set({type: 'SUPPORTS', text_property: 'evidence', "
+            "entries: [{relationship: r, vector: $v}]}) YIELD stored RETURN stored",
+            params={"s": claimant, "t": claim, "uid": f"u{k}", "v": [1.0, float(k)]},
+        )
+    namespace: dict = {"graph": graph}
+    exec(_documented_edge_list_snippets()[source], namespace)
+    assert namespace["edge_index"].shape == (2, 3)
+    assert namespace["edge_attr"].shape == (3, 2)
+    assert len(namespace["index"]) == 4

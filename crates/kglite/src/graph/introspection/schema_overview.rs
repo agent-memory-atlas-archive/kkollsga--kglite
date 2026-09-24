@@ -979,6 +979,9 @@ struct PropAccum {
     value_set: HashSet<Value>,
     value_cap: usize,
     first_type: Option<&'static str>,
+    /// A value of a type other than `first_type` was seen, so the property has
+    /// no single type whatever the metadata's last write recorded.
+    mixed: bool,
 }
 
 impl PropAccum {
@@ -988,6 +991,7 @@ impl PropAccum {
             value_set: HashSet::new(),
             value_cap: cap,
             first_type: None,
+            mixed: false,
         }
     }
 
@@ -997,8 +1001,9 @@ impl PropAccum {
             if self.value_set.len() < self.value_cap {
                 self.value_set.insert(v.clone());
             }
-            if self.first_type.is_none() {
-                self.first_type = Some(value_type_name(v));
+            match self.first_type {
+                None => self.first_type = Some(value_type_name(v)),
+                Some(first) => self.mixed |= first != value_type_name(v),
             }
         }
     }
@@ -1010,7 +1015,8 @@ impl PropAccum {
     /// the property's type, a row's only remaining fact is that it is non-null
     /// — which every column shape answers from its null byte, without building
     /// a `Value`. On a high-cardinality string column that is one heap
-    /// allocation per row versus none.
+    /// allocation per row versus none. Only dense columns take the shortcut, and
+    /// a dense column holds one type, which `add_column` checks once up front.
     #[inline]
     fn needs_value(&self) -> bool {
         self.value_set.len() < self.value_cap || self.first_type.is_none()
@@ -1059,6 +1065,14 @@ impl PropAccum {
                 }
             }
             _ => {
+                // A dense column holds one type, so one value settles whether
+                // it disagrees with what this accumulator already saw — the
+                // built-in `id`/`title` share it with a same-named property.
+                if let Some(first) = self.first_type {
+                    if let Some(value) = rows.iter().find_map(|&row| col.get(row)) {
+                        self.mixed |= first != value_type_name(&value);
+                    }
+                }
                 for &row in rows {
                     if self.needs_value() {
                         if let Some(value) = col.get(row) {
@@ -1354,10 +1368,14 @@ pub fn compute_property_stats(
 
     for prop_name in &ordered {
         if let Some(pa) = accum.remove(prop_name) {
-            let type_string = metadata
-                .and_then(|meta| meta.get(prop_name))
-                .cloned()
-                .unwrap_or_else(|| pa.first_type.unwrap_or("unknown").to_string());
+            let type_string = if pa.mixed {
+                "mixed".to_string()
+            } else {
+                metadata
+                    .and_then(|meta| meta.get(prop_name))
+                    .cloned()
+                    .unwrap_or_else(|| pa.first_type.unwrap_or("unknown").to_string())
+            };
 
             let unique = pa.value_set.len();
             // Hitting the cap means `unique` is a lower bound, which — like a

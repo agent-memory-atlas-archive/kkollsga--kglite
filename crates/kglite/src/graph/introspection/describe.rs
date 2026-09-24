@@ -530,9 +530,13 @@ fn accumulate_connection_topic(
                         value_set: HashSet::new(),
                     });
                     entry.non_null += 1;
-                    if entry.type_name.is_none() {
-                        entry.type_name = Some(value_type_name(value));
-                    }
+                    // Two value types on one property are `mixed`, never
+                    // whichever the scan happened to meet first.
+                    let observed = value_type_name(value);
+                    entry.type_name = match entry.type_name {
+                        Some(first) if first != observed => Some("mixed"),
+                        _ => Some(observed),
+                    };
                     if entry.value_set.len() < value_cap {
                         entry.value_set.insert(value.clone());
                     }

@@ -247,9 +247,11 @@ before upgrading.
   `kglite::api::embeddings::refresh_vector_index` now returns
   `Result<usize, String>` instead of `Option<usize>`. The semantic-search
   guide, `CYPHER.md` and `describe()` now state which mutations drop a
-  relationship index — deleting an embedded relationship or either endpoint,
-  or a `vacuum()` that compacts — and correct the node claim that a
-  rolled-back delete drops it (it leaves the index in place).
+  relationship index — deleting an embedded relationship or either endpoint
+  drops that store's index, and a `vacuum()` that compacts drops every vector
+  index in the graph, node and relationship, including those on types that saw
+  no delete — and correct the node claim that a rolled-back delete drops it
+  (it leaves the index in place).
 - **`r.type`, `r.id` and the endpoint keys read a relationship's stored
   property first, in every clause.** They now follow the rule `n.type`
   follows on a node: a stored property wins, and a relationship without one
@@ -295,6 +297,11 @@ before upgrading.
   same fast paths apply to Python values the other methods convert.
 
 ### Fixed
+
+- `describe()` no longer types a property from its last write: a string
+  property that one later `CREATE`/`SET` gives an integer now reports `mixed`
+  (node and relationship alike, and after save/load) instead of `Int64`. A
+  full-column rewrite still reports its one type.
 
 - A multi-node `MATCH` now starts from the end pinned by an `id` (or
   indexed) equality or an already-bound variable, whichever end it is written

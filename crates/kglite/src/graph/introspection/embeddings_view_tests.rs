@@ -194,6 +194,52 @@ fn the_cypher_reference_names_the_relationship_embedding_procedures() {
     assert!(group.contains("db.edge_embeddings.query"), "{group}");
 }
 
+/// The three contracts a blank-slate user test found stated too narrowly or
+/// not at all: unembedded rows lead a DESC top-k (openCypher sorts null
+/// first) unless filtered, a compacting `vacuum()` drops every vector index,
+/// and `delta` is the vectors the index does not hold — all of them when
+/// there is no index.
+#[test]
+fn the_semantic_topics_state_null_ordering_vacuum_and_delta() {
+    let graph = DirGraph::new();
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    let topics = CypherDetail::Topics(vec!["functions".to_string()]);
+    request.cypher = &topics;
+    let functions = compute_description(&graph, &request).unwrap();
+    let node = line_with(&functions, "<group name=\"semantic\"");
+    assert!(
+        node.contains("WHERE vector_score(n, 'col_emb', $v) IS NOT NULL"),
+        "{node}"
+    );
+    let relationship = line_with(&functions, "<group name=\"relationship_semantic\"");
+    assert!(
+        relationship.contains("WHERE vector_score(r, 'col_emb', $v) IS NOT NULL"),
+        "{relationship}"
+    );
+    assert!(relationship.contains("sorts null first"), "{relationship}");
+
+    let topics = CypherDetail::Topics(vec!["relationship_semantic".to_string()]);
+    request.cypher = &topics;
+    let topic = compute_description(&graph, &request).unwrap();
+    let caveat = line_with(&topic, "<caveat>");
+    assert!(
+        caveat.contains("a vacuum() that compacts drops every vector index"),
+        "{caveat}"
+    );
+
+    request.cypher = &CypherDetail::Overview;
+    let overview = compute_description(&graph, &request).unwrap();
+    let proc_line = line_with(&overview, "<proc name=\"db.edge_embeddings.*\"");
+    assert!(
+        proc_line.contains("a vacuum() that compacts drops every vector index"),
+        "{proc_line}"
+    );
+    assert!(
+        proc_line.contains("delta equals count when no index is built"),
+        "{proc_line}"
+    );
+}
+
 // ── relationship lexical lane ─────────────────────────────────────────
 
 /// Byte-identical to the lines every node-only graph has always carried.

@@ -932,6 +932,48 @@ pub struct ConnectionTypeInfo {
     pub property_types: HashMap<String, String>,
 }
 
+impl ConnectionTypeInfo {
+    /// Whether recording `observed` for `property` would change nothing.
+    pub fn records(&self, property: &str, observed: &str) -> bool {
+        self.property_types
+            .get(property)
+            .is_some_and(|prior| merged_property_type(prior, observed).is_none())
+    }
+
+    /// Record one write's observed type for `property`.
+    ///
+    /// The recorded type covers every write, not the last one: a type that
+    /// disagrees with a concrete recorded type records `"mixed"` (the spelling
+    /// `update_node_properties` and WAL replay use), so one outlier `CREATE`
+    /// after a string load does not re-type the whole column in `describe()`.
+    /// `"Unknown"`/`"Null"` carry no evidence and never displace a concrete type.
+    pub fn record_property_type(&mut self, property: String, observed: String) {
+        match self.property_types.get(&property) {
+            Some(prior) => {
+                if let Some(merged) = merged_property_type(prior, &observed) {
+                    self.property_types.insert(property, merged);
+                }
+            }
+            None => {
+                self.property_types.insert(property, observed);
+            }
+        }
+    }
+}
+
+/// What a recorded property type becomes when a write observes `observed` —
+/// `None` when `prior` already says it.
+fn merged_property_type(prior: &str, observed: &str) -> Option<String> {
+    let no_evidence = |t: &str| t == "Unknown" || t == "Null";
+    if no_evidence(observed) || prior.eq_ignore_ascii_case(observed) || prior == "mixed" {
+        None
+    } else if no_evidence(prior) {
+        Some(observed.to_string())
+    } else {
+        Some("mixed".to_string())
+    }
+}
+
 /// Custom serializer emits sorted keys for the two HashSet<String> and the
 /// HashMap<String, String> so that `.kgl` saves stay byte-deterministic
 /// regardless of per-run HashMap seed. The `test_phase4_parity` golden-hash test

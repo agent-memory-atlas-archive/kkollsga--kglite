@@ -804,3 +804,101 @@ mod sample_attribute_collision_tests {
         assert!(line.contains("city=\"Oslo\""), "got: {line}");
     }
 }
+
+#[cfg(test)]
+mod mixed_property_type_tests {
+    //! A property written with two value types describes as `mixed`, not as
+    //! the type of its last write (a blank-slate user test saw 7,000 string
+    //! `context` values render `context:Int64` after one `CREATE`).
+    use super::*;
+    use crate::graph::algorithms::Interrupt;
+    use crate::graph::languages::cypher::executor::write::execute_mutable;
+    use crate::graph::languages::cypher::parser::parse_cypher;
+    use std::collections::HashMap;
+
+    fn run(graph: &mut DirGraph, query: &str) {
+        let parsed = parse_cypher(query).unwrap();
+        execute_mutable(graph, &parsed, HashMap::new(), Interrupt::default()).unwrap();
+    }
+
+    fn loaded() -> DirGraph {
+        let mut graph = DirGraph::new();
+        run(
+            &mut graph,
+            "CREATE (a:D {id: 1, ctx: 's'}), (b:D {id: 2, ctx: 's'}), \
+             (a)-[:R {context: 'x'}]->(b), (b)-[:R {context: 'y'}]->(a)",
+        );
+        graph
+    }
+
+    fn describe(graph: &DirGraph, request: DescribeRequest) -> String {
+        compute_description(graph, &request).unwrap()
+    }
+
+    fn overview(graph: &DirGraph) -> String {
+        describe(graph, DescribeRequest::new(DescribeSurface::Python))
+    }
+
+    fn connection_detail(graph: &DirGraph) -> String {
+        describe(
+            graph,
+            DescribeRequest {
+                connections: &ConnectionDetail::Topics(vec!["R".to_string()]),
+                ..DescribeRequest::new(DescribeSurface::Python)
+            },
+        )
+    }
+
+    fn node_detail(graph: &DirGraph) -> String {
+        let types = vec!["D".to_string()];
+        describe(
+            graph,
+            DescribeRequest {
+                types: Some(&types),
+                ..DescribeRequest::new(DescribeSurface::Python)
+            },
+        )
+    }
+
+    #[test]
+    fn one_outlier_relationship_types_the_connection_property_mixed() {
+        let mut graph = loaded();
+        assert!(overview(&graph).contains("properties=\"context:String\""));
+        run(
+            &mut graph,
+            "MATCH (a:D {id: 1}), (b:D {id: 2}) CREATE (a)-[:R {context: 42}]->(b)",
+        );
+        let described = overview(&graph);
+        assert!(
+            described.contains("properties=\"context:mixed\""),
+            "got: {described}"
+        );
+        let detail = connection_detail(&graph);
+        assert!(
+            detail.contains("<prop name=\"context\" type=\"mixed\""),
+            "got: {detail}"
+        );
+    }
+
+    #[test]
+    fn one_outlier_node_types_the_node_property_mixed() {
+        let mut graph = loaded();
+        run(&mut graph, "MATCH (n:D {id: 1}) SET n.ctx = 42");
+        let detail = node_detail(&graph);
+        assert!(
+            detail.contains("<prop name=\"ctx\" type=\"mixed\""),
+            "got: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_column_rewritten_to_one_type_keeps_that_type() {
+        let mut graph = loaded();
+        run(&mut graph, "MATCH (n:D) SET n.ctx = 42");
+        let detail = node_detail(&graph);
+        assert!(
+            detail.contains("<prop name=\"ctx\" type=\"Int64\""),
+            "got: {detail}"
+        );
+    }
+}

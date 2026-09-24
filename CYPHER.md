@@ -671,11 +671,18 @@ same way.
 Every `db.edge_embeddings.*` procedure refuses a parameter it does not read,
 naming the key and listing the ones it accepts — including the per-entry map of
 `set`, whose keys are `relationship` and `vector`. A misspelled option is an
-error, never a silently ignored one.
+error, never a silently ignored one. `set` and `embed` refuse a
+`text_property` that no relationship of `type` carries (unless its store
+already exists), naming the properties the type does carry — the refusal the
+node `set_embeddings()` / `embed_texts()` give an unknown column — so a
+misspelling never creates an empty store. Store manual vectors under a
+property the relationships have.
 
 `db.edge_embeddings.list({type?, text_property?})` reports `entity`, `type`,
 `text_property`, canonical `store`, `dimension`, `count`, `metric`, `model`,
-`index_state`, pending `delta`, and `unembedded` relationship count.
+`index_state`, pending `delta`, and `unembedded` relationship count. `delta`
+counts the stored vectors the index does not hold, so with no index built it
+equals `count`.
 In an ordinary `MATCH`, `vector_score(r, 'evidence_emb', $vector)` names the
 canonical store, while `text_score(r, 'evidence', $text)` names the source
 property and embeds the query text. `embedding_norm(r, 'evidence_emb')` reads
@@ -709,7 +716,10 @@ or the same with `text_score` — is served from the store, as it is for nodes:
 
 An HNSW answer is approximate; pass `{exact:true}` as the final argument to
 force the exact route. When scores tie at the cut, the ordinary pipeline
-answers, so the order is the one the unfused query gives.
+answers, so the order is the one the unfused query gives. A relationship with
+no vector scores `null` and so comes **first** under `DESC`; add
+`WHERE vector_score(r, …) IS NOT NULL`, which keeps the store route (see
+**Unembedded rows come first under `DESC`** below).
 `diagnostics.retrieval` reports the route, with store
 `relationship:TYPE.property_emb` — a comma-separated list sorted by
 relationship type when several stores were merged — and `disabled_passes=
@@ -743,8 +753,11 @@ yielding `refreshed: 0`. Deletes are why that matters. `SET` and `CREATE`
 leave an index `online`, but deleting an embedded relationship — `DELETE r`,
 or `DETACH DELETE` of either endpoint — drops it to `index_state: 'none'`
 until `build_index` runs again, exactly as deleting an embedded node drops the
-node index; so does a `vacuum()` that compacts after a delete (a no-op on
-disk). Deleting a relationship the store holds no vector for, and a delete
+node index. A `vacuum()` that compacts — its result reports
+`tombstones_removed > 0`, whether you called it or auto-vacuum ran it after a
+large delete — drops **every** vector index in the graph, node and
+relationship, including those on types that saw no delete (a no-op on disk).
+Deleting a relationship the store holds no vector for, and a delete
 that a failed statement or a rolled-back transaction undoes, leave it in
 place. Until the rebuild, `query` and the fused top-k answer by exact scan.
 
@@ -854,9 +867,32 @@ properties, use filtered `MATCH` with the exact scalar functions instead.
 > mixed/duplicate or unembedded bindings, incompatible metrics, unavailable
 > indexes and filtered candidate underfill use exact execution. Filters alone
 > do not guarantee an exact scan: request `{exact: true}` when that matters.
-> Missing per-node embeddings score null and retain ordinary ORDER BY null
-> placement. Invalid dimensions, metrics or options raise in filters as well
-> as projected scores.
+> Invalid dimensions, metrics or options raise in filters as well as projected
+> scores.
+>
+> **Unembedded rows come first under `DESC`.** `vector_score` and `text_score`
+> are `null` for a node or relationship the store holds no vector for, and
+> openCypher sorts `null` above every value — so `ORDER BY s DESC LIMIT k`
+> fills its first rows with unembedded entities, and because the store does
+> not cover every matched row the planner answers by row scan
+> (`fallback_reason: 'row_coverage'`). Drop them in the `MATCH`'s own `WHERE`:
+>
+> ```cypher
+> MATCH (n:Doc) WHERE vector_score(n, 'body_emb', $q) IS NOT NULL
+> RETURN n.title, vector_score(n, 'body_emb', $q) AS s ORDER BY s DESC LIMIT 10
+>
+> MATCH (a)-[r:SUPPORTS]->(b) WHERE vector_score(r, 'evidence_emb', $q) IS NOT NULL
+> RETURN a.title, b.title, vector_score(r, 'evidence_emb', $q) AS s ORDER BY s DESC LIMIT 10
+> ```
+>
+> The filter keeps the store route — HNSW once an index is online, with
+> `diagnostics.retrieval` naming the store — for nodes and relationships alike
+> (the `text_score` form too). The same test written after the projection,
+> `WITH … AS s WHERE s IS NOT NULL`, leaves the fused route and scores every row
+> exactly; `ORDER BY s DESC NULLS LAST` also puts them last, by exact execution
+> (`ordering_requires_exact`). `vector_search`, `search_text` and
+> `db.edge_embeddings.query` rank the stored vectors only, so they never return
+> an unembedded entity.
 
 ### Lexical search — `text_bm25`
 

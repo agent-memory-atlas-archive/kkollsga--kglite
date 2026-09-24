@@ -558,8 +558,8 @@ relationship the target graph lacks counts as skipped.
 graph-to-graph.
 
 A file with only node stores is `.kgle` version 3, readable by every release
-since 0.14. A file carrying relationship stores is version 4, and kglite
-0.17.12 and older refuse it by version ("Embedding file version 4 is newer
+since 0.14. A file carrying relationship stores is version 4, and released
+versions up to 0.17.12 refuse it by version ("Embedding file version 4 is newer
 than supported version 3. Please upgrade kglite.").
 
 ## Schema and Indexes
@@ -711,8 +711,10 @@ if info['fragmentation_ratio'] > 0.3 or info['edge_tombstones'] > 0:
           f"{result['edge_tombstones_removed']} edge slots")
 ```
 
-`vacuum()` rebuilds the graph with contiguous indices and rebuilds all indexes.
-The current selection is **carried through** it: surviving nodes keep their
+`vacuum()` rebuilds the graph with contiguous indices and rebuilds the property
+indexes. A vacuum that compacts (`tombstones_removed > 0`) drops every HNSW
+vector index and BM25 text index instead, node and relationship alike, because
+each addresses the old slots — rebuild those afterwards. The current selection is **carried through** it: surviving nodes keep their
 place at their new indices, deleted ones drop out, and after a traversal a
 group whose parent was deleted is dropped whole.
 

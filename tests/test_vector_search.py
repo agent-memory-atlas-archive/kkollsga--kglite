@@ -2640,3 +2640,25 @@ class TestDeletionPrunesEmbeddings:
 
         assert graph.select("Doc").vector_search("summary", query, top_k=5) == before
         assert graph.list_embeddings()[0]["count"] == 3
+
+
+def test_set_embeddings_takes_numpy_rows_as_their_values():
+    """numpy rows decode through tobytes(); every admitted dtype must store the
+    value a Python-float extraction would, and anything else keeps that route."""
+    np = pytest.importorskip("numpy")
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(pd.DataFrame({"id": [1, 2, 3, 4, 5], "s": list("abcde")}), "N", "id", "s")
+    matrix = np.array([[0.5, -1.25, 3.0], [1e-3, 2.0, -0.0]])
+    rows = {
+        1: matrix[0].astype(np.float32),
+        2: matrix[1].astype(np.float16),
+        3: np.array([-7, 0, 9], dtype=np.int64),
+        4: np.array([1.5, 2.5, 3.5], dtype=">f8"),  # non-native order: the extraction route
+        5: [0.25, 0.5, 0.75],
+    }
+    graph.set_embeddings("N", "s", rows)
+    for node_id, row in rows.items():
+        expected = [float(np.float32(x)) for x in np.asarray(row, dtype=np.float64)]
+        assert graph.embedding("N", "s", node_id) == expected, node_id
+    with pytest.raises(TypeError):
+        graph.set_embeddings("N", "s", {1: matrix})

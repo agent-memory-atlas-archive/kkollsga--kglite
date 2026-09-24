@@ -262,9 +262,13 @@ automatically. Key points:
   scan — correct, and slower — until you rebuild or call
   `refresh_vector_index(...)`. What *does* drop the index is a change to the
   slot layout it addresses: deleting an embedded node (the delete prunes its
-  vector), and a `vacuum()` that compacts after a delete (on disk `vacuum()` is
-  a no-op). Rebuild after those: `refresh_vector_index(...)` folds in a delta
-  but never builds, so it refuses while no index is built, naming the
+  vector), and a `vacuum()` that compacts — its result reports
+  `tombstones_removed > 0`, whether you called it or auto-vacuum ran it after a
+  large delete — which drops **every** vector index in the graph, node and
+  relationship, including those on types that saw no delete (on disk
+  `vacuum()` is a no-op). Rebuild after those: `refresh_vector_index(...)`
+  folds in a delta but never builds, so it refuses while no index is built,
+  naming the
   `build_vector_index(...)` call. A delete that a failed statement or a
   rolled-back transaction undoes leaves the index in place.
   `SHOW INDEXES` reports `stale` / `delta`, plus `unembedded` — the nodes with
@@ -419,6 +423,17 @@ graph.cypher("MATCH (n:Article) RETURN text_score(n, 'summary', $q) AS s",
              params={'q': query_vec})    # names the column
 ```
 
+**Filter out unembedded rows before a `DESC` top-k.** A node or relationship
+the store holds no vector for scores `null`, and openCypher sorts `null` above
+every value, so `ORDER BY score DESC LIMIT k` returns the unembedded entities
+*first* (and answers by row scan, `fallback_reason: 'row_coverage'`). Add
+`WHERE vector_score(n, 'summary_emb', $q) IS NOT NULL` (or the `text_score`
+form, or `r` for a relationship) to the `MATCH`: it drops those rows and keeps
+the store route, HNSW included. Written after the projection as
+`WITH … WHERE score IS NOT NULL` it leaves the fused route and scores every row.
+`vector_search()`, `search_text()` and `db.edge_embeddings.query` rank stored
+vectors only and never return an unembedded entity.
+
 `vector_score` is the Cypher counterpart of the fluent `vector_search()`
 method. Note the surfaces differ: `text_score()`/`vector_score()` are **Cypher
 functions** (used in `RETURN`/`WHERE`); `search_text()`/`vector_search()` are
@@ -452,6 +467,7 @@ graph.cypher("""
 rows = graph.cypher("""
     MATCH (who:Claimant)-[r:SUPPORTS]->(c:Claim)
     WHERE c.status = 'open'
+      AND text_score(r, 'evidence', $question) IS NOT NULL
     RETURN who.name, c.title,
            text_score(r, 'evidence', $question) AS score
     ORDER BY score DESC LIMIT 5
@@ -520,8 +536,10 @@ nodes.
 Deletes drop the relationship index, as they drop the node index. `SET` and
 `CREATE` leave it `online`; deleting an embedded relationship — `DELETE r`, or
 `DETACH DELETE` of either endpoint, embedded or not — takes `index_state` to
-`none` until `build_index` runs again, and so does a `vacuum()` that compacts
-after a delete (on disk `vacuum()` is a no-op). Deleting a relationship the
+`none` until `build_index` runs again. A `vacuum()` that compacts drops every
+vector index in the graph — node and relationship, including those on types
+that saw no delete — as described for node indexes above (on disk `vacuum()` is
+a no-op). Deleting a relationship the
 store holds no vector for leaves the index alone, and so does a delete that a
 failed statement or a rolled-back transaction undoes. Until the rebuild,
 queries answer by the exact scan. `refresh_index` folds pending changes into an
@@ -551,12 +569,16 @@ plus edge features, e.g. for PyTorch Geometric:
 import numpy as np
 
 rows = graph.relationship_embeddings("SUPPORTS", "evidence", relationship_keys={"SUPPORTS": "uid"})
-nodes = sorted({(r["source_type"], r["source"]) for r in rows} | {(r["target_type"], r["target"]) for r in rows})
-index = {node: i for i, node in enumerate(nodes)}
-edge_index = np.array([[index[(r["source_type"], r["source"])] for r in rows],
-                       [index[(r["target_type"], r["target"])] for r in rows]])
+src = [(r["source_type"], r["source"]) for r in rows]
+dst = [(r["target_type"], r["target"]) for r in rows]
+index = {node: i for i, node in enumerate(dict.fromkeys(src + dst))}  # row order
+edge_index = np.array([[index[n] for n in src], [index[n] for n in dst]])
 edge_attr = np.array([r["vector"] for r in rows], dtype=np.float32)
 ```
+
+Nodes are keyed on `(type, id)` because ids are unique per type only, and
+numbered in row order rather than sorted: a graph can hold integer and string
+ids, which Python cannot order against each other.
 
 A parallel group (several relationships of the type between the same two
 nodes) returns all its members. `relationship_keys` names the property that
@@ -623,8 +645,8 @@ new.import_embeddings("vectors.kgle")  # the file records the key
 
 A group with no usable key is refused by name (type, endpoints, member count)
 rather than guessed at, and nothing is written. An export that carries
-relationship stores is `.kgle` version 4, which kglite 0.17.12 and older
-refuse by version; a node-only export stays version 3.
+relationship stores is `.kgle` version 4, which released versions up to
+0.17.12 refuse by version; a node-only export stays version 3.
 
 The query argument's type decides how `text_score` reads it — a list is a
 vector, a string is text — so a stringified vector like `'[1.0, 2.0]'` is
