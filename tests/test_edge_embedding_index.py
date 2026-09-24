@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -395,3 +396,119 @@ def test_kgl_round_trip_keeps_relationship_vectors_in_every_storage_mode(mode: s
     ]
     assert [rank for rank, _ in after_rows] == [rank for rank, _ in before_rows]
     assert [score for _, score in after_rows] == pytest.approx([score for _, score in before_rows])
+
+
+def _index_status(graph: KnowledgeGraph) -> list[dict]:
+    return graph.cypher(
+        "CALL db.edge_embeddings.list({type:'CLAIMS', text_property:'text'}) "
+        "YIELD index_state,delta RETURN index_state,delta"
+    ).to_list()
+
+
+def _kgl_metadata(blob: bytes) -> dict:
+    size = int.from_bytes(blob[9:13], "little")
+    return json.loads(blob[13 : 13 + size])
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped"])
+@pytest.mark.parametrize("source", ["memory", "mapped"])
+def test_kgl_round_trip_keeps_the_relationship_hnsw_index_online(source: str, storage: str, tmp_path: Path) -> None:
+    """The index is a derived cache, but rebuilding it on every open is a cost
+    the node index never charged: a `.kgl` carries it, so a reload answers its
+    first query through HNSW with the store reporting `online`. A disk graph
+    never writes a `.kgl` (see the disk-generation test below)."""
+    graph = _indexed_graph(6, _graph_in_mode(source, tmp_path))
+    graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+    )
+    exact = [row["relationship"]["properties"]["rank"] for row in _query(graph, exact=True, top_k=6)]
+
+    checkpoint = tmp_path / f"{source}-{storage}.kgl"
+    graph.save(str(checkpoint))
+    reopened = kglite.load(str(checkpoint), storage=storage)
+
+    assert _index_status(reopened) == [{"index_state": "online", "delta": 0}]
+    first = _query(reopened, top_k=6)
+    assert [row["search_method"] for row in first] == ["hnsw"] * 6
+    assert [row["relationship"]["properties"]["rank"] for row in first][0] == exact[0]
+    assert sorted(row["relationship"]["properties"]["rank"] for row in first) == sorted(exact)
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped"])
+def test_kgl_round_trip_keeps_a_stale_relationship_index_delta(storage: str, tmp_path: Path) -> None:
+    """A store saved with an outstanding delta must reload still owing it — both
+    an in-place replacement (dirty slot) and an appended vector (past the
+    watermark). Restoring the index as covering everything would serve the
+    replaced vector's old neighbourhood and never see the new one."""
+    graph = _indexed_graph(5)
+    graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text', "
+        "auto_refresh_limit:0}) YIELD indexed RETURN indexed"
+    )
+    graph.cypher(
+        "MATCH ()-[r:CLAIMS {rank:0}]->() "
+        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "entries:[{relationship:r, vector:[0.0,1.0]}]}) YIELD stored RETURN stored"
+    )
+    graph.cypher("MATCH (hub:Hub {id: 0}) CREATE (hub)-[:CLAIMS {rank: 99}]->(:Doc {id: 99})")
+    graph.cypher(
+        "MATCH ()-[r:CLAIMS {rank:99}]->() "
+        "CALL db.edge_embeddings.set({type:'CLAIMS', text_property:'text', "
+        "entries:[{relationship:r, vector:[1.0,0.0]}]}) YIELD stored RETURN stored"
+    )
+    assert _index_status(graph) == [{"index_state": "stale", "delta": 2}]
+
+    checkpoint = tmp_path / "stale.kgl"
+    graph.save(str(checkpoint))
+    reopened = kglite.load(str(checkpoint), storage=storage)
+
+    assert _index_status(reopened) == [{"index_state": "stale", "delta": 2}]
+    assert reopened.cypher(
+        "CALL db.edge_embeddings.refresh_index({type:'CLAIMS', text_property:'text'}) YIELD refreshed RETURN refreshed"
+    ).to_list() == [{"refreshed": 2}]
+    assert _index_status(reopened) == [{"index_state": "online", "delta": 0}]
+    top = _query(reopened, top_k=1)[0]
+    assert top["search_method"] == "hnsw"
+    assert top["relationship"]["properties"]["rank"] == 99
+
+
+def test_disk_generation_reopen_does_not_persist_the_relationship_index(tmp_path: Path) -> None:
+    """Disk generations persist neither the node nor the relationship HNSW
+    index: only `.kgl` carries it. `save()` on a disk graph writes a generation
+    directory even at a `.kgl`-suffixed path (and `to_bytes()` refuses), so a
+    disk-built graph always reopens with no index, keeping its vectors and
+    falling back to the exact scan."""
+    directory = tmp_path / "disk.kgl"
+    graph = _indexed_graph(6, _graph_in_mode("disk", tmp_path))
+    graph.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+    )
+    graph.save(str(directory))
+    del graph
+    assert directory.is_dir()
+
+    reopened = kglite.load(str(directory))
+    # With no index every stored vector is outstanding, so `delta` is the store size.
+    assert _index_status(reopened) == [{"index_state": "none", "delta": 6}]
+    assert _query(reopened, top_k=1)[0]["search_method"] == "exact"
+
+
+def test_kgl_without_a_relationship_index_carries_no_edge_vector_index_section() -> None:
+    """The section is written only when a relationship index exists, so node-only
+    files — and files whose relationship stores are unindexed — keep the bytes
+    they wrote before the section existed (the golden digest in
+    `test_phase4_parity.py` pins one such file)."""
+    node_only = KnowledgeGraph()
+    node_only.cypher("CREATE (:Doc {id: 1, title: 'a'})")
+    unindexed = _indexed_graph(3)
+    indexed = _indexed_graph(3)
+    indexed.cypher(
+        "CALL db.edge_embeddings.build_index({type:'CLAIMS', text_property:'text'}) YIELD indexed RETURN indexed"
+    )
+
+    for graph in (node_only, unindexed):
+        assert "edge_vector_index_compressed_size" not in _kgl_metadata(graph.to_bytes())
+        assert "edge_vector_index" not in _kgl_metadata(graph.to_bytes()).get("section_digests", {})
+    metadata = _kgl_metadata(indexed.to_bytes())
+    assert metadata["edge_vector_index_compressed_size"] > 0
+    assert "edge_vector_index" in metadata["section_digests"]

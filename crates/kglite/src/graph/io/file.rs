@@ -15,6 +15,8 @@
 //   [section]  timeseries.zst (optional)
 //   [section]  secondary_labels.zst (optional)
 //   [section]  vector_index.zst (optional, rebuildable)
+//   [section]  text_index.zst (optional, rebuildable)
+//   [section]  edge_vector_index.zst (optional, rebuildable; core v4 only)
 //
 // v6 vs v5: the section layout, metadata schema and codec are unchanged. What
 // v6 adds is a per-column encoding choice inside the packed column sections —
@@ -401,6 +403,9 @@ pub(crate) struct FileMetadata {
     /// (`unique_constraint_keys` above states the posture in full).
     #[serde(default, skip_serializing_if = "is_zero")]
     text_index_compressed_size: u64,
+    /// Relationship HNSW section size (`edge_vector_persistence`); skipped at zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    edge_vector_index_compressed_size: u64,
     /// CRC32 (IEEE) of each section's **compressed** bytes, keyed by canonical
     /// section name (see [`column_section_key`] and the "Section integrity"
     /// note above).
@@ -499,6 +504,7 @@ impl FileMetadata {
             secondary_labels_compressed_size: 0,
             vector_index_compressed_size: 0,
             text_index_compressed_size: 0,
+            edge_vector_index_compressed_size: 0,
             section_digests: BTreeMap::new(),
             // Persist edge type counts if cache is warm (no O(E) scan if cold)
             edge_type_counts: if graph.has_edge_type_counts_cache() {
@@ -907,7 +913,7 @@ fn build_section_digests(
     topology: &[u8],
     column_meta: &[PortableColumnSection],
     column_data: &[Vec<u8>],
-    optional: [(&str, Option<&[u8]>); 6],
+    optional: [(&str, Option<&[u8]>); 7],
 ) -> BTreeMap<String, u32> {
     let mut digests = BTreeMap::new();
     digests.insert(TOPOLOGY_SECTION.to_string(), section_digest(topology));
@@ -1024,6 +1030,8 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
         None => None,
     };
 
+    let edge_vector_index_compressed = encode_edge_vector_index_section(graph)?;
+
     let section_digests = build_section_digests(
         &topology_compressed,
         &column_sections_meta,
@@ -1041,36 +1049,23 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
             ),
             (VECTOR_INDEX_SECTION, vector_index_compressed.as_deref()),
             (TEXT_INDEX_SECTION, text_index_compressed.as_deref()),
+            (
+                EDGE_VECTOR_INDEX_SECTION,
+                edge_vector_index_compressed.as_deref(),
+            ),
         ],
     );
     let mut metadata = FileMetadata::from_graph_version(graph, core_version);
     metadata.section_digests = section_digests;
     metadata.topology_compressed_size = topology_compressed.len() as u64;
     metadata.column_sections = column_sections_meta;
-    metadata.embeddings_compressed_size = embedding_compressed
-        .as_ref()
-        .map(|b| b.len() as u64)
-        .unwrap_or(0);
-    metadata.edge_embeddings_compressed_size = edge_embedding_compressed
-        .as_ref()
-        .map(|b| b.len() as u64)
-        .unwrap_or(0);
-    metadata.timeseries_compressed_size = timeseries_compressed
-        .as_ref()
-        .map(|b| b.len() as u64)
-        .unwrap_or(0);
-    metadata.secondary_labels_compressed_size = secondary_labels_compressed
-        .as_ref()
-        .map(|b| b.len() as u64)
-        .unwrap_or(0);
-    metadata.vector_index_compressed_size = vector_index_compressed
-        .as_ref()
-        .map(|b| b.len() as u64)
-        .unwrap_or(0);
-    metadata.text_index_compressed_size = text_index_compressed
-        .as_ref()
-        .map(|b| b.len() as u64)
-        .unwrap_or(0);
+    metadata.embeddings_compressed_size = compressed_len(&embedding_compressed);
+    metadata.edge_embeddings_compressed_size = compressed_len(&edge_embedding_compressed);
+    metadata.timeseries_compressed_size = compressed_len(&timeseries_compressed);
+    metadata.secondary_labels_compressed_size = compressed_len(&secondary_labels_compressed);
+    metadata.vector_index_compressed_size = compressed_len(&vector_index_compressed);
+    metadata.text_index_compressed_size = compressed_len(&text_index_compressed);
+    metadata.edge_vector_index_compressed_size = compressed_len(&edge_vector_index_compressed);
 
     // Canonical JSON: round-trip through serde_json::Value so that all
     // HashMap<String, T> fields (nested at any depth) emit with sorted keys.
@@ -1112,6 +1107,8 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     // which is also why its metadata key is skipped at zero: a graph with no
     // text index writes pre-0.16.10 bytes.
     write_optional_section(writer, text_index_compressed.as_deref())?;
+    // Relationship HNSW section — omitted, key and all, when nothing is indexed.
+    write_optional_section(writer, edge_vector_index_compressed.as_deref())?;
 
     // Flush the writer's own buffer. The atomic-save wrapper additionally
     // fsyncs the underlying file; for an in-memory `Vec<u8>` writer this is
@@ -1985,6 +1982,7 @@ struct PortableSectionPlan {
     secondary_labels: u64,
     vector_index: u64,
     text_index: u64,
+    edge_vector_index: u64,
 }
 
 fn parse_portable_metadata<'a>(
@@ -2434,9 +2432,11 @@ use load_options::MAX_LOAD_ENV_VAR;
 
 mod portable_sections;
 use portable_sections::{
-    decode_portable_topology, encode_portable_edge_embeddings, load_portable_optional_sections,
-    validate_and_rebuild_embedding_norms, write_optional_section,
+    compressed_len, decode_portable_topology, encode_portable_edge_embeddings,
+    load_portable_optional_sections, validate_and_rebuild_embedding_norms, write_optional_section,
 };
+mod edge_vector_persistence;
+use edge_vector_persistence::{encode_edge_vector_index_section, EDGE_VECTOR_INDEX_SECTION};
 mod spill_dirs;
 pub(crate) use spill_dirs::memory_limit_temp_dir;
 use spill_dirs::portable_temp_dir;

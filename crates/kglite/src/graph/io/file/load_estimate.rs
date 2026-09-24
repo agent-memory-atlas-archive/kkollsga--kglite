@@ -327,6 +327,7 @@ pub(super) fn estimate_from_metadata(metadata: &FileMetadata) -> LoadMemoryEstim
         metadata.secondary_labels_compressed_size,
         metadata.vector_index_compressed_size,
         metadata.text_index_compressed_size,
+        metadata.edge_vector_index_compressed_size,
     ] {
         compressed_total += optional;
         largest_section = largest_section.max(optional);

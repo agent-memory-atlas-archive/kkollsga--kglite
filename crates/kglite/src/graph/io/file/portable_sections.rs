@@ -26,6 +26,11 @@ pub(super) fn write_optional_section<W: Write>(
     Ok(())
 }
 
+/// A section's compressed size for its metadata key; 0 when it is absent.
+pub(super) fn compressed_len(section: &Option<Vec<u8>>) -> u64 {
+    section.as_ref().map_or(0, |bytes| bytes.len() as u64)
+}
+
 pub(super) fn validate_and_rebuild_embedding_norms(
     embeddings: &mut HashMap<(String, String), EmbeddingStore>,
 ) -> io::Result<()> {
@@ -58,6 +63,7 @@ pub(super) fn decode_portable_topology(
         secondary_labels: metadata.secondary_labels_compressed_size,
         vector_index: metadata.vector_index_compressed_size,
         text_index: metadata.text_index_compressed_size,
+        edge_vector_index: metadata.edge_vector_index_compressed_size,
     };
     let mut dir_graph = DirGraph::from_graph(graph);
     dir_graph.interner = interner;
@@ -129,6 +135,14 @@ pub(super) fn load_portable_optional_sections(
         let compressed = sections.take(plan.text_index, TEXT_INDEX_SECTION)?;
         if let Ok(raw) = zstd_decompress(compressed) {
             decode_text_indexes_after_normalization(&raw, dir_graph, normalization_effects);
+        }
+    }
+    if plan.edge_vector_index > 0 {
+        // Same split again; runs after the relationship stores above are
+        // installed with their norms, which attaching an index needs.
+        let compressed = sections.take(plan.edge_vector_index, EDGE_VECTOR_INDEX_SECTION)?;
+        if let Ok(raw) = zstd_decompress(compressed) {
+            edge_vector_persistence::decode_edge_vector_indexes(&raw, dir_graph);
         }
     }
     Ok(())

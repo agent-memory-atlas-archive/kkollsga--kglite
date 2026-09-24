@@ -56,6 +56,20 @@ pub(crate) struct EdgeVectorIndexStatus {
     pub(crate) unembedded: usize,
 }
 
+impl EdgeEmbeddingStore {
+    /// The dense store the HNSW index is built over. `.kgl` persistence reads
+    /// the index and its freshness state through it, exactly as for a node
+    /// store, which is why the relationship section can reuse that payload.
+    pub(crate) fn index_store(&self) -> &crate::graph::schema::EmbeddingStore {
+        &self.numeric
+    }
+
+    /// Mutable twin of [`Self::index_store`], for attaching a persisted index.
+    pub(crate) fn index_store_mut(&mut self) -> &mut crate::graph::schema::EmbeddingStore {
+        &mut self.numeric
+    }
+}
+
 pub(crate) fn list_edge_vector_indexes(graph: &DirGraph) -> Vec<EdgeVectorIndexStatus> {
     let guard = graph.graph.begin_query();
     let mut live_by_type = std::collections::HashMap::<&str, usize>::new();

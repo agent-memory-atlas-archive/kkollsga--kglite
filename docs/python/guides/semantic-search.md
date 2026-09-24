@@ -507,7 +507,8 @@ The network-free
 puts the full workflow together with a deterministic fake embedder: selected
 generation, exact endpoint-filtered claim/evidence ranking, a changed-text
 refresh, provenance inspection, explicit whole-store HNSW retrieval, and a
-save/reopen/re-register/rebuild check. Run it with an explicit scratch output:
+save/reopen/re-register check that the HNSW index survives the `.kgl`. Run it
+with an explicit scratch output:
 
 ```bash
 python examples/relationship_graphrag.py --output /tmp/claims.kgl

@@ -36,13 +36,14 @@ def test_relationship_graphrag_example(tmp_path: Path) -> None:
     reopened = kglite.load(str(output))
     assert reopened.cypher(
         "CALL db.edge_embeddings.list({type:'ASSERTS',text_property:'description'}) "
-        "YIELD entity,count,dimension,model RETURN entity,count,dimension,model"
+        "YIELD entity,count,dimension,model,index_state RETURN entity,count,dimension,model,index_state"
     ).to_list() == [
         {
             "entity": "relationship",
             "count": 3,
             "dimension": module.TinyEmbedder.dimension,
             "model": module.TinyEmbedder.model_id,
+            "index_state": "online",
         }
     ]
 

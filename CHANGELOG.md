@@ -14,15 +14,17 @@ before upgrading.
 - A runnable, network-free relationship GraphRAG example in
   `examples/relationship_graphrag.py` demonstrates claim/evidence selection,
   embedding generation, filtered scoring, changed-text refresh, explicit HNSW
-  retrieval, and checkpoint reopen with model registration and index rebuild.
+  retrieval, and checkpoint reopen with model registration.
 
 - Explicit whole-store relationship vector search through
   `db.edge_embeddings.query`, with HNSW build/refresh/drop procedures and
   `search_method` reporting. Missing, stale or incompatible indexes fall back
   to exact search; relationship MATCH scoring stays exact. Index diagnostics
   distinguish relationship stores from identically named node stores.
-  Checkpoints retain vectors and provenance; rebuild the derived relationship
-  index after reopening to use HNSW again. `DROP INDEX` accepts the qualified
+  `.kgl` checkpoints retain vectors, provenance and the built HNSW index, so a
+  reloaded store answers through HNSW with the same pending delta it was saved
+  with; disk generations persist neither the node nor the relationship index.
+  `DROP INDEX` accepts the qualified
   name `SHOW INDEXES` prints for one (`relationship:SUPPORTS.evidence`, bare or
   backticked), drops the accelerator rather than the vectors, and judges the
   statement against the relationship type's endpoint types when a write scope

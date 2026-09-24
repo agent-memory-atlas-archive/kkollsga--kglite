@@ -109,10 +109,19 @@ def run(output: Path) -> None:
     graph.save(str(output))
     reopened = kglite.load(str(output))
     reopened.set_embedder(TinyEmbedder())
-    rebuilt = reopened.cypher(
-        "CALL db.edge_embeddings.build_index({type:'ASSERTS',text_property:'description'}) YIELD indexed RETURN indexed"
+    # The `.kgl` carries the HNSW index, so the reopened store answers through
+    # it without a rebuild.
+    state = reopened.cypher(
+        "CALL db.edge_embeddings.list({type:'ASSERTS',text_property:'description'}) "
+        "YIELD index_state RETURN index_state"
     ).to_list()
-    assert rebuilt == [{"indexed": 3}]
+    assert state == [{"index_state": "online"}]
+    reopened_rows = reopened.cypher(
+        "CALL db.edge_embeddings.query({type:'ASSERTS',text_property:'description',"
+        "vector:$vector,top_k:2}) YIELD search_method RETURN search_method",
+        params={"vector": TinyEmbedder().embed(["evidence that heat increases evaporation"])[0]},
+    ).to_list()
+    assert [row["search_method"] for row in reopened_rows] == ["hnsw", "hnsw"]
     assert exact_filtered(reopened, "evidence that heat increases evaporation")
 
 
