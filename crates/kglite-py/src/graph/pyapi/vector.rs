@@ -659,6 +659,40 @@ impl KnowledgeGraph {
         }
     }
 
+    /// Every vector in a relationship store, addressed by endpoint ids, as rows for an edge list and edge-feature matrix.
+    #[pyo3(signature = (relationship_type, text_column, *, relationship_keys=None))]
+    fn relationship_embeddings(
+        &self,
+        py: Python<'_>,
+        relationship_type: &str,
+        text_column: &str,
+        relationship_keys: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let keys = relationship_keys.unwrap_or_default();
+        let rows = kglite_core::api::embeddings::relationship_embeddings(
+            &self.inner,
+            relationship_type,
+            text_column,
+            &keys,
+        )
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let out = PyList::empty(py);
+        for row in rows {
+            let item = PyDict::new(py);
+            item.set_item("source", py_out::value_to_py(py, &row.source_id)?)?;
+            item.set_item("target", py_out::value_to_py(py, &row.target_id)?)?;
+            item.set_item("source_type", row.source_type)?;
+            item.set_item("target_type", row.target_type)?;
+            match &row.key {
+                Some(key) => item.set_item("key", py_out::value_to_py(py, key)?)?,
+                None => item.set_item("key", py.None())?,
+            }
+            item.set_item("vector", PyList::new(py, &row.vector)?)?;
+            out.append(item)?;
+        }
+        out.into_py_any(py)
+    }
+
     /// Register or unbind an embedding model on the graph.
     ///
     /// Pass a model object to register; pass ``None`` to unbind the

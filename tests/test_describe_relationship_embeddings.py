@@ -205,3 +205,12 @@ def test_relationship_semantic_is_a_direct_topic() -> None:
     hint = _semantic(_graph(False, True).describe())
     assert "stores are per relationship type and text property" in hint
     assert "describe(cypher=['relationship_semantic'])" in hint
+
+
+def test_embedding_readout_is_described_for_both_entities() -> None:
+    hint = _semantic(_graph(False, True).describe())
+    assert "embedding(r, 'col_emb') returns its stored vector" in hint
+    functions = ET.fromstring(KnowledgeGraph().describe(cypher=["functions"]))
+    groups = {e.get("name"): e.text for e in functions.iter("group")}
+    assert "embedding(r1, 'col_emb')" in groups["relationship_semantic"]
+    assert "embedding(n, 'col_emb')" in groups["semantic"]

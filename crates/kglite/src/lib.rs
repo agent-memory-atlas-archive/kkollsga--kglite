@@ -368,6 +368,10 @@ pub mod api {
     /// [`EmbeddingEntity`](embeddings::EmbeddingEntity) or scope, because a node
     /// type and a relationship type may share a name.
     pub mod embeddings {
+        /// Read a relationship store back out, addressed by endpoint ids.
+        pub use crate::graph::edge_embeddings::carry::{
+            relationship_embeddings, RelationshipEmbedding,
+        };
         pub use crate::graph::embedding_inventory::{
             embedding_diagnostics, embedding_info, list_edge_embeddings, EdgeEmbeddingStoreInfo,
             EmbeddingCoverage, EmbeddingDiagnostic, EmbeddingEntity, EmbeddingInfo, LengthStats,

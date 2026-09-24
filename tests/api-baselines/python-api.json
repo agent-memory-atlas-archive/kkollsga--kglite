@@ -996,6 +996,10 @@
           "kind": "method",
           "signature": "(self, /)"
         },
+        "relationship_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column, *, relationship_keys=None)"
+        },
         "remove_embeddings": {
           "kind": "method",
           "signature": "(self, /, node_type, text_column)"

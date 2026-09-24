@@ -798,6 +798,13 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         signature: "embedding_norm(entity :: NODE | RELATIONSHIP, property :: STRING) :: FLOAT?",
     },
     FunctionSpec {
+        name: "embedding",
+        aliases: &[],
+        category: "utility",
+        description: "The stored embedding vector of a node or relationship, as a list of floats; null when it has none",
+        signature: "embedding(entity :: NODE | RELATIONSHIP, store :: STRING) :: LIST<FLOAT>?",
+    },
+    FunctionSpec {
         name: "text_bm25",
         aliases: &[],
         category: "utility",

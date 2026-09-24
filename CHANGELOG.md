@@ -166,6 +166,21 @@ before upgrading.
   `from_records` and ranks relations across types, and the import guide has a
   knwl / knwler section.
 
+- **Reading stored vectors back out, for nodes and relationships.** The Cypher
+  scalar `embedding(x, 'col_emb')` returns a node's or relationship's stored
+  vector as a list of floats. It is null when the entity has no vector, and an
+  error naming the type and source property when the type has no such store.
+  Since `vector_score` takes any list as its query,
+  `vector_score(r2, 'col_emb', embedding(r1, 'col_emb'))` is
+  relationship-to-relationship similarity (node-to-node likewise).
+  `relationship_embeddings(relationship_type, text_column, *,
+  relationship_keys=None)` returns every vector in a relationship store as rows
+  `{source, target, source_type, target_type, key, vector}` in a stable order.
+  Those rows are an edge list plus edge features for graph-learning libraries
+  such as PyTorch Geometric. `relationship_keys` tells a parallel group's
+  members apart, as in `export_embeddings()`. Rust:
+  `kglite::api::embeddings::relationship_embeddings`.
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing

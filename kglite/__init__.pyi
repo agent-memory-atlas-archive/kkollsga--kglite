@@ -8209,6 +8209,9 @@ class KnowledgeGraph:
 
         Returns:
             Dict mapping node IDs to embedding vectors.
+
+        Relationship stores are read with :meth:`relationship_embeddings`,
+        which addresses each vector by its endpoints.
         """
         ...
 
@@ -8245,6 +8248,63 @@ class KnowledgeGraph:
 
         Returns:
             The embedding vector as a list of floats, or None if not found.
+
+        For a relationship store use :meth:`relationship_embeddings`; inside
+        Cypher, ``embedding(n, 'summary_emb')`` reads the same vector for a
+        node or a relationship.
+        """
+        ...
+
+    def relationship_embeddings(
+        self,
+        relationship_type: str,
+        text_column: str,
+        *,
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[dict[str, Any]]:
+        """Read every vector in a relationship embedding store, addressed by
+        its endpoints — the relationship twin of :meth:`embeddings`.
+
+        Each row is ``{"source": <source id>, "target": <target id>,
+        "source_type": str, "target_type": str, "key": <key value or None>,
+        "vector": list[float]}``. Rows are ordered by source (type, id), then
+        target (type, id), then key, then the relationship's position, so the
+        order is stable for a given graph.
+
+        Several relationships of the type between the same two nodes (a
+        parallel group) are all returned, with the same ``source`` and
+        ``target``. Name a property that is unique within each group in
+        ``relationship_keys`` (``{'SUPPORTS': 'uid'}``, the same mapping
+        :meth:`export_embeddings` takes) to get it back as ``key``; a named
+        key missing on a group member, or repeated within a group, is refused
+        by name.
+
+        The rows are a PyTorch Geometric edge list plus edge features::
+
+            import numpy as np
+            rows = graph.relationship_embeddings("SUPPORTS", "evidence")
+            index = {node_id: i for i, node_id in enumerate(sorted(
+                {r["source"] for r in rows} | {r["target"] for r in rows}))}
+            edge_index = np.array([[index[r["source"]] for r in rows],
+                                   [index[r["target"]] for r in rows]])
+            edge_attr = np.array([r["vector"] for r in rows], dtype=np.float32)
+
+        Ids are unique per node type only; key ``index`` by
+        ``(r["source_type"], r["source"])`` when the endpoints span types.
+
+        Args:
+            relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
+            text_column: Source text property (e.g. ``'evidence'``; the store
+                is ``'evidence_emb'``).
+            relationship_keys: Per relationship type, the property that tells
+                a parallel group's members apart.
+
+        Returns:
+            One dict per stored vector.
+
+        Raises:
+            ValueError: No such relationship embedding store, or a named key
+                does not tell a parallel group's members apart.
         """
         ...
 

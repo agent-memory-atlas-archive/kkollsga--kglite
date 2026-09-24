@@ -610,3 +610,70 @@ fn a_merge_across_metrics_or_a_missing_store_is_refused_by_name() {
         "{error}"
     );
 }
+
+#[test]
+fn relationship_embeddings_reads_the_store_by_endpoint_ids_in_a_stable_order() {
+    use crate::graph::edge_embeddings::carry::{relationship_embeddings, RelationshipKeys};
+    let (mut graph, first, _, _) = fixture();
+    let (source, target) = graph.graph.edge_endpoints(first).unwrap();
+    // A second CLAIMS relationship between the same two nodes: a parallel group.
+    let parallel = GraphWrite::add_edge(
+        &mut graph.graph,
+        source,
+        target,
+        EdgeData::new(
+            "CLAIMS".into(),
+            HashMap::from([("uid".to_string(), Value::String("b".into()))]),
+            &mut graph.interner,
+        ),
+    );
+    upsert_edge_embeddings(
+        &mut graph,
+        "CLAIMS",
+        "text",
+        vec![(parallel, vec![0.5, 0.5])],
+        None,
+    )
+    .unwrap();
+
+    let rows = relationship_embeddings(&graph, "CLAIMS", "text", &RelationshipKeys::new()).unwrap();
+    let addresses: Vec<(Value, Value, Option<Value>, Vec<f32>)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.source_id.clone(),
+                row.target_id.clone(),
+                row.key.clone(),
+                row.vector.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        addresses,
+        vec![
+            (Value::Int64(1), Value::Int64(2), None, vec![1.0, 0.0]),
+            (Value::Int64(1), Value::Int64(2), None, vec![0.5, 0.5]),
+            (Value::Int64(1), Value::Int64(3), None, vec![0.0, 1.0]),
+            (Value::Int64(1), Value::Int64(4), None, vec![-1.0, 0.0]),
+        ]
+    );
+    assert!(rows
+        .iter()
+        .all(|row| row.source_type == "Doc" && row.target_type == "Doc"));
+
+    // A key named for the type must tell the group apart: the first member has none.
+    let keys = RelationshipKeys::from([("CLAIMS".to_string(), "uid".to_string())]);
+    let error = relationship_embeddings(&graph, "CLAIMS", "text", &keys).unwrap_err();
+    assert!(
+        error.contains("2 'CLAIMS' relationships connect"),
+        "{error}"
+    );
+    assert!(error.contains("has no 'uid' value"), "{error}");
+
+    let error =
+        relationship_embeddings(&graph, "CLAIMS", "nope", &RelationshipKeys::new()).unwrap_err();
+    assert!(
+        error.contains("No relationship embedding store 'CLAIMS.nope'"),
+        "{error}"
+    );
+}

@@ -537,6 +537,32 @@ marked `hnsw` once an index is built, as it marks node stores (a BM25 index
 shows as `text_index`). `describe(cypher=['relationship_semantic'])` gathers
 the relationship scoring, cross-type ranking and index lifecycle in one topic.
 
+To read the vectors back out, use `embedding(r, 'evidence_emb')` in Cypher. It
+returns one relationship's stored vector, and `embedding(n, 'summary_emb')`
+does the same for a node. Because `vector_score` takes any list as its query,
+`vector_score(r2, 'evidence_emb', embedding(r1, 'evidence_emb'))` is
+relationship-to-relationship similarity. From Python,
+`relationship_embeddings('SUPPORTS', 'evidence')` returns every vector in the
+store as rows `{source, target, source_type, target_type, key, vector}`,
+ordered by source, then target, then key. That is a graph-learning edge list
+plus edge features, e.g. for PyTorch Geometric:
+
+```python
+import numpy as np
+
+rows = graph.relationship_embeddings("SUPPORTS", "evidence", relationship_keys={"SUPPORTS": "uid"})
+nodes = sorted({(r["source_type"], r["source"]) for r in rows} | {(r["target_type"], r["target"]) for r in rows})
+index = {node: i for i, node in enumerate(nodes)}
+edge_index = np.array([[index[(r["source_type"], r["source"])] for r in rows],
+                       [index[(r["target_type"], r["target"])] for r in rows]])
+edge_attr = np.array([r["vector"] for r in rows], dtype=np.float32)
+```
+
+A parallel group (several relationships of the type between the same two
+nodes) returns all its members. `relationship_keys` names the property that
+tells them apart, the same mapping `export_embeddings()` takes. It is optional,
+but a named key that is missing or repeated within a group is refused.
+
 The `query` procedure ranks the complete declared store before later clauses
 run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
 constrain HNSW. Use filtered `MATCH` plus `vector_score`/`text_score` when an

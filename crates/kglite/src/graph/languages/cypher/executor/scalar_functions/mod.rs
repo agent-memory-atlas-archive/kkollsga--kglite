@@ -10,6 +10,7 @@ use crate::datatypes::values::Value;
 
 mod collection;
 mod edge_text;
+mod embedding_readout;
 mod function_registry;
 mod graph;
 mod numeric;
@@ -175,6 +176,9 @@ impl<'a> CypherExecutor<'a> {
             return Ok(v);
         }
         if let Some(v) = self.eval_vector_fn(name, args, row)? {
+            return Ok(v);
+        }
+        if let Some(v) = self.eval_embedding_readout_fn(name, args, row)? {
             return Ok(v);
         }
         if let Some(v) = self.eval_utility_fn(name, args, row)? {

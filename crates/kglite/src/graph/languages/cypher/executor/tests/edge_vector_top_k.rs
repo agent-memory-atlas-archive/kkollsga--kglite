@@ -491,3 +491,133 @@ fn the_store_entry_serves_alternation_and_untyped_scans() {
     assert_eq!(entry(&cross_query("()-[r]->()", 3)), Some(3));
     assert_eq!(entry(&cross_query("(:Hub)<-[r:A|B]-()", 3)), None);
 }
+
+// ── embedding(x, 'col_emb'): the stored vector, both entities ──────────
+
+fn read_rows(graph: &DirGraph, query: &str) -> Vec<Vec<Value>> {
+    read(graph, query, false).rows
+}
+
+fn floats(value: &Value) -> Vec<f64> {
+    let Value::List(items) = value else {
+        panic!("expected a list, got {value:?}");
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            Value::Float64(x) => *x,
+            other => panic!("expected floats, got {other:?}"),
+        })
+        .collect()
+}
+
+fn cosine(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    dot / (norm(a) * norm(b))
+}
+
+#[test]
+fn embedding_reads_a_relationship_vector_from_a_binding_or_a_value() {
+    let graph = cross_type_corpus(false);
+    // k=4 is stored at angle 0.85.
+    let expected = [0.85f64.cos() as f32 as f64, 0.85f64.sin() as f32 as f64];
+    for query in [
+        "MATCH ()-[r:A {k: 4}]->() RETURN embedding(r, 'text_emb') AS v",
+        "MATCH ()-[r:A {k: 4}]->() WITH collect(r) AS rs RETURN embedding(rs[0], 'text_emb') AS v",
+        "MATCH ()-[r:A {k: 4}]->() WITH collect(r) AS rs UNWIND rs AS x RETURN embedding(x, 'text_emb') AS v",
+    ] {
+        let rows = read_rows(&graph, query);
+        assert_eq!(floats(&rows[0][0]), expected, "{query}");
+    }
+}
+
+#[test]
+fn edge_to_edge_similarity_composes_with_vector_score() {
+    let graph = cross_type_corpus(false);
+    let rows = read_rows(
+        &graph,
+        "MATCH ()-[a:A {k: 1}]->(), ()-[b:B {k: 5}]->() \
+         RETURN vector_score(b, 'text_emb', embedding(a, 'text_emb')) AS s, \
+                embedding(a, 'text_emb') AS va, embedding(b, 'text_emb') AS vb",
+    );
+    let (va, vb) = (floats(&rows[0][1]), floats(&rows[0][2]));
+    let Value::Float64(score) = rows[0][0] else {
+        panic!("{:?}", rows[0][0]);
+    };
+    assert!((score - cosine(&va, &vb)).abs() < 1e-6, "{score} vs oracle");
+    assert!((score - (1.10f64 - 0.10).cos()).abs() < 1e-5);
+}
+
+#[test]
+fn embedding_reads_node_vectors_and_is_null_without_one() {
+    let mut graph = cross_type_corpus(false);
+    run(&mut graph, "MATCH (d:Doc) SET d.summary = 'text'");
+    crate::graph::embeddings::set_embeddings(
+        &mut graph,
+        "Doc",
+        "summary",
+        None,
+        [
+            (Value::Int64(1), vec![1.0, 0.0]),
+            (Value::Int64(2), vec![0.6, 0.8]),
+        ],
+    )
+    .unwrap();
+    let rows = read_rows(
+        &graph,
+        "MATCH (a:Doc {id: 1}), (b:Doc {id: 2}) \
+         RETURN embedding(a, 'summary_emb') AS va, \
+                vector_score(b, 'summary_emb', embedding(a, 'summary_emb')) AS s",
+    );
+    assert_eq!(floats(&rows[0][0]), vec![1.0, 0.0]);
+    assert_eq!(rows[0][1], Value::Float64(0.6f32 as f64));
+    // A node of the type without a vector, and a node value, read the same way.
+    let rows = read_rows(
+        &graph,
+        "MATCH (d:Doc) WITH d ORDER BY d.id WITH collect(d) AS ds \
+         RETURN embedding(ds[1], 'summary_emb') AS second, embedding(ds[2], 'summary_emb') AS third",
+    );
+    assert_eq!(floats(&rows[0][0]), vec![0.6f32 as f64, 0.8f32 as f64]);
+    assert_eq!(rows[0][1], Value::Null);
+}
+
+#[test]
+fn embedding_without_the_store_is_refused_naming_type_and_property() {
+    let mut graph = cross_type_corpus(false);
+    run(
+        &mut graph,
+        "MATCH (h:Hub), (d:Doc {id: 1}) CREATE (h)-[:PLAIN]->(d)",
+    );
+    let params = HashMap::new();
+    let refuse = |query: &str| {
+        execute_read(&graph, query, &ExecuteOptions::eager(&params))
+            .err()
+            .unwrap_or_else(|| panic!("{query} must fail"))
+            .to_string()
+    };
+    let error = refuse("MATCH ()-[r:PLAIN]->() RETURN embedding(r, 'text_emb') AS v");
+    assert!(
+        error.contains(
+            "embedding(): no embedding store 'text_emb' (source property 'text') for \
+             relationship type 'PLAIN'"
+        ),
+        "{error}"
+    );
+    let error = refuse("MATCH ()-[r:A]->() RETURN embedding(r, 'text') AS v");
+    assert!(error.contains("Did you mean 'text_emb'?"), "{error}");
+    let error = refuse("MATCH (h:Hub) RETURN embedding(h, 'text_emb') AS v");
+    assert!(error.contains("for node type 'Hub'"), "{error}");
+    let error = refuse("RETURN embedding(1, 'text_emb') AS v");
+    assert!(
+        error.contains("first argument must be a node or a relationship"),
+        "{error}"
+    );
+    assert_eq!(
+        read_rows(
+            &graph,
+            "OPTIONAL MATCH (n:Missing) RETURN embedding(n, 'x_emb') AS v"
+        )[0][0],
+        Value::Null
+    );
+}

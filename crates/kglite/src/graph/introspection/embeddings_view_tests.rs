@@ -404,3 +404,24 @@ fn relationship_semantic_is_a_direct_topic_matching_the_functions_group() {
         "{semantic}"
     );
 }
+
+#[test]
+fn the_embedding_readout_is_named_beside_vector_score() {
+    let semantic = line_with(&inventory(&graph(false, true)), "<semantic ").to_string();
+    assert!(
+        semantic.contains("embedding(r, 'col_emb') returns its stored vector"),
+        "{semantic}"
+    );
+    let graph = DirGraph::new();
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    let functions = CypherDetail::Topics(vec!["functions".to_string()]);
+    request.cypher = &functions;
+    let listing = compute_description(&graph, &request).unwrap();
+    let relationship = line_with(&listing, "<group name=\"relationship_semantic\"");
+    assert!(
+        relationship.contains("vector_score(r2, 'col_emb', embedding(r1, 'col_emb'))"),
+        "{relationship}"
+    );
+    let node = line_with(&listing, "<group name=\"semantic\"");
+    assert!(node.contains("embedding(n, 'col_emb')"), "{node}");
+}

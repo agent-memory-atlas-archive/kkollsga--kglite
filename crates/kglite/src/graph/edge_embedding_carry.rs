@@ -478,3 +478,109 @@ impl DirGraph {
 #[cfg(test)]
 #[path = "edge_embedding_carry_tests.rs"]
 mod tests;
+
+/// One relationship's stored vector, addressed by its endpoints — a row of
+/// [`relationship_embeddings`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct RelationshipEmbedding {
+    /// The source node's type.
+    pub source_type: String,
+    /// The source node's id.
+    pub source_id: Value,
+    /// The target node's type.
+    pub target_type: String,
+    /// The target node's id.
+    pub target_id: Value,
+    /// The relationship's value of the key property named for its type, when
+    /// one was named and the relationship carries it.
+    pub key: Option<Value>,
+    /// The stored vector.
+    pub vector: Vec<f32>,
+}
+
+/// Every vector in the `(relationship_type, text_column)` store, addressed by
+/// endpoint ids — the relationship twin of reading a node store by node id,
+/// and the shape an edge list (`edge_index`) plus an edge-feature matrix
+/// (`edge_attr`) is built from.
+///
+/// Rows are ordered by source (type, id), then target (type, id), then key
+/// (when one is named), then relationship slot, so the order is stable for a
+/// given graph. Several relationships of the type between the same two nodes
+/// (a parallel group) are all returned; naming a key property for the type in
+/// `keys` tells them apart, and a named key that is missing on a member or
+/// repeats within a group is refused by name rather than returned ambiguous.
+/// Refused when there is no such store.
+pub fn relationship_embeddings(
+    graph: &DirGraph,
+    relationship_type: &str,
+    text_column: &str,
+    keys: &RelationshipKeys,
+) -> Result<Vec<RelationshipEmbedding>, String> {
+    let label = format!("{relationship_type}.{text_column}");
+    let store = graph
+        .edge_embeddings
+        .get(&edge_store_key(relationship_type, text_column))
+        .ok_or_else(|| format!("No relationship embedding store '{label}'"))?;
+    let key_property = keys.get(relationship_type).map(String::as_str);
+    let guard = graph.graph.begin_query();
+    let mut checked: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut rows: Vec<(usize, RelationshipEmbedding)> = Vec::with_capacity(store.len());
+    for edge in store.edges() {
+        let Some((source, target)) = graph.graph.edge_endpoints(edge) else {
+            continue;
+        };
+        if let Some(property) = key_property {
+            if checked.insert((source.index(), target.index())) {
+                let members = group_members(graph, source, target, relationship_type);
+                if members.len() > 1 {
+                    group_keys(graph, &members, property).map_err(|reason| {
+                        let group =
+                            describe_group(graph, relationship_type, source, target, members.len());
+                        format!(
+                            "Relationship embedding store '{label}': {group}, and {reason}; the \
+                             key named in relationship_keys must be unique within each group"
+                        )
+                    })?;
+                }
+            }
+        }
+        let (Some(source_view), Some(target_view), Some(vector)) = (
+            graph.graph.node_view(source),
+            graph.graph.node_view(target),
+            store.get(edge),
+        ) else {
+            continue;
+        };
+        rows.push((
+            edge.index(),
+            RelationshipEmbedding {
+                source_type: source_view.node_type_str(&graph.interner).to_string(),
+                source_id: source_view.id().into_owned(),
+                target_type: target_view.node_type_str(&graph.interner).to_string(),
+                target_id: target_view.id().into_owned(),
+                key: key_property.and_then(|property| key_value(graph, edge, property)),
+                vector: vector.to_vec(),
+            },
+        ));
+    }
+    drop(guard);
+    rows.sort_by(|(left_slot, left), (right_slot, right)| {
+        (
+            &left.source_type,
+            &left.source_id,
+            &left.target_type,
+            &left.target_id,
+            &left.key,
+        )
+            .cmp(&(
+                &right.source_type,
+                &right.source_id,
+                &right.target_type,
+                &right.target_id,
+                &right.key,
+            ))
+            .then(left_slot.cmp(right_slot))
+    });
+    Ok(rows.into_iter().map(|(_, row)| row).collect())
+}
