@@ -604,6 +604,151 @@ The query argument's type decides how `text_score` reads it — a list is a
 vector, a string is text — so a stringified vector like `'[1.0, 2.0]'` is
 embedded as a 10-character query. Pass a list and both spellings agree.
 
+#### Relationship communities
+
+Graph RAG pipelines such as Microsoft GraphRAG, LightRAG and knwler answer
+broad questions from *communities*: clusters of the entity graph, each with a
+summary. They answer from the community summary and from the relations inside
+that community. kglite has no native relationship clustering. The whole recipe
+is Cypher over node communities, and every snippet below runs as written
+(`tests/test_relationship_community_recipe.py` executes this section).
+
+Start with an entity graph whose relations carry a `description` and a
+`strength`, and embed the descriptions per relationship type. The embedder here
+is a network-free stand-in; use a real model in practice:
+
+```python
+import kglite
+
+
+class KeywordEmbedder:
+    """Counts a few keywords — a stand-in for a sentence-embedding model."""
+
+    dimension = 6
+    model_id = "demo/keywords"
+    WORDS = ("apple", "computer", "founded", "ship", "voyage", "pacific")
+
+    def load(self):
+        pass
+
+    def unload(self):
+        pass
+
+    def embed(self, texts):
+        return [[float(word in text.lower()) + 0.01 for word in self.WORDS] for text in texts]
+
+
+graph = kglite.KnowledgeGraph()
+graph.set_embedder(KeywordEmbedder())
+graph.cypher("""
+    CREATE (jobs:Entity {id: 1, name: 'Steve Jobs'}), (woz:Entity {id: 2, name: 'Steve Wozniak'}),
+           (apple:Entity {id: 3, name: 'Apple'}), (mac:Entity {id: 4, name: 'Macintosh'}),
+           (cook:Entity {id: 5, name: 'James Cook'}), (ship:Entity {id: 6, name: 'Endeavour'}),
+           (pacific:Entity {id: 7, name: 'Pacific'}), (banks:Entity {id: 8, name: 'Joseph Banks'}),
+           (jobs)-[:founded {description: 'Jobs founded the Apple computer company', strength: 9.0}]->(apple),
+           (woz)-[:founded {description: 'Wozniak co-founded Apple', strength: 8.0}]->(apple),
+           (woz)-[:works_at {description: 'Wozniak engineered the first Apple', strength: 7.0}]->(apple),
+           (apple)-[:created {description: 'Apple created the Macintosh', strength: 9.0}]->(mac),
+           (jobs)-[:works_at {description: 'Jobs led the Macintosh team', strength: 6.0}]->(mac),
+           (cook)-[:sailed_on {description: 'Cook sailed the ship Endeavour on his first voyage', strength: 9.0}]->(ship),
+           (ship)-[:explored {description: 'The Endeavour charted the Pacific', strength: 8.0}]->(pacific),
+           (banks)-[:sailed_on {description: 'Banks joined the Endeavour voyage as naturalist', strength: 7.0}]->(ship),
+           (cook)-[:explored {description: 'Cook explored the Pacific by ship', strength: 6.0}]->(pacific),
+           (banks)-[:inspired {description: 'A museum model sits beside a Macintosh', strength: 1.0}]->(mac)
+""")
+RELATION_TYPES = ["founded", "works_at", "created", "sailed_on", "explored", "inspired"]
+for rel_type in RELATION_TYPES:
+    graph.cypher(
+        f"MATCH ()-[r:{rel_type}]->() WITH collect(r) AS rs "
+        f"CALL db.edge_embeddings.embed({{type: '{rel_type}', text_property: 'description', relationships: rs}}) "
+        "YIELD embedded RETURN embedded"
+    )
+```
+
+**1. Detect communities over the entity graph**, weighted by relation
+strength, and store each entity's community as a property. `CALL leiden`
+takes the same parameters as `CALL louvain`; the [graph algorithms
+guide](graph-algorithms.md#community-detection) covers both:
+
+```python
+graph.cypher("""
+    CALL louvain({node_type: 'Entity', connection_types: $types, weight_property: 'strength'})
+    YIELD node, community
+    SET node.community = community
+""", params={"types": RELATION_TYPES})
+```
+
+**2. Classify each relation as intra-community or bridge.** A bridge relation
+joins two communities. Bridges are the relations a community-scoped answer
+leaves out, and the ones to read when a question spans topics:
+
+```python
+kinds = graph.cypher("""
+    MATCH (s:Entity)-[r]->(t:Entity)
+    RETURN CASE WHEN s.community = t.community THEN 'intra' ELSE 'bridge' END AS kind,
+           type(r) AS type, s.name AS source, t.name AS target
+    ORDER BY kind, source, target
+""").to_list()
+bridges = [row for row in kinds if row["kind"] == "bridge"]
+# [{'kind': 'bridge', 'type': 'inspired', 'source': 'Joseph Banks', 'target': 'Macintosh'}]
+```
+
+**3. Rank one community's relations against a question.** The `WHERE`
+restricts the ranking to relations with both endpoints in the community. The
+query keeps the `ORDER BY text_score(r, …) DESC LIMIT k` shape, so it is served
+from the relationship stores (merged across the alternation's types) instead of
+sorting every scored row. Name the relation types in the alternation: an
+untyped `-[r]->` would also put `IN_COMMUNITY` (step 4) in play, and that type
+has no store:
+
+```python
+apple_community = graph.cypher(
+    "MATCH (e:Entity {name: 'Apple'}) RETURN e.community AS community"
+).to_list()[0]["community"]
+top = graph.cypher("""
+    MATCH (s:Entity)-[r:founded|works_at|created|sailed_on|explored|inspired]->(t:Entity)
+    WHERE s.community = $community AND t.community = $community
+    RETURN s.name AS source, type(r) AS type, t.name AS target,
+           text_score(r, 'description', $question) AS score
+    ORDER BY score DESC LIMIT 2
+""", params={"community": apple_community, "question": "who founded the apple computer company"})
+# top.to_list() -> Steve Jobs founded Apple, then Steve Wozniak founded Apple
+# top.diagnostics["retrieval"] names the stores the ranking read
+```
+
+**4. Summaries as embedded nodes, ranked first** (the knwler shape).
+Materialise each community as a node linked to its members, give it a summary,
+and embed the summaries. A question then picks the best community first and
+ranks only that community's relations. Here the summary joins the community's
+relation descriptions; a real pipeline asks an LLM to summarise them:
+
+```python
+graph.cypher("MATCH (e:Entity) WITH DISTINCT e.community AS c CREATE (:Community {id: c})")
+graph.cypher("MATCH (e:Entity), (c:Community) WHERE c.id = e.community CREATE (e)-[:IN_COMMUNITY]->(c)")
+graph.cypher("""
+    MATCH (c:Community)<-[:IN_COMMUNITY]-(s:Entity)-[r]->(t:Entity)-[:IN_COMMUNITY]->(c)
+    WITH c, collect(r.description) AS descriptions
+    SET c.summary = reduce(acc = '', d IN descriptions | acc + d + '. ')
+""")
+graph.embed_texts("Community", "summary", show_progress=False)
+
+answer = graph.cypher("""
+    MATCH (c:Community)
+    WITH c, text_score(c, 'summary', $question) AS community_score
+    ORDER BY community_score DESC LIMIT 1
+    MATCH (c)<-[:IN_COMMUNITY]-(s:Entity)-[r:founded|works_at|created|sailed_on|explored|inspired]->(t:Entity)
+          -[:IN_COMMUNITY]->(c)
+    RETURN s.name AS source, type(r) AS type, t.name AS target,
+           text_score(r, 'description', $question) AS score
+    ORDER BY score DESC LIMIT 2
+""", params={"question": "ship voyage"})
+# answer.to_list() -> James Cook sailed_on Endeavour, then Joseph Banks sailed_on Endeavour
+```
+
+Clustering the relationships themselves, for example k-means over a
+relationship store, is not supported: `CALL cluster()` clusters the nodes a
+preceding `MATCH` binds.
+
 ### Embedding Norm in Cypher
 
 `embedding_norm()` returns the L2 norm of a node's embedding vector. In Poincaré space, norm indicates hierarchy depth: values near 0 are roots, values near 1 are leaves.

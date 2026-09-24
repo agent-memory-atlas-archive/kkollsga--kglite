@@ -288,6 +288,12 @@ result = graph.louvain_communities(weight_property='strength', resolution=1.5)
 result = graph.label_propagation(max_iterations=100)
 ```
 
+Communities also drive Graph RAG retrieval over relationships. The
+[relationship communities recipe](semantic-search.md#relationship-communities)
+runs `CALL louvain` over an entity graph, separates intra-community relations
+from bridge relations, ranks one community's relations against a question, and
+ranks community summaries first.
+
 ## Clustering
 
 General-purpose clustering via Cypher `CALL cluster()`. Reads nodes from a preceding MATCH clause.
