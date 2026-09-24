@@ -470,14 +470,14 @@ subgraph.export('acme_network.graphml', format='graphml')
 
 ## Embedding Snapshots
 
-Export embeddings to a standalone `.kgle` file so they survive graph rebuilds. Embeddings are keyed by node ID — import resolves IDs against the current graph, skipping any that no longer exist.
+Export embeddings to a standalone `.kgle` file so they survive graph rebuilds. Node embeddings are keyed by node ID — import resolves IDs against the current graph, skipping any that no longer exist.
 
 ```python
-# Export all embeddings
+# Export all embeddings (node and relationship stores)
 stats = graph.export_embeddings("embeddings.kgle")
-# {'stores': 2, 'embeddings': 5000}
+# {'stores': 2, 'embeddings': 5000, 'relationship_stores': 0, 'relationship_embeddings': 0}
 
-# Export only specific node types
+# Export only specific node types (a node-type filter exports no relationship store)
 graph.export_embeddings("embeddings.kgle", ["Article"])
 
 # Export specific (node_type, property) pairs
@@ -490,8 +490,34 @@ graph.export_embeddings("embeddings.kgle", {
 graph2 = kglite.KnowledgeGraph()
 graph2.add_nodes(articles_df, 'Article', 'id', 'title')
 result = graph2.import_embeddings("embeddings.kgle")
-# {'stores': 2, 'imported': 4800, 'skipped': 200}
+# {'stores': 2, 'imported': 4800, 'skipped': 200, 'dropped_stores': 0,
+#  'relationship_stores': 0, 'relationship_imported': 0, ...}
 ```
+
+**Relationship embeddings** travel in the same file. Each vector is matched by
+relationship type and the `(type, id)` of both endpoints, so it lands on the
+relationship of that type between the same two nodes. A *parallel group* —
+two or more relationships of one type between the same endpoints — is carried
+only under a key property you name, whose value is unique within every group.
+The file records the key, so the import does not repeat it:
+
+```python
+graph.export_embeddings("embeddings.kgle", relationship_keys={"SUPPORTS": "uid"})
+graph2.import_embeddings("embeddings.kgle")
+# ... 'relationship_stores': 1, 'relationship_imported': 1200, 'relationship_skipped': 3, ...
+```
+
+A group no usable key can tell apart, in the source or in the target, raises
+`ArgumentError` naming the relationship type, the endpoints and the member
+count. Nothing is written: no file on export, no store on import. A
+relationship the target graph lacks counts as skipped.
+`copy_embeddings_from(other, relationship_keys=…)` applies the same rules
+graph-to-graph.
+
+A file with only node stores is `.kgle` version 3, readable by every release
+since 0.14. A file carrying relationship stores is version 4, and kglite
+0.17.12 and older refuse it by version ("Embedding file version 4 is newer
+than supported version 3. Please upgrade kglite.").
 
 ## Schema and Indexes
 

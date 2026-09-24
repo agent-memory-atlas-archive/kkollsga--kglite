@@ -93,7 +93,8 @@ hashes — so a following `mode='changed'` only re-embeds genuinely new text):
 new_graph = build_from_source()              # fresh, no vectors yet
 new_graph.copy_embeddings_from(old_graph)    # carry every store by node id
 new_graph.embed_texts("Article", "summary", mode="changed")  # fill only the new/changed
-# → {'stores_copied': 1, 'vectors_copied': 1050, 'vectors_skipped': 0}  (from copy_embeddings_from)
+# → {'stores_copied': 1, 'vectors_copied': 1050, 'vectors_skipped': 0,
+#    'relationship_stores_copied': 0, ...}  (from copy_embeddings_from)
 ```
 
 ## Low-Level Vector API
@@ -266,7 +267,9 @@ automatically. Key points:
   no vector at all, which catch-up never embeds. Check with
   `has_vector_index(...)`, remove with `drop_vector_index(...)`.
 - **Persisted.** The index is saved inside the `.kgl` (and `to_bytes()`), so a
-  reloaded graph keeps it — no rebuild on load.
+  reloaded graph keeps it — no rebuild on load. A disk-mode graph's directory
+  keeps neither node nor relationship indexes: rebuild after reopening a disk
+  graph.
 
 ```python
 graph.build_vector_index(
@@ -357,8 +360,8 @@ results = graph.select('Concept').vector_search(
 
 # list_embeddings() shows the stored metric
 graph.list_embeddings()
-# [{'node_type': 'Concept', 'text_column': 'title', 'dimension': 5,
-#   'count': 500, 'metric': 'poincare'}]
+# [{'entity': 'node', 'node_type': 'Concept', 'text_column': 'title',
+#   'store_name': 'title_emb', 'dimension': 5, 'count': 500, 'metric': 'poincare'}]
 ```
 
 Metric resolution order: explicit `metric=` argument > stored metric > `cosine` default.
@@ -489,13 +492,26 @@ nearest = graph.cypher("""
 """, params={'query_vector': [0.1, 0.2]})
 ```
 
+`text:'…'` (or `text:$param`) in place of `vector` embeds the query once with
+the registered embedder before the statement runs; `text` and `vector` together
+are refused, and so is a text computed from a row.
+
 `search_method` reports `hnsw` only when the index served the query. A missing
 or metric-incompatible index falls back to `exact`; a stale writable index may
 catch up at query entry, while a stale index that cannot catch up also falls
 back. `exact:true` always bypasses HNSW. `refresh_index` incorporates pending index changes and
 `drop_index` removes the index while retaining vectors. `list` reports
 `index_state` (`none`, `online`, or `stale`), pending `delta`, and the number of
-`unembedded` relationships.
+`unembedded` relationships. A saved `.kgl` keeps a built relationship index, so
+a reloaded graph answers through HNSW immediately and reports the same pending
+delta it was saved with; a disk-mode graph's directory keeps no index, as for
+nodes.
+
+From Python, `list_embeddings()` and `embedding_diagnostics()` report
+relationship stores as `entity='relationship'` rows. `embedding_info(type, col,
+entity='relationship')` reads one relationship store; the keyword keeps a node
+type and a relationship type of the same name apart. `describe()` shows each
+relationship store on its `<conn>` line and in `describe(connections=['T'])`.
 
 The `query` procedure ranks the complete declared store before later clauses
 run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
@@ -561,7 +577,10 @@ graph.cypher("""
 
 ```python
 graph.list_embeddings()
-# [{'node_type': 'Article', 'text_column': 'summary', 'dimension': 384, 'count': 1000, 'metric': None}]
+# [{'entity': 'node', 'node_type': 'Article', 'text_column': 'summary',
+#   'store_name': 'summary_emb', 'dimension': 384, 'count': 1000, 'metric': 'cosine'}]
+# Relationship stores follow as entity='relationship' rows keyed
+# 'relationship_type' (never 'node_type'), so check row['entity'] first.
 
 graph.remove_embeddings('Article', 'summary')
 
@@ -583,22 +602,27 @@ Embeddings persist across `save()`/`load()` cycles automatically.
 Export embeddings to a standalone `.kgle` file so they survive graph rebuilds:
 
 ```python
-# Export all embeddings
+# Export all embeddings (node and relationship stores)
 stats = graph.export_embeddings("embeddings.kgle")
-# {'stores': 2, 'embeddings': 5000}
+# {'stores': 2, 'embeddings': 5000, 'relationship_stores': 0, 'relationship_embeddings': 0}
 
-# Export only specific node types
+# Export only specific node types (no relationship stores)
 graph.export_embeddings("embeddings.kgle", ["Article", "Author"])
 
 # Import into a fresh graph — matches by (node_type, node_id)
 result = graph.import_embeddings("embeddings.kgle")
-# {'stores': 2, 'imported': 4800, 'skipped': 200}
+# {'stores': 2, 'imported': 4800, 'skipped': 200, 'dropped_stores': 0,
+#  'relationship_stores': 0, 'relationship_imported': 0, ...}
 ```
+
+Relationship stores travel in the same file, matched by relationship type and
+endpoint ids, with parallel relationships told apart by the key named in
+`relationship_keys` — see the relationship section above.
 
 A `.kgle` carries each store's **provenance** — its `metric`, the embedder
 `model_id`, and per-node text hashes — so a rebuild-from-`.kgle` pipeline keeps
 it: after import, `embedding_info()` reports the model/metric, and
 `embed_texts(mode='changed')` re-embeds only genuinely-changed text instead of
-everything. Current releases import `.kgle` v3/Postcard only. Convert v1/v2
-files with kglite 0.13.4 by importing them into the matching graph and
+everything. Current releases import `.kgle` v3 (node stores) and v4 (node and
+relationship stores), both Postcard. Convert v1/v2 files with kglite 0.13.4 by importing them into the matching graph and
 re-exporting them before upgrading.

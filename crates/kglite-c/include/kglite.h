@@ -499,11 +499,16 @@ KgliteStatusCode kglite_session_build_vector_index(struct KgliteSession *session
                                                    const char **out_error_msg);
 
 /**
- * List every embedding store on the session's graph.
+ * List the node embedding stores on the session's graph.
  *
- * A read-only projection of the graph's embedding stores — the C companion to
- * the Python `list_embeddings()`. Reads a snapshot, so it takes no write lock
- * and never forks.
+ * A read-only projection of the graph's **node** embedding stores — the node
+ * rows of the Python `list_embeddings()`. Relationship embedding stores are
+ * not listed here, because each row names its type under `node_type`; read
+ * them through Cypher instead, with
+ * [`kglite_session_execute_read`](crate::kglite_session_execute_read) and
+ * `CALL db.edge_embeddings.list() YIELD type, text_property, store, dimension,
+ * count, metric, model, index_state`. Reads a snapshot, so it takes no write
+ * lock and never forks.
  *
  * On success `out_report_json` is an owned JSON array, one object per store:
  * `{"node_type": "Note", "text_column": "body", "dimension": 384,

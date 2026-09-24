@@ -153,7 +153,9 @@ core-data version (u32 LE)
 JSON metadata length + metadata
 zstd-compressed topology section
 zstd-compressed column sections by node type
-optional embeddings, timeseries, and secondary-label sections
+optional node-embedding, relationship-embedding (core data version 4 only),
+  timeseries and secondary-label sections
+optional rebuildable index sections: node and relationship HNSW, BM25 text
 ```
 
 Container, codec, and core-data versions are separate. The current reader

@@ -334,11 +334,11 @@ fn resolve_one(
                     ));
                 };
                 let slot = (source.index(), target.index());
-                if !group_cache.contains_key(&slot) {
+                if let std::collections::hash_map::Entry::Vacant(vacant) = group_cache.entry(slot) {
                     let keyed = group_keys(dst, &group, property).map_err(|reason| {
                         refusal(&label, &described, &reason, &store.relationship_type)
                     })?;
-                    group_cache.insert(slot, keyed);
+                    vacant.insert(keyed);
                 }
                 group_cache[&slot]
                     .iter()

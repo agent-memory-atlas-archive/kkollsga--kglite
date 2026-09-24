@@ -398,7 +398,7 @@ with a bring-your-own embedder passed to `g.set_embedder(...)`:
 ```python
 graph.cypher("""
     MATCH (c:Chunk)-[:IN_DOC]->(d:Document)
-    RETURN c.text, d.title, text_score(c.embedding, $query_vec) AS score
+    RETURN c.text, d.title, text_score(c, 'text', $query_vec) AS score
     ORDER BY score DESC LIMIT 5
 """, params={"query_vec": query_embedding})
 ```

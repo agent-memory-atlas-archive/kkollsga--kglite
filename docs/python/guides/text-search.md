@@ -337,6 +337,13 @@ rebuildable cache, not a format break: a graph with no text index writes
 byte-identical files to before, older files load unchanged, and a section a
 build cannot read is skipped rather than refused (rebuild it in that case).
 
+A text index is **not** recorded in the write-ahead log. On a durable graph
+(`kglite.open(path, durable=...)`), building one is not a logged write: the
+index reaches disk only with the next checkpoint (`save()`). After a
+crash, the reopened graph recovers every logged write, but a text index built
+since the last checkpoint is gone. Check with `has_text_index()` and rebuild with
+`build_text_index()`. A vector index is logged, so it survives the same crash.
+
 ## Both lanes in one query
 
 This is the reason the lexical lane exists here rather than in a separate
