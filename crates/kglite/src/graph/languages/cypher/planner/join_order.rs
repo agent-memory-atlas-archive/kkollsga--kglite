@@ -60,11 +60,21 @@ pub(super) fn optimize_pattern_start_node(query: &mut CypherQuery, graph: &DirGr
             let first_sel = estimate_node_selectivity_in_context(first_node, graph, &bound_vars);
             let last_sel = estimate_node_selectivity_in_context(last_node, graph, &bound_vars);
 
-            // Only reverse if last node is significantly more selective (5× threshold).
-            // A 5x advantage already saves 80% of expansion work. `saturating_mul`
-            // because unconstrained nodes report `usize::MAX` and would otherwise
-            // overflow.
-            if last_sel.saturating_mul(5) >= first_sel {
+            // Reverse when the last node is clearly (5×) more selective — a 5×
+            // advantage already saves 80% of expansion work. Within that band
+            // a point-anchored last node beats an unanchored first one: the
+            // estimate counts start candidates, not the first hop's fan-out, so
+            // a one-node hub type ties `{id: e.id}` and would otherwise walk
+            // every hub edge per input row. `saturating_mul` because
+            // unconstrained nodes report `usize::MAX`.
+            let reverse = if is_point_anchor(last_node, graph, &bound_vars)
+                && !is_point_anchor(first_node, graph, &bound_vars)
+            {
+                first_sel.saturating_mul(5) >= last_sel
+            } else {
+                last_sel.saturating_mul(5) < first_sel
+            };
+            if !reverse {
                 continue;
             }
 
@@ -103,6 +113,44 @@ fn anchor_vars(clause: &Clause, bound_vars: &mut HashSet<String>) {
     for (var, _) in &m.node_anchors {
         bound_vars.insert(var.clone());
     }
+}
+
+/// An equality in any spelling: a constant, a `$param`, or a value the
+/// executor resolves from the input row before matching
+/// (`resolve_pattern_vars` turns `EqualsVar` / `EqualsNodeProp` /
+/// `EqualsExpr` into `Equals`), so the matcher can seed from it by lookup.
+fn is_point_equality(matcher: &PropertyMatcher) -> bool {
+    matches!(
+        matcher,
+        PropertyMatcher::Equals(_)
+            | PropertyMatcher::EqualsParam(_)
+            | PropertyMatcher::EqualsVar(_)
+            | PropertyMatcher::EqualsNodeProp { .. }
+            | PropertyMatcher::EqualsExpr(_)
+    )
+}
+
+/// True when the matcher seeds this node with one point lookup per input
+/// row: a variable bound earlier, or an equality on `id` or on a property an
+/// index answers point lookups for.
+fn is_point_anchor(
+    np: &crate::graph::core::pattern_matching::NodePattern,
+    graph: &DirGraph,
+    bound_vars: &HashSet<String>,
+) -> bool {
+    if np.variable.as_ref().is_some_and(|v| bound_vars.contains(v)) {
+        return true;
+    }
+    np.properties.as_ref().is_some_and(|props| {
+        props.iter().any(|(prop, matcher)| {
+            is_point_equality(matcher)
+                && (prop == "id"
+                    || np
+                        .node_type
+                        .as_deref()
+                        .is_some_and(|nt| graph.index_answers_point_lookup(nt, prop)))
+        })
+    })
 }
 
 /// Selectivity estimate that knows about variables bound by earlier clauses.
@@ -171,7 +219,7 @@ pub(super) fn estimate_node_selectivity(
             for (prop, matcher) in props {
                 if prop == "id" {
                     match matcher {
-                        PropertyMatcher::Equals(_) | PropertyMatcher::EqualsParam(_) => {
+                        m if is_point_equality(m) => {
                             return 1usize.saturating_add(secondary_count);
                         }
                         PropertyMatcher::In(vals) => {
@@ -230,8 +278,9 @@ pub(super) fn estimate_node_selectivity(
                     }
                 }
             }
-            // Per-property reduction. These props are all NON-indexed (an
-            // indexed equality returned exact selectivity above). Equality on
+            // Per-property reduction. A constant indexed equality returned
+            // its exact count above; what reaches here is non-indexed, or an
+            // equality whose value is only known at run time. Equality on
             // a typed node uses the real distinct-value count (NDV) when
             // available — `type_count / ndv` — so a low-cardinality field
             // (bool ≈ /2, enum ≈ /k) isn't mis-rated as highly selective and a
@@ -241,7 +290,7 @@ pub(super) fn estimate_node_selectivity(
             let mut est = type_count;
             for (prop, matcher) in props {
                 match matcher {
-                    PropertyMatcher::Equals(_) | PropertyMatcher::EqualsParam(_) => {
+                    m if is_point_equality(m) => {
                         match np
                             .node_type
                             .as_ref()

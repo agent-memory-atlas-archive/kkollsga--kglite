@@ -287,6 +287,14 @@ before upgrading.
 
 ### Fixed
 
+- A multi-node `MATCH` now starts from the end pinned by an `id` (or
+  indexed) equality or an already-bound variable, whichever end it is written
+  on. `UNWIND $rows AS e MATCH (:Hub)-[r:CLAIMS]->(:Doc {id: e.id})` — the
+  bulk relationship-embedding ingest shape — now looks each doc up per row
+  instead of walking every edge of the hub once per input row. The same
+  holds for `$param`, `WITH`-bound and constant values, `OPTIONAL MATCH`,
+  and a later clause matching into a bound node.
+
 - Retained relationship bindings no longer expose a replacement edge's
   properties or embedding scores after deletion and physical-slot reuse.
   Embedding writes reject stale or fabricated relationship selections.

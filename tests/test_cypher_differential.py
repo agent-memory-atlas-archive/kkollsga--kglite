@@ -111,6 +111,23 @@ def self_loop_incidence_graph():
 
 
 @pytest.fixture
+def hub_claims_graph():
+    """One-node hub types over id-keyed docs: a point anchor ties the hub.
+
+    `optimize_pattern_start_node` starts `(:Hub)-[:CLAIMS]->(:Doc {id: e.id})`
+    from the doc (one lookup per row) instead of walking the hub's edges.
+    """
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (h:Hub {id: 0}), (g:Other {id: 1}) "
+        "WITH h, g UNWIND range(10, 19) AS i CREATE (d:Doc {id: i}) "
+        "CREATE (h)-[:CLAIMS {w: i}]->(d) "
+        "FOREACH (_ IN CASE WHEN i % 3 = 0 THEN [1] ELSE [] END | CREATE (g)-[:CLAIMS {w: -i}]->(d))"
+    ).to_list()
+    return graph
+
+
+@pytest.fixture
 def relationship_stored_type_graph():
     """A relationship that stores its own `type` property.
 
@@ -250,6 +267,25 @@ def edge_text_differential_graph():
 
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    (
+        "start_node_row_bound_id_anchor",
+        "hub_claims_graph",
+        "UNWIND $batch AS e MATCH (h:Hub)-[r:CLAIMS]->(d:Doc {id: e.id}) RETURN d.id AS d, r.w AS w",
+        {"batch": [{"id": 12}, {"id": 15}, {"id": 99}]},
+    ),
+    (
+        "start_node_row_bound_id_anchor_written_first",
+        "hub_claims_graph",
+        "UNWIND $ids AS x MATCH (d:Doc {id: x})<-[r:CLAIMS]-(h) RETURN d.id AS d, h.id AS h, r.w AS w",
+        {"ids": [12, 15, 99]},
+    ),
+    (
+        "start_node_bound_endpoint_later_clause",
+        "hub_claims_graph",
+        "UNWIND $batch AS e MATCH (d:Doc {id: e.id}) OPTIONAL MATCH (h:Other)-[r:CLAIMS]->(d) "
+        "RETURN d.id AS d, r.w AS w",
+        {"batch": [{"id": 12}, {"id": 13}, {"id": 99}]},
+    ),
     (
         "relationship_stored_type_pushdown",
         "relationship_stored_type_graph",

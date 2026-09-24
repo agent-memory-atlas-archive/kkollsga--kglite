@@ -962,10 +962,6 @@ fn attach_diagnostics(
     result.diagnostics = Some(diagnostics);
 }
 
-/// Run the embedder on collected texts; inject the vectors into a clone of
-/// the param map. Caller-supplied params are not mutated.
-// KgError carries query context; boxing it would only burden an error path.
-#[allow(clippy::result_large_err)]
 /// Lets a missing-store error name `text_score` and the source property the
 /// user wrote instead of the `vector_score` / `<property>_emb` it became.
 fn record_text_score_stores(
@@ -987,6 +983,10 @@ fn record_text_score_stores(
     );
 }
 
+/// Run the embedder on collected texts; inject the vectors into a clone of
+/// the param map. Caller-supplied params are not mutated.
+// KgError carries query context; boxing it would only burden an error path.
+#[allow(clippy::result_large_err)]
 fn embed_into_params(
     opts: &ExecuteOptions<'_>,
     rewrite: &cypher::planner::simplification::TextScoreRewrite,

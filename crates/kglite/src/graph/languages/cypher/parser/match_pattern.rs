@@ -672,6 +672,46 @@ pub(super) fn backtick_quote(name: &str) -> String {
     out
 }
 
+/// The pattern shapes `shortestPath` / `allShortestPaths` can search: two
+/// nodes joined by exactly one relationship, whose minimum length is 0 or 1
+/// (openCypher, as Neo4j enforces it). A longer chain used to search along its
+/// first relationship only, leaving the middle nodes unbound; a larger
+/// minimum used to be ignored and return a shorter path.
+fn validate_shortest_path_pattern(pattern: &Pattern, function: &str) -> Result<(), String> {
+    let edges: Vec<&EdgePattern> = pattern
+        .elements
+        .iter()
+        .filter_map(|element| match element {
+            PatternElement::Edge(edge) => Some(edge),
+            PatternElement::Node(_) => None,
+        })
+        .collect();
+    if edges.len() != 1 {
+        return Err(format!(
+            "{function}() requires a pattern of two nodes joined by exactly one relationship, \
+             like (a)-[:R*..5]-(b); this pattern has {} relationships across {} nodes.",
+            edges.len(),
+            pattern.elements.len() - edges.len()
+        ));
+    }
+    if let Some((min, max)) = edges[0].var_length {
+        if min > 1 {
+            let written = if !edges[0].var_length_max_written {
+                format!("*{min}..")
+            } else if min == max {
+                format!("*{min}")
+            } else {
+                format!("*{min}..{max}")
+            };
+            return Err(format!(
+                "{function}() does not support a minimum length other than 0 or 1, \
+                 but the pattern writes `{written}` (minimum {min})."
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod extractor_parity_tests {
     use super::super::super::tokenizer::tokenize_cypher_with_positions;
@@ -748,44 +788,4 @@ mod extractor_parity_tests {
             }
         }
     }
-}
-
-/// The pattern shapes `shortestPath` / `allShortestPaths` can search: two
-/// nodes joined by exactly one relationship, whose minimum length is 0 or 1
-/// (openCypher, as Neo4j enforces it). A longer chain used to search along its
-/// first relationship only, leaving the middle nodes unbound; a larger
-/// minimum used to be ignored and return a shorter path.
-fn validate_shortest_path_pattern(pattern: &Pattern, function: &str) -> Result<(), String> {
-    let edges: Vec<&EdgePattern> = pattern
-        .elements
-        .iter()
-        .filter_map(|element| match element {
-            PatternElement::Edge(edge) => Some(edge),
-            PatternElement::Node(_) => None,
-        })
-        .collect();
-    if edges.len() != 1 {
-        return Err(format!(
-            "{function}() requires a pattern of two nodes joined by exactly one relationship, \
-             like (a)-[:R*..5]-(b); this pattern has {} relationships across {} nodes.",
-            edges.len(),
-            pattern.elements.len() - edges.len()
-        ));
-    }
-    if let Some((min, max)) = edges[0].var_length {
-        if min > 1 {
-            let written = if !edges[0].var_length_max_written {
-                format!("*{min}..")
-            } else if min == max {
-                format!("*{min}")
-            } else {
-                format!("*{min}..{max}")
-            };
-            return Err(format!(
-                "{function}() does not support a minimum length other than 0 or 1, \
-                 but the pattern writes `{written}` (minimum {min})."
-            ));
-        }
-    }
-    Ok(())
 }
