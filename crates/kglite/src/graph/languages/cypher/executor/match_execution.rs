@@ -313,7 +313,7 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<ResultSet, String> {
         if let Some(pa) = clause.path_assignments.first() {
             if pa.is_shortest_path {
-                return self.execute_shortest_path_match(clause, pa, existing);
+                return self.execute_shortest_path_match(clause, pa, existing, inline_where);
             }
         }
 

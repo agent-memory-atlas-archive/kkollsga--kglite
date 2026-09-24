@@ -91,133 +91,223 @@ fn exact_shortest_hops(
 }
 
 /// One endpoint pair a `shortestPath` clause searches, with the input row it
-/// came from when a prior MATCH supplied one.
-type EndpointPair<'r> = (NodeIndex, NodeIndex, Option<&'r ResultRow>);
+/// came from (`None` only when the clause opens the query). A bound endpoint
+/// is only ever paired with the node it is bound to, so writing both
+/// variables into the output row never re-binds one.
+struct EndpointPair<'r> {
+    source: NodeIndex,
+    target: NodeIndex,
+    prior_row: Option<&'r ResultRow>,
+}
+
+/// The two endpoint node patterns of a `shortestPath` pattern.
+fn shortest_path_endpoints(pattern: &Pattern) -> Result<(&NodePattern, &NodePattern), String> {
+    let elements = &pattern.elements;
+    if elements.len() < 3 {
+        return Err("shortestPath requires a pattern like (a)-[:REL*..N]->(b)".to_string());
+    }
+    let PatternElement::Node(source) = &elements[0] else {
+        return Err("shortestPath pattern must start with a node".to_string());
+    };
+    let Some(PatternElement::Node(target)) = elements.last() else {
+        return Err("shortestPath pattern must end with a node".to_string());
+    };
+    Ok((source, target))
+}
+
+/// How one endpoint variable stands on one input row.
+enum EndpointAnchor {
+    /// An earlier clause bound it — as a pattern binding or as a node value.
+    Bound(NodeIndex),
+    /// Bound to NULL (an unmatched OPTIONAL MATCH) or to a value that is not a
+    /// node: no node can match it, so the row yields nothing.
+    NoMatch,
+    /// Not bound before this clause: resolved from the pattern.
+    Free,
+}
 
 impl<'a> CypherExecutor<'a> {
-    /// The `(source, target, prior_row)` work-list one `shortestPath` clause
-    /// searches over.
+    /// Where `variable` stands on `row`. A stale node value is an error, never
+    /// a reason to widen the endpoint to a scan.
+    fn shortest_path_anchor(
+        &self,
+        row: &ResultRow,
+        variable: Option<&str>,
+    ) -> Result<EndpointAnchor, String> {
+        let Some(var) = variable else {
+            return Ok(EndpointAnchor::Free);
+        };
+        if let Some(&idx) = row.node_bindings.get(var) {
+            return Ok(EndpointAnchor::Bound(idx));
+        }
+        if let Some(idx) = super::projected_targets::projected_node_target(self.graph, row, var)? {
+            return Ok(EndpointAnchor::Bound(idx));
+        }
+        if row.projected.contains_key(var)
+            || row.edge_bindings.contains_key(var)
+            || row.path_bindings.contains_key(var)
+        {
+            return Ok(EndpointAnchor::NoMatch);
+        }
+        Ok(EndpointAnchor::Free)
+    }
+
+    /// The `(source, target)` work-list one `shortestPath` clause searches,
+    /// built per input row.
     ///
-    /// Two shapes, and the difference between them is four orders of
-    /// magnitude. When a prior MATCH already bound both endpoints (the
-    /// canonical `MATCH (a {id: X}), (b {id: Y}) MATCH p =
-    /// shortestPath((a)-[*]-(b))`) each input row contributes exactly one
-    /// pair. With no prior bindings the endpoints are resolved by pattern and
-    /// crossed, which is the case the row check below governs.
+    /// Each endpoint anchors independently: a variable an earlier clause bound
+    /// (a pattern binding, or a node value from `WITH` / `UNWIND` /
+    /// `startNode(r)` / a parameter) contributes exactly that node — checked
+    /// against the endpoint's labels and properties — and only a free endpoint
+    /// is resolved from its pattern. Resolving a bound endpoint from its bare
+    /// pattern instead returns every node in the graph and turns one search
+    /// into an all-pairs cross product that also re-binds the variable.
     fn shortest_path_endpoint_pairs<'r>(
         &self,
-        source_pattern: &NodePattern,
-        target_pattern: &NodePattern,
+        pattern: &Pattern,
         existing: &'r ResultSet,
     ) -> Result<Vec<EndpointPair<'r>>, String> {
-        // Build the (source_idx, target_idx, prior_row) work-list.
-        //
-        // When the source or target variable is already bound from a
-        // prior MATCH clause (the canonical Neo4j pattern is `MATCH
-        // (a {id: X}), (b {id: Y}) MATCH p = shortestPath((a)-[*]-(b))`),
-        // we MUST use the bound NodeIndex and skip re-resolution. Calling
-        // `find_matching_nodes_pub` on the bare-variable patterns instead
-        // (correctly) returns ALL nodes in the graph — turning a single
-        // BFS into a 500K × 500K cartesian-product runaway on realistic
-        // agent workloads.
-        //
-        // Fast path: every input row contributes exactly one (src, tgt)
-        // pair (or zero, if a variable isn't bound and the pattern is
-        // bare). Slow path (no prior rows): fall back to full pattern
-        // resolution + cartesian product, matching pre-fix behaviour
-        // for bare-pattern shortestPath callers.
-        let src_var = source_pattern.variable.as_deref();
-        let tgt_var = target_pattern.variable.as_deref();
-
-        let pairs: Vec<EndpointPair<'r>> = if !existing.rows.is_empty()
-            && src_var
-                .map(|v| existing.rows[0].node_bindings.contains_key(v))
-                .unwrap_or(false)
-            && tgt_var
-                .map(|v| existing.rows[0].node_bindings.contains_key(v))
-                .unwrap_or(false)
-        {
-            // Fast path — both endpoints pre-bound. One pair per input row.
-            let mut out = Vec::with_capacity(existing.rows.len());
-            for row in &existing.rows {
-                let src = match src_var.and_then(|v| row.node_bindings.get(v)) {
-                    Some(&idx) => idx,
-                    None => continue,
-                };
-                let tgt = match tgt_var.and_then(|v| row.node_bindings.get(v)) {
-                    Some(&idx) => idx,
-                    None => continue,
-                };
-                out.push((src, tgt, Some(row)));
-            }
-            out
+        let row_dependent = Self::pattern_has_vars(pattern);
+        let seed_row = ResultRow::new();
+        let rows: Vec<Option<&'r ResultRow>> = if existing.rows.is_empty() {
+            // Only the opening clause sees no rows: the pipeline stops a later
+            // MATCH at an empty input.
+            vec![None]
         } else {
-            // Slow path — no prior bindings; resolve patterns + cartesian product.
-            let executor =
-                PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
-                    .set_deadline(self.deadline)
-                    .set_cancel(self.cancel)
-                    .set_parallel(self.parallel);
-            let source_nodes = executor.find_matching_nodes_pub(source_pattern)?;
-            let target_nodes = executor.find_matching_nodes_pub(target_pattern)?;
-            // Both endpoint scans are node-bounded, but their product is not:
-            // an unanchored `shortestPath((a:X)-[*]-(b:Y))` over two 10k-node
-            // labels asks for 100M pairs here, and `with_capacity` turns that
-            // into a multi-gigabyte allocation (or an abort) before the first
-            // search runs. The pair set IS the materialized row set, so the
-            // ordinary row check governs it.
-            let pairs = source_nodes
+            existing.rows.iter().map(Some).collect()
+        };
+        // Free endpoints whose pattern reads nothing from the row resolve once.
+        let mut free_cache: [Option<Vec<NodeIndex>>; 2] = [None, None];
+        let mut out: Vec<EndpointPair<'r>> = Vec::new();
+
+        for prior_row in rows {
+            let row = prior_row.unwrap_or(&seed_row);
+            let resolved;
+            let pattern = if row_dependent {
+                resolved = self.resolve_pattern_vars(pattern, row);
+                &resolved
+            } else {
+                pattern
+            };
+            let (source_pattern, target_pattern) = shortest_path_endpoints(pattern)?;
+            let src_var = source_pattern.variable.as_deref();
+            let tgt_var = target_pattern.variable.as_deref();
+            let same_var = src_var.is_some() && src_var == tgt_var;
+
+            let src_anchor = self.shortest_path_anchor(row, src_var)?;
+            let tgt_anchor = self.shortest_path_anchor(row, tgt_var)?;
+            if matches!(src_anchor, EndpointAnchor::NoMatch)
+                || matches!(tgt_anchor, EndpointAnchor::NoMatch)
+            {
+                continue;
+            }
+            let mut pre_bindings: Bindings<NodeIndex> = Bindings::new();
+            for (var, anchor) in [(src_var, &src_anchor), (tgt_var, &tgt_anchor)] {
+                if let (Some(v), EndpointAnchor::Bound(idx)) = (var, anchor) {
+                    pre_bindings.insert(v.to_string(), *idx);
+                }
+            }
+
+            let executor = PatternExecutor::with_bindings_and_params(
+                self.graph,
+                None,
+                &pre_bindings,
+                self.params,
+            )
+            .set_deadline(self.deadline)
+            .set_cancel(self.cancel)
+            .set_parallel(self.parallel);
+            let mut candidates = |slot: usize,
+                                  node: &NodePattern,
+                                  anchor: &EndpointAnchor|
+             -> Result<Vec<NodeIndex>, String> {
+                // A bound endpoint goes through the matcher too: its
+                // pre-binding short-circuits the scan to a label and property
+                // check of that one node.
+                if row_dependent || !matches!(anchor, EndpointAnchor::Free) {
+                    return executor.find_matching_nodes_pub(node);
+                }
+                if let Some(cached) = &free_cache[slot] {
+                    return Ok(cached.clone());
+                }
+                let found = executor.find_matching_nodes_pub(node)?;
+                free_cache[slot] = Some(found.clone());
+                Ok(found)
+            };
+            let source_nodes = candidates(0, source_pattern, &src_anchor)?;
+            if source_nodes.is_empty() {
+                continue;
+            }
+            let target_nodes = candidates(1, target_pattern, &tgt_anchor)?;
+
+            // `shortestPath((a)-[*]-(a))`: one variable is one node, so the
+            // pairs are the nodes both endpoint patterns accept.
+            if same_var {
+                let accepted: std::collections::HashSet<NodeIndex> =
+                    target_nodes.into_iter().collect();
+                for &node in source_nodes.iter().filter(|n| accepted.contains(n)) {
+                    self.budget.check_rows(out.len() + 1, "shortestPath")?;
+                    out.push(EndpointPair {
+                        source: node,
+                        target: node,
+                        prior_row,
+                    });
+                }
+                continue;
+            }
+
+            // Each endpoint set is node-bounded, but their product is not: an
+            // unanchored `shortestPath((a:X)-[*]-(b:Y))` over two 10k-node
+            // labels asks for 100M pairs, and the pair set IS the materialized
+            // row set, so the ordinary row check governs it.
+            let total = source_nodes
                 .len()
                 .checked_mul(target_nodes.len())
+                .and_then(|row_pairs| out.len().checked_add(row_pairs))
                 .ok_or_else(|| {
                     "Query row count overflow while executing shortestPath".to_string()
                 })?;
-            self.budget.check_rows(pairs, "shortestPath")?;
-            let mut out = Vec::with_capacity(pairs);
+            self.budget.check_rows(total, "shortestPath")?;
+            out.reserve(total - out.len());
             for &s in &source_nodes {
                 for &t in &target_nodes {
-                    out.push((s, t, None));
+                    out.push(EndpointPair {
+                        source: s,
+                        target: t,
+                        prior_row,
+                    });
                 }
             }
-            out
-        };
-        Ok(pairs)
+        }
+        Ok(out)
     }
 
-    /// Execute a shortestPath MATCH: find shortest path between anchored endpoints
-    /// One output row for a found path.
-    ///
-    /// Starts from the prior row's bindings (when a preceding MATCH supplied
-    /// one) so a downstream RETURN can still see what that MATCH exposed.
-    // Row construction needs both endpoint patterns, both indices and the
-    // hop list; bundling them into a struct would only move the arity.
-    #[allow(clippy::too_many_arguments)]
+    /// One output row for a found path: the input row it extends (so a
+    /// downstream RETURN still sees what earlier clauses exposed), both
+    /// endpoint bindings, and the path.
     fn shortest_path_row(
         &self,
-        prior_row: Option<&ResultRow>,
-        source_pattern: &NodePattern,
-        target_pattern: &NodePattern,
-        source_idx: NodeIndex,
-        target_idx: NodeIndex,
+        pair: &EndpointPair<'_>,
+        endpoint_vars: (Option<&str>, Option<&str>),
         path_variable: &str,
         hops: usize,
         path: Vec<PathHop>,
     ) -> ResultRow {
-        let mut row = match prior_row {
+        let mut row = match pair.prior_row {
             Some(pr) => pr.clone(),
             None => ResultRow::new(),
         };
-        if let Some(ref var) = source_pattern.variable {
-            row.node_bindings.insert(var.clone(), source_idx);
+        if let Some(var) = endpoint_vars.0 {
+            row.node_bindings.insert(var.to_string(), pair.source);
         }
-        if let Some(ref var) = target_pattern.variable {
-            row.node_bindings.insert(var.clone(), target_idx);
+        if let Some(var) = endpoint_vars.1 {
+            row.node_bindings.insert(var.to_string(), pair.target);
         }
         row.path_bindings.insert(
             path_variable.to_string(),
             PathBinding {
                 hop_incarnations: self.capture_path_incarnations(&path),
-                source: source_idx,
+                source: pair.source,
                 hops,
                 path,
             },
@@ -230,27 +320,19 @@ impl<'a> CypherExecutor<'a> {
         clause: &MatchClause,
         path_assignment: &PathAssignment,
         existing: ResultSet,
+        inline_where: Option<&Predicate>,
     ) -> Result<ResultSet, String> {
         let pattern = clause
             .patterns
             .get(path_assignment.pattern_index)
             .ok_or("Invalid pattern index for shortestPath")?;
 
-        // Extract source and target node patterns from the pattern
+        let (source_pattern, target_pattern) = shortest_path_endpoints(pattern)?;
+        let endpoint_vars = (
+            source_pattern.variable.as_deref(),
+            target_pattern.variable.as_deref(),
+        );
         let elements = &pattern.elements;
-        if elements.len() < 3 {
-            return Err("shortestPath requires a pattern like (a)-[:REL*..N]->(b)".to_string());
-        }
-
-        let source_pattern = match &elements[0] {
-            PatternElement::Node(np) => np,
-            _ => return Err("shortestPath pattern must start with a node".to_string()),
-        };
-
-        let target_pattern = match elements.last() {
-            Some(PatternElement::Node(np)) => np,
-            _ => return Err("shortestPath pattern must end with a node".to_string()),
-        };
 
         // Extract edge direction, connection type and hop bounds from the
         // pattern. `min_hops == 0` is what makes a path from a node to itself
@@ -273,11 +355,12 @@ impl<'a> CypherExecutor<'a> {
 
         let connection_types: Option<&[String]> = connection_types_vec.as_deref();
 
-        let pairs = self.shortest_path_endpoint_pairs(source_pattern, target_pattern, &existing)?;
+        let pairs = self.shortest_path_endpoint_pairs(pattern, &existing)?;
 
         let mut all_rows = Vec::new();
 
-        for (source_idx, target_idx, prior_row) in pairs {
+        for pair in &pairs {
+            let (source_idx, target_idx) = (pair.source, pair.target);
             {
                 if source_idx == target_idx {
                     // A `*0..` segment includes the zero-length path: both
@@ -287,11 +370,8 @@ impl<'a> CypherExecutor<'a> {
                     // node back to itself that the BFS below could shorten.
                     if includes_zero_length {
                         all_rows.push(self.shortest_path_row(
-                            prior_row,
-                            source_pattern,
-                            target_pattern,
-                            source_idx,
-                            target_idx,
+                            pair,
+                            endpoint_vars,
                             &path_assignment.variable,
                             0,
                             Vec::new(),
@@ -393,17 +473,26 @@ impl<'a> CypherExecutor<'a> {
 
                 for (path_cost, path_nodes) in exact_paths {
                     all_rows.push(self.shortest_path_row(
-                        prior_row,
-                        source_pattern,
-                        target_pattern,
-                        source_idx,
-                        target_idx,
+                        pair,
+                        endpoint_vars,
                         &path_assignment.variable,
                         path_cost,
                         path_nodes,
                     ));
                 }
             }
+        }
+
+        // The pipeline folds a WHERE that directly follows the opening MATCH
+        // into this call and then skips it as a clause.
+        if let Some(predicate) = inline_where {
+            let mut kept = Vec::with_capacity(all_rows.len());
+            for row in all_rows {
+                if self.evaluate_predicate(predicate, &row)? {
+                    kept.push(row);
+                }
+            }
+            all_rows = kept;
         }
 
         Ok(ResultSet {

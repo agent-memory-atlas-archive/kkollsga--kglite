@@ -357,6 +357,20 @@ before upgrading.
   the target lacks are counted as skipped. The report dicts gain
   `relationship_*` counters; node-only reports keep their keys and values. A
   durable graph journals the import.
+- **`shortestPath` and `allShortestPaths` anchor at endpoints an earlier
+  clause bound.** A bound endpoint was honoured only when both endpoints were
+  pattern bindings from an earlier `MATCH`. With one bound endpoint, or a node
+  value from `WITH`, `UNWIND`, `startNode(r)` or a parameter, both endpoints
+  were resolved again from their patterns. The query returned all-pairs paths,
+  re-bound the variable to other nodes and dropped the input rows. Each
+  endpoint now anchors on its own, row by row. A bound endpoint must satisfy
+  the endpoint's labels and properties. A NULL endpoint yields no row. A
+  deleted node value raises an error instead of widening to a scan. Three
+  related defects are also fixed. Input rows now survive an unanchored search
+  (`UNWIND [1,2] AS x MATCH p = shortestPath(…)` returns two rows). A free
+  endpoint's property map can read row variables (`{name: nm}`). A `WHERE`
+  directly after an opening `MATCH p = shortestPath(…)` is no longer ignored.
+
 ## [0.17.12] - 2026-09-19
 ### Added
 

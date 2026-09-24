@@ -19,6 +19,8 @@
 //! - [`score_fuse`] — the retrieval-fusion scalar: absent lanes, weights, fold
 //! - [`semantics`] — absolute goldens for expression semantics (duplicate
 //!   result columns, `datetime()` time/zone, integer overflow and div-by-zero)
+//! - [`shortest_path`] — `shortestPath` / `allShortestPaths` endpoints an
+//!   earlier clause bound, as pattern bindings or node values
 //! - [`star_projection`] — `*` written beside other projection items:
 //!   which names it stands for, and which explicit item wins a collision
 //! - [`strings`] — string functions and procedure list arguments
@@ -62,6 +64,7 @@ mod relationship_value_accessors;
 mod score_fuse;
 mod self_loops;
 mod semantics;
+mod shortest_path;
 mod star_projection;
 mod strings;
 mod text_bm25;
