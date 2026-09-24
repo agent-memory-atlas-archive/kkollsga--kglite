@@ -311,21 +311,49 @@ pub(crate) fn query_edge_embeddings(
         });
     }
     let metric = resolve_query_metric(store, options.metric.as_deref())?;
-    if !options.exact {
-        if let Some(hits) = query_index(store, query, options.top_k, metric, graph.read_only) {
-            return Ok(EdgeVectorQueryReport {
-                hits,
-                search_method: "hnsw",
-            });
-        }
-    }
-    Ok(EdgeVectorQueryReport {
-        hits: query_exact(store, query, options.top_k, metric),
-        search_method: "exact",
-    })
+    Ok(query_store(
+        store,
+        query,
+        options.top_k,
+        options.exact,
+        metric,
+        graph.read_only,
+    ))
 }
 
-fn resolve_query_metric(
+/// The store half of [`query_edge_embeddings`], for a caller that has already
+/// validated the query against the store and resolved the metric — the fused
+/// `vector_score(r, …) ORDER BY … LIMIT k` route, whose argument errors must
+/// keep the scalar's wording. Same routes, fallbacks and `search_method`.
+pub(crate) fn query_store(
+    store: &EdgeEmbeddingStore,
+    query: &[f32],
+    top_k: usize,
+    exact: bool,
+    metric: DistanceMetric,
+    read_only: bool,
+) -> EdgeVectorQueryReport {
+    if top_k == 0 || store.is_empty() {
+        return EdgeVectorQueryReport {
+            hits: vec![],
+            search_method: "exact",
+        };
+    }
+    if !exact {
+        if let Some(hits) = query_index(store, query, top_k, metric, read_only) {
+            return EdgeVectorQueryReport {
+                hits,
+                search_method: "hnsw",
+            };
+        }
+    }
+    EdgeVectorQueryReport {
+        hits: query_exact(store, query, top_k, metric),
+        search_method: "exact",
+    }
+}
+
+pub(crate) fn resolve_query_metric(
     store: &EdgeEmbeddingStore,
     requested: Option<&str>,
 ) -> Result<DistanceMetric, String> {
@@ -431,12 +459,19 @@ fn query_index(
     Some(hits)
 }
 
+/// Best `top_k` first: score descending, then edge index ascending — a total
+/// order, so the result is deterministic. Partitions before sorting, so an
+/// exact scan over a large store sorts `top_k` hits rather than all of them.
 fn sort_and_truncate(hits: &mut Vec<EdgeVectorQueryHit>, top_k: usize) {
-    hits.sort_by(|left, right| {
+    let order = |left: &EdgeVectorQueryHit, right: &EdgeVectorQueryHit| {
         right
             .score
             .total_cmp(&left.score)
             .then_with(|| left.edge.index().cmp(&right.edge.index()))
-    });
-    hits.truncate(top_k);
+    };
+    if top_k < hits.len() {
+        hits.select_nth_unstable_by(top_k, order);
+        hits.truncate(top_k);
+    }
+    hits.sort_by(order);
 }

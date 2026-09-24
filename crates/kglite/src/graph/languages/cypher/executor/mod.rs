@@ -959,6 +959,7 @@ mod rel_constraint_ddl;
 mod relationship_identity;
 mod retrieval;
 mod retrieval_diagnostics;
+mod retrieval_edge;
 mod retrieval_text;
 pub mod return_clause;
 pub mod rev_procedures;

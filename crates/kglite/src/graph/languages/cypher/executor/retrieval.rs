@@ -7,14 +7,14 @@ use crate::graph::schema::EmbeddingStore;
 use crate::graph::storage::disk::type_index::TypeNodesRef;
 use rustc_hash::FxHashMap;
 
-struct VectorScoreArgs {
-    variable: String,
-    property: String,
-    query: Vec<f32>,
-    options: vector_options::VectorOptions,
+pub(super) struct VectorScoreArgs {
+    pub(super) variable: String,
+    pub(super) property: String,
+    pub(super) query: Vec<f32>,
+    pub(super) options: vector_options::VectorOptions,
 }
 
-enum HnswOutcome {
+pub(super) enum HnswOutcome {
     Indexed(ResultSet, RetrievalDiagnostics),
     Exact(RetrievalDiagnostics),
 }
@@ -160,6 +160,15 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<Option<ResultSet>, String> {
         if limit == 0 {
             return Ok(None);
+        }
+        if let Some(result) = self.try_edge_vector_retrieval_entry(
+            matched,
+            return_clause,
+            score_item_index,
+            score_call,
+            limit,
+        )? {
+            return Ok(Some(result));
         }
         let Some(population) = self.plain_retrieval_population(matched)? else {
             return Ok(None);
@@ -346,7 +355,7 @@ impl<'a> CypherExecutor<'a> {
     /// Parse the constant arguments required by indexed or whole-store retrieval.
     /// Returning `None` delegates unsupported expression shapes to the exact
     /// scorer; evaluation errors keep their established error channel.
-    fn constant_vector_args(
+    pub(super) fn constant_vector_args(
         &self,
         score_expr: &Expression,
         first_row: &ResultRow,
@@ -698,6 +707,34 @@ impl<'a> CypherExecutor<'a> {
 
         let score_expr = self.fold_constants_expr(score_call);
 
+        // A relationship score call has its own index route (`retrieval_edge`);
+        // its exact fallback is the same generic collector as below.
+        match self.try_edge_rows_fused_top_k(
+            &score_expr,
+            descending,
+            limit,
+            &result_set,
+            return_clause,
+            score_item_index,
+        )? {
+            Some(HnswOutcome::Indexed(rs, info)) => {
+                self.record_retrieval(info);
+                return Ok(rs);
+            }
+            Some(HnswOutcome::Exact(info)) => {
+                self.record_retrieval(info);
+                return self.execute_fused_vector_score_exact(
+                    return_clause,
+                    score_item_index,
+                    score_expr,
+                    descending,
+                    limit,
+                    result_set,
+                );
+            }
+            None => {}
+        }
+
         // HNSW fast path: when the score is `vector_score` over a single type
         // whose store carries a built index, search the index instead of scoring
         // every row (the same opt-in approximate path the fluent API auto-uses).
@@ -717,9 +754,28 @@ impl<'a> CypherExecutor<'a> {
             }
             HnswOutcome::Exact(info) => self.record_retrieval(info),
         }
+        self.execute_fused_vector_score_exact(
+            return_clause,
+            score_item_index,
+            score_expr,
+            descending,
+            limit,
+            result_set,
+        )
+    }
 
-        // The generic collector preserves NULLs and stable ties. Reusing it
-        // also keeps exact fallback aligned with ordinary ORDER BY semantics.
+    /// The exact fallback both arms share. The generic collector preserves
+    /// NULLs and stable ties. Reusing it also keeps exact fallback aligned with
+    /// ordinary ORDER BY semantics.
+    fn execute_fused_vector_score_exact(
+        &self,
+        return_clause: &ReturnClause,
+        score_item_index: usize,
+        score_expr: Expression,
+        descending: bool,
+        limit: usize,
+        result_set: ResultSet,
+    ) -> Result<ResultSet, String> {
         let sort_keys = [FusedSortKey {
             expression: score_expr,
             ascending: !descending,

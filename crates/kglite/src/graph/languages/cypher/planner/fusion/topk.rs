@@ -253,6 +253,15 @@ pub(crate) fn fuse_node_scan_top_k(
 /// and projects RETURN expressions only for the k surviving rows. Decline ASC
 /// and NULLS LAST: HNSW narrows highest numeric scores, and the fused clause
 /// carries only the default DESC/null-first ordering.
+///
+/// Entity-agnostic: a relationship score call fuses into the same clause. The
+/// clause's contract — retrieve by the score call, project RETURN for the
+/// winners — does not depend on what the first argument is bound to, so the
+/// executor dispatches on that instead (`retrieval_edge`: a plain single-type
+/// relationship scan is served from the relationship store, anything else from
+/// its materialised rows). The planner therefore checks nothing about the
+/// MATCH, for nodes and relationships alike: a WHERE, extra patterns or bound
+/// endpoints only decide which executor route serves the clause.
 pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
     let mut i = 0;
     while i + 2 < query.clauses.len() {
@@ -260,10 +269,6 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
             i += 1;
             continue;
         };
-        if score_call_reads_relationship(&shape.score_call, &query.clauses[..i]) {
-            i += 1;
-            continue;
-        }
         // HNSW ranks highest scores only. Other directions/null placement use
         // the generic top-k path, which retains their complete ordering contract.
         if !shape.descending || shape.nulls != NullsPlacement::First {
@@ -283,27 +288,6 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
         );
         i += 1;
     }
-}
-
-fn score_call_reads_relationship(call: &Expression, preceding: &[Clause]) -> bool {
-    use crate::graph::core::pattern_matching::PatternElement;
-    let Expression::FunctionCall { args, .. } = call else {
-        return false;
-    };
-    let Some(Expression::Variable(variable)) = args.first() else {
-        return false;
-    };
-    preceding.iter().any(|clause| {
-        let matched = match clause {
-            Clause::Match(matched) | Clause::OptionalMatch(matched) => matched,
-            _ => return false,
-        };
-        matched.patterns.iter().any(|pattern| {
-            pattern.elements.iter().any(|element| {
-                matches!(element, PatternElement::Edge(edge) if edge.variable.as_ref() == Some(variable))
-            })
-        })
-    })
 }
 
 /// Detect `RETURN ... text_bm25(...) AS s ... ORDER BY s DESC LIMIT k` and

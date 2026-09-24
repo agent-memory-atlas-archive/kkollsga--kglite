@@ -165,6 +165,36 @@ def edge_vector_differential_graph():
 
 
 @pytest.fixture
+def edge_vector_exact_graph():
+    """A relationship store with no HNSW index — the exact store route — whose
+    `:R` relationships are all embedded."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (a:N{id:1}),(b:N{id:2}),(c:N{id:3}),"
+        "(a)-[:R{k:0}]->(b),(a)-[:R{k:1}]->(b),(a)-[:R{k:2}]->(c),(b)-[:R{k:3}]->(c),"
+        "(b)-[:R{k:4}]->(a)"
+    )
+    vectors = ([1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [-1.0, 0.0], [0.5, 0.5])
+    for key, vector in enumerate(vectors):
+        graph.cypher(
+            "MATCH ()-[r:R]->() WHERE r.k=$key "
+            "CALL db.edge_embeddings.set({type:'R',text_property:'text',"
+            "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
+            params={"key": key, "vector": vector},
+        )
+    return graph
+
+
+@pytest.fixture
+def edge_vector_sparse_graph(edge_vector_exact_graph):
+    """The exact-route store plus one unembedded `:R` relationship, which
+    scores NULL and ranks first under DESC — a population the store alone
+    cannot serve."""
+    edge_vector_exact_graph.cypher("MATCH (a:N{id:1}),(c:N{id:3}) CREATE (a)-[:R{k:5}]->(c)")
+    return edge_vector_exact_graph
+
+
+@pytest.fixture
 def edge_text_differential_graph():
     """A relationship BM25 index with distinct scores, for optimizer equivalence checks."""
     graph = kglite.KnowledgeGraph()
@@ -261,6 +291,63 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "CALL db.edge_embeddings.query({type:'R',text_property:'text',vector:[1.0,0.0],"
         "top_k:4,exact:true}) YIELD relationship WHERE startNode(relationship).id = 1 "
         "RETURN relationship.k AS k,type(relationship) AS t,endNode(relationship).id AS e",
+        None,
+    ),
+    # `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships: the
+    # trigger shape on an indexed and an unindexed store, endpoint projection
+    # in both directions, a tie at the boundary (the store entry declines and
+    # the matcher's tie order stands), and the WHERE / ASC / NULL-scoring
+    # shapes that keep the pipeline route.
+    (
+        "edge_vector_topk_indexed_scan",
+        "edge_vector_differential_graph",
+        "MATCH ()-[r:R]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_topk_exact_scan",
+        "edge_vector_exact_graph",
+        "MATCH ()-[r:R]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    (
+        "edge_vector_topk_endpoints",
+        "edge_vector_exact_graph",
+        "MATCH (a:N)-[r:R]->(b:N)"
+        " RETURN a.id AS a, b.id AS b, r.k AS k, vector_score(r,'text_emb',[1.0,0.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    (
+        "edge_vector_topk_incoming",
+        "edge_vector_exact_graph",
+        "MATCH (b)<-[r:R]-(a)"
+        " RETURN a.id AS a, b.id AS b, vector_score(r,'text_emb',[1.0,0.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_topk_ties",
+        "edge_vector_exact_graph",
+        "MATCH ()-[r:R]->()"
+        " RETURN r.k AS k, vector_score(r,'text_emb',[1.0,1.0],'dot_product') AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_topk_where",
+        "edge_vector_differential_graph",
+        "MATCH (a:N)-[r:R]->(b:N) WHERE a.id = 1"
+        " RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_topk_asc",
+        "edge_vector_exact_graph",
+        "MATCH ()-[r:R]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s ASC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_topk_unembedded_member",
+        "edge_vector_sparse_graph",
+        "MATCH ()-[r:R]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 2",
         None,
     ),
     # `text_bm25` over relationships: the text top-k fusion claims the
@@ -6122,6 +6209,14 @@ ORDERED_CASES = frozenset(
         "edge_text_score_literal_vector_order",
         "edge_embedding_norm_projection",
         "edge_vector_query_yield_where",
+        "edge_vector_topk_indexed_scan",
+        "edge_vector_topk_exact_scan",
+        "edge_vector_topk_endpoints",
+        "edge_vector_topk_incoming",
+        "edge_vector_topk_ties",
+        "edge_vector_topk_where",
+        "edge_vector_topk_asc",
+        "edge_vector_topk_unembedded_member",
     }
 )
 

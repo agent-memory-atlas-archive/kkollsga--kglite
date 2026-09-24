@@ -5,18 +5,39 @@ use super::*;
 use crate::graph::core::pattern_matching::PatternElement;
 use crate::graph::languages::cypher::parser::parse_cypher;
 
+/// A relationship score call fuses exactly as a node one does: the fused
+/// clause is entity-agnostic and the executor picks the relationship route.
+/// The bail set is the node one — ASC and NULLS LAST keep the generic path.
 #[test]
-fn relationship_vector_score_never_uses_node_retrieval_fusion() {
-    let mut query = parse_cypher(
+fn relationship_vector_score_fuses_like_a_node_score() {
+    let fused = |source: &str| {
+        let mut query = parse_cypher(source).unwrap();
+        super::fusion::fuse_vector_score_order_limit(&mut query);
+        query
+            .clauses
+            .iter()
+            .any(|clause| matches!(clause, Clause::FusedVectorScoreTopK { .. }))
+    };
+    assert!(fused(
         "MATCH ()-[r:R]->() RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score \
-         ORDER BY score DESC LIMIT 3",
-    )
-    .unwrap();
-    super::fusion::fuse_vector_score_order_limit(&mut query);
-    assert!(query
-        .clauses
-        .iter()
-        .all(|clause| !matches!(clause, Clause::FusedVectorScoreTopK { .. })));
+         ORDER BY score DESC LIMIT 3"
+    ));
+    assert!(fused(
+        "MATCH (a)-[r:R]->(b) WHERE a.id = 1 RETURN b.id, vector_score(r,'text_emb',[1.0,0.0]) AS score \
+         ORDER BY score DESC LIMIT 3"
+    ));
+    assert!(!fused(
+        "MATCH ()-[r:R]->() RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score \
+         ORDER BY score ASC LIMIT 3"
+    ));
+    assert!(!fused(
+        "MATCH ()-[r:R]->() RETURN vector_score(r,'text_emb',[1.0,0.0]) AS score \
+         ORDER BY score DESC NULLS LAST LIMIT 3"
+    ));
+    assert!(!fused(
+        "MATCH ()-[r:R]->() RETURN DISTINCT vector_score(r,'text_emb',[1.0,0.0]) AS score \
+         ORDER BY score DESC LIMIT 3"
+    ));
 }
 
 /// The lazy-eligibility contract, pinned as a corpus.

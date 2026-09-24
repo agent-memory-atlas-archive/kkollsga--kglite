@@ -48,6 +48,7 @@ mod deadline_rows;
 mod drop_index;
 mod edge_vector_index;
 mod edge_vector_score;
+mod edge_vector_top_k;
 mod exists_witness;
 mod expressions;
 mod fused_aggregate_labels;

@@ -148,7 +148,7 @@ pub(super) fn execute(
                 }
             };
             let batch_size =
-                optional_positive_usize(params, "batch_size", proc_name)?.unwrap_or(32);
+                optional_positive_usize(params, "batch_size", proc_name)?.unwrap_or(256);
             let metric = optional_string(params, "metric", proc_name)?;
             let report = embed_selected_relationships(
                 graph,

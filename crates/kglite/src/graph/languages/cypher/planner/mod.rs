@@ -617,6 +617,16 @@ fn pass_fuse_node_scan_top_k(query: &mut CypherQuery, ctx: &PassCtx) {
 /// vector_score(...) ORDER BY score LIMIT k` → top-K via a vector-
 /// score min-heap. Projects RETURN expressions only for the k surviving
 /// rows.
+///
+/// **Precondition:** adjacent RETURN / ORDER BY / LIMIT, DESC with NULLS
+/// FIRST, a positive literal limit, no DISTINCT or aggregate (the shared
+/// `match_scored_order_limit` bail set). **Pattern:** the score call reads a
+/// node *or* a relationship; nothing about the MATCH is checked. **Rewrite:**
+/// one `FusedVectorScoreTopK`. The executor picks the route from what the
+/// score call's first argument is bound to — node arm (`retrieval.rs`) or
+/// relationship arm (`retrieval_edge.rs`) — and from whether the MATCH is a
+/// plain scan whose population is the embedding store. **Why-bail:** ASC /
+/// NULLS LAST (HNSW ranks only the highest scores), and the shared set.
 fn pass_fuse_vector_score_order_limit(query: &mut CypherQuery, _ctx: &PassCtx) {
     fuse_vector_score_order_limit(query)
 }

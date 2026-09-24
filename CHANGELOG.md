@@ -121,6 +121,19 @@ before upgrading.
   log: on a durable graph, a text index built after the last checkpoint is
   absent after a crash and must be rebuilt, while vector indexes are logged
   and survive. The text-search guide now states this for both.
+- **Relationship vector top-k is served from the store.** `MATCH (a)-[r:T]->(b)
+  RETURN …, vector_score(r, 'p_emb', $q) AS s ORDER BY s DESC LIMIT k` now
+  takes the same fused route as its node twin: a plain single-type scan whose
+  relationships are all embedded is answered from the relationship store (HNSW
+  when an index is online, exact otherwise — the routes of
+  `db.edge_embeddings.query`) with endpoints bound for the k winners only,
+  instead of scoring every row. 100k relationships × 384 dimensions: 195 ms →
+  4.3 ms, the node twin's cost; the exact `db.edge_embeddings.query` route
+  also got faster (it no longer sorts every hit to keep the top k). Other shapes (a `WHERE`, extra patterns) use the
+  index with an over-fetch filtered to the matched rows, as nodes do. Results
+  are unchanged, including tie order: when scores tie at the cut the query
+  keeps its previous route. `db.edge_embeddings.embed`'s default `batch_size`
+  is now 256, matching `embed_texts`.
 
 ### Changed
 
