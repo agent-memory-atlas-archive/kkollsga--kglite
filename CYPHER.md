@@ -664,12 +664,24 @@ or the same with `text_score` — is served from the store, as it is for nodes:
 - **Any other shape.** It scores its matched rows. With an online index this
   goes through HNSW with a 4× over-fetch filtered to those rows, falling back
   to the exact top-k when the filter underfills.
+- **Several types.** A type alternation `()-[r:A|B]->()` or an untyped
+  `()-[r]->()` (every relationship type the graph holds) is served the same
+  way, per store, then merged into one top-k — when every type in play carries
+  the store. HNSW answers only when every store's index is online; otherwise
+  every store is scanned exactly, so one answer never mixes approximate and
+  exact candidates. On the rows route a store the filter covers only in part
+  must still yield `k` candidates, or the query falls back to the exact top-k.
+  A type in play without the store raises the scalar's own error (`no
+  embedding 'p_emb' found for relationship type 'X'`), as a node label without
+  a store does. Each relationship is scored under its own store's metric,
+  exactly as the unfused query scores it row by row.
 
 An HNSW answer is approximate; pass `{exact:true}` as the final argument to
 force the exact route. When scores tie at the cut, the ordinary pipeline
 answers, so the order is the one the unfused query gives.
 `diagnostics.retrieval` reports the route, with store
-`relationship:TYPE.property_emb`, and `disabled_passes=
+`relationship:TYPE.property_emb` — a comma-separated list, in type order, when
+several stores were merged — and `disabled_passes=
 ['fuse_vector_score_order_limit']` turns the fusion off for nodes and
 relationships alike. `db.edge_embeddings.query` below ranks a whole store
 without a pattern.
@@ -716,6 +728,26 @@ CALL db.edge_embeddings.query({
   type:'SUPPORTS', text_property:'evidence', text:$question, top_k:10
 }) YIELD relationship, score
 ```
+
+**Several types at once.** `types:['SUPPORTS','REFUTES']` in place of `type`
+ranks those stores together, and leaving out both `type` and `types` ranks
+every relationship store for `text_property`. Each store answers on its own
+route (HNSW when its index is online, exact otherwise) for its own `top_k`,
+and the rows merge into one `top_k`: score descending, then relationship type,
+then relationship slot, so the order is deterministic. Each row also yields
+`type`, the hit's relationship type, and its own `search_method`:
+
+```cypher
+CALL db.edge_embeddings.query({
+  types:['SUPPORTS','REFUTES'], text_property:'evidence', vector:$vector, top_k:10
+}) YIELD relationship, score, type, search_method
+```
+
+A named type with no such store is refused by name, and so is `type` together
+with `types`, an empty `types`, or a `text_property` no store carries. Stores
+that declare different metrics refuse the merge, naming both: their scores
+are not on one scale. Pass `metric` to score every store under one metric, or
+query the types separately. `text:` works the same way across types.
 
 `text` needs `set_embedder()` (or `ExecuteOptions::embedder` from Rust);
 without one the call is refused. `text` together with `vector` is refused, and

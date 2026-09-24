@@ -18,6 +18,10 @@ Three shapes, mirroring the node harness:
   10k x 128 store with a recall@10 oracle computed outside the timed region
   (twin: ``test_bench_hnsw_search`` / ``test_bench_exact_vector_search``).
   ``min``.
+* **Cross-type query** — ``db.edge_embeddings.query({types: [...]})`` over
+  three stores that split the 10k x 128 query corpus, against the
+  single-store query on the same total (its twin is the single store, not a
+  node path). ``min``.
 * **Ingest through the embedder** — ``db.edge_embeddings.embed`` filling a
   fresh store from a deterministic model (twin: ``embed_texts``). Each round
   ingests into a fresh graph, a once-per-event cost, so the **mean** of
@@ -213,6 +217,79 @@ def test_bench_edge_query_10k_128(benchmark, query_twins, exact):
     edge_min = min(benchmark.stats.stats.data)
     benchmark.extra_info.update({"node_twin_min_s": node_min, "edge_over_node": edge_min / node_min})
     assert edge_min <= MAX_RATIO * node_min, f"relationship query {edge_min / node_min:.2f}x its node twin"
+
+
+CROSS_TYPES = ("CLAIMS_A", "CLAIMS_B", "CLAIMS_C")
+
+
+@pytest.fixture(scope="module")
+def cross_type_graph(query_twins):
+    """The query corpus split across three relationship types by ``id % 3``,
+    each an indexed store — the same total the single-store cell ranks."""
+    _, _, vectors = query_twins
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(pd.DataFrame({"id": [0], "title": ["hub"]}), "Hub", "id", "title")
+    ids = np.arange(QUERY_N, dtype=np.int64)
+    graph.add_nodes(pd.DataFrame({"id": ids, "title": [f"d{i}" for i in ids]}), "Doc", "id", "title")
+    for offset, rel_type in enumerate(CROSS_TYPES):
+        members = ids[ids % 3 == offset]
+        graph.add_connections(
+            pd.DataFrame({"hub": np.zeros(len(members), dtype=np.int64), "doc": members}),
+            rel_type,
+            "Hub",
+            "hub",
+            "Doc",
+            "doc",
+        )
+        for start in range(0, len(members), SET_BATCH):
+            batch = [{"id": int(i), "vector": vectors[i].tolist()} for i in members[start : start + SET_BATCH]]
+            graph.cypher(
+                f"UNWIND $batch AS entry MATCH (:Hub)-[r:{rel_type}]->(:Doc {{id: entry.id}}) "
+                "WITH collect({relationship: r, vector: entry.vector}) AS entries "
+                f"CALL db.edge_embeddings.set({{type:'{rel_type}', text_property:'summary', entries: entries, "
+                "metric:'cosine'}) YIELD stored RETURN stored",
+                params={"batch": batch},
+            )
+        graph.cypher(
+            f"CALL db.edge_embeddings.build_index({{type:'{rel_type}', text_property:'summary'}}) "
+            "YIELD indexed RETURN indexed"
+        )
+    return graph
+
+
+def _cross_type_query(graph: kglite.KnowledgeGraph, query: list[float], *, exact: bool) -> list[int]:
+    rows = graph.cypher(
+        "CALL db.edge_embeddings.query({types:$types, text_property:'summary', vector:$q, top_k:$k, exact:$exact}) "
+        "YIELD relationship, search_method RETURN endNode(relationship).id AS end, search_method",
+        params={"types": list(CROSS_TYPES), "q": query, "k": TOP_K, "exact": exact},
+    ).to_list()
+    assert {row["search_method"] for row in rows} == {"exact" if exact else "hnsw"}
+    return [int(row["end"]) for row in rows]
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("exact", [True, False], ids=["exact", "hnsw"])
+def test_bench_edge_cross_type_query_3x_10k_128(benchmark, query_twins, cross_type_graph, exact):
+    """A three-store merged query against the single-store query on the same corpus."""
+    _, edges, vectors = query_twins
+    query = vectors[QUERY_N // 4 + 370].tolist()
+    exact_truth = _cross_type_query(cross_type_graph, query, exact=True)
+    assert exact_truth == _edge_query(edges, query, exact=True), "the merge must equal the single store"
+    single_min = _min_seconds(
+        lambda: _edge_query(edges, query, exact=exact), SEARCH_ROUNDS, warmup=SEARCH_WARMUP_ROUNDS
+    )
+    rows = benchmark.pedantic(
+        _cross_type_query,
+        args=(cross_type_graph, query),
+        kwargs={"exact": exact},
+        rounds=SEARCH_ROUNDS,
+        iterations=1,
+        warmup_rounds=SEARCH_WARMUP_ROUNDS,
+    )
+    assert rows[0] == QUERY_N // 4 + 370
+    merged_min = min(benchmark.stats.stats.data)
+    benchmark.extra_info.update({"single_store_min_s": single_min, "merged_over_single": merged_min / single_min})
+    assert merged_min <= MAX_RATIO * single_min, f"cross-type query {merged_min / single_min:.2f}x the single store"
 
 
 class _MatrixEmbedder:

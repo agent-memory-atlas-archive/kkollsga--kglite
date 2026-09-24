@@ -27,6 +27,8 @@ query to DIFFERENTIAL_QUERIES** so the regression is permanent.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 import kglite
@@ -195,6 +197,29 @@ def edge_vector_sparse_graph(edge_vector_exact_graph):
 
 
 @pytest.fixture
+def edge_vector_cross_type_graph():
+    """Three relationship types `R`, `S`, `Q`, each with its own `text` store
+    (`R` and `S` indexed, `Q` not), at distinct angles — the alternation and
+    untyped shapes that merge several stores."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:N{id:1}),(:N{id:2}),(:N{id:3})")
+    edges = [("R", 0, 0.1, 2), ("S", 1, 0.5, 3), ("Q", 2, 0.9, 2), ("R", 3, 1.3, 3), ("S", 4, 1.7, 2), ("Q", 5, 2.4, 3)]
+    for rel_type, key, angle, target in edges:
+        graph.cypher(
+            f"MATCH (a:N{{id:1}}),(b:N{{id:$target}}) CREATE (a)-[r:{rel_type}{{k:$key}}]->(b) "
+            f"WITH r CALL db.edge_embeddings.set({{type:'{rel_type}',text_property:'text',"
+            "entries:[{relationship:r,vector:$vector}]}) YIELD stored RETURN stored",
+            params={"key": key, "target": target, "vector": [math.cos(angle), math.sin(angle)]},
+        )
+    for rel_type in ("R", "S"):
+        graph.cypher(
+            f"CALL db.edge_embeddings.build_index({{type:'{rel_type}',text_property:'text'}}) "
+            "YIELD indexed RETURN indexed"
+        )
+    return graph
+
+
+@pytest.fixture
 def edge_text_differential_graph():
     """A relationship BM25 index with distinct scores, for optimizer equivalence checks."""
     graph = kglite.KnowledgeGraph()
@@ -348,6 +373,34 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "edge_vector_topk_unembedded_member",
         "edge_vector_sparse_graph",
         "MATCH ()-[r:R]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    # Several relationship types in play: an alternation and an untyped scan
+    # merge every type's store (the entry route), a WHERE takes the rows
+    # route, and ASC is a bail shape the pass leaves to the pipeline.
+    (
+        "edge_vector_cross_type_alternation",
+        "edge_vector_cross_type_graph",
+        "MATCH ()-[r:R|S|Q]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.3,1.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    (
+        "edge_vector_cross_type_untyped",
+        "edge_vector_cross_type_graph",
+        "MATCH ()-[r]->() RETURN r.k AS k, vector_score(r,'text_emb',[1.0,0.2]) AS s ORDER BY s DESC LIMIT 4",
+        None,
+    ),
+    (
+        "edge_vector_cross_type_where",
+        "edge_vector_cross_type_graph",
+        "MATCH (a:N)-[r:R|S]->(b:N) WHERE b.id = 2"
+        " RETURN r.k AS k, vector_score(r,'text_emb',[0.3,1.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_cross_type_asc",
+        "edge_vector_cross_type_graph",
+        "MATCH ()-[r:R|S|Q]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.3,1.0]) AS s ORDER BY s ASC LIMIT 2",
         None,
     ),
     # `text_bm25` over relationships: the text top-k fusion claims the
@@ -6217,6 +6270,10 @@ ORDERED_CASES = frozenset(
         "edge_vector_topk_where",
         "edge_vector_topk_asc",
         "edge_vector_topk_unembedded_member",
+        "edge_vector_cross_type_alternation",
+        "edge_vector_cross_type_untyped",
+        "edge_vector_cross_type_where",
+        "edge_vector_cross_type_asc",
     }
 )
 

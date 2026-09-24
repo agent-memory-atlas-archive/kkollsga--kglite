@@ -9,8 +9,8 @@ use crate::graph::edge_embedding_generation::{
     SelectedEdgeText,
 };
 use crate::graph::edge_embeddings::vector_index::{
-    build_edge_vector_index, drop_edge_vector_index, refresh_edge_vector_index,
-    EdgeVectorIndexOptions, EdgeVectorQueryOptions, EdgeVectorQueryReport,
+    build_edge_vector_index, drop_edge_vector_index, query_edge_embedding_stores,
+    refresh_edge_vector_index, EdgeStoreQueryHit, EdgeVectorIndexOptions, EdgeVectorQueryOptions,
 };
 use crate::graph::edge_embeddings::{
     drop_edge_embedding_store, remove_edge_embeddings, upsert_edge_embeddings,
@@ -260,7 +260,7 @@ pub(super) fn list(
 pub(super) fn query(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
-) -> Result<EdgeVectorQueryReport, String> {
+) -> Result<Vec<EdgeStoreQueryHit>, String> {
     let proc_name = "db.edge_embeddings.query";
     reject_unknown_keys(
         &format!("CALL {proc_name}"),
@@ -273,15 +273,15 @@ pub(super) fn query(
              skipped query preparation, so pass the query as 'vector'"
         ));
     }
-    let relationship_type = require_string(params, "type", proc_name)?;
     let text_property = require_string(params, "text_property", proc_name)?;
+    let types = query_types(graph, params, &text_property, proc_name)?;
     let vector = numeric_vector(params.get("vector"), proc_name)?;
     let top_k = optional_nonnegative_usize(params, "top_k", proc_name)?.unwrap_or(10);
     let exact = optional_boolean(params, "exact", proc_name)?.unwrap_or(false);
     let metric = optional_string(params, "metric", proc_name)?;
-    crate::graph::edge_embeddings::vector_index::query_edge_embeddings(
+    query_edge_embedding_stores(
         graph,
-        &relationship_type,
+        &types,
         &text_property,
         &vector,
         EdgeVectorQueryOptions {
@@ -290,6 +290,82 @@ pub(super) fn query(
             metric,
         },
     )
+}
+
+/// The relationship types a `query` ranks: `type` alone, the `types` list
+/// (sorted, duplicates dropped), or — with neither — every type that has a
+/// `text_property` store. A named type without a store is refused later, by
+/// name, when its store is looked up.
+fn query_types(
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+    text_property: &str,
+    proc_name: &str,
+) -> Result<Vec<String>, String> {
+    let listed = match params.get("types") {
+        None | Some(Value::Null) => None,
+        Some(Value::List(items)) => Some(items),
+        Some(value) => {
+            return Err(format!(
+                "CALL {proc_name}: 'types' must be a list of relationship types, got {}",
+                value.type_name()
+            ))
+        }
+    };
+    let single = match params.get("type") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(require_string(params, "type", proc_name)?),
+    };
+    let mut types = match (single, listed) {
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "CALL {proc_name}: 'type' and 'types' are mutually exclusive; name one \
+                 relationship type, or a list of them"
+            ))
+        }
+        (Some(single), None) => vec![single],
+        (None, Some(items)) => {
+            let mut types = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::String(name) if !name.is_empty() => types.push(name.clone()),
+                    other => {
+                        return Err(format!(
+                            "CALL {proc_name}: 'types' must hold non-empty strings, got {}",
+                            other.type_name()
+                        ))
+                    }
+                }
+            }
+            if types.is_empty() {
+                return Err(format!(
+                    "CALL {proc_name}: 'types' is empty; name at least one relationship type, \
+                     or omit it to rank every '{text_property}' store"
+                ));
+            }
+            types
+        }
+        (None, None) => {
+            let types: Vec<String> = graph
+                .edge_embeddings
+                .keys()
+                .filter(|(_, store_name)| {
+                    crate::graph::embeddings::text_column_of(store_name) == Some(text_property)
+                })
+                .map(|(rel_type, _)| rel_type.clone())
+                .collect();
+            if types.is_empty() {
+                return Err(format!(
+                    "CALL {proc_name}: no relationship embedding store for text_property \
+                     '{text_property}'"
+                ));
+            }
+            types
+        }
+    };
+    types.sort();
+    types.dedup();
+    Ok(types)
 }
 
 /// Every parameter each `db.edge_embeddings.*` procedure reads, by name.
@@ -330,6 +406,7 @@ fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         // "Accepted:" line names every spelling a caller may write.
         "db.edge_embeddings.query" => &[
             "type",
+            "types",
             "text_property",
             "vector",
             "text",

@@ -18,6 +18,14 @@
 //!   back to the exact generic top-k when the filter underfills; without one
 //!   the generic top-k scores the rows exactly.
 //!
+//! **Several types.** A type alternation `[r:A|B]` or an untyped `[r]` puts
+//! several relationship types in play (the untyped pattern: every type the
+//! graph holds). Both routes then query each type's store and merge, but only
+//! when every type in play carries the store; otherwise they step aside and
+//! the scalar raises its missing-store error, as it does for a node label
+//! without a store. Each store scores under its own metric, exactly as the
+//! scalar does row by row, so the merge ranks what the unfused query ranks.
+//!
 //! **Tie order.** The unfused query ranks equal scores in the order the
 //! pattern matcher produced the rows, which the entry never sees. So the entry
 //! declines whenever the k+1 best scores are not strictly decreasing, and the
@@ -35,19 +43,21 @@ use crate::graph::edge_embeddings::EdgeEmbeddingStore;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use rustc_hash::FxHashMap;
 
-/// A plain single-hop relationship scan the entry can serve from the store.
+/// A plain single-hop relationship scan the entry can serve from the stores.
 struct PlainEdgeScan<'q> {
     variable: &'q str,
-    rel_type: &'q str,
+    /// The written types, deduplicated; `None` for an untyped pattern.
+    rel_types: Option<Vec<&'q str>>,
     left: &'q NodePattern,
     right: &'q NodePattern,
     outgoing: bool,
 }
 
-/// `(a)-[r:T]->(b)` or `(a)<-[r:T]-(b)` with nothing that filters: no WHERE,
-/// no property maps, no multi-label or parameterised labels, no paths, hints
-/// or anchors, distinct variables. Undirected patterns match each
-/// relationship twice and are not a store-shaped population.
+/// `(a)-[r:T]->(b)`, `(a)-[r:A|B]->(b)` or `(a)-[r]->(b)`, either direction,
+/// with nothing that filters: no WHERE, no property maps, no multi-label or
+/// parameterised labels, no paths, hints or anchors, distinct variables.
+/// Undirected patterns match each relationship twice and are not a
+/// store-shaped population.
 fn plain_edge_scan(matched: &MatchClause) -> Option<PlainEdgeScan<'_>> {
     let [pattern] = matched.patterns.as_slice() else {
         return None;
@@ -65,11 +75,18 @@ fn plain_edge_scan(matched: &MatchClause) -> Option<PlainEdgeScan<'_>> {
     {
         return None;
     }
-    let (Some(variable), Some(rel_type)) = (&edge.variable, &edge.connection_type) else {
-        return None;
+    let variable = edge.variable.as_deref()?;
+    let rel_types = match (&edge.connection_types, &edge.connection_type) {
+        (Some(types), _) => {
+            let mut types: Vec<&str> = types.iter().map(String::as_str).collect();
+            types.sort_unstable();
+            types.dedup();
+            Some(types)
+        }
+        (None, Some(single)) => Some(vec![single.as_str()]),
+        (None, None) => None,
     };
-    if edge.connection_types.is_some()
-        || edge.properties.is_some()
+    if edge.properties.is_some()
         || edge.var_length.is_some()
         || edge.edge_filter.is_some()
         || !edge.type_params.is_empty()
@@ -84,16 +101,31 @@ fn plain_edge_scan(matched: &MatchClause) -> Option<PlainEdgeScan<'_>> {
         return None;
     }
     let names = [left.variable.as_deref(), right.variable.as_deref()];
-    if names.contains(&Some(variable.as_str())) || (names[0].is_some() && names[0] == names[1]) {
+    if names.contains(&Some(variable)) || (names[0].is_some() && names[0] == names[1]) {
         return None;
     }
     Some(PlainEdgeScan {
         variable,
-        rel_type,
+        rel_types,
         left,
         right,
         outgoing: edge.direction == EdgeDirection::Outgoing,
     })
+}
+
+/// One store's winners, tagged with the store's route.
+struct StoreHits {
+    hits: Vec<EdgeVectorQueryHit>,
+    search_method: &'static str,
+}
+
+/// The diagnostics name of the stores a merged route read, in type order.
+fn store_label(rel_types: &[&str], property: &str) -> String {
+    rel_types
+        .iter()
+        .map(|rel_type| format!("relationship:{rel_type}.{property}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Whether the k+1 best hits leave the first k ranked by score alone: no two
@@ -129,39 +161,64 @@ impl<'a> CypherExecutor<'a> {
         if args.variable != scan.variable {
             return Ok(None);
         }
-        let Some(store) = self
-            .graph
-            .edge_embeddings
-            .get(&(scan.rel_type.to_string(), args.property.clone()))
-        else {
-            return Ok(None);
+        let counts = self.graph.get_edge_type_counts();
+        let rel_types: Vec<&str> = match &scan.rel_types {
+            Some(types) => types.clone(),
+            None => {
+                let mut present: Vec<&str> = counts
+                    .iter()
+                    .filter(|(_, &count)| count > 0)
+                    .map(|(rel_type, _)| rel_type.as_str())
+                    .collect();
+                present.sort_unstable();
+                present
+            }
         };
-        let Some(metric) = self.edge_query_metric(store, &args) else {
-            return Ok(None);
-        };
-        let numeric = store.index_store();
-        // A pending refresh belongs to the established route, as on the node arm.
-        if !args.options.exact && numeric.has_index() && numeric.index_is_stale() {
+        if rel_types.is_empty() {
             return Ok(None);
         }
-        if !self.edge_scan_covers_store(&scan, store)? {
-            return Ok(None);
+        let mut stores = Vec::with_capacity(rel_types.len());
+        for &rel_type in &rel_types {
+            let Some(store) = self
+                .graph
+                .edge_embeddings
+                .get(&(rel_type.to_string(), args.property.clone()))
+            else {
+                return Ok(None);
+            };
+            let Some(metric) = self.edge_query_metric(store, &args) else {
+                return Ok(None);
+            };
+            let numeric = store.index_store();
+            // A pending refresh belongs to the established route, as on the node arm.
+            if !args.options.exact && numeric.has_index() && numeric.index_is_stale() {
+                return Ok(None);
+            }
+            if counts.get(rel_type).copied().unwrap_or(0) != store.len()
+                || !self.edge_scan_covers_store(&scan, rel_type, store)?
+            {
+                return Ok(None);
+            }
+            stores.push((store, metric));
         }
-        self.budget.check_work(store.len(), "MATCH")?;
+        let population: usize = stores.iter().map(|(store, _)| store.len()).sum();
+        self.budget.check_work(population, "MATCH")?;
         self.check_deadline()?;
-        let report = query_store(
-            store,
+        let per_store = self.query_stores(
+            &stores,
             &args.query,
             limit.saturating_add(1),
             args.options.exact,
-            metric,
-            self.graph.read_only,
         );
-        if !ranked_by_score_alone(&report.hits, limit) {
+        let search_method = per_store[0].search_method;
+        let mut merged: Vec<EdgeVectorQueryHit> =
+            per_store.into_iter().flat_map(|store| store.hits).collect();
+        merged.sort_by(|left, right| right.score.total_cmp(&left.score));
+        merged.truncate(limit.saturating_add(1));
+        if !ranked_by_score_alone(&merged, limit) {
             return Ok(None);
         }
-        let rows = report
-            .hits
+        let rows = merged
             .iter()
             .take(limit)
             .map(|hit| self.edge_scan_row(&scan, hit.edge))
@@ -169,8 +226,7 @@ impl<'a> CypherExecutor<'a> {
         let Some(rows) = rows else {
             return Ok(None);
         };
-        let scores: Vec<(usize, Value)> = report
-            .hits
+        let scores: Vec<(usize, Value)> = merged
             .iter()
             .take(rows.len())
             .enumerate()
@@ -188,13 +244,50 @@ impl<'a> CypherExecutor<'a> {
             return_clause,
             score_item_index,
         )?;
+        let has_index = stores
+            .iter()
+            .all(|(store, _)| store.index_store().has_index());
         self.record_retrieval(edge_diagnostics(
             &args,
-            numeric.has_index(),
-            report.search_method,
-            scan.rel_type,
+            has_index,
+            search_method,
+            store_label(&rel_types, &args.property),
         ));
         Ok(Some(result))
+    }
+
+    /// Each store's best `top_k`, all on one route: HNSW only when every store
+    /// answers through its index, otherwise every store by exact scan, so the
+    /// merge never mixes approximate and exact candidates.
+    fn query_stores(
+        &self,
+        stores: &[(&EdgeEmbeddingStore, DistanceMetric)],
+        query: &[f32],
+        top_k: usize,
+        exact: bool,
+    ) -> Vec<StoreHits> {
+        let run = |exact: bool| -> Vec<StoreHits> {
+            stores
+                .iter()
+                .map(|&(store, metric)| {
+                    let report =
+                        query_store(store, query, top_k, exact, metric, self.graph.read_only);
+                    StoreHits {
+                        hits: report.hits,
+                        search_method: report.search_method,
+                    }
+                })
+                .collect()
+        };
+        let first = run(exact);
+        if first
+            .iter()
+            .all(|store| store.search_method == first[0].search_method)
+        {
+            first
+        } else {
+            run(true)
+        }
     }
 
     /// The metric the scalar would score with, or `None` when the query or
@@ -215,27 +308,24 @@ impl<'a> CypherExecutor<'a> {
         }
     }
 
-    /// Whether the scan's rows are exactly the store's relationships: the store
-    /// holds a vector for every relationship of the type (a relationship
-    /// without one would score NULL and rank first), and every one of them
-    /// satisfies the pattern's endpoint labels. Labels are proved from the
+    /// Whether every relationship in `rel_type`'s store satisfies the scan's
+    /// endpoint labels (the caller has checked that the store holds a vector
+    /// for every relationship of the type — one without would score NULL and
+    /// rank first). Labels are proved from the
     /// connection metadata when it names exactly the pattern's label, else by
     /// checking each stored relationship's endpoint.
     fn edge_scan_covers_store(
         &self,
         scan: &PlainEdgeScan<'_>,
+        rel_type: &str,
         store: &EdgeEmbeddingStore,
     ) -> Result<bool, String> {
-        let counts = self.graph.get_edge_type_counts();
-        if counts.get(scan.rel_type).copied().unwrap_or(0) != store.len() {
-            return Ok(false);
-        }
         let (source_pattern, target_pattern) = if scan.outgoing {
             (scan.left, scan.right)
         } else {
             (scan.right, scan.left)
         };
-        let metadata = self.graph.connection_type_metadata.get(scan.rel_type);
+        let metadata = self.graph.connection_type_metadata.get(rel_type);
         let proven = |pattern: &NodePattern, sides: Option<&std::collections::HashSet<String>>| {
             pattern.node_type.as_ref().is_none_or(|label| {
                 sides.is_some_and(|types| types.len() == 1 && types.contains(label))
@@ -322,9 +412,9 @@ impl<'a> CypherExecutor<'a> {
             return Ok(None);
         };
         let first_row = &rows.rows[0];
-        let Some(first) = first_row.edge_bindings.get(variable) else {
+        if !first_row.edge_bindings.contains_key(variable) {
             return Ok(None);
-        };
+        }
         let mut info = RetrievalDiagnostics::exact("unsupported_shape");
         if (3..=5).contains(&call_args.len()) {
             info.requested_policy = self.requested_retrieval_policy(call_args)?;
@@ -341,76 +431,78 @@ impl<'a> CypherExecutor<'a> {
         if args.options.exact {
             return Ok(Some(HnswOutcome::Exact(info.fallback("forced_exact"))));
         }
-        let Some(weight) = self.graph.graph.edge_weight(first.edge_index) else {
-            return Ok(Some(HnswOutcome::Exact(info.fallback("unsupported_shape"))));
-        };
-        let rel_type = weight.connection_type_str(&self.graph.interner).to_string();
-        let Some(store) = self
-            .graph
-            .edge_embeddings
-            .get(&(rel_type.clone(), args.property.clone()))
-        else {
-            return Ok(Some(HnswOutcome::Exact(info.fallback("unsupported_shape"))));
-        };
-        let Some(edge_to_row) = self.edge_row_coverage(variable, &rel_type, store, rows) else {
+        let Some(coverage) = self.edge_row_coverage(variable, &args.property, rows) else {
             return Ok(Some(HnswOutcome::Exact(info.fallback("row_coverage"))));
         };
-        info.store = Some(format!("relationship:{rel_type}.{}", args.property));
-        let numeric = store.index_store();
-        if numeric.index_for_query(self.graph.read_only).is_none() {
-            if numeric.has_index() && numeric.index_is_stale() {
-                self.warn(format!(
-                    "relationship vector index '{rel_type}.{}' is behind its store by {} vectors, \
-                     over its auto_refresh_limit of {} — this query was served by exact scan. \
-                     Refresh with CALL db.edge_embeddings.refresh_index.",
-                    args.property,
-                    numeric.delta_size(),
-                    numeric.auto_refresh_limit(),
-                ));
+        let EdgeRowCoverage {
+            edge_to_row,
+            stores,
+        } = coverage;
+        let rel_types: Vec<&str> = stores.iter().map(|store| store.rel_type.as_str()).collect();
+        info.store = Some(store_label(&rel_types, &args.property));
+        let mut metrics = Vec::with_capacity(stores.len());
+        for covered in &stores {
+            let numeric = covered.store.index_store();
+            if numeric.index_for_query(self.graph.read_only).is_none() {
+                if numeric.has_index() && numeric.index_is_stale() {
+                    self.warn(format!(
+                        "relationship vector index '{}.{}' is behind its store by {} vectors, \
+                         over its auto_refresh_limit of {} — this query was served by exact \
+                         scan. Refresh with CALL db.edge_embeddings.refresh_index.",
+                        covered.rel_type,
+                        args.property,
+                        numeric.delta_size(),
+                        numeric.auto_refresh_limit(),
+                    ));
+                }
+                let reason = if numeric.has_index() {
+                    "stale_index"
+                } else {
+                    "no_index"
+                };
+                return Ok(Some(HnswOutcome::Exact(info.fallback(reason))));
             }
-            let reason = if numeric.has_index() {
-                "stale_index"
-            } else {
-                "no_index"
+            let Some(metric) = self.edge_query_metric(covered.store, &args) else {
+                return Ok(Some(HnswOutcome::Exact(info.fallback("unsupported_shape"))));
             };
-            return Ok(Some(HnswOutcome::Exact(info.fallback(reason))));
+            metrics.push(metric);
         }
-        let Some(metric) = self.edge_query_metric(store, &args) else {
-            return Ok(Some(HnswOutcome::Exact(info.fallback("unsupported_shape"))));
-        };
-        let k_fetch = limit.saturating_mul(4).max(limit).min(store.len());
-        let report = query_store(
-            store,
-            &args.query,
-            k_fetch,
-            false,
-            metric,
-            self.graph.read_only,
-        );
-        if report.search_method != "hnsw" {
-            return Ok(Some(HnswOutcome::Exact(info.fallback("metric_mismatch"))));
-        }
-        let mut scored: Vec<(usize, f64)> = report
-            .hits
-            .iter()
-            .filter_map(|hit| {
+        let mut scored: Vec<(usize, f64)> = Vec::new();
+        for (covered, metric) in stores.iter().zip(metrics) {
+            let store_len = covered.store.len();
+            let k_fetch = limit.saturating_mul(4).max(limit).min(store_len);
+            let report = query_store(
+                covered.store,
+                &args.query,
+                k_fetch,
+                false,
+                metric,
+                self.graph.read_only,
+            );
+            if report.search_method != "hnsw" {
+                return Ok(Some(HnswOutcome::Exact(info.fallback("metric_mismatch"))));
+            }
+            let before = scored.len();
+            scored.extend(report.hits.iter().filter_map(|hit| {
                 edge_to_row
                     .get(&hit.edge.index())
                     .map(|&row| (row, hit.score))
-            })
-            .collect();
+            }));
+            // A store the rows cover only in part must still yield `limit`
+            // candidates, or one of its rows may rank above what the merge saw.
+            let whole_store = covered.rows == store_len;
+            if !whole_store && scored.len() - before < limit {
+                return Ok(Some(HnswOutcome::Exact(
+                    info.fallback("filtered_underfill"),
+                )));
+            }
+        }
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         });
         scored.truncate(limit);
-        let whole_store = edge_to_row.len() == store.len();
-        if !whole_store && scored.len() < limit {
-            return Ok(Some(HnswOutcome::Exact(
-                info.fallback("filtered_underfill"),
-            )));
-        }
         let result = self.project_retrieval_winners(
             scored
                 .into_iter()
@@ -425,39 +517,77 @@ impl<'a> CypherExecutor<'a> {
         Ok(Some(HnswOutcome::Indexed(result, info)))
     }
 
-    /// Relationship-to-row lookup, valid only when every row binds a current,
-    /// embedded relationship of `rel_type` and no relationship repeats — the
-    /// HNSW route cannot rank a NULL score or a duplicate row.
-    fn edge_row_coverage(
-        &self,
+    /// Relationship-to-row lookup plus the stores in play, valid only when
+    /// every row binds a current relationship whose type carries the
+    /// `property` store and holds a vector in it, and no relationship repeats —
+    /// the HNSW route cannot rank a NULL score or a duplicate row. A row whose
+    /// type has no store also answers `None`: the exact route then raises the
+    /// scalar's missing-store error.
+    fn edge_row_coverage<'s>(
+        &'s self,
         variable: &str,
-        rel_type: &str,
-        store: &EdgeEmbeddingStore,
+        property: &str,
         rows: &ResultSet,
-    ) -> Option<FxHashMap<usize, usize>> {
-        let type_key = InternedKey::from_str(rel_type);
-        let slots = &store.index_store().node_to_slot;
+    ) -> Option<EdgeRowCoverage<'s>> {
+        let mut stores: Vec<CoveredStore<'s>> = Vec::new();
+        let mut store_of_type: FxHashMap<InternedKey, usize> = FxHashMap::default();
         let mut edge_to_row =
             FxHashMap::with_capacity_and_hasher(rows.rows.len(), Default::default());
         for (position, row) in rows.rows.iter().enumerate() {
             let binding = row.edge_bindings.get(variable)?;
-            if !self.relationship_binding_is_current(binding)
-                || self
-                    .graph
-                    .graph
-                    .edge_weight(binding.edge_index)?
-                    .connection_type
-                    != type_key
-                || !slots.contains_key(&binding.edge_index.index())
+            if !self.relationship_binding_is_current(binding) {
+                return None;
+            }
+            let weight = self.graph.graph.edge_weight(binding.edge_index)?;
+            let at = match store_of_type.get(&weight.connection_type) {
+                Some(&at) => at,
+                None => {
+                    let rel_type = weight.connection_type_str(&self.graph.interner).to_string();
+                    let store = self
+                        .graph
+                        .edge_embeddings
+                        .get(&(rel_type.clone(), property.to_string()))?;
+                    stores.push(CoveredStore {
+                        rel_type,
+                        store,
+                        rows: 0,
+                    });
+                    store_of_type.insert(weight.connection_type, stores.len() - 1);
+                    stores.len() - 1
+                }
+            };
+            let covered = &mut stores[at];
+            if !covered
+                .store
+                .index_store()
+                .node_to_slot
+                .contains_key(&binding.edge_index.index())
                 || edge_to_row
                     .insert(binding.edge_index.index(), position)
                     .is_some()
             {
                 return None;
             }
+            covered.rows += 1;
         }
-        Some(edge_to_row)
+        stores.sort_by(|left, right| left.rel_type.cmp(&right.rel_type));
+        Some(EdgeRowCoverage {
+            edge_to_row,
+            stores,
+        })
     }
+}
+
+/// One store the rows route reads, and how many rows bind into it.
+struct CoveredStore<'s> {
+    rel_type: String,
+    store: &'s EdgeEmbeddingStore,
+    rows: usize,
+}
+
+struct EdgeRowCoverage<'s> {
+    edge_to_row: FxHashMap<usize, usize>,
+    stores: Vec<CoveredStore<'s>>,
 }
 
 /// The entry's retrieval evidence, in the node arm's vocabulary.
@@ -465,9 +595,9 @@ fn edge_diagnostics(
     args: &VectorScoreArgs,
     has_index: bool,
     search_method: &str,
-    rel_type: &str,
+    store: String,
 ) -> RetrievalDiagnostics {
-    let store = Some(format!("relationship:{rel_type}.{}", args.property));
+    let store = Some(store);
     if search_method == "hnsw" {
         let mut info = RetrievalDiagnostics::exact("unsupported_shape");
         info.actual_mode = "hnsw".into();

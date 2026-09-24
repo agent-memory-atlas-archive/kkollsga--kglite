@@ -539,6 +539,33 @@ run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
 constrain HNSW. Use filtered `MATCH` plus `vector_score`/`text_score` when an
 endpoint or relationship predicate must constrain the ranking corpus.
 
+A graph that spreads its relations over many relationship types — one per
+predicate, as knowledge-graph extractors produce — can be ranked as one corpus.
+`types:['created', 'works_at']` in place of `type` ranks those stores together,
+and leaving out both `type` and `types` ranks every relationship store for
+`text_property`. Each store answers on its own route and the answers merge into
+one `top_k`, ordered by score, then relationship type, then relationship slot.
+Every row yields `type` and its own `search_method`:
+
+```python
+rows = graph.cypher("""
+    CALL db.edge_embeddings.query({text_property:'description', text:$q, top_k:5})
+    YIELD relationship, score, type, search_method
+    RETURN type, relationship.description AS description, score, search_method
+""", params={'q': 'who founded the company?'})
+```
+
+A named type without a store is refused by name. Stores that declare different
+metrics refuse the merge, naming both, because their scores are not on one
+scale; pass `metric` to score every store under one. The `MATCH` form takes
+the same shapes: `MATCH ()-[r:created|works_at]->() … ORDER BY
+text_score(r, 'description', $q) DESC LIMIT k`, or an untyped `()-[r]->()`, is
+served per store and merged when every type in play carries the store. It runs
+through HNSW when every store's index is online, and `diagnostics["retrieval"]`
+lists the stores it read. If a type in play has no store, the query raises the
+same error it raises row by row: embed that type, or name the types that have
+stores.
+
 The network-free
 [`examples/relationship_graphrag.py`](https://github.com/kkollsga/kglite/blob/main/examples/relationship_graphrag.py)
 puts the full workflow together with a deterministic fake embedder: selected

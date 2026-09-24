@@ -609,14 +609,8 @@ impl<'a> CypherExecutor<'a> {
         params: &HashMap<String, Value>,
         yields: &[YieldItem],
     ) -> Result<Vec<ResultRow>, String> {
-        let relationship_type = match params.get("type") {
-            Some(Value::String(value)) => value.as_str(),
-            _ => "",
-        };
-        let report = super::edge_embedding_procedures::query(self.graph, params)?;
-        report
-            .hits
-            .into_iter()
+        let hits = super::edge_embedding_procedures::query(self.graph, params)?;
+        hits.into_iter()
             .map(|hit| {
                 let current = self.graph.graph.edge_weight(hit.edge).ok_or_else(|| {
                     format!(
@@ -625,12 +619,13 @@ impl<'a> CypherExecutor<'a> {
                     )
                 })?;
                 let current_type = current.connection_type_str(&self.graph.interner);
-                if current_type != relationship_type {
+                if current_type != hit.rel_type {
                     return Err(format!(
                         "Relationship embedding query returned slot {} with type '{}', expected \
-                         '{relationship_type}'",
+                         '{}'",
                         hit.edge.index(),
-                        current_type
+                        current_type,
+                        hit.rel_type
                     ));
                 }
                 let relationship = super::helpers::materialize_rel_value_with_incarnation(
@@ -649,8 +644,9 @@ impl<'a> CypherExecutor<'a> {
                     ("score", Value::Float64(hit.score)),
                     (
                         "search_method",
-                        Value::String(report.search_method.to_string()),
+                        Value::String(hit.search_method.to_string()),
                     ),
+                    ("type", Value::String(hit.rel_type)),
                 ]);
                 let mut row = ResultRow::new();
                 for item in yields {

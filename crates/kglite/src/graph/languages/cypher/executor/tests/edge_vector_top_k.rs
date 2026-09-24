@@ -275,3 +275,219 @@ fn the_store_entry_serves_exactly_the_store_shaped_scans() {
         None
     );
 }
+
+// ── several relationship types: alternation and untyped patterns ──────────
+
+/// Three types `A`, `B`, `D`, each with its own `text` store, and eight
+/// relationships at distinct angles, so no two scores tie for any query here.
+/// `mixed_metric` declares `B`'s store euclidean.
+fn cross_type_corpus(mixed_metric: bool) -> DirGraph {
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:Hub {id: 0})");
+    let edges: [(&str, i64, f64); 8] = [
+        ("A", 1, 0.10),
+        ("B", 2, 0.35),
+        ("D", 3, 0.60),
+        ("A", 4, 0.85),
+        ("B", 5, 1.10),
+        ("D", 6, 1.35),
+        ("A", 7, 1.60),
+        ("B", 8, 2.20),
+    ];
+    for (rel_type, k, angle) in edges {
+        let metric = if mixed_metric && rel_type == "B" {
+            ", metric:'euclidean'"
+        } else {
+            ""
+        };
+        run(
+            &mut graph,
+            &format!(
+                "MATCH (h:Hub) CREATE (h)-[r:{rel_type} {{k: {k}}}]->(:Doc {{id: {k}}}) \
+                 WITH r CALL db.edge_embeddings.set({{type:'{rel_type}', text_property:'text', \
+                 entries:[{{relationship:r, vector:[{}, {}]}}]{metric}}}) YIELD stored RETURN stored",
+                angle.cos(),
+                angle.sin()
+            ),
+        );
+    }
+    graph
+}
+
+/// The brute-force oracle: every relationship's cosine against `query`,
+/// best first, as `k` values.
+fn cross_type_oracle(query: (f64, f64), limit: usize) -> Vec<Value> {
+    let angles = [0.10, 0.35, 0.60, 0.85, 1.10, 1.35, 1.60, 2.20];
+    let norm = (query.0 * query.0 + query.1 * query.1).sqrt();
+    let mut scored: Vec<(i64, f64)> = angles
+        .iter()
+        .enumerate()
+        .map(|(at, angle): (usize, &f64)| {
+            (
+                at as i64 + 1,
+                (angle.cos() * query.0 + angle.sin() * query.1) / norm,
+            )
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(k, _)| Value::Int64(k))
+        .collect()
+}
+
+const ALL_THREE: &str = "relationship:A.text_emb,relationship:B.text_emb,relationship:D.text_emb";
+
+fn cross_query(pattern: &str, limit: usize) -> String {
+    format!(
+        "MATCH {pattern} RETURN r.k AS k, vector_score(r, 'text_emb', [0.3, 1.0]) AS s \
+         ORDER BY s DESC LIMIT {limit}"
+    )
+}
+
+fn ks(result: &CypherResult) -> Vec<Value> {
+    result.rows.iter().map(|row| row[0].clone()).collect()
+}
+
+#[test]
+fn alternation_and_untyped_scans_merge_every_store() {
+    let graph = cross_type_corpus(false);
+    for pattern in ["()-[r:A|B|D]->()", "()-[r]->()", "(:Hub)-[r:D|A|B]->(:Doc)"] {
+        let fused = assert_same(&graph, &cross_query(pattern, 4));
+        assert_eq!(ks(&fused), cross_type_oracle((0.3, 1.0), 4), "{pattern}");
+        let records = retrieval(&fused);
+        assert!(
+            records
+                .iter()
+                .any(|record| record.store.as_deref() == Some(ALL_THREE)
+                    && record.actual_mode == "exact"
+                    && record.fallback_reason.as_deref() == Some("no_index")),
+            "{pattern}: {records:?}"
+        );
+    }
+    // A two-type alternation reads only those two stores.
+    let two = assert_same(&graph, &cross_query("()-[r:B|A]->()", 3));
+    assert!(retrieval(&two)
+        .iter()
+        .any(|record| record.store.as_deref()
+            == Some("relationship:A.text_emb,relationship:B.text_emb")));
+}
+
+#[test]
+fn indexed_stores_merge_through_hnsw_on_both_routes() {
+    let mut graph = cross_type_corpus(false);
+    for rel_type in ["A", "B"] {
+        run(
+            &mut graph,
+            &format!(
+                "CALL db.edge_embeddings.build_index({{type:'{rel_type}', text_property:'text'}}) \
+                 YIELD indexed RETURN indexed"
+            ),
+        );
+    }
+    // `D` has no index yet: the merge stays exact rather than mixing routes.
+    let partial = assert_same(&graph, &cross_query("()-[r:A|B|D]->()", 4));
+    assert!(retrieval(&partial)
+        .iter()
+        .any(|record| record.actual_mode == "exact"));
+    run(
+        &mut graph,
+        "CALL db.edge_embeddings.build_index({type:'D', text_property:'text'}) YIELD indexed RETURN indexed",
+    );
+    for pattern in ["()-[r:A|B|D]->()", "()-[r]->()"] {
+        let fused = assert_same(&graph, &cross_query(pattern, 4));
+        assert_eq!(ks(&fused), cross_type_oracle((0.3, 1.0), 4), "{pattern}");
+        assert!(
+            retrieval(&fused)
+                .iter()
+                .any(|record| record.actual_mode == "hnsw"
+                    && record.store.as_deref() == Some(ALL_THREE)),
+            "{pattern}: {:?}",
+            retrieval(&fused)
+        );
+    }
+    // The rows route: a WHERE keeps every store whole, so HNSW serves it.
+    let rows = assert_same(
+        &graph,
+        "MATCH (h:Hub)-[r:A|B|D]->() WHERE h.id = 0 RETURN r.k AS k, \
+         vector_score(r, 'text_emb', [0.3, 1.0]) AS s ORDER BY s DESC LIMIT 4",
+    );
+    assert_eq!(ks(&rows), cross_type_oracle((0.3, 1.0), 4));
+    assert!(
+        retrieval(&rows).iter().any(
+            |record| record.actual_mode == "hnsw" && record.store.as_deref() == Some(ALL_THREE)
+        ),
+        "{:?}",
+        retrieval(&rows)
+    );
+    // A filter that leaves one store's rows short of k falls back to exact.
+    let underfilled = assert_same(
+        &graph,
+        "MATCH ()-[r:A|B|D]->(d) WHERE d.id <> 3 RETURN r.k AS k, \
+         vector_score(r, 'text_emb', [0.3, 1.0]) AS s ORDER BY s DESC LIMIT 4",
+    );
+    assert!(
+        retrieval(&underfilled)
+            .iter()
+            .any(|record| record.fallback_reason.as_deref() == Some("filtered_underfill")),
+        "{:?}",
+        retrieval(&underfilled)
+    );
+}
+
+#[test]
+fn a_type_in_play_without_the_store_keeps_the_scalar_error() {
+    let mut graph = cross_type_corpus(false);
+    run(
+        &mut graph,
+        "MATCH (h:Hub), (d:Doc {id: 1}) CREATE (h)-[:PLAIN]->(d)",
+    );
+    for disabled in [false, true] {
+        let params = HashMap::new();
+        let passes: HashSet<String> = HashSet::from([PASS.to_string()]);
+        let mut opts = ExecuteOptions::eager(&params);
+        if disabled {
+            opts.disabled_passes = Some(&passes);
+        }
+        for pattern in ["()-[r]->()", "()-[r:A|PLAIN]->()"] {
+            let Err(error) = execute_read(&graph, &cross_query(pattern, 3), &opts) else {
+                panic!("{pattern}: a type without the store must fail");
+            };
+            let error = error.to_string();
+            assert!(
+                error.contains("no embedding 'text_emb' found for relationship type 'PLAIN'"),
+                "{pattern} disabled={disabled}: {error}"
+            );
+        }
+    }
+    // The alternation that names only stored types is still served.
+    let fused = assert_same(&graph, &cross_query("()-[r:A|B|D]->()", 3));
+    assert_eq!(ks(&fused), cross_type_oracle((0.3, 1.0), 3));
+}
+
+#[test]
+fn stores_under_different_metrics_rank_as_the_scalar_scores() {
+    // The fused route ranks what the written query ranks: each relationship
+    // scored under its own store's metric, exactly as row-by-row scoring does.
+    let graph = cross_type_corpus(true);
+    let fused = assert_same(&graph, &cross_query("()-[r:A|B|D]->()", 5));
+    assert_eq!(fused.rows.len(), 5);
+}
+
+#[test]
+fn the_store_entry_serves_alternation_and_untyped_scans() {
+    let graph = cross_type_corpus(false);
+    let entry = |source: &str| {
+        let params = HashMap::new();
+        let mut query = parser::parse_cypher(source).unwrap();
+        crate::graph::languages::cypher::planner::optimize(&mut query, &graph, &params);
+        CypherExecutor::with_params(&graph, &params, None)
+            .try_retrieval_entry(&query.clauses)
+            .unwrap()
+            .map(|result| result.rows.len())
+    };
+    assert_eq!(entry(&cross_query("()-[r:A|B|D]->()", 3)), Some(3));
+    assert_eq!(entry(&cross_query("()-[r]->()", 3)), Some(3));
+    assert_eq!(entry(&cross_query("(:Hub)<-[r:A|B]-()", 3)), None);
+}

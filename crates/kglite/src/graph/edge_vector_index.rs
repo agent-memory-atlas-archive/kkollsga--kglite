@@ -294,6 +294,9 @@ pub(crate) fn drop_edge_vector_index(
     Ok(true)
 }
 
+/// One store, one route: the form the unit suites drive. Callers go through
+/// [`query_edge_embedding_stores`], which is this per store plus the merge.
+#[cfg(test)]
 pub(crate) fn query_edge_embeddings(
     graph: &DirGraph,
     connection_type: &str,
@@ -333,7 +336,104 @@ pub(crate) fn query_edge_embeddings(
     ))
 }
 
-/// The store half of [`query_edge_embeddings`], for a caller that has already
+/// One hit of a query over several relationship stores: the relationship
+/// type it came from and the route that store answered by.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EdgeStoreQueryHit {
+    pub(crate) rel_type: String,
+    pub(crate) edge: EdgeIndex,
+    pub(crate) score: f64,
+    pub(crate) search_method: &'static str,
+}
+
+/// Rank the `text_property` stores of every type in `types` against one query
+/// and merge them into a single top-k.
+///
+/// Each store answers on its own route — HNSW when its index is online and
+/// serves the metric, exact otherwise — for its own best `top_k`; the merged
+/// order is score descending, then relationship type, then relationship slot,
+/// a total order. Refused when a type has no such store, when the query's
+/// dimension differs from a store's, and — unless the caller names one
+/// `metric` for all of them — when two stores declare different metrics: their
+/// scores are not on one scale, and a merged ranking would interleave them as
+/// if they were.
+pub(crate) fn query_edge_embedding_stores(
+    graph: &DirGraph,
+    types: &[String],
+    text_property: &str,
+    query: &[f32],
+    options: EdgeVectorQueryOptions,
+) -> Result<Vec<EdgeStoreQueryHit>, String> {
+    validate_finite_vector(query)
+        .map_err(|error| format!("Invalid relationship embedding query: {error}"))?;
+    let mut stores = Vec::with_capacity(types.len());
+    for rel_type in types {
+        let store = graph
+            .edge_embeddings
+            .get(&edge_store_key(rel_type, text_property))
+            .ok_or_else(|| {
+                format!("No relationship embedding store '{rel_type}.{text_property}'")
+            })?;
+        if query.len() != store.dimension() {
+            return Err(format!(
+                "Query dimension {} does not match store dimension {} of '{rel_type}.{text_property}'",
+                query.len(),
+                store.dimension()
+            ));
+        }
+        stores.push((rel_type.as_str(), store));
+    }
+    if options.metric.is_none() {
+        let declared = |store: &EdgeEmbeddingStore| store.metric().unwrap_or("cosine").to_string();
+        if let Some(&(first_type, first)) = stores.first() {
+            if let Some(&(other_type, other)) = stores
+                .iter()
+                .find(|(_, store)| declared(store) != declared(first))
+            {
+                return Err(format!(
+                    "Relationship embedding stores '{first_type}.{text_property}' (metric '{}') \
+                     and '{other_type}.{text_property}' (metric '{}') score under different \
+                     metrics, so one merged ranking would compare scores on different scales. \
+                     Query the types separately, or pass metric to score every store under one.",
+                    declared(first),
+                    declared(other),
+                ));
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    for (rel_type, store) in stores {
+        if options.top_k == 0 || store.is_empty() {
+            continue;
+        }
+        let metric = resolve_query_metric(store, options.metric.as_deref())?;
+        let report = query_store(
+            store,
+            query,
+            options.top_k,
+            options.exact,
+            metric,
+            graph.read_only,
+        );
+        hits.extend(report.hits.into_iter().map(|hit| EdgeStoreQueryHit {
+            rel_type: rel_type.to_string(),
+            edge: hit.edge,
+            score: hit.score,
+            search_method: report.search_method,
+        }));
+    }
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.rel_type.cmp(&right.rel_type))
+            .then_with(|| left.edge.index().cmp(&right.edge.index()))
+    });
+    hits.truncate(options.top_k);
+    Ok(hits)
+}
+
+/// The per-store half of [`query_edge_embedding_stores`], for a caller that has already
 /// validated the query against the store and resolved the metric — the fused
 /// `vector_score(r, …) ORDER BY … LIMIT k` route, whose argument errors must
 /// keep the scalar's wording. Same routes, fallbacks and `search_method`.

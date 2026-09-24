@@ -361,7 +361,9 @@ pub struct RetrievalDiagnostics {
     pub actual_mode: String,
     /// Why an exact route ran; absent when HNSW served the result.
     pub fallback_reason: Option<String>,
-    /// `Type.embedding_property` when a single store was established.
+    /// `Type.embedding_property` when a single store was established; a
+    /// comma-separated list, in type order, when a relationship top-k merged
+    /// several stores (`relationship:A.p_emb,relationship:B.p_emb`).
     pub store: Option<String>,
 }
 

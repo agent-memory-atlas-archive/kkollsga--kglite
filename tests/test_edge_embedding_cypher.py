@@ -722,5 +722,5 @@ def test_query_text_without_an_embedder_names_the_procedure() -> None:
 
 def test_query_unknown_parameter_refusal_lists_text() -> None:
     graph = _graph()
-    with pytest.raises(Exception, match=r"Accepted: type, text_property, vector, text, top_k"):
+    with pytest.raises(Exception, match=r"Accepted: type, types, text_property, vector, text, top_k"):
         graph.cypher("CALL db.edge_embeddings.query({type:'CLAIMS', text_property:'text', vector:[1.0, 0.0], bogus:1})")

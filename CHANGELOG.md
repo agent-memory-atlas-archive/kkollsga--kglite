@@ -142,6 +142,20 @@ before upgrading.
   reports the route. `db.edge_embeddings.embed`'s default `batch_size`
   is now 256, matching `embed_texts`.
 
+- **Relationship retrieval across several relationship types.**
+  `CALL db.edge_embeddings.query` takes `types: [...]` in place of `type`, or
+  neither (every relationship store for `text_property`), and merges the
+  stores' answers into one top-k ordered by score, then relationship type,
+  then relationship slot. Every row now also yields `type`, and
+  `search_method` is reported per row. A named type without a store is
+  refused by name, and stores that declare different metrics refuse the merge
+  unless `metric` is passed. The top-k shape `MATCH ()-[r:A|B]->() …
+  vector_score(r, …) ORDER BY … DESC LIMIT k` (or `text_score`), and the
+  untyped `()-[r]->()`, is now served per store and merged — through HNSW
+  when every store's index is online — when every type in play carries the
+  store; `diagnostics.retrieval` lists the stores it read. A type in play
+  without the store still raises the scalar's error.
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing

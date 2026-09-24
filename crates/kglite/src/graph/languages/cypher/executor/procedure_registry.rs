@@ -297,8 +297,8 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "db.edge_embeddings.query",
         aliases: &[],
-        description: "Retrieve the nearest relationships from one whole embedding store, by query vector or by text the registered embedder embeds",
-        columns: &["relationship", "score", "search_method"],
+        description: "Retrieve the nearest relationships from one or several whole embedding stores (type, types, or every store for text_property), merged into one top-k, by query vector or by text the registered embedder embeds",
+        columns: &["relationship", "score", "search_method", "type"],
     },
     ProcedureSpec {
         name: "db.edge_text_index.build",

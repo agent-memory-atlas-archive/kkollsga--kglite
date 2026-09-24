@@ -510,3 +510,103 @@ fn refresh_without_an_index_refuses_and_names_the_build_call() {
     graph.read_only = true;
     assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text").is_err());
 }
+
+/// `fixture()` plus two `SUPPORTS` relationships in their own store: one whose
+/// vector ties exactly with `CLAIMS`' first, one in between.
+fn two_type_fixture(supports_metric: Option<&str>) -> (DirGraph, EdgeIndex, EdgeIndex) {
+    let (mut graph, first, _, _) = fixture();
+    let source = graph.graph.edge_endpoints(first).unwrap().0;
+    let mut supports = Vec::new();
+    for _ in 0..2 {
+        let target = GraphWrite::add_node(
+            &mut graph.graph,
+            NodeData::new(
+                Value::Int64(90 + supports.len() as i64),
+                Value::String("support".into()),
+                "Doc".into(),
+                HashMap::new(),
+                &mut graph.interner,
+            ),
+        );
+        supports.push(GraphWrite::add_edge(
+            &mut graph.graph,
+            source,
+            target,
+            EdgeData::new("SUPPORTS".into(), HashMap::new(), &mut graph.interner),
+        ));
+    }
+    upsert_edge_embeddings(
+        &mut graph,
+        "SUPPORTS",
+        "text",
+        vec![(supports[0], vec![1.0, 0.0]), (supports[1], vec![0.8, 0.6])],
+        supports_metric,
+    )
+    .unwrap();
+    (graph, first, supports[1])
+}
+
+fn stores_query(
+    graph: &DirGraph,
+    types: &[&str],
+    metric: Option<&str>,
+    top_k: usize,
+) -> Result<Vec<EdgeStoreQueryHit>, String> {
+    let types: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+    query_edge_embedding_stores(
+        graph,
+        &types,
+        "text",
+        &[1.0, 0.0],
+        EdgeVectorQueryOptions {
+            top_k,
+            exact: false,
+            metric: metric.map(str::to_string),
+        },
+    )
+}
+
+#[test]
+fn several_stores_merge_into_one_top_k_ordered_by_score_type_then_slot() {
+    let (graph, claims_first, supports_between) = two_type_fixture(Some("cosine"));
+    let hits = stores_query(&graph, &["CLAIMS", "SUPPORTS"], None, 3).unwrap();
+    let summary: Vec<(&str, f64)> = hits
+        .iter()
+        .map(|hit| (hit.rel_type.as_str(), (hit.score * 100.0).round() / 100.0))
+        .collect();
+    // The 1.0 tie is broken by type name, then the 0.8 SUPPORTS hit.
+    assert_eq!(
+        summary,
+        vec![("CLAIMS", 1.0), ("SUPPORTS", 1.0), ("SUPPORTS", 0.8)]
+    );
+    assert_eq!(hits[0].edge, claims_first);
+    assert_eq!(hits[2].edge, supports_between);
+    assert!(hits.iter().all(|hit| hit.search_method == "exact"));
+    // One type is exactly the single-store answer.
+    let single = stores_query(&graph, &["CLAIMS"], None, 2).unwrap();
+    assert!(single.iter().all(|hit| hit.rel_type == "CLAIMS"));
+    assert_eq!(single.len(), 2);
+}
+
+#[test]
+fn a_merge_across_metrics_or_a_missing_store_is_refused_by_name() {
+    let (graph, _, _) = two_type_fixture(Some("euclidean"));
+    let error = stores_query(&graph, &["CLAIMS", "SUPPORTS"], None, 3).unwrap_err();
+    assert!(
+        error.contains("'CLAIMS.text' (metric 'cosine')")
+            && error.contains("'SUPPORTS.text' (metric 'euclidean')"),
+        "{error}"
+    );
+    // One metric named for every store puts the scores on one scale.
+    assert_eq!(
+        stores_query(&graph, &["CLAIMS", "SUPPORTS"], Some("cosine"), 3)
+            .unwrap()
+            .len(),
+        3
+    );
+    let error = stores_query(&graph, &["CLAIMS", "MISSING"], None, 3).unwrap_err();
+    assert!(
+        error.contains("No relationship embedding store 'MISSING.text'"),
+        "{error}"
+    );
+}
