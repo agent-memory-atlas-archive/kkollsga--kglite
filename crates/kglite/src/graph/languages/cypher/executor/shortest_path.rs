@@ -334,24 +334,30 @@ impl<'a> CypherExecutor<'a> {
         );
         let elements = &pattern.elements;
 
-        // Extract edge direction, connection type and hop bounds from the
-        // pattern. `min_hops == 0` is what makes a path from a node to itself
-        // an answer rather than a skip.
-        let (edge_direction, connection_types_vec, min_hops) = elements
-            .iter()
-            .find_map(|elem| {
-                if let PatternElement::Edge(ep) = elem {
-                    let types = ep
-                        .connection_types
-                        .clone()
-                        .or_else(|| ep.connection_type.clone().map(|name| vec![name]));
-                    Some((ep.direction, types, ep.var_length.map(|(min, _)| min)))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or((EdgeDirection::Both, None, None));
-        let includes_zero_length = min_hops == Some(0);
+        // Direction, relationship types and hop bounds of the one relationship
+        // (the parser refuses any other shape, and a minimum above 1).
+        // `min_hops == 0` is what makes a path from a node to itself an answer
+        // rather than a skip. The maximum binds only when it was written: a
+        // bare `*` / `*1..` is unbounded here, not the var-length MATCH cap —
+        // the BFS visits each node at most once, and the deadline, the cancel
+        // flag and the pair-row budget still apply. A relationship without
+        // `*` is one hop.
+        let edge = elements.iter().find_map(|elem| match elem {
+            PatternElement::Edge(ep) => Some(ep),
+            PatternElement::Node(_) => None,
+        });
+        let edge_direction = edge.map_or(EdgeDirection::Both, |ep| ep.direction);
+        let connection_types_vec = edge.and_then(|ep| {
+            ep.connection_types
+                .clone()
+                .or_else(|| ep.connection_type.clone().map(|name| vec![name]))
+        });
+        let includes_zero_length = edge.and_then(|ep| ep.var_length).map(|(min, _)| min) == Some(0);
+        let max_hops: Option<usize> = edge.and_then(|ep| match ep.var_length {
+            None => Some(1),
+            Some((_, max)) if ep.var_length_max_written => Some(max),
+            Some(_) => None,
+        });
 
         let connection_types: Option<&[String]> = connection_types_vec.as_deref();
 
@@ -449,7 +455,9 @@ impl<'a> CypherExecutor<'a> {
                     // The graph algorithm is node-oriented and may surface the
                     // same node sequence once per parallel edge. Expand that
                     // sequence exactly once into relationship combinations.
-                    if !seen_node_paths.insert(path_result.path.clone()) {
+                    if max_hops.is_some_and(|max| path_result.cost > max)
+                        || !seen_node_paths.insert(path_result.path.clone())
+                    {
                         continue;
                     }
                     let remaining = if path_assignment.all_shortest {

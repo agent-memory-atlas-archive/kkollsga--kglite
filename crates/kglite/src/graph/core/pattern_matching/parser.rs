@@ -557,6 +557,7 @@ impl Parser {
                 direction,
                 properties: None,
                 var_length: None,
+                var_length_max_written: false,
                 needs_path_info: true,
                 skip_target_type_check: false,
                 edge_filter: None,
@@ -633,8 +634,11 @@ impl Parser {
             }
         }
 
+        let mut var_length_max_written = false;
         if let Some(Token::Star) = self.peek() {
-            var_length = Some(self.parse_var_length()?);
+            let (min, max, max_written) = self.parse_var_length()?;
+            var_length = Some((min, max));
+            var_length_max_written = max_written;
         }
 
         if let Some(Token::LBrace) = self.peek() {
@@ -662,6 +666,7 @@ impl Parser {
             direction,
             properties,
             var_length,
+            var_length_max_written,
             needs_path_info: true,
             skip_target_type_check: false,
             edge_filter: None,
@@ -670,7 +675,7 @@ impl Parser {
     }
 
     /// Parse variable-length specification: *, *2, *1..3, *..5, *2..
-    /// Returns (min_hops, max_hops)
+    /// Returns (min_hops, max_hops, whether the max was written)
     ///
     /// Open-ended forms (`*`, `*N..`) default the upper bound to
     /// `DEFAULT_MAX_HOPS` as a runaway-query guard — a deliberate,
@@ -679,7 +684,7 @@ impl Parser {
     /// `pattern.var_length_default_cap`). An explicit lower bound above the
     /// default (`*11..`) raises the ceiling to that bound so the range is
     /// never silently empty.
-    fn parse_var_length(&mut self) -> Result<(usize, usize), String> {
+    fn parse_var_length(&mut self) -> Result<(usize, usize, bool), String> {
         self.expect(&Token::Star)?;
 
         // The tokenizer folds a sign into the number it precedes, so `*-1`
@@ -721,15 +726,15 @@ impl Parser {
                                 min, max, min, max, max, min
                             ));
                         }
-                        Ok((min, max))
+                        Ok((min, max, true))
                     } else {
                         // *N.. is "N or more", capped at the default —
                         // raised to `min` so the range is never empty.
-                        Ok((min, min.max(DEFAULT_MAX_HOPS)))
+                        Ok((min, min.max(DEFAULT_MAX_HOPS), false))
                     }
                 } else {
                     // *N means exactly N hops
-                    Ok((min, min))
+                    Ok((min, min, true))
                 }
             }
             Some(Token::DotDot) => {
@@ -743,11 +748,11 @@ impl Parser {
                             .to_string(),
                     );
                 };
-                Ok((1, max))
+                Ok((1, max, true))
             }
             _ => {
                 // * alone means 1 or more (up to default max)
-                Ok((1, DEFAULT_MAX_HOPS))
+                Ok((1, DEFAULT_MAX_HOPS, false))
             }
         }
     }

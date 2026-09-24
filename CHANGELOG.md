@@ -370,6 +370,15 @@ before upgrading.
   (`UNWIND [1,2] AS x MATCH p = shortestPath(…)` returns two rows). A free
   endpoint's property map can read row variables (`{name: nm}`). A `WHERE`
   directly after an opening `MATCH p = shortestPath(…)` is no longer ignored.
+- **`shortestPath` and `allShortestPaths` respect the relationship's hop
+  bounds and refuse shapes they cannot search.** The bounds were ignored:
+  `*..2` returned a 3-hop path and `*2..5` a 1-hop one. A written maximum now
+  bounds the search (`*..3`, `*1..3`). A relationship without `*` is one hop.
+  An open form (`*`, `*1..`) is unbounded, as in openCypher; the 10-hop cap on
+  a variable-length `MATCH` is unchanged. A minimum other than 0 or 1 is now
+  a syntax error that quotes the written bound, as in Neo4j. So is a pattern
+  with more than one relationship, which used to search along the first
+  relationship only and return the middle node as NULL.
 
 ## [0.17.12] - 2026-09-19
 ### Added

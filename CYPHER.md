@@ -1884,6 +1884,7 @@ unbounded `*` (recorded as `pattern.var_length_default_cap` in the dialect
 manifest). An explicit lower bound above 10 (`*11..`) raises the ceiling to
 that bound, and a range whose minimum exceeds its maximum (`*5..2`) is a
 parse error. Spell out `*1..N` when you need more than 10 hops.
+`shortestPath()` and `allShortestPaths()` are not capped (see below).
 
 ### Trail semantics
 
@@ -1979,6 +1980,20 @@ result = graph.cypher("""
 
 # No path → empty list (not an error)
 ```
+
+**Pattern shape and bounds.** The pattern is two nodes joined by exactly one
+relationship; a longer chain such as `(a)-[:R]->(m)-[:R*]->(b)` is a syntax
+error. A written maximum bounds the search: `*..3` and `*1..3` find no path
+longer than 3 hops, and a relationship without `*` is one hop. An open form
+(`*`, `*1..`) is unbounded here, unlike the 10-hop cap on a variable-length
+`MATCH`. The search visits each node at most once, and the query deadline still
+applies. The minimum must be 0 or 1: `*0..` admits the zero-length path from a
+node to itself, and `*2..5` is a syntax error, as in Neo4j.
+
+An endpoint that an earlier clause bound is used as is. This covers a `MATCH`
+binding and a node value from `WITH`, `UNWIND`, `startNode(r)` or a
+parameter. The search runs once per input row, and a NULL endpoint yields no
+row.
 
 **Path functions:** `length(p)` returns the hop count, `nodes(p)` returns full
 node values, and `relationships(p)` returns full relationship values in path

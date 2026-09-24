@@ -69,8 +69,8 @@ impl NodePattern {
 
 /// Pattern for matching edges: -[:TYPE {prop: value}]->
 ///
-/// `*min..max` fills `var_length`: `*` and `*..` mean 1 hop to the default
-/// max, `*2` exactly 2, `*1..3` a closed range, `*2..` 2 to the default max.
+/// `*min..max` fills `var_length`: `*` means 1 hop to the default max, `*..5`
+/// 1 to 5, `*2` exactly 2, `*1..3` a closed range, `*2..` 2 to the default max.
 #[derive(Debug, Clone)]
 pub struct EdgePattern {
     pub variable: Option<String>,
@@ -83,6 +83,11 @@ pub struct EdgePattern {
     pub properties: Option<HashMap<String, PropertyMatcher>>,
     /// `(min_hops, max_hops)`; `None` means exactly one hop.
     pub var_length: Option<(usize, usize)>,
+    /// Whether `var_length`'s maximum was written (`*..5`, `*1..3`, `*2`)
+    /// rather than defaulted to the var-length cap by an open form (`*`,
+    /// `*N..`). A var-length MATCH applies the cap either way; `shortestPath`
+    /// reads this to treat an open form as unbounded.
+    pub var_length_max_written: bool,
     /// Whether the matcher must retain path identity. When false,
     /// variable-length expansion may use global BFS dedup and fixed-length
     /// expansion omits its exact-trail allocation. Set false only when the

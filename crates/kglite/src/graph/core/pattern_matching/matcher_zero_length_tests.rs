@@ -219,7 +219,7 @@ fn shortest_path_still_refuses_a_min_one_walk_back_to_the_same_node() {
     for pattern in [
         "shortestPath((a)-[:K*1..]-(a))",
         "shortestPath((a)-[*]-(a))",
-        "shortestPath((a)-[:K*2..3]-(a))",
+        "shortestPath((a)-[:K*1..3]-(a))",
     ] {
         assert!(
             column(

@@ -342,3 +342,125 @@ fn a_where_after_an_opening_shortest_path_filters() {
         vec![vec![s("c")]],
     );
 }
+
+// ========================================================================
+// Hop bounds and the one-relationship shape
+// ========================================================================
+//
+// The relationship's bounds used to be ignored: `*..2` returned a 3-hop path
+// and `*2..5` a 1-hop one. A chain of relationships searched along the first
+// one only and left the middle node NULL.
+
+/// `C {i:1} -N-> … -N-> C {i:13}`: a 12-hop chain, past the 10-hop var-length
+/// MATCH cap.
+fn long_chain_graph() -> DirGraph {
+    let mut graph = DirGraph::new();
+    run_write(&mut graph, "UNWIND range(1, 13) AS i CREATE (:C {i: i})")
+        .unwrap_or_else(|e| panic!("fixture: {e}"));
+    run_write(
+        &mut graph,
+        "MATCH (a:C), (b:C) WHERE b.i = a.i + 1 CREATE (a)-[:N]->(b)",
+    )
+    .unwrap_or_else(|e| panic!("fixture: {e}"));
+    graph
+}
+
+fn parse_error(source: &str) -> String {
+    match parser::parse_cypher(source) {
+        Ok(_) => panic!("`{source}` must be refused at parse time"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn a_written_maximum_bounds_the_search() {
+    let graph = chain_graph();
+    for function in ["shortestPath", "allShortestPaths"] {
+        // Pre-fix: [3] — the bound was ignored.
+        assert_rows(
+            &graph,
+            &format!("MATCH p = {function}((a:P {{name:'a'}})-[:R*..2]-(q:Q)) RETURN length(p)"),
+            vec![],
+        );
+        assert_rows(
+            &graph,
+            &format!("MATCH p = {function}((a:P {{name:'a'}})-[:R*1..3]-(q:Q)) RETURN length(p)"),
+            vec![vec![i(3)]],
+        );
+    }
+    // Pre-fix: [3] — one relationship without `*` is one hop.
+    assert_rows(
+        &graph,
+        "MATCH p = shortestPath((a:P {name:'a'})-[:R]-(q:Q)) RETURN length(p)",
+        vec![],
+    );
+    assert_rows(
+        &graph,
+        "MATCH p = shortestPath((c:P {name:'c'})-[:R]-(q:Q)) RETURN length(p)",
+        vec![vec![i(1)]],
+    );
+    // `*0` admits only the zero-length path.
+    assert_rows(
+        &graph,
+        "MATCH p = shortestPath((a:P {name:'a'})-[:R*0]-(q:Q)) RETURN length(p)",
+        vec![],
+    );
+}
+
+#[test]
+fn an_open_maximum_is_unbounded_for_shortest_path_only() {
+    let graph = long_chain_graph();
+    for pattern in [
+        "shortestPath((a:C {i:1})-[:N*]-(b:C {i:13}))",
+        "shortestPath((a:C {i:1})-[:N*1..]->(b:C {i:13}))",
+        "allShortestPaths((a:C {i:1})-[*]-(b:C {i:13}))",
+    ] {
+        assert_rows(
+            &graph,
+            &format!("MATCH p = {pattern} RETURN length(p)"),
+            vec![vec![i(12)]],
+        );
+    }
+    // A written maximum below the distance still binds.
+    assert_rows(
+        &graph,
+        "MATCH p = shortestPath((a:C {i:1})-[:N*..11]-(b:C {i:13})) RETURN length(p)",
+        vec![],
+    );
+    // The var-length MATCH cap is unchanged (`pattern.var_length_default_cap`).
+    assert_rows(
+        &graph,
+        "MATCH p = (a:C {i:1})-[:N*]->(b:C {i:13}) RETURN length(p)",
+        vec![],
+    );
+}
+
+#[test]
+fn a_minimum_above_one_is_refused_naming_the_written_bound() {
+    for (pattern, written) in [
+        ("shortestPath((a)-[:R*2..5]-(b))", "`*2..5`"),
+        ("shortestPath((a)-[:R*2..]-(b))", "`*2..`"),
+        ("shortestPath((a)-[*3]-(b))", "`*3`"),
+        ("allShortestPaths((a)-[:R*2..3]->(b))", "`*2..3`"),
+    ] {
+        let err = parse_error(&format!("MATCH p = {pattern} RETURN p"));
+        let function = pattern.split('(').next().unwrap();
+        assert!(
+            err.contains(&format!("{function}()")) && err.contains(written),
+            "{pattern}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_pattern_with_more_than_one_relationship_is_refused() {
+    for pattern in [
+        "shortestPath((a:P)-[:R]->(m:Q)-[:R*]->(b:Q))",
+        "allShortestPaths((a)-[*]-(m)-[*]-(n)-[*]-(b))",
+    ] {
+        let err = parse_error(&format!("MATCH p = {pattern} RETURN p"));
+        assert!(err.contains("exactly one relationship"), "{pattern}: {err}");
+    }
+    let err = parse_error("MATCH p = shortestPath((a:P)-[:R]->(m:Q)-[:R*]->(b:Q)) RETURN p");
+    assert!(err.contains("2 relationships across 3 nodes"), "{err}");
+}

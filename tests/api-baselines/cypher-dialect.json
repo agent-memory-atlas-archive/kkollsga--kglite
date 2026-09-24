@@ -427,7 +427,7 @@
         "match.var_length_default_cap",
         "match.var_length_min_above_default_cap"
       ],
-      "note": "Open-ended variable-length patterns default to a 10-hop ceiling as a runaway-query guard (openCypher's * is unbounded). An explicit minimum above the ceiling raises it to that minimum so the range is never silently empty, and a range whose minimum exceeds its maximum is rejected at parse time."
+      "note": "Open-ended variable-length patterns default to a 10-hop ceiling as a runaway-query guard (openCypher's * is unbounded). An explicit minimum above the ceiling raises it to that minimum so the range is never silently empty, and a range whose minimum exceeds its maximum is rejected at parse time. shortestPath() and allShortestPaths() are not capped: an open * searches every reachable node, as in openCypher."
     },
     {
       "id": "model.labels",

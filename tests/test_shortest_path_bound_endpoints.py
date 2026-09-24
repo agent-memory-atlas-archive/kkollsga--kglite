@@ -160,3 +160,86 @@ def test_where_after_an_opening_shortest_path_filters(graph):
         graph,
         "MATCH p = shortestPath((a:P)-[:R*]-(q:Q)) WHERE length(p) = 1 RETURN a.name AS a",
     ) == [{"a": "c"}]
+
+
+# Hop bounds and the one-relationship shape. The bounds used to be ignored
+# (`*..2` returned a 3-hop path, `*2..5` a 1-hop one) and a chain of
+# relationships searched along its first relationship only.
+
+
+@pytest.fixture(params=["default", "mapped", "disk"])
+def long_chain(request, tmp_path):
+    """C 1 -N-> ... -N-> C 13: twelve hops, past the 10-hop var-length MATCH cap."""
+    options = {"storage": request.param}
+    if request.param == "disk":
+        options["path"] = str(tmp_path / "graph")
+    g = KnowledgeGraph(**options)
+    g.add_nodes(pd.DataFrame({"id": list(range(1, 14))}), "C", "id", "id")
+    g.add_connections(pd.DataFrame({"s": list(range(1, 13)), "t": list(range(2, 14))}), "N", "C", "s", "C", "t")
+    return g
+
+
+@pytest.mark.parametrize("fn", ["shortestPath", "allShortestPaths"])
+@pytest.mark.parametrize(
+    ("rel", "expected"),
+    [("[:R*..2]", []), ("[:R*1..3]", [{"n": 3}]), ("[:R]", []), ("[:R*0]", [])],
+)
+def test_a_written_maximum_bounds_the_search(graph, fn, rel, expected):
+    assert rows(graph, f"MATCH p = {fn}((a:P {{name:'a'}})-{rel}-(q:Q)) RETURN length(p) AS n") == expected
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "MATCH (a:P {name:'a'}) OPTIONAL MATCH ",
+        "MATCH (a:P {name:'a'}) CALL { WITH a MATCH ",
+    ],
+    ids=["optional", "call-subquery"],
+)
+def test_a_written_maximum_binds_in_optional_and_subquery_forms(graph, prefix):
+    tail = " RETURN length(p) AS n } RETURN n" if "CALL" in prefix else " RETURN length(p) AS n"
+    got = rows(graph, prefix + "p = shortestPath((a)-[:R*..2]-(q:Q))" + tail)
+    assert got == ([{"n": None}] if "OPTIONAL" in prefix else [])
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "shortestPath((a:C {id:1})-[:N*]-(b:C {id:13}))",
+        "shortestPath((a:C {id:1})-[:N*1..]->(b:C {id:13}))",
+        "allShortestPaths((a:C {id:1})-[*]-(b:C {id:13}))",
+    ],
+)
+def test_an_open_maximum_is_unbounded_for_shortest_path(long_chain, pattern):
+    assert rows(long_chain, f"MATCH p = {pattern} RETURN length(p) AS n") == [{"n": 12}]
+
+
+def test_the_var_length_match_cap_is_unchanged(long_chain):
+    assert rows(long_chain, "MATCH p = (a:C {id:1})-[:N*]->(b:C {id:13}) RETURN length(p) AS n") == []
+    assert rows(long_chain, "MATCH p = shortestPath((a:C {id:1})-[:N*..11]-(b:C {id:13})) RETURN length(p) AS n") == []
+
+
+@pytest.mark.parametrize(
+    ("pattern", "written"),
+    [
+        ("shortestPath((a:P)-[:R*2..5]-(q:Q))", "`*2..5`"),
+        ("shortestPath((a:P)-[:R*2..]-(q:Q))", "`*2..`"),
+        ("allShortestPaths((a:P)-[:R*3]->(q:Q))", "`*3`"),
+    ],
+)
+def test_a_minimum_above_one_is_refused(graph, pattern, written):
+    fn = pattern.split("(")[0]
+    with pytest.raises(Exception, match=rf"{fn}\(\) does not support a minimum length other than 0 or 1.*{written}"):
+        rows(graph, f"MATCH p = {pattern} RETURN length(p) AS n")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "MATCH p = shortestPath((a:P {name:'a'})-[:R]->(m:Q)-[:R*]->(b:Q)) RETURN m",
+        "MATCH (a:P {name:'a'}) OPTIONAL MATCH p = allShortestPaths((a)-[*]-(m)-[*]-(b:Q)) RETURN m",
+    ],
+)
+def test_a_pattern_with_more_than_one_relationship_is_refused(graph, query):
+    with pytest.raises(Exception, match="exactly one relationship.*2 relationships across 3 nodes"):
+        rows(graph, query)

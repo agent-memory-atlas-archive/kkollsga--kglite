@@ -155,7 +155,7 @@ def test_shortest_path_answers_the_zero_length_path_to_the_same_node(linked_pair
     [
         "shortestPath((a)-[:K*1..]-(a))",
         "shortestPath((a)-[*]-(a))",
-        "shortestPath((a)-[:K*2..3]-(a))",
+        "shortestPath((a)-[:K*1..3]-(a))",
     ],
 )
 def test_shortest_path_still_refuses_a_min_one_walk_back_to_the_same_node(linked_pair, pattern, disable_optimizer):
