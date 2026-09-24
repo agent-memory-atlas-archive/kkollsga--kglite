@@ -129,3 +129,57 @@ fn both_ends_anchored_keeps_the_written_order() {
         vec![Some("h".to_string())]
     );
 }
+
+/// Start variables of the MATCH patterns inside the query's `CALL { }` bodies.
+fn call_body_start_vars(query: &str) -> Vec<Option<String>> {
+    let mut parsed = parse_cypher(query).unwrap();
+    optimize(&mut parsed, &hub_and_docs(), &HashMap::new());
+    parsed
+        .clauses
+        .iter()
+        .filter_map(|clause| match clause {
+            Clause::CallSubquery { body, .. } => Some(body),
+            _ => None,
+        })
+        .flat_map(|body| body.clauses.iter())
+        .filter_map(|clause| match clause {
+            Clause::Match(m) => Some(m),
+            _ => None,
+        })
+        .flat_map(|m| m.patterns.iter())
+        .map(|pattern| match &pattern.elements[0] {
+            PatternElement::Node(np) => np.variable.clone(),
+            PatternElement::Edge(_) => None,
+        })
+        .collect()
+}
+
+fn s() -> Option<String> {
+    Some("s".to_string())
+}
+
+#[test]
+fn call_import_anchors_against_a_labelled_far_end() {
+    // The imported `s` resolves to one node per row; reversing onto the
+    // `:Doc` label scan walked every Doc for every row.
+    for query in [
+        "MATCH (s:Hub) CALL { WITH s MATCH (s)--(:Doc) RETURN count(*) AS c } RETURN c",
+        "MATCH (s:Hub) CALL (s) { MATCH (s)--(:Doc) RETURN count(*) AS c } RETURN c",
+    ] {
+        assert_eq!(call_body_start_vars(query), vec![s()], "{query}");
+    }
+}
+
+#[test]
+fn a_value_bound_by_with_or_unwind_anchors_a_later_match() {
+    assert_eq!(
+        start_vars("MATCH (h:Hub) WITH collect(h) AS hs UNWIND hs AS s MATCH (s)--(:Doc) RETURN s"),
+        vec![Some("h".to_string()), s()]
+    );
+    assert_eq!(
+        start_vars(
+            "MATCH (d:Doc)<-[r:CLAIMS]-() WITH startNode(r) AS s MATCH (s)--(:Doc) RETURN s"
+        ),
+        vec![d(), s()]
+    );
+}

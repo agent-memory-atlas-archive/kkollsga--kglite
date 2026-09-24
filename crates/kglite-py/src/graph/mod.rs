@@ -670,6 +670,32 @@ impl Clone for KnowledgeGraph {
 }
 
 /// Error message shown when embed_texts/search_text is called without set_embedder().
+/// [`KnowledgeGraph::embedder_or_idle`]'s stand-in for a missing model.
+struct IdleEmbedder {
+    dimension: usize,
+    model_id: Option<String>,
+}
+
+impl embedder::Embedder for IdleEmbedder {
+    fn dimension(&self) -> usize {
+        // A pass reads the dimension before it embeds; 0 would be refused as
+        // a broken model rather than reaching `load`, which names the fix.
+        self.dimension.max(1)
+    }
+
+    fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Err(EMBEDDER_SKELETON_MSG.to_string())
+    }
+
+    fn model_id(&self) -> Option<String> {
+        self.model_id.clone()
+    }
+
+    fn load(&self) -> Result<(), String> {
+        Err(EMBEDDER_SKELETON_MSG.to_string())
+    }
+}
+
 const EMBEDDER_SKELETON_MSG: &str = "\
 No embedding model registered. Call g.set_embedder(model) first.
 
@@ -792,6 +818,33 @@ impl KnowledgeGraph {
                 EMBEDDER_SKELETON_MSG,
             )),
         }
+    }
+
+    /// The registered embedder, and `true`; with none registered, a stand-in
+    /// and `false`. The stand-in answers what a pass asks before it needs a
+    /// vector — the store's own dimension and model id — and raises the
+    /// implement-this skeleton the moment a text has to be embedded, so a
+    /// pass with nothing to do finishes without a model.
+    pub(crate) fn embedder_or_idle(
+        &self,
+        entity: kglite_core::api::embeddings::EmbeddingEntity,
+        type_name: &str,
+        text_column: &str,
+    ) -> (Arc<dyn embedder::Embedder>, bool) {
+        if let Some(model) = &self.embedder {
+            return (Arc::clone(model), true);
+        }
+        let info = kglite_core::api::embeddings::embedding_info(
+            &self.inner,
+            entity,
+            type_name,
+            text_column,
+        );
+        let idle = IdleEmbedder {
+            dimension: info.as_ref().map_or(0, |info| info.dimension),
+            model_id: info.and_then(|info| info.model),
+        };
+        (Arc::new(idle), false)
     }
 
     /// Resolve a name (or qualified_name) to a single code entity NodeIndex.

@@ -569,8 +569,32 @@ fn missing_store_error(graph: &DirGraph, node_types: &[&str], store: &str) -> St
     } else {
         hint
     };
+    // A relationship store of that column is the likeliest reason a node
+    // search finds none, and no node-side hint can name it.
+    let elsewhere = relationship_store_pointer(graph, text_column);
     format!(
-        "vector_search('{text_column}'): no embedding store '{store}' on node {plural} {types}.{hint}"
+        "vector_search('{text_column}'): no embedding store '{store}' on node {plural} \
+         {types}.{elsewhere}{hint}"
+    )
+}
+
+/// `" 'col' is a relationship embedding store (on T, …) — …."` when some
+/// relationship type carries a `text_column` store, else `""`.
+fn relationship_store_pointer(graph: &DirGraph, text_column: &str) -> String {
+    let mut types: Vec<&str> = graph
+        .edge_embeddings
+        .keys()
+        .filter(|(_, name)| crate::graph::embeddings::text_column_of(name) == Some(text_column))
+        .map(|(ty, _)| ty.as_str())
+        .collect();
+    if types.is_empty() {
+        return String::new();
+    }
+    types.sort_unstable();
+    format!(
+        " '{text_column}' is a relationship embedding store (on {}) — call \
+         relationship_vector_search('{text_column}', …) or pass entity='relationship'.",
+        types.join(", ")
     )
 }
 

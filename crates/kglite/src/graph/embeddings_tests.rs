@@ -1197,7 +1197,15 @@ fn embed_docs(
     model: &StubEmbedder,
     mode: EmbedMode,
 ) -> Result<EmbedOutcome, EmbedError> {
-    embed_property(graph, "Doc", "summary", mode, model, &EmbedHooks::default())
+    embed_property(
+        graph,
+        "Doc",
+        "summary",
+        mode,
+        model,
+        &EmbedHooks::default(),
+        None,
+    )
 }
 
 /// Overwrite one node's text through the ordinary write path, so the next
@@ -1281,8 +1289,16 @@ fn an_idle_pass_leaves_the_model_alone_unless_the_caller_wants_its_dimension() {
         load_when_idle: true,
         ..EmbedHooks::default()
     };
-    let asked =
-        embed_property(&mut g, "Doc", "summary", EmbedMode::Changed, &model, &hooks).unwrap();
+    let asked = embed_property(
+        &mut g,
+        "Doc",
+        "summary",
+        EmbedMode::Changed,
+        &model,
+        &hooks,
+        None,
+    )
+    .unwrap();
     assert_eq!(asked.embedded, 0);
     assert_eq!(model.loads(), 2, "the wheel's contract: always a dimension");
 }
@@ -1299,6 +1315,7 @@ fn a_label_with_no_nodes_is_a_no_op_and_an_unknown_column_is_an_error() {
         EmbedMode::Changed,
         &model,
         &EmbedHooks::default(),
+        None,
     )
     .unwrap();
     assert_eq!(empty, EmbedOutcome::default(), "nothing to embed, no model");
@@ -1311,6 +1328,7 @@ fn a_label_with_no_nodes_is_a_no_op_and_an_unknown_column_is_an_error() {
         EmbedMode::Changed,
         &model,
         &EmbedHooks::default(),
+        None,
     );
     assert!(
         matches!(bad, Err(EmbedError::Column(ref m)) if m.contains("nowhere")),
@@ -1398,8 +1416,16 @@ fn the_hooks_see_every_batch_and_can_wrap_the_model_call() {
         on_batch: Some(&batch),
         ..EmbedHooks::default()
     };
-    let outcome =
-        embed_property(&mut g, "Doc", "summary", EmbedMode::Changed, &model, &hooks).unwrap();
+    let outcome = embed_property(
+        &mut g,
+        "Doc",
+        "summary",
+        EmbedMode::Changed,
+        &model,
+        &hooks,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(outcome.embedded, 5);
     assert_eq!(started.get(), 5, "the count arrives before the first batch");
@@ -1409,7 +1435,16 @@ fn the_hooks_see_every_batch_and_can_wrap_the_model_call() {
     // …and an idle pass draws no bar at all.
     started.set(0);
     batches.borrow_mut().clear();
-    embed_property(&mut g, "Doc", "summary", EmbedMode::Changed, &model, &hooks).unwrap();
+    embed_property(
+        &mut g,
+        "Doc",
+        "summary",
+        EmbedMode::Changed,
+        &model,
+        &hooks,
+        None,
+    )
+    .unwrap();
     assert_eq!(started.get(), 0);
     assert!(batches.borrow().is_empty());
 }

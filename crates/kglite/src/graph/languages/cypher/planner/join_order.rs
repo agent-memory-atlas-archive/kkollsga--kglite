@@ -7,7 +7,11 @@ use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn optimize_pattern_start_node(query: &mut CypherQuery, graph: &DirGraph) {
+pub(super) fn optimize_pattern_start_node(
+    query: &mut CypherQuery,
+    graph: &DirGraph,
+    initial_scope: &HashSet<String>,
+) {
     use crate::graph::core::pattern_matching::EdgeDirection;
 
     // Track variables bound by earlier clauses so an unconstrained pattern
@@ -16,7 +20,12 @@ pub(super) fn optimize_pattern_start_node(query: &mut CypherQuery, graph: &DirGr
     // `(p)-[:T]->(target:Type)` and reverses it because `(p)` is statically
     // unconstrained → looks worst-case, even though it'll resolve to a single
     // pre-bound NodeIndex when the executor reaches this clause.
-    let mut bound_vars: HashSet<String> = HashSet::new();
+    //
+    // The same holds for a variable bound by a WITH, UNWIND or YIELD, and for
+    // one a `CALL { }` body imports (`initial_scope`): the executor seeds a
+    // node *value* exactly as it seeds a MATCH binding, so `(s)--(:P)` must
+    // not be reversed onto the label scan.
+    let mut bound_vars: HashSet<String> = initial_scope.clone();
 
     for clause in &mut query.clauses {
         // A variable anchored to a slot by `anchor_element_id` is pre-bound at
@@ -28,9 +37,10 @@ pub(super) fn optimize_pattern_start_node(query: &mut CypherQuery, graph: &DirGr
         let (patterns, path_assignments) = match clause {
             Clause::Match(m) => (&mut m.patterns, &m.path_assignments),
             Clause::OptionalMatch(m) => (&mut m.patterns, &m.path_assignments),
-            // Other clauses don't introduce node bindings the optimizer cares
-            // about; advance without modifying patterns.
-            _ => continue,
+            other => {
+                super::simplification::collect_introduced_variables(other, &mut bound_vars);
+                continue;
+            }
         };
         for (pi, pattern) in patterns.iter_mut().enumerate() {
             if pattern.elements.len() < 3 {

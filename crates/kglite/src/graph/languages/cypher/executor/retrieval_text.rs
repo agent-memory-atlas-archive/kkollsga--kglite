@@ -201,6 +201,8 @@ impl CypherExecutor<'_> {
             RetrievalPopulation::WholeType { nodes, .. } => Ok(self
                 .ordered_text_membership(nodes.iter().map(Some), node_type, view)?
                 .then_some(TextRowLookup::WholeType(nodes))),
+            // Built only by the vector entry.
+            RetrievalPopulation::StoreSlots { .. } => Ok(None),
         }
     }
 

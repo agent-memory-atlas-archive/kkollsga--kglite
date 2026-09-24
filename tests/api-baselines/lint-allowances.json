@@ -113,7 +113,15 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:search_text:fn search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, entity: &str, types: Option<&Bound<'_, PyAny>>, relationship_keys: Option<HashMap<String, String>>, ) -> PyResu::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:set_embeddings:fn set_embeddings( &mut self, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:vector_search:fn vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, entity: &str, types: Option<&Bound<'_, PyAny>>, relationship_keys: Option<HashMap<String, String>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -189,11 +197,19 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_search.rs::fn:relationship_search_text:pub(super) fn relationship_search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: usize, metric: Option<&str>, to_df: bool, types: Option<&Bound<'_, PyAny>>, exact: bool, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_search.rs::fn:relationship_vector_search:pub(super) fn relationship_vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: usize, metric: Option<&str>, to_df: bool, types: Option<&Bound<'_, PyAny>>, exact: bool, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:build_relationship_vector_index:pub(super) fn build_relationship_vector_index( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:pub(super) fn embed_relationship_texts( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, mode: Option<&str>, batch_size: usize, show_progress: bool, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:pub(super) fn embed_relationship_texts( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, batch_size: usize, show_progress: bool, mode: Option<&str>, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -229,11 +245,15 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:search_text:fn search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:embed_node_texts:pub(super) fn embed_node_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:vector_search:fn vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:node_search_text:pub(super) fn node_search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:node_vector_search:pub(super) fn node_vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {

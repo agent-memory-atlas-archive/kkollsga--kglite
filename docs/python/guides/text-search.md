@@ -221,8 +221,9 @@ plainly, because they are the whole contract.
 **Writes are never slowed.** Recording a creation is a comparison of one node
 slot against a high-water mark — O(1) per bulk operation, nothing per row — so
 `add_nodes()` into an indexed graph runs at the speed it would without one.
-Edges never touch a text index at all. A graph with no text index pays a single
-branch. This is not a tuning claim; it is why the design is watermark-based, and
+A relationship write never touches a node text index; it is recorded only by a
+[relationship text index](#relationship-text-indexes) on its own type and
+property, by the same rule. A graph with no text index pays a single branch. This is not a tuning claim; it is why the design is watermark-based, and
 there are committed benchmark cells that fail if bulk ingest into an indexed
 graph diverges from the unindexed control.
 
@@ -305,6 +306,27 @@ small.read_only(False)
 
 The point is that you never have to guess: a query that reads a behind-the-graph
 index says so, in the result, with the number.
+
+The warning rides the result (`rows.warnings`, and `rows.diagnostics["warnings"]`)
+and is echoed as a `warning: …` line on stderr by default — relationship indexes
+and node indexes alike. To route it through Python's `warnings` module instead,
+so a filter can silence it or `-W error` can turn it into an exception, call
+`kglite.set_query_warning_policy("pywarn")` once per process:
+
+```python
+import warnings
+
+kglite.set_query_warning_policy("pywarn")
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    small.cypher("MATCH (a:Article) RETURN text_bm25(a, 'body', 'low light') AS score")
+print(caught[0].category.__name__)
+# UserWarning
+kglite.set_query_warning_policy("stderr")
+```
+
+`"stderr"` stays the default because a warning raised through `warnings` under
+`-W error` would turn an advisory into an exception out of `cypher()`.
 
 ### Checking and repairing freshness
 

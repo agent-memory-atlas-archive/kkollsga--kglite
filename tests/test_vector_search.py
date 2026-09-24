@@ -155,9 +155,14 @@ class TestSetGetEmbeddings:
         assert graph.embedding("Article", "summary", 999) is None
 
     def test_embedding_nonexistent_store(self, graph_with_embeddings):
-        """embedding returns None for a property name that doesn't exist."""
+        """embedding refuses a store that doesn't exist (it answered None, the
+        same as a node without a vector), naming the stores the type has."""
         graph = graph_with_embeddings
-        assert graph.embedding("Article", "no_such", 1) is None
+        with pytest.raises(
+            ValueError,
+            match=r"No node embedding store 'Article\.no_such'\. Node embedding stores of 'Article': summary\.",
+        ):
+            graph.embedding("Article", "no_such", 1)
 
 
 class TestSetEmbeddingsValidation:

@@ -173,6 +173,7 @@ fn build_vault_graph(
                         EmbedMode::Changed,
                         model.as_ref(),
                         &hooks,
+                        None,
                     ) {
                         Ok(outcome) => tracing::info!(
                             label,

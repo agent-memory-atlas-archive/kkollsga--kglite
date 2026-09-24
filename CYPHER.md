@@ -763,8 +763,10 @@ or the same with `text_score` — is served from the store, as it is for nodes:
   exactly as the unfused query scores it row by row.
 
 An HNSW answer is approximate; pass `{exact:true}` as the final argument to
-force the exact route. When scores tie at the cut, the ordinary pipeline
-answers, so the order is the one the unfused query gives. A relationship with
+force the exact route. The answer equals the unoptimised pipeline's **up to
+ties**: when several rows score the same at the cut, which of them make the top
+`k`, and their order, can differ between the HNSW route and the exact or
+unfused one — the scores returned are the same. A relationship with
 no vector scores `null` and so comes **first** under `DESC`; add
 `WHERE vector_score(r, …) IS NOT NULL`, which keeps the store route (see
 **Unembedded rows come first under `DESC`** below).

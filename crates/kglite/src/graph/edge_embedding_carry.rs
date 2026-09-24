@@ -542,7 +542,15 @@ pub fn relationship_embeddings(
     let store = graph
         .edge_embeddings
         .get(&edge_store_key(relationship_type, text_column))
-        .ok_or_else(|| format!("No relationship embedding store '{label}'"))?;
+        .ok_or_else(|| {
+            crate::graph::embedding_hints::missing_store_error(
+                graph,
+                crate::graph::embedding_inventory::EmbeddingEntity::Relationship,
+                relationship_type,
+                text_column,
+                crate::graph::embedding_hints::Surface::Method,
+            )
+        })?;
     let key_property = keys.get(relationship_type).map(String::as_str);
     let guard = graph.graph.begin_query();
     let mut checked: BTreeSet<(usize, usize)> = BTreeSet::new();

@@ -649,11 +649,20 @@ fn drop_missing_index(
     } else {
         format!("installed: {}", installed.join(", "))
     };
+    if let Some(relationship) = name.strip_prefix("relationship:") {
+        return Err(format!(
+            "no index named '{name}' exists: no relationship vector or text index is installed \
+             on '{relationship}'. A relationship index is named 'relationship:Type.property' — \
+             the form SHOW INDEXES lists — and DROP INDEX removes its HNSW index and its BM25 \
+             index (the vectors stay); {available}."
+        ));
+    }
     Err(format!(
         "no index named '{name}' exists. KGLite index names are canonical — \
-         'Label.property' for a single property, 'Label.(a,b)' for composite — and a name given \
-         to CREATE INDEX is not stored; {available}. Use the canonical name, or the descriptor \
-         form `DROP INDEX FOR (n:Label) ON (n.property)`."
+         'Label.property' for a single property, 'Label.(a,b)' for composite, \
+         'relationship:Type.property' for a relationship index — and a name given to CREATE \
+         INDEX is not stored; {available}. Use the canonical name, or the descriptor form `DROP \
+         INDEX FOR (n:Label) ON (n.property)`."
     ))
 }
 

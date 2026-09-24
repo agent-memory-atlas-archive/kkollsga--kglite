@@ -267,6 +267,27 @@ def edge_text_differential_graph():
 
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    # A node the row holds as a value (`UNWIND collect(d)`, `startNode(r)`) or
+    # a `CALL { }` import anchors a subquery pattern; the answers must not move.
+    (
+        "subquery_count_on_unwound_value",
+        "hub_claims_graph",
+        "MATCH (d:Doc) WITH collect(d) AS ds UNWIND ds AS d RETURN d.id AS id, COUNT { (d)--() } AS n ORDER BY id",
+        None,
+    ),
+    (
+        "subquery_exists_on_startnode_value",
+        "hub_claims_graph",
+        "MATCH ()-[r:CLAIMS]->(d:Doc) WITH endNode(r) AS d, r.w AS w "
+        "RETURN d.id AS id, w, EXISTS { (d)<-[:CLAIMS]-(:Other) } AS other ORDER BY id, w",
+        None,
+    ),
+    (
+        "call_import_labelled_far_end",
+        "hub_claims_graph",
+        "MATCH (d:Doc) CALL { WITH d MATCH (d)--(:Other) RETURN count(*) AS c } RETURN d.id AS id, c ORDER BY id",
+        None,
+    ),
     (
         "start_node_row_bound_id_anchor",
         "hub_claims_graph",
@@ -464,6 +485,37 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "edge_vector_topk_unembedded_member",
         "edge_vector_sparse_graph",
         "MATCH ()-[r:R]->() RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    # The absorbed `IS NOT NULL` filter (entry and rows routes), the WITH
+    # spelling that ranks before projecting endpoints, and an undirected
+    # pattern that binds each relationship once per orientation.
+    (
+        "edge_vector_topk_not_null_filter",
+        "edge_vector_sparse_graph",
+        "MATCH ()-[r:R]->() WHERE vector_score(r,'text_emb',[0.0,1.0]) IS NOT NULL "
+        "RETURN r.k AS k, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    (
+        "edge_vector_topk_not_null_filter_rows",
+        "edge_vector_sparse_graph",
+        "MATCH (a:N)-[r:R]->(b:N) WHERE a.id = 1 AND vector_score(r,'text_emb',[1.0,0.0]) IS NOT NULL "
+        "RETURN r.k AS k, vector_score(r,'text_emb',[1.0,0.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "edge_vector_topk_with_then_endpoints",
+        "edge_vector_differential_graph",
+        "MATCH ()-[r:R]->() WITH r, vector_score(r,'text_emb',[0.0,1.0]) AS s ORDER BY s DESC LIMIT 2 "
+        "RETURN startNode(r).id AS a, endNode(r).id AS b, r.k AS k, s",
+        None,
+    ),
+    (
+        "edge_vector_topk_undirected",
+        "edge_vector_differential_graph",
+        "MATCH (a:N)-[r:R]-(b:N) RETURN a.id AS a, r.k AS k, vector_score(r,'text_emb',[1.0,0.0]) AS s "
+        "ORDER BY s DESC LIMIT 3",
         None,
     ),
     # Several relationship types in play: an alternation and an untyped scan
@@ -723,6 +775,56 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "vector_whole_type_index_entry",
         "vector_index_entry_graph",
         "MATCH (d:Doc) RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    # A type with an unembedded member: the entry ranks its NULL first from
+    # the type walk and the store answers the rest; an absorbed
+    # `IS NOT NULL` filter makes the store the whole candidate set.
+    (
+        "vector_partial_type_nulls_then_index",
+        "vector_partial_index_graph",
+        "MATCH (d:Doc) RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    (
+        "vector_partial_type_nulls_only",
+        "vector_partial_index_graph",
+        "MATCH (d:Doc) RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 1",
+        None,
+    ),
+    (
+        "vector_not_null_filter_index",
+        "vector_partial_index_graph",
+        "MATCH (d:Doc) WHERE vector_score(d, 'summary_emb', [1.0,0.0]) IS NOT NULL "
+        "RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "vector_not_null_filter_exact",
+        "vector_order_graph",
+        "MATCH (d:Doc) WHERE vector_score(d, 'summary_emb', [0.0,1.0]) IS NOT NULL "
+        "RETURN d.id AS id, vector_score(d, 'summary_emb', [0.0,1.0]) AS s ORDER BY s DESC LIMIT 3",
+        None,
+    ),
+    (
+        "vector_not_null_filter_last_conjunct",
+        "vector_partial_index_graph",
+        "MATCH (d:Doc) WHERE d.id % 2 = 0 AND vector_score(d, 'summary_emb', [1.0,0.0]) IS NOT NULL "
+        "RETURN d.id AS id, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 2",
+        None,
+    ),
+    (
+        "vector_not_null_filter_order_by_call",
+        "vector_partial_index_graph",
+        "MATCH (d:Doc) WHERE vector_score(d, 'summary_emb', [1.0,0.0]) IS NOT NULL "
+        "RETURN d.id AS id ORDER BY vector_score(d, 'summary_emb', [1.0,0.0]) DESC LIMIT 2",
+        None,
+    ),
+    (
+        "vector_with_top_k_then_return",
+        "vector_partial_index_graph",
+        "MATCH (d:Doc) WITH d, vector_score(d, 'summary_emb', [0.0,1.0]) AS s ORDER BY s DESC LIMIT 2 "
+        "RETURN d.id AS id, s",
         None,
     ),
     (
@@ -5120,6 +5222,13 @@ def vector_order_graph() -> kglite.KnowledgeGraph:
     graph.add_nodes(pd.DataFrame({"id": [0, 1, 2, 3], "summary": ["x"] * 4}), "Doc", "id")
     graph.set_embeddings("Doc", "summary", {0: [1.0, 0.0], 1: [0.0, 1.0], 2: [-1.0, 0.0]})
     return graph
+
+
+@pytest.fixture
+def vector_partial_index_graph(vector_order_graph) -> kglite.KnowledgeGraph:
+    # Doc 3 has no vector; the index covers the other three.
+    vector_order_graph.build_vector_index("Doc", "summary")
+    return vector_order_graph
 
 
 @pytest.fixture

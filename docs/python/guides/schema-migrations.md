@@ -135,12 +135,12 @@ graph.save('mygraph.kgl')
 
 ## Changing a node's type: recreate, don't mutate
 
-**A node's primary type is immutable**, and the way KGLite says so is worth
-understanding, because one of the two obvious attempts *appears to succeed*:
+**A node's primary type is immutable**, and both obvious attempts to change
+it *appear to succeed* without doing so:
 
 ```cypher
 MATCH (n:Contractor) SET n.type = 'Person'
--- error: Cannot SET node type via property assignment
+-- succeeds — but it writes a property named `type`, not the type
 ```
 
 ```cypher
@@ -148,7 +148,12 @@ MATCH (n:Contractor) SET n:Person
 -- succeeds — but it does NOT change the type
 ```
 
-The second statement adds a **secondary label**. Afterwards `n.type` is still
+The first writes an ordinary property: `n.type` reads it back as `'Person'`
+(a stored `type` wins over the label on read, as it does on relationships),
+while `labels(n)` stays `['Contractor']` and `MATCH (n:Person)` finds nothing.
+`REMOVE n.type` removes the property, and `n.type` answers the label again.
+
+The second adds a **secondary label**. Afterwards `n.type` is still
 `'Contractor'`, `labels(n)` is `['Contractor', 'Person']`, and — the confusing
 part — `MATCH (n:Person)` *does* match the node. So a migration that used
 `SET n:Person` and checked with `MATCH (n:Person)` would look like it worked

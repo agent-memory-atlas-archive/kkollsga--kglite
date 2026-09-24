@@ -496,7 +496,7 @@ fn pass_reorder_cyclic_pattern_edges(query: &mut CypherQuery, ctx: &PassCtx) {
 /// (typically id-anchored or smallest-cardinality type). Reduces the
 /// front of the join from O(N) to O(1) when one end is anchored.
 fn pass_optimize_pattern_start_node(query: &mut CypherQuery, ctx: &PassCtx) {
-    optimize_pattern_start_node(query, ctx.graph)
+    optimize_pattern_start_node(query, ctx.graph, ctx.initial_scope)
 }
 
 /// **Pass:** `reorder_match_patterns` — Reorder multiple comma-
@@ -627,8 +627,12 @@ fn pass_fuse_node_scan_top_k(query: &mut CypherQuery, ctx: &PassCtx) {
 /// one `FusedVectorScoreTopK`. The executor picks the route from what the
 /// score call's first argument is bound to — node arm (`retrieval.rs`) or
 /// relationship arm (`retrieval_edge.rs`) — and from whether the MATCH is a
-/// plain scan whose population is the embedding store. **Why-bail:** ASC /
-/// NULLS LAST (HNSW ranks only the highest scores), and the shared set.
+/// plain scan whose population is the embedding store. A `WHERE <the same
+/// call> IS NOT NULL` directly before the RETURN (whole predicate or last
+/// conjunct) is absorbed as `non_null_only`, so the store's members are the
+/// candidate set instead of every row being scored to filter. **Why-bail:**
+/// ASC / NULLS LAST (HNSW ranks only the highest scores), and the shared set;
+/// a filter on a different call, or not in last position, stays a WHERE.
 fn pass_fuse_vector_score_order_limit(query: &mut CypherQuery, _ctx: &PassCtx) {
     fuse_vector_score_order_limit(query)
 }

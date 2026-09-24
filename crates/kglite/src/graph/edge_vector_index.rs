@@ -7,6 +7,10 @@ use petgraph::graph::EdgeIndex;
 use super::{edge_store_key, EdgeEmbeddingStore};
 use crate::graph::algorithms::hnsw::HnswParams;
 use crate::graph::algorithms::vector::{self as vs, DistanceMetric};
+use crate::graph::embedding_hints::{
+    missing_store_error, missing_store_hint, no_index_to_refresh, Surface,
+};
+use crate::graph::embedding_inventory::EmbeddingEntity;
 use crate::graph::embedding_validation::validate_finite_vector;
 use crate::graph::schema::DirGraph;
 use crate::graph::schema::EmbeddingStore;
@@ -124,6 +128,17 @@ pub fn build_relationship_vector_index(
     metric: Option<&str>,
     auto_refresh_limit: Option<usize>,
 ) -> Result<crate::graph::embeddings::VectorIndexReport, String> {
+    if !graph
+        .edge_embeddings
+        .contains_key(&edge_store_key(relationship_type, text_column))
+    {
+        return Err(missing_store_to_index(
+            graph,
+            relationship_type,
+            text_column,
+            Surface::Method,
+        ));
+    }
     let report = build_edge_vector_index(
         graph,
         relationship_type,
@@ -172,7 +187,36 @@ pub fn refresh_relationship_vector_index(
     relationship_type: &str,
     text_column: &str,
 ) -> Result<usize, String> {
-    refresh_edge_vector_index(graph, relationship_type, text_column)
+    refresh_edge_vector_index(graph, relationship_type, text_column, Surface::Method)
+}
+
+/// The refusal for an index build over a store that does not exist.
+fn missing_store_to_index(
+    graph: &DirGraph,
+    relationship_type: &str,
+    text_column: &str,
+    surface: Surface,
+) -> String {
+    let hint = missing_store_hint(
+        graph,
+        EmbeddingEntity::Relationship,
+        relationship_type,
+        text_column,
+        surface,
+    );
+    let hint = if hint.is_empty() {
+        format!(
+            " Write one first with {}.",
+            surface.write_store(
+                EmbeddingEntity::Relationship,
+                relationship_type,
+                text_column
+            )
+        )
+    } else {
+        hint
+    };
+    format!("No relationship embedding store '{relationship_type}.{text_column}' to index.{hint}")
 }
 
 pub(crate) fn build_edge_vector_index(
@@ -182,9 +226,18 @@ pub(crate) fn build_edge_vector_index(
     options: EdgeVectorIndexOptions,
 ) -> Result<EdgeVectorIndexReport, String> {
     let key = edge_store_key(connection_type, text_property);
-    let store = graph.edge_embeddings.get_mut(&key).ok_or_else(|| {
-        format!("No relationship embedding store '{connection_type}.{text_property}' to index")
-    })?;
+    if !graph.edge_embeddings.contains_key(&key) {
+        return Err(missing_store_to_index(
+            graph,
+            connection_type,
+            text_property,
+            Surface::Cypher,
+        ));
+    }
+    let store = graph
+        .edge_embeddings
+        .get_mut(&key)
+        .expect("store presence checked immediately above");
     let metric_name = options
         .metric
         .clone()
@@ -265,23 +318,28 @@ pub(crate) fn refresh_edge_vector_index(
     graph: &DirGraph,
     connection_type: &str,
     text_property: &str,
+    surface: Surface,
 ) -> Result<usize, String> {
     let store = graph
         .edge_embeddings
         .get(&edge_store_key(connection_type, text_property))
         .ok_or_else(|| {
-            format!("No relationship embedding store '{connection_type}.{text_property}'")
+            missing_store_error(
+                graph,
+                EmbeddingEntity::Relationship,
+                connection_type,
+                text_property,
+                surface,
+            )
         })?;
     // Refused rather than answered `0`: a delete of an embedded relationship
     // or an endpoint drops the index, and `0` read as "nothing outstanding".
     if !store.numeric.has_index() {
-        return Err(format!(
-            "no vector index on relationship store '{connection_type}.{}' to refresh — \
-             none was built, or a delete of an embedded relationship or an endpoint \
-             (or a vacuum()) dropped it. Build one with CALL \
-             db.relationship_embeddings.build_index({{type: '{connection_type}', text_property: \
-             '{text_property}'}}).",
-            crate::graph::embeddings::store_name(text_property),
+        return Err(no_index_to_refresh(
+            EmbeddingEntity::Relationship,
+            connection_type,
+            text_property,
+            surface,
         ));
     }
     if graph.read_only {
@@ -422,6 +480,7 @@ pub(crate) fn query_edge_embedding_stores(
     text_property: &str,
     query: &[f32],
     options: EdgeVectorQueryOptions,
+    surface: Surface,
 ) -> Result<Vec<EdgeStoreQueryHit>, String> {
     validate_finite_vector(query)
         .map_err(|error| format!("Invalid relationship embedding query: {error}"))?;
@@ -431,7 +490,13 @@ pub(crate) fn query_edge_embedding_stores(
             .edge_embeddings
             .get(&edge_store_key(rel_type, text_property))
             .ok_or_else(|| {
-                format!("No relationship embedding store '{rel_type}.{text_property}'")
+                missing_store_error(
+                    graph,
+                    EmbeddingEntity::Relationship,
+                    rel_type,
+                    text_property,
+                    surface,
+                )
             })?;
         stores.push((rel_type.as_str(), &store.numeric));
     }

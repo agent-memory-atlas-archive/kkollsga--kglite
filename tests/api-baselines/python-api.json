@@ -730,11 +730,11 @@
         },
         "embed_node_texts": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None)"
+          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None, *, metric=None)"
         },
         "embed_relationship_texts": {
           "kind": "method",
-          "signature": "(self, /, relationship_type, text_column, *, mode=None, batch_size=256, show_progress=True, metric=None)"
+          "signature": "(self, /, relationship_type, text_column, batch_size=256, show_progress=True, mode=None, *, metric=None)"
         },
         "embed_texts": {
           "kind": "method",
@@ -742,7 +742,7 @@
         },
         "embedding": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, node_id)"
+          "signature": "(self, /, node_type, text_column, node_id, *, entity='node', relationship_keys=None)"
         },
         "embedding_diagnostics": {
           "kind": "method",
@@ -750,7 +750,7 @@
         },
         "embedding_dim": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column)"
+          "signature": "(self, /, node_type, text_column, *, entity='node')"
         },
         "embedding_info": {
           "kind": "method",
@@ -996,9 +996,21 @@
           "kind": "method",
           "signature": "(self, /, node_type, node_id)"
         },
+        "node_embedding": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, node_id)"
+        },
+        "node_embedding_dim": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column)"
+        },
         "node_embeddings": {
           "kind": "method",
           "signature": "(self, /, node_type_or_text_column, text_column=None)"
+        },
+        "node_search_text": {
+          "kind": "method",
+          "signature": "(self, /, text_column, query, top_k=10, metric=None, to_df=False, returning=None, exact=False)"
         },
         "node_type_counts": {
           "kind": "method",
@@ -1007,6 +1019,10 @@
         "node_types": {
           "kind": "attribute",
           "type": "getset_descriptor"
+        },
+        "node_vector_search": {
+          "kind": "method",
+          "signature": "(self, /, text_column, query_vector, top_k=10, metric=None, to_df=False, returning=None, exact=False)"
         },
         "offset": {
           "kind": "method",
@@ -1064,13 +1080,29 @@
           "kind": "method",
           "signature": "(self, /)"
         },
+        "relationship_embedding": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column, address, *, relationship_keys=None)"
+        },
+        "relationship_embedding_dim": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column)"
+        },
         "relationship_embeddings": {
           "kind": "method",
           "signature": "(self, /, relationship_type, text_column, *, relationship_keys=None)"
         },
+        "relationship_search_text": {
+          "kind": "method",
+          "signature": "(self, /, text_column, query, top_k=10, metric=None, to_df=False, *, types=None, exact=False, relationship_keys=None)"
+        },
         "relationship_types": {
           "kind": "method",
           "signature": "(self, /)"
+        },
+        "relationship_vector_search": {
+          "kind": "method",
+          "signature": "(self, /, text_column, query_vector, top_k=10, metric=None, to_df=False, *, types=None, exact=False, relationship_keys=None)"
         },
         "relationships": {
           "kind": "method",
@@ -1078,11 +1110,19 @@
         },
         "remove_embeddings": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column)"
+          "signature": "(self, /, node_type, text_column, *, entity='node')"
         },
         "remove_label": {
           "kind": "method",
           "signature": "(self, /, node_type, ids, label)"
+        },
+        "remove_node_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column)"
+        },
+        "remove_relationship_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column)"
         },
         "replace_connections": {
           "kind": "method",
@@ -1134,7 +1174,7 @@
         },
         "search_text": {
           "kind": "method",
-          "signature": "(self, /, text_column, query, top_k=10, metric=None, to_df=False, returning=None, exact=False)"
+          "signature": "(self, /, text_column, query, top_k=10, metric=None, to_df=False, returning=None, exact=False, *, entity='node', types=None, relationship_keys=None)"
         },
         "select": {
           "kind": "method",
@@ -1382,7 +1422,7 @@
         },
         "vector_search": {
           "kind": "method",
-          "signature": "(self, /, text_column, query_vector, top_k=10, metric=None, to_df=False, returning=None, exact=False)"
+          "signature": "(self, /, text_column, query_vector, top_k=10, metric=None, to_df=False, returning=None, exact=False, *, entity='node', types=None, relationship_keys=None)"
         },
         "verify_unique_constraints": {
           "kind": "method",

@@ -2,9 +2,11 @@
 
 openCypher sorts `null` above every value, so a node or relationship with no
 vector — `vector_score` is `null` for it — takes the first rows of a DESC
-top-k, and the planner answers by row scan (`fallback_reason: 'row_coverage'`).
-The documented recipe, `WHERE vector_score(...) IS NOT NULL`, drops those rows
-and keeps the store route. CYPHER.md, the semantic-search guide and the
+top-k. A whole node type is still answered from its store (the unembedded
+members first, in type order); a relationship type is answered by row scan
+(`fallback_reason: 'row_coverage'`). The documented recipe,
+`WHERE vector_score(...) IS NOT NULL`, drops those rows and keeps the store
+route. CYPHER.md, the semantic-search guide and the
 `describe()` semantic topics all state this; these tests keep them true.
 """
 
@@ -52,9 +54,11 @@ def _run(graph: KnowledgeGraph, template: str, where: str):
 
 
 def test_unembedded_nodes_come_first_without_the_filter() -> None:
+    # A whole node type is still served by its store: the unembedded members
+    # come first in type order, the store ranks the rest.
     rows, retrieval = _run(_nodes(), NODE_TOP, "")
-    assert sorted(rows[:2]) == [(4, True), (5, True)]
-    assert retrieval[0]["fallback_reason"] == "row_coverage"
+    assert rows == [(4, True), (5, True), (1, False)]
+    assert (retrieval[0]["actual_mode"], retrieval[0]["fallback_reason"]) == ("hnsw", None)
 
 
 def test_the_filter_drops_unembedded_nodes_and_keeps_the_store_route() -> None:

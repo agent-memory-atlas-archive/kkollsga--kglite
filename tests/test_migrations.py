@@ -224,9 +224,14 @@ def test_primary_type_cannot_be_changed_in_place(tmp_path):
     graph = kglite.KnowledgeGraph()
     graph.cypher("CREATE (:Contractor {id: 1, title: 'Ada'})")
 
-    # Property assignment is refused outright.
-    with pytest.raises(Exception, match="Cannot SET node type"):
-        graph.cypher("MATCH (n:Contractor) SET n.type = 'Person'")
+    # Property assignment writes a property named `type`; it does not retype
+    # the node — the label, and MATCH by label, are unchanged.
+    graph.cypher("MATCH (n:Contractor) SET n.type = 'Person'")
+    assert graph.cypher("MATCH (n) RETURN n.type AS t, labels(n) AS l").to_dicts() == [
+        {"t": "Person", "l": ["Contractor"]}
+    ]
+    assert graph.cypher("MATCH (n:Person) RETURN count(n) AS c").to_dicts() == [{"c": 0}]
+    graph.cypher("MATCH (n:Contractor) REMOVE n.type")
 
     # Label assignment *succeeds* but adds a secondary label — the primary type
     # is untouched, even though `MATCH (n:Person)` now matches. This is the trap

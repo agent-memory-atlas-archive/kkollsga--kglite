@@ -11,7 +11,7 @@ use petgraph::graph::EdgeIndex;
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::algorithms::Interrupt;
 use crate::graph::edge_embeddings::{
-    describe_relationship, edge_store_key, install_generated_edge_embeddings,
+    describe_relationship, edge_store_key, install_generated_edge_embeddings, EdgeEmbeddingStore,
     GeneratedEdgeEmbeddingWrite,
 };
 use crate::graph::embedder::Embedder;
@@ -202,6 +202,7 @@ pub(crate) fn generate_selected(
     validate_selection(graph, &request.connection_type, &request.selected)
         .map_err(EmbedError::Output)?;
 
+    let metric = resolve_generation_metric(existing, &request).map_err(EmbedError::Output)?;
     let requested_model = service.model.model_id();
     if request.mode != EmbedMode::All {
         if let Some(prior_model) = existing.and_then(|store| store.model_id()) {
@@ -252,7 +253,7 @@ pub(crate) fn generate_selected(
     let affected = std::mem::take(&mut plan.affected);
     let write = GeneratedEdgeEmbeddingWrite {
         dimension,
-        metric: request.metric.clone(),
+        metric,
         final_model_id: final_model_id.clone(),
         generated,
         remove_selected: std::mem::take(&mut plan.remove_selected),
@@ -275,6 +276,33 @@ pub(crate) fn generate_selected(
         dimension: storage.dimension,
         model_id: final_model_id,
     })
+}
+
+/// The metric a generation pass writes: the requested one, or — when none is
+/// requested — the existing store's, so an incremental pass never resets a
+/// declared metric to the cosine default. A requested metric that differs
+/// from an existing store's is refused unless the pass rebuilds
+/// (`EmbedMode::All`), as the node writer refuses it.
+fn resolve_generation_metric(
+    existing: Option<&EdgeEmbeddingStore>,
+    request: &EdgeGenerationRequest,
+) -> Result<Option<String>, String> {
+    let Some(store) = existing else {
+        return Ok(request.metric.clone());
+    };
+    match request.metric.as_deref() {
+        None => Ok(store.metric().map(str::to_owned)),
+        Some(requested) => {
+            let stored = store.metric().unwrap_or("cosine");
+            if request.mode != EmbedMode::All && stored != requested {
+                return Err(format!(
+                    "Store metric is '{stored}', but this call requested '{requested}'; embed \
+                     with mode='all' to rebuild the store under '{requested}'"
+                ));
+            }
+            Ok(Some(requested.to_owned()))
+        }
+    }
 }
 
 fn validate_request_syntax(request: &EdgeGenerationRequest) -> Result<(), String> {

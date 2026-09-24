@@ -40,6 +40,7 @@ impl KnowledgeGraph {
         metric: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let rows = RelationshipRows {
+            method: "set_relationship_embeddings",
             relationship_type,
             text_column,
             embeddings,
@@ -65,6 +66,7 @@ impl KnowledgeGraph {
         metric: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let rows = RelationshipRows {
+            method: "add_relationship_embeddings",
             relationship_type,
             text_column,
             embeddings,
@@ -79,21 +81,25 @@ impl KnowledgeGraph {
     }
 
     /// Embed a text property for every relationship of a type with the registered model.
-    #[pyo3(signature = (relationship_type, text_column, *, mode=None, batch_size=256, show_progress=true, metric=None))]
-    // One Rust argument per Python keyword, as embed_texts has.
+    #[pyo3(signature = (relationship_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None))]
+    // One Rust argument per Python keyword, as embed_node_texts has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn embed_relationship_texts(
         &mut self,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
-        mode: Option<&str>,
         batch_size: usize,
         show_progress: bool,
+        mode: Option<&str>,
         metric: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
-        let model = self.get_embedder_or_error()?;
+        let (model, _) = self.embedder_or_idle(
+            kglite_core::api::embeddings::EmbeddingEntity::Relationship,
+            relationship_type,
+            text_column,
+        );
         let mode = match mode.unwrap_or("missing") {
             "missing" => EmbedMode::Missing,
             "changed" => EmbedMode::Changed,
@@ -243,6 +249,8 @@ impl KnowledgeGraph {
 
 /// One writer call's arguments, as the Python caller passed them.
 struct RelationshipRows<'a, 'py> {
+    /// The method the caller called, which every shape refusal names.
+    method: &'static str,
     relationship_type: &'a str,
     text_column: &'a str,
     embeddings: &'a Bound<'py, PyAny>,
@@ -268,7 +276,7 @@ impl KnowledgeGraph {
         write: RowWriter,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
-        let rows = marshal_relationship_rows(args.embeddings)?;
+        let rows = marshal_relationship_rows(args.embeddings, args.method)?;
         let keys = args.relationship_keys.unwrap_or_default();
         let g = get_graph_mut(&mut self.inner);
         let report = write(
@@ -293,37 +301,52 @@ impl KnowledgeGraph {
 /// `embeddings` as the rows the engine resolves: a dict keyed by an endpoint
 /// tuple, or the list of row dicts `relationship_embeddings()` returns. Only
 /// the shape is checked here; every address rule lives in core.
-fn marshal_relationship_rows(embeddings: &Bound<'_, PyAny>) -> PyResult<Vec<RelationshipVector>> {
+fn marshal_relationship_rows(
+    embeddings: &Bound<'_, PyAny>,
+    method: &str,
+) -> PyResult<Vec<RelationshipVector>> {
     let mut vectors = py_in::F32Rows::default();
     if let Ok(dict) = embeddings.cast::<PyDict>() {
         let mut rows = Vec::with_capacity(dict.len());
         for (address, vector) in dict.iter() {
-            rows.push(tuple_row(&address, vectors.extract(&vector)?)?);
+            rows.push(tuple_row(
+                &address,
+                vectors.extract(&vector)?,
+                method,
+                "a dict key",
+            )?);
         }
         return Ok(rows);
     }
     if let Ok(list) = embeddings.cast::<PyList>() {
         let mut rows = Vec::with_capacity(list.len());
         for (position, item) in list.iter().enumerate() {
-            rows.push(dict_row(&item, position, &mut vectors)?);
+            rows.push(dict_row(&item, position, &mut vectors, method)?);
         }
         return Ok(rows);
     }
     Err(PyTypeError::new_err(format!(
-        "set_relationship_embeddings(): embeddings must be a dict keyed by endpoint tuples or \
-         a list of row dicts, got {}",
+        "{method}(): embeddings must be a dict keyed by endpoint tuples or a list of row dicts, \
+         got {}",
         type_name(embeddings)
     )))
 }
 
-/// A dict key: `(source_id, target_id)`, `(source_id, target_id, key)`,
+/// An endpoint address — a writer's dict key, or the readout's `address`:
+/// `(source_id, target_id)`, `(source_id, target_id, key)`,
 /// `(source_type, source_id, target_type, target_id)` or that plus `key`.
-fn tuple_row(address: &Bound<'_, PyAny>, vector: Vec<f32>) -> PyResult<RelationshipVector> {
+/// `what` names the argument in the refusal (`"a dict key"`, `"address"`).
+pub(super) fn tuple_row(
+    address: &Bound<'_, PyAny>,
+    vector: Vec<f32>,
+    method: &str,
+    what: &str,
+) -> PyResult<RelationshipVector> {
     let shape_error = || {
         PyTypeError::new_err(format!(
-            "set_relationship_embeddings(): a dict key must be (source_id, target_id), \
-             (source_id, target_id, key), (source_type, source_id, target_type, target_id) or \
-             (source_type, source_id, target_type, target_id, key); got {}",
+            "{method}(): {what} must be (source_id, target_id), (source_id, target_id, key), \
+             (source_type, source_id, target_type, target_id) or (source_type, source_id, \
+             target_type, target_id, key); got {}",
             address
                 .repr()
                 .map_or_else(|_| "?".to_string(), |r| r.to_string())
@@ -356,10 +379,11 @@ fn dict_row(
     item: &Bound<'_, PyAny>,
     position: usize,
     vectors: &mut py_in::F32Rows,
+    method: &str,
 ) -> PyResult<RelationshipVector> {
     let row = item.cast::<PyDict>().map_err(|_| {
         PyTypeError::new_err(format!(
-            "set_relationship_embeddings(): embeddings[{position}] must be a dict like the rows \
+            "{method}(): embeddings[{position}] must be a dict like the rows \
              relationship_embeddings() returns, got {}",
             type_name(item)
         ))
@@ -368,8 +392,7 @@ fn dict_row(
         let key: String = key.extract()?;
         if !ROW_KEYS.contains(&key.as_str()) {
             return Err(PyTypeError::new_err(format!(
-                "set_relationship_embeddings(): embeddings[{position}] has unknown key '{key}'. \
-                 Accepted: {}",
+                "{method}(): embeddings[{position}] has unknown key '{key}'. Accepted: {}",
                 ROW_KEYS.join(", ")
             )));
         }
@@ -380,7 +403,7 @@ fn dict_row(
     let required = |name: &str| {
         present(name)?.ok_or_else(|| {
             PyTypeError::new_err(format!(
-                "set_relationship_embeddings(): embeddings[{position}] is missing '{name}'"
+                "{method}(): embeddings[{position}] is missing '{name}'"
             ))
         })
     };
@@ -414,9 +437,8 @@ fn embed_error(error: EmbedError, relationship_type: &str, text_column: &str) ->
             "embed_relationship_texts(): the model produces {model}-d vectors but the existing \
              '{relationship_type}.{text_column}_emb' relationship store is {store}-d — embedding \
              the rest would mix dimensions and corrupt search. Re-embed with mode='all' to \
-             rebuild at the new dimension, or drop the store first with CALL \
-             db.relationship_embeddings.drop({{type: '{relationship_type}', text_property: \
-             '{text_column}'}})."
+             rebuild at the new dimension, or remove_relationship_embeddings('{relationship_type}', \
+             '{text_column}') first."
         )),
         EmbedError::Column(message) | EmbedError::Output(message) => PyValueError::new_err(message),
         EmbedError::Model(message) => PyRuntimeError::new_err(message),

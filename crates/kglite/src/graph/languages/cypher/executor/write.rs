@@ -1434,9 +1434,8 @@ fn execute_property_set_item<'a>(
     if property == "id" {
         return Err("Cannot SET node id — it is immutable".to_string());
     }
-    if property == "type" || property == "node_type" || property == "label" {
-        return Err("Cannot SET node type via property assignment".to_string());
-    }
+    // `type` / `node_type` / `label` are soft aliases: SET writes a stored
+    // property that wins on read (KG-1); the primary label never changes.
 
     // Resolve the node — a live binding or a projected node value. A
     // null-valued target (OPTIONAL MATCH miss) makes this row's write a no-op
@@ -1815,9 +1814,6 @@ fn execute_remove(
 
                     if property == "id" {
                         return Err("Cannot REMOVE node id — it is immutable".to_string());
-                    }
-                    if property == "type" || property == "node_type" || property == "label" {
-                        return Err("Cannot REMOVE node type".to_string());
                     }
 
                     // A null-valued target (OPTIONAL MATCH miss) makes this

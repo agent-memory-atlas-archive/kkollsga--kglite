@@ -16,6 +16,7 @@ use crate::graph::edge_embedding_generation::EmbeddingExecutionService;
 use crate::graph::edge_embeddings::vector_index::{
     rank_dense_stores, DenseStoreHit, EdgeVectorQueryOptions,
 };
+use crate::graph::embedding_hints::Surface;
 use crate::graph::embeddings::selection::{
     drop_node_store, embed_selected_nodes, journal_node_store, remove_node_vectors,
     NodeEmbedReport, NodeEmbedRequest,
@@ -69,6 +70,14 @@ pub(super) fn execute(
             let ef_search = optional_positive_usize(params, "ef_search", proc_name)?;
             let metric = optional_string(params, "metric", proc_name)?;
             let limit = optional_nonnegative_usize(params, "auto_refresh_limit", proc_name)?;
+            if !embeddings::store_exists(graph, &node_type, &text_property) {
+                return Err(embeddings::missing_store_to_index(
+                    graph,
+                    &node_type,
+                    &text_property,
+                    Surface::Cypher,
+                ));
+            }
             journal_node_store(graph, &node_type, &text_property);
             let report = embeddings::build_vector_index(
                 graph,
@@ -87,7 +96,12 @@ pub(super) fn execute(
             ])
         }
         "db.node_embeddings.refresh_index" => {
-            let refreshed = embeddings::refresh_vector_index(graph, &node_type, &text_property)?;
+            let refreshed = embeddings::refresh_vector_index_from(
+                graph,
+                &node_type,
+                &text_property,
+                Surface::Cypher,
+            )?;
             HashMap::from([("refreshed", Value::Int64(refreshed as i64))])
         }
         "db.node_embeddings.drop_index" => {

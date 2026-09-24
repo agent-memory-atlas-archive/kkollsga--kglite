@@ -587,6 +587,25 @@ fn substitute_expr(expr: &Expression, map: &HashMap<String, Expression>) -> Opti
             Some(_) => return None,
             None => expr.clone(),
         },
+        // `startNode(r).id`: substitute inside the receiver. A bare alias
+        // receiver follows the `PropertyAccess` rule above.
+        Expression::ExprPropertyAccess {
+            expr: inner,
+            property,
+        } => {
+            if let Expression::Variable(v) = inner.as_ref() {
+                if map
+                    .get(v)
+                    .is_some_and(|replacement| !matches!(replacement, Expression::Variable(_)))
+                {
+                    return None;
+                }
+            }
+            Expression::ExprPropertyAccess {
+                expr: Box::new(sub(inner)?),
+                property: property.clone(),
+            }
+        }
         Expression::Literal(_) | Expression::Parameter(_) | Expression::Star => expr.clone(),
         // Patterns have their own binding scope. Copying a downstream COUNT
         // through a node rename would turn its correlated node into a new

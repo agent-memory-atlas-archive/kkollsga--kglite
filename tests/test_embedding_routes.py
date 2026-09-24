@@ -242,7 +242,17 @@ def test_the_default_route_is_node_for_every_router() -> None:
     assert _outcome(lambda: graph.build_vector_index("SUPPORTS", "evidence")) == _outcome(
         lambda: graph.build_node_vector_index("SUPPORTS", "evidence")
     )
-    for name in ("set_embeddings", "add_embeddings", "embed_texts", "embeddings"):
+    for name in (
+        "set_embeddings",
+        "add_embeddings",
+        "embed_texts",
+        "embeddings",
+        "embedding",
+        "embedding_dim",
+        "remove_embeddings",
+        "vector_search",
+        "search_text",
+    ):
         parameter = inspect.signature(getattr(graph, name)).parameters["entity"]
         assert parameter.default == "node"
         assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
@@ -265,8 +275,21 @@ def test_the_default_route_is_node_for_every_router() -> None:
             "add_node_embeddings()",
         ),
         (
-            lambda g: g.embed_texts("Claimant", "note", metric="cosine"),
-            "embed_texts(): `metric` belongs to entity='relationship'; this call routes to embed_node_texts()",
+            lambda g: g.vector_search("note", [1.0, 0.0], types=["SUPPORTS"]),
+            "vector_search(): `types` belongs to entity='relationship'; this call routes to node_vector_search()",
+        ),
+        (
+            lambda g: g.search_text("note", "q", relationship_keys=KEYS),
+            "search_text(): `relationship_keys` belongs to entity='relationship'; this call routes to "
+            "node_search_text()",
+        ),
+        (
+            lambda g: g.vector_search("evidence", [1.0, 0.0], returning=["uid"], entity="relationship"),
+            "vector_search(): `returning` belongs to entity='node'; this call routes to relationship_vector_search()",
+        ),
+        (
+            lambda g: g.embedding("Claimant", "note", 1, relationship_keys=KEYS),
+            "embedding(): `relationship_keys` belongs to entity='relationship'; this call routes to node_embedding()",
         ),
         (
             lambda g: g.embeddings("Claimant", "note", relationship_keys=KEYS),

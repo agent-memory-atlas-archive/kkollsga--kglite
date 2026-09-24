@@ -86,41 +86,10 @@ impl KnowledgeGraph {
         Ok(result.into())
     }
 
-    /// Vector similarity search within the current selection.
-    ///
-    /// Args:
-    ///     text_column: Source column name (e.g. 'summary'). Resolves to '{text_column}_emb'.
-    ///     query_vector: The query embedding vector (list of floats)
-    ///     top_k: Number of results to return (default 10)
-    ///     metric: Distance metric - 'cosine', 'dot_product', 'euclidean', or 'poincare'.
-    ///            If omitted, uses the unique metric stored by the selected
-    ///            embedding stores, or cosine when none is stored. Selections
-    ///            spanning different stored metrics must pass this explicitly.
-    ///     to_df: If True, return a pandas DataFrame instead of list of dicts
-    ///
-    ///     returning: Optional list of fields to project onto each hit. When
-    ///            omitted (default), a hit carries ``id``, ``title``, ``type``,
-    ///            ``score``, and **all** node properties — so no follow-up join
-    ///            is needed to recover them. When given, a hit carries only
-    ///            ``id`` + ``score`` plus the named fields (each a property or a
-    ///            structural field like ``title``/``type``) — trim the payload
-    ///            for ranking-heavy or wide-node workloads.
-    ///
-    /// Returns:
-    ///     List of dicts. By default each has ``id``, ``title``, ``type``,
-    ///     ``score``, and all node properties (``score`` always present, every
-    ///     metric; properties read live so a hit is identical before/after
-    ///     save/reload). With ``returning=[...]`` each has ``id`` + ``score`` +
-    ///     the requested fields only.
-    ///
-    /// Raises:
-    ///     ValueError: if **no** selected node type has an embedding store for
-    ///         ``text_column`` — a wrong column or an un-embedded type, which
-    ///         used to come back as a silent ``[]``. A selection where *some*
-    ///         type has the store is a partial result, not an error.
+    /// Rank the current selection's node vectors in a text column's store against a query vector.
     #[pyo3(signature = (text_column, query_vector, top_k=10, metric=None, to_df=false, returning=None, exact=false))]
     #[allow(clippy::too_many_arguments)]
-    fn vector_search(
+    pub(super) fn node_vector_search(
         &self,
         py: Python<'_>,
         text_column: &str,
@@ -224,14 +193,8 @@ impl KnowledgeGraph {
         py_list.into_py_any(py)
     }
 
-    /// The vector dimension of the `(node_type, text_column)` embedding store,
-    /// or ``None`` if no store exists for it.
-    ///
-    /// A cheap, direct way to detect an embedder/model change without
-    /// bookkeeping: compare it against your model's dimension before
-    /// `embed_texts`/`add_embeddings` (which reject a mismatch). `text_column`
-    /// is the source column name (stored as ``{text_column}_emb``).
-    fn embedding_dim(&self, node_type: &str, text_column: &str) -> Option<usize> {
+    /// The vector dimension of a node type's embedding store for a text column, or None when there is no such store.
+    pub(super) fn node_embedding_dim(&self, node_type: &str, text_column: &str) -> Option<usize> {
         let key = kglite_core::api::embeddings::store_key(node_type, text_column);
         self.inner.embeddings.get(&key).map(|s| s.dimension)
     }
@@ -362,14 +325,19 @@ impl KnowledgeGraph {
         py_list.into_py_any(py)
     }
 
-    /// Remove an embedding store.
-    ///
-    /// Args:
-    ///     node_type: The node type
-    ///     text_column: Source column name (e.g. 'summary')
-    fn remove_embeddings(&mut self, node_type: &str, text_column: &str) -> PyResult<()> {
+    /// Remove a node type's embedding store for a text column; refuses a store that does not exist.
+    pub(super) fn remove_node_embeddings(
+        &mut self,
+        node_type: &str,
+        text_column: &str,
+    ) -> PyResult<()> {
         self.check_durable_owner()?;
-        get_graph_mut(&mut self.inner).remove_embedding_store(node_type, text_column);
+        kglite_core::api::embeddings::remove_embeddings(
+            get_graph_mut(&mut self.inner),
+            node_type,
+            text_column,
+        )
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         self.commit_wal()
     }
 
@@ -575,16 +543,8 @@ impl KnowledgeGraph {
         result.into_py_any(py)
     }
 
-    /// Retrieve a single node's embedding vector.
-    ///
-    /// Args:
-    ///     node_type: The node type (e.g. 'Article').
-    ///     text_column: Source column name (e.g. 'summary').
-    ///     node_id: The node ID to look up.
-    ///
-    /// Returns:
-    ///     The embedding vector as a list of floats, or None if not found.
-    fn embedding(
+    /// One node's stored vector by id, or None when the node or its vector is absent; refuses a store that does not exist.
+    pub(super) fn node_embedding(
         &self,
         py: Python<'_>,
         node_type: &str,
@@ -592,23 +552,11 @@ impl KnowledgeGraph {
         node_id: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let id = py_in::py_value_to_value(node_id)?;
-
-        let node_idx = match self.inner.lookup_by_id_readonly(node_type, &id) {
-            Some(idx) => idx,
-            None => return Ok(py.None()),
-        };
-
-        let key = kglite_core::api::embeddings::store_key(node_type, text_column);
-        let store = match self.inner.embeddings.get(&key) {
-            Some(s) => s,
-            None => return Ok(py.None()),
-        };
-
-        match store.get_embedding(node_idx.index()) {
-            Some(embedding) => {
-                let py_vec = PyList::new(py, embedding)?;
-                py_vec.into_py_any(py)
-            }
+        let vector =
+            kglite_core::api::embeddings::node_embedding(&self.inner, node_type, text_column, &id)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        match vector {
+            Some(vector) => PyList::new(py, vector)?.into_py_any(py),
             None => Ok(py.None()),
         }
     }
@@ -680,7 +628,9 @@ impl KnowledgeGraph {
     }
 
     /// Embed a text column for every node of a type with the registered model.
-    #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None))]
+    #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None))]
+    // One Rust argument per Python keyword, as embed_relationship_texts has.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn embed_node_texts(
         &mut self,
         py: Python<'_>,
@@ -689,12 +639,17 @@ impl KnowledgeGraph {
         batch_size: Option<usize>,
         show_progress: Option<bool>,
         mode: Option<&str>,
+        metric: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         // Refuse derived durable/CDC handles before loading or invoking the
         // model. `commit_wal()` retains the same guard after mutation as
         // defense in depth, but it cannot undo an already-installed store.
         self.check_durable_owner()?;
-        let model = self.get_embedder_or_error()?;
+        let (model, registered) = self.embedder_or_idle(
+            kglite_core::api::embeddings::EmbeddingEntity::Node,
+            node_type,
+            text_column,
+        );
         let mode = match mode.unwrap_or("missing") {
             "missing" => EmbedMode::Missing,
             "changed" => EmbedMode::Changed,
@@ -741,8 +696,9 @@ impl KnowledgeGraph {
         let hooks = EmbedHooks {
             batch_size: batch_size.unwrap_or(256),
             // `embed_texts` reports a dimension in every return dict, even for
-            // a pass with nothing to do, so the model is loaded for it.
-            load_when_idle: true,
+            // a pass with nothing to do, so a registered model is loaded for
+            // it; without one, the store's own dimension is reported.
+            load_when_idle: registered,
             embed_batch: Some(&embed_batch),
             on_start: Some(&open_bar),
             on_batch: Some(&tick),
@@ -754,6 +710,7 @@ impl KnowledgeGraph {
             mode,
             model.as_ref(),
             &hooks,
+            metric,
         );
         if let Some(bar) = progress_bar.borrow().as_ref() {
             let _ = bar.call_method0("close");
@@ -769,26 +726,10 @@ impl KnowledgeGraph {
         Ok(result.into())
     }
 
-    /// Search embeddings using a text query.
-    ///
-    /// Uses the model registered via ``set_embedder()`` to embed the query,
-    /// then performs vector search within the current selection.  The user
-    /// refers to the text column name (e.g. ``"summary"``); the graph
-    /// resolves it to ``"summary_emb"`` internally.
-    ///
-    /// Args:
-    ///     text_column: Text column whose embeddings to search (e.g. ``'summary'``).
-    ///     query: The text query to search for.
-    ///     top_k: Number of results to return (default 10).
-    ///     metric: Distance metric. Omitted uses the same selection-aware stored
-    ///         metric resolution as ``vector_search``.
-    ///     to_df: If True, return a pandas DataFrame.
-    ///
-    /// Returns:
-    ///     Same format as ``vector_search()`` — list of dicts or DataFrame.
+    /// Embed a query with the registered model and rank the current selection's node vectors against it.
     #[pyo3(signature = (text_column, query, top_k=10, metric=None, to_df=false, returning=None, exact=false))]
     #[allow(clippy::too_many_arguments)]
-    fn search_text(
+    pub(super) fn node_search_text(
         &self,
         py: Python<'_>,
         text_column: &str,
@@ -799,35 +740,8 @@ impl KnowledgeGraph {
         returning: Option<Vec<String>>,
         exact: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        let model = self.get_embedder_or_error()?;
-        let model_dimension = model.dimension();
-
-        model
-            .load()
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
-
-        // Unload regardless of success or failure — hence the `?` after it.
-        let texts = vec![query.to_string()];
-        let embed_result = py.detach(|| model.embed(&texts));
-        model.unload();
-        let embeddings = embed_result.map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
-
-        if embeddings.len() != 1 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "search_text: model.embed() returned {} vectors for 1 texts",
-                embeddings.len()
-            )));
-        }
-
-        let query_vector = embeddings.into_iter().next().unwrap();
-        if query_vector.len() != model_dimension {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "search_text: model.embed() returned vector width {}, expected registered model dimension {model_dimension}",
-                query_vector.len()
-            )));
-        }
-
-        self.vector_search(
+        let query_vector = self.embed_query(py, query)?;
+        self.node_vector_search(
             py,
             text_column,
             query_vector,
@@ -921,6 +835,41 @@ impl KnowledgeGraph {
     ) -> PyResult<usize> {
         kglite_core::api::embeddings::refresh_vector_index(&self.inner, node_type, text_column)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+}
+
+impl KnowledgeGraph {
+    /// One query string through the registered model, checked against the
+    /// model's declared dimension — the query side of both `search_text` twins.
+    pub(super) fn embed_query(&self, py: Python<'_>, query: &str) -> PyResult<Vec<f32>> {
+        let model = self.get_embedder_or_error()?;
+        let model_dimension = model.dimension();
+
+        model
+            .load()
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+
+        // Unload regardless of success or failure — hence the `?` after it.
+        let texts = vec![query.to_string()];
+        let embed_result = py.detach(|| model.embed(&texts));
+        model.unload();
+        let embeddings = embed_result.map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+
+        if embeddings.len() != 1 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "search_text: model.embed() returned {} vectors for 1 texts",
+                embeddings.len()
+            )));
+        }
+
+        let query_vector = embeddings.into_iter().next().unwrap();
+        if query_vector.len() != model_dimension {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "search_text: model.embed() returned vector width {}, expected registered model dimension {model_dimension}",
+                query_vector.len()
+            )));
+        }
+        Ok(query_vector)
     }
 }
 

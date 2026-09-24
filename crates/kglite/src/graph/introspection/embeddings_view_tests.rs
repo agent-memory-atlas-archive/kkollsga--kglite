@@ -77,7 +77,7 @@ const CONN_LINE: &str = "<conn type=\"SUPPORTS\" count=\"2\" from=\"SUPPORTS\" t
 
 /// The node-only hint, pinned byte-for-byte (`embedding_norm` takes the store
 /// name, `'col_emb'` — the raw column spelling was a false claim).
-const NODE_SEMANTIC_LINE: &str = "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space)\"/>";
+const NODE_SEMANTIC_LINE: &str = "    <semantic hint=\"text_score(n, 'col', 'query'|[0.1,0.2,...], metric) — similarity; a list query is scored as your query vector, a string query is embedded via set_embedder() (metric: 'cosine'|'poincare'|'dot_product'|'euclidean'); vector_score(n, 'col_emb', $v) scores against a vector (ORDER BY … DESC LIMIT k is served from the store, through HNSW once indexed); embedding_norm(n, 'col_emb') — L2 norm (hierarchy depth in Poincaré space); CALL db.node_embeddings.query({type:'T' | types:['A','B'], text_property:'col', vector:$v | text:'query', top_k:10}) YIELD node, score, search_method, type ranks whole stores, and db.node_embeddings.set / .embed / .build_index / .list manage them in a query (db.embeddings.* routes by entity); describe(cypher=['node_semantic']) has the details\"/>";
 
 #[test]
 fn the_inventory_map_names_the_relationship_store_on_its_conn_line() {
@@ -493,4 +493,55 @@ fn the_embedding_readout_is_named_beside_vector_score() {
     );
     let node = line_with(&listing, "<group name=\"semantic\"");
     assert!(node.contains("embedding(n, 'col_emb')"), "{node}");
+}
+
+#[test]
+fn node_semantic_is_a_direct_topic_matching_the_functions_group() {
+    let graph = DirGraph::new();
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    let topic = CypherDetail::Topics(vec!["node_semantic".to_string()]);
+    request.cypher = &topic;
+    let xml = compute_description(&graph, &request).unwrap();
+    assert!(xml.contains("<topic name=\"node_semantic\">"), "{xml}");
+    let usage = line_with(&xml, "<usage>");
+    assert!(usage.contains("CALL db.node_embeddings.query("), "{usage}");
+    assert!(usage.contains("db.embeddings.*"), "{usage}");
+    let summary = line_with(&xml, "<summary>");
+
+    let functions = CypherDetail::Topics(vec!["functions".to_string()]);
+    request.cypher = &functions;
+    let listing = compute_description(&graph, &request).unwrap();
+    let group = line_with(&listing, "<group name=\"semantic\"");
+    let group_body = group
+        .trim()
+        .trim_start_matches("<group name=\"semantic\">")
+        .trim_end_matches("</group>");
+    let summary_body = summary
+        .trim()
+        .trim_start_matches("<summary>")
+        .trim_end_matches("</summary>");
+    assert_eq!(group_body, summary_body);
+}
+
+#[test]
+fn the_node_semantic_hint_names_the_node_procedures_and_topic() {
+    let semantic = line_with(&inventory(&graph(true, false)), "<semantic ").to_string();
+    assert!(semantic.contains("db.node_embeddings.query"), "{semantic}");
+    assert!(
+        semantic.contains("describe(cypher=['node_semantic'])"),
+        "{semantic}"
+    );
+}
+
+#[test]
+fn cross_type_ranking_states_its_per_type_cost() {
+    let graph = DirGraph::new();
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    let topic = CypherDetail::Topics(vec!["relationship_semantic".to_string()]);
+    request.cypher = &topic;
+    let xml = compute_description(&graph, &request).unwrap();
+    assert!(
+        line_with(&xml, "<usage>").contains("one search per relationship type"),
+        "{xml}"
+    );
 }

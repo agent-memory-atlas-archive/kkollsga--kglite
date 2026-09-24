@@ -76,7 +76,9 @@ pub(crate) fn resolve_fused_sort_keys(
 /// edge-free pattern without path assignments; RETURN uses DISTINCT, an
 /// aggregate, or a function call (those need an evaluation context this scan
 /// does not build); a sort key reads a RETURN alias it is not equal to (see
-/// [`resolve_fused_sort_keys`]); LIMIT is not a positive integer literal.
+/// [`resolve_fused_sort_keys`]); LIMIT is not a positive integer literal; a
+/// retrieval score ranks with no WHERE, or with a WHERE ending in that
+/// vector score's `IS NOT NULL` — both belong to the retrieval fusions.
 pub(crate) fn fuse_node_scan_top_k(
     query: &mut CypherQuery,
     params: &std::collections::HashMap<String, Value>,
@@ -182,6 +184,20 @@ pub(crate) fn fuse_node_scan_top_k(
             i += 1;
             continue;
         }
+        // A WHERE that only keeps the ranked score's non-null rows is the
+        // vector pass's to absorb (`fuse_vector_score_order_limit`); this scan
+        // would score every node twice to reproduce what the store answers.
+        if let (Some(wi), [key]) = (where_idx, sort_keys.as_slice()) {
+            if let Clause::Where(w) = &query.clauses[wi] {
+                if !key.ascending
+                    && key.nulls == NullsPlacement::First
+                    && strip_score_not_null(&w.predicate, &key.expression).is_some()
+                {
+                    i += 1;
+                    continue;
+                }
+            }
+        }
 
         // LIMIT must be positive literal integer
         let limit_val = if let Clause::Limit(l) = &query.clauses[limit_idx] {
@@ -262,6 +278,15 @@ pub(crate) fn fuse_node_scan_top_k(
 /// its materialised rows). The planner therefore checks nothing about the
 /// MATCH, for nodes and relationships alike: a WHERE, extra patterns or bound
 /// endpoints only decide which executor route serves the clause.
+///
+/// A `WHERE <score call> IS NOT NULL` directly before the RETURN — the whole
+/// predicate or its last conjunct — is absorbed into the clause as
+/// `non_null_only`: that filter keeps exactly the rows the embedding store
+/// holds, so the executor serves it from the store instead of scoring every
+/// row twice (once to filter, once to rank). Only a call identical to the
+/// ranked one is absorbed, so the errors it could raise are the ranked call's
+/// own; an earlier conjunct is not, because the WHERE would have skipped the
+/// conjuncts after a NULL score, and those may raise.
 pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
     let mut i = 0;
     while i + 2 < query.clauses.len() {
@@ -275,6 +300,21 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
             i += 1;
             continue;
         }
+        let absorbed = match i.checked_sub(1).map(|w| &query.clauses[w]) {
+            Some(Clause::Where(w)) => strip_score_not_null(&w.predicate, &shape.score_call),
+            _ => None,
+        };
+        let non_null_only = absorbed.is_some();
+        match absorbed {
+            Some(None) => {
+                query.clauses.remove(i - 1);
+                i -= 1;
+            }
+            Some(Some(rest)) => {
+                query.clauses[i - 1] = Clause::Where(WhereClause { predicate: rest })
+            }
+            None => {}
+        }
         let return_clause = take_fused_shape(query, i);
         query.clauses.insert(
             i,
@@ -284,9 +324,70 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
                 score_call: shape.score_call,
                 descending: shape.descending,
                 limit: shape.limit,
+                non_null_only,
             },
         );
         i += 1;
+    }
+}
+
+/// `predicate` without its `<score_call> IS NOT NULL` filter: `Some(None)` when
+/// that filter is the whole predicate, `Some(Some(rest))` when it is the last
+/// conjunct, `None` when there is none to remove.
+pub(crate) fn strip_score_not_null(
+    predicate: &Predicate,
+    score_call: &Expression,
+) -> Option<Option<Predicate>> {
+    match predicate {
+        Predicate::IsNotNull(expr) if same_constant_call(expr, score_call) => Some(None),
+        Predicate::And(rest, last) => match strip_score_not_null(last, score_call)? {
+            None => Some(Some((**rest).clone())),
+            Some(inner) => Some(Some(Predicate::And(rest.clone(), Box::new(inner)))),
+        },
+        _ => None,
+    }
+}
+
+/// Whether two `vector_score` calls are the same call: same arguments, each a
+/// variable, parameter, literal, or a list or map of those. Anything else is
+/// "not provably the same", which only costs the absorption.
+fn same_constant_call(left: &Expression, right: &Expression) -> bool {
+    fn same(left: &Expression, right: &Expression) -> bool {
+        match (left, right) {
+            (Expression::Variable(a), Expression::Variable(b))
+            | (Expression::Parameter(a), Expression::Parameter(b)) => a == b,
+            (Expression::Literal(a), Expression::Literal(b)) => a == b,
+            (Expression::ListLiteral(a), Expression::ListLiteral(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b))
+            }
+            (Expression::MapLiteral(a), Expression::MapLiteral(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b)
+                        .all(|((ka, va), (kb, vb))| ka == kb && same(va, vb))
+            }
+            _ => false,
+        }
+    }
+    match (left, right) {
+        (
+            Expression::FunctionCall {
+                name: left_name,
+                args: left_args,
+                distinct: false,
+            },
+            Expression::FunctionCall {
+                name: right_name,
+                args: right_args,
+                distinct: false,
+            },
+        ) => {
+            left_name == "vector_score"
+                && right_name == "vector_score"
+                && left_args.len() == right_args.len()
+                && left_args.iter().zip(right_args).all(|(a, b)| same(a, b))
+        }
+        _ => false,
     }
 }
 

@@ -46,6 +46,8 @@ use crate::datatypes::Value;
 use crate::graph::algorithms::hnsw::HnswParams;
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::dir_graph::DirGraph;
+use crate::graph::embedding_hints::{missing_store_hint, no_index_to_refresh, Surface};
+use crate::graph::embedding_inventory::EmbeddingEntity;
 use crate::graph::schema::EmbeddingStore;
 use crate::graph::storage::GraphRead;
 use crate::graph::wal::EmbeddingWrite;
@@ -525,12 +527,11 @@ pub(crate) fn build_index_structure(
     };
 
     if !graph.embeddings.contains_key(&key) {
-        let hint = unknown_column_hint(graph, &[node_type], text_column, "build_vector_index()");
-        return Err(format!(
-            "No embedding store '{}.{}' to index.{} Call set_embeddings()/embed_texts() first.",
+        return Err(missing_store_to_index(
+            graph,
             node_type,
-            store_name(text_column),
-            hint
+            text_column,
+            Surface::Method,
         ));
     }
     let store = graph
@@ -598,6 +599,86 @@ pub(crate) fn drop_index_structure(
     }
 }
 
+/// The refusal for an index build over a node store that does not exist,
+/// its remedy spelled for `surface`.
+pub(crate) fn missing_store_to_index(
+    graph: &DirGraph,
+    node_type: &str,
+    text_column: &str,
+    surface: Surface,
+) -> String {
+    let caller = match surface {
+        Surface::Method => "build_vector_index()",
+        Surface::Cypher => "db.node_embeddings.build_index",
+    };
+    let mut hint = unknown_column_hint(graph, &[node_type], text_column, caller);
+    if hint.is_empty() {
+        hint = missing_store_hint(
+            graph,
+            EmbeddingEntity::Node,
+            node_type,
+            text_column,
+            surface,
+        );
+    }
+    format!(
+        "No embedding store '{}.{}' to index.{} Write one first with {}.",
+        node_type,
+        store_name(text_column),
+        hint,
+        surface.write_store(EmbeddingEntity::Node, node_type, text_column)
+    )
+}
+
+/// Remove the whole `(node_type, text_column)` store — its vectors,
+/// provenance and HNSW index. Refused by name when there is no such store
+/// (the store name passed for the column, a relationship store, a typo), so a
+/// mistake is never a silent no-op.
+pub fn remove_embeddings(
+    graph: &mut DirGraph,
+    node_type: &str,
+    text_column: &str,
+) -> Result<(), String> {
+    if !store_exists(graph, node_type, text_column) {
+        return Err(crate::graph::embedding_hints::missing_store_error(
+            graph,
+            EmbeddingEntity::Node,
+            node_type,
+            text_column,
+            Surface::Method,
+        ));
+    }
+    graph.remove_embedding_store(node_type, text_column);
+    Ok(())
+}
+
+/// The vector stored for the `node_type` node with id `id` in the
+/// `(node_type, text_column)` store: `None` when no such node exists or it has
+/// no vector. Refused by name when there is no such store.
+pub fn node_embedding(
+    graph: &DirGraph,
+    node_type: &str,
+    text_column: &str,
+    id: &Value,
+) -> Result<Option<Vec<f32>>, String> {
+    let store = graph
+        .embeddings
+        .get(&store_key(node_type, text_column))
+        .ok_or_else(|| {
+            crate::graph::embedding_hints::missing_store_error(
+                graph,
+                EmbeddingEntity::Node,
+                node_type,
+                text_column,
+                Surface::Method,
+            )
+        })?;
+    Ok(graph
+        .lookup_by_id_readonly(node_type, id)
+        .and_then(|node| store.get_embedding(node.index()))
+        .map(<[f32]>::to_vec))
+}
+
 /// Whether a store exists for `(node_type, text_column)` at all.
 pub fn store_exists(graph: &DirGraph, node_type: &str, text_column: &str) -> bool {
     graph
@@ -627,20 +708,37 @@ pub fn refresh_vector_index(
     node_type: &str,
     text_column: &str,
 ) -> Result<usize, String> {
+    refresh_vector_index_from(graph, node_type, text_column, Surface::Method)
+}
+
+/// [`refresh_vector_index`] with its remedies spelled for `surface` — the
+/// `db.node_embeddings.refresh_index` procedure names procedures.
+pub(crate) fn refresh_vector_index_from(
+    graph: &DirGraph,
+    node_type: &str,
+    text_column: &str,
+    surface: Surface,
+) -> Result<usize, String> {
     let store_label = format!("{node_type}.{}", store_name(text_column));
     let Some(store) = graph.embeddings.get(&store_key(node_type, text_column)) else {
+        let hint = missing_store_hint(
+            graph,
+            EmbeddingEntity::Node,
+            node_type,
+            text_column,
+            surface,
+        );
         return Err(format!(
-            "refresh_vector_index: no embedding store '{store_label}'. Embed \
-             '{node_type}.{text_column}' first (embed_texts / set_embeddings), then \
-             build_vector_index('{node_type}', '{text_column}')."
+            "refresh_vector_index: no embedding store '{store_label}'.{hint} Embed \
+             '{node_type}.{text_column}' first ({}), then {}.",
+            surface.write_store(EmbeddingEntity::Node, node_type, text_column),
+            surface.build_index(EmbeddingEntity::Node, node_type, text_column)
         ));
     };
     if !store.has_index() {
         return Err(format!(
-            "refresh_vector_index: no vector index on '{store_label}' to refresh — \
-             none was built, or a delete of an embedded node (or a vacuum()) \
-             dropped it. Build one with build_vector_index('{node_type}', \
-             '{text_column}')."
+            "refresh_vector_index: {}",
+            no_index_to_refresh(EmbeddingEntity::Node, node_type, text_column, surface)
         ));
     }
     if graph.read_only {
@@ -987,6 +1085,12 @@ impl Default for EmbedHooks<'_> {
 /// The model is loaded once around the whole pass and unloaded on every exit,
 /// including every error exit. The store is written once, at the end, so a
 /// failure mid-pass leaves the graph exactly as it found it.
+///
+/// `metric` is the store's scoring metric: recorded on a store this pass
+/// creates or rebuilds (`EmbedMode::All`), and refused when it differs from
+/// the metric an existing store declares — as the upserting
+/// [`add_embeddings`] refuses a batch under another metric. `None` keeps the
+/// store's own (cosine for a new one).
 pub fn embed_property(
     graph: &mut std::sync::Arc<DirGraph>,
     node_type: &str,
@@ -994,8 +1098,29 @@ pub fn embed_property(
     mode: EmbedMode,
     model: &dyn crate::graph::embedder::Embedder,
     hooks: &EmbedHooks<'_>,
+    metric: Option<&str>,
 ) -> Result<EmbedOutcome, EmbedError> {
     let key = store_key(node_type, text_column);
+    if let Some(requested) = metric {
+        if DistanceMetric::from_name(requested).is_none() {
+            return Err(EmbedError::Output(format!(
+                "Unknown metric '{requested}'. Use 'cosine', 'dot_product', 'euclidean', or \
+                 'poincare'."
+            )));
+        }
+        if let Some(existing) = (mode != EmbedMode::All)
+            .then(|| graph.embeddings.get(&key))
+            .flatten()
+        {
+            let stored = existing.metric.as_deref().unwrap_or("cosine");
+            if stored != requested {
+                return Err(EmbedError::Output(format!(
+                    "Store metric is '{stored}', but this call requested '{requested}'; embed \
+                     with mode='all' to rebuild the store under '{requested}'"
+                )));
+            }
+        }
+    }
     let requested_model_id = model.model_id();
     let (mut found, store_dimension, had_existing_store) = {
         let graph: &DirGraph = graph;
@@ -1088,6 +1213,9 @@ pub fn embed_property(
     // identity, while an unverified or mixed store remains unverified.
     if mode == EmbedMode::All || !had_existing_store {
         store.model_id = requested_model_id;
+        if let Some(requested) = metric {
+            store.metric = Some(requested.to_string());
+        }
     }
     let embedded = found.texts.len();
     found.texts = Vec::new();

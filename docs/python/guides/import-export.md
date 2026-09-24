@@ -436,16 +436,26 @@ documents. Their exports load through three routes:
   refused with a count before anything loads, unless `default_node_type` /
   `default_edge_type` is also given. The attribute becomes the label or
   relationship type and is not also stored as a property, as with `node_type`.
-- **knwler document JSON** (`chunks` plus a `graph` of `entities` and
-  `relations`). The runnable, network-free
+- **knwler document JSON** — per-document files (`chunks` plus a `graph` of
+  `entities` and `relations`) or the merged `consolidated_graph.json`
+  (`documents`, `chunks`, and a `graph` with `clusters`). The runnable,
+  network-free
   [`examples/knwler_import.py`](https://github.com/kkollsga/kglite/blob/main/examples/knwler_import.py)
-  turns documents into a `from_records` spec. Entity ids are `name::type`, as
-  knwler's own `create_network` builds them. Relations are grouped into one
-  connection per relation type, `Document-[:CONTAINS]->Chunk` is added, and
+  turns either shape into a `from_records` spec. Entity ids are `name::type`,
+  as knwler's own `create_network` builds them. Relations are grouped into one
+  connection per relation type, with endpoint types taken from each relation's
+  `source_type` / `target_type`; `Document-[:CONTAINS]->Chunk`,
+  `Chunk-[:HAS_ENTITY]->Entity` and, for a consolidated export,
+  `Entity-[:BELONGS_TO]->Cluster` are added, and
   `on_missing_endpoint='error'` refuses a relation whose endpoint names no
-  entity. It then embeds every relation type and ranks across all of them with
-  one `db.relationship_embeddings.query` that names no `type` (see
-  [relationship retrieval across types](semantic-search.md)).
+  entity. It then embeds every relation type in one
+  `db.relationship_embeddings.embed({types: …})` call and ranks across all of
+  them with one `db.relationship_embeddings.query` that names no `type` (see
+  [relationship retrieval across types](semantic-search.md)). knwler's own
+  Neo4j importer Cypher (`MERGE … SET e.type = …`) also runs against a
+  `KnowledgeGraph` unchanged, apart from its `CREATE CONSTRAINT … REQUIRE d.id
+  IS UNIQUE` statements, which KGLite refuses in favour of a declared primary
+  key.
 
 One limitation shapes all three routes. A relationship type cannot come from a
 row value inside a single statement: `CREATE (a)-[:$(row.type)]->(b)` is

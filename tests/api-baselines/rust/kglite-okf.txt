@@ -1493,6 +1493,38 @@ pub fn kglite::api::embeddings::RelationshipIngestReport::default() -> kglite::a
 impl core::fmt::Debug for kglite::api::embeddings::RelationshipIngestReport
 pub fn kglite::api::embeddings::RelationshipIngestReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::embeddings::RelationshipIngestReport
+#[non_exhaustive] pub struct kglite::api::embeddings::RelationshipSearchHit
+pub kglite::api::embeddings::RelationshipSearchHit::key: core::option::Option<kglite::datatypes::values::Value>
+pub kglite::api::embeddings::RelationshipSearchHit::relationship_type: alloc::string::String
+pub kglite::api::embeddings::RelationshipSearchHit::score: f64
+pub kglite::api::embeddings::RelationshipSearchHit::source_id: kglite::datatypes::values::Value
+pub kglite::api::embeddings::RelationshipSearchHit::source_type: alloc::string::String
+pub kglite::api::embeddings::RelationshipSearchHit::target_id: kglite::datatypes::values::Value
+pub kglite::api::embeddings::RelationshipSearchHit::target_type: alloc::string::String
+impl core::clone::Clone for kglite::api::embeddings::RelationshipSearchHit
+pub fn kglite::api::embeddings::RelationshipSearchHit::clone(&self) -> kglite::api::embeddings::RelationshipSearchHit
+impl core::cmp::PartialEq for kglite::api::embeddings::RelationshipSearchHit
+pub fn kglite::api::embeddings::RelationshipSearchHit::eq(&self, other: &kglite::api::embeddings::RelationshipSearchHit) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::RelationshipSearchHit
+pub fn kglite::api::embeddings::RelationshipSearchHit::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::RelationshipSearchHit
+#[non_exhaustive] pub struct kglite::api::embeddings::RelationshipSearchOptions
+pub kglite::api::embeddings::RelationshipSearchOptions::exact: bool
+pub kglite::api::embeddings::RelationshipSearchOptions::metric: core::option::Option<alloc::string::String>
+pub kglite::api::embeddings::RelationshipSearchOptions::top_k: usize
+impl kglite::api::embeddings::RelationshipSearchOptions
+pub fn kglite::api::embeddings::RelationshipSearchOptions::new(top_k: usize) -> Self
+pub fn kglite::api::embeddings::RelationshipSearchOptions::with_exact(self, exact: bool) -> Self
+pub fn kglite::api::embeddings::RelationshipSearchOptions::with_metric(self, metric: core::option::Option<&str>) -> Self
+impl core::clone::Clone for kglite::api::embeddings::RelationshipSearchOptions
+pub fn kglite::api::embeddings::RelationshipSearchOptions::clone(&self) -> kglite::api::embeddings::RelationshipSearchOptions
+impl core::cmp::PartialEq for kglite::api::embeddings::RelationshipSearchOptions
+pub fn kglite::api::embeddings::RelationshipSearchOptions::eq(&self, other: &kglite::api::embeddings::RelationshipSearchOptions) -> bool
+impl core::default::Default for kglite::api::embeddings::RelationshipSearchOptions
+pub fn kglite::api::embeddings::RelationshipSearchOptions::default() -> kglite::api::embeddings::RelationshipSearchOptions
+impl core::fmt::Debug for kglite::api::embeddings::RelationshipSearchOptions
+pub fn kglite::api::embeddings::RelationshipSearchOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::RelationshipSearchOptions
 pub struct kglite::api::embeddings::RelationshipVector
 pub kglite::api::embeddings::RelationshipVector::key: core::option::Option<kglite::datatypes::values::Value>
 pub kglite::api::embeddings::RelationshipVector::source_id: kglite::datatypes::values::Value
@@ -1542,7 +1574,7 @@ pub fn kglite::api::embeddings::build_relationship_vector_index(graph: &mut kgli
 pub fn kglite::api::embeddings::build_vector_index(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, m: core::option::Option<usize>, ef_construction: core::option::Option<usize>, ef_search: core::option::Option<usize>, metric: core::option::Option<&str>, auto_refresh_limit: core::option::Option<usize>) -> core::result::Result<kglite::api::embeddings::VectorIndexReport, alloc::string::String>
 pub fn kglite::api::embeddings::drop_relationship_vector_index(graph: &mut kglite::api::DirGraph, relationship_type: &str, text_column: &str) -> core::result::Result<bool, alloc::string::String>
 pub fn kglite::api::embeddings::drop_vector_index(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str) -> bool
-pub fn kglite::api::embeddings::embed_property(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, node_type: &str, text_column: &str, mode: kglite::api::embeddings::EmbedMode, model: &dyn kglite::api::Embedder, hooks: &kglite::api::embeddings::EmbedHooks<'_>) -> core::result::Result<kglite::api::embeddings::EmbedOutcome, kglite::api::embeddings::EmbedError>
+pub fn kglite::api::embeddings::embed_property(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, node_type: &str, text_column: &str, mode: kglite::api::embeddings::EmbedMode, model: &dyn kglite::api::Embedder, hooks: &kglite::api::embeddings::EmbedHooks<'_>, metric: core::option::Option<&str>) -> core::result::Result<kglite::api::embeddings::EmbedOutcome, kglite::api::embeddings::EmbedError>
 pub fn kglite::api::embeddings::embed_relationship_texts(graph: &mut kglite::api::DirGraph, relationship_type: &str, text_column: &str, mode: kglite::api::embeddings::EmbedMode, model: &dyn kglite::api::Embedder, hooks: &kglite::api::embeddings::EmbedHooks<'_>, metric: core::option::Option<&str>) -> core::result::Result<kglite::api::embeddings::EmbedOutcome, kglite::api::embeddings::EmbedError>
 pub fn kglite::api::embeddings::embedding_diagnostics(graph: &kglite::api::DirGraph, node_type: core::option::Option<&str>, relationship_type: core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<kglite::api::embeddings::EmbeddingDiagnostic>, alloc::string::String>
 pub fn kglite::api::embeddings::embedding_info(graph: &kglite::api::DirGraph, entity: kglite::api::embeddings::EmbeddingEntity, type_name: &str, text_column: &str) -> core::option::Option<kglite::api::embeddings::EmbeddingInfo>
@@ -1551,10 +1583,16 @@ pub fn kglite::api::embeddings::has_vector_index(graph: &kglite::api::DirGraph, 
 pub fn kglite::api::embeddings::list_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::EmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_relationship_embeddings(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::RelationshipEmbeddingStoreInfo>
 pub fn kglite::api::embeddings::list_vector_indexes(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::VectorIndexStatus>
+pub fn kglite::api::embeddings::node_embedding(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str, id: &kglite::datatypes::values::Value) -> core::result::Result<core::option::Option<alloc::vec::Vec<f32>>, alloc::string::String>
 pub fn kglite::api::embeddings::refresh_relationship_vector_index(graph: &kglite::api::DirGraph, relationship_type: &str, text_column: &str) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::embeddings::refresh_vector_index(graph: &kglite::api::DirGraph, node_type: &str, text_column: &str) -> core::result::Result<usize, alloc::string::String>
+pub fn kglite::api::embeddings::relationship_embedding(graph: &kglite::api::DirGraph, relationship_type: &str, text_column: &str, address: &kglite::api::embeddings::RelationshipVector, keys: &kglite::api::embeddings::RelationshipKeys) -> core::result::Result<core::option::Option<alloc::vec::Vec<f32>>, alloc::string::String>
+pub fn kglite::api::embeddings::relationship_embedding_dim(graph: &kglite::api::DirGraph, relationship_type: &str, text_column: &str) -> core::option::Option<usize>
 pub fn kglite::api::embeddings::relationship_embeddings(graph: &kglite::api::DirGraph, relationship_type: &str, text_column: &str, keys: &kglite::api::embeddings::RelationshipKeys) -> core::result::Result<alloc::vec::Vec<kglite::api::embeddings::RelationshipEmbedding>, alloc::string::String>
+pub fn kglite::api::embeddings::remove_embeddings(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::embeddings::remove_relationship_embeddings(graph: &mut kglite::api::DirGraph, relationship_type: &str, text_column: &str) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::embeddings::resolve_source_column<'a>(graph: &'a kglite::api::DirGraph, node_type: &str, text_column: &'a str) -> core::result::Result<&'a str, alloc::string::String>
+pub fn kglite::api::embeddings::search_relationship_embeddings(graph: &kglite::api::DirGraph, types: core::option::Option<&[alloc::string::String]>, text_column: &str, query: &[f32], options: &kglite::api::embeddings::RelationshipSearchOptions, keys: &kglite::api::embeddings::RelationshipKeys) -> core::result::Result<alloc::vec::Vec<kglite::api::embeddings::RelationshipSearchHit>, alloc::string::String>
 pub fn kglite::api::embeddings::set_embeddings<I, V>(graph: &mut kglite::api::DirGraph, node_type: &str, text_column: &str, metric: core::option::Option<&str>, entries: I) -> core::result::Result<kglite::api::embeddings::EmbeddingIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = (kglite::datatypes::values::Value, V)>, V: core::convert::AsRef<[f32]>
 pub fn kglite::api::embeddings::set_relationship_embeddings<I>(graph: &mut kglite::api::DirGraph, relationship_type: &str, text_column: &str, rows: I, keys: &kglite::api::embeddings::RelationshipKeys, metric: core::option::Option<&str>) -> core::result::Result<kglite::api::embeddings::RelationshipIngestReport, alloc::string::String> where I: core::iter::traits::collect::IntoIterator<Item = kglite::api::embeddings::RelationshipVector>
 pub fn kglite::api::embeddings::store_key(node_type: &str, text_column: &str) -> (alloc::string::String, alloc::string::String)

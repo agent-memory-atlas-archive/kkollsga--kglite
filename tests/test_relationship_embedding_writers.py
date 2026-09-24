@@ -262,7 +262,7 @@ def test_endpoint_types_are_required_once_the_type_connects_several(tmp_path: Pa
         "CREATE (:Bot {id: 5}) WITH 1 AS x MATCH (b:Bot), (c:Claim {id: 10}) "
         "CREATE (b)-[:SUPPORTS {uid: 'z', evidence: 'zeta'}]->(c)"
     )
-    with pytest.raises(ValueError, match="source nodes of types Bot, Claimant; address the row by"):
+    with pytest.raises(ValueError, match="source nodes of types Bot, Claimant; address it by"):
         graph.set_relationship_embeddings("SUPPORTS", "evidence", {(1, 10): [1.0, 0.0]})
     graph.set_relationship_embeddings("SUPPORTS", "evidence", {("Bot", 5, "Claim", 10): [1.0, 0.0]})
     assert _by_uid(graph) == {"z": [1.0, 0.0]}

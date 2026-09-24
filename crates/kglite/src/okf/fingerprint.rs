@@ -283,6 +283,7 @@ pub(crate) fn apply_embed_targets(out: &mut BuildOutput, embedder: Option<&dyn E
             crate::graph::embeddings::EmbedMode::Changed,
             model,
             &hooks,
+            None,
         ) {
             out.report
                 .warnings

@@ -158,10 +158,13 @@ impl<'a> CypherExecutor<'a> {
             // `witness_cap` is `None` for exactly the shapes whose expansion
             // can run away (see `exists_witness_cap`), so the operator's
             // match ceiling is what bounds those.
+            // A node the row carries only as a value anchors the pattern, as
+            // in `execute_count_pattern`.
+            let seeded = match_clause::seed_prebound_pattern_vars(pat, row);
             let matches = self
                 .materializing_executor(
                     witness_cap,
-                    &row.node_bindings,
+                    seeded.as_ref().unwrap_or(&row.node_bindings),
                     "EXISTS subquery expansion",
                 )
                 .execute(pat)?;

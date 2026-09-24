@@ -335,7 +335,7 @@ impl DefaultEndpoints {
         explicit: Option<&'a str>,
         side: &str,
         relationship_type: &str,
-        position: usize,
+        position: Option<usize>,
     ) -> Result<&'a str, String> {
         if let Some(explicit) = explicit {
             return Ok(explicit);
@@ -354,8 +354,9 @@ impl DefaultEndpoints {
                 )
             };
             format!(
-                "rows[{position}] names no {side} node type, and {found}; address the row \
-                 by (source_type, source_id, target_type, target_id)"
+                "{}names no {side} node type, and {found}; address it by (source_type, \
+                 source_id, target_type, target_id)",
+                RowPrefix(position)
             )
         })
     }
@@ -404,13 +405,13 @@ fn resolve_rows(
                     row.source_type.as_deref(),
                     "source",
                     relationship_type,
-                    position,
+                    Some(position),
                 )?,
                 defaults.pick(
                     row.target_type.as_deref(),
                     "target",
                     relationship_type,
-                    position,
+                    Some(position),
                 )?,
             ),
             None => (
@@ -419,7 +420,7 @@ fn resolve_rows(
             ),
         };
         let address = Address {
-            position,
+            position: Some(position),
             relationship_type,
             source_type,
             source_id: &row.source_id,
@@ -441,7 +442,7 @@ fn resolve_rows(
 
 /// One row's address, for resolution and for the refusal that names it.
 struct Address<'a> {
-    position: usize,
+    position: Option<usize>,
     relationship_type: &'a str,
     source_type: &'a str,
     source_id: &'a Value,
@@ -453,8 +454,8 @@ impl std::fmt::Display for Address<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "rows[{}] ({} id={})-[:{}]->({} id={})",
-            self.position,
+            "{}({} id={})-[:{}]->({} id={})",
+            RowPrefix(self.position),
             self.source_type,
             self.source_id,
             self.relationship_type,
@@ -462,6 +463,70 @@ impl std::fmt::Display for Address<'_> {
             self.target_id
         )
     }
+}
+
+/// `"rows[i] "` for a batch row, nothing for a single address.
+struct RowPrefix(Option<usize>);
+
+impl std::fmt::Display for RowPrefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(position) => write!(f, "rows[{position}] "),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Resolve one address to the relationship it names, by the rules a batch row
+/// follows — the read side's lookup ([`relationship_embedding`]).
+///
+/// [`relationship_embedding`]: super::search::relationship_embedding
+pub(crate) fn resolve_address(
+    graph: &DirGraph,
+    relationship_type: &str,
+    address: &RelationshipVector,
+    keys: &RelationshipKeys,
+) -> Result<EdgeIndex, String> {
+    let defaults = (address.source_type.is_none() || address.target_type.is_none())
+        .then(|| DefaultEndpoints::scan(graph, relationship_type));
+    let (source_type, target_type) = match &defaults {
+        Some(defaults) => (
+            defaults.pick(
+                address.source_type.as_deref(),
+                "source",
+                relationship_type,
+                None,
+            )?,
+            defaults.pick(
+                address.target_type.as_deref(),
+                "target",
+                relationship_type,
+                None,
+            )?,
+        ),
+        None => (
+            address.source_type.as_deref().unwrap_or_default(),
+            address.target_type.as_deref().unwrap_or_default(),
+        ),
+    };
+    let _arena_guard = graph.graph.begin_query();
+    let mut resolver = Resolver {
+        graph,
+        relationship_type,
+        key_property: keys.get(relationship_type).map(String::as_str),
+        parallel: FxHashMap::default(),
+    };
+    resolver.resolve(
+        &Address {
+            position: None,
+            relationship_type,
+            source_type,
+            source_id: &address.source_id,
+            target_type,
+            target_id: &address.target_id,
+        },
+        address.key.as_ref(),
+    )
 }
 
 /// Endpoint-pair groups, resolved once each.

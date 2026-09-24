@@ -1,6 +1,7 @@
 use super::vector_index::*;
 use super::*;
 use crate::datatypes::Value;
+use crate::graph::embedding_hints::Surface;
 use crate::graph::schema::{EdgeData, NodeData};
 use crate::graph::storage::GraphWrite;
 use std::collections::HashMap;
@@ -488,7 +489,7 @@ fn wal_replay_restores_the_metric_the_index_was_built_for() {
 #[test]
 fn refresh_without_an_index_refuses_and_names_the_build_call() {
     let (mut graph, _, _, _) = fixture();
-    let error = refresh_edge_vector_index(&graph, "CLAIMS", "text").unwrap_err();
+    let error = refresh_edge_vector_index(&graph, "CLAIMS", "text", Surface::Cypher).unwrap_err();
     assert!(error.contains("'CLAIMS.text_emb'"), "{error}");
     assert!(
         error.contains(
@@ -504,13 +505,16 @@ fn refresh_without_an_index_refuses_and_names_the_build_call() {
         EdgeVectorIndexOptions::default(),
     )
     .unwrap();
-    assert_eq!(refresh_edge_vector_index(&graph, "CLAIMS", "text"), Ok(0));
+    assert_eq!(
+        refresh_edge_vector_index(&graph, "CLAIMS", "text", Surface::Cypher),
+        Ok(0)
+    );
     assert!(drop_edge_vector_index(&mut graph, "CLAIMS", "text").unwrap());
-    assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text").is_err());
+    assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text", Surface::Cypher).is_err());
 
     // Read-only does not turn the refusal back into a silent zero.
     graph.read_only = true;
-    assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text").is_err());
+    assert!(refresh_edge_vector_index(&graph, "CLAIMS", "text", Surface::Cypher).is_err());
 }
 
 /// `fixture()` plus two `SUPPORTS` relationships in their own store: one whose
@@ -565,6 +569,7 @@ fn stores_query(
             exact: false,
             metric: metric.map(str::to_string),
         },
+        Surface::Cypher,
     )
 }
 

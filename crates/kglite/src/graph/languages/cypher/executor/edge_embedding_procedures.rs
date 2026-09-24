@@ -16,6 +16,8 @@ use crate::graph::edge_embeddings::{
     describe_relationship, drop_edge_embedding_store, remove_edge_embeddings,
     require_carried_text_property, upsert_edge_embeddings, EdgeEmbeddingWriteReport,
 };
+use crate::graph::embedding_hints::{missing_column_hint, Surface};
+use crate::graph::embedding_inventory::EmbeddingEntity;
 use crate::graph::embeddings::EmbedMode;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::ResultRow;
@@ -95,7 +97,12 @@ pub(super) fn execute(
             ])
         }
         "db.relationship_embeddings.refresh_index" => {
-            let refreshed = refresh_edge_vector_index(graph, &relationship_type, &text_property)?;
+            let refreshed = refresh_edge_vector_index(
+                graph,
+                &relationship_type,
+                &text_property,
+                Surface::Cypher,
+            )?;
             HashMap::from([("refreshed", Value::Int64(refreshed as i64))])
         }
         "db.relationship_embeddings.drop_index" => {
@@ -223,6 +230,7 @@ pub(super) fn query(
             exact,
             metric,
         },
+        Surface::Cypher,
     )
 }
 
@@ -251,7 +259,13 @@ fn query_types(
     if types.is_empty() {
         return Err(format!(
             "CALL {proc_name}: no relationship embedding store for text_property \
-             '{text_property}'"
+             '{text_property}'.{}",
+            missing_column_hint(
+                graph,
+                EmbeddingEntity::Relationship,
+                text_property,
+                Surface::Cypher
+            )
         ));
     }
     types.sort();

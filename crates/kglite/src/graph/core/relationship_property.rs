@@ -15,7 +15,7 @@
 
 use crate::datatypes::values::{RelValue, Value};
 use crate::graph::core::iterators::GraphEdgeRef;
-use crate::graph::schema::DirGraph;
+use crate::graph::schema::{DirGraph, EdgeData};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
 
@@ -40,6 +40,14 @@ pub fn relationship_property(
             return value;
         }
     }
+    envelope_property(graph, key, envelope)
+}
+
+/// The envelope field `key` names, or NULL. Split out so a reader with the
+/// stored value in hand can skip building the envelope on the hit path: the
+/// matcher's pushed-down WHERE reads one property per relationship per row,
+/// and the envelope's type-name resolve is the part that costs.
+fn envelope_property(graph: &DirGraph, key: &str, envelope: RelationshipEnvelope<'_>) -> Value {
     match key {
         "type" | "connection_type" => Value::String(envelope.rel_type.to_string()),
         "id" => Value::Int64(envelope.id as i64),
@@ -65,12 +73,22 @@ pub fn relationship_value_property(graph: &DirGraph, rel: &RelValue, key: &str) 
 }
 
 /// `r.<key>` for an edge the matcher is expanding — the reader a pushed-down
-/// WHERE filter evaluates against, so it agrees with the projection.
-pub fn edge_ref_property(graph: &DirGraph, edge: &GraphEdgeRef<'_>, key: &str) -> Option<Value> {
-    let data = edge.weight();
-    Some(relationship_property(
+/// WHERE filter evaluates against, so it agrees with the projection. `data` is
+/// `edge.weight()`, fetched once by the caller: on disk every `weight()` call
+/// materialises the edge, and a filter may read several properties.
+pub fn edge_ref_property(
+    graph: &DirGraph,
+    edge: &GraphEdgeRef<'_>,
+    data: &EdgeData,
+    key: &str,
+) -> Option<Value> {
+    if let Some(value) = data.get_property(key) {
+        if !matches!(value, Value::Null) {
+            return Some(value.clone());
+        }
+    }
+    Some(envelope_property(
         graph,
-        data.get_property(key).cloned(),
         key,
         RelationshipEnvelope {
             id: edge.id().index(),

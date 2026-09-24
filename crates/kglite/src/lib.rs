@@ -379,13 +379,21 @@ pub mod api {
         pub use crate::graph::edge_embeddings::carry::{
             relationship_embeddings, RelationshipEmbedding, RelationshipKeys,
         };
+        /// Write a relationship store by endpoint ids — replace it or upsert
+        /// into it with given vectors, or embed every relationship's text
+        /// through a bound `Embedder`.
         pub use crate::graph::edge_embeddings::ingest::{
             add_relationship_embeddings, embed_relationship_texts, set_relationship_embeddings,
             RelationshipIngestReport, RelationshipVector,
         };
-        /// Write a relationship store by endpoint ids — replace it or upsert
-        /// into it with given vectors, or embed every relationship's text
-        /// through a bound `Embedder`.
+        /// Rank relationship stores against a query vector, read one
+        /// relationship's vector or a store's dimension, or remove a store —
+        /// the relationship twins of `vector_search`, `node_embedding`,
+        /// `embedding_dim` and `remove_embeddings`.
+        pub use crate::graph::edge_embeddings::search::{
+            relationship_embedding, relationship_embedding_dim, remove_relationship_embeddings,
+            search_relationship_embeddings, RelationshipSearchHit, RelationshipSearchOptions,
+        };
         /// The HNSW lifecycle of a relationship store, as the node twins.
         pub use crate::graph::edge_embeddings::vector_index::{
             build_relationship_vector_index, drop_relationship_vector_index,
@@ -398,10 +406,10 @@ pub mod api {
         };
         pub use crate::graph::embeddings::{
             add_embeddings, build_vector_index, drop_vector_index, embed_property,
-            has_vector_index, list_embeddings, list_vector_indexes, refresh_vector_index,
-            resolve_source_column, set_embeddings, store_key, store_name, EmbedBatchFn, EmbedError,
-            EmbedHooks, EmbedMode, EmbedOutcome, EmbeddingIngestReport, EmbeddingStoreInfo,
-            VectorIndexReport, VectorIndexStatus,
+            has_vector_index, list_embeddings, list_vector_indexes, node_embedding,
+            refresh_vector_index, remove_embeddings, resolve_source_column, set_embeddings,
+            store_key, store_name, EmbedBatchFn, EmbedError, EmbedHooks, EmbedMode, EmbedOutcome,
+            EmbeddingIngestReport, EmbeddingStoreInfo, VectorIndexReport, VectorIndexStatus,
         };
     }
 

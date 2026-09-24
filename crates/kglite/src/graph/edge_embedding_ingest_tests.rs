@@ -13,6 +13,7 @@ use crate::graph::edge_embeddings::vector_index::{
     build_edge_vector_index, list_edge_vector_indexes, refresh_edge_vector_index,
     EdgeVectorIndexOptions,
 };
+use crate::graph::embedding_hints::Surface;
 use crate::graph::embedding_inventory::{embedding_info, EmbeddingEntity};
 use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 
@@ -425,7 +426,7 @@ fn endpoint_types_may_be_left_out_only_when_the_type_has_one_of_each() {
     assert_eq!(
         error,
         "rows[0] names no source node type, and 'CLAIMS' relationships have source nodes of \
-         types Author, Doc; address the row by (source_type, source_id, target_type, target_id)"
+         types Author, Doc; address it by (source_type, source_id, target_type, target_id)"
     );
 }
 
@@ -606,7 +607,7 @@ fn a_write_after_an_index_build_is_the_index_delta() {
     let status = &list_edge_vector_indexes(&graph)[0];
     assert_eq!((status.built, status.stale, status.delta), (true, true, 2));
     assert_eq!(
-        refresh_edge_vector_index(&graph, "CLAIMS", "text").unwrap(),
+        refresh_edge_vector_index(&graph, "CLAIMS", "text", Surface::Cypher).unwrap(),
         2
     );
     let status = &list_edge_vector_indexes(&graph)[0];

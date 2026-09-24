@@ -225,6 +225,33 @@ before upgrading.
   property, and how to rank across types. `describe(cypher=
   ['relationship_semantic'])` is now a topic of its own.
 
+- Every embedding reader and the store remover now has a node twin, a
+  relationship twin and an `entity=` router, as the writers and the index
+  methods already did: `vector_search` → `node_vector_search` /
+  `relationship_vector_search`, `search_text` → `node_search_text` /
+  `relationship_search_text`, `embedding` → `node_embedding` /
+  `relationship_embedding`, `embedding_dim` → `node_embedding_dim` /
+  `relationship_embedding_dim`, `remove_embeddings` →
+  `remove_node_embeddings` / `remove_relationship_embeddings`. The
+  relationship search ranks what `db.relationship_embeddings.query` ranks
+  (every type with the store, or `types=`) and returns each hit as a
+  `relationship_embeddings()` row without the vector plus `relationship_type`
+  and `score`; `relationship_embedding` reads one vector by an endpoint
+  address shaped like a writer's dict key. The Rust API gains
+  `kglite::api::embeddings::{search_relationship_embeddings,
+  relationship_embedding, relationship_embedding_dim,
+  remove_relationship_embeddings, node_embedding, remove_embeddings}`.
+- `embed_node_texts()` / `embed_texts()` take `metric=` on the node route:
+  recorded on a store the call creates or rebuilds (`mode='all'`), refused
+  when it differs from an existing store's.
+- `describe(cypher=['node_semantic'])` is a topic beside
+  `relationship_semantic`, and the `<semantic>` hint names
+  `db.node_embeddings.*`, `vector_score(n, …)` and the topic.
+- `examples/knwler_import.py` reads knwler's consolidated
+  `consolidated_graph.json` as well as per-document files, adds
+  `HAS_ENTITY` and cluster `BELONGS_TO` relationships, and embeds every
+  relation type in one `types:` call.
+
 ### Changed
 
 - The relationship embedding and text-index procedures are named
@@ -355,6 +382,26 @@ before upgrading.
   `UNWIND $batch … CALL db.relationship_embeddings.set` ingest with numpy row vectors
   now runs at 0.6-0.9x the node `set_embeddings` time (was 4.3-4.7x). The
   same fast paths apply to Python values the other methods convert.
+
+- `remove_embeddings()` / `embedding()` refuse a store that does not exist
+  (`ValueError`) instead of returning `None` — a relationship store on the
+  node route, the store name passed for the column, or a typo. `embedding()`
+  still returns `None` for a node without a vector.
+- `embed_relationship_texts()` takes `mode` as its fifth positional argument
+  (after `batch_size` and `show_progress`), as `embed_node_texts()` does;
+  keyword callers are unaffected.
+- `embed_node_texts()` / `embed_relationship_texts()` need a registered
+  embedder only when a text has to be embedded: a pass with nothing to do
+  returns its counts and the store's dimension without one.
+- Embedding-store refusals name the store the caller probably meant — the
+  text column when the store name was passed, a near-miss column or type, or
+  the same name on the other entity — and a remedy names a call in the surface
+  the caller used: `build_relationship_vector_index(...)` from Python,
+  `CALL db.relationship_embeddings.build_index(...)` from Cypher (and the node
+  twins likewise). `vector_search()` on a column only a relationship store
+  carries says so.
+- `DROP INDEX relationship:T.p` with nothing installed names the relationship
+  index form instead of only the node forms.
 
 ### Fixed
 
@@ -593,6 +640,51 @@ before upgrading.
   `vector_score` raised. It now raises, as do `embedding()` and `text_score()`.
   Every retrieval scalar's missing-store or missing-index error is recognised
   by its shared message shape, so a scalar added later is covered.
+
+- `labels(x)[i]` answered `null` for a node carried as a value — from
+  `startNode(r)`, `collect`/`UNWIND`, `collect(...)[0]`, a map field, a path,
+  a procedure column or a subquery — while `head(labels(x))` was right; and on
+  a MATCH-bound node every index but `0` (a secondary label) answered `null`.
+- `SET n.type = …`, `SET n += {type: …}`, `SET n = {…}`, `ON CREATE SET` /
+  `ON MATCH SET` and `REMOVE n.type` were refused on nodes ("Cannot SET node
+  type via property assignment") although `CREATE`/`MERGE` maps write the same
+  property and the documentation says `SET n.type` writes a property. They
+  now write or remove the stored property: `n.type` reads it (else the label),
+  and the label and `labels(n)` never change. `node_type` and `label` follow
+  the same rule. A Neo4j-style importer that runs `SET e.type = …` loads its
+  entities.
+- An `embed_relationship_texts()` / `db.relationship_embeddings.embed` pass
+  without `metric` reset a store's declared metric to cosine, even when it
+  re-embedded one changed relationship; it now keeps the store's metric, and a
+  different requested metric is refused unless the pass rebuilds
+  (`mode='all'`), as the node writer refuses it.
+- The `TypeError` for an unsupported `embeddings` argument named
+  `set_relationship_embeddings()` when `add_relationship_embeddings()` was
+  called; it names the method called.
+- The stale-vector-index warning of a node top-k query told a Cypher caller
+  to run the Python `build_vector_index()`; it names
+  `CALL db.node_embeddings.refresh_index`.
+- `WHERE vector_score(…) IS NOT NULL` before a `vector_score … ORDER BY …
+  DESC LIMIT k` no longer scores every row: the filter is served from the
+  embedding store (100k nodes: 27 ms → 0.11 ms; 100k relationships: 55 ms →
+  0.05 ms). A node type with some unembedded members is answered from its
+  store too — the NULL-scored nodes first, as openCypher orders them, then
+  the store's best (30 ms → 0.07 ms).
+
+- `MATCH ()-[r:T]->() WITH r, vector_score(r, …) AS s ORDER BY s DESC LIMIT k
+  RETURN startNode(r)…` now uses the vector index (60 ms → 0.05 ms at 100k),
+  and an undirected `(a)-[r:T]-(b)` top-k uses it instead of falling back to
+  `row_coverage` (111 ms → 35 ms).
+
+- `COUNT { }` and `EXISTS { }` over a node held as a value (`WITH
+  startNode(r) AS s`, `UNWIND collect(n) AS s`) start from that node instead
+  of scanning the graph per row (80k nodes: 361 ms → 0.7 ms), and a
+  `CALL { WITH s MATCH (s)--(:Label) }` body starts from the imported `s`
+  rather than the label scan (20 ms → 0.75 ms). Results are unchanged.
+
+- A `WHERE r.prop …` filter on a relationship reads the property without
+  building the relationship's id/type fallback and without re-reading the
+  relationship per property, back to 0.17.12 speed (it was 5–13% slower).
 
 ## [0.17.12] - 2026-09-19
 ### Added

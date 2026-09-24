@@ -2061,6 +2061,7 @@ impl<'a> PatternExecutor<'a> {
                 // below) never happens. Reads edge properties, so it
                 // materialises the edge (lazy on disk) only when a filter exists.
                 if let Some(ref filter) = edge_pattern.edge_filter {
+                    let edge_data = edge.weight();
                     let edge_source = edge.source();
                     let edge_target = edge.target();
                     // Map the matcher's `direction` onto "is the peer
@@ -2077,7 +2078,7 @@ impl<'a> PatternExecutor<'a> {
                         peer_is_start,
                         edge_source,
                         edge_target,
-                        &|prop: &str| edge_ref_property(self.graph, &edge, prop),
+                        &|prop: &str| edge_ref_property(self.graph, &edge, edge_data, prop),
                     );
                     if !keep {
                         continue;

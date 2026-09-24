@@ -53,3 +53,45 @@ def test_the_example_runs_as_a_script(capsys: pytest.CaptureFixture[str]) -> Non
     _load_example().main()
     out = capsys.readouterr().out
     assert "Charles Darwin -[proposed]-> natural selection" in out
+
+
+def test_the_consolidated_export_loads_every_document_chunk_and_cluster() -> None:
+    """``consolidated_graph.json`` is a dict with ``documents`` / ``graph`` /
+    ``chunks``. Passed to the per-document-only adapter it raised a
+    ``TypeError``, and wrapped in a list it loaded one Document and hung every
+    chunk on the consolidated id."""
+    module = _load_example()
+    consolidated = module.consolidate(module.DOCS)
+    assert set(consolidated) == {"id", "documents", "schema", "graph", "chunks"}
+    result = module.run(data=consolidated)
+    assert result["counts"] == {"Document": 2, "Chunk": 4, "Entity": 4, "Cluster": 3}
+    graph = result["graph"]
+    assert graph.cypher(
+        "MATCH (d:Document)-[:CONTAINS]->(c:Chunk) RETURN d.id AS doc, count(c) AS n ORDER BY doc"
+    ).to_list() == [{"doc": "doc1", "n": 2}, {"doc": "doc2", "n": 2}]
+    assert graph.cypher(
+        "MATCH (c:Chunk {id: 'doc2-chunk2'})-[:HAS_ENTITY]->(e:Entity) RETURN e.id AS e ORDER BY e"
+    ).to_list() == [{"e": "Charles Darwin::Person"}]
+    assert graph.cypher(
+        "MATCH (e:Entity)-[:BELONGS_TO]->(c:Cluster) RETURN c.topics AS topics, count(e) AS n ORDER BY n DESC, topics"
+    ).to_list()[0] == {"topics": ["Person"], "n": 2}
+    # The same ranking as the per-document load.
+    per_document = module.run()
+    assert [(r["source"], r["type"], r["target"]) for r in result["ranked"]] == [
+        (r["source"], r["type"], r["target"]) for r in per_document["ranked"]
+    ]
+
+
+def test_a_single_per_document_dict_and_its_own_endpoint_types_are_read() -> None:
+    module = _load_example()
+    doc = copy.deepcopy(module.DOCS[1])
+    for relation in doc["graph"]["relations"]:
+        relation["source_type"], relation["target_type"] = (
+            "Person",
+            {"radium": "Element"}.get(relation["target"], "Person"),
+        )
+    graph = kglite.from_records(module.knwler_to_spec(doc), on_missing_endpoint="error")
+    assert graph.cypher("MATCH (d:Document) RETURN d.id AS id").to_list() == [{"id": "doc2"}]
+    assert graph.cypher("MATCH (:Entity {name: 'Marie Curie'})-[:read]->(t:Entity) RETURN t.id AS t").to_list() == [
+        {"t": "Charles Darwin::Person"}
+    ]

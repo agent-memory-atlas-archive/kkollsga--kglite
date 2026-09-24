@@ -258,10 +258,14 @@ impl<'a> CypherExecutor<'a> {
         // anything, so it is memory exactly like a row set — and the count it
         // produces is already charged as `Charge::Materialized` by the caller,
         // so the ceiling refuses nothing this expression could have returned.
+        // A node the row carries only as a value (`WITH startNode(r) AS s`,
+        // `UNWIND collect(n) AS s`) anchors the pattern exactly as a MATCH
+        // binding does; `bindings_compatible` still enforces the identity.
+        let seeded = super::match_clause::seed_prebound_pattern_vars(pattern, row);
         let matches = self
             .materializing_executor(
                 self.budget_probe_limit(None),
-                &row.node_bindings,
+                seeded.as_ref().unwrap_or(&row.node_bindings),
                 "COUNT subquery pattern",
             )
             .execute(pattern)?;
@@ -568,6 +572,12 @@ impl<'a> CypherExecutor<'a> {
         }
     }
 
+    /// `labels(n)[0]` on a MATCH-bound node answers from the primary label
+    /// without building the list. Every other shape — a node carried as a
+    /// value (`WITH startNode(r) AS x`, `collect`/`UNWIND`, a procedure
+    /// column), any other index (secondary labels are ordered after the
+    /// primary) — returns `None` so the general path indexes the real
+    /// `labels()` list rather than guessing `Null`.
     fn evaluate_labels_zero_fast_path(
         &self,
         expression: &Expression,
@@ -577,25 +587,20 @@ impl<'a> CypherExecutor<'a> {
         let Expression::FunctionCall { name, args, .. } = expression else {
             return None;
         };
-        if name != "labels" {
+        if name != "labels" || args.len() != 1 {
             return None;
         }
         let Some(Expression::Variable(variable)) = args.first() else {
             return None;
         };
-        let Expression::Literal(Value::Int64(index)) = index else {
+        let Expression::Literal(Value::Int64(0)) = index else {
             return None;
         };
-        if *index != 0 {
-            return Some(Value::Null);
-        }
-        Some(
-            row.node_bindings
-                .get(variable)
-                .and_then(|node_index| self.graph.graph.node_view(*node_index))
-                .map(|node| Value::String(node.get_node_type_ref(&self.graph.interner).to_string()))
-                .unwrap_or(Value::Null),
-        )
+        let &node_index = row.node_bindings.get(variable)?;
+        let node = self.graph.graph.node_view(node_index)?;
+        Some(Value::String(
+            node.get_node_type_ref(&self.graph.interner).to_string(),
+        ))
     }
 
     fn evaluate_list_literal(

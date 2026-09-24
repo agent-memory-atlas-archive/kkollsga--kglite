@@ -621,9 +621,9 @@ the type connects, or a vector of the wrong width is refused by row, naming the
 relationship, and nothing is written. `db.relationship_embeddings.set` remains the
 in-query route, for relationships a `MATCH` binds.
 
-Every embedding method has a node spelling, a relationship spelling, and a
-generic router that picks one with `entity=` — `"node"` by default, so every
-existing node call is unchanged:
+The methods in this table each have a node spelling, a relationship spelling,
+and a generic router that picks one with `entity=` — `"node"` by default, so
+every existing node call is unchanged:
 
 | Router (`entity="node"` default) | Node route | Relationship route |
 |---|---|---|
@@ -631,8 +631,38 @@ existing node call is unchanged:
 | `add_embeddings` | `add_node_embeddings` | `add_relationship_embeddings` |
 | `embed_texts` | `embed_node_texts` | `embed_relationship_texts` |
 | `embeddings` | `node_embeddings` | `relationship_embeddings` |
+| `embedding` | `node_embedding` | `relationship_embedding` |
+| `embedding_dim` | `node_embedding_dim` | `relationship_embedding_dim` |
+| `remove_embeddings` | `remove_node_embeddings` | `remove_relationship_embeddings` |
+| `vector_search` | `node_vector_search` | `relationship_vector_search` |
+| `search_text` | `node_search_text` | `relationship_search_text` |
 | `build_vector_index` | `build_node_vector_index` | `build_relationship_vector_index` |
 | `refresh_vector_index` / `drop_vector_index` / `has_vector_index` | `…_node_vector_index` | `…_relationship_vector_index` |
+
+The inventory methods need no twin: `embedding_info` takes `entity=` itself,
+and `list_embeddings`, `embedding_diagnostics`, `export_embeddings`,
+`import_embeddings` and `copy_embeddings_from` cover both entities in one call.
+In Cypher the same split holds: `db.node_embeddings.*` and
+`db.relationship_embeddings.*` are the twins, and `db.embeddings.*` routes to
+one of them with an `entity:` key (`'node'` by default).
+
+`relationship_vector_search` / `relationship_search_text` rank what
+`db.relationship_embeddings.query` ranks — every relationship type with a
+`text_column` store, or the ones `types=` names — and return each hit as a
+`relationship_embeddings()` row without the vector, plus `relationship_type`
+and `score`. `relationship_embedding` reads one relationship's vector by an
+address shaped like a writer's dict key:
+
+```python
+hits = graph.relationship_search_text("evidence", "water damage", top_k=5)
+# [{'source': 1, 'target': 10, 'source_type': 'Claimant', 'target_type': 'Claim',
+#   'key': None, 'relationship_type': 'SUPPORTS', 'score': 0.93}, ...]
+vector = graph.relationship_embedding("SUPPORTS", "evidence", (1, 10))
+```
+
+`remove_embeddings` and `embedding` refuse a store that does not exist,
+naming the store you probably meant — the text column when the store name was
+passed, a near-miss column or type, or the same name on the other entity.
 
 ```python
 graph.add_embeddings("SUPPORTS", "evidence", rows, entity="relationship")
@@ -673,7 +703,16 @@ the same shapes: `MATCH ()-[r:created|works_at]->() … ORDER BY
 text_score(r, 'description', $q) DESC LIMIT k`, or an untyped `()-[r]->()`, is
 served per store and merged when every type in play carries the store. It runs
 through HNSW when every store's index is online, and `diagnostics["retrieval"]`
-lists the stores it read. If a type in play has no store, the query raises the
+lists the stores it read.
+
+Every form runs **one search per relationship type** — each type's store has
+its own HNSW index — and merges the answers, so a ranking across many types
+costs about the number of types times one search. Under the long tail of small
+relationship types an extractor produces, that per-store cost dominates and an
+index buys little over the exact scan of each small store; the answer is the
+same either way. The Python router is the same fan-out:
+`graph.search_text("description", q, entity="relationship")` ranks every
+relationship type that has a `description` store. If a type in play has no store, the query raises the
 same error it raises row by row: embed that type, or name the types that have
 stores.
 

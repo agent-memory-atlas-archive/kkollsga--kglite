@@ -122,6 +122,10 @@ pub enum Clause {
         score_call: Expression,
         descending: bool,
         limit: usize,
+        /// The planner absorbed a `WHERE <score_call> IS NOT NULL` into this
+        /// clause: a row whose score is NULL is not a candidate, so the
+        /// embedding store's members are the whole candidate set.
+        non_null_only: bool,
     },
     /// Optimizer-generated: fuse RETURN (with `text_bm25`) + ORDER BY + LIMIT
     /// into one pass the executor can serve from the text index's postings.

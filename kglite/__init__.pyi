@@ -7978,7 +7978,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def vector_search(
+    def node_vector_search(
         self,
         text_column: str,
         query_vector: list[float],
@@ -7988,7 +7988,8 @@ class KnowledgeGraph:
         returning: list[str] | None = None,
         exact: bool = False,
     ) -> list[dict[str, Any]] | pd.DataFrame:
-        """Vector similarity search within the current selection.
+        """Vector similarity search within the current selection — the node
+        route of :meth:`vector_search`.
 
         Searches for nodes most similar to the query vector among the currently
         selected nodes. Results are ordered by similarity (most similar first).
@@ -8058,6 +8059,131 @@ class KnowledgeGraph:
             # ranking-only / slim payload
             ranked = graph.select('Article').vector_search(
                 'summary', query_vec, top_k=50, returning=['title'])
+
+        Relationship stores are ranked by :meth:`relationship_vector_search`
+        (or ``vector_search(..., entity="relationship")``); the error above
+        names a relationship store of that column when one exists.
+        """
+        ...
+
+    def relationship_vector_search(
+        self,
+        text_column: str,
+        query_vector: list[float],
+        top_k: int = 10,
+        metric: str | None = None,
+        to_df: bool = False,
+        *,
+        types: str | list[str] | None = None,
+        exact: bool = False,
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[dict[str, Any]] | pd.DataFrame:
+        """Rank relationship vectors against a query vector — the relationship
+        route of :meth:`vector_search`, over the ranking
+        ``CALL db.relationship_embeddings.query`` performs.
+
+        With ``types`` omitted, every relationship type that has a
+        ``text_column`` store is ranked; ``types`` narrows that to one type or a
+        list. The stores' answers merge into one ``top_k`` ordered by score,
+        then relationship type, then relationship position. Each store answers
+        on its own route — HNSW once :meth:`build_relationship_vector_index` has
+        run, else an exact scan — so a ranking over many relationship types
+        runs one search per type.
+
+        Each hit is a :meth:`relationship_embeddings` row without the vector,
+        plus the type it came from and its score::
+
+            {"source": <source id>, "target": <target id>,
+             "source_type": str, "target_type": str,
+             "key": <key value or None>,
+             "relationship_type": str, "score": float}
+
+        Relationships with no vector are never returned.
+
+        Example::
+
+            hits = graph.relationship_vector_search("context", query_vec, top_k=5)
+            hits = graph.relationship_vector_search(
+                "context", query_vec, types=["CITES", "SUPPORTS"])
+
+        Args:
+            text_column: Source text property (e.g. ``'context'``; the stores
+                are ``'context_emb'``).
+            query_vector: The query vector; every coordinate must be finite.
+            top_k: Hits to return (default 10).
+            metric: Score under this metric instead of each store's own.
+                Stores declaring different metrics refuse the merge unless it
+                is passed.
+            to_df: If ``True``, return a pandas DataFrame.
+            types: A relationship type or a list of them; omitted ranks every
+                type with a ``text_column`` store.
+            exact: Force an exact scan even where an HNSW index is online.
+            relationship_keys: Per relationship type, the property whose value
+                a hit carries as ``key`` (as :meth:`relationship_embeddings`
+                takes it).
+
+        Returns:
+            List of hit dicts (or a DataFrame if ``to_df=True``).
+
+        Raises:
+            ValueError: no relationship store carries ``text_column`` (the
+                message names a near-miss column, or the node store of that
+                name); a named type has no such store; ``types`` is empty; the
+                query's dimension differs from a store's.
+            TypeError: ``types`` is neither a string nor a list of strings.
+        """
+        ...
+
+    def vector_search(
+        self,
+        text_column: str,
+        query_vector: list[float],
+        top_k: int = 10,
+        metric: str | None = None,
+        to_df: bool = False,
+        returning: list[str] | None = None,
+        exact: bool = False,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        types: str | list[str] | None = None,
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[dict[str, Any]] | pd.DataFrame:
+        """Rank stored vectors against a query vector — the current
+        selection's nodes by default, relationships with
+        ``entity="relationship"``.
+
+        Routes to :meth:`node_vector_search` (``entity="node"``, the default)
+        or :meth:`relationship_vector_search` (``entity="relationship"``) and
+        behaves exactly as the method it routes to — same result, same errors.
+        ``returning`` belongs to the node route; ``types`` and
+        ``relationship_keys`` to the relationship route; a keyword the chosen
+        route does not take is refused by name.
+
+        Example::
+
+            graph.select("Article").vector_search("summary", query_vec, top_k=10)
+            graph.vector_search("context", query_vec, entity="relationship")
+
+        Args:
+            text_column: Source text column name (e.g. ``'summary'``).
+            query_vector: The query vector.
+            top_k: Hits to return (default 10).
+            metric: As the routed method takes it.
+            to_df: If ``True``, return a pandas DataFrame.
+            returning: Node route only — see :meth:`node_vector_search`.
+            exact: Force an exact scan even where an HNSW index is online.
+            entity: ``"node"`` (default) or ``"relationship"``.
+            types: Relationship route only — see
+                :meth:`relationship_vector_search`.
+            relationship_keys: Relationship route only.
+
+        Returns:
+            The routed method's hits.
+
+        Raises:
+            TypeError: a keyword the chosen route does not take.
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as the routed method.
         """
         ...
 
@@ -8089,9 +8215,10 @@ class KnowledgeGraph:
         """
         ...
 
-    def embedding_dim(self, node_type: str, text_column: str) -> Optional[int]:
-        """The vector dimension of the ``(node_type, text_column)`` embedding
-        store, or ``None`` if none exists.
+    def node_embedding_dim(self, node_type: str, text_column: str) -> Optional[int]:
+        """The vector dimension of the ``(node_type, text_column)`` node
+        embedding store, or ``None`` if none exists — the node route of
+        :meth:`embedding_dim`.
 
         A cheap, direct way to detect an embedder dimension change without
         bookkeeping: compare it against your model's dimension before
@@ -8102,6 +8229,32 @@ class KnowledgeGraph:
 
             if g.embedding_dim("Article", "summary") not in (None, model.dimension):
                 g.embed_texts("Article", "summary", mode="all")  # model changed
+        """
+        ...
+
+    def relationship_embedding_dim(self, relationship_type: str, text_column: str) -> Optional[int]:
+        """The vector dimension of the ``(relationship_type, text_column)``
+        relationship embedding store, or ``None`` if none exists — the
+        relationship route of :meth:`embedding_dim`.
+        """
+        ...
+
+    def embedding_dim(
+        self,
+        node_type: str,
+        text_column: str,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> Optional[int]:
+        """The vector dimension of an embedding store, or ``None`` if none
+        exists — a node type's by default, a relationship type's with
+        ``entity="relationship"``.
+
+        Routes to :meth:`node_embedding_dim` or
+        :meth:`relationship_embedding_dim` and behaves exactly as it does.
+
+        Raises:
+            ValueError: ``entity`` is neither ``"node"`` nor ``"relationship"``.
         """
         ...
 
@@ -8385,12 +8538,59 @@ class KnowledgeGraph:
         """
         ...
 
-    def remove_embeddings(self, node_type: str, text_column: str) -> None:
-        """Remove an embedding store.
+    def remove_node_embeddings(self, node_type: str, text_column: str) -> None:
+        """Remove a node embedding store — its vectors, provenance and HNSW
+        index. The node route of :meth:`remove_embeddings`.
 
         Args:
             node_type: The node type.
             text_column: Source text column name (e.g. ``'summary'``).
+
+        Raises:
+            ValueError: no ``(node_type, text_column)`` store exists. The
+                message names the store you probably meant: the column when
+                the store name (``'summary_emb'``) was passed, a near-miss
+                column, or a relationship store of that name.
+        """
+        ...
+
+    def remove_relationship_embeddings(self, relationship_type: str, text_column: str) -> None:
+        """Remove a relationship embedding store — its vectors, provenance and
+        HNSW index, as ``CALL db.relationship_embeddings.drop`` does. The
+        relationship route of :meth:`remove_embeddings`.
+
+        Args:
+            relationship_type: The relationship type (e.g. ``'CITES'``).
+            text_column: Source text property (e.g. ``'context'``).
+
+        Raises:
+            ValueError: no ``(relationship_type, text_column)`` store exists;
+                the message names the store you probably meant.
+        """
+        ...
+
+    def remove_embeddings(
+        self,
+        node_type: str,
+        text_column: str,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> None:
+        """Remove an embedding store — a node type's by default, a
+        relationship type's with ``entity="relationship"``.
+
+        Routes to :meth:`remove_node_embeddings` or
+        :meth:`remove_relationship_embeddings` and behaves exactly as it does:
+        a store that does not exist is refused by name, never a silent no-op.
+
+        Example::
+
+            graph.remove_embeddings("Doc", "summary")
+            graph.remove_embeddings("CITES", "context", entity="relationship")
+
+        Raises:
+            ValueError: no such store; ``entity`` is neither ``"node"`` nor
+                ``"relationship"``.
         """
         ...
 
@@ -8521,8 +8721,9 @@ class KnowledgeGraph:
         """
         ...
 
-    def embedding(self, node_type: str, text_column: str, node_id: Any) -> list[float] | None:
-        """Retrieve a single node's embedding vector.
+    def node_embedding(self, node_type: str, text_column: str, node_id: Any) -> list[float] | None:
+        """Retrieve a single node's embedding vector — the node route of
+        :meth:`embedding`.
 
         Args:
             node_type: The node type (e.g. 'Article').
@@ -8530,11 +8731,75 @@ class KnowledgeGraph:
             node_id: The node ID to look up.
 
         Returns:
-            The embedding vector as a list of floats, or None if not found.
+            The embedding vector as a list of floats, or ``None`` when no node
+            of the type has that id or the node has no vector.
 
-        For a relationship store use :meth:`relationship_embeddings`; inside
-        Cypher, ``embedding(n, 'summary_emb')`` reads the same vector for a
-        node or a relationship.
+        Raises:
+            ValueError: no ``(node_type, text_column)`` store exists; the
+                message names the store you probably meant (a relationship
+                store of that name included).
+
+        Inside Cypher, ``embedding(n, 'summary_emb')`` reads the same vector.
+        """
+        ...
+
+    def relationship_embedding(
+        self,
+        relationship_type: str,
+        text_column: str,
+        address: tuple[Any, ...],
+        *,
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[float] | None:
+        """Retrieve one relationship's embedding vector by its endpoints — the
+        relationship route of :meth:`embedding`.
+
+        ``address`` is shaped like a key of the dict
+        :meth:`set_relationship_embeddings` takes: ``(source_id, target_id)``,
+        ``(source_id, target_id, key)``, ``(source_type, source_id,
+        target_type, target_id)`` or that plus ``key``. The endpoint types may
+        be left out when every relationship of the type runs between one source
+        and one target node type; a member of a parallel group is picked by the
+        key property ``relationship_keys`` names.
+
+        Example::
+
+            vec = graph.relationship_embedding("CITES", "context", (1, 2))
+
+        Returns:
+            The vector as a list of floats, or ``None`` when that relationship
+            has none.
+
+        Raises:
+            ValueError: no such store; the address names no relationship or an
+                ambiguous parallel group.
+            TypeError: ``address`` is not a tuple of one of the four shapes.
+        """
+        ...
+
+    def embedding(
+        self,
+        node_type: str,
+        text_column: str,
+        node_id: Any,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[float] | None:
+        """Retrieve one stored vector — a node's by id by default, a
+        relationship's by endpoint address with ``entity="relationship"``.
+
+        Routes to :meth:`node_embedding` or :meth:`relationship_embedding`
+        (where ``node_id`` is the address tuple) and behaves exactly as it
+        does; ``relationship_keys`` on a node call is refused by name.
+
+        Example::
+
+            graph.embedding("Article", "summary", 42)
+            graph.embedding("CITES", "context", (1, 2), entity="relationship")
+
+        Inside Cypher, ``embedding(n, 'summary_emb')`` reads the same vector
+        for a node or a relationship.
         """
         ...
 
@@ -8798,6 +9063,8 @@ class KnowledgeGraph:
         batch_size: int = 256,
         show_progress: bool = True,
         mode: str | None = None,
+        *,
+        metric: str | None = None,
     ) -> dict[str, int]:
         """Embed a text column for all nodes of a given type.
 
@@ -8835,6 +9102,10 @@ class KnowledgeGraph:
                 *or* whose text changed since the last embed (via the stored
                 content hash) — the incremental re-embed; ``'all'``: re-embed
                 every node, rebuilding the store fresh.
+            metric: The store's distance metric — recorded on a store this
+                call creates or rebuilds (``mode='all'``); a different metric
+                than an existing store declares is refused. Omitted keeps the
+                store's own (``'cosine'`` for a new one).
 
         Returns:
             Dict with ``embedded``, ``skipped``, ``skipped_existing``,
@@ -8845,10 +9116,12 @@ class KnowledgeGraph:
                 complaint :meth:`set_embeddings` makes, raised before the model
                 is loaded (an existing type with no matching rows stays a
                 ``{'embedded': 0}`` no-op); if ``text_column`` resolves to none
-                of the accepted spellings; or if ``mode`` is not
-                ``'missing'`` / ``'changed'`` / ``'all'``.
-            RuntimeError: if no embedder was registered with
-                :meth:`set_embedder`.
+                of the accepted spellings; if ``mode`` is not
+                ``'missing'`` / ``'changed'`` / ``'all'``; or if ``metric`` is
+                unknown or differs from the existing store's.
+            RuntimeError: if a node needs embedding and no embedder was
+                registered with :meth:`set_embedder`. A pass with nothing to
+                embed needs no model and reports the store's dimension.
 
         Example::
 
@@ -8879,7 +9152,7 @@ class KnowledgeGraph:
         :meth:`embed_relationship_texts` (``entity="relationship"``) and behaves exactly as
         the method it routes to — same result, same errors. On the
         relationship route the first argument is the relationship type.
-        A keyword only the other route takes is refused by name.
+        Both routes take the same arguments.
 
         Example::
 
@@ -8894,14 +9167,12 @@ class KnowledgeGraph:
             show_progress: Show a tqdm progress bar (default ``True``).
             mode: ``'missing'`` (default), ``'changed'`` or ``'all'``.
             entity: ``"node"`` (default) or ``"relationship"``.
-            metric: Relationship route only — see
-                :meth:`embed_relationship_texts`.
+            metric: As the routed method takes it.
 
         Returns:
             The routed method's result dict.
 
         Raises:
-            TypeError: ``metric`` on a node call.
             ValueError: ``entity`` is neither ``"node"`` nor
                 ``"relationship"``; otherwise as the routed method.
         """
@@ -8911,10 +9182,10 @@ class KnowledgeGraph:
         self,
         relationship_type: str,
         text_column: str,
-        *,
-        mode: str | None = None,
         batch_size: int = 256,
         show_progress: bool = True,
+        mode: str | None = None,
+        *,
         metric: str | None = None,
     ) -> dict[str, int]:
         """Embed a text property for every relationship of a type — the
@@ -8938,15 +9209,15 @@ class KnowledgeGraph:
             relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
             text_column: The relationship property holding the text (e.g.
                 ``'evidence'``).
+            batch_size: Texts per ``model.embed()`` call (default 256).
+            show_progress: Show a tqdm progress bar (default ``True``);
+                silently none when ``tqdm`` is not installed.
             mode: Which relationships to embed — ``'missing'`` (default): only
                 those without a vector; ``'changed'``: those without a vector
                 *or* whose text changed since it was embedded (via the stored
                 hash); ``'all'``: every one, and a relationship whose text is
                 gone loses its vector. Only ``'all'`` can change the store's
-                dimension.
-            batch_size: Texts per ``model.embed()`` call (default 256).
-            show_progress: Show a tqdm progress bar (default ``True``);
-                silently none when ``tqdm`` is not installed.
+                dimension. The same position as :meth:`embed_node_texts`.
             metric: The distance metric to record on the store, as
                 ``db.relationship_embeddings.embed``'s ``metric`` does.
 
@@ -8962,7 +9233,9 @@ class KnowledgeGraph:
                 and ``mode`` is not ``'all'``; the model's dimension differs
                 from vectors the pass would keep; or the model's output
                 contradicts its dimension.
-            RuntimeError: No embedder is registered, or the model failed.
+            RuntimeError: A relationship needs embedding and no embedder is
+                registered (a pass with nothing to embed needs no model), or
+                the model failed.
 
         Example::
 
@@ -8973,7 +9246,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def search_text(
+    def node_search_text(
         self,
         text_column: str,
         query: str,
@@ -8983,7 +9256,8 @@ class KnowledgeGraph:
         returning: list[str] | None = None,
         exact: bool = False,
     ) -> list[dict[str, Any]] | pd.DataFrame:
-        """Search embeddings using a text query.
+        """Search node embeddings using a text query — the node route of
+        :meth:`search_text`.
 
         Uses the model registered via ``set_embedder()`` to embed the query,
         then performs vector search within the current selection — or the whole
@@ -9016,6 +9290,69 @@ class KnowledgeGraph:
             results = g.select("Article").search_text(
                 "summary", "find AI articles", top_k=10
             )
+        """
+        ...
+
+    def relationship_search_text(
+        self,
+        text_column: str,
+        query: str,
+        top_k: int = 10,
+        metric: str | None = None,
+        to_df: bool = False,
+        *,
+        types: str | list[str] | None = None,
+        exact: bool = False,
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[dict[str, Any]] | pd.DataFrame:
+        """Embed ``query`` with the registered model and rank relationship
+        vectors against it — :meth:`relationship_vector_search` with a text
+        query, and the relationship route of :meth:`search_text`.
+
+        Example::
+
+            hits = graph.relationship_search_text("context", "who founded it?", top_k=5)
+
+        Returns:
+            The hits :meth:`relationship_vector_search` returns.
+
+        Raises:
+            RuntimeError: no embedder is registered, or the model failed.
+            ValueError: as :meth:`relationship_vector_search`.
+        """
+        ...
+
+    def search_text(
+        self,
+        text_column: str,
+        query: str,
+        top_k: int = 10,
+        metric: str | None = None,
+        to_df: bool = False,
+        returning: list[str] | None = None,
+        exact: bool = False,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        types: str | list[str] | None = None,
+        relationship_keys: Optional[dict[str, str]] = None,
+    ) -> list[dict[str, Any]] | pd.DataFrame:
+        """Embed a text query with the registered model and rank stored
+        vectors — the current selection's nodes by default, relationships with
+        ``entity="relationship"``.
+
+        Routes to :meth:`node_search_text` or :meth:`relationship_search_text`
+        and behaves exactly as the method it routes to; the keywords follow
+        :meth:`vector_search`'s routing.
+
+        Example::
+
+            g.select("Article").search_text("summary", "find AI articles", top_k=10)
+            g.search_text("context", "who founded it?", entity="relationship")
+
+        Raises:
+            TypeError: a keyword the chosen route does not take.
+            ValueError: ``entity`` is neither ``"node"`` nor
+                ``"relationship"``; otherwise as the routed method.
         """
         ...
 

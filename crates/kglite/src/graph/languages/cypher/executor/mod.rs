@@ -759,12 +759,16 @@ impl<'a> CypherExecutor<'a> {
                 score_call,
                 descending,
                 limit,
+                non_null_only,
             } => self.execute_fused_vector_score_top_k(
-                return_clause,
-                *score_item_index,
+                retrieval::FusedTopK {
+                    return_clause,
+                    score_item_index: *score_item_index,
+                    descending: *descending,
+                    limit: *limit,
+                    non_null_only: *non_null_only,
+                },
                 score_call,
-                *descending,
-                *limit,
                 result_set,
             ),
             Clause::FusedTextBm25TopK {

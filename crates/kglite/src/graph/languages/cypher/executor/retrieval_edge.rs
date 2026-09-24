@@ -32,7 +32,7 @@
 //! generic route answers instead: the fused answer is then identical to the
 //! unfused one, not merely equivalent. The rows route breaks ties by row
 //! position, exactly as the node arm does.
-use super::retrieval::{HnswOutcome, VectorScoreArgs};
+use super::retrieval::{FusedTopK, HnswOutcome, VectorScoreArgs};
 use super::*;
 use crate::graph::algorithms::vector::DistanceMetric;
 use crate::graph::core::pattern_matching::NodePattern;
@@ -142,7 +142,10 @@ impl<'a> CypherExecutor<'a> {
     /// The entry route. `Ok(None)` hands the clause to the established path
     /// (materialise the MATCH, then the rows route) — for any shape, store or
     /// argument this route does not own, including every argument error, so
-    /// errors keep the scalar's wording.
+    /// errors keep the scalar's wording. Under `non_null_only` a relationship
+    /// without a vector is not a candidate, so the store need not hold every
+    /// relationship of its type: deleting a relationship prunes its vector, so
+    /// the store's members are exactly the type's non-NULL rows.
     pub(super) fn try_edge_vector_retrieval_entry(
         &self,
         matched: &MatchClause,
@@ -150,6 +153,7 @@ impl<'a> CypherExecutor<'a> {
         score_item_index: usize,
         score_call: &Expression,
         limit: usize,
+        non_null_only: bool,
     ) -> Result<Option<ResultSet>, String> {
         let Some(scan) = plain_edge_scan(matched) else {
             return Ok(None);
@@ -194,7 +198,7 @@ impl<'a> CypherExecutor<'a> {
             if !args.options.exact && numeric.has_index() && numeric.index_is_stale() {
                 return Ok(None);
             }
-            if counts.get(rel_type).copied().unwrap_or(0) != store.len()
+            if (!non_null_only && counts.get(rel_type).copied().unwrap_or(0) != store.len())
                 || !self.edge_scan_covers_store(&scan, rel_type, store)?
             {
                 return Ok(None);
@@ -396,12 +400,16 @@ impl<'a> CypherExecutor<'a> {
     pub(super) fn try_edge_rows_fused_top_k(
         &self,
         score_expr: &Expression,
-        descending: bool,
-        limit: usize,
+        top: FusedTopK<'_>,
         rows: &ResultSet,
-        return_clause: &ReturnClause,
-        score_item_index: usize,
     ) -> Result<Option<HnswOutcome>, String> {
+        let FusedTopK {
+            return_clause,
+            score_item_index,
+            descending,
+            limit,
+            non_null_only,
+        } = top;
         let Expression::FunctionCall {
             args: call_args, ..
         } = score_expr
@@ -431,11 +439,13 @@ impl<'a> CypherExecutor<'a> {
         if args.options.exact {
             return Ok(Some(HnswOutcome::Exact(info.fallback("forced_exact"))));
         }
-        let Some(coverage) = self.edge_row_coverage(variable, &args.property, rows) else {
+        let Some(coverage) = self.edge_row_coverage(variable, &args.property, rows, non_null_only)
+        else {
             return Ok(Some(HnswOutcome::Exact(info.fallback("row_coverage"))));
         };
         let EdgeRowCoverage {
             edge_to_row,
+            repeated_rows,
             stores,
         } = coverage;
         let rel_types: Vec<&str> = stores.iter().map(|store| store.rel_type.as_str()).collect();
@@ -483,14 +493,20 @@ impl<'a> CypherExecutor<'a> {
                 return Ok(Some(HnswOutcome::Exact(info.fallback("metric_mismatch"))));
             }
             let before = scored.len();
-            scored.extend(report.hits.iter().filter_map(|hit| {
-                edge_to_row
-                    .get(&hit.edge.index())
-                    .map(|&row| (row, hit.score))
-            }));
+            for hit in &report.hits {
+                let Some(&row) = edge_to_row.get(&hit.edge.index()) else {
+                    continue;
+                };
+                scored.push((row, hit.score));
+                // An undirected pattern binds each relationship once per
+                // orientation; every row carries the same score.
+                if let Some(more) = repeated_rows.get(&hit.edge.index()) {
+                    scored.extend(more.iter().map(|&row| (row, hit.score)));
+                }
+            }
             // A store the rows cover only in part must still yield `limit`
             // candidates, or one of its rows may rank above what the merge saw.
-            let whole_store = covered.rows == store_len;
+            let whole_store = covered.relationships == store_len;
             if !whole_store && scored.len() - before < limit {
                 return Ok(Some(HnswOutcome::Exact(
                     info.fallback("filtered_underfill"),
@@ -519,20 +535,25 @@ impl<'a> CypherExecutor<'a> {
 
     /// Relationship-to-row lookup plus the stores in play, valid only when
     /// every row binds a current relationship whose type carries the
-    /// `property` store and holds a vector in it, and no relationship repeats —
-    /// the HNSW route cannot rank a NULL score or a duplicate row. A row whose
-    /// type has no store also answers `None`: the exact route then raises the
-    /// scalar's missing-store error.
+    /// `property` store and holds a vector in it — the HNSW route cannot rank
+    /// a NULL score. Under `non_null_only` a row without a vector is simply
+    /// not a candidate. A relationship bound by several rows (an undirected
+    /// pattern matches each one in both orientations) maps its first row in
+    /// `edge_to_row` and the rest in `repeated_rows`; coverage counts
+    /// relationships, not rows. A row whose type has no store answers `None`:
+    /// the exact route then raises the scalar's missing-store error.
     fn edge_row_coverage<'s>(
         &'s self,
         variable: &str,
         property: &str,
         rows: &ResultSet,
+        non_null_only: bool,
     ) -> Option<EdgeRowCoverage<'s>> {
         let mut stores: Vec<CoveredStore<'s>> = Vec::new();
         let mut store_of_type: FxHashMap<InternedKey, usize> = FxHashMap::default();
         let mut edge_to_row =
             FxHashMap::with_capacity_and_hasher(rows.rows.len(), Default::default());
+        let mut repeated_rows: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
         for (position, row) in rows.rows.iter().enumerate() {
             let binding = row.edge_bindings.get(variable)?;
             if !self.relationship_binding_is_current(binding) {
@@ -550,43 +571,50 @@ impl<'a> CypherExecutor<'a> {
                     stores.push(CoveredStore {
                         rel_type,
                         store,
-                        rows: 0,
+                        relationships: 0,
                     });
                     store_of_type.insert(weight.connection_type, stores.len() - 1);
                     stores.len() - 1
                 }
             };
             let covered = &mut stores[at];
-            if !covered
-                .store
-                .index_store()
-                .node_to_slot
-                .contains_key(&binding.edge_index.index())
-                || edge_to_row
-                    .insert(binding.edge_index.index(), position)
-                    .is_some()
-            {
+            let edge = binding.edge_index.index();
+            if !covered.store.index_store().node_to_slot.contains_key(&edge) {
+                if non_null_only {
+                    continue;
+                }
                 return None;
             }
-            covered.rows += 1;
+            match edge_to_row.entry(edge) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(position);
+                    covered.relationships += 1;
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    repeated_rows.entry(edge).or_default().push(position);
+                }
+            }
         }
         stores.sort_by(|left, right| left.rel_type.cmp(&right.rel_type));
         Some(EdgeRowCoverage {
             edge_to_row,
+            repeated_rows,
             stores,
         })
     }
 }
 
-/// One store the rows route reads, and how many rows bind into it.
+/// One store the rows route reads, and how many distinct relationships of it
+/// the rows bind.
 struct CoveredStore<'s> {
     rel_type: String,
     store: &'s EdgeEmbeddingStore,
-    rows: usize,
+    relationships: usize,
 }
 
 struct EdgeRowCoverage<'s> {
     edge_to_row: FxHashMap<usize, usize>,
+    repeated_rows: FxHashMap<usize, Vec<usize>>,
     stores: Vec<CoveredStore<'s>>,
 }
 

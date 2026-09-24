@@ -28,6 +28,9 @@ pub(crate) mod carry;
 #[path = "edge_embedding_ingest.rs"]
 pub(crate) mod ingest;
 
+#[path = "edge_embedding_search.rs"]
+pub(crate) mod search;
+
 pub(crate) type EdgeEmbeddingKey = (String, String);
 
 const VACANT_EDGE: u32 = u32::MAX;
