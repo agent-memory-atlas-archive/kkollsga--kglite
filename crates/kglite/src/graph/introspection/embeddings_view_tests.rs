@@ -378,6 +378,14 @@ fn relationship_semantic_is_a_direct_topic_matching_the_functions_group() {
     );
     assert!(xml.contains("types:['A','B']"), "{xml}");
     assert!(xml.contains("MATCH ()-[r:A|B]->()"), "{xml}");
+    let caveat = line_with(&xml, "<caveat>");
+    assert!(
+        caveat.contains(
+            "vector_score(): no embedding 'col_emb' found for relationship type 'X', or \
+             text_score(): no embedding for property 'col' on relationship type 'X'"
+        ),
+        "{caveat}"
+    );
 
     let functions = CypherDetail::Topics(vec!["functions".to_string()]);
     request.cypher = &functions;

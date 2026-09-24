@@ -181,6 +181,18 @@ before upgrading.
   members apart, as in `export_embeddings()`. Rust:
   `kglite::api::embeddings::relationship_embeddings`.
 
+- **`describe()` now shows which embedding stores have an index.** A store with
+  an HNSW index shows `index="hnsw"` on its `<embeddings/>` element, for node
+  types and relationship types alike. On a relationship `<conn>` line the
+  attribute reads `embeddings="col(dim=D,count=N,hnsw)"`. A BM25 text index
+  shows as `<text_index property="p"/>` (`text_index="p"` on the `<conn>`
+  line). Before, an agent could not tell whether a query would be served by
+  an index. Nothing new is rendered when no index exists. Node stores are
+  listed in column order (they were in hash order). The relationship
+  `<semantic>` hint now states that stores are per relationship type and
+  property, and how to rank across types. `describe(cypher=
+  ['relationship_semantic'])` is now a topic of its own.
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
@@ -260,6 +272,16 @@ before upgrading.
 
   `type(r)`, `id(r)`, `properties(r)`, `keys(r)` and the Python relationship
   dict (`id`, `start`, `end`, `type`, `properties`) are unchanged.
+
+- **`shortestPath` and `allShortestPaths` respect the relationship's hop
+  bounds and refuse shapes they cannot search.** The bounds were ignored:
+  `*..2` returned a 3-hop path and `*2..5` a 1-hop one. A written maximum now
+  bounds the search (`*..3`, `*1..3`). A relationship without `*` is one hop.
+  An open form (`*`, `*1..`) is unbounded, as in openCypher; the 10-hop cap on
+  a variable-length `MATCH` is unchanged. A minimum other than 0 or 1 is now
+  a syntax error that quotes the written bound, as in Neo4j. So is a pattern
+  with more than one relationship, which used to search along the first
+  relationship only and return the middle node as NULL.
 
 ### Fixed
 
@@ -419,6 +441,7 @@ before upgrading.
   the target lacks are counted as skipped. The report dicts gain
   `relationship_*` counters; node-only reports keep their keys and values. A
   durable graph journals the import.
+
 - **`shortestPath` and `allShortestPaths` anchor at endpoints an earlier
   clause bound.** A bound endpoint was honoured only when both endpoints were
   pattern bindings from an earlier `MATCH`. With one bound endpoint, or a node
@@ -432,27 +455,7 @@ before upgrading.
   (`UNWIND [1,2] AS x MATCH p = shortestPath(…)` returns two rows). A free
   endpoint's property map can read row variables (`{name: nm}`). A `WHERE`
   directly after an opening `MATCH p = shortestPath(…)` is no longer ignored.
-- **`shortestPath` and `allShortestPaths` respect the relationship's hop
-  bounds and refuse shapes they cannot search.** The bounds were ignored:
-  `*..2` returned a 3-hop path and `*2..5` a 1-hop one. A written maximum now
-  bounds the search (`*..3`, `*1..3`). A relationship without `*` is one hop.
-  An open form (`*`, `*1..`) is unbounded, as in openCypher; the 10-hop cap on
-  a variable-length `MATCH` is unchanged. A minimum other than 0 or 1 is now
-  a syntax error that quotes the written bound, as in Neo4j. So is a pattern
-  with more than one relationship, which used to search along the first
-  relationship only and return the middle node as NULL.
 
-- **`describe()` now shows which embedding stores have an index.** A store with
-  an HNSW index shows `index="hnsw"` on its `<embeddings/>` element, for node
-  types and relationship types alike. On a relationship `<conn>` line the
-  attribute reads `embeddings="col(dim=D,count=N,hnsw)"`. A BM25 text index
-  shows as `<text_index property="p"/>` (`text_index="p"` on the `<conn>`
-  line). Before, an agent could not tell whether a query would be served by
-  an index. Nothing new is rendered when no index exists. Node stores are
-  listed in column order (they were in hash order). The relationship
-  `<semantic>` hint now states that stores are per relationship type and
-  property, and how to rank across types. `describe(cypher=
-  ['relationship_semantic'])` is now a topic of its own.
 - **A MATCH inline property map accepts the same values as a `CREATE` map.**
   Before, `UNWIND $rows AS row MATCH (d:Doc {id: row[0]})` failed with "Pattern
   parse error: Expected property key or '}'", a message about a key that was
@@ -463,6 +466,7 @@ before upgrading.
   reaches index lookups. A value that evaluates to NULL matches nothing, and
   one that fails to evaluate raises its error. A value that does not parse
   now gets the expression parser's message, which names the unexpected token.
+
 - **A `text_score()` call over a missing embedding store now names
   `text_score` and the property you wrote.** `text_score(d, 's', …)` on a
   type without embeddings for `s` used to report "vector_score(): no
