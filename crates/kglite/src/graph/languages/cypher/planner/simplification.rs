@@ -713,10 +713,42 @@ impl TextScoreCollector {
         Ok(())
     }
 
-    /// Rewrite every expression a clause can carry. One arm per clause kind;
-    /// the write-side property maps and SET-item lists are shared helpers
-    /// because CREATE and MERGE spell them identically.
+    /// Rewrite every expression a clause can carry: a dispatcher over the
+    /// read-side, write-side and procedure-call families below, plus the two
+    /// clause kinds that nest a whole query.
     fn rewrite_clause(
+        &mut self,
+        clause: &mut Clause,
+        params: &HashMap<String, Value>,
+    ) -> Result<(), String> {
+        match clause {
+            Clause::Return(_)
+            | Clause::Where(_)
+            | Clause::Filter(_)
+            | Clause::Match(_)
+            | Clause::OptionalMatch(_)
+            | Clause::With(_)
+            | Clause::OrderBy(_)
+            | Clause::Unwind(_)
+            | Clause::Skip(_)
+            | Clause::Limit(_) => self.rewrite_read_clause(clause, params),
+            Clause::Delete(_)
+            | Clause::Set(_)
+            | Clause::Create(_)
+            | Clause::Merge(_)
+            | Clause::LoadCsv(_)
+            | Clause::Foreach { .. } => self.rewrite_write_clause(clause, params),
+            Clause::Call(call) => self.rewrite_call(call, params),
+            Clause::CallSubquery { body, .. } => self.rewrite_query(body, params),
+            Clause::Union(union) => self.rewrite_query(&mut union.query, params),
+            // Remove: no expressions
+            // Fused clauses: don't exist yet (created by optimize, which runs after rewrite)
+            _ => Ok(()),
+        }
+    }
+
+    /// Projection, filter and pagination clauses.
+    fn rewrite_read_clause(
         &mut self,
         clause: &mut Clause,
         params: &HashMap<String, Value>,
@@ -751,9 +783,22 @@ impl TextScoreCollector {
                     self.rewrite_expr(&mut item.expression, params)?;
                 }
             }
-            Clause::Unwind(u) => {
-                self.rewrite_expr(&mut u.expression, params)?;
-            }
+            Clause::Unwind(u) => self.rewrite_expr(&mut u.expression, params)?,
+            Clause::Skip(s) => self.rewrite_expr(&mut s.count, params)?,
+            Clause::Limit(l) => self.rewrite_expr(&mut l.count, params)?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Write clauses. The property maps and SET-item lists are shared helpers
+    /// because CREATE and MERGE spell them identically.
+    fn rewrite_write_clause(
+        &mut self,
+        clause: &mut Clause,
+        params: &HashMap<String, Value>,
+    ) -> Result<(), String> {
+        match clause {
             Clause::Delete(d) => {
                 for expr in &mut d.expressions {
                     self.rewrite_expr(expr, params)?;
@@ -774,12 +819,6 @@ impl TextScoreCollector {
                     self.rewrite_set_items(items, params)?;
                 }
             }
-            Clause::Skip(s) => {
-                self.rewrite_expr(&mut s.count, params)?;
-            }
-            Clause::Limit(l) => {
-                self.rewrite_expr(&mut l.count, params)?;
-            }
             Clause::LoadCsv(load) => self.rewrite_expr(&mut load.source, params)?,
             Clause::Foreach { list, body, .. } => {
                 self.rewrite_expr(list, params)?;
@@ -787,22 +826,26 @@ impl TextScoreCollector {
                     self.rewrite_clause(clause, params)?;
                 }
             }
-            Clause::Call(call) => {
-                if call
-                    .procedure_name
-                    .eq_ignore_ascii_case(EDGE_EMBEDDINGS_QUERY)
-                {
-                    self.rewrite_edge_query_text(&mut call.parameters, params)?;
-                }
-                for (_, expression) in &mut call.parameters {
-                    self.rewrite_expr(expression, params)?;
-                }
-            }
-            Clause::CallSubquery { body, .. } => self.rewrite_query(body, params)?,
-            Clause::Union(union) => self.rewrite_query(&mut union.query, params)?,
-            // Remove: no expressions
-            // Fused clauses: don't exist yet (created by optimize, which runs after rewrite)
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// A procedure call: `db.edge_embeddings.query`'s `text:` is rewritten into
+    /// a `vector:` parameter first, then every argument expression as usual.
+    fn rewrite_call(
+        &mut self,
+        call: &mut CallClause,
+        params: &HashMap<String, Value>,
+    ) -> Result<(), String> {
+        if call
+            .procedure_name
+            .eq_ignore_ascii_case(EDGE_EMBEDDINGS_QUERY)
+        {
+            self.rewrite_edge_query_text(&mut call.parameters, params)?;
+        }
+        for (_, expression) in &mut call.parameters {
+            self.rewrite_expr(expression, params)?;
         }
         Ok(())
     }
