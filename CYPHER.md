@@ -695,17 +695,18 @@ or the same with `text_score` — is served from the store, as it is for nodes:
   every store is scanned exactly, so one answer never mixes approximate and
   exact candidates. On the rows route a store the filter covers only in part
   must still yield `k` candidates, or the query falls back to the exact top-k.
-  A type in play without the store raises the scalar's own error (`no
-  embedding 'p_emb' found for relationship type 'X'`), as a node label without
-  a store does. Each relationship is scored under its own store's metric,
+  A type in play without the store raises the scalar's own error
+  (`vector_score(): no embedding 'p_emb' found for relationship type 'X'`, or
+  `text_score(): no embedding for property 'p' on relationship type 'X'`), as a
+  node label without a store does. Each relationship is scored under its own store's metric,
   exactly as the unfused query scores it row by row.
 
 An HNSW answer is approximate; pass `{exact:true}` as the final argument to
 force the exact route. When scores tie at the cut, the ordinary pipeline
 answers, so the order is the one the unfused query gives.
 `diagnostics.retrieval` reports the route, with store
-`relationship:TYPE.property_emb` — a comma-separated list, in type order, when
-several stores were merged — and `disabled_passes=
+`relationship:TYPE.property_emb` — a comma-separated list sorted by
+relationship type when several stores were merged — and `disabled_passes=
 ['fuse_vector_score_order_limit']` turns the fusion off for nodes and
 relationships alike. `db.edge_embeddings.query` below ranks a whole store
 without a pattern.

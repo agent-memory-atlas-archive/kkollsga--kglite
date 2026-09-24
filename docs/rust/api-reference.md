@@ -85,7 +85,7 @@ import or copy then writes nothing. `embedding_dim`, `replace_connections`,
 | Item | Purpose |
 |---|---|
 | `set_embeddings` / `add_embeddings` / `embed_property` | Write node vectors: replace a store, upsert into one, or compute them through a bound `Embedder`. |
-| `build_vector_index` / `refresh_vector_index` / `drop_vector_index` / `has_vector_index` / `list_vector_indexes` | Node HNSW index lifecycle. A built index is saved in `.kgl` (node and relationship alike); disk generations keep neither. |
+| `build_vector_index` / `refresh_vector_index` / `drop_vector_index` / `has_vector_index` / `list_vector_indexes` | Node HNSW index lifecycle. A built index is saved in `.kgl` (node and relationship alike); disk generations keep neither. `refresh_vector_index` returns `Result<usize, String>`: the vectors it folded in (`0` when current or read-only), or an error when the store or its index does not exist — it never builds one. |
 | `list_embeddings(&graph)` → `Vec<EmbeddingStoreInfo>` | Node stores only. The C ABI publishes its `node_type` field verbatim, so relationship stores are not folded in. |
 | `list_edge_embeddings(&graph)` → `Vec<EdgeEmbeddingStoreInfo>` | Relationship stores, sorted by type and store. |
 | `embedding_info(&graph, EmbeddingEntity, type, column)` | Provenance for one store (dimension, count, model, effective metric, hashed). `EmbeddingEntity::{Node, Relationship}` is explicit because a node type and a relationship type may share a name. |
