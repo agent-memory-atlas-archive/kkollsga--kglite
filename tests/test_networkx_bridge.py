@@ -652,3 +652,111 @@ def test_from_networkx_int_and_whole_float_keys_are_one_family():
     g = kglite.from_networkx(nxg)
     assert g.len() == 2
     assert sorted(g.select("Node").ids()) == [1, 2]
+
+
+# ── node_type_attr / edge_type_attr: knwl / knwler exports ─────────────────
+
+
+def _knwler_style_graph():
+    """knwler's `create_network` shape: a MultiDiGraph keyed `name::type`, the
+    type in a `type` attribute on nodes and edges, integer edge keys."""
+    g = nx.MultiDiGraph()
+    g.add_node("doc", type="document", title="Moby Dick")
+    g.add_node("Ahab::person", name="Ahab", type="person", description="captain")
+    g.add_node("Moby Dick::animal", name="Moby Dick", type="animal", description="whale")
+    g.add_node("Pequod::ship", name="Pequod", type="ship", description="whaler")
+    g.add_edge("Ahab::person", "Moby Dick::animal", type="obsessed_with", description="hunts the whale")
+    g.add_edge("Ahab::person", "Pequod::ship", type="captains", description="commands the Pequod")
+    return g
+
+
+def test_type_attrs_become_labels_and_relationship_types():
+    kg = kglite.from_networkx(_knwler_style_graph(), node_type_attr="type", edge_type_attr="type")
+    labels = kg.cypher("MATCH (n) RETURN n.id AS id, labels(n) AS labels ORDER BY id").to_list()
+    assert labels == [
+        {"id": "Ahab::person", "labels": ["person"]},
+        {"id": "Moby Dick::animal", "labels": ["animal"]},
+        {"id": "Pequod::ship", "labels": ["ship"]},
+        {"id": "doc", "labels": ["document"]},
+    ]
+    rels = kg.cypher("MATCH (a)-[r]->(b) RETURN type(r) AS t, r.description AS d ORDER BY t").to_list()
+    assert rels == [
+        {"t": "captains", "d": "commands the Pequod"},
+        {"t": "obsessed_with", "d": "hunts the whale"},
+    ]
+    # Mirrors node_type/connection_type: the attribute that named the type is
+    # consumed exactly as they are, so the same graph spelled with those
+    # attributes imports to identical properties.
+    renamed = nx.MultiDiGraph()
+    for key, attrs in _knwler_style_graph().nodes(data=True):
+        renamed.add_node(key, **{("node_type" if k == "type" else k): v for k, v in attrs.items()})
+    for u, v, attrs in _knwler_style_graph().edges(data=True):
+        renamed.add_edge(u, v, **{("connection_type" if k == "type" else k): v2 for k, v2 in attrs.items()})
+    twin = kglite.from_networkx(renamed)
+    query = "MATCH (a)-[r]->(b) RETURN properties(a) AS a, properties(r) AS r, properties(b) AS b ORDER BY a.id, b.id"
+    assert kg.cypher(query).to_list() == twin.cypher(query).to_list()
+    # The one surface where a stored relationship `type` property would show.
+    assert '<prop name="type"' not in kg.describe(connections=["captains"])
+
+
+def test_default_attrs_keep_the_existing_behaviour():
+    kg = kglite.from_networkx(_knwler_style_graph())
+    assert kg.cypher("MATCH (n) RETURN DISTINCT labels(n) AS l").to_list() == [{"l": ["Node"]}]
+    assert kg.cypher("MATCH ()-[r]->() RETURN DISTINCT type(r) AS t").to_list() == [{"t": "RELATED"}]
+
+
+def test_a_named_node_attr_missing_on_some_nodes_is_refused_with_the_count():
+    g = _knwler_style_graph()
+    g.add_node("untyped", name="x")
+    g.add_node("blank", type="")
+    with pytest.raises(kglite.ArgumentError, match=r"node_type_attr='type' is missing on 2 of 6 nodes") as info:
+        kglite.from_networkx(g, node_type_attr="type", edge_type_attr="type")
+    assert "default_node_type" in str(info.value)
+
+
+def test_a_wrong_node_attr_name_is_refused_by_name():
+    with pytest.raises(kglite.ArgumentError, match=r"node_type_attr='label' is missing on 4 of 4 nodes"):
+        kglite.from_networkx(_knwler_style_graph(), node_type_attr="label", edge_type_attr="type")
+
+
+def test_a_named_edge_attr_missing_on_some_edges_is_refused_with_the_count():
+    g = _knwler_style_graph()
+    g.add_edge("Pequod::ship", "doc", description="no type")
+    with pytest.raises(kglite.ArgumentError, match=r"edge_type_attr='type' is missing on 1 of 3 edges") as info:
+        kglite.from_networkx(g, node_type_attr="type", edge_type_attr="type")
+    assert "default_edge_type" in str(info.value)
+
+
+def test_an_explicit_default_types_the_nodes_and_edges_missing_the_attr():
+    g = _knwler_style_graph()
+    g.add_node("untyped", name="x")
+    g.add_edge("Pequod::ship", "untyped", description="no type")
+    kg = kglite.from_networkx(
+        g, node_type_attr="type", edge_type_attr="type", default_node_type="Thing", default_edge_type="linked"
+    )
+    assert kg.cypher("MATCH (n:Thing) RETURN n.id AS id").to_list() == [{"id": "untyped"}]
+    assert kg.cypher("MATCH (:ship)-[r:linked]->(:Thing) RETURN count(r) AS n").to_list() == [{"n": 1}]
+
+
+def test_refusal_happens_before_anything_is_loaded():
+    """A refusal must not depend on which type bucket loads first."""
+    g = _knwler_style_graph()
+    g.add_edge("Ahab::person", "doc", description="untyped edge")
+    with pytest.raises(kglite.ArgumentError):
+        kglite.from_networkx(g, node_type_attr="type", edge_type_attr="type")
+
+
+def test_knwl_graphml_round_trips_with_the_type_attrs(tmp_path):
+    """knwl stores a MultiDiGraph with a `type` attribute on nodes and edges
+    and the edge type as the edge key, written with `nx.write_graphml`."""
+    g = nx.MultiDiGraph()
+    g.add_node("n1", id="n1", name="Alan Turing", type="Person", description="mathematician")
+    g.add_node("n2", id="n2", name="Enigma", type="Machine", description="cipher")
+    g.add_edge("n1", "n2", key="broke", id="e1", type="broke", weight=1.0, description="broke the cipher")
+    path = tmp_path / "graph.graphml"
+    nx.write_graphml(g, path, infer_numeric_types=True)
+    loaded = nx.read_graphml(path, force_multigraph=True)
+    kg = kglite.from_networkx(loaded, node_type_attr="type", edge_type_attr="type")
+    assert kg.cypher(
+        "MATCH (a:Person)-[r:broke]->(b:Machine) RETURN a.name AS a, b.name AS b, r.weight AS w"
+    ).to_list() == [{"a": "Alan Turing", "b": "Enigma", "w": 1.0}]

@@ -413,6 +413,10 @@ graph.operation_index()   # sequential index of last operation
 graph.report_history()    # all reports
 ```
 
+Knowledge graphs extracted by knwl or knwler load through a Cypher
+script, `from_networkx(..., node_type_attr="type", edge_type_attr="type")` or
+`from_records`: see [knwl / knwler exports](import-export.md#knwl--knwler-exports).
+
 ## N-Triples and RDF
 
 Two loaders read RDF, for two different jobs:

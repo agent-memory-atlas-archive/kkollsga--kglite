@@ -1644,8 +1644,10 @@ def attach_rows(
 def from_networkx(
     nx_graph: Any,
     *,
-    default_node_type: str = "Node",
-    default_edge_type: str = "RELATED",
+    default_node_type: Optional[str] = None,
+    default_edge_type: Optional[str] = None,
+    node_type_attr: Optional[str] = None,
+    edge_type_attr: Optional[str] = None,
 ) -> KnowledgeGraph:
     """Build a :class:`KnowledgeGraph` from a ``networkx`` graph.
 
@@ -1656,7 +1658,18 @@ def from_networkx(
     and a ``title`` attribute becomes the title (otherwise the id is used).
     Edges carrying a ``connection_type`` attribute (or, for a
     ``MultiDiGraph``, the edge key) use it as the edge type. Plain networkx
-    graphs get ``default_node_type`` / ``default_edge_type``.
+    graphs get ``default_node_type`` / ``default_edge_type`` (``"Node"`` /
+    ``"RELATED"`` when not given).
+
+    ``node_type_attr`` / ``edge_type_attr`` name a different attribute to
+    read the types from — ``"type"`` for knwl and knwler exports, whose
+    nodes and edges carry ``type`` — so each node gets that label and each
+    edge that relationship type. The named attribute is consumed, as
+    ``node_type`` / ``connection_type`` are, not also stored as a property.
+    Naming one makes it required: nodes (edges) that lack it or carry an
+    empty value are refused, with their count, before anything is loaded —
+    unless ``default_node_type`` (``default_edge_type``) is also given, which
+    then types them. See the knwl / knwler recipe in the import/export guide.
 
     A graph exported with ``to_networkx(node_key="type_id")`` round-trips
     without any extra argument: its ``(node_type, id)`` tuple keys are
@@ -1687,16 +1700,25 @@ def from_networkx(
 
     Args:
         nx_graph: A networkx graph instance.
-        default_node_type: Node type for nodes lacking a ``node_type`` attr.
-        default_edge_type: Edge type for edges lacking a ``connection_type`` attr.
+        default_node_type: Node type for nodes lacking the type attribute
+            (``"Node"`` when not given).
+        default_edge_type: Edge type for edges lacking the type attribute
+            (``"RELATED"`` when not given).
+        node_type_attr: Node attribute naming the node type. Unset, a
+            ``node_type`` attribute is used when present.
+        edge_type_attr: Edge attribute naming the relationship type. Unset, a
+            ``connection_type`` attribute (or a ``MultiDiGraph``'s string edge
+            key) is used when present.
 
     Returns:
         A new :class:`KnowledgeGraph`.
 
     Raises:
         ArgumentError: A node key cannot be stored as an id, one node type's
-            ids mix integer and string shapes, or the graph mixes
-            ``(node_type, id)`` export keys with other key shapes.
+            ids mix integer and string shapes, the graph mixes
+            ``(node_type, id)`` export keys with other key shapes, or a named
+            ``node_type_attr`` / ``edge_type_attr`` is missing on some nodes or
+            edges and no default was given.
 
     Example::
 

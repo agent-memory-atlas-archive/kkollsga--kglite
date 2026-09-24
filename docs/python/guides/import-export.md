@@ -409,6 +409,49 @@ than strings produced after an intermediate float rounded the integer. This is
 not a typed round-trip for heterogeneous columns. Optional `pandas` and
 `networkx` imports remain lazy until `from_networkx()` is called.
 
+## knwl / knwler exports
+
+[knwl](https://github.com/Orbifold/knwl) and
+[knwler](https://github.com/Orbifold/knwler) extract knowledge graphs from
+documents. Their exports load through three routes:
+
+- **Cypher script** (`knwl export --format cypher`). The script runs as
+  written, one statement at a time: split it on `;` and pass each statement to
+  `graph.cypher()`. Node labels and relationship types are the upper-cased
+  `type` values the exporter wrote.
+- **GraphML or a networkx graph.** Both tools store the type in a `type`
+  attribute on nodes and edges. By default `from_networkx` reads `node_type` /
+  `connection_type`, and without them everything loads as `Node` /
+  `RELATED`. Name the attribute instead:
+
+  ```python
+  import networkx as nx
+
+  nx_graph = nx.read_graphml("graph.graphml", force_multigraph=True)
+  graph = kglite.from_networkx(nx_graph, node_type_attr="type", edge_type_attr="type")
+  graph.cypher("MATCH (a)-[r]->(b) RETURN labels(a), type(r), labels(b) LIMIT 5")
+  ```
+
+  A named attribute is required on every node (edge). One that lacks it is
+  refused with a count before anything loads, unless `default_node_type` /
+  `default_edge_type` is also given. The attribute becomes the label or
+  relationship type and is not also stored as a property, as with `node_type`.
+- **knwler document JSON** (`chunks` plus a `graph` of `entities` and
+  `relations`). The runnable, network-free
+  [`examples/knwler_import.py`](https://github.com/kkollsga/kglite/blob/main/examples/knwler_import.py)
+  turns documents into a `from_records` spec. Entity ids are `name::type`, as
+  knwler's own `create_network` builds them. Relations are grouped into one
+  connection per relation type, `Document-[:CONTAINS]->Chunk` is added, and
+  `on_missing_endpoint='error'` refuses a relation whose endpoint names no
+  entity. It then embeds every relation type and ranks across all of them with
+  one `db.edge_embeddings.query` that names no `type` (see
+  [relationship retrieval across types](semantic-search.md)).
+
+One limitation shapes all three routes. A relationship type cannot come from a
+row value inside a single statement: `CREATE (a)-[:$(row.type)]->(b)` is
+refused, because `$(...)` takes a statement parameter, not a row expression.
+Group the rows by type, as the example does, or run one statement per type.
+
 ## Neo4j Export
 
 Push a graph (or the active selection) to a live Neo4j database over Bolt,

@@ -1657,7 +1657,7 @@
     },
     "from_networkx": {
       "kind": "function",
-      "signature": "(nx_graph, *, default_node_type: str = 'Node', default_edge_type: str = 'RELATED') -> 'KnowledgeGraph'"
+      "signature": "(nx_graph, *, default_node_type: str | None = None, default_edge_type: str | None = None, node_type_attr: str | None = None, edge_type_attr: str | None = None) -> 'KnowledgeGraph'"
     },
     "from_records": {
       "kind": "function",

@@ -21,6 +21,80 @@ if typing.TYPE_CHECKING:
 _IDENTITY_ATTRS = ("node_type", "title", "id")
 
 
+class _TypeSpec(typing.NamedTuple):
+    """Where node and relationship types come from.
+
+    ``*_attr`` is the attribute that names the type. ``*_strict`` is set when
+    the caller named that attribute: every node (edge) must then carry it,
+    unless the caller also named a ``default_*`` type (``*_default`` is then
+    that type). Unnamed, the historical lenient rule holds: ``node_type`` /
+    ``connection_type`` when present, else the default.
+    """
+
+    node_attr: str
+    node_default: str
+    node_strict: bool
+    edge_attr: str
+    edge_default: str
+    edge_strict: bool
+
+    def node_type(self, attrs: typing.Any) -> str:
+        value = attrs.get(self.node_attr)
+        return self.node_default if _missing_type(value) else str(value)
+
+    def edge_type(self, attrs: typing.Any) -> typing.Any:
+        """The edge's type, or ``None`` when the attribute is absent (the
+        caller then applies the multigraph-key and default fallbacks)."""
+        value = attrs.get(self.edge_attr)
+        return None if _missing_type(value) else str(value)
+
+
+def _missing_type(value: typing.Any) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _type_spec(
+    node_type_attr: typing.Optional[str],
+    edge_type_attr: typing.Optional[str],
+    default_node_type: typing.Optional[str],
+    default_edge_type: typing.Optional[str],
+) -> _TypeSpec:
+    return _TypeSpec(
+        node_attr=node_type_attr or "node_type",
+        node_default=default_node_type or "Node",
+        node_strict=node_type_attr is not None and default_node_type is None,
+        edge_attr=edge_type_attr or "connection_type",
+        edge_default=default_edge_type or "RELATED",
+        edge_strict=edge_type_attr is not None and default_edge_type is None,
+    )
+
+
+def _reject_missing_type_attrs(nx_graph: typing.Any, spec: _TypeSpec, key_mode: str) -> None:
+    """Refuse a named type attribute that some nodes or edges lack, before any
+    row is loaded — the lenient default would otherwise file them under
+    ``Node`` / ``RELATED`` without a word."""
+    from . import ArgumentError
+
+    if spec.node_strict and key_mode != "type_id":
+        missing = [key for key, attrs in nx_graph.nodes(data=True) if _missing_type(attrs.get(spec.node_attr))]
+        if missing:
+            raise ArgumentError(
+                f"from_networkx(): node_type_attr={spec.node_attr!r} is missing on {len(missing)} of "
+                f"{nx_graph.number_of_nodes()} nodes (first: {missing[0]!r}). Check the attribute name, "
+                f"set it on every node, or pass default_node_type='...' to type the rest."
+            )
+    if spec.edge_strict:
+        missing_edges = [
+            (u, v) for u, v, attrs in nx_graph.edges(data=True) if _missing_type(attrs.get(spec.edge_attr))
+        ]
+        if missing_edges:
+            raise ArgumentError(
+                f"from_networkx(): edge_type_attr={spec.edge_attr!r} is missing on {len(missing_edges)} of "
+                f"{nx_graph.number_of_edges()} edges (first: {missing_edges[0]!r}). Check the attribute name, "
+                f"set it on every edge, or pass default_edge_type='...' to type the rest."
+            )
+
+
 def _is_type_id_key(key: typing.Any, attrs: typing.Any) -> bool:
     """Whether ``key`` is the ``(node_type, id)`` tuple that
     ``to_networkx(node_key="type_id")`` emits.
@@ -192,7 +266,7 @@ def _reject_unrepresentable_ids(nx_graph: typing.Any, key_mode: str) -> None:
     )
 
 
-def _reject_mixed_id_families(nx_graph: typing.Any, key_mode: str, default_node_type: str) -> None:
+def _reject_mixed_id_families(nx_graph: typing.Any, key_mode: str, spec: _TypeSpec) -> None:
     """Refuse a node type whose ids are individually storable but cannot share
     a column.
 
@@ -213,7 +287,7 @@ def _reject_mixed_id_families(nx_graph: typing.Any, key_mode: str, default_node_
         if key_mode == "type_id":
             ntype, node_id = str(key[0]), key[1]
         else:
-            ntype, node_id = str(attrs.get("node_type", default_node_type)), key
+            ntype, node_id = spec.node_type(attrs), key
         families = per_type[ntype]
         family = _id_family(node_id)
         entry = families.get(family)
@@ -227,7 +301,7 @@ def _reject_mixed_id_families(nx_graph: typing.Any, key_mode: str, default_node_
 
 
 def _collect_nodes(
-    nx_graph: typing.Any, key_mode: str, default_node_type: str
+    nx_graph: typing.Any, key_mode: str, spec: _TypeSpec
 ) -> tuple[dict[str, list[dict]], dict[typing.Any, str]]:
     """Group nodes into per-type row dicts, and index key -> node_type so the
     edge pass can name both endpoint types.
@@ -241,11 +315,12 @@ def _collect_nodes(
         if key_mode == "type_id":
             ntype, node_id = key[0], key[1]
         else:
-            ntype, node_id = str(attrs.get("node_type", default_node_type)), key
+            ntype, node_id = spec.node_type(attrs), key
             type_of_node[key] = ntype
         row: dict[str, typing.Any] = {"id": node_id, "title": attrs.get("title", node_id)}
         for k, v in attrs.items():
-            if k in _IDENTITY_ATTRS:
+            # The type attribute is consumed like `node_type`, never re-stored.
+            if k in _IDENTITY_ATTRS or k == spec.node_attr:
                 continue
             row[k] = v
         nodes_by_type[ntype].append(row)
@@ -256,8 +331,7 @@ def _collect_edges(
     nx_graph: typing.Any,
     key_mode: str,
     type_of_node: dict[typing.Any, str],
-    default_node_type: str,
-    default_edge_type: str,
+    spec: _TypeSpec,
 ) -> dict[tuple[str, str, str], list[dict]]:
     """Group edges by (connection_type, source_type, target_type).
 
@@ -274,20 +348,23 @@ def _collect_edges(
         else:
             u, v, attrs = rec
             ekey = None
-        ctype = attrs.get("connection_type")
+        ctype = spec.edge_type(attrs)
         if ctype is None:
             # MultiDiGraph from to_networkx() uses connection_type as the
-            # edge key; fall back to it, then to the default.
-            ctype = ekey if (is_multigraph and isinstance(ekey, str)) else default_edge_type
+            # edge key; fall back to it, then to the default. A named
+            # attribute has no key fallback: its absence was refused earlier
+            # unless the caller named a default.
+            lenient_key = is_multigraph and isinstance(ekey, str) and not spec.edge_strict
+            ctype = ekey if lenient_key and spec.edge_attr == "connection_type" else spec.edge_default
         if key_mode == "type_id":
             (stype, src), (ttype, tgt) = u, v
         else:
-            stype = type_of_node.get(u, default_node_type)
-            ttype = type_of_node.get(v, default_node_type)
+            stype = type_of_node.get(u, spec.node_default)
+            ttype = type_of_node.get(v, spec.node_default)
             src, tgt = u, v
         row = {"src": src, "tgt": tgt}
         for k, val in attrs.items():
-            if k == "connection_type":
+            if k in ("connection_type", spec.edge_attr):
                 continue
             row[k] = val
         edges_by_key[(str(ctype), stype, ttype)].append(row)
@@ -348,8 +425,10 @@ def _is_nan(value):
 def from_networkx(
     nx_graph: typing.Any,
     *,
-    default_node_type: str = "Node",
-    default_edge_type: str = "RELATED",
+    default_node_type: typing.Optional[str] = None,
+    default_edge_type: typing.Optional[str] = None,
+    node_type_attr: typing.Optional[str] = None,
+    edge_type_attr: typing.Optional[str] = None,
 ) -> "KnowledgeGraph":
     """Build a :class:`KnowledgeGraph` from a ``networkx`` graph.
 
@@ -373,7 +452,17 @@ def from_networkx(
     ones raises rather than importing the half it understands.
 
     Plain networkx graphs (no ``node_type`` / ``connection_type`` attrs)
-    get ``default_node_type`` and ``default_edge_type``. Node keys must be
+    get ``default_node_type`` and ``default_edge_type`` (``"Node"`` and
+    ``"RELATED"`` when not given).
+
+    ``node_type_attr`` / ``edge_type_attr`` name the attribute that carries
+    the type instead — ``"type"`` for a knwl or knwler export — so each node
+    gets that label and each edge that relationship type. The named
+    attribute is consumed, as ``node_type`` is, not also stored as a
+    property. Naming one makes it required: a node (edge) that lacks it, or
+    carries an empty value, is refused with the count before anything is
+    loaded — unless ``default_node_type`` (``default_edge_type``) is also
+    given, which then types the ones that lack it. Node keys must be
     storable as ids (integers or strings); a key that is not — a foreign
     tuple label, a fractional float — raises before anything is loaded,
     rather than being dropped row by row into a smaller graph. Within one
@@ -394,16 +483,25 @@ def from_networkx(
 
     Args:
         nx_graph: A networkx graph instance.
-        default_node_type: Node type for nodes lacking a ``node_type`` attr.
-        default_edge_type: Edge type for edges lacking a ``connection_type`` attr.
+        default_node_type: Node type for nodes lacking the type attribute
+            (``"Node"`` when not given).
+        default_edge_type: Edge type for edges lacking the type attribute
+            (``"RELATED"`` when not given).
+        node_type_attr: Node attribute naming the node type. Unset, a
+            ``node_type`` attribute is used when present.
+        edge_type_attr: Edge attribute naming the relationship type. Unset, a
+            ``connection_type`` attribute (or a ``MultiDiGraph``'s string
+            edge key) is used when present.
 
     Returns:
         A new :class:`KnowledgeGraph`.
 
     Raises:
         ArgumentError: A node key cannot be stored as an id, one node type's
-            ids mix integer and string shapes, or the graph mixes
-            ``(node_type, id)`` export keys with other key shapes.
+            ids mix integer and string shapes, the graph mixes
+            ``(node_type, id)`` export keys with other key shapes, or a named
+            ``node_type_attr`` / ``edge_type_attr`` is missing on some nodes
+            or edges and no default was given.
 
     Example::
 
@@ -429,18 +527,20 @@ def from_networkx(
 
     # Settle the key shape and reject unusable ids BEFORE the first
     # add_nodes call, so a refusal never leaves a half-built graph behind.
+    spec = _type_spec(node_type_attr, edge_type_attr, default_node_type, default_edge_type)
     key_mode = _node_key_mode(nx_graph)
     _reject_unrepresentable_ids(nx_graph, key_mode)
-    _reject_mixed_id_families(nx_graph, key_mode, default_node_type)
+    _reject_missing_type_attrs(nx_graph, spec, key_mode)
+    _reject_mixed_id_families(nx_graph, key_mode, spec)
 
     g = KnowledgeGraph()
 
-    nodes_by_type, type_of_node = _collect_nodes(nx_graph, key_mode, default_node_type)
+    nodes_by_type, type_of_node = _collect_nodes(nx_graph, key_mode, spec)
     for ntype, rows in nodes_by_type.items():
         df = _ingestion_frame(rows, ("id", "title"))
         g.add_nodes(df, ntype, "id", "title")
 
-    edges_by_key = _collect_edges(nx_graph, key_mode, type_of_node, default_node_type, default_edge_type)
+    edges_by_key = _collect_edges(nx_graph, key_mode, type_of_node, spec)
     for (ctype, stype, ttype), rows in edges_by_key.items():
         df = _ingestion_frame(rows, ("src", "tgt"))
         g.add_connections(

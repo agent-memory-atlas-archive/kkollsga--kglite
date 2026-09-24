@@ -273,8 +273,10 @@ def attach_rows(graph, parent_type, parent_id, data, *, row_type, edge_type, key
 def from_networkx(
     nx_graph,
     *,
-    default_node_type: str = "Node",
-    default_edge_type: str = "RELATED",
+    default_node_type: str | None = None,
+    default_edge_type: str | None = None,
+    node_type_attr: str | None = None,
+    edge_type_attr: str | None = None,
 ) -> "KnowledgeGraph":
     """Build a :class:`KnowledgeGraph` from a ``networkx`` graph.
 
@@ -283,6 +285,8 @@ def from_networkx(
     ``node_key="type_id"`` export — the ``(node_type, id)`` tuple keys are
     detected and unwrapped automatically. A node key that cannot be stored
     as an id raises :class:`ArgumentError` rather than being dropped.
+    ``node_type_attr`` / ``edge_type_attr`` name the attributes that carry
+    the node and relationship types (``"type"`` for knwl / knwler exports).
     Requires the ``networkx`` package: ``pip install networkx``.
     """
     from .networkx_interop import from_networkx as _from_networkx
@@ -291,6 +295,8 @@ def from_networkx(
         nx_graph,
         default_node_type=default_node_type,
         default_edge_type=default_edge_type,
+        node_type_attr=node_type_attr,
+        edge_type_attr=edge_type_attr,
     )
 
 

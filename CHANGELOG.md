@@ -156,6 +156,16 @@ before upgrading.
   store; `diagnostics.retrieval` lists the stores it read. A type in play
   without the store still raises the scalar's error.
 
+- **`from_networkx(..., node_type_attr=, edge_type_attr=)`** names the node
+  and edge attribute that carries the type. Pass `"type"` for knwl or knwler
+  exports, which otherwise loaded as `Node` / `RELATED`. A named attribute is
+  required: nodes or edges that lack it are refused with a count before
+  anything loads, unless `default_node_type` / `default_edge_type` is also
+  given. Existing calls behave as before. A runnable
+  `examples/knwler_import.py` loads knwler document JSON through
+  `from_records` and ranks relations across types, and the import guide has a
+  knwl / knwler section.
+
 ### Changed
 
 - Rust callers constructing `RelValue` should use `RelValue::new(...)`; existing
