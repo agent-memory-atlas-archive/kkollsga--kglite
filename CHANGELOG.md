@@ -161,7 +161,8 @@ before upgrading.
   exports, which otherwise loaded as `Node` / `RELATED`. A named attribute is
   required: nodes or edges that lack it are refused with a count before
   anything loads, unless `default_node_type` / `default_edge_type` is also
-  given. Existing calls behave as before. A runnable
+  given. On a `(node_type, id)`-keyed export the key names the type and the
+  attribute stays an ordinary property. Existing calls behave as before. A runnable
   `examples/knwler_import.py` loads knwler document JSON through
   `from_records` and ranks relations across types, and the import guide has a
   knwl / knwler section.
@@ -264,8 +265,9 @@ before upgrading.
   store any of these keys on relationships now read them back. Queries over
   relationships without them return what they did before, with three
   exceptions:
-  - on a MATCH variable, `r.id`, `r.start` and `r.end` now give the envelope
-    value instead of `null`;
+  - on a MATCH variable, `r.id`, `r.start` and `` r.`end` `` (`end` is
+    reserved, so it is backticked) now give the envelope value instead of
+    `null`;
   - on a relationship value, `start` and `end` give the endpoint's node id
     instead of its internal index;
   - `connection_type` now falls back on values as well as on MATCH variables.
@@ -472,8 +474,9 @@ before upgrading.
   type without embeddings for `s` used to report "vector_score(): no
   embedding 's_emb' found for node type 'D'". It now reports
   "text_score(): no embedding for property 's' on node type 'D'" and says how
-  to embed it: `embed_texts('D', 's')` for nodes, `CALL
-  db.edge_embeddings.embed({type, text_property})` for relationships. This
+  to embed it: `embed_texts('D', 's')` for nodes, `MATCH ()-[r:C]->() WITH
+  collect(r) AS rs CALL db.edge_embeddings.embed({type, text_property,
+  relationships: rs})` for relationships. This
   holds in projections, WHERE filters and fused top-k. A direct
   `vector_score()` call keeps its store-name message.
 

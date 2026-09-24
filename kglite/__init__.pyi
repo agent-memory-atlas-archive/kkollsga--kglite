@@ -1669,7 +1669,10 @@ def from_networkx(
     Naming one makes it required: nodes (edges) that lack it or carry an
     empty value are refused, with their count, before anything is loaded —
     unless ``default_node_type`` (``default_edge_type``) is also given, which
-    then types them. See the knwl / knwler recipe in the import/export guide.
+    then types them. On a graph keyed by ``(node_type, id)`` export tuples the
+    key names the type: ``node_type_attr`` is neither read nor consumed there,
+    and an attribute of that name stays an ordinary property. See the knwl /
+    knwler recipe in the import/export guide.
 
     A graph exported with ``to_networkx(node_key="type_id")`` round-trips
     without any extra argument: its ``(node_type, id)`` tuple keys are

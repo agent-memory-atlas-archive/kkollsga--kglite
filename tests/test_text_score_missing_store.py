@@ -50,7 +50,11 @@ def test_relationship_message_names_text_score_and_the_property(graph, query):
         graph.cypher(query)
     message = str(error.value)
     assert "text_score(): no embedding for property 's' on relationship type 'R'" in message
-    assert "db.edge_embeddings.embed" in message
+    # The remedy must run as written: embed() requires `relationships`.
+    assert (
+        "MATCH ()-[r:R]->() WITH collect(r) AS rs CALL db.edge_embeddings.embed("
+        "{type: 'R', text_property: 's', relationships: rs})" in message
+    )
     assert "vector_score" not in message and "s_emb" not in message
 
 

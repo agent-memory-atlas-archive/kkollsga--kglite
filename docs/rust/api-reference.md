@@ -89,6 +89,7 @@ import or copy then writes nothing. `embedding_dim`, `replace_connections`,
 | `list_embeddings(&graph)` → `Vec<EmbeddingStoreInfo>` | Node stores only. The C ABI publishes its `node_type` field verbatim, so relationship stores are not folded in. |
 | `list_edge_embeddings(&graph)` → `Vec<EdgeEmbeddingStoreInfo>` | Relationship stores, sorted by type and store. |
 | `embedding_info(&graph, EmbeddingEntity, type, column)` | Provenance for one store (dimension, count, model, effective metric, hashed). `EmbeddingEntity::{Node, Relationship}` is explicit because a node type and a relationship type may share a name. |
+| `relationship_embeddings(&graph, relationship_type, text_column, &RelationshipKeys)` → `Result<Vec<RelationshipEmbedding>, String>` | Every vector in a relationship store, addressed by endpoint `(type, id)` and ordered by source, target, key, slot — the edge-list plus edge-feature shape. Parallel relationships are told apart by the key property named for their type in `RelationshipKeys`; a named key missing on a member, or repeated within a group, is refused by name. |
 | `embedding_diagnostics(&graph, node_type, relationship_type)` | Coverage rows (`EmbeddingDiagnostic`: an `EmbeddingCoverage` of embedded / embeddable / store-orphan, with `LengthStats`) for node and relationship types. With no filter, every node type and every relationship type is scanned. |
 
 Relationship vectors are written and queried through Cypher

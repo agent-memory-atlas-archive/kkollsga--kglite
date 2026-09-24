@@ -477,6 +477,21 @@ def test_from_networkx_tuple_key_without_node_type_attr_raises():
         kglite.from_networkx(nxg)
 
 
+def test_from_networkx_type_id_keys_leave_node_type_attr_as_a_property():
+    """On a `(node_type, id)`-keyed graph the key names the type, so a named
+    `node_type_attr` is neither required nor consumed: a node without it is
+    not refused, and one carrying it keeps it as an ordinary property."""
+    nxg = nx.MultiDiGraph()
+    nxg.add_node(("Person", 1), node_type="Person", title="Alice", type="vip")
+    nxg.add_node(("Person", 2), node_type="Person", title="Bob")
+    kg = kglite.from_networkx(nxg, node_type_attr="type")
+    rows = kg.cypher("MATCH (n) RETURN n.id AS id, labels(n) AS labels, n.type AS type ORDER BY id").to_list()
+    assert rows == [
+        {"id": 1, "labels": ["Person"], "type": "vip"},  # the stored property survived
+        {"id": 2, "labels": ["Person"], "type": "Person"},  # no stored `type`: the label fallback
+    ]
+
+
 def test_from_networkx_fractional_float_key_raises_naming_the_count():
     """A fractional float is the quiet half of the shrinkage class: node 1
     imports, node 1.5 drops, and the caller is handed a smaller graph."""

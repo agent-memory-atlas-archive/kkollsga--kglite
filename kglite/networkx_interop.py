@@ -319,8 +319,10 @@ def _collect_nodes(
             type_of_node[key] = ntype
         row: dict[str, typing.Any] = {"id": node_id, "title": attrs.get("title", node_id)}
         for k, v in attrs.items():
-            # The type attribute is consumed like `node_type`, never re-stored.
-            if k in _IDENTITY_ATTRS or k == spec.node_attr:
+            # The type attribute is consumed like `node_type`, never re-stored —
+            # only where it was read: a `(node_type, id)` key names the type
+            # itself, and the attribute stays an ordinary property there.
+            if k in _IDENTITY_ATTRS or (k == spec.node_attr and key_mode != "type_id"):
                 continue
             row[k] = v
         nodes_by_type[ntype].append(row)

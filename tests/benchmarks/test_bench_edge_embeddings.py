@@ -289,7 +289,13 @@ def test_bench_edge_cross_type_query_3x_10k_128(benchmark, query_twins, cross_ty
     assert rows[0] == QUERY_N // 4 + 370
     merged_min = min(benchmark.stats.stats.data)
     benchmark.extra_info.update({"single_store_min_s": single_min, "merged_over_single": merged_min / single_min})
-    assert merged_min <= MAX_RATIO * single_min, f"cross-type query {merged_min / single_min:.2f}x the single store"
+    # Exact ranks the same 10k vectors either way, so the merge must be free.
+    # An HNSW search costs its ef-bound walk, not its store size, so three
+    # stores cost three searches (release: 1.72x); the bound is one search per
+    # store — a merge that re-ranks every candidate, or an unindexed store
+    # (search_method already pins hnsw per row), is what it catches.
+    limit = MAX_RATIO if exact else float(len(CROSS_TYPES))
+    assert merged_min <= limit * single_min, f"cross-type query {merged_min / single_min:.2f}x the single store"
 
 
 class _MatrixEmbedder:

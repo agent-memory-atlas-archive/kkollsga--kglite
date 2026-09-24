@@ -971,8 +971,9 @@ impl CypherExecutor<'_> {
         match self.text_score_property(prop_name) {
             Some(property) => format!(
                 "{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on relationship type \
-                 '{relationship_type}'. Embed it first with CALL db.edge_embeddings.embed(\
-                 {{type: '{relationship_type}', text_property: '{property}'}})."
+                 '{relationship_type}'. Embed it first with MATCH ()-[r:{relationship_type}]->() \
+                 WITH collect(r) AS rs CALL db.edge_embeddings.embed({{type: \
+                 '{relationship_type}', text_property: '{property}', relationships: rs}})."
             ),
             None => format!(
                 "{NO_EMBEDDING_PREFIX}{prop_name}' found for relationship type \

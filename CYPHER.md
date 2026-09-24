@@ -239,13 +239,17 @@ graph.cypher("MATCH ()-[r:RATED]->(m) RETURN m.title, r.score ORDER BY r.score D
 
 A stored property always wins, as it does on a node. A relationship with no
 property of that name answers `r.type` (and `r.connection_type`) with its
-type, `r.id` with `id(r)`, and `r.start` / `r.start_id` / `r.end` / `r.end_id`
-with the endpoint ids (`id(startNode(r))`, `id(endNode(r))`). A relationship
+type, `r.id` with `id(r)`, and `r.start` / `r.start_id` / `` r.`end` `` /
+`r.end_id` with the endpoint ids (`id(startNode(r))`, `id(endNode(r))`; `end`
+is a reserved word, so it is backticked). A relationship
 that stores `type` or `id`, as graphs imported from LLM extractors often do,
 reads those values back in every clause. The rule is the same for a MATCH
 variable and for a relationship value from `collect`, `UNWIND`,
 `relationships(p)` or `YIELD relationship`. `type(r)`, `id(r)`,
-`startNode(r)` and `endNode(r)` always read the relationship itself.
+`startNode(r)` and `endNode(r)` always read the relationship itself. A
+relationship pattern map (`-[r {type: 'x'}]->`) and `MERGE` match stored
+properties only, so `{type: 'R'}` finds no relationship that merely *is* an
+`R`; write `WHERE r.type = 'R'` to include the fallback.
 
 `SET` / `REMOVE` work on a relationship variable, so you can upsert edge
 properties — including via `MERGE`:
