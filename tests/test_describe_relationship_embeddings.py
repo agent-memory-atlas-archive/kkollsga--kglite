@@ -129,3 +129,79 @@ def test_conn_embeddings_attribute_agrees_across_storage_modes(tmp_path: Path) -
     assert lines["memory"]["embeddings"] == "body(dim=2,count=1)"
     assert lines["mapped"] == lines["memory"]
     assert lines["disk"] == lines["memory"]
+
+
+# ── index presence (rendered surface), both entities ────────────────────────
+
+
+def _indexed(graph: KnowledgeGraph, *, node_hnsw=False, edge_hnsw=False, node_bm25=False, edge_bm25=False):
+    if node_hnsw:
+        graph.build_vector_index("SUPPORTS", "body")
+    if edge_hnsw:
+        graph.cypher(
+            "CALL db.edge_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) YIELD indexed RETURN indexed"
+        )
+    if node_bm25:
+        graph.build_text_index("SUPPORTS", "body")
+    if edge_bm25:
+        graph.cypher("CALL db.edge_text_index.build({type:'SUPPORTS', property:'body'}) YIELD indexed RETURN indexed")
+    return graph
+
+
+def _node_embeddings(xml: str) -> list[dict]:
+    (node_type,) = [element for element in ET.fromstring(xml).iter() if element.get("name") == "SUPPORTS"]
+    return [dict(e.attrib) for e in node_type.iter("embeddings")]
+
+
+def test_hnsw_presence_is_shown_for_both_entities() -> None:
+    graph = _indexed(_graph(True, True), node_hnsw=True, edge_hnsw=True)
+    xml = graph.describe()
+    assert _conn(xml).get("embeddings") == "body(dim=2,count=1,hnsw)"
+    assert _node_embeddings(xml) == [{"text_col": "body", "dim": "3", "count": "2", "index": "hnsw"}]
+    detail = ET.fromstring(graph.describe(connections=["SUPPORTS"]))
+    assert [dict(e.attrib) for e in detail.iter("embeddings")] == [
+        {"text_col": "body", "dim": "2", "count": "1", "index": "hnsw"}
+    ]
+
+
+def test_a_graph_with_only_relationship_indexes_marks_only_the_relationship() -> None:
+    graph = _indexed(_graph(True, True), edge_hnsw=True, edge_bm25=True)
+    xml = graph.describe()
+    conn = _conn(xml)
+    assert conn.get("embeddings") == "body(dim=2,count=1,hnsw)"
+    assert conn.get("text_index") == "body"
+    assert _node_embeddings(xml) == [{"text_col": "body", "dim": "3", "count": "2"}]
+    (node_type,) = [element for element in ET.fromstring(xml).iter() if element.get("name") == "SUPPORTS"]
+    assert list(node_type.iter("text_index")) == []
+
+
+def test_bm25_presence_is_shown_for_both_entities() -> None:
+    graph = _indexed(_graph(False, False), node_bm25=True, edge_bm25=True)
+    xml = graph.describe()
+    assert _conn(xml).get("text_index") == "body"
+    (node_type,) = [element for element in ET.fromstring(xml).iter() if element.get("name") == "SUPPORTS"]
+    assert [e.get("property") for e in node_type.iter("text_index")] == ["body"]
+    detail = ET.fromstring(graph.describe(connections=["SUPPORTS"]))
+    assert [e.get("property") for e in detail.iter("text_index")] == ["body"]
+
+
+def test_without_indexes_the_description_is_unchanged_by_index_rendering() -> None:
+    graph = _graph(True, True)
+    for xml in (graph.describe(), graph.describe(connections=["SUPPORTS"]), graph.describe(types=["SUPPORTS"])):
+        assert "hnsw" not in xml
+        assert "text_index" not in xml
+    assert _conn(graph.describe()).get("embeddings") == "body(dim=2,count=1)"
+
+
+def test_relationship_semantic_is_a_direct_topic() -> None:
+    topic = ET.fromstring(KnowledgeGraph().describe(cypher=["relationship_semantic"]))
+    (element,) = [e for e in topic.iter("topic") if e.get("name") == "relationship_semantic"]
+    summary = element.find("summary").text
+    assert "Stores are per (relationship type, text property)" in summary
+    assert "types:['A','B']" in element.find("usage").text
+    functions = ET.fromstring(KnowledgeGraph().describe(cypher=["functions"]))
+    (group,) = [e for e in functions.iter("group") if e.get("name") == "relationship_semantic"]
+    assert group.text == summary
+    hint = _semantic(_graph(False, True).describe())
+    assert "stores are per relationship type and text property" in hint
+    assert "describe(cypher=['relationship_semantic'])" in hint

@@ -532,7 +532,10 @@ From Python, `list_embeddings()` and `embedding_diagnostics()` report
 relationship stores as `entity='relationship'` rows. `embedding_info(type, col,
 entity='relationship')` reads one relationship store; the keyword keeps a node
 type and a relationship type of the same name apart. `describe()` shows each
-relationship store on its `<conn>` line and in `describe(connections=['T'])`.
+relationship store on its `<conn>` line and in `describe(connections=['T'])`,
+marked `hnsw` once an index is built, as it marks node stores (a BM25 index
+shows as `text_index`). `describe(cypher=['relationship_semantic'])` gathers
+the relationship scoring, cross-type ranking and index lifecycle in one topic.
 
 The `query` procedure ranks the complete declared store before later clauses
 run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not

@@ -263,3 +263,144 @@ fn the_cypher_reference_names_the_relationship_text_index_procedures() {
     assert!(lexical.contains("text_bm25(r, 'prop'"), "{lexical}");
     assert!(lexical.contains("db.edge_text_index.build"), "{lexical}");
 }
+
+// ── index presence, both entities ─────────────────────────────────────
+
+fn with_vector_indexes(mut graph: DirGraph, node: bool, edge: bool) -> DirGraph {
+    if node {
+        crate::graph::embeddings::build_vector_index(
+            &mut graph, "SUPPORTS", "body", None, None, None, None, None,
+        )
+        .unwrap();
+    }
+    if edge {
+        run(
+            &mut graph,
+            "CALL db.edge_embeddings.build_index({type:'SUPPORTS', text_property:'body'}) \
+             YIELD indexed RETURN indexed",
+        );
+    }
+    graph
+}
+
+fn node_detail(graph: &DirGraph) -> String {
+    let types = ["SUPPORTS".to_string()];
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    request.types = Some(&types);
+    compute_description(graph, &request).unwrap()
+}
+
+#[test]
+fn an_hnsw_index_is_shown_on_both_entities_stores() {
+    let graph = with_vector_indexes(graph(true, true), true, true);
+    let xml = inventory(&graph);
+    assert_eq!(
+        line_with(&xml, "<conn type=\"SUPPORTS\"").trim(),
+        "<conn type=\"SUPPORTS\" count=\"2\" from=\"SUPPORTS\" to=\"SUPPORTS\" \
+         properties=\"body:String\" embeddings=\"body(dim=2,count=1,hnsw)\"/>"
+    );
+    let detail = describe_with(&graph, &ConnectionDetail::Topics(vec!["SUPPORTS".into()]));
+    assert_eq!(
+        line_with(&detail, "<embeddings "),
+        "    <embeddings text_col=\"body\" dim=\"2\" count=\"1\" index=\"hnsw\"/>"
+    );
+    assert!(
+        node_detail(&graph)
+            .contains("<embeddings text_col=\"body\" dim=\"3\" count=\"2\" index=\"hnsw\"/>"),
+        "{}",
+        node_detail(&graph)
+    );
+    // Only the relationship store indexed: the node store says nothing.
+    let edge_only = with_vector_indexes(self::graph(true, true), false, true);
+    assert!(
+        node_detail(&edge_only).contains("<embeddings text_col=\"body\" dim=\"3\" count=\"2\"/>")
+    );
+    assert!(inventory(&edge_only).contains("embeddings=\"body(dim=2,count=1,hnsw)\""));
+}
+
+#[test]
+fn a_bm25_index_is_shown_on_both_entities() {
+    let graph = with_text_indexes(self::graph(false, false), true, true);
+    let xml = inventory(&graph);
+    assert_eq!(
+        line_with(&xml, "<conn type=\"SUPPORTS\"").trim(),
+        "<conn type=\"SUPPORTS\" count=\"2\" from=\"SUPPORTS\" to=\"SUPPORTS\" \
+         properties=\"body:String\" text_index=\"body\"/>"
+    );
+    let detail = describe_with(&graph, &ConnectionDetail::Topics(vec!["SUPPORTS".into()]));
+    assert_eq!(
+        line_with(&detail, "<text_index "),
+        "    <text_index property=\"body\"/>"
+    );
+    assert!(
+        node_detail(&graph).contains("<text_index property=\"body\"/>"),
+        "{}",
+        node_detail(&graph)
+    );
+    // A relationship index alone leaves the node type's view untouched.
+    let edge_only = with_text_indexes(self::graph(false, false), false, true);
+    assert!(!node_detail(&edge_only).contains("<text_index "));
+}
+
+#[test]
+fn without_any_index_nothing_new_is_rendered() {
+    let graph = graph(true, true);
+    for xml in [
+        inventory(&graph),
+        describe_with(&graph, &ConnectionDetail::Topics(vec!["SUPPORTS".into()])),
+        node_detail(&graph),
+    ] {
+        assert!(!xml.contains("hnsw\""), "{xml}");
+        assert!(!xml.contains(",hnsw"), "{xml}");
+        assert!(!xml.contains("text_index"), "{xml}");
+    }
+    assert_eq!(
+        line_with(&inventory(&graph), "<conn type=\"SUPPORTS\"").trim(),
+        CONN_LINE
+    );
+}
+
+#[test]
+fn relationship_semantic_is_a_direct_topic_matching_the_functions_group() {
+    let graph = DirGraph::new();
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    let topic = CypherDetail::Topics(vec!["relationship_semantic".to_string()]);
+    request.cypher = &topic;
+    let xml = compute_description(&graph, &request).unwrap();
+    assert!(
+        xml.contains("<topic name=\"relationship_semantic\">"),
+        "{xml}"
+    );
+    let summary = line_with(&xml, "<summary>");
+    assert!(
+        summary.contains("Stores are per (relationship type, text property)"),
+        "{summary}"
+    );
+    assert!(xml.contains("types:['A','B']"), "{xml}");
+    assert!(xml.contains("MATCH ()-[r:A|B]->()"), "{xml}");
+
+    let functions = CypherDetail::Topics(vec!["functions".to_string()]);
+    request.cypher = &functions;
+    let listing = compute_description(&graph, &request).unwrap();
+    let group = line_with(&listing, "<group name=\"relationship_semantic\"");
+    let group_body = group
+        .trim()
+        .trim_start_matches("<group name=\"relationship_semantic\">")
+        .trim_end_matches("</group>");
+    let summary_body = summary
+        .trim()
+        .trim_start_matches("<summary>")
+        .trim_end_matches("</summary>");
+    assert_eq!(group_body, summary_body);
+
+    // The per-graph hint says once how stores are keyed and ranked across types.
+    let semantic = line_with(&inventory(&self::graph(false, true)), "<semantic ").to_string();
+    assert!(
+        semantic.contains("stores are per relationship type and text property"),
+        "{semantic}"
+    );
+    assert!(
+        semantic.contains("describe(cypher=['relationship_semantic'])"),
+        "{semantic}"
+    );
+}

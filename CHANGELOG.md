@@ -212,7 +212,6 @@ before upgrading.
   relationship index — deleting an embedded relationship or either endpoint,
   or a `vacuum()` that compacts — and correct the node claim that a
   rolled-back delete drops it (it leaves the index in place).
-
 ### Fixed
 
 - Retained relationship bindings no longer expose a replacement edge's
@@ -393,6 +392,18 @@ before upgrading.
   a syntax error that quotes the written bound, as in Neo4j. So is a pattern
   with more than one relationship, which used to search along the first
   relationship only and return the middle node as NULL.
+
+- **`describe()` now shows which embedding stores have an index.** A store with
+  an HNSW index shows `index="hnsw"` on its `<embeddings/>` element, for node
+  types and relationship types alike. On a relationship `<conn>` line the
+  attribute reads `embeddings="col(dim=D,count=N,hnsw)"`. A BM25 text index
+  shows as `<text_index property="p"/>` (`text_index="p"` on the `<conn>`
+  line). Before, an agent could not tell whether a query would be served by
+  an index. Nothing new is rendered when no index exists. Node stores are
+  listed in column order (they were in hash order). The relationship
+  `<semantic>` hint now states that stores are per relationship type and
+  property, and how to rank across types. `describe(cypher=
+  ['relationship_semantic'])` is now a topic of its own.
 
 ## [0.17.12] - 2026-09-19
 ### Added

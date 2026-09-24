@@ -13,7 +13,11 @@ const CYPHER_TOPIC_LIST: &str = "MATCH, WHERE, FILTER, RETURN, FINISH, WITH, HAV
     label_propagation, connected_components, k_core, clustering_coefficient, cluster, orphan_node, self_loop, \
     cycle_2step, missing_required_edge, missing_inbound_edge, duplicate_title, \
     duplicate_id, null_property, inverse_violation, transitivity_violation, cardinality_violation, \
-    type_domain_violation, type_range_violation, parallel_edges, ontology";
+    type_domain_violation, type_range_violation, parallel_edges, ontology, relationship_semantic";
+
+/// The `relationship_semantic` functions group, shared with the direct
+/// `relationship_semantic` topic so the two cannot drift apart.
+const RELATIONSHIP_SEMANTIC_GROUP: &str = "vector_score(r, 'col_emb', $v), text_score(r, 'col', 'query'|[...] [, metric]) and embedding_norm(r, 'col_emb') score a bound relationship against its relationship embedding store, exactly, row by row. The top-k shape RETURN … vector_score(r, …) AS s ORDER BY s DESC LIMIT k (or text_score) is served from the store, as for nodes: a plain single-type pattern whose every relationship is embedded goes straight to the store, any other shape scores its rows; an alternation [r:A|B] or untyped [r] merges per-store answers when every type in play carries the store (a type without it raises the scalar's error); HNSW answers (approximate) when an index is online, pass {exact:true} as the final argument to force exact, ties at the cut are answered by the ordinary pipeline, and result diagnostics report the route. Stores are per (relationship type, text property). To rank a whole relationship store without a pattern, CALL db.edge_embeddings.query({type:'T', text_property:'col', vector:$v | text:'query', top_k:10}) YIELD relationship, score, search_method, type — HNSW once db.edge_embeddings.build_index has run; types:['A','B'] (or neither type nor types: every store for text_property) ranks several stores merged into one top-k.";
 
 /// Tier 3: detailed Cypher docs for specific topics with params and examples.
 pub(super) fn write_cypher_topics(
@@ -86,6 +90,7 @@ pub(super) fn write_cypher_topics(
             "TYPE_DOMAIN_VIOLATION" => write_topic_type_domain_violation(xml),
             "TYPE_RANGE_VIOLATION" => write_topic_type_range_violation(xml),
             "PARALLEL_EDGES" => write_topic_parallel_edges(xml),
+            "RELATIONSHIP_SEMANTIC" => write_topic_relationship_semantic(xml),
             _ => {
                 return Err(format!(
                     "Unknown Cypher topic '{}'. Available: {}",
@@ -388,7 +393,9 @@ pub(super) fn write_topic_functions(xml: &mut String) {
     xml.push_str("    <group name=\"lexical\">text_bm25(n, 'prop', 'query text') — BM25 relevance of the node's indexed text; needs build_text_index(node_type, property) first (error if absent). text_bm25(r, 'prop', 'query text') does the same for a relationship binding or value (collect(r)[0], UNWIND, the relationship column of db.edge_embeddings.query) over an index built with CALL db.edge_text_index.build({type, property}). 0.0 = indexed but shares no word with the query, null = the index has no document for that row. Composes with WHERE and ORDER BY score DESC LIMIT k</group>\n");
     xml.push_str("    <group name=\"hybrid\">score_fuse(s1, s2, ... [, [w1, w2, ...]]) — one score out of several ranked lanes, e.g. score_fuse(text_bm25(n, 'body', $q), vector_score(n, 'body_emb', $qv)) ORDER BY score DESC LIMIT k; over relationships, score_fuse(text_bm25(r, 'evidence', $q), vector_score(r, 'evidence_emb', $qv)). Equal weight by default; a trailing list weights the lanes in order (weights must be finite and >= 0, one per score). A lane that could not see the row (null, NaN, inf) drops out of the average together with its weight instead of scoring 0; null only when every lane is absent. For Reciprocal Rank Fusion, rank the lanes first with rank() OVER (ORDER BY lane DESC) in a WITH, then fuse 1.0/(60+rank) — RRF needs ranks over the whole result, which no per-row scalar can see.</group>\n");
     xml.push_str("    <group name=\"semantic\">text_score(n, 'col', 'query'|[0.1,0.2,...] [, metric] [, {exact:true}]) — similarity score; exact:true bypasses HNSW, otherwise a compatible top-k may use it; result diagnostics report actual_mode and fallback_reason (also with PROFILE), while EXPLAIN reports requested policy only; a list query is scored as your query vector, a string query is embedded via set_embedder() (metrics: 'cosine', 'poincare', 'dot_product', 'euclidean'); embedding_norm(n, 'col_emb') — L2 norm of embedding vector (hierarchy depth in Poincaré space, 0=root, ~1=leaf)</group>\n");
-    xml.push_str("    <group name=\"relationship_semantic\">vector_score(r, 'col_emb', $v), text_score(r, 'col', 'query'|[...] [, metric]) and embedding_norm(r, 'col_emb') score a bound relationship against its relationship embedding store, exactly, row by row. The top-k shape RETURN … vector_score(r, …) AS s ORDER BY s DESC LIMIT k (or text_score) is served from the store, as for nodes: a plain single-type pattern whose every relationship is embedded goes straight to the store, any other shape scores its rows; an alternation [r:A|B] or untyped [r] merges per-store answers when every type in play carries the store (a type without it raises the scalar's error); HNSW answers (approximate) when an index is online, pass {exact:true} as the final argument to force exact, ties at the cut are answered by the ordinary pipeline, and result diagnostics report the route. To rank a whole relationship store without a pattern, CALL db.edge_embeddings.query({type:'T', text_property:'col', vector:$v | text:'query', top_k:10}) YIELD relationship, score, search_method — HNSW once db.edge_embeddings.build_index has run.</group>\n");
+    xml.push_str(&format!(
+        "    <group name=\"relationship_semantic\">{RELATIONSHIP_SEMANTIC_GROUP}</group>\n"
+    ));
     xml.push_str("    <group name=\"vector\">dot(a,b), cosine(a,b), norm(a) — over any list-valued data (a stored list property, a literal, a parameter, collect()), not the embedding store. NULL argument → NULL; a length mismatch or a non-numeric element is an error; cosine of a zero-length vector is NULL. e.g. RETURN d.title, cosine(d.vec, $q) AS score ORDER BY score DESC</group>\n");
     xml.push_str("  </functions>\n");
 }
@@ -1552,6 +1559,20 @@ pub(super) fn write_cypher_overview(xml: &mut String, surface: DescribeSurface) 
         )
     ));
     xml.push_str("</cypher>\n");
+}
+
+/// Relationship vector retrieval as one topic: the scoring functions, the
+/// per-store shape, cross-type ranking and the index lifecycle.
+pub(super) fn write_topic_relationship_semantic(xml: &mut String) {
+    xml.push_str("  <topic name=\"relationship_semantic\">\n");
+    xml.push_str(&format!(
+        "    <summary>{RELATIONSHIP_SEMANTIC_GROUP}</summary>\n"
+    ));
+    xml.push_str("    <usage>An embedding store belongs to one relationship type and one text property (describe() shows it on that type's conn line as embeddings=\"col(dim=D,count=N)\", with ,hnsw once an index is built). Write vectors with db.edge_embeddings.set or .embed; index with db.edge_embeddings.build_index. To rank across relationship types, either CALL db.edge_embeddings.query({types:['A','B'], text_property:'col', ...}) — or leave out type and types to rank every store for text_property — which merges the stores into one top-k ordered by score, then type, then slot (each row yields type and its own search_method); or MATCH ()-[r:A|B]->() (or untyped ()-[r]->()) RETURN r, vector_score(r, 'col_emb', $v) AS s ORDER BY s DESC LIMIT k, served per store and merged when every type in play carries the store.</usage>\n");
+    xml.push_str("    <caveat>A type in play without the store raises no embedding 'col_emb' found for relationship type 'X' — name only the types that carry it. Stores declaring different metrics refuse the procedure's merge unless metric is passed. Deleting an embedded relationship or an endpoint drops that store's HNSW index to none until build_index runs again; refresh_index refuses while there is none.</caveat>\n");
+    xml.push_str("    <ex desc=\"cross-type procedure\">CALL db.edge_embeddings.query({text_property:'description', text:'who founded it?', top_k:5}) YIELD relationship, score, type RETURN type, relationship.description, score</ex>\n");
+    xml.push_str("    <ex desc=\"fused alternation\">MATCH (s)-[r:created|works_at]->(t) RETURN s.name, type(r), t.name, text_score(r, 'description', $q) AS score ORDER BY score DESC LIMIT 5</ex>\n");
+    xml.push_str("  </topic>\n");
 }
 
 pub(super) fn write_topic_ontology(xml: &mut String) {

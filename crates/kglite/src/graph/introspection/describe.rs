@@ -21,6 +21,7 @@ use super::connectivity::{
 };
 use super::embeddings_view::{
     conn_embeddings_attr, hybrid_hint, lexical_hint, semantic_hint, write_conn_embeddings,
+    write_node_embeddings,
 };
 use super::schema_overview::{
     compute_all_neighbors_schemas, compute_connected_type_pairs, compute_connected_types,
@@ -1378,20 +1379,7 @@ fn write_type_detail(
         }
     }
 
-    if caps.has_embeddings {
-        for ((nt, prop_name), store) in &graph.embeddings {
-            if nt == node_type {
-                let text_col = prop_name.strip_suffix("_emb").unwrap_or(prop_name.as_str());
-                xml.push_str(&format!(
-                    "{}  <embeddings text_col=\"{}\" dim=\"{}\" count=\"{}\"/>\n",
-                    indent,
-                    xml_escape(text_col),
-                    store.dimension,
-                    store.len()
-                ));
-            }
-        }
-    }
+    write_node_embeddings(xml, graph, node_type, indent);
 
     {
         let children: Vec<&String> = graph
