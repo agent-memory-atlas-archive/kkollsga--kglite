@@ -518,6 +518,11 @@ pub enum PropertyMatcher {
         var: String,
         prop: String,
     },
+    /// Deferred expression equality: an inline-map value written as a full
+    /// Cypher expression (`MATCH (d {id: row[0]})`), the value grammar a
+    /// `CREATE` map accepts. The executor evaluates it against each row, as
+    /// it does [`Self::EqualsVar`]; a NULL result matches nothing.
+    EqualsExpr(Box<crate::graph::languages::cypher::ast::Expression>),
     /// Pushed from `WHERE n.prop IN [v1, v2, ...]` by the planner.
     ///
     /// A [`MembershipSet`] rather than a bare `Vec<Value>`: the list is

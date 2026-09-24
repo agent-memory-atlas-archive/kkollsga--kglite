@@ -40,6 +40,7 @@ use join_order::{
 pub(crate) use nested::import_pattern_anchors_in_arm;
 use node_anchor::anchor_element_id;
 use rel_predicate_pushdown::extract_pushable_rel_predicates_with_params;
+pub(crate) use simplification::collect_expression_refs;
 use var_length_lowering::lower_fixed_var_length_hops;
 use with_boundary::{
     pass_fold_aliasing_with, pass_hoist_terminal_return_over_with_top_k, pass_hoist_with_where,
@@ -302,6 +303,7 @@ fn optimize_with_disabled_scoped(
     global_scope: &HashSet<String>,
 ) {
     query.optimizer_tags.clear();
+    super::executor::match_execution::fold_constant_inline_maps(query, graph, params);
     let ctx = PassCtx {
         graph,
         params,

@@ -299,7 +299,9 @@ pub(super) fn value_matches(
             .is_some_and(|expected| values_equal(value, expected)),
         // EqualsVar / EqualsNodeProp should be resolved to Equals before
         // pattern matching. If they reach here unresolved, no match is possible.
-        PropertyMatcher::EqualsVar(_) | PropertyMatcher::EqualsNodeProp { .. } => false,
+        PropertyMatcher::EqualsVar(_)
+        | PropertyMatcher::EqualsNodeProp { .. }
+        | PropertyMatcher::EqualsExpr(_) => false,
         // One coercion-normalized probe against the set the planner built
         // with the pattern — not a scan of the list per candidate node.
         PropertyMatcher::In(values) => values.matches(value),

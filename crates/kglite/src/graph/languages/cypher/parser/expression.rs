@@ -120,7 +120,7 @@ impl CypherParser {
         // positions.)
         if self.check(&CypherToken::LParen) && self.looks_like_pattern_start() {
             let pattern_str = self.extract_pattern_string()?;
-            let pattern = crate::graph::core::pattern_matching::parse_pattern(&pattern_str)?;
+            let pattern = self.parse_extracted_pattern(&pattern_str)?;
             return Ok(Expression::PredicateExpr(Box::new(Predicate::Exists {
                 patterns: vec![pattern],
                 pattern_groups: vec![0],

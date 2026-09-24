@@ -184,7 +184,7 @@ impl<'a> CypherExecutor<'a> {
             let row = prior_row.unwrap_or(&seed_row);
             let resolved;
             let pattern = if row_dependent {
-                resolved = self.resolve_pattern_vars(pattern, row);
+                resolved = self.resolve_pattern_vars(pattern, row)?;
                 &resolved
             } else {
                 pattern

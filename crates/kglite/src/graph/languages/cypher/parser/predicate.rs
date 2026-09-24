@@ -51,7 +51,7 @@ impl CypherParser {
                             // Support EXISTS((...)) — inner parens are the pattern
             if self.check(&CypherToken::LParen) {
                 let pattern_str = self.extract_pattern_string()?;
-                let pattern = crate::graph::core::pattern_matching::parse_pattern(&pattern_str)?;
+                let pattern = self.parse_extracted_pattern(&pattern_str)?;
                 self.expect(&CypherToken::RParen)?; // consume outer )
                 Ok(Predicate::Exists {
                     patterns: vec![pattern],

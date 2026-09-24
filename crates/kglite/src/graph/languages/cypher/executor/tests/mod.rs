@@ -12,6 +12,8 @@
 //!   keeping the pattern's node labels and its first-MATCH row multiplicity
 //! - [`mutations`] — CREATE / SET / DELETE / REMOVE / MERGE and index upkeep
 //! - [`identifiers`] — quoted-identifier escaping (the injection class)
+//! - [`inline_map_expressions`] — `MATCH (d {id: row[0]})`: inline-map values
+//!   written with the expression grammar a `CREATE` map accepts
 //! - [`label_predicates`] — parenthesised label checks vs node patterns
 //! - [`lists`] — list parsing, slicing, sizing, and quantifier predicates
 //! - [`relationship_property_precedence`] — `r.<key>` reads the stored
@@ -57,6 +59,7 @@ mod exists_witness;
 mod expressions;
 mod fused_aggregate_labels;
 mod identifiers;
+mod inline_map_expressions;
 mod label_predicates;
 mod lists;
 mod mutations;

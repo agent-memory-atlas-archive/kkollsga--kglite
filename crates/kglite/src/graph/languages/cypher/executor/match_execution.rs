@@ -59,8 +59,14 @@ impl<'a> CypherExecutor<'a> {
     ///
     /// When a reference cannot be resolved (unknown var, missing property, or
     /// null), the matcher is replaced with `In(vec![])` so the pattern yields
-    /// no candidates — Cypher equality treats null as never-equal.
-    pub(super) fn resolve_pattern_vars(&self, pattern: &Pattern, row: &ResultRow) -> Pattern {
+    /// no candidates — Cypher equality treats null as never-equal. An inline
+    /// map expression (`EqualsExpr`) that fails to evaluate is an error, as
+    /// the same expression in a `CREATE` map or a `WHERE` is.
+    pub(super) fn resolve_pattern_vars(
+        &self,
+        pattern: &Pattern,
+        row: &ResultRow,
+    ) -> Result<Pattern, String> {
         let mut resolved = pattern.clone();
         for element in &mut resolved.elements {
             let props = match element {
@@ -70,6 +76,12 @@ impl<'a> CypherExecutor<'a> {
             if let Some(props) = props {
                 for matcher in props.values_mut() {
                     match matcher {
+                        PropertyMatcher::EqualsExpr(expr) => {
+                            *matcher = match self.evaluate_expression(expr, row)? {
+                                Value::Null => PropertyMatcher::In(MembershipSet::default()),
+                                value => PropertyMatcher::Equals(value),
+                            };
+                        }
                         PropertyMatcher::EqualsVar(name) => {
                             // Check projected scalars (WITH/UNWIND ... AS varName)
                             if let Some(val) = row.projected.get(name) {
@@ -123,7 +135,22 @@ impl<'a> CypherExecutor<'a> {
                 }
             }
         }
-        resolved
+        Ok(resolved)
+    }
+
+    /// `pattern` resolved against `row` when it has deferred matchers
+    /// (`has_vars`, from [`Self::pattern_has_vars`]), else borrowed as is.
+    fn pattern_for_row<'p>(
+        &self,
+        pattern: &'p Pattern,
+        has_vars: bool,
+        row: &ResultRow,
+    ) -> Result<std::borrow::Cow<'p, Pattern>, String> {
+        Ok(if has_vars {
+            std::borrow::Cow::Owned(self.resolve_pattern_vars(pattern, row)?)
+        } else {
+            std::borrow::Cow::Borrowed(pattern)
+        })
     }
 
     /// Check if a pattern contains any deferred-resolution matchers.
@@ -137,7 +164,9 @@ impl<'a> CypherExecutor<'a> {
                 for matcher in props.values() {
                     if matches!(
                         matcher,
-                        PropertyMatcher::EqualsVar(_) | PropertyMatcher::EqualsNodeProp { .. }
+                        PropertyMatcher::EqualsVar(_)
+                            | PropertyMatcher::EqualsNodeProp { .. }
+                            | PropertyMatcher::EqualsExpr(_)
                     ) {
                         return true;
                     }
@@ -199,6 +228,15 @@ impl<'a> CypherExecutor<'a> {
         inline_where: Option<&Predicate>,
         matcher_distinct_target: Option<String>,
     ) -> Result<Option<Vec<ResultRow>>, String> {
+        // The opening MATCH has no row, so an inline-map expression can only
+        // read constants and parameters — resolve it against the empty row.
+        let resolved;
+        let pattern = if Self::pattern_has_vars(pattern) {
+            resolved = self.resolve_pattern_vars(pattern, &ResultRow::new())?;
+            &resolved
+        } else {
+            pattern
+        };
         let matcher_deduped = matcher_distinct_target.is_some();
         // A slot anchor (`WHERE elementId(v) = …`) seeds the variable as a
         // pre-binding, turning the leading scan into a point lookup.
@@ -412,13 +450,7 @@ impl<'a> CypherExecutor<'a> {
                         if remaining == Some(0) {
                             break;
                         }
-                        let resolved;
-                        let pat = if has_vars {
-                            resolved = self.resolve_pattern_vars(pattern, &existing_row);
-                            &resolved
-                        } else {
-                            pattern
-                        };
+                        let pat = &*self.pattern_for_row(pattern, has_vars, &existing_row)?;
                         // A relationship variable re-used from a prior clause
                         // pins the pattern to that edge — seed its endpoints
                         // so the executor doesn't enumerate every edge.
@@ -792,7 +824,7 @@ impl<'a> CypherExecutor<'a> {
                 // the current (partially-bound) row.
                 let resolved;
                 let pat = if Self::pattern_has_vars(pattern) {
-                    resolved = self.resolve_pattern_vars(pattern, cur);
+                    resolved = self.resolve_pattern_vars(pattern, cur)?;
                     &resolved
                 } else {
                     pattern
@@ -882,5 +914,62 @@ impl<'a> CypherExecutor<'a> {
             return run(None);
         }
         Ok(matches)
+    }
+}
+
+/// Fold every row-independent inline-map expression (`{id: toUpper('a')}`,
+/// `{id: $list[0]}`) to the literal matcher it evaluates to, before the
+/// planner runs. The fused scans and index selection read literal equality,
+/// so a constant left as an expression would reach a path that cannot
+/// evaluate it. Row-dependent expressions stay deferred and resolve per row;
+/// one that fails to evaluate here is also left in place, so the row-time
+/// resolution reports the error. Builds no executor when the query has no
+/// such expression.
+pub(crate) fn fold_constant_inline_maps(
+    query: &mut CypherQuery,
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+) {
+    let mut executor = None;
+    fold_clauses(&mut query.clauses, &mut |expr| {
+        let mut refs = std::collections::HashSet::new();
+        crate::graph::languages::cypher::planner::collect_expression_refs(expr, &mut refs);
+        if !refs.is_empty() {
+            return None;
+        }
+        let executor =
+            executor.get_or_insert_with(|| CypherExecutor::with_params(graph, params, None));
+        match executor.evaluate_expression(expr, &ResultRow::new()) {
+            Ok(Value::Null) => Some(PropertyMatcher::In(MembershipSet::default())),
+            Ok(value) => Some(PropertyMatcher::Equals(value)),
+            Err(_) => None,
+        }
+    });
+}
+
+fn fold_clauses(
+    clauses: &mut [Clause],
+    fold: &mut impl FnMut(&Expression) -> Option<PropertyMatcher>,
+) {
+    for clause in clauses {
+        match clause {
+            Clause::Match(m) | Clause::OptionalMatch(m) => {
+                for element in m.patterns.iter_mut().flat_map(|p| p.elements.iter_mut()) {
+                    let props = match element {
+                        PatternElement::Node(np) => np.properties.as_mut(),
+                        PatternElement::Edge(ep) => ep.properties.as_mut(),
+                    };
+                    for matcher in props.into_iter().flat_map(|map| map.values_mut()) {
+                        if let PropertyMatcher::EqualsExpr(expr) = matcher {
+                            if let Some(folded) = fold(expr) {
+                                *matcher = folded;
+                            }
+                        }
+                    }
+                }
+            }
+            Clause::CallSubquery { body, .. } => fold_clauses(&mut body.clauses, fold),
+            _ => {}
+        }
     }
 }

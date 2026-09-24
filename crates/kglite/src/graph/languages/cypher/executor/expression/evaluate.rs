@@ -249,7 +249,7 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<Vec<crate::graph::core::pattern_matching::PatternMatch>, String> {
         let resolved;
         let pattern = if Self::pattern_has_vars(pattern) {
-            resolved = self.resolve_pattern_vars(pattern, row);
+            resolved = self.resolve_pattern_vars(pattern, row)?;
             &resolved
         } else {
             pattern

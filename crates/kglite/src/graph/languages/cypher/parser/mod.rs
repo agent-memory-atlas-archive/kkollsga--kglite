@@ -46,6 +46,11 @@ pub struct CypherParser {
     /// token index is absent the parser falls back to the canonical keyword
     /// spelling.
     keyword_lexemes: std::collections::HashMap<usize, String>,
+    /// Inline-map values written as full expressions (`{id: row[0]}`) that the
+    /// secondary pattern lexer cannot read. Each is parked here and replaced in
+    /// the re-serialized pattern by a `$` placeholder naming its index; see
+    /// `match_pattern::INLINE_EXPR_PARAM_PREFIX`.
+    inline_map_exprs: Vec<Expression>,
 }
 
 /// Maximum expression/predicate AST nesting depth accepted by the parser.
@@ -115,6 +120,7 @@ impl CypherParser {
             pos: 0,
             depth: 0,
             keyword_lexemes: keyword_lexemes.into_iter().collect(),
+            inline_map_exprs: Vec::new(),
         }
     }
 

@@ -111,6 +111,20 @@ def self_loop_incidence_graph():
 
 
 @pytest.fixture
+def relationship_stored_type_graph():
+    """A relationship that stores its own `type` property.
+
+    The WHERE the planner pushes into the matcher read the stored property
+    while the unoptimised WHERE read the relationship type, so
+    `WHERE r.type = 'user-type'` kept the row under one plan and dropped it
+    under the other.
+    """
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:E{id:'a'})-[:REL{type:'user-type'}]->(:E{id:'b'})").to_list()
+    return graph
+
+
+@pytest.fixture
 def label_mixed_parent_graph():
     """Parents of three labels sharing one CHILD_OF edge type.
 
@@ -236,6 +250,12 @@ def edge_text_differential_graph():
 
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    (
+        "relationship_stored_type_pushdown",
+        "relationship_stored_type_graph",
+        "MATCH (a:E {id:'a'})-[r:REL]->(b) WHERE r.type = 'user-type' RETURN b.id",
+        None,
+    ),
     (
         "edge_vector_endpoint_parallel_multiplicity",
         "edge_vector_differential_graph",

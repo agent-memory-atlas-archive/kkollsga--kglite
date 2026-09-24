@@ -687,3 +687,46 @@ fn a_node_value_whose_slot_died_or_changed_type_scores_null() {
         );
     }
 }
+
+/// `text_score(d, 'body', …)` runs as `vector_score(d, 'body_emb', …)`; a
+/// missing store must still be reported in the terms the user wrote. The
+/// session passes the rewrite's store list under `TEXT_SCORE_STORES_PARAM`,
+/// reproduced here. Pre-fix: "vector_score(): no embedding 'body_emb' found
+/// for node type 'Doc'".
+#[test]
+fn a_missing_store_behind_text_score_names_text_score_and_the_property() {
+    use crate::graph::languages::cypher::planner::simplification::{
+        rewrite_text_score, TEXT_SCORE_STORES_PARAM,
+    };
+    let graph = docs(&[("a", [1.0, 0.0])]);
+    let run = |source: &str| {
+        let mut query = parser::parse_cypher(source).unwrap();
+        let mut params = HashMap::new();
+        let rewrite = rewrite_text_score(&mut query, &params).unwrap();
+        params.insert(
+            TEXT_SCORE_STORES_PARAM.to_string(),
+            Value::List(
+                rewrite
+                    .text_score_stores
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+        CypherExecutor::with_params(&graph, &params, None)
+            .execute(&query)
+            .unwrap_err()
+    };
+    let err = run("MATCH (d:Doc) RETURN text_score(d, 'body', [1.0, 0.0])");
+    assert_eq!(
+        err,
+        "text_score(): no embedding for property 'body' on node type 'Doc'. \
+         Embed it first with embed_texts('Doc', 'body')."
+    );
+    // The same store read through vector_score keeps its store terms.
+    let err = run("MATCH (d:Doc) RETURN vector_score(d, 'body_emb', [1.0, 0.0])");
+    assert_eq!(
+        err,
+        "vector_score(): no embedding 'body_emb' found for node type 'Doc'"
+    );
+}

@@ -87,7 +87,7 @@ impl<'a> CypherExecutor<'a> {
                     // vector for one driving row before counting it, and
                     // unlike the group-key scans below it is reachable with a
                     // variable-length edge.
-                    let resolved = self.resolve_pattern_vars(pattern, row);
+                    let resolved = self.resolve_pattern_vars(pattern, row)?;
                     let matches = self
                         .materializing_executor(
                             None,

@@ -7,6 +7,7 @@ use super::super::*;
 use super::shared::*;
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::vector as vs;
+use crate::graph::languages::cypher::planner::simplification::TEXT_SCORE_STORES_PARAM;
 use crate::graph::storage::GraphRead;
 use crate::graph::text_indexes;
 
@@ -312,7 +313,7 @@ impl CypherExecutor<'_> {
 
         let store = match self.graph.embedding_store(node_type, &c.prop_name) {
             Some(s) => s,
-            None => return Err(missing_embedding_error(self.graph, node_type, &c.prop_name)),
+            None => return Err(self.missing_embedding_error(node_type, &c.prop_name)),
         };
 
         Self::check_vector_score_dimension(c.query_vec.len(), store.dimension)?;
@@ -514,12 +515,7 @@ impl CypherExecutor<'_> {
             .graph
             .edge_embeddings
             .get(&(relationship_type.to_string(), prop_name.clone()))
-            .ok_or_else(|| {
-                format!(
-                    "vector_score(): no embedding '{}' found for relationship type '{}'",
-                    prop_name, relationship_type
-                )
-            })?;
+            .ok_or_else(|| self.missing_edge_embedding_error(relationship_type, &prop_name))?;
         Self::check_vector_score_dimension(query_vec.len(), store.dimension())?;
         let tail = args[3..]
             .iter()
@@ -591,7 +587,7 @@ impl CypherExecutor<'_> {
         let store = self
             .graph
             .embedding_store(node_type, &prop_name)
-            .ok_or_else(|| missing_embedding_error(self.graph, node_type, &prop_name))?;
+            .ok_or_else(|| self.missing_embedding_error(node_type, &prop_name))?;
         let metric = match options.metric {
             Some(metric) => metric,
             None => {
@@ -854,8 +850,12 @@ fn score_fuse_weight(weights: &[Value], position: usize) -> Result<f64, String> 
 /// Prefix of every [`missing_text_index_error`] message.
 const NO_TEXT_INDEX_PREFIX: &str = "text_bm25(): no text index on '";
 
-/// Prefix of every [`missing_embedding_error`] message.
+/// Prefix of every `vector_score` missing-store message
+/// ([`CypherExecutor::missing_embedding_error`] and its relationship twin).
 const NO_EMBEDDING_PREFIX: &str = "vector_score(): no embedding '";
+
+/// Prefix of the same messages for a `text_score` call.
+const TEXT_SCORE_NO_EMBEDDING_PREFIX: &str = "text_score(): no embedding for property '";
 
 /// True when `message` reports a retrieval lane the graph does not have — no
 /// text index over the property, or no embedding store of that name.
@@ -870,7 +870,9 @@ const NO_EMBEDDING_PREFIX: &str = "vector_score(): no embedding '";
 pub(in crate::graph::languages::cypher::executor) fn is_missing_retrieval_source_error(
     message: &str,
 ) -> bool {
-    message.starts_with(NO_TEXT_INDEX_PREFIX) || message.starts_with(NO_EMBEDDING_PREFIX)
+    message.starts_with(NO_TEXT_INDEX_PREFIX)
+        || message.starts_with(NO_EMBEDDING_PREFIX)
+        || message.starts_with(TEXT_SCORE_NO_EMBEDDING_PREFIX)
 }
 
 /// Vector shape, metric and options failures are query errors even when
@@ -909,28 +911,68 @@ fn missing_text_index_error(graph: &DirGraph, node_type: &str, prop_name: &str) 
     }
 }
 
-/// The error for `vector_score(n, '<name>', …)` when no store of that name
-/// exists on the node's type.
-///
-/// `vector_score` is named in *store* terms (`'summary_emb'`) while every other
-/// surface — `set_embeddings`, `text_score`, the Python API — is named in
-/// *source column* terms (`'summary'`). A caller who reaches for the column
-/// name here gets an error naming a store that does exist under the spelling
-/// they didn't use, so the message hands them both ways out. When the name is
-/// genuinely unknown there is nothing to suggest and the plain message stands.
-pub(in crate::graph::languages::cypher::executor) fn missing_embedding_error(
-    graph: &DirGraph,
-    node_type: &str,
-    prop_name: &str,
-) -> String {
-    let base = format!("{NO_EMBEDDING_PREFIX}{prop_name}' found for node type '{node_type}'");
-    let suffixed = crate::graph::embeddings::store_name(prop_name);
-    match graph.embedding_store(node_type, &suffixed) {
-        Some(_) => format!(
-            "{base}. Did you mean '{suffixed}'? vector_score() takes the embedding \
-             store name; text_score(n, '{prop_name}', <query text>) takes the text column."
-        ),
-        None => base,
+impl CypherExecutor<'_> {
+    /// The error for `vector_score(n, '<name>', …)` / `text_score(n,
+    /// '<property>', …)` when the node's type has no such store.
+    ///
+    /// `text_score` reaches the scorer rewritten to `vector_score` over the
+    /// store `<property>_emb`; the rewrite lists those stores under
+    /// [`TEXT_SCORE_STORES_PARAM`], so the message names the function and the
+    /// property the user wrote. `vector_score` is named in *store* terms while
+    /// every other surface is named in *source column* terms, so a
+    /// `vector_score` caller who used the column name is shown the store
+    /// spelling that does exist.
+    pub(in crate::graph::languages::cypher::executor) fn missing_embedding_error(
+        &self,
+        node_type: &str,
+        prop_name: &str,
+    ) -> String {
+        if let Some(property) = self.text_score_property(prop_name) {
+            return format!(
+                "{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on node type '{node_type}'. \
+                 Embed it first with embed_texts('{node_type}', '{property}')."
+            );
+        }
+        let base = format!("{NO_EMBEDDING_PREFIX}{prop_name}' found for node type '{node_type}'");
+        let suffixed = crate::graph::embeddings::store_name(prop_name);
+        match self.graph.embedding_store(node_type, &suffixed) {
+            Some(_) => format!(
+                "{base}. Did you mean '{suffixed}'? vector_score() takes the embedding \
+                 store name; text_score(n, '{prop_name}', <query text>) takes the text column."
+            ),
+            None => base,
+        }
+    }
+
+    /// The relationship twin of [`Self::missing_embedding_error`].
+    pub(in crate::graph::languages::cypher::executor) fn missing_edge_embedding_error(
+        &self,
+        relationship_type: &str,
+        prop_name: &str,
+    ) -> String {
+        match self.text_score_property(prop_name) {
+            Some(property) => format!(
+                "{TEXT_SCORE_NO_EMBEDDING_PREFIX}{property}' on relationship type \
+                 '{relationship_type}'. Embed it first with CALL db.edge_embeddings.embed(\
+                 {{type: '{relationship_type}', text_property: '{property}'}})."
+            ),
+            None => format!(
+                "{NO_EMBEDDING_PREFIX}{prop_name}' found for relationship type \
+                 '{relationship_type}'"
+            ),
+        }
+    }
+
+    /// The source property a `text_score` call wrote, when `store` is one the
+    /// text_score rewrite produced in this statement.
+    fn text_score_property<'s>(&self, store: &'s str) -> Option<&'s str> {
+        let Some(Value::List(stores)) = self.params.get(TEXT_SCORE_STORES_PARAM) else {
+            return None;
+        };
+        stores
+            .iter()
+            .any(|listed| matches!(listed, Value::String(s) if s == store))
+            .then(|| store.strip_suffix("_emb").unwrap_or(store))
     }
 }
 

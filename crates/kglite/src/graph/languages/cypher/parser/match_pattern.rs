@@ -3,9 +3,82 @@
 use super::super::ast::*;
 use super::super::tokenizer::{keyword_name_token, reserved_literal_name_token, CypherToken};
 use super::{describe_with_hint, describe_with_hint_opt, CypherParser};
-use crate::graph::core::pattern_matching::{EdgePattern, Pattern, PatternElement};
+use crate::datatypes::values::Value;
+use crate::graph::core::pattern_matching::{EdgePattern, Pattern, PatternElement, PropertyMatcher};
+
+/// Placeholder-parameter prefix for an inline-map value the pattern lexer
+/// cannot read; the suffix is the index into `CypherParser::inline_map_exprs`.
+/// A user cannot collide with it by accident: the name is only ever emitted
+/// here, into the re-serialized pattern string.
+const INLINE_EXPR_PARAM_PREFIX: &str = "__kglite_inline_expr_";
+
+/// Is `expr` an inline-map value the secondary pattern parser reads natively
+/// (a scalar literal, `$param`, `var` or `var.prop`)? Those keep their
+/// dedicated matchers — literal equality is what index selection and the
+/// fused scans recognise.
+fn pattern_lexer_reads(expr: &Expression) -> bool {
+    match expr {
+        Expression::Literal(value) => matches!(
+            value,
+            Value::String(_) | Value::Int64(_) | Value::Float64(_) | Value::Boolean(_)
+        ),
+        Expression::Parameter(_) | Expression::Variable(_) => true,
+        Expression::PropertyAccess { .. } => true,
+        _ => false,
+    }
+}
 
 impl CypherParser {
+    /// After the `:` of an inline map entry, parse the value with the full
+    /// expression grammar — the one `CREATE`'s property maps use. A value the
+    /// pattern lexer reads natively is left in the token stream for the
+    /// caller's loop to re-serialize; any other (`row[0]`, `toUpper(x)`,
+    /// `n.a + 1`, a list, `null`) is parked and written as a placeholder
+    /// parameter that [`Self::parse_extracted_pattern`] turns back into
+    /// [`PropertyMatcher::EqualsExpr`].
+    fn emit_inline_map_value(&mut self, parts: &mut Vec<String>) -> Result<(), String> {
+        let start = self.pos;
+        let expr = self.parse_expression()?;
+        if pattern_lexer_reads(&expr) {
+            self.pos = start;
+            return Ok(());
+        }
+        parts.push(format!(
+            "${INLINE_EXPR_PARAM_PREFIX}{}",
+            self.inline_map_exprs.len()
+        ));
+        self.inline_map_exprs.push(expr);
+        Ok(())
+    }
+
+    /// Parse a re-serialized pattern string and restore the inline-map
+    /// expressions [`Self::emit_inline_map_value`] parked.
+    pub(super) fn parse_extracted_pattern(&self, pattern_str: &str) -> Result<Pattern, String> {
+        let mut pattern = crate::graph::core::pattern_matching::parse_pattern(pattern_str)?;
+        for element in &mut pattern.elements {
+            let properties = match element {
+                PatternElement::Node(node) => node.properties.as_mut(),
+                PatternElement::Edge(edge) => edge.properties.as_mut(),
+            };
+            for matcher in properties.into_iter().flat_map(|map| map.values_mut()) {
+                let PropertyMatcher::EqualsParam(name) = matcher else {
+                    continue;
+                };
+                let Some(slot) = name
+                    .strip_prefix(INLINE_EXPR_PARAM_PREFIX)
+                    .and_then(|index| index.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                let expr = self.inline_map_exprs.get(slot).cloned().ok_or_else(|| {
+                    format!("internal error: inline map expression {slot} was not recorded")
+                })?;
+                *matcher = PropertyMatcher::EqualsExpr(Box::new(expr));
+            }
+        }
+        Ok(pattern)
+    }
+
     // ========================================================================
     // MATCH Clause
     // ========================================================================
@@ -136,7 +209,8 @@ impl CypherParser {
                 return Err("Expected a pattern in MATCH clause".to_string());
             }
 
-            let pattern = crate::graph::core::pattern_matching::parse_pattern(&pattern_str)
+            let pattern = self
+                .parse_extracted_pattern(&pattern_str)
                 .map_err(|e| format!("Pattern parse error: {}", e))?;
             patterns.push(pattern);
 
@@ -201,7 +275,8 @@ impl CypherParser {
                 break;
             }
 
-            let pattern = crate::graph::core::pattern_matching::parse_pattern(&pattern_str)
+            let pattern = self
+                .parse_extracted_pattern(&pattern_str)
                 .map_err(|e| format!("Pattern parse error in EXISTS: {}", e))?;
             patterns.push(pattern);
             groups.push(group);
@@ -321,7 +396,12 @@ impl CypherParser {
                     brace_depth -= 1;
                     parts.push("}".to_string());
                 }
-                CypherToken::Colon => parts.push(":".to_string()),
+                CypherToken::Colon => {
+                    parts.push(":".to_string());
+                    if brace_depth > 0 {
+                        self.emit_inline_map_value(&mut parts)?;
+                    }
+                }
                 CypherToken::Comma => parts.push(",".to_string()),
                 CypherToken::Dash => parts.push("-".to_string()),
                 CypherToken::GreaterThan => parts.push(">".to_string()),
@@ -471,7 +551,12 @@ impl CypherParser {
                     brace_depth -= 1;
                     parts.push("}".to_string());
                 }
-                CypherToken::Colon => parts.push(":".to_string()),
+                CypherToken::Colon => {
+                    parts.push(":".to_string());
+                    if brace_depth > 0 {
+                        self.emit_inline_map_value(&mut parts)?;
+                    }
+                }
                 CypherToken::Comma => parts.push(",".to_string()),
                 CypherToken::Dash => parts.push("-".to_string()),
                 CypherToken::GreaterThan => parts.push(">".to_string()),

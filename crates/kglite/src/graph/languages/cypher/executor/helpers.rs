@@ -1753,6 +1753,9 @@ mod user_input_error_tests {
         assert!(is_user_input_error(
             "vector_score(): no embedding 'nope_emb' found for node type 'Doc'"
         ));
+        assert!(is_user_input_error(
+            "text_score(): no embedding for property 'nope' on node type 'Doc'. Embed it first"
+        ));
     }
 
     #[test]

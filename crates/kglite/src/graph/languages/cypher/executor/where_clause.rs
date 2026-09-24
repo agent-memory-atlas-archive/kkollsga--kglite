@@ -150,7 +150,7 @@ impl<'a> CypherExecutor<'a> {
             prev_group = Some(group);
             let resolved;
             let pat = if Self::pattern_has_vars(pattern) {
-                resolved = self.resolve_pattern_vars(pattern, row);
+                resolved = self.resolve_pattern_vars(pattern, row)?;
                 &resolved
             } else {
                 pattern
@@ -943,9 +943,9 @@ impl<'a> CypherExecutor<'a> {
                 .edge_embeddings
                 .get(&(relationship_type.to_string(), spec.prop_name.clone()))
             else {
-                error = Some(format!(
-                    "vector_score(): no embedding '{}' found for relationship type '{}'",
-                    spec.prop_name, relationship_type
+                error = Some(self.missing_edge_embedding_error(
+                    relationship_type,
+                    &spec.prop_name,
                 ));
                 return false;
             };
@@ -989,7 +989,7 @@ impl<'a> CypherExecutor<'a> {
         let store = match graph.embedding_store(node_type, &spec.prop_name) {
             Some(s) => s,
             None => {
-                error = Some(scalar_functions::utility::missing_embedding_error(graph, node_type, &spec.prop_name));
+                error = Some(self.missing_embedding_error(node_type, &spec.prop_name));
                 return false;
             }
         };

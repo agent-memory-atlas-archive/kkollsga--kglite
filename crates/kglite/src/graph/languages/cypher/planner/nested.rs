@@ -144,6 +144,11 @@ fn pattern_reads_import(body: &CypherQuery, import: &[String]) -> bool {
                 | PropertyMatcher::EqualsNodeProp { var: name, .. } => {
                     import.iter().any(|import| import == name)
                 }
+                PropertyMatcher::EqualsExpr(expr) => {
+                    let mut refs = HashSet::new();
+                    super::simplification::collect_expression_refs(expr, &mut refs);
+                    import.iter().any(|import| refs.contains(import))
+                }
                 _ => false,
             })
         })

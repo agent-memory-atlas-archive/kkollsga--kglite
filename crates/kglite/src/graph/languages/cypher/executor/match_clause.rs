@@ -561,7 +561,7 @@ impl<'a> CypherExecutor<'a> {
                 // one within the same OPTIONAL MATCH.
                 let resolved;
                 let pat = if Self::pattern_has_vars(pattern) {
-                    resolved = self.resolve_pattern_vars(pattern, cur);
+                    resolved = self.resolve_pattern_vars(pattern, cur)?;
                     &resolved
                 } else {
                     pattern
@@ -895,7 +895,9 @@ impl<'a> CypherExecutor<'a> {
                 props.values().any(|matcher| {
                     matches!(
                         matcher,
-                        PropertyMatcher::EqualsVar(_) | PropertyMatcher::EqualsNodeProp { .. }
+                        PropertyMatcher::EqualsVar(_)
+                            | PropertyMatcher::EqualsNodeProp { .. }
+                            | PropertyMatcher::EqualsExpr(_)
                     )
                 })
             }) {

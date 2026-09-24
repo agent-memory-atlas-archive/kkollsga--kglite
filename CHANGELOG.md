@@ -438,6 +438,25 @@ before upgrading.
   `<semantic>` hint now states that stores are per relationship type and
   property, and how to rank across types. `describe(cypher=
   ['relationship_semantic'])` is now a topic of its own.
+- **A MATCH inline property map accepts the same values as a `CREATE` map.**
+  Before, `UNWIND $rows AS row MATCH (d:Doc {id: row[0]})` failed with "Pattern
+  parse error: Expected property key or '}'", a message about a key that was
+  not missing. Only a literal, `$param`, variable or `var.prop` worked. Index
+  and key access, function calls, arithmetic, list and map literals, and
+  `null` now work as values in MATCH, OPTIONAL MATCH, relationship maps and
+  `EXISTS { … }`. A constant value is folded before planning, so it still
+  reaches index lookups. A value that evaluates to NULL matches nothing, and
+  one that fails to evaluate raises its error. A value that does not parse
+  now gets the expression parser's message, which names the unexpected token.
+- **A `text_score()` call over a missing embedding store now names
+  `text_score` and the property you wrote.** `text_score(d, 's', …)` on a
+  type without embeddings for `s` used to report "vector_score(): no
+  embedding 's_emb' found for node type 'D'". It now reports
+  "text_score(): no embedding for property 's' on node type 'D'" and says how
+  to embed it: `embed_texts('D', 's')` for nodes, `CALL
+  db.edge_embeddings.embed({type, text_property})` for relationships. This
+  holds in projections, WHERE filters and fused top-k. A direct
+  `vector_score()` call keeps its store-name message.
 
 ## [0.17.12] - 2026-09-19
 ### Added

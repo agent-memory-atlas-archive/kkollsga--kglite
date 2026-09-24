@@ -635,7 +635,16 @@ fn distinct_route_var(r: &ReturnClause) -> Option<String> {
 /// inserts the resulting vector into the params map under `param_name`.
 pub struct TextScoreRewrite {
     pub texts_to_embed: Vec<(String, String)>,
+    /// Store names (`summary_emb`) that a `text_score(…, 'summary', …)` call
+    /// was rewritten to read. The caller passes them to the executor under
+    /// [`TEXT_SCORE_STORES_PARAM`] so a missing-store error can name the
+    /// function and the source property the user wrote, not the rewrite's.
+    pub text_score_stores: Vec<String>,
 }
+
+/// Reserved parameter carrying [`TextScoreRewrite::text_score_stores`] as a
+/// list of strings. Like `$__ts_N`, it is minted only by the rewrite.
+pub const TEXT_SCORE_STORES_PARAM: &str = "__ts_stores";
 
 /// Walk the AST and rewrite all `text_score(node, col, query_text)` calls
 /// to `vector_score(node, col_emb, $__ts_N)`, and every
@@ -656,12 +665,14 @@ pub fn rewrite_text_score(
     let mut collector = TextScoreCollector {
         counter: 0,
         texts_to_embed: Vec::new(),
+        text_score_stores: Vec::new(),
     };
 
     collector.rewrite_query(query, params)?;
 
     Ok(TextScoreRewrite {
         texts_to_embed: collector.texts_to_embed,
+        text_score_stores: collector.text_score_stores,
     })
 }
 
@@ -671,6 +682,7 @@ const EDGE_EMBEDDINGS_QUERY: &str = "db.edge_embeddings.query";
 struct TextScoreCollector {
     counter: usize,
     texts_to_embed: Vec<(String, String)>,
+    text_score_stores: Vec<String>,
 }
 
 /// Classify `text_score`'s query argument: `Some(text)` to embed, or `None`
@@ -911,9 +923,11 @@ impl TextScoreCollector {
         let query_text = text_score_query_arg(&args[2], params)?;
 
         *name = "vector_score".to_string();
-        args[1] = Expression::Literal(Value::String(crate::graph::embeddings::store_name(
-            &col_name,
-        )));
+        let store = crate::graph::embeddings::store_name(&col_name);
+        if !self.text_score_stores.contains(&store) {
+            self.text_score_stores.push(store.clone());
+        }
+        args[1] = Expression::Literal(Value::String(store));
 
         if let Some(query_text) = query_text {
             args[2] = Expression::Parameter(self.param_for_text(query_text));
@@ -1747,6 +1761,7 @@ fn collect_pattern_refs(patterns: &[Pattern], out: &mut HashSet<String>) {
 
 fn collect_property_matcher_refs(m: &PropertyMatcher, out: &mut HashSet<String>) {
     match m {
+        PropertyMatcher::EqualsExpr(expr) => collect_expression_refs(expr, out),
         PropertyMatcher::EqualsVar(name) => {
             out.insert(name.clone());
         }

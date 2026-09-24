@@ -169,6 +169,17 @@ graph.cypher("MATCH (n:Person) WHERE n.email =~ '.*@example\\.com' RETURN n.name
 graph.cypher("MATCH (n:Person) WHERE n.name =~ '.*ali.*' RETURN n.name")
 ```
 
+An inline property map is an equality filter written in the pattern. Its
+values take the same expressions as a `CREATE` map: literals, `$params`,
+variables, and computed values such as `row[0]`, `row['k']`, `toLower(name)`
+or `x + 1`. A value that evaluates to `null` matches nothing, and one that
+fails to evaluate is an error:
+
+```python
+graph.cypher("UNWIND $rows AS row MATCH (d:Doc {id: row[0]}) SET d.lines = row[1]",
+             params={"rows": [["a", 10], ["b", 20]]})
+```
+
 ### Generated filters: prefer `IN [...]` over long `OR` chains
 
 Expression nesting is capped at **512 levels**, and every `OR` term adds one
@@ -540,6 +551,7 @@ graph.cypher("""
 | `text_score(n, prop, query, metric)` | With explicit metric (`'cosine'`, `'dot_product'`, `'euclidean'`, `'poincare'`) |
 | `vector_score(n, prop, vector [, metric] [, options])` | Semantic similarity against a pre-computed embedding vector (pass a list of floats directly, no `set_embedder()` needed) |
 | `embedding_norm(n, prop)` | L2 norm of embedding vector (hierarchy depth in Poincaré space: 0=root, ~1=leaf) |
+| `embedding(x, 'col_emb')` | The stored vector of a node or relationship as a list of floats; null when it has none, an error when its type has no such store. Compose it: `vector_score(m, 'col_emb', embedding(n, 'col_emb'))` is node-to-node (or relationship-to-relationship) similarity |
 | `score_fuse(s1, s2, … [, weights])` | Fuse ranked-lane scores into one — the mean of the signals that are **present**, or a weighted mean with a trailing list. A lane that could not score the row (`null`, `NaN`, `inf`) drops out of the average together with its weight; `null` only when every lane is absent |
 | `dot(a, b)` | Dot product of two list-valued vectors |
 | `cosine(a, b)` | Cosine similarity of two list-valued vectors |
@@ -661,8 +673,10 @@ error, never a silently ignored one.
 In an ordinary `MATCH`, `vector_score(r, 'evidence_emb', $vector)` names the
 canonical store, while `text_score(r, 'evidence', $text)` names the source
 property and embeds the query text. `embedding_norm(r, 'evidence_emb')` reads
-the stored vector. Scored per row, they are exact and obey the surrounding
-graph filters.
+the stored vector's norm, and `embedding(r, 'evidence_emb')` returns the vector
+itself, so `vector_score(r2, 'evidence_emb', embedding(r1, 'evidence_emb'))`
+scores one relationship against another. Scored per row, they are exact and
+obey the surrounding graph filters.
 
 The top-k shape — `RETURN … vector_score(r, …) AS s ORDER BY s DESC LIMIT k`,
 or the same with `text_score` — is served from the store, as it is for nodes:
@@ -4044,7 +4058,7 @@ below; do not infer absence from this shorter list.
 |----------|-----------|
 | **Clauses** | `MATCH`, `OPTIONAL MATCH`, `WHERE`, `FILTER`, `RETURN`, `FINISH`, `WITH`, `ORDER BY`, `SKIP`/`OFFSET`, `LIMIT`, `UNWIND`, `UNION`/`UNION ALL`, scoped and legacy `CALL { ... }` read subqueries, `CREATE`, `INSERT`, `SET`, `DELETE`/`NODETACH DELETE`/`DETACH DELETE`, `REMOVE`, `MERGE`, `EXPLAIN`, `PROFILE` |
 | **Schema DDL** | `CREATE INDEX`, `CREATE RANGE INDEX`, `DROP INDEX`, `SHOW INDEXES`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`, `SHOW CONSTRAINTS` — standalone statements; the two `SHOW` forms are reads |
-| **Patterns** | Node `(n:Type)`, relationship `-[:REL]->`, abbreviated `-->` / `--` / `<--`, variable-length `*1..3`, undirected `-[:REL]-`, properties `{key: val, key: $param, key: var}`, `p = shortestPath(...)` |
+| **Patterns** | Node `(n:Type)`, relationship `-[:REL]->`, abbreviated `-->` / `--` / `<--`, variable-length `*1..3`, undirected `-[:REL]-`, properties `{key: val, key: $param, key: var}` or any expression (`{id: row[0]}`, `{n: x + 1}`), `p = shortestPath(...)` |
 | **WHERE** | `=`, `<>`, `<`, `>`, `<=`, `>=`, `=~` (regex, full-string), `AND`, `OR`, `NOT`, `IS NULL`, `IS NOT NULL`, `IN [...]`, `CONTAINS`, `STARTS WITH`, `ENDS WITH`, `EXISTS { pattern WHERE ... }`, `EXISTS(( pattern ))`, inline pattern predicates, `any/all/none/single(x IN list WHERE ...)` |
 | **RETURN** | `n.prop`, `r.prop`, `AS` aliases, `DISTINCT`, arithmetic `+`/`-`/`*`/`/`, string concat `\|\|`, map projections `n {.prop}`, map literals `{k: expr}`, list slicing `[i..j]` |
 | **Aggregation** | `count(*)`, `count(expr)`, `sum`, `avg`/`mean`, `min`, `max`, `collect`, `std` |

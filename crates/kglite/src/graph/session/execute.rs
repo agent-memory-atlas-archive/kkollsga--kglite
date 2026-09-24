@@ -842,12 +842,13 @@ fn prepare(
     })?;
 
     // EXPLAIN renders plan rows without executing, so it needs no embedding.
-    let params: Cow<'_, HashMap<String, Value>> =
+    let mut params: Cow<'_, HashMap<String, Value>> =
         if !rewrite.texts_to_embed.is_empty() && !parsed.explain {
             Cow::Owned(embed_into_params(opts, &rewrite)?)
         } else {
             Cow::Borrowed(opts.params)
         };
+    record_text_score_stores(&mut params, &rewrite);
 
     let disabled_default = cypher::planner::empty_disabled_set();
     let disabled_ref = opts.disabled_passes.unwrap_or(disabled_default);
@@ -965,6 +966,27 @@ fn attach_diagnostics(
 /// the param map. Caller-supplied params are not mutated.
 // KgError carries query context; boxing it would only burden an error path.
 #[allow(clippy::result_large_err)]
+/// Lets a missing-store error name `text_score` and the source property the
+/// user wrote instead of the `vector_score` / `<property>_emb` it became.
+fn record_text_score_stores(
+    params: &mut Cow<'_, HashMap<String, Value>>,
+    rewrite: &cypher::planner::simplification::TextScoreRewrite,
+) {
+    if rewrite.text_score_stores.is_empty() {
+        return;
+    }
+    params.to_mut().insert(
+        cypher::planner::simplification::TEXT_SCORE_STORES_PARAM.to_string(),
+        Value::List(
+            rewrite
+                .text_score_stores
+                .iter()
+                .map(|store| Value::String(store.clone()))
+                .collect(),
+        ),
+    );
+}
+
 fn embed_into_params(
     opts: &ExecuteOptions<'_>,
     rewrite: &cypher::planner::simplification::TextScoreRewrite,
