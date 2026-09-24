@@ -1,8 +1,8 @@
-//! Compile-ready P4 module draft.
-//!
-//! Production assumptions are limited to the storage-owned
-//! `GeneratedEdgeEmbeddingWrite` and `install_generated_edge_embeddings` seam
-//! declared in `interface-handoff.md`.
+//! Relationship embedding generation: select relationships, read their text,
+//! run the registered model over what needs it, and install the result as one
+//! generated write. `db.edge_embeddings.embed` drives it with a Cypher
+//! selection; `api::embeddings::embed_relationship_texts` with every
+//! relationship of a type.
 
 use std::collections::HashSet;
 
@@ -15,7 +15,7 @@ use crate::graph::edge_embeddings::{
     GeneratedEdgeEmbeddingWrite,
 };
 use crate::graph::embedder::Embedder;
-use crate::graph::embeddings::EmbedMode;
+use crate::graph::embeddings::{EmbedError, EmbedHooks, EmbedMode};
 use crate::graph::schema::{DirGraph, EmbeddingStore};
 use crate::graph::storage::GraphRead;
 
@@ -72,62 +72,79 @@ struct SelectionPlan {
 }
 
 impl EmbeddingExecutionService<'_> {
-    fn interrupted(&self) -> Result<(), String> {
+    fn interrupted(&self) -> Result<(), EmbedError> {
         if self.interrupt.deadline_expired() {
-            Err("relationship embedding generation exceeded its deadline".into())
+            Err(EmbedError::Output(
+                "relationship embedding generation exceeded its deadline".into(),
+            ))
         } else if self.interrupt.is_cancelled() {
-            Err("relationship embedding generation was cancelled".into())
+            Err(EmbedError::Output(
+                "relationship embedding generation was cancelled".into(),
+            ))
         } else {
             Ok(())
         }
     }
 
     /// Loads at most once and unloads on every exit after a successful load.
+    /// `hooks` wraps the model call and reports progress, as it does for
+    /// [`crate::graph::embeddings::embed_property`].
     fn generate(
         &self,
         graph: &DirGraph,
         pending: &[Pending],
         batch_size: usize,
-    ) -> Result<Vec<(EdgeIndex, Vec<f32>, u64)>, String> {
+        hooks: Option<&EmbedHooks<'_>>,
+    ) -> Result<Vec<(EdgeIndex, Vec<f32>, u64)>, EmbedError> {
         if pending.is_empty() {
             return Ok(Vec::new());
         }
         self.interrupted()?;
-        self.model.load()?;
+        self.model.load().map_err(EmbedError::Model)?;
         let result = (|| {
             self.interrupted()?;
             let dimension = self.model.dimension();
             if dimension == 0 {
-                return Err("embedder declared dimension 0".into());
+                return Err(EmbedError::Output("embedder declared dimension 0".into()));
+            }
+            if let Some(started) = hooks.and_then(|hooks| hooks.on_start) {
+                started(pending.len());
             }
             let mut generated = Vec::with_capacity(pending.len());
             for batch in pending.chunks(batch_size) {
                 self.interrupted()?;
                 let texts: Vec<_> = batch.iter().map(|item| item.text.clone()).collect();
-                let vectors = self.model.embed(&texts)?;
+                let vectors = match hooks.and_then(|hooks| hooks.embed_batch) {
+                    Some(embed) => embed(&texts),
+                    None => self.model.embed(&texts),
+                }
+                .map_err(EmbedError::Model)?;
                 self.interrupted()?;
                 if vectors.len() != batch.len() {
-                    return Err(format!(
+                    return Err(EmbedError::Output(format!(
                         "embedder returned {} vectors for {} relationship texts",
                         vectors.len(),
                         batch.len()
-                    ));
+                    )));
                 }
                 for (item, vector) in batch.iter().zip(vectors) {
                     if vector.len() != dimension {
-                        return Err(format!(
+                        return Err(EmbedError::Output(format!(
                             "embedder returned a {}-d vector for relationship {}, expected {dimension}",
                             vector.len(),
                             describe_relationship(graph, item.edge)
-                        ));
+                        )));
                     }
                     if vector.iter().any(|value| !value.is_finite()) {
-                        return Err(format!(
+                        return Err(EmbedError::Output(format!(
                             "embedder returned a non-finite vector for relationship {}",
                             describe_relationship(graph, item.edge)
-                        ));
+                        )));
                     }
                     generated.push((item.edge, vector, item.text_hash));
+                }
+                if let Some(batched) = hooks.and_then(|hooks| hooks.on_batch) {
+                    batched(batch.len());
                 }
             }
             Ok(generated)
@@ -142,7 +159,25 @@ pub(crate) fn embed_selected_relationships(
     request: EdgeGenerationRequest,
     service: Option<&EmbeddingExecutionService<'_>>,
 ) -> Result<EdgeGenerationReport, String> {
-    validate_request_syntax(&request)?;
+    generate_selected(graph, request, service, None).map_err(|error| match error {
+        EmbedError::Dimension { store, model } => format!(
+            "the model produces {model}-d vectors but the existing relationship store is \
+             {store}-d and retained vectors would remain"
+        ),
+        other => other.to_string(),
+    })
+}
+
+/// [`embed_selected_relationships`] with the failure kept typed — a model
+/// failure apart from a caller's mistake — and the binding's hooks threaded
+/// into the model loop.
+pub(crate) fn generate_selected(
+    graph: &mut DirGraph,
+    request: EdgeGenerationRequest,
+    service: Option<&EmbeddingExecutionService<'_>>,
+    hooks: Option<&EmbedHooks<'_>>,
+) -> Result<EdgeGenerationReport, EmbedError> {
+    validate_request_syntax(&request).map_err(EmbedError::Output)?;
     let key = edge_store_key(&request.connection_type, &request.text_property);
     let existing = graph.edge_embeddings.get(&key);
     if request.selected.is_empty() {
@@ -160,21 +195,24 @@ pub(crate) fn embed_selected_relationships(
         });
     }
     let service = service.ok_or_else(|| {
-        "relationship embedding generation requires a registered embedder".to_string()
+        EmbedError::Output(
+            "relationship embedding generation requires a registered embedder".into(),
+        )
     })?;
-    validate_selection(graph, &request.connection_type, &request.selected)?;
+    validate_selection(graph, &request.connection_type, &request.selected)
+        .map_err(EmbedError::Output)?;
 
     let requested_model = service.model.model_id();
     if request.mode != EmbedMode::All {
         if let Some(prior_model) = existing.and_then(|store| store.model_id()) {
             if requested_model.as_deref() != Some(prior_model) {
-                return Err(format!(
+                return Err(EmbedError::Output(format!(
                     "the existing relationship embedding store was generated by model '{prior_model}', but the current model is {}; use mode='all' to rebuild the selected slice",
                     requested_model
                         .as_deref()
                         .map(|model| format!("'{model}'"))
                         .unwrap_or_else(|| "unknown".into())
-                ));
+                )));
             }
         }
     }
@@ -191,19 +229,19 @@ pub(crate) fn embed_selected_relationships(
     });
     let dimension = service.model.dimension();
     if dimension == 0 {
-        return Err("embedder declared dimension 0".into());
+        return Err(EmbedError::Output("embedder declared dimension 0".into()));
     }
     if let Some(store) = existing.filter(|store| store.dimension() != dimension) {
         if request.mode != EmbedMode::All || unselected_vectors_remain {
-            return Err(format!(
-                "the model produces {dimension}-d vectors but the existing relationship store is {}-d and retained vectors would remain",
-                store.dimension()
-            ));
+            return Err(EmbedError::Dimension {
+                store: store.dimension(),
+                model: dimension,
+            });
         }
     }
 
     let mut plan = plan_selection(existing, &request.selected, request.mode);
-    let generated = service.generate(graph, &plan.pending, request.batch_size)?;
+    let generated = service.generate(graph, &plan.pending, request.batch_size, hooks)?;
     let final_model_id = final_model_id(
         existing.and_then(|store| store.model_id()),
         requested_model.as_deref(),
@@ -225,7 +263,8 @@ pub(crate) fn embed_selected_relationships(
         &request.connection_type,
         &request.text_property,
         write,
-    )?;
+    )
+    .map_err(EmbedError::Output)?;
     Ok(EdgeGenerationReport {
         embedded: plan.pending.len(),
         skipped: plan.skipped,
@@ -533,7 +572,9 @@ mod tests {
             model: &model,
             interrupt: Interrupt::default(),
         };
-        let generated = service.generate(&DirGraph::new(), &pending(3), 2).unwrap();
+        let generated = service
+            .generate(&DirGraph::new(), &pending(3), 2, None)
+            .unwrap();
         assert_eq!(generated.len(), 3);
         assert_eq!(model.loads.load(Ordering::Relaxed), 1);
         assert_eq!(model.embeds.load(Ordering::Relaxed), 2);
@@ -553,7 +594,9 @@ mod tests {
                 model: &model,
                 interrupt: Interrupt::default(),
             };
-            assert!(service.generate(&DirGraph::new(), &pending(2), 2).is_err());
+            assert!(service
+                .generate(&DirGraph::new(), &pending(2), 2, None)
+                .is_err());
             assert_eq!(model.loads.load(Ordering::Relaxed), 1);
             assert_eq!(model.unloads.load(Ordering::Relaxed), 1);
         }
@@ -570,7 +613,9 @@ mod tests {
                 cancel: Some(&CANCELLED),
             },
         };
-        assert!(service.generate(&DirGraph::new(), &pending(1), 1).is_err());
+        assert!(service
+            .generate(&DirGraph::new(), &pending(1), 1, None)
+            .is_err());
         assert_eq!(model.loads.load(Ordering::Relaxed), 0);
         assert_eq!(model.embeds.load(Ordering::Relaxed), 0);
         assert_eq!(model.unloads.load(Ordering::Relaxed), 0);
@@ -588,7 +633,7 @@ mod tests {
             },
         };
         assert!(service
-            .generate(&DirGraph::new(), &[], 1)
+            .generate(&DirGraph::new(), &[], 1, None)
             .unwrap()
             .is_empty());
         assert_eq!(model.loads.load(Ordering::Relaxed), 0);

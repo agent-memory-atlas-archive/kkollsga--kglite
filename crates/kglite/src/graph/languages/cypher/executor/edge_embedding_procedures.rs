@@ -5,8 +5,8 @@ use petgraph::graph::EdgeIndex;
 
 use crate::datatypes::values::{RelValue, Value};
 use crate::graph::edge_embedding_generation::{
-    embed_selected_relationships, EdgeGenerationRequest, EmbeddingExecutionService,
-    SelectedEdgeText,
+    embed_selected_relationships, EdgeGenerationReport, EdgeGenerationRequest,
+    EmbeddingExecutionService, SelectedEdgeText,
 };
 use crate::graph::edge_embeddings::vector_index::{
     build_edge_vector_index, drop_edge_vector_index, query_edge_embedding_stores,
@@ -38,6 +38,10 @@ pub(super) fn execute(
         params.keys().map(String::as_str),
         accepted_keys(proc_name),
     )?;
+    if proc_name == "db.edge_embeddings.embed" {
+        let values = execute_embed(graph, params, identities, service)?;
+        return Ok(vec![yield_row(values, yields)]);
+    }
     let relationship_type = require_string(params, "type", proc_name)?;
     let text_property = require_string(params, "text_property", proc_name)?;
     let values = match proc_name {
@@ -97,66 +101,6 @@ pub(super) fn execute(
         "db.edge_embeddings.drop_index" => {
             let dropped = drop_edge_vector_index(graph, &relationship_type, &text_property)?;
             HashMap::from([("dropped", Value::Boolean(dropped))])
-        }
-        "db.edge_embeddings.embed" => {
-            let relationships = require_list(params, "relationships", proc_name)?;
-            let mut selected = Vec::with_capacity(relationships.len());
-            for (position, value) in relationships.iter().enumerate() {
-                let Value::Relationship(relationship) = value else {
-                    return Err(format!(
-                        "CALL {proc_name}: 'relationships' must contain relationships"
-                    ));
-                };
-                let at = ListPosition("relationships", position);
-                let edge =
-                    resolve_rel_value(relationship, &relationship_type, identities, proc_name, at)?;
-                let text = graph
-                    .graph
-                    .edge_weight(edge)
-                    .and_then(|current| current.get_property(&text_property))
-                    .and_then(|value| match value {
-                        Value::String(text) if !text.is_empty() => Some(text.clone()),
-                        _ => None,
-                    });
-                selected.push(SelectedEdgeText { edge, text });
-            }
-            let edges: Vec<_> = selected.iter().map(|item| item.edge).collect();
-            reject_repeated(graph, &edges, "relationships", proc_name)?;
-            if !selected.is_empty() {
-                require_carried_text_property(graph, &relationship_type, &text_property)
-                    .map_err(|error| format!("CALL {proc_name}: {error}"))?;
-            }
-            let mode = match optional_string(params, "mode", proc_name)?.as_deref() {
-                None | Some("missing") => EmbedMode::Missing,
-                Some("changed") => EmbedMode::Changed,
-                Some("all") => EmbedMode::All,
-                Some(other) => {
-                    return Err(format!(
-                        "CALL {proc_name}: unknown mode '{other}'; use missing, changed, or all"
-                    ))
-                }
-            };
-            let batch_size =
-                optional_positive_usize(params, "batch_size", proc_name)?.unwrap_or(256);
-            let metric = optional_string(params, "metric", proc_name)?;
-            let report = embed_selected_relationships(
-                graph,
-                EdgeGenerationRequest {
-                    connection_type: relationship_type,
-                    text_property,
-                    selected,
-                    mode,
-                    batch_size,
-                    metric,
-                },
-                service,
-            )?;
-            HashMap::from([
-                ("embedded", Value::Int64(report.embedded as i64)),
-                ("skipped", Value::Int64(report.skipped as i64)),
-                ("dimension", Value::Int64(report.dimension as i64)),
-                ("model", report.model_id.map_or(Value::Null, Value::String)),
-            ])
         }
         other => unreachable!("non-edge-embedding procedure routed here: {other}"),
     };
@@ -291,6 +235,37 @@ fn query_types(
     text_property: &str,
     proc_name: &str,
 ) -> Result<Vec<String>, String> {
+    let omit_hint = format!("or omit it to rank every '{text_property}' store");
+    if let Some(types) = named_types(params, proc_name, &omit_hint)? {
+        return Ok(types);
+    }
+    let mut types: Vec<String> = graph
+        .edge_embeddings
+        .keys()
+        .filter(|(_, store_name)| {
+            crate::graph::embeddings::text_column_of(store_name) == Some(text_property)
+        })
+        .map(|(rel_type, _)| rel_type.clone())
+        .collect();
+    if types.is_empty() {
+        return Err(format!(
+            "CALL {proc_name}: no relationship embedding store for text_property \
+             '{text_property}'"
+        ));
+    }
+    types.sort();
+    Ok(types)
+}
+
+/// The relationship types a procedure names: `type` alone, or the `types`
+/// list (sorted, duplicates dropped); `None` when it names neither. The two
+/// are mutually exclusive, and an empty list is refused with `empty_hint` as
+/// the alternative the caller has.
+fn named_types(
+    params: &HashMap<String, Value>,
+    proc_name: &str,
+    empty_hint: &str,
+) -> Result<Option<Vec<String>>, String> {
     let listed = match params.get("types") {
         None | Some(Value::Null) => None,
         Some(Value::List(items)) => Some(items),
@@ -329,42 +304,150 @@ fn query_types(
             if types.is_empty() {
                 return Err(format!(
                     "CALL {proc_name}: 'types' is empty; name at least one relationship type, \
-                     or omit it to rank every '{text_property}' store"
+                     {empty_hint}"
                 ));
             }
             types
         }
-        (None, None) => {
-            let types: Vec<String> = graph
-                .edge_embeddings
-                .keys()
-                .filter(|(_, store_name)| {
-                    crate::graph::embeddings::text_column_of(store_name) == Some(text_property)
-                })
-                .map(|(rel_type, _)| rel_type.clone())
-                .collect();
-            if types.is_empty() {
-                return Err(format!(
-                    "CALL {proc_name}: no relationship embedding store for text_property \
-                     '{text_property}'"
-                ));
-            }
-            types
-        }
+        (None, None) => return Ok(None),
     };
     types.sort();
     types.dedup();
-    Ok(types)
+    Ok(Some(types))
+}
+
+/// `db.edge_embeddings.embed`: one generation pass per named type over the
+/// relationships of that type in the list, reported as one row — `embedded`
+/// and `skipped` summed, `dimension` and `model` the value the passes share
+/// (null when they differ). Every relationship must be of a named type.
+fn execute_embed(
+    graph: &mut DirGraph,
+    params: &HashMap<String, Value>,
+    identities: &Arc<Mutex<StatementRelationshipIdentities>>,
+    service: Option<&EmbeddingExecutionService<'_>>,
+) -> Result<HashMap<&'static str, Value>, String> {
+    let proc_name = "db.edge_embeddings.embed";
+    let types = named_types(params, proc_name, "or pass type")?
+        .ok_or_else(|| format!("CALL {proc_name}: missing parameter 'type'"))?;
+    let text_property = require_string(params, "text_property", proc_name)?;
+    let relationships = require_list(params, "relationships", proc_name)?;
+    let mut selected: Vec<Vec<SelectedEdgeText>> = vec![Vec::new(); types.len()];
+    let mut edges = Vec::with_capacity(relationships.len());
+    for (position, value) in relationships.iter().enumerate() {
+        let Value::Relationship(relationship) = value else {
+            return Err(format!(
+                "CALL {proc_name}: 'relationships' must contain relationships"
+            ));
+        };
+        let at = ListPosition("relationships", position);
+        let slot = match types.iter().position(|name| *name == relationship.rel_type) {
+            Some(slot) => slot,
+            // One named type keeps the procedure's single-type wording.
+            None if types.len() == 1 => 0,
+            None => {
+                return Err(format!(
+                    "CALL {proc_name}: {at} has type '{}', expected one of {}",
+                    relationship.rel_type,
+                    types
+                        .iter()
+                        .map(|name| format!("'{name}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            }
+        };
+        let edge = resolve_rel_value(relationship, &types[slot], identities, proc_name, at)?;
+        let text = graph
+            .graph
+            .edge_weight(edge)
+            .and_then(|current| current.get_property(&text_property))
+            .and_then(|value| match value {
+                Value::String(text) if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            });
+        selected[slot].push(SelectedEdgeText { edge, text });
+        edges.push(edge);
+    }
+    reject_repeated(graph, &edges, "relationships", proc_name)?;
+    for (relationship_type, selection) in types.iter().zip(&selected) {
+        if !selection.is_empty() {
+            require_carried_text_property(graph, relationship_type, &text_property)
+                .map_err(|error| format!("CALL {proc_name}: {error}"))?;
+        }
+    }
+    let mode = match optional_string(params, "mode", proc_name)?.as_deref() {
+        None | Some("missing") => EmbedMode::Missing,
+        Some("changed") => EmbedMode::Changed,
+        Some("all") => EmbedMode::All,
+        Some(other) => {
+            return Err(format!(
+                "CALL {proc_name}: unknown mode '{other}'; use missing, changed, or all"
+            ))
+        }
+    };
+    let batch_size = optional_positive_usize(params, "batch_size", proc_name)?.unwrap_or(256);
+    let metric = optional_string(params, "metric", proc_name)?;
+    let mut reports = Vec::with_capacity(types.len());
+    for (relationship_type, selection) in types.into_iter().zip(selected) {
+        let had_selection = !selection.is_empty();
+        let report = embed_selected_relationships(
+            graph,
+            EdgeGenerationRequest {
+                connection_type: relationship_type,
+                text_property: text_property.clone(),
+                selected: selection,
+                mode,
+                batch_size,
+                metric: metric.clone(),
+            },
+            service,
+        )?;
+        reports.push((had_selection, report));
+    }
+    // A type the list selected nothing of reports its untouched store; it
+    // speaks for the row only when no type was selected at all.
+    let any_selected = reports.iter().any(|(had, _)| *had);
+    let considered: Vec<_> = reports
+        .iter()
+        .filter(|(had, _)| *had || !any_selected)
+        .map(|(_, report)| report)
+        .collect();
+    let shared = |value: &dyn Fn(&EdgeGenerationReport) -> Value| {
+        let first = value(considered[0]);
+        if considered.iter().all(|report| value(report) == first) {
+            first
+        } else {
+            Value::Null
+        }
+    };
+    Ok(HashMap::from([
+        (
+            "embedded",
+            Value::Int64(reports.iter().map(|(_, r)| r.embedded).sum::<usize>() as i64),
+        ),
+        (
+            "skipped",
+            Value::Int64(reports.iter().map(|(_, r)| r.skipped).sum::<usize>() as i64),
+        ),
+        (
+            "dimension",
+            shared(&|report| Value::Int64(report.dimension as i64)),
+        ),
+        (
+            "model",
+            shared(&|report| report.model_id.clone().map_or(Value::Null, Value::String)),
+        ),
+    ]))
 }
 
 /// Every parameter each `db.edge_embeddings.*` procedure reads, by name.
 ///
 /// One table rather than a literal at each call site: the nine procedures share
-/// `type`/`text_property` and differ only in their tails, and a list that lived
-/// beside its reader is the kind that goes stale when a parameter is added two
-/// functions away. The strings are also the "Accepted:" line a caller sees, so
-/// they carry `type` and `text_property` even though those are required rather
-/// than optional.
+/// `type`/`text_property` (`query` and `embed` also take `types`) and differ
+/// only in their tails, and a list that lived beside its reader is the kind
+/// that goes stale when a parameter is added two functions away. The strings
+/// are also the "Accepted:" line a caller sees, so they carry the required
+/// names as well as the optional ones.
 fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
         "db.edge_embeddings.set" => &["type", "text_property", "entries", "metric"],
@@ -384,6 +467,7 @@ fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
         ],
         "db.edge_embeddings.embed" => &[
             "type",
+            "types",
             "text_property",
             "relationships",
             "mode",

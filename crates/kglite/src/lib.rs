@@ -362,6 +362,13 @@ pub mod api {
     /// their own concerns in through `EmbedHooks` (a progress bar, releasing
     /// the GIL around the model call).
     ///
+    /// Relationship stores have the same two write halves, addressed by
+    /// endpoint ids: `set_relationship_embeddings` replaces a store and
+    /// `add_relationship_embeddings` upserts into one (as `set_embeddings` /
+    /// `add_embeddings` do for nodes), and `embed_relationship_texts` computes
+    /// the vectors — the entry points beside
+    /// `db.edge_embeddings.set` / `.embed`, sharing their store paths.
+    ///
     /// The read-side inventory covers both entities: `list_embeddings` lists
     /// node stores, `list_edge_embeddings` relationship stores, and
     /// `embedding_info` / `embedding_diagnostics` take an explicit
@@ -370,7 +377,14 @@ pub mod api {
     pub mod embeddings {
         /// Read a relationship store back out, addressed by endpoint ids.
         pub use crate::graph::edge_embeddings::carry::{
-            relationship_embeddings, RelationshipEmbedding,
+            relationship_embeddings, RelationshipEmbedding, RelationshipKeys,
+        };
+        /// Write a relationship store by endpoint ids — replace it or upsert
+        /// into it with given vectors, or embed every relationship's text
+        /// through a bound `Embedder`.
+        pub use crate::graph::edge_embeddings::ingest::{
+            add_relationship_embeddings, embed_relationship_texts, set_relationship_embeddings,
+            RelationshipIngestReport, RelationshipVector,
         };
         pub use crate::graph::embedding_inventory::{
             embedding_diagnostics, embedding_info, list_edge_embeddings, EdgeEmbeddingStoreInfo,

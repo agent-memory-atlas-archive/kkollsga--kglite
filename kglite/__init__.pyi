@@ -8322,6 +8322,168 @@ class KnowledgeGraph:
         """
         ...
 
+    def set_relationship_embeddings(
+        self,
+        relationship_type: str,
+        text_column: str,
+        embeddings: dict[tuple[Any, ...], Sequence[float]] | list[dict[str, Any]],
+        *,
+        relationship_keys: Optional[dict[str, str]] = None,
+        metric: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Store relationship vectors addressed by their endpoints.
+        **Replaces** any existing store for ``(relationship_type,
+        "{text_column}_emb")`` — the relationship twin of
+        :meth:`set_embeddings`, and the write-side twin of
+        :meth:`relationship_embeddings`.
+
+        The store is the one ``db.edge_embeddings.*``, ``vector_score(r, …)``
+        and :meth:`relationship_embeddings` use. Relationships you do not name
+        are left with no vector, and the old store's metric and HNSW index go
+        with it, as for a replaced node store. To extend a store instead, use
+        :meth:`add_relationship_embeddings` (an upsert, like ``CALL
+        db.edge_embeddings.set``). Use these methods for bulk loads;
+        ``db.edge_embeddings.set`` writes relationships a query has just
+        matched.
+
+        ``embeddings`` takes one of two shapes:
+
+        * a **dict** mapping an endpoint tuple to a vector (a list of floats or
+          a 1-D numpy array). The key is ``(source_id, target_id)`` when every
+          relationship of the type runs from one source node type to one target
+          node type (the types are taken from the graph);
+          ``(source_type, source_id, target_type, target_id)`` otherwise; and
+          either of those with the relationship's key value appended —
+          ``(source_id, target_id, key)`` or ``(source_type, source_id,
+          target_type, target_id, key)`` — to pick a member of a parallel
+          group.
+        * a **list of row dicts** shaped like :meth:`relationship_embeddings`'
+          rows: ``source``, ``target`` and ``vector`` required;
+          ``source_type``, ``target_type`` and ``key`` optional (``None`` means
+          absent). Rows read with :meth:`relationship_embeddings` can be
+          modified and written straight back.
+
+        Several relationships of the type between the same two nodes (a
+        parallel group) are told apart only by a key: name a property unique
+        within each group in ``relationship_keys`` (``{'SUPPORTS': 'uid'}``,
+        the mapping :meth:`relationship_embeddings` and
+        :meth:`export_embeddings` take) and give each row its value.
+
+        Every row is resolved and every vector checked before anything is
+        written, so a refused call leaves the store as it was. The dimension is
+        the first vector's, and every coordinate must be finite. The new store
+        records the vectors, dimension and metric you supply and no model or
+        source-text provenance (:meth:`embedding_info` ``model`` is ``None``).
+        Call ``save()`` to persist.
+
+        Args:
+            relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
+            text_column: The relationship property the vectors stand for (e.g.
+                ``'evidence'``; the store is ``'evidence_emb'``). Some
+                relationship of the type must carry it unless the store
+                already exists.
+            embeddings: The vectors, in either shape above.
+            relationship_keys: Per relationship type, the property that tells
+                a parallel group's members apart.
+            metric: The new store's distance metric — ``'cosine'``
+                (default), ``'dot_product'``, ``'euclidean'`` or
+                ``'poincare'``.
+
+        Returns:
+            Dict with ``embeddings_stored`` (vectors in the store after the
+            call), ``dimension``, ``changed`` (vectors written) and
+            ``store_created`` (``True`` whenever the call wrote: it always
+            installs a fresh store).
+
+        Raises:
+            TypeError: ``embeddings`` is neither shape, a dict key is not one of
+                the four tuples, or a row dict lacks ``source`` / ``target`` /
+                ``vector`` or has another key.
+            ValueError: A row names no single relationship — an endpoint id no
+                node of that type has, two nodes no relationship of the type
+                connects, a parallel group without a key property or without a
+                key on the row, a key that is missing or repeated within its
+                group, a key value no member has, endpoint types left out for a
+                type that connects several — or two rows name the same
+                relationship; a vector's dimension differs from the first's or
+                a coordinate is not finite; ``metric`` is unknown; or no
+                relationship of the type carries ``text_column``. The message
+                names the row (``rows[i]``) and its relationship.
+
+        Example::
+
+            rows = graph.relationship_embeddings(
+                "SUPPORTS", "evidence", relationship_keys={"SUPPORTS": "uid"}
+            )
+            for row in rows:
+                row["vector"] = [2 * x for x in row["vector"]]
+            graph.set_relationship_embeddings(
+                "SUPPORTS", "evidence", rows, relationship_keys={"SUPPORTS": "uid"}
+            )
+
+            # Or a dict keyed by endpoints, e.g. from a numpy matrix:
+            graph.set_relationship_embeddings(
+                "CITES", "context", {(1, 2): matrix[0], (1, 3): matrix[1]}
+            )
+        """
+        ...
+
+    def add_relationship_embeddings(
+        self,
+        relationship_type: str,
+        text_column: str,
+        embeddings: dict[tuple[Any, ...], Sequence[float]] | list[dict[str, Any]],
+        *,
+        relationship_keys: Optional[dict[str, str]] = None,
+        metric: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Add or update relationship vectors without discarding the existing
+        store — the relationship twin of :meth:`add_embeddings`, and the bulk
+        twin of ``CALL db.edge_embeddings.set``, which upserts the same way.
+
+        Differs from :meth:`set_relationship_embeddings` (which replaces the
+        store) by upserting into the ``(relationship_type,
+        "{text_column}_emb")`` store: relationships you do not name keep their
+        vectors, and the first call creates the store. ``embeddings``,
+        ``relationship_keys``, row resolution and every refusal are exactly as
+        for :meth:`set_relationship_embeddings`.
+
+        An existing store's dimension is authoritative. A written vector is a
+        manual one: its source-text hash is cleared and the store's model
+        provenance becomes unknown (:meth:`embedding_info` ``model`` is
+        ``None``), as for :meth:`add_embeddings`. A built HNSW index is kept and
+        the new vectors are its delta, folded in by the next query or
+        ``db.edge_embeddings.refresh_index``. Call ``save()`` to persist.
+
+        Args:
+            relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
+            text_column: The relationship property the vectors stand for.
+            embeddings: The vectors, in either shape
+                :meth:`set_relationship_embeddings` takes.
+            relationship_keys: Per relationship type, the property that tells
+                a parallel group's members apart.
+            metric: Applies to the call that creates the store. An existing
+                store that declares none adopts it; one that declares another
+                is refused.
+
+        Returns:
+            Dict with ``embeddings_stored`` (vectors in the store after the
+            call), ``dimension``, ``changed`` (vectors this call added or
+            changed; a byte-identical manual vector is not a change) and
+            ``store_created`` (``True`` only on the call that created it).
+
+        Raises:
+            TypeError: As for :meth:`set_relationship_embeddings`.
+            ValueError: As for :meth:`set_relationship_embeddings`, plus a
+                vector whose dimension differs from the existing store's, or a
+                ``metric`` that contradicts the store's.
+
+        Example::
+
+            graph.add_relationship_embeddings("CITES", "context", {(2, 3): vec})
+        """
+        ...
+
     def set_embedder(self, model: Optional[EmbeddingModel]) -> None:
         """Register or unbind an embedding model on the graph.
 
@@ -8424,6 +8586,72 @@ class KnowledgeGraph:
 
             # Add/edit articles, then re-embed only what changed:
             g.embed_texts("Article", "summary", mode="changed")
+        """
+        ...
+
+    def embed_relationship_texts(
+        self,
+        relationship_type: str,
+        text_column: str,
+        *,
+        mode: str | None = None,
+        batch_size: int = 256,
+        show_progress: bool = True,
+        metric: str | None = None,
+    ) -> dict[str, int]:
+        """Embed a text property for every relationship of a type — the
+        relationship twin of :meth:`embed_texts`.
+
+        Uses the model registered via :meth:`set_embedder`. Reads each
+        relationship's ``text_column`` property, calls ``model.embed()`` in
+        batches, and stores the vectors in ``(relationship_type,
+        "{text_column}_emb")`` with per-relationship source-text hashes and the
+        model id — exactly what ``CALL db.edge_embeddings.embed`` stores when
+        given every relationship of the type. Relationships with a missing,
+        non-string or empty value are skipped. Model output coordinates must
+        be finite.
+
+        Model provenance follows :meth:`embed_texts`: an incremental pass
+        refuses a store another (or an unnamed) model generated — use
+        ``mode='all'`` to rebuild — and a store holding manual vectors stays
+        ``model=None`` until a ``mode='all'`` pass.
+
+        Args:
+            relationship_type: The relationship type (e.g. ``'SUPPORTS'``).
+            text_column: The relationship property holding the text (e.g.
+                ``'evidence'``).
+            mode: Which relationships to embed — ``'missing'`` (default): only
+                those without a vector; ``'changed'``: those without a vector
+                *or* whose text changed since it was embedded (via the stored
+                hash); ``'all'``: every one, and a relationship whose text is
+                gone loses its vector. Only ``'all'`` can change the store's
+                dimension.
+            batch_size: Texts per ``model.embed()`` call (default 256).
+            show_progress: Show a tqdm progress bar (default ``True``);
+                silently none when ``tqdm`` is not installed.
+            metric: The distance metric to record on the store, as
+                ``db.edge_embeddings.embed``'s ``metric`` does.
+
+        Returns:
+            Dict with ``embedded``, ``skipped`` (no text), ``skipped_existing``,
+            ``reembedded_changed`` and ``dimension``.
+
+        Raises:
+            ValueError: No relationship of ``relationship_type`` carries
+                ``text_column`` and no store exists for it (this includes a
+                relationship type the graph does not have); ``mode`` is not one
+                of the three names; the store was generated by another model
+                and ``mode`` is not ``'all'``; the model's dimension differs
+                from vectors the pass would keep; or the model's output
+                contradicts its dimension.
+            RuntimeError: No embedder is registered, or the model failed.
+
+        Example::
+
+            g.set_embedder(my_model)
+            g.embed_relationship_texts("SUPPORTS", "evidence")
+            # Edit some evidence, then re-embed only what changed:
+            g.embed_relationship_texts("SUPPORTS", "evidence", mode="changed")
         """
         ...
 

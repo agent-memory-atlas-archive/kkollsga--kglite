@@ -1092,7 +1092,7 @@ fn embed_error(error: EmbedError, node_type: &str, text_column: &str) -> PyErr {
 /// module named 'tqdm'" whenever the parent is unimportable, even though
 /// `sys.modules["tqdm.auto"]` already holds the target. `import_module`
 /// honours that `sys.modules` entry for the full dotted name.
-fn resolve_progress_factory<'py>(
+pub(super) fn resolve_progress_factory<'py>(
     py: Python<'py>,
     show_progress: bool,
 ) -> Option<Bound<'py, PyAny>> {
@@ -1109,7 +1109,7 @@ fn resolve_progress_factory<'py>(
 /// One tqdm bar from the factory `resolve_progress_factory` returned, sized to
 /// the texts this pass will embed. `None` keeps the silent fallback: no
 /// factory, or a factory that refuses the call, simply draws no bar.
-fn open_progress_bar<'py>(
+pub(super) fn open_progress_bar<'py>(
     factory: Option<&Bound<'py, PyAny>>,
     total: usize,
     desc: String,

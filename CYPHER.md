@@ -638,6 +638,15 @@ Selection is validated before the model callback and the write is atomic. The
 source text is read from live graph state, including a `SET r.evidence = ...`
 earlier in the same statement.
 
+`types: ['SUPPORTS', 'REFUTES']` in place of `type` embeds several types in one
+call: each listed type gets its own pass over the selected relationships of
+that type, exactly as a separate call per type would, and every relationship in
+`relationships` must be of a listed type (`type` and `types` are mutually
+exclusive). The call still yields one row: `embedded` and `skipped` summed over
+the types, `dimension` and `model` the value the passes share, `null` when they
+differ. To embed every relationship of a type from Python, without a
+selection, call `embed_relationship_texts(type, text_property, mode=…)`.
+
 The mutating procedure must remain a top-level pipeline clause. A read-only
 `CALL {}` subquery may return collected relationship values to an outer
 top-level `db.edge_embeddings.embed` call. A mutating call placed inside the
@@ -661,6 +670,15 @@ CALL db.edge_embeddings.remove({
 CALL db.edge_embeddings.drop({type:'SUPPORTS', text_property:'evidence'})
 YIELD dropped
 ```
+
+`set` upserts the relationships a query has bound. For a bulk load — vectors
+computed outside the graph for thousands of relationships — use the Python
+`add_relationship_embeddings(type, text_property, {(source_id, target_id):
+vector, …})`, the same upsert, or `set_relationship_embeddings(…)`, which
+replaces the store as the node `set_embeddings` does (Rust:
+`kglite::api::embeddings::{add,set}_relationship_embeddings`). Both address
+each relationship by its endpoint ids, take numpy rows, and write without a
+per-row query pipeline.
 
 `set` yields `stored`, the number of vectors the store holds after the call —
 not the number this call wrote, which no column reports — and `dimension`, the

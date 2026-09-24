@@ -84,7 +84,7 @@ pub(crate) struct ResolvedEdgeStore {
     skipped: usize,
 }
 
-fn describe_group(
+pub(super) fn describe_group(
     graph: &DirGraph,
     relationship_type: &str,
     source: NodeIndex,
@@ -106,23 +106,50 @@ fn refusal(store: &str, group: &str, reason: &str, relationship_type: &str) -> S
     )
 }
 
-/// The live members of `relationship_type` from `source` to `target`.
-fn group_members(
+/// The live members of `relationship_type` from `source` to `target`, in slot
+/// order.
+///
+/// Walks the source's outgoing and the target's incoming edges in lockstep
+/// and answers from whichever list ends first, so the cost is twice the
+/// smaller degree. `edges_connecting` walks the source's list alone, which
+/// made resolving every relationship off one hub quadratic: 200k rows `Hub ->
+/// Doc` took 31 s against 0.09 s for the node twin.
+pub(super) fn group_members(
     graph: &DirGraph,
     source: NodeIndex,
     target: NodeIndex,
     relationship_type: &str,
 ) -> Vec<EdgeIndex> {
+    use petgraph::Direction::{Incoming, Outgoing};
     let conn = InternedKey::from_str(relationship_type);
-    graph
+    let mut outgoing = graph
         .graph
-        .edges_connecting(source, target)
-        .filter(|edge| edge.connection_type() == conn)
-        .map(|edge| edge.id())
-        .collect()
+        .edges_directed_filtered(source, Outgoing, Some(conn));
+    let mut incoming = graph
+        .graph
+        .edges_directed_filtered(target, Incoming, Some(conn));
+    let (mut from_source, mut from_target) = (Vec::new(), Vec::new());
+    let mut members = loop {
+        match outgoing.next() {
+            None => break from_source,
+            Some(edge) if edge.target() == target && edge.connection_type() == conn => {
+                from_source.push(edge.id())
+            }
+            Some(_) => {}
+        }
+        match incoming.next() {
+            None => break from_target,
+            Some(edge) if edge.source() == source && edge.connection_type() == conn => {
+                from_target.push(edge.id())
+            }
+            Some(_) => {}
+        }
+    };
+    members.sort_unstable_by_key(|edge| edge.index());
+    members
 }
 
-fn key_value(graph: &DirGraph, edge: EdgeIndex, property: &str) -> Option<Value> {
+pub(super) fn key_value(graph: &DirGraph, edge: EdgeIndex, property: &str) -> Option<Value> {
     graph
         .graph
         .edge_weight(edge)?
@@ -132,7 +159,7 @@ fn key_value(graph: &DirGraph, edge: EdgeIndex, property: &str) -> Option<Value>
 }
 
 /// Every member's key value, refusing a member without one or a repeated value.
-fn group_keys(
+pub(super) fn group_keys(
     graph: &DirGraph,
     members: &[EdgeIndex],
     property: &str,

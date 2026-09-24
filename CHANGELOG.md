@@ -182,6 +182,22 @@ before upgrading.
   members apart, as in `export_embeddings()`. Rust:
   `kglite::api::embeddings::relationship_embeddings`.
 
+- **Writing relationship vectors from Python and Rust.**
+  `set_relationship_embeddings(relationship_type, text_column, embeddings, *,
+  relationship_keys=None, metric=None)` replaces a relationship store and
+  `add_relationship_embeddings(...)` upserts into one, as `set_embeddings()` /
+  `add_embeddings()` do for nodes, with vectors addressed by endpoint
+  ids — a dict keyed by `(source_id, target_id)` (or with the endpoint types,
+  and a parallel group's key appended), or the rows `relationship_embeddings()`
+  returns, so a read-modify-write round-trips; numpy rows are read from their
+  bytes. `embed_relationship_texts(relationship_type, text_column, *, mode=…)`
+  embeds every relationship of a type with the registered model, as
+  `embed_texts()` does for nodes. They share the validation and store path of
+  `db.edge_embeddings.set` (an upsert) / `.embed`, with the same refusals;
+  `db.edge_embeddings.embed` also takes `types: [...]` in place of `type`.
+  Rust: `kglite::api::embeddings::{set_relationship_embeddings,
+  add_relationship_embeddings, embed_relationship_texts}`.
+
 - **`describe()` now shows which embedding stores have an index.** A store with
   an HNSW index shows `index="hnsw"` on its `<embeddings/>` element, for node
   types and relationship types alike. On a relationship `<conn>` line the

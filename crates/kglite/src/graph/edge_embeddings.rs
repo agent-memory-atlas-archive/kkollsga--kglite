@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use rustc_hash::FxHashSet;
+
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +24,9 @@ pub(crate) mod vector_index;
 
 #[path = "edge_embedding_carry.rs"]
 pub(crate) mod carry;
+
+#[path = "edge_embedding_ingest.rs"]
+pub(crate) mod ingest;
 
 pub(crate) type EdgeEmbeddingKey = (String, String);
 
@@ -606,6 +611,27 @@ pub(crate) fn upsert_edge_embeddings(
     entries: Vec<(EdgeIndex, Vec<f32>)>,
     metric: Option<&str>,
 ) -> Result<EdgeEmbeddingWriteReport, String> {
+    upsert_edge_embeddings_listed(
+        graph,
+        connection_type,
+        text_property,
+        entries,
+        metric,
+        "entries",
+    )
+}
+
+/// [`upsert_edge_embeddings`] with the name the caller gave its list, so a
+/// per-entry error reads `rows[3]` for `set_relationship_embeddings` and
+/// `entries[3]` for `db.edge_embeddings.set`.
+pub(crate) fn upsert_edge_embeddings_listed(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    text_property: &str,
+    entries: Vec<(EdgeIndex, Vec<f32>)>,
+    metric: Option<&str>,
+    list: &str,
+) -> Result<EdgeEmbeddingWriteReport, String> {
     if entries.is_empty() {
         return Ok(EdgeEmbeddingWriteReport::default());
     }
@@ -628,34 +654,7 @@ pub(crate) fn upsert_edge_embeddings(
         }
     }
 
-    let mut seen = HashSet::with_capacity(entries.len());
-    let _arena_guard = graph.graph.begin_query();
-    // `entries` is the caller's list in order, so a position names the entry
-    // the way `db.edge_embeddings.set({entries: …})` spelled it.
-    for (position, (edge, vector)) in entries.iter().enumerate() {
-        if !seen.insert(edge.index()) {
-            return Err(format!(
-                "Relationship slot {} appears more than once in the batch",
-                edge.index()
-            ));
-        }
-        validate_live_edge_type(graph, *edge, connection_type)?;
-        if vector.len() != expected_dimension {
-            return Err(format!(
-                "Embedding for relationship {} (entries[{position}]) has dimension {}, expected {}",
-                describe_relationship(graph, *edge),
-                vector.len(),
-                expected_dimension
-            ));
-        }
-        validate_finite_vector(vector).map_err(|error| {
-            format!(
-                "Invalid embedding for relationship {} (entries[{position}]): {error}",
-                describe_relationship(graph, *edge)
-            )
-        })?;
-    }
-    drop(_arena_guard);
+    validate_manual_entries(graph, connection_type, &entries, expected_dimension, list)?;
 
     // A cell counts as changed when its vector differs **or** when it still
     // carries a generated `text_hash`: a manual write takes ownership of the
@@ -664,7 +663,7 @@ pub(crate) fn upsert_edge_embeddings(
     // vector, and `embed(mode:'changed')` then skipped a relationship the
     // manual write owned — the vector it compared against was the generated
     // one only by coincidence.
-    let changed_edges: HashSet<_> = entries
+    let changed_edges: FxHashSet<_> = entries
         .iter()
         .filter(|(edge, vector)| {
             existing.is_none_or(|store| {
@@ -737,6 +736,98 @@ pub(crate) fn upsert_edge_embeddings(
     })
 }
 
+/// Every entry live, of the declared type, listed once, `dimension` wide and
+/// finite. `entries` is the caller's list in order, so a position names the
+/// entry the way the caller spelled it (`entries[i]`, `rows[i]`).
+fn validate_manual_entries(
+    graph: &DirGraph,
+    connection_type: &str,
+    entries: &[(EdgeIndex, Vec<f32>)],
+    dimension: usize,
+    list: &str,
+) -> Result<(), String> {
+    let mut seen = FxHashSet::with_capacity_and_hasher(entries.len(), Default::default());
+    let _arena_guard = graph.graph.begin_query();
+    for (position, (edge, vector)) in entries.iter().enumerate() {
+        if !seen.insert(edge.index()) {
+            return Err(format!(
+                "Relationship slot {} appears more than once in the batch",
+                edge.index()
+            ));
+        }
+        validate_live_edge_type(graph, *edge, connection_type)?;
+        if vector.len() != dimension {
+            return Err(format!(
+                "Embedding for relationship {} ({list}[{position}]) has dimension {}, expected {}",
+                describe_relationship(graph, *edge),
+                vector.len(),
+                dimension
+            ));
+        }
+        validate_finite_vector(vector).map_err(|error| {
+            format!(
+                "Invalid embedding for relationship {} ({list}[{position}]): {error}",
+                describe_relationship(graph, *edge)
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Replace the whole `(connection_type, text_property)` store with `entries`
+/// — the relationship twin of the node `set_embeddings`. The prior store, its
+/// vectors, provenance and HNSW index are discarded; the new store holds only
+/// `entries`, takes its dimension from the first vector and `metric` as its
+/// metric, and has no model id or text hashes. An empty batch writes nothing.
+pub(crate) fn replace_edge_embeddings_listed(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    text_property: &str,
+    entries: Vec<(EdgeIndex, Vec<f32>)>,
+    metric: Option<&str>,
+    list: &str,
+) -> Result<EdgeEmbeddingWriteReport, String> {
+    if entries.is_empty() {
+        return Ok(EdgeEmbeddingWriteReport::default());
+    }
+    validate_metric(metric)?;
+    let dimension = entries[0].1.len();
+    if dimension == 0 {
+        return Err("Embedding vectors must not be empty".to_string());
+    }
+    validate_manual_entries(graph, connection_type, &entries, dimension, list)?;
+
+    let mut successor = EdgeEmbeddingStore::new(dimension, metric);
+    successor.numeric.data.reserve(entries.len() * dimension);
+    for (edge, vector) in &entries {
+        successor.set_manual(*edge, vector);
+    }
+    // The store is replaced whole, so every live member of the type is a
+    // touched group: the WAL records each group's final state.
+    let affected = live_edges_of_type(graph, connection_type)?;
+    capture_wal_edge_embedding_bases(
+        graph,
+        connection_type,
+        text_property,
+        affected.iter().copied(),
+    )?;
+    let key = edge_store_key(connection_type, text_property);
+    let stored = successor.len();
+    let prior = graph.edge_embeddings.insert(key.clone(), successor);
+    if let Some(journal) = graph.graph.undo_journal_mut() {
+        journal.note_edge_embedding_store_replaced(key, prior);
+    }
+    note_wal_edge_embedding_changes(graph, connection_type, text_property, true, affected);
+    graph.bump_version();
+    // Always a fresh store, as the node `set_embeddings` reports it.
+    Ok(EdgeEmbeddingWriteReport {
+        stored,
+        dimension,
+        changed: entries.len(),
+        store_created: true,
+    })
+}
+
 /// Journal enough to reverse one manual upsert.
 ///
 /// A store the write *creates* is one `EdgeEmbeddingStoreReplaced { prior:
@@ -751,7 +842,7 @@ fn journal_manual_upsert(
     graph: &mut DirGraph,
     key: &EdgeEmbeddingKey,
     store_created: bool,
-    changed_edges: &HashSet<usize>,
+    changed_edges: &FxHashSet<usize>,
 ) {
     if graph.graph.undo_journal_mut().is_none() {
         return;

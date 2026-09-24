@@ -90,12 +90,15 @@ import or copy then writes nothing. `embedding_dim`, `replace_connections`,
 | `list_edge_embeddings(&graph)` → `Vec<EdgeEmbeddingStoreInfo>` | Relationship stores, sorted by type and store. |
 | `embedding_info(&graph, EmbeddingEntity, type, column)` | Provenance for one store (dimension, count, model, effective metric, hashed). `EmbeddingEntity::{Node, Relationship}` is explicit because a node type and a relationship type may share a name. |
 | `relationship_embeddings(&graph, relationship_type, text_column, &RelationshipKeys)` → `Result<Vec<RelationshipEmbedding>, String>` | Every vector in a relationship store, addressed by endpoint `(type, id)` and ordered by source, target, key, slot — the edge-list plus edge-feature shape. Parallel relationships are told apart by the key property named for their type in `RelationshipKeys`; a named key missing on a member, or repeated within a group, is refused by name. |
+| `set_relationship_embeddings` / `add_relationship_embeddings` `(&mut graph, relationship_type, text_column, rows, &RelationshipKeys, metric)` → `Result<RelationshipIngestReport, String>` | Write relationship vectors, each `RelationshipVector` addressed as `relationship_embeddings` reads it back: endpoint `(type, id)` pairs (the types may be `None` when the relationship type has one source and one target node type) plus a key for a parallel-group member. `set_` **replaces** the store (old vectors, metric, provenance and HNSW index discarded), as `set_embeddings` does for nodes; `add_` **upserts**, as `add_embeddings` and `db.edge_embeddings.set` do (same store path, dimension, metric and provenance rules as the procedure). Every row is resolved first; a row naming no relationship, an ambiguous parallel group, a key a member lacks or repeats, or two rows naming one relationship is refused by its position. `From<RelationshipEmbedding>` makes read-modify-write a round trip. |
+| `embed_relationship_texts(&mut graph, relationship_type, text_column, EmbedMode, &dyn Embedder, &EmbedHooks, metric)` → `Result<EmbedOutcome, EmbedError>` | Embed every relationship of a type through a bound `Embedder` — the relationship twin of `embed_property`, and the pass `db.edge_embeddings.embed` runs over every relationship of the type. Records the model id and per-relationship text hashes. |
 | `embedding_diagnostics(&graph, node_type, relationship_type)` | Coverage rows (`EmbeddingDiagnostic`: an `EmbeddingCoverage` of embedded / embeddable / store-orphan, with `LengthStats`) for node and relationship types. With no filter, every node type and every relationship type is scanned. |
 
-Relationship vectors are written and queried through Cypher
-(`db.edge_embeddings.*`, `vector_score(r, …)`, `text_score(r, …)`). Every
-binding gets them through the query pipeline; there is no separate
-relationship-write function in `kglite::api`.
+Relationship vectors are queried through Cypher (`db.edge_embeddings.query`,
+`vector_score(r, …)`, `text_score(r, …)`), which every binding reaches through
+the query pipeline. They are written either in a query
+(`db.edge_embeddings.set` / `.embed` over bound relationships) or in bulk
+through the two writers above, which share the procedures' store path.
 
 ## Schema introspection
 

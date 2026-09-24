@@ -439,7 +439,7 @@ method. Note the surfaces differ: `text_score()`/`vector_score()` are **Cypher
 functions** (used in `RETURN`/`WHERE`); `search_text()`/`vector_search()` are
 **fluent methods** on a selection.
 
-Relationships use the same Cypher-first path. This claim/evidence example
+Relationships are queried through the same Cypher path. This claim/evidence example
 embeds an explicit filtered selection and then combines exact semantic scoring
 with the graph pattern:
 
@@ -481,6 +481,15 @@ when retained vectors cannot all be attributed to the reported model, and a
 dimension change requires selection coverage of every stored vector. The
 write and model callback are atomic, and same-statement property updates are
 read from current graph state.
+
+`embed` is the in-query route: it acts on relationships a query has just
+matched. The bulk route is a method. `graph.embed_relationship_texts('SUPPORTS',
+'evidence', mode='changed')` embeds every relationship of the type with the
+registered model — the relationship twin of `embed_texts()`, storing the same
+vectors, hashes and model id `embed` stores. `types: ['SUPPORTS', 'REFUTES']`
+in place of `type` makes one `embed` call cover several types; each listed type
+gets its own pass. For vectors computed outside the graph, see
+`set_relationship_embeddings()` / `add_relationship_embeddings()` below.
 
 Mutating procedures remain top-level pipeline clauses. A read-only `CALL {}`
 subquery may collect native relationship values and return them to an outer
@@ -584,6 +593,33 @@ A parallel group (several relationships of the type between the same two
 nodes) returns all its members. `relationship_keys` names the property that
 tells them apart, the same mapping `export_embeddings()` takes. It is optional,
 but a named key that is missing or repeated within a group is refused.
+
+The write side takes the same address, in the node API's two forms:
+`set_relationship_embeddings()` replaces the store (like `set_embeddings()`)
+and `add_relationship_embeddings()` upserts into it (like `add_embeddings()`
+and `db.edge_embeddings.set`). They are the bulk route for vectors you computed
+yourself — a numpy matrix from an external model, or rows read above and
+modified — without a per-row query. Key a dict by
+`(source_id, target_id)` when the relationship type has one source and one
+target node type, by `(source_type, source_id, target_type, target_id)`
+otherwise, and append the key value for a parallel-group member; or pass the
+rows `relationship_embeddings()` returned:
+
+```python
+graph.add_relationship_embeddings(
+    "SUPPORTS", "evidence", {(1, 10): vectors[0], (2, 10): vectors[1]}
+)
+
+rows = graph.relationship_embeddings("SUPPORTS", "evidence", relationship_keys={"SUPPORTS": "uid"})
+for row in rows:
+    row["vector"] = [x / 2 for x in row["vector"]]
+graph.set_relationship_embeddings("SUPPORTS", "evidence", rows, relationship_keys={"SUPPORTS": "uid"})
+```
+
+A parallel group written without a key, an endpoint pair no relationship of
+the type connects, or a vector of the wrong width is refused by row, naming the
+relationship, and nothing is written. `db.edge_embeddings.set` remains the
+in-query route, for relationships a `MATCH` binds.
 
 The `query` procedure ranks the complete declared store before later clauses
 run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not

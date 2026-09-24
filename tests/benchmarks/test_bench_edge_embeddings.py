@@ -3,8 +3,9 @@
 Not a core cell: CI runs ``test_bench_core.py`` unmodified under the
 published 0.13.2 wheel, where ``db.edge_embeddings.*`` does not exist, so a
 relationship cell can never live there. Each cell here instead carries a
-**self-contained ratio guard** against its node twin measured in the same
-process, which needs no baseline row. Run explicitly, release build only::
+**self-contained ratio guard** against a twin measured in the same process
+(its node twin, or for the parameter cell its sibling shape), which needs no
+baseline row. Run explicitly, release build only::
 
     uv run --no-sync maturin develop --release
     pytest tests/benchmarks/test_bench_edge_embeddings.py -m benchmark -v -s
@@ -23,14 +24,15 @@ Three shapes, mirroring the node harness:
   single-store query on the same total (its twin is the single store, not a
   node path). ``min``.
 * **Vector parameter conversion** — one 5000 x 128 ingest batch bound as a
-  Cypher parameter (float lists, and one 2-D float32 array) and unwound,
-  against ``set_embeddings`` storing the same floats from numpy rows. The
-  conversion is the part of a ``db.edge_embeddings.set`` batch that the node
-  writer does not share; ``min``.
+  Cypher parameter and unwound, as a 2-D float32 array against the same values
+  as float lists: the array's bytes route must not be slower (1.05x). ``min``.
 * **Ingest through the embedder** — ``db.edge_embeddings.embed`` filling a
   fresh store from a deterministic model (twin: ``embed_texts``). Each round
   ingests into a fresh graph, a once-per-event cost, so the **mean** of
   first writes is the statistic (Performance protocol item 4a).
+* **Bulk vector write** — ``set_relationship_embeddings`` filling a fresh
+  20k x 384 store from numpy rows keyed by endpoint ids (twin:
+  ``set_embeddings`` from the same numpy rows). Mean of first writes, as above.
 
 The ratio ceilings are the program's stop rule (plan D7): a relationship
 path more than ``MAX_RATIO`` slower than its node twin is a finding, not a
@@ -66,8 +68,6 @@ PARAM_DIMENSION = 128
 PARAM_ROUNDS = 20
 #: Relationship path may cost at most this multiple of its node twin.
 MAX_RATIO = 1.5
-# `Value`-boxed query parameters against the node writer's `Vec<f32>` list route.
-PARAM_BOXING_CEILING = 2.5
 
 
 def _vectors(n: int, dimension: int, seed: int) -> np.ndarray:
@@ -390,43 +390,78 @@ def test_bench_edge_embed_ingest_20k_384(benchmark):
     assert edge_mean <= MAX_RATIO * node_mean, f"relationship ingest {edge_mean / node_mean:.2f}x its node twin"
 
 
+def _ingest_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "id": np.arange(INGEST_N, dtype=np.int64),
+            "title": [f"d{i}" for i in range(INGEST_N)],
+            "summary": [f"text {i}" for i in range(INGEST_N)],
+        }
+    )
+
+
 @pytest.mark.benchmark
-@pytest.mark.parametrize("shape", ["float_lists", "array_2d"])
-def test_bench_edge_param_vectors_5k_128(benchmark, shape):
-    """Binding one ingest batch's vectors as a parameter against the node writer storing them."""
+def test_bench_edge_set_rows_20k_384(benchmark):
+    """Fresh-store ``set_relationship_embeddings`` from numpy rows against ``set_embeddings``."""
+    vectors = _vectors(INGEST_N, INGEST_DIMENSION, seed=20_260_928)
+    frame = _ingest_frame()
+    node_rows = dict(enumerate(vectors))
+    edge_rows = {(0, i): vectors[i] for i in range(INGEST_N)}
+
+    def fresh_edges() -> kglite.KnowledgeGraph:
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [0], "title": ["hub"]}), "Hub", "id", "title")
+        g.add_nodes(frame, "Doc", "id", "title")
+        g.add_connections(
+            pd.DataFrame({"hub": np.zeros(INGEST_N, dtype=np.int64), "doc": frame["id"], "summary": frame["summary"]}),
+            "CLAIMS",
+            "Hub",
+            "hub",
+            "Doc",
+            "doc",
+        )
+        return g
+
+    node_means = []
+    for _ in range(INGEST_ROUNDS):
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(frame, "Doc", "id", "title")
+        started = time.perf_counter()
+        g.set_embeddings("Doc", "summary", node_rows, metric="cosine")
+        node_means.append(time.perf_counter() - started)
+    node_mean = sum(node_means) / len(node_means)
+
+    def edge_write(g: kglite.KnowledgeGraph):
+        return g.set_relationship_embeddings("CLAIMS", "summary", edge_rows, metric="cosine")
+
+    result = benchmark.pedantic(edge_write, setup=lambda: ((fresh_edges(),), {}), rounds=INGEST_ROUNDS, iterations=1)
+    assert result["embeddings_stored"] == INGEST_N
+    edge_mean = sum(benchmark.stats.stats.data) / len(benchmark.stats.stats.data)
+    benchmark.extra_info.update(
+        {"node_twin_mean_s": node_mean, "edge_over_node": edge_mean / node_mean, "statistic": "mean-of-first-writes"}
+    )
+    assert edge_mean <= MAX_RATIO * node_mean, f"relationship bulk write {edge_mean / node_mean:.2f}x its node twin"
+
+
+@pytest.mark.benchmark
+def test_bench_edge_param_vectors_5k_128(benchmark):
+    """Binding one ingest batch's vectors as a parameter: a 2-D float32 array against float lists."""
     vectors = _vectors(PARAM_ROWS, PARAM_DIMENSION, seed=20_260_927)
-    param = vectors.tolist() if shape == "float_lists" else vectors
+    as_lists = vectors.tolist()
     graph = kglite.KnowledgeGraph()
 
-    def convert():
+    def convert(param):
         return graph.cypher("UNWIND $batch AS e RETURN count(e) AS c", params={"batch": param}).to_list()
 
-    nodes = kglite.KnowledgeGraph()
-    nodes.add_nodes(
-        pd.DataFrame(
-            {
-                "id": np.arange(PARAM_ROWS, dtype=np.int64),
-                "title": [f"d{i}" for i in range(PARAM_ROWS)],
-                "summary": [f"text {i}" for i in range(PARAM_ROWS)],
-            }
-        ),
-        "Doc",
-        "id",
-        "title",
-    )
-    # The reference is the node writer fed the same Python floats (its list
-    # route): both start from PyFloat objects. A query parameter boxes each
-    # float into a 16-byte `Value` inside a per-row `Vec`, which a `Vec<f32>`
-    # memcpy never pays — ~1.8x in release — so the ceiling is 2.5x, not
-    # MAX_RATIO; it still catches the per-element Python call this cell was
-    # written against (16x) and a fast path that stops firing.
-    rows = dict(enumerate(vectors.tolist()))
-    node_min = _min_seconds(lambda: nodes.set_embeddings("Doc", "summary", rows, metric="cosine"), PARAM_ROUNDS)
-
-    result = benchmark.pedantic(convert, rounds=PARAM_ROUNDS, iterations=1, warmup_rounds=3)
+    # The array is read from its bytes; it must never cost more than walking
+    # the same values as Python floats. The absolute cost (which includes the
+    # UNWIND pipeline's fixed cost) is bench-check's longitudinal concern.
+    result = benchmark.pedantic(convert, args=(as_lists,), rounds=PARAM_ROUNDS, iterations=1, warmup_rounds=3)
     assert result == [{"c": PARAM_ROWS}]
-    param_min = benchmark.stats.stats.min
-    benchmark.extra_info.update({"node_twin_min_s": node_min, "param_over_node": param_min / node_min})
-    assert param_min <= PARAM_BOXING_CEILING * node_min, (
-        f"parameter conversion {param_min / node_min:.2f}x the node writer's list route"
+    assert convert(vectors) == [{"c": PARAM_ROWS}]
+    lists_min = benchmark.stats.stats.min
+    array_min = _min_seconds(lambda: convert(vectors), PARAM_ROUNDS)
+    benchmark.extra_info.update(
+        {"float_lists_min_s": lists_min, "array_2d_min_s": array_min, "array_over_lists": array_min / lists_min}
     )
+    assert array_min <= 1.05 * lists_min, f"array_2d parameter {array_min / lists_min:.2f}x the float-list route"

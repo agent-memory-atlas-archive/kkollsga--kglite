@@ -14,6 +14,7 @@ round-trip. Phase 1+ expands per-area as new trait methods are added.
 
 from __future__ import annotations
 
+import collections
 import math
 from pathlib import Path
 import random
@@ -929,3 +930,39 @@ def test_relationship_embedding_parity(tmp_path):
         assert reloaded_comparable(after[mode]) == reloaded_comparable(after["memory"]), (
             f"{mode} checkpoint diverges from the memory `.kgl` after reload"
         )
+
+    # ── the Python writers: endpoint-addressed upsert, then a full re-embed ──
+    # Every RELATED pair is a parallel pair (the fixture repeats each (src,
+    # dst) once), so the upsert runs on a fresh single-edge type beside it.
+    pair_counts = collections.Counter((s, d) for s, d, _ in oracle)
+    parallel = next(pair for pair, count in pair_counts.items() if count > 1)
+    written = {(eid, eid + 1): [float(eid % 5), float(eid % 3), 2.0] for eid in range(60)}
+    for mode, kg in graphs.items():
+        kg.cypher(
+            "MATCH (a:Entity), (b:Entity) WHERE a.eid < 60 AND b.eid = a.eid + 1 "
+            "CREATE (a)-[:NEXT {note: 'next ' + toString(a.eid)}]->(b)"
+        )
+        report = kg.set_relationship_embeddings("NEXT", "note", written, metric="euclidean")
+        assert report == {"embeddings_stored": 60, "dimension": 3, "changed": 60, "store_created": True}, mode
+        stored = {(row["source"], row["target"]): row["vector"] for row in kg.relationship_embeddings("NEXT", "note")}
+        assert stored == written, mode
+        assert kg.embedding_info("NEXT", "note", entity="relationship")["metric"] == "euclidean", mode
+        # `set_` replaces (only the written rows remain), `add_` upserts.
+        kg.set_relationship_embeddings("NEXT", "note", {(0, 1): [7.0, 7.0, 7.0]})
+        assert [(r["source"], r["target"]) for r in kg.relationship_embeddings("NEXT", "note")] == [(0, 1)], mode
+        kg.add_relationship_embeddings("NEXT", "note", written)
+        stored = {(row["source"], row["target"]): row["vector"] for row in kg.relationship_embeddings("NEXT", "note")}
+        assert stored == written, mode
+        with pytest.raises(ValueError, match=r"is ambiguous: 2 'RELATED' relationships connect"):
+            kg.set_relationship_embeddings("RELATED", "text", {parallel: [1.0, 1.0, 1.0]})
+        outcome = kg.embed_relationship_texts("RELATED", "text", mode="all", show_progress=False)
+        assert (outcome["embedded"], outcome["dimension"]) == (expected_count, 3), mode
+        regenerated = sorted(
+            (row["source"], row["target"], tuple(row["vector"]))
+            for row in kg.relationship_embeddings("RELATED", "text")
+        )
+        assert regenerated == sorted((s, d, tuple(_ParityEmbedder.vector(f"edge {s} to {d}"))) for s, d, _ in oracle), (
+            mode
+        )
+        info = kg.embedding_info("RELATED", "text", entity="relationship")
+        assert (info["model"], info["hashed"]) == ("parity/stub", expected_count), mode

@@ -161,6 +161,10 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:fn embed_relationship_texts( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, mode: Option<&str>, batch_size: usize, show_progress: bool, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/session.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },

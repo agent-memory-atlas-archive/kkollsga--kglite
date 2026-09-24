@@ -472,6 +472,10 @@
           "kind": "method",
           "signature": "(self, /, properties, keep_selection=None)"
         },
+        "add_relationship_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None)"
+        },
         "add_timeseries": {
           "kind": "method",
           "signature": "(self, /, node_type, *, data, fk, time_key, channels, resolution=None, units=None)"
@@ -687,6 +691,10 @@
         "drop_vector_index": {
           "kind": "method",
           "signature": "(self, /, node_type, text_column)"
+        },
+        "embed_relationship_texts": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column, *, mode=None, batch_size=256, show_progress=True, metric=None)"
         },
         "embed_texts": {
           "kind": "method",
@@ -1107,6 +1115,10 @@
         "set_recipe": {
           "kind": "method",
           "signature": "(self, /, recipe, name, description, cypher, parameters=None, recipe_description=None, tool=None)"
+        },
+        "set_relationship_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None)"
         },
         "set_schema_version": {
           "kind": "method",
