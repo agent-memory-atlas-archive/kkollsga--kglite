@@ -1,4 +1,5 @@
-//! How `describe()` shows relationship embedding stores.
+//! How `describe()` shows relationship embedding stores and relationship
+//! retrieval lanes.
 //!
 //! Node stores render as an `<embeddings text_col= dim= count=/>` child of their
 //! node type. Relationship stores use the same spelling in the connection
@@ -62,14 +63,52 @@ const RELATIONSHIP_SEMANTIC: &str = "relationships: vector_score(r, 'col_emb', $
 /// The `<semantic>` hint line, when the graph carries a node or a relationship
 /// store. A node-only graph gets exactly its historical line.
 pub(super) fn semantic_hint(graph: &DirGraph) -> Option<String> {
-    let parts: Vec<&str> = [
-        (!graph.embeddings.is_empty()).then_some(NODE_SEMANTIC),
-        (!graph.edge_embeddings.is_empty()).then_some(RELATIONSHIP_SEMANTIC),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    (!parts.is_empty()).then(|| format!("    <semantic hint=\"{}\"/>\n", parts.join("; ")))
+    hint_line(
+        "semantic",
+        [
+            (!graph.embeddings.is_empty()).then_some(NODE_SEMANTIC),
+            (!graph.edge_embeddings.is_empty()).then_some(RELATIONSHIP_SEMANTIC),
+        ],
+    )
+}
+
+const NODE_LEXICAL: &str = "text_bm25(n, 'prop', 'query text') — BM25 relevance of the node's indexed text; 0.0 = indexed but shares no word with the query, null = no document for that row. Build with build_text_index(node_type, property).";
+
+const RELATIONSHIP_LEXICAL: &str = "relationships: text_bm25(r, 'prop', 'query text') over an index built with CALL db.edge_text_index.build({type:'T', property:'prop'})";
+
+const NODE_HYBRID: &str = "score_fuse(text_bm25(n, 'prop', $q), vector_score(n, 'col_emb', $qv)) — one score from both lanes (weights: a trailing list, e.g. [0.7, 0.3]). A lane that cannot see a row scores null and drops out of the average rather than zeroing it; all lanes absent = null. Rank with ORDER BY … DESC LIMIT k.";
+
+const RELATIONSHIP_HYBRID: &str =
+    "relationships: score_fuse(text_bm25(r, 'prop', $q), vector_score(r, 'prop_emb', $qv))";
+
+/// Join the parts that apply into one hint line, or `None` when none does.
+fn hint_line(element: &str, parts: [Option<&str>; 2]) -> Option<String> {
+    let parts: Vec<&str> = parts.into_iter().flatten().collect();
+    (!parts.is_empty()).then(|| format!("    <{element} hint=\"{}\"/>\n", parts.join("; ")))
+}
+
+/// The `<lexical>` hint: node text indexes, relationship text indexes, or both.
+/// A graph with node text indexes only gets exactly its historical line.
+pub(super) fn lexical_hint(graph: &DirGraph) -> Option<String> {
+    hint_line(
+        "lexical",
+        [
+            (!graph.text_indexes.is_empty()).then_some(NODE_LEXICAL),
+            (!graph.edge_text_indexes.is_empty()).then_some(RELATIONSHIP_LEXICAL),
+        ],
+    )
+}
+
+/// The `<hybrid>` hint, for each entity that carries both retrieval lanes.
+pub(super) fn hybrid_hint(graph: &DirGraph) -> Option<String> {
+    hint_line(
+        "hybrid",
+        [
+            (!graph.embeddings.is_empty() && !graph.text_indexes.is_empty()).then_some(NODE_HYBRID),
+            (!graph.edge_embeddings.is_empty() && !graph.edge_text_indexes.is_empty())
+                .then_some(RELATIONSHIP_HYBRID),
+        ],
+    )
 }
 
 #[cfg(test)]

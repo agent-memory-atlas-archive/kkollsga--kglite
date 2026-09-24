@@ -180,3 +180,73 @@ fn the_cypher_reference_names_the_relationship_embedding_procedures() {
     assert!(group.contains("vector_score(r, 'col_emb'"), "{group}");
     assert!(group.contains("db.edge_embeddings.query"), "{group}");
 }
+
+// ── relationship lexical lane ─────────────────────────────────────────
+
+/// Byte-identical to the lines every node-only graph has always carried.
+const NODE_LEXICAL_LINE: &str = "    <lexical hint=\"text_bm25(n, 'prop', 'query text') — BM25 relevance of the node's indexed text; 0.0 = indexed but shares no word with the query, null = no document for that row. Build with build_text_index(node_type, property).\"/>";
+const NODE_HYBRID_LINE: &str = "    <hybrid hint=\"score_fuse(text_bm25(n, 'prop', $q), vector_score(n, 'col_emb', $qv)) — one score from both lanes (weights: a trailing list, e.g. [0.7, 0.3]). A lane that cannot see a row scores null and drops out of the average rather than zeroing it; all lanes absent = null. Rank with ORDER BY … DESC LIMIT k.\"/>";
+
+fn with_text_indexes(mut graph: DirGraph, node: bool, edge: bool) -> DirGraph {
+    if node {
+        crate::graph::text_indexes::build_text_index(&mut graph, "SUPPORTS", "body", None).unwrap();
+    }
+    if edge {
+        run(
+            &mut graph,
+            "CALL db.edge_text_index.build({type:'SUPPORTS', property:'body'}) \
+             YIELD indexed RETURN indexed",
+        );
+    }
+    graph
+}
+
+#[test]
+fn a_relationship_text_index_alone_gets_the_lexical_hint() {
+    let xml = inventory(&with_text_indexes(graph(false, false), false, true));
+    let lexical = line_with(&xml, "<lexical ");
+    assert!(lexical.contains("text_bm25(r, 'prop'"), "{lexical}");
+    assert!(lexical.contains("db.edge_text_index.build"), "{lexical}");
+    assert!(!lexical.contains("text_bm25(n,"), "{lexical}");
+    assert!(!xml.contains("<hybrid "), "one lane is not hybrid:\n{xml}");
+}
+
+#[test]
+fn both_relationship_lanes_get_the_hybrid_hint() {
+    let xml = inventory(&with_text_indexes(graph(false, true), false, true));
+    let hybrid = line_with(&xml, "<hybrid ");
+    assert!(hybrid.contains("text_bm25(r, 'prop', $q)"), "{hybrid}");
+    assert!(!hybrid.contains("text_bm25(n,"), "{hybrid}");
+}
+
+#[test]
+fn node_only_retrieval_hints_render_exactly_as_before() {
+    let xml = inventory(&with_text_indexes(graph(true, false), true, false));
+    assert_eq!(line_with(&xml, "<lexical "), NODE_LEXICAL_LINE);
+    assert_eq!(line_with(&xml, "<hybrid "), NODE_HYBRID_LINE);
+}
+
+#[test]
+fn the_cypher_reference_names_the_relationship_text_index_procedures() {
+    let graph = DirGraph::new();
+    let mut request = DescribeRequest::new(DescribeSurface::Python);
+    request.cypher = &CypherDetail::Overview;
+    let overview = compute_description(&graph, &request).unwrap();
+    let proc_line = line_with(&overview, "<proc name=\"db.edge_text_index.*\"");
+    for name in ["build", "refresh", "drop", "list"] {
+        assert!(
+            proc_line.contains(&format!("db.edge_text_index.{name}(")),
+            "{name} missing: {proc_line}"
+        );
+    }
+    assert!(proc_line.contains("text_bm25(r, 'property'"), "{proc_line}");
+    let drop_clause = line_with(&overview, "<clause name=\"DROP INDEX\"");
+    assert!(drop_clause.contains("BM25 text index"), "{drop_clause}");
+
+    let topics = CypherDetail::Topics(vec!["functions".to_string()]);
+    request.cypher = &topics;
+    let functions = compute_description(&graph, &request).unwrap();
+    let lexical = line_with(&functions, "<group name=\"lexical\"");
+    assert!(lexical.contains("text_bm25(r, 'prop'"), "{lexical}");
+    assert!(lexical.contains("db.edge_text_index.build"), "{lexical}");
+}

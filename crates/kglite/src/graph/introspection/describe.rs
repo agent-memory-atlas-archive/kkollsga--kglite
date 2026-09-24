@@ -19,7 +19,9 @@ use super::connectivity::{
     compute_type_connectivity, derive_edge_counts_from_triples, neighbors_from_triples,
     TypeConnectivityIndex,
 };
-use super::embeddings_view::{conn_embeddings_attr, semantic_hint, write_conn_embeddings};
+use super::embeddings_view::{
+    conn_embeddings_attr, hybrid_hint, lexical_hint, semantic_hint, write_conn_embeddings,
+};
 use super::schema_overview::{
     compute_all_neighbors_schemas, compute_connected_type_pairs, compute_connected_types,
     compute_connection_type_stats, compute_join_candidates, compute_property_stats, compute_sample,
@@ -812,7 +814,6 @@ fn write_extensions(xml: &mut String, graph: &DirGraph, surface: DescribeSurface
             .node_type_metadata
             .values()
             .any(|props| props.values().any(|t| t.eq_ignore_ascii_case("point")));
-    let has_embeddings = !graph.embeddings.is_empty();
 
     xml.push_str("  <extensions>\n");
 
@@ -822,11 +823,11 @@ fn write_extensions(xml: &mut String, graph: &DirGraph, surface: DescribeSurface
     if has_spatial {
         xml.push_str("    <spatial hint=\"distance(a,b)→m, contains(a,b), intersects(a,b), centroid(n), area(n)→m², perimeter(n)→m\"/>\n");
     }
-    if !graph.text_indexes.is_empty() {
-        xml.push_str("    <lexical hint=\"text_bm25(n, 'prop', 'query text') — BM25 relevance of the node's indexed text; 0.0 = indexed but shares no word with the query, null = no document for that row. Build with build_text_index(node_type, property).\"/>\n");
-    }
-    if has_embeddings && !graph.text_indexes.is_empty() {
-        xml.push_str("    <hybrid hint=\"score_fuse(text_bm25(n, 'prop', $q), vector_score(n, 'col_emb', $qv)) — one score from both lanes (weights: a trailing list, e.g. [0.7, 0.3]). A lane that cannot see a row scores null and drops out of the average rather than zeroing it; all lanes absent = null. Rank with ORDER BY … DESC LIMIT k.\"/>\n");
+    for hint in [lexical_hint(graph), hybrid_hint(graph)]
+        .into_iter()
+        .flatten()
+    {
+        xml.push_str(&hint);
     }
     if let Some(hint) = semantic_hint(graph) {
         xml.push_str(&hint);
