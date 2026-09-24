@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import re
 
 import pytest
 
@@ -113,7 +114,7 @@ def test_embedding_is_null_without_a_vector_and_refused_without_a_store(tmp_path
     assert graph.cypher("MATCH (c:Claim {id: 30}) RETURN embedding(c, 'summary_emb') AS v").to_list() == [{"v": None}]
     with pytest.raises(
         kglite.CypherExecutionError,
-        match=r"no embedding store 'evidence_emb' \(source property 'evidence'\) for node type 'Claimant'",
+        match=r"embedding\(\): no embedding 'evidence_emb' found for node type 'Claimant'",
     ):
         graph.cypher("MATCH (c:Claimant {id: 1}) RETURN embedding(c, 'evidence_emb') AS v")
     with pytest.raises(kglite.CypherExecutionError, match="Did you mean 'evidence_emb'"):
@@ -184,3 +185,40 @@ def test_rows_build_pyg_edge_index_and_edge_attr(tmp_path: Path) -> None:
         "RETURN b.uid AS uid, vector_score(b, 'evidence_emb', embedding(a, 'evidence_emb')) AS s ORDER BY uid"
     ).to_list()
     assert [row["s"] for row in scored] == pytest.approx(cosines.tolist(), abs=1e-6)
+
+
+# ── a missing store raises inside a fused WHERE ──────────────────────────────
+
+
+@pytest.mark.parametrize("mode", ["memory", "mapped"])
+@pytest.mark.parametrize(
+    ("query", "message"),
+    [
+        (
+            "MATCH (c:Claimant) WHERE size(embedding(c, 'evidence_emb')) > 0 RETURN count(c) AS n",
+            "embedding(): no embedding 'evidence_emb' found for node type 'Claimant'",
+        ),
+        (
+            "MATCH (c:Claimant) WHERE embedding_norm(c, 'evidence_emb') > 0 RETURN count(c) AS n",
+            "embedding_norm(): no embedding 'evidence_emb' found for node type 'Claimant'",
+        ),
+        (
+            "MATCH ()-[r:SUPPORTS]->() WHERE size(embedding(r, 'summary_emb')) > 0 RETURN count(r) AS n",
+            "embedding(): no embedding 'summary_emb' found for relationship type 'SUPPORTS'",
+        ),
+        (
+            "MATCH ()-[r:SUPPORTS]->() WHERE embedding_norm(r, 'summary_emb') > 0 RETURN count(r) AS n",
+            "embedding_norm(): no embedding 'summary_emb' found for relationship type 'SUPPORTS'",
+        ),
+        (
+            "MATCH (c:Claimant) WHERE text_score(c, 'evidence', [1.0, 0.0]) > 0 RETURN count(c) AS n",
+            "text_score(): no embedding for property 'evidence' on node type 'Claimant'",
+        ),
+    ],
+)
+def test_a_missing_store_raises_in_a_fused_where(mode: str, query: str, message: str, tmp_path: Path) -> None:
+    """The fused filters drop a row whose predicate fails to evaluate; a
+    missing store is not about the row, and counting 0 hid it."""
+    graph = _graph(mode, tmp_path)
+    with pytest.raises(kglite.CypherExecutionError, match=re.escape(message)):
+        graph.cypher(query)

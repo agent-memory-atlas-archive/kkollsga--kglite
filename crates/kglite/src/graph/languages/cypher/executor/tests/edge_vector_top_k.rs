@@ -598,10 +598,7 @@ fn embedding_without_the_store_is_refused_naming_type_and_property() {
     };
     let error = refuse("MATCH ()-[r:PLAIN]->() RETURN embedding(r, 'text_emb') AS v");
     assert!(
-        error.contains(
-            "embedding(): no embedding store 'text_emb' (source property 'text') for \
-             relationship type 'PLAIN'"
-        ),
+        error.contains("embedding(): no embedding 'text_emb' found for relationship type 'PLAIN'"),
         "{error}"
     );
     let error = refuse("MATCH ()-[r:A]->() RETURN embedding(r, 'text') AS v");
@@ -620,4 +617,47 @@ fn embedding_without_the_store_is_refused_naming_type_and_property() {
         )[0][0],
         Value::Null
     );
+}
+
+/// A missing store is an error in a fused `WHERE` too, never a row that
+/// "does not match": the fused filters swallow per-row evaluation errors, and
+/// counted `0` for `embedding()` / `embedding_norm()` where `vector_score`
+/// raised.
+#[test]
+fn a_missing_store_raises_inside_a_fused_where() {
+    let mut graph = cross_type_corpus(false);
+    run(
+        &mut graph,
+        "MATCH (h:Hub), (d:Doc {id: 1}) CREATE (h)-[:PLAIN]->(d)",
+    );
+    let params = HashMap::new();
+    let cases = [
+        (
+            "MATCH (h:Hub) WHERE size(embedding(h, 'text_emb')) > 0 RETURN count(h) AS n",
+            "embedding(): no embedding 'text_emb' found for node type 'Hub'",
+        ),
+        (
+            "MATCH (h:Hub) WHERE embedding_norm(h, 'text_emb') > 0 RETURN count(h) AS n",
+            "embedding_norm(): no embedding 'text_emb' found for node type 'Hub'",
+        ),
+        (
+            "MATCH ()-[r:PLAIN]->() WHERE size(embedding(r, 'text_emb')) > 0 RETURN count(r) AS n",
+            "embedding(): no embedding 'text_emb' found for relationship type 'PLAIN'",
+        ),
+        (
+            "MATCH ()-[r:PLAIN]->() WHERE embedding_norm(r, 'text_emb') > 0 RETURN count(r) AS n",
+            "embedding_norm(): no embedding 'text_emb' found for relationship type 'PLAIN'",
+        ),
+        (
+            "MATCH (h:Hub) WHERE text_score(h, 'text', [1.0, 0.0]) > 0 RETURN count(h) AS n",
+            "text_score(): no embedding for property 'text' on node type 'Hub'",
+        ),
+    ];
+    for (query, expected) in cases {
+        let Err(error) = execute_read(&graph, query, &ExecuteOptions::eager(&params)) else {
+            panic!("{query}: a missing store must raise, not count 0");
+        };
+        let error = error.to_string();
+        assert!(error.contains(expected), "{query}: {error}");
+    }
 }

@@ -154,20 +154,16 @@ enum ReadoutTarget {
     Nothing,
 }
 
-/// `embedding(): no embedding store 'x_emb' (source property 'x') for node type
-/// 'T'`, plus a hint when the caller wrote the source property and the
-/// `_emb` store exists.
+/// `embedding(): no embedding 'x_emb' found for node type 'T'` — the shape
+/// `vector_score` and `embedding_norm` use — plus a hint when the caller wrote
+/// the source property and the `_emb` store exists.
 fn missing_store_error(
     store: &str,
     entity: &str,
     type_name: &str,
     has_store: impl Fn(&str) -> bool,
 ) -> String {
-    let source = crate::graph::embeddings::text_column_of(store).unwrap_or(store);
-    let base = format!(
-        "embedding(): no embedding store '{store}' (source property '{source}') for {entity} \
-         '{type_name}'"
-    );
+    let base = format!("embedding(): no embedding '{store}' found for {entity} '{type_name}'");
     let suffixed = crate::graph::embeddings::store_name(store);
     if crate::graph::embeddings::text_column_of(store).is_none() && has_store(&suffixed) {
         format!(

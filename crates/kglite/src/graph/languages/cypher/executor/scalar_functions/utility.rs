@@ -857,8 +857,21 @@ const NO_EMBEDDING_PREFIX: &str = "vector_score(): no embedding '";
 /// Prefix of the same messages for a `text_score` call.
 const TEXT_SCORE_NO_EMBEDDING_PREFIX: &str = "text_score(): no embedding for property '";
 
+/// The retrieval scalars. Each reports a lane its entity's type lacks as
+/// `<name>(): no embedding …` or `<name>(): no text index on '…'` — the one
+/// shape [`is_missing_retrieval_source_error`] recognises, so a scalar added
+/// here is covered without listing its message.
+const RETRIEVAL_SCALARS: &[&str] = &[
+    "vector_score",
+    "text_score",
+    "embedding_norm",
+    "embedding",
+    "text_bm25",
+];
+
 /// True when `message` reports a retrieval lane the graph does not have — no
-/// text index over the property, or no embedding store of that name.
+/// text index over the property, or no embedding store of that name — from
+/// any of the [`RETRIEVAL_SCALARS`].
 ///
 /// The fused execution paths consult this (through
 /// [`super::super::helpers::is_user_input_error`]) before swallowing a
@@ -870,9 +883,14 @@ const TEXT_SCORE_NO_EMBEDDING_PREFIX: &str = "text_score(): no embedding for pro
 pub(in crate::graph::languages::cypher::executor) fn is_missing_retrieval_source_error(
     message: &str,
 ) -> bool {
-    message.starts_with(NO_TEXT_INDEX_PREFIX)
-        || message.starts_with(NO_EMBEDDING_PREFIX)
-        || message.starts_with(TEXT_SCORE_NO_EMBEDDING_PREFIX)
+    RETRIEVAL_SCALARS.iter().any(|name| {
+        message
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix("(): "))
+            .is_some_and(|rest| {
+                rest.starts_with("no embedding ") || rest.starts_with("no text index on '")
+            })
+    })
 }
 
 /// Vector shape, metric and options failures are query errors even when

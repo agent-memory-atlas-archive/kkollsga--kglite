@@ -169,7 +169,7 @@ before upgrading.
 - **Reading stored vectors back out, for nodes and relationships.** The Cypher
   scalar `embedding(x, 'col_emb')` returns a node's or relationship's stored
   vector as a list of floats. It is null when the entity has no vector, and an
-  error naming the type and source property when the type has no such store.
+  error naming the store and the type when the type has no such store.
   Since `vector_score` takes any list as its query,
   `vector_score(r2, 'col_emb', embedding(r1, 'col_emb'))` is
   relationship-to-relationship similarity (node-to-node likewise).
@@ -472,6 +472,14 @@ before upgrading.
   db.edge_embeddings.embed({type, text_property})` for relationships. This
   holds in projections, WHERE filters and fused top-k. A direct
   `vector_score()` call keeps its store-name message.
+
+- **A missing embedding store raises inside a filter.** A fused `WHERE`
+  treated the missing-store error from `embedding_norm()` as a row that does
+  not match, so `MATCH (b:B) WHERE embedding_norm(b, 'x_emb') > 0 RETURN
+  count(b)` counted `0` when `B` has no such store, while the same filter with
+  `vector_score` raised. It now raises, as do `embedding()` and `text_score()`.
+  Every retrieval scalar's missing-store or missing-index error is recognised
+  by its shared message shape, so a scalar added later is covered.
 
 ## [0.17.12] - 2026-09-19
 ### Added
