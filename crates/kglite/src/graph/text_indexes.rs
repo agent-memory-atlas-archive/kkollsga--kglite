@@ -355,11 +355,29 @@ impl TextIndexStore {
 
     /// Mark a slot as needing a re-read on the next refresh.
     ///
-    /// The rollback path's whole undo story: a delete pruned the document, and
-    /// if the statement is reversed the node comes back with its text while the
+    /// How a rollback undoes a delete: the delete pruned the document, and if
+    /// the statement is reversed the node comes back with its text while the
     /// document does not. Marking the slot makes the next refresh restore it.
+    /// (A mid-statement refresh is undone by [`Self::rollback_statement`].)
     pub(crate) fn note_slot_changed(&self, node: NodeIndex) {
         self.freshness.note_changed(Self::slot(node));
+    }
+
+    /// Open, commit or roll back the statement window a mid-statement refresh
+    /// has to be reversible within — see
+    /// [`IndexFreshness::rollback_statement`]. Driven by
+    /// `StatementCheckpoint`'s journal path; the clone path restores a deep
+    /// copy of the whole index instead.
+    pub(crate) fn begin_statement(&self) {
+        self.freshness.begin_statement();
+    }
+
+    pub(crate) fn end_statement(&self) {
+        self.freshness.end_statement();
+    }
+
+    pub(crate) fn rollback_statement(&self) {
+        self.freshness.rollback_statement();
     }
 
     /// Tokenize and resolve a query string against this index's dictionary.

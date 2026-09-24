@@ -712,3 +712,79 @@ fn a_rolled_back_delete_batch_restores_every_pruned_document() {
     assert_eq!(store(&graph).documents(), 128);
     assert_matches_rebuild(&graph, "quick marmoset");
 }
+
+// ── a refresh inside a statement that then fails ─────────────────────
+
+/// `text_bm25` refreshes the index at query entry, and inside a write
+/// statement that refresh can fold in text the statement itself wrote. A later
+/// clause failing rolls the property back; the index must not keep the words.
+fn fail_after_refresh(graph: &mut DirGraph, write: &str) {
+    let params = HashMap::new();
+    let failed = execute_mut(
+        graph,
+        &format!("{write} WITH n, text_bm25(n, 'body', 'zebra') AS s RETURN s, 1 / 0 AS boom"),
+        &ExecuteOptions::eager(&params),
+    );
+    assert!(failed.is_err(), "the statement must fail after its refresh");
+}
+
+#[test]
+fn a_set_refreshed_mid_statement_then_rolled_back_leaves_no_words_behind() {
+    let (mut graph, _) = indexed_corpus();
+    let before_zebra = score_map(&graph, "zebra");
+    let before_fox = score_map(&graph, "quick fox");
+
+    fail_after_refresh(
+        &mut graph,
+        "MATCH (n:Doc {id: 1}) SET n.body = 'zebra stripes'",
+    );
+
+    assert!(
+        store(&graph).is_stale(&graph),
+        "the folded-in slot must be marked for re-reading, so the index reports stale"
+    );
+    store(&graph).refresh(&graph, "Doc");
+    assert_eq!(score_map(&graph, "zebra"), before_zebra);
+    assert_eq!(score_map(&graph, "quick fox"), before_fox);
+    assert_matches_rebuild(&graph, "zebra");
+}
+
+#[test]
+fn a_creation_refreshed_mid_statement_then_rolled_back_leaves_no_ghost_document() {
+    let (mut graph, _) = indexed_corpus();
+    let before = score_map(&graph, "zebra");
+
+    fail_after_refresh(&mut graph, "CREATE (n:Doc {id: 50, body: 'zebra zebra'})");
+
+    assert_eq!(graph.type_indices.get("Doc").map(|m| m.len()), Some(3));
+    store(&graph).refresh(&graph, "Doc");
+    assert_eq!(
+        store(&graph).documents(),
+        3,
+        "the rolled-back node's document must not survive on its freed slot"
+    );
+    assert_eq!(score_map(&graph, "zebra"), before);
+    assert_matches_rebuild(&graph, "zebra");
+}
+
+#[test]
+fn a_committed_statement_keeps_the_refresh_it_did() {
+    let (mut graph, _) = indexed_corpus();
+    run(
+        &mut graph,
+        "MATCH (n:Doc {id: 1}) SET n.body = 'zebra stripes' \
+         WITH n, text_bm25(n, 'body', 'zebra') AS s RETURN s",
+    );
+    assert!(!store(&graph).is_stale(&graph));
+    // A later failing statement that writes nothing indexed must not re-open
+    // the committed statement's claims.
+    let params = HashMap::new();
+    let failed = execute_mut(
+        &mut graph,
+        "MATCH (n:Doc {id: 2}) SET n.tag = 'x' WITH n RETURN 1 / 0 AS boom",
+        &ExecuteOptions::eager(&params),
+    );
+    assert!(failed.is_err());
+    assert!(!store(&graph).is_stale(&graph));
+    assert_matches_rebuild(&graph, "zebra");
+}

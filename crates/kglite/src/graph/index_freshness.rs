@@ -112,6 +112,17 @@ pub struct IndexFreshness {
     limit: AtomicUsize,
     /// Slots below the watermark that need re-reading.
     dirty: Mutex<FxHashSet<u32>>,
+    /// Every slot a refresh claimed since [`Self::begin_statement`], while a
+    /// write statement's rollback window is open; `None` outside one.
+    ///
+    /// A refresh inside a write statement (`text_bm25` catches its index up at
+    /// query entry) folds in text the statement itself wrote and clears those
+    /// slots' dirty bits. If a later clause fails, the rollback restores the
+    /// properties — and, for a created node, frees its slot — but not the
+    /// index. [`Self::rollback_statement`] marks every claimed slot dirty again
+    /// so the next refresh re-reads what the rollback restored. Taken after
+    /// `dirty` in [`Self::take_delta`]; never held while taking `dirty`.
+    statement_claims: Mutex<Option<FxHashSet<u32>>>,
 }
 
 impl IndexFreshness {
@@ -123,6 +134,7 @@ impl IndexFreshness {
             dirty_len: AtomicUsize::new(0),
             limit: AtomicUsize::new(limit.unwrap_or(DEFAULT_AUTO_REFRESH_LIMIT)),
             dirty: Mutex::new(FxHashSet::default()),
+            statement_claims: Mutex::new(None),
         }
     }
 
@@ -245,6 +257,7 @@ impl IndexFreshness {
             dirty_len: AtomicUsize::new(dirty.len()),
             limit: AtomicUsize::new(limit),
             dirty: Mutex::new(dirty),
+            statement_claims: Mutex::new(None),
         }
     }
 
@@ -270,13 +283,52 @@ impl IndexFreshness {
         }
         let taken = std::mem::take(&mut *dirty);
         self.dirty_len.store(0, Ordering::Relaxed);
-        self.watermark
-            .store(node_bound.max(from), Ordering::Relaxed);
-        Some(FreshnessDelta {
+        let to = node_bound.max(from);
+        self.watermark.store(to, Ordering::Relaxed);
+        let delta = FreshnessDelta {
             from,
-            to: node_bound.max(from),
+            to,
             dirty: taken,
-        })
+        };
+        if let Some(claims) = self.claims().as_mut() {
+            claims.extend(delta.slots());
+        }
+        Some(delta)
+    }
+
+    fn claims(&self) -> std::sync::MutexGuard<'_, Option<FxHashSet<u32>>> {
+        self.statement_claims
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Start recording the slots refreshes claim, for a write statement that
+    /// may roll back. See the `statement_claims` field.
+    pub(crate) fn begin_statement(&self) {
+        *self.claims() = Some(FxHashSet::default());
+    }
+
+    /// The statement committed: what its refreshes folded in is now true.
+    pub(crate) fn end_statement(&self) {
+        *self.claims() = None;
+    }
+
+    /// The statement rolled back: mark every slot a refresh claimed since
+    /// [`Self::begin_statement`] dirty again. The watermark stays where the
+    /// refresh left it, so a slot a rolled-back creation vacated is below it and
+    /// is re-read — the refresh removes the document a vanished node left — and
+    /// a later creation into it is the recycled-slot case.
+    pub(crate) fn rollback_statement(&self) {
+        let Some(claimed) = self.claims().take() else {
+            return;
+        };
+        if claimed.is_empty() {
+            return;
+        }
+        let watermark = self.watermark();
+        let mut dirty = self.dirty_set();
+        dirty.extend(claimed.into_iter().filter(|slot| *slot < watermark));
+        self.dirty_len.store(dirty.len(), Ordering::Relaxed);
     }
 }
 
@@ -291,6 +343,7 @@ impl Clone for IndexFreshness {
             dirty_len: AtomicUsize::new(dirty.len()),
             limit: AtomicUsize::new(self.limit()),
             dirty: Mutex::new(dirty),
+            statement_claims: Mutex::new(None),
         }
     }
 }

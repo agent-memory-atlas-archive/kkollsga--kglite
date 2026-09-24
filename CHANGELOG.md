@@ -216,6 +216,18 @@ before upgrading.
   slot a `CREATE` then reused no longer reports the new relationship's type,
   endpoints or properties through these functions; it reads as null, as its
   property access already did.
+- **A failed write statement no longer leaves its text in a BM25 index.**
+  `text_bm25` catches its index up when a query reaches it, so a statement
+  that wrote the indexed property (or created a node of the indexed type),
+  scored it with `text_bm25`, and then failed in a later clause rolled the
+  write back but kept the new words in the index — reported `ONLINE` and not
+  stale, so later `text_bm25` scores were silently wrong until the next
+  `build_text_index`. A rolled-back creation also left its document on the
+  freed node slot. The rollback now marks every slot such a refresh folded
+  in; `SHOW INDEXES` reports the index stale, and the next read re-reads the
+  restored text, giving the pre-statement scores.
+
+
 
 ## [0.17.12] - 2026-09-19
 ### Added

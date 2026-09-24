@@ -177,10 +177,14 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // `UndoEntry::TextDocPruned`, captured where a node deletion prunes the
     // node's document (`mutation::delete_state::prune_doomed_text_docs`); a
     // rollback re-marks the slot rather than restoring the document, and the
-    // next refresh re-reads the restored text. Every *other* in-statement
-    // mutation of this map is already a mark rather than an edit
-    // (`index_freshness::write_hooks`), so it survives the swap correctly with
-    // no entry of its own. `DROP INDEX` removing a text index is whole-index
+    // next refresh re-reads the restored text. A write hook
+    // (`index_freshness::write_hooks`) is only a mark, but a refresh *inside*
+    // the statement (`text_bm25` catches up at query entry) edits the index
+    // and clears those marks: each store records the slots its refreshes claim
+    // while the checkpoint is open (`TextIndexStore::begin_statement`), and
+    // `StatementCheckpoint::rollback` re-marks them, so the next refresh
+    // re-reads the restored text and drops a rolled-back creation's
+    // document. `DROP INDEX` removing a text index is whole-index
     // DDL and unjournalled, on the same argument as the three families above:
     // the one fallible step after it (`dropped == 0 && !if_exists`) is
     // reachable only when nothing was dropped.
@@ -368,6 +372,9 @@ impl StatementCheckpoint {
         let edge_embedding_base_capture = graph.graph.records_edge_embedding_bases();
         let shell = Box::new(graph.schema_shell());
         graph.graph.begin_undo();
+        for store in graph.text_indexes.values() {
+            store.begin_statement();
+        }
         Self::Journal {
             shell,
             recorded_ops,
@@ -390,6 +397,9 @@ impl StatementCheckpoint {
                 // holds the new state. CDC configuration is published only
                 // after that succeeds.
                 graph.graph.take_undo();
+                for store in graph.text_indexes.values() {
+                    store.end_statement();
+                }
                 if let Some(cdc) = cdc {
                     cdc.commit(graph);
                 }
@@ -417,6 +427,12 @@ impl StatementCheckpoint {
                 let fallout = journal
                     .map(|journal| replay(graph, *journal))
                     .unwrap_or_default();
+                // `text_indexes` is parked, so each store here is the live one
+                // a mid-statement refresh may have folded the reversed writes
+                // into; re-mark what it claimed.
+                for store in graph.text_indexes.values() {
+                    store.rollback_statement();
+                }
                 // Ops the failed statement buffered for the write-ahead log
                 // describe writes that no longer exist.
                 if let Some(len) = recorded_ops {
