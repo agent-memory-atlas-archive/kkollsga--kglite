@@ -577,7 +577,8 @@ def test_binary_size_regression():
         the bound-value planner anchors.
 
 
-      - 0.18.1:       26,337,936 bytes (≈25.1 MB). +16 bytes: path-binding helpers and the load-time reference-candidate scan.
+      - 0.18.1:       26,337,936 bytes (≈25.1 MB). +16 bytes: path-binding helpers and
+        the load-time reference-candidate scan.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
