@@ -78,8 +78,8 @@ void main() {
     try (KnowledgeGraph graph = KnowledgeGraph.open(path)) {
 
         // query() is the READ path: snapshot-consistent, runs concurrently,
-        // and throws if handed a mutation. Return properties, never a whole
-        // node — `RETURN p` hands you a debug string, `p.title` a String.
+        // and throws if handed a mutation. `RETURN p` hands you the whole
+        // node as a Map; `p.title` is just the String.
         List<Map<String, Object>> rows = graph.query(
             "MATCH (p:Person) RETURN p.id AS id, p.title AS name ORDER BY p.id");
 
@@ -158,7 +158,13 @@ follows, and the mapping is asserted in both directions by
 | string | `String` | |
 | list | `List` | elements mapped recursively |
 | map | `Map` | insertion-ordered, `String` keys |
-| node, relationship, path, temporal | `String` | **a debug rendering — see below** |
+| node | `Map` | `id`, `labels`, `properties` |
+| relationship | `Map` | `id`, `start`, `end`, `type`, `properties` |
+| path | `Map` | `nodes`, `relationships`, each a `List` of the maps above |
+| date | `String` | ISO `"2020-01-01"`; bind it back as a `LocalDate` to match it |
+| datetime | `String` | ISO `"2020-01-01T08:00:00"`, normalised to UTC, no zone suffix |
+| duration | `Map` | `months`, `days`, `seconds` |
+| point | `Map` | `latitude`, `longitude` |
 
 Parameters accept the mirror set: `null`, `String`, `Boolean`, any `Number`,
 `Map` with `String` keys, `Iterable`, `Object[]`, nested freely. `LocalDate`
@@ -170,11 +176,9 @@ type, `NaN`) is rejected before the call reaches the engine, with a message
 naming the type. Always parameterise — concatenating a
 value into Cypher is an injection exactly as it is in SQL.
 
-**Do not `RETURN` a whole node, relationship or path.** The ABI serialises
-cells as JSON and has no JSON shape for those, so you get the engine's own
-`Debug` rendering in a `String`:
-`"Node(NodeValue { id: 0, labels: [\"Person\"], properties: {…} })"`. Ask for
-what you want instead — each of these is a real value:
+A whole node, relationship or path arrives as the `Map` above, and
+`collect(n)` as a `List` of them. Returning just the parts you want is often
+clearer — each of these is a first-class value:
 
 ```cypher
 RETURN p.title AS name         // String
@@ -433,11 +437,10 @@ updating clauses `CREATE`, `MERGE` (+ `ON CREATE SET` / `ON MATCH SET`), `SET`
   rendering style, values numbered `$p0…$pN` in emission order, nothing
   rewritten. Every statement in the test corpus is asserted character for
   character *and* run against the engine beside its hand-written twin.
-- **There is no `returning(node)`.** For the reason in [Values](#values) —
-  `RETURN p` crosses the ABI as a debug string — the DSL offers `p.prop("…")`,
-  `p.properties()`, `p.labels()`, `p.id()` and `r.type()` instead, all of which
-  return real values. It becomes a pure addition when the ABI grows a node
-  shape.
+- **There is no `returning(node)`.** The DSL offers `p.prop("…")`,
+  `p.properties()`, `p.labels()`, `p.id()` and `r.type()` instead. The whole
+  node is still reachable as `p.ref().as("p")`, which returns the node `Map`
+  described in [Values](#values).
 
 Rows stay `List<Map<String, Object>>`, identical to the raw route. There is no
 typed row and no object mapping: see [Scope](#scope).

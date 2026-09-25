@@ -98,6 +98,10 @@ before upgrading.
   a C or Java host had no way to turn that off. The C ABI no longer prints
   them; they arrive in the result's diagnostics JSON (and, in Java, through
   `QueryResult.warnings()`). Python and the CLI still print them as before.
+- The Java README and javadoc said a returned node, relationship or path
+  arrives as a debug string. It has been a structured `Map` since 0.16.1; the
+  value table now lists each shape (node, relationship, path, date, datetime,
+  duration, point), and the test pins them.
 
 ## [0.18.0] - 2026-09-24
 

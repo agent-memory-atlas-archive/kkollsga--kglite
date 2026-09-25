@@ -124,11 +124,9 @@ class KnowledgeGraphTest {
      * asserted cell by cell — including the row that surprises people.
      *
      * <p>Documented behaviour with no test is documentation that drifts, and
-     * this table is the first thing a consumer of the binding relies on. The
-     * whole-node case is pinned rather than merely described: it is the
-     * consequence of the C ABI having no JSON shape for a node, so if the
-     * engine ever grows one, this test is the thing that says the docs and the
-     * README now lie.
+     * this table is the first thing a consumer of the binding relies on, so
+     * the structured shapes (node, relationship, date, duration) are pinned
+     * rather than merely described.
      */
     @Test
     @DisplayName("the documented value mapping holds in both directions")
@@ -191,6 +189,26 @@ class KnowledgeGraphTest {
             assertEquals("Ada", ((Map<?, ?>) parts.get("props")).get("title"));
             assertEquals(List.of("Person"), parts.get("labels"), "labels() is a List of String");
             assertTrue(parts.get("id") instanceof Long, "id() is a Long");
+
+            Object path = graph.query("MATCH p = (:Person)-[:KNOWS]->(:Person) RETURN p AS p")
+                    .get(0).get("p");
+            assertTrue(path instanceof Map<?, ?> pathMap
+                    && pathMap.get("nodes") instanceof List<?> nodes && nodes.size() == 2
+                    && pathMap.get("relationships") instanceof List<?> rels && rels.size() == 1,
+                    "a path is a Map of node and relationship lists, got " + path);
+            assertEquals(List.of(nodeMap),
+                    graph.query("MATCH (p:Person {id: 1}) RETURN collect(p) AS ps").get(0).get("ps"),
+                    "collect(n) is a List of node maps");
+
+            // Temporal and spatial cells.
+            Map<String, Object> scalars = graph.query(
+                    "RETURN date('2020-01-01') AS d, datetime('2020-01-01T10:00:00+02:00') AS t,"
+                            + " duration({days: 2}) AS dur,"
+                            + " point(1.5, 2.5) AS pt").get(0);
+            assertEquals("2020-01-01", scalars.get("d"));
+            assertEquals("2020-01-01T08:00:00", scalars.get("t"), "normalised to UTC, no suffix");
+            assertEquals(Map.of("months", 0L, "days", 2L, "seconds", 0L), scalars.get("dur"));
+            assertEquals(Map.of("latitude", 1.5, "longitude", 2.5), scalars.get("pt"));
         }
     }
 

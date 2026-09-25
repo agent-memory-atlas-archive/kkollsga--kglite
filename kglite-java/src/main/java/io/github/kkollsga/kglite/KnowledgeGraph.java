@@ -82,8 +82,17 @@ import java.util.Optional;
  *           recursively.</td></tr>
  *   <tr><td>map</td><td>{@link Map}</td><td>Insertion-ordered; keys are
  *           {@code String}.</td></tr>
- *   <tr><td>node, relationship, path, temporal</td><td>{@link String}</td>
+ *   <tr><td>node, relationship, path</td><td>{@link Map}</td>
  *       <td>A structured {@code Map} — see below.</td></tr>
+ *   <tr><td>date</td><td>{@link String}</td><td>ISO {@code "2020-01-01"};
+ *           bind it back as a {@link java.time.LocalDate} to match it.</td></tr>
+ *   <tr><td>datetime</td><td>{@link String}</td>
+ *       <td>ISO {@code "2020-01-01T08:00:00"}, normalised to UTC, with no
+ *           zone suffix.</td></tr>
+ *   <tr><td>duration</td><td>{@link Map}</td><td>{@code months},
+ *           {@code days}, {@code seconds}.</td></tr>
+ *   <tr><td>point</td><td>{@link Map}</td><td>{@code latitude},
+ *           {@code longitude}.</td></tr>
  * </table>
  *
  * <p><strong>Whole nodes, relationships and paths arrive as structured
@@ -105,8 +114,8 @@ import java.util.Optional;
  * }</pre>
  *
  * <p>The same applies inside collections: {@code collect(n)} is a {@code List}
- * of those debug strings, while {@code collect(properties(n))} is a
- * {@code List} of {@code Map}.
+ * of those node maps, and {@code collect(properties(n))} a {@code List} of the
+ * property maps alone.
  *
  * <h2>Threading</h2>
  *
