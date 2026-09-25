@@ -24,6 +24,13 @@ before upgrading.
 
 ### Fixed
 
+- Loading a `.kgl` file, and reopening a disk graph, no longer reads every
+  property cell of every node. Since 0.17.0 each load checked all cells for
+  legacy endpoint references; it now reads only the storage that can hold
+  one, so typed columns are skipped. Measured on release builds: a 547k-node
+  graph loads in 506 ms (0.18.0: 637 ms; 0.16.24: 499 ms), a 200k-node
+  10-column `.kgl` in 34 ms (77 ms), and the disk reopen of that graph takes
+  9 ms (62 ms). Files with legacy references are still normalised on load.
 - A path variable read by the `WHERE` of its own leading `MATCH` —
   `MATCH p=(a)-[:R]->(b) WHERE length(p) > 0`, and every other read such as
   `nodes(p)`, `relationships(p)`, `p IS NOT NULL` or `all(r IN

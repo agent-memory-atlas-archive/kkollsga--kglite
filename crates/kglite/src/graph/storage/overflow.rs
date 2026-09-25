@@ -548,6 +548,30 @@ where
     .unwrap_or(Ok(()))
 }
 
+/// Whether any entry of a row blob decodes to a value `hit` accepts, visiting
+/// only the entries that can nest other values (List, Map).
+///
+/// Every other decodable tag yields a scalar, and the encoder has written a
+/// top-level `NodeRef` as [`TAG_NULL`] since 0.13.0, so a value holding a
+/// `NodeRef` can come out of a blob only inside a List or Map payload. The
+/// retired [`TAG_LIST`] and unknown tags are never decoded ([`decode_blob`]),
+/// so nothing a reader sees can come from them either.
+pub(crate) fn blob_any_nested_value(blob: &[u8], mut hit: impl FnMut(&Value) -> bool) -> bool {
+    for_each_raw(blob, |_, tag, blob, pos| {
+        if tag == TAG_LIST_POSTCARD || tag == TAG_MAP_POSTCARD {
+            match read_value(blob, pos, tag) {
+                Some(value) if hit(&value) => return Some(true),
+                Some(_) => {}
+                None => return Some(false), // truncated payload ends the row
+            }
+        } else if !skip_value(blob, pos, tag) {
+            return Some(false);
+        }
+        None
+    })
+    .unwrap_or(false)
+}
+
 /// Shared entry-walk driver: parses `[num_entries]` then per entry the
 /// `[key][tag]` header, handing `(key, tag, blob, pos)` to `step`.
 /// `step` must advance `*pos` past the entry payload; returning

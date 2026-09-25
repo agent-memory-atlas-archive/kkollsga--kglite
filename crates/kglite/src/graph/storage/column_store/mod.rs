@@ -1107,6 +1107,54 @@ impl ColumnStore {
 
     /// All non-null properties for a row, from both the dense columns and the
     /// overflow bag.
+    /// Rows with a cell `hit` accepts, among the cells that can hold a
+    /// `Value::NodeRef`: heterogeneous (Mixed) property and title columns,
+    /// and List/Map overflow entries, local or in the mmap base. Typed and
+    /// mmap columns cannot represent one and are not read. Cells are visited
+    /// by reference; only List/Map overflow payloads are decoded.
+    ///
+    /// Over-approximates [`Self::row_properties`] plus the title: a row whose
+    /// base cell the overlay overrides, or a tombstoned row, may be reported.
+    pub(crate) fn node_ref_candidate_rows(
+        &self,
+        mut hit: impl FnMut(&Value) -> bool,
+    ) -> rustc_hash::FxHashSet<u32> {
+        let mut rows = rustc_hash::FxHashSet::default();
+        for column in self.columns.iter().chain(self.title_column.iter()) {
+            if let Some(cells) = column.heterogeneous_cells() {
+                for (row, cell) in cells.iter().enumerate() {
+                    if hit(cell) {
+                        rows.insert(row as u32);
+                    }
+                }
+            }
+        }
+        if let (Some(offsets), Some(data)) = (&self.overflow_offsets, &self.overflow_data) {
+            for row in 0..offsets.len().saturating_sub(1) {
+                let (start, end) = (offsets.get(row) as usize, offsets.get(row + 1) as usize);
+                if start < end
+                    && end <= data.len()
+                    && super::overflow::blob_any_nested_value(data.slice(start, end), &mut hit)
+                {
+                    rows.insert(row as u32);
+                }
+            }
+        }
+        if let Some(base) = self.mmap_store.as_deref() {
+            if base.has_overflow {
+                for row in 0..base.row_count() {
+                    if base
+                        .overflow_blob(row)
+                        .is_some_and(|blob| super::overflow::blob_any_nested_value(blob, &mut hit))
+                    {
+                        rows.insert(row);
+                    }
+                }
+            }
+        }
+        rows
+    }
+
     pub fn row_properties(&self, row_id: u32) -> Vec<(InternedKey, Value)> {
         let mut out = Vec::new();
         self.row_properties_into(row_id, &mut out);

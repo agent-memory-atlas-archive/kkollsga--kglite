@@ -146,6 +146,21 @@ impl Clone for TypedColumn {
 }
 
 impl TypedColumn {
+    /// The cells of a column that can hold an arbitrary [`Value`] — and so a
+    /// `Value::NodeRef` — or `None` for a column whose variant cannot
+    /// represent one. Exhaustive on purpose: a new variant must answer.
+    pub(crate) fn heterogeneous_cells(&self) -> Option<&[Value]> {
+        match self {
+            TypedColumn::Mixed { data } => Some(data),
+            TypedColumn::Int64 { .. }
+            | TypedColumn::Float64 { .. }
+            | TypedColumn::UniqueId { .. }
+            | TypedColumn::Bool { .. }
+            | TypedColumn::Date { .. }
+            | TypedColumn::Str { .. } => None,
+        }
+    }
+
     /// Unique targets, including unique mappings, retain the existing push
     /// path. Shared mapped columns clone to heap just like ordinary Clone;
     /// declined reservations fall back to Arc::make_mut.

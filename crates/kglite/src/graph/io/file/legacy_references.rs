@@ -1,6 +1,8 @@
 //! Admission for recoverable legacy endpoint references in complete snapshots.
 
 use std::collections::HashSet;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::io;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
@@ -253,37 +255,111 @@ fn estimated_path_bytes(path: &PathValue) -> u64 {
         }))
 }
 
+/// Every node with a title or property cell holding a legacy endpoint
+/// reference.
+///
+/// Only storage that can represent a `Value::NodeRef` is read, and by
+/// reference: each type's column store answers which of its rows can
+/// ([`ColumnStore::node_ref_candidate_rows`]), and an inline title or
+/// non-columnar property map is checked in place. A row is materialised only
+/// when it may hold one, so a graph of typed columns builds no values at all —
+/// the complete-row read this replaced made every load O(property cells).
 fn collect_node_changes(graph: &DirGraph) -> Vec<NodeChanges> {
     let _guard = graph.begin_read_pass();
-    graph
-        .graph
-        .node_indices()
-        .filter_map(|index| {
-            let title = graph
-                .graph
-                .get_node_title(index)
-                .filter(property_value_needs_snapshot);
-            let node_type = graph
-                .graph
-                .node_type_of(index)
-                .and_then(|key| graph.interner.try_resolve(key))?
-                .to_string();
-            let properties: Vec<(InternedKey, Value)> = node_properties(&graph.graph, index)
-                .into_iter()
-                .filter(|(_, value)| property_value_needs_snapshot(value))
-                .collect();
-            if title.is_none() && properties.is_empty() {
-                None
-            } else {
-                Some(NodeChanges {
-                    index,
-                    node_type,
-                    title,
-                    properties,
-                })
+    // Scanned lazily, once per type.
+    let mut candidates: FxHashMap<InternedKey, FxHashSet<u32>> = FxHashMap::default();
+    let mut changes = Vec::new();
+    for index in graph.graph.node_indices() {
+        let Some((type_key, location)) = node_location(graph, index) else {
+            continue;
+        };
+        let may_hold = match location {
+            NodeLocation::Row { row, inline_title } => {
+                let rows = candidates.entry(type_key).or_insert_with(|| {
+                    graph
+                        .graph
+                        .column_store(type_key)
+                        .map(|store| store.node_ref_candidate_rows(property_value_needs_snapshot))
+                        .unwrap_or_default()
+                });
+                rows.contains(&row) || inline_title.is_some_and(property_value_needs_snapshot)
             }
-        })
-        .collect()
+            NodeLocation::Inline => true,
+        };
+        if may_hold {
+            if let Some(change) = node_change(graph, index) {
+                changes.push(change);
+            }
+        }
+    }
+    changes
+}
+
+/// Where a node's title and properties live.
+enum NodeLocation<'g> {
+    /// Row `row` of its type's column store, plus the inline title when the
+    /// node carries one (a non-Null `NodeData.title` wins over the store's).
+    Row {
+        row: u32,
+        inline_title: Option<&'g Value>,
+    },
+    /// Anywhere else: read the whole node.
+    Inline,
+}
+
+fn node_location(graph: &DirGraph, index: NodeIndex) -> Option<(InternedKey, NodeLocation<'_>)> {
+    if let Some(disk) = graph.graph.as_disk() {
+        // A disk node is always a store row; its title comes from the store.
+        let slot = disk.node_slot(index.index());
+        if !slot.is_alive() {
+            return None;
+        }
+        let row = NodeLocation::Row {
+            row: slot.row_id,
+            inline_title: None,
+        };
+        return Some((InternedKey::from_u64(slot.node_type), row));
+    }
+    let data = graph.graph.node_weight(index)?;
+    let location = match data.properties.columnar_row_id() {
+        Some(row) if graph.graph.column_store(data.node_type).is_some() => NodeLocation::Row {
+            row,
+            inline_title: (!matches!(data.title, Value::Null)).then_some(&data.title),
+        },
+        _ => NodeLocation::Inline,
+    };
+    Some((data.node_type, location))
+}
+
+/// The node's cells that hold a legacy endpoint reference, if any.
+fn node_change(graph: &DirGraph, index: NodeIndex) -> Option<NodeChanges> {
+    #[cfg(test)]
+    ROWS_MATERIALIZED.with(|count| count.set(count.get() + 1));
+    let title = graph
+        .graph
+        .get_node_title(index)
+        .filter(property_value_needs_snapshot);
+    let node_type = graph
+        .graph
+        .node_type_of(index)
+        .and_then(|key| graph.interner.try_resolve(key))?
+        .to_string();
+    let properties: Vec<(InternedKey, Value)> = node_properties(&graph.graph, index)
+        .into_iter()
+        .filter(|(_, value)| property_value_needs_snapshot(value))
+        .collect();
+    (title.is_some() || !properties.is_empty()).then_some(NodeChanges {
+        index,
+        node_type,
+        title,
+        properties,
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Nodes [`collect_node_changes`] read in full since the last reset.
+    static ROWS_MATERIALIZED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn invalidated_indexes(
@@ -484,6 +560,195 @@ mod tests {
         );
         let edge = graph.graph.edge_weight(EdgeIndex::new(0)).unwrap();
         assert_eq!(edge.properties[0].1, Value::String("Beta".into()));
+    }
+
+    /// A graph whose every property lives in a typed column: nothing in it
+    /// can hold an endpoint reference.
+    fn typed_fixture() -> DirGraph {
+        let mut graph = DirGraph::new();
+        execute(
+            &mut graph,
+            "UNWIND range(1, 40) AS i CREATE (:Item {id: i, title: 'item ' + toString(i), \
+             n: i, f: i * 0.5, b: (i % 2 = 0), s: 'x' + toString(i), d: date('2020-01-01')})",
+        );
+        graph
+    }
+
+    fn heterogeneous_columns(graph: &DirGraph) -> usize {
+        graph
+            .graph
+            .column_stores_iter()
+            .map(|(_, store)| {
+                (0..store.schema().len())
+                    .filter(|slot| store.column_type_str(*slot) == Some("mixed"))
+                    .count()
+            })
+            .sum()
+    }
+
+    fn changed(graph: &DirGraph) -> Vec<(usize, bool, Vec<String>)> {
+        let mut out: Vec<_> = collect_node_changes(graph)
+            .into_iter()
+            .map(|change| {
+                let mut keys: Vec<String> = change
+                    .properties
+                    .iter()
+                    .map(|(key, _)| graph.interner.resolve(*key).to_string())
+                    .collect();
+                keys.sort();
+                (change.index.index(), change.title.is_some(), keys)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn materialized<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        ROWS_MATERIALIZED.with(|count| count.set(0));
+        let out = f();
+        (out, ROWS_MATERIALIZED.with(|count| count.get()))
+    }
+
+    #[test]
+    fn heterogeneous_property_and_title_columns_are_scanned() {
+        let graph = raw_fixture();
+        assert!(
+            heterogeneous_columns(&graph) > 0,
+            "fixture must use Mixed columns"
+        );
+        let (found, rows) = materialized(|| changed(&graph));
+        assert_eq!(
+            found,
+            vec![(0, true, vec!["list".into(), "map".into(), "scalar".into()])]
+        );
+        assert_eq!(rows, 1, "only the row holding references is read in full");
+    }
+
+    #[test]
+    fn inline_title_is_scanned() {
+        let mut graph = typed_fixture();
+        GraphWrite::node_weight_mut(&mut graph.graph, NodeIndex::new(3))
+            .unwrap()
+            .title = Value::NodeRef(1);
+        graph.graph.flush_pending_writes();
+        assert_eq!(changed(&graph), vec![(3, true, vec![])]);
+    }
+
+    #[test]
+    fn non_columnar_properties_are_scanned() {
+        let mut graph = typed_fixture();
+        let key = graph.interner.get_or_intern("endpoint");
+        GraphWrite::node_weight_mut(&mut graph.graph, NodeIndex::new(5))
+            .unwrap()
+            .properties = crate::graph::storage::property_storage::PropertyStorage::Map(
+            [(key, Value::NodeRef(1))].into_iter().collect(),
+        );
+        assert_eq!(changed(&graph), vec![(5, false, vec!["endpoint".into()])]);
+    }
+
+    #[test]
+    fn overflow_list_and_map_entries_are_scanned() {
+        use crate::graph::storage::mapped::mmap_vec::MmapOrVec;
+        use crate::graph::storage::overflow::encode_value;
+        let mut graph = typed_fixture();
+        let item = InternedKey::from_str("Item");
+        let extra = graph.interner.get_or_intern("extra");
+        let rows = graph.graph.column_store(item).unwrap().row_count();
+        let row_of = |graph: &DirGraph, node: usize| {
+            graph
+                .graph
+                .node_weight(NodeIndex::new(node))
+                .unwrap()
+                .properties
+                .columnar_row_id()
+                .unwrap()
+        };
+        let (list_row, map_row, plain_row) =
+            (row_of(&graph, 2), row_of(&graph, 7), row_of(&graph, 9));
+        let mut data = Vec::new();
+        let mut offsets = vec![0u64];
+        for row in 0..rows {
+            let value = if row == list_row {
+                Some(Value::List(vec![Value::Int64(1), Value::NodeRef(0)]))
+            } else if row == map_row {
+                Some(Value::Map(
+                    [("at", Value::NodeRef(0))].into_iter().collect(),
+                ))
+            } else if row == plain_row {
+                Some(Value::List(vec![Value::String("no reference".into())]))
+            } else {
+                None
+            };
+            if let Some(value) = value {
+                let mut blob = 1u16.to_le_bytes().to_vec();
+                encode_value(&mut blob, extra, &value);
+                data.extend_from_slice(&blob);
+            }
+            offsets.push(data.len() as u64);
+        }
+        let mut bytes = crate::graph::storage::mapped::mmap_vec::MmapBytes::new();
+        bytes.extend(&data).unwrap();
+        Arc::make_mut(GraphWrite::column_store_mut(&mut graph.graph, item).unwrap())
+            .replace_overflow_bag(MmapOrVec::from_vec(offsets), bytes);
+        let (found, materialized_rows) = materialized(|| changed(&graph));
+        assert_eq!(
+            found,
+            vec![
+                (2, false, vec!["extra".into()]),
+                (7, false, vec!["extra".into()])
+            ]
+        );
+        assert_eq!(materialized_rows, 2);
+    }
+
+    #[test]
+    fn typed_columns_are_never_materialized_on_load_in_any_mode() {
+        use crate::graph::storage::mode::StorageMode;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("typed.kgl");
+        let mut source = Arc::new(typed_fixture());
+        save_graph(&mut source, path.to_str().unwrap()).unwrap();
+        for options in [
+            LoadOptions::new(),
+            LoadOptions::new().with_storage(StorageMode::Mapped),
+        ] {
+            let (loaded, rows) =
+                materialized(|| load_file_with(path.to_str().unwrap(), &options).unwrap());
+            assert_eq!(loaded.graph.node_count(), 40);
+            assert_eq!(
+                heterogeneous_columns(&loaded),
+                0,
+                "fixture must be typed-only"
+            );
+            assert_eq!(rows, 0, "a typed-only graph reads no row in full");
+        }
+        let dir = tmp.path().join("typed-disk");
+        let mut graph = typed_fixture();
+        graph.enable_disk_mode().unwrap();
+        let mut graph = Arc::new(graph);
+        save_graph(&mut graph, dir.to_str().unwrap()).unwrap();
+        drop(graph);
+        let (loaded, rows) = materialized(|| load_file(dir.to_str().unwrap()).unwrap());
+        assert_eq!(loaded.graph.node_count(), 40);
+        assert_eq!(rows, 0, "a typed-only disk graph reads no row in full");
+    }
+
+    #[test]
+    fn mapped_load_normalizes_complete_snapshot() {
+        use crate::graph::storage::mode::StorageMode;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("legacy-mapped.kgl");
+        let mut source = Arc::new(raw_fixture());
+        save_graph(&mut source, path.to_str().unwrap()).unwrap();
+        let (loaded, rows) = materialized(|| {
+            load_file_with(
+                path.to_str().unwrap(),
+                &LoadOptions::new().with_storage(StorageMode::Mapped),
+            )
+            .unwrap()
+        });
+        assert_normalized(&loaded);
+        assert_eq!(rows, 1, "only the row holding references is read in full");
     }
 
     #[test]

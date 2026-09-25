@@ -670,7 +670,7 @@ impl MmapColumnStore {
     }
 
     /// Extract the overflow blob slice for a given row, or None if not present.
-    fn overflow_blob(&self, row_id: u32) -> Option<&[u8]> {
+    pub(crate) fn overflow_blob(&self, row_id: u32) -> Option<&[u8]> {
         if !self.has_overflow {
             return None;
         }
