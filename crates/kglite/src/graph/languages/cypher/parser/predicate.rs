@@ -88,10 +88,10 @@ impl CypherParser {
         let mut items = Vec::new();
 
         if !self.check(&CypherToken::RBracket) {
-            items.push(self.parse_expression()?);
+            items.push(self.parse_expression_with_predicates()?);
             while self.check(&CypherToken::Comma) {
                 self.advance();
-                items.push(self.parse_expression()?);
+                items.push(self.parse_expression_with_predicates()?);
             }
         }
 

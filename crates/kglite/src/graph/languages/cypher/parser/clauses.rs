@@ -119,7 +119,7 @@ impl CypherParser {
     }
 
     pub(super) fn parse_order_item(&mut self) -> Result<OrderItem, String> {
-        let expression = self.parse_expression()?;
+        let expression = self.parse_expression_with_predicates()?;
 
         let ascending = match self.peek() {
             Some(CypherToken::Asc) => {
@@ -207,7 +207,7 @@ impl CypherParser {
 
     pub(super) fn parse_unwind_clause(&mut self) -> Result<Clause, String> {
         self.expect(&CypherToken::Unwind)?;
-        let expression = self.parse_expression()?;
+        let expression = self.parse_expression_with_predicates()?;
         self.expect(&CypherToken::As)?;
         let alias = self.try_consume_alias_name()?;
         Ok(Clause::Unwind(UnwindClause {
@@ -595,7 +595,7 @@ impl CypherParser {
                     self.expect_name("property key")?
                 };
                 self.expect(&CypherToken::Colon)?;
-                let value_expr = self.parse_expression()?;
+                let value_expr = self.parse_expression_with_predicates()?;
                 props.push((key, value_expr));
 
                 if self.check(&CypherToken::Comma) {
@@ -717,7 +717,7 @@ impl CypherParser {
                 self.expect(&CypherToken::Equals)?;
                 items.push(SetItem::Map {
                     variable: var_name,
-                    expression: self.parse_expression()?,
+                    expression: self.parse_expression_with_predicates()?,
                     replace: false,
                 });
             } else if self.check(&CypherToken::Equals) {
@@ -725,7 +725,7 @@ impl CypherParser {
                 self.advance();
                 items.push(SetItem::Map {
                     variable: var_name,
-                    expression: self.parse_expression()?,
+                    expression: self.parse_expression_with_predicates()?,
                     replace: true,
                 });
             } else if self.check(&CypherToken::Dot) {
@@ -754,7 +754,7 @@ impl CypherParser {
                     }
                 }
                 self.expect(&CypherToken::Equals)?;
-                let expression = self.parse_expression()?;
+                let expression = self.parse_expression_with_predicates()?;
                 items.push(SetItem::Property {
                     variable: var_name,
                     property: prop_name,

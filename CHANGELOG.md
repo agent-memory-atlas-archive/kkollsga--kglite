@@ -121,6 +121,13 @@ before upgrading.
   same way. The merge itself is unchanged and follows `conflict_handling`
   (`update`: non-null values overwrite, nulls keep the stored value;
   `replace`: the row's property set; `preserve`: stored values win).
+- A comparison or boolean expression without parentheses was a syntax error
+  in most value positions: a map value (`{b: i % 2 = 0}`), a list item
+  (`[x = 1, a AND b]`), a function argument (`toString(1 = 1)`), a map
+  projection value, a list comprehension projection (`[x IN xs | x > 1]`),
+  `reduce`, an `IN [...]` item, `UNWIND`, `ORDER BY`, the right-hand side of
+  `SET`, and a `CREATE`/`MERGE`/`MATCH` property value. Each now takes any
+  expression, as `RETURN` and `WITH` already did.
 
 ## [0.18.0] - 2026-09-24
 

@@ -187,6 +187,10 @@ pub fn parse_with_mutation_check(
 }
 
 #[cfg(test)]
+#[path = "predicate_value_position_tests.rs"]
+mod predicate_value_position_tests;
+
+#[cfg(test)]
 mod parameter_name_tests {
     use crate::api::cypher::parameter_names;
     use crate::error::{KgError, KgErrorCode};

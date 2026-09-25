@@ -38,7 +38,7 @@ impl CypherParser {
     /// [`PropertyMatcher::EqualsExpr`].
     fn emit_inline_map_value(&mut self, parts: &mut Vec<String>) -> Result<(), String> {
         let start = self.pos;
-        let expr = self.parse_expression()?;
+        let expr = self.parse_expression_with_predicates()?;
         if pattern_lexer_reads(&expr) {
             self.pos = start;
             return Ok(());

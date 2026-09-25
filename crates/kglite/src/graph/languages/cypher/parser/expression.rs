@@ -500,10 +500,10 @@ impl CypherParser {
                 // Otherwise: list literal [expr, expr, ...]
                 let mut items = Vec::new();
                 if !self.check(&CypherToken::RBracket) {
-                    items.push(self.parse_expression()?);
+                    items.push(self.parse_expression_with_predicates()?);
                     while self.check(&CypherToken::Comma) {
                         self.advance();
-                        items.push(self.parse_expression()?);
+                        items.push(self.parse_expression_with_predicates()?);
                     }
                 }
                 self.expect(&CypherToken::RBracket)?;
@@ -694,7 +694,7 @@ impl CypherParser {
                 .unwrap_or_else(|| "DISTINCT".to_string());
             return Ok(Expression::Variable(name));
         }
-        self.parse_expression()
+        self.parse_expression_with_predicates()
     }
 
     /// Parse function call: name(args...)
@@ -896,7 +896,7 @@ impl CypherParser {
                 // alias: expression — soft keywords allowed as keys (KG-2)
                 let key = self.expect_name("property name or .property in map projection")?;
                 self.expect(&CypherToken::Colon)?;
-                let expr = self.parse_expression()?;
+                let expr = self.parse_expression_with_predicates()?;
                 items.push(MapProjectionItem::Alias { key, expr });
             }
         }
@@ -918,7 +918,7 @@ impl CypherParser {
                 // to their uppercase word — same as pattern property maps.
                 let key = self.expect_name("key name in map literal")?;
                 self.expect(&CypherToken::Colon)?;
-                let expr = self.parse_expression()?;
+                let expr = self.parse_expression_with_predicates()?;
                 entries.push((key, expr));
 
                 if self.check(&CypherToken::Comma) {
@@ -1016,7 +1016,7 @@ impl CypherParser {
         // Optional | map_expr
         let map_expr = if self.check(&CypherToken::Pipe) {
             self.advance();
-            Some(Box::new(self.parse_expression()?))
+            Some(Box::new(self.parse_expression_with_predicates()?))
         } else {
             None
         };
@@ -1084,7 +1084,7 @@ impl CypherParser {
         };
 
         self.expect(&CypherToken::Equals)?;
-        let init = self.parse_expression()?;
+        let init = self.parse_expression_with_predicates()?;
         self.expect(&CypherToken::Comma)?;
 
         // iteration variable
@@ -1101,7 +1101,7 @@ impl CypherParser {
         self.expect(&CypherToken::In)?;
         let list_expr = self.parse_expression()?;
         self.expect(&CypherToken::Pipe)?;
-        let body = self.parse_expression()?;
+        let body = self.parse_expression_with_predicates()?;
         self.expect(&CypherToken::RParen)?;
 
         Ok(Expression::Reduce {
