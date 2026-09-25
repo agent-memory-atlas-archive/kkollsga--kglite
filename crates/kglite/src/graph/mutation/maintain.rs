@@ -948,6 +948,10 @@ pub struct EdgeSpec {
 pub struct EdgeSpecReport {
     /// Edges the batch engine actually created.
     pub connections_created: usize,
+    /// Specs that met an existing edge of the same type between the same
+    /// endpoints and merged their properties into it (the default `update`
+    /// conflict mode), creating nothing.
+    pub connections_updated: usize,
     /// Edges skipped because a source or target id had no node of its
     /// declared type. Unlike [`add_connections`], this primitive does NOT
     /// vivify stub endpoints — endpoints must already exist.
@@ -1057,9 +1061,29 @@ pub fn add_edges_from_specs(
 
         let (stats, _metrics) = batch.execute(graph, edge_type)?;
         report.connections_created += stats.connections_created;
+        report.connections_updated += stats.connections_updated;
     }
     graph.bump_version();
     Ok(report)
+}
+
+/// The report for one connection batch: its created and updated counts, the
+/// caller's skipped rows, and its timing.
+fn batch_report(
+    operation: &str,
+    stats: &crate::graph::mutation::batch::ConnectionBatchStats,
+    skipped: usize,
+    metrics: &crate::graph::mutation::batch::BatchMetrics,
+) -> ConnectionOperationReport {
+    let mut report = ConnectionOperationReport::new(
+        operation.to_string(),
+        stats.connections_created,
+        skipped,
+        stats.properties_tracked,
+        metrics.processing_time * 1000.0,
+    );
+    report.connections_updated = stats.connections_updated;
+    report
 }
 
 /// How a call decides whether it may take the one-edge-per-row fast path:
@@ -1337,13 +1361,7 @@ pub(crate) fn add_connections_with_initial_load(
         graph.invalidate_edge_type_counts_cache();
     }
 
-    let mut report = ConnectionOperationReport::new(
-        "add_connections".to_string(),
-        stats.connections_created,
-        skipped_count,
-        stats.properties_tracked,
-        metrics.processing_time * 1000.0,
-    );
+    let mut report = batch_report("add_connections", &stats, skipped_count, &metrics);
     report.stubs_vivified = stubs_vivified;
 
     if !errors.is_empty() {
@@ -2246,13 +2264,7 @@ pub fn create_connections(
 
     let (stats, metrics) = batch.execute(graph, connection_type)?;
 
-    let mut report = ConnectionOperationReport::new(
-        "create_connections".to_string(),
-        stats.connections_created,
-        skipped,
-        stats.properties_tracked,
-        metrics.processing_time * 1000.0,
-    );
+    let mut report = batch_report("create_connections", &stats, skipped, &metrics);
 
     if !errors.is_empty() {
         report = report.with_errors(errors);
@@ -2439,6 +2451,10 @@ mod connection_property_tests;
 #[cfg(test)]
 #[path = "maintain_id_index_tests.rs"]
 mod id_index_tests;
+
+#[cfg(test)]
+#[path = "maintain_merge_report_tests.rs"]
+mod merge_report_tests;
 
 #[cfg(test)]
 #[path = "maintain_replace_connections_tests.rs"]

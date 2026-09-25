@@ -91,7 +91,12 @@ impl NodeOperationReport {
 #[derive(Debug, Clone)]
 pub struct ConnectionOperationReport {
     pub operation_type: String,
+    /// Relationships this call added.
     pub connections_created: usize,
+    /// Rows that met an existing relationship of the same type between the
+    /// same endpoints and merged into it per `conflict_handling` (`replace`
+    /// included): the relationship already existed, so none was created.
+    pub connections_updated: usize,
     pub connections_skipped: usize,
     /// Stub nodes auto-created so an edge to a missing endpoint could
     /// still connect (see `add_connections` vivification).
@@ -113,6 +118,7 @@ impl ConnectionOperationReport {
         Self {
             operation_type,
             connections_created,
+            connections_updated: 0,
             connections_skipped,
             stubs_vivified: 0,
             property_fields_tracked,

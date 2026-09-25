@@ -690,12 +690,15 @@ struct ConnectionCreation {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ConnectionBatchStats {
     pub connections_created: usize,
+    /// Rows merged into an existing relationship per the conflict mode.
+    pub connections_updated: usize,
     pub properties_tracked: usize,
 }
 
 impl ConnectionBatchStats {
     fn combine(&mut self, other: &ConnectionBatchStats) {
         self.connections_created += other.connections_created;
+        self.connections_updated += other.connections_updated;
         self.properties_tracked = self.properties_tracked.max(other.properties_tracked);
     }
 }
@@ -877,7 +880,7 @@ impl ConnectionBatchProcessor {
                         // the same (src, tgt) hits the freshly-created edge,
                         // not the removed one.
                         existing_lookup.insert((conn.source_idx, conn.target_idx), new_id);
-                        stats.connections_created += 1;
+                        stats.connections_updated += 1;
                     }
                     ConflictHandling::Update => {
                         let interned_props = conn.properties;
@@ -895,7 +898,7 @@ impl ConnectionBatchProcessor {
                                     edge_props.push((k, v));
                                 }
                             }
-                            stats.connections_created += 1;
+                            stats.connections_updated += 1;
                         }
                         crate::graph::index_freshness::write_hooks::note_edge_property_written(
                             graph, edge_idx, None,
@@ -913,7 +916,7 @@ impl ConnectionBatchProcessor {
                                     edge_props.push((k, v));
                                 }
                             }
-                            stats.connections_created += 1;
+                            stats.connections_updated += 1;
                         }
                         crate::graph::index_freshness::write_hooks::note_edge_property_written(
                             graph, edge_idx, None,
@@ -935,7 +938,7 @@ impl ConnectionBatchProcessor {
                                     edge_props.push((k, v));
                                 }
                             }
-                            stats.connections_created += 1;
+                            stats.connections_updated += 1;
                         }
                         crate::graph::index_freshness::write_hooks::note_edge_property_written(
                             graph, edge_idx, None,

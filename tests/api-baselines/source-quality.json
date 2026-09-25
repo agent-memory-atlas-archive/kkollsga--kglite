@@ -304,21 +304,21 @@
     {
       "path": "crates/kglite/src/graph/mutation/extend.rs",
       "qualified_name": "crate::extend_graph",
-      "lines": 218,
-      "branches": 27,
+      "lines": 202,
+      "branches": 25,
       "nesting": 4
     },
     {
       "path": "crates/kglite/src/graph/mutation/maintain.rs",
       "qualified_name": "crate::add_connections_with_initial_load",
-      "lines": 231,
+      "lines": 225,
       "branches": 23,
       "nesting": 3
     },
     {
       "path": "crates/kglite/src/graph/mutation/maintain.rs",
       "qualified_name": "crate::create_connections",
-      "lines": 259,
+      "lines": 253,
       "branches": 47,
       "nesting": 10
     },

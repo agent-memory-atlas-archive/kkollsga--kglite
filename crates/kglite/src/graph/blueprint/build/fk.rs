@@ -873,7 +873,9 @@ pub(super) fn connect(
                     source_type, connection_type, target_type, r.stubs_vivified
                 ));
             }
-            Ok(r.connections_created)
+            // Rows that landed, merged ones included: the summary compares
+            // this input count with the stored edges to report dedupes.
+            Ok(r.connections_created + r.connections_updated)
         }
         Err(e) => {
             report

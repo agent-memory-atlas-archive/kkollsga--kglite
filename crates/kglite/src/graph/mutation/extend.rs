@@ -69,6 +69,9 @@ pub struct ExtendReport {
     pub nodes_updated: usize,
     pub nodes_skipped: usize,
     pub edges_created: usize,
+    /// Source edges merged into an existing edge of the same type between the
+    /// same endpoints, per `conflict_handling`.
+    pub edges_updated: usize,
     pub edges_skipped: usize,
     pub node_types_merged: usize,
     pub connection_types_merged: usize,
@@ -257,6 +260,7 @@ pub fn extend_graph(
         nodes_updated: 0,
         nodes_skipped: 0,
         edges_created: 0,
+        edges_updated: 0,
         edges_skipped: 0,
         node_types_merged: node_groups.len(),
         connection_types_merged: 0,
@@ -357,6 +361,20 @@ pub fn extend_graph(
         .collect::<std::collections::HashSet<_>>()
         .len();
 
+    merge_edge_groups(target, edge_groups, &conflict_handling, &mut report)?;
+
+    report.processing_time_ms = start.elapsed().as_secs_f64() * 1000.0;
+    Ok(report)
+}
+
+/// Route each source edge group through `add_connections`, tallying the
+/// outcome into `report`.
+fn merge_edge_groups(
+    target: &mut DirGraph,
+    edge_groups: HashMap<(String, String, String), EdgeGroup>,
+    conflict_handling: &Option<String>,
+    report: &mut ExtendReport,
+) -> Result<(), String> {
     for ((conn_type, _, _), group) in edge_groups {
         let df = build_edge_dataframe(&group)?;
         let r: ConnectionOperationReport = add_connections(
@@ -372,12 +390,11 @@ pub fn extend_graph(
             conflict_handling.clone(),
         )?;
         report.edges_created += r.connections_created;
+        report.edges_updated += r.connections_updated;
         report.edges_skipped += r.connections_skipped;
         report.errors.extend(r.errors);
     }
-
-    report.processing_time_ms = start.elapsed().as_secs_f64() * 1000.0;
-    Ok(report)
+    Ok(())
 }
 
 fn scope_error(which: &str) -> String {

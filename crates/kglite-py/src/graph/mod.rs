@@ -744,6 +744,7 @@ impl KnowledgeGraph {
             report_dict.set_item("operation", &result.operation_type)?;
             report_dict.set_item("timestamp", result.timestamp.to_rfc3339())?;
             report_dict.set_item("connections_created", result.connections_created)?;
+            report_dict.set_item("connections_updated", result.connections_updated)?;
             report_dict.set_item("connections_skipped", result.connections_skipped)?;
             report_dict.set_item("stubs_vivified", result.stubs_vivified)?;
             report_dict.set_item("property_fields_tracked", result.property_fields_tracked)?;
@@ -758,7 +759,9 @@ impl KnowledgeGraph {
             // Emit a warning whenever the report flags skips or errors —
             // silent skips on bulk edge loads were a recurring footgun.
             if has_errors && on_invalid.warns() {
-                let total = result.connections_created + result.connections_skipped;
+                let total = result.connections_created
+                    + result.connections_updated
+                    + result.connections_skipped;
                 let detail = if result.errors.is_empty() {
                     String::new()
                 } else {

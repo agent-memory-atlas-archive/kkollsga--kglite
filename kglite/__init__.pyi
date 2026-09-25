@@ -2272,8 +2272,11 @@ class KnowledgeGraph:
 
         Returns:
             Operation report dict with ``connections_created``,
-            ``connections_skipped``, ``processing_time_ms``, ``has_errors``,
-            and optionally ``errors``.
+            ``connections_updated``, ``connections_skipped``,
+            ``processing_time_ms``, ``has_errors``, and optionally ``errors``.
+            A row whose ``(connection_type, source, target)`` already has a
+            relationship merges into it per ``conflict_handling`` and counts
+            in ``connections_updated``, not ``connections_created``.
         """
         ...
 
@@ -2373,7 +2376,8 @@ class KnowledgeGraph:
                 stub node, not skipped, and is unaffected by this setting.
 
         Returns:
-            Operation report dict with ``connections_created``, ``connections_skipped``, etc.
+            Operation report dict with ``connections_created``,
+            ``connections_updated``, ``connections_skipped``, etc.
         """
         ...
 
@@ -2475,8 +2479,8 @@ class KnowledgeGraph:
 
         Returns:
             Operation report dict with ``nodes_created``, ``nodes_updated``,
-            ``nodes_skipped``, ``edges_created``, ``edges_skipped``,
-            ``node_types_merged``, ``connection_types_merged``,
+            ``nodes_skipped``, ``edges_created``, ``edges_updated``,
+            ``edges_skipped``, ``node_types_merged``, ``connection_types_merged``,
             ``labels_unioned``, ``processing_time_ms``, ``has_errors``, and
             optionally ``errors``.
         """

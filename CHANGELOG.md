@@ -18,6 +18,10 @@ before upgrading.
   unknown label or relationship type with its "did you mean?" hint, a row-cap
   truncation) and its full `diagnostics()`. The plain `query`/`cypher`
   methods are unchanged.
+- The `add_relationships` / `add_connections` report has a
+  `connections_updated` count, `extend()`'s report an `edges_updated` count,
+  and the C ABI's `kglite_create_edges_batch` report a `connections_updated`
+  key: rows that merged into an existing relationship.
 
 ### Changed
 
@@ -109,6 +113,14 @@ before upgrading.
   of 400 runs, two agreeing runs each: a 10k-relationship filtered
   `count(*)` 3.33–3.38 ms → 2.72–2.75 ms, a 1000-row result 2.31–2.37 ms →
   1.81 ms, a one-hop lookup 9.1 µs → 7.9 µs.
+- `add_connections` merging into an existing relationship — a later call
+  with a row whose relationship type, source and target already have a
+  relationship — reported the row as created (`connections_created: 1`)
+  although no relationship was added. Such a row now counts in the new
+  `connections_updated`; `extend()` and `kglite_create_edges_batch` count the
+  same way. The merge itself is unchanged and follows `conflict_handling`
+  (`update`: non-null values overwrite, nulls keep the stored value;
+  `replace`: the row's property set; `preserve`: stored values win).
 
 ## [0.18.0] - 2026-09-24
 

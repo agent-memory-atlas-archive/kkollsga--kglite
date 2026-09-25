@@ -1087,6 +1087,7 @@ fn build_extend_report_dict<'py>(
     d.set_item("nodes_updated", result.nodes_updated)?;
     d.set_item("nodes_skipped", result.nodes_skipped)?;
     d.set_item("edges_created", result.edges_created)?;
+    d.set_item("edges_updated", result.edges_updated)?;
     d.set_item("edges_skipped", result.edges_skipped)?;
     d.set_item("node_types_merged", result.node_types_merged)?;
     d.set_item("connection_types_merged", result.connection_types_merged)?;
@@ -1323,7 +1324,7 @@ impl KnowledgeGraph {
     ///
     /// Returns:
     ///     dict with 'nodes_created', 'nodes_updated', 'nodes_skipped',
-    ///     'edges_created', 'edges_skipped', 'node_types_merged',
+    ///     'edges_created', 'edges_updated', 'edges_skipped', 'node_types_merged',
     ///     'connection_types_merged', 'labels_unioned',
     ///     'processing_time_ms', 'has_errors', and optionally 'errors'.
     #[pyo3(signature = (other, conflict_handling=None))]

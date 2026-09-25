@@ -2301,6 +2301,7 @@ pub fn kglite::api::mutation::PropertySpec::fmt(&self, f: &mut core::fmt::Format
 pub struct kglite::api::mutation::ConnectionOperationReport
 pub kglite::api::mutation::ConnectionOperationReport::connections_created: usize
 pub kglite::api::mutation::ConnectionOperationReport::connections_skipped: usize
+pub kglite::api::mutation::ConnectionOperationReport::connections_updated: usize
 pub kglite::api::mutation::ConnectionOperationReport::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::mutation::ConnectionOperationReport::operation_type: alloc::string::String
 pub kglite::api::mutation::ConnectionOperationReport::processing_time_ms: f64
@@ -2345,6 +2346,7 @@ impl core::fmt::Debug for kglite::api::mutation::EdgeSpec
 pub fn kglite::api::mutation::EdgeSpec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::mutation::EdgeSpecReport
 pub kglite::api::mutation::EdgeSpecReport::connections_created: usize
+pub kglite::api::mutation::EdgeSpecReport::connections_updated: usize
 pub kglite::api::mutation::EdgeSpecReport::skipped_missing_endpoint: usize
 impl core::clone::Clone for kglite::api::mutation::EdgeSpecReport
 pub fn kglite::api::mutation::EdgeSpecReport::clone(&self) -> kglite::api::mutation::EdgeSpecReport
@@ -2356,6 +2358,7 @@ pub struct kglite::api::mutation::ExtendReport
 pub kglite::api::mutation::ExtendReport::connection_types_merged: usize
 pub kglite::api::mutation::ExtendReport::edges_created: usize
 pub kglite::api::mutation::ExtendReport::edges_skipped: usize
+pub kglite::api::mutation::ExtendReport::edges_updated: usize
 pub kglite::api::mutation::ExtendReport::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::mutation::ExtendReport::labels_unioned: usize
 pub kglite::api::mutation::ExtendReport::node_types_merged: usize

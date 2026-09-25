@@ -37,6 +37,28 @@ class TestAddConnections:
         report = graph.add_connections(conn_df, "SELF", "Node", "source", "Node", "target")
         assert report["connections_created"] == 1
 
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            (None, {"a": 30, "b": 20}),
+            ("update", {"a": 30, "b": 20}),
+            ("replace", {"a": 30, "b": None}),
+            ("preserve", {"a": 10, "b": 20}),
+        ],
+    )
+    def test_second_call_on_same_endpoints_reports_an_update(self, mode, expected):
+        graph = KnowledgeGraph()
+        graph.add_nodes(pd.DataFrame({"id": [1, 2]}), "Node", "id")
+        kwargs = {} if mode is None else {"conflict_handling": mode}
+        first = pd.DataFrame({"s": [1], "t": [2], "a": [10], "b": [20]})
+        report = graph.add_connections(first, "LINKS", "Node", "s", "Node", "t", **kwargs)
+        assert (report["connections_created"], report["connections_updated"]) == (1, 0)
+        second = pd.DataFrame({"s": [1], "t": [2], "a": [30], "b": [None]})
+        report = graph.add_connections(second, "LINKS", "Node", "s", "Node", "t", **kwargs)
+        assert (report["connections_created"], report["connections_updated"]) == (0, 1)
+        rows = graph.cypher("MATCH ()-[r:LINKS]->() RETURN r.a AS a, r.b AS b").to_list()
+        assert rows == [expected]
+
     def test_cross_type_connections(self):
         graph = KnowledgeGraph()
         users = pd.DataFrame({"id": [1], "name": ["Alice"]})

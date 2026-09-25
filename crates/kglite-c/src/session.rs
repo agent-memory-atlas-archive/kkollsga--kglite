@@ -598,8 +598,11 @@ pub unsafe extern "C" fn kglite_session_execute_mut_batch(
 /// target id isn't found for its declared type is skipped and counted.
 ///
 /// On success `out_report_json` is set to an owned JSON object
-/// `{"connections_created": N, "skipped_missing_endpoint": M}`; free it
-/// with [`kglite_free_string`](crate::kglite_free_string).
+/// `{"connections_created": N, "connections_updated": U,
+/// "skipped_missing_endpoint": M}`, where `connections_updated` counts specs
+/// that met an existing edge of the same type between the same endpoints and
+/// merged their properties into it; free it with
+/// [`kglite_free_string`](crate::kglite_free_string).
 ///
 /// This wraps the shared core primitive
 /// [`add_edges_from_specs`](kglite::api::mutation::add_edges_from_specs) —
@@ -641,6 +644,7 @@ pub unsafe extern "C" fn kglite_create_edges_batch(
                 Ok(report) => {
                     let json = serde_json::json!({
                         "connections_created": report.connections_created,
+                        "connections_updated": report.connections_updated,
                         "skipped_missing_endpoint": report.skipped_missing_endpoint,
                     })
                     .to_string();
@@ -1142,6 +1146,20 @@ mod tests {
         let report = report.expect("report json");
         assert_eq!(report["connections_created"], 1);
         assert_eq!(report["skipped_missing_endpoint"], 1);
+        assert_eq!(
+            count(session, "MATCH (:Src)-[r:REL]->(:Dst) RETURN count(r) AS c"),
+            1
+        );
+
+        // The same endpoints again merge into that edge: an update, not a creation.
+        let (status, report, err) = edges_batch(
+            session,
+            r#"[{"src_id": 1, "src_type": "Src", "dst_id": 2, "dst_type": "Dst", "type": "REL", "props": {"w": 2}}]"#,
+        );
+        assert_eq!(status, KgliteStatusCode::Ok, "err: {err:?}");
+        let report = report.expect("report json");
+        assert_eq!(report["connections_created"], 0);
+        assert_eq!(report["connections_updated"], 1);
         assert_eq!(
             count(session, "MATCH (:Src)-[r:REL]->(:Dst) RETURN count(r) AS c"),
             1

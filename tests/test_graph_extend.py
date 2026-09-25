@@ -205,9 +205,8 @@ def test_edge_disjoint_and_dedup():
     edges = _all(g1, "MATCH (a)-[:KNOWS]->(b) RETURN a.id AS s, b.id AS t")
     pairs = sorted((e["s"], e["t"]) for e in edges)
     assert pairs == [(1, 2), (3, 4)]
-    # edges_created mirrors add_connections: it counts every edge touched
-    # (one new 3->4 + one property-merge on the existing 1->2) = 2.
-    assert rep["edges_created"] == 2
+    # One new edge (3->4); the duplicate merged into the existing 1->2.
+    assert (rep["edges_created"], rep["edges_updated"]) == (1, 1)
 
 
 def test_edge_properties_merge_on_dedup():
