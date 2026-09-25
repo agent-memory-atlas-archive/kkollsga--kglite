@@ -120,11 +120,17 @@
       "sha256": "153213f7a5e0e9edde7b2603865fa6025e4e3b5d66faae1bb23de26737b8a2f1",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "2026-09-24 21:06 capture on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, uptime 22 d, load avg 3.5 at start (desktop load, no concurrent builds; target/ had just been cargo-cleaned so the release build was cold, the benchmarks ran after it); vs accepted 0_17_11: worst cell +2.8% min (hop1_deg3_memory, a control), median -5.2%, no cell over +12%; controls cypher_match +1.8%, untyped_edge_count_1m -0.0%, khop3_in_list -0.8%, traversal -8.3%; exists_fixed_hop -26% and exists_var_length_witness -21% are the W1 anchor fixes. Single clean capture far from every threshold, no retake needed; bench-anchor OK worst +5.3%.",
+    "0_18_1.json": {
+      "evidence": "Release 0.18.1, 2026-09-25: one 37-cell capture vs accepted 0_18_0: median min +6.5%, medians mostly +3-5%, worst min +15.5% (exists_var_length_witness); unchanged-path controls (save_kgl, add_nodes, blueprint_build, cypher_where) moved the same direction, so the shift reads as instrument drift, not code. Targeted release A/B vs the 0.18.0 wheel on the changed paths showed no regression (path-binding cells within noise), disk reopen -51% and load_kgl -5% are the intended wins; Linux CI perf regression gate green on the same code. Not promoted: reference stays 0_18_0. Machine: Mac16,10 M4 16 GiB, Darwin 25.6.0, uptime 23 d, load avg ~1.8 at start, no concurrent native build during capture.",
       "platform": "Darwin/arm64",
-      "sha256": "153213f7a5e0e9edde7b2603865fa6025e4e3b5d66faae1bb23de26737b8a2f1",
-      "status": "accepted"
+      "sha256": "664cc823a08d33ad755695dece966d4740741f6636f0d4561c6d763cac9813ec",
+      "status": "pending"
+    },
+    "current.json": {
+      "evidence": "Release 0.18.1, 2026-09-25: one 37-cell capture vs accepted 0_18_0: median min +6.5%, medians mostly +3-5%, worst min +15.5% (exists_var_length_witness); unchanged-path controls (save_kgl, add_nodes, blueprint_build, cypher_where) moved the same direction, so the shift reads as instrument drift, not code. Targeted release A/B vs the 0.18.0 wheel on the changed paths showed no regression (path-binding cells within noise), disk reopen -51% and load_kgl -5% are the intended wins; Linux CI perf regression gate green on the same code. Not promoted: reference stays 0_18_0. Machine: Mac16,10 M4 16 GiB, Darwin 25.6.0, uptime 23 d, load avg ~1.8 at start, no concurrent native build during capture.",
+      "platform": "Darwin/arm64",
+      "sha256": "664cc823a08d33ad755695dece966d4740741f6636f0d4561c6d763cac9813ec",
+      "status": "pending"
     },
     "current.linux.json": {
       "evidence": "reference_0_16_23.linux.json plus one cell: the harness gained test_bench_hop1_deg3_memory mid-cycle (859d874d, deep-scan program) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement \u2014 kglite 0.13.2 run unmodified on macOS/M4 2026-09-08 (15.405 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the eleven existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",

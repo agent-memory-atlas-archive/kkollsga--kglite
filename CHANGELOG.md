@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-25
+
 ### Changed
 
 - **Breaking:** a variable-length relationship variable is now the list of
