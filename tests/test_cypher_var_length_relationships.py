@@ -131,3 +131,70 @@ def test_undirected_segment_orders_relationships_along_the_walk(graph):
 def test_unoptimised_plan_agrees(graph):
     query = f"{SEGMENT} WHERE all(x IN r WHERE x.w < 2) RETURN b.name AS b, size(r) AS s"
     assert _rows(graph, query) == _rows(graph, query, disable_optimizer=True) == [{"b": "b", "s": 1}]
+
+
+# --- the list as a write and a pattern constraint ------------------------------
+
+
+def _chain():
+    g = kglite.KnowledgeGraph()
+    g.cypher("CREATE (a:A {name:'a'})-[:R {w:1}]->(b:B {name:'b'})-[:R {w:2}]->(c:B {name:'c'}), (a)-[:S {w:3}]->(c)")
+    return g
+
+
+def _remaining(g):
+    nodes = sorted(r["n"] for r in g.cypher("MATCH (n) RETURN n.name AS n").to_list())
+    rels = sorted(r["w"] for r in g.cypher("MATCH ()-[x]->() RETURN x.w AS w").to_list())
+    return nodes, rels
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        # A var-length relationship variable deletes every relationship in it.
+        ("MATCH (a:A)-[r:R*2..2]->(b) DELETE r", (["a", "b", "c"], [3])),
+        ("MATCH (a:A)-[r:R*1..1]->(b) DELETE r", (["a", "b", "c"], [2, 3])),
+        ("MATCH (a:A)-[r:R*2..2]->(b) WITH r DELETE r", (["a", "b", "c"], [3])),
+        # A list value of relationships or nodes deletes each element.
+        ("MATCH ()-[r:R]->() WITH collect(r) AS rs DELETE rs", (["a", "b", "c"], [3])),
+        ("MATCH (n:B) WITH collect(n) AS ns DETACH DELETE ns", (["a"], [])),
+        # A path deletes its relationships and nodes.
+        ("MATCH p=(a:A)-[:R]->(b) DETACH DELETE p", (["c"], [])),
+        ("MATCH p=(a:A)-[:R*2..2]->(b) DETACH DELETE p", ([], [])),
+        # A null (an OPTIONAL MATCH miss) deletes nothing.
+        ("MATCH (a:A) OPTIONAL MATCH (a)-[r:S*2..2]->(b) DELETE r", (["a", "b", "c"], [1, 2, 3])),
+    ],
+)
+def test_delete_takes_every_element(query, expected):
+    g = _chain()
+    g.cypher(query)
+    assert _remaining(g) == expected
+
+
+def test_plain_delete_of_a_path_refuses_nodes_with_other_relationships():
+    g = _chain()
+    with pytest.raises(Exception):
+        g.cypher("MATCH p=(a:A)-[:R]->(b) DELETE p")
+    assert _remaining(g) == (["a", "b", "c"], [1, 2, 3])
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        # Re-matching a bound segment walks exactly its relationships, in order.
+        (
+            "MATCH (a:A)-[r:R*1..2]->(b) WITH r MATCH (x)-[r*1..2]->(y) "
+            "RETURN x.name AS x, y.name AS y, size(r) AS s ORDER BY s",
+            [{"x": "a", "y": "b", "s": 1}, {"x": "a", "y": "c", "s": 2}],
+        ),
+        ("MATCH (a:A)-[r:R*1..2]->(b) MATCH (x)-[r*1..2]->(y) RETURN count(*) AS n", [{"n": 2}]),
+        ("MATCH (a:A)-[r:R*1..2]->(b) WITH r MATCH (x)<-[r*1..2]-(y) RETURN count(*) AS n", [{"n": 1}]),
+        (
+            "MATCH (a:A)-[r:R*2..2]->(b) WITH [k IN r | k] AS rels "
+            "MATCH (x)-[rels*1..3]->(y) RETURN x.name AS x, y.name AS y",
+            [{"x": "a", "y": "c"}],
+        ),
+    ],
+)
+def test_rebound_segment_constrains_the_match(query, expected):
+    assert _chain().cypher(query).to_list() == expected

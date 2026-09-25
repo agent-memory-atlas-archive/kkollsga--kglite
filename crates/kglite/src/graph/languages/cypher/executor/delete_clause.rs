@@ -15,7 +15,9 @@ use super::write_scope::{enforce_bound_edge_write_scope, enforce_node_write_scop
 use crate::datatypes::values::{RelValue, Value};
 use crate::graph::algorithms::Interrupt;
 use crate::graph::languages::cypher::ast::{DeleteClause, Expression};
-use crate::graph::languages::cypher::result::{EdgeBinding, MutationStats, ResultRow, ResultSet};
+use crate::graph::languages::cypher::result::{
+    EdgeBinding, MutationStats, PathBinding, ResultRow, ResultSet,
+};
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 use petgraph::graph::{EdgeIndex, NodeIndex};
@@ -109,13 +111,22 @@ fn collect_row_target(
     if let Some(edge_binding) = row.edge_bindings.get(var_name) {
         return collect_bound_relationship(graph, var_name, edge_binding, targets, identities);
     }
-    // Not bound to a node/edge. A node or relationship VALUE (projected by
-    // WITH / collect) is still deletable; anything else is NULL — e.g. an
-    // unmatched OPTIONAL MATCH variable — and openCypher ignores NULL in
-    // DELETE (so the idiomatic single-statement cascade `MATCH (root)
-    // OPTIONAL MATCH (root)-->(child) DETACH DELETE root, child` works even
-    // when a branch is empty). Skip it.
-    collect_projected_target(graph, row, var_name, targets, identities)
+    // A path, or a variable-length relationship variable's segment: DELETE
+    // takes each of its relationships and, for a path, its nodes too
+    // (openCypher). Once silently ignored.
+    if let Some(path) = row.path_bindings.get(var_name) {
+        return collect_bound_path(graph, var_name, path, targets, identities);
+    }
+    // Not bound to a node/edge/path. A node or relationship VALUE (projected
+    // by WITH / collect), or a list or path of them, is still deletable;
+    // anything else is NULL — e.g. an unmatched OPTIONAL MATCH variable — and
+    // openCypher ignores NULL in DELETE (so the idiomatic single-statement
+    // cascade `MATCH (root) OPTIONAL MATCH (root)-->(child) DETACH DELETE
+    // root, child` works even when a branch is empty). Skip it.
+    match row.projected.get(var_name) {
+        Some(value) => collect_value_target(graph, var_name, value, targets, identities),
+        None => Ok(()),
+    }
 }
 
 fn collect_bound_relationship(
@@ -139,20 +150,57 @@ fn collect_bound_relationship(
     enforce_bound_edge_write_scope(graph, edge_binding)
 }
 
-fn collect_projected_target(
+/// Each hop's relationship of a bound path or segment, with the hop's own
+/// bind-time identity, plus the path's nodes unless it is a relationship list.
+fn collect_bound_path(
     graph: &DirGraph,
-    row: &ResultRow,
     var_name: &str,
+    path: &PathBinding,
     targets: &mut DeleteTargets,
     identities: &StatementRelationshipIdentities,
 ) -> Result<(), String> {
-    match row.projected.get(var_name) {
-        Some(Value::NodeRef(i)) => {
-            let node_idx = NodeIndex::new(*i as usize);
-            if targets.nodes.insert(node_idx) {
-                enforce_node_write_scope(graph, node_idx)?;
-            }
+    for (index, hop) in path.path.iter().enumerate() {
+        let (source, target) = graph
+            .graph
+            .edge_endpoints(hop.edge)
+            .ok_or_else(|| format!("Relationship in '{var_name}' no longer exists"))?;
+        let binding = EdgeBinding {
+            source,
+            target,
+            edge_index: hop.edge,
+            incarnation: path.hop_incarnation(index),
+        };
+        collect_bound_relationship(graph, var_name, &binding, targets, identities)?;
+    }
+    if !path.relationship_list {
+        let nodes = std::iter::once(path.source).chain(path.path.iter().map(|hop| hop.node));
+        for node_idx in nodes {
+            collect_node(graph, node_idx, targets)?;
         }
+    }
+    Ok(())
+}
+
+fn collect_node(
+    graph: &DirGraph,
+    node_idx: NodeIndex,
+    targets: &mut DeleteTargets,
+) -> Result<(), String> {
+    if targets.nodes.insert(node_idx) {
+        enforce_node_write_scope(graph, node_idx)?;
+    }
+    Ok(())
+}
+
+fn collect_value_target(
+    graph: &DirGraph,
+    var_name: &str,
+    value: &Value,
+    targets: &mut DeleteTargets,
+    identities: &StatementRelationshipIdentities,
+) -> Result<(), String> {
+    match value {
+        Value::NodeRef(i) => collect_node(graph, NodeIndex::new(*i as usize), targets)?,
         // A materialised node value (`collect(n)` / `RETURN n`) is deletable
         // too — this is the load-bearing case for `FOREACH (e IN collect(n) |
         // DETACH DELETE e)`, where the loop variable is bound in `projected`
@@ -161,20 +209,30 @@ fn collect_projected_target(
         // to the petgraph index, so it resolves the same way as `NodeRef`.
         // (Without this arm, DELETE inside FOREACH over a collected list was a
         // silent no-op.)
-        Some(Value::Node(nv)) => {
-            let node_idx = NodeIndex::new(nv.id as usize);
-            if targets.nodes.insert(node_idx) {
-                enforce_node_write_scope(graph, node_idx)?;
-            }
-        }
+        Value::Node(nv) => collect_node(graph, NodeIndex::new(nv.id as usize), targets)?,
         // A materialised relationship value (`collect(r)` then UNWIND, or a
         // `FOREACH` loop variable) is deletable on the same grounds as the
         // node arms above. Without it the value fell through here and DELETE
         // was a silent no-op: no edge removed, no error. It carries its own
         // identity checks rather than the binding path's, because a value can
         // outlive the slot it names.
-        Some(Value::Relationship(rel)) => {
+        Value::Relationship(rel) => {
             collect_projected_relationship(graph, var_name, rel, targets, identities)?;
+        }
+        // A list (`WITH collect(r) AS rs DELETE rs`) or path value deletes
+        // every element it holds, as openCypher's DELETE does.
+        Value::List(items) => {
+            for item in items {
+                collect_value_target(graph, var_name, item, targets, identities)?;
+            }
+        }
+        Value::Path(path) => {
+            for rel in &path.rels {
+                collect_projected_relationship(graph, var_name, rel, targets, identities)?;
+            }
+            for node in &path.nodes {
+                collect_node(graph, NodeIndex::new(node.id as usize), targets)?;
+            }
         }
         _ => {}
     }

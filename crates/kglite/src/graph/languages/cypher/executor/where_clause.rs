@@ -66,6 +66,31 @@ impl<'a> CypherExecutor<'a> {
                     }
                 }
             }
+            // And for a variable-length relationship variable: the segment
+            // must walk exactly the relationships the bound list holds, in
+            // order — a carried segment binding, or a projected list value.
+            if let MatchBinding::VariableLengthPath { path, .. } = binding {
+                let walked = path.iter().map(|hop| hop.edge.index());
+                if let Some(existing) = row.path_bindings.get(var) {
+                    if !walked.eq(existing.path.iter().map(|hop| hop.edge.index())) {
+                        return false;
+                    }
+                } else {
+                    match row.projected.get(var) {
+                        None => {}
+                        Some(Value::List(items)) => {
+                            let bound = items.iter().map(|item| match item {
+                                Value::Relationship(rel) => Some(rel.id as usize),
+                                _ => None,
+                            });
+                            if !walked.map(Some).eq(bound) {
+                                return false;
+                            }
+                        }
+                        Some(_) => return false,
+                    }
+                }
+            }
         }
         true
     }

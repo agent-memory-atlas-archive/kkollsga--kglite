@@ -1334,3 +1334,19 @@ class TestCyclicPatternCorrectness:
         assert optimised == naive
         # sanity: the cycle actually matches some rows (not a vacuous pass)
         assert len(optimised) > 0
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "[x IN null | x]",
+        "[x IN null WHERE x > 1]",
+        "[x IN null WHERE x > 1 | x * 2]",
+        "reduce(acc = 0, x IN null | acc + x)",
+        "any(x IN null WHERE x > 1)",
+        "all(x IN null WHERE x > 1)",
+    ],
+)
+def test_iterating_null_yields_null(expression):
+    """openCypher: a comprehension, fold or quantifier over null is null."""
+    assert rg.KnowledgeGraph().cypher(f"RETURN {expression} AS v").to_list() == [{"v": None}]

@@ -31,6 +31,18 @@ before upgrading.
   graph loads in 506 ms (0.18.0: 637 ms; 0.16.24: 499 ms), a 200k-node
   10-column `.kgl` in 34 ms (77 ms), and the disk reopen of that graph takes
   9 ms (62 ms). Files with legacy references are still normalised on load.
+- `DELETE` of a variable-length relationship variable (`MATCH
+  (a)-[r:R*1..3]->(b) DELETE r`), of a path (`DETACH DELETE p`), or of a
+  list value (`WITH collect(r) AS rs DELETE rs`) deleted nothing, silently.
+  It now deletes every relationship in it and, for a path, its nodes, with
+  plain `DELETE` still refusing a node that keeps other relationships.
+- Re-using a bound variable-length relationship variable in a later pattern
+  (`… WITH r MATCH (x)-[r*1..3]->(y)`) did not constrain it: the pattern
+  matched every segment. It now matches only the segment that walks exactly
+  those relationships, in order.
+- A list comprehension or `reduce` over `null` returned `[]` or the initial
+  value; both now return `null`, as the quantifiers `any`/`all`/`none`/
+  `single` already did.
 - A path variable read by the `WHERE` of its own leading `MATCH` —
   `MATCH p=(a)-[:R]->(b) WHERE length(p) > 0`, and every other read such as
   `nodes(p)`, `relationships(p)`, `p IS NOT NULL` or `all(r IN

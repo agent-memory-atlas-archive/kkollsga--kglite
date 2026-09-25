@@ -717,6 +717,16 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "RETURN q.name AS n, size(r) AS s, [k IN r | k.since] AS years ORDER BY n, s, years",
         None,
     ),
+    # A re-bound variable-length relationship variable constrains the later
+    # segment to its list (12 rows, one per bound segment); a count route that
+    # skipped the constraint would return every segment of every start.
+    (
+        "var_length_relationship_list_rebound_count",
+        "social_graph",
+        "MATCH (p:Person {person_id: 1})-[r:KNOWS*1..2]->(q:Person) WITH r "
+        "MATCH (x:Person)-[r*1..2]->(y:Person) RETURN count(*) AS n",
+        None,
+    ),
     (
         "path_count_later_optional_match",
         "social_graph",

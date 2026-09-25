@@ -640,7 +640,12 @@ impl<'a> CypherExecutor<'a> {
             }
         }
 
-        let items = parse_list_value(&self.evaluate_expression(list_expr, row)?);
+        let list = self.evaluate_expression(list_expr, row)?;
+        // A comprehension over null is null, not an empty list (openCypher).
+        if matches!(list, Value::Null) {
+            return Ok(Value::Null);
+        }
+        let items = parse_list_value(&list);
         let mut results = Vec::new();
         for item in items {
             let mut temp_row = row.clone();
@@ -759,6 +764,10 @@ impl<'a> CypherExecutor<'a> {
         // The initializer is deliberately evaluated before the list expression.
         let mut value = self.evaluate_expression(init, row)?;
         let list = self.evaluate_expression(list_expr, row)?;
+        // Folding over null is null, whatever the initial value (openCypher).
+        if matches!(list, Value::Null) {
+            return Ok(Value::Null);
+        }
         for item in parse_list_value(&list) {
             let mut temp_row = row.clone();
             temp_row
