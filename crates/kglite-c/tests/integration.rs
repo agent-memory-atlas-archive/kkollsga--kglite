@@ -206,6 +206,44 @@ fn params_json_round_trip() {
     unsafe { kglite_session_free(session) };
 }
 
+/// A date or datetime read out of a result, wrapped in its `$date` /
+/// `$datetime` tag and passed back as a parameter, matches the stored value.
+#[test]
+fn tagged_date_and_datetime_params_match_stored_values() {
+    let session = seed_notes(
+        "CREATE (a:A {id: 1})-[:R {vf: date('2020-01-01'), at: datetime('2020-01-01T10:00:00+02:00')}]->(:B {id: 2})",
+    );
+    let read = query_rows(
+        session,
+        "MATCH ()-[r:R]->() RETURN r.vf AS vf, r.at AS at",
+        "{}",
+    );
+    let vf = read[0]["vf"].clone();
+    let at = read[0]["at"].clone();
+    assert_eq!(vf, serde_json::json!("2020-01-01"));
+
+    let untagged = serde_json::json!({ "v": vf }).to_string();
+    let rows = query_rows(
+        session,
+        "MATCH ()-[r:R]->() WHERE r.vf = $v RETURN count(*) AS c",
+        &untagged,
+    );
+    assert_eq!(
+        rows,
+        serde_json::json!([{ "c": 0 }]),
+        "a bare string stays a string"
+    );
+
+    let tagged = serde_json::json!({ "v": { "$date": vf }, "t": { "$datetime": at } }).to_string();
+    let rows = query_rows(
+        session,
+        "MATCH ()-[r:R]->() WHERE r.vf = $v AND r.at = $t RETURN count(*) AS c",
+        &tagged,
+    );
+    assert_eq!(rows, serde_json::json!([{ "c": 1 }]));
+    unsafe { kglite_session_free(session) };
+}
+
 #[test]
 fn raw_json_marker_object_and_batch_selector_preserve_effective_values() {
     let graph = kglite_graph_new();

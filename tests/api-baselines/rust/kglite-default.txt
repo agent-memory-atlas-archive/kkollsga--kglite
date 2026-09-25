@@ -2393,6 +2393,7 @@ pub fn kglite::api::mutation::validate_graph(graph: &kglite::api::DirGraph, sche
 pub mod kglite::api::param
 pub enum kglite::api::param::JsonQueryParameterErrorKind
 pub kglite::api::param::JsonQueryParameterErrorKind::IntegerOutOfRange
+pub kglite::api::param::JsonQueryParameterErrorKind::InvalidTemporal
 pub kglite::api::param::JsonQueryParameterErrorKind::NonFiniteFloat
 impl core::clone::Clone for kglite::param::JsonQueryParameterErrorKind
 pub fn kglite::param::JsonQueryParameterErrorKind::clone(&self) -> kglite::param::JsonQueryParameterErrorKind
@@ -5452,6 +5453,7 @@ pub fn kglite::graphgen::generate_to_dir(cfg: &kglite::graphgen::GraphGenConfig,
 pub mod kglite::param
 pub enum kglite::param::JsonQueryParameterErrorKind
 pub kglite::param::JsonQueryParameterErrorKind::IntegerOutOfRange
+pub kglite::param::JsonQueryParameterErrorKind::InvalidTemporal
 pub kglite::param::JsonQueryParameterErrorKind::NonFiniteFloat
 impl core::clone::Clone for kglite::param::JsonQueryParameterErrorKind
 pub fn kglite::param::JsonQueryParameterErrorKind::clone(&self) -> kglite::param::JsonQueryParameterErrorKind

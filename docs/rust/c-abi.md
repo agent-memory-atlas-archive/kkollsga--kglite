@@ -124,6 +124,16 @@ owned message naming the nested parameter path. Free that message with
 `kglite_free_string`. This applies to single, options and batch query calls;
 edge/property ingestion keeps its declared tolerant conversion policy.
 
+JSON has no date type, so a date or datetime parameter is a one-key tagged
+object: `{"$date": "2020-01-01"}` binds a date (parsed as `date()` parses),
+`{"$datetime": "2020-01-01T10:00:00+02:00"}` binds a datetime (parsed as
+`datetime()` parses; an offset is applied, normalising to UTC), and
+`{"$duration": {"months": 0, "days": 1, "seconds": 0}}` binds a duration. The
+payloads are the shapes result rows render those types as, so a cell read back
+and wrapped in its tag matches the stored value; a bare string stays a string.
+An object with any other key, or with a tag key beside other keys, is an
+ordinary map. A malformed payload is refused like an unrepresentable number.
+
 ## Result access
 
 Results remain owned by `KgliteCypherResult` until

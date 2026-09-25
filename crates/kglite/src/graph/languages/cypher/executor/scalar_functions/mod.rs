@@ -27,6 +27,12 @@ mod vector;
 pub(super) use function_registry::{FunctionSpec, FUNCTIONS};
 use shared::*;
 
+/// Parse a datetime string exactly as `datetime(s)` does: an offset is
+/// applied, normalising the reading to UTC. `None` when `datetime(s)` is null.
+pub(crate) fn parse_datetime_utc(text: &str) -> Option<chrono::NaiveDateTime> {
+    shared::parse_iso_datetime(text).map(|parsed| parsed.utc())
+}
+
 impl<'a> CypherExecutor<'a> {
     #[cfg(test)]
     pub(super) fn test_eval_collection_fn(

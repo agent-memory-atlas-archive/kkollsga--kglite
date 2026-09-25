@@ -15,6 +15,7 @@
 //! dispatch each time.
 
 mod raw_json;
+mod tagged;
 
 pub use raw_json::validate_json_query_numbers_at;
 
@@ -40,6 +41,9 @@ pub enum JsonQueryParameterErrorKind {
     IntegerOutOfRange,
     /// A decimal or exponent token is outside the finite `f64` range.
     NonFiniteFloat,
+    /// A `{"$date": …}`, `{"$datetime": …}` or `{"$duration": …}` object
+    /// whose payload is not a valid value of that type.
+    InvalidTemporal,
 }
 
 /// A rejected JSON query parameter, including its object/array path.
@@ -69,6 +73,9 @@ impl std::fmt::Display for JsonQueryParameterError {
             }
             JsonQueryParameterErrorKind::NonFiniteFloat => {
                 "number is outside the finite 64-bit float range"
+            }
+            JsonQueryParameterErrorKind::InvalidTemporal => {
+                "is a tagged date, datetime or duration with an invalid payload"
             }
         };
         write!(formatter, "Query parameter {} {reason}", self.path)
@@ -114,6 +121,7 @@ impl std::error::Error for JsonQueryTextError {}
 enum QueryConversionError {
     IntegerOutOfRange,
     NonFiniteFloat,
+    InvalidTemporal,
     AtIndex(usize, Box<Self>),
     AtKey(String, Box<Self>),
 }
@@ -155,6 +163,12 @@ impl QueryConversionError {
                     return JsonQueryParameterError {
                         path,
                         kind: JsonQueryParameterErrorKind::NonFiniteFloat,
+                    };
+                }
+                Self::InvalidTemporal => {
+                    return JsonQueryParameterError {
+                        path,
+                        kind: JsonQueryParameterErrorKind::InvalidTemporal,
                     };
                 }
             };
@@ -248,16 +262,24 @@ fn convert_query_value(v: &serde_json::Value) -> Result<Value, QueryConversionEr
             })
             .collect::<Result<Vec<_>, _>>()
             .map(Value::List),
-        serde_json::Value::Object(map) => map
-            .iter()
-            .map(|(key, value)| {
-                convert_query_value(value)
-                    .map(|value| (key.clone(), value))
-                    .map_err(|error| QueryConversionError::AtKey(key.clone(), Box::new(error)))
-            })
-            .collect::<Result<crate::datatypes::PropMap, _>>()
-            .map(Value::Map),
+        serde_json::Value::Object(map) => match tagged::decode(map) {
+            Some(decoded) => decoded.ok_or(QueryConversionError::InvalidTemporal),
+            None => convert_query_map(map),
+        },
     }
+}
+
+fn convert_query_map(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Value, QueryConversionError> {
+    map.iter()
+        .map(|(key, value)| {
+            convert_query_value(value)
+                .map(|value| (key.clone(), value))
+                .map_err(|error| QueryConversionError::AtKey(key.clone(), Box::new(error)))
+        })
+        .collect::<Result<crate::datatypes::PropMap, _>>()
+        .map(Value::Map)
 }
 
 /// Convert a JSON value to a Cypher `Value`. Scalars map directly;

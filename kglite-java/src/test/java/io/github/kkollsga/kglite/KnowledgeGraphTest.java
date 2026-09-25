@@ -194,6 +194,31 @@ class KnowledgeGraphTest {
         }
     }
 
+    @Test
+    @DisplayName("java.time parameters bind as dates and datetimes, matching stored values")
+    void dateAndDatetimeParameters() {
+        try (KnowledgeGraph graph = KnowledgeGraph.createInMemory()) {
+            graph.cypher("CREATE (:A {id: 1})-[:R {vf: date('2020-01-01'),"
+                    + " at: datetime('2020-01-01T10:00:00+02:00')}]->(:B {id: 2})");
+            String count = "MATCH ()-[r:R]->() WHERE r.vf = $v AND r.at = $t RETURN count(*) AS c";
+            List<Object> datetimes = List.of(
+                    java.time.LocalDateTime.of(2020, 1, 1, 8, 0),
+                    java.time.OffsetDateTime.parse("2020-01-01T10:00+02:00"),
+                    java.time.ZonedDateTime.parse("2020-01-01T09:00+01:00[Europe/Oslo]"),
+                    java.time.Instant.parse("2020-01-01T08:00:00Z"));
+            for (Object t : datetimes) {
+                Map<String, Object> params = Map.of("v", java.time.LocalDate.of(2020, 1, 1), "t", t);
+                assertEquals(1L, graph.query(count, params).get(0).get("c"), t.toString());
+            }
+
+            // The string a date cell comes back as, rebound as a LocalDate, matches.
+            Object vf = graph.query("MATCH ()-[r:R]->() RETURN r.vf AS vf").get(0).get("vf");
+            assertEquals("2020-01-01", vf);
+            assertEquals(1L, graph.query("MATCH ()-[r:R]->() WHERE r.vf = $v RETURN count(*) AS c",
+                    Map.of("v", java.time.LocalDate.parse((String) vf))).get(0).get("c"));
+        }
+    }
+
     /** {@code Map.of} rejects a null value; the null cell case needs one. */
     private static Map<String, Object> mapOfNullable(Object... pairs) {
         Map<String, Object> map = new java.util.LinkedHashMap<>();

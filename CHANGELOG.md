@@ -68,6 +68,17 @@ before upgrading.
   fixed-length path had length 1), and from only the variable-length part of
   a pattern that mixes fixed and variable-length hops
   (`p=(a)-[:R]->(b)-[:R*1..2]->(c)`).
+- Date and datetime parameters over the JSON path (the C ABI, Java, the MCP
+  server) had no way to be typed: a date read back from a result and passed in
+  again was a string, so `WHERE r.since = $d` silently matched nothing. A
+  one-key tagged object now binds a typed value: `{"$date": "2020-01-01"}`,
+  `{"$datetime": "2020-01-01T10:00:00+02:00"}` (an offset is applied,
+  normalising to UTC) and `{"$duration": {"months": 0, "days": 1,
+  "seconds": 0}}`, whose payloads are the shapes results render those types
+  as. A malformed payload is refused with the parameter's path; any other
+  object is still a map. Java binds `LocalDate` as a date and
+  `LocalDateTime`, `OffsetDateTime`, `ZonedDateTime` and `Instant` as a
+  datetime.
 
 ## [0.18.0] - 2026-09-24
 

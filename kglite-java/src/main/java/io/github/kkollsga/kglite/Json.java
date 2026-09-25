@@ -2,6 +2,13 @@ package io.github.kkollsga.kglite;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -66,11 +73,33 @@ final class Json {
             case float[] floats -> writePrimitiveArray(out, floats.length, i -> writeNumber(out, floats[i]));
             case double[] doubles ->
                     writePrimitiveArray(out, doubles.length, i -> writeNumber(out, doubles[i]));
+            case LocalDate d -> writeTagged(out, "$date", DateTimeFormatter.ISO_LOCAL_DATE.format(d));
+            case LocalDateTime d ->
+                    writeTagged(out, "$datetime", DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(d));
+            case OffsetDateTime d ->
+                    writeTagged(out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d));
+            case ZonedDateTime d -> writeTagged(
+                    out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d.toOffsetDateTime()));
+            case Instant i -> writeTagged(
+                    out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(i.atOffset(ZoneOffset.UTC)));
             default -> throw new KgliteException(
                     "cannot bind a " + value.getClass().getName() + " as a Cypher parameter;"
                             + " use null, String, Boolean, a Number, Map, Iterable, Object[],"
-                            + " float[] or double[]");
+                            + " float[], double[], LocalDate, LocalDateTime, OffsetDateTime,"
+                            + " ZonedDateTime or Instant");
         }
+    }
+
+    /**
+     * Write a date or datetime as the engine's tagged parameter object, e.g.
+     * {@code {"$date":"2020-01-01"}}; the engine reads it back as a typed value.
+     */
+    private static void writeTagged(StringBuilder out, String tag, String iso) {
+        out.append('{');
+        writeString(out, tag);
+        out.append(':');
+        writeString(out, iso);
+        out.append('}');
     }
 
     /** Write a JSON array of {@code length} elements, each emitted by {@code element}. */

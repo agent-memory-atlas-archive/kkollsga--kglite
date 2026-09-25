@@ -274,7 +274,10 @@ pub fn query_conversion_error(
         crate::param::JsonQueryParameterErrorKind::IntegerOutOfRange => {
             VariableIssueKind::IntegerRange
         }
-        crate::param::JsonQueryParameterErrorKind::NonFiniteFloat => VariableIssueKind::WrongType,
+        crate::param::JsonQueryParameterErrorKind::NonFiniteFloat
+        | crate::param::JsonQueryParameterErrorKind::InvalidTemporal => {
+            VariableIssueKind::WrongType
+        }
     };
     VariablesValidationError {
         issues: vec![VariableIssue::new(error.path(), kind, error.to_string())],

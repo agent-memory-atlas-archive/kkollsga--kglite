@@ -333,11 +333,11 @@ class TransactionTest {
             Transaction tx = graph.beginTransaction();
             tx.add("CREATE (:Person {id: 90, title: 'Pre'})");
 
-            Map<String, Object> illegal = Map.of("when", java.time.LocalDate.of(2026, 8, 10));
+            Map<String, Object> illegal = Map.of("when", java.time.LocalTime.of(10, 30));
             KgliteException thrown = assertThrows(KgliteException.class,
                     () -> tx.add("CREATE (:Person {id: 91, at: $when})", illegal));
             assertEquals("WrapperError", thrown.statusName());
-            assertTrue(thrown.getMessage().contains("LocalDate"), thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("LocalTime"), thrown.getMessage());
 
             assertThrows(KgliteException.class, () -> tx.add(null));
             assertThrows(KgliteException.class, () -> tx.add("CREATE (:Person {id: 91})", null));

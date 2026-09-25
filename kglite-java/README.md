@@ -145,9 +145,13 @@ follows, and the mapping is asserted in both directions by
 | node, relationship, path, temporal | `String` | **a debug rendering — see below** |
 
 Parameters accept the mirror set: `null`, `String`, `Boolean`, any `Number`,
-`Map` with `String` keys, `Iterable`, `Object[]`, nested freely. Anything else
-(a POJO, a `java.time` value, `NaN`) is rejected before the call reaches the
-engine, with a message naming the type. Always parameterise — concatenating a
+`Map` with `String` keys, `Iterable`, `Object[]`, nested freely. `LocalDate`
+binds as a Cypher date, and `LocalDateTime`, `OffsetDateTime`, `ZonedDateTime`
+and `Instant` bind as a datetime (an offset is applied, so the stored value is
+UTC), so `WHERE r.since = $d` matches a stored `date()`. A bare `String` stays a
+string and never equals a date. Anything else (a POJO, another `java.time`
+type, `NaN`) is rejected before the call reaches the engine, with a message
+naming the type. Always parameterise — concatenating a
 value into Cypher is an injection exactly as it is in SQL.
 
 **Do not `RETURN` a whole node, relationship or path.** The ABI serialises

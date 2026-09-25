@@ -404,10 +404,18 @@ public final class KnowledgeGraph implements AutoCloseable {
      *       {@link Long}</li>
      *   <li>a {@link Map} with {@code String} keys</li>
      *   <li>an {@link Iterable} or an {@code Object[]}</li>
+     *   <li>a {@link java.time.LocalDate}, bound as a Cypher date</li>
+     *   <li>a {@link java.time.LocalDateTime}, {@link java.time.OffsetDateTime},
+     *       {@link java.time.ZonedDateTime} or {@link java.time.Instant}, bound
+     *       as a Cypher datetime; an offset is applied, normalising to UTC</li>
      * </ul>
      *
-     * <p>Nesting is allowed to any depth. Anything else — a {@code java.time}
-     * value, a POJO, a {@code byte[]}, a non-{@code String} map key, a
+     * <p>A date cell comes back as its ISO {@code String}; a bare
+     * {@code String} parameter stays a string and never equals a stored date,
+     * so rebind it as a {@code LocalDate} to match it.
+     *
+     * <p>Nesting is allowed to any depth. Anything else — another
+     * {@code java.time} type, a POJO, a {@code byte[]}, a non-{@code String} map key, a
      * {@code NaN} or infinite {@code Double} — is rejected before the call
      * reaches the engine, with a {@link KgliteException} whose
      * {@link KgliteException#statusName()} is {@code "WrapperError"} and whose

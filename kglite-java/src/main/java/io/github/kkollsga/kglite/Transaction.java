@@ -162,7 +162,7 @@ public final class Transaction implements AutoCloseable {
      *
      * <p>The parameters are validated and serialized <em>here</em>, not at
      * {@link #commit()}: a value the wrapper cannot bind (a POJO, a
-     * {@code java.time} value, a {@code NaN}) throws at the call that supplied
+     * {@code java.time.LocalTime}, a {@code NaN}) throws at the call that supplied
      * it, where the stack trace names the offending statement, rather than
      * surfacing later as a failure of the whole batch. The legal value set is
      * {@link KnowledgeGraph#cypher(String, Map)}'s.
