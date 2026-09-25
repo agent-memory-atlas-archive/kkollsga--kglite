@@ -31,6 +31,12 @@ before upgrading.
   graph loads in 506 ms (0.18.0: 637 ms; 0.16.24: 499 ms), a 200k-node
   10-column `.kgl` in 34 ms (77 ms), and the disk reopen of that graph takes
   9 ms (62 ms). Files with legacy references are still normalised on load.
+- Loading embeddings reads the stored vectors once: the finite-value check
+  added in 0.18.0 runs inside the pass that rebuilds the cached norms instead
+  of as a second pass over every float. A non-finite stored coordinate still
+  refuses the load with the same error. Measured on release builds: a
+  50k x 384 embedding store loads in 32 ms (0.18.0: 39.5 ms), and a 158k-node
+  graph with 175 MB of embeddings loads within noise of 0.16.24.
 - `DELETE` of a variable-length relationship variable (`MATCH
   (a)-[r:R*1..3]->(b) DELETE r`), of a path (`DETACH DELETE p`), or of a
   list value (`WITH collect(r) AS rs DELETE rs`) deleted nothing, silently.

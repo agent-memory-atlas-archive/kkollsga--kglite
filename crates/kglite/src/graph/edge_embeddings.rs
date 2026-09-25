@@ -259,7 +259,11 @@ impl EdgeEmbeddingStore {
         self.numeric
             .validate_shape()
             .map_err(|error| error.to_string())?;
-        validate_finite_vector(&self.numeric.data).map_err(|error| error.to_string())?;
+        // Norms are derived here, in the pass that refuses a non-finite
+        // coordinate; the checks below read only slots and endpoints.
+        self.numeric
+            .rebuild_norms_checked()
+            .map_err(|error| error.to_string())?;
         for &raw in self.numeric.text_hashes.keys() {
             if !self.numeric.node_to_slot.contains_key(&raw) {
                 return Err(format!("source hash names absent relationship slot {raw}"));
@@ -290,7 +294,6 @@ impl EdgeEmbeddingStore {
                 ));
             }
         }
-        self.numeric.rebuild_norms();
         Ok(())
     }
 

@@ -1725,7 +1725,8 @@ impl EmbeddingStore {
 
     /// Validate the serialized, parallel embedding-store columns before any
     /// derived cache indexes into them. Persistence callers must run this
-    /// before [`Self::rebuild_norms`] so malformed cardinalities become a
+    /// before [`Self::rebuild_norms`] or
+    /// [`Self::rebuild_norms_checked`] so malformed cardinalities become a
     /// load error rather than a slice panic.
     pub(crate) fn validate_shape(&self) -> Result<(), &'static str> {
         let expected_data_len = self
@@ -1760,6 +1761,37 @@ impl EmbeddingStore {
             self.norms
                 .push(l2_norm_sq(&self.data[start..start + self.dimension]).sqrt());
         }
+    }
+
+    /// [`Self::rebuild_norms`] that also refuses a non-finite coordinate, in
+    /// the same pass over `data`: a vector's squared norm is finite whenever
+    /// all its coordinates are, so only a vector whose norm is not — a
+    /// non-finite coordinate, or finite ones that overflow — is scanned
+    /// again. The error names the coordinate's index in `data`, as
+    /// [`validate_finite_vector`](crate::graph::embedding_validation::validate_finite_vector)
+    /// over the whole of `data` does. Loaders call this instead of the two
+    /// separate passes; `norms` is left partial on error.
+    pub(crate) fn rebuild_norms_checked(
+        &mut self,
+    ) -> Result<(), crate::graph::embedding_validation::NonFiniteVector> {
+        let n = self.slot_to_node.len();
+        self.norms.clear();
+        self.norms.reserve(n);
+        for slot in 0..n {
+            let start = slot * self.dimension;
+            let vector = &self.data[start..start + self.dimension];
+            let norm_sq = l2_norm_sq(vector);
+            if !norm_sq.is_finite() {
+                crate::graph::embedding_validation::validate_finite_vector(vector).map_err(
+                    |error| crate::graph::embedding_validation::NonFiniteVector {
+                        index: start + error.index,
+                        value: error.value,
+                    },
+                )?;
+            }
+            self.norms.push(norm_sq.sqrt());
+        }
+        Ok(())
     }
 
     #[inline]

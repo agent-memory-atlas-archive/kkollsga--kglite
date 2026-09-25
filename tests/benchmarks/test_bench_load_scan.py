@@ -1,4 +1,4 @@
-"""Load cells for a wide, typed-column graph: what the load path's per-cell work costs.
+"""Load cells for wide graphs: what the load path's per-cell and per-float work costs.
 
 Every complete load checks for legacy endpoint references before publishing
 the graph. For a graph whose properties all sit in typed columns that check
@@ -6,6 +6,9 @@ has nothing to read: a typed column cannot hold a reference. These cells
 guard that it stays so, on the two load routes — a `.kgl` load, and a disk
 directory reopen — with 200k nodes x 10 short-string properties, where a
 per-cell pass is plainly visible (it roughly doubled the `.kgl` load).
+
+The embedding cell loads a store of 50k x 384 floats, which load reads once to
+rebuild the cached norms; a second pass over the floats is plainly visible there.
 
 Outside the frozen core harness: a new core cell needs a versioned capture on
 both platforms before CI's exact-set gate can pass.
@@ -67,3 +70,26 @@ def test_bench_disk_reopen_wide_typed(benchmark, wide_disk_dir):
 
     benchmark.pedantic(reopen, setup=release_previous_handle, rounds=30, warmup_rounds=3, iterations=1)
     assert handle["graph"].cypher("MATCH (n:Item) RETURN count(n) AS c").to_list() == [{"c": NODES}]
+
+
+EMBED_NODES = 50_000
+EMBED_DIM = 384
+
+
+@pytest.fixture(scope="module")
+def embedding_kgl_path(tmp_path_factory):
+    graph = KnowledgeGraph()
+    frame = pd.DataFrame(
+        {"nid": range(EMBED_NODES), "name": [f"N{i}" for i in range(EMBED_NODES)], "text": ["t"] * EMBED_NODES}
+    )
+    graph.add_nodes(frame, "Doc", "nid", "name")
+    vectors = {i: [((i * 31 + d * 7) % 101) / 101.0 for d in range(EMBED_DIM)] for i in range(EMBED_NODES)}
+    graph.set_embeddings("Doc", "text", vectors)
+    path = str(tmp_path_factory.mktemp("embed_load") / "embed.kgl")
+    graph.save(path)
+    return path
+
+
+def test_bench_load_kgl_embeddings(benchmark, embedding_kgl_path):
+    graph = benchmark.pedantic(kglite.load, args=(embedding_kgl_path,), rounds=30, warmup_rounds=3, iterations=1)
+    assert graph.cypher("MATCH (n:Doc) RETURN count(n) AS c").to_list() == [{"c": EMBED_NODES}]

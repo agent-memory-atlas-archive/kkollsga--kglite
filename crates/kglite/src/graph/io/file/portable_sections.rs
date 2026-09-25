@@ -36,9 +36,9 @@ pub(super) fn validate_and_rebuild_embedding_norms(
 ) -> io::Result<()> {
     for store in embeddings.values_mut() {
         store.validate_shape().map_err(invalid_data)?;
-        crate::graph::embedding_validation::validate_finite_vector(&store.data)
+        store
+            .rebuild_norms_checked()
             .map_err(|error| invalid_data(error.to_string()))?;
-        store.rebuild_norms();
     }
     Ok(())
 }

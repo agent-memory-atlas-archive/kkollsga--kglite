@@ -2471,6 +2471,10 @@ use text_index_persistence::{
 #[path = "file/edge_embedding_persistence_tests.rs"]
 mod edge_embedding_persistence_tests;
 
+#[cfg(test)]
+#[path = "file/embedding_load_validation_tests.rs"]
+mod embedding_load_validation_tests;
+
 mod vector_persistence;
 
 use vector_persistence::{decode_vector_indexes, encode_vector_indexes};
