@@ -6,6 +6,7 @@
 
 use crate::status::KgliteStatusCode;
 use crate::strings::alloc_c_string;
+use kglite::api::cypher::{with_query_warning_sink, QueryWarningSink};
 use std::any::Any;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -29,6 +30,10 @@ fn panic_text(payload: &(dyn Any + Send)) -> String {
 /// Run a status-returning export with deterministic output initialization and
 /// panic-to-Internal conversion. `reset_outputs` is run before validation and
 /// again after a panic, so callers never observe their old sentinel values.
+///
+/// The body runs with the engine's query-warning echo silenced: a library
+/// must not write to its host's stderr, and every warning is already in the
+/// result's diagnostics JSON (`kglite_cypher_result_diagnostics_json`).
 pub(crate) fn status_boundary(
     out_error_msg: *mut *const c_char,
     mut reset_outputs: impl FnMut(),
@@ -36,7 +41,8 @@ pub(crate) fn status_boundary(
 ) -> KgliteStatusCode {
     reset_outputs();
     init_out(out_error_msg, std::ptr::null());
-    match catch_unwind(AssertUnwindSafe(body)) {
+    let silenced = || with_query_warning_sink(QueryWarningSink::Silent, body);
+    match catch_unwind(AssertUnwindSafe(silenced)) {
         Ok(status) => status,
         Err(payload) => {
             reset_outputs();

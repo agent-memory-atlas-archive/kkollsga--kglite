@@ -300,6 +300,40 @@ fn change_capture_publishes_abi_mutations() {
     unsafe { kglite_session_free(session) };
 }
 
+/// A query warning reaches the host through the diagnostics JSON only: the
+/// library prints nothing to the host process's stderr. The query runs in a
+/// child copy of this test binary so its real stderr can be read.
+#[test]
+fn query_warnings_are_not_printed_to_stderr() {
+    const PROBE: &str = "KGLITE_C_WARNING_STDERR_PROBE";
+    if std::env::var_os(PROBE).is_some() {
+        let session = seed_notes("CREATE (:City {id: 1})");
+        let warnings = query_warning_json(session, "MATCH (c:Cty) RETURN c");
+        assert!(warnings[0].as_str().unwrap().contains("Cty"), "{warnings}");
+        unsafe { kglite_session_free(session) };
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "query_warnings_are_not_printed_to_stderr",
+            "--nocapture",
+        ])
+        .env(PROBE, "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "probe failed: {stderr}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the probe did not run"
+    );
+    assert!(
+        !stderr.contains("warning:"),
+        "the library printed to stderr: {stderr}"
+    );
+}
+
 #[test]
 fn raw_json_marker_object_and_batch_selector_preserve_effective_values() {
     let graph = kglite_graph_new();

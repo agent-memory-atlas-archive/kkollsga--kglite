@@ -123,6 +123,22 @@ methods rather than a Cypher form: `setEmbeddings`, `addEmbeddings` and
 `buildVectorIndex`, covered in
 [Embeddings and vector search](#embeddings-and-vector-search).
 
+### Warnings and diagnostics
+
+`queryResult(...)` and `cypherResult(...)` run the same two paths and return a
+`QueryResult`: the same `rows()`, plus `warnings()` — the engine's non-fatal
+advisories, such as a `MATCH` on a label the graph does not have (*"Did you
+mean 'City'?"*) or a result cut by a row cap — and `diagnostics()`, the
+engine's whole diagnostics object (`elapsed_ms`, `timeout_ms`, `row_limit`,
+`total_rows`, `retrieval`). The native library never prints a warning to the
+process's stderr, so these methods are the only place warnings appear.
+
+```java
+QueryResult result = graph.queryResult("MATCH (c:Cty) RETURN c.id AS id", Map.of());
+result.rows();      // []
+result.warnings();  // ["MATCH references unknown node label 'Cty' … Did you mean 'City'?"]
+```
+
 ## Values
 
 Rows are `List<Map<String, Object>>`: one `Map` per row, keyed by column name

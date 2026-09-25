@@ -129,6 +129,8 @@ final class Abi {
             bind("kglite_cypher_result_columns_json", FunctionDescriptor.of(PTR, PTR));
     private static final MethodHandle RESULT_ROWS_JSON =
             bind("kglite_cypher_result_rows_json", FunctionDescriptor.of(PTR, PTR));
+    private static final MethodHandle RESULT_DIAGNOSTICS_JSON =
+            bind("kglite_cypher_result_diagnostics_json", FunctionDescriptor.of(PTR, PTR));
     private static final MethodHandle RESULT_FREE =
             bind("kglite_cypher_result_free", FunctionDescriptor.ofVoid(PTR));
     private static final MethodHandle LEASE_ACQUIRE =
@@ -358,6 +360,36 @@ final class Abi {
             MemorySegment result = outResult.get(PTR, 0);
             try {
                 return decodeRows(result);
+            } finally {
+                RESULT_FREE.invokeExact(result);
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /**
+     * As {@link #executeOpts}, also decoding the result's diagnostics JSON.
+     *
+     * @return the rows with their warnings and diagnostics
+     */
+    static QueryResult executeWithDiagnostics(
+            MemorySegment session, String query, String paramsJson, boolean mutating,
+            long timeoutMs, long maxWorkUnits) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outResult = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            MethodHandle handle = mutating ? SESSION_EXECUTE_MUT_OPTS : SESSION_EXECUTE_READ_OPTS;
+            int rc = (int) handle.invokeExact(
+                    session, cstr(arena, query), cstr(arena, paramsJson),
+                    timeoutMs, maxWorkUnits, outResult, outError);
+            check(rc, outError);
+            MemorySegment result = outResult.get(PTR, 0);
+            try {
+                java.util.List<Map<String, Object>> rows = decodeRows(result);
+                MemorySegment diagnosticsPtr =
+                        (MemorySegment) RESULT_DIAGNOSTICS_JSON.invokeExact(result);
+                return Json.toQueryResult(rows, takeString(diagnosticsPtr));
             } finally {
                 RESULT_FREE.invokeExact(result);
             }

@@ -319,6 +319,38 @@ final class Json {
     }
 
     /**
+     * Pair decoded rows with the result's diagnostics JSON object. The ABI
+     * renders "no diagnostics" as JSON {@code null}; that, and a missing
+     * {@code warnings} array, read as empty.
+     *
+     * @param rows            the decoded rows
+     * @param diagnosticsJson the diagnostics JSON text, or {@code null}
+     * @return the combined result
+     * @throws KgliteException if the diagnostics are not a JSON object or null
+     */
+    static QueryResult toQueryResult(List<Map<String, Object>> rows, String diagnosticsJson) {
+        Object parsed = diagnosticsJson == null ? null : parse(diagnosticsJson);
+        if (parsed == null) {
+            return new QueryResult(rows, List.of(), Map.of());
+        }
+        if (!(parsed instanceof Map<?, ?> map)) {
+            throw new KgliteException("the engine returned diagnostics that are not a JSON object");
+        }
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        map.forEach((key, value) -> diagnostics.put((String) key, value));
+        List<String> warnings = new ArrayList<>();
+        if (diagnostics.get("warnings") instanceof List<?> items) {
+            for (Object item : items) {
+                warnings.add(String.valueOf(item));
+            }
+        }
+        return new QueryResult(
+                rows,
+                Collections.unmodifiableList(warnings),
+                Collections.unmodifiableMap(diagnostics));
+    }
+
+    /**
      * Parse a JSON document into {@code Map}/{@code List}/{@code String}/
      * {@code Long}/{@code Double}/{@code Boolean}/{@code null}.
      *

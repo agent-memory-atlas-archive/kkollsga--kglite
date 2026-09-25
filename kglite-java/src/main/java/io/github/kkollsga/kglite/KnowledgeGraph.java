@@ -635,6 +635,85 @@ public final class KnowledgeGraph implements AutoCloseable {
         return runOpts(query, params, false, timeout, maxWorkUnits);
     }
 
+    /**
+     * As {@link #query(String, Map)}, returning the rows together with the
+     * engine's warnings and diagnostics for the statement.
+     *
+     * @param query  the Cypher text, referring to bindings as {@code $name}
+     * @param params the bindings; may be empty, never {@code null}
+     * @return the rows, warnings and diagnostics
+     * @throws KgliteException on any engine failure
+     * @throws IllegalStateException if this graph is closed
+     */
+    public QueryResult queryResult(String query, Map<String, Object> params) {
+        return queryResult(query, params, null, 0L);
+    }
+
+    /**
+     * As {@link #query(String, Map, Duration, long)}, returning the rows
+     * together with the engine's warnings and diagnostics for the statement.
+     *
+     * @param query        the Cypher text, referring to bindings as {@code $name}
+     * @param params       the bindings; may be empty, never {@code null}
+     * @param timeout      the wall-clock budget, or {@code null} for none
+     * @param maxWorkUnits the work units the query may charge; {@code 0} is
+     *     unlimited
+     * @return the rows, warnings and diagnostics
+     * @throws KgliteException on any engine failure, including the timeout or
+     *     the work-budget overflow
+     * @throws IllegalStateException if this graph is closed
+     */
+    public QueryResult queryResult(
+            String query, Map<String, Object> params, Duration timeout, long maxWorkUnits) {
+        return runWithDiagnostics(query, params, false, timeout, maxWorkUnits);
+    }
+
+    /**
+     * As {@link #cypher(String, Map)}, returning the rows together with the
+     * engine's warnings and diagnostics for the statement.
+     *
+     * @param query  the Cypher text, referring to bindings as {@code $name}
+     * @param params the bindings; may be empty, never {@code null}
+     * @return the rows, warnings and diagnostics
+     * @throws KgliteException on any engine failure, or if a parameter value has
+     *     no JSON representation
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public QueryResult cypherResult(String query, Map<String, Object> params) {
+        return cypherResult(query, params, null, 0L);
+    }
+
+    /**
+     * As {@link #cypher(String, Map, Duration, long)}, returning the rows
+     * together with the engine's warnings and diagnostics for the statement.
+     *
+     * @param query        the Cypher text, referring to bindings as {@code $name}
+     * @param params       the bindings; may be empty, never {@code null}
+     * @param timeout      the wall-clock budget, or {@code null} for none
+     * @param maxWorkUnits the work units the query may charge; {@code 0} is
+     *     unlimited
+     * @return the rows, warnings and diagnostics
+     * @throws KgliteException on any engine failure, including the timeout or
+     *     the work-budget overflow
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public QueryResult cypherResult(
+            String query, Map<String, Object> params, Duration timeout, long maxWorkUnits) {
+        return runWithDiagnostics(query, params, true, timeout, maxWorkUnits);
+    }
+
+    private QueryResult runWithDiagnostics(
+            String query, Map<String, Object> params, boolean mutating,
+            Duration timeout, long maxWorkUnits) {
+        String paramsJson = prepareRun(query, params, mutating);
+        long timeoutMs = timeoutMillis(timeout);
+        long workUnits = maxWorkUnits < 0 ? 0 : maxWorkUnits;
+        return session.use(handle -> Abi.executeWithDiagnostics(
+                handle, query, paramsJson, mutating, timeoutMs, workUnits));
+    }
+
     private List<Map<String, Object>> run(String query, Map<String, Object> params, boolean mutating) {
         String paramsJson = prepareRun(query, params, mutating);
         return session.use(handle -> Abi.execute(handle, query, paramsJson, mutating));

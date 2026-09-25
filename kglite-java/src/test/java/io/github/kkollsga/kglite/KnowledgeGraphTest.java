@@ -239,6 +239,28 @@ class KnowledgeGraphTest {
         }
     }
 
+    @Test
+    @DisplayName("queryResult and cypherResult carry the engine's warnings and diagnostics")
+    void resultsCarryWarningsAndDiagnostics() {
+        try (KnowledgeGraph graph = KnowledgeGraph.createInMemory()) {
+            QueryResult created = graph.cypherResult("CREATE (:City {id: 1}) RETURN 1 AS one", Map.of());
+            assertEquals(List.of(Map.of("one", 1L)), created.rows());
+            assertEquals(List.of(), created.warnings(), "a clean statement warns about nothing");
+            assertTrue(created.diagnostics().containsKey("elapsed_ms"), created.diagnostics().toString());
+
+            QueryResult typo = graph.queryResult("MATCH (c:Cty) RETURN c.id AS id", Map.of());
+            assertEquals(List.of(), typo.rows());
+            assertEquals(1, typo.warnings().size(), typo.warnings().toString());
+            assertTrue(typo.warnings().get(0).contains("'City'"), typo.warnings().get(0));
+            assertEquals(typo.warnings(), typo.diagnostics().get("warnings"));
+            assertThrows(UnsupportedOperationException.class, () -> typo.warnings().add("x"));
+
+            assertThrows(KgliteException.class,
+                    () -> graph.queryResult("CREATE (:City {id: 2})", Map.of()),
+                    "the read path still refuses a mutation");
+        }
+    }
+
     /** {@code Map.of} rejects a null value; the null cell case needs one. */
     private static Map<String, Object> mapOfNullable(Object... pairs) {
         Map<String, Object> map = new java.util.LinkedHashMap<>();

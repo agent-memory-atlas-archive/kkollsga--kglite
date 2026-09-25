@@ -142,6 +142,10 @@ portable decoding in the host language. Copy/parse data before freeing the
 result, and free every independently returned string with
 `kglite_free_string`.
 
+Query warnings (an unknown label or relationship type, a row-cap truncation)
+arrive only in `kglite_cypher_result_diagnostics_json`'s `warnings` array. The
+library does not print them to the host process's stderr.
+
 ## Binding checklist
 
 1. Validate UTF-8 and nullability before calls.

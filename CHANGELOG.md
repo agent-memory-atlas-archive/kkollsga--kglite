@@ -11,6 +11,14 @@ before upgrading.
 
 ## [0.18.1] - 2026-09-25
 
+### Added
+
+- Java: `KnowledgeGraph.queryResult(...)` and `cypherResult(...)` return a
+  `QueryResult` carrying the rows together with the engine's `warnings()` (an
+  unknown label or relationship type with its "did you mean?" hint, a row-cap
+  truncation) and its full `diagnostics()`. The plain `query`/`cypher`
+  methods are unchanged.
+
 ### Changed
 
 - **Breaking:** a variable-length relationship variable is now the list of
@@ -86,6 +94,10 @@ before upgrading.
   write, batch and transaction through the C ABI now publishes its changes,
   and a failed statement publishes none. The same holds for the Rust
   `Session::write()` guard and `Session::transact`.
+- Query warnings were printed to the host process's stderr by the C ABI, and
+  a C or Java host had no way to turn that off. The C ABI no longer prints
+  them; they arrive in the result's diagnostics JSON (and, in Java, through
+  `QueryResult.warnings()`). Python and the CLI still print them as before.
 
 ## [0.18.0] - 2026-09-24
 
