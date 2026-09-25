@@ -134,6 +134,13 @@ before upgrading.
   DELETE xs` returned `xs`, and `WITH n, 5 AS k SET n.k = k` returned `n` and
   `k`. Such a query now returns no rows, as it already did after a plain
   `WITH n`; a trailing procedure `CALL` still returns its rows.
+- A list comprehension, `any`/`all`/`none`/`single` or `reduce` over a value
+  that is not a list — `[x IN 'abc' | x]`, `all(x IN 5 WHERE x > 1)` —
+  iterated nothing, so it returned `[]`, `false`/`true` or the initial value
+  silently; as a `WHERE` filter it kept or dropped every row. It is now an
+  error naming the construct and the value's type, on every execution path.
+  A list stored in its bracketed text form still iterates, `null` still gives
+  `null`, and `UNWIND` of a non-list is unchanged (one row holding the value).
 
 ## [0.18.0] - 2026-09-24
 

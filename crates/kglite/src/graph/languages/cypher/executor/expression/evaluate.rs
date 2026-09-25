@@ -645,7 +645,7 @@ impl<'a> CypherExecutor<'a> {
         if matches!(list, Value::Null) {
             return Ok(Value::Null);
         }
-        let items = parse_list_value(&list);
+        let items = iteration_items(&list, "A list comprehension")?;
         let mut results = Vec::new();
         for item in items {
             let mut temp_row = row.clone();
@@ -719,7 +719,13 @@ impl<'a> CypherExecutor<'a> {
         }
         let mut true_count = 0usize;
         let mut saw_unknown = false;
-        for item in parse_list_value(&list) {
+        let construct = match quantifier {
+            ListQuantifier::Any => "any()",
+            ListQuantifier::All => "all()",
+            ListQuantifier::None => "none()",
+            ListQuantifier::Single => "single()",
+        };
+        for item in iteration_items(&list, construct)? {
             let mut temp_row = row.clone();
             temp_row.projected.insert(variable.to_string(), item);
             match self.evaluate_predicate_tristate(filter, &temp_row)? {
@@ -768,7 +774,7 @@ impl<'a> CypherExecutor<'a> {
         if matches!(list, Value::Null) {
             return Ok(Value::Null);
         }
-        for item in parse_list_value(&list) {
+        for item in iteration_items(&list, "reduce()")? {
             let mut temp_row = row.clone();
             temp_row
                 .projected

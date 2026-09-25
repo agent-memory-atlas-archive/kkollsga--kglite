@@ -23,12 +23,13 @@ pub use super::super::ast::is_aggregate_expression;
 /// both surface as evaluation errors, and both must keep meaning "this row
 /// does not match".
 ///
-/// Invalid regexes, missing parameters/retrieval sources, and malformed
-/// vector arguments remain query errors. A fused filter must raise them just
+/// Invalid regexes, missing parameters/retrieval sources, malformed vector
+/// arguments and iterating a non-list remain query errors. A fused filter must raise them just
 /// as scalar evaluation does; it must not report a silent empty result or zero
 /// count. Each recognizer lives beside the errors it classifies.
 pub(super) fn is_user_input_error(message: &str) -> bool {
-    super::regex_cache::is_compile_error(message)
+    is_iteration_type_error(message)
+        || super::regex_cache::is_compile_error(message)
         || super::expression::is_missing_parameter_error(message)
         || super::scalar_functions::utility::is_missing_retrieval_source_error(message)
         || super::scalar_functions::utility::is_vector_argument_error(message)
@@ -1288,6 +1289,37 @@ pub(in crate::graph::languages::cypher) fn parse_list_value(val: &Value) -> Vec<
         }
         _ => vec![],
     }
+}
+
+/// Middle of the [`iteration_items`] type error, and what
+/// [`is_iteration_type_error`] recognises it by.
+const ITERATION_TYPE_ERROR: &str = " expects a list to iterate, got ";
+
+/// The items a list comprehension, list quantifier or `reduce` iterates.
+/// Callers answer null themselves. A list — or a list held in its bracketed
+/// text form, which [`parse_list_value`] reads — yields its items; any other
+/// value is a type error naming `construct`, not an empty iteration.
+pub(in crate::graph::languages::cypher) fn iteration_items(
+    value: &Value,
+    construct: &str,
+) -> Result<Vec<Value>, String> {
+    match value {
+        Value::List(items) => Ok(items.clone()),
+        Value::String(text) if text.trim().starts_with('[') && text.trim().ends_with(']') => {
+            Ok(parse_list_value(value))
+        }
+        other => Err(format!(
+            "{construct}{ITERATION_TYPE_ERROR}{}",
+            other.type_name()
+        )),
+    }
+}
+
+/// Whether `message` is an [`iteration_items`] type error — wrong for the
+/// query, not for one row, so a fused filter must raise it rather than drop
+/// the row.
+fn is_iteration_type_error(message: &str) -> bool {
+    message.contains(ITERATION_TYPE_ERROR)
 }
 
 /// Parse a single value token (the same grammar as items inside a

@@ -187,6 +187,10 @@ pub fn parse_with_mutation_check(
 }
 
 #[cfg(test)]
+#[path = "iteration_type_tests.rs"]
+mod iteration_type_tests;
+
+#[cfg(test)]
 #[path = "predicate_value_position_tests.rs"]
 mod predicate_value_position_tests;
 

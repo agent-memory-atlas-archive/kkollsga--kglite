@@ -1663,7 +1663,7 @@ graph.cypher("""
 """)
 ```
 
-> **Note:** List comprehensions require at least one row in the pipeline. Use `UNWIND [1] AS _` or a preceding `MATCH`/`WITH` to provide the row context.
+Over `null` a comprehension is `null`. Over any other value that is not a list (`[x IN 'abc' | x]`, `[x IN 5 | x]`) it is an error, not an empty list; the same holds for the quantifiers and `reduce` below. (`UNWIND` of a non-list value is that one value as one row.)
 
 ## List Quantifier Predicates
 
