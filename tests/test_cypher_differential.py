@@ -689,6 +689,31 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH p=(a:N)-[:R*3..3]-(b:N) RETURN a.id AS a,b.id AS b,count(*) AS n ORDER BY a,b",
         None,
     ),
+    # A path variable read by the WHERE of its own clause: `hoist_with_where`
+    # moves the first into the MATCH's fused WHERE, which ran before paths were
+    # bound (0 rows optimised, 54 unoptimised). The other two share executor
+    # code with the unoptimised plan, so their answers are pinned in
+    # test_cypher_path_predicates.py; here they carry the pass trigger shapes.
+    (
+        "path_where_hoisted_into_match",
+        "social_graph",
+        "MATCH p=(a:Person)-[:KNOWS]->(b:Person) WITH p WHERE length(p) > 0 RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "path_where_lowered_fixed_var_length",
+        "social_graph",
+        "MATCH p=(a:Person {person_id: 1})-[:KNOWS*2..2]->(b:Person) "
+        "WHERE length(p) = 2 AND last(nodes(p)).age > 22 RETURN b.name AS name ORDER BY name",
+        None,
+    ),
+    (
+        "path_count_later_optional_match",
+        "social_graph",
+        "MATCH (a:Person) WHERE a.age < 25 OPTIONAL MATCH p=(a)-[:KNOWS]->(b:Person) "
+        "RETURN a.name AS a, count(p) AS n ORDER BY a",
+        None,
+    ),
     (
         "predicate_index_equality",
         "predicate_point_index_graph",

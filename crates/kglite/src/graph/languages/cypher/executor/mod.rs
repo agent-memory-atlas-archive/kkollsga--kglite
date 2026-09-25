@@ -956,6 +956,7 @@ mod node_ontology;
 mod node_text_index_procedures;
 pub(crate) mod ontology_procedures;
 pub(crate) mod ordering;
+mod path_binding;
 mod procedure_params;
 mod procedure_registry;
 pub(crate) mod procedure_router;

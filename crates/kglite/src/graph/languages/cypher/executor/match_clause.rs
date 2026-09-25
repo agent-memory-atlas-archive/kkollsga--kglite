@@ -608,6 +608,12 @@ impl<'a> CypherExecutor<'a> {
                 edge_sets = expanded_sets;
             }
         }
+        // Paths before the WHERE, which may read them.
+        if !clause.path_assignments.is_empty() {
+            for candidate in &mut row_set {
+                self.bind_row_paths(clause, candidate);
+            }
+        }
         if let Some(predicate) = scoped_where {
             let mut kept = Vec::with_capacity(row_set.len());
             for candidate in row_set {
@@ -802,6 +808,7 @@ impl<'a> CypherExecutor<'a> {
                     }
                 }
             }
+            Self::null_pad_path_vars(clause, &mut null_row);
             return Ok(ResultSet {
                 rows: vec![null_row],
                 columns,
@@ -810,10 +817,28 @@ impl<'a> CypherExecutor<'a> {
         }
 
         let mut new_rows = Vec::with_capacity(existing.rows.len());
+        // A shortestPath is a search, not a pattern the matcher expands, so
+        // each driving row takes the shortest-path route on its own.
+        let shortest = clause
+            .path_assignments
+            .first()
+            .filter(|pa| pa.is_shortest_path);
 
         for row in &existing.rows {
-            let expanded =
-                self.expand_optional_match_row(clause, row, new_rows.len(), scoped_where)?;
+            let expanded = match shortest {
+                Some(pa) => {
+                    let driving = ResultSet {
+                        rows: vec![row.clone()],
+                        columns: existing.columns.clone(),
+                        lazy_return_items: None,
+                    };
+                    self.execute_shortest_path_match(clause, pa, driving, scoped_where)?
+                        .rows
+                }
+                None => {
+                    self.expand_optional_match_row(clause, row, new_rows.len(), scoped_where)?
+                }
+            };
             if expanded.is_empty() {
                 // The joined pattern set produced no match: keep the row,
                 // recording an explicit NULL for every pattern variable so
@@ -822,6 +847,7 @@ impl<'a> CypherExecutor<'a> {
                     .reserve_rows(new_rows.len(), 1, "OPTIONAL MATCH")?;
                 let mut keep = row.clone();
                 null_pad_pattern_vars(&mut keep, clause);
+                Self::null_pad_path_vars(clause, &mut keep);
                 new_rows.push(keep);
             } else {
                 new_rows.extend(expanded);

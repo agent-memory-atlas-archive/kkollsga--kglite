@@ -9,6 +9,26 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- A path variable read by the `WHERE` of its own leading `MATCH` —
+  `MATCH p=(a)-[:R]->(b) WHERE length(p) > 0`, and every other read such as
+  `nodes(p)`, `relationships(p)`, `p IS NOT NULL` or `all(r IN
+  relationships(p) WHERE …)` — was null there, so the query returned no rows.
+  The same happened to `MATCH p=… WITH p WHERE length(p) > 0`, which the
+  optimiser moves into the `MATCH`, and to each `UNION` branch.
+- A path variable in an `OPTIONAL MATCH` that is not the first clause
+  (`MATCH (x) OPTIONAL MATCH p=(x)-[:R]->(b)`) was never bound: `p` read as
+  null, `count(p)` as 0 and a `WHERE` reading `p` null-extended every row.
+  This includes `OPTIONAL MATCH p=shortestPath(…)`, which also ignored the
+  shortest-path search there.
+- A path could be built from the wrong bindings: from an earlier clause's
+  path or variable-length relationship (`MATCH (a)-[r*1..2]->(b) MATCH
+  p=(b)-[:R]->(c)` returned `r`'s nodes as `p`, and `MATCH p=(b)` after a
+  fixed-length path had length 1), and from only the variable-length part of
+  a pattern that mixes fixed and variable-length hops
+  (`p=(a)-[:R]->(b)-[:R*1..2]->(c)`).
+
 ## [0.18.0] - 2026-09-24
 
 ### Added

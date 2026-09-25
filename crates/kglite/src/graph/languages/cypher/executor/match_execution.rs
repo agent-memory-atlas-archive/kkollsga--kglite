@@ -289,6 +289,7 @@ impl<'a> CypherExecutor<'a> {
         // (the kglite-visual OOM), so the loop that charges `reserve_rows`
         // charges the interrupt at the same stride.
         let mut work = 0usize;
+        let bind_paths = Self::binds_paths_before_where(clause, inline_where);
         for m in matches {
             self.check_interrupt_periodic(work)?;
             work = work.saturating_add(1);
@@ -301,7 +302,10 @@ impl<'a> CypherExecutor<'a> {
                     continue;
                 }
             }
-            let row = self.pattern_match_to_row(m);
+            let mut row = self.pattern_match_to_row(m);
+            if bind_paths {
+                self.bind_row_paths(clause, &mut row);
+            }
             // Residual WHERE fused into this MATCH: filter BEFORE the dedup
             // insert so the kept representative is a row that passed the
             // predicate (filter-then-dedup).
@@ -374,6 +378,10 @@ impl<'a> CypherExecutor<'a> {
         // path) pay nothing. Edges may repeat across separate MATCH clauses.
         let enforce_rel_uniqueness = match_clause::clause_needs_rel_uniqueness(clause);
 
+        // `first_pattern_rows` binds paths itself when a fused WHERE may read
+        // one; only the leading MATCH's single pattern carries a fused WHERE.
+        let paths_bound_early =
+            existing.rows.is_empty() && Self::binds_paths_before_where(clause, inline_where);
         let mut result_rows = if existing.rows.is_empty() {
             // First MATCH: execute patterns to produce initial bindings
             let mut all_rows = Vec::new();
@@ -540,52 +548,19 @@ impl<'a> CypherExecutor<'a> {
             )?
         };
 
-        // Propagate path bindings for non-shortestPath path assignments.
-        // For `MATCH p = (a)-[r:REL*1..3]->(b)`, alias the edge's
-        // VariableLengthPath binding under the path variable `p`.
-        // For single-hop `MATCH p = (a)-[:REL]->(b)`, synthesize a PathBinding
-        // from the edge binding.
-        // Runs over the finished row set, once per path assignment, cloning a
-        // path binding per row — the last unbounded per-row pass of the clause.
-        let mut path_work = 0usize;
-        for pa in &clause.path_assignments {
-            if pa.is_shortest_path {
-                continue;
-            }
-            // Identify the VLP edge variable from this pattern so we look up
-            // the correct path binding (not just the first one in the map).
-            let vlp_edge_var: Option<String> =
-                clause.patterns.get(pa.pattern_index).and_then(|pat| {
-                    pat.elements.iter().find_map(|elem| {
-                        if let PatternElement::Edge(ep) = elem {
-                            if ep.var_length.is_some() {
-                                return ep.variable.clone();
-                            }
-                        }
-                        None
-                    })
-                });
-
+        // Bind path variables over the finished row set — the last unbounded
+        // per-row pass of the clause.
+        if !paths_bound_early
+            && clause
+                .path_assignments
+                .iter()
+                .any(|pa| !pa.is_shortest_path)
+        {
+            let mut path_work = 0usize;
             for row in &mut result_rows {
                 self.check_interrupt_periodic(path_work)?;
                 path_work = path_work.saturating_add(1);
-                let path_binding = if let Some(ref vlp_var) = vlp_edge_var {
-                    row.path_bindings.get(vlp_var).cloned()
-                } else {
-                    // Fallback: pick first path binding (single-path case)
-                    row.path_bindings.iter().next().map(|(_, pb)| pb.clone())
-                };
-                if let Some(pb) = path_binding {
-                    row.path_bindings.insert(pa.variable.clone(), pb);
-                } else {
-                    // No variable-length path found: synthesize the exact
-                    // fixed-length trail from its named/internal edge bindings.
-                    if let Some(pattern) = clause.patterns.get(pa.pattern_index) {
-                        if let Some(pb) = self.synthesize_path_from_pattern(pattern, row) {
-                            row.path_bindings.insert(pa.variable.clone(), pb);
-                        }
-                    }
-                }
+                self.bind_row_paths(clause, row);
             }
         }
 

@@ -291,6 +291,12 @@
   "tests/test_storage_parity.py::test_cypher_parity[exact_path_relationship_ids-MATCH p=(a:Entity {eid: 0})-[:RELATED*1..2]->(b:Entity) RETURN [r IN relationships(p) | id(r)] AS ids ORDER BY ids]": {
     "owner": "storage-parity"
   },
+  "tests/test_storage_parity.py::test_cypher_parity[path_where_fixed-MATCH p=(a:Entity)-[:RELATED]->(b:Entity) WHERE a.eid < 20 AND length(p) = 1 AND last(nodes(p)).rank >= 0 RETURN count(*) AS c]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_storage_parity.py::test_cypher_parity[path_where_var_length-MATCH p=(a:Entity {eid: 0})-[:RELATED*1..2]->(b:Entity) WHERE length(p) = 2 RETURN [r IN relationships(p) | id(r)] AS ids ORDER BY ids]": {
+    "owner": "storage-parity"
+  },
   "tests/test_storage_parity.py::test_cypher_parity[order_by_limit-MATCH (n:Entity) RETURN n.eid AS id, n.score AS s ORDER BY s DESC LIMIT 5]": {
     "owner": "storage-parity"
   },
