@@ -102,6 +102,13 @@ before upgrading.
   arrives as a debug string. It has been a structured `Map` since 0.16.1; the
   value table now lists each shape (node, relationship, path, date, datetime,
   duration, point), and the test pins them.
+- Queries through the C library (and so from Java) ran 22–32% slower than the
+  same queries in the Python wheel, because the library allocated through the
+  system allocator. It now uses mimalloc, as the wheel does, behind the same
+  `kglite_memory_stats` accounting. Measured on release builds on macOS, min
+  of 400 runs, two agreeing runs each: a 10k-relationship filtered
+  `count(*)` 3.33–3.38 ms → 2.72–2.75 ms, a 1000-row result 2.31–2.37 ms →
+  1.81 ms, a one-hop lookup 9.1 µs → 7.9 µs.
 
 ## [0.18.0] - 2026-09-24
 

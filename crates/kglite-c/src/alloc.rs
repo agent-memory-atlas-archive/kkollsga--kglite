@@ -1,9 +1,14 @@
 //! Tracking global allocator + memory stats for the C ABI.
 //!
-//! kglite-c installs a tracking allocator (wrapping the System
-//! allocator) so a binding can observe the Rust-side heap via
+//! kglite-c installs a tracking allocator (wrapping mimalloc, the allocator
+//! the Python wheel also uses) so a binding can observe the Rust-side heap via
 //! [`kglite_memory_stats`] — current live bytes, peak since process
 //! start, and total allocation count. Counters are process-wide.
+//!
+//! mimalloc rather than the system allocator because the engine is
+//! allocation-heavy: on macOS, engine-bound queries through this library ran
+//! 22–32% slower on the system allocator (release builds, measured
+//! 2026-09-25). It is the v2 line, pinned for the reason the wheel pins it.
 //!
 //! Only allocations made through the Rust global allocator are counted;
 //! the host runtime's own heap (Go, the JVM, Node, …) is separate and
@@ -11,23 +16,24 @@
 //! cheap, and exact accounting across threads isn't required for a
 //! monitoring stat.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use mimalloc::MiMalloc;
+use std::alloc::{GlobalAlloc, Layout};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static CURRENT: AtomicU64 = AtomicU64::new(0);
 static PEAK: AtomicU64 = AtomicU64::new(0);
 static TOTAL_ALLOCS: AtomicU64 = AtomicU64::new(0);
 
-/// System allocator wrapper that tallies bytes + allocation count.
+/// mimalloc wrapper that tallies bytes + allocation count.
 struct TrackingAllocator;
 
-// SAFETY: every method forwards to `System` (a sound `GlobalAlloc`) and
-// only adds bookkeeping; we never hand back a pointer System didn't
-// produce. realloc is left to the default `GlobalAlloc` impl, which
-// routes through our `alloc`/`dealloc` so byte accounting stays correct.
+// SAFETY: every method forwards to `MiMalloc` (a sound `GlobalAlloc`) and
+// only adds bookkeeping; we never hand back a pointer it didn't produce.
+// realloc is forwarded so a growth can happen in place; it counts as one
+// allocation and moves the live-byte tally by the size difference.
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = unsafe { System.alloc(layout) };
+        let ptr = unsafe { MiMalloc.alloc(layout) };
         if !ptr.is_null() {
             let size = layout.size() as u64;
             TOTAL_ALLOCS.fetch_add(1, Ordering::Relaxed);
@@ -38,8 +44,24 @@ unsafe impl GlobalAlloc for TrackingAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) };
+        unsafe { MiMalloc.dealloc(ptr, layout) };
         CURRENT.fetch_sub(layout.size() as u64, Ordering::Relaxed);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let new = unsafe { MiMalloc.realloc(ptr, layout, new_size) };
+        if !new.is_null() {
+            TOTAL_ALLOCS.fetch_add(1, Ordering::Relaxed);
+            let old = layout.size() as u64;
+            let size = new_size as u64;
+            if size >= old {
+                let now = CURRENT.fetch_add(size - old, Ordering::Relaxed) + (size - old);
+                PEAK.fetch_max(now, Ordering::Relaxed);
+            } else {
+                CURRENT.fetch_sub(old - size, Ordering::Relaxed);
+            }
+        }
+        new
     }
 }
 
@@ -99,5 +121,24 @@ mod tests {
         assert!(after.peak_bytes >= after.current_bytes);
         // Keep `v` alive across the second reading.
         assert_eq!(v.len(), 10_000);
+    }
+
+    /// A realloc moves the live-byte tally by the size difference. The
+    /// counters are process-wide and other tests run concurrently, so the
+    /// check allows a margin far below the 64 MiB it measures.
+    #[test]
+    fn realloc_moves_the_live_byte_tally() {
+        const MIB: u64 = 1 << 20;
+        let mut buffer: Vec<u8> = Vec::with_capacity(MIB as usize);
+        buffer.push(1);
+        let before = kglite_memory_stats().current_bytes;
+        buffer.reserve_exact(65 * MIB as usize);
+        let grown = kglite_memory_stats().current_bytes;
+        let delta = grown.wrapping_sub(before) as i64;
+        assert!(
+            (32 * MIB as i64..96 * MIB as i64).contains(&delta),
+            "a 64 MiB growth moved the tally by {delta} bytes"
+        );
+        drop(buffer);
     }
 }

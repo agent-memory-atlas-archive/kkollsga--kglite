@@ -40,6 +40,7 @@ kglite = { version = "0.18.1", path = "../kglite", default-features = false }
 # boundary (the design doc fixes JSON-at-boundary for nested
 # value types in §7).
 serde_json = "1.0.150"
+mimalloc = { version = "0.1.49", default-features = false, features = ["v2"] }
 
 [build-dependencies]
 # cbindgen generates `include/kglite.h` at build time from this
