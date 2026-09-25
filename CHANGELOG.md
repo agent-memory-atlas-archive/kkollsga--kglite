@@ -128,6 +128,12 @@ before upgrading.
   `reduce`, an `IN [...]` item, `UNWIND`, `ORDER BY`, the right-hand side of
   `SET`, and a `CREATE`/`MERGE`/`MATCH` property value. Each now takes any
   expression, as `RETURN` and `WITH` already did.
+- A query ending in an updating clause (`CREATE`, `MERGE`, `SET`, `REMOVE`,
+  `DELETE`, `FOREACH`) returned the rows of the `WITH` before it when that
+  `WITH` projected a new value — `MATCH ()-[r]->() WITH collect(r) AS xs
+  DELETE xs` returned `xs`, and `WITH n, 5 AS k SET n.k = k` returned `n` and
+  `k`. Such a query now returns no rows, as it already did after a plain
+  `WITH n`; a trailing procedure `CALL` still returns its rows.
 
 ## [0.18.0] - 2026-09-24
 

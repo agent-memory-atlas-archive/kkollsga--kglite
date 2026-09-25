@@ -594,8 +594,21 @@ fn finalize_mutation(
     GraphWrite::flush_pending_writes(&mut graph.graph);
 
     let has_return = query.clauses.iter().any(|c| matches!(c, Clause::Return(_)));
+    // A query that ends in an updating clause has no result rows, whatever a
+    // preceding WITH projected. A trailing procedure CALL keeps its YIELD rows.
+    let ends_in_update = matches!(
+        query.clauses.last(),
+        Some(
+            Clause::Create(_)
+                | Clause::Merge(_)
+                | Clause::Set(_)
+                | Clause::Remove(_)
+                | Clause::Delete(_)
+                | Clause::Foreach { .. }
+        )
+    );
 
-    if has_return || !result_set.columns.is_empty() {
+    if has_return || (!ends_in_update && !result_set.columns.is_empty()) {
         let FinalizeCtx {
             params,
             interrupt,
@@ -2087,6 +2100,10 @@ mod remove_columnar_tests;
 #[cfg(test)]
 #[path = "write_rel_constraint_tests.rs"]
 mod rel_constraint_tests;
+
+#[cfg(test)]
+#[path = "write_update_tail_tests.rs"]
+mod update_tail_tests;
 
 #[cfg(test)]
 #[path = "write_mutation_query_tests.rs"]
