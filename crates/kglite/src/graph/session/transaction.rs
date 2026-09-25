@@ -87,8 +87,23 @@ pub struct Session {
 /// Serialized mutable access to a Session graph. The guard holds the Session
 /// mutex for the complete write, so a uniquely-owned Arc mutates in place and
 /// a held reader snapshot triggers copy-on-write exactly once.
+///
+/// Dropping the guard is the write's commit boundary: whatever the capture
+/// buffer holds is published to the change-data-capture log then, still under
+/// the Session mutex. A failed statement has already truncated its buffered
+/// ops, so only applied changes are published.
 pub struct SessionWriteGuard<'a> {
     guard: MutexGuard<'a, Arc<DirGraph>>,
+}
+
+impl Drop for SessionWriteGuard<'_> {
+    fn drop(&mut self) {
+        // A guard never borrowed mutably may still share its graph with a
+        // reader; it wrote nothing, so there is nothing to drain.
+        if let Some(graph) = Arc::get_mut(&mut self.guard) {
+            crate::graph::cdc::drain_at_commit(graph);
+        }
+    }
 }
 
 impl Deref for SessionWriteGuard<'_> {
@@ -213,6 +228,9 @@ impl Session {
             return Ok(value);
         }
         working.set_version(current_version + 1);
+        // The commit boundary: publish the fork's captured changes. An error
+        // above dropped the fork with its buffer, so nothing it wrote is.
+        crate::graph::cdc::drain_at_commit(&mut working);
         *guard = Arc::new(working);
         Ok(value)
     }

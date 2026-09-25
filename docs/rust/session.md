@@ -60,6 +60,12 @@ match session.commit(tx, true) {
 route to the working graph after the first mutation. Readers holding a prior
 snapshot continue seeing it after commit; new snapshots see the committed graph.
 
+Each successful commit is also where change-data capture (`CALL
+db.cdc.enable()`) publishes its events. The serialized paths count the same
+way: dropping a `write()` guard, or a `transact` closure returning `Ok`,
+publishes what it applied; a failed statement or an `Err` closure publishes
+nothing.
+
 Pass `check_occ=true` in production so a transaction based on a stale version
 returns `ConflictDetected`. Last-writer-wins is not a safe default.
 

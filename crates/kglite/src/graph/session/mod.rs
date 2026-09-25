@@ -83,6 +83,8 @@ mod stored_property_admission_tests;
 #[cfg(test)]
 mod strict_reads_tests;
 pub(crate) mod transaction;
+#[cfg(test)]
+mod write_publish_tests;
 
 /// Stack size a thread must have to run [`execute_read`] / [`execute_mut`]
 /// safely — servers that dispatch queries onto their own threads should

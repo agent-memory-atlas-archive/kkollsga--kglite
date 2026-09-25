@@ -79,6 +79,13 @@ before upgrading.
   object is still a map. Java binds `LocalDate` as a date and
   `LocalDateTime`, `OffsetDateTime`, `ZonedDateTime` and `Instant` as a
   datetime.
+- Change data capture enabled through the C ABI (and so from Java) published
+  nothing: `CALL db.cdc.enable()` succeeded, but `db.cdc.status()` kept
+  reporting no buffered events and `db.cdc.query()` returned no rows after
+  any number of writes, while the capture buffer grew. Every auto-committed
+  write, batch and transaction through the C ABI now publishes its changes,
+  and a failed statement publishes none. The same holds for the Rust
+  `Session::write()` guard and `Session::transact`.
 
 ## [0.18.0] - 2026-09-24
 

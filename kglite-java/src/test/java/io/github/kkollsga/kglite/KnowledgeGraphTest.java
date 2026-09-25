@@ -219,6 +219,26 @@ class KnowledgeGraphTest {
         }
     }
 
+    @Test
+    @DisplayName("change capture publishes cypher() and transaction writes")
+    void changeCapturePublishesWrites() {
+        try (KnowledgeGraph graph = KnowledgeGraph.createInMemory()) {
+            graph.cypher("CALL db.cdc.enable()");
+            graph.cypher("CREATE (:Person {id: 1})");
+            graph.cypher("MATCH (p:Person) SET p.age = $age", Map.of("age", 30));
+            Transaction tx = graph.beginTransaction();
+            tx.add("CREATE (:Person {id: 2})");
+            tx.commit();
+
+            List<Map<String, Object>> changes = graph.query(
+                    "CALL db.cdc.query({}) YIELD operation, nodeId RETURN operation, nodeId");
+            assertEquals(List.of(
+                    Map.of("operation", "create", "nodeId", 1L),
+                    Map.of("operation", "update", "nodeId", 1L),
+                    Map.of("operation", "create", "nodeId", 2L)), changes);
+        }
+    }
+
     /** {@code Map.of} rejects a null value; the null cell case needs one. */
     private static Map<String, Object> mapOfNullable(Object... pairs) {
         Map<String, Object> map = new java.util.LinkedHashMap<>();

@@ -244,6 +244,62 @@ fn tagged_date_and_datetime_params_match_stored_values() {
     unsafe { kglite_session_free(session) };
 }
 
+fn execute_mut_ok(session: *mut KgliteSession, query: &str) {
+    let query = CString::new(query).unwrap();
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    let mut err: *const c_char = std::ptr::null();
+    let rc = unsafe {
+        kglite_session_execute_mut(
+            session,
+            query.as_ptr(),
+            std::ptr::null(),
+            &mut result,
+            &mut err,
+        )
+    };
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    unsafe { kglite_cypher_result_free(result) };
+}
+
+/// Change capture enabled through the ABI publishes each auto-committed
+/// mutation, and a failed statement publishes nothing.
+#[test]
+fn change_capture_publishes_abi_mutations() {
+    let session = seed_notes("CREATE (:Seed {id: 0})");
+    execute_mut_ok(session, "CALL db.cdc.enable()");
+    execute_mut_ok(session, "CREATE (:Person {id: 1})");
+    execute_mut_ok(session, "MATCH (p:Person) SET p.age = 30");
+
+    let failing = CString::new("UNWIND [1, 0] AS d CREATE (:Person {v: 10 / d})").unwrap();
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    let mut err: *const c_char = std::ptr::null();
+    let rc = unsafe {
+        kglite_session_execute_mut(
+            session,
+            failing.as_ptr(),
+            std::ptr::null(),
+            &mut result,
+            &mut err,
+        )
+    };
+    assert_ne!(rc, KgliteStatusCode::Ok);
+    unsafe { kglite_free_string(err) };
+
+    let rows = query_rows(
+        session,
+        "CALL db.cdc.query({}) YIELD operation, nodeType RETURN operation, nodeType",
+        "{}",
+    );
+    assert_eq!(
+        rows,
+        serde_json::json!([
+            {"operation": "create", "nodeType": "Person"},
+            {"operation": "update", "nodeType": "Person"},
+        ])
+    );
+    unsafe { kglite_session_free(session) };
+}
+
 #[test]
 fn raw_json_marker_object_and_batch_selector_preserve_effective_values() {
     let graph = kglite_graph_new();
