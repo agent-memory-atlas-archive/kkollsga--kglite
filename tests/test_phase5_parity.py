@@ -98,7 +98,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: (run on each platform; the script writes whichever entry matches the
 #: current host).
 BINARY_SIZE_BASELINES = {
-    "darwin": 26_337_936,  # 0.18.1 darwin baseline
+    "darwin": 26_354_464,  # 0.18.1 darwin baseline
     # Published 0.17.12 manylinux2014 x86_64 wheel member
     # `kglite/kglite.abi3.so`; artifact identity is recorded in the history below.
     "linux": 31_188_600,
@@ -577,8 +577,9 @@ def test_binary_size_regression():
         the bound-value planner anchors.
 
 
-      - 0.18.1:       26,337,936 bytes (≈25.1 MB). +16 bytes: path-binding helpers and
-        the load-time reference-candidate scan.
+      - 0.18.1:       26,354,464 bytes (≈25.1 MB). +16,544 bytes: path-binding
+        helpers, the load-time reference-candidate scan, tagged date/duration
+        JSON parameters and the parser's widened value positions.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise

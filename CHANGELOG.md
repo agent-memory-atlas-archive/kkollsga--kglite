@@ -9,7 +9,7 @@ before upgrading.
 
 ## [Unreleased]
 
-## [0.18.1] - 2026-09-25
+## [0.18.1] - 2026-09-26
 
 ### Added
 
