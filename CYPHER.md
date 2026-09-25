@@ -2048,6 +2048,28 @@ that bound, and a range whose minimum exceeds its maximum (`*5..2`) is a
 parse error. Spell out `*1..N` when you need more than 10 hops.
 `shortestPath()` and `allShortestPaths()` are not capped (see below).
 
+### The relationship variable is a list
+
+A variable on a variable-length relationship binds the **list of
+relationships** the segment walked, in walk order (openCypher semantics). Bind
+the path when you need its nodes:
+
+```python
+# r is a list: size, indexing, comprehensions and quantifiers all apply
+graph.cypher("""
+    MATCH (a:Person {name: 'Alice'})-[r:KNOWS*1..3]->(b:Person)
+    WHERE all(k IN r WHERE k.since >= 2015)
+    RETURN b.name, size(r) AS hops, [k IN r | k.since] AS years
+""")
+
+# the nodes along the way come from a path variable
+graph.cypher("MATCH p = (a:Person {name: 'Alice'})-[:KNOWS*1..3]->(b) RETURN nodes(p), relationships(p)")
+```
+
+Releases up to 0.18.0 bound `r` as a path map (`{nodes, relationships}`), so
+`size(r)` was null and `all(k IN r WHERE …)` was always true; code that read
+the map's fields should bind `p = …` and use `nodes(p)` / `relationships(p)`.
+
 ### Trail semantics
 
 A variable-length segment walks **trails**: no relationship may be used twice

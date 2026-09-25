@@ -175,6 +175,41 @@
       ]
     ]
   },
+  "var_length_relationship_list": {
+    "keys": [
+      "rels"
+    ],
+    "rows": [
+      [
+        [
+          {
+            "kind": "relationship",
+            "id": 0,
+            "start": 0,
+            "end": 1,
+            "type": "R",
+            "properties": {
+              "tag": "first"
+            }
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "kind": "relationship",
+            "id": 1,
+            "start": 0,
+            "end": 1,
+            "type": "R",
+            "properties": {
+              "tag": "second"
+            }
+          }
+        ]
+      ]
+    ]
+  },
   "union_columns": {
     "keys": [
       "value"

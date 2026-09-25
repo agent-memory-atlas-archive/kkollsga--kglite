@@ -707,6 +707,16 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "WHERE length(p) = 2 AND last(nodes(p)).age > 22 RETURN b.name AS name ORDER BY name",
         None,
     ),
+    # A variable-length relationship variable is its relationship list; the
+    # answers are pinned in test_cypher_var_length_relationships.py.
+    (
+        "var_length_relationship_list_filter",
+        "social_graph",
+        "MATCH (p:Person {person_id: 1})-[r:KNOWS*1..2]->(q:Person) "
+        "WHERE any(k IN r WHERE k.since >= 2017) "
+        "RETURN q.name AS n, size(r) AS s, [k IN r | k.since] AS years ORDER BY n, s, years",
+        None,
+    ),
     (
         "path_count_later_optional_match",
         "social_graph",

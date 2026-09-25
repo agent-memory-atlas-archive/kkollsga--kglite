@@ -105,7 +105,11 @@ impl<'a> CypherExecutor<'a> {
                     PatternElement::Edge(ep) => Some((i, ep)),
                     PatternElement::Node(_) => None,
                 })?;
-            return var_length_segment(ep, index, row).cloned();
+            // The segment reads as a relationship list; the path over it does not.
+            return var_length_segment(ep, index, row).map(|segment| PathBinding {
+                relationship_list: false,
+                ..segment.clone()
+            });
         }
         stitch_path(pattern, fixed_trail?, row)
     }
@@ -157,6 +161,7 @@ fn stitch_path(
         }
     }
     Some(PathBinding {
+        relationship_list: false,
         source: source?,
         hops: path.len(),
         path,

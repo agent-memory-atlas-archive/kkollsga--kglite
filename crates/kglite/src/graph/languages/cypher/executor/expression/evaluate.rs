@@ -804,6 +804,9 @@ impl<'a> CypherExecutor<'a> {
             )));
         }
         if let Some(path) = row.path_bindings.get(name) {
+            if path.relationship_list {
+                return Ok(self.relationship_list_value(path));
+            }
             return Ok(Value::Path(Box::new(materialize_path_value(
                 path,
                 self.graph,

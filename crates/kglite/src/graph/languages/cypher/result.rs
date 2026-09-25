@@ -180,9 +180,15 @@ pub struct EdgeBinding {
     pub incarnation: Option<crate::datatypes::values::RelationshipIncarnation>,
 }
 
-/// Variable-length path binding
+/// A walked sequence of hops: a path variable's value, or the segment a
+/// variable-length relationship variable (`[r*1..3]`) walked.
 #[derive(Debug, Clone)]
 pub struct PathBinding {
+    /// True for a variable-length relationship variable's segment, which
+    /// reads as the *list* of its relationships (openCypher), not as a path.
+    /// The list is built only when the variable is read, so a named segment
+    /// nothing reads costs no more than an anonymous one.
+    pub relationship_list: bool,
     pub source: NodeIndex,
     pub hops: usize,
     pub path: Vec<PathHop>,

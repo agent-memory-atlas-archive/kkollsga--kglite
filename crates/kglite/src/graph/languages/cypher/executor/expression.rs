@@ -537,8 +537,11 @@ impl<'a> CypherExecutor<'a> {
             return Ok(resolve_edge_property(self.graph, edge, property));
         }
 
-        // Path variable
+        // Path variable. A relationship list has no properties.
         if let Some(path) = row.path_bindings.get(variable) {
+            if path.relationship_list {
+                return Ok(Value::Null);
+            }
             return match property {
                 "length" | "hops" => Ok(Value::Int64(path.hops as i64)),
                 _ => Ok(Value::Null),

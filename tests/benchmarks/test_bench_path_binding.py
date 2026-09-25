@@ -1,4 +1,4 @@
-"""Path-variable binding cells: what binding `p` costs on the leading MATCH.
+"""Path-binding cells: what binding `p`, and reading `[r*]` as a list, cost.
 
 Outside the frozen core harness, because CI benchmarks `test_bench_core.py` on
 the published 0.13.2 wheel with `--require-exact-set`: a new core cell needs a
@@ -54,3 +54,25 @@ def test_bench_path_where_control_no_path(benchmark, link_graph):
     """Control: the same MATCH and WHERE with no path variable."""
     query = "MATCH (a:Item)-[:LINKS]->(b:Item) WHERE a.x % 100 = 7 RETURN count(*) AS n"
     assert benchmark(_count, link_graph, query) == SELECTED
+
+
+# A variable-length relationship variable reads as a list of relationships,
+# built only when the variable is read. The named-but-unread cell must cost
+# what the anonymous control costs; the twin reads `r` and builds every list.
+SEGMENT_SEEDS = 200
+SEGMENT_PATHS = SEGMENT_SEEDS * (FANOUT + FANOUT**2 + FANOUT**3)
+
+
+def test_bench_var_length_named_unread(benchmark, link_graph):
+    query = f"MATCH (a:Item)-[r:LINKS*1..3]->(b:Item) WHERE a.x < {SEGMENT_SEEDS} RETURN count(*) AS n"
+    assert benchmark(_count, link_graph, query) == SEGMENT_PATHS
+
+
+def test_bench_var_length_reads_list(benchmark, link_graph):
+    query = f"MATCH (a:Item)-[r:LINKS*1..3]->(b:Item) WHERE a.x < {SEGMENT_SEEDS} RETURN sum(size(r)) AS n"
+    assert benchmark(_count, link_graph, query) == SEGMENT_SEEDS * (FANOUT + 2 * FANOUT**2 + 3 * FANOUT**3)
+
+
+def test_bench_var_length_anonymous_control(benchmark, link_graph):
+    query = f"MATCH (a:Item)-[:LINKS*1..3]->(b:Item) WHERE a.x < {SEGMENT_SEEDS} RETURN count(*) AS n"
+    assert benchmark(_count, link_graph, query) == SEGMENT_PATHS

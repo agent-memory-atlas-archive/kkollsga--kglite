@@ -306,6 +306,7 @@ impl<'a> CypherExecutor<'a> {
         row.path_bindings.insert(
             path_variable.to_string(),
             PathBinding {
+                relationship_list: false,
                 hop_incarnations: self.capture_path_incarnations(&path),
                 source: pair.source,
                 hops,

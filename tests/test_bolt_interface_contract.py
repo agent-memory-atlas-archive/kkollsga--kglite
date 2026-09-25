@@ -40,6 +40,8 @@ def _cell(value):
             "nodes": [_cell(node) for node in value.nodes],
             "relationships": [_cell(rel) for rel in value.relationships],
         }
+    if isinstance(value, list):
+        return [_cell(item) for item in value]
     return value
 
 
@@ -73,6 +75,12 @@ def capture_bolt_contract(path: Path) -> dict:
                         session,
                         "MATCH p=(a:N {id: 1})-[r:R]->(b:N {id: 2}) "
                         "RETURN a AS source, r AS edge, p AS path ORDER BY r.tag",
+                    ),
+                    # A variable-length relationship variable is a list
+                    # of relationships, not a path.
+                    "var_length_relationship_list": _run(
+                        session,
+                        "MATCH (a:N {id: 1})-[r:R*1..1]->(b:N {id: 2}) RETURN r AS rels ORDER BY r[0].tag",
                     ),
                     "union_columns": _run(session, "RETURN 1 AS value UNION ALL RETURN 2 AS value"),
                     # Wire-shape lock for the server-facts intercept (default

@@ -465,6 +465,7 @@ impl<'a> CypherExecutor<'a> {
             row.path_bindings.insert(
                 "__fixed_path".to_string(),
                 PathBinding {
+                    relationship_list: false,
                     hop_incarnations: self.capture_path_incarnations(&path),
                     source,
                     hops: path.len(),
@@ -500,6 +501,7 @@ impl<'a> CypherExecutor<'a> {
                     row.path_bindings.insert(
                         var,
                         PathBinding {
+                            relationship_list: true,
                             hop_incarnations: self.capture_path_incarnations(&path),
                             source,
                             hops,
@@ -631,6 +633,7 @@ impl<'a> CypherExecutor<'a> {
             row.path_bindings.insert(
                 "__fixed_path".to_string(),
                 PathBinding {
+                    relationship_list: false,
                     hop_incarnations: self.capture_path_incarnations(path),
                     source: *source,
                     hops: path.len(),
@@ -665,6 +668,7 @@ impl<'a> CypherExecutor<'a> {
                     row.path_bindings.insert(
                         var.clone(),
                         PathBinding {
+                            relationship_list: true,
                             hop_incarnations: self.capture_path_incarnations(path),
                             source: *source,
                             hops: *hops,
@@ -708,6 +712,7 @@ impl<'a> CypherExecutor<'a> {
             let single = node_vars.first()?;
             let source_idx = row.node_bindings.get(single)?;
             return Some(PathBinding {
+                relationship_list: false,
                 hop_incarnations: self.capture_path_incarnations(&[]),
                 source: *source_idx,
                 hops: 0,
@@ -754,6 +759,7 @@ impl<'a> CypherExecutor<'a> {
         }
 
         Some(PathBinding {
+            relationship_list: false,
             hop_incarnations,
             source: *source_idx,
             hops: edge_vars.len(),

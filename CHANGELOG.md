@@ -9,6 +9,19 @@ before upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** a variable-length relationship variable is now the list of
+  relationships its segment walked, in walk order, as in openCypher:
+  `MATCH (a)-[r:R*1..3]->(b) RETURN r` returns a list of relationships
+  instead of a path map. It used to read as that path map everywhere, so
+  `size(r)` was null, `[x IN r | x.w]` was empty and `all(x IN r WHERE …)`
+  was always true — a filter that silently kept every row. Size, indexing,
+  list comprehensions, `any`/`all`/`none`/`single`, `UNWIND r` and `WITH r`
+  now work on it. **Migration:** code that read the old map's
+  `nodes`/`relationships` should bind the path instead:
+  `MATCH p=(a)-[:R*1..3]->(b) RETURN nodes(p), relationships(p)`.
+
 ### Fixed
 
 - A path variable read by the `WHERE` of its own leading `MATCH` —

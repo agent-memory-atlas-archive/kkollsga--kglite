@@ -1192,6 +1192,17 @@ impl<'a> super::CypherExecutor<'a> {
     /// Materialise hop `index` of `path` the way [`materialize_path_value`]
     /// does, for the callers that emit relationships one hop at a time
     /// (`relationships(p)` and the list comprehension over it).
+    /// A variable-length relationship variable's value: its relationships
+    /// in walk order, each as `RETURN r` would emit it.
+    pub(super) fn relationship_list_value(&self, path: &super::PathBinding) -> Value {
+        Value::List(
+            (0..path.path.len())
+                .filter_map(|index| self.materialize_path_relationship(path, index))
+                .map(|rel| Value::Relationship(Box::new(rel)))
+                .collect(),
+        )
+    }
+
     pub(super) fn materialize_path_relationship(
         &self,
         path: &super::PathBinding,
