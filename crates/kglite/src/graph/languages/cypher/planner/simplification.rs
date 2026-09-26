@@ -142,10 +142,18 @@ pub(super) fn fold_or_to_in_pred(pred: &Predicate) -> Predicate {
             let mut other_preds: Vec<Predicate> = Vec::new();
             collect_or_equalities(pred, &mut equalities, &mut other_preds);
 
-            let mut groups: std::collections::HashMap<(String, String), Vec<Expression>> =
-                std::collections::HashMap::new();
+            // First-appearance order, not a hash map's: the rewrite must be a
+            // function of the predicate, or EXPLAIN (and the plan) of one
+            // query differs from run to run.
+            let mut groups: Vec<((String, String), Vec<Expression>)> = Vec::new();
             for (var, prop, val_expr) in equalities {
-                groups.entry((var, prop)).or_default().push(val_expr);
+                match groups
+                    .iter_mut()
+                    .find(|((v, p), _)| *v == var && *p == prop)
+                {
+                    Some((_, values)) => values.push(val_expr),
+                    None => groups.push(((var, prop), vec![val_expr])),
+                }
             }
 
             let mut result_preds: Vec<Predicate> = Vec::new();

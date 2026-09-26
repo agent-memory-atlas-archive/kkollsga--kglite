@@ -1903,3 +1903,38 @@ fn test_null_comparison_value_is_not_pushed() {
         );
     }
 }
+
+/// Red before first-appearance grouping: equalities on distinct properties
+/// were regrouped through a `HashMap`, so `a OR b` came back as `b OR a`
+/// about half the time and EXPLAIN reported `fold_or_to_in` on a query it
+/// left unchanged — the plan text of one query differed run to run.
+#[test]
+fn fold_or_to_in_keeps_distinct_property_equalities_in_order() {
+    let query = parse_cypher(
+        "MATCH (p:Person) WHERE p.email = 'never' OR p.city = 'Oslo' OR p.city = 'Bergen' \
+         OR p.age = 3 RETURN p",
+    )
+    .unwrap();
+    let Clause::Where(w) = &query.clauses[1] else {
+        panic!("{:?}", query.clauses)
+    };
+    let first = format!("{:?}", simplification::fold_or_to_in_pred(&w.predicate));
+    for _ in 0..32 {
+        assert_eq!(
+            format!("{:?}", simplification::fold_or_to_in_pred(&w.predicate)),
+            first
+        );
+    }
+    let two = parse_cypher("MATCH (p:Person) WHERE p.email = 'never' OR p.city = 'Oslo' RETURN p")
+        .unwrap();
+    let Clause::Where(w) = &two.clauses[1] else {
+        panic!()
+    };
+    for _ in 0..32 {
+        assert_eq!(
+            format!("{:?}", simplification::fold_or_to_in_pred(&w.predicate)),
+            format!("{:?}", w.predicate),
+            "nothing to fold leaves the predicate as written"
+        );
+    }
+}
