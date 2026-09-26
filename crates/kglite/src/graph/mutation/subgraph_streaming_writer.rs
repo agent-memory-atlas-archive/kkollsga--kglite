@@ -958,6 +958,7 @@ fn value_kind(v: &Value) -> &'static str {
     v.type_name()
 }
 
+// Test data uses the literal `3.14` as a plain float, not an approximation of PI.
 #[cfg(test)]
 #[allow(clippy::approx_constant)]
 mod tests {

@@ -1612,6 +1612,7 @@ mod total_equality_tests {
     }
 }
 
+// Test data uses the literal `3.14` as a plain float, not an approximation of PI.
 #[cfg(test)]
 #[allow(clippy::approx_constant)]
 mod tests {

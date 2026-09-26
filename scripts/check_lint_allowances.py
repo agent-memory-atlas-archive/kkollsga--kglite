@@ -17,6 +17,18 @@ DEFAULT_BASELINE = REPO_ROOT / "tests" / "api-baselines" / "lint-allowances.json
 ALLOW_ATTRIBUTE = re.compile(r"(?P<inner>#!|#)\[\s*allow\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
 COMMENT = re.compile(r"//.*?$|/\*.*?\*/", re.MULTILINE | re.DOTALL)
 OTHER_ATTRIBUTE = re.compile(r"^\s*#\[.*?\]\s*", re.DOTALL)
+# An item header at the start of the text: visibility, qualifiers, kind, name.
+ITEM_HEAD = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:default\s+)?"
+    r"(?:(?:const|async|unsafe|extern(?:\s+\"[^\"]+\")?)\s+)*"
+    r"(?:(?P<kind>fn|struct|enum|union|trait|type|const|static|mod|impl|use)\b"
+    r"|(?P<macro>macro_rules!))"
+    r"(?:\s+(?:mut\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*))?"
+)
+FN_SIGNATURE = re.compile(
+    r"(?s)\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?"
+    r"(?:extern\s+\"[^\"]+\"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b.*?(?=\{|;)"
+)
 
 CLASSIFICATION_REASONS = {
     "api-shape": "Changing the warned shape is deferred to the public API review.",
@@ -72,28 +84,27 @@ def _scope_after(source: str, end: int, inner: bool) -> str:
             break
         tail = stripped[attribute.end() :]
 
-    item = re.search(
-        r"(?s)\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?"
-        r"(?:extern\s+\"[^\"]+\"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b.*?(?=\{|;)",
-        tail[:2000],
-    )
-    if item:
-        return f"fn:{item.group(1)}:{_normalise(item.group(0))[:300]}"
-
-    named = re.search(
-        r"(?s)\b(?:pub(?:\([^)]*\))?\s+)?(struct|enum|trait|type|const|static|mod)\s+"
-        r"([A-Za-z_][A-Za-z0-9_]*)\b.*?(?=\{|;|=)",
-        tail[:1200],
-    )
-    if named:
-        return f"{named.group(1)}:{named.group(2)}"
-
-    impl_item = re.match(r"(?s)\s*(impl\b.*?)(?=\{)", tail[:1200])
-    if impl_item:
-        return f"impl:{_normalise(impl_item.group(1))[:300]}"
-
-    first_line = next((line.strip() for line in tail.splitlines() if line.strip()), "<end-of-file>")
-    return f"statement:{_normalise(first_line)[:300]}"
+    # Key to the item the attribute is attached to — the one starting `tail` —
+    # never to a later one: searching ahead for the next `fn` keyed a struct's
+    # allowance to the following method, and re-keyed it when comment lines
+    # between them were deleted.
+    head = ITEM_HEAD.match(tail)
+    if head is None:
+        first_line = next((line.strip() for line in tail.splitlines() if line.strip()), "<end-of-file>")
+        return f"statement:{_normalise(first_line)[:300]}"
+    kind = head.group("kind") or "macro"
+    if kind == "fn":
+        # `tail` starts at this fn, so the first signature match is its own.
+        signature = FN_SIGNATURE.search(tail[:2000])
+        text = signature.group(0) if signature else f"fn {head.group('name')}"
+        return f"fn:{head.group('name')}:{_normalise(text)[:300]}"
+    if kind == "impl":
+        impl_item = re.match(r"(?s)(.*?)(?=\{|;)", tail[head.start("kind") :])
+        return f"impl:{_normalise(impl_item.group(1) if impl_item else 'impl')[:300]}"
+    if kind == "use":
+        use_item = re.match(r"(?s)(.*?);", tail)
+        return f"use:{_normalise(use_item.group(1) if use_item else 'use')[:300]}"
+    return f"{kind}:{head.group('name')}"
 
 
 def _has_reason(source: str, start: int, end: int) -> bool:
@@ -120,6 +131,8 @@ def collect_allowances(root: Path) -> list[Allowance]:
         source = path.read_text(encoding="utf-8")
         relative = path.relative_to(root).as_posix()
         for match in ALLOW_ATTRIBUTE.finditer(source):
+            if "//" in source[source.rfind("\n", 0, match.start()) + 1 : match.start()]:
+                continue  # an attribute quoted in a line comment is prose
             scope = _scope_after(source, match.end(), match.group("inner") == "#!")
             line = source.count("\n", 0, match.start()) + 1
             reason = _has_reason(source, match.start(), match.end())
@@ -252,6 +265,16 @@ def self_test() -> None:
             encoding="utf-8",
         )
         assert collect_allowances(root)[0].has_reason
+        source.write_text(
+            "// `#[allow(unused)]` quoted in prose is not an allowance.\n"
+            "#[derive(Debug)]\n"
+            "#[allow(dead_code)]\n"
+            "pub struct Resolved {\n    x: u8,\n}\n\n"
+            "pub(crate) fn resolve() -> Resolved {\n    Resolved { x: 0 }\n}\n",
+            encoding="utf-8",
+        )
+        keyed = collect_allowances(root)
+        assert [allowance.scope for allowance in keyed] == ["struct:Resolved"], keyed
     print("lint-allowance self-test: OK")
 
 

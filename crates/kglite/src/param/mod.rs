@@ -555,6 +555,7 @@ fn rel_to_json(rel: &crate::datatypes::values::RelValue) -> serde_json::Value {
     )
 }
 
+// Test data uses the literal `3.14` as a plain float, not an approximation of PI.
 #[cfg(test)]
 #[allow(clippy::approx_constant)]
 mod tests {

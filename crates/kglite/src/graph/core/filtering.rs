@@ -1501,6 +1501,7 @@ pub fn filter_orphan_nodes(
     Ok(())
 }
 
+// Test data uses the literal `3.14` as a plain float, not an approximation of PI.
 #[cfg(test)]
 #[allow(clippy::approx_constant)]
 mod tests {

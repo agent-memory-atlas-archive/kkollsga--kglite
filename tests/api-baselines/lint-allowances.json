@@ -269,7 +269,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite/src/datatypes/values.rs::fn:test_as_string_with_string_value:fn test_as_string_with_string_value()::clippy::approx_constant",
+      "identity": "crates/kglite/src/datatypes/values.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -301,7 +301,7 @@
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/blueprint/expr.rs::fn:ctx:fn ctx(pairs: &[(&str, Value)]) -> HashMap<String, Value>::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/blueprint/expr.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -309,11 +309,11 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/core/data_retrieval.rs::fn:get_connections:pub fn get_connections( graph: &DirGraph, selection: &CurrentSelection, level_index: Option<usize>, indices: Option<&[usize]>, include_node_properties: bool, ) -> Vec<LevelConnections>::clippy::type_complexity",
+      "identity": "crates/kglite/src/graph/core/data_retrieval.rs::struct:ConnectionInfo::clippy::type_complexity",
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/core/filtering.rs::fn:test_values_equal_same_type:fn test_values_equal_same_type()::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/core/filtering.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -357,7 +357,7 @@
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/core/value_operations.rs::fn:test_arithmetic_int_overflow_is_an_error:fn test_arithmetic_int_overflow_is_an_error()::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/core/value_operations.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -389,10 +389,6 @@
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/features/spatial.rs::fn:test_parse_wkt_point:fn test_parse_wkt_point()::clippy::approx_constant",
-      "classification": "test"
-    },
-    {
       "identity": "crates/kglite/src/graph/features/spatial.rs::fn:within_bounds:pub fn within_bounds( graph: &DirGraph, selection: &CurrentSelection, lat_field: &str, lon_field: &str, min_lat: f64, max_lat: f64, min_lon: f64, max_lon: f64, geom_fallback: Option<&str>, ) -> Result<Vec<NodeIndex>, String>::clippy::too_many_arguments",
       "classification": "transitional"
     },
@@ -401,11 +397,15 @@
       "classification": "transitional"
     },
     {
+      "identity": "crates/kglite/src/graph/features/spatial.rs::mod:tests::clippy::approx_constant",
+      "classification": "test"
+    },
+    {
       "identity": "crates/kglite/src/graph/introspection/describe.rs::fn:write_connection_property:fn write_connection_property( xml: &mut String, graph: &DirGraph, rel_type: &str, prop_name: &str, stats: EdgePropertyAccum, truncate_at: Option<usize>, max_prop_values: usize, )::clippy::too_many_arguments",
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/introspection/reporting.rs::fn:new:pub fn new( operation_type: String, expression: String, nodes_processed: usize, nodes_updated: usize, nodes_with_errors: usize, processing_time_ms: f64, is_aggregation: bool, ) -> Self::clippy::enum_variant_names",
+      "identity": "crates/kglite/src/graph/introspection/reporting.rs::enum:OperationReport::clippy::enum_variant_names",
       "classification": "transitional"
     },
     {
@@ -421,7 +421,7 @@
       "classification": "test"
     },
     {
-      "identity": "crates/kglite/src/graph/io/rdf/loader.rs::fn:resource_iri:fn resource_iri(term: &Term) -> Option<Cow<'_, str>>::unreachable_patterns",
+      "identity": "crates/kglite/src/graph/io/rdf/loader.rs::statement:_ => {}::unreachable_patterns",
       "classification": "test"
     },
     {
@@ -485,7 +485,7 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/languages/cypher/tokenizer.rs::fn:test_simple_match_return:fn test_simple_match_return()::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/languages/cypher/tokenizer.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -509,20 +509,16 @@
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/mutation/subgraph_streaming_writer.rs::fn:make_schema:fn make_schema(interner: &mut StringInterner, props: &[&str]) -> Arc<TypeSchema>::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/mutation/subgraph_streaming_writer.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
-      "identity": "crates/kglite/src/graph/mutation/validation.rs::fn:test_value_matches_type:fn test_value_matches_type()::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/mutation/validation.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
       "identity": "crates/kglite/src/graph/recipes/records.rs::module::clippy::result_large_err",
       "classification": "api-shape"
-    },
-    {
-      "identity": "crates/kglite/src/graph/schema.rs::fn:is_reserved_provenance_key:pub fn is_reserved_provenance_key(key: &str) -> bool::unused_imports",
-      "classification": "boundary"
     },
     {
       "identity": "crates/kglite/src/graph/schema.rs::fn:len:pub fn len(&self) -> usize::clippy::len_without_is_empty",
@@ -531,6 +527,10 @@
     {
       "identity": "crates/kglite/src/graph/schema.rs::fn:new:pub fn new() -> Self::clippy::new_without_default",
       "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/schema.rs::use:pub use crate::graph::storage::{MappedGraph, MemoryGraph}::unused_imports",
+      "classification": "boundary"
     },
     {
       "identity": "crates/kglite/src/graph/session/execute.rs::fn:embed_into_params:fn embed_into_params( opts: &ExecuteOptions<'_>, rewrite: &cypher::planner::simplification::TextScoreRewrite, ) -> Result<HashMap<String, Value>, KgError>::clippy::result_large_err",
@@ -561,11 +561,11 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/storage/column_store/mod.rs::fn:load_bytes:fn load_bytes( bytes: &[u8], temp_dir: Option<&Path>, _col_name: &str, ext: &str, ) -> io::Result<MmapBytes>@occurrence:1::clippy::chunks_exact_to_as_chunks",
+      "identity": "crates/kglite/src/graph/storage/column_store/mod.rs::statement:for (index, chunk) in bytes.chunks_exact(T::WIDTH).enumerate() {::clippy::chunks_exact_to_as_chunks",
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/storage/column_store/mod.rs::fn:load_bytes:fn load_bytes( bytes: &[u8], temp_dir: Option<&Path>, _col_name: &str, ext: &str, ) -> io::Result<MmapBytes>@occurrence:2::clippy::chunks_exact_to_as_chunks",
+      "identity": "crates/kglite/src/graph/storage/column_store/mod.rs::statement:let data = bytes.chunks_exact(T::WIDTH).map(T::decode_le).collect();::clippy::chunks_exact_to_as_chunks",
       "classification": "transitional"
     },
     {
@@ -581,7 +581,7 @@
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite/src/graph/storage/disk/edge_properties.rs::fn:k:fn k(s: &str, interner: &mut StringInterner) -> InternedKey::clippy::approx_constant",
+      "identity": "crates/kglite/src/graph/storage/disk/edge_properties.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -593,11 +593,11 @@
       "classification": "test"
     },
     {
-      "identity": "crates/kglite/src/graph/storage/mod.rs::statement:pub use recording::RecordingGraph;::unused_imports",
+      "identity": "crates/kglite/src/graph/storage/mod.rs::use:pub use recording::RecordingGraph::unused_imports",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite/src/param/mod.rs::fn:null_roundtrip:fn null_roundtrip()::clippy::approx_constant",
+      "identity": "crates/kglite/src/param/mod.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     }
   ],
@@ -611,7 +611,7 @@
       "classification": "dead-code"
     },
     {
-      "identity": "crates/kglite/src/error.rs::fn:code_round_trip:fn code_round_trip()::dead_code",
+      "identity": "crates/kglite/src/error.rs::type:KgResult::dead_code",
       "classification": "dead-code"
     },
     {
@@ -655,15 +655,11 @@
       "classification": "dead-code"
     },
     {
-      "identity": "crates/kglite/src/graph/features/temporal/endpoint_index.rs::fn:resolve:pub(crate) fn resolve( graph: &DirGraph, template: &GuardTemplate, selector: ValidTimeSelector, ) -> ResolvedFilter::dead_code",
+      "identity": "crates/kglite/src/graph/features/temporal/endpoint_index.rs::struct:ResolvedFilter::dead_code",
       "classification": "dead-code"
     },
     {
-      "identity": "crates/kglite/src/graph/io/unified_columns.rs::fn:write_unified_columns:pub fn write_unified_columns( dir: &Path, column_stores: &HashMap<String, Arc<ColumnStore>>, _interner: &StringInterner, ) -> io::Result<WriteResult>::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/languages/cypher/planner/schema_check/mod.rs::fn:fmt:fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result::dead_code",
+      "identity": "crates/kglite/src/graph/io/unified_columns.rs::struct:WriteResult::dead_code",
       "classification": "dead-code"
     },
     {
@@ -755,11 +751,7 @@
       "classification": "dead-code"
     },
     {
-      "identity": "crates/kglite/src/graph/storage/disk/segment_summary.rs::fn:numeric:pub fn numeric(value: f64) -> Self@occurrence:1::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/storage/disk/segment_summary.rs::fn:numeric:pub fn numeric(value: f64) -> Self@occurrence:2::dead_code",
+      "identity": "crates/kglite/src/graph/storage/disk/segment_summary.rs::impl:impl PropRange::dead_code",
       "classification": "dead-code"
     },
     {

@@ -403,6 +403,8 @@ pub fn format_unique_values_for_storage(
         .collect()
 }
 
+// Public `api::fluent` shape the Python binding destructures positionally;
+// a type alias would only rename the tuple.
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct ConnectionInfo {

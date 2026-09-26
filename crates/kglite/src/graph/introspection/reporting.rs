@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 
 const MAX_REPORT_HISTORY: usize = 10;
 
+// Each variant wraps the like-named `*OperationReport` struct; the shared
+// `Operation` suffix mirrors those payload types.
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum OperationReport {

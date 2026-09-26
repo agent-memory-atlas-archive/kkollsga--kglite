@@ -1146,8 +1146,7 @@ fn parse_date_field(v: &Value, range: std::ops::Range<usize>) -> ExprResult<i64>
         .map_err(|_| ExprError::TypeError(format!("invalid date field in '{}'", s)))
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────
-
+// Test data uses the literal `3.14` as a plain float, not an approximation of PI.
 #[cfg(test)]
 #[allow(clippy::approx_constant)]
 mod tests {
