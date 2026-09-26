@@ -27,6 +27,18 @@ before upgrading.
   statement carrying a context raises "valid-time contexts are not executable
   yet in this build", and only `EXPLAIN` runs. Rust:
   `kglite::api::cypher::prepend_valid_time`.
+- `CALL db.temporal.declarations()` yields `empty_rows` and
+  `unreadable_rows` per declaration: rows a write since the declaration left
+  with an empty interval (valid at no instant) or with a bound that is not
+  NULL, a date, a datetime or an ISO string, counted at the graph's current
+  state. `describe()` prints them as `temporal_empty` / `temporal_unreadable`
+  (`empty=` / `unreadable=` inside a combined `temporal` attribute) when any
+  are present. Rust: `DeclarationInfo` gains the `empty_rows` and
+  `unreadable_rows` fields, so a struct literal of it needs both. The counts
+  come from a per-graph index of each declared type's interval endpoints,
+  rebuilt after a write; under `FOR VALID_TIME AS OF` with a literal instant
+  the planner also takes each declared label's count at that instant, not its
+  full count, when choosing where a pattern starts.
 - Cypher: `valid_at(entity, date)` and `valid_during(entity, start, end)` read
   the bounds and convention from the entity type's declared validity interval
   (`db.temporal.declare`, a loader's `validFrom`/`validTo`, `set_temporal`), as
@@ -255,6 +267,10 @@ before upgrading.
 - `valid_during()` — Cypher and fluent — no longer reports an empty interval
   (inverted, or `from == to` under `half_open`) as overlapping a range wide
   enough to cover both bounds; `valid_at()` already found it valid on no date.
+- `valid_at()` — Cypher and fluent — no longer finds an empty interval whose
+  two datetime bounds fall on one day (`[08:00, 00:00]`, or `[08:00, 08:00)`
+  under `half_open`) valid on that date: compared at date grain both bounds
+  read as the day itself.
   Such an interval can only be written after the type is declared.
 - The `add_nodes` docstring said a call onto a type with `validFrom` /
   `validTo` column types checks its rows' intervals; that holds only for the

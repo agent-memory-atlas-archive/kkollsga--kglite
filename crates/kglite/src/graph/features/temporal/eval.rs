@@ -179,7 +179,8 @@ pub(crate) fn parse_bounds(
 }
 
 /// `from <= t` and `t <= to` (`t < to` when half-open, as [`end_admits`]
-/// reads it). NULL bounds are open.
+/// reads it). NULL bounds are open. An empty interval (see [`non_empty`])
+/// contains no instant, even one on its own day at date grain.
 /// Both bounds are read before either is compared, so a bad bound errors
 /// whatever the instant.
 pub(crate) fn interval_contains(
@@ -189,7 +190,21 @@ pub(crate) fn interval_contains(
     convention: IntervalConvention,
 ) -> Result<bool, TemporalError> {
     let (from, to) = parse_bounds(from, to)?;
-    Ok(starts_by(from, instant) && ends_after(to, instant, convention))
+    Ok(non_empty(from, to, convention)
+        && starts_by(from, instant)
+        && ends_after(to, instant, convention))
+}
+
+/// Whether the interval holds any instant: false when its end does not
+/// admit its own start — inverted, or `from == to` under half-open — which a
+/// declaration refuses and only a later write can leave. Checked apart from
+/// the instant, because at date grain an inverted pair of timestamps on one
+/// day (`[08:00, 00:00]`) would otherwise read as covering that day.
+fn non_empty(from: Option<Instant>, to: Option<Instant>, convention: IntervalConvention) -> bool {
+    match (from, to) {
+        (Some(from), Some(to)) => end_admits(to, from, convention),
+        _ => true,
+    }
 }
 
 /// Whether the element's interval shares an instant with the closed query
@@ -204,11 +219,7 @@ pub(crate) fn interval_overlaps(
     convention: IntervalConvention,
 ) -> Result<bool, TemporalError> {
     let (from, to) = parse_bounds(from, to)?;
-    let non_empty = match (from, to) {
-        (Some(from), Some(to)) => end_admits(to, from, convention),
-        _ => true,
-    };
-    Ok(non_empty && starts_by(from, b) && ends_after(to, a, convention))
+    Ok(non_empty(from, to, convention) && starts_by(from, b) && ends_after(to, a, convention))
 }
 
 fn starts_by(from: Option<Instant>, t: Instant) -> bool {
@@ -280,6 +291,18 @@ mod tests {
 
     const CLOSED: IntervalConvention = IntervalConvention::Closed;
     const HALF_OPEN: IntervalConvention = IntervalConvention::HalfOpen;
+
+    #[test]
+    fn an_empty_interval_on_one_day_contains_no_instant_of_that_day() {
+        // At date grain both bounds equal the day; the interval is still empty.
+        let (from, to) = (ts("2009-06-30T08:00"), ts("2009-06-30T00:00"));
+        assert!(!contains(&from, &to, d("2009-06-30"), CLOSED));
+        assert!(!contains(&from, &to, d("2009-06-30"), HALF_OPEN));
+        let same = ts("2009-06-30T08:00");
+        assert!(!contains(&same, &same, d("2009-06-30"), HALF_OPEN));
+        assert!(contains(&same, &same, d("2009-06-30"), CLOSED));
+        assert!(contains(&same, &same, ts("2009-06-30T08:00"), CLOSED));
+    }
 
     #[test]
     fn date_only_strings_read_as_date_does() {

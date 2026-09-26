@@ -315,7 +315,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "db.temporal.declarations",
         aliases: &[],
-        description: "List validity-interval declarations: kind, name, source type, bound properties, convention, abutting rows counted at declare time, and whether the relationship type is ambiguous (several unkeyed declarations from an older graph; re-declare them per source_type)",
+        description: "List validity-interval declarations: kind, name, source type, bound properties, convention, abutting rows counted at declare time, whether the relationship type is ambiguous (several unkeyed declarations from an older graph; re-declare them per source_type), and the rows a write since left with an empty interval (valid at no instant) or an unreadable bound, counted now",
         columns: &[
             "kind",
             "name",
@@ -325,6 +325,8 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
             "convention",
             "abutting_rows",
             "ambiguous",
+            "empty_rows",
+            "unreadable_rows",
         ],
     },
     ProcedureSpec {

@@ -1451,7 +1451,8 @@ CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field',
   YIELD declared, rows, abutting_rows
 CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'}) YIELD undeclared
 CALL db.temporal.declarations()
-  YIELD kind, name, source_type, from, to, convention, abutting_rows, ambiguous
+  YIELD kind, name, source_type, from, to, convention, abutting_rows, ambiguous,
+        empty_rows, unreadable_rows
 ```
 
 - **Target.** Exactly one of `node` (a primary type or a secondary label) or
@@ -1470,6 +1471,11 @@ CALL db.temporal.declarations()
   property; an inverted interval is valid on no date. To refuse such writes,
   add a property-type constraint:
   `CREATE CONSTRAINT FOR (m:FieldStatus) REQUIRE m.date_to IS :: DATE`.
+  `db.temporal.declarations()` reports what such writes left, counted at the
+  graph's current state: `empty_rows` (an inverted interval, or `from == to`
+  under `half_open` — valid at no instant) and `unreadable_rows` (a bound that
+  is not NULL, a date, a datetime or an ISO string). Counting reads every row
+  of the declared type once after each write.
 - **Re-declaring** the same target with the same properties and convention is
   a no-op (`declared: false`); different ones are refused until the target is
   undeclared.

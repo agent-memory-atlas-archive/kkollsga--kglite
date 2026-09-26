@@ -655,6 +655,10 @@
       "classification": "dead-code"
     },
     {
+      "identity": "crates/kglite/src/graph/features/temporal/endpoint_index.rs::fn:resolve:pub(crate) fn resolve( graph: &DirGraph, template: &GuardTemplate, selector: ValidTimeSelector, ) -> ResolvedFilter::dead_code",
+      "classification": "dead-code"
+    },
+    {
       "identity": "crates/kglite/src/graph/io/unified_columns.rs::fn:write_unified_columns:pub fn write_unified_columns( dir: &Path, column_stores: &HashMap<String, Arc<ColumnStore>>, _interner: &StringInterner, ) -> io::Result<WriteResult>::dead_code",
       "classification": "dead-code"
     },

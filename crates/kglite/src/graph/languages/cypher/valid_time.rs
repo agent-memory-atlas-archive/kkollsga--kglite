@@ -15,7 +15,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use super::ast::{CallClause, Clause, CypherQuery, StatementContext};
+use super::ast::{CallClause, Clause, CypherQuery, Expression, StatementContext};
 use super::executor::{is_context_free_procedure, is_mutation_query, CypherExecutor};
 use super::parameter_presence::{walk_query, AstSink};
 use super::result::ResultRow;
@@ -49,7 +49,7 @@ pub(crate) fn lower(query: &mut CypherQuery, graph: &DirGraph) {
 #[cold]
 #[inline(never)]
 fn lower_context(query: &mut CypherQuery, graph: &DirGraph) {
-    let declarations = temporal::list(graph);
+    let declarations = temporal::declared(graph);
     let refusal = statement_refusal(query, declarations.is_empty())
         .or_else(|| attach_templates(query, graph, &declarations).err());
     if refusal.is_some() {
@@ -261,7 +261,10 @@ fn refuse_context(
     if rendering_only {
         return Ok(());
     }
-    resolve_filter(query, context, graph, params)?;
+    // Resolved against the endpoint index as execution will resolve it, so
+    // the index is built and exercised on every storage mode before the
+    // refusal below.
+    let _resolved = resolve_filter(query, context, graph, params)?.resolve(graph);
     Err(NOT_EXECUTABLE_YET.to_string())
 }
 
@@ -281,6 +284,51 @@ fn resolve_filter(
         template,
         selector: ValidTimeSelector::AsOf(instant),
     })
+}
+
+/// The context instant when the statement spells it as a constant — a
+/// literal, or `date(…)` / `datetime(…)` of one — so planning can estimate
+/// with the counts valid at it. A `$param` or `date()` (today) is known only
+/// per execution, and a refused context runs nothing; neither has one, and
+/// the plan keeps each label's full count.
+pub(crate) fn plan_instant(query: &CypherQuery, graph: &DirGraph) -> Option<eval::Instant> {
+    let context = query.context.as_ref()?;
+    let constant = match &context.instant {
+        Expression::Literal(_) => true,
+        Expression::FunctionCall { name, args, .. } => {
+            matches!(args.as_slice(), [Expression::Literal(_)])
+                && (name.eq_ignore_ascii_case("date") || name.eq_ignore_ascii_case("datetime"))
+        }
+        _ => false,
+    };
+    if context.refusal.is_some() || !constant {
+        return None;
+    }
+    let value = CypherExecutor::with_params(graph, &HashMap::new(), None)
+        .evaluate_expression(&context.instant, &ResultRow::new())
+        .ok()?;
+    eval::parse_instant(&value).ok()
+}
+
+/// Nodes of each declared label in this scope's template valid at
+/// `instant`, from the endpoint index — the planner's start-node estimate
+/// under a context. `None` without a template, an instant, or any indexed
+/// label.
+pub(crate) fn valid_counts(
+    query: &CypherQuery,
+    graph: &DirGraph,
+    instant: Option<eval::Instant>,
+) -> Option<HashMap<String, usize>> {
+    let (guard, instant) = (query.guard.as_ref()?, instant?);
+    let counts: HashMap<String, usize> = guard
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let count = temporal::endpoint_index::node_count_at(graph, &node.label, instant)?;
+            Some((node.label.clone(), count))
+        })
+        .collect();
+    (!counts.is_empty()).then_some(counts)
 }
 
 /// `query` under a `FOR VALID_TIME AS OF` context at `instant` — what a

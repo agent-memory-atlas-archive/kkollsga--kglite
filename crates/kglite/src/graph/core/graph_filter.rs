@@ -7,6 +7,9 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::graph::dir_graph::DirGraph;
+use crate::graph::features::temporal::endpoint_index;
+pub(crate) use crate::graph::features::temporal::endpoint_index::ResolvedFilter;
 use crate::graph::features::temporal::eval::Instant;
 use crate::graph::features::temporal::IntervalConvention;
 use crate::graph::schema::{InternedKey, TemporalConfig};
@@ -122,4 +125,16 @@ impl TryFrom<&TemporalContext> for ValidTimeSelector {
 pub(crate) struct GraphFilter {
     pub(crate) template: Arc<GuardTemplate>,
     pub(crate) selector: ValidTimeSelector,
+}
+
+impl GraphFilter {
+    /// This filter at `graph`'s current version: per indexed target its
+    /// segment (equal keys, equal masks), the node and relationship masks
+    /// those segments give, the targets left to property guards (Disk mode,
+    /// an unreadable bound, the endpoint-index byte cap, a range selector),
+    /// and whether every target is timeless at the instant. See
+    /// `features::temporal::endpoint_index`.
+    pub(crate) fn resolve(&self, graph: &DirGraph) -> ResolvedFilter {
+        endpoint_index::resolve(graph, &self.template, self.selector)
+    }
 }

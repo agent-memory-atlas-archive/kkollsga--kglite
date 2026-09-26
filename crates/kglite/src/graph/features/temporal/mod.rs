@@ -7,6 +7,7 @@
 pub(crate) mod declarations;
 #[cfg(test)]
 mod declarations_tests;
+pub(crate) mod endpoint_index;
 pub(crate) mod eval;
 mod loader;
 #[cfg(test)]
@@ -20,6 +21,7 @@ mod persist_tests;
 mod request;
 mod validate;
 
+pub(crate) use declarations::declared;
 pub(crate) use declarations::merge_start_key;
 pub use declarations::{
     declare, declare_loaded, edge_configs, list, node_config, undeclare, DeclarationInfo,

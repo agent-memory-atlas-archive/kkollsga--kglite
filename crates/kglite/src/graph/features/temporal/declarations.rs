@@ -11,9 +11,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::endpoint_index::{self, IndexCache};
 use super::eval::IntervalConvention;
 use super::merge_key::StartKey;
 use super::validate::{self, Walk};
+use crate::graph::dir_graph::caches::ForkPrivateCache;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::TemporalConfig;
 
@@ -91,6 +93,16 @@ pub struct DeclarationInfo {
     /// depends on the order they were added in. Re-declare them per
     /// `source_type` to resolve it. Always `false` for a node label.
     pub ambiguous: bool,
+    /// Rows whose interval is empty now — `from` after `to`, or equal under
+    /// half-open — which are valid at no instant. A declaration refuses
+    /// them, so they come from later writes. Counted at the graph's current
+    /// version; `None` where not counted.
+    pub empty_rows: Option<usize>,
+    /// Rows holding a bound that is now unreadable (not NULL, a date, a
+    /// datetime or an ISO string) — left by a write after the declaration.
+    /// A query that filters on such a row raises. Counted like
+    /// [`Self::empty_rows`].
+    pub unreadable_rows: Option<usize>,
 }
 
 /// The largest disk-mode node label whose abutting rows are counted. Counting
@@ -107,6 +119,10 @@ pub(crate) struct TemporalDeclarations {
     /// through this derive.
     #[serde(skip)]
     pub(super) abutting: HashMap<TemporalTarget, usize>,
+    /// Endpoint indexes and counts at one graph version; a fork starts
+    /// empty.
+    #[serde(skip)]
+    pub(super) index: ForkPrivateCache<IndexCache>,
 }
 
 /// What a declaration does to the store once validated.
@@ -280,6 +296,15 @@ impl TemporalDeclarations {
         };
     }
 
+    /// Drop every cached endpoint index. For a version set directly rather
+    /// than bumped, which could repeat a version the cache was filled at.
+    pub(crate) fn forget_endpoint_indexes(&self) {
+        *self
+            .index
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
     pub(super) fn remove(&mut self, target: &TemporalTarget) -> bool {
         self.abutting.remove(target);
         match target {
@@ -331,6 +356,8 @@ impl TemporalDeclarations {
                 },
                 target,
                 config: config.clone(),
+                empty_rows: None,
+                unreadable_rows: None,
             })
             .collect();
         out.sort_by(|a, b| lookup_order(&a.target).cmp(&lookup_order(&b.target)));
@@ -440,8 +467,22 @@ pub(super) fn record_remove(graph: &mut DirGraph, target: &TemporalTarget) -> bo
 
 /// Every declaration: nodes by label, then relationship types by name, each
 /// type's source-keyed declarations (by source) before its unkeyed one — the
-/// order a relationship's lookup tries them in.
+/// order a relationship's lookup tries them in. The empty and unreadable
+/// row counts are taken at the graph's current version (one walk per
+/// declaration, cached until the next write).
 pub fn list(graph: &DirGraph) -> Vec<DeclarationInfo> {
+    let mut entries = graph.temporal.entries();
+    for info in &mut entries {
+        let counts = endpoint_index::target_counts(graph, &info.target, &info.config);
+        info.empty_rows = Some(counts.empty_rows);
+        info.unreadable_rows = Some(counts.unreadable_rows);
+    }
+    entries
+}
+
+/// [`list`] without the row counts, which walk the graph: for callers that
+/// read only the declarations themselves.
+pub(crate) fn declared(graph: &DirGraph) -> Vec<DeclarationInfo> {
     graph.temporal.entries()
 }
 

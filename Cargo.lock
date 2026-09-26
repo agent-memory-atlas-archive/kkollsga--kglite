@@ -1988,6 +1988,7 @@ dependencies = [
  "crc32fast",
  "csv",
  "fastembed",
+ "fixedbitset",
  "flate2",
  "fs2",
  "geo",

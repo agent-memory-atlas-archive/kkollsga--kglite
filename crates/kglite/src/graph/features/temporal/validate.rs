@@ -153,7 +153,7 @@ impl Seen {
     }
 }
 
-fn node_bound(graph: &DirGraph, idx: NodeIndex, property: &str) -> Value {
+pub(super) fn node_bound(graph: &DirGraph, idx: NodeIndex, property: &str) -> Value {
     let value = match property {
         "id" => graph.graph.get_node_id(idx),
         "title" => graph.graph.get_node_title(idx),
@@ -198,6 +198,69 @@ fn walk_nodes(
         }
         Ok(())
     };
+    for_each_node_row(graph, label, &mut visit)?;
+    let walk = Walk {
+        rows,
+        abutting: counting.then(|| count_abutting(&group)),
+    };
+    Ok((walk, seen))
+}
+
+pub(super) fn edge_bound(graph: &DirGraph, edge: EdgeIndex, key: InternedKey) -> Value {
+    graph
+        .graph
+        .get_edge_property(edge, key)
+        .unwrap_or(Value::Null)
+}
+
+fn walk_edges(
+    graph: &DirGraph,
+    rel_type: &str,
+    source_type: Option<&str>,
+    config: &TemporalConfig,
+) -> Result<(Walk, Seen), String> {
+    let from_key = InternedKey::from_str(&config.valid_from);
+    let to_key = InternedKey::from_str(&config.valid_to);
+    let mut group: Vec<Bounds> = Vec::new();
+    let mut seen = Seen::default();
+    let mut rows = 0usize;
+    let mut abutting = 0usize;
+    for_each_edge_row(graph, rel_type, source_type, |row| {
+        let EdgeRow::Edge { id, source, target } = row else {
+            rows += group.len();
+            abutting += count_abutting(&group);
+            group.clear();
+            return Ok::<(), String>(());
+        };
+        let from = edge_bound(graph, id, from_key);
+        let to = edge_bound(graph, id, to_key);
+        seen.note(&from, &to);
+        let bounds = check_row(&from, &to, config).map_err(|reason| {
+            format!(
+                "{rel_type} relationship from node '{}' to node '{}', {reason}",
+                node_name(graph, source),
+                node_name(graph, target)
+            )
+        })?;
+        group.push(bounds);
+        Ok(())
+    })?;
+    let walk = Walk {
+        rows,
+        abutting: Some(abutting),
+    };
+    Ok((walk, seen))
+}
+
+/// Visit every node a declaration on `label` governs: the label's primary
+/// members, then the nodes carrying it as a secondary label. The endpoint
+/// index walks the same rows, so it and a declaration agree on what a label
+/// covers.
+pub(super) fn for_each_node_row<E>(
+    graph: &DirGraph,
+    label: &str,
+    mut visit: impl FnMut(NodeIndex) -> Result<(), E>,
+) -> Result<(), E> {
     if let Some(bucket) = graph.type_indices.get(label) {
         for idx in bucket.iter() {
             visit(idx)?;
@@ -213,30 +276,31 @@ fn walk_nodes(
             }
         }
     }
-    let walk = Walk {
-        rows,
-        abutting: counting.then(|| count_abutting(&group)),
-    };
-    Ok((walk, seen))
+    Ok(())
 }
 
-fn edge_bound(graph: &DirGraph, edge: EdgeIndex, key: InternedKey) -> Value {
-    graph
-        .graph
-        .get_edge_property(edge, key)
-        .unwrap_or(Value::Null)
+/// One step of [`for_each_edge_row`].
+pub(super) enum EdgeRow {
+    Edge {
+        id: EdgeIndex,
+        source: NodeIndex,
+        target: NodeIndex,
+    },
+    /// Every relationship of one source node has been visited.
+    SourceDone,
 }
 
-fn walk_edges(
+/// Visit every relationship a declaration of `rel_type` (keyed on
+/// `source_type`, or unkeyed) governs, grouped by source node: a keyed
+/// declaration covers its source type's outgoing relationships of the type,
+/// an unkeyed one those of every source without a keyed declaration.
+pub(super) fn for_each_edge_row<E>(
     graph: &DirGraph,
     rel_type: &str,
     source_type: Option<&str>,
-    config: &TemporalConfig,
-) -> Result<(Walk, Seen), String> {
+    mut visit: impl FnMut(EdgeRow) -> Result<(), E>,
+) -> Result<(), E> {
     let rel_key = InternedKey::from_str(rel_type);
-    let from_key = InternedKey::from_str(&config.valid_from);
-    let to_key = InternedKey::from_str(&config.valid_to);
-    // An unkeyed declaration applies only to sources without a keyed one.
     let sources = match source_type {
         Some(source) => vec![source.to_string()],
         None => {
@@ -246,16 +310,11 @@ fn walk_edges(
             sources
         }
     };
-    let mut group: Vec<Bounds> = Vec::new();
-    let mut seen = Seen::default();
-    let mut rows = 0usize;
-    let mut abutting = 0usize;
     for source in &sources {
         let Some(bucket) = graph.type_indices.get(source) else {
             continue;
         };
         for node in bucket.iter() {
-            group.clear();
             for edge in
                 graph
                     .graph
@@ -264,27 +323,16 @@ fn walk_edges(
                 if edge.connection_type() != rel_key {
                     continue;
                 }
-                let from = edge_bound(graph, edge.id(), from_key);
-                let to = edge_bound(graph, edge.id(), to_key);
-                seen.note(&from, &to);
-                let bounds = check_row(&from, &to, config).map_err(|reason| {
-                    format!(
-                        "{rel_type} relationship from node '{}' to node '{}', {reason}",
-                        node_name(graph, edge.source()),
-                        node_name(graph, edge.target())
-                    )
+                visit(EdgeRow::Edge {
+                    id: edge.id(),
+                    source: edge.source(),
+                    target: edge.target(),
                 })?;
-                group.push(bounds);
             }
-            rows += group.len();
-            abutting += count_abutting(&group);
+            visit(EdgeRow::SourceDone)?;
         }
     }
-    let walk = Walk {
-        rows,
-        abutting: Some(abutting),
-    };
-    Ok((walk, seen))
+    Ok(())
 }
 
 /// Refuse a load whose own rows hold an unreadable, inverted or empty

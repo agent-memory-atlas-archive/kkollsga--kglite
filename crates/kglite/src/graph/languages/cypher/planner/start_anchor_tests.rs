@@ -183,3 +183,70 @@ fn a_value_bound_by_with_or_unwind_anchors_a_later_match() {
         vec![d(), s()]
     );
 }
+
+/// 20 `A` nodes valid throughout, and 60 `B` versions of which exactly one is
+/// valid on 2020-06-01 — the rest are one-day versions in 2000.
+fn versioned() -> DirGraph {
+    use crate::graph::features::temporal::{declare, IntervalConvention, TemporalTarget};
+    use crate::graph::session::execute::{execute_mut, ExecuteOptions};
+    let mut graph = DirGraph::new();
+    let params = HashMap::new();
+    for query in [
+        "UNWIND range(1, 20) AS i \
+         CREATE (:A {id: i, vf: date('1990-01-01'), vt: date('2100-01-01')})",
+        "UNWIND range(1, 59) AS i \
+         CREATE (:B {id: i, vf: date('2000-01-01') + i, vt: date('2000-01-01') + i})",
+        "CREATE (:B {id: 60, vf: date('2020-01-01'), vt: date('2100-01-01')})",
+        "MATCH (a:A), (b:B) WHERE b.id % 20 + 1 = a.id CREATE (a)-[:R]->(b)",
+    ] {
+        execute_mut(&mut graph, query, &ExecuteOptions::eager(&params)).unwrap();
+    }
+    for label in ["A", "B"] {
+        let target = TemporalTarget::Node(label.to_string());
+        declare(&mut graph, &target, "vf", "vt", IntervalConvention::Closed).unwrap();
+    }
+    graph
+}
+
+fn versioned_start(query: &str) -> Option<String> {
+    let graph = versioned();
+    let mut parsed = parse_cypher(query).unwrap();
+    let params = HashMap::from([("t".to_string(), Value::String("2020-06-01".into()))]);
+    optimize(&mut parsed, &graph, &params);
+    let Some(Clause::Match(m)) = parsed.clauses.first() else {
+        panic!("{query}: no leading MATCH");
+    };
+    match &m.patterns[0].elements[0] {
+        PatternElement::Node(np) => np.variable.clone(),
+        PatternElement::Edge(_) => None,
+    }
+}
+
+#[test]
+fn a_literal_context_instant_anchors_on_the_label_nearly_empty_at_it() {
+    let pattern = "MATCH (a:A)-[:R]->(b:B) RETURN a, b";
+    let b = Some("b".to_string());
+    let a = Some("a".to_string());
+    // 20 A against 60 B: A starts without a context.
+    assert_eq!(versioned_start(pattern), a);
+    // One B is valid on the instant, so B starts.
+    assert_eq!(
+        versioned_start(&format!(
+            "FOR VALID_TIME AS OF date('2020-06-01') {pattern}"
+        )),
+        b
+    );
+    assert_eq!(
+        versioned_start(&format!("FOR VALID_TIME AS OF '2020-06-01' {pattern}")),
+        b
+    );
+    // An instant known only per execution keeps the full counts.
+    assert_eq!(
+        versioned_start(&format!("FOR VALID_TIME AS OF $t {pattern}")),
+        a
+    );
+    assert_eq!(
+        versioned_start(&format!("FOR VALID_TIME AS OF date() {pattern}")),
+        a
+    );
+}

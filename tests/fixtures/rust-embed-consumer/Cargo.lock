@@ -671,6 +671,7 @@ dependencies = [
  "chrono",
  "crc32fast",
  "csv",
+ "fixedbitset",
  "flate2",
  "fs2",
  "geo",

@@ -851,6 +851,7 @@ impl DirGraph {
     /// own mechanisms.
     pub fn set_version(&mut self, v: u64) {
         self.version = v;
+        self.temporal.forget_endpoint_indexes();
     }
 
     /// Advance the version by one — the canonical "this graph just mutated"

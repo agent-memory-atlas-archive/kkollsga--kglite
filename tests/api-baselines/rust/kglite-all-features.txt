@@ -3281,7 +3281,9 @@ pub struct kglite::api::temporal::DeclarationInfo
 pub kglite::api::temporal::DeclarationInfo::abutting_rows: core::option::Option<usize>
 pub kglite::api::temporal::DeclarationInfo::ambiguous: bool
 pub kglite::api::temporal::DeclarationInfo::config: kglite::api::TemporalConfig
+pub kglite::api::temporal::DeclarationInfo::empty_rows: core::option::Option<usize>
 pub kglite::api::temporal::DeclarationInfo::target: kglite::api::temporal::TemporalTarget
+pub kglite::api::temporal::DeclarationInfo::unreadable_rows: core::option::Option<usize>
 impl core::clone::Clone for kglite::api::temporal::DeclarationInfo
 pub fn kglite::api::temporal::DeclarationInfo::clone(&self) -> kglite::api::temporal::DeclarationInfo
 impl core::cmp::PartialEq for kglite::api::temporal::DeclarationInfo

@@ -5,7 +5,10 @@
 //! count prints exactly `temporal_from=".." temporal_to=".."`, the form every
 //! earlier release printed. A declaration adds what distinguishes it:
 //! `temporal_convention`, `temporal_source` and `temporal_abutting` (rows
-//! whose end met another row's start when it was declared). A relationship
+//! whose end met another row's start when it was declared), and — only when
+//! a write since has left any — `temporal_empty` / `temporal_unreadable`
+//! (rows valid at no instant, and rows with a bound no query can read,
+//! counted at the current version). A relationship
 //! type with several declarations prints them once each in one `temporal`
 //! attribute, since an element cannot repeat an attribute, in lookup order:
 //! the source-keyed ones, then the unkeyed one as `other sources`, which is
@@ -15,10 +18,25 @@
 
 use super::describe::xml_escape;
 use crate::graph::dir_graph::DirGraph;
+use crate::graph::features::temporal::endpoint_index::{self, TargetCounts};
 use crate::graph::features::temporal::TemporalTarget;
 use crate::graph::schema::TemporalConfig;
 
-fn attributes(config: &TemporalConfig, abutting: Option<usize>) -> String {
+/// What one declaration prints besides its properties: the declare-time
+/// abutting count and the current damage counts.
+struct Counted {
+    abutting: Option<usize>,
+    now: TargetCounts,
+}
+
+fn counted(graph: &DirGraph, target: &TemporalTarget, config: &TemporalConfig) -> Counted {
+    Counted {
+        abutting: graph.temporal.abutting(target),
+        now: endpoint_index::target_counts(graph, target, config),
+    }
+}
+
+fn attributes(config: &TemporalConfig, counted: &Counted) -> String {
     let mut out = format!(
         " temporal_from=\"{}\" temporal_to=\"{}\"",
         xml_escape(&config.valid_from),
@@ -33,15 +51,22 @@ fn attributes(config: &TemporalConfig, abutting: Option<usize>) -> String {
     if let Some(source) = &config.source_type {
         out.push_str(&format!(" temporal_source=\"{}\"", xml_escape(source)));
     }
-    if let Some(count) = abutting {
+    if let Some(count) = counted.abutting {
         out.push_str(&format!(" temporal_abutting=\"{count}\""));
+    }
+    if counted.now.empty_rows > 0 {
+        out.push_str(&format!(" temporal_empty=\"{}\"", counted.now.empty_rows));
+    }
+    if counted.now.unreadable_rows > 0 {
+        let count = counted.now.unreadable_rows;
+        out.push_str(&format!(" temporal_unreadable=\"{count}\""));
     }
     out
 }
 
-/// `source: from..to[ half_open][ abutting=N]` — one declaration inside the
-/// combined `temporal` attribute.
-fn compact(config: &TemporalConfig, abutting: Option<usize>) -> String {
+/// `source: from..to[ half_open][ abutting=N][ empty=N][ unreadable=N]` —
+/// one declaration inside the combined `temporal` attribute.
+fn compact(config: &TemporalConfig, counted: &Counted) -> String {
     let mut out = match &config.source_type {
         Some(source) => format!("{source}: "),
         None => "other sources: ".to_string(),
@@ -50,8 +75,14 @@ fn compact(config: &TemporalConfig, abutting: Option<usize>) -> String {
     if !config.convention.is_closed() {
         out.push_str(&format!(" {}", config.convention.as_str()));
     }
-    if let Some(count) = abutting {
+    if let Some(count) = counted.abutting {
         out.push_str(&format!(" abutting={count}"));
+    }
+    if counted.now.empty_rows > 0 {
+        out.push_str(&format!(" empty={}", counted.now.empty_rows));
+    }
+    if counted.now.unreadable_rows > 0 {
+        out.push_str(&format!(" unreadable={}", counted.now.unreadable_rows));
     }
     out
 }
@@ -62,26 +93,27 @@ pub(super) fn node_attrs(graph: &DirGraph, label: &str) -> String {
         .node(label)
         .map_or_else(String::new, |config| {
             let target = TemporalTarget::Node(label.to_string());
-            attributes(config, graph.temporal.abutting(&target))
+            attributes(config, &counted(graph, &target, config))
         })
 }
 
 pub(super) fn conn_attrs(graph: &DirGraph, rel_type: &str) -> String {
     let counted = |config: &TemporalConfig| {
-        graph.temporal.abutting(&TemporalTarget::Relationship {
+        let target = TemporalTarget::Relationship {
             rel_type: rel_type.to_string(),
             source_type: config.source_type.clone(),
-        })
+        };
+        counted(graph, &target, config)
     };
     match graph.temporal.edges(rel_type) {
         [] => String::new(),
-        [only] => attributes(only, counted(only)),
+        [only] => attributes(only, &counted(only)),
         several => {
             let mut ordered: Vec<&TemporalConfig> = several.iter().collect();
             ordered.sort_by_key(|c| (c.source_type.is_none(), c.source_type.as_deref()));
             let listed = ordered
                 .into_iter()
-                .map(|config| compact(config, counted(config)))
+                .map(|config| compact(config, &counted(config)))
                 .collect::<Vec<_>>()
                 .join("; ");
             let ambiguous = if graph.temporal.is_ambiguous(rel_type) {

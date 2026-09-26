@@ -18,8 +18,8 @@ pub(super) fn pass_optimize_nested_queries(query: &mut CypherQuery, ctx: &PassCt
                 ctx.graph,
                 ctx.params,
                 ctx.disabled,
-                ctx.initial_scope,
-                ctx.global_scope,
+                (ctx.initial_scope, ctx.global_scope),
+                ctx.plan_instant,
             ),
             Clause::CallSubquery { import, body } => {
                 optimize_call_body(import, body, &visible, ctx);
@@ -73,8 +73,8 @@ fn optimize_call_body(
         ctx.graph,
         ctx.params,
         &disabled,
-        &imports,
-        body_globals,
+        (&imports, body_globals),
+        ctx.plan_instant,
     );
 }
 

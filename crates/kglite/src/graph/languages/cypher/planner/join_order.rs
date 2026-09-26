@@ -7,10 +7,19 @@ use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 use std::collections::{HashMap, HashSet};
 
+/// Under a valid-time context whose instant is known at plan time: nodes of
+/// each declared label valid at that instant. Replaces the label's full
+/// count in the start-node estimates; `None` outside a context, for an
+/// instant only known at execution (`$param`, `date()`), or on a graph with
+/// no endpoint index (Disk mode). An estimate only — the guard, not the
+/// plan, decides which rows are valid.
+pub(super) type ValidCounts<'a> = Option<&'a HashMap<String, usize>>;
+
 pub(super) fn optimize_pattern_start_node(
     query: &mut CypherQuery,
     graph: &DirGraph,
     initial_scope: &HashSet<String>,
+    valid: ValidCounts<'_>,
 ) {
     use crate::graph::core::pattern_matching::EdgeDirection;
 
@@ -67,8 +76,10 @@ pub(super) fn optimize_pattern_start_node(
             //   `(b)<-[*1..3]-(a)` (same edges traversed in reverse). Path-bound
             //   patterns are protected by the `path_assignments` check above.
 
-            let first_sel = estimate_node_selectivity_in_context(first_node, graph, &bound_vars);
-            let last_sel = estimate_node_selectivity_in_context(last_node, graph, &bound_vars);
+            let first_sel =
+                estimate_node_selectivity_in_context(first_node, graph, &bound_vars, valid);
+            let last_sel =
+                estimate_node_selectivity_in_context(last_node, graph, &bound_vars, valid);
 
             // Reverse when the last node is clearly (5×) more selective — a 5×
             // advantage already saves 80% of expansion work. Within that band
@@ -170,13 +181,29 @@ fn estimate_node_selectivity_in_context(
     np: &crate::graph::core::pattern_matching::NodePattern,
     graph: &DirGraph,
     bound_vars: &HashSet<String>,
+    valid: ValidCounts<'_>,
 ) -> usize {
     if let Some(ref v) = np.variable {
         if bound_vars.contains(v) {
             return 1;
         }
     }
-    estimate_node_selectivity(np, graph)
+    estimate_node_selectivity(np, graph, valid)
+}
+
+/// The fewest valid nodes among `np`'s declared labels, when any carries a
+/// plan-time count. A node must be valid under every declared label it
+/// carries, so the smallest count bounds the candidates.
+fn valid_count(
+    np: &crate::graph::core::pattern_matching::NodePattern,
+    valid: ValidCounts<'_>,
+) -> Option<usize> {
+    let valid = valid?;
+    np.node_type
+        .iter()
+        .chain(&np.extra_labels)
+        .filter_map(|label| valid.get(label).copied())
+        .min()
 }
 
 /// Estimate the number of candidate nodes for a node pattern.
@@ -184,13 +211,17 @@ fn estimate_node_selectivity_in_context(
 pub(super) fn estimate_node_selectivity(
     np: &crate::graph::core::pattern_matching::NodePattern,
     graph: &DirGraph,
+    valid: ValidCounts<'_>,
 ) -> usize {
     // Alternation: the candidate set is the branch union, so the estimate
     // is the branch sum (an upper bound — overlap only lowers it).
     if let Some(alts) = &np.alt_labels {
         let total: usize = alts
             .iter()
-            .map(|label| graph.label_cardinality(label))
+            .map(|label| {
+                let count = valid.and_then(|valid| valid.get(label).copied());
+                count.unwrap_or_else(|| graph.label_cardinality(label))
+            })
             .sum();
         return total.max(1);
     }
@@ -208,6 +239,7 @@ pub(super) fn estimate_node_selectivity(
             (primary.saturating_add(secondary), secondary)
         },
     );
+    let type_count = valid_count(np, valid).map_or(type_count, |count| count.min(type_count));
 
     // Unconstrained nodes (no type, no properties) match every node — the
     // *worst* possible start node. `usize::MAX` stops the optimizer ever
@@ -631,7 +663,11 @@ fn shares_variable_across(clauses: &[Clause]) -> bool {
 ///
 /// Estimates selectivity by looking at the first node of each pattern (after
 /// start-node optimization has already picked the best direction).
-pub(super) fn reorder_match_patterns(query: &mut CypherQuery, graph: &DirGraph) {
+pub(super) fn reorder_match_patterns(
+    query: &mut CypherQuery,
+    graph: &DirGraph,
+    valid: ValidCounts<'_>,
+) {
     let mut bound_vars: HashSet<String> = HashSet::new();
 
     for clause in &mut query.clauses {
@@ -675,7 +711,7 @@ pub(super) fn reorder_match_patterns(query: &mut CypherQuery, graph: &DirGraph) 
             .enumerate()
             .map(|(i, pat)| {
                 let sel = if let Some(PatternElement::Node(np)) = pat.elements.first() {
-                    estimate_node_selectivity_in_context(np, graph, &bound_vars)
+                    estimate_node_selectivity_in_context(np, graph, &bound_vars, valid)
                 } else {
                     usize::MAX
                 };
@@ -859,7 +895,11 @@ impl SimpleCycle {
 /// `SimpleCycle::detect` proves, and only when the new root is ≥`ROOT_GAIN`×
 /// more selective than the written one. Every other pattern is left
 /// byte-identical, so acyclic queries are provably unaffected.
-pub(super) fn reorder_cyclic_pattern_edges(query: &mut CypherQuery, graph: &DirGraph) {
+pub(super) fn reorder_cyclic_pattern_edges(
+    query: &mut CypherQuery,
+    graph: &DirGraph,
+    valid: ValidCounts<'_>,
+) {
     /// Re-root only on a clear selectivity win, to avoid churn on marginal
     /// cases where the cost proxy could mislead.
     const ROOT_GAIN: usize = 4;
@@ -889,7 +929,7 @@ pub(super) fn reorder_cyclic_pattern_edges(query: &mut CypherQuery, graph: &DirG
             let sels: Vec<usize> = ring
                 .nodes
                 .iter()
-                .map(|np| estimate_node_selectivity(np, graph))
+                .map(|np| estimate_node_selectivity(np, graph, valid))
                 .collect();
             let root = (0..ring.k).min_by_key(|&j| sels[j]).unwrap_or(0);
             // Clear-win gate; also a no-op when the written root is already best

@@ -296,7 +296,8 @@ pub fn extend_graph(
     // the gate below, which must model it — key declared relationship types on
     // their `from` bound. They are validated once the edges have landed, or
     // withdrawn when the merge fails before then.
-    let adopted = temporal::adopt_declarations(target, temporal::list(source), &mut report.errors);
+    let adopted =
+        temporal::adopt_declarations(target, temporal::declared(source), &mut report.errors);
     let merged = merge_rows(
         target,
         source,

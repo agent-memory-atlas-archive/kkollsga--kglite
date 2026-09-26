@@ -2,6 +2,7 @@
 
 use super::ast::*;
 use crate::datatypes::values::Value;
+use crate::graph::features::temporal::eval::Instant;
 use crate::graph::schema::DirGraph;
 use std::collections::{HashMap, HashSet};
 
@@ -63,6 +64,9 @@ pub struct PassCtx<'a> {
     global_scope: &'a HashSet<String>,
     /// This scope carries a guard template: only [`guard::is_safe`] passes run.
     guarded: bool,
+    /// The context instant when it is a literal, inherited by nested scopes.
+    plan_instant: Option<Instant>,
+    valid_counts: Option<&'a HashMap<String, usize>>,
 }
 
 type PassFn = fn(&mut CypherQuery, &PassCtx);
@@ -299,7 +303,14 @@ pub fn optimize_with_disabled(
     disabled: &HashSet<String>,
 ) {
     let empty_scope = empty_disabled_set();
-    optimize_with_disabled_scoped(query, graph, params, disabled, empty_scope, empty_scope);
+    optimize_with_disabled_scoped(
+        query,
+        graph,
+        params,
+        disabled,
+        (empty_scope, empty_scope),
+        None,
+    );
 }
 
 fn optimize_with_disabled_scoped(
@@ -307,13 +318,15 @@ fn optimize_with_disabled_scoped(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
     disabled: &HashSet<String>,
-    initial_scope: &HashSet<String>,
-    global_scope: &HashSet<String>,
+    (initial_scope, global_scope): (&HashSet<String>, &HashSet<String>),
+    plan_instant: Option<Instant>,
 ) {
     query.optimizer_tags.clear();
     super::executor::match_execution::fold_constant_inline_maps(query, graph, params);
     // Mandatory, and outside PASSES so no `disabled_passes` entry can skip it.
     super::valid_time::lower(query, graph);
+    let plan_instant = plan_instant.or_else(|| super::valid_time::plan_instant(query, graph));
+    let valid_counts = super::valid_time::valid_counts(query, graph, plan_instant);
     let ctx = PassCtx {
         graph,
         params,
@@ -321,6 +334,8 @@ fn optimize_with_disabled_scoped(
         initial_scope,
         global_scope,
         guarded: query.guard.is_some(),
+        plan_instant,
+        valid_counts: valid_counts.as_ref(),
     };
     for (name, pass_fn) in PASSES {
         if disabled.contains(*name) || (ctx.guarded && !guard::is_safe(name)) {
@@ -499,7 +514,7 @@ fn pass_reorder_match_clauses(query: &mut CypherQuery, ctx: &PassCtx) {
 /// Shape-gated: only fires on simple rings of clean single-typed edges and only
 /// on a clear (≥4×) selectivity win, leaving every acyclic pattern unchanged.
 fn pass_reorder_cyclic_pattern_edges(query: &mut CypherQuery, ctx: &PassCtx) {
-    reorder_cyclic_pattern_edges(query, ctx.graph)
+    reorder_cyclic_pattern_edges(query, ctx.graph, ctx.valid_counts)
 }
 
 /// **Pass:** `optimize_pattern_start_node` — For 3+-element patterns,
@@ -507,7 +522,7 @@ fn pass_reorder_cyclic_pattern_edges(query: &mut CypherQuery, ctx: &PassCtx) {
 /// (typically id-anchored or smallest-cardinality type). Reduces the
 /// front of the join from O(N) to O(1) when one end is anchored.
 fn pass_optimize_pattern_start_node(query: &mut CypherQuery, ctx: &PassCtx) {
-    optimize_pattern_start_node(query, ctx.graph, ctx.initial_scope)
+    optimize_pattern_start_node(query, ctx.graph, ctx.initial_scope, ctx.valid_counts)
 }
 
 /// **Pass:** `reorder_match_patterns` — Reorder multiple comma-
@@ -515,7 +530,7 @@ fn pass_optimize_pattern_start_node(query: &mut CypherQuery, ctx: &PassCtx) {
 /// selectivity. Sibling of `reorder_match_clauses` but operates within
 /// a single MATCH.
 fn pass_reorder_match_patterns(query: &mut CypherQuery, ctx: &PassCtx) {
-    reorder_match_patterns(query, ctx.graph)
+    reorder_match_patterns(query, ctx.graph, ctx.valid_counts)
 }
 
 /// **Pass:** `push_limit_into_match` — Mark the trailing `LIMIT N` as

@@ -708,7 +708,7 @@ fn test_label_cardinality_includes_secondary_carriers() {
     );
     graph.has_secondary_labels = true;
 
-    assert_eq!(join_order::estimate_node_selectivity(node, &graph), 5);
+    assert_eq!(join_order::estimate_node_selectivity(node, &graph, None), 5);
 }
 
 #[test]

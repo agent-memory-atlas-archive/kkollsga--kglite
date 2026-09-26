@@ -12,6 +12,7 @@ Numbers ride alongside the existing core benchmarks under
 import pandas as pd
 import pytest
 
+import kglite
 from kglite import KnowledgeGraph
 
 
@@ -230,3 +231,116 @@ def test_null_or_pairs_agree():
     assert nulls == [{"c": entities}]
     open_edges = graph.cypher("MATCH ()-[r:R]->() WHERE r.vt IS NULL RETURN count(*) AS c").to_list()
     assert open_edges == [{"c": 50_000 // NULL_OR_VERSIONS}]
+
+
+# ---------------------------------------------------------------------------
+# The valid-time endpoint index
+# ---------------------------------------------------------------------------
+#
+# Build: a write moves the graph version, and the next read of a declared
+# type walks its rows again. `db.temporal.declarations()` reads the counts, so
+# one round is one write plus one walk of VT_ROWS rows that also collects and
+# sorts their endpoints. The twin sets the index byte cap to one byte: the
+# same write and walk, counting only, so the pair's ratio isolates keeping the
+# arrays.
+#
+# Resolve: a statement under FOR VALID_TIME AS OF resolves its filter — the
+# segment of the instant and the mask it gives — before this build's not-yet
+# refusal. The rounds cycle through more instants (each its own segment) than
+# the mask cache keeps, so every round builds a mask. The twin plans the same
+# statements under EXPLAIN, which renders without resolving.
+
+VT_ENTITIES = 4_000
+VT_VERSIONS = 5
+VT_START = pd.Timestamp("2000-01-01")
+# Inside the first four versions' staggered start windows: every instant has
+# a different count of started rows, so each is its own segment.
+VT_INSTANTS = [
+    (VT_START + pd.Timedelta(days=version * 730 + day)).date().isoformat()
+    for version in range(4)
+    for day in (50, 150, 250)
+]
+_VT_CAP_ENV = "KGLITE_TEMPORAL_INDEX_MAX_BYTES"
+
+
+def _build_valid_time_graph() -> KnowledgeGraph:
+    """VT_ENTITIES * VT_VERSIONS consecutive yearly versions, staggered by
+    entity so the endpoints spread over many days."""
+    graph = KnowledgeGraph()
+    n = VT_ENTITIES * VT_VERSIONS
+    vf = [VT_START + pd.Timedelta(days=(i % VT_VERSIONS) * 730 + (i // VT_VERSIONS) % 300) for i in range(n)]
+    rows = pd.DataFrame(
+        {
+            "nid": list(range(n)),
+            "name": [f"V_{i}" for i in range(n)],
+            "vf": vf,
+            "vt": [d + pd.Timedelta(days=729) for d in vf],
+        }
+    )
+    graph.add_nodes(rows, "V", "nid", "name")
+    graph.cypher("CREATE (:Marker {n: 0})").to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'V', from: 'vf', to: 'vt', convention: 'half_open'})").to_list()
+    return graph
+
+
+@pytest.fixture(scope="module")
+def valid_time_graph():
+    return _build_valid_time_graph()
+
+
+def _write_then_count(graph: KnowledgeGraph) -> list:
+    graph.cypher("MATCH (m:Marker) SET m.n = m.n + 1").to_list()
+    return graph.cypher("CALL db.temporal.declarations() YIELD empty_rows RETURN empty_rows").to_list()
+
+
+@pytest.mark.benchmark
+def test_bench_valid_time_index_build(benchmark, valid_time_graph, monkeypatch):
+    """One write, then the walk that rebuilds a 20k-row endpoint index."""
+    monkeypatch.delenv(_VT_CAP_ENV, raising=False)
+    result = benchmark(lambda: _write_then_count(valid_time_graph))
+    assert result == [{"empty_rows": 0}]
+
+
+@pytest.mark.benchmark
+def test_bench_valid_time_index_build_counts_only(benchmark, valid_time_graph, monkeypatch):
+    """Control for `valid_time_index_build`: the same walk, keeping nothing."""
+    monkeypatch.setenv(_VT_CAP_ENV, "1")
+    result = benchmark(lambda: _write_then_count(valid_time_graph))
+    assert result == [{"empty_rows": 0}]
+
+
+_VT_QUERY = "{prefix}FOR VALID_TIME AS OF date('{t}') MATCH (v:V) RETURN count(*) AS c"
+
+
+def _cycle(graph: KnowledgeGraph, prefix: str):
+    # A write first: an index the counts-only cell refused under its one-byte
+    # cap stays refused for the rest of that graph version.
+    graph.cypher("MATCH (m:Marker) SET m.n = m.n + 1").to_list()
+    state = {"i": 0}
+
+    def run():
+        t = VT_INSTANTS[state["i"] % len(VT_INSTANTS)]
+        state["i"] += 1
+        try:
+            return graph.cypher(_VT_QUERY.format(prefix=prefix, t=t)).to_list()
+        except kglite.CypherExecutionError as err:
+            assert "not executable yet" in str(err)
+            return None
+
+    return run
+
+
+@pytest.mark.benchmark
+def test_bench_valid_time_resolve_segment(benchmark, valid_time_graph, monkeypatch):
+    """Plan, resolve (segment + a fresh mask) and refuse a context query."""
+    monkeypatch.delenv(_VT_CAP_ENV, raising=False)
+    benchmark(_cycle(valid_time_graph, ""))
+
+
+@pytest.mark.benchmark
+def test_bench_valid_time_resolve_segment_explain(benchmark, valid_time_graph, monkeypatch):
+    """Control for `valid_time_resolve_segment`: the same statements planned
+    and rendered under EXPLAIN, resolving nothing."""
+    monkeypatch.delenv(_VT_CAP_ENV, raising=False)
+    result = benchmark(_cycle(valid_time_graph, "EXPLAIN "))
+    assert result

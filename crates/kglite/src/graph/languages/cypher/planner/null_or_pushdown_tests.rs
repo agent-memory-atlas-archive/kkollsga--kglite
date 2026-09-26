@@ -195,7 +195,10 @@ fn null_or_filter_does_not_reduce_the_start_node_estimate() {
         .type_indices
         .entry_or_default("Item".to_string())
         .extend((0..100).map(petgraph::graph::NodeIndex::new));
-    assert_eq!(join_order::estimate_node_selectivity(&node, &graph), 100);
+    assert_eq!(
+        join_order::estimate_node_selectivity(&node, &graph, None),
+        100
+    );
 }
 
 fn is_rel_null_or_ge(pred: &RelEdgePredicate, bound: i64) -> bool {

@@ -147,6 +147,8 @@ pub(super) fn declarations(
                     ),
                     ("abutting_rows", count(info.abutting_rows)),
                     ("ambiguous", Value::Boolean(info.ambiguous)),
+                    ("empty_rows", count(info.empty_rows)),
+                    ("unreadable_rows", count(info.unreadable_rows)),
                 ]),
                 yields,
             )

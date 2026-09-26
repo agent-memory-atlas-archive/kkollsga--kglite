@@ -85,6 +85,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [dependencies]
 petgraph = { version = "0.8.3", features = ["serde-1"] }
+# The temporal endpoint index's node/relationship masks. Already resolved
+# through petgraph (which does not re-export it); default features off to
+# match petgraph's own requirement, so feature unification does not move.
+fixedbitset = { version = "0.5.7", default-features = false }
 # 6.0 carries both features selected below; the 5.x-era hazard that made
 # the floor `5.9` (5.0.x lacks `ort-download-binaries-native-tls`) does not
 # recur inside 6.0.x, and 6.0.0 was compiled against this adapter to
