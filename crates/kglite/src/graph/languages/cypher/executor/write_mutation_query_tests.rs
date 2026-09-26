@@ -2,13 +2,7 @@ use super::super::super::ast::*;
 use super::{clause_needs_implicit_row, is_mutation_query};
 
 fn query(clauses: Vec<Clause>) -> CypherQuery {
-    CypherQuery {
-        clauses,
-        explain: false,
-        profile: false,
-        output_format: OutputFormat::Default,
-        optimizer_tags: Vec::new(),
-    }
+    CypherQuery::from_clauses(clauses, OutputFormat::Default)
 }
 
 fn create_clause() -> Clause {

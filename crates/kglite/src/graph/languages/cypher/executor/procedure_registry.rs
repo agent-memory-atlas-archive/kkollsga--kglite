@@ -867,6 +867,44 @@ pub(super) fn is_mutating_procedure(name: &str) -> bool {
         .any(|mutating| mutating.eq_ignore_ascii_case(spec.name))
 }
 
+/// The read procedures that report metadata — labels, types, indexes,
+/// schemas, declarations, CDC positions — and no graph element, so they
+/// answer the same under a `FOR VALID_TIME AS OF` context. Every other
+/// procedure enumerates elements without the context's guard and is refused
+/// under one. A name list for the reason [`MUTATING_PROCEDURES`] is one;
+/// `every_context_free_procedure_is_registered` closes the drift.
+const CONTEXT_FREE_PROCEDURES: &[&str] = &[
+    "list_procedures",
+    "db.labels",
+    "db.relationshipTypes",
+    "db.indexes",
+    "db.constraints",
+    "db.propertyKeys",
+    "db.schema",
+    "db.schema.visualization",
+    "db.schema.nodeTypeProperties",
+    "db.schema.relTypeProperties",
+    "apoc.meta.nodeTypeProperties",
+    "apoc.meta.relTypeProperties",
+    "db.temporal.declarations",
+    "db.node_embeddings.list",
+    "db.embeddings.list",
+    "db.relationship_embeddings.list",
+    "db.node_text_index.list",
+    "db.text_index.list",
+    "db.relationship_text_index.list",
+    "db.cdc.status",
+    "db.cdc.current",
+    "db.cdc.earliest",
+];
+
+/// Whether `name` (canonical spelling or alias, any case) runs unchanged
+/// under a statement context. An unknown name is not — it fails as unknown
+/// wherever it runs.
+pub(crate) fn is_context_free_procedure(name: &str) -> bool {
+    find_procedure(name).is_some_and(|spec| CONTEXT_FREE_PROCEDURES.contains(&spec.name))
+}
+
 /// The three embedding-store namespaces: node, relationship, and the router.
 const EMBEDDING_NAMESPACES: [&str; 3] = [
     "db.node_embeddings.",
@@ -1019,5 +1057,21 @@ mod tests {
                 "{name} must resolve case-insensitively"
             );
         }
+    }
+
+    /// Every context-free name is a registered, non-mutating procedure in
+    /// its canonical spelling.
+    #[test]
+    fn every_context_free_procedure_is_registered() {
+        for name in CONTEXT_FREE_PROCEDURES {
+            let spec = find_procedure(name).unwrap_or_else(|| {
+                panic!("CONTEXT_FREE_PROCEDURES names unknown procedure {name}")
+            });
+            assert_eq!(spec.name, *name, "use the canonical spelling");
+            assert!(!is_mutating_procedure(name), "{name} mutates");
+            assert!(is_context_free_procedure(&name.to_lowercase()));
+        }
+        assert!(!is_context_free_procedure("pagerank"));
+        assert!(!is_context_free_procedure("no.such.procedure"));
     }
 }

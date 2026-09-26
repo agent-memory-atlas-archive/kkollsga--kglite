@@ -8,6 +8,7 @@
 pub mod calculations;
 pub mod data_retrieval;
 pub mod filtering;
+pub(crate) mod graph_filter;
 pub mod iterators;
 pub mod membership;
 pub(crate) mod numeric_sum;

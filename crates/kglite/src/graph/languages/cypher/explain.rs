@@ -187,6 +187,24 @@ fn closure_probe_ops(patterns: &[Pattern], graph: &DirGraph) -> Vec<String> {
 pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result::CypherResult {
     let mut rows = Vec::new();
 
+    // A statement context leads the plan: the axis, the declared targets the
+    // top scope's guard covers, and that the instant is resolved per
+    // execution rather than planned.
+    if let Some(context) = &query.context {
+        let targets = query
+            .guard
+            .as_deref()
+            .map_or_else(|| "none".to_string(), ToString::to_string);
+        rows.push(vec![
+            Value::Int64(1),
+            Value::String(format!(
+                "ValidTimeContext axis={} targets={targets} instant: per execution",
+                context.axis.to_uppercase()
+            )),
+            Value::Null,
+        ]);
+    }
+
     for clause in query.clauses.iter() {
         // `step` numbers rows, not clauses: a MATCH contributes a ClosureProbe
         // row per eligible closure and an Expand row per variable-length edge

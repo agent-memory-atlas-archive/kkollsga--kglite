@@ -79,6 +79,9 @@ impl CypherExecutor<'_> {
             profile: query.profile,
             output_format: query.output_format,
             optimizer_tags: Vec::new(),
+            context: None,
+            // The batches run the scope's clauses, so they keep its guard.
+            guard: query.guard.clone(),
         };
         let mut suffix_declared = initial_declared.clone();
         suffix_declared.insert(load.variable.clone());
@@ -252,7 +255,12 @@ impl CypherExecutor<'_> {
                 continue;
             }
 
-            if i == 0 && !profiling && result_set.rows.is_empty() && result_set.columns.is_empty() {
+            if i == 0
+                && !profiling
+                && query.guard.is_none()
+                && result_set.rows.is_empty()
+                && result_set.columns.is_empty()
+            {
                 if let Some(result) = self.try_retrieval_entry(&query.clauses)? {
                     let operator = if matches!(query.clauses[1], Clause::FusedTextBm25TopK { .. }) {
                         "FusedTextBm25TopK"
@@ -291,6 +299,7 @@ impl CypherExecutor<'_> {
             // A bail returns the input unchanged for materialized dispatch.
             if self.streaming
                 && !profiling
+                && query.guard.is_none()
                 && inline_where.is_none()
                 && !matches!(clause, Clause::Match(_) | Clause::OptionalMatch(_))
                 && !(preserved.is_some()

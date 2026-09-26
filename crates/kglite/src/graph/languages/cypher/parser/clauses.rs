@@ -259,21 +259,19 @@ impl CypherParser {
     /// Parse the right arm of a set operator. Top-level arms retain the
     /// historical to-EOF boundary; arms inside `CALL { ... }` stop at that
     /// body's matching `}` so the caller, not the set parser, consumes it.
+    ///
+    /// A top-level arm is a query body, not a statement: `EXPLAIN`,
+    /// `PROFILE` and a `FOR … AS OF` context lead the whole statement and are
+    /// refused inside an arm (see [`CypherParser::unexpected_clause_start`]).
     fn parse_set_right_arm(&mut self, end_at_rbrace: bool) -> Result<CypherQuery, String> {
         if !end_at_rbrace {
-            return self.parse_query();
+            return self.parse_query_body(false, false);
         }
         let (clauses, output_format) = self.parse_clause_sequence(true)?;
         if clauses.is_empty() {
             return Err("A set operator requires a query in its right arm".to_string());
         }
-        Ok(CypherQuery {
-            clauses,
-            explain: false,
-            profile: false,
-            output_format,
-            optimizer_tags: Vec::new(),
-        })
+        Ok(CypherQuery::from_clauses(clauses, output_format))
     }
 
     // ========================================================================
@@ -1171,13 +1169,7 @@ impl CypherParser {
         // execution or mutation classification ever runs.
         validate_subquery_body(&clauses, &import)?;
 
-        let body = Box::new(CypherQuery {
-            clauses,
-            explain: false,
-            profile: false,
-            output_format: OutputFormat::Default,
-            optimizer_tags: Vec::new(),
-        });
+        let body = Box::new(CypherQuery::from_clauses(clauses, OutputFormat::Default));
 
         Ok(Clause::CallSubquery { import, body })
     }

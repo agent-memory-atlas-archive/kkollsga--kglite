@@ -1059,6 +1059,7 @@ pub fn kglite::api::cypher::optimize(query: &mut kglite::api::cypher::CypherQuer
 pub fn kglite::api::cypher::parameter_names(query: &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_cypher(query: &str) -> core::result::Result<kglite::api::cypher::CypherQuery, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_with_mutation_check(query: &str) -> core::result::Result<(kglite::api::cypher::CypherQuery, bool), kglite::error::KgError>
+pub fn kglite::api::cypher::prepend_valid_time(query: &str, instant: &kglite::datatypes::values::Value) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn kglite::api::cypher::query_features(query: &str) -> core::result::Result<kglite::api::cypher::QueryFeatures, kglite::error::KgError>
 pub fn kglite::api::cypher::query_warning_sink() -> kglite::api::cypher::QueryWarningSink
 pub fn kglite::api::cypher::resolve_edge_property(graph: &kglite::api::DirGraph, edge: &kglite::api::cypher::EdgeBinding, property: &str) -> kglite::datatypes::values::Value

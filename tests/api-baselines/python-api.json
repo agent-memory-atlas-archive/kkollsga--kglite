@@ -658,7 +658,7 @@
         },
         "cypher": {
           "kind": "method",
-          "signature": "(self, /, query, *, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=True, parallel=False, disable_optimizer=False, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None)"
+          "signature": "(self, /, query, *, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=True, parallel=False, disable_optimizer=False, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None)"
         },
         "date": {
           "kind": "method",

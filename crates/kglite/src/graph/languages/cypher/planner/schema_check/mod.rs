@@ -543,13 +543,7 @@ fn validate_foreach_scope(
     let mut inner = scope.clone();
     inner.insert(variable.to_string());
     validate_scope(
-        &CypherQuery {
-            clauses: body.to_vec(),
-            explain: false,
-            profile: false,
-            output_format: OutputFormat::Default,
-            optimizer_tags: Vec::new(),
-        },
+        &CypherQuery::from_clauses(body.to_vec(), OutputFormat::Default),
         &inner,
     )
 }
@@ -676,13 +670,7 @@ fn validate_legacy_set_scope(
         &empty
     };
     validate_scope_with_globals(
-        &CypherQuery {
-            clauses: query.clauses[..arm_end].to_vec(),
-            explain: false,
-            profile: false,
-            output_format: OutputFormat::Default,
-            optimizer_tags: Vec::new(),
-        },
+        &CypherQuery::from_clauses(query.clauses[..arm_end].to_vec(), OutputFormat::Default),
         initial,
         &empty,
     )?;

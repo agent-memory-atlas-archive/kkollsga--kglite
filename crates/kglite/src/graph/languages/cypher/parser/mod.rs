@@ -26,6 +26,7 @@ pub mod load_csv;
 pub mod match_pattern;
 pub mod predicate;
 pub mod schema_ddl;
+mod statement_context;
 
 /// Tokenizes and parses Cypher query strings into a `CypherQuery` AST by
 /// recursive descent over the token stream.
@@ -385,28 +386,50 @@ impl CypherParser {
         }
     }
 
+    /// Parse one statement: its leading `EXPLAIN` / `PROFILE` and
+    /// `FOR <axis> AS OF <instant>` prefixes, in either order, then its body.
     pub fn parse_query(&mut self) -> Result<CypherQuery, String> {
         let mut explain = false;
         let mut profile = false;
-        if self.check(&CypherToken::Explain) {
-            self.advance();
-            explain = true;
-        } else if self.check(&CypherToken::Profile) {
-            self.advance();
-            profile = true;
+        let mut context = None;
+        loop {
+            if self.check(&CypherToken::Explain) || self.check(&CypherToken::Profile) {
+                if explain || profile {
+                    return Err("A statement takes one EXPLAIN or PROFILE".to_string());
+                }
+                explain = self.check(&CypherToken::Explain);
+                profile = !explain;
+                self.advance();
+            } else if self.peek_soft_word("FOR") {
+                if context.is_some() {
+                    return Err(statement_context::DOUBLED_CONTEXT.to_string());
+                }
+                context = Some(self.parse_statement_context()?);
+            } else {
+                break;
+            }
         }
+        let mut query = self.parse_query_body(explain, profile)?;
+        query.context = context;
+        Ok(query)
+    }
 
+    /// A statement's body — schema DDL or a clause sequence — without its
+    /// prefixes. Also a top-level UNION right arm, which takes none.
+    pub(super) fn parse_query_body(
+        &mut self,
+        explain: bool,
+        profile: bool,
+    ) -> Result<CypherQuery, String> {
         // Schema DDL is a whole statement, not a pipeline stage, so it is
         // recognised here rather than inside the clause loop: one check per
         // query instead of one per clause, and `parse_clause_sequence` keeps
         // its shape. A DDL statement consumes the entire token stream.
         if let Some(clause) = self.try_parse_schema_ddl_statement()? {
             return Ok(CypherQuery {
-                clauses: vec![clause],
                 explain,
                 profile,
-                output_format: OutputFormat::Default,
-                optimizer_tags: Vec::new(),
+                ..CypherQuery::from_clauses(vec![clause], OutputFormat::Default)
             });
         }
 
@@ -436,11 +459,9 @@ impl CypherParser {
         }
 
         Ok(CypherQuery {
-            clauses,
             explain,
             profile,
-            output_format,
-            optimizer_tags: Vec::new(),
+            ..CypherQuery::from_clauses(clauses, output_format)
         })
     }
 
@@ -577,12 +598,7 @@ impl CypherParser {
                 Some(CypherToken::Identifier(s)) if s.eq_ignore_ascii_case("FORMAT") => {
                     return Ok((clauses, self.parse_format_tail(end_at_rbrace)?))
                 }
-                Some(t) => {
-                    return Err(format!(
-                        "Unexpected token at start of clause: {}",
-                        describe_token(t)
-                    ));
-                }
+                Some(t) => return Err(self.unexpected_clause_start(t)),
                 None => break,
             }
         }

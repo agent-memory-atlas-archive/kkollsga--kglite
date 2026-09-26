@@ -11,6 +11,22 @@ before upgrading.
 
 ### Added
 
+- Cypher: the statement prefix `FOR VALID_TIME AS OF <instant>`, before or
+  after `EXPLAIN` / `PROFILE`, where the instant is a quoted ISO date or
+  datetime, `$param`, `date(…)` / `datetime(…)` of either, or `date()` for
+  today. Python `cypher(…, valid_at=…)` (a `datetime.date`, a
+  `datetime.datetime` or an ISO string) and the MCP `cypher_query` tool's
+  `valid_at` argument write the same prefix. The plan records, per query scope,
+  the declared validity intervals the statement can reach; `EXPLAIN` shows them
+  in a leading `ValidTimeContext` row. Refused under a context: an axis other
+  than `VALID_TIME`, a graph with no validity declaration, a writing statement,
+  a procedure that enumerates graph elements (metadata procedures such as
+  `db.labels()` are fine), a relationship type whose declarations are
+  ambiguous, a second prefix, and a prefix inside a UNION arm or a
+  `CALL { }` body. Execution arrives in a later change: in this build a
+  statement carrying a context raises "valid-time contexts are not executable
+  yet in this build", and only `EXPLAIN` runs. Rust:
+  `kglite::api::cypher::prepend_valid_time`.
 - Cypher: `valid_at(entity, date)` and `valid_during(entity, start, end)` read
   the bounds and convention from the entity type's declared validity interval
   (`db.temporal.declare`, a loader's `validFrom`/`validTo`, `set_temporal`), as
@@ -220,6 +236,12 @@ before upgrading.
   blueprint (or re-run the loads) to recover the rows.
 
 ### Fixed
+
+- Cypher: `EXPLAIN` / `PROFILE` written at the start of a top-level `UNION`
+  arm (`RETURN 1 AS x UNION EXPLAIN RETURN 2 AS x`) was accepted and silently
+  ignored, running the whole statement. It is now a syntax error: the keyword
+  leads the statement. `EXPLAIN PROFILE …` and `EXPLAIN` after a clause name
+  the same rule instead of reporting an unexpected token.
 
 - A Cypher statement that fails on what it was given — a malformed
   `valid_at` date, a property the type does not have, a type with no declared

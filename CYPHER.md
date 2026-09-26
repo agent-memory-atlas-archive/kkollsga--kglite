@@ -1496,6 +1496,33 @@ CALL db.temporal.declarations()
   pair is a parallel relationship rather than a merge. A blueprint declares
   through a spec's `temporal` key, which must name its convention.
 
+### Statement context: `FOR VALID_TIME AS OF`
+
+A statement prefixed `FOR VALID_TIME AS OF <instant>` asks the whole query as
+of that instant on the declared types. The prefix stands before or after
+`EXPLAIN` / `PROFILE`; the instant is a quoted ISO date or datetime, `$param`,
+`date(…)` / `datetime(…)` of a literal or parameter, or `date()` for today.
+Python `cypher(…, valid_at=…)` and the MCP `cypher_query` tool's `valid_at`
+argument write the same prefix.
+
+```cypher
+FOR VALID_TIME AS OF date('2010-06-30') EXPLAIN
+MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
+```
+
+- **Not executable yet in this build.** Execution arrives in a later change:
+  a statement carrying a context raises "valid-time contexts are not
+  executable yet in this build". `EXPLAIN` works and leads the plan with a
+  `ValidTimeContext` row naming the axis and the declared intervals the query
+  can reach; the instant is resolved per execution, not planned.
+- **One context per statement.** A second prefix, or one inside a UNION arm or
+  a `CALL { }` body, is a syntax error.
+- **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
+  probe for support), a graph with no validity declaration, a writing
+  statement, a procedure that enumerates graph elements (metadata procedures
+  such as `db.labels()` and `db.temporal.declarations()` are fine), and a
+  relationship type whose declarations are `ambiguous`.
+
 ### Duration semantics
 
 A `Duration` value carries three independent components:

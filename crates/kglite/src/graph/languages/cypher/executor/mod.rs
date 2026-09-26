@@ -241,6 +241,12 @@ pub struct CypherExecutor<'a> {
     /// [`apply_row_limit`]. `None` (the default, and the only value a nested
     /// executor ever holds) retains everything.
     pub(super) row_limit: Option<usize>,
+    /// The statement's resolved `FOR VALID_TIME AS OF` filter. While it is
+    /// set every fused operator and every shortcut that answers without the
+    /// pattern matcher declines, since the guard lives in the matcher. Always
+    /// `None` in this build: a statement with a context refuses before
+    /// execution (see `valid_time::check_executable`).
+    pub(super) graph_filter: Option<std::sync::Arc<crate::graph::core::graph_filter::GraphFilter>>,
 }
 
 impl<'a> CypherExecutor<'a> {
@@ -268,6 +274,7 @@ impl<'a> CypherExecutor<'a> {
             relationship_identities: None,
             _arena_guard: graph.graph.begin_query(),
             row_limit: None,
+            graph_filter: None,
         }
     }
 
@@ -494,6 +501,12 @@ impl<'a> CypherExecutor<'a> {
     /// idle period reclaims the prior generation; overlapping and nested
     /// queries share the generation without invalidating refs.
     pub fn execute(&self, query: &CypherQuery) -> Result<CypherResult, String> {
+        crate::graph::languages::cypher::valid_time::check_executable(
+            query,
+            self.graph,
+            self.params,
+            false,
+        )?;
         let mut result = self.execute_with_cap(query, self.row_limit)?;
         crate::graph::languages::cypher::result::clear_published_relationship_incarnations(
             &mut result,
@@ -732,6 +745,7 @@ impl<'a> CypherExecutor<'a> {
         clause: &Clause,
         result_set: ResultSet,
     ) -> Result<ResultSet, String> {
+        self.debug_assert_matcher_route(clause);
         match clause {
             Clause::Match(m) => self.execute_match(m, result_set, None),
             Clause::OptionalMatch(m) => self.execute_optional_match(m, result_set),
@@ -964,6 +978,7 @@ pub(crate) mod ordering;
 mod path_binding;
 mod procedure_params;
 mod procedure_registry;
+pub(crate) use procedure_registry::is_context_free_procedure;
 pub(crate) mod procedure_router;
 mod projected_targets;
 pub mod refresh_stats;
@@ -1042,4 +1057,44 @@ fn declared_from_rows(result_set: &ResultSet) -> std::collections::HashSet<Strin
         }
     }
     declared
+}
+
+impl CypherExecutor<'_> {
+    /// Under a graph filter no fused operator may run: the planner's guard
+    /// allow-list keeps them out of the plan, and this is where a leak would
+    /// surface.
+    #[inline]
+    fn debug_assert_matcher_route(&self, clause: &Clause) {
+        debug_assert!(
+            self.graph_filter.is_none() || !is_fused_clause(clause),
+            "fused clause {} reached execution under a graph filter",
+            clause_display_name(clause)
+        );
+    }
+}
+
+/// The optimizer's physical operators — every `Fused*` variant and the
+/// spatial join. Each answers without the pattern matcher, so none may run
+/// under a graph filter unless the planner's guard allow-list admits it.
+fn is_fused_clause(clause: &Clause) -> bool {
+    matches!(
+        clause,
+        Clause::FusedOptionalMatchAggregate { .. }
+            | Clause::FusedVectorScoreTopK { .. }
+            | Clause::FusedTextBm25TopK { .. }
+            | Clause::FusedMatchReturnAggregate { .. }
+            | Clause::FusedMatchWithAggregate { .. }
+            | Clause::FusedOrderByTopK { .. }
+            | Clause::FusedCountAll { .. }
+            | Clause::FusedCountAllEdges { .. }
+            | Clause::FusedCountByType { .. }
+            | Clause::FusedCountEdgesByType { .. }
+            | Clause::FusedCountTypedNode { .. }
+            | Clause::FusedCountLabelUnion { .. }
+            | Clause::FusedCountTypedEdge { .. }
+            | Clause::FusedCountAnchoredEdges { .. }
+            | Clause::FusedNodeScanAggregate { .. }
+            | Clause::FusedNodeScanTopK { .. }
+            | Clause::SpatialJoin { .. }
+    )
 }

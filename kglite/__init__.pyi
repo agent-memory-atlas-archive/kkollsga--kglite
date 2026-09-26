@@ -7220,6 +7220,7 @@ class KnowledgeGraph:
         write_scope: Optional[list[str]] = None,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
+        valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None,
     ) -> Union[ResultView, pd.DataFrame, str]:
         """Execute a Cypher query.
 
@@ -7454,6 +7455,25 @@ class KnowledgeGraph:
                   :meth:`add_relationships` — ``write_scope`` is a
                   per-Cypher-execution concept and does not reach the
                   Python loader API.
+            valid_at: Run the query as of an instant — a ``datetime.date``,
+                a ``datetime.datetime``, or an ISO date / datetime string.
+                Exactly the statement prefix ``FOR VALID_TIME AS OF
+                date('…')`` (``datetime('…')`` for a time) written before
+                ``query``, so the two spellings are one feature: the prefix
+                may stand before or after ``EXPLAIN`` / ``PROFILE``, and a
+                ``query`` that already carries a ``FOR … AS OF`` prefix
+                raises ``ValueError`` naming both, since a statement takes
+                one context. The graph needs a validity declaration
+                (``db.temporal.declare``); axes other than ``VALID_TIME``,
+                writing statements, and element-enumerating procedures
+                (``pagerank()`` and the like — metadata procedures such as
+                ``db.labels()`` are fine) are refused. **Not executable yet
+                in this build:** a statement with a valid-time context
+                raises "valid-time contexts are not executable yet in this
+                build"; ``EXPLAIN`` works and shows the plan with a leading
+                ``ValidTimeContext`` row naming the axis and the declared
+                targets the query reaches, the instant being resolved per
+                execution.
 
         Returns:
             ResultView by default, DataFrame when ``to_df=True``,

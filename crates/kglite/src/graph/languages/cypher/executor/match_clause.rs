@@ -959,7 +959,10 @@ impl<'a> CypherExecutor<'a> {
         where_clause: &Option<Box<Predicate>>,
         row: &ResultRow,
     ) -> Option<Result<bool, String>> {
-        if patterns.len() != 1 || !self.incident_scan_respects_bindings(&patterns[0], row) {
+        if self.graph_filter.is_some()
+            || patterns.len() != 1
+            || !self.incident_scan_respects_bindings(&patterns[0], row)
+        {
             return None;
         }
         let (node_a, edge, node_b) = simple_node_edge_node(&patterns[0])?;
@@ -1131,6 +1134,10 @@ impl<'a> CypherExecutor<'a> {
         pattern: &crate::graph::core::pattern_matching::Pattern,
         bindings: &Bindings<NodeIndex>,
     ) -> Result<Option<i64>, String> {
+        // Counts adjacency without the matcher, so a guard cannot see it.
+        if self.graph_filter.is_some() {
+            return Ok(None);
+        }
         self.count_simple_pattern_from_bound(pattern, bindings, false)
     }
 
@@ -1145,6 +1152,9 @@ impl<'a> CypherExecutor<'a> {
         pattern: &crate::graph::core::pattern_matching::Pattern,
         bindings: &Bindings<NodeIndex>,
     ) -> Result<Option<i64>, String> {
+        if self.graph_filter.is_some() {
+            return Ok(None);
+        }
         self.count_simple_pattern_from_bound(pattern, bindings, true)
     }
 

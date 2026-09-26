@@ -23,6 +23,14 @@ pub(crate) struct ReadCypherArgs {
     /// needs longer must say so explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Run the query as of this date — an ISO date (`"2020-06-30"`) or
+    /// datetime (`"2020-06-30T12:00:00"`). Same as writing the prefix
+    /// `FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph
+    /// needs a validity declaration (`db.temporal.declarations()`). Not
+    /// executable yet in this build: such a query is refused, and `EXPLAIN`
+    /// shows its plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_at: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
@@ -45,6 +53,14 @@ pub(crate) struct CypherArgs {
     /// needs longer must say so explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Run the query as of this date — an ISO date (`"2020-06-30"`) or
+    /// datetime (`"2020-06-30T12:00:00"`). Same as writing the prefix
+    /// `FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph
+    /// needs a validity declaration (`db.temporal.declarations()`). Not
+    /// executable yet in this build: such a query is refused, and `EXPLAIN`
+    /// shows its plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_at: Option<String>,
     /// Role-scoped write whitelist (write-enabled servers only) — so an agent
     /// can plan in its own types (`["Plan","Task"]`) without touching
     /// research-owned ones. When set, every **node** write (`CREATE`, `MERGE`,

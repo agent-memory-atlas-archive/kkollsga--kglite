@@ -25,6 +25,7 @@ pub mod result;
 #[cfg(test)]
 mod stack_probe;
 pub mod tokenizer;
+pub(crate) mod valid_time;
 pub mod value_codec;
 mod window;
 

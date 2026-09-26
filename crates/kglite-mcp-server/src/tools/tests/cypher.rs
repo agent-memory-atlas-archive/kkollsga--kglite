@@ -811,3 +811,65 @@ fn retrieval_diagnostics_reach_preview_csv_and_write_ack() {
         .unwrap();
     assert!(!clean.contains("retrieval:"), "{clean}");
 }
+
+/// `valid_at` prepends the `FOR VALID_TIME AS OF` prefix through the core
+/// helper: a second context is refused naming both, `EXPLAIN` renders the
+/// context row, and execution meets this build's refusal.
+#[test]
+fn valid_at_prepends_the_context_prefix() {
+    assert_eq!(
+        query_with_valid_at("RETURN 1", None).unwrap(),
+        "RETURN 1",
+        "no valid_at leaves the text alone"
+    );
+    assert_eq!(
+        query_with_valid_at("RETURN 1", Some("2020-06-30")).unwrap(),
+        "FOR VALID_TIME AS OF date('2020-06-30') RETURN 1"
+    );
+    let doubled =
+        query_with_valid_at("FOR VALID_TIME AS OF $t RETURN 1", Some("2020-06-30")).unwrap_err();
+    assert!(
+        doubled.contains("already has a FOR") && doubled.contains("valid_at="),
+        "{doubled}"
+    );
+    let bad = query_with_valid_at("RETURN 1", Some("soon")).unwrap_err();
+    assert!(bad.starts_with("valid_at:"), "{bad}");
+
+    let mut active = active_with_vessel();
+    let params = std::collections::HashMap::new();
+    let opts = kglite::api::session::ExecuteOptions::eager(&params);
+    let graph = kglite::api::make_dir_graph_mut(active.kg.dir_mut());
+    for seed in [
+        "MATCH (v:Vessel) SET v.vf = '2000-01-01', v.vt = '2030-01-01'",
+        "CALL db.temporal.declare({node: 'Vessel', from: 'vf', to: 'vt', \
+         convention: 'closed'}) YIELD declared RETURN declared",
+    ] {
+        kglite::api::session::execute_mut(graph, seed, &opts).expect("seed");
+    }
+    let explain =
+        query_with_valid_at("EXPLAIN MATCH (v:Vessel) RETURN v.id", Some("2020-06-30")).unwrap();
+    let output = run_cypher_tool_output(
+        &active,
+        &explain,
+        HashMap::new(),
+        ExecPolicy::default(),
+        CSV_OFF,
+    )
+    .expect("EXPLAIN renders under a context");
+    assert!(
+        output.text.contains("ValidTimeContext axis=VALID_TIME"),
+        "{}",
+        output.text
+    );
+    let run = query_with_valid_at("MATCH (v:Vessel) RETURN v.id", Some("2020-06-30")).unwrap();
+    let Err(err) = run_cypher_tool_output(
+        &active,
+        &run,
+        HashMap::new(),
+        ExecPolicy::default(),
+        CSV_OFF,
+    ) else {
+        panic!("a context query executed");
+    };
+    assert!(err.contains("not executable yet"), "{err}");
+}

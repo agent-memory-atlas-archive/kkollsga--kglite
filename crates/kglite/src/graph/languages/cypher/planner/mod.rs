@@ -6,6 +6,7 @@ use crate::graph::schema::DirGraph;
 use std::collections::{HashMap, HashSet};
 
 mod annotations;
+mod guard;
 mod invariants;
 #[cfg(debug_assertions)]
 use invariants::debug_check_invariants;
@@ -60,6 +61,8 @@ pub struct PassCtx<'a> {
     pub disabled: &'a HashSet<String>,
     initial_scope: &'a HashSet<String>,
     global_scope: &'a HashSet<String>,
+    /// This scope carries a guard template: only [`guard::is_safe`] passes run.
+    guarded: bool,
 }
 
 type PassFn = fn(&mut CypherQuery, &PassCtx);
@@ -245,6 +248,11 @@ pub fn all_pass_names() -> Vec<String> {
 /// marked (their results pass through the union machinery, which expects
 /// fully evaluated rows).
 pub fn mark_lazy_eligibility(query: &mut CypherQuery) {
+    // A guarded scope keeps materialised rows until the lazy route is
+    // proven to read them through the guard.
+    if query.guard.is_some() {
+        return;
+    }
     // Don't mark when the top-level query contains a UNION — the union
     // machinery merges materialised rows.
     if query.clauses.iter().any(|c| matches!(c, Clause::Union(_))) {
@@ -304,15 +312,18 @@ fn optimize_with_disabled_scoped(
 ) {
     query.optimizer_tags.clear();
     super::executor::match_execution::fold_constant_inline_maps(query, graph, params);
+    // Mandatory, and outside PASSES so no `disabled_passes` entry can skip it.
+    super::valid_time::lower(query, graph);
     let ctx = PassCtx {
         graph,
         params,
         disabled,
         initial_scope,
         global_scope,
+        guarded: query.guard.is_some(),
     };
     for (name, pass_fn) in PASSES {
-        if disabled.contains(*name) {
+        if disabled.contains(*name) || (ctx.guarded && !guard::is_safe(name)) {
             continue;
         }
         let before = query.explain.then(|| format!("{:?}", query.clauses));

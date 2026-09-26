@@ -1688,7 +1688,7 @@ impl KnowledgeGraph {
     }
 
     /// Run Cypher reads and writes; write_scope limits mutations such as DETACH DELETE by stored type; return a ResultView or a DataFrame when to_df=True.
-    #[pyo3(signature = (query, *, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=true, parallel=false, disable_optimizer=false, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None))]
+    #[pyo3(signature = (query, *, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=true, parallel=false, disable_optimizer=false, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None))]
     // Shared keyword-only query options preserve parity across Python entry points.
     #[allow(clippy::too_many_arguments)]
     // The detached closure preserves the engine's structured KgError until PyErr conversion.
@@ -1709,7 +1709,18 @@ impl KnowledgeGraph {
         write_scope: Option<Vec<String>>,
         git_sha: Option<String>,
         modified_by: Option<String>,
+        valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        // `valid_at=` is the statement prefix `FOR VALID_TIME AS OF`, written
+        // into the text before anything parses it.
+        let prefixed = valid_at
+            .map(|instant| {
+                let value = py_in::py_query_parameter_to_value("valid_at", instant)?;
+                cypher::prepend_valid_time(query, &value)
+                    .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+            })
+            .transpose()?;
+        let query = prefixed.as_deref().unwrap_or(query);
         let write_scope_set: Option<std::collections::HashSet<String>> =
             write_scope.map(|v| v.into_iter().collect());
         let self_ref = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;

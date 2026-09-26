@@ -19,13 +19,43 @@ pub(crate) fn first_missing_parameter(
     names.into_iter().find(|name| !params.contains_key(name))
 }
 
-fn visit_query(query: &CypherQuery, names: &mut BTreeSet<String>) {
+/// What a walk of a query reports. The walk covers every clause and every
+/// expression, so a sink sees each parameter and read pattern wherever it is
+/// written — a `WHERE`, an `EXISTS {}` / `COUNT {}`, a pattern comprehension.
+pub(crate) trait AstSink {
+    fn parameter(&mut self, name: &str);
+    /// A pattern that is matched: `MATCH` / `OPTIONAL MATCH`, `EXISTS {}`,
+    /// `COUNT {}`, a pattern comprehension. `CREATE` / `MERGE` patterns are
+    /// not reported.
+    fn read_pattern(&mut self, _pattern: &Pattern) {}
+    fn procedure(&mut self, _call: &CallClause) {}
+    /// Whether the walk descends into `CALL { }` bodies and UNION arms.
+    fn nested_scopes(&self) -> bool {
+        true
+    }
+}
+
+impl AstSink for BTreeSet<String> {
+    fn parameter(&mut self, name: &str) {
+        self.insert(name.to_string());
+    }
+}
+
+/// Walk `query` — its clauses and, at the top level, its context instant.
+pub(crate) fn walk_query(query: &CypherQuery, sink: &mut impl AstSink) {
+    visit_query(query, sink);
+}
+
+fn visit_query(query: &CypherQuery, names: &mut impl AstSink) {
+    if let Some(context) = &query.context {
+        visit_expression(&context.instant, names);
+    }
     for clause in &query.clauses {
         visit_clause(clause, names);
     }
 }
 
-fn visit_clause(clause: &Clause, names: &mut BTreeSet<String>) {
+fn visit_clause(clause: &Clause, names: &mut impl AstSink) {
     match clause {
         Clause::Match(c) | Clause::OptionalMatch(c) => visit_match(c, names),
         Clause::Where(c) | Clause::Filter(c) => visit_predicate(&c.predicate, names),
@@ -41,7 +71,11 @@ fn visit_clause(clause: &Clause, names: &mut BTreeSet<String>) {
         Clause::Limit(c) => visit_expression(&c.count, names),
         Clause::Unwind(c) => visit_expression(&c.expression, names),
         Clause::LoadCsv(c) => visit_expression(&c.source, names),
-        Clause::Union(c) => visit_query(&c.query, names),
+        Clause::Union(c) => {
+            if names.nested_scopes() {
+                visit_query(&c.query, names);
+            }
+        }
         Clause::Create(c) => visit_create(c, names),
         Clause::Set(c) => visit_set_items(&c.items, names),
         Clause::Delete(c) => visit_expressions(&c.expressions, names),
@@ -52,7 +86,7 @@ fn visit_clause(clause: &Clause, names: &mut BTreeSet<String>) {
                     ..
                 } = item
                 {
-                    names.insert(name.clone());
+                    names.parameter(name);
                 }
             }
         }
@@ -72,11 +106,16 @@ fn visit_clause(clause: &Clause, names: &mut BTreeSet<String>) {
             }
         }
         Clause::Call(c) => {
+            names.procedure(c);
             for (_, expression) in &c.parameters {
                 visit_expression(expression, names);
             }
         }
-        Clause::CallSubquery { body, .. } => visit_query(body, names),
+        Clause::CallSubquery { body, .. } => {
+            if names.nested_scopes() {
+                visit_query(body, names);
+            }
+        }
         Clause::FusedOptionalMatchAggregate {
             match_clause,
             with_clause,
@@ -174,7 +213,7 @@ fn visit_clause(clause: &Clause, names: &mut BTreeSet<String>) {
     }
 }
 
-fn visit_match(clause: &MatchClause, names: &mut BTreeSet<String>) {
+fn visit_match(clause: &MatchClause, names: &mut impl AstSink) {
     for pattern in &clause.patterns {
         visit_pattern(pattern, names);
     }
@@ -183,37 +222,38 @@ fn visit_match(clause: &MatchClause, names: &mut BTreeSet<String>) {
     }
 }
 
-fn visit_pattern(pattern: &Pattern, names: &mut BTreeSet<String>) {
+fn visit_pattern(pattern: &Pattern, names: &mut impl AstSink) {
+    names.read_pattern(pattern);
     for element in &pattern.elements {
         let (properties, dynamic) = match element {
             PatternElement::Node(node) => (&node.properties, &node.label_params),
             PatternElement::Edge(edge) => (&edge.properties, &edge.type_params),
         };
         for marker in dynamic {
-            names.insert(marker.param.clone());
+            names.parameter(&marker.param);
         }
         if let Some(properties) = properties {
             for matcher in properties.values() {
                 if let PropertyMatcher::EqualsParam(name) = matcher {
-                    names.insert(name.clone());
+                    names.parameter(name);
                 }
             }
         }
     }
 }
 
-fn visit_create(clause: &CreateClause, names: &mut BTreeSet<String>) {
+fn visit_create(clause: &CreateClause, names: &mut impl AstSink) {
     for pattern in &clause.patterns {
         visit_create_pattern(pattern, names);
     }
 }
 
-fn visit_create_pattern(pattern: &CreatePattern, names: &mut BTreeSet<String>) {
+fn visit_create_pattern(pattern: &CreatePattern, names: &mut impl AstSink) {
     for element in &pattern.elements {
         match element {
             CreateElement::Node(node) => {
                 for marker in &node.label_params {
-                    names.insert(marker.param.clone());
+                    names.parameter(&marker.param);
                 }
                 for (_, expression) in &node.properties {
                     visit_expression(expression, names);
@@ -221,7 +261,7 @@ fn visit_create_pattern(pattern: &CreatePattern, names: &mut BTreeSet<String>) {
             }
             CreateElement::Edge(edge) => {
                 if let Some(name) = &edge.type_param {
-                    names.insert(name.clone());
+                    names.parameter(name);
                 }
                 for (_, expression) in &edge.properties {
                     visit_expression(expression, names);
@@ -231,7 +271,7 @@ fn visit_create_pattern(pattern: &CreatePattern, names: &mut BTreeSet<String>) {
     }
 }
 
-fn visit_set_items(items: &[SetItem], names: &mut BTreeSet<String>) {
+fn visit_set_items(items: &[SetItem], names: &mut impl AstSink) {
     for item in items {
         match item {
             SetItem::Property {
@@ -248,7 +288,7 @@ fn visit_set_items(items: &[SetItem], names: &mut BTreeSet<String>) {
                 label_param: Some(name),
                 ..
             } => {
-                names.insert(name.clone());
+                names.parameter(name);
             }
             SetItem::Label { .. } => {}
             SetItem::Map { expression, .. } => visit_expression(expression, names),
@@ -256,38 +296,38 @@ fn visit_set_items(items: &[SetItem], names: &mut BTreeSet<String>) {
     }
 }
 
-fn visit_return(clause: &ReturnClause, names: &mut BTreeSet<String>) {
+fn visit_return(clause: &ReturnClause, names: &mut impl AstSink) {
     visit_items(&clause.items, names);
     if let Some(predicate) = &clause.having {
         visit_predicate(predicate, names);
     }
 }
 
-fn visit_items(items: &[ReturnItem], names: &mut BTreeSet<String>) {
+fn visit_items(items: &[ReturnItem], names: &mut impl AstSink) {
     for item in items {
         visit_expression(&item.expression, names);
     }
 }
 
-fn visit_order_items(items: &[OrderItem], names: &mut BTreeSet<String>) {
+fn visit_order_items(items: &[OrderItem], names: &mut impl AstSink) {
     for item in items {
         visit_expression(&item.expression, names);
     }
 }
 
-fn visit_sort_keys(keys: &[FusedSortKey], names: &mut BTreeSet<String>) {
+fn visit_sort_keys(keys: &[FusedSortKey], names: &mut impl AstSink) {
     for key in keys {
         visit_expression(&key.expression, names);
     }
 }
 
-fn visit_expressions(expressions: &[Expression], names: &mut BTreeSet<String>) {
+fn visit_expressions(expressions: &[Expression], names: &mut impl AstSink) {
     for expression in expressions {
         visit_expression(expression, names);
     }
 }
 
-fn visit_predicate(predicate: &Predicate, names: &mut BTreeSet<String>) {
+fn visit_predicate(predicate: &Predicate, names: &mut impl AstSink) {
     match predicate {
         Predicate::Comparison { left, right, .. }
         | Predicate::StartsWith {
@@ -339,16 +379,16 @@ fn visit_predicate(predicate: &Predicate, names: &mut BTreeSet<String>) {
             label_param: Some(name),
             ..
         } => {
-            names.insert(name.clone());
+            names.parameter(name);
         }
         Predicate::LabelCheck { .. } => {}
     }
 }
 
-fn visit_expression(expression: &Expression, names: &mut BTreeSet<String>) {
+fn visit_expression(expression: &Expression, names: &mut impl AstSink) {
     match expression {
         Expression::Parameter(name) => {
-            names.insert(name.clone());
+            names.parameter(name);
         }
         Expression::Add(left, right)
         | Expression::Subtract(left, right)

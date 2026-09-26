@@ -569,9 +569,13 @@ pub fn register(
                 Ok(params) => params,
                 Err(error) => return Err(s.with_rebuild_warning(error)),
             };
+            let query = match query_with_valid_at(&args.query, args.valid_at.as_deref()) {
+                Ok(query) => query,
+                Err(error) => return Err(s.with_rebuild_warning(error)),
+            };
             let body = s
                 .with_active_mut(|active| {
-                    run_cypher_write_output(active, &args.query, params, authz, policy, &csv)
+                    run_cypher_write_output(active, &query, params, authz, policy, &csv)
                         .map_err(|e| cypher_tool_error(&e))
                 })
                 .unwrap_or_else(|| Err(NO_GRAPH.to_string()));
@@ -592,8 +596,12 @@ pub fn register(
                 Ok(params) => params,
                 Err(error) => return Err(s.with_rebuild_warning(error)),
             };
+            let query = match query_with_valid_at(&args.query, args.valid_at.as_deref()) {
+                Ok(query) => query,
+                Err(error) => return Err(s.with_rebuild_warning(error)),
+            };
             let body = s
-                .with_active(|g| run_cypher_tool_output(g, &args.query, params, policy, &csv))
+                .with_active(|g| run_cypher_tool_output(g, &query, params, policy, &csv))
                 .unwrap_or_else(|| Err(NO_GRAPH.to_string()));
             body.map(|output| {
                 output

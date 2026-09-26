@@ -471,6 +471,18 @@ pub(crate) fn params_from_json(
         .map_err(|error| error.to_string())
 }
 
+/// The query text a `cypher_query` call runs: its `query` under
+/// `valid_at`'s `FOR VALID_TIME AS OF` context when one is given — the same
+/// text rewrite the Python `valid_at=` makes, through the one core helper.
+pub(crate) fn query_with_valid_at(query: &str, valid_at: Option<&str>) -> Result<String, String> {
+    match valid_at {
+        None => Ok(query.to_string()),
+        Some(instant) => {
+            kglite::api::cypher::prepend_valid_time(query, &Value::String(instant.to_string()))
+        }
+    }
+}
+
 /// The boot-decided engine settings a Cypher route applies to every
 /// execution, travelling as one value.
 ///

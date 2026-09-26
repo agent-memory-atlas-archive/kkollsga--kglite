@@ -247,6 +247,9 @@ pub(crate) fn execute_mutable_with_csv(
         &crate::graph::edge_embedding_generation::EmbeddingExecutionService<'_>,
     >,
 ) -> Result<CypherResult, String> {
+    // Lowering refuses a writing statement under a context; this catches a
+    // caller that executes without optimizing.
+    crate::graph::languages::cypher::valid_time::check_executable(query, graph, &params, false)?;
     // Arena guard for the whole mutation: holds the query count so every
     // materializing read (`get_node` → `node_weight`) inside a mutation clause
     // is guard-covered. Owned counter handle — coexists with `&mut`.

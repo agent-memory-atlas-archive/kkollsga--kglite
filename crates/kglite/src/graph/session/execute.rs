@@ -853,6 +853,8 @@ fn prepare(
     let disabled_default = cypher::planner::empty_disabled_set();
     let disabled_ref = opts.disabled_passes.unwrap_or(disabled_default);
     cypher::planner::optimize_with_disabled(&mut parsed, graph, &params, disabled_ref);
+    cypher::valid_time::check_executable(&parsed, graph, &params, parsed.explain)
+        .map_err(|message| exec_err(opts, Instant::now(), message))?;
 
     // Lazy marking — only when the caller asked for it. Done BEFORE caching so
     // the cached plan is ready-to-execute for this `lazy_eligible` (the cache

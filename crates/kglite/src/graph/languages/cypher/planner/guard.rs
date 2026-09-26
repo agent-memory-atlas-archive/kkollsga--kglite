@@ -1,0 +1,190 @@
+//! Which optimizer passes may run on a scope that carries a guard template
+//! (a statement prefixed `FOR VALID_TIME AS OF`). Default-deny: a pass runs
+//! under a guard only when it is listed in [`GUARD_SAFE_PASSES`]. Every name
+//! in `PASSES` is in exactly one of the two lists with the reason for its
+//! verdict, and a test fails when a new pass is in neither.
+//!
+//! The premise the verdicts rest on: the guard is applied where the pattern
+//! matcher accepts an element, so a pass is safe when every row it leaves in
+//! the plan still comes out of the matcher. A pass that answers from a
+//! store, an index, a count or a precomputed frontier without the matcher
+//! would bypass the guard and is denied until it is given a guarded form.
+
+/// Passes that run under a guard, each with why it is safe.
+pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
+    (
+        "optimize_nested_queries",
+        "recursion only; each nested scope carries its own template",
+    ),
+    (
+        "lower_fixed_var_length_hops",
+        "makes the intermediate hops explicit nodes, which the matcher then accepts",
+    ),
+    ("rewrite_count_bound_var_to_star", "expression rewrite"),
+    (
+        "hoist_with_where",
+        "moves a predicate; rows still come from the matcher",
+    ),
+    (
+        "push_where_into_match.1",
+        "a predicate into the matcher; candidates are still accepted by it",
+    ),
+    ("fold_or_to_in", "expression rewrite"),
+    (
+        "push_where_into_match.2",
+        "a predicate into the matcher; candidates are still accepted by it",
+    ),
+    (
+        "extract_pushable_rel_predicates",
+        "an edge predicate into the edge filter; independent of the guard",
+    ),
+    ("fold_pass_through_with", "clause structure only"),
+    ("fold_aliasing_with", "clause structure only"),
+    (
+        "hoist_terminal_return_over_with_top_k",
+        "clause structure only",
+    ),
+    ("narrow_unwind_source", "clause structure only"),
+    (
+        "desugar_multi_match_return_aggregate",
+        "shape rewrite; the fusions it feeds are denied",
+    ),
+    (
+        "reorder_match_clauses",
+        "order only; guards on every element make the order irrelevant to the answer",
+    ),
+    (
+        "reorder_cyclic_pattern_edges",
+        "order only; guards on every element make the order irrelevant to the answer",
+    ),
+    (
+        "optimize_pattern_start_node",
+        "order only; guards on every element make the order irrelevant to the answer",
+    ),
+    (
+        "reorder_match_patterns",
+        "order only; guards on every element make the order irrelevant to the answer",
+    ),
+    (
+        "push_distinct_into_match",
+        "a dedup hint inside the matcher, applied to rows it accepted",
+    ),
+    ("reorder_predicates_by_cost", "WHERE evaluation order only"),
+    (
+        "mark_disjoint_fixed_trails",
+        "trail bookkeeping only; no element is skipped",
+    ),
+];
+
+/// Passes that never run under a guard, each with what it would bypass. The
+/// planner reads only the allow-list; this list is the verdict record the
+/// walk test holds every registered pass against.
+#[cfg(test)]
+const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
+    (
+        "anchor_element_id",
+        "seeds a pre-bound slot that skips node acceptance",
+    ),
+    (
+        "fuse_spatial_join",
+        "an R-tree join over the type index, outside the matcher",
+    ),
+    (
+        "push_limit_into_match",
+        "an early stop that may count rows before the guard rejects them",
+    ),
+    (
+        "push_limit_into_aggregate",
+        "caps groups outside the matcher",
+    ),
+    ("fuse_anchored_edge_count", "counts adjacency offsets"),
+    (
+        "fuse_count_short_circuits",
+        "answers counts from the type index",
+    ),
+    (
+        "fuse_optional_match_aggregate",
+        "a fused per-row count outside the matcher",
+    ),
+    ("fuse_match_return_aggregate", "a fused aggregate operator"),
+    ("fuse_match_with_aggregate", "a fused aggregate operator"),
+    (
+        "fuse_match_with_aggregate_top_k",
+        "a fused aggregate operator",
+    ),
+    (
+        "fuse_node_scan_aggregate",
+        "walks the store without the matcher",
+    ),
+    (
+        "fuse_node_scan_top_k",
+        "walks the store without the matcher",
+    ),
+    (
+        "fuse_vector_score_order_limit",
+        "retrieval from a vector index",
+    ),
+    ("fuse_text_bm25_order_limit", "retrieval from a text index"),
+    (
+        "fuse_order_by_top_k",
+        "a fused top-k operator, not yet proven over guarded rows",
+    ),
+    (
+        "mark_fast_var_length_paths",
+        "a fast frontier expansion that bypasses per-element acceptance",
+    ),
+    (
+        "mark_skip_target_type_check",
+        "skips the node-type check that label guards rely on",
+    ),
+];
+
+/// Whether pass `name` may run on a guarded scope.
+pub(super) fn is_safe(name: &str) -> bool {
+    GUARD_SAFE_PASSES.iter().any(|(safe, _)| *safe == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::PASSES;
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Every registered pass has exactly one verdict, and every listed name
+    /// is a registered pass — a new pass in neither list fails here.
+    #[test]
+    fn every_pass_has_exactly_one_guard_verdict() {
+        let safe: HashSet<&str> = GUARD_SAFE_PASSES.iter().map(|(n, _)| *n).collect();
+        let denied: HashSet<&str> = GUARD_DENIED_PASSES.iter().map(|(n, _)| *n).collect();
+        assert_eq!(safe.len(), GUARD_SAFE_PASSES.len(), "duplicate safe entry");
+        assert_eq!(
+            denied.len(),
+            GUARD_DENIED_PASSES.len(),
+            "duplicate denied entry"
+        );
+        assert!(
+            safe.is_disjoint(&denied),
+            "{:?}",
+            safe.intersection(&denied)
+        );
+        let registered: HashSet<&str> = PASSES.iter().map(|(n, _)| *n).collect();
+        for name in &registered {
+            assert!(
+                safe.contains(name) || denied.contains(name),
+                "pass '{name}' has no guard verdict: add it to GUARD_SAFE_PASSES or \
+                 GUARD_DENIED_PASSES in planner/guard.rs"
+            );
+        }
+        for name in safe.union(&denied) {
+            assert!(
+                registered.contains(name),
+                "'{name}' is not a registered pass"
+            );
+        }
+        for (name, reason) in GUARD_SAFE_PASSES.iter().chain(GUARD_DENIED_PASSES) {
+            assert!(!reason.is_empty(), "'{name}' has no reason");
+        }
+        assert!(!is_safe("mark_skip_target_type_check"));
+        assert!(is_safe("optimize_nested_queries"));
+    }
+}

@@ -1896,7 +1896,7 @@ impl<'a> CypherExecutor<'a> {
         group_key_indices: &[usize],
         count_indices: &[usize],
     ) -> Result<Option<Vec<ResultRow>>, String> {
-        if pattern.elements.len() != 3 {
+        if self.graph_filter.is_some() || pattern.elements.len() != 3 {
             return Ok(None);
         }
         // Histogram fast path counts every edge of the given type — it

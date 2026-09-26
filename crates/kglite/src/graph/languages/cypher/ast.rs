@@ -1,7 +1,9 @@
 use crate::datatypes::values::Value;
 use crate::graph::constraints::EntityKind;
+use crate::graph::core::graph_filter::GuardTemplate;
 use crate::graph::core::membership::MembershipSet;
 use crate::graph::core::pattern_matching::{ParamLabel, Pattern};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputFormat {
@@ -20,6 +22,41 @@ pub struct CypherQuery {
     /// Passes that changed the plan. Populated only for EXPLAIN so normal
     /// execution pays no plan-diff allocation cost.
     pub optimizer_tags: Vec<String>,
+    /// The statement's `FOR <axis> AS OF <instant>` prefix. Set by the parser
+    /// on the top-level query only; nested scopes read [`Self::guard`].
+    pub(crate) context: Option<StatementContext>,
+    /// The guard template lowering compiled for this scope — the top level,
+    /// each `CALL { }` body and each UNION arm carry their own. `None`
+    /// whenever the statement has no context.
+    pub(crate) guard: Option<Arc<GuardTemplate>>,
+}
+
+impl CypherQuery {
+    /// A context-free scope of `clauses`.
+    pub(crate) fn from_clauses(clauses: Vec<Clause>, output_format: OutputFormat) -> Self {
+        CypherQuery {
+            clauses,
+            explain: false,
+            profile: false,
+            output_format,
+            optimizer_tags: Vec::new(),
+            context: None,
+            guard: None,
+        }
+    }
+}
+
+/// A statement prefix `FOR <axis> AS OF <instant>`.
+#[derive(Debug, Clone)]
+pub(crate) struct StatementContext {
+    /// As written; only `VALID_TIME` lowers.
+    pub(crate) axis: String,
+    /// A literal, `$param`, or `date()` / `datetime()` of either (or no
+    /// argument: today). Evaluated once per execution, never at plan time.
+    pub(crate) instant: Expression,
+    /// Why lowering refused the statement, raised before any execution and
+    /// before EXPLAIN renders a plan.
+    pub(crate) refusal: Option<String>,
 }
 
 /// How a read `CALL { ... }` subquery receives variables from its outer row.

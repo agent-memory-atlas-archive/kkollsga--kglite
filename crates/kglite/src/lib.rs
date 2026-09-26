@@ -886,6 +886,11 @@ pub mod api {
             materialise_lazy, materialise_lazy_range, materialise_lazy_row, CypherResult,
             LazyResultDescriptor,
         };
+        /// `query` under a `FOR VALID_TIME AS OF` context — the text a
+        /// binding's `valid_at=` argument sends. The instant (a date, a
+        /// datetime, or an ISO date/datetime string) is written as a literal;
+        /// a query that already carries a context is refused naming both.
+        pub use crate::graph::languages::cypher::valid_time::prepend_valid_time;
         /// Operator-declared value codecs — position-scoped, bidirectional
         /// literal conversions (`'Q42'` ↔ `42`) bound to a property. Bindings
         /// build a `Vec<ValueCodec>` (e.g. from a YAML manifest) and pass it via
