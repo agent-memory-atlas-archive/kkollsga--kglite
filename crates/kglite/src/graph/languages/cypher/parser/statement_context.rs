@@ -15,7 +15,7 @@ pub(super) const DOUBLED_CONTEXT: &str =
     "A statement takes one FOR <axis> AS OF context; this one has two";
 
 const INSTANT_FORMS: &str = "a quoted ISO date or datetime, $param, date('…'), date($param), \
-                             datetime('…'), datetime($param), or date() for today";
+                             datetime('…'), datetime($param), or date() for today (UTC)";
 
 impl CypherParser {
     /// Parse `FOR <axis> AS OF <instant>`; the caller has seen `FOR`.
@@ -79,7 +79,9 @@ impl CypherParser {
 }
 
 /// A literal string, a parameter, or `date` / `datetime` of one — and
-/// `date()` with no argument, which is today when the statement executes.
+/// `date()` with no argument, today in UTC when the statement executes.
+/// `datetime()` with no argument is not accepted: it reads the local clock,
+/// while an instant is naive UTC.
 fn is_context_instant(expression: &Expression) -> bool {
     let operand = |e: &Expression| {
         matches!(

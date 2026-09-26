@@ -1336,6 +1336,7 @@ Date-range filtering on nodes and relationships with explicit field names.
 
 | Function | Description |
 |----------|-------------|
+| `date()` | Today's date in UTC (no-arg form) |
 | `date(str)` | Parse a date string to a DateTime (date-only) value: `'YYYY'`, `'YYYY-MM'`, `'YYYY-MM-DD'`, or ISO 8601 basic `'YYYYMMDD'`; anything else is null |
 | `date({year, month, day})` | Build a date from integers (openCypher's map form): `date({year: y, month: 1, day: 1})`. `month` and `day` default to 1; an impossible date, an unknown key or a non-integer component raises; a null component gives null |
 | `datetime({year, month, day, hour, minute, second, millisecond, microsecond, nanosecond})` | Build a zoneless datetime the same way; missing time fields are 0. A `timezone` key is refused |
@@ -1507,7 +1508,9 @@ CALL db.temporal.declarations()
 A statement prefixed `FOR VALID_TIME AS OF <instant>` asks the whole query as
 of that instant on the declared types. The prefix stands before or after
 `EXPLAIN` / `PROFILE`; the instant is a quoted ISO date or datetime, `$param`,
-`date(…)` / `datetime(…)` of a literal or parameter, or `date()` for today.
+`date(…)` / `datetime(…)` of a literal or parameter, or `date()` for today in
+UTC. `datetime()` with no argument is refused there: it reads the local clock,
+and a valid-time instant is UTC.
 Python `cypher(…, valid_at=…)` and the MCP `cypher_query` tool's `valid_at`
 argument write the same prefix.
 
@@ -1526,8 +1529,10 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
   probe for support), a graph with no validity declaration, a writing
   statement, a procedure that enumerates graph elements (metadata procedures
-  such as `db.labels()` and `db.temporal.declarations()` are fine), and a
-  relationship type whose declarations are `ambiguous`.
+  such as `db.labels()` and `db.temporal.declarations()` are fine),
+  `degree()` / `inDegree()` / `outDegree()` / `shortest_path_length()` (they
+  read a node's relationships outside the pattern matcher; not available under
+  a context yet), and a relationship type whose declarations are `ambiguous`.
 
 ### Duration semantics
 

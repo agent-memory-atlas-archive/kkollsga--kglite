@@ -653,11 +653,16 @@ impl<'a> CypherExecutor<'a> {
             // shape qualifies (single typed-node + one EqualsVar/
             // EqualsNodeProp matcher) and the outer-row count justifies
             // the build cost. Avoids the per-row full-type scan that
-            // `PatternExecutor::execute` would otherwise do.
+            // `PatternExecutor::execute` would otherwise do. A probe binds
+            // nodes without the matcher, so none is built under a graph
+            // filter, whose guard lives in the matcher.
             transient_indexes: clause
                 .patterns
                 .iter()
                 .map(|p| {
+                    if self.graph_filter.is_some() {
+                        return None;
+                    }
                     transient_index::TransientEqIndex::try_build(self.graph, p, existing_rows.len())
                 })
                 .collect(),
@@ -771,6 +776,10 @@ impl<'a> CypherExecutor<'a> {
                 // indexes only cover single-node patterns, so the
                 // clause-local edge set is unchanged.)
                 if let Some(idx) = &transient_indexes[pi] {
+                    debug_assert!(
+                        self.graph_filter.is_none(),
+                        "transient equality index reached under a graph filter"
+                    );
                     if !cur.node_bindings.contains_key(idx.bind_var.as_str())
                         && !cur.projected.contains_key(idx.bind_var.as_str())
                     {

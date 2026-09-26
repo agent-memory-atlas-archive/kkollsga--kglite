@@ -29,6 +29,8 @@ pub(crate) trait AstSink {
     /// not reported.
     fn read_pattern(&mut self, _pattern: &Pattern) {}
     fn procedure(&mut self, _call: &CallClause) {}
+    /// A scalar function call, by name as written.
+    fn function(&mut self, _name: &str) {}
     /// Whether the walk descends into `CALL { }` bodies and UNION arms.
     fn nested_scopes(&self) -> bool {
         true
@@ -407,9 +409,11 @@ fn visit_expression(expression: &Expression, names: &mut impl AstSink) {
         | Expression::IsNull(inner)
         | Expression::IsNotNull(inner)
         | Expression::ExprPropertyAccess { expr: inner, .. } => visit_expression(inner, names),
-        Expression::FunctionCall { args, .. } | Expression::ListLiteral(args) => {
+        Expression::FunctionCall { name, args, .. } => {
+            names.function(name);
             visit_expressions(args, names);
         }
+        Expression::ListLiteral(args) => visit_expressions(args, names),
         Expression::Case {
             operand,
             when_clauses,

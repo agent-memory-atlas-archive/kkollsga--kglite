@@ -106,12 +106,38 @@ def test_execution_is_refused_in_this_build(wells, query):
         ("FOR SYSTEM_TIME AS OF date('2006-01-01') MATCH (n) RETURN n", "axis SYSTEM_TIME is not supported"),
         (f"{AS_OF}MATCH (w:Well) SET w.x = 1", "cannot write"),
         (f"{AS_OF}CALL pagerank() YIELD node RETURN node", "procedure pagerank"),
+        (f"{AS_OF}MATCH (w:Well) RETURN degree(w)", "not available under a valid-time context yet"),
+        (f"{AS_OF}MATCH (w:Well) RETURN outDegree(w)", "not available under a valid-time context yet"),
     ],
 )
 def test_lowering_refusals_stop_explain_too(wells, query, message):
     for text in (query, f"EXPLAIN {query}"):
         with pytest.raises(kglite.KgError, match=message):
             wells.cypher(text).to_list()
+
+
+def test_no_argument_date_is_today_at_execution(wells):
+    query = "FOR VALID_TIME AS OF date() MATCH (w:Well) RETURN w.id"
+    with pytest.raises(kglite.KgError, match=NOT_YET):
+        wells.cypher(query).to_list()
+    assert _plan(wells, f"EXPLAIN {query}")[0].endswith("instant: per execution")
+    today = wells.cypher("RETURN date() AS d").to_list()[0]["d"]
+    utc = datetime.datetime.now(datetime.timezone.utc).date()
+    assert today in (utc, utc - datetime.timedelta(days=1))
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "(a:Field)-[:LICENSED*2]-(b:Field)",
+        "p = shortestPath((a:Field)-[:LICENSED*]-(b:Field))",
+    ],
+)
+def test_multi_hop_intermediates_reach_declared_labels(wells, pattern):
+    """The hand-expanded twin lists `Well`; so must the multi-hop spelling."""
+    expanded = _plan(wells, f"EXPLAIN {AS_OF}MATCH (a:Field)-[:LICENSED]-()-[:LICENSED]-(b:Field) RETURN a")[0]
+    assert "(:Well [vf, vt] closed)" in expanded
+    assert "(:Well [vf, vt] closed)" in _plan(wells, f"EXPLAIN {AS_OF}MATCH {pattern} RETURN a")[0]
 
 
 def test_a_graph_without_declarations_refuses_a_context():

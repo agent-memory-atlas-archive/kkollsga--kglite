@@ -254,10 +254,15 @@ fn checked_shift_months(date: chrono::NaiveDate, delta: i64) -> Option<chrono::N
 }
 
 impl CypherExecutor<'_> {
-    /// `date(string | map | date)`.
+    /// `date()` (today), `date(string | map | date)`.
     fn eval_date(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
+        // Today in UTC: a valid-time instant is naive UTC, and
+        // `FOR VALID_TIME AS OF date()` resolves through here.
+        if args.is_empty() {
+            return Ok(Value::DateTime(chrono::Utc::now().date_naive()));
+        }
         if args.len() != 1 {
-            return Err("date() requires 1 argument: date('2020-01-15')".into());
+            return Err("date() takes 0 or 1 argument: date() or date('2020-01-15')".into());
         }
         let val = self.evaluate_expression(&args[0], row)?;
         match val {

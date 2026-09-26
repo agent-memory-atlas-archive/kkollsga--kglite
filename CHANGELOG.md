@@ -14,19 +14,22 @@ before upgrading.
 - Cypher: the statement prefix `FOR VALID_TIME AS OF <instant>`, before or
   after `EXPLAIN` / `PROFILE`, where the instant is a quoted ISO date or
   datetime, `$param`, `date(…)` / `datetime(…)` of either, or `date()` for
-  today. Python `cypher(…, valid_at=…)` (a `datetime.date`, a
+  today (UTC). Python `cypher(…, valid_at=…)` (a `datetime.date`, a
   `datetime.datetime` or an ISO string) and the MCP `cypher_query` tool's
   `valid_at` argument write the same prefix. The plan records, per query scope,
   the declared validity intervals the statement can reach; `EXPLAIN` shows them
   in a leading `ValidTimeContext` row. Refused under a context: an axis other
   than `VALID_TIME`, a graph with no validity declaration, a writing statement,
   a procedure that enumerates graph elements (metadata procedures such as
-  `db.labels()` are fine), a relationship type whose declarations are
-  ambiguous, a second prefix, and a prefix inside a UNION arm or a
+  `db.labels()` are fine), `degree()` / `inDegree()` / `outDegree()` /
+  `shortest_path_length()` (not available under a context yet), a
+  relationship type whose declarations are ambiguous, a second prefix, and a prefix inside a UNION arm or a
   `CALL { }` body. Execution arrives in a later change: in this build a
   statement carrying a context raises "valid-time contexts are not executable
   yet in this build", and only `EXPLAIN` runs. Rust:
   `kglite::api::cypher::prepend_valid_time`.
+- Cypher `date()` with no argument returns today's date in UTC; it used to
+  raise "requires 1 argument".
 - `CALL db.temporal.declarations()` yields `empty_rows` and
   `unreadable_rows` per declaration: rows a write since the declaration left
   with an empty interval (valid at no instant) or with a bound that is not

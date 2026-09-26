@@ -388,3 +388,157 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
     let prefixed = prepend_valid_time("EXPLAIN MATCH (n) RETURN n", &text).unwrap();
     assert!(parse_cypher(&prefixed).unwrap().context.is_some());
 }
+
+/// `date()` is today (UTC) at execution: it reaches the "not yet" refusal,
+/// EXPLAIN renders it per execution, and planning keeps the full counts.
+#[test]
+fn no_argument_date_is_today_per_execution() {
+    let graph = graph();
+    let none = HashMap::new();
+    let query = "FOR VALID_TIME AS OF date() MATCH (w:Well) RETURN w.id";
+    let err = read(&graph, query, &none).unwrap_err();
+    assert!(err.contains("not executable yet"), "{err}");
+    let explained = read(&graph, &format!("EXPLAIN {query}"), &none).unwrap();
+    let first = format!("{:?}", explained.rows[0][1]);
+    assert!(first.contains("instant: per execution"), "{first}");
+    assert!(plan_instant(&lowered(&graph, query, &[]), &graph).is_none());
+    // The function agrees with the prefix: today's UTC date.
+    let today = read(&graph, "RETURN date() AS d", &none).unwrap();
+    let utc = chrono::Utc::now().date_naive();
+    match today.rows[0][0] {
+        Value::DateTime(d) => assert!(d == utc || d.succ_opt() == Some(utc), "{d} vs {utc}"),
+        ref other => panic!("{other:?}"),
+    }
+}
+
+fn explained_targets(graph: &DirGraph, query: &str) -> String {
+    let result = read(graph, &format!("EXPLAIN {AS_OF}{query}"), &HashMap::new())
+        .unwrap_or_else(|e| panic!("{query}: {e}"));
+    format!("{:?}", result.rows[0][1])
+}
+
+/// The anonymous nodes a variable-length or shortest-path segment passes
+/// through are untyped, so they reach every declared label — as the
+/// hand-expanded spelling does.
+#[test]
+fn multi_hop_segments_reach_every_declared_label() {
+    let graph = graph();
+    let well = "targets=(:Well [vf, vt] closed)";
+    let expanded = "MATCH (a:Field)-[:NEAR]-()-[:NEAR]-(b:Field) RETURN a";
+    assert!(explained_targets(&graph, expanded).contains(well));
+    for query in [
+        "MATCH (a:Field)-[:NEAR*2]-(b:Field) RETURN a",
+        "MATCH (a:Field)-[:NEAR*1..3]-(b:Field) RETURN a",
+        "MATCH (a:Field)-[:NEAR*]-(b:Field) RETURN a",
+        "MATCH p = shortestPath((a:Field)-[:NEAR*]-(b:Field)) RETURN p",
+        "MATCH p = allShortestPaths((a:Field)-[:NEAR*..4]-(b:Field)) RETURN p",
+    ] {
+        let rendered = explained_targets(&graph, query);
+        assert!(rendered.contains(well), "{query}: {rendered}");
+    }
+    // A segment of at most one hop has no intermediate node.
+    for query in [
+        "MATCH (a:Field)-[:NEAR*1]-(b:Field) RETURN a",
+        "MATCH (a:Field)-[:NEAR*0..1]-(b:Field) RETURN a",
+        "MATCH p = shortestPath((a:Field)-[:NEAR]-(b:Field)) RETURN p",
+    ] {
+        let rendered = explained_targets(&graph, query);
+        assert!(
+            rendered.contains("no declared targets"),
+            "{query}: {rendered}"
+        );
+    }
+}
+
+/// Scalar functions that read a node's relationships outside the matcher
+/// cannot see a guard, so a context refuses them — EXPLAIN included.
+#[test]
+fn topology_scalar_functions_are_refused_under_a_context() {
+    let graph = graph();
+    let none = HashMap::new();
+    for call in [
+        "degree(w)",
+        "inDegree(w)",
+        "OUTDEGREE(w)",
+        "shortest_path_length(w, w)",
+    ] {
+        let query = format!("{AS_OF}MATCH (w:Well) RETURN {call} AS x");
+        for text in [query.clone(), format!("EXPLAIN {query}")] {
+            let err = read(&graph, &text, &none).unwrap_err();
+            assert!(
+                err.contains("not available under a valid-time context yet"),
+                "{text}: {err}"
+            );
+        }
+        // Without the context the function runs.
+        read(&graph, &format!("MATCH (w:Well) RETURN {call} AS x"), &none).unwrap();
+    }
+    let nested = lowered(
+        &graph,
+        &format!("{AS_OF}MATCH (w:Well) CALL {{ WITH w RETURN degree(w) AS d }} RETURN d"),
+        &[],
+    );
+    assert!(refusal(&nested).unwrap().contains("degree"));
+}
+
+/// The transient equality index binds nodes without the matcher; under a
+/// graph filter the subsequent MATCH goes through the matcher instead. The
+/// statement form meets the refusal; the executor form runs with the filter
+/// set, where a debug assertion guards the index's binding site.
+#[test]
+fn the_transient_equality_index_declines_under_a_graph_filter() {
+    let graph = graph();
+    let none = HashMap::new();
+    let text = "UNWIND range(1, 80) AS i MATCH (f:Field) MATCH (w:Well {vf: f.vf}) \
+                RETURN i, w.id";
+    let err = read(&graph, &format!("{AS_OF}{text}"), &none).unwrap_err();
+    assert!(err.contains("not executable yet"), "{err}");
+
+    let plain = lowered(&graph, text, &[]);
+    let unfiltered = CypherExecutor::with_params(&graph, &none, None)
+        .execute(&plain)
+        .unwrap();
+    assert_eq!(unfiltered.rows.len(), 80);
+    let mut executor = CypherExecutor::with_params(&graph, &none, None);
+    executor.graph_filter = Some(Arc::new(GraphFilter {
+        template: Arc::default(),
+        selector: ValidTimeSelector::AsOf(eval::Instant::Date(
+            chrono::NaiveDate::from_ymd_opt(2006, 1, 1).unwrap(),
+        )),
+    }));
+    let filtered = executor.execute(&plain).unwrap();
+    assert_eq!(
+        format!("{:?}", filtered.rows),
+        format!("{:?}", unfiltered.rows)
+    );
+}
+
+/// Every instant `prepend_valid_time` accepts is written as text its own
+/// parser reads back to the same instant; one it cannot write is refused.
+#[test]
+fn prepend_round_trips_or_refuses_every_instant() {
+    let graph = graph();
+    let none = HashMap::new();
+    let date = |y| chrono::NaiveDate::from_ymd_opt(y, 3, 4).unwrap();
+    for year in [-5, 0, 1, 2020, 9999, 10000] {
+        for value in [
+            Value::DateTime(date(year)),
+            Value::Timestamp(date(year).and_hms_opt(10, 30, 0).unwrap()),
+        ] {
+            match prepend_valid_time("RETURN 1", &value) {
+                Ok(text) => {
+                    let parsed = parse_cypher(&text).unwrap();
+                    let instant = &parsed.context.as_ref().unwrap().instant;
+                    let back = CypherExecutor::with_params(&graph, &none, None)
+                        .evaluate_expression(instant, &ResultRow::new())
+                        .unwrap();
+                    assert_eq!(back, value, "{text}");
+                }
+                Err(err) => {
+                    assert!(year < 0, "{value:?}: {err}");
+                    assert!(err.starts_with("valid_at:"), "{err}");
+                }
+            }
+        }
+    }
+}

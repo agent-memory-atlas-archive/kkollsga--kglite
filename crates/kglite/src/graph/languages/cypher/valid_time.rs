@@ -15,6 +15,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use chrono::Datelike;
+
 use super::ast::{CallClause, Clause, CypherQuery, Expression, StatementContext};
 use super::executor::{is_context_free_procedure, is_mutation_query, CypherExecutor};
 use super::parameter_presence::{walk_query, AstSink};
@@ -94,6 +96,12 @@ fn attach_templates(
 ) -> Result<(), String> {
     let mut reach = Reach::default();
     walk_query(query, &mut reach);
+    if let Some(name) = reach.refused_function {
+        return Err(format!(
+            "{name}() counts or walks a node's relationships outside the pattern matcher, \
+             so it is not available under a valid-time context yet"
+        ));
+    }
     if let Some(name) = reach.refused_procedure {
         return Err(format!(
             "procedure {name} enumerates graph elements and is not valid-time aware, so it \
@@ -126,14 +134,22 @@ fn clear_templates(query: &mut CypherQuery) {
 /// What one scope's read patterns and procedure calls can reach.
 #[derive(Default)]
 struct Reach {
-    /// A node pattern with no label (or a label bound from a parameter).
+    /// A node pattern with no label (or a label bound from a parameter), or
+    /// the intermediate nodes of a multi-hop segment.
     any_node: bool,
     labels: BTreeSet<String>,
     /// A relationship pattern with no type (or a type from a parameter).
     any_rel: bool,
     rel_types: BTreeSet<String>,
     refused_procedure: Option<String>,
+    /// A scalar function that reads relationships without the matcher.
+    refused_function: Option<String>,
 }
+
+/// Scalar functions that read a node's relationships directly — every
+/// incident edge, or a search of their own — so a guard in the matcher
+/// cannot see them.
+const TOPOLOGY_FUNCTIONS: &[&str] = &["degree", "indegree", "outdegree", "shortest_path_length"];
 
 impl AstSink for Reach {
     fn parameter(&mut self, _name: &str) {}
@@ -151,6 +167,11 @@ impl AstSink for Reach {
                     }
                 }
                 PatternElement::Edge(edge) => {
+                    // A segment of two or more hops passes through anonymous,
+                    // untyped nodes, which can carry any declared label.
+                    if edge.var_length.is_some_and(|(_, max)| max > 1) {
+                        self.any_node = true;
+                    }
                     let types = match (&edge.connection_types, &edge.connection_type) {
                         (Some(types), _) => types.as_slice(),
                         (None, Some(single)) => std::slice::from_ref(single),
@@ -168,6 +189,16 @@ impl AstSink for Reach {
     fn procedure(&mut self, call: &CallClause) {
         if self.refused_procedure.is_none() && !is_context_free_procedure(&call.procedure_name) {
             self.refused_procedure = Some(call.procedure_name.clone());
+        }
+    }
+
+    fn function(&mut self, name: &str) {
+        if self.refused_function.is_none()
+            && TOPOLOGY_FUNCTIONS
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(name))
+        {
+            self.refused_function = Some(name.to_string());
         }
     }
 
@@ -339,6 +370,19 @@ pub(crate) fn valid_counts(
 /// one; `EXPLAIN` / `PROFILE` may follow the prefix, so they need no special
 /// handling.
 pub fn prepend_valid_time(query: &str, instant: &Value) -> Result<String, String> {
+    // chrono writes a negative year as `-0005-…`, which the ISO date parser
+    // behind `date('…')` does not read back.
+    let year = match instant {
+        Value::DateTime(date) => Some(date.year()),
+        Value::Timestamp(ts) => Some(ts.year()),
+        _ => None,
+    };
+    if let Some(year) = year.filter(|year| *year < 0) {
+        return Err(format!(
+            "valid_at: year {year} is before year 0, which a FOR VALID_TIME AS OF \
+             literal cannot spell"
+        ));
+    }
     let literal = match (instant, eval::parse_instant(instant)) {
         (Value::DateTime(date), _) => format!("date('{}')", date.format("%Y-%m-%d")),
         (Value::Timestamp(ts), _) => {

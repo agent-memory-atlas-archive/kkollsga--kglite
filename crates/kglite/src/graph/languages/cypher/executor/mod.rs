@@ -241,11 +241,16 @@ pub struct CypherExecutor<'a> {
     /// [`apply_row_limit`]. `None` (the default, and the only value a nested
     /// executor ever holds) retains everything.
     pub(super) row_limit: Option<usize>,
-    /// The statement's resolved `FOR VALID_TIME AS OF` filter. While it is
-    /// set every fused operator and every shortcut that answers without the
-    /// pattern matcher declines, since the guard lives in the matcher. Always
-    /// `None` in this build: a statement with a context refuses before
-    /// execution (see `valid_time::check_executable`).
+    /// The statement's resolved `FOR VALID_TIME AS OF` filter. The guard lives
+    /// in the pattern matcher, so while it is set the fused operators (a debug
+    /// assertion in `execute_single_clause`) and the shortcuts that read this
+    /// field decline: the fast EXISTS probe, the simple-pattern and
+    /// distinct-peer counts, the histogram aggregate and the transient
+    /// equality index. Lowering refuses the scalar functions that read
+    /// relationships directly (`degree()` and kin). `shortestPath` runs its
+    /// own search and does not read this field. Always `None` in this build:
+    /// a statement with a context refuses before execution (see
+    /// `valid_time::check_executable`).
     pub(super) graph_filter: Option<std::sync::Arc<crate::graph::core::graph_filter::GraphFilter>>,
 }
 

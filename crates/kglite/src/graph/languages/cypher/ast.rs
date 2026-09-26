@@ -51,8 +51,9 @@ impl CypherQuery {
 pub(crate) struct StatementContext {
     /// As written; only `VALID_TIME` lowers.
     pub(crate) axis: String,
-    /// A literal, `$param`, or `date()` / `datetime()` of either (or no
-    /// argument: today). Evaluated once per execution, never at plan time.
+    /// A literal, `$param`, `date()` / `datetime()` of either, or `date()`
+    /// (today in UTC). Evaluated once per execution; a constant one is also
+    /// read at plan time for the start-node estimate (`plan_instant`).
     pub(crate) instant: Expression,
     /// Why lowering refused the statement, raised before any execution and
     /// before EXPLAIN renders a plan.

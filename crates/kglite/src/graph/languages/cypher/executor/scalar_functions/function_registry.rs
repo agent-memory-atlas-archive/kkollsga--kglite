@@ -345,8 +345,8 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "date",
         aliases: &[],
         category: "temporal",
-        description: "Parse a date string, or build one from a {year, month, day} map; an unparseable string is null, not an error",
-        signature: "date(input :: STRING | MAP) :: DATE?",
+        description: "Today (UTC), a parsed date string, or one built from a {year, month, day} map; an unparseable string is null, not an error",
+        signature: "date(input :: STRING | MAP?) :: DATE?",
     },
     FunctionSpec {
         name: "datetime",
