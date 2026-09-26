@@ -53,7 +53,7 @@ _BINARY_CRATES = {
 # Markers whose tests legitimately run long (30GB mapped graphs, multi-GB
 # model downloads, sustained load). Everything else falls under the 120 s
 # per-test hang ceiling set in pyproject.toml [tool.pytest.ini_options].
-_TIMEOUT_EXEMPT_MARKERS = ("benchmark", "stress", "model_download", "bolt_stress")
+_TIMEOUT_EXEMPT_MARKERS = ("benchmark", "bench_heavy", "stress", "model_download", "bolt_stress")
 
 
 def pytest_collection_modifyitems(items):

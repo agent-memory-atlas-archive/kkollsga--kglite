@@ -156,13 +156,14 @@ markers = [
     "slow: slow tests taking >5s (deselect with '-m not slow')",
     "parity: cross-storage-mode oracle tests (memory vs mapped vs disk)",
     "stress: opt-in stress tests (30GB mapped, 10k-hop) — select with '-m stress'",
+    "bench_heavy: opt-in 200k-node / 1M-relationship benchmark cells (test_bench_temporal.py) — select with '-m bench_heavy'; not part of '-m benchmark'",
     "differential: cypher optimizer differential tests (optimized vs. naive)",
     "model_download: tests that fetch multi-GB ML model weights (bge-m3 etc.). Opt-in via '-m model_download'.",
     "binary_size: structural gate that needs the release .dylib built (cargo build --release). CI runs it in the python-tests job which already builds the release artifact for the MCP smoke test.",
     "bolt: Bolt protocol smoke/correctness tests (require the kglite-bolt-server release binary, neo4j driver, port binding). Phase C of docs/history/bolt-implementation.md shipped, so the original xfail(strict=True) contract stubs are now ordinary passing tests. Select with '-m bolt' or `make test-full`.",
     "bolt_stress: Bolt-protocol concurrency/stress tests (slow; multi-session under load). Opt-in via '-m bolt_stress'; excluded from default suite to keep iteration fast.",
 ]
-addopts = "-m 'not benchmark and not parity and not stress and not model_download and not binary_size and not bolt and not bolt_stress'"
+addopts = "-m 'not benchmark and not parity and not stress and not bench_heavy and not model_download and not binary_size and not bolt and not bolt_stress'"
 # Hang detection, not a performance budget: the default suite's slowest test
 # runs ~2 s, so a test that hits 120 s is stuck (deadlock, unresponsive
 # subprocess, runaway query) and must FAIL loudly instead of stalling the
