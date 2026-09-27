@@ -124,11 +124,7 @@ impl TransientEqIndex {
     pub(super) fn probe_value(&self, row: &ResultRow, graph: &DirGraph) -> Option<Value> {
         let value = match &self.resolution {
             ProbeResolution::Projected(var) => row.projected.get(var.as_str()).cloned()?,
-            ProbeResolution::NodeProp { var, prop } => {
-                let idx = row.node_bindings.get(var.as_str())?;
-                let node = graph.graph.node_view(*idx)?;
-                resolve_node_property(node, prop, graph)
-            }
+            ProbeResolution::NodeProp { var, prop } => node_prop_reference(graph, row, var, prop)?,
         };
         if matches!(value, Value::Null) {
             None
@@ -143,6 +139,36 @@ impl TransientEqIndex {
             .get(value)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+}
+
+/// The value `var.prop` names in an inline-map matcher (`{id: var.prop}`),
+/// for this row: a bound node's property, else a projected node value's, else
+/// a projected map's member — a row of `UNWIND $rows AS var`. `None` when
+/// `var` is none of these. The per-row matcher and the probe of an index
+/// built for it both read it here, so they cannot disagree about what the
+/// reference names.
+pub(super) fn node_prop_reference(
+    graph: &DirGraph,
+    row: &ResultRow,
+    var: &str,
+    prop: &str,
+) -> Option<Value> {
+    if let Some(node) = row
+        .node_bindings
+        .get(var)
+        .and_then(|idx| graph.graph.node_view(*idx))
+    {
+        return Some(resolve_node_property(node, prop, graph));
+    }
+    match row.projected.get(var)? {
+        Value::NodeRef(i) => graph
+            .graph
+            .node_view(NodeIndex::new(*i as usize))
+            .map(|node| resolve_node_property(node, prop, graph)),
+        Value::Node(node) => node.properties.get(prop).cloned(),
+        Value::Map(members) => members.get(prop).cloned(),
+        _ => None,
     }
 }
 

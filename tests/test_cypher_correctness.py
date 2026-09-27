@@ -1127,6 +1127,18 @@ class TestTransientEqualityIndex:
         )
         assert len(result) == 5
 
+    @pytest.mark.parametrize("rows", [63, 64, 150])
+    def test_a_map_member_probe_matches_on_both_sides_of_the_threshold(self, shared_key_graph, rows):
+        """`UNWIND $rows AS r MATCH (n {key: r.k})` reads the map member
+        whether the per-row matcher or the index built past the threshold
+        answers; the index used to read only bound nodes, so from 64 rows
+        on every probe missed and the MATCH returned nothing."""
+        params = {"rows": [{"k": f"K{i:04d}"} for i in range(rows)]}
+        query = "UNWIND $rows AS r MATCH (n:R {key: r.k}) RETURN count(*) AS c"
+        assert shared_key_graph.cypher(query, params=params).to_list() == [{"c": rows}]
+        joined = "UNWIND $rows AS r MATCH (a:L {key: r.k}), (b:R {key: r.k}) RETURN count(*) AS c"
+        assert shared_key_graph.cypher(joined, params=params).to_list() == [{"c": rows}]
+
     def test_equals_var_join_below_threshold_correct(self):
         """Below the 64-row threshold, the slow path runs — must still match."""
         import pandas as pd
