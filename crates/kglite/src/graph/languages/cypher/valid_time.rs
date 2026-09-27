@@ -68,11 +68,7 @@ fn statement_refusal(query: &CypherQuery, no_declarations: bool) -> Option<Strin
         ));
     }
     if no_declarations {
-        return Some(
-            "FOR VALID_TIME AS OF needs a validity declaration, and this graph has none; \
-             declare one with CALL db.temporal.declare(...)"
-                .to_string(),
-        );
+        return Some(NO_DECLARATION.to_string());
     }
     if is_mutation_query(query) {
         return Some(
@@ -365,14 +361,7 @@ fn plain_text_if_timeless(
     params: &HashMap<String, Value>,
 ) -> Option<String> {
     let instant = resolve_instant(context, graph, params).ok()?;
-    let every_target = Reach {
-        any_node: true,
-        any_rel: true,
-        ..Reach::default()
-    };
-    let template = every_target
-        .template(graph, &temporal::declared(graph))
-        .ok()?;
+    let template = declared_template(graph).ok()?;
     if !temporal::endpoint_index::template_timeless_at(graph, &template, instant) {
         return None;
     }
@@ -383,6 +372,22 @@ fn plain_text_if_timeless(
     let prefix = if query.profile { "PROFILE " } else { "" };
     Some(format!("{prefix}{}", &text[body_start..]))
 }
+
+/// Every declared target of `graph`, as one template: what a scope that can
+/// reach any node and any relationship compiles to. Refused when a
+/// relationship type holds several unkeyed declarations.
+pub(crate) fn declared_template(graph: &DirGraph) -> Result<GuardTemplate, String> {
+    let every_target = Reach {
+        any_node: true,
+        any_rel: true,
+        ..Reach::default()
+    };
+    every_target.template(graph, &temporal::declared(graph))
+}
+
+/// The refusal for a context on a graph with no validity declaration.
+pub(crate) const NO_DECLARATION: &str = "FOR VALID_TIME AS OF needs a validity declaration, \
+     and this graph has none; declare one with CALL db.temporal.declare(...)";
 
 /// The context instant when the statement spells it as a constant — a
 /// literal, or `date(…)` / `datetime(…)` of one — so planning can estimate
@@ -429,14 +434,45 @@ pub(crate) fn valid_counts(
     (!counts.is_empty()).then_some(counts)
 }
 
-/// `query` under a `FOR VALID_TIME AS OF` context at `instant` — what a
-/// binding's `valid_at=` sends. The instant is written as a literal
-/// (`date('…')` for a date, `datetime('…')` for a datetime or an ISO string
-/// with a time) so the statement text, not a parameter, carries it. A query
-/// that already has a context is refused naming both, since a statement takes
-/// one; `EXPLAIN` / `PROFILE` may follow the prefix, so they need no special
-/// handling.
-pub fn prepend_valid_time(query: &str, instant: &Value) -> Result<String, String> {
+/// Why [`prepend_valid_time`] or a valid-time view refused a query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrependError {
+    /// The instant is not a date, a datetime or an ISO date/datetime string,
+    /// or it is one a `FOR VALID_TIME AS OF` literal cannot spell.
+    BadInstant(String),
+    /// The query already carries a `FOR … AS OF` context and `valid_at=`
+    /// would add a second; `literal` is the one `valid_at=` spelled.
+    DoubledContext { literal: String },
+    /// The query carries a `FOR … AS OF` context and runs on a view that is
+    /// already as of `literal`.
+    ViewAlreadyAsOf { literal: String },
+}
+
+impl std::fmt::Display for PrependError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrependError::BadInstant(message) => f.write_str(message),
+            PrependError::DoubledContext { literal } => write!(
+                f,
+                "the query already has a FOR … AS OF context and valid_at= adds another \
+                 (FOR {VALID_TIME} AS OF {literal}); a statement takes one context, so drop \
+                 one of them"
+            ),
+            PrependError::ViewAlreadyAsOf { literal } => write!(
+                f,
+                "this view is already as of {literal}, and the query carries its own \
+                 FOR … AS OF context; drop the query's context, or take a fresh view \
+                 (freeze(valid_at=…)) at the other instant"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PrependError {}
+
+/// `instant` as a `FOR VALID_TIME AS OF` literal: `date('…')` for a date,
+/// `datetime('…')` for a datetime or an ISO string with a time.
+pub(crate) fn instant_literal(instant: &Value) -> Result<String, PrependError> {
     // chrono writes a negative year as `-0005-…`, which the ISO date parser
     // behind `date('…')` does not read back.
     let year = match instant {
@@ -445,35 +481,49 @@ pub fn prepend_valid_time(query: &str, instant: &Value) -> Result<String, String
         _ => None,
     };
     if let Some(year) = year.filter(|year| *year < 0) {
-        return Err(format!(
+        return Err(PrependError::BadInstant(format!(
             "valid_at: year {year} is before year 0, which a FOR VALID_TIME AS OF \
              literal cannot spell"
-        ));
+        )));
     }
-    let literal = match (instant, eval::parse_instant(instant)) {
-        (Value::DateTime(date), _) => format!("date('{}')", date.format("%Y-%m-%d")),
+    match (instant, eval::parse_instant(instant)) {
+        (Value::DateTime(date), _) => Ok(format!("date('{}')", date.format("%Y-%m-%d"))),
         (Value::Timestamp(ts), _) => {
-            format!("datetime('{}')", ts.format("%Y-%m-%dT%H:%M:%S%.f"))
+            Ok(format!("datetime('{}')", ts.format("%Y-%m-%dT%H:%M:%S%.f")))
         }
-        (Value::String(text), Ok(eval::Instant::Date(_))) => format!("date('{text}')"),
-        (Value::String(text), Ok(eval::Instant::Timestamp(_))) => format!("datetime('{text}')"),
-        (_, Err(err)) => return Err(format!("valid_at: {err}")),
+        (Value::String(text), Ok(eval::Instant::Date(_))) => Ok(format!("date('{text}')")),
+        (Value::String(text), Ok(eval::Instant::Timestamp(_))) => Ok(format!("datetime('{text}')")),
+        (_, Err(err)) => Err(PrependError::BadInstant(format!("valid_at: {err}"))),
         (other, Ok(_)) => unreachable!("parse_instant accepted {other:?}"),
-    };
-    if carries_context(query) {
-        return Err(format!(
-            "the query already has a FOR … AS OF context and valid_at= adds another \
-             (FOR {VALID_TIME} AS OF {literal}); a statement takes one context, so drop \
-             one of them"
-        ));
     }
-    Ok(format!("FOR {VALID_TIME} AS OF {literal} {query}"))
 }
 
-/// Whether `query`'s prefixes include `FOR` — found through the tokenizer,
-/// so a comment or string that mentions it does not count. A query that does
-/// not tokenize is left for the parser to report.
-fn carries_context(query: &str) -> bool {
+/// `query` under a `FOR VALID_TIME AS OF` context at `instant` — what a
+/// binding's `valid_at=` sends. The instant is written as a literal
+/// (`date('…')` for a date, `datetime('…')` for a datetime or an ISO string
+/// with a time) so the statement text, not a parameter, carries it. A query
+/// that already has a context is refused naming both
+/// ([`PrependError::DoubledContext`]), since a statement takes one;
+/// `EXPLAIN` / `PROFILE` may follow the prefix, so they need no special
+/// handling.
+pub fn prepend_valid_time(query: &str, instant: &Value) -> Result<String, PrependError> {
+    let literal = instant_literal(instant)?;
+    if carries_valid_time_context(query) {
+        return Err(PrependError::DoubledContext { literal });
+    }
+    Ok(prefixed(&literal, query))
+}
+
+/// `query` behind the prefix for an already-rendered `literal`.
+pub(crate) fn prefixed(literal: &str, query: &str) -> String {
+    format!("FOR {VALID_TIME} AS OF {literal} {query}")
+}
+
+/// Whether `query`'s prefixes include `FOR` — a `FOR … AS OF` context —
+/// found through the tokenizer, so a comment or string that mentions it does
+/// not count. A query that does not tokenize is left for the parser to
+/// report, and answers `false`.
+pub fn carries_valid_time_context(query: &str) -> bool {
     let Ok(tokenized) = tokenize_cypher_with_positions(query) else {
         return false;
     };

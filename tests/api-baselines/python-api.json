@@ -818,7 +818,7 @@
         },
         "freeze": {
           "kind": "method",
-          "signature": "(self, /)"
+          "signature": "(self, /, *, valid_at=None)"
         },
         "get_default_max_work_units": {
           "kind": "method",
@@ -1654,7 +1654,7 @@
         },
         "snapshot": {
           "kind": "method",
-          "signature": "(self, /)"
+          "signature": "(self, /, *, valid_at=None)"
         },
         "version": {
           "kind": "method",

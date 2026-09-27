@@ -867,6 +867,23 @@ impl core::fmt::Debug for kglite::api::cypher::OutputFormat
 pub fn kglite::api::cypher::OutputFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for kglite::api::cypher::OutputFormat
 impl core::marker::StructuralPartialEq for kglite::api::cypher::OutputFormat
+pub enum kglite::api::cypher::PrependError
+pub kglite::api::cypher::PrependError::BadInstant(alloc::string::String)
+pub kglite::api::cypher::PrependError::DoubledContext
+pub kglite::api::cypher::PrependError::DoubledContext::literal: alloc::string::String
+pub kglite::api::cypher::PrependError::ViewAlreadyAsOf
+pub kglite::api::cypher::PrependError::ViewAlreadyAsOf::literal: alloc::string::String
+impl core::clone::Clone for kglite::api::cypher::PrependError
+pub fn kglite::api::cypher::PrependError::clone(&self) -> kglite::api::cypher::PrependError
+impl core::cmp::Eq for kglite::api::cypher::PrependError
+impl core::cmp::PartialEq for kglite::api::cypher::PrependError
+pub fn kglite::api::cypher::PrependError::eq(&self, other: &kglite::api::cypher::PrependError) -> bool
+impl core::error::Error for kglite::api::cypher::PrependError
+impl core::fmt::Debug for kglite::api::cypher::PrependError
+pub fn kglite::api::cypher::PrependError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::cypher::PrependError
+pub fn kglite::api::cypher::PrependError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::cypher::PrependError
 pub enum kglite::api::cypher::QueryWarningSink
 pub kglite::api::cypher::QueryWarningSink::Silent
 pub kglite::api::cypher::QueryWarningSink::Stderr
@@ -1046,6 +1063,7 @@ impl core::clone::Clone for kglite::api::cypher::ValueCodec
 pub fn kglite::api::cypher::ValueCodec::clone(&self) -> kglite::api::cypher::ValueCodec
 impl core::fmt::Debug for kglite::api::cypher::ValueCodec
 pub fn kglite::api::cypher::ValueCodec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn kglite::api::cypher::carries_valid_time_context(query: &str) -> bool
 pub fn kglite::api::cypher::collect_unknown_pattern_warnings(query: &kglite::api::cypher::CypherQuery, graph: &kglite::api::DirGraph) -> alloc::vec::Vec<alloc::string::String>
 pub fn kglite::api::cypher::execute_mutable(graph: &mut kglite::api::DirGraph, query: &kglite::api::cypher::CypherQuery, params: std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>, interrupt: kglite::api::algorithms::Interrupt) -> core::result::Result<kglite::api::cypher::CypherResult, alloc::string::String>
 pub fn kglite::api::cypher::generate_explain_result(query: &kglite::api::cypher::CypherQuery, graph: &kglite::api::DirGraph) -> kglite::api::cypher::CypherResult
@@ -1059,7 +1077,7 @@ pub fn kglite::api::cypher::optimize(query: &mut kglite::api::cypher::CypherQuer
 pub fn kglite::api::cypher::parameter_names(query: &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_cypher(query: &str) -> core::result::Result<kglite::api::cypher::CypherQuery, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_with_mutation_check(query: &str) -> core::result::Result<(kglite::api::cypher::CypherQuery, bool), kglite::error::KgError>
-pub fn kglite::api::cypher::prepend_valid_time(query: &str, instant: &kglite::datatypes::values::Value) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn kglite::api::cypher::prepend_valid_time(query: &str, instant: &kglite::datatypes::values::Value) -> core::result::Result<alloc::string::String, kglite::api::cypher::PrependError>
 pub fn kglite::api::cypher::query_features(query: &str) -> core::result::Result<kglite::api::cypher::QueryFeatures, kglite::error::KgError>
 pub fn kglite::api::cypher::query_warning_sink() -> kglite::api::cypher::QueryWarningSink
 pub fn kglite::api::cypher::resolve_edge_property(graph: &kglite::api::DirGraph, edge: &kglite::api::cypher::EdgeBinding, property: &str) -> kglite::datatypes::values::Value
@@ -3312,7 +3330,25 @@ pub struct kglite::api::temporal::NodeValidityRequest<'g>
 impl<'g> kglite::api::temporal::NodeValidityRequest<'g>
 pub fn kglite::api::temporal::NodeValidityRequest<'g>::keep(&self, node: kglite::api::NodeView<'_>) -> core::result::Result<bool, alloc::string::String>
 pub fn kglite::api::temporal::NodeValidityRequest<'g>::new(graph: &'g kglite::api::DirGraph, function: &'static str, from: core::option::Option<&str>, to: core::option::Option<&str>, test: kglite::api::temporal::ValidityTest) -> Self
+pub struct kglite::api::temporal::ValidSlice
+impl kglite::api::temporal::ValidSlice
+pub fn kglite::api::temporal::ValidSlice::bytes(&self) -> usize
+pub fn kglite::api::temporal::ValidSlice::from_base(&self, base: petgraph::graph_impl::NodeIndex) -> core::option::Option<petgraph::graph_impl::NodeIndex>
+pub fn kglite::api::temporal::ValidSlice::graph(&self) -> &alloc::sync::Arc<kglite::api::DirGraph>
+pub fn kglite::api::temporal::ValidSlice::to_base(&self, slice: petgraph::graph_impl::NodeIndex) -> core::option::Option<petgraph::graph_impl::NodeIndex>
+impl core::fmt::Debug for kglite::api::temporal::ValidSlice
+pub fn kglite::api::temporal::ValidSlice::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::temporal::ValidTimeView
+impl kglite::api::temporal::ValidTimeView
+pub fn kglite::api::temporal::ValidTimeView::as_of(&self) -> &str
+pub fn kglite::api::temporal::ValidTimeView::base(&self) -> &alloc::sync::Arc<kglite::api::DirGraph>
+pub fn kglite::api::temporal::ValidTimeView::cypher_text(&self, query: &str) -> core::result::Result<alloc::string::String, kglite::api::cypher::PrependError>
+pub fn kglite::api::temporal::ValidTimeView::slice(&self) -> core::result::Result<alloc::sync::Arc<kglite::api::temporal::ValidSlice>, kglite::error::KgError>
+impl core::fmt::Debug for kglite::api::temporal::ValidTimeView
+pub fn kglite::api::temporal::ValidTimeView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const kglite::api::temporal::DISK_NODE_ABUTMENT_CAP: usize
+pub const kglite::api::temporal::DISK_SLICE_ELEMENT_CAP: usize
+pub const kglite::api::temporal::SLICE_BYTE_CAP: usize
 pub fn kglite::api::temporal::declare(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: kglite::api::temporal::IntervalConvention) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::declare_defaulted(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::declare_from_column_types(graph: &mut kglite::api::DirGraph, target: kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>, frame: &kglite::datatypes::values::DataFrame) -> core::result::Result<kglite::api::temporal::LoadDeclaration, alloc::string::String>
@@ -3323,6 +3359,7 @@ pub fn kglite::api::temporal::node_config<'g>(graph: &'g kglite::api::DirGraph, 
 pub fn kglite::api::temporal::node_request_config(graph: &kglite::api::DirGraph, function: &str, node_type: &str, from: core::option::Option<&str>, to: core::option::Option<&str>) -> core::result::Result<kglite::api::TemporalConfig, alloc::string::String>
 pub fn kglite::api::temporal::relationship_request_configs(graph: &kglite::api::DirGraph, function: &str, rel_type: &str) -> core::result::Result<alloc::vec::Vec<kglite::api::TemporalConfig>, alloc::string::String>
 pub fn kglite::api::temporal::undeclare(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget) -> bool
+pub fn kglite::api::temporal::view_at(graph: alloc::sync::Arc<kglite::api::DirGraph>, instant: &kglite::datatypes::values::Value) -> core::result::Result<kglite::api::temporal::ValidTimeView, kglite::error::KgError>
 pub mod kglite::api::text_indexes
 pub struct kglite::api::text_indexes::PreparedQuery
 impl kglite::api::text_indexes::PreparedQuery

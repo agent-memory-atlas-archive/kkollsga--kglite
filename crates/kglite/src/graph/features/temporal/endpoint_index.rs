@@ -68,7 +68,7 @@
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
-use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard, Weak};
 
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use fixedbitset::FixedBitSet;
@@ -76,6 +76,7 @@ use fixedbitset::FixedBitSet;
 use super::declarations::TemporalTarget;
 use super::duplicate_ids::DuplicateIds;
 use super::eval::{self, Instant, IntervalConvention};
+use super::slice::{SliceKey, ValidSlice};
 use super::validate::{edge_bound, for_each_edge_row, for_each_node_row, node_bound, EdgeRow};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{GuardBounds, GuardTemplate, ValidTimeSelector};
@@ -481,6 +482,13 @@ pub(crate) struct IndexCache {
     targets: Vec<CachedTarget>,
     /// Oldest first.
     masks: VecDeque<(SegmentKey, Arc<ElementMasks>)>,
+    /// Masks a live valid-time view holds ([`pin_masks`]). The view's `Arc`
+    /// keeps a mask alive after the LRU drops it; the weak entry lets a query
+    /// whose key the view's covers reuse it ([`is_covered_by`]).
+    pinned: Vec<(SegmentKey, Weak<ElementMasks>)>,
+    /// Materialised valid slices, oldest first, under their own byte cap
+    /// (see [`super::slice`]).
+    slices: VecDeque<(SliceKey, Arc<ValidSlice>)>,
     /// Per node type, its duplicate-id map; `None` when it would pass the
     /// cap.
     duplicates: Vec<(String, Option<Arc<DuplicateIds>>)>,
@@ -494,11 +502,17 @@ impl IndexCache {
     fn at(&mut self, version: u64) -> &mut Self {
         if self.version != version {
             self.version = version;
-            self.targets.clear();
-            self.masks.clear();
-            self.duplicates.clear();
+            self.clear();
         }
         self
+    }
+
+    fn clear(&mut self) {
+        self.targets.clear();
+        self.masks.clear();
+        self.pinned.clear();
+        self.slices.clear();
+        self.duplicates.clear();
     }
 
     fn find(&self, target: &TemporalTarget, config: &TemporalConfig) -> Option<Lookup> {
@@ -533,8 +547,33 @@ impl IndexCache {
             .map(|(_, map)| map.clone())
     }
 
+    /// The cached masks, and each pinned mask the LRU no longer holds —
+    /// counted once, alive only while its view is.
     fn mask_bytes(&self) -> usize {
-        self.masks.iter().map(|(_, m)| m.bytes()).sum()
+        let cached: usize = self.masks.iter().map(|(_, m)| m.bytes()).sum();
+        let pinned_only: usize = self
+            .pinned
+            .iter()
+            .filter_map(|(_, weak)| weak.upgrade())
+            .filter(|pin| !self.masks.iter().any(|(_, m)| Arc::ptr_eq(m, pin)))
+            .map(|pin| pin.bytes())
+            .sum();
+        cached + pinned_only
+    }
+
+    /// A cached or pinned mask whose key covers `key`.
+    fn covering_mask(&mut self, key: &SegmentKey) -> Option<Arc<ElementMasks>> {
+        if let Some(pos) = self.masks.iter().position(|(k, _)| is_covered_by(key, k)) {
+            let entry = self.masks.remove(pos).expect("position is in range");
+            let masks = Arc::clone(&entry.1);
+            self.masks.push_back(entry);
+            return Some(masks);
+        }
+        self.pinned.retain(|(_, weak)| weak.strong_count() > 0);
+        self.pinned
+            .iter()
+            .filter(|(k, _)| is_covered_by(key, k))
+            .find_map(|(_, weak)| weak.upgrade())
     }
 
     /// Evict cached masks, oldest first, until `extra` more bytes fit the
@@ -690,9 +729,8 @@ pub(crate) fn template_timeless_at(graph: &DirGraph, template: &GuardTemplate, t
 /// [`crate::graph::core::graph_filter::GraphFilter::resolve`].
 #[derive(Debug)]
 pub(crate) struct ResolvedFilter {
-    /// The targets the masks cover, each with its segment.
-    // Read by the endpoint-index tests; execution needs only the masks.
-    #[allow(dead_code)]
+    /// The targets the masks cover, each with its segment. A valid-time
+    /// view pins its masks under this key; execution needs only the masks.
     pub(crate) key: SegmentKey,
     /// `None` when no target is indexed, when [`Self::timeless`] holds (the
     /// plain plan answers), or when the masks do not fit the byte cap (their
@@ -768,8 +806,8 @@ pub(crate) fn resolve(
     }
 }
 
-/// The masks for `key`, from the cache or built and cached under the byte
-/// cap; `None` when they cannot fit the cap even with every cached mask
+/// The masks for `key`, from the cache — an entry or a view's pin whose key
+/// covers it — or built and cached under the byte cap; `None` when they cannot fit the cap even with every cached mask
 /// evicted, and nothing is allocated or evicted then. Held under the cache
 /// lock throughout, so the room made is the room used.
 fn cached_masks(
@@ -781,10 +819,7 @@ fn cached_masks(
     let cache = write
         .get_or_insert_with(IndexCache::default)
         .at(graph.version());
-    if let Some(pos) = cache.masks.iter().position(|(k, _)| k == key) {
-        let entry = cache.masks.remove(pos).expect("position is in range");
-        let masks = Arc::clone(&entry.1);
-        cache.masks.push_back(entry);
+    if let Some(masks) = cache.covering_mask(key) {
         return Some(masks);
     }
     let needed = ElementMasks::bytes_for(graph.graph.node_bound(), graph.graph.edge_bound());
@@ -825,10 +860,72 @@ fn build_masks(graph: &DirGraph, parts: &[(Arc<EndpointIndex>, Segment, bool)]) 
 /// clause: a later read in the same statement walks the rows it wrote.
 pub(crate) fn invalidate(graph: &DirGraph) {
     if let Some(cache) = write_cache(graph).as_mut() {
-        cache.targets.clear();
-        cache.masks.clear();
-        cache.duplicates.clear();
+        cache.clear();
     }
+}
+
+/// Whether masks built for `cover` may serve a query keyed `key`: every
+/// `(target, segment)` of `key` is in `cover`. The extra targets of `cover`
+/// only clear elements of targets the query's template does not reach —
+/// its scopes cannot bind them (the template already holds every declared
+/// label a pattern can reach, secondary labels included), and a
+/// relationship type outside it is never traversed.
+fn is_covered_by(key: &SegmentKey, cover: &SegmentKey) -> bool {
+    key.iter().all(|pair| cover.contains(pair))
+}
+
+/// Register `masks`, resolved for `key`, as pinned by a live view: while the
+/// view holds its `Arc`, a query whose key it covers is served these masks
+/// even after the LRU evicts them, and the cap counts them once.
+pub(crate) fn pin_masks(graph: &DirGraph, key: &SegmentKey, masks: &Arc<ElementMasks>) {
+    let mut write = write_cache(graph);
+    let cache = write
+        .get_or_insert_with(IndexCache::default)
+        .at(graph.version());
+    cache.pinned.retain(|(_, weak)| weak.strong_count() > 0);
+    if !cache
+        .pinned
+        .iter()
+        .any(|(_, weak)| std::ptr::eq(weak.as_ptr(), Arc::as_ptr(masks)))
+    {
+        cache.pinned.push((key.clone(), Arc::downgrade(masks)));
+    }
+}
+
+/// The slice cached for `key` at the graph's version.
+pub(crate) fn cached_slice(graph: &DirGraph, key: &SliceKey) -> Option<Arc<ValidSlice>> {
+    let mut write = write_cache(graph);
+    let cache = write.as_mut().filter(|c| c.version == graph.version())?;
+    let pos = cache.slices.iter().position(|(k, _)| k == key)?;
+    let entry = cache.slices.remove(pos).expect("position is in range");
+    let slice = Arc::clone(&entry.1);
+    cache.slices.push_back(entry);
+    Some(slice)
+}
+
+/// Cache `slice` for `key`, evicting the oldest slices until the slices fit
+/// `cap` bytes together; one that alone passes `cap` is not kept.
+pub(crate) fn store_slice(graph: &DirGraph, key: SliceKey, slice: &Arc<ValidSlice>, cap: usize) {
+    let mut write = write_cache(graph);
+    let cache = write
+        .get_or_insert_with(IndexCache::default)
+        .at(graph.version());
+    if slice.bytes() > cap || cache.slices.iter().any(|(k, _)| *k == key) {
+        return;
+    }
+    let held = |slices: &VecDeque<(SliceKey, Arc<ValidSlice>)>| -> usize {
+        slices.iter().map(|(_, s)| s.bytes()).sum()
+    };
+    while held(&cache.slices) + slice.bytes() > cap {
+        cache.slices.pop_front();
+    }
+    cache.slices.push_back((key, Arc::clone(slice)));
+}
+
+/// How many slices the graph's cache holds (tests).
+#[cfg(test)]
+pub(crate) fn cached_slice_count(graph: &DirGraph) -> usize {
+    read_cache(graph).as_ref().map_or(0, |c| c.slices.len())
 }
 
 /// `node_type`'s duplicate-id map at the graph's version, built on a miss

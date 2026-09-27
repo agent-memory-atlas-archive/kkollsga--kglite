@@ -3,7 +3,7 @@
 
 use crate::graph::schema::{CurrentSelection, DirGraph, EdgeData, SchemaInstall};
 use crate::graph::storage::{GraphRead, GraphWrite};
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{EdgeIndex, NodeIndex};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -68,19 +68,30 @@ pub fn extract_subgraph(
     source: &DirGraph,
     selection: &CurrentSelection,
 ) -> Result<DirGraph, String> {
-    // Arena guard: disk-backed node/edge reads materialize into the query
-    // arena (protocol in disk/graph.rs); no-op on memory/mapped.
-    let _arena_guard = source.graph.begin_query();
     let level_idx = selection.get_level_count().saturating_sub(1);
     let level = selection
         .get_level(level_idx)
         .ok_or_else(|| "No active selection level".to_string())?;
-
     let nodes = level.get_all_nodes();
+    copy_induced_subgraph(source, &nodes, |_| true).map(|(graph, _)| graph)
+}
+
+/// A fresh graph holding `nodes` (copied in the order given) and every
+/// relationship between two of them that `keep_edge` accepts, with the
+/// source's secondary labels, ontology and schema. The map takes each copied
+/// source node to its new index. Temporal declarations, embeddings, text and
+/// vector indexes, spatial config and id indexes are not copied.
+pub(crate) fn copy_induced_subgraph(
+    source: &DirGraph,
+    nodes: &[NodeIndex],
+    mut keep_edge: impl FnMut(EdgeIndex) -> bool,
+) -> Result<(DirGraph, HashMap<NodeIndex, NodeIndex>), String> {
+    // Arena guard: disk-backed node/edge reads materialize into the query
+    // arena (protocol in disk/graph.rs); no-op on memory/mapped.
+    let _arena_guard = source.graph.begin_query();
     let node_set: HashSet<NodeIndex> = nodes.iter().copied().collect();
 
     let mut new_graph = DirGraph::new();
-
     // Copy interner so the subgraph can resolve InternedKeys from compact storage
     new_graph.interner = source.interner.clone();
 
@@ -106,7 +117,7 @@ pub fn extract_subgraph(
     let mut index_map: HashMap<NodeIndex, NodeIndex> = HashMap::with_capacity(nodes.len());
 
     // Copy selected nodes
-    for &old_idx in &nodes {
+    for &old_idx in nodes {
         if let Some(node_data) = source.graph.node_weight(old_idx) {
             // Add to new graph (single clone instead of double)
             let new_idx = GraphWrite::add_node(&mut new_graph.graph, node_data.clone());
@@ -137,12 +148,12 @@ pub fn extract_subgraph(
     }
 
     // Copy edges between selected nodes
-    for &old_source_idx in &nodes {
+    for &old_source_idx in nodes {
         for edge in source.graph.edges(old_source_idx) {
             let old_target_idx = edge.target();
 
             // Only copy edge if target is also in selection
-            if node_set.contains(&old_target_idx) {
+            if node_set.contains(&old_target_idx) && keep_edge(edge.id()) {
                 if let (Some(&new_source), Some(&new_target)) = (
                     index_map.get(&old_source_idx),
                     index_map.get(&old_target_idx),
@@ -200,7 +211,7 @@ pub fn extract_subgraph(
             .map_err(|violation| format!("subgraph schema install failed: {violation}"))?;
     }
 
-    Ok(new_graph)
+    Ok((new_graph, index_map))
 }
 
 /// Get summary statistics about the subgraph that would be extracted.

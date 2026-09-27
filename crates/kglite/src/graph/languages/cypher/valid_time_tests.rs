@@ -415,18 +415,30 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
         Value::Null,
     ] {
         let err = prepend_valid_time("RETURN 1", &bad).unwrap_err();
-        assert!(err.starts_with("valid_at:"), "{err}");
+        assert!(matches!(err, PrependError::BadInstant(_)), "{err}");
+        assert!(err.to_string().starts_with("valid_at:"), "{err}");
     }
     for doubled in [
         "FOR VALID_TIME AS OF $t RETURN 1",
         "EXPLAIN for valid_time AS OF $t RETURN 1",
     ] {
         let err = prepend_valid_time(doubled, &text).unwrap_err();
+        assert_eq!(
+            err,
+            PrependError::DoubledContext {
+                literal: "date('2020-01-02')".into()
+            }
+        );
+        assert!(carries_valid_time_context(doubled));
+        let err = err.to_string();
         assert!(err.contains("already has a FOR"), "{err}");
         assert!(err.contains("date('2020-01-02')"), "{err}");
     }
     // A comment or string mentioning FOR is not a context.
     prepend_valid_time("// FOR later\nRETURN 'FOR' AS x", &text).unwrap();
+    assert!(!carries_valid_time_context(
+        "// FOR later\nRETURN 'FOR' AS x"
+    ));
     // The prepended text parses to the same statement as the hand-written one.
     let prefixed = prepend_valid_time("EXPLAIN MATCH (n) RETURN n", &text).unwrap();
     assert!(parse_cypher(&prefixed).unwrap().context.is_some());
@@ -572,7 +584,8 @@ fn prepend_round_trips_or_refuses_every_instant() {
                 }
                 Err(err) => {
                     assert!(year < 0, "{value:?}: {err}");
-                    assert!(err.starts_with("valid_at:"), "{err}");
+                    assert!(matches!(err, PrependError::BadInstant(_)), "{err}");
+                    assert!(err.to_string().starts_with("valid_at:"), "{err}");
                 }
             }
         }

@@ -125,6 +125,14 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:_valid_time_slice:fn _valid_time_slice(&self, py: Python<'_>) -> PyResult<crate::graph::KnowledgeGraph>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:as_of:pub(crate) fn as_of( py: Python<'_>, inner: Arc<DirGraph>, embedder: Option<Arc<dyn crate::graph::embedder::Embedder>>, defaults: QueryDefaults, valid_at: Option<&Bound<'_, PyAny>>, ) -> PyResult<Self>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::result_large_err",
       "classification": "api-shape"
     },
@@ -401,6 +409,10 @@
       "classification": "test"
     },
     {
+      "identity": "crates/kglite/src/graph/features/temporal/view.rs::module::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/introspection/describe.rs::fn:write_connection_property:fn write_connection_property( xml: &mut String, graph: &DirGraph, rel_type: &str, prop_name: &str, stats: EdgePropertyAccum, truncate_at: Option<usize>, max_prop_values: usize, )::clippy::too_many_arguments",
       "classification": "transitional"
     },
@@ -656,10 +668,6 @@
     },
     {
       "identity": "crates/kglite/src/graph/core/pattern_matching/pattern.rs::enum:RelEdgePredicate::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/features/temporal/endpoint_index.rs::statement:pub(crate) key: SegmentKey,::dead_code",
       "classification": "dead-code"
     },
     {

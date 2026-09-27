@@ -462,6 +462,13 @@ pub mod api {
     /// `set_temporal` and a load's `validFrom`/`validTo` column types through
     /// `declare_defaulted` / `declare_from_column_types`.
     pub mod temporal {
+        /// A zero-copy view of a graph as of one valid-time instant: queries
+        /// run on the base graph under the view's `FOR VALID_TIME AS OF`
+        /// prefix, and a consumer that needs a materialised graph asks the
+        /// view for its `ValidSlice`.
+        pub use crate::graph::features::temporal::view::{
+            view_at, ValidSlice, ValidTimeView, DISK_SLICE_ELEMENT_CAP, SLICE_BYTE_CAP,
+        };
         pub use crate::graph::features::temporal::{
             declare, declare_defaulted, declare_from_column_types, declare_loaded, edge_configs,
             list, node_config, node_request_config, relationship_request_configs, undeclare,
@@ -890,7 +897,11 @@ pub mod api {
         /// binding's `valid_at=` argument sends. The instant (a date, a
         /// datetime, or an ISO date/datetime string) is written as a literal;
         /// a query that already carries a context is refused naming both.
-        pub use crate::graph::languages::cypher::valid_time::prepend_valid_time;
+        /// `carries_valid_time_context` asks the same tokenizer test alone,
+        /// and `PrependError` says which refusal applied.
+        pub use crate::graph::languages::cypher::valid_time::{
+            carries_valid_time_context, prepend_valid_time, PrependError,
+        };
         /// Operator-declared value codecs — position-scoped, bidirectional
         /// literal conversions (`'Q42'` ↔ `42`) bound to a property. Bindings
         /// build a `Vec<ValueCodec>` (e.g. from a YAML manifest) and pass it via

@@ -479,6 +479,7 @@ pub(crate) fn query_with_valid_at(query: &str, valid_at: Option<&str>) -> Result
         None => Ok(query.to_string()),
         Some(instant) => {
             kglite::api::cypher::prepend_valid_time(query, &Value::String(instant.to_string()))
+                .map_err(|err| err.to_string())
         }
     }
 }

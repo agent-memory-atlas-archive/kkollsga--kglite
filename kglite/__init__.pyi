@@ -4973,7 +4973,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def freeze(self) -> "FrozenGraph":
+    def freeze(self, *, valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None) -> "FrozenGraph":
         """Take an immutable, concurrently-readable snapshot of the graph.
 
         Returns a :class:`FrozenGraph` that shares this graph's data (an O(1)
@@ -4993,6 +4993,22 @@ class KnowledgeGraph:
         override the captured defaults. The current embedding-model binding is
         captured too; later source replacement or unbinding does not affect the
         snapshot, while mutable state inside that same model object remains shared.
+
+        Args:
+            valid_at: Freeze the graph as of an instant — a ``datetime.date``,
+                a ``datetime.datetime`` or an ISO date/datetime string. Every
+                :meth:`FrozenGraph.cypher` on the handle then answers as
+                ``cypher(query, valid_at=…)`` on this graph would, with no
+                copy: the handle runs each query behind the same
+                ``FOR VALID_TIME AS OF`` prefix on the shared data, and keeps
+                the validity masks it resolved at freeze time alive for its
+                lifetime, so its queries do not rebuild them.
+
+        Raises:
+            ValueError: ``valid_at`` is not a date, datetime or ISO
+                date/datetime string; the graph has no validity declaration;
+                or a relationship type holds several declarations with no
+                source type.
         """
         ...
 
@@ -10197,7 +10213,7 @@ class Session:
         """
         ...
 
-    def snapshot(self) -> "FrozenGraph":
+    def snapshot(self, *, valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None) -> "FrozenGraph":
         """Take an immutable :class:`FrozenGraph` snapshot of the current state.
 
         An O(1) ``Arc`` clone that stays stable even if the ``Session`` is
@@ -10205,6 +10221,13 @@ class Session:
         consistent multi-query view or hand a fixed read snapshot to readers.
 
         The snapshot inherits this Session's captured query defaults.
+
+        Args:
+            valid_at: Take the snapshot as of an instant, as
+                :meth:`KnowledgeGraph.freeze` does with ``valid_at``.
+
+        Raises:
+            ValueError: As :meth:`KnowledgeGraph.freeze` with ``valid_at``.
         """
         ...
 
@@ -10263,6 +10286,11 @@ class FrozenGraph:
     The source's embedding-model binding is captured with the snapshot. Later
     source replacement or unbinding does not alter it; mutable state inside the
     captured model object remains shared. Model bindings are not serialized.
+
+    A handle taken with ``freeze(valid_at=…)`` or ``Session.snapshot(valid_at=…)``
+    is **as of** that instant: see :meth:`cypher`. :meth:`node_count` and
+    :attr:`node_types` still describe the whole snapshot, not the elements
+    valid at the instant.
     """
 
     def cypher(
@@ -10299,16 +10327,28 @@ class FrozenGraph:
 
         Omitted/None options inherit the snapshot's captured defaults. The built-in
         Python timeout is 180_000ms; ``timeout_ms=0`` disables that query deadline.
+
+        On a handle taken with ``valid_at``, every query runs behind that
+        instant's ``FOR VALID_TIME AS OF`` prefix, so it answers exactly as
+        :meth:`KnowledgeGraph.cypher` with the same ``valid_at`` answers on
+        the frozen state — ``id(n)`` is the user id and ``elementId(n)`` the
+        snapshot's own identity, as there. ``EXPLAIN`` and ``PROFILE`` work
+        and show the ``ValidTimeContext`` row. A query that carries its own
+        ``FOR … AS OF`` prefix raises ``ValueError``: the handle already
+        fixes the instant, so take a fresh ``freeze(valid_at=…)`` for
+        another one.
         """
         ...
 
     def node_count(self) -> int:
-        """Number of nodes in the snapshot."""
+        """Number of nodes in the snapshot — every node, on a ``valid_at``
+        handle too, not only those valid at its instant."""
         ...
 
     @property
     def node_types(self) -> list[str]:
-        """Node type names present in the snapshot."""
+        """Node type names present in the snapshot, on a ``valid_at`` handle
+        too."""
         ...
 
 class Transaction:

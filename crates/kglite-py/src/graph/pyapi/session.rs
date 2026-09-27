@@ -544,8 +544,14 @@ impl Session {
     /// if the `Session` is later written to (copy-on-write forks the writer).
     /// Use this to hold a consistent multi-query view, or to hand a fixed
     /// read snapshot to a pool of readers.
-    fn snapshot(&self, py: Python<'_>) -> FrozenGraph {
-        FrozenGraph::with_defaults(self.read_snapshot(py), self.embedder.clone(), self.defaults)
+    #[pyo3(signature = (*, valid_at=None))]
+    fn snapshot(
+        &self,
+        py: Python<'_>,
+        valid_at: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<FrozenGraph> {
+        let snapshot = self.read_snapshot(py);
+        FrozenGraph::as_of(py, snapshot, self.embedder.clone(), self.defaults, valid_at)
     }
 
     /// Spawn a per-thread **query cursor**: a `KnowledgeGraph` bound to a

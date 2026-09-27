@@ -660,3 +660,115 @@ fn the_duplicate_id_map_holds_only_shadowed_nodes_and_counts_against_the_cap() {
     set_byte_cap(&capped, bytes - 1);
     assert!(duplicate_ids(&capped, "M").is_none());
 }
+
+// --- Pinned masks and covering keys (valid-time views) -----------------
+
+/// Twelve one-year well versions (twelve segments of their own) and a
+/// licence on each, so resolves at different years never share a key.
+fn yearly_wells() -> DirGraph {
+    let mut g = graph(&[
+        "UNWIND range(0, 11) AS i CREATE (:Well {id: i, \
+         vf: date({year: 2000 + i, month: 1, day: 1}), \
+         vt: date({year: 2000 + i, month: 12, day: 31})})",
+        "MATCH (w:Well) CREATE (w)-[:LICENSED {lf: date('2003-01-01'), lt: date('2040-01-01')}]->(:Company {id: w.id})",
+    ]);
+    declare(&mut g, &node("Well"), "vf", "vt", CLOSED).unwrap();
+    declare(&mut g, &licensed(), "lf", "lt", CLOSED).unwrap();
+    g
+}
+
+/// `template(g)` without its relationship target: the key of a query that
+/// reaches wells only.
+fn wells_only(g: &DirGraph) -> GuardTemplate {
+    let mut template = template(g);
+    template.edges.clear();
+    template
+}
+
+fn resolve_with(g: &DirGraph, template: &GuardTemplate, year: i32) -> ResolvedFilter {
+    GraphFilter {
+        template: Arc::new(template.clone()),
+        selector: ValidTimeSelector::AsOf(Instant::Date(
+            NaiveDate::from_ymd_opt(year, 6, 1).unwrap(),
+        )),
+    }
+    .resolve(g)
+}
+
+#[test]
+fn a_covering_key_serves_a_query_without_a_build() {
+    let g = yearly_wells();
+    let view = resolve_with(&g, &template(&g), 2005);
+    let view_masks = view.masks.clone().unwrap();
+    assert_eq!(view.key.len(), 2);
+    let query = resolve_with(&g, &wells_only(&g), 2005);
+    assert_eq!(query.key.len(), 1);
+    assert!(is_covered_by(&query.key, &view.key));
+    assert!(!is_covered_by(&view.key, &query.key));
+    assert!(Arc::ptr_eq(query.masks.as_ref().unwrap(), &view_masks));
+    assert_eq!(
+        read_cache(&g).as_ref().unwrap().masks.len(),
+        1,
+        "nothing built"
+    );
+    // A key in another segment is not covered.
+    let other = resolve_with(&g, &wells_only(&g), 2006);
+    assert!(!Arc::ptr_eq(other.masks.as_ref().unwrap(), &view_masks));
+}
+
+#[test]
+fn a_pinned_mask_outlives_the_lru_and_is_counted_once() {
+    let g = yearly_wells();
+    let view = resolve_with(&g, &template(&g), 2005);
+    let pinned = view.masks.clone().unwrap();
+    pin_masks(&g, &view.key, &pinned);
+    // Nine resolves at other years overflow the eight-entry LRU.
+    for year in (2000..2012).filter(|&y| y != 2005).take(9) {
+        resolve_with(&g, &template(&g), year);
+    }
+    {
+        let cache = read_cache(&g);
+        let cache = cache.as_ref().unwrap();
+        assert_eq!(cache.masks.len(), MAX_CACHED_MASKS);
+        assert!(!cache.masks.iter().any(|(_, m)| Arc::ptr_eq(m, &pinned)));
+        let lru: usize = cache.masks.iter().map(|(_, m)| m.bytes()).sum();
+        assert_eq!(
+            cache.mask_bytes(),
+            lru + pinned.bytes(),
+            "the pin counted once"
+        );
+    }
+    // A query the view's key covers is served the pinned masks, not a build.
+    let query = resolve_with(&g, &wells_only(&g), 2005);
+    assert!(Arc::ptr_eq(query.masks.as_ref().unwrap(), &pinned));
+    let same = resolve_with(&g, &template(&g), 2005);
+    assert!(Arc::ptr_eq(same.masks.as_ref().unwrap(), &pinned));
+    // Pinning the same masks twice registers them once.
+    pin_masks(&g, &view.key, &pinned);
+    assert_eq!(read_cache(&g).as_ref().unwrap().pinned.len(), 1);
+    // Once the view lets go, the pin is gone and a resolve builds afresh.
+    let weak = Arc::downgrade(&pinned);
+    drop((view, pinned, query, same));
+    assert!(weak.upgrade().is_none());
+    let rebuilt = resolve_with(&g, &wells_only(&g), 2005);
+    assert!(rebuilt.masks.is_some());
+    assert_eq!(read_cache(&g).as_ref().unwrap().mask_bytes() % 8, 0);
+}
+
+#[test]
+fn a_write_drops_the_pins_with_the_masks() {
+    let mut g = yearly_wells();
+    let view = resolve_with(&g, &template(&g), 2005);
+    let pinned = view.masks.clone().unwrap();
+    pin_masks(&g, &view.key, &pinned);
+    run(
+        &mut g,
+        "MATCH (w:Well {id: 5}) SET w.vt = date('2005-03-01')",
+    );
+    let after = resolve_with(&g, &wells_only(&g), 2005);
+    assert!(!Arc::ptr_eq(after.masks.as_ref().unwrap(), &pinned));
+    assert!(read_cache(&g).as_ref().unwrap().pinned.is_empty());
+    // The held masks still answer for the state they were built on.
+    assert!(pinned.nodes.contains(well_slot(&g, 5)));
+    assert!(!after.masks.unwrap().nodes.contains(well_slot(&g, 5)));
+}

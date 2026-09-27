@@ -20,7 +20,9 @@ pub(crate) mod persist;
 #[cfg(test)]
 mod persist_tests;
 mod request;
+pub(crate) mod slice;
 mod validate;
+pub mod view;
 
 pub(crate) use declarations::declared;
 pub(crate) use declarations::merge_start_key;

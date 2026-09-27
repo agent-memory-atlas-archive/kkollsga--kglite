@@ -882,11 +882,18 @@ impl KnowledgeGraph {
     /// graph cheaply, freeze it, serve concurrent readers, and swap in a new
     /// `freeze()` when the data changes.
     /// The current embedder binding is captured with the snapshot.
-    fn freeze(&self) -> crate::graph::pyapi::frozen::FrozenGraph {
-        crate::graph::pyapi::frozen::FrozenGraph::with_defaults(
+    #[pyo3(signature = (*, valid_at=None))]
+    fn freeze(
+        &self,
+        py: Python<'_>,
+        valid_at: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<crate::graph::pyapi::frozen::FrozenGraph> {
+        crate::graph::pyapi::frozen::FrozenGraph::as_of(
+            py,
             std::sync::Arc::clone(&self.inner),
             self.embedder.clone(),
             self.query_defaults(),
+            valid_at,
         )
     }
 
@@ -1717,7 +1724,7 @@ impl KnowledgeGraph {
             .map(|instant| {
                 let value = py_in::py_query_parameter_to_value("valid_at", instant)?;
                 cypher::prepend_valid_time(query, &value)
-                    .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+                    .map_err(|err| PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string()))
             })
             .transpose()?;
         let query = prefixed.as_deref().unwrap_or(query);

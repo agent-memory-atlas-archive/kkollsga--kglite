@@ -11,12 +11,18 @@ Every A/B cell comes in two halves over the same data:
   built from only the elements that ``valid_at`` reports valid at ``T`` (every
   node and relationship the full graph holds valid at ``T``, no declarations).
 
-When the mask-backed view lands (``freeze(valid_at=)``), each ``*_view`` cell
-switches from the copied twin to it. The cell names, the graphs and the
-expected answers stay the same, so the cells re-measure the guard and the view
-as each lands. The module-scoped fixtures assert, before anything is timed, that
-each context answer equals its view answer and differs from the unguarded
-full-graph answer, so a cell cannot measure a filter that stopped filtering.
+* ``*_frozen`` — the same question, unprefixed, on ``freeze(valid_at=T)`` of
+  the full graph: the handle adds the prefix, so it runs the guarded route of
+  ``*_context`` with the masks the handle pinned at creation. The copied
+  ``*_view`` twin stays beside it as the floor either tier is measured
+  against — a frozen handle is not a copy, so it did not replace the twin.
+
+The module-scoped fixtures assert, before anything is timed, that each context
+answer equals its view answer (and its frozen answer) and differs from the
+unguarded full-graph answer, so a cell cannot measure a filter that stopped
+filtering. ``view_at_*`` time creating the handle — cold on a fresh copy of the
+graph (endpoint indexes and masks built) and warm (both cached) — and
+``slice_at`` the handle's materialised slice, built on a fresh copy.
 
 Default scale — 20k nodes / 100k relationships, 20% of the versioned elements
 valid at ``T`` (one of five periods):
@@ -279,6 +285,10 @@ class Pair:
     view: KnowledgeGraph
     params: dict[str, object]
 
+    @property
+    def frozen(self):
+        return self.full.freeze(valid_at=T)
+
 
 def _pair(scale: Scale) -> Pair:
     frames = _frames(scale)
@@ -289,6 +299,9 @@ def _pair(scale: Scale) -> Pair:
         guarded = _rows(full, cell.context, params)
         assert guarded == _rows(view, cell.plain, params), f"{name}: context answer differs from the view"
         assert guarded != _rows(full, cell.plain, params), f"{name}: the guard filters nothing"
+    frozen = full.freeze(valid_at=T)
+    for name, cell in CELLS.items():
+        assert _rows(frozen, cell.plain, params) == _rows(view, cell.plain, params), f"{name}: frozen"
     assert _rows(full, NODE_SCAN_PUSHED, params) == _rows(view, CELLS["node_scan_open"].plain, params)
     return Pair(full, view, params)
 
@@ -315,6 +328,40 @@ def test_temporal_context(benchmark, pair, name):
 @pytest.mark.parametrize("name", list(CELLS))
 def test_temporal_view(benchmark, pair, name):
     benchmark(_run, pair.view, CELLS[name].plain, pair.params)
+
+
+@pytest.fixture(scope="module")
+def frozen(pair):
+    return pair.frozen
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", list(CELLS))
+def test_temporal_frozen(benchmark, pair, frozen, name):
+    benchmark(_run, frozen, CELLS[name].plain, pair.params)
+
+
+@pytest.mark.benchmark
+def test_temporal_view_at_cold(benchmark, pair):
+    benchmark.pedantic(
+        lambda kg: kg.freeze(valid_at=T), setup=lambda: ((pair.full.copy(),), {}), rounds=20, iterations=1
+    )
+
+
+@pytest.mark.benchmark
+def test_temporal_view_at_warm(benchmark, pair):
+    pair.full.freeze(valid_at=T)
+    benchmark(lambda: pair.full.freeze(valid_at=T))
+
+
+@pytest.mark.benchmark
+def test_temporal_slice_at(benchmark, pair):
+    benchmark.pedantic(
+        lambda handle: handle._valid_time_slice(),
+        setup=lambda: ((pair.full.copy().freeze(valid_at=T),), {}),
+        rounds=10,
+        iterations=1,
+    )
 
 
 @pytest.mark.benchmark
@@ -386,7 +433,8 @@ def test_temporal_disk(benchmark, disk_graph, shape, guard):
 
 
 def test_temporal_cells_answer_like_their_views():
-    """Every context spelling returns its view twin's rows at a small scale."""
+    """Every context spelling returns its view twin's rows at a small scale,
+    and so does the unprefixed question on `freeze(valid_at=T)`."""
     _pair(Scale(260, 100, 600, 6_200, (6, 300), 20, 10))
 
 
@@ -461,6 +509,28 @@ def test_temporal_heavy_context(benchmark, heavy_pair, name):
 @pytest.mark.parametrize("name", list(HEAVY_CELLS))
 def test_temporal_heavy_view(benchmark, heavy_pair, name):
     benchmark(_run, heavy_pair.view, HEAVY_CELLS[name].plain, heavy_pair.params)
+
+
+# The cells whose context is the prefix. The procedure cells scope themselves
+# with `where:`; the prefix refuses an element-enumerating procedure.
+HEAVY_PREFIXED = [name for name, cell in HEAVY_CELLS.items() if cell.context.startswith(AS_OF_T)]
+
+
+@pytest.mark.bench_heavy
+@pytest.mark.parametrize("name", HEAVY_PREFIXED)
+def test_temporal_heavy_frozen(benchmark, heavy_pair, name):
+    handle = heavy_pair.frozen
+    benchmark(_run, handle, HEAVY_CELLS[name].plain, heavy_pair.params)
+
+
+@pytest.mark.bench_heavy
+def test_temporal_heavy_slice_at(benchmark, heavy_pair):
+    benchmark.pedantic(
+        lambda handle: handle._valid_time_slice(),
+        setup=lambda: ((heavy_pair.full.copy().freeze(valid_at=T),), {}),
+        rounds=3,
+        iterations=1,
+    )
 
 
 @pytest.mark.bench_heavy

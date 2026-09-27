@@ -1,7 +1,9 @@
 """The valid-time equivalence oracle, across storage modes.
 
 A statement under ``FOR VALID_TIME AS OF t`` on the full graph must answer as
-the same statement without the prefix does on a **reference slice**: a new
+the same statement without the prefix does on the view's materialised slice
+(``freeze(valid_at=t)``'s, built through the engine's own admit tests) and on
+a **reference slice**: a new
 graph holding only the elements valid at ``t``. The slice is built from the
 full graph's own Cypher ``valid_at`` — the validity evaluator, one call per declared
 label a node carries (the four-argument form, so each call reads that
@@ -274,15 +276,35 @@ def _numbered(nodes, edges):
     return nodes, edges
 
 
+# Physical identities: a frozen view runs on the base, so these equal the
+# guarded base's; a separately built graph has its own and cannot join in.
+ELEMENT_QUERIES = [
+    "MATCH (n) RETURN elementId(n) AS e, n.uid AS u",
+    "MATCH (a)-[r]->(b) RETURN elementId(a) AS a, elementId(b) AS b, r.eid AS e",
+]
+
+
 def _check(mode, nodes, edges, instant):
+    """Three implementations agree on every shape: the guarded statement on
+    the full graph (and through a view frozen at the instant), the unguarded
+    statement on the view's materialised slice, and the unguarded statement
+    on the reference slice."""
     nodes, edges = _numbered(nodes, edges)
     with _graph(mode) as full:
         _write(full, nodes, edges, declare=True)
         reference = _reference(full, nodes, edges, instant)
+        frozen = full.freeze(valid_at=instant)
+        sliced = frozen._valid_time_slice()
         for query in QUERIES:
             ordered = query in ORDERED
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", ordered, {"t": instant})
-            assert guarded == _answer(reference, query, ordered), f"{mode} at {instant}: {query}"
+            where = f"{mode} at {instant}: {query}"
+            assert guarded == _answer(reference, query, ordered), where
+            assert _answer(frozen, query, ordered) == guarded, f"frozen view, {where}"
+            assert _answer(sliced, query, ordered) == guarded, f"slice, {where}"
+        for query in ELEMENT_QUERIES:
+            guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", False, {"t": instant})
+            assert _answer(frozen, query, False) == guarded, f"frozen view, {mode} at {instant}: {query}"
 
 
 @pytest.mark.parametrize("mode", MODES)

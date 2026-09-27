@@ -13,6 +13,11 @@
 //! at the original bytes. That is the "build → freeze → share → swap"
 //! model — build a fresh graph cheaply, `freeze()` it, hand it to readers,
 //! and atomically swap in a new frozen snapshot when the data changes.
+//!
+//! `freeze(valid_at=…)` / `Session.snapshot(valid_at=…)` give the handle a
+//! core `ValidTimeView`: every `cypher()` runs behind the view's
+//! `FOR VALID_TIME AS OF` prefix on the same shared graph, with the view's
+//! masks pinned for the handle's lifetime.
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -27,6 +32,7 @@ use crate::graph::DirGraph;
 use crate::util::EnterKg;
 use kglite_core::api::session::CsvImportPolicy;
 use kglite_core::api::session::{execute_read, ExecuteOptions};
+use kglite_core::api::temporal::{view_at, ValidTimeView};
 use kglite_core::api::GraphRead;
 
 /// Immutable, `Send`-able read snapshot of a graph. See module docs.
@@ -35,6 +41,8 @@ pub struct FrozenGraph {
     defaults: QueryDefaults,
     pub(crate) inner: Arc<DirGraph>,
     pub(crate) embedder: Option<Arc<dyn crate::graph::embedder::Embedder>>,
+    /// Set by `valid_at=`: the graph as of that instant.
+    view: Option<Arc<ValidTimeView>>,
 }
 
 impl FrozenGraph {
@@ -47,7 +55,31 @@ impl FrozenGraph {
             inner,
             embedder,
             defaults,
+            view: None,
         }
+    }
+
+    /// [`Self::with_defaults`], as of `valid_at` when one is given. The view
+    /// resolves (and may build the endpoint indexes) outside the GIL.
+    // The detached closure preserves the engine's structured KgError until PyErr conversion.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn as_of(
+        py: Python<'_>,
+        inner: Arc<DirGraph>,
+        embedder: Option<Arc<dyn crate::graph::embedder::Embedder>>,
+        defaults: QueryDefaults,
+        valid_at: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let mut frozen = Self::with_defaults(inner, embedder, defaults);
+        if let Some(instant) = valid_at {
+            let value = py_in::py_query_parameter_to_value("valid_at", instant)?;
+            let base = Arc::clone(&frozen.inner);
+            let view = py
+                .detach(|| view_at(base, &value))
+                .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
+            frozen.view = Some(Arc::new(view));
+        }
+        Ok(frozen)
     }
 }
 
@@ -78,6 +110,14 @@ impl FrozenGraph {
         max_work_units: Option<usize>,
         row_limit: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
+        let prefixed = match &self.view {
+            Some(view) => Some(
+                view.cypher_text(query)
+                    .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?,
+            ),
+            None => None,
+        };
+        let query = prefixed.as_deref().unwrap_or(query);
         // Reject mutations up front with a frozen-specific message (clearer
         // than execute_read's generic "use execute_mut").
         let pre_parsed = cypher::parse_cypher(query).map_err(crate::error_py::kg_to_pyerr)?;
@@ -162,9 +202,29 @@ impl FrozenGraph {
         self.inner.get_node_types()
     }
 
+    /// The view's materialised valid slice as a new KnowledgeGraph; a test hook for the tier-agreement oracle.
+    // The detached closure preserves the engine's structured KgError until PyErr conversion.
+    #[allow(clippy::result_large_err)]
+    fn _valid_time_slice(&self, py: Python<'_>) -> PyResult<crate::graph::KnowledgeGraph> {
+        let view = self.view.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("this FrozenGraph has no valid_at")
+        })?;
+        let view = Arc::clone(view);
+        let slice = py
+            .detach(move || view.slice())
+            .map_err(crate::error_py::kg_to_pyerr)?;
+        Ok(crate::graph::KnowledgeGraph::from_arc(Arc::clone(
+            slice.graph(),
+        )))
+    }
+
     fn __repr__(&self) -> String {
+        let as_of = self
+            .view
+            .as_ref()
+            .map_or_else(String::new, |view| format!(", valid_at={}", view.as_of()));
         format!(
-            "FrozenGraph(nodes={}, types={})",
+            "FrozenGraph(nodes={}, types={}{as_of})",
             self.inner.graph.node_count(),
             self.inner.get_node_types().len()
         )

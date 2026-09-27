@@ -24,7 +24,9 @@ before upgrading.
   `db.labels()` are fine), `degree()` / `inDegree()` / `outDegree()` /
   `shortest_path_length()` (not available under a context yet), a
   relationship type whose declarations are ambiguous, a second prefix, and a prefix inside a UNION arm or a
-  `CALL { }` body. Rust: `kglite::api::cypher::prepend_valid_time`.
+  `CALL { }` body. Rust: `kglite::api::cypher::prepend_valid_time`, whose
+  `PrependError` tells a bad instant from a doubled context, and
+  `carries_valid_time_context`.
 - Cypher: a statement under `FOR VALID_TIME AS OF` executes. It answers as if
   the graph held only the elements valid at the instant: a node valid under
   every declared label it carries (primary or secondary), a relationship
@@ -46,6 +48,18 @@ before upgrading.
   pads NULLs when every match is invalid, and `EXISTS { }`, `COUNT { }` and
   pattern comprehensions see only valid matches. The Python `cypher(valid_at=…)` argument and the MCP `cypher_query` tool's
   `valid_at` argument run through the same prefix.
+- Python: `KnowledgeGraph.freeze(valid_at=…)` and `Session.snapshot(valid_at=…)`
+  return a `FrozenGraph` as of that instant. Its `cypher()` runs every query
+  behind the instant's `FOR VALID_TIME AS OF` prefix on the shared snapshot,
+  with no copy, and answers exactly as `cypher(query, valid_at=…)` does
+  (`EXPLAIN` / `PROFILE` included); a query carrying its own prefix raises
+  `ValueError`. The handle keeps the validity masks it resolved at creation
+  for its lifetime, so its queries reuse them however many other instants
+  are queried meanwhile. `node_count()` / `node_types` still describe the
+  whole snapshot. Rust: `kglite::api::temporal::view_at` returns the
+  `ValidTimeView` behind it, whose `slice()` builds (and caches per
+  segment, under a 128 MiB cap, a 2M-element cap on Disk) a materialised
+  graph of the valid elements with a map back to the base's nodes.
 - Cypher `date()` with no argument returns today's date in UTC; it used to
   raise "requires 1 argument".
 - `CALL db.temporal.declarations()` yields `empty_rows` and
