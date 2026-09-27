@@ -5,10 +5,8 @@ Every A/B cell comes in two halves over the same data:
 
 * ``*_context`` — the full graph (five periods of every versioned element), the
   question asked "as of" ``T`` with the statement prefix
-  ``FOR VALID_TIME AS OF $t`` on the plain query (the guard in the pattern matcher). The
-  variable-length cell keeps the two-argument ``valid_at(x, $t)`` spelling on
-  every node of the path until variable-length relationships run under a
-  context.
+  ``FOR VALID_TIME AS OF $t`` on the plain query (the guard in the pattern
+  matcher, its variable-length expansion and its path search).
 * ``*_view`` — the **view twin**: the same question, unguarded, on a graph
   built from only the elements that ``valid_at`` reports valid at ``T`` (every
   node and relationship the full graph holds valid at ``T``, no declarations).
@@ -27,8 +25,10 @@ valid at ``T`` (one of five periods):
   joined by timeless ``R`` relationships between same-period versions.
 * SODIR-shaped: timeless ``Field`` and ``Company`` nodes, 33k ``HAS_LICENSEE``
   and 5k ``HAS_OPERATOR`` relationships (edge-declared).
-* A/B cells: anchored 1-hop, open-ended node scan, var-length ``*1..3`` and
-  ``count(*)``; the SODIR anchored 1-hop and the Q4 time-consistent 3-hop.
+* A/B cells: anchored 1-hop, open-ended node scan, var-length ``*1..3``,
+  ``shortestPath`` between anchored version sets and ``count(*)``; the SODIR
+  anchored 1-hop, the Q4 time-consistent 3-hop and a per-field
+  ``COUNT { }`` over the licensee hop.
 * Agent cells: ``count(*)`` per field, top-k ``ORDER BY … LIMIT``, degree count.
 * Disk: one SODIR-shaped licensee hop on a disk graph, edge-declared (the guard
   reads each candidate relationship's bounds) against its node-declared twin
@@ -216,15 +216,17 @@ def _prefixed(plain: str) -> Cell:
 CELLS: dict[str, Cell] = {
     "anchored_1hop": _prefixed("MATCH (a:E)-[:R]->(b:E) WHERE a.eid IN $ids RETURN count(*) AS n"),
     "node_scan_open": _prefixed("MATCH (a:E) RETURN avg(a.score) AS s"),
-    # Variable-length relationships do not run under a context yet.
-    "var_length_1_3": Cell(
-        "MATCH (a:E)-[:R*1..3]->(b:E) WHERE a.eid IN $ids RETURN count(DISTINCT b) AS n",
-        "MATCH p = (a:E)-[:R*1..3]->(b:E) WHERE a.eid IN $ids "
-        "AND all(x IN nodes(p) WHERE valid_at(x, $t)) RETURN count(DISTINCT b) AS n",
+    "var_length_1_3": _prefixed("MATCH (a:E)-[:R*1..3]->(b:E) WHERE a.eid IN $ids RETURN count(DISTINCT b) AS n"),
+    "shortest_path": _prefixed(
+        "MATCH (a:E) WHERE a.eid IN $src MATCH (b:E) WHERE b.eid IN $dst "
+        "MATCH p = shortestPath((a)-[:R*..6]-(b)) RETURN count(*) AS n, sum(length(p)) AS s"
     ),
     "count_star": _prefixed("MATCH (a:E) RETURN count(*) AS n"),
     "sodir_anchored_1hop": _prefixed(
         "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE f.id IN $fids RETURN count(*) AS n"
+    ),
+    "count_hop": _prefixed(
+        "MATCH (f:Field) WHERE f.id IN $fids RETURN f.id AS f, COUNT { (f)-[:HAS_LICENSEE]->() } AS n"
     ),
     "sodir_q4_3hop": _prefixed(
         "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)<-[r1:HAS_LICENSEE]-(f2:Field)"
@@ -251,10 +253,15 @@ CONTROLS = {
 
 def _params(scale: Scale) -> dict[str, object]:
     rng = np.random.default_rng(SEED + 1)
+    ids = [int(x) for x in rng.choice(scale.entities, scale.anchors, replace=False)]
     return {
         "t": T,
-        "ids": [int(x) for x in rng.choice(scale.entities, scale.anchors, replace=False)],
+        "ids": ids,
         "fids": [int(x) for x in rng.choice(scale.fields, scale.field_anchors, replace=False)],
+        # Ten source and ten target entities for the path search: 100 pairs as
+        # of T, 2,500 over every version.
+        "src": ids[:10],
+        "dst": ids[10:20],
     }
 
 

@@ -2057,19 +2057,21 @@ impl<'a> PatternExecutor<'a> {
         // `max_results` reaches a variable-length expansion only when every row
         // it returns survives the post-expansion filters
         // (`HopPlan::var_length_cap_safe`), so the BFS may stop once filled.
+        // A filter picks the guarded expansion once per segment call; the
+        // plain loops carry no filter test.
         if let Some((min_hops, max_hops)) = edge_pattern.var_length {
-            self.refuse_var_length_under_filter()?;
-            return self.expand_var_length(
-                source,
-                &VarLengthSegment {
-                    edge: edge_pattern,
-                    node: node_pattern,
-                    min_hops,
-                    max_hops,
-                },
-                max_results,
-                visited,
-            );
+            let segment = VarLengthSegment {
+                edge: edge_pattern,
+                node: node_pattern,
+                min_hops,
+                max_hops,
+            };
+            return match self.graph_filter.as_deref() {
+                None => self.expand_var_length(source, &segment, max_results, visited),
+                Some(filter) => {
+                    self.expand_var_length_guarded(filter, source, &segment, max_results)
+                }
+            };
         }
 
         if self.disk_peer_sweep_applies(edge_pattern) {
@@ -2228,10 +2230,13 @@ impl<'a> PatternExecutor<'a> {
 mod expansion;
 
 #[path = "matcher_guard.rs"]
-pub(crate) mod guard;
+mod guard;
 
 #[path = "matcher_var_length.rs"]
 mod var_length;
+
+#[path = "matcher_var_length_guarded.rs"]
+mod var_length_guarded;
 
 use var_length::{VarLengthSegment, VisitedStamps};
 

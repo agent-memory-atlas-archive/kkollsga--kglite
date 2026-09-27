@@ -10,6 +10,7 @@ exactly as before, and a declaration alone changes no plan and no answer.
 from __future__ import annotations
 
 import datetime
+import re
 
 import pytest
 
@@ -31,7 +32,6 @@ globals().update(
     }
 )
 
-NOT_YET = "not available under FOR VALID_TIME AS OF yet"
 AS_OF = "FOR VALID_TIME AS OF date('2006-01-01') "
 
 
@@ -247,6 +247,7 @@ GUARD_SAFE_PASSES = {
     "fuse_node_scan_aggregate",
     "fuse_node_scan_top_k",
     "fuse_order_by_top_k",
+    "mark_fast_var_length_paths",
 }
 
 
@@ -302,3 +303,44 @@ def test_a_declaration_alone_changes_no_plan_and_no_answer(name, fixture, query,
     declared = observe()
     assert declared[0] == undeclared[0]
     assert declared[1] == undeclared[1]
+
+
+# The corpus's variable-length and shortestPath entries, prefix-less.
+_VAR_LENGTH = [entry for entry in _PREFIXLESS if re.search(r"\[[^\]]*\*", entry[2]) or "hortestPath" in entry[2]]
+# Refusals a context raises before it runs anything: the entry has no
+# guarded form to compare.
+_CONTEXT_REFUSALS = ("cannot write", "procedure", "not available under a valid-time context", "ambiguous")
+
+
+def test_the_corpus_has_var_length_entries_to_sync():
+    assert len(_VAR_LENGTH) >= 40, len(_VAR_LENGTH)
+
+
+@pytest.mark.parametrize("name,fixture,query,params", _VAR_LENGTH, ids=[e[0] for e in _VAR_LENGTH])
+def test_the_guarded_var_length_expansion_matches_the_plain_one(name, fixture, query, params, request):
+    """The guarded expansions are clones of the plain ones. Under a filter
+    that admits every element the query can reach — two isolated
+    `ZzValidity` nodes, one valid and one not, so the guard runs without
+    hiding anything reachable — every corpus variable-length and
+    shortestPath entry answers as it does without the prefix. An entry the
+    seeded nodes can reach (an untyped zero-hop anchor) is left out."""
+    graph = request.getfixturevalue(fixture)
+    if graph.cypher("CALL db.temporal.declarations()").to_list():
+        pytest.skip("the fixture declares its own intervals")
+    kwargs = {"params": params} if params else {}
+    order = "ordered" if name in ORDERED_CASES else "bag"
+    plain = _normalize(graph.cypher(query, **kwargs).to_list(), order=order)
+    graph.cypher(
+        "CREATE (:ZzValidity {vf: date('2000-01-01'), vt: date('2001-01-01')}),"
+        " (:ZzValidity {vf: date('2000-01-01'), vt: date('2030-01-01')})"
+    ).to_list()
+    if _normalize(graph.cypher(query, **kwargs).to_list(), order=order) != plain:
+        pytest.skip("the seeded nodes are reachable from this entry")
+    graph.cypher("CALL db.temporal.declare({node: 'ZzValidity', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    try:
+        guarded = graph.cypher(f"{AS_OF}{query}", **kwargs).to_list()
+    except kglite.KgError as error:
+        if any(reason in str(error) for reason in _CONTEXT_REFUSALS):
+            pytest.skip(f"refused under a context: {error}")
+        raise
+    assert _normalize(guarded, order=order) == plain

@@ -14,7 +14,6 @@ use rustc_hash::FxHashMap;
 use super::match_clause::{bound_hop, simple_node_edge_node, BoundHop};
 use super::*;
 use crate::graph::core::graph_filter::ElementFilter;
-use crate::graph::core::pattern_matching::matcher::guard::VAR_LENGTH_NOT_YET;
 use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::languages::cypher::valid_time;
 
@@ -38,15 +37,6 @@ impl CypherExecutor<'_> {
         match self.graph_filter().and_then(|filter| filter.error()) {
             Some(error) => Err(error.to_string()),
             None => Ok(()),
-        }
-    }
-
-    /// `shortestPath` runs its own search, which does not test the filter.
-    #[inline]
-    pub(super) fn refuse_path_search_under_filter(&self) -> Result<(), String> {
-        match self.graph_filter() {
-            None => Ok(()),
-            Some(_) => Err(VAR_LENGTH_NOT_YET.to_string()),
         }
     }
 

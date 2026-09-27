@@ -99,6 +99,11 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "fuse_order_by_top_k",
         "a bounded heap over rows the matcher already admitted",
     ),
+    (
+        "mark_fast_var_length_paths",
+        "the distance frontier has a guarded form that tests every relationship and \
+         node it crosses before marking it (matcher_var_length_guarded.rs)",
+    ),
 ];
 
 /// Passes that never run under a guard, each with what it would bypass. The
@@ -130,10 +135,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
         "retrieval from a vector index",
     ),
     ("fuse_text_bm25_order_limit", "retrieval from a text index"),
-    (
-        "mark_fast_var_length_paths",
-        "a fast frontier expansion that bypasses per-element acceptance",
-    ),
     (
         "mark_skip_target_type_check",
         "skips the node-type check that label guards rely on",

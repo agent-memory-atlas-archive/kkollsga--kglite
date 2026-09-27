@@ -19,8 +19,6 @@ import pytest
 
 import kglite
 
-NOT_YET = "not available under FOR VALID_TIME AS OF yet"
-
 
 def at(date: str, body: str) -> str:
     return f"FOR VALID_TIME AS OF date('{date}') {body}"
@@ -199,21 +197,6 @@ def test_a_wrong_typed_bound_raises():
         graph.cypher(at("2006-01-01", "MATCH (s:Site) RETURN s.id")).to_list()
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "MATCH (w:Well)-[:IN*1..2]-(x) RETURN x.id",
-        "MATCH p = shortestPath((w:Well {id: 1})-[:IN*]-(f:Field)) RETURN length(p)",
-        "MATCH (w:Well) WHERE EXISTS { (w)-[:IN*1..3]-() } RETURN w.id",
-    ],
-)
-def test_var_length_and_shortest_path_are_not_available_yet(sodir, body):
-    with pytest.raises(kglite.KgError, match=NOT_YET):
-        sodir.cypher(at("2006-01-01", body)).to_list()
-    # A fixed-length star lowers to explicit hops and runs.
-    assert ids(sodir, at("2006-01-01", "MATCH (w:Well)-[:IN*1]->(f) RETURN w.id")) == [1, 2]
-
-
 def test_the_plan_cache_never_carries_an_instant(sodir):
     body = "MATCH (w:Well) RETURN w.id"
     # One text, two parameter values: two answers.
@@ -247,6 +230,198 @@ def test_valid_at_runs_the_query_as_of_the_date(sodir):
     assert ids(sodir, "MATCH (w:Well) RETURN w.id", valid_at="2003-01-01") == [1]
     assert ids(sodir, "MATCH (w:Well) RETURN w.id", valid_at=dt.date(2011, 1, 1)) == [2]
     assert ids(sodir, "MATCH (w:Well) RETURN w.id", valid_at=dt.datetime(2011, 1, 1, 12)) == [2]
+
+
+# ── Variable-length relationships, OPTIONAL MATCH, subqueries, shortestPath ──
+
+
+@pytest.fixture
+def network():
+    """Stops on a declared `LINK` network. Stop 2 closes in 2005, the direct
+    1→3 link runs 2000–2005, and 4→5 has two parallel links — `xy1`
+    (2000–2005) and `xy2` (from 2006). At 2008 the only valid route from 1
+    to 3 is 1→4→5→3 over `xy2`; unguarded, 1→3 is one hop."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (s1:Stop {id: 1}), (s2:Stop {id: 2, vf: date('2000-01-01'), vt: date('2005-01-01')}),"
+        " (s3:Stop {id: 3}), (s4:Stop {id: 4}), (s5:Stop {id: 5}),"
+        " (s1)-[:LINK {k: 'a2'}]->(s2), (s2)-[:LINK {k: '2b'}]->(s3),"
+        " (s1)-[:LINK {k: 'ab', since: date('2000-01-01'), until: date('2005-01-01')}]->(s3),"
+        " (s1)-[:LINK {k: 'ax'}]->(s4),"
+        " (s4)-[:LINK {k: 'xy1', since: date('2000-01-01'), until: date('2005-01-01')}]->(s5),"
+        " (s4)-[:LINK {k: 'xy2', since: date('2006-01-01')}]->(s5),"
+        " (s5)-[:LINK {k: 'yb'}]->(s3)"
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'Stop', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    graph.cypher(
+        "CALL db.temporal.declare({relationship: 'LINK', from: 'since', to: 'until', convention: 'half_open'})"
+    ).to_list()
+    return graph
+
+
+def _explained(graph, query):
+    return [row["operation"] for row in graph.cypher(f"EXPLAIN {query}").to_list()]
+
+
+def test_var_length_paths_run_only_through_valid_elements(network):
+    count = "MATCH (:Stop {{id: 1}})-[:LINK*1..{n}]->(:Stop {{id: 3}}) RETURN count(*) AS c"
+    # Unguarded: 1→3, 1→2→3, and 1→4→5→3 once per parallel 4→5 link.
+    assert ids(network, count.format(n=2)) == [2]
+    assert ids(network, count.format(n=3)) == [4]
+    # The direct link is closed and stop 2 is gone: nothing within two hops.
+    assert ids(network, at("2008-01-01", count.format(n=2))) == [0]
+    assert ids(network, at("2008-01-01", count.format(n=3))) == [1]
+    # A bound relationship list holds only the valid relationships.
+    body = "MATCH (:Stop {id: 1})-[r:LINK*1..3]->(:Stop {id: 3}) RETURN [x IN r | x.k] AS ks"
+    assert ids(network, at("2008-01-01", body)) == [["ax", "xy2", "yb"]]
+    assert ids(network, at("2003-01-01", body)) == [["a2", "2b"], ["ab"], ["ax", "xy1", "yb"]]
+    # A fixed-length star is written out as hops and runs the same way.
+    assert ids(network, at("2008-01-01", "MATCH (:Stop {id: 1})-[:LINK*1]->(t) RETURN t.id")) == [4]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # The distance frontier (the planner marks the segment trail-free).
+        "MATCH (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t) AS c",
+        # The trail expansion (a named path needs the relationships).
+        "MATCH p = (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t) AS c",
+    ],
+)
+def test_an_invisible_intermediate_node_or_relationship_breaks_the_path(network, body):
+    """Within two hops of stop 1 at 2008: 4 and 5 only — 2 is invisible, 3
+    is reached over the closed direct link or through 2."""
+    assert ids(network, body) == [4]
+    assert ids(network, at("2008-01-01", body)) == [2]
+
+
+def test_the_distance_frontier_runs_under_a_context(network):
+    body = "MATCH (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t) AS c"
+    assert "OptimizerPass mark_fast_var_length_paths" in _explained(network, at("2008-01-01", body))
+
+
+@pytest.mark.parametrize("path", ["", "p = "])
+def test_an_undirected_closed_trail_needs_valid_relationships(network, path):
+    """Stop 4 reaches itself over the two parallel 4–5 links; at 2008 one
+    of them is closed, so 4 is no longer its own two-hop neighbour."""
+    body = f"MATCH {path}(s:Stop {{id: 4}})-[:LINK*1..2]-(t:Stop) RETURN DISTINCT t.id AS t"
+    assert ids(network, body) == [1, 2, 3, 4, 5]
+    assert ids(network, at("2008-01-01", body)) == [1, 3, 5]
+
+
+def test_exists_with_a_var_length_pattern_is_guarded(network):
+    body = "MATCH (s:Stop) WHERE EXISTS { (s)-[:LINK*2..2]->(:Stop {id: 3}) } RETURN s.id"
+    assert ids(network, body) == [1, 4]
+    assert ids(network, at("2008-01-01", body)) == [4]
+
+
+def test_shortest_path_takes_the_longer_valid_route(network):
+    body = (
+        "MATCH p = shortestPath((a:Stop {id: 1})-[:LINK*]->(b:Stop {id: 3})) "
+        "RETURN length(p) AS n, [r IN relationships(p) | r.k] AS ks"
+    )
+    assert network.cypher(body).to_list() == [{"n": 1, "ks": ["ab"]}]
+    # Through the valid parallel link only.
+    assert network.cypher(at("2008-01-01", body)).to_list() == [{"n": 3, "ks": ["ax", "xy2", "yb"]}]
+    undirected = "MATCH p = shortestPath((a:Stop {id: 1})-[:LINK*]-(b:Stop {id: 3})) RETURN length(p) AS n"
+    assert ids(network, at("2008-01-01", undirected)) == [3]
+    reverse = "MATCH p = shortestPath((b:Stop {id: 3})<-[:LINK*]-(a:Stop {id: 1})) RETURN length(p) AS n"
+    assert ids(network, at("2008-01-01", reverse)) == [3]
+    # No valid route at all: stop 2 itself is invisible.
+    none = "MATCH p = shortestPath((a:Stop {id: 1})-[:LINK*]->(b:Stop {id: 2})) RETURN length(p) AS n"
+    assert ids(network, at("2008-01-01", none)) == []
+
+
+def test_all_shortest_paths_skip_invisible_parallel_relationships(network):
+    body = (
+        "MATCH p = allShortestPaths((a:Stop {id: 1})-[:LINK*]->(b:Stop {id: 3})) "
+        "RETURN [r IN relationships(p) | r.k] AS ks"
+    )
+    assert ids(network, body) == [["ab"]]
+    assert ids(network, at("2008-01-01", body)) == [["ax", "xy2", "yb"]]
+    # At 2003 the direct link is valid again; one shortest path.
+    assert ids(network, at("2003-01-01", body)) == [["ab"]]
+    # One node sequence, one path per valid parallel relationship.
+    four = (
+        "MATCH p = allShortestPaths((a:Stop {id: 4})-[:LINK*]-(b:Stop {id: 5})) "
+        "RETURN [r IN relationships(p) | r.k] AS ks"
+    )
+    assert ids(network, four) == [["xy1"], ["xy2"]]
+    assert ids(network, at("2008-01-01", four)) == [["xy2"]]
+    assert ids(network, at("2003-01-01", four)) == [["xy1"]]
+
+
+def test_optional_match_pads_nulls_when_every_match_is_invisible(sodir):
+    body = "MATCH (f:Field) OPTIONAL MATCH (f)-[:HAS_LICENSEE]->(c) RETURN f.id AS f, c.id AS c"
+    assert sodir.cypher(at("2006-01-01", body)).to_list() == [{"f": 10, "c": None}]
+    assert sodir.cypher(at("2003-01-01", body)).to_list() == [{"f": 10, "c": 20}]
+    wells = "MATCH (f:Field) OPTIONAL MATCH (f)<-[:IN]-(w:Well) RETURN f.id AS f, collect(w.id) AS w"
+    assert sodir.cypher(at("2011-01-01", wells)).to_list() == [{"f": 10, "w": [2]}]
+
+
+@pytest.mark.parametrize("storage", [None, "mapped"])
+def test_count_subquery_equals_the_guarded_match_count(storage):
+    """Memory takes the incident-relationship count, mapped the row join."""
+    graph = kglite.KnowledgeGraph(storage=storage) if storage else kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (f:Field {id: 10}), (c1:Company {id: 20}), (c2:Company {id: 21}),"
+        " (c3:Company {id: 22, vf: date('2007-01-01'), vt: date('2100-01-01')}),"
+        " (f)-[:HAS_LICENSEE {lf: date('2000-01-01'), lt: date('2005-01-01')}]->(c1),"
+        " (f)-[:HAS_LICENSEE {lf: date('2004-01-01')}]->(c2),"
+        " (f)-[:HAS_LICENSEE {lf: date('2004-01-01')}]->(c3)"
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'Company', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    graph.cypher(
+        "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', from: 'lf', to: 'lt', convention: 'half_open'})"
+    ).to_list()
+    counted = "MATCH (f:Field) RETURN count { (f)-[:HAS_LICENSEE]->() } AS n"
+    matched = "MATCH (f:Field)-[:HAS_LICENSEE]->() RETURN count(*) AS n"
+    for date, want in [("2003-01-01", 1), ("2004-06-01", 2), ("2008-01-01", 2), ("1990-01-01", 0)]:
+        assert ids(graph, at(date, counted)) == ids(graph, at(date, matched)) == [want], date
+    assert ids(graph, counted) == [3]
+
+
+def test_pattern_comprehensions_collect_only_valid_matches(sodir):
+    names = "MATCH (f:Field) RETURN [(f)<--(w) | w.id] AS ws"
+    paths = "MATCH (f:Field) RETURN [p = (f)<-[:IN]-(w) | length(p)] AS ls"
+    collected = "MATCH (f:Field)<--(w) RETURN collect(w.id) AS ws"
+    assert sorted(ids(sodir, names)[0]) == [1, 2, 3]
+    for date, want in [("2006-01-01", [1, 2]), ("2011-01-01", [2]), ("2013-01-01", [2, 3])]:
+        assert sorted(ids(sodir, at(date, names))[0]) == sorted(ids(sodir, at(date, collected))[0]) == want
+        assert ids(sodir, at(date, paths))[0] == [1] * len(want)
+    licensees = "MATCH (f:Field) RETURN [(f)-->(c) | c.id] AS cs"
+    assert ids(sodir, at("2006-01-01", licensees)) == [[]]
+    assert ids(sodir, at("2003-01-01", licensees)) == [[20]]
+
+
+def test_exists_answers_under_the_guard_on_the_join_route(sodir):
+    exists = "MATCH (f:Field) WHERE EXISTS { MATCH (f)-[:HAS_LICENSEE]->(c) WHERE c.id > 0 } RETURN f.id"
+    assert ids(sodir, at("2006-01-01", exists)) == []
+    assert ids(sodir, at("2003-01-01", exists)) == [10]
+
+
+def test_gullfaks_q4_by_var_length_equals_the_written_out_hops():
+    """The SODIR-shaped benchmark fixture at a small scale: the partners of a
+    field's operator, `(op)<-[:HAS_LICENSEE]-(f2)-[:HAS_LICENSEE]->(p)`, as
+    one undirected two-hop segment answers what the written-out hops do,
+    with and without the context."""
+    from tests.benchmarks import test_bench_temporal as bench
+
+    scale = bench.Scale(260, 100, 600, 6_200, (6, 300), 20, 10)
+    graph = bench._load(bench._frames(scale), declared=True)
+    params = bench._params(scale)
+    hops = (
+        "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)<-[r1:HAS_LICENSEE]-(f2:Field)"
+        "-[r2:HAS_LICENSEE]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
+    )
+    segment = (
+        "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)-[:HAS_LICENSEE*2..2]-(p:Company) "
+        "WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
+    )
+    for prefix in ("", bench.AS_OF_T):
+        written = bench._rows(graph, prefix + hops, params)
+        assert bench._rows(graph, prefix + segment, params) == written, prefix
+    assert bench._rows(graph, bench.AS_OF_T + segment, params) != bench._rows(graph, segment, params)
 
 
 # ── The timeless exit ────────────────────────────────────────────────────────

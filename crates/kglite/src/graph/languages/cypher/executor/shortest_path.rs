@@ -5,19 +5,26 @@
 //! shape (BFS between two anchor points rather than the usual pattern-walk).
 
 use super::*;
+use crate::graph::algorithms::graph_algorithms as ga;
+use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::core::pattern_matching::{NodePattern, PathHop};
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
 
+/// The most paths one `allShortestPaths` endpoint pair yields; bounds
+/// pathological fan-out.
+const MAX_ALL_SHORTEST: usize = 256;
+
 /// Expand one shortest node sequence into exact relationship sequences.
-/// Parallel edges create distinct paths; repeated edges are rejected.
+/// Parallel edges create distinct paths; repeated edges are rejected, and
+/// under a valid-time filter so is a relationship it does not admit.
 fn exact_shortest_hops(
     graph: &DirGraph,
     nodes: &[NodeIndex],
-    edge_direction: EdgeDirection,
-    connection_types: Option<&[String]>,
+    (edge_direction, connection_types): (EdgeDirection, Option<&[String]>),
     max_paths: usize,
+    filter: Option<&ElementFilter>,
 ) -> Vec<Vec<PathHop>> {
     let allowed: Option<Vec<InternedKey>> =
         connection_types.map(|types| types.iter().map(|t| InternedKey::from_str(t)).collect());
@@ -53,6 +60,9 @@ fn exact_shortest_hops(
                         .as_ref()
                         .is_some_and(|types| !types.contains(&edge.connection_type()))
                     || candidates.iter().any(|hop: &PathHop| hop.edge == edge.id())
+                    || filter.is_some_and(|f| {
+                        !f.admits_edge(graph, edge.id(), edge.connection_type(), edge.source())
+                    })
                 {
                     continue;
                 }
@@ -308,6 +318,73 @@ impl<'a> CypherExecutor<'a> {
         row
     }
 
+    /// The node sequences of the shortest paths from `source` to `target`:
+    /// at most one for `shortestPath`, every minimal one (capped at
+    /// [`MAX_ALL_SHORTEST`]) for `allShortestPaths`. Under a valid-time
+    /// filter the search follows only admitted relationships and nodes.
+    fn shortest_path_search(
+        &self,
+        (source_idx, target_idx): (NodeIndex, NodeIndex),
+        edge_direction: EdgeDirection,
+        connection_types: Option<&[String]>,
+        all_shortest: bool,
+    ) -> Vec<ga::PathResult> {
+        let filter = self.graph_filter().map(|f| &**f);
+        // An incoming pattern searches from the target and reverses.
+        let (from, to, reverse) = match edge_direction {
+            EdgeDirection::Incoming => (target_idx, source_idx, true),
+            _ => (source_idx, target_idx, false),
+        };
+        let directed = edge_direction != EdgeDirection::Both;
+        let mut results: Vec<ga::PathResult> = if all_shortest {
+            match filter {
+                Some(f) => ga::all_shortest_paths_filtered(
+                    self.graph,
+                    (from, to),
+                    connection_types,
+                    self.interrupt(),
+                    MAX_ALL_SHORTEST,
+                    directed,
+                    f,
+                ),
+                None if directed => ga::all_shortest_paths_directed(
+                    self.graph,
+                    from,
+                    to,
+                    connection_types,
+                    self.interrupt(),
+                    MAX_ALL_SHORTEST,
+                ),
+                None => ga::all_shortest_paths(
+                    self.graph,
+                    from,
+                    to,
+                    connection_types,
+                    self.interrupt(),
+                    MAX_ALL_SHORTEST,
+                ),
+            }
+        } else {
+            let path_opts = ga::PathOptions {
+                connection_types,
+                ..ga::PathOptions::default().with_interrupt(self.interrupt())
+            }
+            .with_filter(filter);
+            let single = if directed {
+                ga::shortest_path_directed(self.graph, from, to, &path_opts)
+            } else {
+                ga::shortest_path(self.graph, from, to, &path_opts)
+            };
+            single.into_iter().collect()
+        };
+        if reverse {
+            for result in &mut results {
+                result.path.reverse();
+            }
+        }
+        results
+    }
+
     pub(super) fn execute_shortest_path_match(
         &self,
         clause: &MatchClause,
@@ -315,7 +392,6 @@ impl<'a> CypherExecutor<'a> {
         existing: ResultSet,
         inline_where: Option<&Predicate>,
     ) -> Result<ResultSet, String> {
-        self.refuse_path_search_under_filter()?;
         let pattern = clause
             .patterns
             .get(path_assignment.pattern_index)
@@ -380,68 +456,12 @@ impl<'a> CypherExecutor<'a> {
                     continue;
                 }
 
-                // Dispatch based on edge direction + the all-shortest flag.
-                // `shortestPath` yields ≤1 path; `allShortestPaths` yields
-                // every minimal path (one output row each), capped to bound
-                // pathological fan-out.
-                use crate::graph::algorithms::graph_algorithms as ga;
-                const MAX_ALL_SHORTEST: usize = 256;
-                let path_results: Vec<ga::PathResult> = if path_assignment.all_shortest {
-                    match edge_direction {
-                        EdgeDirection::Both => ga::all_shortest_paths(
-                            self.graph,
-                            source_idx,
-                            target_idx,
-                            connection_types,
-                            self.interrupt(),
-                            MAX_ALL_SHORTEST,
-                        ),
-                        EdgeDirection::Outgoing => ga::all_shortest_paths_directed(
-                            self.graph,
-                            source_idx,
-                            target_idx,
-                            connection_types,
-                            self.interrupt(),
-                            MAX_ALL_SHORTEST,
-                        ),
-                        EdgeDirection::Incoming => ga::all_shortest_paths_directed(
-                            self.graph,
-                            target_idx,
-                            source_idx,
-                            connection_types,
-                            self.interrupt(),
-                            MAX_ALL_SHORTEST,
-                        )
-                        .into_iter()
-                        .map(|mut pr| {
-                            pr.path.reverse();
-                            pr
-                        })
-                        .collect(),
-                    }
-                } else {
-                    // Direction comes from the dispatch below, not from here.
-                    let path_opts = ga::PathOptions {
-                        connection_types,
-                        ..ga::PathOptions::default().with_interrupt(self.interrupt())
-                    };
-                    let single = match edge_direction {
-                        EdgeDirection::Both => {
-                            ga::shortest_path(self.graph, source_idx, target_idx, &path_opts)
-                        }
-                        EdgeDirection::Outgoing => ga::shortest_path_directed(
-                            self.graph, source_idx, target_idx, &path_opts,
-                        ),
-                        EdgeDirection::Incoming => ga::shortest_path_directed(
-                            self.graph, target_idx, source_idx, &path_opts,
-                        )
-                        .map(|mut pr| {
-                            pr.path.reverse();
-                            pr
-                        }),
-                    };
-                    single.into_iter().collect()
-                };
+                let path_results = self.shortest_path_search(
+                    (source_idx, target_idx),
+                    edge_direction,
+                    connection_types,
+                    path_assignment.all_shortest,
+                );
 
                 let mut exact_paths = Vec::new();
                 let mut seen_node_paths = std::collections::HashSet::new();
@@ -462,9 +482,9 @@ impl<'a> CypherExecutor<'a> {
                     for hops in exact_shortest_hops(
                         self.graph,
                         &path_result.path,
-                        edge_direction,
-                        connection_types,
+                        (edge_direction, connection_types),
                         remaining,
+                        self.graph_filter().map(|f| &**f),
                     ) {
                         exact_paths.push((path_result.cost, hops));
                     }

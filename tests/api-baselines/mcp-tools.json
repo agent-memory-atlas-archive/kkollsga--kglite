@@ -47,7 +47,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`), and\nrelationship patterns of variable length do not run under it yet.",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
             "type": [
               "string",
               "null"
@@ -632,7 +632,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`), and\nrelationship patterns of variable length do not run under it yet.",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
             "type": [
               "string",
               "null"
@@ -1477,7 +1477,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`), and\nrelationship patterns of variable length do not run under it yet.",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
             "type": [
               "string",
               "null"
@@ -2250,7 +2250,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`), and\nrelationship patterns of variable length do not run under it yet.",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
             "type": [
               "string",
               "null"
@@ -2935,7 +2935,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`), and\nrelationship patterns of variable length do not run under it yet.",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
             "type": [
               "string",
               "null"

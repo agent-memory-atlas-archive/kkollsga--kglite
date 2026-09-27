@@ -3,7 +3,9 @@
 //! slots, index and id seeks, the untyped seed the inverted index names — and
 //! every fixed hop (the relationship and the node it reaches) is put to the
 //! filter; the source end of a hop is a candidate or an earlier hop's target,
-//! so both endpoints of every matched relationship are tested.
+//! so both endpoints of every matched relationship are tested. Variable-length
+//! segments test each relationship and node they cross in
+//! `matcher_var_length_guarded.rs`.
 //!
 //! Without a filter each site is one `Option` test. The filtering bodies are
 //! `#[cold]` / `#[inline(never)]` so the plain loops keep their register
@@ -15,11 +17,6 @@ use super::{NodePattern, PatternExecutor};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::schema::{DirGraph, InternedKey};
-
-/// Why a variable-length relationship does not run under a filter yet.
-pub(crate) const VAR_LENGTH_NOT_YET: &str =
-    "variable-length relationships (and shortestPath) are not available under \
-     FOR VALID_TIME AS OF yet; write the hops out, or query without the context";
 
 impl PatternExecutor<'_> {
     /// Every node `pattern` can bind to, before any hop.
@@ -68,16 +65,6 @@ impl PatternExecutor<'_> {
         self.graph_filter
             .as_ref()
             .is_some_and(|filter| hop_rejected(filter, self.graph, edge, conn, source, far))
-    }
-
-    /// `Err` when a filter is set: the variable-length expansions do not test
-    /// their intermediate nodes yet.
-    #[inline]
-    pub(super) fn refuse_var_length_under_filter(&self) -> Result<(), String> {
-        match self.graph_filter {
-            None => Ok(()),
-            Some(_) => Err(VAR_LENGTH_NOT_YET.to_string()),
-        }
     }
 }
 

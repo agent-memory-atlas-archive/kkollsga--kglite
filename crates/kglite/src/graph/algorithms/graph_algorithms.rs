@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 // ceiling); re-exported so existing `graph_algorithms::…` paths keep resolving.
 use super::bidirectional::bidirectional_bfs;
 pub use super::centrality::*;
+use super::path_guard;
+use crate::graph::core::graph_filter::ElementFilter;
 // Community detection likewise: sibling module, same compatibility re-export.
 pub use super::community::*;
 use super::community::{scoped_universe, DedupNeighborSource};
@@ -175,7 +177,7 @@ impl EdgeDir {
     /// the backward frontier must expand the transpose, or it would search for
     /// paths *out of* the target instead of *into* it.
     #[inline]
-    fn reversed(self) -> Self {
+    pub(super) fn reversed(self) -> Self {
         match self {
             EdgeDir::Any => EdgeDir::Any,
             EdgeDir::Outgoing => EdgeDir::Incoming,
@@ -254,7 +256,7 @@ fn expand_neighbors_into(
 
 /// Whether a node passes the via_types filter.
 /// Source and target should be excluded from this check by the caller.
-fn node_passes_via_filter(
+pub(super) fn node_passes_via_filter(
     graph: &DirGraph,
     node: NodeIndex,
     via_types: &Option<HashSet<&str>>,
@@ -308,6 +310,10 @@ pub struct PathOptions<'a> {
     pub direction: EdgeDir,
     /// Deadline + cooperative-cancellation bundle.
     pub interrupt: Interrupt,
+    /// A valid-time filter the path must pass through (Cypher `shortestPath`
+    /// under `FOR VALID_TIME AS OF`): every relationship and node on it is
+    /// admitted. Read by [`shortest_path`] and [`shortest_path_cost_with`].
+    pub(crate) filter: Option<&'a ElementFilter>,
 }
 
 impl<'a> PathOptions<'a> {
@@ -325,6 +331,10 @@ impl<'a> PathOptions<'a> {
     }
     pub fn with_interrupt(mut self, interrupt: Interrupt) -> Self {
         self.interrupt = interrupt;
+        self
+    }
+    pub(crate) fn with_filter(mut self, filter: Option<&'a ElementFilter>) -> Self {
+        self.filter = filter;
         self
     }
 }
@@ -415,18 +425,19 @@ pub fn shortest_path(
         via_types,
         direction,
         interrupt: deadline,
+        filter,
     } = *options;
     let via_set: Option<HashSet<&str>> =
         via_types.map(|vt| vt.iter().map(|s| s.as_str()).collect());
     let interned = intern_connection_types(connection_types);
     let path = bidirectional_path(
         graph,
-        source,
-        target,
+        (source, target),
         interned.as_deref(),
         &via_set,
         direction,
         deadline,
+        filter,
     )?;
     let cost = path.len().saturating_sub(1);
 
@@ -452,12 +463,12 @@ pub fn all_shortest_paths(
     let _arena_guard = graph.graph.begin_query();
     all_shortest_paths_impl(
         graph,
-        source,
-        target,
+        (source, target),
         connection_types,
         deadline,
         max_paths,
         false,
+        None,
     )
 }
 
@@ -477,23 +488,47 @@ pub fn all_shortest_paths_directed(
     let _arena_guard = graph.graph.begin_query();
     all_shortest_paths_impl(
         graph,
-        source,
-        target,
+        (source, target),
         connection_types,
         deadline,
         max_paths,
         true,
+        None,
+    )
+}
+
+/// [`all_shortest_paths`] (`directed == false`) or
+/// [`all_shortest_paths_directed`] over only the relationships and nodes
+/// `filter` admits — Cypher `allShortestPaths` under `FOR VALID_TIME AS OF`.
+pub(crate) fn all_shortest_paths_filtered(
+    graph: &DirGraph,
+    (source, target): (NodeIndex, NodeIndex),
+    connection_types: Option<&[String]>,
+    deadline: Interrupt,
+    max_paths: usize,
+    directed: bool,
+    filter: &ElementFilter,
+) -> Vec<PathResult> {
+    let _arena_guard = graph.graph.begin_query();
+    all_shortest_paths_impl(
+        graph,
+        (source, target),
+        connection_types,
+        deadline,
+        max_paths,
+        directed,
+        Some(filter),
     )
 }
 
 fn all_shortest_paths_impl(
     graph: &DirGraph,
-    source: NodeIndex,
-    target: NodeIndex,
+    (source, target): (NodeIndex, NodeIndex),
     connection_types: Option<&[String]>,
     deadline: Interrupt,
     max_paths: usize,
     directed: bool,
+    filter: Option<&ElementFilter>,
 ) -> Vec<PathResult> {
     use std::collections::HashMap;
 
@@ -527,10 +562,10 @@ fn all_shortest_paths_impl(
             if visit_count.is_multiple_of(1000) && deadline.exceeded() {
                 return Vec::new();
             }
-            let neighbors = if directed {
-                filtered_neighbors_outgoing(graph, u, interned_ref)
-            } else {
-                filtered_neighbors_undirected(graph, u, interned_ref)
+            let neighbors = match filter {
+                Some(f) => path_guard::admitted_neighbors(graph, u, directed, interned_ref, f),
+                None if directed => filtered_neighbors_outgoing(graph, u, interned_ref),
+                None => filtered_neighbors_undirected(graph, u, interned_ref),
             };
             for v in neighbors {
                 match dist.get(&v).copied() {
@@ -614,6 +649,7 @@ pub fn shortest_path_cost_with(
         via_types,
         direction,
         interrupt: deadline,
+        filter,
     } = *options;
 
     let via_set: Option<HashSet<&str>> =
@@ -625,12 +661,12 @@ pub fn shortest_path_cost_with(
     // the termination rule to get wrong.
     bidirectional_path(
         graph,
-        source,
-        target,
+        (source, target),
         interned.as_deref(),
         &via_set,
         direction,
         deadline,
+        filter,
     )
     .map(|path| path.len().saturating_sub(1))
 }
@@ -676,7 +712,12 @@ pub fn shortest_path_cost_batch_with(
         via_types,
         direction,
         interrupt: deadline,
+        filter,
     } = *options;
+    debug_assert!(
+        filter.is_none(),
+        "this path finder applies no valid-time filter"
+    );
 
     let interned = intern_connection_types(connection_types);
 
@@ -923,7 +964,12 @@ pub fn shortest_path_costs_from(
         via_types,
         direction,
         interrupt: deadline,
+        filter,
     } = *options;
+    debug_assert!(
+        filter.is_none(),
+        "this path finder applies no valid-time filter"
+    );
 
     let mut out: Vec<(NodeIndex, usize)> = Vec::new();
     let mut scratch = BfsScratch::new(bound);
@@ -966,13 +1012,25 @@ pub fn shortest_path_costs_from(
 /// *into* the target".
 fn bidirectional_path(
     graph: &DirGraph,
-    source: NodeIndex,
-    target: NodeIndex,
+    (source, target): (NodeIndex, NodeIndex),
     connection_types: Option<&[InternedKey]>,
     via_types: &Option<HashSet<&str>>,
     direction: EdgeDir,
     deadline: Interrupt,
+    filter: Option<&ElementFilter>,
 ) -> Option<Vec<NodeIndex>> {
+    // Under a filter the search walks relationships, not neighbour lists.
+    if let Some(filter) = filter {
+        return path_guard::bidirectional_path_guarded(
+            graph,
+            (source, target),
+            connection_types,
+            via_types,
+            direction,
+            deadline,
+            filter,
+        );
+    }
     let source_id = u32::try_from(source.index()).ok()?;
     let target_id = u32::try_from(target.index()).ok()?;
     let backward = direction.reversed();
@@ -2015,7 +2073,12 @@ pub fn shortest_path_weighted(
         via_types,
         direction,
         interrupt: deadline,
+        filter,
     } = *options;
+    debug_assert!(
+        filter.is_none(),
+        "this path finder applies no valid-time filter"
+    );
     use std::cmp::Ordering;
     use std::collections::BinaryHeap;
 

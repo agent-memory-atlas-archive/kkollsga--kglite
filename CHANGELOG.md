@@ -37,9 +37,12 @@ before upgrading.
   anchors keep their fast routes under a context; `PROFILE` runs too. When
   every declared type is valid in full at the instant (as of today on a graph
   of current rows) the statement runs its unprefixed plan, with every fast
-  route. Not available under a context yet: variable-length relationships and
-  `shortestPath` / `allShortestPaths` (a fixed `*2` runs as written-out hops).
-  The Python `cypher(valid_at=…)` argument and the MCP `cypher_query` tool's
+  route. Variable-length relationships cross only valid relationships and
+  valid intermediate nodes (a bound relationship list holds only valid ones),
+  and `shortestPath` / `allShortestPaths` find the shortest valid route, which
+  may be longer than the shortest one in the whole graph. `OPTIONAL MATCH`
+  pads NULLs when every match is invalid, and `EXISTS { }`, `COUNT { }` and
+  pattern comprehensions see only valid matches. The Python `cypher(valid_at=…)` argument and the MCP `cypher_query` tool's
   `valid_at` argument run through the same prefix.
 - Cypher `date()` with no argument returns today's date in UTC; it used to
   raise "requires 1 argument".

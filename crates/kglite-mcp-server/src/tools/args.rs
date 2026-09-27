@@ -26,8 +26,7 @@ pub(crate) struct ReadCypherArgs {
     /// Run the query as of this date — an ISO date (`"2020-06-30"`) or
     /// datetime (`"2020-06-30T12:00:00"`). Same as writing the prefix
     /// `FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph
-    /// needs a validity declaration (`db.temporal.declarations()`), and
-    /// relationship patterns of variable length do not run under it yet.
+    /// needs a validity declaration (`db.temporal.declarations()`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_at: Option<String>,
 }
@@ -55,8 +54,7 @@ pub(crate) struct CypherArgs {
     /// Run the query as of this date — an ISO date (`"2020-06-30"`) or
     /// datetime (`"2020-06-30T12:00:00"`). Same as writing the prefix
     /// `FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph
-    /// needs a validity declaration (`db.temporal.declarations()`), and
-    /// relationship patterns of variable length do not run under it yet.
+    /// needs a validity declaration (`db.temporal.declarations()`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_at: Option<String>,
     /// Role-scoped write whitelist (write-enabled servers only) — so an agent

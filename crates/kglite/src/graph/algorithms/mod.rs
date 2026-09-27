@@ -11,6 +11,7 @@ pub mod clustering;
 pub mod community;
 pub mod graph_algorithms;
 pub mod hnsw;
+mod path_guard;
 pub mod text_index;
 pub mod vector;
 

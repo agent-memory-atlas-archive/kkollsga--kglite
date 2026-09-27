@@ -73,6 +73,23 @@ QUERIES = [
     "MATCH (n {id: 2}) RETURN count(*) AS c",
     "MATCH (n:A) RETURN n.id AS i, count(*) AS c",
     "MATCH (a:A)-[:S]->(b) WITH a, count(b) AS c RETURN a.uid AS a, c",
+    # Variable-length segments: the trail expansion, the distance frontier
+    # (with the undirected closed-trail probe), a zero-hop segment and the
+    # relationship list, and one inside EXISTS.
+    "MATCH (a:A)-[:R*1..3]->(b) RETURN a.uid AS a, b.uid AS b",
+    "MATCH (a)-[:R|S*1..2]-(b) RETURN DISTINCT a.uid AS a, b.uid AS b",
+    "MATCH p = (a)-[*1..2]->(b) RETURN [n IN nodes(p) | n.uid] AS ns, [r IN relationships(p) | r.eid] AS rs",
+    "MATCH (a:A)-[rs:S*0..2]->(b) RETURN a.uid AS a, b.uid AS b, [r IN rs | r.eid] AS rs",
+    "MATCH (n) WHERE EXISTS { (n)-[:R*1..2]->() } RETURN n.uid AS u",
+    # OPTIONAL MATCH, COUNT { } and pattern comprehensions.
+    "MATCH (n) OPTIONAL MATCH (n)-[:R]->(m) RETURN n.uid AS n, m.uid AS m",
+    "MATCH (n) RETURN n.uid AS u, COUNT { (n)-[:S]-() } AS c",
+    "MATCH (n) RETURN n.uid AS u, size([(n)-->(m) | m.uid]) AS c",
+    "MATCH (n:A) RETURN n.uid AS u, [p = (n)-[:R]->() | length(p)] AS ls",
+    # shortestPath and allShortestPaths.
+    "MATCH (a:A), (b:B) MATCH p = shortestPath((a)-[*]-(b)) RETURN a.uid AS a, b.uid AS b, length(p) AS l",
+    "MATCH (a:A), (b) WHERE a <> b MATCH p = allShortestPaths((a)-[:R|S*]->(b)) "
+    "RETURN a.uid AS a, b.uid AS b, [r IN relationships(p) | r.eid] AS rs",
 ]
 ORDERED = {"MATCH (n:A) RETURN n.uid AS u ORDER BY u DESC LIMIT 3"}
 

@@ -189,6 +189,36 @@ fn counts_answer_with_the_guard() {
     assert_eq!(rows(&graph, &at("2011-01-01", per_field)), ints(&[1]));
 }
 
+/// OPTIONAL MATCH, pattern comprehensions and `COUNT { }` run their own
+/// matches through the guarded matcher: an invisible match NULL-pads or is
+/// left out of the list and the count.
+#[test]
+fn optional_match_and_subqueries_see_only_valid_matches() {
+    let graph = registry();
+    let optional = "MATCH (f:Field) OPTIONAL MATCH (f)-[:LICENSED]->(c) RETURN f.id, c.id";
+    assert_eq!(
+        rows(&graph, &at("2006-01-01", optional)),
+        vec![vec![Value::Int64(10), Value::Null]]
+    );
+    assert_eq!(
+        rows(&graph, &at("2003-01-01", optional)),
+        vec![vec![Value::Int64(10), Value::Int64(20)]]
+    );
+    for (date, want) in [("2006-01-01", 2), ("2011-01-01", 1)] {
+        for query in [
+            "MATCH (f:Field) RETURN size([(f)<-[:IN]-(w) | w.id])",
+            "MATCH (f:Field) RETURN size([p = (f)<-[:IN]-(w) | length(p)])",
+            "MATCH (f:Field) RETURN COUNT { (f)<-[:IN]-(w) WHERE w.id > 0 }",
+        ] {
+            assert_eq!(
+                rows(&graph, &at(date, query)),
+                ints(&[want]),
+                "{date}: {query}"
+            );
+        }
+    }
+}
+
 /// Version nodes that share a user id: the id index holds one of them, so
 /// the seek must find the one valid at the instant.
 #[test]
@@ -217,20 +247,95 @@ fn an_id_seek_finds_the_valid_version_among_several() {
     }
 }
 
-#[test]
-fn var_length_and_shortest_path_are_not_available_yet() {
-    let graph = registry();
-    for body in [
-        "MATCH (a:Field)-[:IN*1..2]-(b) RETURN b.id",
-        "MATCH p = shortestPath((a:Field)-[:IN*]-(b:Company)) RETURN p",
-        "MATCH (f:Field) WHERE EXISTS { (f)-[:IN*1..3]-() } RETURN f.id",
+/// A declared `LINK` network: stop 2 closes in 2005, the direct 1→3 link
+/// runs 2000–2005, and 4→5 has two parallel links, `xy1` (2000–2005) and
+/// `xy2` (from 2006). At 2008 the only valid route from 1 to 3 is 1→4→5→3
+/// over `xy2`.
+fn network() -> DirGraph {
+    let mut graph = DirGraph::new();
+    for query in [
+        "CREATE (s1:Stop {id: 1}), (s2:Stop {id: 2, vf: date('2000-01-01'), vt: date('2005-01-01')}), \
+         (s3:Stop {id: 3}), (s4:Stop {id: 4}), (s5:Stop {id: 5}), \
+         (s1)-[:LINK {k: 'a2'}]->(s2), (s2)-[:LINK {k: '2b'}]->(s3), \
+         (s1)-[:LINK {k: 'ab', since: date('2000-01-01'), until: date('2005-01-01')}]->(s3), \
+         (s1)-[:LINK {k: 'ax'}]->(s4), \
+         (s4)-[:LINK {k: 'xy1', since: date('2000-01-01'), until: date('2005-01-01')}]->(s5), \
+         (s4)-[:LINK {k: 'xy2', since: date('2006-01-01')}]->(s5), (s5)-[:LINK {k: 'yb'}]->(s3)",
+        "CALL db.temporal.declare({node: 'Stop', from: 'vf', to: 'vt', convention: 'closed'}) \
+         YIELD declared RETURN declared",
+        "CALL db.temporal.declare({relationship: 'LINK', from: 'since', to: 'until', \
+         convention: 'half_open'}) YIELD declared RETURN declared",
     ] {
-        let err = error(&graph, &at("2006-01-01", body));
-        assert!(
-            err.contains("not available under FOR VALID_TIME AS OF yet"),
-            "{body}: {err}"
+        run(&mut graph, query);
+    }
+    graph
+}
+
+fn strings(values: &[&str]) -> Vec<Value> {
+    values.iter().map(|v| Value::String((*v).into())).collect()
+}
+
+#[test]
+fn var_length_segments_cross_only_valid_relationships_and_nodes() {
+    let graph = network();
+    let count = "MATCH (:Stop {id: 1})-[:LINK*1..3]->(:Stop {id: 3}) RETURN count(*) AS c";
+    assert_eq!(rows(&graph, count), ints(&[4]));
+    assert_eq!(rows(&graph, &at("2008-01-01", count)), ints(&[1]));
+    let list = "MATCH (:Stop {id: 1})-[r:LINK*1..3]->(:Stop {id: 3}) RETURN [x IN r | x.k]";
+    assert_eq!(
+        rows(&graph, &at("2008-01-01", list)),
+        vec![vec![Value::List(strings(&["ax", "xy2", "yb"]))]]
+    );
+    // The distance frontier and the trail expansion: stop 2 is invisible and
+    // the direct link closed, so two hops from 1 reach only 4 and 5.
+    for reach in [
+        "MATCH (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t)",
+        "MATCH p = (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t)",
+    ] {
+        assert_eq!(rows(&graph, reach), ints(&[4]), "{reach}");
+        assert_eq!(
+            rows(&graph, &at("2008-01-01", reach)),
+            ints(&[2]),
+            "{reach}"
         );
     }
+    // The undirected closed trail 4–5–4 needs both parallel links.
+    let closed = "MATCH (s:Stop {id: 4})-[:LINK*1..2]-(t:Stop) RETURN DISTINCT t.id";
+    assert_eq!(rows(&graph, closed), ints(&[1, 2, 3, 4, 5]));
+    assert_eq!(rows(&graph, &at("2008-01-01", closed)), ints(&[1, 3, 5]));
+    let exists = "MATCH (s:Stop) WHERE EXISTS { (s)-[:LINK*2..2]->(:Stop {id: 3}) } RETURN s.id";
+    assert_eq!(rows(&graph, &at("2008-01-01", exists)), ints(&[4]));
+}
+
+#[test]
+fn shortest_paths_take_the_longer_valid_route() {
+    let graph = network();
+    let single = "MATCH p = shortestPath((:Stop {id: 1})-[:LINK*]->(:Stop {id: 3})) \
+                  RETURN [r IN relationships(p) | r.k]";
+    assert_eq!(
+        rows(&graph, single),
+        vec![vec![Value::List(strings(&["ab"]))]]
+    );
+    assert_eq!(
+        rows(&graph, &at("2008-01-01", single)),
+        vec![vec![Value::List(strings(&["ax", "xy2", "yb"]))]]
+    );
+    let incoming =
+        "MATCH p = shortestPath((:Stop {id: 3})<-[:LINK*]-(:Stop {id: 1})) RETURN length(p)";
+    assert_eq!(rows(&graph, &at("2008-01-01", incoming)), ints(&[3]));
+    let all = "MATCH p = allShortestPaths((:Stop {id: 4})-[:LINK*]-(:Stop {id: 5})) \
+               RETURN [r IN relationships(p) | r.k]";
+    assert_eq!(
+        rows(&graph, &at("2008-01-01", all)),
+        vec![vec![Value::List(strings(&["xy2"]))]]
+    );
+    assert_eq!(
+        rows(&graph, &at("2003-01-01", all)),
+        vec![vec![Value::List(strings(&["xy1"]))]]
+    );
+    let routed = "MATCH p = allShortestPaths((:Stop {id: 1})-[:LINK*]->(:Stop {id: 3})) \
+                  RETURN length(p)";
+    assert_eq!(rows(&graph, &at("2008-01-01", routed)), ints(&[3]));
 }
 
 /// A bound the evaluator cannot read raises instead of hiding the element.

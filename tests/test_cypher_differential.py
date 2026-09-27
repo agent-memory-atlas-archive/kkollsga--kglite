@@ -314,6 +314,37 @@ def declared_lineage_graph():
     return graph
 
 
+@pytest.fixture
+def declared_network_graph():
+    """A declared `LINK` network whose valid routes at 2008 are longer than
+    its unguarded ones: stop 2 closes in 2005, the direct 1→3 link runs
+    2000–2005, and 4→5 has two parallel links of which only `xy2` is valid
+    from 2006."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (s1:Stop {id: 1}), (s2:Stop {id: 2, vf: date('2000-01-01'), vt: date('2005-01-01')}),"
+        " (s3:Stop {id: 3}), (s4:Stop {id: 4}), (s5:Stop {id: 5}),"
+        " (s1)-[:LINK {k: 'a2'}]->(s2), (s2)-[:LINK {k: '2b'}]->(s3),"
+        " (s1)-[:LINK {k: 'ab', since: date('2000-01-01'), until: date('2005-01-01')}]->(s3),"
+        " (s1)-[:LINK {k: 'ax'}]->(s4),"
+        " (s4)-[:LINK {k: 'xy1', since: date('2000-01-01'), until: date('2005-01-01')}]->(s5),"
+        " (s4)-[:LINK {k: 'xy2', since: date('2006-01-01')}]->(s5), (s5)-[:LINK {k: 'yb'}]->(s3)"
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'Stop', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    graph.cypher(
+        "CALL db.temporal.declare({relationship: 'LINK', from: 'since', to: 'until', convention: 'half_open'})"
+    ).to_list()
+    return graph
+
+
+def _network_context_pair(name: str, query: str) -> list[tuple[str, str, str, dict | None]]:
+    """`query` on `declared_network_graph` as of 2008 and without a context."""
+    return [
+        (f"context_{name}", "declared_network_graph", "FOR VALID_TIME AS OF date('2008-01-01') " + query, None),
+        (f"context_twin_{name}", "declared_network_graph", query, None),
+    ]
+
+
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     # Each fusion the planner admits under a FOR VALID_TIME AS OF context,
     # with the prefix and without it on the same declared fixture.
@@ -460,6 +491,58 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "declared_lineage_graph",
         "MATCH (a:A) RETURN COUNT { (a)-[:R]->() } AS c",
         None,
+    ),
+    # Variable-length segments, OPTIONAL MATCH, subquery patterns and path
+    # searches under a context, each with its prefix-less twin.
+    *_network_context_pair(
+        "var_length_trails",
+        ("MATCH (:Stop {id: 1})-[r:LINK*1..3]->(t:Stop) RETURN t.id AS t, [x IN r | x.k] AS ks"),
+    ),
+    *_network_context_pair(
+        "var_length_frontier",
+        ("MATCH (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t) AS c"),
+    ),
+    *_network_context_pair(
+        "var_length_closed_trail",
+        ("MATCH (s:Stop {id: 4})-[:LINK*1..2]-(t:Stop) RETURN DISTINCT t.id AS t"),
+    ),
+    *_network_context_pair(
+        "var_length_zero_hop",
+        ("MATCH (s:Stop)-[:LINK*0..1]->(t:Stop) RETURN s.id AS s, t.id AS t"),
+    ),
+    *_network_context_pair(
+        "exists_var_length",
+        ("MATCH (s:Stop) WHERE EXISTS { (s)-[:LINK*2..2]->(:Stop {id: 3}) } RETURN s.id AS s"),
+    ),
+    *_network_context_pair(
+        "optional_match",
+        ("MATCH (s:Stop) OPTIONAL MATCH (s)-[:LINK]->(t:Stop {id: 3}) RETURN s.id AS s, t.id AS t"),
+    ),
+    *_network_context_pair(
+        "pattern_comprehension",
+        ("MATCH (s:Stop) RETURN s.id AS s, size([(s)-->(t) | t.id]) AS n"),
+    ),
+    *_network_context_pair(
+        "pattern_comprehension_path",
+        ("MATCH (s:Stop) RETURN s.id AS s, [p = (s)-[:LINK*1..2]->() | length(p)] AS ls"),
+    ),
+    *_network_context_pair(
+        "count_subquery_undirected",
+        ("MATCH (s:Stop) RETURN s.id AS s, COUNT { (s)-[:LINK]-() } AS c"),
+    ),
+    *_network_context_pair(
+        "shortest_path",
+        (
+            "MATCH p = shortestPath((:Stop {id: 1})-[:LINK*]->(:Stop {id: 3})) "
+            "RETURN [r IN relationships(p) | r.k] AS ks"
+        ),
+    ),
+    *_network_context_pair(
+        "all_shortest_paths",
+        (
+            "MATCH p = allShortestPaths((:Stop {id: 4})-[:LINK*]-(:Stop {id: 5})) "
+            "RETURN [r IN relationships(p) | r.k] AS ks"
+        ),
     ),
     # The declared forms on list items read the item's own declaration, and
     # a null element is null, through every plan.

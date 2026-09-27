@@ -1544,10 +1544,15 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   fast route, and returns the same rows. This is decided per execution, in
   memory and mapped storage (disk storage keeps no endpoint index, so there
   the statement always runs guarded).
-- **Not available under a context yet:** variable-length relationships
-  (`-[:R*1..3]->`; a fixed `*2` is written out as hops and runs) and
-  `shortestPath` / `allShortestPaths` raise "… not available under FOR
-  VALID_TIME AS OF yet".
+- **Paths and subqueries.** A variable-length relationship (`-[:R*1..3]->`)
+  crosses only valid relationships and valid intermediate nodes, so a path
+  through an invalid node or relationship is not a match, and a bound list
+  (`-[rs:R*]->`) holds only valid relationships. `shortestPath` and
+  `allShortestPaths` search the valid elements only: the answer is the
+  shortest valid route, which may be longer than the unguarded one, and a
+  parallel relationship that is not valid is never on it. `OPTIONAL MATCH`
+  pads NULLs when every match is invalid; `EXISTS { }`, `COUNT { }` and
+  pattern comprehensions (`[(f)-->(c) | c.name]`) see only valid matches.
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
