@@ -42,6 +42,7 @@ guides/semantic-search
 guides/text-search
 guides/spatial
 guides/timeseries
+guides/valid-time
 guides/graph-algorithms
 guides/import-export
 guides/schema-migrations

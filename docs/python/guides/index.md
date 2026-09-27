@@ -27,7 +27,8 @@ Domain-specific surfaces — pull them in when your data has the shape:
 | {doc}`okf` | …your "data" is a markdown knowledge base — an OKF bundle, a Claude memory dir, a skills folder, an Obsidian vault. Frontmatter → nodes, links → typed edges. |
 | {doc}`help-vault` | …you want a runnable synthetic knowledge-base lifecycle: preserve originals, verify conversion, traverse complete answers, regenerate owned layers, and build a public share. |
 | {doc}`spatial` | …your nodes have coordinates. R-tree indexing, distance-based filters, GeoJSON I/O. |
-| {doc}`timeseries` | …property values change over time. Snapshot history, valid_at / valid_during temporal filters. |
+| {doc}`timeseries` | …nodes carry numeric series over time (monthly production, sensor readings). `ts_*()` aggregation, range and lookup functions. |
+| {doc}`valid-time` | …your data is history: versions valid over periods, as a register or a licence table keeps them. Declared intervals, `FOR VALID_TIME AS OF` / `valid_at=`, the fluent date context, modelling and lineage. |
 | {doc}`semantic-search` | …you want fuzzy / meaning-based lookup. `text_score()` in Cypher, embedding model registration. |
 | {doc}`text-search` | …you want keyword search, or keyword *and* meaning in one ranking. BM25 via `build_text_index()` + `text_bm25()`, the index-freshness contract, and hybrid retrieval with `score_fuse()`. |
 | {doc}`graph-algorithms` | …you need PageRank, community detection, shortest paths, centrality. |

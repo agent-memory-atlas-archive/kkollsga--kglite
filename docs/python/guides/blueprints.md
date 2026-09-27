@@ -601,9 +601,14 @@ After loading, the declared bounds apply without naming them:
 ```python
 graph.select("Contract")                               # valid today
 graph.date("2024-06-15").select("Contract")            # valid on that date
-graph.select("Contract").valid_during("2024-01-01", "2024-12-31")
+graph.select("Contract", temporal=False).valid_during("2024-01-01", "2024-12-31")
+graph.cypher("MATCH (c:Contract) RETURN c.title", valid_at="2024-06-15")
 graph.cypher("CALL db.temporal.declarations()")        # what is declared
 ```
+
+`select()` on a declared type already keeps only today's rows, so
+`temporal=False` comes first when an explicit filter should see every version.
+See the {doc}`valid-time` guide.
 
 On an edge, `from` and `to` name the **stored** property, after `rename`, and
 both must be listed in the edge's `properties`. The declaration is made for the

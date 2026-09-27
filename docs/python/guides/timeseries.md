@@ -136,74 +136,10 @@ graph.timeseries(node_id, start='2020', end='2020')
 
 ---
 
-## Time-travel queries (temporal validity)
+## Validity intervals
 
-Timeseries (above) attaches numeric channels to a node. *Temporal validity* is
-a different axis: nodes and edges that carry a validity interval — a role held
-from a hire date to an end date, a price effective over a range, an estimate
-superseded by a later one. `valid_at` and `valid_during` filter to the slice
-of the graph that was true at a point in time or overlapped an interval, so
-you can ask "what did the graph look like on this date?" without versioning
-the whole store. Almost nothing in the embedded-graph space has this built into
-the query language.
-
-Name the two date properties holding the interval bounds (any ISO
-date/datetime strings, or `date()` values) — or declare them once, with
-`CALL db.temporal.declare({node: 'Role', from: 'start_date', to: 'end_date',
-convention: 'half_open'})` or a loader's `validFrom`/`validTo` column types,
-and write `valid_at(r, '2020-06-15')`. A declared type's convention applies to
-both forms: under `half_open` the `to` day is the first day no longer valid,
-which is what a registry whose periods end on their successor's start day
-means.
-
-A declaration validates the rows stored when it is made. Writes made after it
-— a later load, `SET`, `CREATE` — are not re-validated: a bound that is not a
-date raises, naming the element, from the next query that filters on it, and
-an inverted interval is valid on no date. Add
-`CREATE CONSTRAINT FOR (r:Role) REQUIRE r.end_date IS :: DATE` to refuse such
-writes when they happen.
-
-### Point-in-time: `valid_at(entity, date, 'from_field', 'to_field')`
-
-```python
-# Roles active on a specific date
-graph.cypher("""
-    MATCH (r:Role)
-    WHERE valid_at(r, '2020-06-15', 'start_date', 'end_date')
-    RETURN r.person, r.title
-""")
-# Alice's role on 2020-06-15 was 'Engineer'; on 2022-01-01 it was 'Manager'
-```
-
-Works on edges too — filter a relationship by *when it was valid*:
-
-```python
-graph.cypher("""
-    MATCH (p:Person)-[r:EMPLOYED_BY]->(c:Company)
-    WHERE valid_at(r, '2019-01-01', 'start_date', 'end_date')
-    RETURN p.name, c.name
-""")
-```
-
-### Interval overlap: `valid_during(entity, start, end, 'from_field', 'to_field')`
-
-```python
-# Everything whose validity overlapped calendar-year 2021
-graph.cypher("""
-    MATCH (r:Role)
-    WHERE valid_during(r, '2021-01-01', '2021-12-31', 'start_date', 'end_date')
-    RETURN r.person, r.title
-""")
-```
-
-Both accept a `date(...)` or `datetime(...)` value for the query date, or a
-string read the way those functions read it: `'2009'` is 2009-01-01, `'2009-06'`
-is 2009-06-01, and a string with a time part keeps its time, an offset applied
-and normalised to UTC. A value that is not a date — `'garbage'`, `2009` as an
-integer, `null` — raises `CypherExecutionError` rather than matching nothing.
-The stored bounds may be dates, datetimes or ISO strings; a datetime bound is
-compared at date grain against a date. Without a declaration naming the two
-properties, both functions treat the interval as closed, and an open/sentinel upper bound (e.g. `'9999-12-31'`) as "still valid". Pair
-them with [date functions](../../reference/cypher-reference.md) — `date()`,
-`add_days(date(), 30)` — to express relative windows like "active in the next
-30 days".
+Timeseries attaches numeric channels to a node. *Validity* is a different
+axis: nodes and relationships that each hold a period — a role from its start
+to its end date, a municipality from its founding to its merger — asked as of
+an instant with `FOR VALID_TIME AS OF`, `cypher(valid_at=…)` or the fluent
+`date()` context. See {doc}`valid-time`.

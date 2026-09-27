@@ -109,22 +109,21 @@ attached, gated by `applies_when` predicates to what the graph actually contains
 with how to use your graph rather than discovering it through trial-and-error.*
 **→ [AI Agents guide](https://kglite.readthedocs.io/en/latest/python/guides/ai-agents.html).**
 
-**As-of queries over history.** Load history tables as dated edges and lifecycle
-windows as node properties, and one symmetric idiom answers *"how did the world
-look on ⟨date⟩?"* for nodes and relationships alike:
+**As-of queries over history.** Declare the two bound properties of each dated
+type once, and one prefix answers *"how did the world look on ⟨date⟩?"* for
+every node and relationship a statement touches:
 
 ```cypher
-MATCH (l:Licence)-[r:HAS_OPERATOR]->(c:Company)
-WHERE valid_at(l, '1999-06-30', 'existsFrom', 'existsTo')
-  AND valid_at(r, '1999-06-30', 'validFrom',  'validTo')
+FOR VALID_TIME AS OF date('1999-06-30')
+MATCH (l:Licence)-[:HAS_OPERATOR]->(c:Company)
 RETURN c.title
 ```
 
-Move the date and the answer moves with it: the operator of record in 1999, not
-today's. A null or missing bound is open-ended, so an edge with no end date is
-still current and an entity carrying no dates at all always matches;
-`valid_during(entity, start, end, from, to)` is the interval-overlap sibling.
-**→ [Timeseries and temporal guide](https://kglite.readthedocs.io/en/latest/python/guides/timeseries.html).**
+Move the date and the answer moves with it: the operator of record in 1999. No
+hop can be left undated (paths, graph algorithms and vector and BM25 ranking
+see only what was valid then); `cypher(valid_at=…)`, the MCP tools and Java's
+`ValidAt` write the same prefix.
+**→ [Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html).**
 
 **A declared ontology that gates the build.** `define_ontology()` records what
 must hold: domain and range over an `is_a` class forest, required edge
@@ -528,6 +527,7 @@ tracks by audience, each with its own index:
   [text search](https://kglite.readthedocs.io/en/latest/python/guides/text-search.html) ·
   [spatial](https://kglite.readthedocs.io/en/latest/python/guides/spatial.html) ·
   [timeseries](https://kglite.readthedocs.io/en/latest/python/guides/timeseries.html) ·
+  [valid time](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html) ·
   [ontology](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html) ·
   [recipes](https://kglite.readthedocs.io/en/latest/python/guides/recipes.html).
   *Ship*: [durable apps](https://kglite.readthedocs.io/en/latest/python/guides/durable-apps.html) ·
@@ -564,7 +564,7 @@ Quick reference to the feature set; each row links into the appropriate guide.
 | **Label model** | One immutable primary type per node plus optional secondary labels: `CREATE (n:A:B)`, `SET n:B`, `REMOVE n:B`, and `labels(n)` returns the list (primary first). Details in the [Cypher reference](CYPHER.md) callout. |
 | **Text predicates** | `text_edit_distance`, `text_normalize`, `text_jaccard`, `text_ngrams`, `text_contains_any` / `text_starts_with_any` |
 | **[Ontology](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html)** | Declared semantic layer: `is_a` class forest + relationship semantics (`define_ontology`), `SHOW ONTOLOGY`, no-arg validators, `CALL ontology_audit()` scorecard, blueprint data-quality gate, opt-in materialization. Annotations, not axioms: SKOS in spirit, never OWL. |
-| **Temporal** | `valid_at()` / `valid_during()` as-of and interval-overlap filtering on nodes and relationships (null bounds are open-ended), `date()`/`datetime()`, `date_diff()`, date arithmetic |
+| **[Valid time](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)** | Declared validity intervals (closed or half-open), `FOR VALID_TIME AS OF` / `valid_at=` as-of queries across every hop, `valid_at()` / `valid_during()`, `date()`/`datetime()`, date arithmetic |
 | **[Structured data](https://kglite.readthedocs.io/en/latest/python/guides/structured-data.html)** | DataFrame table properties (`set_table_property`/`get_table_property`), declared `list<map{...}>` shapes with indexed error paths, atomic nested `SET o.items[2].qty = 8`, `table.upsert`/`table.delete`, `attach_rows`. |
 | **[Spatial](https://kglite.readthedocs.io/en/latest/python/guides/spatial.html)** | Coordinates, WKT geometry, distance + containment, `kg_knn` k-nearest-neighbour. Pragmatic primitives, not a full GIS stack. |
 | **[Timeseries](https://kglite.readthedocs.io/en/latest/python/guides/timeseries.html)** | Time-indexed values with `ts_*()` Cypher functions. For graphs whose nodes carry value-over-time series. |

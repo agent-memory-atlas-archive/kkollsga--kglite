@@ -147,7 +147,7 @@ map per executed clause with `clause`, `rows_in`, `rows_out` and `elapsed_us`
 ### As of an instant
 
 On a graph with a validity declaration (`CALL db.temporal.declare(...)`, see
-`CYPHER.md` §Valid-time context), a read can run **as of** an instant: pass a
+`CYPHER.md` §Statement context: `FOR VALID_TIME AS OF`), a read can run **as of** an instant: pass a
 `ValidAt` to `query`, `queryResult` or `queryBatch`. It writes the statement
 prefix `FOR VALID_TIME AS OF date('…')` before the text — the same prefix the
 Python and MCP bindings' `valid_at` write — rendered from `java.time`, never

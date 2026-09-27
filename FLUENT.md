@@ -302,11 +302,32 @@ nodes:
   its declaration;
 - `select(limit=…)` counts the nodes that pass;
 - a relationship type holding several unkeyed declarations (a graph saved
-  before declarations were keyed by source type) is refused — re-declare them
-  per `source_type`.
+  before declarations were keyed by source type) is refused — remove them with
+  `CALL db.temporal.undeclare({relationship: …})` and declare one per
+  `source_type`.
 
 Undeclared types pass unfiltered. `valid_at()` with no date reads the context:
-one day, or overlap with a `date(a, b)` range.
+one day, or overlap with a `date(a, b)` range — and today (UTC) under the
+default context or `date('all')`.
+
+The context belongs to the selection chain. The graph-wide methods —
+`pagerank()`, `betweenness_centrality()`, `louvain_communities()`,
+`connected_components()`, `shortest_path()` and the other algorithm and path
+methods, `vector_search()` / `search_text()` without a selection, and the
+relationship search routes (`relationship_vector_search()`,
+`relationship_search_text()`, `entity="relationship"`, whatever the selection) —
+read the whole graph whatever `date()` says. Ask them as of a date through
+Cypher: `graph.cypher("CALL pagerank() YIELD node, score RETURN node.title,
+score", valid_at='2010-06-30')`, `CALL db.relationship_embeddings.query(…)`
+for relationship vectors, or `graph.freeze(valid_at='2010-06-30')` for many
+queries. A node `vector_search()` on a selection ranks the selection, which
+the context has already filtered.
+
+Cypher has no default: a statement without `FOR VALID_TIME AS OF` (or
+`valid_at=`) sees every version. See the
+[valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)
+for modelling history and for the questions — lineage, two instants — that run
+without a context.
 
 ---
 

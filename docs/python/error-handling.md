@@ -129,6 +129,17 @@ The same rule covers an **unknown node type**: `properties()`,
 and `set_temporal()` all raise `ArgumentError` for a type the graph does not
 have.
 
+**Valid time** follows the same split. A statement under
+`FOR VALID_TIME AS OF` that writes, calls a procedure with no valid-time route,
+names an axis other than `VALID_TIME`, or runs on a graph with no validity
+declaration raises `CypherExecutionError`; a second context in one statement is
+a `CypherSyntaxError`. Python's `valid_at=` raises `ValueError` before the
+query runs for an instant that is not a date or datetime, and for a query that
+already carries a context. The fluent node filters (`select()`, `valid_at()`,
+`valid_during()`) raise `ValueError` for bounds they cannot read or a field the
+type does not have; `traverse(at=…)` on an undeclared relationship type and an
+unreadable `date()` argument raise `ArgumentError`.
+
 ## Catching errors
 
 ```python

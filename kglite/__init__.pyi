@@ -2925,7 +2925,7 @@ class KnowledgeGraph:
     ) -> KnowledgeGraph:
         """Filter nodes valid at a specific date.
 
-        Keeps nodes where ``date_from <= date <= date_to``.
+        Keeps nodes whose validity interval contains *date*.
 
         A node is kept only when it is valid under every declared label it
         carries, the rule a ``FOR VALID_TIME AS OF`` statement applies: its
@@ -6215,6 +6215,10 @@ class KnowledgeGraph:
     ) -> Optional[dict[str, Any]]:
         """Find the shortest path between two nodes.
 
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
+
         Undirected by default; pass ``direction`` for a one-way search.
 
         Args:
@@ -6268,6 +6272,10 @@ class KnowledgeGraph:
     ) -> Optional[Union[int, float]]:
         """Get just the cost of the shortest path.
 
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
+
         Faster than :meth:`shortest_path` when you only need the distance,
         and asks exactly the same question — same filters, same direction.
 
@@ -6307,6 +6315,10 @@ class KnowledgeGraph:
     ) -> list[int | None]:
         """Return shortest-path lengths for ID pairs of one node type.
 
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
+
         Results preserve input order; unreachable pairs produce ``None``.
         Builds the adjacency once for the whole batch, so this is much
         cheaper than a loop over :meth:`shortest_path_length`.
@@ -6344,6 +6356,10 @@ class KnowledgeGraph:
         timeout_ms: Optional[int] = None,
     ) -> dict[Any, Optional[int]]:
         """Hop distances from ONE source to many targets, in a single BFS.
+
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
 
         The one-to-many member of the shortest-path family: what N
         :meth:`shortest_path_length` calls answer one pair at a time, this
@@ -6426,6 +6442,10 @@ class KnowledgeGraph:
     ) -> Optional[list[Any]]:
         """Get node IDs along the shortest path.
 
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
+
         Args:
             source_type: Source node type. An **ID namespace** — it says
                 which type to look ``source_id`` up in, never which node types
@@ -6464,6 +6484,10 @@ class KnowledgeGraph:
         direction: Optional[str] = None,
     ) -> Optional[list[int]]:
         """Get raw graph indices along the shortest path.
+
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
 
         Fastest path query — no node data lookup.
 
@@ -6508,6 +6532,10 @@ class KnowledgeGraph:
     ) -> list[dict[str, Any]]:
         """Find all paths between two nodes.
 
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
+
         Args:
             source_type: Source node type. An **ID namespace** — it says
                 which type to look ``source_id`` up in, never which node types
@@ -6538,6 +6566,11 @@ class KnowledgeGraph:
     ) -> list[list[dict[str, Any]]]:
         """Find connected components in the graph.
 
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL connected_components()`` in Cypher under
+        ``cypher(..., valid_at=...)``, or on a ``freeze(valid_at=...)`` view,
+        which runs it on the elements valid then.
+
         Args:
             weak: If ``True`` (default), find weakly connected components.
                 If ``False``, find strongly connected components.
@@ -6560,6 +6593,10 @@ class KnowledgeGraph:
         timeout_ms: Optional[int] = None,
     ) -> bool:
         """Check if two nodes are connected (directly or indirectly).
+
+        Walks the whole graph: the ``date()`` context does not apply. As of an
+        instant, match the path in Cypher under ``cypher(..., valid_at=...)``,
+        where ``shortestPath`` crosses only the elements valid then.
 
         ``True`` exactly when :meth:`shortest_path_length` with the same
         arguments returns a distance.
@@ -6619,6 +6656,11 @@ class KnowledgeGraph:
     ) -> Union[ResultView, pd.DataFrame]:
         """Calculate betweenness centrality.
 
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL betweenness()`` in Cypher under ``cypher(...,
+        valid_at=...)``, or on a ``freeze(valid_at=...)`` view, which runs it
+        on the elements valid then.
+
         Args:
             normalized: Normalise scores to ``[0, 1]``. Default ``True``.
             sample_size: Sample source nodes for faster computation on large graphs.
@@ -6646,6 +6688,11 @@ class KnowledgeGraph:
     ) -> Union[ResultView, pd.DataFrame]:
         """Calculate PageRank centrality.
 
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL pagerank()`` in Cypher under ``cypher(...,
+        valid_at=...)``, or on a ``freeze(valid_at=...)`` view, which runs it
+        on the elements valid then.
+
         Args:
             damping_factor: Probability of following a link. Default ``0.85``.
             max_iterations: Maximum iterations. Default ``100``.
@@ -6672,6 +6719,11 @@ class KnowledgeGraph:
     ) -> Union[ResultView, pd.DataFrame]:
         """Calculate degree centrality.
 
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL degree()`` in Cypher under ``cypher(...,
+        valid_at=...)``, or on a ``freeze(valid_at=...)`` view, which runs it
+        on the elements valid then.
+
         Args:
             normalized: Normalise by ``(n-1)``. Default ``True``.
             connection_types: Only count these relationship types (str or list).
@@ -6696,6 +6748,11 @@ class KnowledgeGraph:
         to_df: Optional[bool] = None,
     ) -> Union[ResultView, pd.DataFrame]:
         """Calculate closeness centrality.
+
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL closeness()`` in Cypher under ``cypher(...,
+        valid_at=...)``, or on a ``freeze(valid_at=...)`` view, which runs it
+        on the elements valid then.
 
         Args:
             normalized: Adjust for disconnected components. Default ``True``.
@@ -6726,6 +6783,11 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Detect communities using the Louvain algorithm.
 
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL louvain()`` in Cypher under ``cypher(...,
+        valid_at=...)``, or on a ``freeze(valid_at=...)`` view, which runs it
+        on the elements valid then.
+
         Args:
             weight_property: Edge property to use as weight. Default all edges weight ``1.0``.
             resolution: Resolution parameter (higher = more communities). Default ``1.0``.
@@ -6745,6 +6807,11 @@ class KnowledgeGraph:
         timeout_ms: Optional[int] = None,
     ) -> dict[str, Any]:
         """Detect communities using label propagation.
+
+        Runs on the whole graph: the ``date()`` context does not apply. As of
+        an instant, run ``CALL label_propagation()`` in Cypher under
+        ``cypher(..., valid_at=...)``, or on a ``freeze(valid_at=...)`` view,
+        which runs it on the elements valid then.
 
         Args:
             max_iterations: Maximum iterations. Default ``100``.
@@ -7728,8 +7795,10 @@ class KnowledgeGraph:
         bulk load onto a declared
         relationship type keeps each period between the same endpoints as its
         own relationship (see :meth:`add_relationships`). This is
-        ``CALL db.temporal.declare`` with a defaulted convention: both
-        properties must exist, every stored bound must read as a date, a
+        ``CALL db.temporal.declare`` with a defaulted convention: the
+        ``valid_from`` property must exist (a ``valid_to`` no row carries yet
+        is accepted with a warning, unless it is a near miss of a property
+        the type has), every stored bound must read as a date, a
         datetime or an ISO date string, and no row's interval may be inverted
         (or empty under ``'half_open'``). Re-declaring the same interval is a
         no-op; a different one for the same type (and source type) is
@@ -7761,14 +7830,17 @@ class KnowledgeGraph:
 
         Raises:
             ArgumentError: If *type_name* is not a known node or relationship
-                type, *source_type* is given for a node type, a property does
-                not exist, a stored bound is unreadable or a row's interval is
+                type, *source_type* is given for a node type, *valid_from* does
+                not exist or *valid_to* is a near miss of a property the type
+                has, a stored bound is unreadable or a row's interval is
                 inverted (the message names the element), or a different
                 declaration already covers the type.
 
         Warns:
             UserWarning: A closed declaration whose rows end on the day another
-                row of the same label (or from the same source node) begins.
+                row of the same label (or from the same source node) begins,
+                or a *valid_to* no row carries yet (every row is open-ended
+                until one is written).
         """
         ...
 
@@ -7791,6 +7863,13 @@ class KnowledgeGraph:
         ``save_subset()`` copy only valid relationships. Undeclared types pass unfiltered. A
         relationship type holding several unkeyed declarations is refused,
         as Cypher refuses it.
+
+        The context belongs to the selection chain. ``cypher()`` does not
+        read it (pass ``valid_at=`` there), nor do the graph-wide algorithm
+        and path methods (``pagerank()``, ``shortest_path()``, …) or
+        ``vector_search()`` / ``search_text()`` without a selection; run
+        those as of an instant through ``cypher(..., valid_at=...)`` or a
+        ``freeze(valid_at=...)`` view.
 
         Modes:
             - ``date('2013')`` — point-in-time (valid at 2013-01-01).
@@ -8383,6 +8462,10 @@ class KnowledgeGraph:
         """Vector similarity search within the current selection — the node
         route of :meth:`vector_search`.
 
+        Without a selection it ranks the whole store: the ``date()`` context
+        applies only through a selection (``graph.date(d).select(T)``). As of
+        an instant, rank in Cypher under ``cypher(..., valid_at=...)``.
+
         Searches for nodes most similar to the query vector among the currently
         selected nodes. Results are ordered by similarity (most similar first).
 
@@ -8474,6 +8557,12 @@ class KnowledgeGraph:
         route of :meth:`vector_search`, over the ranking
         ``CALL db.relationship_embeddings.query`` performs.
 
+        It ranks the whole store, whatever the selection or the ``date()``
+        context says. As of an instant, run
+        ``CALL db.relationship_embeddings.query(...)`` under
+        ``cypher(..., valid_at=...)``, which ranks only the relationships
+        valid then with both endpoints valid.
+
         With ``types`` omitted, every relationship type that has a
         ``text_column`` store is ranked; ``types`` narrows that to one type or a
         list. The stores' answers merge into one ``top_k`` ordered by score,
@@ -8543,6 +8632,13 @@ class KnowledgeGraph:
         """Rank stored vectors against a query vector — the current
         selection's nodes by default, relationships with
         ``entity="relationship"``.
+
+        The node route ranks the selection, which the ``date()`` context has
+        filtered; without a selection it ranks the whole store. The
+        relationship route ranks the whole store whatever the selection or
+        the context says. As of an instant, rank in Cypher under
+        ``cypher(..., valid_at=...)`` — ``db.relationship_embeddings.query``
+        for relationships.
 
         Routes to :meth:`node_vector_search` (``entity="node"``, the default)
         or :meth:`relationship_vector_search` (``entity="relationship"``) and
@@ -9660,6 +9756,10 @@ class KnowledgeGraph:
         """Search node embeddings using a text query — the node route of
         :meth:`search_text`.
 
+        Without a selection it ranks the whole store: the ``date()`` context
+        applies only through a selection (``graph.date(d).select(T)``). As of
+        an instant, rank in Cypher under ``cypher(..., valid_at=...)``.
+
         Uses the model registered via ``set_embedder()`` to embed the query,
         then performs vector search within the current selection — or the whole
         graph when no selection is active (see :meth:`vector_search`). Refer to
@@ -9710,6 +9810,12 @@ class KnowledgeGraph:
         vectors against it — :meth:`relationship_vector_search` with a text
         query, and the relationship route of :meth:`search_text`.
 
+        It ranks the whole store, whatever the selection or the ``date()``
+        context says. As of an instant, run
+        ``CALL db.relationship_embeddings.query(...)`` under
+        ``cypher(..., valid_at=...)``, which ranks only the relationships
+        valid then with both endpoints valid.
+
         Example::
 
             hits = graph.relationship_search_text("context", "who founded it?", top_k=5)
@@ -9740,6 +9846,13 @@ class KnowledgeGraph:
         """Embed a text query with the registered model and rank stored
         vectors — the current selection's nodes by default, relationships with
         ``entity="relationship"``.
+
+        The node route ranks the selection, which the ``date()`` context has
+        filtered; without a selection it ranks the whole store. The
+        relationship route ranks the whole store whatever the selection or
+        the context says. As of an instant, rank in Cypher under
+        ``cypher(..., valid_at=...)`` — ``db.relationship_embeddings.query``
+        for relationships.
 
         Routes to :meth:`node_search_text` or :meth:`relationship_search_text`
         and behaves exactly as the method it routes to; the keywords follow

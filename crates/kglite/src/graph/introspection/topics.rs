@@ -812,7 +812,7 @@ pub(super) fn write_topic_spatial(xml: &mut String) {
 
 pub(super) fn write_topic_temporal(xml: &mut String) {
     xml.push_str("  <temporal>\n");
-    xml.push_str("    <desc>Temporal filtering functions for date-range validity checks on nodes and relationships. Works with any date/datetime string or DateTime properties. NULL fields are treated as open-ended boundaries.</desc>\n");
+    xml.push_str("    <desc>Date values and arithmetic, and the valid_at/valid_during validity tests. To ask a whole statement as of an instant use the FOR VALID_TIME AS OF prefix (see context). NULL bounds are open-ended.</desc>\n");
     xml.push_str("    <functions>\n");
     xml.push_str("      <fn name=\"date(str) / datetime(str)\">Parse date string to DateTime value. Supports 'YYYY-MM-DD' format.</fn>\n");
     xml.push_str("      <fn name=\"date_diff(d1, d2)\">Days between two dates (d1 - d2). Same as date subtraction.</fn>\n");
@@ -843,8 +843,9 @@ pub(super) fn write_topic_temporal(xml: &mut String) {
     xml.push_str("      <rule>NULL to_field = still valid / open-ended (always passes the to check)</rule>\n");
     xml.push_str("      <rule>Both NULL = always valid (returns true)</rule>\n");
     xml.push_str("    </null_semantics>\n");
-    xml.push_str("    <declarations>CALL db.temporal.declare({node: 'Label' | relationship: 'TYPE'[, source_type: 'Label'], from: 'prop', to: 'prop', convention: 'closed' | 'half_open'}) records which properties bound a type's validity interval and whether the to day is still valid (closed) or the first day no longer valid (half_open). Every stored bound is validated first; rows whose to equals another row's from (same label, or same source node) are counted, with a warning under closed. db.temporal.undeclare({...}) removes one; db.temporal.declarations() lists them, with empty_rows / unreadable_rows: rows a later write left valid at no instant or with a bound no query can read. Declarations drive the fluent select()/traverse() filters and Cypher valid_at(entity, date)/valid_during(entity, start, end); the four-argument forms follow a declaration that names the same two properties.</declarations>\n");
-    xml.push_str("    <context>FOR VALID_TIME AS OF &lt;instant&gt; before a statement (either side of EXPLAIN/PROFILE) asks the whole statement as of that instant: it sees only the nodes valid under every declared label they carry and the relationships valid with both endpoints, variable-length paths and shortestPath included; text_bm25 ranks with the valid documents' statistics, vector_score top-k and the embedding queries rank only valid elements, and the graph algorithms (pagerank, louvain, connected_components, ...) run on a cached copy of the valid elements and YIELD the graph's own nodes; EXPLAIN shows the declared targets it reaches. For many queries at one instant, Python freeze(valid_at=) / Session.snapshot(valid_at=) returns a FrozenGraph whose cypher() runs every query as of it and whose node_count()/node_types count only what is visible then. valid_at= writes the prefix on every entry point that takes query text: Python KnowledgeGraph.cypher, Session.cypher/execute, Transaction.cypher, FrozenGraph.cypher (refused on a valid_at handle), and the MCP cypher_query, run_recipe_query and named recipe tools. diagnostics.temporal echoes the instant, the targets reached and the route (guarded / plain when nothing was filtered / view).</context>\n");
+    xml.push_str("    <declarations>CALL db.temporal.declare({node: 'Label' | relationship: 'TYPE'[, source_type: 'Label'], from: 'prop', to: 'prop', convention: 'closed' | 'half_open'}) records which properties bound a type's validity interval and whether the to day is still valid (closed) or the first day no longer valid (half_open). Every stored bound is validated first; a to property no row carries yet (every period open) is accepted with a warning, a missing from is refused; rows whose to equals another row's from (same label, or same source node) are counted, with a warning under closed. db.temporal.undeclare({...}) removes one; db.temporal.declarations() lists them, with empty_rows / unreadable_rows: rows a later write left valid at no instant or with a bound no query can read. Declarations drive the fluent select()/traverse() filters and Cypher valid_at(entity, date)/valid_during(entity, start, end); the four-argument forms follow a declaration that names the same two properties.</declarations>\n");
+    xml.push_str("    <functions_vs_context>valid_at(n, date) reads one declaration (the primary type's, else a secondary label's) and valid_at(r, date) tests the relationship alone; each call filters only the element it names. The context requires a node valid under every declared label it carries and a relationship valid with both endpoints, on every element of the statement. Use the functions for a second instant or undeclared bounds; use the context for as-of questions. Lineage over a successor relationship (versions that never coexist) runs without a context.</functions_vs_context>\n");
+    xml.push_str("    <context>FOR VALID_TIME AS OF &lt;instant&gt; before a statement (either side of EXPLAIN/PROFILE) asks the whole statement as of that instant: it sees only the nodes valid under every declared label they carry and the relationships valid with both endpoints, variable-length paths and shortestPath included; text_bm25 ranks with the valid documents' statistics, vector_score top-k and the embedding queries rank only valid elements, and the graph algorithms (pagerank, louvain, connected_components, ...) run on a cached copy of the valid elements and YIELD the graph's own nodes; EXPLAIN shows the declared targets it reaches. For many queries at one instant, Python freeze(valid_at=) / Session.snapshot(valid_at=) returns a FrozenGraph whose cypher() runs every query as of it and whose node_count()/node_types count only what is visible then. valid_at= writes the prefix on these entry points: Python KnowledgeGraph.cypher, Session.cypher/execute, Transaction.cypher, FrozenGraph.cypher (refused on a valid_at handle), the MCP cypher_query, run_recipe_query and named recipe tools, and Java ValidAt on query/queryResult/queryBatch; C ABI, CLI and Bolt clients write the prefix into the query text themselves. diagnostics.temporal echoes the instant, the targets reached and the route (guarded / plain when nothing was filtered / view). Without a context a statement sees every version: Cypher never defaults to today (the fluent API does).</context>\n");
     xml.push_str("  </temporal>\n");
 }
 
@@ -894,7 +895,8 @@ pub(super) fn write_fluent_overview(xml: &mut String, surface: DescribeSurface) 
     xml.push_str("  </group>\n");
 
     xml.push_str("  <group name=\"temporal\">\n");
-    xml.push_str("    <method sig=\"valid_at(date, date_from_field=None, date_to_field=None)\">Point-in-time filter: keep nodes valid at a specific date.</method>\n");
+    xml.push_str("    <method sig=\"date(date_str=None, end_str=None)\">Set the date context the chain filters declared types by: one day, a range, 'all', or today in UTC (the default).</method>\n");
+    xml.push_str("    <method sig=\"valid_at(date=None, date_from_field=None, date_to_field=None)\">Point-in-time filter: keep nodes valid at a specific date.</method>\n");
     xml.push_str("    <method sig=\"valid_during(start_date, end_date, date_from_field=None, date_to_field=None)\">Range overlap filter: keep nodes valid during a period.</method>\n");
     xml.push_str("  </group>\n");
 
@@ -1156,17 +1158,27 @@ pub(super) fn write_fluent_topic_spatial(xml: &mut String) {
 
 pub(super) fn write_fluent_topic_temporal(xml: &mut String) {
     xml.push_str("  <temporal>\n");
-    xml.push_str("    <desc>Temporal validity filtering. Nodes must have valid_from / valid_to (or custom-named) date properties.</desc>\n");
+    xml.push_str("    <desc>A type with a declared validity interval (set_temporal(), a loader's validFrom/validTo column types, CALL db.temporal.declare) is filtered by the cursor's date context, which defaults to today in UTC — unlike Cypher, which filters nothing without FOR VALID_TIME AS OF or valid_at=. The context is that prefix's filter: select() keeps a node valid under every declared label it carries; traverse() keeps a relationship valid under its own source's declaration and a target node that is valid too; expand(), where_connected(), where_orphans(), degrees(), relationships(), compare(), to_subgraph() and save_subset() follow, count and copy only valid relationships to valid nodes. Undeclared types pass unfiltered.</desc>\n");
     xml.push_str("    <methods>\n");
-    xml.push_str("      <m sig=\"valid_at(date, date_from_field=None, date_to_field=None)\">Keep nodes valid at a specific date. date can be 'YYYY-MM-DD' string or datetime.</m>\n");
-    xml.push_str("      <m sig=\"valid_during(start_date, end_date, date_from_field=None, date_to_field=None)\">Keep nodes whose validity overlaps a date range.</m>\n");
+    xml.push_str("      <m sig=\"date(date_str=None, end_str=None)\">Set the context: date('2010') one day; date('2010', '2015') anything valid during the range (a partial end covers its period: '2015' ends 2015-12-31); date('all') no filtering; date() today in UTC. Dates are strings ('2010', '2010-06', '2010-06-30', '20100630', '2010-06-30T12:00'), datetime.date or datetime.datetime, taken at date grain.</m>\n");
+    xml.push_str("      <m sig=\"select(node_type, temporal=None)\">temporal=False turns the context off for this call; limit= counts the nodes that pass.</m>\n");
+    xml.push_str("      <m sig=\"valid_at(date=None, date_from_field=None, date_to_field=None)\">Keep nodes valid at date under the same label rule; named fields replace the primary type's declared bounds. No date: the context (today under the default or 'all'). Raises for a field the type lacks, or an undeclared type with no date_from/date_to.</m>\n");
+    xml.push_str("      <m sig=\"valid_during(start_date, end_date, date_from_field=None, date_to_field=None)\">Keep nodes whose validity overlaps the range; a partial end date covers its whole period.</m>\n");
+    xml.push_str("      <m sig=\"traverse(connection_type, at=None, during=None, temporal=None)\">at=/during= filter one hop, relationships and targets, under the relationship type's declaration (raises if it has none); temporal=False turns filtering off for the hop.</m>\n");
     xml.push_str("    </methods>\n");
+    xml.push_str("    <rules>\n");
+    xml.push_str("      <rule>An explicit filter on the context's default: select() already keeps only today's nodes of a declared type, so pass temporal=False (or date('all')) before valid_at()/valid_during() to test every version.</rule>\n");
+    xml.push_str("      <rule>A relationship type holding several declarations with no source type (a graph saved by an older version) is refused: CALL db.temporal.undeclare({relationship: 'T'}), then declare one per source_type.</rule>\n");
+    xml.push_str("      <rule>The graph-wide methods — pagerank(), louvain_communities(), connected_components(), shortest_path() and the other algorithm and path methods, vector_search()/search_text() without a selection, and the relationship search routes (relationship_vector_search(), relationship_search_text(), entity='relationship') whatever the selection — ignore the context. As of a date: cypher(query, valid_at=...) (CALL db.relationship_embeddings.query(...) for relationship vectors) or freeze(valid_at=...).cypher(\"CALL pagerank() ...\").</rule>\n");
+    xml.push_str("      <rule>An unreadable bound raises, naming the step, the node and the property (select(): node '2', property 'vt': ...).</rule>\n");
+    xml.push_str("    </rules>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str(
-        "      <ex desc=\"point in time\">graph.select('Licence').valid_at('2020-06-15')</ex>\n",
-    );
-    xml.push_str("      <ex desc=\"range overlap\">graph.select('Licence').valid_during('2020-01-01', '2020-12-31')</ex>\n");
-    xml.push_str("      <ex desc=\"custom columns\">graph.select('Contract').valid_at('2023-01-01', date_from_field='start_date', date_to_field='end_date')</ex>\n");
+    xml.push_str("      <ex desc=\"as of a date\">graph.date('2010-06-30').select('Field').traverse('HAS_LICENSEE')</ex>\n");
+    xml.push_str("      <ex desc=\"point in time, every version tested\">graph.select('Licence', temporal=False).valid_at('2020-06-15')</ex>\n");
+    xml.push_str("      <ex desc=\"range overlap\">graph.select('Licence', temporal=False).valid_during('2020-01-01', '2020-12-31')</ex>\n");
+    xml.push_str("      <ex desc=\"one hop at a date\">graph.select('Field', temporal=False).traverse('HAS_LICENSEE', at='2005')</ex>\n");
+    xml.push_str("      <ex desc=\"named bounds\">graph.select('Contract', temporal=False).valid_at('2023-01-01', date_from_field='start_date', date_to_field='end_date')</ex>\n");
+    xml.push_str("      <ex desc=\"algorithm as of a date\">graph.cypher('CALL pagerank() YIELD node, score RETURN node.title, score', valid_at='2010-06-30')</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </temporal>\n");
 }

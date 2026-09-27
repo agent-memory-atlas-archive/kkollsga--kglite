@@ -339,13 +339,22 @@ graph.add_nodes(
     node_type='Estimate',
     unique_id_field='estimate_id',
     node_title_field='name',
-    column_types={'valid_from': 'datetime', 'valid_to': 'datetime'}
+    column_types={'valid_from': 'validFrom', 'valid_to': 'validTo'},
+    convention='closed',
 )
 
-graph.select('Estimate').where({'valid_from': {'>=': '2020-06-01'}})
-graph.select('Estimate').valid_at('2020-06-15')
-graph.select('Estimate').valid_during('2020-01-01', '2020-06-30')
+graph.select('Estimate', temporal=False).where({'valid_from': {'>=': '2020-06-01'}})
+graph.date('2020-06-15').select('Estimate')           # valid on that day
+graph.select('Estimate', temporal=False).valid_during('2020-01-01', '2020-06-30')
+graph.cypher("MATCH (e:Estimate) RETURN e.title", valid_at='2020-06-15')
 ```
+
+`validFrom` / `validTo` load the columns as dates and declare them as the
+type's validity interval; `convention` says whether the `to` day is still
+valid (`'closed'`) or the first day no longer valid (`'half_open'`). A declared
+type is filtered to today by `select()` unless a `date()` context or
+`temporal=False` says otherwise. Plain `'date'` / `'datetime'` column types
+load dates without declaring anything. See {doc}`valid-time`.
 
 ## Batch Property Updates
 

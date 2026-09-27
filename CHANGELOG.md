@@ -11,70 +11,199 @@ before upgrading.
 
 ### Added
 
+- **Valid time.** A node label or relationship type can declare the two
+  properties that bound its validity interval, and a statement can be asked
+  as of an instant: it then answers as if the graph held only the elements
+  valid then. The
+  [valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)
+  covers declaring, asking and modelling; the entries below are the surface.
+- Cypher: `CALL db.temporal.declare({node: 'Label' | relationship: 'TYPE',
+  source_type?: 'Label', from: 'vf', to: 'vt', convention: 'closed' |
+  'half_open'})` declares which two properties bound an element's validity
+  interval, with a closed end (the `to` day is still valid) or a half-open
+  one (the `to` day is the first day no longer valid; a datetime `to`
+  excludes only from its own time). The declaration reads every stored
+  bound first and refuses a missing `from` property, an unreadable bound or
+  an inverted interval, naming the node or the relationship's endpoints. A
+  `to` property no row carries yet (every period still open, as on fresh
+  data) is accepted with a warning that every row is open-ended until one is
+  written, unless it is a near miss of a property the target has, which is
+  refused as a typo with a "Did you mean" hint; `set_temporal()` follows the
+  same rule, and a loader or blueprint counts a bound column it has just
+  written, even all NULL, as present. Later writes are not re-validated, and
+  a property-type constraint (`REQUIRE n.valid_to IS :: DATE`) refuses a bad
+  write up front. It yields
+  `declared`, `rows` and `abutting_rows`: the rows whose `to` equals another
+  row's `from` in the same label or from the same source node, which under
+  `closed` also earns a query warning. A relationship uses its source's
+  `source_type` declaration first and the unkeyed one otherwise.
+  `CALL db.temporal.undeclare({...})` removes one, and
+  `CALL db.temporal.declarations()` lists them, with `empty_rows` and
+  `unreadable_rows`: rows a write since the declaration left with an empty
+  interval (valid at no instant) or with a bound that is not NULL, a date, a
+  datetime or an ISO string, counted at the graph's current state by a walk
+  over each declared type's rows, repeated after a write (including one
+  earlier in the same statement). `describe()` shows each declaration's
+  convention, and `temporal_empty` / `temporal_unreadable` (`empty=` /
+  `unreadable=` inside a combined `temporal` attribute) when such rows exist.
+- `set_temporal()`, `add_nodes()`, `add_relationships()` and
+  `replace_relationships()` (and their `connection`-named twins) take
+  `convention='closed' | 'half_open'` for the validity interval they declare;
+  `set_temporal()` also takes `source_type=`. Left out, the convention of a
+  declaration of the same properties is kept, and a new one is closed. A
+  closed declaration whose rows end on the day another begins emits a
+  `UserWarning` suggesting `'half_open'`.
+- Blueprints: a node spec, `fk_edges` entry or `junction_edges` entry takes
+  `"temporal": {"from": ..., "to": ..., "convention": "closed" | "half_open"}`
+  and `from_blueprint()` declares that validity interval once every row is
+  loaded. On an edge, `from`/`to` name the stored property (after `rename`)
+  and the declaration is made for the spec's node type as the source type. A
+  bound the rows cannot satisfy fails the build, naming the row. Columns typed
+  `validFrom`/`validTo` without a `temporal` key, or a `temporal` key without
+  `convention`, declare nothing and the build warns with what to add — the
+  blueprint guide's earlier claim that those types enable temporal filtering
+  was not true.
+- Validity-interval declarations are saved in `.kgl` files and disk graphs,
+  with their convention, source type and declare-time `abutting_rows`, and
+  files from earlier versions load with their temporal configs. For older
+  versions a saved file also records closed node declarations and each
+  relationship type whose configs are all closed and have no `source_type`;
+  a type with a half-open or per-source declaration is left out, so an older
+  version treats it as undeclared rather than misreading it. `CALL db.temporal.declarations()`
+  yields `ambiguous`, which is `true` for a relationship type holding several
+  configs without a `source_type` (possible only in a file saved by an older
+  version); `describe()` marks such a type
+  `temporal_ambiguous="true"`. Re-declare each with its `source_type` to
+  resolve it.
+- Cypher: `valid_at(entity, date)` and `valid_during(entity, start, end)` read
+  the bounds and convention from the entity type's declared validity interval
+  (`db.temporal.declare`, a loader's `validFrom`/`validTo`, `set_temporal`), as
+  the fluent filters do. A relationship takes its source type's keyed
+  declaration first. On a type with no declaration they raise, naming
+  `db.temporal.declare` and the four-argument form. The entity may come from
+  a list — `collect()`, `UNWIND`, `nodes(p)`, `relationships(p)`, a
+  variable-length relationship list, `ALL(r IN relationships(p) WHERE …)` —
+  and reads its own type's declaration exactly as a matched variable does.
+  The four- and five-argument forms follow the convention of a declaration
+  that names the same two properties — on a `half_open` one, a query on the
+  day one period ends and the next begins counts only the new one — and a
+  property pair no declaration names reads closed, as before. Each call tests
+  the one element it names: `valid_at(n, date)` reads the node's primary
+  type's declaration (else a secondary label's) and `valid_at(r, date)` the
+  relationship's own interval, without its endpoints — unlike the statement
+  context below, which requires every declared label and both endpoints.
+- Cypher `date()` with no argument returns today's date in UTC; it used to
+  raise "requires 1 argument".
+- Cypher: `date({year, month, day})` and `datetime({year, month, day, hour,
+  minute, second, millisecond, microsecond, nanosecond})`, openCypher's map
+  form, build a date or datetime from integers — `date({year: y, month: 1,
+  day: 1})`. Missing fields default to the start of the period; an impossible
+  date, an unknown key or a non-integer component raises.
 - Cypher: the statement prefix `FOR VALID_TIME AS OF <instant>`, before or
   after `EXPLAIN` / `PROFILE`, where the instant is a quoted ISO date or
   datetime, `$param`, `date(…)` / `datetime(…)` of either, or `date()` for
-  today (UTC). Python `cypher(…, valid_at=…)` (a `datetime.date`, a
-  `datetime.datetime` or an ISO string) and the MCP `cypher_query` tool's
-  `valid_at` argument write the same prefix. The plan records, per query scope,
-  the declared validity intervals the statement can reach; `EXPLAIN` shows them
-  in a leading `ValidTimeContext` row. Refused under a context: an axis other
-  than `VALID_TIME`, a graph with no validity declaration, a writing statement,
-  a procedure that enumerates graph elements without a valid-time route (the
+  today (UTC). The plan records, per query scope, the declared validity
+  intervals the statement can reach; `EXPLAIN` shows them in a leading
+  `ValidTimeContext` row (over Bolt, as every `EXPLAIN` does: zero records
+  and the plan in the SUCCESS metadata's `plan` key, whichever side of
+  `EXPLAIN` the prefix stands). Refused under a context: an axis other than
+  `VALID_TIME`, a graph with no validity declaration, a writing statement, a
+  procedure that enumerates graph elements without a valid-time route (the
   validation rules, `cluster`, `kg_knn`; metadata procedures such as
   `db.labels()` are fine), `degree()` / `inDegree()` / `outDegree()` /
-  `shortest_path_length()` (not available under a context yet), a
-  relationship type whose declarations are ambiguous, a second prefix, and a prefix inside a UNION arm or a
-  `CALL { }` body. Rust: `kglite::api::cypher::prepend_valid_time`, whose
-  `PrependError` tells a bad instant from a doubled context, and
-  `carries_valid_time_context`.
-- Cypher: a statement under `FOR VALID_TIME AS OF` executes. It answers as if
-  the graph held only the elements valid at the instant: a node valid under
-  every declared label it carries (primary or secondary), a relationship
-  valid under the declaration keyed on its own source node's type and with
-  both endpoints valid. Undeclared types are timeless, a NULL bound is open,
-  and a bound that is not a date, datetime or ISO string raises naming the
-  element. An id seek finds the version valid at the instant when several
-  version nodes share the id, whichever numeric kind each stores it as (the
-  last in the type's node order when more than one is valid, in every
-  storage mode; a `.kgl` reload orders a type's nodes by slot, so after a
-  deleted slot is reused that need not be the one created last), and
-  inline-map values that are expressions
-  are evaluated under the context. Counts, node scans with an aggregate or
+  `shortest_path_length()` (they read a node's relationships outside the
+  pattern matcher; the refusal names `COUNT { (n)--() }` and
+  `MATCH p = shortestPath(…) RETURN length(p)`, which answer under a
+  context), a
+  relationship type whose declarations are ambiguous, a second prefix, and a
+  prefix inside a UNION arm or a `CALL { }` body. A statement without the
+  prefix sees every version.
+- Cypher: a statement under `FOR VALID_TIME AS OF` answers as if the graph
+  held only the elements valid at the instant: a node valid under every
+  declared label it carries (primary or secondary), a relationship valid
+  under the declaration keyed on its own source node's type and with both
+  endpoints valid. Undeclared types are timeless, a NULL bound is open, and a
+  bound that is not a date, datetime or ISO string raises naming the element.
+  An id seek finds the version valid at the instant when several version
+  nodes share the id, whichever numeric kind each stores it as (the last in
+  the type's node order when more than one is valid, in every storage mode; a
+  `.kgl` reload orders a type's nodes by slot, so after a deleted slot is
+  reused that need not be the one created last), and inline-map values that
+  are expressions are evaluated under the context. Variable-length
+  relationships cross only valid relationships and valid intermediate nodes
+  (a bound relationship list holds only valid ones), and `shortestPath` /
+  `allShortestPaths` find the shortest valid route, which may be longer than
+  the shortest one in the whole graph. `OPTIONAL MATCH` pads NULLs when every
+  match is invalid, and `EXISTS { }`, `COUNT { }` and pattern comprehensions
+  see only valid matches. Counts, node scans with an aggregate or
   `ORDER BY … LIMIT`, top-k over matched rows, `COUNT { }` and `elementId`
   anchors keep their fast routes under a context; `PROFILE` runs too. When
   every declared type is valid in full at the instant (as of today on a graph
   of current rows) the statement runs its unprefixed plan, with every fast
-  route. Variable-length relationships cross only valid relationships and
-  valid intermediate nodes (a bound relationship list holds only valid ones),
-  and `shortestPath` / `allShortestPaths` find the shortest valid route, which
-  may be longer than the shortest one in the whole graph. `OPTIONAL MATCH`
-  pads NULLs when every match is invalid, and `EXISTS { }`, `COUNT { }` and
-  pattern comprehensions see only valid matches. The Python `cypher(valid_at=…)` argument and the MCP `cypher_query` tool's
-  `valid_at` argument run through the same prefix.
+  route. In memory and mapped storage the declaration walk also builds an
+  index of each type's interval endpoints when every bound is readable and it
+  fits a byte cap; with a literal instant the planner takes each indexed
+  label's count at that instant, not its full count, when choosing where a
+  pattern starts.
+- Cypher: retrieval and graph algorithms under `FOR VALID_TIME AS OF` (and on
+  a `freeze(valid_at=…)` handle). `text_bm25()` ranks with the statistics of
+  the documents valid at the instant — their count, mean length and each
+  term's document frequency — so a document scores what it would in an index
+  of the valid documents alone (a relationship document with both endpoints
+  valid under every label they carry, whichever labels the statement names),
+  and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index route.
+  `vector_score` top-k over `MATCH (n:Label)` scores only the valid nodes'
+  vectors, exactly (`diagnostics.retrieval` `fallback_reason: "exact_mask"`),
+  or from 200,000 valid vectors (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) through
+  the HNSW index's valid candidates (`actual_mode: "hnsw_mask"`).
+  `db.node_embeddings.query`, `db.relationship_embeddings.query` and the
+  `db.embeddings.query` router rank only valid elements (`search_method:
+  "exact_mask"` / `"hnsw_mask"`). The graph algorithm procedures —
+  `pagerank`, `betweenness`, `degree`, `closeness`, `louvain`, `leiden`,
+  `label_propagation`, `connected_components`, `k_core`, `ready_set`,
+  `clustering_coefficient`, `triangle_count`, `eccentricity`, `diameter` —
+  run on a copy of the valid elements, built once per instant and cached
+  until the graph changes, and `YIELD node` binds the graph's own node. Their
+  `node_type` and `relationship` arguments are checked against the graph, as
+  without a context: an unknown relationship type is refused by `ready_set`,
+  an unknown type is an error under `lock_schema()`, and a type none of whose
+  nodes is valid at the instant is empty, not unknown. A copy over its cap
+  (128 MiB; on Disk also 2,000,000 elements, and a 64 MiB
+  one-bit-per-element instant mask, `KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) is
+  refused when the statement runs, naming the cap; over the mask cap the
+  `vector_score` top-k route instead steps aside to the guarded match.
+- Python: `cypher(…, valid_at=…)` on `KnowledgeGraph`, `Session.cypher()`,
+  `Session.execute()`, `Transaction.cypher()` and `FrozenGraph.cypher()` take
+  a `datetime.date`, a `datetime.datetime` or an ISO string and write the
+  `FOR VALID_TIME AS OF` prefix: `EXPLAIN` / `PROFILE` may follow it, a query
+  that already carries a context raises `ValueError`, and a write under
+  `valid_at=` is refused as the prefix is. The graph-wide algorithm and path
+  methods, `vector_search()` / `search_text()` without a selection, and the
+  relationship search routes (whatever the selection) do not read the fluent
+  date context; `cypher(…, valid_at=…)` is their as-of route
+  (`db.relationship_embeddings.query` for relationship vectors).
 - Python: `KnowledgeGraph.freeze(valid_at=…)` and `Session.snapshot(valid_at=…)`
   return a `FrozenGraph` as of that instant. Its `cypher()` runs every query
-  behind the instant's `FOR VALID_TIME AS OF` prefix on the shared snapshot,
-  with no copy, and answers exactly as `cypher(query, valid_at=…)` does
-  (`EXPLAIN` / `PROFILE` included); a query carrying its own prefix raises
-  `ValueError`. The handle keeps the validity masks it resolved at creation
-  for its lifetime, so its queries reuse them however many other instants
-  are queried meanwhile. `node_count()` / `node_types` count only the nodes
-  visible at the instant. Rust: `kglite::api::temporal::view_at` returns the
-  `ValidTimeView` behind it, whose `slice()` builds (and caches per
-  segment, under a 128 MiB cap, a 2M-element cap on Disk) a materialised
-  graph of the valid elements with a map back to the base's nodes.
-- Python: `Session.cypher()`, `Session.execute()`, `Transaction.cypher()` and
-  `FrozenGraph.cypher()` take `valid_at=`, as `KnowledgeGraph.cypher()` does:
-  the same `FOR VALID_TIME AS OF` prefix, `EXPLAIN` / `PROFILE` after it, and
-  `ValueError` for a query that already carries a context. On a
-  `freeze(valid_at=…)` handle `valid_at=` raises that `ValueError` (the handle
-  fixes its instant); a write under `valid_at=` is refused as the prefix is.
-- MCP: `run_recipe_query` and every named recipe tool (`tool:`) take
-  `valid_at`, an ISO date or datetime, and run the stored query behind the
-  prefix; `include_cypher` reports the prefixed text, and a doubled context or
-  an unreadable instant is a `query_failed` error. A recipe query that
-  declares a `valid_at` parameter of its own keeps it as its variable.
+  behind the instant's prefix on the shared snapshot, with no copy, and
+  answers exactly as `cypher(query, valid_at=…)` does (`EXPLAIN` / `PROFILE`
+  included); a query carrying its own prefix, or `valid_at=` on the handle,
+  raises `ValueError`. The handle keeps the validity masks it resolved at
+  creation for its lifetime, so its queries reuse them however many other
+  instants are queried meanwhile. `node_count()` / `node_types` count only
+  the nodes visible at the instant.
+- MCP: `cypher_query`, `run_recipe_query` and every named recipe tool
+  (`tool:`) take `valid_at`, an ISO date or datetime, and run the query
+  behind the prefix; `include_cypher` reports the prefixed text, and a
+  doubled context or an unreadable instant is a `query_failed` error. A
+  recipe query that declares a `valid_at` parameter of its own keeps it as
+  its variable.
+- Java: `ValidAt` renders the prefix from `java.time` (`LocalDate` →
+  `date('…')`, `LocalDateTime` → `datetime('…')` read as naive UTC, offset and
+  zoned datetimes and `Instant` converted to UTC, ISO strings parsed first);
+  `query(…, ValidAt)`, `queryResult(…, ValidAt)` and the new
+  `queryBatch(List<BatchQuery>[, ValidAt])`, which binds
+  `kglite_session_execute_read_batch` so a multi-query report reads one
+  snapshot. No C ABI symbol was added.
 - Query diagnostics echo a valid-time statement: Python
   `ResultView.diagnostics["temporal"]`, the MCP `temporal:` line and recipe
   result `diagnostics.temporal`, the C ABI's (and so Java's) diagnostics JSON
@@ -87,93 +216,37 @@ before upgrading.
   valid slice, and the session-scoped graph version answered. Statements
   without a context carry no `temporal` object in the serialized forms
   (`None` under the Python key); their diagnostics are otherwise unchanged.
-- Java: `ValidAt` renders the prefix from `java.time` (`LocalDate` →
-  `date('…')`, `LocalDateTime` → `datetime('…')` read as naive UTC, offset and
-  zoned datetimes and `Instant` converted to UTC, ISO strings parsed first);
-  `query(…, ValidAt)`, `queryResult(…, ValidAt)` and the new
-  `queryBatch(List<BatchQuery>[, ValidAt])`, which binds
-  `kglite_session_execute_read_batch` so a multi-query report reads one
-  snapshot. No C ABI symbol was added.
-- Rust API: `QueryDiagnostics::temporal` (`kglite::api::cypher::TemporalDiagnostics`),
-  serialized only when set, and `ValidTimeView::execute_read`, which runs a
-  read through the view and echoes route `view`.
-- Cypher: retrieval and graph algorithms under `FOR VALID_TIME AS OF` (and on
-  a `freeze(valid_at=…)` handle). `text_bm25()` ranks with the statistics of
-  the documents valid at the instant — their count, mean length and each
-  term's document frequency — so a document scores what it would in an index
-  of the valid documents alone (a relationship document with both endpoints
-  valid under every label they carry, whichever labels the statement names),
-  and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index route.
-  `vector_score` top-k over `MATCH (n:Label)` scores
-  only the valid nodes' vectors, exactly (`diagnostics.retrieval`
-  `fallback_reason: "exact_mask"`), or from 200,000 valid vectors
-  (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) through the HNSW index's valid
-  candidates (`actual_mode: "hnsw_mask"`). `db.node_embeddings.query`,
-  `db.relationship_embeddings.query` and the `db.embeddings.query` router rank
-  only valid elements (`search_method: "exact_mask"` / `"hnsw_mask"`). The
-  graph algorithm procedures — `pagerank`, `betweenness`, `degree`,
-  `closeness`, `louvain`, `leiden`, `label_propagation`,
-  `connected_components`, `k_core`, `ready_set`, `clustering_coefficient`,
-  `triangle_count`, `eccentricity`, `diameter` — run on a copy of the valid
-  elements, built once per instant and cached until the graph changes, and
-  `YIELD node` binds the graph's own node. Their `node_type` and
-  `relationship` arguments are checked against the graph, as without a
-  context: an unknown relationship type is refused by `ready_set`, an unknown
-  type is an error under `lock_schema()`, and a type none of whose nodes is
-  valid at the instant is empty, not unknown. A copy over its cap (128 MiB; on
-  Disk also 2,000,000 elements, and a 64 MiB one-bit-per-element instant mask,
-  `KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) is refused when the statement runs,
-  naming the cap; over the mask cap the `vector_score` top-k route instead
-  steps aside to the guarded match. Rust: `kglite::api::temporal::DISK_MASK_BYTE_CAP`, and
-  `ValidTimeView::node_count` / `node_types`.
-- Cypher `date()` with no argument returns today's date in UTC; it used to
-  raise "requires 1 argument".
-- `CALL db.temporal.declarations()` yields `empty_rows` and
-  `unreadable_rows` per declaration: rows a write since the declaration left
-  with an empty interval (valid at no instant) or with a bound that is not
-  NULL, a date, a datetime or an ISO string, counted at the graph's current
-  state. `describe()` prints them as `temporal_empty` / `temporal_unreadable`
-  (`empty=` / `unreadable=` inside a combined `temporal` attribute) when any
-  are present. Rust: `DeclarationInfo` gains the `empty_rows` and
-  `unreadable_rows` fields, so a struct literal of it needs both. The counts
-  come from a walk over each declared type's rows, repeated after a write
-  (including a write earlier in the same statement). In memory and mapped
-  storage the walk also builds an index of the type's interval endpoints when
-  every bound is readable and it fits a byte cap; under `FOR VALID_TIME AS OF`
-  with a literal instant the planner takes each indexed label's count at that
-  instant, not its full count, when choosing where a pattern starts.
-- Cypher: `valid_at(entity, date)` and `valid_during(entity, start, end)` read
-  the bounds and convention from the entity type's declared validity interval
-  (`db.temporal.declare`, a loader's `validFrom`/`validTo`, `set_temporal`), as
-  the fluent filters do. A relationship takes its source type's keyed
-  declaration first. On a type with no declaration they raise, naming
-  `db.temporal.declare` and the four-argument form. The entity may come from
-  a list — `collect()`, `UNWIND`, `nodes(p)`, `relationships(p)`, a
-  variable-length relationship list, `ALL(r IN relationships(p) WHERE …)` —
-  and reads its own type's declaration exactly as a matched variable does.
-- Cypher: `date({year, month, day})` and `datetime({year, month, day, hour,
-  minute, second, millisecond, microsecond, nanosecond})`, openCypher's map
-  form, build a date or datetime from integers — `date({year: y, month: 1,
-  day: 1})`. Missing fields default to the start of the period; an impossible
-  date, an unknown key or a non-integer component raises.
-- Rust API: `kglite::api::temporal::{node_request_config,
-  relationship_request_configs}` resolve an explicit validity request against
-  a type — the rule the fluent filters and Cypher share — and
-  `kglite::api::schema_property_keys` gives a single-typed node set's export
-  columns from the type's schema.
-- Rust API: `kglite::api::fluent::FluentFilter`, the valid-time filter a
-  fluent step runs under, resolved from the cursor's `TemporalContext`, a
-  `traverse(at=/during=)` argument or a `valid_at()` / `valid_during()`
-  request into the filter `FOR VALID_TIME AS OF` uses; and
-  `kglite::api::fluent::select_nodes`, the fluent `select()` with the filter
-  applied before its sort and limit.
 - Fluent `date()`, `valid_at()`, `valid_during()` and `traverse(at=…,
   during=…)` take a `datetime.date` or `datetime.datetime`, as `cypher()`
   parameters do, and a datetime string such as `'2009-06-30T12:00'`. The
   fluent filters work at date grain, so a datetime is taken at its date (an
-  aware one in UTC). Rust: `kglite::api::timeseries::parse_date_or_datetime_query`.
-- Rust API: `kglite::api::blueprint::TemporalSpec`, the `temporal` field's type on
-  `NodeSpec`, `FkEdge` and `JunctionEdge`.
+  aware one in UTC).
+- Rust API for valid time: `kglite::api::temporal` (`declare`,
+  `declare_loaded`, `declare_defaulted`, `declare_from_column_types`,
+  `LoadDeclaration`, `undeclare`, `list`, `node_config`, `edge_configs`,
+  `node_request_config` and `relationship_request_configs` — which resolve an
+  explicit validity request against a type by the rule the fluent filters and
+  Cypher share — `TemporalTarget`, `IntervalConvention`, `DeclarationInfo`
+  with `ambiguous`, `empty_rows` and `unreadable_rows`, `view_at` returning a
+  `ValidTimeView` whose `slice()` builds (and caches per segment, under a
+  128 MiB cap, a 2M-element cap on Disk) a materialised graph of the valid
+  elements with a map back to the base's nodes, and whose `execute_read`,
+  `node_count` and `node_types` answer through the view, and
+  `DISK_MASK_BYTE_CAP`); `kglite::api::cypher::prepend_valid_time`, whose
+  `PrependError` tells a bad instant from a doubled context,
+  `carries_valid_time_context` and `TemporalDiagnostics`
+  (`QueryDiagnostics::temporal`, serialized only when set);
+  `kglite::api::fluent::FluentFilter`, the filter a fluent step runs under,
+  resolved from the cursor's `TemporalContext`, a `traverse(at=/during=)`
+  argument or a `valid_at()` / `valid_during()` request, and
+  `kglite::api::fluent::select_nodes`, the fluent `select()` with the filter
+  applied before its sort and limit; `kglite::api::blueprint::TemporalSpec`,
+  the `temporal` field's type on `NodeSpec`, `FkEdge` and `JunctionEdge`;
+  `kglite::api::timeseries::parse_date_or_datetime_query`;
+  `TemporalConfig::convention` / `source_type`; `GraphRead::get_edge_property`,
+  which reads one relationship property without materialising the
+  relationship; and `kglite::api::schema_property_keys`, a single-typed node
+  set's export columns from the type's schema.
 - Rust API: `SchemaDefinition::reject_reserved_provenance_constraints` and
   `NodeSchemaDefinition` / `ConnectionSchemaDefinition::constrained_properties`,
   the check every constraint-declaring surface shares.
@@ -192,61 +265,19 @@ before upgrading.
   row; `[p = (a)-->(b) | length(p)]` binds each match's path. In the Rust API,
   `kglite::api::cypher::Expression` gains a `PatternComprehension` variant, so
   an exhaustive match over it needs a new arm.
-- Cypher: `CALL db.temporal.declare({node: 'Label' | relationship: 'TYPE',
-  source_type?: 'Label', from: 'vf', to: 'vt', convention: 'closed' |
-  'half_open'})` declares which two properties bound an element's validity
-  interval, with a closed end (the `to` day is still valid) or a half-open
-  one (the `to` day is the first day no longer valid; a datetime `to`
-  excludes only from its own time). The declaration reads
-  every stored bound first and refuses a missing property, an unreadable
-  bound or an inverted interval, naming the node or the relationship's
-  endpoints. It yields `declared`, `rows` and `abutting_rows`: the rows whose
-  `to` equals another row's `from` in the same label or from the same source
-  node, which under `closed` also earns a query warning. A relationship uses
-  its source's `source_type` declaration first and the unkeyed one otherwise.
-  `CALL db.temporal.undeclare({...})` removes one, and
-  `CALL db.temporal.declarations()` lists them. The fluent `select()`,
-  `valid_at()`, `valid_during()` and `traverse()` filters follow a
-  declaration's convention, and `describe()` shows it.
-- Validity-interval declarations are saved in `.kgl` files and disk graphs,
-  with their convention, source type and declare-time `abutting_rows`, and
-  files from earlier versions load with their temporal configs. For older
-  versions a saved file also records closed node declarations and each
-  relationship type whose configs are all closed and have no `source_type`;
-  a type with a half-open or per-source declaration is left out, so an older
-  version treats it as undeclared rather than misreading it. `CALL db.temporal.declarations()`
-  yields `ambiguous`, which is `true` for a relationship type holding several
-  configs without a `source_type` (possible only in a file saved by an older
-  version); `describe()` marks such a type
-  `temporal_ambiguous="true"`. Re-declare each with its `source_type` to
-  resolve it.
-- Rust API: `kglite::api::temporal::DeclarationInfo::ambiguous`.
-- `set_temporal()`, `add_nodes()`, `add_relationships()` and
-  `replace_relationships()` (and their `connection`-named twins) take
-  `convention='closed' | 'half_open'` for the validity interval they declare;
-  `set_temporal()` also takes `source_type=`. Left out, the convention of a
-  declaration of the same properties is kept, and a new one is closed. A
-  closed declaration whose rows end on the day another begins emits a
-  `UserWarning` suggesting `'half_open'`.
-- Blueprints: a node spec, `fk_edges` entry or `junction_edges` entry takes
-  `"temporal": {"from": ..., "to": ..., "convention": "closed" | "half_open"}`
-  and `from_blueprint()` declares that validity interval once every row is
-  loaded. On an edge, `from`/`to` name the stored property (after `rename`)
-  and the declaration is made for the spec's node type as the source type. A
-  bound the rows cannot satisfy fails the build, naming the row. Columns typed
-  `validFrom`/`validTo` without a `temporal` key, or a `temporal` key without
-  `convention`, declare nothing and the build warns with what to add — the
-  blueprint guide's earlier claim that those types enable temporal filtering
-  was not true.
-- Rust API: `kglite::api::temporal` (`declare`, `declare_loaded`,
-  `declare_defaulted`, `declare_from_column_types`, `LoadDeclaration`,
-  `undeclare`, `list`, `node_config`, `edge_configs`, `TemporalTarget`,
-  `IntervalConvention`), `TemporalConfig::convention` / `source_type`, and
-  `GraphRead::get_edge_property`, which reads one relationship property
-  without materialising the relationship.
 
 ### Changed
 
+- **Breaking (Python):** a date value comes back as a `datetime.date`, and a
+  date column in `to_df()` is `datetime64[ns]`, on every read route —
+  `cypher()` / `to_list()`, rows, fluent `collect()` and `to_df()`, `Session`,
+  `Transaction` and `FrozenGraph`, and nested in lists and maps. It came back
+  as its ISO string (`'2010-01-02'`, a string column in `to_df()`), unlike a
+  datetime, which already came back as `datetime.datetime`. To keep the old
+  shape, format the value: `d.isoformat()` or `str(d)`, and
+  `df[col].dt.strftime('%Y-%m-%d')` for a frame column. A returned date passed
+  back as a query parameter matches as before. The Bolt server, the MCP server
+  and JSON output are unchanged; timeseries keys stay ISO strings.
 - **The fluent date context is the `FOR VALID_TIME AS OF` filter.**
   `date()`, `traverse(at=…, during=…)` and `valid_at()` / `valid_during()`
   resolve to the filter a Cypher statement at that date runs under, so a
@@ -257,9 +288,7 @@ before upgrading.
     turns the filtering off for the hop, relationships and targets alike.
   - `select()`, `valid_at()` and `valid_during()` keep a node only when it
     is valid under **every** declared label it carries, secondary labels
-    included; they used to read only the node's primary type. (`valid_at()`
-    / `valid_during()` also answered differently on a graph with secondary
-    labels depending on which queries had run before.)
+    included; they used to read only the node's primary type.
   - `expand()`, `where_connected()`, `where_orphans()`, `degrees()`,
     `relationships()` / `connections()`, `compare()` and `to_subgraph()` read
     the context too: they follow and count only valid relationships to valid
@@ -294,69 +323,9 @@ before upgrading.
   `get_node_degrees` take one too and return a `Result`, erring only on a
   bound the filter cannot read. `kglite::api::io::save_subset` and
   `save_subset_streaming_disk` take a trailing `Option<&FluentFilter>`.
-- The Bolt server, the MCP server, the CLI, the C ABI (and so Java), and the
-  graph-carried skill and recipe writers run trailing aggregates through the
-  streaming pipeline, as the Python handles do. Performance only: the rows
-  are identical to the materialized path.
 - **Breaking (Rust):** `kglite::api::cypher::QueryDiagnostics` has a new
   field, `temporal`; a struct literal must name it or end in
   `..Default::default()`.
-- Python: `FrozenGraph.cypher()`, `Session.cypher()` and `Transaction.cypher()`
-  fold a trailing aggregate (`count`, `sum`, grouped `RETURN`/`WITH`, `ORDER BY
-  … LIMIT` over it) into its result as rows are matched, as
-  `KnowledgeGraph.cypher()` does, instead of collecting every matched row
-  first. A frozen twin of a graph answered such a query up to ~2× slower than
-  the graph itself; the answers are unchanged.
-- **Breaking (Rust):** `kglite::api::session::ExecuteOptions` has a new field,
-  `streaming`, which turns that pipeline on independently of `lazy_eligible`
-  (it used to follow `lazy_eligible`). A struct literal must name it;
-  `ExecuteOptions::eager` sets it to `false`, as the pipeline was off there
-  before.
-- **Breaking (Python):** a date value comes back as a `datetime.date`, and a
-  date column in `to_df()` is `datetime64[ns]`, on every read route —
-  `cypher()` / `to_list()`, rows, fluent `collect()` and `to_df()`, `Session`,
-  `Transaction` and `FrozenGraph`, and nested in lists and maps. It came back
-  as its ISO string (`'2010-01-02'`, a string column in `to_df()`), unlike a
-  datetime, which already came back as `datetime.datetime`. To keep the old
-  shape, format the value: `d.isoformat()` or `str(d)`, and
-  `df[col].dt.strftime('%Y-%m-%d')` for a frame column. A returned date passed
-  back as a query parameter matches as before. The Bolt server, the MCP server
-  and JSON output are unchanged; timeseries keys stay ISO strings.
-- **Behaviour change on declared types:** Cypher `valid_at(entity, date,
-  'from', 'to')` and `valid_during(entity, start, end, 'from', 'to')` now follow
-  the convention of a declaration that names the same two properties. On a
-  `half_open` declaration the `to` day is no longer valid, so a query on the
-  day one period ends and the next begins counts only the new one — where it
-  used to count both, and disagreed with the fluent `select()`/`traverse()`
-  filters on the same graph. A property pair no declaration names still reads
-  closed, and a `closed` declaration answers as before.
-- Cypher: `=`, `<>` and `IN` compare a date or datetime with a string by
-  parsing the string, as `<` and `>` already did. `n.valid_to = '1990-01-01'`
-  matched nothing — as a literal, a parameter, an inline map `{valid_to: …}` or
-  a fluent `where({'valid_to': …})` — while `n.valid_to > '1990-01-01'` worked,
-  so a date returned to Python as ISO text and fed back into an equality found
-  no row. A string that is not a date stays unequal, as before. The same
-  holds on indexed properties, where a date probe over an index holding
-  date-like text now scans. openCypher makes `=` across the two types false.
-  The ISO basic form `'19900101'` compares as `'1990-01-01'` does on every
-  operator (`=`, `<>`, `<`, `>`, `IN`, a fluent `where`), as `date()` and
-  `valid_at` already read it; it used to match nothing, even under `<`.
-- A blueprint `"date"` cell holding a number of fewer than nine digits is no
-  longer read as epoch milliseconds: eight digits are `YYYYMMDD`, and a smaller
-  number is not a date (NULL, reported). Every such value used to become
-  1970-01-01. Epoch milliseconds of nine digits or more read as before.
-- Durable graphs journal validity-interval declarations in the write-ahead
-  log, whichever route made them — `CALL db.temporal.declare` / `undeclare`,
-  `set_temporal()`, a loader's `validFrom`/`validTo` column types, or
-  `extend()` — so a crash before the next `save()` no longer loses them. The
-  WAL format moves to version 10: logs written by earlier versions still
-  replay, and an earlier version refuses a version-10 log with the "unsupported
-  WAL format version" error rather than dropping part of it. Rebuild prebuilt
-  `kglite-mcp-server`, `kglite-bolt-server` and `kglite` CLI binaries that
-  open durable graphs written by this version.
-- Rust API: `DirGraph::temporal_node_configs` and `temporal_edge_configs` are
-  no longer public fields; read declarations through
-  `kglite::api::temporal::{node_config, edge_configs, list}`.
 - Cypher `valid_at` / `valid_during` read the query date the way `date()` and
   `datetime()` do: `'2009'` is 2009-01-01 and `'2009-06'` is 2009-06-01, and a
   string with a time part keeps its time, its offset applied and normalised to
@@ -367,13 +336,6 @@ before upgrading.
   `CypherExecutionError`, naming the variable, the property and both types,
   instead of silently answering false. A datetime bound compares at date grain
   against a date. The closed-interval semantics are otherwise unchanged.
-- Cypher filters of the form `x.p IS NULL OR x.p >= $v` (either order, any of
-  `<`, `<=`, `>`, `>=`) and `coalesce(x.p, default) >= $v` with a literal or
-  parameter default now filter nodes and relationships while the pattern is
-  matched, as a plain `x.p >= $v` does, instead of after. A relationship's
-  `r.p IS NULL` / `r.p IS NOT NULL` filters during expansion too. Answers are
-  unchanged.
-
 - `set_temporal()` and `validFrom`/`validTo` column types declare their
   interval the way `CALL db.temporal.declare` does: both properties must
   exist, and a stored bound that is not a date, a datetime or an ISO string,
@@ -415,128 +377,57 @@ before upgrading.
   no row held (a later row's start with an earlier row's end). Graphs built
   before this change keep their folded relationships: rebuild from the
   blueprint (or re-run the loads) to recover the rows.
+- Durable graphs journal validity-interval declarations in the write-ahead
+  log, whichever route made them — `CALL db.temporal.declare` / `undeclare`,
+  `set_temporal()`, a loader's `validFrom`/`validTo` column types, or
+  `extend()` — so a crash before the next `save()` no longer loses them. The
+  WAL format moves to version 10: logs written by earlier versions still
+  replay, and an earlier version refuses a version-10 log with the "unsupported
+  WAL format version" error rather than dropping part of it. Rebuild prebuilt
+  `kglite-mcp-server`, `kglite-bolt-server` and `kglite` CLI binaries that
+  open durable graphs written by this version.
+- Rust API: `DirGraph::temporal_node_configs` and `temporal_edge_configs` are
+  no longer public fields; read declarations through
+  `kglite::api::temporal::{node_config, edge_configs, list}`.
+- Cypher: `=`, `<>` and `IN` compare a date or datetime with a string by
+  parsing the string, as `<` and `>` already did. `n.valid_to = '1990-01-01'`
+  matched nothing — as a literal, a parameter, an inline map `{valid_to: …}` or
+  a fluent `where({'valid_to': …})` — while `n.valid_to > '1990-01-01'` worked,
+  so a date returned to Python as ISO text and fed back into an equality found
+  no row. A string that is not a date stays unequal, as before. The same
+  holds on indexed properties, where a date probe over an index holding
+  date-like text now scans. openCypher makes `=` across the two types false.
+  The ISO basic form `'19900101'` compares as `'1990-01-01'` does on every
+  operator (`=`, `<>`, `<`, `>`, `IN`, a fluent `where`), as `date()` and
+  `valid_at` already read it; it used to match nothing, even under `<`.
+- A blueprint `"date"` cell holding a number of fewer than nine digits is no
+  longer read as epoch milliseconds: eight digits are `YYYYMMDD`, and a smaller
+  number is not a date (NULL, reported). Every such value used to become
+  1970-01-01. Epoch milliseconds of nine digits or more read as before.
+- The Bolt server, the MCP server, the CLI, the C ABI (and so Java), and the
+  graph-carried skill and recipe writers run trailing aggregates through the
+  streaming pipeline, as the Python handles do. Performance only: the rows
+  are identical to the materialized path.
+- Python: `FrozenGraph.cypher()`, `Session.cypher()` and `Transaction.cypher()`
+  fold a trailing aggregate (`count`, `sum`, grouped `RETURN`/`WITH`, `ORDER BY
+  … LIMIT` over it) into its result as rows are matched, as
+  `KnowledgeGraph.cypher()` does, instead of collecting every matched row
+  first. A frozen twin of a graph answered such a query up to ~2× slower than
+  the graph itself; the answers are unchanged.
+- **Breaking (Rust):** `kglite::api::session::ExecuteOptions` has a new field,
+  `streaming`, which turns that pipeline on independently of `lazy_eligible`
+  (it used to follow `lazy_eligible`). A struct literal must name it;
+  `ExecuteOptions::eager` sets it to `false`, as the pipeline was off there
+  before.
+- Cypher filters of the form `x.p IS NULL OR x.p >= $v` (either order, any of
+  `<`, `<=`, `>`, `>=`) and `coalesce(x.p, default) >= $v` with a literal or
+  parameter default now filter nodes and relationships while the pattern is
+  matched, as a plain `x.p >= $v` does, instead of after. A relationship's
+  `r.p IS NULL` / `r.p IS NOT NULL` filters during expansion too. Answers are
+  unchanged.
 
 ### Fixed
 
-- Bolt: `FOR VALID_TIME AS OF … EXPLAIN …` (the prefix before `EXPLAIN`)
-  now answers as every `EXPLAIN` does over Bolt — zero records and the plan
-  in the SUCCESS metadata's `plan` key — instead of forwarding the plan's
-  step rows as records. The server reads the executed outcome's explain
-  flag rather than the statement's first keyword.
-- Cypher: past 64 driving rows, `UNWIND $keys AS k MATCH (n:T {prop: k})`
-  (and `{prop: r.key}`, `WITH x AS k MATCH …`) returned no match for a key
-  of another kind than the stored value that the row-by-row match treats as
-  equal — an integer against a whole float, ISO text against a date or
-  datetime, a date against midnight, a one-element JSON list (`["Oslo"]`)
-  against its string — and the right rows below 64. The query-local index
-  now keys numbers on one spelling and a midnight datetime on its date, and
-  leaves a key it cannot answer that way (text against dates, JSON-list text)
-  to the row-by-row match.
-
-- Cypher: `UNWIND $rows AS r MATCH (n:T {prop: r.key})` over 64 or more rows
-  returned no match. Past 64 driving rows the MATCH builds a query-local
-  equality index, and its probe read `r.key` only from a bound node, never
-  from a map (or a projected node value) as the per-row matcher does.
-
-- Cypher: an id seek (`{id: …}`) on a node type whose nodes share an id
-  stored under different numeric kinds — a loaded integer column beside an
-  id written by Cypher `CREATE`, or a float id — returned the node of the
-  kind the query spelled, so `{id: 1}` and `{id: a.id}` could answer with
-  different nodes. The id index now holds one node per id, the last in the
-  type's node order, whatever the kinds. An older disk directory whose saved
-  id index holds one id under two kinds is healed on load, and the next save
-  no longer writes that index back.
-
-- A property (or id) column whose first value was a float stored a later
-  integer the float cannot represent exactly as its rounded float —
-  `9007199254740993` (2^53+1) became `9007199254740992.0`, and
-  `9223372036854775807` became `9.223372036854776e18` — through `add_nodes`,
-  Cypher `CREATE` and `SET`, in every storage mode, and the value saved that
-  way. Such an integer now widens the column to mixed, as a value of another
-  kind already did: it is kept exactly, an id seek by it finds the node, and
-  `to_df()` returns the column as `object`. An integer the float holds
-  exactly (`7` → `7.0`) still joins the float column.
-
-- Cypher: a float id and an integer id are one id only when each converts to
-  the other exactly. Creating a node with id `1.0e19` removed the index entry
-  of a node with id `9223372036854775807` (the float saturated onto the
-  largest integer), and an integer id past 2^53 removed the entry of the float
-  it rounds to, so the earlier node's id seek returned no rows. `{id: 1.0}`
-  and `{id: 1}` remain one id.
-
-- `to_subgraph()` and `save_subset()` on a mapped or disk graph copied every
-  row of each selected node's type onto the heap (the copy shared the source's
-  file-backed column stores, and its first write cloned them whole); in memory
-  mode it held a full copy of each such store too. The copy now holds only the
-  selected nodes' rows. It keeps the source's type metadata, id/title
-  spellings, type hierarchy and user-schema version, so a property none of the
-  selected nodes carries is accepted in `MATCH (n:T {p: …})` and
-  `CREATE (:T {p: …})` on the copy as on the source, and the in-memory and
-  streaming disk `save_subset` variants save the same metadata.
-
-- Rust: `kglite::api::io::save_subset_streaming_disk` wrote every node id as
-  null for a disk graph written in the current session (it read ids only from
-  a reopened graph's file-backed base), and failed on a float column widened
-  to mixed by an integer it cannot hold exactly ("expected Float64/Int64/Null").
-  Both now stream: ids come from wherever the graph holds them, and a mixed
-  column is written as mixed.
-
-- `add_relationships(query=…)` (and Rust `DataFrame::from_cypher_rows`) put a
-  column mixing floats and integers into a float column, rounding an integer
-  past 2^53 onto its neighbour (`9007199254740993` → `9007199254740992.0`).
-  Such a column now takes the text fallback that other mixed columns take, so
-  every value is written exactly; a mix whose integers the float holds exactly
-  is still a float column.
-
-- Disk: a reopened disk graph whose saved id index held a float id (`{id:
-  1.0}`) returned no rows for `MATCH (n:T {id: 1})`; the saved index now
-  answers every numeric spelling of an id as the in-memory one does. A type
-  whose ids repeat no longer saves its id index: the save orders the type's
-  nodes by slot, so the saved choice among duplicates could disagree with the
-  reopened order. It is rebuilt on first use.
-
-- Cypher: the four-argument `valid_at` / `valid_during` accept a bound
-  property that a declared secondary label of the node records; they used to
-  raise "property … does not exist on node type" when the node's primary type
-  never held it, although the bound was merely unset (open).
-
-- Cypher: `EXPLAIN` / `PROFILE` written at the start of a top-level `UNION`
-  arm (`RETURN 1 AS x UNION EXPLAIN RETURN 2 AS x`) was accepted and silently
-  ignored, running the whole statement. It is now a syntax error: the keyword
-  leads the statement. `EXPLAIN PROFILE …` and `EXPLAIN` after a clause name
-  the same rule instead of reporting an unexpected token.
-
-- A Cypher statement that fails on what it was given — a malformed
-  `valid_at` date, a property the type does not have, a type with no declared
-  validity interval — is a client error on every wire: the Bolt server sends
-  `Neo.ClientError.Statement.ArgumentError` (Neo4j drivers raise
-  `ClientError`) instead of `Neo.DatabaseError.Statement.ExecutionFailed`,
-  which told drivers and retry logic the server broke, and
-  `KgErrorCode::CypherExecution` maps to HTTP 422 instead of 500 (also
-  through the C ABI's `kglite_status_code_neo4j_status` / `_http_status`).
-  The Python class stays `CypherExecutionError`.
-- `valid_during()` — Cypher and fluent — no longer reports an empty interval
-  (inverted, or `from == to` under `half_open`) as overlapping a range wide
-  enough to cover both bounds; `valid_at()` already found it valid on no date.
-- `valid_at()` — Cypher and fluent — no longer finds an empty interval whose
-  two datetime bounds fall on one day (`[08:00, 00:00]`, or `[08:00, 08:00)`
-  under `half_open`) valid on that date: compared at date grain both bounds
-  read as the day itself.
-  Such an interval can only be written after the type is declared.
-- The `add_nodes` docstring said a call onto a type with `validFrom` /
-  `validTo` column types checks its rows' intervals; that holds only for the
-  call that makes the declaration. Writes onto a declared type are not
-  re-validated, which the docstring, `set_temporal()`, CYPHER.md and the
-  temporal guide now say, with the property-type constraint
-  (`REQUIRE n.valid_to IS :: DATE`) that refuses a bad write up front.
-- Load errors and warnings (`add_nodes` and the validity-interval check) name
-  a row by its 0-based position and now say so: `row 1 (0-based)`.
-- Docs: FLUENT.md's temporal section covers declarations, conventions,
-  relationship dates and the date context; `column_types` lists `validFrom` /
-  `validTo`.
-- Fluent `select(T, limit=n)` (and `sort=`) under a date context applied the
-  limit before the date filter, so it returned fewer than `n` nodes — often
-  none — while valid nodes existed. The filter now runs first.
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.
@@ -548,6 +439,143 @@ before upgrading.
   node is now filtered under its own type's declaration, and named fields that
   match it follow its convention. The ambient `date()` context still filters
   only declared types.
+- Cypher `valid_at()` / `valid_during()` refuse a bound property that no element
+  of the type has — a misspelled `'validfrom'` — instead of reading it as an
+  open bound on every row and answering with a plausible but wrong count. The
+  error names the property and the type. A property the type has but one row
+  leaves null is still open.
+  A property that a declared secondary label of the node records counts as
+  one the type has, although the node's primary type never held it.
+- `valid_during()` — Cypher and fluent — no longer reports an empty interval
+  (inverted, or `from == to` under `half_open`) as overlapping a range wide
+  enough to cover both bounds; `valid_at()` already found it valid on no date.
+- `valid_at()` — Cypher and fluent — no longer finds an empty interval whose
+  two datetime bounds fall on one day (`[08:00, 00:00]`, or `[08:00, 08:00)`
+  under `half_open`) valid on that date: compared at date grain both bounds
+  read as the day itself.
+  Such an interval can only be written after the type is declared.
+- Fluent `select(T, limit=n)` (and `sort=`) under a date context applied the
+  limit before the date filter, so it returned fewer than `n` nodes — often
+  none — while valid nodes existed. The filter now runs first.
+- Fluent temporal filtering (`select()` under a `date()` context,
+  `valid_at()`, `valid_during()` and `traverse()` over temporal relationships)
+  treated bounds stored as datetimes or ISO strings as unbounded, so elements
+  outside the requested date passed. Every bound kind is now compared, and an
+  unreadable bound raises (`ValueError` from the node filters).
+- `select(node_type, temporal=True)` on a type with no temporal configuration
+  raises `ValueError`, as documented, instead of selecting every node.
+- `describe()` repeated `temporal_from` / `temporal_to` on one `<conn>`
+  element when a relationship type had several temporal configurations,
+  which is malformed XML. It now prints them once each in one
+  `temporal="Source: from..to; …"` attribute.
+- `extend()` now copies the other graph's validity-interval declarations and
+  spatial configurations; it copied neither, so the other graph's periods
+  between the same endpoints collapsed into one relationship on merge and its
+  spatial types lost their configuration. An `extend()` whose relationships
+  are refused copies no declaration.
+- A Cypher statement that fails on what it was given — a malformed
+  `valid_at` date, a property the type does not have, a type with no declared
+  validity interval — is a client error on every wire: the Bolt server sends
+  `Neo.ClientError.Statement.ArgumentError` (Neo4j drivers raise
+  `ClientError`) instead of `Neo.DatabaseError.Statement.ExecutionFailed`,
+  which told drivers and retry logic the server broke, and
+  `KgErrorCode::CypherExecution` maps to HTTP 422 instead of 500 (also
+  through the C ABI's `kglite_status_code_neo4j_status` / `_http_status`).
+  The Python class stays `CypherExecutionError`.
+- Dates written as ISO 8601 basic `YYYYMMDD` — the native format of many
+  registries — load as the date they spell. A blueprint `"date"` column read
+  eight digits as epoch milliseconds and stored 1970-01-01 without a warning,
+  while `add_nodes` stored NULL. Both now read `19650701` as 1965-07-01, as
+  text, an integer, or a whole-number float (an integer column with a gap
+  arrives from pandas as float), and Cypher `date('19650701')` returns it too.
+  A blueprint date cell that is not a date is still stored as NULL, and is now
+  reported in one build warning per column naming the count and the first
+  cell. The `add_nodes` warning no longer counts empty or blank cells as
+  values that could not be parsed.
+- Cypher: a `WHERE` predicate that failed to evaluate under an aggregate or a
+  top-K query no longer answers with rows. `MATCH (m:M) WHERE 1/0 > 0 RETURN
+  count(*)`, a `valid_at()` with a malformed date, or a stored bound that is
+  not a date returned `0` (or a count of the rows that did evaluate) from
+  `count(*)`, `count(m)`, `sum`, `min`, a grouped count, `ORDER BY … LIMIT`,
+  `HAVING` and `WITH … WHERE` after an aggregate; each now raises the error,
+  as the same `WHERE` does under a plain `RETURN`.
+- `datetime('2009-06-30T01:00+02:00')` — an offset-bearing stamp written to the
+  minute — returned null; it now parses, with the offset applied.
+- Load errors and warnings (`add_nodes` and the validity-interval check) name
+  a row by its 0-based position and now say so: `row 1 (0-based)`.
+- Docs: valid time has one guide (`docs/python/guides/valid-time.md`)
+  instead of notes spread over five pages; FLUENT.md's temporal section covers
+  declarations, conventions, relationship dates and the date context;
+  `column_types` lists `validFrom` / `validTo`; and the temporal examples in
+  the data-loading and blueprint guides run as written.
+- Cypher: past 64 driving rows, `UNWIND $keys AS k MATCH (n:T {prop: k})`
+  (and `{prop: r.key}`, `WITH x AS k MATCH …`) returned no match for a key
+  of another kind than the stored value that the row-by-row match treats as
+  equal — an integer against a whole float, ISO text against a date or
+  datetime, a date against midnight, a one-element JSON list (`["Oslo"]`)
+  against its string — and the right rows below 64. The query-local index
+  now keys numbers on one spelling and a midnight datetime on its date, and
+  leaves a key it cannot answer that way (text against dates, JSON-list text)
+  to the row-by-row match.
+- Cypher: `UNWIND $rows AS r MATCH (n:T {prop: r.key})` over 64 or more rows
+  returned no match. Past 64 driving rows the MATCH builds a query-local
+  equality index, and its probe read `r.key` only from a bound node, never
+  from a map (or a projected node value) as the per-row matcher does.
+- Cypher: an id seek (`{id: …}`) on a node type whose nodes share an id
+  stored under different numeric kinds — a loaded integer column beside an
+  id written by Cypher `CREATE`, or a float id — returned the node of the
+  kind the query spelled, so `{id: 1}` and `{id: a.id}` could answer with
+  different nodes. The id index now holds one node per id, the last in the
+  type's node order, whatever the kinds. An older disk directory whose saved
+  id index holds one id under two kinds is healed on load, and the next save
+  no longer writes that index back.
+- A property (or id) column whose first value was a float stored a later
+  integer the float cannot represent exactly as its rounded float —
+  `9007199254740993` (2^53+1) became `9007199254740992.0`, and
+  `9223372036854775807` became `9.223372036854776e18` — through `add_nodes`,
+  Cypher `CREATE` and `SET`, in every storage mode, and the value saved that
+  way. Such an integer now widens the column to mixed, as a value of another
+  kind already did: it is kept exactly, an id seek by it finds the node, and
+  `to_df()` returns the column as `object`. An integer the float holds
+  exactly (`7` → `7.0`) still joins the float column.
+- Cypher: a float id and an integer id are one id only when each converts to
+  the other exactly. Creating a node with id `1.0e19` removed the index entry
+  of a node with id `9223372036854775807` (the float saturated onto the
+  largest integer), and an integer id past 2^53 removed the entry of the float
+  it rounds to, so the earlier node's id seek returned no rows. `{id: 1.0}`
+  and `{id: 1}` remain one id.
+- `to_subgraph()` and `save_subset()` on a mapped or disk graph copied every
+  row of each selected node's type onto the heap (the copy shared the source's
+  file-backed column stores, and its first write cloned them whole); in memory
+  mode it held a full copy of each such store too. The copy now holds only the
+  selected nodes' rows. It keeps the source's type metadata, id/title
+  spellings, type hierarchy and user-schema version, so a property none of the
+  selected nodes carries is accepted in `MATCH (n:T {p: …})` and
+  `CREATE (:T {p: …})` on the copy as on the source, and the in-memory and
+  streaming disk `save_subset` variants save the same metadata.
+- Rust: `kglite::api::io::save_subset_streaming_disk` wrote every node id as
+  null for a disk graph written in the current session (it read ids only from
+  a reopened graph's file-backed base), and failed on a float column widened
+  to mixed by an integer it cannot hold exactly ("expected Float64/Int64/Null").
+  Both now stream: ids come from wherever the graph holds them, and a mixed
+  column is written as mixed.
+- `add_relationships(query=…)` (and Rust `DataFrame::from_cypher_rows`) put a
+  column mixing floats and integers into a float column, rounding an integer
+  past 2^53 onto its neighbour (`9007199254740993` → `9007199254740992.0`).
+  Such a column now takes the text fallback that other mixed columns take, so
+  every value is written exactly; a mix whose integers the float holds exactly
+  is still a float column.
+- Disk: a reopened disk graph whose saved id index held a float id (`{id:
+  1.0}`) returned no rows for `MATCH (n:T {id: 1})`; the saved index now
+  answers every numeric spelling of an id as the in-memory one does. A type
+  whose ids repeat no longer saves its id index: the save orders the type's
+  nodes by slot, so the saved choice among duplicates could disagree with the
+  reopened order. It is rebuilt on first use.
+- Cypher: `EXPLAIN` / `PROFILE` written at the start of a top-level `UNION`
+  arm (`RETURN 1 AS x UNION EXPLAIN RETURN 2 AS x`) was accepted and silently
+  ignored, running the whole statement. It is now a syntax error: the keyword
+  leads the statement. `EXPLAIN PROFILE …` and `EXPLAIN` after a clause name
+  the same rule instead of reporting an unexpected token.
 - After a `.kgl` save and load, `to_df()` and `collect()` over more than 50
   nodes of one type no longer add all-None columns named after the loader's
   id and title columns (`add_nodes(df, 'T', 'code', 'name')`).
@@ -570,34 +598,12 @@ before upgrading.
   and no longer report a mismatch against a property recorded as `mixed` or
   with no concrete type. The `add_nodes` docstring now says `errors` also
   lists type mismatches, which are not refusals.
-- Cypher `valid_at()` / `valid_during()` refuse a bound property that no element
-  of the type has — a misspelled `'validfrom'` — instead of reading it as an
-  open bound on every row and answering with a plausible but wrong count. The
-  error names the property and the type. A property the type has but one row
-  leaves null is still open.
 - Blueprints: an edge now finds a node whose `pk` is declared `"string"` by its
   zero-padded code. The `fk_edges` and `junction_edges` id columns were typed
   by inference, so `0001` was read as the integer 1, matched no node `'0001'`,
   and every such row vivified a stub node with no properties — under a
   temporal declaration, a node valid on every date. An id column that refers
   to a string-keyed node type is now read as text.
-- Dates written as ISO 8601 basic `YYYYMMDD` — the native format of many
-  registries — load as the date they spell. A blueprint `"date"` column read
-  eight digits as epoch milliseconds and stored 1970-01-01 without a warning,
-  while `add_nodes` stored NULL. Both now read `19650701` as 1965-07-01, as
-  text, an integer, or a whole-number float (an integer column with a gap
-  arrives from pandas as float), and Cypher `date('19650701')` returns it too.
-  A blueprint date cell that is not a date is still stored as NULL, and is now
-  reported in one build warning per column naming the count and the first
-  cell. The `add_nodes` warning no longer counts empty or blank cells as
-  values that could not be parsed.
-- Cypher: a `WHERE` predicate that failed to evaluate under an aggregate or a
-  top-K query no longer answers with rows. `MATCH (m:M) WHERE 1/0 > 0 RETURN
-  count(*)`, a `valid_at()` with a malformed date, or a stored bound that is
-  not a date returned `0` (or a count of the rows that did evaluate) from
-  `count(*)`, `count(m)`, `sum`, `min`, a grouped count, `ORDER BY … LIMIT`,
-  `HAVING` and `WITH … WHERE` after an aggregate; each now raises the error,
-  as the same `WHERE` does under a plain `RETURN`.
 - On a disk graph, merging into an existing relationship left its stored
   properties unchanged when read afterwards: `add_relationships` with
   `conflict_handling='update'`, `'sum'` or `'preserve'`, rows folding into one
@@ -635,11 +641,6 @@ before upgrading.
 - On an `auto_timestamp` type, `SET n.updated_at = …` and
   `SET r.updated_at = …` are now replaced by the stamp, as on `CREATE` and in
   the bulk loaders. The written value used to persist.
-- `extend()` now copies the other graph's validity-interval declarations and
-  spatial configurations; it copied neither, so the other graph's periods
-  between the same endpoints collapsed into one relationship on merge and its
-  spatial types lost their configuration. An `extend()` whose relationships
-  are refused copies no declaration.
 - `extend()` refused by a relationship constraint raises
   `ConstraintViolationError`, as `add_relationships` does; it raised
   `ArgumentError`.
@@ -670,20 +671,6 @@ before upgrading.
   type connected more than one pair of node types, only the first pair merged
   kept its parallel relationships; which pair that was changed from run to
   run.
-- `describe()` repeated `temporal_from` / `temporal_to` on one `<conn>`
-  element when a relationship type had several temporal configurations,
-  which is malformed XML. It now prints them once each in one
-  `temporal="Source: from..to; …"` attribute.
-- Fluent temporal filtering (`select()` under a `date()` context,
-  `valid_at()`, `valid_during()` and `traverse()` over temporal relationships)
-  treated bounds stored as datetimes or ISO strings as unbounded, so elements
-  outside the requested date passed. Every bound kind is now compared, and an
-  unreadable bound raises (`ValueError` from the node filters).
-- `select(node_type, temporal=True)` on a type with no temporal configuration
-  raises `ValueError`, as documented, instead of selecting every node.
-- `datetime('2009-06-30T01:00+02:00')` — an offset-bearing stamp written to the
-  minute — returned null; it now parses, with the offset applied.
-
 - A node comparison against a NULL value (`WHERE n.age > $x` with `x` null,
   or `n.age >= null`) matched every row with a non-null `age` when the
   comparison was pushed into the pattern; it now matches no row, as the

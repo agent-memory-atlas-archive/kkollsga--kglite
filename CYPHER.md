@@ -1332,7 +1332,11 @@ Looks up the *k* nodes of `target_type` closest to `(lat, lon)` (geodesic). Uses
 
 ## Temporal Functions
 
-Date-range filtering on nodes and relationships with explicit field names.
+Date and datetime values, date arithmetic, and the `valid_at` / `valid_during`
+validity tests. To ask a whole statement as of an instant, prefix it with
+[`FOR VALID_TIME AS OF`](#statement-context-for-valid_time-as-of); the
+[valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)
+covers declaring intervals and modelling history.
 
 | Function | Description |
 |----------|-------------|
@@ -1363,6 +1367,18 @@ Date-range filtering on nodes and relationships with explicit field names.
 The entity may be a matched variable or a value — an item of `collect()`, `UNWIND`, `nodes(p)`,
 `relationships(p)` or a variable-length relationship list — and its type's declaration is read the same
 way either way.
+
+**The functions are not the statement context.** `valid_at(n, date)` reads one
+declaration: the node's primary type's, else its first declared secondary label's
+(alphabetically). `valid_at(r, date)` tests the relationship's own interval and
+not its endpoints. A relationship type holding several unkeyed declarations is
+read per row, by the first declaration whose bounds the relationship carries. And
+each call filters only the element it names. Under
+[`FOR VALID_TIME AS OF`](#statement-context-for-valid_time-as-of) — and in the
+fluent API's date context — a node must be valid under *every* declared label it
+carries, a relationship needs both endpoints valid, the ambiguous type is refused,
+and every element of the statement is filtered. Use the functions for a second
+instant or for bounds no declaration names; use the context for "as of".
 
 **NULL semantics:** NULL `from` = valid since beginning. NULL `to` = still valid. Both NULL = always valid.
 A null entity — an unmatched `OPTIONAL MATCH` — gives null in every form, so `WHERE` drops the row.
@@ -1460,10 +1476,14 @@ CALL db.temporal.declarations()
   `relationship`. `source_type` narrows a relationship declaration to the
   relationships leaving nodes of that type; a relationship uses its source's
   declaration first and the unkeyed one otherwise.
-- **Validation.** Both properties must exist on the target, and every stored
-  bound must be NULL, a date, a datetime or an ISO string, with `from` before
-  `to` (strictly before under `half_open`). The first row that fails is
-  refused, naming the node's id or the relationship's endpoints.
+- **Validation.** The `from` property must exist on the target. A `to`
+  property that no row carries yet — every period still open — is accepted
+  with a warning ("no row of … carries '…'; every row is open-ended until one
+  is written"), unless it is a near miss of a property the target has, which
+  is refused as a typo with a "Did you mean" hint. Every stored bound must be
+  NULL, a date, a datetime or an ISO string, with `from` before `to`
+  (strictly before under `half_open`). The first row that fails is refused,
+  naming the node's id or the relationship's endpoints.
 - **Later writes are not re-validated.** Only the rows stored at declare time
   are checked; a `SET`, `CREATE` or load onto a declared type is not, so a
   declaration adds no cost to the write path. A bound that is not a date then
@@ -1606,6 +1626,13 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   `session_version`, the graph version answered — comparable within one
   process only, as it restarts on load. A statement without a context has no
   `temporal` object in the serialized forms (`None` under the Python key).
+- **No context, no filter.** A statement without the prefix sees every
+  version — Cypher never defaults to today, while the fluent API's date context
+  does. A client that wants "current" sends the prefix (or `valid_at`) with
+  today's date. Questions that join versions that never coexist — lineage over
+  a successor relationship, a comparison of two instants — run without a
+  context, with `valid_at(x, d)` on the elements that need it: under a context
+  a hop is visible only when both its ends are valid at the one instant.
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
@@ -1614,8 +1641,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   validation rules (`orphan_node`, …), `cluster`, `kg_knn` — (metadata
   procedures such as `db.labels()` and `db.temporal.declarations()` are fine),
   `degree()` / `inDegree()` / `outDegree()` / `shortest_path_length()` (they
-  read a node's relationships outside the pattern matcher; not available under
-  a context yet — `COUNT { (n)--() }` is), and a relationship type whose
+  read a node's relationships outside the pattern matcher; `COUNT { (n)--() }`
+  and `MATCH p = shortestPath(…) RETURN length(p)` answer under a context), and
+  a relationship type whose
   declarations are `ambiguous` — when the statement can reach it; the
   embedding query procedures and the algorithms reach every type, so any
   ambiguous type refuses them.
