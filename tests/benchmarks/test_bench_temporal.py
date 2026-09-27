@@ -627,8 +627,9 @@ HEAVY_CELLS: dict[str, Cell] = {
     "global_1hop": _prefixed("MATCH (a:E)-[:R]->(b:E) RETURN sum(b.score) AS s"),
     **RETRIEVAL_CELLS,
 }
-# The view twin's HNSW ranking is approximate; the context's is exact over
-# the valid vectors below 200k of them.
+# Both vector rankings are approximate here: the view twin's HNSW search,
+# and the context's filtered search of the full graph's index (26k valid of
+# 130k vectors weighs 5,200, past the route threshold).
 HEAVY_UNCOMPARED = {"vector_top10"}
 
 

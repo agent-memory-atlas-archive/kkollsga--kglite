@@ -531,8 +531,12 @@ class ResultView:
           including nested CALL, UNION and mutation pipelines. Available for
           ordinary queries and PROFILE. Each record carries ``requested_policy``
           (``auto``, ``exact``, or ``per_row``), ``actual_mode`` (``hnsw`` or
-          ``exact``), ``fallback_reason`` (a reason string, or None for HNSW),
-          and ``store`` (``Type.embedding_property`` when established, else None).
+          ``exact``; ``hnsw_mask`` under a valid-time context when a filtered
+          HNSW search ranked the valid vectors), ``fallback_reason`` (a reason
+          string, or None for HNSW; under a context ``exact_mask`` when the
+          valid vectors were scored exactly, ``exact_mask_visit_limit`` when
+          the filtered search passed its step budget first), and ``store``
+          (``Type.embedding_property`` when established, else None).
           Repeated identical routes are coalesced; this is not a call counter.
           Empty inputs, LIMIT 0, EXPLAIN and queries without an instrumented
           vector ranking operator produce no records. Scalar scores inside

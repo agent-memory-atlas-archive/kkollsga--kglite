@@ -380,9 +380,10 @@ pub struct TemporalDiagnostics {
     /// the filter removed nothing and the statement ran its plain plan.
     /// `view`: it ran through a valid-time view (`freeze(valid_at=)`).
     pub route: String,
-    /// `exact_mask` when a vector retrieval scored the valid vectors exactly,
-    /// `hnsw_mask` when it narrowed an HNSW index's candidates to the valid
-    /// ones; `None` without a vector retrieval.
+    /// `exact_mask` when a vector retrieval scored the valid vectors exactly
+    /// (the retrieval record's `fallback_reason` says why), `hnsw_mask` when
+    /// a filtered search of its HNSW index returned the nearest valid ones;
+    /// `None` without a vector retrieval.
     pub retrieval: Option<String>,
     /// Whether a graph algorithm ran on the valid slice.
     pub slice: bool,
@@ -399,11 +400,12 @@ pub struct RetrievalDiagnostics {
     /// `auto`, `exact`, or `per_row` when options remain evaluated per row.
     pub requested_policy: String,
     /// `hnsw` for approximate candidate selection, otherwise `exact`; under
-    /// a `FOR VALID_TIME AS OF` context, `hnsw_mask` when the index's
-    /// candidates were narrowed to the valid ones.
+    /// a `FOR VALID_TIME AS OF` context, `hnsw_mask` when a filtered search
+    /// of the index returned the valid vectors nearest the query.
     pub actual_mode: String,
     /// Why an exact route ran (`exact_mask`: the valid vectors, scored
-    /// exactly); absent when HNSW served the result.
+    /// exactly; `exact_mask_visit_limit`: the same, after the filtered search
+    /// passed its step budget); absent when HNSW served the result.
     pub fallback_reason: Option<String>,
     /// `Type.embedding_property` when a single store was established; a
     /// comma-separated list, in type order, when a relationship top-k merged

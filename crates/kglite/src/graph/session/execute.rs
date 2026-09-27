@@ -1023,7 +1023,10 @@ fn finish_echo(
         if record.actual_mode == "hnsw_mask" {
             Some("hnsw_mask".to_string())
         } else {
-            (record.fallback_reason.as_deref() == Some("exact_mask")).then(|| "exact_mask".into())
+            let reason = record.fallback_reason.as_deref().unwrap_or_default();
+            reason
+                .starts_with("exact_mask")
+                .then(|| "exact_mask".into())
         }
     });
     echo

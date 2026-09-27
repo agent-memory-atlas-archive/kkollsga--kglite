@@ -738,7 +738,7 @@ pub(crate) fn query_admitted_store(
                 == Some(index.metric())
         }) {
             let admitted = vector_mask::admitted_slots(store, admits);
-            if vector_mask::prefers_index(admitted) {
+            if vector_mask::prefers_index(admitted, store.len()) {
                 if let Some(slots) =
                     vector_mask::hnsw_admitted(store, &index, query, top_k, admitted, admits)
                 {

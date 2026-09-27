@@ -125,6 +125,18 @@ ALGORITHM_QUERIES = [
 ]
 ORDERED.add(TEXT_QUERIES[1])
 
+# Vector top-k over a `body_emb` store per primary type, ranked on the
+# reference by its own stores (NULL-scoring nodes are pinned in
+# `test_valid_time_retrieval.py`). Each runs twice: under the default route rule and with the filtered HNSW
+# search forced (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX=1`), which at this size
+# walks every admitted slot and must equal the exact answer.
+VECTOR_QUERIES = [
+    "MATCH (n:A) RETURN n.uid AS u, vector_score(n, 'body_emb', $v) AS s ORDER BY s DESC LIMIT 50",
+    "MATCH (n:B) RETURN n.uid AS u, vector_score(n, 'body_emb', $v) AS s ORDER BY s DESC LIMIT 50",
+]
+VECTOR_TOP_SCORES = "MATCH (n:{label}) RETURN vector_score(n, 'body_emb', $v) AS s ORDER BY s DESC LIMIT 2"
+EXACT_MAX_ENV = "KGLITE_TEMPORAL_VECTOR_EXACT_MAX"
+
 YEARS = list(range(2000, 2011))
 BOUND = st.one_of(
     st.sampled_from(YEARS).map(lambda y: dt.date(y, 1, 1)),
@@ -361,6 +373,55 @@ def _check(mode, nodes, edges, instant):
             assert guarded == _answer(reference, query, ordered), where
             assert _answer(frozen, query, ordered) == guarded, f"frozen view, {where}"
             assert _answer(sliced, query, ordered) == guarded, f"slice, {where}"
+        _check_vectors(mode, full, reference, instant)
+
+
+def _embed(*graphs):
+    """`body_emb` vectors derived from each node's `uid`, so every graph
+    holding a node gives it the same one, and an HNSW index per store —
+    one per primary type, since a C node carrying a second label is
+    matched as that label."""
+    for graph in graphs:
+        for label in "ABC":
+            stored = graph.cypher(
+                f"MATCH (n:{label}) WHERE labels(n)[0] = '{label}' "
+                "WITH collect({node: n, vector: [toFloat(n.uid % 5) + 0.1, toFloat(n.uid % 7), "
+                "toFloat(n.uid) / 10.0 + 1.0]}) AS entries WHERE size(entries) > 0 "
+                f"CALL db.node_embeddings.set({{type: '{label}', text_column: 'body', entries: entries}}) "
+                "YIELD stored RETURN stored"
+            ).to_list()
+            if stored:
+                graph.build_node_vector_index(label, "body")
+
+
+def _check_vectors(mode, full, reference, instant):
+    """Vector top-k under the prefix and through a view frozen after the
+    stores were written equals the reference slice's exact ranking, on both
+    routes."""
+    _embed(full, reference)
+    frozen = full.freeze(valid_at=instant)
+    params = {"t": instant, "v": [0.3, 2.0, 1.4]}
+    old = os.environ.get(EXACT_MAX_ENV)
+    try:
+        for forced in (None, "1"):
+            if forced:
+                os.environ[EXACT_MAX_ENV] = forced
+            for query in VECTOR_QUERIES:
+                where = f"{mode} at {instant}, exact max {forced}: {query}"
+                expected = _answer(reference, query.replace("$v)", "$v, {exact: true})"), False, params)
+                guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", False, params)
+                assert guarded == expected, where
+                assert _answer(frozen, query, False, params) == guarded, f"frozen view, {where}"
+            for label in "AB":
+                query = VECTOR_TOP_SCORES.format(label=label)
+                expected = _answer(reference, query.replace("$v)", "$v, {exact: true})"), True, params)
+                guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", True, params)
+                assert guarded == expected, f"{mode} at {instant}, exact max {forced}: {query}"
+    finally:
+        if old is None:
+            os.environ.pop(EXACT_MAX_ENV, None)
+        else:
+            os.environ[EXACT_MAX_ENV] = old
 
 
 def _uids(rows) -> list:

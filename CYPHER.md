@@ -1587,12 +1587,20 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   documents alone, and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index
   route. A relationship document is valid when it and both its endpoints are,
   under every declared label they carry, whichever labels the statement
-  names, so every statement at the instant scores with the same statistics. `vector_score(n, …)` top-k over `MATCH (n:Label)` scores the valid
-  nodes' vectors exactly (`diagnostics.retrieval`: `actual_mode: "exact"`,
-  `fallback_reason: "exact_mask"`); from 200,000 valid vectors
-  (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) a built HNSW index serves the valid
-  candidates instead (`actual_mode: "hnsw_mask"`), over-fetching until it has
-  `k` of them or falling back to the exact pass.
+  names, so every statement at the instant scores with the same statistics. `vector_score(n, …)` top-k over `MATCH (n:Label)` ranks only the valid
+  nodes' vectors, by one of two routes. The exact route scores every valid
+  vector (`diagnostics.retrieval`: `actual_mode: "exact"`, `fallback_reason:
+  "exact_mask"`). With a built HNSW index, a filtered search walks the index
+  through every vector but returns only valid ones (`actual_mode:
+  "hnsw_mask"`) — one search, no over-fetch, and an invalid vector never
+  comes back even when it is the nearest. The search runs when the valid
+  count weighted by the valid share (`valid² / stored`) reaches 1,500
+  (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX` replaces the threshold; `1` sends every
+  query with an index to the search): a selective instant is cheaper to score
+  exactly, since the search's cost grows as the valid share shrinks. A
+  search that passes its step budget — valid vectors clustered away from the
+  query — gives way to the exact route (`fallback_reason:
+  "exact_mask_visit_limit"`).
   `db.node_embeddings.query` / `db.relationship_embeddings.query` (and the
   `db.embeddings.query` router) rank only valid nodes — or valid
   relationships with both endpoints valid — and report

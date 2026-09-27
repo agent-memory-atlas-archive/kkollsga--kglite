@@ -14,6 +14,7 @@ import math
 import re
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import kglite
@@ -236,12 +237,16 @@ def test_above_the_threshold_the_index_serves_the_admitted_candidates(full, refe
         "RETURN d.vid AS vid, vector_score(d, 'body_emb', $v) AS s ORDER BY s DESC LIMIT 10"
     )
     result = full.cypher(AS_OF + non_null, params=params)
-    got = [vid for vid, _ in _pairs(result)]
     assert _retrieval(result)[0]["actual_mode"] == "hnsw_mask"
+    assert _retrieval(result)[0]["fallback_reason"] is None
     assert result.diagnostics["temporal"]["retrieval"] == "hnsw_mask"
-    assert all(vid % 3 == VALID for vid in got) and len(got) == 10
-    exact = [vid for vid, _ in _pairs(reference.cypher(non_null.replace("$v)", "$v, {exact: true})"), params=params))]
-    assert len(set(got) & set(exact)) >= 9, (got, exact)
+    # One filtered search, whose ef-wide result set holds every admitted
+    # vector at this size: the exact answer, scores and order.
+    _close(_pairs(result), _pairs(reference.cypher(non_null.replace("$v)", "$v, {exact: true})"), params=params)))
+    # With NULL-scoring versions leading the order, as the reference ranks them.
+    _close(
+        _pairs(full.cypher(AS_OF + VECTOR_TOP, params=params)), _pairs(reference.cypher(VECTOR_EXACT, params=params))
+    )
 
 
 def test_embedding_query_procedures_rank_only_admitted_nodes(full, reference, rows, monkeypatch):
@@ -284,6 +289,140 @@ def test_a_limit_past_the_store_size_returns_every_admitted_vector(full, referen
     )
     got = full.cypher(AS_OF + call, params=params).to_list()
     assert sorted(r["vid"] for r in got) == sorted(vid for vid, _ in expected)
+
+
+# A store holding a vector for every version, in node order: the store's
+# slots are the scan's rows, and the route tests admission per slot it
+# touches. Versions are valid at T in a pseudo-random fifth.
+COVERED_TOP = "MATCH (d:Doc) RETURN d.vid AS vid, vector_score(d, 'body_emb', $v) AS s ORDER BY s DESC LIMIT 10"
+
+
+def _covered_rows(n, dim, share, seed=3):
+    rng = np.random.default_rng(seed)
+    valid = rng.random(n) < share
+    return [
+        {"vid": vid, "valid": bool(valid[vid]), "vec": rng.standard_normal(dim).astype(np.float32).tolist()}
+        for vid in range(n)
+    ]
+
+
+def _covered_graph(graph, rows):
+    frame = pd.DataFrame(
+        {
+            "vid": [r["vid"] for r in rows],
+            "name": [f"d{r['vid']}" for r in rows],
+            "body": ["x"] * len(rows),
+            "vf": pd.to_datetime([PERIODS[VALID][0] if r["valid"] else PERIODS[0][0] for r in rows]),
+            "vt": pd.to_datetime([PERIODS[VALID][1] if r["valid"] else PERIODS[0][1] for r in rows]),
+        }
+    )
+    graph.add_nodes(frame, "Doc", "vid", "name")
+    graph.set_temporal("Doc", "vf", "vt")
+    graph.set_embeddings("Doc", "body", {r["vid"]: r["vec"] for r in rows})
+    graph.build_node_vector_index("Doc", "body")
+    return graph
+
+
+def _covered_reference(rows):
+    valid = [r for r in rows if r["valid"]]
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(
+        pd.DataFrame({"vid": [r["vid"] for r in valid], "name": ["x"] * len(valid), "body": ["x"] * len(valid)}),
+        "Doc",
+        "vid",
+        "name",
+    )
+    graph.set_embeddings("Doc", "body", {r["vid"]: r["vec"] for r in valid})
+    return graph
+
+
+@pytest.fixture(scope="module")
+def covered_rows():
+    return _covered_rows(600, 8, 0.2)
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+@pytest.mark.parametrize("forced", [None, "1"])
+def test_a_covering_store_ranks_the_valid_vectors_exactly_on_both_routes(
+    tmp_path, covered_rows, storage, forced, monkeypatch
+):
+    if forced:
+        monkeypatch.setenv("KGLITE_TEMPORAL_VECTOR_EXACT_MAX", forced)
+    full = _covered_graph(_graph(storage, tmp_path), covered_rows)
+    reference = _covered_reference(covered_rows)
+    for q in (0, 5, 17, 42):
+        params = {"t": T, "v": covered_rows[q]["vec"]}
+        expected = _pairs(reference.cypher(COVERED_TOP.replace("$v)", "$v, {exact: true})"), params=params))
+        result = full.cypher(AS_OF + COVERED_TOP, params=params)
+        _close(_pairs(result), expected)
+        route = "hnsw_mask" if forced else "exact_mask"
+        assert result.diagnostics["temporal"]["retrieval"] == route
+        assert _retrieval(result)[0]["fallback_reason"] == (None if forced else "exact_mask")
+        _close(_pairs(full.freeze(valid_at=T).cypher(COVERED_TOP, params=params)), expected)
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+@pytest.mark.parametrize("forced", [None, "1"])
+def test_an_invisible_nearest_vector_never_comes_back_from_a_covering_store(
+    tmp_path, covered_rows, storage, forced, monkeypatch
+):
+    if forced:
+        monkeypatch.setenv("KGLITE_TEMPORAL_VECTOR_EXACT_MAX", forced)
+    full = _covered_graph(_graph(storage, tmp_path), covered_rows)
+    invisible = [r for r in covered_rows if not r["valid"]][:5]
+    for row in invisible:
+        params = {"t": T, "v": row["vec"]}
+        assert _pairs(full.cypher(COVERED_TOP, params=params))[0][0] == row["vid"], "the query is its own nearest"
+        guarded = _pairs(full.cypher(AS_OF + COVERED_TOP, params=params))
+        assert len(guarded) == 10
+        assert row["vid"] not in [vid for vid, _ in guarded]
+        assert all(covered_rows[vid]["valid"] for vid, _ in guarded)
+
+
+def test_the_route_rule_weighs_the_admitted_count_by_the_admitted_share():
+    """`admitted² / store` against 1,500: 2,000 of 4,000 valid (1,000)
+    scores exactly; 3,000 of 4,000 (2,250) searches the index."""
+    for share, route in ((0.5, "exact_mask"), (0.75, "hnsw_mask")):
+        rows = _covered_rows(4000, 8, share, seed=11)
+        admitted = sum(r["valid"] for r in rows)
+        assert (admitted * admitted // 4000 >= 1500) == (route == "hnsw_mask"), admitted
+        full = _covered_graph(kglite.KnowledgeGraph(), rows)
+        result = full.cypher(AS_OF + COVERED_TOP, params={"t": T, "v": rows[1]["vec"]})
+        assert result.diagnostics["temporal"]["retrieval"] == route, (share, admitted)
+
+
+def test_a_filtered_search_past_its_budget_gives_way_to_the_exact_pass(monkeypatch):
+    # 40 valid versions in 20,000, each far from the query's neighbourhood:
+    # the search walks invalid vectors until its step budget runs out, and
+    # the exact pass answers, saying why.
+    monkeypatch.setenv("KGLITE_TEMPORAL_VECTOR_EXACT_MAX", "1")
+    rows = _covered_rows(20_000, 8, 0.002, seed=5)
+    full = _covered_graph(kglite.KnowledgeGraph(), rows)
+    reference = _covered_reference(rows)
+    params = {"t": T, "v": next(r["vec"] for r in rows if not r["valid"])}
+    result = full.cypher(AS_OF + COVERED_TOP, params=params)
+    assert _retrieval(result)[0]["actual_mode"] == "exact"
+    assert _retrieval(result)[0]["fallback_reason"] == "exact_mask_visit_limit"
+    assert result.diagnostics["temporal"]["retrieval"] == "exact_mask"
+    _close(_pairs(result), _pairs(reference.cypher(COVERED_TOP.replace("$v)", "$v, {exact: true})"), params=params)))
+
+
+def test_the_filtered_search_keeps_the_recall_contract_against_the_exact_valid_top_k():
+    """Recall@10 of the filtered search against the exact top-10 of the valid
+    vectors, over 40 stored-vector queries (valid and invalid), on 8,000
+    random 32-d vectors half of which are valid — where the route rule
+    itself picks the search: at least the 0.8 the unfiltered index is held
+    to (`test_vector_index.py`)."""
+    rows = _covered_rows(8000, 32, 0.5, seed=7)
+    full = _covered_graph(kglite.KnowledgeGraph(), rows)
+    hits = 0
+    for row in rows[:40]:
+        params = {"t": T, "v": row["vec"]}
+        got = full.cypher(AS_OF + COVERED_TOP, params=params)
+        assert got.diagnostics["temporal"]["retrieval"] == "hnsw_mask"
+        exact = full.cypher(AS_OF + COVERED_TOP.replace("$v)", "$v, {exact: true})"), params=params)
+        hits += len({vid for vid, _ in _pairs(got)} & {vid for vid, _ in _pairs(exact)})
+    assert hits / 400 >= 0.8, hits / 400
 
 
 # Relationship BM25: CITES (undeclared) joins Papers to Papers and to Books,

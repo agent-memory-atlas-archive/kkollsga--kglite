@@ -11,11 +11,14 @@
 //! statistics are shared by every statement at the instant.
 //!
 //! * **Vector** (`MATCH (n:T) RETURN … vector_score(n, …) AS s ORDER BY s
-//!   DESC LIMIT k`): the admitted nodes of `T` are gathered — bit tests, no
-//!   row — and the store's admitted slots are scored exactly, or, above
-//!   `vector_mask::MASKED_EXACT_MAX` admitted vectors with a fresh index, the
-//!   index's admitted candidates are. Nodes without a vector score NULL and
-//!   rank first, as the unfused query ranks them.
+//!   DESC LIMIT k`): the store's admitted slots are scored exactly, or, with
+//!   a fresh index and enough admitted vectors (`vector_mask`'s rule), one
+//!   filtered search of the index returns the nearest admitted ones. When the
+//!   store holds every node of `T` in node order, its slots are the scan's
+//!   rows and each slot the route touches costs one admit test; otherwise the
+//!   admitted nodes of `T` are gathered first — bit tests, no row — and nodes
+//!   without a vector score NULL and rank first, as the unfused query ranks
+//!   them.
 //! * **BM25** (`text_bm25()` everywhere it appears): a query prepared under
 //!   the instant's filter over every declared node label (and a relationship
 //!   index's own type) carries the admitted documents' statistics — `N`, the
@@ -122,6 +125,11 @@ impl CypherExecutor<'_> {
         let Some(filter) = filter else {
             return self.try_whole_type_vector_entry(matched, top, score_call);
         };
+        if let Some(served) =
+            self.covered_vector_entry(top, score_call, (variable, node_type), &filter)?
+        {
+            return Ok(served);
+        }
         let Some(admitted) = self.admitted_nodes(node_type, &filter)? else {
             return Ok(None);
         };
@@ -187,10 +195,87 @@ impl CypherExecutor<'_> {
         Ok(Some(result))
     }
 
+    /// The node vector entry when `node_type`'s store holds a vector for
+    /// every node of the type, in the type's node order: the store's slots
+    /// are the scan's rows, so no node scores NULL and slot order breaks ties
+    /// as the scan does. Admission is a test per slot the route touches, the
+    /// admitted count comes from the endpoint index when it has one, and no
+    /// walk over the type precedes the ranking. `Ok(None)` when the store
+    /// does not cover the type (the caller walks the admitted nodes);
+    /// `Ok(Some(None))` hands the clause to the guarded matcher.
+    fn covered_vector_entry(
+        &self,
+        top: FusedTopK<'_>,
+        score_call: &Expression,
+        (variable, node_type): (&str, &str),
+        filter: &ElementFilter,
+    ) -> Result<Option<Option<ResultSet>>, String> {
+        let Some(nodes) = self.graph.type_indices.get(node_type) else {
+            return Ok(Some(None));
+        };
+        let Some(first) = nodes.iter().next() else {
+            return Ok(Some(None));
+        };
+        let score_expr = self.fold_constants_expr(score_call);
+        let mut seed = ResultRow::new();
+        seed.node_bindings.insert(variable.to_owned(), first);
+        // The arguments are constant (`constant_vector_args` accepts nothing
+        // else), so any node binds them; an argument that fails to evaluate
+        // is left to the guarded matcher, which raises it only when a valid
+        // node reaches it.
+        let Ok(Some(args)) = self.constant_vector_args(&score_expr, &seed) else {
+            return Ok(Some(None));
+        };
+        if args.variable != variable {
+            return Ok(Some(None));
+        }
+        let Some(store) = self.graph.embedding_store(node_type, &args.property) else {
+            return Ok(Some(None));
+        };
+        if store.len() != nodes.len()
+            || !nodes
+                .iter()
+                .zip(&store.slot_to_node)
+                .all(|(node, &slot_node)| node.index() == slot_node)
+        {
+            return Ok(None);
+        }
+        self.budget.check_work(nodes.len(), "MATCH")?;
+        self.check_deadline()?;
+        let admits = |node: usize| filter.admits_node(self.graph, NodeIndex::new(node));
+        let admitted = match filter.label_count(self.graph, node_type) {
+            Some(count) => count,
+            None => vector_mask::admitted_slots(store, &admits),
+        };
+        if admitted == 0 {
+            return Ok(Some(None));
+        }
+        let (winners, info) =
+            self.with_prepared_vector_score(&score_expr, &seed, (store, node_type), |prepared| {
+                self.masked_vector_winners(
+                    store,
+                    prepared,
+                    (&args, node_type),
+                    (top.limit, admitted),
+                    &admits,
+                )
+            })?;
+        let result = self.project_retrieval_winners(
+            winners.into_iter(),
+            &score_expr,
+            &RetrievalPopulation::StoreSlots { store, variable },
+            top.return_clause,
+            top.score_item_index,
+        )?;
+        self.record_retrieval(info);
+        Ok(Some(Some(result)))
+    }
+
     /// The best `limit` admitted slots as `(slot, score)`, and the route that
-    /// ranked them: the index's admitted candidates when `embedded` (the
+    /// ranked them: a filtered search of the index when `embedded` (the
     /// admitted vectors) reaches the threshold and a fresh index serves the
-    /// metric, else an exact pass over the admitted slots.
+    /// metric, else an exact pass over the admitted slots — also when the
+    /// search passed its visit budget, which the route's reason records.
     fn masked_vector_winners(
         &self,
         store: &EmbeddingStore,
@@ -207,13 +292,15 @@ impl CypherExecutor<'_> {
         if limit == 0 {
             return Ok((Vec::new(), info));
         }
-        if !args.options.exact && vector_mask::prefers_index(embedded) {
-            if let Some(winners) =
-                self.indexed_admitted(store, prepared, args, (limit, embedded), admits)
-            {
-                info.actual_mode = "hnsw_mask".into();
-                info.fallback_reason = None;
-                return Ok((winners, info));
+        if !args.options.exact && vector_mask::prefers_index(embedded, store.len()) {
+            match self.indexed_admitted(store, prepared, args, (limit, embedded), admits) {
+                Some(Some(winners)) => {
+                    info.actual_mode = "hnsw_mask".into();
+                    info.fallback_reason = None;
+                    return Ok((winners, info));
+                }
+                Some(None) => info.fallback_reason = Some(vector_mask::VISIT_LIMIT_REASON.into()),
+                None => {}
             }
         }
         let winners = self.exact_vector_winners(store, prepared, limit, Some(admits))?;
@@ -221,7 +308,8 @@ impl CypherExecutor<'_> {
     }
 
     /// The index route of [`Self::masked_vector_winners`]; `None` when no
-    /// fresh index serves the metric or the index ran short.
+    /// fresh index serves the metric, `Some(None)` when its filtered search
+    /// gave way ([`vector_mask::hnsw_admitted`]).
     fn indexed_admitted(
         &self,
         store: &EmbeddingStore,
@@ -229,7 +317,7 @@ impl CypherExecutor<'_> {
         args: &VectorScoreArgs,
         (limit, embedded): (usize, usize),
         admits: &dyn Fn(usize) -> bool,
-    ) -> Option<Vec<(usize, Value)>> {
+    ) -> Option<Option<Vec<(usize, Value)>>> {
         use crate::graph::algorithms::hnsw::HnswMetric;
         use crate::graph::algorithms::vector::DistanceMetric;
         let metric = args
@@ -240,8 +328,11 @@ impl CypherExecutor<'_> {
         if metric.and_then(HnswMetric::from_distance) != Some(index.metric()) {
             return None;
         }
-        let slots =
-            vector_mask::hnsw_admitted(store, &index, &args.query, limit, embedded, admits)?;
+        let Some(slots) =
+            vector_mask::hnsw_admitted(store, &index, &args.query, limit, embedded, admits)
+        else {
+            return Some(None);
+        };
         let mut scored: Vec<(usize, f64)> = slots
             .into_iter()
             .map(|slot| {
@@ -257,12 +348,12 @@ impl CypherExecutor<'_> {
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         scored.truncate(limit);
-        Some(
+        Some(Some(
             scored
                 .into_iter()
                 .map(|(slot, score)| (slot, Value::Float64(score)))
                 .collect(),
-        )
+        ))
     }
 
     /// A `text_bm25` query over `owner.property`, prepared under

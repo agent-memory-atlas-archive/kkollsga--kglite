@@ -797,6 +797,116 @@ impl HnswIndex {
         w.truncate(k);
         w.into_iter().map(|c| (c.id, c.dist)).collect()
     }
+
+    /// [`Self::search`] over only the slots `accept` admits (Lucene's
+    /// `acceptDocs`): the layer-0 walk still steps through rejected slots,
+    /// which keep the graph connected, but only admitted slots enter the
+    /// `ef`-wide result set, so the search runs until it holds `ef` admitted
+    /// candidates at least as close as its frontier. The upper layers descend
+    /// unfiltered — they only pick where layer 0 starts. `None` once the walk
+    /// has computed `visit_limit` distances: a selective filter makes the
+    /// traversal approach a full scan, which the caller runs exactly instead.
+    pub fn search_filtered(
+        &self,
+        (query, query_norm): (&[f32], f32),
+        (k, ef): (usize, Option<usize>),
+        (data, norms): (&[f32], &[f32]),
+        accept: &dyn Fn(u32) -> bool,
+        visit_limit: usize,
+    ) -> Option<Vec<(u32, f32)>> {
+        let entry = match self.entry_point {
+            Some(e) if k > 0 => e,
+            _ => return Some(Vec::new()),
+        };
+        let ctx = DistCtx {
+            data,
+            norms,
+            dim: self.dim,
+            metric: self.metric,
+        };
+        let ef = ef.unwrap_or(self.params.ef_search).max(k);
+        let df = |id: u32| ctx.dist_query(query, query_norm, id);
+        let mut ep = vec![entry];
+        for lc in (1..=self.max_level).rev() {
+            if let Some(best) = self.search_layer(&ctx, &ep, 1, lc, &df).into_iter().min() {
+                ep = vec![best.id];
+            }
+        }
+        let mut w = self.search_layer_accepting(ep[0], ef, &df, accept, visit_limit)?;
+        w.sort_unstable();
+        w.truncate(k);
+        Some(w.into_iter().map(|c| (c.id, c.dist)).collect())
+    }
+
+    /// Layer 0 of [`Self::search_filtered`]: `candidates` holds every slot
+    /// closer than the admitted set's farthest (all of them while fewer than
+    /// `ef` are admitted); `results` only admitted ones.
+    fn search_layer_accepting(
+        &self,
+        entry: u32,
+        ef: usize,
+        df: &impl Fn(u32) -> f32,
+        accept: &dyn Fn(u32) -> bool,
+        visit_limit: usize,
+    ) -> Option<Vec<Cand>> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        let mut visited = vec![0u64; self.len.div_ceil(64)];
+        let mut first_visit = |id: u32| {
+            let (word, bit) = (id as usize / 64, 1u64 << (id % 64));
+            let fresh = visited[word] & bit == 0;
+            visited[word] |= bit;
+            fresh
+        };
+        let mut candidates: BinaryHeap<Reverse<Cand>> = BinaryHeap::new();
+        let mut results: BinaryHeap<Cand> = BinaryHeap::with_capacity(ef + 1);
+        let bound = |results: &BinaryHeap<Cand>| {
+            if results.len() < ef {
+                f32::INFINITY
+            } else {
+                results.peek().map_or(f32::INFINITY, |far| far.dist)
+            }
+        };
+        first_visit(entry);
+        let start = Cand {
+            id: entry,
+            dist: df(entry),
+        };
+        candidates.push(Reverse(start));
+        if accept(entry) {
+            results.push(start);
+        }
+        let mut visits = 1usize;
+        while let Some(Reverse(c)) = candidates.pop() {
+            if c.dist > bound(&results) {
+                break;
+            }
+            let Some(neighbours) = self.links.get(c.id as usize).and_then(|l| l.first()) else {
+                continue;
+            };
+            for &e in neighbours {
+                if !first_visit(e) {
+                    continue;
+                }
+                visits += 1;
+                if visits > visit_limit {
+                    return None;
+                }
+                let cand = Cand { id: e, dist: df(e) };
+                if cand.dist < bound(&results) {
+                    candidates.push(Reverse(cand));
+                    if accept(e) {
+                        results.push(cand);
+                        if results.len() > ef {
+                            results.pop();
+                        }
+                    }
+                }
+            }
+        }
+        Some(results.into_vec())
+    }
 }
 
 // ─── Shared / concurrent-build free functions ───────────────────────────────
@@ -1694,5 +1804,170 @@ mod tests {
             );
             }
         }
+    }
+
+    /// Brute-force top-`k` over the slots `accept` admits.
+    fn brute_topk_accepting(
+        (data, norms, dim): (&[f32], &[f32], usize),
+        metric: HnswMetric,
+        (query, qnorm): (&[f32], f32),
+        k: usize,
+        accept: &dyn Fn(u32) -> bool,
+    ) -> Vec<u32> {
+        let ctx = DistCtx {
+            data,
+            norms,
+            dim,
+            metric,
+        };
+        let mut all: Vec<Cand> = (0..(data.len() / dim) as u32)
+            .filter(|&id| accept(id))
+            .map(|id| Cand {
+                id,
+                dist: ctx.dist_query(query, qnorm, id),
+            })
+            .collect();
+        all.sort_unstable();
+        all.truncate(k);
+        all.into_iter().map(|c| c.id).collect()
+    }
+
+    /// A pseudo-random admitted set holding about `percent`% of the slots.
+    fn mask(n: usize, percent: u64, seed: u64) -> Vec<bool> {
+        let mut rng = SplitMix64(seed);
+        (0..n).map(|_| rng.next_u64() % 100 < percent).collect()
+    }
+
+    /// Recall@10 of the filtered search against the exact admitted top-10,
+    /// over 50 stored-vector queries — admitted and rejected alike — on a
+    /// fresh build per `round`, beside the unfiltered search's recall on the
+    /// same build and `ef`.
+    fn filtered_recall(metric: HnswMetric, percent: u64, round: u64) -> (f64, f64) {
+        let (n, dim, k) = (2000, 32, 10);
+        let (data, norms) = make_data(n, dim, 0xABCD);
+        let index = HnswIndex::build(&data, &norms, dim, metric, HnswParams::default(), 42);
+        let admitted = mask(n, percent, 0x5EED + round);
+        let accept = |slot: u32| admitted[slot as usize];
+        let (mut masked, mut plain) = (0usize, 0usize);
+        for q in 0..50 {
+            let query = (&data[q * dim..(q + 1) * dim], norms[q]);
+            let truth: HashSet<u32> =
+                brute_topk_accepting((&data, &norms, dim), metric, query, k, &accept)
+                    .into_iter()
+                    .collect();
+            let got = index
+                .search_filtered(query, (k, Some(100)), (&data, &norms), &accept, usize::MAX)
+                .expect("an unlimited search never gives way");
+            assert!(got.iter().all(|&(slot, _)| admitted[slot as usize]));
+            masked += got.iter().filter(|(slot, _)| truth.contains(slot)).count();
+            let all: HashSet<u32> = brute_topk(&data, &norms, dim, metric, query.0, query.1, k)
+                .into_iter()
+                .collect();
+            plain += index
+                .search(query.0, query.1, k, Some(100), &data, &norms)
+                .iter()
+                .filter(|(slot, _)| all.contains(slot))
+                .count();
+        }
+        (masked as f64 / 500.0, plain as f64 / 500.0)
+    }
+
+    /// The filtered search keeps the unfiltered recall contract
+    /// (`test_recall_*`: > 0.90, dot > 0.85) against the exact top-10 of the
+    /// admitted slots, at 50% and 20% admitted, over three builds each (the
+    /// concurrent build's graph varies run to run).
+    #[test]
+    fn filtered_search_keeps_the_recall_contract() {
+        for (metric, floor) in [
+            (HnswMetric::Cosine, 0.90),
+            (HnswMetric::Euclidean, 0.90),
+            (HnswMetric::Dot, 0.85),
+        ] {
+            for percent in [50, 20] {
+                for round in 0..3 {
+                    let (masked, plain) = filtered_recall(metric, percent, round);
+                    assert!(
+                        masked > floor,
+                        "{metric:?} {percent}% round {round}: filtered recall@10 {masked} \
+                         (unfiltered {plain})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A rejected slot never comes back, even when it is the query itself —
+    /// the nearest vector there is — and every other slot but one is
+    /// rejected too.
+    #[test]
+    fn filtered_search_never_returns_a_rejected_slot() {
+        let (n, dim) = (500, 16);
+        let (data, norms) = make_data(n, dim, 3);
+        let index = HnswIndex::build(
+            &data,
+            &norms,
+            dim,
+            HnswMetric::Cosine,
+            HnswParams::default(),
+            5,
+        );
+        let query = (&data[7 * dim..8 * dim], norms[7]);
+        assert_eq!(
+            index.search(query.0, query.1, 1, None, &data, &norms)[0].0,
+            7
+        );
+        let hits = index
+            .search_filtered(
+                query,
+                (5, None),
+                (&data, &norms),
+                &|slot| slot != 7,
+                usize::MAX,
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 5);
+        assert!(hits.iter().all(|&(slot, _)| slot != 7));
+        let only = index
+            .search_filtered(
+                query,
+                (5, None),
+                (&data, &norms),
+                &|slot| slot == 311,
+                usize::MAX,
+            )
+            .unwrap();
+        assert_eq!(
+            only.iter().map(|&(slot, _)| slot).collect::<Vec<_>>(),
+            vec![311]
+        );
+        let none = index
+            .search_filtered(query, (5, None), (&data, &norms), &|_| false, usize::MAX)
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    /// The search gives way once it has computed `visit_limit` distances;
+    /// the same search with room answers.
+    #[test]
+    fn filtered_search_gives_way_at_its_visit_limit() {
+        let (data, norms) = make_data(2000, 16, 9);
+        let index = HnswIndex::build(
+            &data,
+            &norms,
+            16,
+            HnswMetric::Cosine,
+            HnswParams::default(),
+            5,
+        );
+        let query = (&data[..16], norms[0]);
+        let rare = |slot: u32| slot.is_multiple_of(100);
+        assert!(index
+            .search_filtered(query, (10, None), (&data, &norms), &rare, 50)
+            .is_none());
+        let found = index
+            .search_filtered(query, (10, None), (&data, &norms), &rare, usize::MAX)
+            .unwrap();
+        assert_eq!(found.len(), 10);
+        assert!(found.windows(2).all(|pair| pair[0].1 <= pair[1].1));
     }
 }

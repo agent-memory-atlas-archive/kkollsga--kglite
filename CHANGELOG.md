@@ -152,10 +152,19 @@ before upgrading.
   of the valid documents alone (a relationship document with both endpoints
   valid under every label they carry, whichever labels the statement names),
   and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index route.
-  `vector_score` top-k over `MATCH (n:Label)` scores only the valid nodes'
-  vectors, exactly (`diagnostics.retrieval` `fallback_reason: "exact_mask"`),
-  or from 200,000 valid vectors (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) through
-  the HNSW index's valid candidates (`actual_mode: "hnsw_mask"`).
+  `vector_score` top-k over `MATCH (n:Label)` ranks only the valid nodes'
+  vectors: exactly (`diagnostics.retrieval` `fallback_reason: "exact_mask"`),
+  or by one filtered search of the HNSW index that walks through invalid
+  vectors without returning them (`actual_mode: "hnsw_mask"`; an invalid
+  vector never comes back, even as the nearest). The search runs when the
+  valid count weighted by the valid share (`valid² / stored`) reaches 1,500
+  (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX` replaces the threshold), the measured
+  crossover; a search that passes its step budget gives way to the exact
+  route (`fallback_reason: "exact_mask_visit_limit"`). When the store holds a
+  vector for every node of the label, neither route walks the label first.
+  Measured against the same question on a graph of only the valid elements
+  (release, two runs): 26,000 valid of 130,000 vectors 1.75× (was 14.2×),
+  2,600 of 13,000 1.51× (was 2.58×).
   `db.node_embeddings.query`, `db.relationship_embeddings.query` and the
   `db.embeddings.query` router rank only valid elements (`search_method:
   "exact_mask"` / `"hnsw_mask"`). The graph algorithm procedures —
