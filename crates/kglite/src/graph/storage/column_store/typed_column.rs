@@ -8,6 +8,7 @@
 //! id/title columns, the packed `.kgl` codec — lives in the sibling `mod.rs`.
 
 use crate::datatypes::values::Value;
+use crate::graph::schema::exact_float;
 use crate::graph::storage::mapped::mmap_vec::{MmapBytes, MmapOrVec, MmapPod};
 use crate::graph::storage::packed_codec::write_packed_values;
 use crate::graph::storage::StrField;
@@ -466,8 +467,12 @@ impl TypedColumn {
             (TypedColumn::Float64 { data, nulls }, Value::Float64(v)) => {
                 push_pair(data, *v, nulls, 0)?;
             }
-            (TypedColumn::Float64 { data, nulls }, Value::Int64(v)) => {
-                // Allow int→float promotion (common from pandas)
+            // int→float promotion (common from pandas), only when the float
+            // is the integer: one it would round falls to the demotion arm and
+            // the column widens to Mixed rather than store another number.
+            (TypedColumn::Float64 { data, nulls }, Value::Int64(v))
+                if exact_float(*v).is_some() =>
+            {
                 push_pair(data, *v as f64, nulls, 0)?;
             }
             (TypedColumn::Float64 { data, nulls }, Value::Null) => {
@@ -721,7 +726,9 @@ impl TypedColumn {
                 data.set(idx, *v);
                 nulls.set(idx, 0);
             }
-            (TypedColumn::Float64 { data, nulls }, Value::Int64(v)) => {
+            (TypedColumn::Float64 { data, nulls }, Value::Int64(v))
+                if exact_float(*v).is_some() =>
+            {
                 if idx >= data.len() {
                     return Err(());
                 }

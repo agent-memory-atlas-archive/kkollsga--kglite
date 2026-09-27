@@ -242,10 +242,7 @@ def test_soft_alias_range_preserves_title_fallback_candidates():
 def test_ids_one_float_apart_at_precision_edges_stay_their_own(tmp_path, storage, first, second):
     # A float is one id with an integer only when each converts to the other
     # exactly: creating the second node must not evict the first's index entry.
-    # The leading string id keeps the id column mixed, so each id is stored as
-    # given (a float column would store the integer as its rounded float).
     graph = kglite.KnowledgeGraph(storage=storage, path=str(tmp_path / "ids") if storage == "disk" else None)
-    graph.cypher("CREATE (:T {id: 'x', name: 'x'})")
     for name, value in [("first", first), ("second", second)]:
         graph.cypher("CREATE (:T {id: $id, name: $name})", params={"id": value, "name": name})
     for name, value in [("first", first), ("second", second)]:

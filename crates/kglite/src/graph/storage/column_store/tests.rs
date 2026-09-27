@@ -49,6 +49,21 @@ fn test_typed_column_float64_with_int_promotion() {
     assert_eq!(col.get(1), Some(Value::Float64(42.0)));
 }
 
+/// A float column promotes only an integer it holds exactly; one it would
+/// round is refused (the caller widens the column to Mixed), on push and set.
+#[test]
+fn a_float64_column_refuses_an_integer_it_would_round() {
+    let mut col = TypedColumn::from_type_str("float64");
+    assert!(col.push(&Value::Float64(0.5)).is_ok());
+    assert!(col.push(&Value::Int64(1 << 53)).is_ok());
+    for inexact in [(1i64 << 53) + 1, i64::MAX] {
+        assert!(col.push(&Value::Int64(inexact)).is_err(), "{inexact}");
+        assert!(col.set(0, &Value::Int64(inexact)).is_err(), "{inexact}");
+    }
+    assert_eq!(col.get(0), Some(Value::Float64(0.5)));
+    assert_eq!(col.get(1), Some(Value::Float64((1u64 << 53) as f64)));
+}
+
 #[test]
 fn test_typed_column_string_roundtrip() {
     let mut col = TypedColumn::from_type_str("string");

@@ -515,3 +515,96 @@ class TestIdTitleSentinel:
         assert row["with_id"] == 500, "the column rebuild dropped node ids"
         sample = loaded.cypher("MATCH (n:N) WHERE n.id = 7 RETURN n.id AS id, n.name AS nm").to_dicts()[0]
         assert sample["id"] == 7 and sample["nm"] == "n7"
+
+
+# ── A float column keeps an integer it cannot hold exactly ───────────────────
+
+INEXACT = [2**53 + 1, 2**63 - 1]
+
+
+def _open(storage, tmp_path, name="g"):
+    if storage == "disk":
+        return kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / name))
+    return kglite.KnowledgeGraph(storage=storage)
+
+
+def _exact(graph, label="T"):
+    """`{id: v}` for each node, and each stored `v`, with Python types."""
+    rows = graph.cypher(f"MATCH (n:{label}) RETURN n.id AS id, n.v AS v ORDER BY n.n").to_list()
+    return [(row["id"], type(row["id"]), row["v"], type(row["v"])) for row in rows]
+
+
+def _expected():
+    # The float-first node, then one node per inexact integer: id and v alike.
+    return [(0.5, float, 0.5, float)] + [(big, int, big, int) for big in INEXACT]
+
+
+def _check(graph, label="T"):
+    assert _exact(graph, label) == _expected()
+    for big in INEXACT:
+        found = graph.cypher(f"MATCH (n:{label} {{id: $id}}) RETURN n.v AS v", params={"id": big}).to_list()
+        assert found == [{"v": big}], big
+        found = graph.cypher(f"MATCH (n:{label}) WHERE n.v = $v RETURN n.id AS id", params={"v": big}).to_list()
+        assert found == [{"id": big}], big
+
+
+class TestFloatColumnKeepsInexactIntegers:
+    """A column typed Float64 by its first value widens to mixed for an
+    integer the float cannot represent exactly (2^53+1, 2^63-1), for the id
+    and for any other property, instead of storing the rounded float."""
+
+    @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+    def test_create_keeps_the_integer(self, tmp_path, storage):
+        g = _open(storage, tmp_path)
+        g.cypher("CREATE (:T {n: 0, id: 0.5, v: 0.5})")
+        for i, big in enumerate(INEXACT, 1):
+            g.cypher("CREATE (:T {n: $n, id: $b, v: $b})", params={"n": i, "b": big})
+        _check(g)
+
+    @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+    def test_add_nodes_keeps_the_integer(self, tmp_path, storage):
+        # add_nodes keys ids as integers, so only the property column starts
+        # as floats here; the float id is CREATE's and SET's case.
+        g = _open(storage, tmp_path)
+        g.add_nodes(pd.DataFrame({"n": [0], "id": [1], "v": [0.5]}), "T", "id")
+        g.add_nodes(pd.DataFrame({"n": [1, 2], "id": [2, 3], "v": INEXACT}), "T", "id")
+        rows = g.cypher("MATCH (n:T) RETURN n.v AS v ORDER BY n.n").to_list()
+        assert [(r["v"], type(r["v"])) for r in rows] == [(0.5, float)] + [(b, int) for b in INEXACT]
+        for big in INEXACT:
+            found = g.cypher("MATCH (n:T) WHERE n.v = $v RETURN count(n) AS c", params={"v": big}).to_list()
+            assert found == [{"c": 1}], big
+
+    @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+    def test_set_keeps_the_integer(self, tmp_path, storage):
+        g = _open(storage, tmp_path)
+        g.cypher("CREATE (:T {n: 0, id: 0.5, v: 0.5})")
+        for i, big in enumerate(INEXACT, 1):
+            g.cypher("CREATE (:T {n: $n, id: $b, v: 1.5})", params={"n": i, "b": big})
+            g.cypher("MATCH (n:T {n: $n}) SET n.v = $b", params={"n": i, "b": big})
+        _check(g)
+
+    @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+    def test_a_saved_graph_reloads_the_integer(self, tmp_path, storage):
+        g = _open(storage, tmp_path)
+        g.cypher("CREATE (:T {n: 0, id: 0.5, v: 0.5})")
+        for i, big in enumerate(INEXACT, 1):
+            g.cypher("CREATE (:T {n: $n, id: $b, v: $b})", params={"n": i, "b": big})
+        path = str(tmp_path / "g") if storage == "disk" else str(tmp_path / "g.kgl")
+        g.save(path)
+        loaded = kglite.load(path, storage=None if storage == "disk" else storage)
+        _check(loaded)
+
+    def test_to_df_holds_the_widened_column_as_object(self):
+        g = kglite.KnowledgeGraph()
+        g.cypher("CREATE (:T {n: 0, id: 0.5, v: 0.5})")
+        g.cypher("CREATE (:T {n: 1, id: $b, v: $b})", params={"b": INEXACT[0]})
+        df = g.select("T").to_df()
+        assert df["v"].dtype == object
+        assert list(df.sort_values("n")["v"]) == [0.5, INEXACT[0]]
+        assert type(df.sort_values("n")["v"].iloc[1]) is int
+
+    def test_an_exact_integer_still_joins_the_float_column(self):
+        g = kglite.KnowledgeGraph()
+        g.cypher("CREATE (:T {n: 0, id: 0.5, v: 0.5})")
+        g.cypher("CREATE (:T {n: 1, id: 1.5, v: 7})")
+        assert g.cypher("MATCH (n:T {n: 1}) RETURN n.v AS v").to_list() == [{"v": 7.0}]

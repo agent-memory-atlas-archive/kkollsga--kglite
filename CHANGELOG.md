@@ -350,6 +350,16 @@ before upgrading.
   id index holds one id under two kinds is healed on load, and the next save
   no longer writes that index back.
 
+- A property (or id) column whose first value was a float stored a later
+  integer the float cannot represent exactly as its rounded float —
+  `9007199254740993` (2^53+1) became `9007199254740992.0`, and
+  `9223372036854775807` became `9.223372036854776e18` — through `add_nodes`,
+  Cypher `CREATE` and `SET`, in every storage mode, and the value saved that
+  way. Such an integer now widens the column to mixed, as a value of another
+  kind already did: it is kept exactly, an id seek by it finds the node, and
+  `to_df()` returns the column as `object`. An integer the float holds
+  exactly (`7` → `7.0`) still joins the float column.
+
 - Cypher: a float id and an integer id are one id only when each converts to
   the other exactly. Creating a node with id `1.0e19` removed the index entry
   of a node with id `9223372036854775807` (the float saturated onto the

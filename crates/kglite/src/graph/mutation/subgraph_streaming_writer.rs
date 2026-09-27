@@ -32,7 +32,7 @@
 //! - Mixed:    heap-buffered until finalize (no streaming format)
 
 use crate::datatypes::values::{BorrowedValue, Value};
-use crate::graph::schema::{InternedKey, StringInterner, TypeSchema};
+use crate::graph::schema::{exact_float, InternedKey, StringInterner, TypeSchema};
 use crate::graph::storage::column_store::{ColumnStore, TypedColumn};
 use crate::graph::storage::mapped::mmap_vec::{MmapBytes, MmapOrVec};
 use std::collections::HashMap;
@@ -553,7 +553,7 @@ impl ColumnWriter {
             } => {
                 let (v, is_null): (f64, u8) = match value {
                     BorrowedValue::Float64(x) => (x, 0),
-                    BorrowedValue::Int64(x) => (x as f64, 0),
+                    BorrowedValue::Int64(x) if exact_float(x).is_some() => (x as f64, 0),
                     BorrowedValue::Null => (0.0, 1),
                     other => {
                         return Err(io::Error::other(format!(
@@ -687,9 +687,10 @@ impl ColumnWriter {
             } => {
                 let (v, is_null): (f64, u8) = match value {
                     Value::Float64(x) => (*x, 0),
-                    // Permit Int64 → Float64 promotion to mirror
-                    // TypedColumn::push's behavior on the heap path.
-                    Value::Int64(x) => (*x as f64, 0),
+                    // Int64 → Float64 promotion mirrors TypedColumn::push:
+                    // only an integer the float holds exactly; one it would
+                    // round is an error here, never a different number.
+                    Value::Int64(x) if exact_float(*x).is_some() => (*x as f64, 0),
                     Value::Null => (0.0, 1),
                     other => {
                         return Err(io::Error::other(format!(

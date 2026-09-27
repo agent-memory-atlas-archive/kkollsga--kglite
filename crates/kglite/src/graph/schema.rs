@@ -426,8 +426,9 @@ pub(crate) fn id_integer(id: &Value) -> Option<i64> {
 }
 
 /// `n` as a float, when the float is exactly `n`: past 2^53 an integer
-/// rounds onto a neighbour's float, which is another id.
-fn exact_float(n: i64) -> Option<f64> {
+/// rounds onto a neighbour's float, which is another value (another id, and a
+/// value a `Float64` column cannot hold).
+pub(crate) fn exact_float(n: i64) -> Option<f64> {
     let f = n as f64;
     (f < I64_FLOAT_END && f as i64 == n).then_some(f)
 }
