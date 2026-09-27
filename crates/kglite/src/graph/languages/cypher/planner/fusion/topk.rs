@@ -122,13 +122,7 @@ pub(crate) fn fuse_node_scan_top_k(
 
         // MATCH must be single pattern, single node, no edges
         let is_single_node = if let Clause::Match(mc) = &query.clauses[match_idx] {
-            mc.patterns.len() == 1
-                && mc.patterns[0].elements.len() == 1
-                && matches!(
-                    mc.patterns[0].elements[0],
-                    crate::graph::core::pattern_matching::PatternElement::Node(_)
-                )
-                && mc.path_assignments.is_empty()
+            super::is_single_scannable_node(mc)
         } else {
             false
         };

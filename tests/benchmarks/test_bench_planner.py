@@ -340,3 +340,86 @@ def test_bench_valid_time_resolve_segment_explain(benchmark, valid_time_graph, m
     monkeypatch.delenv(_VT_CAP_ENV, raising=False)
     result = benchmark(_cycle(valid_time_graph, "EXPLAIN "))
     assert result
+
+
+# ---------------------------------------------------------------------------
+# Id seeks among version nodes that share an id
+# ---------------------------------------------------------------------------
+#
+# Every entity has two versions with one id: the old one (2000–2010) and the
+# new one (from 2010), inserted last, so the id index holds the new one. At a
+# past instant every seek's index hit is invisible, and the seek finds the
+# old version through the type's duplicate-id map (built once per graph
+# version, so a warm round measures the seeks). A seek must not walk the
+# type: the check below compares the per-seek cost on a 20k-node and a
+# 200k-node type.
+
+SEEK_ENTITIES = 100_000  # two versions each: a 200k-node type
+SEEK_IDS = 2_000
+SEEK_QUERY = "FOR VALID_TIME AS OF date('2005-01-01') UNWIND $ids AS x MATCH (n:T {id: x}) RETURN n.name AS name"
+
+
+def _build_seek_graph(entities: int, storage: str, path) -> KnowledgeGraph:
+    if storage == "disk":
+        graph = KnowledgeGraph(storage="disk", path=str(path))
+    else:
+        graph = KnowledgeGraph()
+    graph.cypher(
+        "UNWIND range(0, $n - 1) AS i CREATE (:T {id: i, name: 'old', vf: date('2000-01-01'), vt: date('2010-01-01')})",
+        params={"n": entities},
+    ).to_list()
+    graph.cypher(
+        "UNWIND range(0, $n - 1) AS i CREATE (:T {id: i, name: 'new', vf: date('2010-01-01')})",
+        params={"n": entities},
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'T', from: 'vf', to: 'vt', convention: 'half_open'})").to_list()
+    return graph
+
+
+def _seek_ids(entities: int) -> list[int]:
+    step = entities // SEEK_IDS
+    return list(range(0, step * SEEK_IDS, step))
+
+
+def _seek(graph: KnowledgeGraph, entities: int) -> list:
+    return graph.cypher(SEEK_QUERY, params={"ids": _seek_ids(entities)}).to_list()
+
+
+@pytest.fixture(scope="module", params=["memory", "disk"])
+def seek_graph(request, tmp_path_factory):
+    path = tmp_path_factory.mktemp("seek") / "graph"
+    graph = _build_seek_graph(SEEK_ENTITIES, request.param, path)
+    rows = _seek(graph, SEEK_ENTITIES)
+    assert len(rows) == SEEK_IDS and {r["name"] for r in rows} == {"old"}
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_valid_time_id_seeks(benchmark, seek_graph):
+    """2k id seeks under a context at a past instant on a 200k-node type,
+    each index hit invisible."""
+    rows = benchmark(lambda: _seek(seek_graph, SEEK_ENTITIES))
+    assert len(rows) == SEEK_IDS
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("storage", ["memory", "disk"])
+def test_valid_time_id_seeks_do_not_walk_the_type(storage, tmp_path):
+    """The per-seek cost on a 200k-node type stays within 3x of a 20k-node
+    one; a seek that walked the type would cost 10x. Meaningful in release."""
+    import time
+
+    per_seek = {}
+    for entities in (SEEK_ENTITIES // 10, SEEK_ENTITIES):
+        graph = _build_seek_graph(entities, storage, tmp_path / f"g{entities}")
+        rows = _seek(graph, entities)  # builds the duplicate-id map
+        assert {r["name"] for r in rows} == {"old"}
+        best = float("inf")
+        for _ in range(7):
+            start = time.perf_counter()
+            _seek(graph, entities)
+            best = min(best, time.perf_counter() - start)
+        per_seek[entities] = best / SEEK_IDS
+    small, large = per_seek[SEEK_ENTITIES // 10], per_seek[SEEK_ENTITIES]
+    print(f"\n{storage}: {small * 1e3:.4f} ms/seek at 20k nodes, {large * 1e3:.4f} ms/seek at 200k nodes")
+    assert large < 3 * small, per_seek

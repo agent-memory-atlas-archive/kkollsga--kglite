@@ -299,6 +299,11 @@ fn var_length_segments_cross_only_valid_relationships_and_nodes() {
             "{reach}"
         );
     }
+    // The frontier marks a node only once a valid relationship reaches it:
+    // stop 3 is first met over the closed direct link, and still reached
+    // through 4 and 5.
+    let frontier = "MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t)";
+    assert_eq!(rows(&graph, &at("2008-01-01", frontier)), ints(&[3]));
     // The undirected closed trail 4–5–4 needs both parallel links.
     let closed = "MATCH (s:Stop {id: 4})-[:LINK*1..2]-(t:Stop) RETURN DISTINCT t.id";
     assert_eq!(rows(&graph, closed), ints(&[1, 2, 3, 4, 5]));
@@ -355,4 +360,105 @@ fn an_unreadable_bound_raises() {
         err.contains("node '1'") && err.contains("property 'vt'"),
         "{err}"
     );
+}
+
+/// Inline-map values are lowered like any other expression: a topology
+/// function inside one is refused, and a row-independent one is evaluated
+/// under the filter at execution, never folded at plan time without it.
+#[test]
+fn inline_map_values_are_lowered_and_evaluated_under_the_filter() {
+    let graph = registry();
+    let degree = "MATCH (f:Field) MATCH (c:Company {id: degree(f) + 17}) RETURN c.id";
+    let err = error(&graph, &at("2011-01-01", degree));
+    assert!(err.contains("degree()"), "{err}");
+    // At 2011 only Well 2 is visible (Well 1 closed in 2010, the Pad carrier
+    // opens in 2012), so the count is 1 and the id 20.
+    let counted = "MATCH (c:Company {id: COUNT { (:Well) } + 19}) RETURN c.id";
+    assert_eq!(rows(&graph, &at("2011-01-01", counted)), ints(&[20]));
+    assert!(rows(&graph, counted).is_empty(), "three Wells unguarded");
+    // An unfolded constant reaches the node-scan aggregate and top-k shapes.
+    for (query, want) in [
+        ("MATCH (c:Company {id: 19 + 1}) RETURN count(c)", 1),
+        ("MATCH (c:Company {id: 19 + 1}) RETURN c.id", 20),
+        (
+            "MATCH (c:Company {id: 19 + 1}) RETURN c.id ORDER BY c.id LIMIT 1",
+            20,
+        ),
+    ] {
+        assert_eq!(
+            rows(&graph, &at("2011-01-01", query)),
+            ints(&[want]),
+            "{query}"
+        );
+    }
+}
+
+/// Several visible versions share an id: the seek returns the one inserted
+/// last, the id index's own choice, whichever version the index holds.
+#[test]
+fn an_id_seek_returns_the_latest_inserted_visible_version() {
+    let mut graph = DirGraph::new();
+    for query in [
+        "CREATE (:M {id: 1, name: 'a', vf: date('2000-01-01')}), \
+         (:M {id: 1, name: 'b', vf: date('2000-01-01')}), \
+         (:M {id: 1, name: 'c', vf: date('2030-01-01'), vt: date('2040-01-01')}), \
+         (:M {id: 2, name: 'd', vf: date('2000-01-01')})",
+        "CALL db.temporal.declare({node: 'M', from: 'vf', to: 'vt', convention: 'closed'}) \
+         YIELD declared RETURN declared",
+    ] {
+        run(&mut graph, query);
+    }
+    for body in [
+        "MATCH (m:M {id: 1}) RETURN m.name",
+        "MATCH (m {id: 1}) RETURN m.name",
+        "MATCH (m:M) WHERE m.id IN [1] RETURN m.name",
+    ] {
+        assert_eq!(
+            rows(&graph, &at("2020-01-01", body)),
+            vec![vec![Value::String("b".into())]],
+            "{body}"
+        );
+        assert_eq!(
+            rows(&graph, &at("2035-01-01", body)),
+            vec![vec![Value::String("c".into())]],
+            "{body}"
+        );
+    }
+    // Over the byte cap there is no map; the walk keeps the same rule.
+    crate::graph::features::temporal::endpoint_index::set_byte_cap(&graph, 1);
+    let seek = "MATCH (m:M {id: 1}) RETURN m.name";
+    assert_eq!(
+        rows(&graph, &at("2020-01-01", seek)),
+        vec![vec![Value::String("b".into())]]
+    );
+}
+
+/// A seek compares ids before it reads a bound, so an unrelated node's
+/// unreadable bound does not raise from it; a scan that reads it still does.
+#[test]
+fn an_id_seek_reads_no_other_ids_bounds() {
+    let mut graph = DirGraph::new();
+    for query in [
+        "CREATE (:Muni {id: 363, name: 'old', vf: date('1900-01-01'), vt: date('1999-12-31')}), \
+         (:Muni {id: 363, name: 'new', vf: date('2000-01-01')}), \
+         (:Muni {id: 999, name: 'bad', vf: date('1900-01-01')})",
+        "CALL db.temporal.declare({node: 'Muni', from: 'vf', to: 'vt', convention: 'closed'}) \
+         YIELD declared RETURN declared",
+        "MATCH (m:Muni {id: 999}) SET m.vt = 42",
+    ] {
+        run(&mut graph, query);
+    }
+    let seek = "MATCH (m:Muni {id: 363}) RETURN m.name";
+    assert_eq!(
+        rows(&graph, &at("1950-01-01", seek)),
+        vec![vec![Value::String("old".into())]]
+    );
+    let capped = graph.clone();
+    crate::graph::features::temporal::endpoint_index::set_byte_cap(&capped, 1);
+    assert_eq!(
+        rows(&capped, &at("1950-01-01", seek)),
+        vec![vec![Value::String("old".into())]]
+    );
+    let err = error(&graph, &at("1950-01-01", "MATCH (m:Muni) RETURN m.name"));
+    assert!(err.contains("node '999'"), "{err}");
 }

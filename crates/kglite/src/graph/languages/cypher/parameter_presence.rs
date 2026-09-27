@@ -236,8 +236,10 @@ fn visit_pattern(pattern: &Pattern, names: &mut impl AstSink) {
         }
         if let Some(properties) = properties {
             for matcher in properties.values() {
-                if let PropertyMatcher::EqualsParam(name) = matcher {
-                    names.parameter(name);
+                match matcher {
+                    PropertyMatcher::EqualsParam(name) => names.parameter(name),
+                    PropertyMatcher::EqualsExpr(expression) => visit_expression(expression, names),
+                    _ => {}
                 }
             }
         }

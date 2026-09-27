@@ -48,6 +48,29 @@ pub(super) fn projection_has_wildcard(
     })
 }
 
+/// Whether `pattern` is one node whose inline map holds only values the
+/// node scan can test as they stand. An expression value (`{id: 19 + 1}`) is
+/// resolved per row by the unfused path; the node scan would compare against
+/// the unevaluated expression and match nothing. Outside a valid-time guard
+/// `fold_constant_inline_maps` has already folded every constant one.
+pub(super) fn is_single_scannable_node(
+    clause: &crate::graph::languages::cypher::ast::MatchClause,
+) -> bool {
+    use crate::graph::core::pattern_matching::{PatternElement, PropertyMatcher};
+    let [pattern] = clause.patterns.as_slice() else {
+        return false;
+    };
+    let [PatternElement::Node(node)] = pattern.elements.as_slice() else {
+        return false;
+    };
+    clause.path_assignments.is_empty()
+        && !node.properties.as_ref().is_some_and(|props| {
+            props
+                .values()
+                .any(|m| matches!(m, PropertyMatcher::EqualsExpr(_)))
+        })
+}
+
 /// Finer multi-label fusion gate, shared by the fusions whose executors
 /// filter typed nodes via `binary_search` on the primary `type_indices`
 /// slice (edge aggregates) or build an R-tree from it (spatial join), and

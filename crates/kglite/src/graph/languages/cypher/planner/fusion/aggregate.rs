@@ -1079,10 +1079,7 @@ pub(crate) fn fuse_node_scan_aggregate(
         // properties (`{city: 'Oslo'}`) are allowed — the executor evaluates
         // them inline via `PatternExecutor::node_matches_properties_pub()`.
         let is_single_node = if let Clause::Match(mc) = &query.clauses[match_idx] {
-            mc.patterns.len() == 1
-                && mc.patterns[0].elements.len() == 1
-                && matches!(mc.patterns[0].elements[0], PatternElement::Node(_))
-                && mc.path_assignments.is_empty()
+            super::is_single_scannable_node(mc)
         } else {
             false
         };

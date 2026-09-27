@@ -32,7 +32,9 @@ before upgrading.
   both endpoints valid. Undeclared types are timeless, a NULL bound is open,
   and a bound that is not a date, datetime or ISO string raises naming the
   element. An id seek finds the version valid at the instant when several
-  version nodes share the id. Counts, node scans with an aggregate or
+  version nodes share the id (the one inserted last when more than one is
+  valid, in every storage mode), and inline-map values that are expressions
+  are evaluated under the context. Counts, node scans with an aggregate or
   `ORDER BY … LIMIT`, top-k over matched rows, `COUNT { }` and `elementId`
   anchors keep their fast routes under a context; `PROFILE` runs too. When
   every declared type is valid in full at the instant (as of today on a graph

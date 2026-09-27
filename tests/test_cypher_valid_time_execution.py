@@ -165,6 +165,79 @@ def test_id_seeks_find_the_version_valid_at_the_instant():
         assert ids(graph, "MATCH (m:Muni {id: $i}) RETURN m.name", params={"i": 363}, valid_at=date) == [name]
 
 
+def _storage(storage, tmp_path):
+    if storage == "disk":
+        return kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / "graph"))
+    return kglite.KnowledgeGraph(storage=storage) if storage != "memory" else kglite.KnowledgeGraph()
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+def test_an_id_seek_returns_the_latest_inserted_visible_version(storage, tmp_path):
+    """Two of three versions sharing an id are valid: every mode returns the
+    one inserted last (the id index's own choice), whichever node the index
+    holds; an id whose only other version has an unreadable bound does not
+    raise from a seek, though a scan that reads it does."""
+    graph = _storage(storage, tmp_path)
+    graph.cypher(
+        "CREATE (:M {id: 1, name: 'a', vf: date('2000-01-01')}),"
+        " (:M {id: 1, name: 'b', vf: date('2000-01-01')}),"
+        " (:M {id: 1, name: 'c', vf: date('2030-01-01'), vt: date('2040-01-01')}),"
+        " (:M {id: 363, name: 'old', vf: date('1900-01-01'), vt: date('1999-12-31')}),"
+        " (:M {id: 363, name: 'new', vf: date('2000-01-01')}),"
+        " (:M {id: 999, name: 'bad', vf: date('1900-01-01')})"
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'M', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    graph.cypher("MATCH (m:M {id: 999}) SET m.vt = 42").to_list()
+    for body in (
+        "MATCH (m:M {id: 1}) RETURN m.name",
+        "MATCH (m {id: 1}) RETURN m.name",
+        "MATCH (m:M) WHERE m.id IN [1] RETURN m.name",
+        "UNWIND [1] AS x MATCH (m:M {id: x}) RETURN m.name",
+    ):
+        assert ids(graph, at("2020-01-01", body)) == ["b"], (storage, body)
+        assert ids(graph, at("2035-01-01", body)) == ["c"], (storage, body)
+    assert ids(graph, at("1950-01-01", "MATCH (m:M {id: 363}) RETURN m.name")) == ["old"]
+    with pytest.raises(kglite.KgError, match=r"node '999'"):
+        graph.cypher(at("1950-01-01", "MATCH (m:M) RETURN m.name")).to_list()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "MATCH (w:Well {id: $k}) RETURN w.id",
+        "MATCH (w:Well {id: $k}) RETURN count(w)",
+        "MATCH (w:Well {id: $k}) RETURN w.id ORDER BY w.id LIMIT 1",
+        "MATCH (w:Well {id: $k})-[:IN]->(f) RETURN f.id",
+        "MATCH (f:Field) OPTIONAL MATCH (w:Well {id: $k})-[:IN]->(f) RETURN w.id",
+        "MATCH (f:Field) RETURN COUNT { (w:Well {id: $k})-[:IN]->(f) }",
+        "MATCH (f:Field) WHERE EXISTS { (:Well {id: $k})-[:IN]->(f) } RETURN f.id",
+        "MATCH (f:Field) RETURN [(w:Well {id: $k})-[:IN]->(f) | w.id]",
+        "MATCH (w:Well {id: $k})-[:IN*1..2]-(x:Field) RETURN x.id",
+        "MATCH p = shortestPath((w:Well {id: $k})-[*]-(c:Company)) RETURN length(p)",
+        "MATCH (a:Field) MATCH (w:Well {id: $k}) RETURN w.id",
+    ],
+)
+def test_an_inline_map_expression_answers_as_its_value_under_a_context(sodir, body):
+    """A statement under a context keeps its inline-map expressions (they are
+    not folded at plan time without the filter): each shape answers as the
+    same statement with the value written as a literal."""
+    for date in ("2003-01-01", "2011-01-01"):
+        for k in (1, 2):
+            want = sodir.cypher(at(date, body.replace("$k", str(k)))).to_list()
+            got = sodir.cypher(at(date, body.replace("$k", f"{k - 1} + 1"))).to_list()
+            assert got == want, (date, k, body)
+
+
+def test_a_count_in_an_inline_map_counts_only_valid_nodes(sodir):
+    # At 2011 one Well is valid (Well 1 closed in 2010, the Pad carrier opens
+    # in 2012), so the count is 1 and the company id 20; unguarded it is 3.
+    body = "MATCH (c:Company {id: COUNT { (:Well) } + 19}) RETURN c.id"
+    assert ids(sodir, at("2011-01-01", body)) == [20]
+    assert ids(sodir, body) == []
+    with pytest.raises(kglite.KgError, match=r"degree\(\)"):
+        sodir.cypher(at("2011-01-01", "MATCH (f:Field) MATCH (c:Company {id: degree(f) + 17}) RETURN c.id")).to_list()
+
+
 @pytest.mark.parametrize(
     "convention,on_boundary",
     [("closed", ["Amsterdam-new", "Amsterdam-old"]), ("half_open", ["Amsterdam-new"])],

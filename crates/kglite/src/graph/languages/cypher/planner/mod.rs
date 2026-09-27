@@ -324,7 +324,12 @@ fn optimize_with_disabled_scoped(
     plan_instant: Option<Instant>,
 ) {
     query.optimizer_tags.clear();
-    super::executor::match_execution::fold_constant_inline_maps(query, graph, params);
+    // A statement with a context (and each scope lowering gave a template)
+    // keeps its inline-map expressions for the filtered executor; see
+    // `guard::GUARD_DENIED_PREPASSES`.
+    if query.context.is_none() && query.guard.is_none() {
+        super::executor::match_execution::fold_constant_inline_maps(query, graph, params);
+    }
     // Mandatory, and outside PASSES so no `disabled_passes` entry can skip it.
     super::valid_time::lower(query, graph);
     let plan_instant = plan_instant.or_else(|| super::valid_time::plan_instant(query, graph));

@@ -891,9 +891,9 @@ impl<'a> CypherExecutor<'a> {
 
 /// Fold every row-independent inline-map expression (`{id: toUpper('a')}`,
 /// `{id: $list[0]}`) to the literal matcher it evaluates to, before the
-/// planner runs. The fused scans and index selection read literal equality,
-/// so a constant left as an expression would reach a path that cannot
-/// evaluate it. Row-dependent expressions stay deferred and resolve per row;
+/// planner runs, so index selection reads literal equality. A scope under a
+/// valid-time guard is not folded (the folding executor has no filter); the
+/// fused node scans decline an expression value, so it resolves per row. Row-dependent expressions stay deferred and resolve per row;
 /// one that fails to evaluate here is also left in place, so the row-time
 /// resolution reports the error. Builds no executor when the query has no
 /// such expression.

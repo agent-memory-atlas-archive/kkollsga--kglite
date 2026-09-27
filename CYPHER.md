@@ -1528,7 +1528,10 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   types are timeless. A NULL or missing bound is open; a bound that is not a
   date, a datetime or an ISO string raises, naming the element. An id seek
   (`{id: …}`) finds the version valid at the instant when several version
-  nodes share the id.
+  nodes share the id — the one inserted last when more than one is valid, in
+  every storage mode — and reads no other id's bounds. An inline-map value
+  that is an expression (`{id: COUNT { (:Well) }}`) is evaluated under the
+  context too.
 - **Execution.** The instant is resolved once per execution (a `$param` or
   `date()` is read when the statement runs, so a cached plan never carries
   one). Counts (`count(*)` over a label, a type or the whole graph), node

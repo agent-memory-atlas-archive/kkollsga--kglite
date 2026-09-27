@@ -5,19 +5,19 @@
 //! per execution, so a cached plan never carries an instant.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use fixedbitset::FixedBitSet;
 use petgraph::graph::{EdgeIndex, NodeIndex};
-use rustc_hash::FxHashMap;
 
 use crate::datatypes::values::Value;
 use crate::graph::dir_graph::DirGraph;
+use crate::graph::features::temporal::duplicate_ids;
 pub(crate) use crate::graph::features::temporal::endpoint_index::ResolvedFilter;
 use crate::graph::features::temporal::endpoint_index::{self, ElementMasks};
 use crate::graph::features::temporal::eval::{self, Instant, TemporalError};
 use crate::graph::features::temporal::{self, IntervalConvention, TemporalTarget};
-use crate::graph::schema::{InternedKey, TemporalConfig, TypeIdIndex};
+use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::GraphRead;
 use crate::graph::TemporalContext;
 
@@ -166,8 +166,6 @@ pub(crate) struct ElementFilter {
     /// The first bound the evaluator could not read. The element is rejected
     /// and the execution raises this once it finishes.
     error: OnceLock<String>,
-    /// Per declared type, its admitted nodes' ids — see [`Self::lookup_id`].
-    valid_ids: Mutex<FxHashMap<String, Arc<TypeIdIndex>>>,
 }
 
 #[derive(Debug)]
@@ -227,7 +225,6 @@ impl ElementFilter {
             node_residual,
             edge_rules: edge_rules.into_boxed_slice(),
             error: OnceLock::new(),
-            valid_ids: Mutex::new(FxHashMap::default()),
         })
     }
 
@@ -315,48 +312,39 @@ impl ElementFilter {
         self.error.get().map(String::as_str)
     }
 
-    /// The visible node of `node_type` whose id is `id`, given the one the id
-    /// index returned (`hit`). The id index holds one node per (type, id), so
-    /// when several version nodes share an id it may hand back one that is
-    /// not visible while another is; that case is answered from the visible
-    /// nodes' ids, collected once per type and execution (a linear scan per
-    /// lookup on Disk, whose heap must not grow with the graph).
+    /// The visible node of `node_type` with the id the id index answered
+    /// `hit` for. The index holds one node per (type, id), the last in the
+    /// type's node order, so when version nodes share an id it may hand back
+    /// one that is not visible while another is. Then the nodes it shadows —
+    /// only those, from the type's duplicate-id map — are tested latest
+    /// first, so every mode returns the latest-inserted visible version and
+    /// no other id's bounds are read. A map over the byte cap is not built;
+    /// the type is walked instead, comparing ids before any bound.
     #[cold]
     #[inline(never)]
     pub(crate) fn lookup_id(
         &self,
         graph: &DirGraph,
         node_type: &str,
-        id: &Value,
         hit: Option<NodeIndex>,
     ) -> Option<NodeIndex> {
         let hit = hit?;
         if self.admits_node(graph, hit) {
             return Some(hit);
         }
-        let nodes = graph.type_indices.get(node_type)?;
-        if graph.graph.is_disk() {
-            return nodes.iter().find(|&idx| {
-                self.admits_node(graph, idx)
-                    && graph
-                        .graph
-                        .get_node_id(idx)
-                        .is_some_and(|v| crate::graph::core::filtering::values_equal(&v, id))
-            });
+        if let Some(duplicates) = endpoint_index::duplicate_ids(graph, node_type) {
+            return duplicates
+                .others(hit)
+                .find(|&idx| self.admits_node(graph, idx));
         }
-        let index = {
-            let mut cache = self.valid_ids.lock().unwrap_or_else(|p| p.into_inner());
-            let entry = cache.entry(node_type.to_string()).or_insert_with(|| {
-                let ids = nodes
-                    .iter()
-                    .filter(|&idx| self.admits_node(graph, idx))
-                    .filter_map(|idx| Some((graph.graph.get_node_id(idx)?, idx)))
-                    .collect();
-                Arc::new(TypeIdIndex::General(ids))
-            });
-            Arc::clone(entry)
-        };
-        index.get(id)
+        let nodes = graph.type_indices.get(node_type)?;
+        (0..nodes.len())
+            .rev()
+            .filter_map(|i| nodes.get(i))
+            .find(|&idx| {
+                duplicate_ids::shadowed_by(graph, node_type, idx) == Some(hit)
+                    && self.admits_node(graph, idx)
+            })
     }
 
     #[cold]

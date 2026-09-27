@@ -69,8 +69,11 @@ QUERIES = [
     "MATCH (n:A) RETURN n.uid AS u ORDER BY u DESC LIMIT 3",
     "MATCH (n) RETURN n.uid AS u, COUNT { (n)-[:R]->() } AS c",
     "MATCH (n) WHERE EXISTS { (n)<-[:S]-() } RETURN n.uid AS u",
-    "MATCH (n:A {id: 1}) RETURN count(*) AS c",
-    "MATCH (n {id: 2}) RETURN count(*) AS c",
+    # Id seeks name the node they matched: among versions sharing an id, the
+    # latest-inserted valid one, which is the reference slice's own choice.
+    "MATCH (n:A {id: 1}) RETURN n.uid AS u",
+    "MATCH (n {id: 2}) RETURN n.uid AS u",
+    "UNWIND [0, 1, 2, 3] AS x MATCH (n:B {id: x}) RETURN x, n.uid AS u",
     "MATCH (n:A) RETURN n.id AS i, count(*) AS c",
     "MATCH (a:A)-[:S]->(b) WITH a, count(b) AS c RETURN a.uid AS a, c",
     # Variable-length segments: the trail expansion, the distance frontier

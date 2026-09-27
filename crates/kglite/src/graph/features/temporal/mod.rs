@@ -7,6 +7,7 @@
 pub(crate) mod declarations;
 #[cfg(test)]
 mod declarations_tests;
+pub(crate) mod duplicate_ids;
 pub(crate) mod endpoint_index;
 pub(crate) mod eval;
 mod loader;

@@ -1,8 +1,9 @@
 //! Mandatory lowering of a statement's `FOR <axis> AS OF <instant>` context.
 //!
-//! Lowering runs on every optimize, after `fold_constant_inline_maps` and
-//! outside `PASSES`, so `disabled_passes` can never change what a context
-//! means. It walks every scope itself — the top level, each UNION arm and
+//! Lowering runs on every optimize, outside `PASSES`, so `disabled_passes`
+//! can never change what a context means. A statement with a context skips
+//! `fold_constant_inline_maps`, so lowering sees every inline-map value as
+//! written. It walks every scope itself — the top level, each UNION arm and
 //! each `CALL { }` body — because the recursion inside `PASSES`
 //! (`optimize_nested_queries`) can be disabled. Each scope gets its own
 //! [`GuardTemplate`]: the declared targets its patterns can reach. The

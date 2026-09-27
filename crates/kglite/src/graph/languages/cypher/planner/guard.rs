@@ -141,6 +141,16 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Planner work outside `PASSES` that a guarded scope also skips, each with
+/// what it would bypass. The planner tests `CypherQuery::context` /
+/// `CypherQuery::guard` at the call site; this list is its verdict record.
+#[cfg(test)]
+const GUARD_DENIED_PREPASSES: &[(&str, &str)] = &[(
+    "fold_constant_inline_maps",
+    "evaluates a row-independent inline-map value (`{n: COUNT { (:Well) }}`) at plan \
+     time with an executor that has no filter, and caches the literal with the plan",
+)];
+
 /// Whether pass `name` may run on a guarded scope.
 pub(crate) fn is_safe(name: &str) -> bool {
     GUARD_SAFE_PASSES.iter().any(|(safe, _)| *safe == name)
@@ -183,7 +193,17 @@ mod tests {
                 "'{name}' is not a registered pass"
             );
         }
-        for (name, reason) in GUARD_SAFE_PASSES.iter().chain(GUARD_DENIED_PASSES) {
+        for (name, _) in GUARD_DENIED_PREPASSES {
+            assert!(
+                !registered.contains(name),
+                "'{name}' is a registered pass: give it a verdict in the pass lists"
+            );
+        }
+        let all = GUARD_SAFE_PASSES
+            .iter()
+            .chain(GUARD_DENIED_PASSES)
+            .chain(GUARD_DENIED_PREPASSES);
+        for (name, reason) in all {
             assert!(!reason.is_empty(), "'{name}' has no reason");
         }
         assert!(!is_safe("mark_skip_target_type_check"));

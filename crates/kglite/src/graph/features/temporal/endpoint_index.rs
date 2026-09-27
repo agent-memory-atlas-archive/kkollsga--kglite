@@ -62,7 +62,9 @@
 //! to make room for a new mask, and one that cannot fit beside the arrays at
 //! all is not built (its targets keep property guards). Disk mode
 //! never builds an index (its heap must not grow with the graph); the walk
-//! still counts the rows for `db.temporal.declarations()`.
+//! still counts the rows for `db.temporal.declarations()`. The same cache,
+//! stamp and cap hold each node type's duplicate-id map
+//! ([`super::duplicate_ids`]), which every mode builds.
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
@@ -72,6 +74,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use fixedbitset::FixedBitSet;
 
 use super::declarations::TemporalTarget;
+use super::duplicate_ids::DuplicateIds;
 use super::eval::{self, Instant, IntervalConvention};
 use super::validate::{edge_bound, for_each_edge_row, for_each_node_row, node_bound, EdgeRow};
 use crate::datatypes::values::Value;
@@ -478,6 +481,9 @@ pub(crate) struct IndexCache {
     targets: Vec<CachedTarget>,
     /// Oldest first.
     masks: VecDeque<(SegmentKey, Arc<ElementMasks>)>,
+    /// Per node type, its duplicate-id map; `None` when it would pass the
+    /// cap.
+    duplicates: Vec<(String, Option<Arc<DuplicateIds>>)>,
     /// Replaces the byte cap for this graph (tests).
     cap: Option<usize>,
 }
@@ -490,6 +496,7 @@ impl IndexCache {
             self.version = version;
             self.targets.clear();
             self.masks.clear();
+            self.duplicates.clear();
         }
         self
     }
@@ -501,12 +508,29 @@ impl IndexCache {
             .map(|c| (c.counts, c.index.clone()))
     }
 
+    /// What the cache keeps beside its masks: the endpoint arrays and the
+    /// duplicate-id maps.
     fn array_bytes(&self) -> usize {
-        self.targets
+        let arrays: usize = self
+            .targets
             .iter()
             .filter_map(|c| c.index.as_ref().ok())
             .map(|index| index.bytes())
-            .sum()
+            .sum();
+        let duplicates: usize = self
+            .duplicates
+            .iter()
+            .filter_map(|(_, map)| map.as_deref())
+            .map(DuplicateIds::bytes)
+            .sum();
+        arrays + duplicates
+    }
+
+    fn find_duplicates(&self, node_type: &str) -> Option<Option<Arc<DuplicateIds>>> {
+        self.duplicates
+            .iter()
+            .find(|(t, _)| t == node_type)
+            .map(|(_, map)| map.clone())
     }
 
     fn mask_bytes(&self) -> usize {
@@ -803,7 +827,38 @@ pub(crate) fn invalidate(graph: &DirGraph) {
     if let Some(cache) = write_cache(graph).as_mut() {
         cache.targets.clear();
         cache.masks.clear();
+        cache.duplicates.clear();
     }
+}
+
+/// `node_type`'s duplicate-id map at the graph's version, built on a miss
+/// outside the lock (a racing builder's map wins) under what the byte cap
+/// leaves; `None` when it does not fit. Every mode builds one: it holds only
+/// shadowed nodes (see [`super::duplicate_ids`]).
+pub(crate) fn duplicate_ids(graph: &DirGraph, node_type: &str) -> Option<Arc<DuplicateIds>> {
+    let version = graph.version();
+    let budget = {
+        let read = read_cache(graph);
+        let current = read.as_ref().filter(|c| c.version == version);
+        if let Some(hit) = current.and_then(|c| c.find_duplicates(node_type)) {
+            return hit;
+        }
+        let cap = read
+            .as_ref()
+            .map_or_else(|| IndexCache::default().cap(), IndexCache::cap);
+        cap.saturating_sub(current.map_or(0, IndexCache::array_bytes))
+    };
+    let built = DuplicateIds::build(graph, node_type, budget);
+    let mut write = write_cache(graph);
+    let cache = write.get_or_insert_with(IndexCache::default).at(version);
+    if let Some(hit) = cache.find_duplicates(node_type) {
+        return hit;
+    }
+    let map = built
+        .filter(|map| cache.make_room(map.bytes(), cache.cap()))
+        .map(Arc::new);
+    cache.duplicates.push((node_type.to_string(), map.clone()));
+    map
 }
 
 /// Replace the byte cap for this graph's endpoint indexes.
