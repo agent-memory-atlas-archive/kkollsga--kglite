@@ -562,19 +562,6 @@ def test_bench_traversal(benchmark, bench_graph):
 
 
 @pytest.mark.benchmark
-def test_bench_select(benchmark, bench_graph):
-    """Fluent select of one type on a graph with no validity declaration: the
-    date context must cost nothing (no filter is built)."""
-    benchmark(bench_graph.select, "Item")
-
-
-@pytest.mark.benchmark
-def test_bench_select_where(benchmark, bench_graph):
-    """Fluent select followed by a property filter."""
-    benchmark(lambda: bench_graph.select("Item").where({"category": "cat_3"}))
-
-
-@pytest.mark.benchmark
 def test_bench_shortest_path(benchmark, bench_graph):
     """Shortest path computation."""
     benchmark(bench_graph.cypher, "MATCH p = shortestPath((a:Item {id: 0})-[*]-(b:Item {id: 500})) RETURN length(p)")

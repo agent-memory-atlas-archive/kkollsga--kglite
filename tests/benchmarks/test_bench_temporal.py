@@ -411,6 +411,49 @@ def test_temporal_fluent_view(benchmark, fluent_pair, name):
     benchmark(FLUENT_CELLS[name], fluent_pair.view)
 
 
+# ── Undeclared-graph fluent cells ────────────────────────────────────────────
+#
+# These live here rather than in test_bench_core.py because the CI perf gate
+# pins that harness's benchmark set to baselines/current.json, which only a
+# release captures; P18's same-session A/B against the previous wheel runs
+# this file explicitly.
+
+
+@pytest.fixture(scope="module")
+def undeclared_graph():
+    """1000 Item nodes, 2000 LINKS edges, no validity declaration."""
+    graph = KnowledgeGraph()
+    nodes = pd.DataFrame(
+        {
+            "nid": list(range(1000)),
+            "name": [f"Node_{i}" for i in range(1000)],
+            "category": [f"cat_{i % 10}" for i in range(1000)],
+        }
+    )
+    graph.add_nodes(nodes, "Item", "nid", "name")
+    edges = pd.DataFrame(
+        {
+            "from_id": [i % 1000 for i in range(2000)],
+            "to_id": [(i * 7 + 13) % 1000 for i in range(2000)],
+        }
+    )
+    graph.add_relationships(edges, "LINKS", "Item", "from_id", "Item", "to_id")
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_select(benchmark, undeclared_graph):
+    """Fluent select of one type on a graph with no validity declaration: the
+    date context must cost nothing (no filter is built)."""
+    benchmark(undeclared_graph.select, "Item")
+
+
+@pytest.mark.benchmark
+def test_bench_select_where(benchmark, undeclared_graph):
+    """Fluent select followed by a property filter on an undeclared graph."""
+    benchmark(lambda: undeclared_graph.select("Item").where({"category": "cat_3"}))
+
+
 # ── Default-scale retrieval and algorithm cells ─────────────────────────────
 
 RETRIEVAL_CELLS: dict[str, Cell] = {

@@ -92,7 +92,11 @@ def test_diagnostics_shape_is_unchanged():
         "row_limit",
         "total_rows",
         "warnings",
+        "temporal",
     }
+    # `temporal` is the valid-time echo; a statement with no context carries
+    # the key as None (the serialized forms omit the object).
+    assert diag["temporal"] is None
     assert isinstance(diag["elapsed_ms"], int)
     # `timed_out` is deliberately absent: it had no writer anywhere, so it read
     # False on every result — a fired deadline raises CypherTimeoutError rather
