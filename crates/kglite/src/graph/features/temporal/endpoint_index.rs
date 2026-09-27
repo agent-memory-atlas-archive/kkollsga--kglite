@@ -50,12 +50,17 @@
 //! `GraphRead` (so journalled writes are seen), and cached inside the
 //! declaration store in a fork-private cache stamped with the graph version.
 //! Every write bumps the version, so the next lookup rebuilds; a fork starts
-//! cold, and a version set directly empties the cache. A target keeps
+//! cold, and a version set directly empties the cache. Inside a mutating
+//! statement the version moves only at commit, so the write engine empties
+//! the cache after each writing clause ([`invalidate`]). A target keeps
 //! property guards instead of an index when a row holds a bound the
 //! evaluator cannot read (a mask cannot raise that error only when the row is
 //! visited), or when its arrays would pass [`ENDPOINT_INDEX_BYTE_CAP`], which
-//! bounds one graph's arrays and cached masks together: a build over it is
-//! refused, and cached masks are evicted oldest first to make room. Disk mode
+//! bounds one graph's arrays and cached masks together. A build is refused
+//! before its peak working set ([`PEAK_BYTES_PER_PAIR`]) would pass what the
+//! cap leaves beside the kept arrays; cached masks are evicted oldest first
+//! to make room for a new mask, and one that cannot fit beside the arrays at
+//! all is not built (its targets keep property guards). Disk mode
 //! never builds an index (its heap must not grow with the graph); the walk
 //! still counts the rows for `db.temporal.declarations()`.
 
@@ -87,11 +92,18 @@ pub(crate) const BYTE_CAP_ENV: &str = "KGLITE_TEMPORAL_INDEX_MAX_BYTES";
 const DAY_US: i64 = 86_400_000_000;
 /// `NaiveDate::num_days_from_ce` of 1970-01-01.
 const EPOCH_DAYS_FROM_CE: i64 = 719_163;
-/// A collected row's `(key, slot)` pair on each side, as the build holds it
-/// while walking — more than the 24 bytes the finished arrays keep, so the
-/// cap bounds the walk's working set too (splitting the sorted pairs into
-/// the kept arrays briefly holds both).
-const BYTES_PER_ROW: usize = 2 * size_of::<(i64, u32)>();
+/// The most the build holds per reserved row slot: the `from` and `to`
+/// `(key, slot)` pair buffers (16 bytes each), plus at most one more buffer
+/// of that size alive at once — the old one while a pair buffer grows (both
+/// grow to the same capacity, one after the other), or the finished 12-byte
+/// `(key, slot)` arrays of the side being split. The build reserves its own
+/// capacity and checks this bound before every reservation, so the walk's
+/// peak stays within the budget; the finished arrays keep 24 bytes a row.
+const PEAK_BYTES_PER_PAIR: usize = 3 * size_of::<(i64, u32)>();
+/// An empty row's slot, and its buffer's old copy while that grows.
+const PEAK_BYTES_PER_EMPTY: usize = 2 * size_of::<u32>();
+/// The first capacity a build reserves.
+const MIN_RESERVE: usize = 16;
 /// The most masks cached at once; the byte cap may hold fewer.
 const MAX_CACHED_MASKS: usize = 8;
 
@@ -238,7 +250,7 @@ struct Builder {
     from: Vec<(i64, u32)>,
     to: Vec<(i64, u32)>,
     empty: Vec<u32>,
-    /// Bytes the collected rows may reach.
+    /// Bytes the build may hold at its peak — see [`PEAK_BYTES_PER_PAIR`].
     budget: usize,
 }
 
@@ -253,6 +265,58 @@ impl Builder {
         }
     }
 
+    /// The peak bytes the build can reach at `pairs` and `empties` reserved
+    /// slots.
+    fn peak(pairs: usize, empties: usize) -> usize {
+        pairs
+            .saturating_mul(PEAK_BYTES_PER_PAIR)
+            .saturating_add(empties.saturating_mul(PEAK_BYTES_PER_EMPTY))
+    }
+
+    /// The capacity to grow `len` slots to: double, clamped to what the
+    /// budget leaves beside `other` bytes; `None` when not one more fits.
+    fn grown(&self, len: usize, per_slot: usize, other: usize) -> Option<usize> {
+        let fits = self.budget.checked_sub(other)? / per_slot;
+        let wanted = len.saturating_mul(2).max(MIN_RESERVE);
+        (fits > len).then(|| wanted.min(fits))
+    }
+
+    /// Reserve room for one more row, checking the peak bound before any
+    /// allocation; refused when the budget cannot hold it.
+    fn reserve_one(&mut self, empty: bool) -> Result<(), Unindexed> {
+        let pairs = self.from.capacity().max(self.to.capacity());
+        if empty {
+            if self.empty.len() < self.empty.capacity() {
+                return Ok(());
+            }
+            let other = Self::peak(pairs, 0);
+            let cap = self
+                .grown(self.empty.len(), PEAK_BYTES_PER_EMPTY, other)
+                .ok_or(Unindexed::OverBudget)?;
+            self.empty.reserve_exact(cap - self.empty.len());
+        } else {
+            if self.from.len() < pairs {
+                return Ok(());
+            }
+            let other = Self::peak(0, self.empty.capacity());
+            let cap = self
+                .grown(self.from.len(), PEAK_BYTES_PER_PAIR, other)
+                .ok_or(Unindexed::OverBudget)?;
+            self.from.reserve_exact(cap - self.from.len());
+            self.to.reserve_exact(cap - self.to.len());
+        }
+        // `reserve_exact` may hand out more than asked; hold that to the
+        // bound as well.
+        let reserved = Self::peak(
+            self.from.capacity().max(self.to.capacity()),
+            self.empty.capacity(),
+        );
+        if reserved > self.budget {
+            return Err(Unindexed::OverBudget);
+        }
+        Ok(())
+    }
+
     fn push(
         &mut self,
         slot: usize,
@@ -261,34 +325,42 @@ impl Builder {
         empty: bool,
     ) -> Result<(), Unindexed> {
         let slot = u32::try_from(slot).map_err(|_| Unindexed::OverBudget)?;
-        let bytes =
-            (self.from.len() + 1) * BYTES_PER_ROW + (self.empty.len() + 1) * size_of::<u32>();
-        if bytes > self.budget {
-            return Err(Unindexed::OverBudget);
+        let keys = if empty {
+            None
+        } else {
+            let from = from_key(from).ok_or(Unindexed::Unrepresentable)?;
+            let to = to_key(to, self.convention).ok_or(Unindexed::Unrepresentable)?;
+            Some((from, to))
+        };
+        self.reserve_one(empty)?;
+        match keys {
+            None => self.empty.push(slot),
+            Some((from, to)) => {
+                self.from.push((from, slot));
+                self.to.push((to, slot));
+            }
         }
-        if empty {
-            self.empty.push(slot);
-            return Ok(());
-        }
-        let from = from_key(from).ok_or(Unindexed::Unrepresentable)?;
-        let to = to_key(to, self.convention).ok_or(Unindexed::Unrepresentable)?;
-        self.from.push((from, slot));
-        self.to.push((to, slot));
         Ok(())
     }
 
-    fn finish(mut self) -> EndpointIndex {
-        self.from.sort_unstable();
-        self.to.sort_unstable();
-        let (from_keys, from_slots) = self.from.into_iter().unzip();
-        let (to_keys, to_slots) = self.to.into_iter().unzip();
+    /// Sort each side and split it into its kept arrays, one side at a
+    /// time, so a side's pair buffer is freed before the next is split.
+    fn finish(self) -> EndpointIndex {
+        fn split(mut pairs: Vec<(i64, u32)>) -> (Vec<i64>, Vec<u32>) {
+            pairs.sort_unstable();
+            pairs.into_iter().unzip()
+        }
+        let (from_keys, from_slots) = split(self.from);
+        let (to_keys, to_slots) = split(self.to);
+        let mut empty_slots = self.empty;
+        empty_slots.shrink_to_fit();
         EndpointIndex {
             convention: self.convention,
             from_keys,
             from_slots,
             to_keys,
             to_slots,
-            empty_slots: self.empty,
+            empty_slots,
         }
     }
 }
@@ -378,7 +450,11 @@ pub(crate) struct ElementMasks {
 
 impl ElementMasks {
     fn bytes(&self) -> usize {
-        (self.nodes.len().div_ceil(64) + self.edges.len().div_ceil(64)) * size_of::<u64>()
+        Self::bytes_for(self.nodes.len(), self.edges.len())
+    }
+
+    fn bytes_for(nodes: usize, edges: usize) -> usize {
+        (nodes.div_ceil(64) + edges.div_ceil(64)) * size_of::<u64>()
     }
 }
 
@@ -438,9 +514,13 @@ impl IndexCache {
     }
 
     /// Evict cached masks, oldest first, until `extra` more bytes fit the
-    /// cap beside what is held. `false` when they cannot fit.
+    /// cap beside what is held. `false`, with nothing evicted, when they
+    /// cannot fit even beside no mask.
     fn make_room(&mut self, extra: usize, cap: usize) -> bool {
         let arrays = self.array_bytes();
+        if arrays.saturating_add(extra) > cap {
+            return false;
+        }
         while arrays + self.mask_bytes() + extra > cap {
             if self.masks.pop_front().is_none() {
                 return false;
@@ -575,8 +655,9 @@ fn template_targets<'g>(
 pub(crate) struct ResolvedFilter {
     /// The targets the masks cover, each with its segment.
     pub(crate) key: SegmentKey,
-    /// `None` when no target is indexed, or when [`Self::timeless`] holds
-    /// (the plain plan answers).
+    /// `None` when no target is indexed, when [`Self::timeless`] holds (the
+    /// plain plan answers), or when the masks do not fit the byte cap (their
+    /// targets then move to `guarded` and `key` is empty).
     pub(crate) masks: Option<Arc<ElementMasks>>,
     /// Targets the masks do not cover — Disk mode, an unreadable or
     /// sub-microsecond bound, the byte cap, a range selector or a
@@ -630,7 +711,16 @@ pub(crate) fn resolve(
             }
         }
     }
-    let masks = (!timeless && !parts.is_empty()).then(|| cached_masks(graph, &key, &parts));
+    let masks = if timeless || parts.is_empty() {
+        None
+    } else {
+        let masks = cached_masks(graph, &key, &parts);
+        if masks.is_none() {
+            // No room for the masks: every indexed target keeps its guards.
+            guarded.extend(key.drain(..).map(|(target, _)| target));
+        }
+        masks
+    };
     ResolvedFilter {
         key,
         masks,
@@ -639,32 +729,35 @@ pub(crate) fn resolve(
     }
 }
 
+/// The masks for `key`, from the cache or built and cached under the byte
+/// cap; `None` when they cannot fit the cap even with every cached mask
+/// evicted, and nothing is allocated or evicted then. Held under the cache
+/// lock throughout, so the room made is the room used.
 fn cached_masks(
     graph: &DirGraph,
     key: &SegmentKey,
     parts: &[(Arc<EndpointIndex>, Segment, bool)],
-) -> Arc<ElementMasks> {
-    let version = graph.version();
-    {
-        let mut write = write_cache(graph);
-        let cache = write.get_or_insert_with(IndexCache::default).at(version);
-        if let Some(pos) = cache.masks.iter().position(|(k, _)| k == key) {
-            let entry = cache.masks.remove(pos).expect("position is in range");
-            let masks = Arc::clone(&entry.1);
-            cache.masks.push_back(entry);
-            return masks;
-        }
-    }
-    let masks = Arc::new(build_masks(graph, parts));
+) -> Option<Arc<ElementMasks>> {
     let mut write = write_cache(graph);
-    let cache = write.get_or_insert_with(IndexCache::default).at(version);
+    let cache = write
+        .get_or_insert_with(IndexCache::default)
+        .at(graph.version());
+    if let Some(pos) = cache.masks.iter().position(|(k, _)| k == key) {
+        let entry = cache.masks.remove(pos).expect("position is in range");
+        let masks = Arc::clone(&entry.1);
+        cache.masks.push_back(entry);
+        return Some(masks);
+    }
+    let needed = ElementMasks::bytes_for(graph.graph.node_bound(), graph.graph.edge_bound());
+    if !cache.make_room(needed, cache.cap()) {
+        return None;
+    }
     if cache.masks.len() >= MAX_CACHED_MASKS {
         cache.masks.pop_front();
     }
-    if cache.make_room(masks.bytes(), cache.cap()) {
-        cache.masks.push_back((key.clone(), Arc::clone(&masks)));
-    }
-    masks
+    let masks = Arc::new(build_masks(graph, parts));
+    cache.masks.push_back((key.clone(), Arc::clone(&masks)));
+    Some(masks)
 }
 
 fn build_masks(graph: &DirGraph, parts: &[(Arc<EndpointIndex>, Segment, bool)]) -> ElementMasks {
@@ -686,6 +779,16 @@ fn build_masks(graph: &DirGraph, parts: &[(Arc<EndpointIndex>, Segment, bool)]) 
         index.clear_invalid(*segment, bits);
     }
     masks
+}
+
+/// Drop every cached index and mask. The version moves only when a
+/// statement commits, so the write engine calls this after each writing
+/// clause: a later read in the same statement walks the rows it wrote.
+pub(crate) fn invalidate(graph: &DirGraph) {
+    if let Some(cache) = write_cache(graph).as_mut() {
+        cache.targets.clear();
+        cache.masks.clear();
+    }
 }
 
 /// Replace the byte cap for this graph's endpoint indexes.

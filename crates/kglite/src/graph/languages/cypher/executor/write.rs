@@ -439,6 +439,7 @@ fn run_clause_pipeline(
             continue;
         }
 
+        let mut wrote = true;
         match clause {
             Clause::Create(create) => {
                 result_set = execute_create(graph, create, result_set, params, stats, interrupt)?;
@@ -514,6 +515,7 @@ fn run_clause_pipeline(
                 schema_ddl::execute_schema_mutation(graph, command, stats, interrupt)?;
             }
             _ => {
+                wrote = false;
                 let executor = CypherExecutor::with_params(graph, params, interrupt.deadline)
                     .with_cancel(interrupt.cancel)
                     .with_budget(budget.clone())
@@ -532,6 +534,11 @@ fn run_clause_pipeline(
             }
         }
 
+        // The graph version moves only at commit; a read later in this
+        // statement must not answer from what the cache held before the write.
+        if wrote {
+            crate::graph::features::temporal::endpoint_index::invalidate(graph);
+        }
         budget.check_rows(result_set.rows.len(), &clause_display_name(clause))?;
         super::mutation_support::check_budget(budget, stats)?;
 

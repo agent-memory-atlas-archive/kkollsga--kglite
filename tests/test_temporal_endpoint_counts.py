@@ -6,7 +6,9 @@ ISO string), and ``describe()`` prints them when a write has left any.
 
 The counts come from the per-version walk the endpoint index is built by, so
 a write between two reads must show in the second: every write moves the
-graph version, and nothing is served from the first read's walk.
+graph version, and nothing is served from the first read's walk. Inside one
+statement the version moves only at commit, so the write engine drops the
+cache after each writing clause.
 
 Red proof: before the columns existed, yielding them failed as an unknown
 column; the same-day inverted-datetime case returned the row.
@@ -73,6 +75,30 @@ def test_each_write_between_two_reads_shows_in_the_second(storage, tmp_path) -> 
     assert _counts(g) == [{"name": "Status", "empty_rows": 2, "unreadable_rows": 1}]
     g.cypher("MATCH (s:Status) WHERE s.id IN [1, 3, 4] SET s.vt = null").to_list()
     assert _counts(g) == [{"name": "Status", "empty_rows": 0, "unreadable_rows": 0}]
+
+
+@pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
+def test_a_write_shows_in_a_later_read_of_the_same_statement(storage, tmp_path) -> None:
+    """The version moves only when the statement commits, so a read that
+    filled the cache earlier in the statement must not answer a read after
+    its write."""
+    g = _graph(storage, tmp_path)
+    rows = g.cypher(
+        "CALL db.temporal.declarations() YIELD empty_rows AS before WITH before "
+        "MATCH (s:Status {id: 1}) SET s.vt = date('1990-01-01') "
+        "WITH before, count(*) AS written "
+        "CALL db.temporal.declarations() YIELD empty_rows, unreadable_rows "
+        "RETURN before, empty_rows, unreadable_rows"
+    ).to_list()
+    assert rows == [{"before": 0, "empty_rows": 1, "unreadable_rows": 0}]
+    rows = g.cypher(
+        "CALL db.temporal.declarations() YIELD unreadable_rows AS before WITH before "
+        "CREATE (:Status {id: 3, vf: date('2006-01-01'), vt: 'someday'}) "
+        "WITH before CALL db.temporal.declarations() YIELD unreadable_rows "
+        "RETURN before, unreadable_rows"
+    ).to_list()
+    assert rows == [{"before": 0, "unreadable_rows": 1}]
+    assert _counts(g) == [{"name": "Status", "empty_rows": 1, "unreadable_rows": 1}]
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)

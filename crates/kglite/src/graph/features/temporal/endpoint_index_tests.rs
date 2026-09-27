@@ -282,14 +282,17 @@ const WELLS: &[&str] = &[
     "MATCH (w:Well) CREATE (w)-[:LICENSED {lf: date('2005-01-01'), lt: date('2015-12-31')}]->(:Company {id: w.id})",
 ];
 
+fn licensed() -> TemporalTarget {
+    TemporalTarget::Relationship {
+        rel_type: "LICENSED".into(),
+        source_type: None,
+    }
+}
+
 fn declared_wells() -> DirGraph {
     let mut g = graph(WELLS);
     declare(&mut g, &node("Well"), "vf", "vt", CLOSED).unwrap();
-    let licensed = TemporalTarget::Relationship {
-        rel_type: "LICENSED".into(),
-        source_type: None,
-    };
-    declare(&mut g, &licensed, "lf", "lt", CLOSED).unwrap();
+    declare(&mut g, &licensed(), "lf", "lt", CLOSED).unwrap();
     g
 }
 
@@ -565,4 +568,74 @@ fn a_node_carrying_two_declared_labels_must_be_valid_under_both() {
     assert!(!valid("2003-01-01"), "Field has not started");
     assert!(valid("2007-01-01"));
     assert!(!valid("2012-01-01"), "Asset has ended");
+}
+
+/// Bytes the build can hold at its current capacities, by the bound the
+/// module states: 48 per reserved pair slot, 8 per reserved empty slot.
+fn working_bytes(builder: &Builder) -> usize {
+    48 * builder.from.capacity().max(builder.to.capacity()) + 8 * builder.empty.capacity()
+}
+
+#[test]
+fn the_build_is_refused_before_an_allocation_would_pass_its_budget() {
+    let d = |n| Some(Instant::Date(day(n)));
+    for (budget, every_nth_empty) in [(48 * 40 + 7, 0), (48 * 25 + 8 * 9, 3), (47, 0)] {
+        let mut builder = Builder::new(CLOSED, budget);
+        let mut accepted = 0;
+        let refused_at = loop {
+            let empty = every_nth_empty != 0 && accepted % every_nth_empty == 0;
+            let capacities = (
+                builder.from.capacity(),
+                builder.to.capacity(),
+                builder.empty.capacity(),
+            );
+            match builder.push(accepted, d(1), d(2), empty) {
+                Ok(()) => {
+                    accepted += 1;
+                    assert!(
+                        working_bytes(&builder) <= budget,
+                        "{budget}: {accepted} rows"
+                    );
+                }
+                Err(reason) => {
+                    assert_eq!(reason, Unindexed::OverBudget);
+                    // Refused before reserving anything more.
+                    let after = (
+                        builder.from.capacity(),
+                        builder.to.capacity(),
+                        builder.empty.capacity(),
+                    );
+                    assert_eq!(after, capacities, "{budget}");
+                    break capacities;
+                }
+            }
+        };
+        // Not refused early: the next row could not have fit in any growth.
+        let pairs = builder.from.len();
+        let empties = builder.empty.len();
+        let (pair_cap, empty_cap) = (refused_at.0, refused_at.2);
+        let pair_full = pairs == pair_cap && 48 * (pair_cap + 1) + 8 * empty_cap > budget;
+        let empty_full = empties == empty_cap && 48 * pair_cap + 8 * (empty_cap + 1) > budget;
+        assert!(pair_full || empty_full, "{budget}: refused with room left");
+        if accepted > 0 {
+            assert!(builder.finish().bytes() <= budget);
+        }
+    }
+}
+
+#[test]
+fn a_mask_that_cannot_fit_evicts_nothing_and_leaves_its_targets_guarded() {
+    let g = declared_wells();
+    let first = resolved(&g, date("2005-06-01"));
+    let arrays = read_cache(&g).as_ref().unwrap().array_bytes();
+    let one_mask = first.masks.as_ref().unwrap().bytes();
+    set_byte_cap(&g, arrays + one_mask - 1);
+    let second = resolved(&g, date("2016-06-01"));
+    assert!(second.masks.is_none());
+    assert_eq!(second.guarded, vec![node("Well"), licensed()]);
+    assert!(!second.timeless);
+    let cache = read_cache(&g);
+    let cache = cache.as_ref().unwrap();
+    assert_eq!(cache.masks.len(), 1, "the cached mask is kept");
+    assert_eq!(cache.masks[0].0, first.key);
 }

@@ -292,9 +292,9 @@ fn refuse_context(
     if rendering_only {
         return Ok(());
     }
-    // Resolved against the endpoint index as execution will resolve it, so
-    // the index is built and exercised on every storage mode before the
-    // refusal below.
+    // Resolved as execution will resolve it before the refusal below: in
+    // memory and mapped storage that builds the endpoint index; Disk builds
+    // none, so there the walk only counts and every target stays guarded.
     let _resolved = resolve_filter(query, context, graph, params)?.resolve(graph);
     Err(NOT_EXECUTABLE_YET.to_string())
 }

@@ -38,10 +38,12 @@ before upgrading.
   (`empty=` / `unreadable=` inside a combined `temporal` attribute) when any
   are present. Rust: `DeclarationInfo` gains the `empty_rows` and
   `unreadable_rows` fields, so a struct literal of it needs both. The counts
-  come from a per-graph index of each declared type's interval endpoints,
-  rebuilt after a write; under `FOR VALID_TIME AS OF` with a literal instant
-  the planner also takes each declared label's count at that instant, not its
-  full count, when choosing where a pattern starts.
+  come from a walk over each declared type's rows, repeated after a write
+  (including a write earlier in the same statement). In memory and mapped
+  storage the walk also builds an index of the type's interval endpoints when
+  every bound is readable and it fits a byte cap; under `FOR VALID_TIME AS OF`
+  with a literal instant the planner takes each indexed label's count at that
+  instant, not its full count, when choosing where a pattern starts.
 - Cypher: `valid_at(entity, date)` and `valid_during(entity, start, end)` read
   the bounds and convention from the entity type's declared validity interval
   (`db.temporal.declare`, a loader's `validFrom`/`validTo`, `set_temporal`), as
