@@ -307,6 +307,12 @@ before upgrading.
   different nodes. The id index now holds one node per id, the last in the
   type's node order, whatever the kinds.
 
+- `to_subgraph()` and `save_subset()` on a mapped or disk graph copied every
+  row of each selected node's type onto the heap (the copy shared the source's
+  file-backed column stores, and its first write cloned them whole); in memory
+  mode it held a full copy of each such store too. The copy now holds only the
+  selected nodes' rows.
+
 - Disk: a reopened disk graph whose saved id index held a float id (`{id:
   1.0}`) returned no rows for `MATCH (n:T {id: 1})`; the saved index now
   answers every numeric spelling of an id as the in-memory one does. A type

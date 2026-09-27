@@ -1,6 +1,7 @@
 // src/graph/subgraph.rs
 //! Subgraph extraction and selection expansion operations
 
+use crate::datatypes::values::Value;
 use crate::graph::schema::{CurrentSelection, DirGraph, EdgeData, SchemaInstall};
 use crate::graph::storage::{GraphRead, GraphWrite};
 use petgraph::graph::{EdgeIndex, NodeIndex};
@@ -80,7 +81,8 @@ pub fn extract_subgraph(
 /// relationship between two of them that `keep_edge` accepts, with the
 /// source's secondary labels, ontology and schema. The map takes each copied
 /// source node to its new index. Temporal declarations, embeddings, text and
-/// vector indexes, spatial config and id indexes are not copied.
+/// vector indexes, spatial config and id indexes are not copied. The copy's
+/// column stores hold only the copied nodes' rows.
 pub(crate) fn copy_induced_subgraph(
     source: &DirGraph,
     nodes: &[NodeIndex],
@@ -98,53 +100,37 @@ pub(crate) fn copy_induced_subgraph(
     // Copy type schemas so compact property storage works correctly
     new_graph.type_schemas = source.type_schemas.clone();
 
-    // Carry the source's column stores. A copied node keeps its `row_id`, and
-    // that row id means nothing without the store the backend owns — the node
-    // does not carry its own `Arc`, so its properties do not travel with it.
-    // Sharing the `Arc` keeps every row id valid; the rows belonging to
-    // unselected nodes are orphans, which `enable_columnar` already detects
-    // and compacts away on the next save.
-    for (type_key, store) in source
-        .graph
-        .column_stores_iter()
-        .map(|(k, v)| (k, Arc::clone(v)))
-        .collect::<Vec<_>>()
-    {
-        GraphWrite::install_column_store(&mut new_graph.graph, type_key, store);
-    }
-
     // Map from old node indices to new node indices
     let mut index_map: HashMap<NodeIndex, NodeIndex> = HashMap::with_capacity(nodes.len());
 
-    // Copy selected nodes
+    // Each node is inserted into the copy's own column stores, read through
+    // `GraphRead`: the copy never shares the source's store `Arc`s, so its
+    // heap is its own rows — a mapped or disk store is file-backed, and the
+    // first write into a shared one would clone every row of the type.
     for &old_idx in nodes {
-        if let Some(node_data) = source.graph.node_weight(old_idx) {
-            // Add to new graph (single clone instead of double)
-            let new_idx = GraphWrite::add_node(&mut new_graph.graph, node_data.clone());
-            index_map.insert(old_idx, new_idx);
-            if let Some(node) = source.graph.node_view(old_idx) {
-                let mut title = node.title().into_owned();
-                crate::graph::session::snapshot_property_values(
-                    &source.graph,
-                    std::iter::once(&mut title),
-                );
-                GraphWrite::set_node_title(&mut new_graph.graph, new_idx, title);
-                let mut properties = node.property_pairs();
-                crate::graph::session::snapshot_property_values(
-                    &source.graph,
-                    properties.iter_mut().map(|(_, value)| value),
-                );
-                for (key, value) in properties {
-                    GraphWrite::set_node_property(&mut new_graph.graph, new_idx, key, value);
-                }
-            }
-
-            // Update type indices
-            new_graph
-                .type_indices
-                .entry_or_default(node_data.node_type_str(&source.interner).to_string())
-                .push(new_idx);
-        }
+        let Some(node) = source.graph.node_view(old_idx) else {
+            continue;
+        };
+        let node_type = node.node_type_str(&source.interner).to_string();
+        let mut id = node.id().into_owned();
+        let mut title = node.title().into_owned();
+        let mut properties = node.property_pairs();
+        crate::graph::session::snapshot_property_values(
+            &source.graph,
+            [&mut id, &mut title]
+                .into_iter()
+                .chain(properties.iter_mut().map(|(_, value)| value)),
+        );
+        let properties: HashMap<String, Value> = properties
+            .into_iter()
+            .map(|(key, value)| (source.interner.resolve(key).to_string(), value))
+            .collect();
+        let new_idx = new_graph.insert_node_routed(id, title, &node_type, properties);
+        index_map.insert(old_idx, new_idx);
+        new_graph
+            .type_indices
+            .entry_or_default(node_type)
+            .push(new_idx);
     }
 
     // Copy edges between selected nodes

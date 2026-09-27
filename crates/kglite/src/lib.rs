@@ -33,6 +33,12 @@ pub mod graphgen;
 pub mod okf;
 pub mod param;
 pub(crate) mod serde_codec;
+#[cfg(test)]
+pub(crate) mod test_alloc;
+
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: test_alloc::Counting = test_alloc::Counting;
 
 /// Curated stable Rust API. Downstream consumers should depend on
 /// items here, not on the underlying module structure (which may

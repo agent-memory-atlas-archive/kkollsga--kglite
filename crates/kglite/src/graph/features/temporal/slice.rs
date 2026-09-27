@@ -18,17 +18,23 @@
 //! temporal declarations (the slice is already as of its instant),
 //! embeddings, text or vector indexes.
 //!
-//! Two caps bound it. Every mode: the slice's estimated bytes (see
+//! The copy is a fresh in-memory graph with its own column stores, holding
+//! only the kept nodes' rows; it never shares the base's stores, which in
+//! mapped and Disk mode are file-backed and would be copied onto the heap
+//! whole by the first write.
+//!
+//! Two caps bound it. Every mode: the slice's bytes (see
 //! [`ValidSlice::bytes`]) against [`SLICE_BYTE_CAP`] — over it the slice is
 //! refused, and the cache of slices evicts oldest first to stay under it.
 //! Disk mode also counts admitted elements against
 //! [`DISK_SLICE_ELEMENT_CAP`] while it walks, and refuses as soon as the walk
-//! passes it, so the node and relationship lists never grow past it.
+//! passes it. The walk holds only the admitted nodes and relationships —
+//! nothing sized by the base graph — so on Disk its lists never grow past
+//! the cap.
 
 use std::sync::Arc;
 
-use fixedbitset::FixedBitSet;
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{EdgeIndex, NodeIndex};
 
 use super::endpoint_index::SegmentKey;
 use super::eval::Instant;
@@ -100,12 +106,11 @@ impl ValidSlice {
         self.to_base.binary_search(&base).ok().map(NodeIndex::new)
     }
 
-    /// The slice's estimated heap bytes, the figure the caps judge: the node
-    /// and relationship records with their property slots, and the column
-    /// stores of every type the slice keeps a node of (the copy writes each
-    /// kept node's properties back, which copies its type's shared store).
-    /// Heap payloads behind a property value (a long string, a list) are not
-    /// counted.
+    /// The slice's heap bytes, the figure the caps judge: an estimate of the
+    /// node and relationship records with their property slots, plus the
+    /// measured heap of the slice's own column stores (which hold only the
+    /// kept nodes' rows). Heap payloads behind a relationship property value
+    /// (a long string, a list) are not counted.
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -175,33 +180,22 @@ pub(crate) fn slice_at(
         cap: caps.disk_elements,
         admitted: 0,
     };
-    let mut kept_nodes = FixedBitSet::with_capacity(base.graph.node_bound());
     let mut nodes = Vec::new();
     let mut properties = 0usize;
-    let mut kept_types: Vec<InternedKey> = Vec::new();
-    let mut indices: Vec<NodeIndex> = base.graph.node_indices().collect();
-    indices.sort_unstable();
-    for idx in indices {
+    for idx in base.graph.node_indices() {
         if filter.is_some_and(|f| !f.admits_node(base, idx)) {
             continue;
         }
         budget.admit()?;
-        kept_nodes.insert(idx.index());
         nodes.push(idx);
         properties += base.graph.node_property_count(idx);
-        if let Some(node_type) = base.graph.node_type_of(idx) {
-            if !kept_types.contains(&node_type) {
-                kept_types.push(node_type);
-            }
-        }
     }
-    let mut kept_edges = FixedBitSet::with_capacity(base.graph.edge_bound());
-    let mut edges = 0usize;
+    nodes.sort_unstable();
+    let mut kept_edges: Vec<EdgeIndex> = Vec::new();
     for &source in &nodes {
         for edge in base.graph.edges(source) {
-            let target = edge.target();
             let weight = edge.weight();
-            if !kept_nodes.contains(target.index())
+            if nodes.binary_search(&edge.target()).is_err()
                 || filter.is_some_and(|f| {
                     !f.admits_edge(base, edge.id(), weight.connection_type, source)
                 })
@@ -209,31 +203,21 @@ pub(crate) fn slice_at(
                 continue;
             }
             budget.admit()?;
-            kept_edges.grow(edge.id().index() + 1);
-            kept_edges.insert(edge.id().index());
-            edges += 1;
+            kept_edges.push(edge.id());
             properties += weight.properties.len();
         }
     }
     if let Some(err) = filter.and_then(ElementFilter::error) {
         return Err(err.to_string());
     }
-    let stores: usize = kept_types
-        .iter()
-        .filter_map(|t| base.graph.column_store(*t))
-        .map(|store| store.heap_bytes())
-        .sum();
-    let bytes =
-        nodes.len() * NODE_BYTES + edges * EDGE_BYTES + properties * PROPERTY_BYTES + stores;
-    if bytes > caps.bytes {
-        return Err(format!(
-            "the valid slice would take about {} MiB, over the {} MiB slice cap \
-             ({SLICE_BYTE_CAP_ENV})",
-            bytes.div_ceil(1 << 20),
-            caps.bytes >> 20
-        ));
-    }
-    let (graph, _) = copy_induced_subgraph(base, &nodes, |edge| kept_edges.contains(edge.index()))?;
+    // Refused before the copy on the records alone; the copy's own stores
+    // are then measured and judged again.
+    let records =
+        nodes.len() * NODE_BYTES + kept_edges.len() * EDGE_BYTES + properties * PROPERTY_BYTES;
+    over_cap(records, caps)?;
+    kept_edges.sort_unstable();
+    let (graph, _) =
+        copy_induced_subgraph(base, &nodes, |edge| kept_edges.binary_search(&edge).is_ok())?;
     debug_assert!(
         graph
             .graph
@@ -242,6 +226,13 @@ pub(crate) fn slice_at(
             .all(|(i, idx)| idx.index() == i),
         "a fresh graph numbers the copied nodes densely, in copy order"
     );
+    let stores: usize = graph
+        .graph
+        .column_stores_iter()
+        .map(|(_, store)| store.heap_bytes())
+        .sum();
+    let bytes = records + stores;
+    over_cap(bytes, caps)?;
     Ok(ValidSlice {
         graph: Arc::new(graph),
         to_base: nodes,
@@ -249,6 +240,22 @@ pub(crate) fn slice_at(
     })
 }
 
+fn over_cap(bytes: usize, caps: SliceCaps) -> Result<(), String> {
+    if bytes > caps.bytes {
+        return Err(format!(
+            "the valid slice would take about {} MiB, over the {} MiB slice cap \
+             ({SLICE_BYTE_CAP_ENV})",
+            bytes.div_ceil(1 << 20),
+            caps.bytes >> 20
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "slice_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "slice_memory_tests.rs"]
+mod memory_tests;
