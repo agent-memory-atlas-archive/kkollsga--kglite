@@ -462,3 +462,48 @@ fn an_id_seek_reads_no_other_ids_bounds() {
     let err = error(&graph, &at("1950-01-01", "MATCH (m:Muni) RETURN m.name"));
     assert!(err.contains("node '999'"), "{err}");
 }
+
+/// [`rows`] with the streaming pipeline on (the Python surface's setting);
+/// `rows` runs eager, where the pipeline is off.
+fn streamed_rows(graph: &DirGraph, query: &str) -> Vec<Vec<Value>> {
+    let params = HashMap::new();
+    let options = ExecuteOptions {
+        lazy_eligible: true,
+        ..ExecuteOptions::eager(&params)
+    };
+    let result = execute_read(graph, query, &options).unwrap_or_else(|e| panic!("{query}: {e}"));
+    assert!(
+        result.result.lazy.is_none(),
+        "{query}: a guarded scope never goes lazy"
+    );
+    let mut rows = result.result.rows;
+    rows.sort_by_key(|row| format!("{row:?}"));
+    rows
+}
+
+/// Every shape the streaming pipeline absorbs — a grouped aggregate in
+/// `RETURN` or `WITH` (with its `WHERE`), `DISTINCT` over a node and over a
+/// value, a subquery argument, and the `ORDER BY … LIMIT` heap — answers
+/// under a context as the materialized path does, over the valid rows only.
+#[test]
+fn the_streaming_pipeline_answers_as_the_materialized_path_under_a_context() {
+    let graph = network();
+    for query in [
+        "MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t)",
+        "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id, count(t)",
+        "MATCH (s:Stop)-[r:LINK]->(t) RETURN count(DISTINCT t.id), count(*), count(r)",
+        "MATCH (s:Stop)-[:LINK]->(t) WITH s, count(t) AS c WHERE c > 0 RETURN s.id, c",
+        "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(*) AS c ORDER BY s DESC LIMIT 2",
+        "MATCH (s:Stop)-[:LINK]->(t) RETURN min(t.id), max(t.id), sum(t.id), avg(t.id)",
+        "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id, sum(COUNT { (t)-[:LINK]->() }) AS n",
+    ] {
+        let context = at("2008-01-01", query);
+        let materialized = rows(&graph, &context);
+        assert_eq!(streamed_rows(&graph, &context), materialized, "{query}");
+        assert_ne!(
+            materialized,
+            rows(&graph, query),
+            "{query}: filters nothing"
+        );
+    }
+}

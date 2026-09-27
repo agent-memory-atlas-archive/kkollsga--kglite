@@ -89,12 +89,22 @@ QUERIES = [
     "MATCH (n) RETURN n.uid AS u, COUNT { (n)-[:S]-() } AS c",
     "MATCH (n) RETURN n.uid AS u, size([(n)-->(m) | m.uid]) AS c",
     "MATCH (n:A) RETURN n.uid AS u, [p = (n)-[:R]->() | length(p)] AS ls",
+    # The streaming pipeline over matched rows: grouped aggregates, DISTINCT
+    # over a node and a value, WITH … WHERE, and the ORDER BY … LIMIT heap.
+    "MATCH (a:A)-[:R*1..3]->(b) RETURN count(DISTINCT b) AS c",
+    "MATCH (a)-[r:S]->(b) RETURN a.uid AS a, count(b) AS c, count(DISTINCT b.uid) AS d",
+    "MATCH (a)-[:R|S]-(b) WITH a, count(*) AS c WHERE c > 1 RETURN a.uid AS a, c",
+    "MATCH (a)-[:R]->(b) RETURN a.uid AS a, sum(b.uid) AS s ORDER BY a DESC LIMIT 3",
+    "MATCH (a)-->(b) RETURN min(b.uid) AS lo, max(b.uid) AS hi, avg(b.uid) AS m",
     # shortestPath and allShortestPaths.
     "MATCH (a:A), (b:B) MATCH p = shortestPath((a)-[*]-(b)) RETURN a.uid AS a, b.uid AS b, length(p) AS l",
     "MATCH (a:A), (b) WHERE a <> b MATCH p = allShortestPaths((a)-[:R|S*]->(b)) "
     "RETURN a.uid AS a, b.uid AS b, [r IN relationships(p) | r.eid] AS rs",
 ]
-ORDERED = {"MATCH (n:A) RETURN n.uid AS u ORDER BY u DESC LIMIT 3"}
+ORDERED = {
+    "MATCH (n:A) RETURN n.uid AS u ORDER BY u DESC LIMIT 3",
+    "MATCH (a)-[:R]->(b) RETURN a.uid AS a, sum(b.uid) AS s ORDER BY a DESC LIMIT 3",
+}
 
 YEARS = list(range(2000, 2011))
 BOUND = st.one_of(

@@ -526,6 +526,29 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "pattern_comprehension_path",
         ("MATCH (s:Stop) RETURN s.id AS s, [p = (s)-[:LINK*1..2]->() | length(p)] AS ls"),
     ),
+    # The streaming pipeline under a context: grouped aggregates in RETURN
+    # and WITH (with its WHERE), DISTINCT over a node and a value, a
+    # subquery argument and the ORDER BY … LIMIT heap, over matched rows.
+    *_network_context_pair(
+        "streaming_var_length_distinct",
+        ("MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t) AS c"),
+    ),
+    *_network_context_pair(
+        "streaming_group_count",
+        ("MATCH (s:Stop)-[r:LINK]->(t) RETURN s.id AS s, count(t) AS c, count(DISTINCT t.id) AS d"),
+    ),
+    *_network_context_pair(
+        "streaming_with_where",
+        ("MATCH (s:Stop)-[:LINK]->(t) WITH s, count(t) AS c WHERE c > 0 RETURN s.id AS s, c"),
+    ),
+    *_network_context_pair(
+        "streaming_top_k",
+        ("MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(*) AS c ORDER BY s DESC LIMIT 2"),
+    ),
+    *_network_context_pair(
+        "streaming_subquery_argument",
+        ("MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, sum(COUNT { (t)-[:LINK]->() }) AS n, avg(t.id) AS m"),
+    ),
     *_network_context_pair(
         "count_subquery_undirected",
         ("MATCH (s:Stop) RETURN s.id AS s, COUNT { (s)-[:LINK]-() } AS c"),

@@ -297,9 +297,12 @@ impl CypherExecutor<'_> {
 
             // Streaming-pipeline path: absorb a contiguous run of clauses.
             // A bail returns the input unchanged for materialized dispatch.
+            // It also runs under a valid-time guard: it never starts at a
+            // MATCH, so it reads only rows an earlier clause matched, and it
+            // evaluates their expressions through this (filtered) executor,
+            // as the materialized projection does.
             if self.streaming
                 && !profiling
-                && query.guard.is_none()
                 && inline_where.is_none()
                 && !matches!(clause, Clause::Match(_) | Clause::OptionalMatch(_))
                 && !(preserved.is_some()
