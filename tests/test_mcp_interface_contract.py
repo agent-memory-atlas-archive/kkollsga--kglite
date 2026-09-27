@@ -66,6 +66,29 @@ def capture_mcp_contract(base: Path) -> dict[str, list[dict]]:
         encoding="utf-8",
     )
 
+    # A recipe catalogue publishes the fixed pair and a named tool, each
+    # taking `valid_at` beside the query's own variables.
+    recipe_manifest = base / "recipe_mcp.yaml"
+    recipe_manifest.write_text(
+        "name: Recipe Contract\n"
+        "extensions:\n"
+        "  cypher_recipes:\n"
+        "    people:\n"
+        "      description: Person lookups.\n"
+        "      queries:\n"
+        "        in_city:\n"
+        "          description: People in one city.\n"
+        "          tool: people_by_city\n"
+        "          parameters:\n"
+        "            type: object\n"
+        "            properties:\n"
+        "              city: {type: string}\n"
+        "            required: [city]\n"
+        "            additionalProperties: false\n"
+        '          cypher: "MATCH (p:Person {city: $city}) RETURN p.title AS name ORDER BY name"\n',
+        encoding="utf-8",
+    )
+
     return {
         "graph_readonly": _capture(["--graph", str(graph)]),
         "graph_writable": _capture(["--graph", str(graph), "--writable"]),
@@ -75,6 +98,7 @@ def capture_mcp_contract(base: Path) -> dict[str, list[dict]]:
         "graph_writable_scoped": _capture(["--graph", str(graph), "--writable", "--write-scope", "Person,City"]),
         "local_workspace": _capture(["--mcp-config", str(local_manifest)]),
         "manifest_tool": _capture(["--graph", str(graph), "--mcp-config", str(custom_manifest)]),
+        "manifest_recipes": _capture(["--graph", str(graph), "--mcp-config", str(recipe_manifest)]),
     }
 
 
@@ -88,6 +112,13 @@ def test_mcp_tools_list_matches_reviewed_mode_schemas(mcp_contract):
     assert mcp_contract == expected, (
         "MCP tool names/descriptions/input schemas drifted; review and refresh mcp-tools.json"
     )
+
+
+def test_recipe_tools_take_valid_at(mcp_contract):
+    tools = {tool["name"]: tool for tool in mcp_contract["manifest_recipes"]}
+    for name in ("run_recipe_query", "people_by_city"):
+        assert tools[name]["inputSchema"]["properties"]["valid_at"]["type"] in ("string", ["string", "null"]), name
+    assert "valid_at" not in tools["people_by_city"]["inputSchema"]["required"]
 
 
 def test_operator_pinned_write_scope_is_stated_in_the_tool_description(mcp_contract):

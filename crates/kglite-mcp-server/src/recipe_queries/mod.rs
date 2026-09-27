@@ -19,6 +19,8 @@ mod wire;
 mod catalog_tests;
 #[cfg(test)]
 mod result_tests;
+#[cfg(test)]
+mod valid_at_tests;
 
 pub(crate) use description::{catalog_hint, CatalogBudgets, CatalogHint};
 pub(crate) use errors::RecipeErrorEnvelope;

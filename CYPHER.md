@@ -1511,8 +1511,10 @@ of that instant on the declared types. The prefix stands before or after
 `date(…)` / `datetime(…)` of a literal or parameter, or `date()` for today in
 UTC. `datetime()` with no argument is refused there: it reads the local clock,
 and a valid-time instant is UTC.
-Python `cypher(…, valid_at=…)` and the MCP `cypher_query` tool's `valid_at`
-argument write the same prefix.
+Every binding's `valid_at` writes the same prefix: Python
+`KnowledgeGraph.cypher`, `Session.cypher` / `execute`, `Transaction.cypher` and
+`FrozenGraph.cypher`; the MCP `cypher_query`, `run_recipe_query` and named
+recipe tools; Java `ValidAt` on `query` / `queryResult` / `queryBatch`.
 
 ```cypher
 FOR VALID_TIME AS OF date('2010-06-30')
@@ -1592,6 +1594,18 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   Over the mask cap the `vector_score` top-k route steps aside and the
   guarded match answers, testing only the nodes it reaches; the embedding
   query procedures and the algorithms are refused.
+- **The echo.** The result's diagnostics carry a `temporal` object (Python
+  `diagnostics["temporal"]`, the C / Java diagnostics JSON, the MCP
+  `temporal:` line, Bolt's `kglite.temporal` summary key): `axis`, the
+  `instant` resolved (ISO; a datetime in naive UTC), the declared `targets`
+  the statement's patterns reach across every scope, without their bounds
+  (`(:Well)`, `[:LICENSEE]`, `[:LICENSEE from :Field]`), the `route` (`guarded`;
+  `plain` when the timeless exit ran; `view` through a `freeze(valid_at=…)`
+  handle), `retrieval` (`exact_mask` / `hnsw_mask` for a `vector_score`
+  top-k, else null), `slice` (a graph algorithm ran on the valid slice) and
+  `session_version`, the graph version answered — comparable within one
+  process only, as it restarts on load. A statement without a context has no
+  `temporal` object in the serialized forms (`None` under the Python key).
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can

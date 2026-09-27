@@ -205,6 +205,7 @@ def test_vector_top_k_is_exact_over_the_mask(full, reference, rows):
     result = full.cypher(AS_OF + VECTOR_TOP, params=params)
     _close(_pairs(result), expected)
     assert {"actual_mode": "exact", "fallback_reason": "exact_mask"}.items() <= _retrieval(result)[0].items()
+    assert result.diagnostics["temporal"]["retrieval"] == "exact_mask"
     _close(_pairs(full.freeze(valid_at=T).cypher(VECTOR_TOP, params=params)), expected)
     non_null = (
         "MATCH (d:Doc) WHERE vector_score(d, 'body_emb', $v) IS NOT NULL "
@@ -237,6 +238,7 @@ def test_above_the_threshold_the_index_serves_the_admitted_candidates(full, refe
     result = full.cypher(AS_OF + non_null, params=params)
     got = [vid for vid, _ in _pairs(result)]
     assert _retrieval(result)[0]["actual_mode"] == "hnsw_mask"
+    assert result.diagnostics["temporal"]["retrieval"] == "hnsw_mask"
     assert all(vid % 3 == VALID for vid in got) and len(got) == 10
     exact = [vid for vid, _ in _pairs(reference.cypher(non_null.replace("$v)", "$v, {exact: true})"), params=params))]
     assert len(set(got) & set(exact)) >= 9, (got, exact)

@@ -992,6 +992,7 @@ pub struct kglite::api::cypher::QueryDiagnostics
 pub kglite::api::cypher::QueryDiagnostics::elapsed_ms: u64
 pub kglite::api::cypher::QueryDiagnostics::retrieval: alloc::vec::Vec<kglite::api::cypher::RetrievalDiagnostics>
 pub kglite::api::cypher::QueryDiagnostics::row_limit: core::option::Option<usize>
+pub kglite::api::cypher::QueryDiagnostics::temporal: core::option::Option<kglite::api::cypher::TemporalDiagnostics>
 pub kglite::api::cypher::QueryDiagnostics::timeout_ms: core::option::Option<u64>
 pub kglite::api::cypher::QueryDiagnostics::total_rows: core::option::Option<u64>
 pub kglite::api::cypher::QueryDiagnostics::warnings: alloc::vec::Vec<alloc::string::String>
@@ -1053,6 +1054,26 @@ impl core::clone::Clone for kglite::api::cypher::ReturnItem
 pub fn kglite::api::cypher::ReturnItem::clone(&self) -> kglite::api::cypher::ReturnItem
 impl core::fmt::Debug for kglite::api::cypher::ReturnItem
 pub fn kglite::api::cypher::ReturnItem::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::cypher::TemporalDiagnostics
+pub kglite::api::cypher::TemporalDiagnostics::axis: alloc::string::String
+pub kglite::api::cypher::TemporalDiagnostics::instant: alloc::string::String
+pub kglite::api::cypher::TemporalDiagnostics::retrieval: core::option::Option<alloc::string::String>
+pub kglite::api::cypher::TemporalDiagnostics::route: alloc::string::String
+pub kglite::api::cypher::TemporalDiagnostics::session_version: u64
+pub kglite::api::cypher::TemporalDiagnostics::slice: bool
+pub kglite::api::cypher::TemporalDiagnostics::targets: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for kglite::api::cypher::TemporalDiagnostics
+pub fn kglite::api::cypher::TemporalDiagnostics::clone(&self) -> kglite::api::cypher::TemporalDiagnostics
+impl core::cmp::Eq for kglite::api::cypher::TemporalDiagnostics
+impl core::cmp::PartialEq for kglite::api::cypher::TemporalDiagnostics
+pub fn kglite::api::cypher::TemporalDiagnostics::eq(&self, other: &kglite::api::cypher::TemporalDiagnostics) -> bool
+impl core::default::Default for kglite::api::cypher::TemporalDiagnostics
+pub fn kglite::api::cypher::TemporalDiagnostics::default() -> kglite::api::cypher::TemporalDiagnostics
+impl core::fmt::Debug for kglite::api::cypher::TemporalDiagnostics
+pub fn kglite::api::cypher::TemporalDiagnostics::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::cypher::TemporalDiagnostics
+impl serde_core::ser::Serialize for kglite::api::cypher::TemporalDiagnostics
+pub fn kglite::api::cypher::TemporalDiagnostics::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 pub struct kglite::api::cypher::ValueCodec
 pub kglite::api::cypher::ValueCodec::kind: kglite::api::cypher::CodecKind
 pub kglite::api::cypher::ValueCodec::property: alloc::string::String
@@ -3325,6 +3346,7 @@ impl kglite::api::temporal::ValidTimeView
 pub fn kglite::api::temporal::ValidTimeView::as_of(&self) -> &str
 pub fn kglite::api::temporal::ValidTimeView::base(&self) -> &alloc::sync::Arc<kglite::api::DirGraph>
 pub fn kglite::api::temporal::ValidTimeView::cypher_text(&self, query: &str) -> core::result::Result<alloc::string::String, kglite::api::cypher::PrependError>
+pub fn kglite::api::temporal::ValidTimeView::execute_read(&self, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::temporal::ValidTimeView::node_count(&self) -> core::result::Result<usize, kglite::error::KgError>
 pub fn kglite::api::temporal::ValidTimeView::node_types(&self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 pub fn kglite::api::temporal::ValidTimeView::slice(&self) -> core::result::Result<alloc::sync::Arc<kglite::api::temporal::ValidSlice>, kglite::error::KgError>

@@ -415,7 +415,7 @@ impl Session {
     /// `FrozenGraph.cypher`. A mutation query
     /// (`CREATE` / `SET` / `DELETE` / `REMOVE` / `MERGE`) is rejected — use
     /// `Session.execute()` for writes.
-    #[pyo3(signature = (query, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None))]
+    #[pyo3(signature = (query, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, valid_at=None))]
     // The Python boundary mirrors the public query-option surface.
     #[allow(clippy::too_many_arguments)]
     fn cypher(
@@ -427,7 +427,10 @@ impl Session {
         timeout_ms: Option<u64>,
         max_work_units: Option<usize>,
         row_limit: Option<usize>,
+        valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let query = crate::graph::valid_time::prefixed_query(query, valid_at)?;
+        let query = query.as_ref();
         let pre_parsed = cypher::parse_cypher(query).map_err(crate::error_py::kg_to_pyerr)?;
         if cypher::is_mutation_query(&pre_parsed) {
             return Err(crate::error_py::kg_to_pyerr(
@@ -495,10 +498,11 @@ impl Session {
     ///         mutation. See `KnowledgeGraph.cypher` for the exact perimeter.
     ///     git_sha, modified_by: Freshness provenance stamped alongside
     ///         `updated_at` on types that declare `auto_timestamp`.
+    ///     valid_at: Run the query under `FOR VALID_TIME AS OF` this instant.
     ///
     /// Returns the query result (rows for `... RETURN`, otherwise mutation
     /// stats), same shape as `KnowledgeGraph.cypher`.
-    #[pyo3(signature = (query, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None))]
+    #[pyo3(signature = (query, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None))]
     // Python boundary mirrors the public query option surface.
     #[allow(clippy::too_many_arguments)]
     fn execute(
@@ -513,7 +517,10 @@ impl Session {
         write_scope: Option<Vec<String>>,
         git_sha: Option<String>,
         modified_by: Option<String>,
+        valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let query = crate::graph::valid_time::prefixed_query(query, valid_at)?;
+        let query = query.as_ref();
         let mut pre_parsed = cypher::parse_cypher(query).map_err(crate::error_py::kg_to_pyerr)?;
         let param_map = decode_params(params)?;
         let output_csv = pre_parsed.output_format == cypher::OutputFormat::Csv;

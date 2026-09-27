@@ -53,6 +53,7 @@ pub fn execute(
     opts.git_sha = options.git_sha.as_deref();
     opts.modified_by = options.modified_by.as_deref();
     opts.parallel = options.parallel;
+    opts.streaming = true;
 
     let g = make_dir_graph_mut(graph);
     let outcome = execute_mut(g, query, &opts)?;
@@ -75,6 +76,7 @@ pub fn execute_readonly(
         .with_csv_import(CsvImportPolicy::LocalFilesystem)
         .with_parallel(options.parallel);
     opts.deadline = deadline_from(options.timeout_ms);
+    opts.streaming = true;
     Ok(execute_read(graph, query, &opts)?)
 }
 

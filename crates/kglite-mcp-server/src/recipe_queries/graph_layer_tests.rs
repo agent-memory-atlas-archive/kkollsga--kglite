@@ -150,6 +150,7 @@ fn a_graph_only_catalogue_registers_the_routes_and_runs() {
             query: "count".into(),
             variables: serde_json::Map::new(),
             include_cypher: false,
+            valid_at: None,
         },
     )
     .into_call_tool_result();
@@ -461,6 +462,7 @@ fn a_producer_only_catalogue_registers_the_routes_in_the_workspace_modes() {
                 query: "hotspots".into(),
                 variables: serde_json::Map::new(),
                 include_cypher: false,
+                valid_at: None,
             },
         )
         .into_call_tool_result();

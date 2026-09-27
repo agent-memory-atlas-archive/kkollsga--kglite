@@ -150,6 +150,7 @@ pub(crate) fn run_cypher_write_output(
     // Snapshot the embedder Arc before the mutable borrow of `kg`.
     let embedder = active.kg.embedder().cloned();
     let mut opts = kglite::api::session::ExecuteOptions::eager(&params);
+    opts.streaming = true;
     opts.embedder = embedder;
     opts.value_codecs = policy.value_codecs;
     // `policy.parallel` is deliberately NOT applied: the operator's opt-in

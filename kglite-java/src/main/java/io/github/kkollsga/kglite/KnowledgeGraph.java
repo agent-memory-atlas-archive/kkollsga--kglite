@@ -645,6 +645,109 @@ public final class KnowledgeGraph implements AutoCloseable {
     }
 
     /**
+     * Run a parameterised read-only Cypher statement as of an instant — the
+     * <strong>read</strong> path under {@code FOR VALID_TIME AS OF}.
+     *
+     * <p>Exactly {@link #query(String, Map)} on {@code validAt.prefix(query)}:
+     * the answer holds only the elements valid at the instant, a node valid
+     * under every declared label it carries and a relationship valid with
+     * both endpoints. The graph needs a validity declaration
+     * ({@code CALL db.temporal.declare(...)}). {@code EXPLAIN} and
+     * {@code PROFILE} may lead {@code query}; a {@code query} that already
+     * carries a {@code FOR … AS OF} prefix is the engine's syntax error.
+     *
+     * @param query   the Cypher text, referring to bindings as {@code $name}
+     * @param params  the bindings; may be empty, never {@code null}
+     * @param validAt the instant; never {@code null}
+     * @return one insertion-ordered, unmodifiable map per row
+     * @throws KgliteException on any engine failure, including a doubled
+     *     context
+     * @throws IllegalArgumentException if {@code validAt} is {@code null}
+     * @throws IllegalStateException if this graph is closed
+     */
+    public List<Map<String, Object>> query(
+            String query, Map<String, Object> params, ValidAt validAt) {
+        return query(prefixed(query, validAt), params);
+    }
+
+    /**
+     * As {@link #query(String, Map, ValidAt)}, returning the rows together
+     * with the engine's warnings and diagnostics — whose {@code "temporal"}
+     * entry echoes the instant, the declared targets the statement reached
+     * and the route that answered it.
+     *
+     * @param query   the Cypher text, referring to bindings as {@code $name}
+     * @param params  the bindings; may be empty, never {@code null}
+     * @param validAt the instant; never {@code null}
+     * @return the rows, warnings and diagnostics
+     * @throws KgliteException on any engine failure
+     * @throws IllegalArgumentException if {@code validAt} is {@code null}
+     * @throws IllegalStateException if this graph is closed
+     */
+    public QueryResult queryResult(String query, Map<String, Object> params, ValidAt validAt) {
+        return queryResult(prefixed(query, validAt), params);
+    }
+
+    /**
+     * Run several read-only statements against one snapshot — the
+     * <strong>read</strong> path, batched: every statement sees the same graph
+     * state, whatever writes land between them.
+     *
+     * @param queries the statements, run in order; may be empty
+     * @return one result per statement, in input order, each with its rows,
+     *     warnings and diagnostics
+     * @throws KgliteException on any engine failure, including a write in the
+     *     batch
+     * @throws IllegalStateException if this graph is closed
+     */
+    public List<QueryResult> queryBatch(List<BatchQuery> queries) {
+        if (queries == null) {
+            throw new KgliteException("queries cannot be null; pass List.of() for none");
+        }
+        List<String> texts = new java.util.ArrayList<>(queries.size());
+        List<String> paramsJson = new java.util.ArrayList<>(queries.size());
+        for (BatchQuery statement : queries) {
+            texts.add(statement.query());
+            paramsJson.add(prepareRun(statement.query(), statement.params(), false));
+        }
+        String request = Json.writeBatch(texts, paramsJson);
+        return session.use(handle -> Abi.executeReadBatch(handle, request));
+    }
+
+    /**
+     * {@link #queryBatch(List)} with every statement as of one instant: one
+     * snapshot, one {@code FOR VALID_TIME AS OF} prefix per statement.
+     *
+     * @param queries the statements, run in order; may be empty
+     * @param validAt the instant; never {@code null}
+     * @return one result per statement, in input order
+     * @throws KgliteException on any engine failure
+     * @throws IllegalArgumentException if {@code validAt} is {@code null}
+     * @throws IllegalStateException if this graph is closed
+     */
+    public List<QueryResult> queryBatch(List<BatchQuery> queries, ValidAt validAt) {
+        if (queries == null) {
+            throw new KgliteException("queries cannot be null; pass List.of() for none");
+        }
+        if (validAt == null) {
+            throw new IllegalArgumentException("validAt cannot be null");
+        }
+        return queryBatch(queries.stream()
+                .map(q -> new BatchQuery(prefixed(q.query(), validAt), q.params()))
+                .toList());
+    }
+
+    private static String prefixed(String query, ValidAt validAt) {
+        if (validAt == null) {
+            throw new IllegalArgumentException("validAt cannot be null");
+        }
+        if (query == null) {
+            throw new KgliteException("a Cypher query cannot be null");
+        }
+        return validAt.prefix(query);
+    }
+
+    /**
      * As {@link #query(String, Map)}, returning the rows together with the
      * engine's warnings and diagnostics for the statement.
      *

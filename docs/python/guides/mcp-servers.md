@@ -457,9 +457,12 @@ stable tools instead of registering one top-level tool per query:
 - `list_recipe_queries(recipe?)` — omit `recipe` for compact catalog
   summaries; provide it to disclose that recipe's query descriptions and
   parameter schemas. Stored Cypher is never returned by the listing tool.
-- `run_recipe_query(recipe, query, variables, include_cypher=false)` — run one
-  exact operation with strictly validated variables. `variables` is always
-  required; parameter-free queries receive `{}`.
+- `run_recipe_query(recipe, query, variables, include_cypher=false, valid_at?)`
+  — run one exact operation with strictly validated variables. `variables` is
+  always required; parameter-free queries receive `{}`. `valid_at` (an ISO
+  date or datetime) runs the stored query as of that instant, behind the
+  `FOR VALID_TIME AS OF` prefix `cypher_query`'s `valid_at` writes; the
+  result's `diagnostics.temporal` echoes it.
 
 `run_recipe_query`'s own description carries the catalogue, so the routing is
 in `tools/list` and an agent does not have to discover it: the static sentence
@@ -1503,7 +1506,9 @@ vault's `.kglite/recipes/*.md` frontmatter. Every such query is registered as
 an MCP tool of that name, in addition to the fixed pair:
 
 - **Description** = the query's description. **Input schema** = the query's
-  `parameters`, so the arguments *are* the variables. **Output schema and
+  `parameters`, so the arguments *are* the variables, plus an optional
+  `valid_at` that runs the query as of an instant (unless the query declares a
+  `valid_at` parameter itself, which then stays its variable). **Output schema and
   annotations** = `run_recipe_query`'s, so the rows and the error envelope are
   byte-for-byte the ones the fixed route returns. `include_cypher` is not
   reachable from a named tool — audit through `run_recipe_query`.

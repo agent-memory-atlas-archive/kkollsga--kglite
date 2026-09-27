@@ -113,6 +113,34 @@ def test_query_subcommand_json(tmp_path):
     assert rows == [{"name": "Alice", "age": 30}]
 
 
+def test_query_subcommand_answers_the_streaming_shapes_as_the_eager_path(tmp_path):
+    """The one-shot read path folds trailing aggregates as they are matched;
+    each shape, under a context and without one, answers as the engine's eager
+    path does."""
+    import json
+
+    import kglite
+    from tests.valid_time_network import AT, NETWORK, STREAMING_SHAPES
+
+    g = kglite.KnowledgeGraph()
+    for statement in NETWORK:
+        g.cypher(statement).to_list()
+    p = tmp_path / "network.kgl"
+    g.save(str(p))
+
+    def canon(rows, ordered):
+        rows = [json.dumps(row, sort_keys=True) for row in rows]
+        return rows if ordered else sorted(rows)
+
+    for shape in STREAMING_SHAPES:
+        ordered = "ORDER BY" in shape
+        for query in (shape, AT + shape):
+            proc = _run_args_proc("query", str(p), query, "--format", "json")
+            assert proc.returncode == 0, (query, proc.stderr)
+            expected = g.cypher(query, streaming=False).to_list()
+            assert canon(json.loads(proc.stdout), ordered) == canon(expected, ordered), query
+
+
 def test_query_subcommand_timeout_ms_bounds_a_runaway_query(tmp_path):
     """`--timeout-ms` is the CLI's only deadline. There is deliberately no
     default (see `docs/operators/cli.md`): Ctrl-C is the interactive cancel and

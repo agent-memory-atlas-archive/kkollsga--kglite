@@ -3431,5 +3431,658 @@
         "type": "object"
       }
     }
+  ],
+  "manifest_recipes": [
+    {
+      "name": "cypher_query",
+      "description": "Query, explore, and understand the active knowledge graph with Cypher \u2014 the primary tool for structural questions: how things relate, where an entity/function/type is defined, what references or calls what, counts, and multi-hop paths (for code graphs: call graphs, definitions, imports \u2014 navigate the codebase structure). Pass params={...} to bind $placeholders \u2014 both `{prop: $p}` inside a pattern and `WHERE x.prop = $p` read from it, and a $name with no value is an error rather than an empty result. Returns up to 15 rows inline; append FORMAT CSV for a CSV body capped at 200 rows, with a notice naming the true total \u2014 narrow the query to fit, or ask the operator to enable extensions.csv_http_server for a fetch URL carrying the complete result.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "params": {
+            "additionalProperties": true,
+            "description": "Values for the `$name` placeholders in `query`, as a JSON object \u2014\n`{\"flag\": \"NO\", \"min\": 3}`. Both spellings bind from here: the inline\nproperty map (`MATCH (v:Vessel {flag: $flag})`) and the `WHERE` clause\n(`WHERE v.flag = $flag`). A parameter named in the query but absent\nhere is an error, never an empty result. Accepts strings, numbers,\nbooleans, null, and arrays/objects of those; a value is bound as data,\nso it can never be read as Cypher syntax.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Cypher query string. Append `FORMAT CSV` for CSV-encoded output.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "valid_at": {
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "expand_response",
+      "description": "Inspect retained output without rerunning a tool. Use result_id from a preview; path is a JSON Pointer into its payload; offset selects items/fields/Unicode characters. response.mode=full returns the original inline result (empty path) or a complete selected value. Results are session-scoped and expire/evict as disclosed in the preview.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "offset": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "default": "",
+            "type": "string"
+          },
+          "response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "result_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "fetch_images",
+      "description": "Fetch image files as image content blocks. Takes vault-relative paths or `Image` node ids \u2014 query `Image` nodes with `cypher_query` first and fetch only the ones you need. At most 4 per call, 4 MiB each, 12 MiB total; png, jpeg, gif and webp only. Over-cap or non-image items are refused with the reason named, never resized or truncated.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "items": {
+            "description": "Vault-relative image paths or `Image` node ids (identical under the vault model), e.g. 'img/faults.png'. Absolute paths and `..` segments are refused.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_bytes": {
+            "description": "Lower the per-image byte cap for this call. Cannot raise the server's configured cap.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph_overview",
+      "description": "Inspect and explore the active graph's schema \u2014 start here to understand a codebase or dataset: node types, properties, connections, sample values, and a per-type example query (anchored on each type's real identifier property). With no args returns the inventory; pass types=[...] / connections=true|[...] / cypher=true|[...] for drill-down.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$defs": {
+          "DetailSelection": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "connections": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DetailSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`true` for all connection types; or `[\"CALLS\"]` for a deep-dive."
+          },
+          "cypher": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DetailSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`true` for the Cypher language reference; or `[\"MATCH\",\"WHERE\"]`."
+          },
+          "types": {
+            "description": "Drill into specific node types (e.g. `[\"Person\", \"Document\"]`).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "OverviewArgs",
+        "type": "object"
+      }
+    },
+    {
+      "name": "grep",
+      "description": "Search source files using ripgrep. `pattern` is a regex (Rust syntax). `glob` filters file paths (e.g. \"*.py\"). `context` adds N surrounding lines per match. Set `case_insensitive=true` for case-insensitive matching. `max_results` caps total matches (default 50).\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "case_insensitive": {
+            "default": false,
+            "description": "Case-insensitive matching.",
+            "type": "boolean"
+          },
+          "context": {
+            "default": 0,
+            "description": "Lines of context around each match (default 0).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "glob": {
+            "description": "File-name glob (e.g. ``\"*.py\"``). Defaults to all files.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_results": {
+            "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pattern": {
+            "description": "Regex pattern (Rust regex syntax).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_recipe_queries",
+      "description": "List the boot-validated Cypher recipe catalog. Omit `recipe` for compact recipe summaries; provide it to inspect that recipe's named queries and parameter schemas. The routing is already in run_recipe_query's description; call this only for a recipe not listed there.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "recipe": {
+            "description": "Optional recipe name. Omit for compact catalog summaries.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_source",
+      "description": "List directory contents under the configured source root. `path` is resolved against the first source root (\".\" lists the root itself). `depth` controls recursion (1 = flat ls, 2+ = tree). `glob` filters entry names. `dirs_only=true` shows only directories.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "depth": {
+            "default": 1,
+            "description": "Recursion depth (1 = flat ls; 2+ = tree).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dirs_only": {
+            "default": false,
+            "description": "Show only directories.",
+            "type": "boolean"
+          },
+          "glob": {
+            "description": "Glob filter for entry names.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "default": ".",
+            "description": "Subdirectory relative to the source root (default ``\".\"``).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "people_by_city",
+      "description": "People in one city.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "city": {
+            "type": "string"
+          },
+          "valid_at": {
+            "description": "Run the query as of this date \u2014 an ISO date (\"2020-06-30\") or datetime (\"2020-06-30T12:00:00\"). Same as writing the prefix FOR VALID_TIME AS OF date('2020-06-30') before the stored query; the graph needs a validity declaration (db.temporal.declarations()).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "ping",
+      "description": "Liveness probe \u2014 returns 'pong' (or echoes `message` if supplied). Use to confirm the server framework is wired correctly before relying on graph- or source-aware tools.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "message": {
+            "description": "Optional message to echo back. Defaults to \"pong\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "read_source",
+      "description": "Read a file from the configured source root(s). Pass `start_line`/`end_line` to slice, `grep` to filter to matching lines, `max_chars` to cap output. Pass `rev` (a tag, branch, or commit SHA) to read the file's content at that git revision via `git show` instead of the working tree \u2014 useful for comparing a file across releases (requires a git repo source root). Path traversal attempts are rejected. Available only when source roots are configured.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "end_line": {
+            "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file_path": {
+            "description": "File path relative to the configured source root(s).",
+            "type": "string"
+          },
+          "grep": {
+            "description": "Regex pattern to filter lines. Returns matching lines plus context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grep_context": {
+            "description": "Lines of context around each grep match (default 2).",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_chars": {
+            "description": "Cap output size in characters.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_matches": {
+            "description": "Cap the number of matches returned.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rev": {
+            "description": "Read the file at this git revision (tag, branch, or commit SHA)\nvia `git show` instead of the working tree. Requires the active\nsource root to be a git repository. All other options\n(`start_line`/`grep`/`max_chars`/\u2026) apply to the historical\ncontent unchanged.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_line": {
+            "description": "Start line (1-indexed). Defaults to start-of-file.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "reload_graph",
+      "description": "Re-read the served graph file from disk, replacing the in-memory graph \u2014 use this when the file has been rebuilt by another process and queries are returning stale results. The path is the one this server was started on. If this server has unsaved in-memory changes the reload is refused, because it would discard them: call save_graph first to keep them, or pass discard_unsaved=true to drop them and serve the file as it is on disk. If the re-read fails, the current graph stays active and the error is returned.\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "discard_unsaved": {
+            "default": false,
+            "description": "Set `true` to throw away this server's unsaved in-memory changes and\nserve the file as it is on disk. Without it, a reload that would\ndiscard unsaved changes is refused instead \u2014 call `save_graph` first to\nkeep them, or `save_graph_as` to keep them somewhere else. There is no\nmerge: the in-memory version and the file are alternatives.",
+            "type": "boolean"
+          }
+        },
+        "title": "ReloadGraphArgs",
+        "type": "object"
+      }
+    },
+    {
+      "name": "run_recipe_query",
+      "description": "Run one exact, boot-validated, read-only Cypher recipe query with strictly validated variables. Returns all rows up to the MCP payload limit or a structured error; use cypher_query for unmatched or broader questions.\n\nCatalogue \u2014 call with `recipe` and `query` from this list:\npeople.in_city \u2014 People in one city.; params: city: string (required) \u2192 tool: people_by_city\nResponses default to 16384 serialized bytes, except results carrying image, audio or resource content, which are returned whole. Set _response.mode=full for complete inline output or _response.max_bytes for a larger per-call budget. Previews include calls to expand retained evidence without rerunning this tool.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "_response": {
+            "additionalProperties": false,
+            "description": "Default 16384 serialized result bytes. Use mode=full for complete inline output, or max_bytes for a larger one-call budget. Tool/query limits still apply.",
+            "properties": {
+              "max_bytes": {
+                "minimum": 4096,
+                "type": "integer"
+              },
+              "mode": {
+                "default": "bounded",
+                "enum": [
+                  "bounded",
+                  "full"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "include_cypher": {
+            "default": false,
+            "description": "Include the stored parameterized Cypher and separate parameters map for\naudit. Both fields are omitted when this is false.",
+            "type": "boolean"
+          },
+          "query": {
+            "enum": [
+              "in_city"
+            ],
+            "type": "string"
+          },
+          "recipe": {
+            "enum": [
+              "people"
+            ],
+            "type": "string"
+          },
+          "valid_at": {
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the stored query; the\ngraph needs a validity declaration (`db.temporal.declarations()`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variables": {
+            "additionalProperties": true,
+            "description": "Variables for the chosen query, as named in the catalogue block in this tool's description. Required even for a parameter-free query (pass `{}`).",
+            "type": "object"
+          }
+        },
+        "required": [
+          "recipe",
+          "query",
+          "variables"
+        ],
+        "type": "object"
+      }
+    }
   ]
 }

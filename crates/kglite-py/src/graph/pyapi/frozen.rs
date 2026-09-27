@@ -22,14 +22,17 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::query_defaults::QueryDefaults;
 use crate::datatypes::py_in;
 use crate::graph::languages::cypher;
 use crate::graph::pyapi::result_view::ResultView;
+use crate::graph::valid_time::{prefixed_query, prepend_error};
 use crate::graph::DirGraph;
 use crate::util::EnterKg;
+use kglite_core::api::cypher::PrependError;
 use kglite_core::api::session::CsvImportPolicy;
 use kglite_core::api::session::{execute_read, ExecuteOptions};
 use kglite_core::api::temporal::{view_at, ValidTimeView};
@@ -95,7 +98,7 @@ impl FrozenGraph {
     /// then take a fresh `freeze()`.
     ///
     /// Safe to call from many threads on the same `FrozenGraph` at once.
-    #[pyo3(signature = (query, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None))]
+    #[pyo3(signature = (query, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, valid_at=None))]
     // The detached closure preserves the engine's structured KgError until PyErr conversion.
     #[allow(clippy::result_large_err)]
     // The Python boundary mirrors the public query-option surface.
@@ -109,15 +112,20 @@ impl FrozenGraph {
         timeout_ms: Option<u64>,
         max_work_units: Option<usize>,
         row_limit: Option<usize>,
+        valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        let prefixed = match &self.view {
-            Some(view) => Some(
-                view.cypher_text(query)
-                    .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?,
-            ),
-            None => None,
+        // A view fixes its instant: `valid_at=` there is a second one.
+        let text = match (&self.view, valid_at) {
+            (Some(view), Some(_)) => {
+                return Err(prepend_error(PrependError::ViewAlreadyAsOf {
+                    literal: view.as_of().to_string(),
+                }))
+            }
+            (Some(view), None) => Cow::Owned(view.cypher_text(query).map_err(prepend_error)?),
+            (None, valid_at) => prefixed_query(query, valid_at)?,
         };
-        let query = prefixed.as_deref().unwrap_or(query);
+        let raw_query = query;
+        let query = text.as_ref();
         // Reject mutations up front with a frozen-specific message (clearer
         // than execute_read's generic "use execute_mut").
         let pre_parsed = cypher::parse_cypher(query).map_err(crate::error_py::kg_to_pyerr)?;
@@ -149,8 +157,13 @@ impl FrozenGraph {
         let row_limit = effective.row_limit;
 
         let inner = Arc::clone(&self.inner);
+        let view = self.view.clone();
         let embedder = self.embedder.clone();
-        let query_owned = query.to_string();
+        // A view prefixes the query itself, so its echo names the view.
+        let query_owned = match view {
+            Some(_) => raw_query.to_string(),
+            None => query.to_string(),
+        };
         // GIL-free execution — the whole point of a frozen snapshot is that
         // many readers run in parallel against the shared, immutable graph.
         let result = py.enter_kg(
@@ -173,7 +186,10 @@ impl FrozenGraph {
                     modified_by: None,
                     csv_import: CsvImportPolicy::LocalFilesystem,
                 };
-                let outcome = execute_read(&inner, &query_owned, &opts)?;
+                let outcome = match &view {
+                    Some(view) => view.execute_read(&query_owned, &opts)?,
+                    None => execute_read(&inner, &query_owned, &opts)?,
+                };
                 Ok(outcome.result)
             },
         )?;

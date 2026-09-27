@@ -82,6 +82,8 @@ mod row_limit_tests;
 mod stored_property_admission_tests;
 #[cfg(test)]
 mod strict_reads_tests;
+#[cfg(test)]
+mod temporal_echo_tests;
 pub(crate) mod transaction;
 #[cfg(test)]
 mod write_publish_tests;

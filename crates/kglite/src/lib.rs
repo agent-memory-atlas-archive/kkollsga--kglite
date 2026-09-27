@@ -930,7 +930,7 @@ pub mod api {
         pub use crate::graph::languages::cypher::planner::schema_check::collect_unknown_pattern_warnings;
         pub use crate::graph::languages::cypher::result::{
             ClauseStats, EdgeBinding, MutationStats, QueryDiagnostics, ResultRow,
-            RetrievalDiagnostics,
+            RetrievalDiagnostics, TemporalDiagnostics,
         };
     }
 

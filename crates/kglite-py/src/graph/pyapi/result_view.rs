@@ -626,7 +626,7 @@ impl ResultView {
             .unwrap_or_default()
     }
 
-    /// Execution timing, warnings, row limits and actual retrieval routes.
+    /// Execution timing, warnings, row limits, actual retrieval routes and the valid-time echo.
     #[getter]
     fn diagnostics(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.diagnostics {
@@ -656,6 +656,7 @@ impl ResultView {
                     retrieval.append(item)?;
                 }
                 dict.set_item("retrieval", retrieval)?;
+                dict.set_item("temporal", temporal_dict(py, d.temporal.as_ref())?)?;
                 Ok(dict.into_any().unbind())
             }
             None => Ok(py.None()),
@@ -930,4 +931,23 @@ impl ResultIter {
         self.index += 1;
         Ok(Some(result))
     }
+}
+
+/// `diagnostics["temporal"]`: the valid-time echo, `None` without a context.
+fn temporal_dict(
+    py: Python<'_>,
+    echo: Option<&kglite_core::api::cypher::TemporalDiagnostics>,
+) -> PyResult<Py<PyAny>> {
+    let Some(echo) = echo else {
+        return Ok(py.None());
+    };
+    let dict = PyDict::new(py);
+    dict.set_item("axis", &echo.axis)?;
+    dict.set_item("instant", &echo.instant)?;
+    dict.set_item("targets", echo.targets.clone())?;
+    dict.set_item("route", &echo.route)?;
+    dict.set_item("retrieval", &echo.retrieval)?;
+    dict.set_item("slice", echo.slice)?;
+    dict.set_item("session_version", echo.session_version)?;
+    Ok(dict.into_any().unbind())
 }

@@ -571,6 +571,24 @@ class ResultView:
           programmatic / agent callers. Shortcut: :attr:`warnings`, which is
           ``[]`` rather than an error on a view with no diagnostics.
 
+        - ``temporal`` (Optional[dict]): the valid-time echo of a query run
+          under ``FOR VALID_TIME AS OF`` (or ``valid_at=``), ``None`` for
+          any other. Keys: ``axis`` (``'VALID_TIME'``); ``instant`` (the
+          resolved instant, ISO — ``'2009-06-30'``, or
+          ``'2009-06-30T12:00:00'`` naive UTC); ``targets`` (the declared
+          targets the query's patterns reach across every scope, without
+          bounds: ``'(:Well)'``, ``'[:LICENSEE from :Field]'``); ``route``
+          (``'guarded'`` — filtered, the plan ``EXPLAIN`` shows; ``'plain'``
+          — every declared target was valid in full at the instant, so the
+          unfiltered plan ran; ``'view'`` — through a
+          ``freeze(valid_at=…)`` handle); ``retrieval`` (``'exact_mask'`` or
+          ``'hnsw_mask'`` for a ``vector_score`` top-k over the valid
+          vectors, else ``None``; the embedding ``query`` procedures report
+          theirs per row in ``search_method``); ``slice`` (whether a graph
+          algorithm ran on the valid slice); ``session_version`` (the graph
+          version answered, comparable within one process only — it
+          restarts when a graph is loaded).
+
         Use this to tune ``timeout_ms`` or move toward anchored queries
         when your query repeatedly approaches the deadline, and surface
         ``warnings`` to catch silent-empty-result typos.
@@ -7497,7 +7515,11 @@ class KnowledgeGraph:
                 would not fit — and yield the graph's own nodes. ``EXPLAIN`` shows the plan with a leading
                 ``ValidTimeContext`` row naming the axis and the declared
                 targets the query reaches, the instant being resolved per
-                execution.
+                execution. :attr:`ResultView.diagnostics` ``["temporal"]``
+                echoes the instant, those targets and the route that
+                answered. ``Session.cypher`` / ``Session.execute``,
+                ``Transaction.cypher`` and ``FrozenGraph.cypher`` take the
+                same ``valid_at``.
 
         Returns:
             ResultView by default, DataFrame when ``to_df=True``,
@@ -10126,6 +10148,7 @@ class Session:
         timeout_ms: int | None = None,
         max_work_units: int | None = None,
         row_limit: int | None = None,
+        valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None,
     ) -> Any:
         """Run a read-only Cypher query against a momentary snapshot.
 
@@ -10154,6 +10177,15 @@ class Session:
         Omitted/None options inherit the defaults captured when the Session was
         created. The built-in Python timeout is 180_000ms; ``timeout_ms=0`` disables
         the per-query deadline. A zero row cap retains no rows, not unlimited rows.
+
+        ``valid_at`` runs the query as of an instant — a ``datetime.date``, a
+        ``datetime.datetime`` or an ISO date / datetime string — exactly as
+        :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does: the statement prefix
+        ``FOR VALID_TIME AS OF date('…')`` written before ``query`` (``EXPLAIN``
+        / ``PROFILE`` may follow it), and ``ValueError`` when ``query`` already
+        carries a ``FOR … AS OF`` prefix or the instant is not one a literal
+        can spell. :attr:`ResultView.diagnostics` ``["temporal"]`` echoes the
+        instant and how the query was answered.
         """
         ...
 
@@ -10168,6 +10200,7 @@ class Session:
         write_scope: list[str] | None = None,
         git_sha: str | None = None,
         modified_by: str | None = None,
+        valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None,
     ) -> Any:
         """Run a Cypher write against the shared graph, serialized.
 
@@ -10216,6 +10249,11 @@ class Session:
         would receive mutations to this independent graph. Use the source graph for
         captured writes. A retained Session without CDC may write privately after its
         source ends persistence ownership.
+
+        ``valid_at`` prefixes ``query`` with ``FOR VALID_TIME AS OF`` exactly as
+        :meth:`cypher` does. A statement under that context cannot write, so a
+        write with ``valid_at`` raises the engine's refusal; a read runs as of
+        the instant.
         """
         ...
 
@@ -10306,6 +10344,7 @@ class FrozenGraph:
         timeout_ms: int | None = None,
         max_work_units: int | None = None,
         row_limit: int | None = None,
+        valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None,
     ) -> Any:
         """Run a read-only Cypher query against the snapshot.
 
@@ -10341,7 +10380,11 @@ class FrozenGraph:
         and show the ``ValidTimeContext`` row. A query that carries its own
         ``FOR … AS OF`` prefix raises ``ValueError``: the handle already
         fixes the instant, so take a fresh ``freeze(valid_at=…)`` for
-        another one.
+        another one. ``valid_at`` here raises the same ``ValueError`` on such a
+        handle; on a plain handle it prefixes ``query`` as
+        :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does. A query on a
+        ``valid_at`` handle echoes ``route`` ``"view"`` in
+        :attr:`ResultView.diagnostics` ``["temporal"]``.
         """
         ...
 
@@ -10406,6 +10449,7 @@ class Transaction:
         write_scope: list[str] | None = None,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
+        valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None,
     ) -> ResultView | pd.DataFrame:
         """Execute a Cypher query within this transaction.
 
@@ -10428,6 +10472,12 @@ class Transaction:
             max_work_units: Work budget for the statement — intermediate rows,
                 retained collection items and scan work, not a result-row cap.
                 Exceeding it raises an error and rolls back the statement.
+            valid_at: Run the query as of an instant, exactly as
+                :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does — the
+                statement prefix ``FOR VALID_TIME AS OF`` on the transaction's
+                own state, uncommitted writes included. Raises ``ValueError``
+                when ``query`` already carries a ``FOR … AS OF`` prefix. A
+                statement under the context cannot write.
 
         Omitted/None query options inherit the defaults captured at begin. An
         explicit per-query timeout is bounded by any transaction lifetime deadline;

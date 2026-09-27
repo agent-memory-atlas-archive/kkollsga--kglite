@@ -1718,16 +1718,8 @@ impl KnowledgeGraph {
         modified_by: Option<String>,
         valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        // `valid_at=` is the statement prefix `FOR VALID_TIME AS OF`, written
-        // into the text before anything parses it.
-        let prefixed = valid_at
-            .map(|instant| {
-                let value = py_in::py_query_parameter_to_value("valid_at", instant)?;
-                cypher::prepend_valid_time(query, &value)
-                    .map_err(|err| PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string()))
-            })
-            .transpose()?;
-        let query = prefixed.as_deref().unwrap_or(query);
+        let query = crate::graph::valid_time::prefixed_query(query, valid_at)?;
+        let query = query.as_ref();
         let write_scope_set: Option<std::collections::HashSet<String>> =
             write_scope.map(|v| v.into_iter().collect());
         let self_ref = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;

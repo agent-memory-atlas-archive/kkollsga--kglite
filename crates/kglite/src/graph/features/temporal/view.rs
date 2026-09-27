@@ -37,6 +37,7 @@ use crate::graph::languages::cypher::valid_time::{
     carries_valid_time_context, declared_template, instant_literal, prefixed, PrependError,
     NO_DECLARATION,
 };
+use crate::graph::session::execute::{execute_read, ExecuteOptions, ExecuteOutcome};
 use crate::graph::storage::GraphRead;
 
 /// A graph as of one valid-time instant; see the module docs.
@@ -110,6 +111,25 @@ impl ValidTimeView {
             });
         }
         Ok(prefixed(&self.literal, query))
+    }
+
+    /// Run read `query` on the view: [`Self::cypher_text`] on [`Self::base`],
+    /// its valid-time echo's route `view`. A refused prefix is a
+    /// [`KgError::Argument`] naming the view's instant.
+    pub fn execute_read(
+        &self,
+        query: &str,
+        opts: &ExecuteOptions<'_>,
+    ) -> Result<ExecuteOutcome, KgError> {
+        let text = self
+            .cypher_text(query)
+            .map_err(|err| KgError::Argument(err.to_string()))?;
+        let mut outcome = execute_read(&self.base, &text, opts)?;
+        let echo = outcome.result.diagnostics.as_mut();
+        if let Some(echo) = echo.and_then(|d| d.temporal.as_mut()) {
+            echo.route = "view".to_string();
+        }
+        Ok(outcome)
     }
 
     /// The view's materialised [`ValidSlice`], from the graph's slice cache or

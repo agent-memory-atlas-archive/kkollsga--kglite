@@ -91,7 +91,22 @@ pub(crate) fn run_recipe_query(
             ));
         }
     };
-    match state.execute_cypher_read_strict(&query.cypher, params) {
+    let cypher = match crate::tools::query_with_valid_at(&query.cypher, args.valid_at.as_deref()) {
+        Ok(cypher) => cypher,
+        Err(message) => {
+            return RunRecipeQueryOutput::Error(RecipeErrorEnvelope::query_failure_cause(
+                &args,
+                query,
+                super::errors::QueryFailureCause {
+                    category: "invalid_argument".to_string(),
+                    kglite_code: "InvalidArgument".to_string(),
+                    message,
+                    position: None,
+                },
+            ));
+        }
+    };
+    match state.execute_cypher_read_strict(&cypher, params) {
         Ok(outcome) => serialize_success(&args, query, &outcome.result),
         Err(StrictCypherReadError::StaleGraph(failure)) => {
             RunRecipeQueryOutput::Error(RecipeErrorEnvelope::stale_graph(&args, query, failure))

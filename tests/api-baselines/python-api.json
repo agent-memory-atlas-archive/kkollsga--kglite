@@ -362,7 +362,7 @@
       "members": {
         "cypher": {
           "kind": "method",
-          "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None)"
+          "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, valid_at=None)"
         },
         "node_count": {
           "kind": "method",
@@ -1638,11 +1638,11 @@
         },
         "cypher": {
           "kind": "method",
-          "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None)"
+          "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, valid_at=None)"
         },
         "execute": {
           "kind": "method",
-          "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None)"
+          "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None)"
         },
         "node_count": {
           "kind": "method",
@@ -1716,7 +1716,7 @@
         },
         "cypher": {
           "kind": "method",
-          "signature": "(self, /, query, params=None, to_df=False, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None)"
+          "signature": "(self, /, query, params=None, to_df=False, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None)"
         },
         "is_read_only": {
           "kind": "attribute",

@@ -814,7 +814,7 @@ fn retrieval_diagnostics_reach_preview_csv_and_write_ack() {
 
 /// `valid_at` prepends the `FOR VALID_TIME AS OF` prefix through the core
 /// helper: a second context is refused naming both, `EXPLAIN` renders the
-/// context row, and execution meets this build's refusal.
+/// context row, and execution answers as of the instant with its echo.
 #[test]
 fn valid_at_prepends_the_context_prefix() {
     assert_eq!(
@@ -879,7 +879,14 @@ fn valid_at_prepends_the_context_prefix() {
         CSV_OFF,
     )
     .expect("a context query runs");
-    assert_eq!(during.text, plain.text, "every vessel is valid in 2020");
+    // Every vessel is valid in 2020: the same rows, through the plain route.
+    let rows_of = |text: &str| text.split("\n\n").next().unwrap().to_string();
+    assert_eq!(rows_of(&during.text), rows_of(&plain.text));
+    assert!(
+        during.text.contains("\"route\":\"plain\""),
+        "{}",
+        during.text
+    );
     let before = query_with_valid_at(count, Some("1990-06-30")).unwrap();
     let output = run_cypher_tool_output(
         &active,
@@ -890,4 +897,73 @@ fn valid_at_prepends_the_context_prefix() {
     )
     .expect("a context query runs");
     assert_ne!(output.text, plain.text, "no vessel is valid in 1990");
+    assert!(
+        output.text.contains("temporal: {")
+            && output.text.contains("\"instant\":\"1990-06-30\"")
+            && output.text.contains("\"route\":\"guarded\""),
+        "{}",
+        output.text
+    );
+    assert!(!plain.text.contains("temporal:"), "{}", plain.text);
+}
+
+/// The trailing-aggregate shapes the streaming pipeline folds, on a declared
+/// network: stop 2 closes in 2005 and two `LINK`s end then.
+const STREAMING_SHAPES: [&str; 7] = [
+    "MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t) AS c",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(t) AS c",
+    "MATCH (s:Stop)-[r:LINK]->(t) RETURN count(DISTINCT t.id) AS d, count(*) AS c, count(r) AS r",
+    "MATCH (s:Stop)-[:LINK]->(t) WITH s, count(t) AS c WHERE c > 0 RETURN s.id AS s, c",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(*) AS c ORDER BY s DESC LIMIT 2",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN min(t.id) AS lo, max(t.id) AS hi, sum(t.id) AS s, avg(t.id) AS a",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, sum(COUNT { (t)-[:LINK]->() }) AS n",
+];
+
+/// The MCP read seam streams, and answers each shape as the eager path does,
+/// under a context and without one.
+#[test]
+fn the_read_seam_answers_the_streaming_shapes_as_the_eager_path() {
+    let mut active = fresh_active();
+    let params = std::collections::HashMap::new();
+    let eager = kglite::api::session::ExecuteOptions::eager(&params);
+    let graph = kglite::api::make_dir_graph_mut(active.kg.dir_mut());
+    for seed in [
+        "CREATE (s1:Stop {id: 1}), (s2:Stop {id: 2, vf: date('2000-01-01'), vt: date('2005-01-01')}), \
+         (s3:Stop {id: 3}), (s4:Stop {id: 4}), (s5:Stop {id: 5}), \
+         (s1)-[:LINK]->(s2), (s2)-[:LINK]->(s3), \
+         (s1)-[:LINK {since: date('2000-01-01'), until: date('2005-01-01')}]->(s3), \
+         (s1)-[:LINK]->(s4), \
+         (s4)-[:LINK {since: date('2000-01-01'), until: date('2005-01-01')}]->(s5), \
+         (s4)-[:LINK {since: date('2006-01-01')}]->(s5), (s5)-[:LINK]->(s3)",
+        "CALL db.temporal.declare({node: 'Stop', from: 'vf', to: 'vt', convention: 'closed'}) \
+         YIELD declared RETURN declared",
+        "CALL db.temporal.declare({relationship: 'LINK', from: 'since', to: 'until', \
+         convention: 'half_open'}) YIELD declared RETURN declared",
+    ] {
+        kglite::api::session::execute_mut(graph, seed, &eager).expect("seed");
+    }
+    let rows = |mut rows: Vec<Vec<Value>>, ordered: bool| {
+        if !ordered {
+            rows.sort_by_key(|row| format!("{row:?}"));
+        }
+        rows
+    };
+    for shape in STREAMING_SHAPES {
+        let ordered = shape.contains("ORDER BY");
+        for query in [
+            shape.to_string(),
+            format!("FOR VALID_TIME AS OF date('2008-01-01') {shape}"),
+        ] {
+            let expected = kglite::api::session::execute_read(active.kg.dir(), &query, &eager)
+                .expect("eager path")
+                .result
+                .rows;
+            let served =
+                execute_cypher_inner(&active.kg, &query, HashMap::new(), ExecPolicy::default())
+                    .unwrap_or_else(|error| panic!("{query}: {error}"))
+                    .result
+                    .rows;
+            assert_eq!(rows(served, ordered), rows(expected, ordered), "{query}");
+        }
+    }
 }

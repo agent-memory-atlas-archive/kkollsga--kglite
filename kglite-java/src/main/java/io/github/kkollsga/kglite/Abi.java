@@ -106,6 +106,8 @@ final class Abi {
     private static final MethodHandle SESSION_EXECUTE_MUT_OPTS = bind(
             "kglite_session_execute_mut_opts",
             FunctionDescriptor.of(I32, PTR, PTR, PTR, I64, I64, PTR, PTR));
+    private static final MethodHandle SESSION_EXECUTE_READ_BATCH = bind(
+            "kglite_session_execute_read_batch", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR));
     private static final MethodHandle SESSION_EXECUTE_MUT_BATCH = bind(
             "kglite_session_execute_mut_batch", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR));
     private static final MethodHandle SESSION_SAVE =
@@ -420,10 +422,29 @@ final class Abi {
      */
     static java.util.List<QueryResult> executeMutBatch(
             MemorySegment session, String queriesJson) {
+        return executeBatch(SESSION_EXECUTE_MUT_BATCH, session, queriesJson);
+    }
+
+    /**
+     * {@code kglite_session_execute_read_batch} — N reads against one
+     * snapshot, so every statement sees the same graph state.
+     *
+     * @param session     the session handle
+     * @param queriesJson the request array, {@code [{"query":…,"params":{…}}]}
+     * @return one result per input statement, in input order, each with its
+     *     rows, warnings and diagnostics
+     */
+    static java.util.List<QueryResult> executeReadBatch(
+            MemorySegment session, String queriesJson) {
+        return executeBatch(SESSION_EXECUTE_READ_BATCH, session, queriesJson);
+    }
+
+    private static java.util.List<QueryResult> executeBatch(
+            MethodHandle handle, MemorySegment session, String queriesJson) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment outResults = arena.allocate(PTR);
             MemorySegment outError = arena.allocate(PTR);
-            int rc = (int) SESSION_EXECUTE_MUT_BATCH.invokeExact(
+            int rc = (int) handle.invokeExact(
                     session, cstr(arena, queriesJson), outResults, outError);
             // The header documents out_results_json as null on failure, so there
             // is nothing to free on this branch; check() consumes out_error_msg.
@@ -431,7 +452,7 @@ final class Abi {
             String resultsJson = takeString(outResults.get(PTR, 0));
             if (resultsJson == null) {
                 throw new KgliteException(
-                        "the engine reported a successful transaction but produced no results");
+                        "the engine reported a successful batch but produced no results");
             }
             return Json.toBatchResults(resultsJson);
         } catch (Throwable t) {

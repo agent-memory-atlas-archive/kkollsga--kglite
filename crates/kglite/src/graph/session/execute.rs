@@ -27,7 +27,9 @@ use crate::graph::languages::cypher::ast::{
     Clause, CreateElement, CreatePattern, CypherQuery, OutputFormat, RemoveItem, SetItem,
 };
 use crate::graph::languages::cypher::executor::load_csv::CsvImportPolicy;
-use crate::graph::languages::cypher::result::CypherResult;
+use crate::graph::languages::cypher::result::{
+    CypherResult, QueryDiagnostics, TemporalDiagnostics,
+};
 use crate::graph::languages::cypher::value_codec::ValueCodec;
 
 /// Per-query knobs. Borrowed for the duration of one execute call.
@@ -355,12 +357,15 @@ pub fn execute_read(
     opts: &ExecuteOptions<'_>,
 ) -> Result<ExecuteOutcome, KgError> {
     let started = Instant::now();
-    let PreparedQuery {
-        plan: parsed,
-        params,
-        encode_plan,
-        warnings,
-    } = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
+    let (
+        PreparedQuery {
+            plan: parsed,
+            params,
+            encode_plan,
+            warnings,
+        },
+        echo,
+    ) = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
     let is_mutation = cypher::is_mutation_query(&parsed);
     // Attribute the plan-cache events `prepare` just caused, now that the
     // statement kind is known. Test-only; see `plan_cache::instrumentation`.
@@ -369,7 +374,7 @@ pub fn execute_read(
 
     if parsed.explain {
         let mut result = cypher::generate_explain_result(&parsed, graph);
-        attach_diagnostics(&mut result, &warnings, started, opts);
+        attach_diagnostics(&mut result, &warnings, started, opts, echo);
         return Ok(ExecuteOutcome {
             result,
             is_mutation,
@@ -401,7 +406,7 @@ pub fn execute_read(
     // (mcp-server) runs eager.
     cypher::value_codec::apply_encode(&mut result, &encode_plan);
     super::resolve_noderefs(&graph.graph, &mut result.rows);
-    attach_diagnostics(&mut result, &warnings, started, opts);
+    attach_diagnostics(&mut result, &warnings, started, opts, echo);
 
     Ok(ExecuteOutcome {
         result,
@@ -470,12 +475,15 @@ pub fn execute_mut(
     opts: &ExecuteOptions<'_>,
 ) -> Result<ExecuteOutcome, KgError> {
     let started = Instant::now();
-    let PreparedQuery {
-        plan: parsed,
-        params,
-        encode_plan,
-        warnings,
-    } = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
+    let (
+        PreparedQuery {
+            plan: parsed,
+            params,
+            encode_plan,
+            warnings,
+        },
+        echo,
+    ) = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
     let is_mutation = cypher::is_mutation_query(&parsed);
     // See the identical call in `execute_read`. Test-only.
     #[cfg(test)]
@@ -486,7 +494,7 @@ pub fn execute_mut(
     // plan remains a read-only, O(plan) operation.
     if parsed.explain {
         let mut result = cypher::generate_explain_result(&parsed, graph);
-        attach_diagnostics(&mut result, &warnings, started, opts);
+        attach_diagnostics(&mut result, &warnings, started, opts, echo);
         return Ok(ExecuteOutcome {
             result,
             is_mutation,
@@ -610,7 +618,7 @@ pub fn execute_mut(
     // reads back `'Q42'`). Eager path only; see execute_read.
     cypher::value_codec::apply_encode(&mut result, &encode_plan);
     super::resolve_noderefs(&graph.graph, &mut result.rows);
-    attach_diagnostics(&mut result, &warnings, started, opts);
+    attach_diagnostics(&mut result, &warnings, started, opts, echo);
 
     Ok(ExecuteOutcome {
         result,
@@ -946,20 +954,28 @@ fn prepare(
 /// instant — runs the plan of its text without the prefix: the normal planner,
 /// plan cache and fused routes, and the same rows. Re-decided on every
 /// execution (see `valid_time::timeless_plain_text`); EXPLAIN keeps the
-/// guarded plan.
+/// guarded plan. Also returns the statement's valid-time echo, taken from the
+/// plan with the context, and `None` without one.
 #[allow(clippy::result_large_err)] // KgError carries query context, as `prepare`'s does.
 fn timeless_route(
     graph: &DirGraph,
     query: &str,
     prepared: PreparedQuery,
     opts: &ExecuteOptions<'_>,
-) -> Result<PreparedQuery, KgError> {
+) -> Result<(PreparedQuery, Option<TemporalDiagnostics>), KgError> {
     if prepared.plan.context.is_none() {
-        return Ok(prepared);
+        return Ok((prepared, None));
     }
-    match cypher::valid_time::timeless_plain_text(query, &prepared.plan, graph, &prepared.params) {
-        Some(plain) => prepare(graph, &plain, opts),
-        None => Ok(prepared),
+    let plan = &prepared.plan;
+    match cypher::valid_time::timeless_plain_text(query, plan, graph, &prepared.params) {
+        Some(plain) => {
+            let echo = cypher::valid_time::temporal_echo(plan, graph, &prepared.params, "plain");
+            Ok((prepare(graph, &plain, opts)?, echo))
+        }
+        None => {
+            let echo = cypher::valid_time::temporal_echo(plan, graph, &prepared.params, "guarded");
+            Ok((prepared, echo))
+        }
     }
 }
 
@@ -980,8 +996,10 @@ fn attach_diagnostics(
     prepare_warnings: &[String],
     started: Instant,
     opts: &ExecuteOptions<'_>,
+    echo: Option<TemporalDiagnostics>,
 ) {
     let mut diagnostics = result.diagnostics.take().unwrap_or_default();
+    diagnostics.temporal = echo.map(|echo| finish_echo(echo, &diagnostics));
     if !prepare_warnings.is_empty() {
         let mut merged = prepare_warnings.to_vec();
         merged.append(&mut diagnostics.warnings);
@@ -992,6 +1010,23 @@ fn attach_diagnostics(
         .deadline
         .map(|deadline| deadline.saturating_duration_since(started).as_millis() as u64);
     result.diagnostics = Some(diagnostics);
+}
+
+/// `echo` with what the executor recorded: a vector retrieval's masked route,
+/// and whether an algorithm ran on the valid slice.
+fn finish_echo(
+    mut echo: TemporalDiagnostics,
+    diagnostics: &QueryDiagnostics,
+) -> TemporalDiagnostics {
+    echo.slice = diagnostics.temporal.as_ref().is_some_and(|t| t.slice);
+    echo.retrieval = diagnostics.retrieval.iter().find_map(|record| {
+        if record.actual_mode == "hnsw_mask" {
+            Some("hnsw_mask".to_string())
+        } else {
+            (record.fallback_reason.as_deref() == Some("exact_mask")).then(|| "exact_mask".into())
+        }
+    });
+    echo
 }
 
 /// Lets a missing-store error name `text_score` and the source property the

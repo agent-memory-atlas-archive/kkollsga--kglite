@@ -40,6 +40,7 @@ fn args(include_cypher: bool) -> RunRecipeQueryArgs {
         query: "lookup".into(),
         variables: Map::from_iter([("name".into(), json!("Ada"))]),
         include_cypher,
+        valid_at: None,
     }
 }
 
@@ -58,6 +59,7 @@ fn canonical_args(query: &str) -> RunRecipeQueryArgs {
         query: query.into(),
         variables: Map::from_iter([("qualified_name".into(), json!("pkg.target"))]),
         include_cypher: false,
+        valid_at: None,
     }
 }
 
@@ -480,6 +482,7 @@ fn defaulted_args(variables: Value) -> RunRecipeQueryArgs {
         query: "search".into(),
         variables: variables.as_object().expect("object").clone(),
         include_cypher: true,
+        valid_at: None,
     }
 }
 

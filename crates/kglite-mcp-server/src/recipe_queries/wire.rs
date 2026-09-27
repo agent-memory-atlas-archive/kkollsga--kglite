@@ -26,6 +26,12 @@ pub(crate) struct RunRecipeQueryArgs {
     /// audit. Both fields are omitted when this is false.
     #[serde(default)]
     pub(crate) include_cypher: bool,
+    /// Run the query as of this date — an ISO date (`"2020-06-30"`) or
+    /// datetime (`"2020-06-30T12:00:00"`). Same as writing the prefix
+    /// `FOR VALID_TIME AS OF date('2020-06-30')` before the stored query; the
+    /// graph needs a validity declaration (`db.temporal.declarations()`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) valid_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]

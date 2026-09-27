@@ -25,7 +25,7 @@ use super::executor::{
     is_view_routed_procedure, CypherExecutor,
 };
 use super::parameter_presence::{walk_query, AstSink};
-use super::result::ResultRow;
+use super::result::{ResultRow, TemporalDiagnostics};
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{
@@ -350,6 +350,39 @@ fn resolve_instant(
     eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))
 }
 
+/// The valid-time echo for `query` on this execution — the instant it
+/// resolves to and the declared targets its scopes reach — answered by
+/// `route`. `None` without a context, and when the instant does not resolve
+/// (execution reports that itself).
+pub(crate) fn temporal_echo(
+    query: &CypherQuery,
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+    route: &str,
+) -> Option<TemporalDiagnostics> {
+    let context = query.context.as_ref()?;
+    let instant = resolve_instant(context, graph, params).ok()?;
+    let mut template = GuardTemplate::default();
+    merge_scope_templates(query, &mut template);
+    let nodes = template.nodes.iter().map(|n| format!("(:{})", n.label));
+    let edges = template.edges.iter().map(|e| match &e.source_type {
+        Some(source) => format!("[:{} from :{source}]", e.rel_type),
+        None => format!("[:{}]", e.rel_type),
+    });
+    Some(TemporalDiagnostics {
+        axis: context.axis.to_ascii_uppercase(),
+        instant: match instant {
+            eval::Instant::Date(date) => date.format("%Y-%m-%d").to_string(),
+            eval::Instant::Timestamp(ts) => ts.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+        },
+        targets: nodes.chain(edges).collect(),
+        route: route.to_string(),
+        retrieval: None,
+        slice: false,
+        session_version: graph.version(),
+    })
+}
+
 /// The session's plain-plan exit: `query`'s text without its context prefix
 /// (`PROFILE ` kept), when every declared target of the graph is indexed and
 /// timeless at the instant this execution resolves — the filter would remove
@@ -478,8 +511,8 @@ pub enum PrependError {
     /// The query already carries a `FOR … AS OF` context and `valid_at=`
     /// would add a second; `literal` is the one `valid_at=` spelled.
     DoubledContext { literal: String },
-    /// The query carries a `FOR … AS OF` context and runs on a view that is
-    /// already as of `literal`.
+    /// The query carries a `FOR … AS OF` context, or `valid_at=` asks for
+    /// one, on a view that is already as of `literal`.
     ViewAlreadyAsOf { literal: String },
 }
 
@@ -495,9 +528,9 @@ impl std::fmt::Display for PrependError {
             ),
             PrependError::ViewAlreadyAsOf { literal } => write!(
                 f,
-                "this view is already as of {literal}, and the query carries its own \
-                 FOR … AS OF context; drop the query's context, or take a fresh view \
-                 (freeze(valid_at=…)) at the other instant"
+                "this view is already as of {literal}, and the query asks for another \
+                 instant (its own FOR … AS OF context, or valid_at=); drop that, or take \
+                 a fresh view (freeze(valid_at=…)) at the other instant"
             ),
         }
     }

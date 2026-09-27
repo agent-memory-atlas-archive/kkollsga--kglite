@@ -144,6 +144,33 @@ A `PROFILE` statement's per-clause statistics arrive through `profile()`: one
 map per executed clause with `clause`, `rows_in`, `rows_out` and `elapsed_us`
 (empty for an unprofiled statement).
 
+### As of an instant
+
+On a graph with a validity declaration (`CALL db.temporal.declare(...)`, see
+`CYPHER.md` §Valid-time context), a read can run **as of** an instant: pass a
+`ValidAt` to `query`, `queryResult` or `queryBatch`. It writes the statement
+prefix `FOR VALID_TIME AS OF date('…')` before the text — the same prefix the
+Python and MCP bindings' `valid_at` write — rendered from `java.time`, never
+spliced: a `LocalDate` becomes `date('…')`, a `LocalDateTime` becomes
+`datetime('…')` read as naive UTC, and an `OffsetDateTime`, `ZonedDateTime` or
+`Instant` is converted to UTC first. A `String` is parsed as ISO before it is
+rendered. The answer holds only the elements valid at the instant, and
+`diagnostics().get("temporal")` echoes the instant, the declared targets the
+statement reached and the route (`guarded`, or `plain` when nothing was
+filtered). A text that already carries a `FOR … AS OF` prefix is the engine's
+syntax error.
+
+```java
+ValidAt mid2009 = ValidAt.of(LocalDate.of(2009, 6, 30));
+graph.query("MATCH (f:Field)-[:OPERATED_BY]->(c) RETURN f.name, c.name", Map.of(), mid2009);
+
+// One snapshot for a whole report: every statement sees the same graph state.
+List<QueryResult> report = graph.queryBatch(List.of(
+        BatchQuery.of("MATCH (f:Field) RETURN count(f) AS fields"),
+        new BatchQuery("MATCH (f:Field {name: $name}) RETURN f.status", Map.of("name", "VOLVE"))),
+        mid2009);
+```
+
 ## Values
 
 Rows are `List<Map<String, Object>>`: one `Map` per row, keyed by column name

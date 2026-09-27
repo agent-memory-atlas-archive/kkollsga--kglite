@@ -310,7 +310,10 @@ pub(super) fn audit_fields(
     query: &RecipeQueryDefinition,
 ) -> (Option<String>, Option<Map<String, Value>>) {
     if args.include_cypher {
-        (Some(query.cypher.clone()), Some(args.variables.clone()))
+        // What ran: the stored text behind `valid_at`'s prefix when one applied.
+        let cypher = crate::tools::query_with_valid_at(&query.cypher, args.valid_at.as_deref())
+            .unwrap_or_else(|_| query.cypher.clone());
+        (Some(cypher), Some(args.variables.clone()))
     } else {
         (None, None)
     }

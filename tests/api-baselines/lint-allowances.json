@@ -133,11 +133,11 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::result_large_err",
+      "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, valid_at: Option<&Bound<'_, PyAny>>, ) -> PyResult<Py<PyAny>>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/frozen.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, valid_at: Option<&Bound<'_, PyAny>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -221,11 +221,11 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/session.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/session.rs::fn:cypher:fn cypher( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, valid_at: Option<&Bound<'_, PyAny>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/session.rs::fn:execute:fn execute( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, write_scope: Option<Vec<String>>, git_sha: Option<String>, modified_by: Option<String>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/session.rs::fn:execute:fn execute( &self, py: Python<'_>, query: &str, to_df: bool, params: Option<&Bound<'_, PyDict>>, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, write_scope: Option<Vec<String>>, git_sha: Option<String>, modified_by: Option<String>, valid_at: Option<&Bound<'_, PyAny::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -245,7 +245,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/transaction.rs::fn:cypher:fn cypher( &mut self, py: Python<'_>, query: &str, params: Option<&Bound<'_, PyDict>>, to_df: bool, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, write_scope: Option<Vec<String>>, git_sha: Option<String>, modified_by: Option<String>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/transaction.rs::fn:cypher:fn cypher( &mut self, py: Python<'_>, query: &str, params: Option<&Bound<'_, PyDict>>, to_df: bool, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, write_scope: Option<Vec<String>>, git_sha: Option<String>, modified_by: Option<String>, valid_at: Option<&Bound<'_, Py::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -561,7 +561,7 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:timeless_route:fn timeless_route( graph: &DirGraph, query: &str, prepared: PreparedQuery, opts: &ExecuteOptions<'_>, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:timeless_route:fn timeless_route( graph: &DirGraph, query: &str, prepared: PreparedQuery, opts: &ExecuteOptions<'_>, ) -> Result<(PreparedQuery, Option<TemporalDiagnostics>), KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {

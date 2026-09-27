@@ -784,10 +784,12 @@ pub unsafe extern "C" fn kglite_session_free(session: *mut KgliteSession) {
 
 impl SessionState {
     /// Build the per-call [`ExecuteOptions`] for this session — eager
-    /// defaults plus the session's embedder. Centralized so the read / mut /
-    /// batch paths can't drift on per-call option defaults.
+    /// defaults with the streaming aggregate pipeline on (its rows are
+    /// materialized too), plus the session's embedder. Centralized so the
+    /// read / mut / batch paths can't drift on per-call option defaults.
     fn make_opts<'a>(&self, params: &'a HashMap<String, Value>) -> ExecuteOptions<'a> {
         let mut opts = ExecuteOptions::eager(params);
+        opts.streaming = true;
         opts.embedder = self
             .embedder
             .lock()

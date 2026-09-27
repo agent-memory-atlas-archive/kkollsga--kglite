@@ -25,9 +25,12 @@ import java.util.Map;
  * @param diagnostics the engine's full diagnostics object — {@code warnings},
  *                    {@code elapsed_ms}, {@code timeout_ms},
  *                    {@code row_limit}, {@code total_rows},
- *                    {@code retrieval} and, for a {@code PROFILE} statement,
- *                    {@code profile} — or an empty map when the engine
- *                    reported none
+ *                    {@code retrieval}, for a statement under
+ *                    {@code FOR VALID_TIME AS OF} (see {@link ValidAt})
+ *                    {@code temporal} — the instant, the declared targets
+ *                    reached and the route — and, for a {@code PROFILE}
+ *                    statement, {@code profile}; or an empty map when the
+ *                    engine reported none
  */
 public record QueryResult(
         List<Map<String, Object>> rows, List<String> warnings, Map<String, Object> diagnostics) {

@@ -64,6 +64,39 @@ before upgrading.
   `ValidTimeView` behind it, whose `slice()` builds (and caches per
   segment, under a 128 MiB cap, a 2M-element cap on Disk) a materialised
   graph of the valid elements with a map back to the base's nodes.
+- Python: `Session.cypher()`, `Session.execute()`, `Transaction.cypher()` and
+  `FrozenGraph.cypher()` take `valid_at=`, as `KnowledgeGraph.cypher()` does:
+  the same `FOR VALID_TIME AS OF` prefix, `EXPLAIN` / `PROFILE` after it, and
+  `ValueError` for a query that already carries a context. On a
+  `freeze(valid_at=…)` handle `valid_at=` raises that `ValueError` (the handle
+  fixes its instant); a write under `valid_at=` is refused as the prefix is.
+- MCP: `run_recipe_query` and every named recipe tool (`tool:`) take
+  `valid_at`, an ISO date or datetime, and run the stored query behind the
+  prefix; `include_cypher` reports the prefixed text, and a doubled context or
+  an unreadable instant is a `query_failed` error. A recipe query that
+  declares a `valid_at` parameter of its own keeps it as its variable.
+- Query diagnostics echo a valid-time statement: Python
+  `ResultView.diagnostics["temporal"]`, the MCP `temporal:` line and recipe
+  result `diagnostics.temporal`, the C ABI's (and so Java's) diagnostics JSON
+  `temporal` object, and the Bolt SUCCESS metadata `kglite.temporal`. It names
+  the axis, the instant resolved (ISO; naive UTC for a datetime), the declared
+  targets the statement reaches, the `route` — `guarded`, `plain` when every
+  declared target was valid in full so the unfiltered plan ran, `view` on a
+  `freeze(valid_at=…)` handle — the masked vector route (`exact_mask` /
+  `hnsw_mask`) of a `vector_score` top-k, whether a graph algorithm ran on the
+  valid slice, and the session-scoped graph version answered. Statements
+  without a context carry no `temporal` object in the serialized forms
+  (`None` under the Python key); their diagnostics are otherwise unchanged.
+- Java: `ValidAt` renders the prefix from `java.time` (`LocalDate` →
+  `date('…')`, `LocalDateTime` → `datetime('…')` read as naive UTC, offset and
+  zoned datetimes and `Instant` converted to UTC, ISO strings parsed first);
+  `query(…, ValidAt)`, `queryResult(…, ValidAt)` and the new
+  `queryBatch(List<BatchQuery>[, ValidAt])`, which binds
+  `kglite_session_execute_read_batch` so a multi-query report reads one
+  snapshot. No C ABI symbol was added.
+- Rust API: `QueryDiagnostics::temporal` (`kglite::api::cypher::TemporalDiagnostics`),
+  serialized only when set, and `ValidTimeView::execute_read`, which runs a
+  read through the view and echoes route `view`.
 - Cypher: retrieval and graph algorithms under `FOR VALID_TIME AS OF` (and on
   a `freeze(valid_at=…)` handle). `text_bm25()` ranks with the statistics of
   the documents valid at the instant — their count, mean length and each
@@ -210,6 +243,13 @@ before upgrading.
 
 ### Changed
 
+- The Bolt server, the MCP server, the CLI, the C ABI (and so Java), and the
+  graph-carried skill and recipe writers run trailing aggregates through the
+  streaming pipeline, as the Python handles do. Performance only: the rows
+  are identical to the materialized path.
+- **Breaking (Rust):** `kglite::api::cypher::QueryDiagnostics` has a new
+  field, `temporal`; a struct literal must name it or end in
+  `..Default::default()`.
 - Python: `FrozenGraph.cypher()`, `Session.cypher()` and `Transaction.cypher()`
   fold a trailing aggregate (`count`, `sum`, grouped `RETURN`/`WITH`, `ORDER BY
   … LIMIT` over it) into its result as rows are matched, as
@@ -330,6 +370,11 @@ before upgrading.
 
 ### Fixed
 
+- Bolt: `FOR VALID_TIME AS OF … EXPLAIN …` (the prefix before `EXPLAIN`)
+  now answers as every `EXPLAIN` does over Bolt — zero records and the plan
+  in the SUCCESS metadata's `plan` key — instead of forwarding the plan's
+  step rows as records. The server reads the executed outcome's explain
+  flag rather than the statement's first keyword.
 - Cypher: past 64 driving rows, `UNWIND $keys AS k MATCH (n:T {prop: k})`
   (and `{prop: r.key}`, `WITH x AS k MATCH …`) returned no match for a key
   of another kind than the stored value that the row-by-row match treats as

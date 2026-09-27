@@ -552,8 +552,10 @@ pub(crate) fn execute_cypher_inner(
     }
 
     // Eager rows are required by both the legacy formatters and structured
-    // routes. The embedder and codecs match the pre-extraction execution path.
+    // routes; the streaming aggregate pipeline materializes them too. The
+    // embedder and codecs match the pre-extraction execution path.
     let mut opts = kglite::api::session::ExecuteOptions::eager(&params);
+    opts.streaming = true;
     opts.embedder = kg.embedder().cloned();
     opts.value_codecs = policy.value_codecs;
     // A permission, not an instruction: the engine still applies its own
@@ -611,6 +613,9 @@ pub(crate) fn cypher_diagnostics_block(result: &cypher::CypherResult) -> String 
                 "\nretrieval: {}\n",
                 serde_json::json!(d.retrieval)
             ));
+        }
+        if let Some(temporal) = &d.temporal {
+            out.push_str(&format!("\ntemporal: {}\n", serde_json::json!(temporal)));
         }
     }
     out

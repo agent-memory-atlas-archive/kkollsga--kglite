@@ -8,6 +8,7 @@
 pub mod embedder;
 pub mod languages;
 pub mod pyapi;
+pub(crate) mod valid_time;
 
 pub use pyapi::transaction::Transaction;
 

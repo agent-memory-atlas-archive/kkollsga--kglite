@@ -120,7 +120,7 @@ const COMPONENTS_EDITION: &str = "community";
 mod intercepts;
 use intercepts::{
     checkpoint_stream, parse_checkpoint_call, parse_server_facts_call, plan_from_explain_rows,
-    server_facts_stream, strip_keyword_ci, CheckpointCall, ServerFactsCall, ServerFactsVerb,
+    server_facts_stream, CheckpointCall, ServerFactsCall, ServerFactsVerb,
 };
 
 /// Bolt backend wrapping a loaded kglite graph.
@@ -560,7 +560,7 @@ impl BoltBackend for KgliteBackend {
 
         let elapsed_start = Instant::now();
 
-        let (result, type_str) = if let Some(handle) = transaction.map(|t| t.0.clone()) {
+        let (result, type_str, explain) = if let Some(handle) = transaction.map(|t| t.0.clone()) {
             // Explicit tx: metadata was parsed at BEGIN and lives on the
             // TxState (Neo4j drivers send tx metadata on BEGIN only).
             self.execute_in_tx(&handle, query, kg_params)?
@@ -599,9 +599,12 @@ impl BoltBackend for KgliteBackend {
             if !d.retrieval.is_empty() {
                 summary.insert("kglite.retrieval".into(), retrieval_metadata(&d.retrieval));
             }
+            if let Some(temporal) = &d.temporal {
+                summary.insert("kglite.temporal".into(), temporal_metadata(temporal));
+            }
         }
         let mut columns = result.columns;
-        if strip_keyword_ci(trimmed, "explain").is_some() {
+        if explain {
             if let Some(plan) = plan_from_explain_rows(&columns, &result.rows) {
                 summary.insert("plan".to_string(), plan);
                 records.clear();
@@ -1123,9 +1126,11 @@ impl KgliteBackend {
     ) -> kglite::api::session::ExecuteOptions<'a> {
         // Eager rows — bolt-server materializes every result into BoltRecords
         // before handing back to boltr; no lazy materializer at this layer.
+        // The streaming aggregate pipeline materializes its rows too.
         // `text_score()` isn't wired either (embedder = None in the defaults);
         // text-score queries are rejected at the session level.
         let mut opts = kglite::api::session::ExecuteOptions::eager(kg_params);
+        opts.streaming = true;
         // All three are no-ops on reads; see `TxMeta` for what they carry.
         opts.write_scope = meta.write_scope.as_ref();
         opts.git_sha = meta.git_sha.as_deref();
@@ -1229,7 +1234,7 @@ impl KgliteBackend {
         query: &str,
         kg_params: HashMap<String, Value>,
         meta: &TxMeta,
-    ) -> Result<(cypher::CypherResult, &'static str), BoltError> {
+    ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
         // Pre-parse to reject auto-commit mutations with a Bolt-specific error
         // before session::execute_read rejects with a generic one. The parse
         // result is discarded; the executor's parse_cache makes the second
@@ -1257,7 +1262,7 @@ impl KgliteBackend {
         let opts = self.execute_opts(&kg_params, meta);
         let outcome =
             kglite::api::session::execute_read(&snapshot, query, &opts).map_err(kg_to_bolt)?;
-        Ok((outcome.result, "r"))
+        Ok((outcome.result, "r", outcome.explain))
     }
 
     /// Tx path: outer mutex only long enough to clone the per-tx Arc, then the
@@ -1273,7 +1278,7 @@ impl KgliteBackend {
         handle: &str,
         query: &str,
         kg_params: HashMap<String, Value>,
-    ) -> Result<(cypher::CypherResult, &'static str), BoltError> {
+    ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
         // Step 1: Brief outer-mutex hold to look up the per-tx Arc.
         let state_arc: Arc<Mutex<TxState>> = {
             let txs = self.transactions.lock().unwrap_or_else(|p| p.into_inner());
@@ -1312,7 +1317,7 @@ impl KgliteBackend {
             let working = tx_inner.working_mut().map_err(kg_to_bolt)?;
             let outcome =
                 kglite::api::session::execute_mut(working, query, &opts).map_err(kg_to_bolt)?;
-            Ok((outcome.result, "w"))
+            Ok((outcome.result, "w", outcome.explain))
         } else {
             let graph = tx_inner.current().ok_or_else(|| {
                 BoltError::Backend(format!(
@@ -1321,9 +1326,32 @@ impl KgliteBackend {
             })?;
             let outcome =
                 kglite::api::session::execute_read(graph, query, &opts).map_err(kg_to_bolt)?;
-            Ok((outcome.result, "r"))
+            Ok((outcome.result, "r", outcome.explain))
         }
     }
+}
+
+/// The valid-time echo as `kglite.temporal` summary metadata.
+fn temporal_metadata(echo: &kglite::api::cypher::TemporalDiagnostics) -> BoltValue {
+    let text = |value: &str| BoltValue::String(value.to_string());
+    BoltValue::Dict(BoltDict::from([
+        ("axis".into(), text(&echo.axis)),
+        ("instant".into(), text(&echo.instant)),
+        (
+            "targets".into(),
+            BoltValue::List(echo.targets.iter().map(|t| text(t)).collect()),
+        ),
+        ("route".into(), text(&echo.route)),
+        (
+            "retrieval".into(),
+            echo.retrieval.as_deref().map_or(BoltValue::Null, text),
+        ),
+        ("slice".into(), BoltValue::Boolean(echo.slice)),
+        (
+            "session_version".into(),
+            BoltValue::Integer(echo.session_version as i64),
+        ),
+    ]))
 }
 
 fn retrieval_metadata(records: &[kglite::api::cypher::RetrievalDiagnostics]) -> BoltValue {

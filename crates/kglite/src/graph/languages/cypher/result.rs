@@ -355,6 +355,41 @@ pub struct QueryDiagnostics {
     /// lower bound. `None` both when no cap applied and when the result fitted
     /// inside one.
     pub total_rows: Option<u64>,
+    /// How a statement under `FOR VALID_TIME AS OF` (or a binding's
+    /// `valid_at=`) was answered. `None`, and left out of the serialized form,
+    /// for a statement without a context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal: Option<TemporalDiagnostics>,
+}
+
+/// The valid-time echo on [`QueryDiagnostics::temporal`]: the instant a
+/// context resolved to, what it filtered and by which route.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TemporalDiagnostics {
+    /// The context's axis, `VALID_TIME`.
+    pub axis: String,
+    /// The instant this execution resolved, ISO 8601: `2009-06-30` for a
+    /// date, `2009-06-30T12:00:00` (naive UTC) for a datetime.
+    pub instant: String,
+    /// The declared targets the statement's patterns reach, merged across
+    /// every scope and without bounds (EXPLAIN shows only the top scope,
+    /// with bounds): `(:Well)`, `[:LICENSEE]`, `[:LICENSEE from :Field]`.
+    pub targets: Vec<String>,
+    /// `guarded`: the statement ran under the filter (EXPLAIN renders that
+    /// plan). `plain`: every declared target was timeless at the instant, so
+    /// the filter removed nothing and the statement ran its plain plan.
+    /// `view`: it ran through a valid-time view (`freeze(valid_at=)`).
+    pub route: String,
+    /// `exact_mask` when a vector retrieval scored the valid vectors exactly,
+    /// `hnsw_mask` when it narrowed an HNSW index's candidates to the valid
+    /// ones; `None` without a vector retrieval.
+    pub retrieval: Option<String>,
+    /// Whether a graph algorithm ran on the valid slice.
+    pub slice: bool,
+    /// The graph version the answer was computed at. Session-scoped: it
+    /// restarts when a graph is loaded, so it compares answers within one
+    /// process, not across saves.
+    pub session_version: u64,
 }
 
 /// One executed vector retrieval route. Repeated identical routes are coalesced;

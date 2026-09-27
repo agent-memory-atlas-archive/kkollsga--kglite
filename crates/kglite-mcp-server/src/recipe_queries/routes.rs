@@ -152,10 +152,11 @@ pub(crate) fn register_recipe_query_routes(
     }
 
     for entry in named.iter() {
+        let (schema, takes_valid_at) = named_tool_schema(&entry.parameters);
         let attr = Tool::new_with_raw(
             entry.tool.clone(),
             Some(entry.description.clone().into()),
-            Arc::new(entry.parameters.clone()),
+            Arc::new(schema),
         )
         .with_output_schema::<RunRecipeQueryOutput>()
         .with_annotations(safe_annotations());
@@ -168,14 +169,22 @@ pub(crate) fn register_recipe_query_routes(
             move |ctx: ToolCallContext<'_, McpServer>| -> DynFut<'_, Result<CallToolResponse, McpError>> {
                 let state = handler_state.clone();
                 let catalog = handler_catalog.clone();
-                // The arguments *are* the variables: the route already knows
-                // which query it is, so `include_cypher` has no way to be
-                // asked for here — `run_recipe_query` remains the audit route.
+                // The arguments *are* the variables, beside `valid_at`: the
+                // route already knows which query it is, so `include_cypher`
+                // has no way to be asked for here — `run_recipe_query`
+                // remains the audit route.
+                let mut variables = ctx.arguments.clone().unwrap_or_default();
+                let valid_at = if takes_valid_at {
+                    take_valid_at(&mut variables)
+                } else {
+                    None
+                };
                 let args = RunRecipeQueryArgs {
                     recipe: recipe.clone(),
                     query: query.clone(),
-                    variables: ctx.arguments.clone().unwrap_or_default(),
+                    variables,
                     include_cypher: false,
+                    valid_at,
                 };
                 Box::pin(async move {
                     Ok(run_recipe_query(&state, &catalog, args)
@@ -233,6 +242,52 @@ pub(crate) fn register_recipe_query_routes(
     );
 
     Ok(2 + named.len())
+}
+
+/// A named tool's input schema: the query's parameter schema with a
+/// `valid_at` property beside them, and whether it has one — a query that
+/// declares a `valid_at` parameter of its own keeps it as a variable.
+fn named_tool_schema(parameters: &Map<String, Value>) -> (Map<String, Value>, bool) {
+    let mut schema = parameters.clone();
+    let properties = schema
+        .entry("properties")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(properties) = properties.as_object_mut() else {
+        return (parameters.clone(), false);
+    };
+    if properties.contains_key(VALID_AT) {
+        return (parameters.clone(), false);
+    }
+    properties.insert(
+        VALID_AT.to_string(),
+        serde_json::json!({
+            "type": "string",
+            "description": "Run the query as of this date — an ISO date (\"2020-06-30\") or \
+                datetime (\"2020-06-30T12:00:00\"). Same as writing the prefix \
+                FOR VALID_TIME AS OF date('2020-06-30') before the stored query; the graph \
+                needs a validity declaration (db.temporal.declarations()).",
+        }),
+    );
+    (schema, true)
+}
+
+/// The argument named tools reserve beside the query's own variables.
+const VALID_AT: &str = "valid_at";
+
+/// Remove a string `valid_at` from a named tool's arguments. Any other value
+/// stays, and the variable check reports it.
+fn take_valid_at(variables: &mut Map<String, Value>) -> Option<String> {
+    match variables.get(VALID_AT) {
+        Some(Value::String(_)) => match variables.remove(VALID_AT) {
+            Some(Value::String(instant)) => Some(instant),
+            _ => None,
+        },
+        Some(Value::Null) => {
+            variables.remove(VALID_AT);
+            None
+        }
+        _ => None,
+    }
 }
 
 /// The run route's published tool: the catalogue in the description, and the

@@ -110,12 +110,13 @@ impl Transaction {
     ///         and reports the exact pre-truncation `total_rows`.
     ///     git_sha, modified_by: Freshness provenance stamped alongside
     ///         `updated_at` on types that declare `auto_timestamp`.
+    ///     valid_at: Run the query under `FOR VALID_TIME AS OF` this instant.
     ///
     /// Returns:
     ///     Query results (same format as KnowledgeGraph.cypher).
     // Python boundary mirrors the public query option surface.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (query, params=None, to_df=false, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None))]
+    #[pyo3(signature = (query, params=None, to_df=false, timeout_ms=None, max_work_units=None, row_limit=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None))]
     fn cypher(
         &mut self,
         py: Python<'_>,
@@ -128,7 +129,10 @@ impl Transaction {
         write_scope: Option<Vec<String>>,
         git_sha: Option<String>,
         modified_by: Option<String>,
+        valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let query = crate::graph::valid_time::prefixed_query(query, valid_at)?;
+        let query = query.as_ref();
         let write_scope_set: Option<std::collections::HashSet<String>> =
             write_scope.map(|v| v.into_iter().collect());
         // Check transaction-level deadline first

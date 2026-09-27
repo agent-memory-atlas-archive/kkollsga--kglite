@@ -37,7 +37,8 @@ impl CypherExecutor<'_> {
     pub(super) fn attach_runtime_diagnostics(&self, result: &mut CypherResult) {
         let records = self.take_retrieval();
         let warnings = self.take_runtime_warnings();
-        if records.is_empty() && warnings.is_empty() {
+        let sliced = self.view_slice.get().is_some();
+        if records.is_empty() && warnings.is_empty() && !sliced {
             return;
         }
         let d = result
@@ -45,6 +46,10 @@ impl CypherExecutor<'_> {
             .get_or_insert_with(QueryDiagnostics::default);
         d.retrieval.extend(records);
         d.warnings.extend(warnings);
+        if sliced {
+            // The session completes the echo; the executor knows only this.
+            d.temporal.get_or_insert_with(Default::default).slice = true;
+        }
     }
     fn retrieval_option_is_constant(expression: &Expression) -> bool {
         match expression {
@@ -108,6 +113,11 @@ impl CypherExecutor<'_> {
     /// on its own executor, so without this its procedure warnings would be
     /// dropped when that executor is.
     pub(super) fn absorb_warnings(&self, nested: &CypherExecutor<'_>) {
+        // A body under the statement's context routed to the same instant's
+        // slice.
+        if let Some(slice) = nested.view_slice.get() {
+            let _ = self.view_slice.set(std::sync::Arc::clone(slice));
+        }
         for record in nested.take_retrieval() {
             self.record_retrieval(record);
         }
