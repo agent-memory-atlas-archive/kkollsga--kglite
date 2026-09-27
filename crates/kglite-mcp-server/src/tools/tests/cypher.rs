@@ -861,15 +861,33 @@ fn valid_at_prepends_the_context_prefix() {
         "{}",
         output.text
     );
-    let run = query_with_valid_at("MATCH (v:Vessel) RETURN v.id", Some("2020-06-30")).unwrap();
-    let Err(err) = run_cypher_tool_output(
+    let count = "MATCH (v:Vessel) RETURN count(v) AS n";
+    let plain = run_cypher_tool_output(
         &active,
-        &run,
+        count,
         HashMap::new(),
         ExecPolicy::default(),
         CSV_OFF,
-    ) else {
-        panic!("a context query executed");
-    };
-    assert!(err.contains("not executable yet"), "{err}");
+    )
+    .expect("the plain count runs");
+    let valid = query_with_valid_at(count, Some("2020-06-30")).unwrap();
+    let during = run_cypher_tool_output(
+        &active,
+        &valid,
+        HashMap::new(),
+        ExecPolicy::default(),
+        CSV_OFF,
+    )
+    .expect("a context query runs");
+    assert_eq!(during.text, plain.text, "every vessel is valid in 2020");
+    let before = query_with_valid_at(count, Some("1990-06-30")).unwrap();
+    let output = run_cypher_tool_output(
+        &active,
+        &before,
+        HashMap::new(),
+        ExecPolicy::default(),
+        CSV_OFF,
+    )
+    .expect("a context query runs");
+    assert_ne!(output.text, plain.text, "no vessel is valid in 1990");
 }

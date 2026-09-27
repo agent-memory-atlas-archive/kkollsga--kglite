@@ -1515,15 +1515,39 @@ Python `cypher(…, valid_at=…)` and the MCP `cypher_query` tool's `valid_at`
 argument write the same prefix.
 
 ```cypher
-FOR VALID_TIME AS OF date('2010-06-30') EXPLAIN
+FOR VALID_TIME AS OF date('2010-06-30')
 MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
 ```
 
-- **Not executable yet in this build.** Execution arrives in a later change:
-  a statement carrying a context raises "valid-time contexts are not
-  executable yet in this build". `EXPLAIN` works and leads the plan with a
+- **What it sees.** The statement answers as if the graph held only the
+  elements valid at the instant. A node passes when it is valid under every
+  declared label it carries — primary or secondary — so `MATCH (n)` and
+  `MATCH (n:Field)` agree; a relationship passes when it is valid under the
+  declaration keyed on its own source node's type (else its type's unkeyed
+  one) **and** both its endpoints pass, named or not. Undeclared labels and
+  types are timeless. A NULL or missing bound is open; a bound that is not a
+  date, a datetime or an ISO string raises, naming the element. An id seek
+  (`{id: …}`) finds the version valid at the instant when several version
+  nodes share the id.
+- **Execution.** The instant is resolved once per execution (a `$param` or
+  `date()` is read when the statement runs, so a cached plan never carries
+  one). Counts (`count(*)` over a label, a type or the whole graph), node
+  scans with an aggregate or `ORDER BY … LIMIT`, top-k over matched rows and
+  `elementId` anchors keep their fast routes under a context; the fused
+  per-group aggregates that read the store beside the pattern matcher do not.
+  `PROFILE` runs the same way. `EXPLAIN` leads the plan with a
   `ValidTimeContext` row naming the axis and the declared intervals the query
   can reach; the instant is resolved per execution, not planned.
+- **Timeless exit.** When every declared type of the graph is valid in full
+  at the instant — "as of today" on a graph that holds only current rows —
+  the statement runs the plan of its text without the prefix, with every
+  fast route, and returns the same rows. This is decided per execution, in
+  memory and mapped storage (disk storage keeps no endpoint index, so there
+  the statement always runs guarded).
+- **Not available under a context yet:** variable-length relationships
+  (`-[:R*1..3]->`; a fixed `*2` is written out as hops and runs) and
+  `shortestPath` / `allShortestPaths` raise "… not available under FOR
+  VALID_TIME AS OF yet".
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
@@ -1532,7 +1556,8 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   such as `db.labels()` and `db.temporal.declarations()` are fine),
   `degree()` / `inDegree()` / `outDegree()` / `shortest_path_length()` (they
   read a node's relationships outside the pattern matcher; not available under
-  a context yet), and a relationship type whose declarations are `ambiguous`.
+  a context yet — `COUNT { (n)--() }` is), and a relationship type whose
+  declarations are `ambiguous`.
 
 ### Duration semantics
 

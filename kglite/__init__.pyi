@@ -7467,10 +7467,12 @@ class KnowledgeGraph:
                 (``db.temporal.declare``); axes other than ``VALID_TIME``,
                 writing statements, and element-enumerating procedures
                 (``pagerank()`` and the like — metadata procedures such as
-                ``db.labels()`` are fine) are refused. **Not executable yet
-                in this build:** a statement with a valid-time context
-                raises "valid-time contexts are not executable yet in this
-                build"; ``EXPLAIN`` works and shows the plan with a leading
+                ``db.labels()`` are fine) are refused, and variable-length
+                relationships and ``shortestPath`` are not available under a
+                context yet. The query answers as if the graph held only the
+                elements valid at the instant: a node valid under every
+                declared label it carries, a relationship valid with both
+                its endpoints. ``EXPLAIN`` shows the plan with a leading
                 ``ValidTimeContext`` row naming the axis and the declared
                 targets the query reaches, the instant being resolved per
                 execution.

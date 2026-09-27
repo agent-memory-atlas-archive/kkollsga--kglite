@@ -35,6 +35,7 @@ pub use request::{
     node_request_config, node_type_has_property, relationship_request_configs,
     relationship_type_has_property, unknown_bound_message, NodeValidityRequest, ValidityTest,
 };
+pub(crate) use validate::{edge_bound, node_bound};
 
 use crate::datatypes::values::Value;
 use crate::graph::schema::{InternedKey, TemporalConfig};
@@ -44,15 +45,20 @@ use eval::{BoundSide, Instant, TemporalError};
 /// `property 'vf': the from bound … is not a date …` — the element prefix is
 /// the caller's, since only it knows which element the properties belong to.
 fn describe(err: TemporalError, config: &TemporalConfig) -> String {
+    describe_bound_error(err, &config.valid_from, &config.valid_to)
+}
+
+/// [`describe`] for a declaration known by its two bound property names.
+pub(crate) fn describe_bound_error(err: TemporalError, from: &str, to: &str) -> String {
     let property = match &err {
         TemporalError::Bound {
             side: BoundSide::From,
             ..
-        } => &config.valid_from,
+        } => from,
         TemporalError::Bound {
             side: BoundSide::To,
             ..
-        } => &config.valid_to,
+        } => to,
         TemporalError::Instant { .. } => return err.to_string(),
     };
     format!("property '{property}': {err}")

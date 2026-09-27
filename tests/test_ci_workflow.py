@@ -341,6 +341,7 @@ def test_storage_and_disk_jobs_run_bounded_regression_targets() -> None:
         "tests/test_phase4_parity.py",
         "tests/test_phase5_parity.py::test_graph_copy_cow_correctness_memory",
         "tests/test_phase5_parity.py::test_graph_copy_cow_correctness_mapped",
+        "tests/test_valid_time_oracle.py",
     ):
         assert target in parity_args, f"storage-parity does not run {target}"
 

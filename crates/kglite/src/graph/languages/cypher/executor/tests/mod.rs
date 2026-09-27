@@ -32,6 +32,8 @@
 //! - [`strings`] — string functions and procedure list arguments
 //! - [`temporal_procedures`] — `db.temporal.*` declarations: arguments,
 //!   yielded rows, the abutment advisory, rollback
+//! - [`valid_time_guard`] — the valid-time guard in the matcher: one matcher
+//!   constructor, and each guard site's answer under `FOR VALID_TIME AS OF`
 //! - [`text_bm25`] — the BM25 scalar's null/zero split, freshness policy, cache
 //! - [`vector_score`] — the embedding-store scalar's per-query argument cache
 //! - [`vectors`] — `dot` / `cosine` / `norm` over list-valued data
@@ -80,6 +82,7 @@ mod star_projection;
 mod strings;
 mod temporal_procedures;
 mod text_bm25;
+mod valid_time_guard;
 mod vector_score;
 mod vectors;
 mod with_scope;

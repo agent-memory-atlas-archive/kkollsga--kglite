@@ -4,8 +4,8 @@ use super::scan_eval::{ScanCompiler, ScanExpr, ScanPred, ScanRuntime};
 use super::*;
 use crate::datatypes::values::Value;
 use crate::graph::core::pattern_matching::{
-    EdgeDirection, EdgePattern, MatchBinding, NodePattern, Pattern, PatternElement,
-    PatternExecutor, PatternMatch, PropertyMatcher,
+    EdgeDirection, EdgePattern, MatchBinding, NodePattern, Pattern, PatternElement, PatternMatch,
+    PropertyMatcher,
 };
 use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::parallel::{self, ParallelInterrupt};
@@ -88,7 +88,9 @@ fn expression_may_read_var(expr: &Expression, var: &str) -> bool {
 /// sweep nor the CSR counter can honour them. (`edge.edge_filter`, the
 /// planner-pushed relationship predicate, is a different field and is not
 /// excluded here — `count_simple_pattern_from_bound` applies it per edge.)
-fn simple_node_edge_node(pattern: &Pattern) -> Option<(&NodePattern, &EdgePattern, &NodePattern)> {
+pub(super) fn simple_node_edge_node(
+    pattern: &Pattern,
+) -> Option<(&NodePattern, &EdgePattern, &NodePattern)> {
     if pattern.elements.len() != 3 {
         return None;
     }
@@ -107,15 +109,15 @@ fn simple_node_edge_node(pattern: &Pattern) -> Option<(&NodePattern, &EdgePatter
 
 /// The bound end of a single-hop `(a)-[e]-(b)` pattern, the directions to
 /// sweep from it, and the unbound end's pattern.
-struct BoundHop<'p> {
-    bound_idx: NodeIndex,
-    traverse_dirs: &'static [Direction],
-    other: &'p NodePattern,
+pub(super) struct BoundHop<'p> {
+    pub(super) bound_idx: NodeIndex,
+    pub(super) traverse_dirs: &'static [Direction],
+    pub(super) other: &'p NodePattern,
 }
 
 /// Exactly one end must be bound (`bound` resolves a variable); `None` when
 /// both or neither is. An undirected pattern sweeps both directions.
-fn bound_hop<'p>(
+pub(super) fn bound_hop<'p>(
     node_a: &'p NodePattern,
     edge: &EdgePattern,
     node_b: &'p NodePattern,
@@ -922,7 +924,7 @@ impl<'a> CypherExecutor<'a> {
                 }))
     }
 
-    fn node_satisfies_pattern_labels(
+    pub(super) fn node_satisfies_pattern_labels(
         &self,
         idx: NodeIndex,
         np: &crate::graph::core::pattern_matching::NodePattern,
@@ -998,7 +1000,7 @@ impl<'a> CypherExecutor<'a> {
         where_clause: &Option<Box<Predicate>>,
         row: &ResultRow,
     ) -> Option<Result<bool, String>> {
-        if self.graph_filter.is_some()
+        if self.graph_filter().is_some()
             || patterns.len() != 1
             || !self.incident_scan_respects_bindings(&patterns[0], row)
         {
@@ -1150,9 +1152,8 @@ impl<'a> CypherExecutor<'a> {
         pattern: &crate::graph::core::pattern_matching::Pattern,
         bindings: &Bindings<NodeIndex>,
     ) -> Result<Option<i64>, String> {
-        // Counts adjacency without the matcher, so a guard cannot see it.
-        if self.graph_filter.is_some() {
-            return Ok(None);
+        if let Some(filter) = self.graph_filter() {
+            return self.count_simple_pattern_guarded(filter, pattern, bindings, false);
         }
         self.count_simple_pattern_from_bound(pattern, bindings, false)
     }
@@ -1168,8 +1169,8 @@ impl<'a> CypherExecutor<'a> {
         pattern: &crate::graph::core::pattern_matching::Pattern,
         bindings: &Bindings<NodeIndex>,
     ) -> Result<Option<i64>, String> {
-        if self.graph_filter.is_some() {
-            return Ok(None);
+        if let Some(filter) = self.graph_filter() {
+            return self.count_simple_pattern_guarded(filter, pattern, bindings, true);
         }
         self.count_simple_pattern_from_bound(pattern, bindings, true)
     }
@@ -1285,7 +1286,7 @@ impl<'a> CypherExecutor<'a> {
         // Slow path: iterate incident edges. This loop can cover millions of
         // edges for hub nodes (Q5 has ~40 M incoming P31 edges), so check the
         // deadline every 1 M iterations.
-        let pe = PatternExecutor::new_lightweight_with_params(self.graph, None, self.params);
+        let pe = self.pattern_executor(None, None);
         let mut count: i64 = 0;
         let mut peers: HashSet<NodeIndex> = HashSet::new();
         let mut iter: usize = 0;

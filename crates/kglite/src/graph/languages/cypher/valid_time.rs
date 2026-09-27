@@ -10,7 +10,8 @@
 //!
 //! A statement lowering refuses keeps its context with the refusal on it,
 //! raised before execution and before EXPLAIN renders a plan (see
-//! [`check_executable`]).
+//! [`check_executable`]). One that lowers executes under the filter
+//! [`execution_filter`] resolves.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use super::result::ResultRow;
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{
-    EdgeGuard, GraphFilter, GuardBounds, GuardTemplate, NodeGuard, ValidTimeSelector,
+    EdgeGuard, ElementFilter, GraphFilter, GuardBounds, GuardTemplate, NodeGuard, ValidTimeSelector,
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
 use crate::graph::features::temporal::{self, eval, TemporalTarget};
@@ -32,11 +33,6 @@ use crate::graph::schema::{DirGraph, InternedKey};
 
 /// The one axis that lowers.
 const VALID_TIME: &str = "VALID_TIME";
-
-/// The refusal every execution under a context meets in this build.
-pub(crate) const NOT_EXECUTABLE_YET: &str =
-    "valid-time contexts are not executable yet in this build: FOR VALID_TIME AS OF \
-     parses, lowers and renders under EXPLAIN, but a statement carrying one does not run";
 
 /// Compile `query`'s context into a guard template per scope, or record why
 /// the statement is refused. Without a context this returns on its first
@@ -258,63 +254,133 @@ impl Reach {
     }
 }
 
-/// Raise what stops `query` from running. `rendering_only` is true where
-/// the caller renders an EXPLAIN plan and executes nothing: a lowering
-/// refusal still stops it, the build's "not yet" does not.
-///
-/// Otherwise the instant is resolved first — once per execution, from the
-/// caller's parameters — so a bad instant names itself before the
-/// statement meets [`NOT_EXECUTABLE_YET`].
-pub(crate) fn check_executable(
+/// Raise the refusal lowering recorded on `query`'s context, if any. Called
+/// before a plan is cached, before EXPLAIN renders it, and at execution.
+pub(crate) fn check_executable(query: &CypherQuery) -> Result<(), String> {
+    match query.context.as_ref().and_then(|c| c.refusal.as_ref()) {
+        Some(refusal) => Err(refusal.clone()),
+        None => Ok(()),
+    }
+}
+
+/// The filter `query` executes under: the template of every scope joined
+/// with the instant this execution resolves, from the caller's parameters,
+/// against the graph's endpoint indexes. `None` without a context, and when
+/// the filter removes nothing at the instant (every target timeless).
+pub(crate) fn execution_filter(
     query: &CypherQuery,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
-    rendering_only: bool,
-) -> Result<(), String> {
+) -> Result<Option<Arc<ElementFilter>>, String> {
     let Some(context) = &query.context else {
-        return Ok(());
+        return Ok(None);
     };
-    refuse_context(query, context, graph, params, rendering_only)
+    resolve_execution_filter(query, context, graph, params)
 }
 
 #[cold]
 #[inline(never)]
-fn refuse_context(
+fn resolve_execution_filter(
     query: &CypherQuery,
     context: &StatementContext,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
-    rendering_only: bool,
-) -> Result<(), String> {
-    if let Some(refusal) = &context.refusal {
-        return Err(refusal.clone());
-    }
-    if rendering_only {
-        return Ok(());
-    }
-    // Resolved as execution will resolve it before the refusal below: in
-    // memory and mapped storage that builds the endpoint index; Disk builds
-    // none, so there the walk only counts and every target stays guarded.
-    let _resolved = resolve_filter(query, context, graph, params)?.resolve(graph);
-    Err(NOT_EXECUTABLE_YET.to_string())
+) -> Result<Option<Arc<ElementFilter>>, String> {
+    let mut template = GuardTemplate::default();
+    merge_scope_templates(query, &mut template);
+    let filter = GraphFilter {
+        template: Arc::new(template),
+        selector: ValidTimeSelector::AsOf(resolve_instant(context, graph, params)?),
+    };
+    let resolved = filter.resolve(graph);
+    Ok(ElementFilter::new(&filter, resolved).map(Arc::new))
 }
 
-/// Join the top scope's template with the instant this execution resolves.
-fn resolve_filter(
+/// Every scope's template in one: the executor resolves one filter per
+/// statement, and a UNION arm or `CALL { }` body may reach targets the top
+/// scope does not. Guarding a target a scope cannot reach changes nothing.
+fn merge_scope_templates(query: &CypherQuery, into: &mut GuardTemplate) {
+    if let Some(guard) = &query.guard {
+        for node in &guard.nodes {
+            if !into.nodes.iter().any(|n| n.label == node.label) {
+                into.nodes.push(node.clone());
+            }
+        }
+        for edge in &guard.edges {
+            let same =
+                |e: &EdgeGuard| e.rel_type == edge.rel_type && e.source_type == edge.source_type;
+            if !into.edges.iter().any(same) {
+                into.edges.push(edge.clone());
+            }
+        }
+    }
+    for clause in &query.clauses {
+        match clause {
+            Clause::Union(arm) => merge_scope_templates(&arm.query, into),
+            Clause::CallSubquery { body, .. } => merge_scope_templates(body, into),
+            _ => {}
+        }
+    }
+}
+
+/// The context's instant, evaluated once per execution.
+fn resolve_instant(
+    context: &StatementContext,
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+) -> Result<eval::Instant, String> {
+    let value = CypherExecutor::with_params(graph, params, None)
+        .evaluate_expression(&context.instant, &ResultRow::new())?;
+    eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))
+}
+
+/// The session's plain-plan exit: `query`'s text without its context prefix
+/// (`PROFILE ` kept), when every declared target of the graph is indexed and
+/// timeless at the instant this execution resolves — the filter would remove
+/// nothing, so the unguarded plan, with every fused route, gives the same
+/// rows. All declarations count, not only those the statement names: a label
+/// the query never spells can still govern the nodes it reaches. Decided per
+/// execution (the instant may be a parameter or today) and never cached.
+pub(crate) fn timeless_plain_text(
+    text: &str,
+    query: &CypherQuery,
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+) -> Option<String> {
+    let context = query.context.as_ref()?;
+    if query.explain || context.refusal.is_some() {
+        return None;
+    }
+    plain_text_if_timeless(text, query, context, graph, params)
+}
+
+#[cold]
+#[inline(never)]
+fn plain_text_if_timeless(
+    text: &str,
     query: &CypherQuery,
     context: &StatementContext,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
-) -> Result<GraphFilter, String> {
-    let template = query.guard.clone().unwrap_or_default();
-    let value = CypherExecutor::with_params(graph, params, None)
-        .evaluate_expression(&context.instant, &ResultRow::new())?;
-    let instant =
-        eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))?;
-    Ok(GraphFilter {
-        template,
-        selector: ValidTimeSelector::AsOf(instant),
-    })
+) -> Option<String> {
+    let instant = resolve_instant(context, graph, params).ok()?;
+    let every_target = Reach {
+        any_node: true,
+        any_rel: true,
+        ..Reach::default()
+    };
+    let template = every_target
+        .template(graph, &temporal::declared(graph))
+        .ok()?;
+    if !temporal::endpoint_index::template_timeless_at(graph, &template, instant) {
+        return None;
+    }
+    let body_start = text
+        .char_indices()
+        .nth(context.body_start)
+        .map_or(text.len(), |(byte, _)| byte);
+    let prefix = if query.profile { "PROFILE " } else { "" };
+    Some(format!("{prefix}{}", &text[body_start..]))
 }
 
 /// The context instant when the statement spells it as a constant — a

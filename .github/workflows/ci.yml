@@ -921,7 +921,7 @@ jobs:
         run: |
           python -m venv .venv
           echo "$PWD/.venv/bin" >> $GITHUB_PATH
-          .venv/bin/pip install maturin pytest pytest-timeout pandas
+          .venv/bin/pip install maturin pytest pytest-timeout pandas hypothesis
           .venv/bin/maturin develop --release
       - name: Run bounded memory/mapped/disk parity matrix
         run: |
@@ -933,7 +933,7 @@ jobs:
             tests/test_phase3_parity.py tests/test_phase4_parity.py \
             tests/test_phase5_parity.py::test_graph_copy_cow_correctness_memory \
             tests/test_phase5_parity.py::test_graph_copy_cow_correctness_mapped \
-            tests/test_temporal_persistence.py
+            tests/test_temporal_persistence.py tests/test_valid_time_oracle.py
 
   disk-concurrency:
     needs: [dedup]

@@ -5,7 +5,7 @@
 //! shape (BFS between two anchor points rather than the usual pattern-walk).
 
 use super::*;
-use crate::graph::core::pattern_matching::{NodePattern, PathHop, PatternExecutor};
+use crate::graph::core::pattern_matching::{NodePattern, PathHop};
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
@@ -208,15 +208,7 @@ impl<'a> CypherExecutor<'a> {
                 }
             }
 
-            let executor = PatternExecutor::with_bindings_and_params(
-                self.graph,
-                None,
-                &pre_bindings,
-                self.params,
-            )
-            .set_deadline(self.deadline)
-            .set_cancel(self.cancel)
-            .set_parallel(self.parallel);
+            let executor = self.pattern_executor(None, Some(&pre_bindings));
             let mut candidates = |slot: usize,
                                   node: &NodePattern,
                                   anchor: &EndpointAnchor|
@@ -323,6 +315,7 @@ impl<'a> CypherExecutor<'a> {
         existing: ResultSet,
         inline_where: Option<&Predicate>,
     ) -> Result<ResultSet, String> {
+        self.refuse_path_search_under_filter()?;
         let pattern = clause
             .patterns
             .get(path_assignment.pattern_index)

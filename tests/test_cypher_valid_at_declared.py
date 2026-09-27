@@ -112,3 +112,19 @@ def test_a_relationship_takes_its_source_types_keyed_declaration_first(storage, 
         rows = g.cypher(f"MATCH (s)-[r:HAS]->() WHERE {form} RETURN s.name AS s ORDER BY s").to_list()
         # The Field edge is half-open (keyed), the Well edge closed (unkeyed).
         assert [r["s"] for r in rows] == ["w"], form
+
+
+def test_a_bound_a_secondary_label_records_is_known() -> None:
+    """A node of type A carrying the declared secondary label B, with both of
+    B's bounds unset: the bounds are open, not an unknown property. Red before
+    the fix: the existence check read only the primary type, which never
+    holds `b_from`."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("CREATE (:B {id: 1, b_from: date('2001-01-01'), b_to: date('2002-01-01')}), (:A {id: 2})").to_list()
+    graph.cypher("MATCH (a:A) SET a:B").to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'B', from: 'b_from', to: 'b_to', convention: 'closed'})").to_list()
+    rows = graph.cypher("MATCH (n:A) RETURN valid_at(n, date('2010-01-01'), 'b_from', 'b_to') AS ok").to_list()
+    assert rows == [{"ok": True}]
+    # A name no label the node carries records is still refused.
+    with pytest.raises(kglite.KgError, match="does not exist on node type 'A'"):
+        graph.cypher("MATCH (n:A) RETURN valid_at(n, date('2010-01-01'), 'c_from', 'b_to') AS ok").to_list()

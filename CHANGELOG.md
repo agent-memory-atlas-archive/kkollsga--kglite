@@ -24,10 +24,23 @@ before upgrading.
   `db.labels()` are fine), `degree()` / `inDegree()` / `outDegree()` /
   `shortest_path_length()` (not available under a context yet), a
   relationship type whose declarations are ambiguous, a second prefix, and a prefix inside a UNION arm or a
-  `CALL { }` body. Execution arrives in a later change: in this build a
-  statement carrying a context raises "valid-time contexts are not executable
-  yet in this build", and only `EXPLAIN` runs. Rust:
-  `kglite::api::cypher::prepend_valid_time`.
+  `CALL { }` body. Rust: `kglite::api::cypher::prepend_valid_time`.
+- Cypher: a statement under `FOR VALID_TIME AS OF` executes. It answers as if
+  the graph held only the elements valid at the instant: a node valid under
+  every declared label it carries (primary or secondary), a relationship
+  valid under the declaration keyed on its own source node's type and with
+  both endpoints valid. Undeclared types are timeless, a NULL bound is open,
+  and a bound that is not a date, datetime or ISO string raises naming the
+  element. An id seek finds the version valid at the instant when several
+  version nodes share the id. Counts, node scans with an aggregate or
+  `ORDER BY … LIMIT`, top-k over matched rows, `COUNT { }` and `elementId`
+  anchors keep their fast routes under a context; `PROFILE` runs too. When
+  every declared type is valid in full at the instant (as of today on a graph
+  of current rows) the statement runs its unprefixed plan, with every fast
+  route. Not available under a context yet: variable-length relationships and
+  `shortestPath` / `allShortestPaths` (a fixed `*2` runs as written-out hops).
+  The Python `cypher(valid_at=…)` argument and the MCP `cypher_query` tool's
+  `valid_at` argument run through the same prefix.
 - Cypher `date()` with no argument returns today's date in UTC; it used to
   raise "requires 1 argument".
 - `CALL db.temporal.declarations()` yields `empty_rows` and
@@ -253,6 +266,11 @@ before upgrading.
   blueprint (or re-run the loads) to recover the rows.
 
 ### Fixed
+
+- Cypher: the four-argument `valid_at` / `valid_during` accept a bound
+  property that a declared secondary label of the node records; they used to
+  raise "property … does not exist on node type" when the node's primary type
+  never held it, although the bound was merely unset (open).
 
 - Cypher: `EXPLAIN` / `PROFILE` written at the start of a top-level `UNION`
   arm (`RETURN 1 AS x UNION EXPLAIN RETURN 2 AS x`) was accepted and silently

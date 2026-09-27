@@ -232,7 +232,7 @@ impl<'a> PatternExecutor<'a> {
                     // treats each start node once.
                     union.sort_unstable();
                     union.dedup();
-                    union
+                    self.guard_seeds(union)
                 } else {
                     self.find_matching_nodes(first_node)?
                 }

@@ -409,6 +409,9 @@ impl CypherParser {
                 break;
             }
         }
+        if let Some(context) = context.as_mut() {
+            context.body_start = self.pos;
+        }
         let mut query = self.parse_query_body(explain, profile)?;
         query.context = context;
         Ok(query)
@@ -735,7 +738,15 @@ pub fn parse_cypher(input: &str) -> Result<CypherQuery, KgError> {
     }
     let mut parser = CypherParser::with_keyword_lexemes(tokens, keyword_lexemes);
     match parser.parse_query() {
-        Ok(q) => Ok(q),
+        Ok(mut q) => {
+            if let Some(context) = q.context.as_mut() {
+                context.body_start = positions
+                    .get(context.body_start)
+                    .copied()
+                    .unwrap_or_else(|| input.chars().count());
+            }
+            Ok(q)
+        }
         Err(e) => {
             let char_offset = positions
                 .get(parser.pos)

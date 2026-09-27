@@ -58,6 +58,11 @@ pub(crate) struct StatementContext {
     /// Why lowering refused the statement, raised before any execution and
     /// before EXPLAIN renders a plan.
     pub(crate) refusal: Option<String>,
+    /// Where the statement's body starts in its text, in chars: the parser
+    /// records the token index and `parse_cypher` turns it into the offset.
+    /// The session's timeless exit re-plans the text from here without the
+    /// prefix.
+    pub(crate) body_start: usize,
 }
 
 /// How a read `CALL { ... }` subquery receives variables from its outer row.

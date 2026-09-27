@@ -153,7 +153,7 @@ impl Seen {
     }
 }
 
-pub(super) fn node_bound(graph: &DirGraph, idx: NodeIndex, property: &str) -> Value {
+pub(crate) fn node_bound(graph: &DirGraph, idx: NodeIndex, property: &str) -> Value {
     let value = match property {
         "id" => graph.graph.get_node_id(idx),
         "title" => graph.graph.get_node_title(idx),
@@ -206,7 +206,7 @@ fn walk_nodes(
     Ok((walk, seen))
 }
 
-pub(super) fn edge_bound(graph: &DirGraph, edge: EdgeIndex, key: InternedKey) -> Value {
+pub(crate) fn edge_bound(graph: &DirGraph, edge: EdgeIndex, key: InternedKey) -> Value {
     graph
         .graph
         .get_edge_property(edge, key)

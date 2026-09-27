@@ -2,6 +2,7 @@ use crate::datatypes::values::Value;
 use crate::graph::core::filtering::{
     compare_values, may_parse_as_temporal, str_values_equal, values_equal,
 };
+use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::dir_graph::indexes::predicate_queries::string_index_hits;
@@ -472,6 +473,10 @@ pub struct PatternExecutor<'a> {
     /// fluent API, MERGE matching). `None` on memory/mapped backends —
     /// one enum match at construction on the in-memory hot path.
     _arena_guard: Option<crate::graph::storage::disk::graph::DiskQueryGuard>,
+    /// The statement's resolved `FOR VALID_TIME AS OF` filter: every node
+    /// candidate and every matched hop is put to it (`matcher_guard.rs`).
+    /// `None` outside a context, where each guard site is one `Option` test.
+    graph_filter: Option<std::sync::Arc<ElementFilter>>,
 }
 
 static EMPTY_PARAMS: std::sync::LazyLock<HashMap<String, Value>> =
@@ -496,6 +501,7 @@ impl<'a> PatternExecutor<'a> {
             cap_truncated: AtomicBool::new(false),
             match_ceiling: None,
             _arena_guard: graph.graph.begin_query(),
+            graph_filter: None,
         }
     }
 
@@ -518,6 +524,7 @@ impl<'a> PatternExecutor<'a> {
             cap_truncated: AtomicBool::new(false),
             match_ceiling: None,
             _arena_guard: graph.graph.begin_query(),
+            graph_filter: None,
         }
     }
 
@@ -541,6 +548,7 @@ impl<'a> PatternExecutor<'a> {
             cap_truncated: AtomicBool::new(false),
             match_ceiling: None,
             _arena_guard: graph.graph.begin_query(),
+            graph_filter: None,
         }
     }
 
@@ -558,6 +566,15 @@ impl<'a> PatternExecutor<'a> {
     /// Cypher executor threads down from `ExecuteOptions`, like `cancel`.
     pub fn set_parallel(mut self, parallel: bool) -> Self {
         self.parallel = parallel;
+        self
+    }
+
+    /// Put every node and hop this execution matches to `filter`.
+    pub(crate) fn set_graph_filter(
+        mut self,
+        filter: Option<std::sync::Arc<ElementFilter>>,
+    ) -> Self {
+        self.graph_filter = filter;
         self
     }
 
@@ -632,7 +649,10 @@ impl<'a> PatternExecutor<'a> {
         self.find_matching_nodes(pattern)
     }
 
-    fn find_matching_nodes(&self, pattern: &NodePattern) -> Result<Vec<NodeIndex>, String> {
+    fn find_matching_nodes_unguarded(
+        &self,
+        pattern: &NodePattern,
+    ) -> Result<Vec<NodeIndex>, String> {
         let extra_keys: Vec<InternedKey> = pattern
             .extra_labels
             .iter()
@@ -769,7 +789,7 @@ impl<'a> PatternExecutor<'a> {
                 // order — nondeterministic across processes).
                 let mut hits: Vec<petgraph::graph::NodeIndex> = Vec::new();
                 for node_type in self.graph.type_indices.keys() {
-                    if let Some(idx) = self.graph.lookup_by_id_readonly(node_type, id_val) {
+                    if let Some(idx) = self.lookup_node_id(node_type, id_val) {
                         if props.len() == 1 || self.node_matches_properties(idx, props) {
                             hits.push(idx);
                         }
@@ -1319,7 +1339,7 @@ impl<'a> PatternExecutor<'a> {
         if let Some(PropertyMatcher::In(values)) = props.get("id") {
             let mut result = Vec::with_capacity(values.len());
             for val in values {
-                if let Some(idx) = self.graph.lookup_by_id_readonly(node_type, val) {
+                if let Some(idx) = self.lookup_node_id(node_type, val) {
                     result.push(idx);
                 }
             }
@@ -1506,7 +1526,7 @@ impl<'a> PatternExecutor<'a> {
                     .map(|alias| alias == prop_name.as_str())
                     .unwrap_or(false);
             if is_id_alias {
-                if let Some(idx) = self.graph.lookup_by_id_readonly(node_type, value) {
+                if let Some(idx) = self.lookup_node_id(node_type, value) {
                     return Some(vec![idx]);
                 }
                 return Some(Vec::new()); // key miss, not a missing index
@@ -1894,6 +1914,8 @@ impl<'a> PatternExecutor<'a> {
             && !edge_pattern.needs_path_info
             && edge_pattern.connection_types.is_none()
             && self.graph.graph.is_disk()
+            // The sweep yields no relationship to guard; the general loop does.
+            && self.graph_filter.is_none()
     }
 
     /// One hop over the disk CSR's peer list, without materialising an edge.
@@ -2036,6 +2058,7 @@ impl<'a> PatternExecutor<'a> {
         // it returns survives the post-expansion filters
         // (`HopPlan::var_length_cap_safe`), so the BFS may stop once filled.
         if let Some((min_hops, max_hops)) = edge_pattern.var_length {
+            self.refuse_var_length_under_filter()?;
             return self.expand_var_length(
                 source,
                 &VarLengthSegment {
@@ -2127,6 +2150,9 @@ impl<'a> PatternExecutor<'a> {
                 if target_hint.is_some_and(|h| target != h) {
                     continue;
                 }
+                if self.hop_hidden(edge.id(), conn_type, edge.source(), target) {
+                    continue;
+                }
 
                 // Primary + secondary labels; skipped when the edge type
                 // guarantees the target's type.
@@ -2200,6 +2226,9 @@ impl<'a> PatternExecutor<'a> {
 
 #[path = "matcher_expansion.rs"]
 mod expansion;
+
+#[path = "matcher_guard.rs"]
+pub(crate) mod guard;
 
 #[path = "matcher_var_length.rs"]
 mod var_length;

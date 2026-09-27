@@ -52,6 +52,7 @@ impl CypherParser {
             axis,
             instant,
             refusal: None,
+            body_start: 0,
         })
     }
 

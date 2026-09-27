@@ -243,22 +243,10 @@ impl<'a> CypherExecutor<'a> {
         // Search-space only — the predicate stays.
         let unbound: Bindings<petgraph::graph::NodeIndex> = Bindings::new();
         let anchors = match_clause::seed_clause_node_anchors(clause, &unbound);
-        let executor = match anchors.as_ref() {
-            Some(pre_bindings) => PatternExecutor::with_bindings_and_params(
-                self.graph,
-                pattern_limit,
-                pre_bindings,
-                self.params,
-            ),
-            None => {
-                PatternExecutor::new_lightweight_with_params(self.graph, pattern_limit, self.params)
-            }
-        }
-        .set_deadline(self.deadline)
-        .set_cancel(self.cancel)
-        .set_parallel(self.parallel)
-        .set_match_ceiling(self.budget.match_ceiling("MATCH expansion"))
-        .set_distinct_target(matcher_distinct_target);
+        let executor = self
+            .pattern_executor(pattern_limit, anchors.as_ref())
+            .set_match_ceiling(self.budget.match_ceiling("MATCH expansion"))
+            .set_distinct_target(matcher_distinct_target);
         let matches = executor.execute(pattern)?;
         self.budget.check_work(matches.len(), "MATCH expansion")?;
 
@@ -660,7 +648,7 @@ impl<'a> CypherExecutor<'a> {
                 .patterns
                 .iter()
                 .map(|p| {
-                    if self.graph_filter.is_some() {
+                    if self.graph_filter().is_some() {
                         return None;
                     }
                     transient_index::TransientEqIndex::try_build(self.graph, p, existing_rows.len())
@@ -777,7 +765,7 @@ impl<'a> CypherExecutor<'a> {
                 // clause-local edge set is unchanged.)
                 if let Some(idx) = &transient_indexes[pi] {
                     debug_assert!(
-                        self.graph_filter.is_none(),
+                        self.graph_filter().is_none(),
                         "transient equality index reached under a graph filter"
                     );
                     if !cur.node_bindings.contains_key(idx.bind_var.as_str())

@@ -461,7 +461,17 @@ impl CypherExecutor<'_> {
             node_type_has_property, relationship_type_has_property,
         };
         match element.kind {
-            ElementKind::Node(_) => node_type_has_property(self.graph, &element.target, field),
+            // A declaration on a secondary label governs the node too, so a
+            // bound that label records is known here.
+            ElementKind::Node(idx) => {
+                node_type_has_property(self.graph, &element.target, field)
+                    || (self.graph.has_secondary_labels
+                        && self
+                            .graph
+                            .secondary_label_names(idx)
+                            .iter()
+                            .any(|label| node_type_has_property(self.graph, label, field)))
+            }
             ElementKind::Edge { .. } => {
                 relationship_type_has_property(self.graph, &element.target, field)
             }

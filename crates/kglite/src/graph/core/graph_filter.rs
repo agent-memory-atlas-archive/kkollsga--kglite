@@ -5,14 +5,20 @@
 //! per execution, so a cached plan never carries an instant.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use fixedbitset::FixedBitSet;
+use petgraph::graph::{EdgeIndex, NodeIndex};
+use rustc_hash::FxHashMap;
+
+use crate::datatypes::values::Value;
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::features::temporal::endpoint_index;
 pub(crate) use crate::graph::features::temporal::endpoint_index::ResolvedFilter;
-use crate::graph::features::temporal::eval::Instant;
-use crate::graph::features::temporal::IntervalConvention;
-use crate::graph::schema::{InternedKey, TemporalConfig};
+use crate::graph::features::temporal::endpoint_index::{self, ElementMasks};
+use crate::graph::features::temporal::eval::{self, Instant, TemporalError};
+use crate::graph::features::temporal::{self, IntervalConvention, TemporalTarget};
+use crate::graph::schema::{InternedKey, TemporalConfig, TypeIdIndex};
+use crate::graph::storage::GraphRead;
 use crate::graph::TemporalContext;
 
 /// The declared validity interval of one node label a scope can reach.
@@ -137,4 +143,319 @@ impl GraphFilter {
     pub(crate) fn resolve(&self, graph: &DirGraph) -> ResolvedFilter {
         endpoint_index::resolve(graph, &self.template, self.selector)
     }
+}
+
+/// A [`GraphFilter`] resolved for one execution: the test every guarded site
+/// puts an element to. A bit test where the endpoint index gave a mask; the
+/// validity evaluator on the declaration's bound properties for the targets it did
+/// not (Disk mode, an unreadable bound, the byte cap, a range selector). NULL
+/// or missing bounds are open.
+///
+/// A node passes only when it is valid under every declared label it carries
+/// (primary or secondary); a relationship is judged by the declaration keyed
+/// on its own source node's primary type, else the type's unkeyed one.
+#[derive(Debug)]
+pub(crate) struct ElementFilter {
+    selector: ValidTimeSelector,
+    masks: Option<Arc<ElementMasks>>,
+    /// Declared labels the masks do not cover.
+    node_residual: Box<[(InternedKey, GuardBounds)]>,
+    /// Per relationship type with a declaration the masks do not cover, every
+    /// declaration of that type in the template.
+    edge_rules: Box<[(InternedKey, Box<[EdgeRule]>)]>,
+    /// The first bound the evaluator could not read. The element is rejected
+    /// and the execution raises this once it finishes.
+    error: OnceLock<String>,
+    /// Per declared type, its admitted nodes' ids — see [`Self::lookup_id`].
+    valid_ids: Mutex<FxHashMap<String, Arc<TypeIdIndex>>>,
+}
+
+#[derive(Debug)]
+struct EdgeRule {
+    source: Option<InternedKey>,
+    bounds: GuardBounds,
+    /// Left to the evaluator: its rows have no mask.
+    residual: bool,
+}
+
+impl ElementFilter {
+    /// `None` when the resolved filter removes nothing: every target is
+    /// timeless at the instant, or the template has no target.
+    pub(crate) fn new(filter: &GraphFilter, resolved: ResolvedFilter) -> Option<Self> {
+        if resolved.timeless || (resolved.masks.is_none() && resolved.guarded.is_empty()) {
+            return None;
+        }
+        let template = &filter.template;
+        let residual_node = |label: &str| {
+            resolved
+                .guarded
+                .iter()
+                .any(|t| matches!(t, TemporalTarget::Node(l) if l == label))
+        };
+        let node_residual = template
+            .nodes
+            .iter()
+            .filter(|guard| residual_node(&guard.label))
+            .map(|guard| (InternedKey::from_str(&guard.label), guard.bounds.clone()))
+            .collect();
+        let residual_edge = |guard: &EdgeGuard| {
+            resolved.guarded.iter().any(|t| {
+                matches!(t, TemporalTarget::Relationship { rel_type, source_type }
+                    if *rel_type == guard.rel_type && *source_type == guard.source_type)
+            })
+        };
+        let mut edge_rules: Vec<(InternedKey, Box<[EdgeRule]>)> = Vec::new();
+        for guard in &template.edges {
+            if !residual_edge(guard) || edge_rules.iter().any(|(k, _)| *k == guard.rel_key) {
+                continue;
+            }
+            let rules = template
+                .edges
+                .iter()
+                .filter(|g| g.rel_key == guard.rel_key)
+                .map(|g| EdgeRule {
+                    source: g.source_type_key,
+                    bounds: g.bounds.clone(),
+                    residual: residual_edge(g),
+                })
+                .collect();
+            edge_rules.push((guard.rel_key, rules));
+        }
+        Some(ElementFilter {
+            selector: filter.selector,
+            masks: resolved.masks,
+            node_residual,
+            edge_rules: edge_rules.into_boxed_slice(),
+            error: OnceLock::new(),
+            valid_ids: Mutex::new(FxHashMap::default()),
+        })
+    }
+
+    /// Whether node `idx` is visible.
+    #[inline]
+    pub(crate) fn admits_node(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        if let Some(masks) = &self.masks {
+            if !bit_admits(&masks.nodes, idx.index()) {
+                return false;
+            }
+        }
+        self.node_residual.is_empty() || self.residual_admits_node(graph, idx)
+    }
+
+    /// Whether relationship `edge` of type `conn`, leaving `source`, is
+    /// visible — its own interval only, not its endpoints.
+    #[inline]
+    pub(crate) fn admits_edge(
+        &self,
+        graph: &DirGraph,
+        edge: EdgeIndex,
+        conn: InternedKey,
+        source: NodeIndex,
+    ) -> bool {
+        if let Some(masks) = &self.masks {
+            if !bit_admits(&masks.edges, edge.index()) {
+                return false;
+            }
+        }
+        self.edge_rules.is_empty() || self.residual_admits_edge(graph, edge, conn, source)
+    }
+
+    /// A matched hop: the relationship and the node it reaches.
+    #[inline]
+    pub(crate) fn admits_hop(
+        &self,
+        graph: &DirGraph,
+        edge: EdgeIndex,
+        conn: InternedKey,
+        source: NodeIndex,
+        far: NodeIndex,
+    ) -> bool {
+        self.admits_edge(graph, edge, conn, source) && self.admits_node(graph, far)
+    }
+
+    /// A relationship and both its endpoints.
+    pub(crate) fn admits_relationship(
+        &self,
+        graph: &DirGraph,
+        edge: EdgeIndex,
+        conn: InternedKey,
+        source: NodeIndex,
+        target: NodeIndex,
+    ) -> bool {
+        self.admits_hop(graph, edge, conn, source, target) && self.admits_node(graph, source)
+    }
+
+    /// How many nodes carrying `label` the filter admits, from the endpoint
+    /// index without visiting them: when no node carries a second label (so
+    /// the label's own interval decides) and the label is undeclared or
+    /// indexed at an instant. `None` sends the caller to a guarded walk.
+    pub(crate) fn label_count(&self, graph: &DirGraph, label: &str) -> Option<usize> {
+        if graph.has_secondary_labels {
+            return None;
+        }
+        let ValidTimeSelector::AsOf(t) = self.selector else {
+            return None;
+        };
+        let key = InternedKey::from_str(label);
+        if self
+            .node_residual
+            .iter()
+            .any(|(residual, _)| *residual == key)
+        {
+            return None;
+        }
+        match graph.temporal.node(label) {
+            None => Some(graph.label_cardinality(label)),
+            Some(_) => endpoint_index::node_count_at(graph, label, t),
+        }
+    }
+
+    /// The error a bound the evaluator could not read raised, if any.
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error.get().map(String::as_str)
+    }
+
+    /// The visible node of `node_type` whose id is `id`, given the one the id
+    /// index returned (`hit`). The id index holds one node per (type, id), so
+    /// when several version nodes share an id it may hand back one that is
+    /// not visible while another is; that case is answered from the visible
+    /// nodes' ids, collected once per type and execution (a linear scan per
+    /// lookup on Disk, whose heap must not grow with the graph).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn lookup_id(
+        &self,
+        graph: &DirGraph,
+        node_type: &str,
+        id: &Value,
+        hit: Option<NodeIndex>,
+    ) -> Option<NodeIndex> {
+        let hit = hit?;
+        if self.admits_node(graph, hit) {
+            return Some(hit);
+        }
+        let nodes = graph.type_indices.get(node_type)?;
+        if graph.graph.is_disk() {
+            return nodes.iter().find(|&idx| {
+                self.admits_node(graph, idx)
+                    && graph
+                        .graph
+                        .get_node_id(idx)
+                        .is_some_and(|v| crate::graph::core::filtering::values_equal(&v, id))
+            });
+        }
+        let index = {
+            let mut cache = self.valid_ids.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = cache.entry(node_type.to_string()).or_insert_with(|| {
+                let ids = nodes
+                    .iter()
+                    .filter(|&idx| self.admits_node(graph, idx))
+                    .filter_map(|idx| Some((graph.graph.get_node_id(idx)?, idx)))
+                    .collect();
+                Arc::new(TypeIdIndex::General(ids))
+            });
+            Arc::clone(entry)
+        };
+        index.get(id)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn residual_admits_node(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        let primary = graph.graph.node_type_of(idx);
+        for (label, bounds) in self.node_residual.iter() {
+            let carries = primary == Some(*label)
+                || (graph.has_secondary_labels
+                    && graph
+                        .secondary_label_index
+                        .get(label)
+                        .is_some_and(|bucket| bucket.binary_search(&idx).is_ok()));
+            if !carries {
+                continue;
+            }
+            let from = temporal::node_bound(graph, idx, &bounds.from);
+            let to = temporal::node_bound(graph, idx, &bounds.to);
+            let valid = self.evaluate(&from, &to, bounds, || {
+                let id = graph
+                    .graph
+                    .get_node_id(idx)
+                    .map_or_else(|| "?".to_string(), |v| format_value_compact(&v));
+                format!("node '{id}'")
+            });
+            if !valid {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn residual_admits_edge(
+        &self,
+        graph: &DirGraph,
+        edge: EdgeIndex,
+        conn: InternedKey,
+        source: NodeIndex,
+    ) -> bool {
+        let Some((_, rules)) = self.edge_rules.iter().find(|(key, _)| *key == conn) else {
+            return true;
+        };
+        let source_type = graph.graph.node_type_of(source);
+        let keyed = rules
+            .iter()
+            .find(|rule| rule.source.is_some() && rule.source == source_type);
+        let Some(rule) = keyed.or_else(|| rules.iter().find(|rule| rule.source.is_none())) else {
+            return true;
+        };
+        if !rule.residual {
+            return true;
+        }
+        let from = temporal::edge_bound(graph, edge, rule.bounds.from_key);
+        let to = temporal::edge_bound(graph, edge, rule.bounds.to_key);
+        self.evaluate(&from, &to, &rule.bounds, || {
+            let id = graph
+                .graph
+                .get_node_id(source)
+                .map_or_else(|| "?".to_string(), |v| format_value_compact(&v));
+            format!("relationship from node '{id}'")
+        })
+    }
+
+    /// Whether `[from, to]` holds the selector; an unreadable bound records
+    /// the execution's error (the first one wins) and rejects the element.
+    fn evaluate(
+        &self,
+        from: &Value,
+        to: &Value,
+        bounds: &GuardBounds,
+        element: impl FnOnce() -> String,
+    ) -> bool {
+        let outcome = match self.selector {
+            ValidTimeSelector::AsOf(t) => eval::interval_contains(from, to, t, bounds.convention),
+            ValidTimeSelector::Overlap(a, b) => {
+                eval::interval_overlaps(from, to, a, b, bounds.convention)
+            }
+        };
+        outcome.unwrap_or_else(|err: TemporalError| {
+            let message = format!(
+                "FOR VALID_TIME AS OF: {}, {}",
+                element(),
+                temporal::describe_bound_error(err, &bounds.from, &bounds.to)
+            );
+            let _ = self.error.set(message);
+            false
+        })
+    }
+}
+
+/// A slot past the mask was created after the filter resolved; no declared
+/// row can be there, so it passes.
+#[inline]
+fn bit_admits(bits: &FixedBitSet, slot: usize) -> bool {
+    slot >= bits.len() || bits.contains(slot)
+}
+
+fn format_value_compact(value: &Value) -> String {
+    crate::graph::core::value_operations::format_value_compact(value)
 }

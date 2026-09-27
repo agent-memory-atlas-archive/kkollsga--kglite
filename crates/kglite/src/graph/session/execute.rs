@@ -352,7 +352,7 @@ pub fn execute_read(
         params,
         encode_plan,
         warnings,
-    } = prepare(graph, query, opts)?;
+    } = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
     let is_mutation = cypher::is_mutation_query(&parsed);
     // Attribute the plan-cache events `prepare` just caused, now that the
     // statement kind is known. Test-only; see `plan_cache::instrumentation`.
@@ -467,7 +467,7 @@ pub fn execute_mut(
         params,
         encode_plan,
         warnings,
-    } = prepare(graph, query, opts)?;
+    } = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
     let is_mutation = cypher::is_mutation_query(&parsed);
     // See the identical call in `execute_read`. Test-only.
     #[cfg(test)]
@@ -853,7 +853,7 @@ fn prepare(
     let disabled_default = cypher::planner::empty_disabled_set();
     let disabled_ref = opts.disabled_passes.unwrap_or(disabled_default);
     cypher::planner::optimize_with_disabled(&mut parsed, graph, &params, disabled_ref);
-    cypher::valid_time::check_executable(&parsed, graph, &params, parsed.explain)
+    cypher::valid_time::check_executable(&parsed)
         .map_err(|message| exec_err(opts, Instant::now(), message))?;
 
     // Lazy marking — only when the caller asked for it. Done BEFORE caching so
@@ -931,6 +931,28 @@ fn prepare(
         encode_plan,
         warnings,
     })
+}
+
+/// A statement under `FOR VALID_TIME AS OF` whose filter would remove
+/// nothing — every declared target of the graph timeless at this execution's
+/// instant — runs the plan of its text without the prefix: the normal planner,
+/// plan cache and fused routes, and the same rows. Re-decided on every
+/// execution (see `valid_time::timeless_plain_text`); EXPLAIN keeps the
+/// guarded plan.
+#[allow(clippy::result_large_err)] // KgError carries query context, as `prepare`'s does.
+fn timeless_route(
+    graph: &DirGraph,
+    query: &str,
+    prepared: PreparedQuery,
+    opts: &ExecuteOptions<'_>,
+) -> Result<PreparedQuery, KgError> {
+    if prepared.plan.context.is_none() {
+        return Ok(prepared);
+    }
+    match cypher::valid_time::timeless_plain_text(query, &prepared.plan, graph, &prepared.params) {
+        Some(plain) => prepare(graph, &plain, opts),
+        None => Ok(prepared),
+    }
 }
 
 /// Attach `QueryDiagnostics` to a finished result — the single place every

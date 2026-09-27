@@ -4,16 +4,17 @@ question asked on a graph that holds only the as-of slice.
 Every A/B cell comes in two halves over the same data:
 
 * ``*_context`` — the full graph (five periods of every versioned element), the
-  question asked "as of" ``T`` through today's declared-type surface: the
-  two-argument ``valid_at(x, $t)`` on every declared element the pattern binds.
+  question asked "as of" ``T`` with the statement prefix
+  ``FOR VALID_TIME AS OF $t`` on the plain query (the guard in the pattern matcher). The
+  variable-length cell keeps the two-argument ``valid_at(x, $t)`` spelling on
+  every node of the path until variable-length relationships run under a
+  context.
 * ``*_view`` — the **view twin**: the same question, unguarded, on a graph
   built from only the elements that ``valid_at`` reports valid at ``T`` (every
   node and relationship the full graph holds valid at ``T``, no declarations).
 
-When the query-wide context prefix lands (``FOR VALID_TIME AS OF $t <query>``),
-each ``*_context`` cell switches from the ``valid_at`` spelling to the prefix
-on the plain query, and the ``*_view`` cell switches from the copied twin to the
-mask-backed view (``freeze(valid_at=)``). The cell names, the graphs and the
+When the mask-backed view lands (``freeze(valid_at=)``), each ``*_view`` cell
+switches from the copied twin to it. The cell names, the graphs and the
 expected answers stay the same, so the cells re-measure the guard and the view
 as each lands. The module-scoped fixtures assert, before anything is timed, that
 each context answer equals its view answer and differs from the unguarded
@@ -155,8 +156,9 @@ def _frames(scale: Scale) -> dict[str, pd.DataFrame]:
     return {"E": e, "R": r, "Field": fields, "Company": companies, "LIC": lic, "OP": op}
 
 
-def _load(frames: dict[str, pd.DataFrame], *, declared: bool) -> KnowledgeGraph:
-    kg = KnowledgeGraph()
+def _load(frames: dict[str, pd.DataFrame], *, declared: bool, kg: KnowledgeGraph | None = None) -> KnowledgeGraph:
+    """Load the frames into `kg` (a new in-memory graph by default)."""
+    kg = KnowledgeGraph() if kg is None else kg
     kg.add_nodes(frames["E"], "E", "vid", "name")
     kg.add_nodes(frames["Field"], "Field", "fid", "name")
     kg.add_nodes(frames["Company"], "Company", "cid", "name")
@@ -204,48 +206,37 @@ def _va(*names: str) -> str:
     return " AND ".join(f"valid_at({name}, $t)" for name in names)
 
 
+AS_OF_T = "FOR VALID_TIME AS OF $t "
+
+
+def _prefixed(plain: str) -> Cell:
+    return Cell(plain, AS_OF_T + plain)
+
+
 CELLS: dict[str, Cell] = {
-    "anchored_1hop": Cell(
-        "MATCH (a:E)-[:R]->(b:E) WHERE a.eid IN $ids RETURN count(*) AS n",
-        f"MATCH (a:E)-[:R]->(b:E) WHERE a.eid IN $ids AND {_va('a', 'b')} RETURN count(*) AS n",
-    ),
-    "node_scan_open": Cell(
-        "MATCH (a:E) RETURN avg(a.score) AS s",
-        f"MATCH (a:E) WHERE {_va('a')} RETURN avg(a.score) AS s",
-    ),
+    "anchored_1hop": _prefixed("MATCH (a:E)-[:R]->(b:E) WHERE a.eid IN $ids RETURN count(*) AS n"),
+    "node_scan_open": _prefixed("MATCH (a:E) RETURN avg(a.score) AS s"),
+    # Variable-length relationships do not run under a context yet.
     "var_length_1_3": Cell(
         "MATCH (a:E)-[:R*1..3]->(b:E) WHERE a.eid IN $ids RETURN count(DISTINCT b) AS n",
         "MATCH p = (a:E)-[:R*1..3]->(b:E) WHERE a.eid IN $ids "
         "AND all(x IN nodes(p) WHERE valid_at(x, $t)) RETURN count(DISTINCT b) AS n",
     ),
-    "count_star": Cell(
-        "MATCH (a:E) RETURN count(*) AS n",
-        f"MATCH (a:E) WHERE {_va('a')} RETURN count(*) AS n",
+    "count_star": _prefixed("MATCH (a:E) RETURN count(*) AS n"),
+    "sodir_anchored_1hop": _prefixed(
+        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE f.id IN $fids RETURN count(*) AS n"
     ),
-    "sodir_anchored_1hop": Cell(
-        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE f.id IN $fids RETURN count(*) AS n",
-        f"MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE f.id IN $fids AND {_va('r')} RETURN count(*) AS n",
-    ),
-    "sodir_q4_3hop": Cell(
+    "sodir_q4_3hop": _prefixed(
         "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)<-[r1:HAS_LICENSEE]-(f2:Field)"
-        "-[r2:HAS_LICENSEE]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n",
-        "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)<-[r1:HAS_LICENSEE]-(f2:Field)"
-        f"-[r2:HAS_LICENSEE]->(p:Company) WHERE f.id IN $fids AND {_va('o', 'r1', 'r2')} "
-        "AND p <> op RETURN count(*) AS n",
+        "-[r2:HAS_LICENSEE]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
     ),
-    "agent_count_per_field": Cell(
-        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) RETURN f.name AS field, count(*) AS n",
-        f"MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE {_va('r')} RETURN f.name AS field, count(*) AS n",
+    "agent_count_per_field": _prefixed(
+        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) RETURN f.name AS field, count(*) AS n"
     ),
-    "agent_top_k": Cell(
-        "MATCH (a:E) RETURN a.eid AS eid, a.score AS s ORDER BY s DESC LIMIT 10",
-        f"MATCH (a:E) WHERE {_va('a')} RETURN a.eid AS eid, a.score AS s ORDER BY s DESC LIMIT 10",
-    ),
-    "agent_degree": Cell(
+    "agent_top_k": _prefixed("MATCH (a:E) RETURN a.eid AS eid, a.score AS s ORDER BY s DESC LIMIT 10"),
+    "agent_degree": _prefixed(
         "MATCH (c:Company)<-[r:HAS_LICENSEE]-(:Field) "
-        "RETURN c.name AS company, count(r) AS deg ORDER BY deg DESC, company LIMIT 10",
-        f"MATCH (c:Company)<-[r:HAS_LICENSEE]-(:Field) WHERE {_va('r')} "
-        "RETURN c.name AS company, count(r) AS deg ORDER BY deg DESC, company LIMIT 10",
+        "RETURN c.name AS company, count(r) AS deg ORDER BY deg DESC, company LIMIT 10"
     ),
 }
 
@@ -347,6 +338,9 @@ DISK_SHAPES = {
 
 def _disk_query(shape: str, guard: str) -> str:
     template, var = DISK_SHAPES[shape]
+    if guard == "context":
+        # The statement prefix: on disk every guard reads the bounds.
+        return AS_OF_T + template.format(g="true")
     return template.format(g=DISK_GUARDS[guard].format(x=var))
 
 
@@ -363,7 +357,7 @@ def _disk_pair(path: str) -> tuple[KnowledgeGraph, dict[str, object]]:
     kg.set_temporal("HAS_LICENSEE", "lf", "lt")
     kg.set_temporal("Stake", "lf", "lt")
     params = _params(DEFAULT)
-    counts = {(s, g): _rows(kg, _disk_query(s, g), params) for s in DISK_SHAPES for g in DISK_GUARDS}
+    counts = {(s, g): _rows(kg, _disk_query(s, g), params) for s in DISK_SHAPES for g in [*DISK_GUARDS, "context"]}
     assert len(set(map(tuple, counts.values()))) == 1, f"disk twins disagree: {counts}"
     return kg, params
 
@@ -374,7 +368,7 @@ def disk_graph(tmp_path_factory) -> tuple[KnowledgeGraph, dict[str, object]]:
 
 
 @pytest.mark.benchmark
-@pytest.mark.parametrize("guard", list(DISK_GUARDS))
+@pytest.mark.parametrize("guard", [*DISK_GUARDS, "context"])
 @pytest.mark.parametrize("shape", list(DISK_SHAPES))
 def test_temporal_disk(benchmark, disk_graph, shape, guard):
     kg, params = disk_graph
@@ -396,15 +390,10 @@ HEAVY_CELLS: dict[str, Cell] = {
         name: CELLS[name]
         for name in ("anchored_1hop", "node_scan_open", "var_length_1_3", "count_star", "sodir_q4_3hop")
     },
-    "anchored_3hop": Cell(
-        "MATCH (a:E)-[:R]->(b:E)-[:R]->(c:E)-[:R]->(d:E) WHERE a.eid IN $ids RETURN count(*) AS n",
-        "MATCH (a:E)-[:R]->(b:E)-[:R]->(c:E)-[:R]->(d:E) WHERE a.eid IN $ids "
-        f"AND {_va('a', 'b', 'c', 'd')} RETURN count(*) AS n",
+    "anchored_3hop": _prefixed(
+        "MATCH (a:E)-[:R]->(b:E)-[:R]->(c:E)-[:R]->(d:E) WHERE a.eid IN $ids RETURN count(*) AS n"
     ),
-    "global_1hop": Cell(
-        "MATCH (a:E)-[:R]->(b:E) RETURN sum(b.score) AS s",
-        f"MATCH (a:E)-[:R]->(b:E) WHERE {_va('a', 'b')} RETURN sum(b.score) AS s",
-    ),
+    "global_1hop": _prefixed("MATCH (a:E)-[:R]->(b:E) RETURN sum(b.score) AS s"),
     "bm25_top10": Cell(
         "MATCH (n:E) RETURN n.eid AS e, text_bm25(n, 'body', 'w7 w311') AS s ORDER BY s DESC, e LIMIT 10",
         f"MATCH (n:E) WHERE {_va('n')} "

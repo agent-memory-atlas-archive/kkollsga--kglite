@@ -236,10 +236,7 @@ impl<'a> CypherExecutor<'a> {
         let group_only_pattern = crate::graph::core::pattern_matching::Pattern {
             elements: vec![pattern.elements[group_elem_idx].clone()],
         };
-        let executor = PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
-            .set_deadline(self.deadline)
-            .set_cancel(self.cancel)
-            .set_parallel(self.parallel);
+        let executor = self.pattern_executor(None, None);
         let group_matches = executor.execute(&group_only_pattern)?;
         let mut total = 0i64;
 
@@ -448,10 +445,7 @@ impl<'a> CypherExecutor<'a> {
                     elements: vec![pattern.elements[group_elem_idx].clone()],
                 };
                 let executor =
-                    PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
-                        .set_deadline(self.deadline)
-                        .set_cancel(self.cancel)
-            .set_parallel(self.parallel);
+                    self.pattern_executor(None, None);
                 Some(executor.execute(&group_only_pattern)?)
             } else {
                 None
@@ -875,7 +869,7 @@ impl<'a> CypherExecutor<'a> {
             };
 
             let prop_executor = group_node_props.as_ref().map(|_| {
-                PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
+                self.pattern_executor(None, None)
             });
 
             if descending {
@@ -1119,10 +1113,7 @@ impl<'a> CypherExecutor<'a> {
                     elements: vec![pattern.elements[group_elem_idx].clone()],
                 };
                 let executor =
-                    PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
-                        .set_deadline(self.deadline)
-                        .set_cancel(self.cancel)
-            .set_parallel(self.parallel);
+                    self.pattern_executor(None, None);
                 let group_matches = executor.execute(&group_only_pattern)?;
                 let mut rows = Vec::with_capacity(group_matches.len());
                 for (scan_count, m) in group_matches.iter().enumerate() {
@@ -1170,10 +1161,7 @@ impl<'a> CypherExecutor<'a> {
     /// range, prefix, global, and backend-specific indexes. The fused operator
     /// still owns expression evaluation and aggregation/top-K maintenance.
     fn fused_scan_candidates(&self, node_pattern: &NodePattern) -> Result<Vec<NodeIndex>, String> {
-        PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
-            .set_deadline(self.deadline)
-            .set_cancel(self.cancel)
-            .set_parallel(self.parallel)
+        self.pattern_executor(None, None)
             .find_matching_nodes_pub(node_pattern)
     }
 
@@ -1646,10 +1634,7 @@ impl<'a> CypherExecutor<'a> {
         // that are writers). Execute M1 fully so its filters apply. The
         // count then runs against M2's pattern, which is anchored on the
         // shared variable per group key.
-        let executor = PatternExecutor::new_lightweight_with_params(self.graph, None, self.params)
-            .set_deadline(self.deadline)
-            .set_cancel(self.cancel)
-            .set_parallel(self.parallel);
+        let executor = self.pattern_executor(None, None);
         let count_pattern: &crate::graph::core::pattern_matching::Pattern =
             if let Some(m2) = secondary_match {
                 &m2.patterns[0]
@@ -1896,7 +1881,7 @@ impl<'a> CypherExecutor<'a> {
         group_key_indices: &[usize],
         count_indices: &[usize],
     ) -> Result<Option<Vec<ResultRow>>, String> {
-        if self.graph_filter.is_some() || pattern.elements.len() != 3 {
+        if self.graph_filter().is_some() || pattern.elements.len() != 3 {
             return Ok(None);
         }
         // Histogram fast path counts every edge of the given type — it

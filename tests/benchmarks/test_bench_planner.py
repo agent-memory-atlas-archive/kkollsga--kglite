@@ -12,7 +12,6 @@ Numbers ride alongside the existing core benchmarks under
 import pandas as pd
 import pytest
 
-import kglite
 from kglite import KnowledgeGraph
 
 
@@ -245,8 +244,8 @@ def test_null_or_pairs_agree():
 # arrays.
 #
 # Resolve: a statement under FOR VALID_TIME AS OF resolves its filter — the
-# segment of the instant and the mask it gives — before this build's not-yet
-# refusal. The rounds cycle through more instants (each its own segment) than
+# segment of the instant and the mask it gives — and runs its guarded count.
+# The rounds cycle through more instants (each its own segment) than
 # the mask cache keeps, so every round builds a mask. The twin plans the same
 # statements under EXPLAIN, which renders without resolving.
 
@@ -321,18 +320,15 @@ def _cycle(graph: KnowledgeGraph, prefix: str):
     def run():
         t = VT_INSTANTS[state["i"] % len(VT_INSTANTS)]
         state["i"] += 1
-        try:
-            return graph.cypher(_VT_QUERY.format(prefix=prefix, t=t)).to_list()
-        except kglite.CypherExecutionError as err:
-            assert "not executable yet" in str(err)
-            return None
+        return graph.cypher(_VT_QUERY.format(prefix=prefix, t=t)).to_list()
 
     return run
 
 
 @pytest.mark.benchmark
 def test_bench_valid_time_resolve_segment(benchmark, valid_time_graph, monkeypatch):
-    """Plan, resolve (segment + a fresh mask) and refuse a context query."""
+    """Plan, resolve (segment + a fresh mask) and run a context query: a
+    guarded fused count, one bit test per node."""
     monkeypatch.delenv(_VT_CAP_ENV, raising=False)
     benchmark(_cycle(valid_time_graph, ""))
 

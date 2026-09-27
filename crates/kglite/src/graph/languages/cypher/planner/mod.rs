@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 mod annotations;
 mod guard;
+#[cfg(test)]
+pub(crate) use guard::is_safe as guard_is_safe;
 mod invariants;
 #[cfg(debug_assertions)]
 use invariants::debug_check_invariants;

@@ -383,5 +383,38 @@
   },
   "tests/test_temporal_persistence.py::test_temporal_declarations_round_trip[disk]": {
     "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_context_equals_the_reference_slice[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_context_equals_the_reference_slice[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_context_equals_the_reference_slice[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_context_equals_the_reference_slice[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_golden_counts_anchor_the_oracle[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_golden_counts_anchor_the_oracle[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_golden_counts_anchor_the_oracle[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_golden_counts_anchor_the_oracle[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_bench_cells_answer_like_their_views[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_bench_cells_answer_like_their_views[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_bench_cells_answer_like_their_views[memory_guards]": {
+    "owner": "storage-parity"
   }
 }

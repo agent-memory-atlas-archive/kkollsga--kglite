@@ -74,6 +74,31 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "mark_disjoint_fixed_trails",
         "trail bookkeeping only; no element is skipped",
     ),
+    (
+        "anchor_element_id",
+        "the anchor is a pre-binding, which the matcher's candidate guard re-tests",
+    ),
+    (
+        "push_limit_into_aggregate",
+        "a group cap over rows the matcher already admitted",
+    ),
+    (
+        "fuse_count_short_circuits",
+        "its counts have a guarded form that tests every node and relationship \
+         (execute_fused_count_guarded)",
+    ),
+    (
+        "fuse_node_scan_aggregate",
+        "its candidates come from the matcher's guarded node scan",
+    ),
+    (
+        "fuse_node_scan_top_k",
+        "its candidates come from the matcher's guarded node scan",
+    ),
+    (
+        "fuse_order_by_top_k",
+        "a bounded heap over rows the matcher already admitted",
+    ),
 ];
 
 /// Passes that never run under a guard, each with what it would bypass. The
@@ -82,10 +107,6 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
 #[cfg(test)]
 const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
     (
-        "anchor_element_id",
-        "seeds a pre-bound slot that skips node acceptance",
-    ),
-    (
         "fuse_spatial_join",
         "an R-tree join over the type index, outside the matcher",
     ),
@@ -93,15 +114,7 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
         "push_limit_into_match",
         "an early stop that may count rows before the guard rejects them",
     ),
-    (
-        "push_limit_into_aggregate",
-        "caps groups outside the matcher",
-    ),
     ("fuse_anchored_edge_count", "counts adjacency offsets"),
-    (
-        "fuse_count_short_circuits",
-        "answers counts from the type index",
-    ),
     (
         "fuse_optional_match_aggregate",
         "a fused per-row count outside the matcher",
@@ -113,22 +126,10 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
         "a fused aggregate operator",
     ),
     (
-        "fuse_node_scan_aggregate",
-        "walks the store without the matcher",
-    ),
-    (
-        "fuse_node_scan_top_k",
-        "walks the store without the matcher",
-    ),
-    (
         "fuse_vector_score_order_limit",
         "retrieval from a vector index",
     ),
     ("fuse_text_bm25_order_limit", "retrieval from a text index"),
-    (
-        "fuse_order_by_top_k",
-        "a fused top-k operator, not yet proven over guarded rows",
-    ),
     (
         "mark_fast_var_length_paths",
         "a fast frontier expansion that bypasses per-element acceptance",
@@ -140,7 +141,7 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
 ];
 
 /// Whether pass `name` may run on a guarded scope.
-pub(super) fn is_safe(name: &str) -> bool {
+pub(crate) fn is_safe(name: &str) -> bool {
     GUARD_SAFE_PASSES.iter().any(|(safe, _)| *safe == name)
 }
 

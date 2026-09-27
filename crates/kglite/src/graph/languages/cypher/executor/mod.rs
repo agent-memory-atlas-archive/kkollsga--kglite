@@ -26,6 +26,7 @@
 use super::ast::*;
 use super::result::*;
 use crate::datatypes::values::Value;
+use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::core::pattern_matching::{
     EdgeDirection, Pattern, PatternElement, PatternExecutor, PropertyMatcher,
 };
@@ -241,17 +242,17 @@ pub struct CypherExecutor<'a> {
     /// [`apply_row_limit`]. `None` (the default, and the only value a nested
     /// executor ever holds) retains everything.
     pub(super) row_limit: Option<usize>,
-    /// The statement's resolved `FOR VALID_TIME AS OF` filter. The guard lives
-    /// in the pattern matcher, so while it is set the fused operators (a debug
-    /// assertion in `execute_single_clause`) and the shortcuts that read this
-    /// field decline: the fast EXISTS probe, the simple-pattern and
-    /// distinct-peer counts, the histogram aggregate and the transient
-    /// equality index. Lowering refuses the scalar functions that read
-    /// relationships directly (`degree()` and kin). `shortestPath` runs its
-    /// own search and does not read this field. Always `None` in this build:
-    /// a statement with a context refuses before execution (see
-    /// `valid_time::check_executable`).
-    pub(super) graph_filter: Option<std::sync::Arc<crate::graph::core::graph_filter::GraphFilter>>,
+    /// The statement's `FOR VALID_TIME AS OF` filter, resolved once at the
+    /// top of [`Self::execute`] (PROFILE runs the same entry) and handed to
+    /// every pattern matcher [`Self::pattern_executor`] builds. Unset outside
+    /// a context and when the filter removes nothing at the instant. While
+    /// set, the operators that read the graph beside the matcher either test
+    /// the filter themselves (the fused counts, the simple-pattern counter,
+    /// see `guarded_ops.rs`) or decline: the fast EXISTS probe, the
+    /// histogram aggregate, the transient equality index and `shortestPath`.
+    /// Lowering refuses the scalar functions that read relationships
+    /// directly (`degree()` and kin).
+    graph_filter: OnceLock<std::sync::Arc<ElementFilter>>,
 }
 
 impl<'a> CypherExecutor<'a> {
@@ -279,7 +280,7 @@ impl<'a> CypherExecutor<'a> {
             relationship_identities: None,
             _arena_guard: graph.graph.begin_query(),
             row_limit: None,
-            graph_filter: None,
+            graph_filter: OnceLock::new(),
         }
     }
 
@@ -408,16 +409,49 @@ impl<'a> CypherExecutor<'a> {
         pre_bindings: &'p Bindings<petgraph::graph::NodeIndex>,
         operator: &'static str,
     ) -> PatternExecutor<'p> {
-        PatternExecutor::with_bindings_and_params(
-            self.graph,
-            max_matches,
-            pre_bindings,
-            self.params,
-        )
+        self.pattern_executor(max_matches, Some(pre_bindings))
+            .set_match_ceiling(self.budget.match_ceiling(operator))
+    }
+
+    /// The one place this executor builds a pattern matcher: this query's
+    /// deadline, cancel flag, parallel permission and valid-time filter. A
+    /// matcher built anywhere else would match without the filter, which a
+    /// source scan in `tests/valid_time_guard.rs` rules out.
+    #[inline]
+    pub(super) fn pattern_executor<'p>(
+        &'p self,
+        max_matches: Option<usize>,
+        pre_bindings: Option<&'p Bindings<petgraph::graph::NodeIndex>>,
+    ) -> PatternExecutor<'p> {
+        match pre_bindings {
+            Some(bindings) => PatternExecutor::with_bindings_and_params(
+                self.graph,
+                max_matches,
+                bindings,
+                self.params,
+            ),
+            None => {
+                PatternExecutor::new_lightweight_with_params(self.graph, max_matches, self.params)
+            }
+        }
         .set_deadline(self.deadline)
         .set_cancel(self.cancel)
         .set_parallel(self.parallel)
-        .set_match_ceiling(self.budget.match_ceiling(operator))
+        .set_graph_filter(self.graph_filter.get().cloned())
+    }
+
+    /// The statement's resolved valid-time filter, if it removes anything.
+    #[inline]
+    pub(super) fn graph_filter(&self) -> Option<&std::sync::Arc<ElementFilter>> {
+        self.graph_filter.get()
+    }
+
+    /// Run under `filter` — a nested executor inheriting its statement's.
+    pub(super) fn with_graph_filter(self, filter: Option<std::sync::Arc<ElementFilter>>) -> Self {
+        if let Some(filter) = filter {
+            let _ = self.graph_filter.set(filter);
+        }
+        self
     }
 
     /// Enable or disable the streaming-pipeline path. Default is
@@ -506,13 +540,12 @@ impl<'a> CypherExecutor<'a> {
     /// idle period reclaims the prior generation; overlapping and nested
     /// queries share the generation without invalidating refs.
     pub fn execute(&self, query: &CypherQuery) -> Result<CypherResult, String> {
-        crate::graph::languages::cypher::valid_time::check_executable(
-            query,
-            self.graph,
-            self.params,
-            false,
-        )?;
+        crate::graph::languages::cypher::valid_time::check_executable(query)?;
+        if query.context.is_some() {
+            self.resolve_graph_filter(query)?;
+        }
         let mut result = self.execute_with_cap(query, self.row_limit)?;
+        self.raise_graph_filter_error()?;
         crate::graph::languages::cypher::result::clear_published_relationship_incarnations(
             &mut result,
         );
@@ -695,6 +728,9 @@ impl<'a> CypherExecutor<'a> {
     /// `execute_single_clause`, which routes every `Fused*Count*` variant here
     /// as one arm.
     fn execute_fused_count_clause(&self, clause: &Clause) -> Result<ResultSet, String> {
+        if let Some(filter) = self.graph_filter() {
+            return self.execute_fused_count_guarded(filter, clause);
+        }
         match clause {
             Clause::FusedCountAll { alias } => {
                 self.budget
@@ -984,6 +1020,7 @@ mod path_binding;
 mod procedure_params;
 mod procedure_registry;
 pub(crate) use procedure_registry::is_context_free_procedure;
+mod guarded_ops;
 pub(crate) mod procedure_router;
 mod projected_targets;
 pub mod refresh_stats;
@@ -1065,17 +1102,38 @@ fn declared_from_rows(result_set: &ResultSet) -> std::collections::HashSet<Strin
 }
 
 impl CypherExecutor<'_> {
-    /// Under a graph filter no fused operator may run: the planner's guard
-    /// allow-list keeps them out of the plan, and this is where a leak would
-    /// surface.
+    /// Under a graph filter only the fused operators with a guarded route
+    /// may run: the planner's guard allow-list keeps the others out of the
+    /// plan, and this is where a leak would surface.
     #[inline]
     fn debug_assert_matcher_route(&self, clause: &Clause) {
         debug_assert!(
-            self.graph_filter.is_none() || !is_fused_clause(clause),
+            self.graph_filter.get().is_none()
+                || !is_fused_clause(clause)
+                || runs_under_graph_filter(clause),
             "fused clause {} reached execution under a graph filter",
             clause_display_name(clause)
         );
     }
+}
+
+/// The fused operators that run under a graph filter: the node scans and
+/// the top-k heap read their candidates through the guarded matcher, and the
+/// counts take `execute_fused_count_guarded`.
+fn runs_under_graph_filter(clause: &Clause) -> bool {
+    matches!(
+        clause,
+        Clause::FusedOrderByTopK { .. }
+            | Clause::FusedNodeScanAggregate { .. }
+            | Clause::FusedNodeScanTopK { .. }
+            | Clause::FusedCountAll { .. }
+            | Clause::FusedCountAllEdges { .. }
+            | Clause::FusedCountByType { .. }
+            | Clause::FusedCountEdgesByType { .. }
+            | Clause::FusedCountTypedNode { .. }
+            | Clause::FusedCountLabelUnion { .. }
+            | Clause::FusedCountTypedEdge { .. }
+    )
 }
 
 /// The optimizer's physical operators — every `Fused*` variant and the

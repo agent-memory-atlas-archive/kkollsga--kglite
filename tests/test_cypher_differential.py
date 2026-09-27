@@ -315,6 +315,152 @@ def declared_lineage_graph():
 
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    # Each fusion the planner admits under a FOR VALID_TIME AS OF context,
+    # with the prefix and without it on the same declared fixture.
+    (
+        "context_fused_count_typed",
+        "declared_interval_graph",
+        "FOR VALID_TIME AS OF date('1985-06-01') MATCH (m:M) RETURN count(m) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_typed",
+        "declared_interval_graph",
+        "MATCH (m:M) RETURN count(m) AS c",
+        None,
+    ),
+    (
+        "context_fused_count_all",
+        "declared_interval_graph",
+        "FOR VALID_TIME AS OF date('1985-06-01') MATCH (n) RETURN count(n) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_all",
+        "declared_interval_graph",
+        "MATCH (n) RETURN count(n) AS c",
+        None,
+    ),
+    (
+        "context_fused_count_by_type",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH (n) RETURN labels(n) AS l, count(*) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_by_type",
+        "declared_lineage_graph",
+        "MATCH (n) RETURN labels(n) AS l, count(*) AS c",
+        None,
+    ),
+    (
+        "context_fused_count_typed_edge",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH ()-[r:R]->() RETURN count(*) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_typed_edge",
+        "declared_lineage_graph",
+        "MATCH ()-[r:R]->() RETURN count(*) AS c",
+        None,
+    ),
+    (
+        "context_fused_count_all_edges",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH ()-[r]->() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_all_edges",
+        "declared_lineage_graph",
+        "MATCH ()-[r]->() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "context_fused_count_edges_by_type",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH ()-[r]->() RETURN type(r) AS t, count(*) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_edges_by_type",
+        "declared_lineage_graph",
+        "MATCH ()-[r]->() RETURN type(r) AS t, count(*) AS c",
+        None,
+    ),
+    (
+        "context_node_scan_top_k",
+        "declared_interval_graph",
+        "FOR VALID_TIME AS OF date('1985-06-01') MATCH (m:M) RETURN m.code AS c ORDER BY m.code DESC LIMIT 2",
+        None,
+    ),
+    (
+        "context_twin_node_scan_top_k",
+        "declared_interval_graph",
+        "MATCH (m:M) RETURN m.code AS c ORDER BY m.code DESC LIMIT 2",
+        None,
+    ),
+    (
+        "context_node_scan_aggregate",
+        "declared_interval_graph",
+        "FOR VALID_TIME AS OF date('1985-06-01') MATCH (m:M) RETURN m.kind AS k, count(*) AS c",
+        None,
+    ),
+    (
+        "context_twin_node_scan_aggregate",
+        "declared_interval_graph",
+        "MATCH (m:M) RETURN m.kind AS k, count(*) AS c",
+        None,
+    ),
+    (
+        "context_push_limit_into_aggregate",
+        "declared_interval_graph",
+        "FOR VALID_TIME AS OF date('1985-06-01') MATCH (m:M) RETURN m.kind AS k, count(*) AS c LIMIT 2",
+        None,
+    ),
+    (
+        "context_twin_push_limit_into_aggregate",
+        "declared_interval_graph",
+        "MATCH (m:M) RETURN m.kind AS k, count(*) AS c LIMIT 2",
+        None,
+    ),
+    (
+        "context_order_by_top_k",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH (x)-[:R]->(y) RETURN y.name AS n ORDER BY n LIMIT 2",
+        None,
+    ),
+    (
+        "context_twin_order_by_top_k",
+        "declared_lineage_graph",
+        "MATCH (x)-[:R]->(y) RETURN y.name AS n ORDER BY n LIMIT 2",
+        None,
+    ),
+    (
+        "context_element_id_anchor",
+        "declared_interval_graph",
+        "FOR VALID_TIME AS OF date('2020-06-01') MATCH (m:M) WHERE elementId(m) = $eid RETURN m.code AS c",
+        {"eid": "0"},
+    ),
+    (
+        "context_twin_element_id_anchor",
+        "declared_interval_graph",
+        "MATCH (m:M) WHERE elementId(m) = $eid RETURN m.code AS c",
+        {"eid": "0"},
+    ),
+    (
+        "context_count_subquery",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2012-01-01') MATCH (a:A) RETURN COUNT { (a)-[:R]->() } AS c",
+        None,
+    ),
+    (
+        "context_twin_count_subquery",
+        "declared_lineage_graph",
+        "MATCH (a:A) RETURN COUNT { (a)-[:R]->() } AS c",
+        None,
+    ),
     # The declared forms on list items read the item's own declaration, and
     # a null element is null, through every plan.
     (

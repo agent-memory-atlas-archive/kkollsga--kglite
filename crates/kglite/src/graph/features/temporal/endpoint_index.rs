@@ -646,14 +646,29 @@ fn template_targets<'g>(
     nodes.chain(edges).collect()
 }
 
+/// Whether every target of `template` is indexed and timeless at `t` —
+/// every row it governs valid then. Builds (and caches) the indexes, never a
+/// mask; the session's plain-plan exit asks it over every declaration.
+pub(crate) fn template_timeless_at(graph: &DirGraph, template: &GuardTemplate, t: Instant) -> bool {
+    template_targets(graph, template)
+        .into_iter()
+        .all(|(target, config)| {
+            config.is_some_and(|config| {
+                index(graph, &target, config)
+                    .ok()
+                    .and_then(|index| index.timeless_at(t))
+                    == Some(true)
+            })
+        })
+}
+
 /// A [`GuardTemplate`] resolved against one instant. See
 /// [`crate::graph::core::graph_filter::GraphFilter::resolve`].
-// Read only by tests until guarded execution consumes a resolved filter;
-// the first production reader removes this allowance.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct ResolvedFilter {
     /// The targets the masks cover, each with its segment.
+    // Read by the endpoint-index tests; execution needs only the masks.
+    #[allow(dead_code)]
     pub(crate) key: SegmentKey,
     /// `None` when no target is indexed, when [`Self::timeless`] holds (the
     /// plain plan answers), or when the masks do not fit the byte cap (their

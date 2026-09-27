@@ -549,6 +549,10 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:timeless_route:fn timeless_route( graph: &DirGraph, query: &str, prepared: PreparedQuery, opts: &ExecuteOptions<'_>, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/session/transaction.rs::fn:working_mut:pub fn working_mut(&mut self) -> Result<&mut DirGraph, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
@@ -655,7 +659,7 @@
       "classification": "dead-code"
     },
     {
-      "identity": "crates/kglite/src/graph/features/temporal/endpoint_index.rs::struct:ResolvedFilter::dead_code",
+      "identity": "crates/kglite/src/graph/features/temporal/endpoint_index.rs::statement:pub(crate) key: SegmentKey,::dead_code",
       "classification": "dead-code"
     },
     {

@@ -1,6 +1,6 @@
 //! Lowering a `FOR VALID_TIME AS OF` context: the per-scope templates, the
-//! refusals, the guarded pass allow-list, and the "not yet" execution
-//! refusal every path meets in this build.
+//! refusals, the guarded pass allow-list, and execution under the filter
+//! each path resolves.
 
 use super::*;
 use crate::graph::languages::cypher::parser::parse_cypher;
@@ -199,6 +199,7 @@ fn has_fused(clauses: &[Clause]) -> bool {
             Clause::FusedCountTypedNode { .. }
                 | Clause::FusedCountAll { .. }
                 | Clause::FusedMatchReturnAggregate { .. }
+                | Clause::FusedMatchWithAggregate { .. }
                 | Clause::FusedNodeScanAggregate { .. }
                 | Clause::FusedNodeScanTopK { .. }
                 | Clause::FusedOrderByTopK { .. }
@@ -207,14 +208,13 @@ fn has_fused(clauses: &[Clause]) -> bool {
 }
 
 /// Default-deny: a denied pass does not run on a guarded scope, and the
-/// allow-listed ones still do.
+/// allow-listed ones — the re-admitted fusions included — still do.
 #[test]
 fn a_guarded_scope_runs_only_allow_listed_passes() {
     let graph = graph();
     for body in [
-        "MATCH (w:Well) RETURN count(w) AS c",
-        "MATCH (w:Well) RETURN w.id AS id ORDER BY id LIMIT 1",
-        "MATCH (w:Well) RETURN w.id AS id, count(*) AS c",
+        "MATCH (w:Well)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
+        "MATCH (w:Well)-[:LICENSED]->(f) WITH w, count(f) AS c RETURN w.id, c",
     ] {
         let plain = lowered(&graph, &format!("EXPLAIN {body}"), &[]);
         assert!(has_fused(&plain.clauses), "{body} should fuse unguarded");
@@ -224,9 +224,39 @@ fn a_guarded_scope_runs_only_allow_listed_passes() {
             "{body}: {:?}",
             guarded.clauses
         );
+    }
+    for (body, pass) in [
+        (
+            "MATCH (w:Well) RETURN count(w) AS c",
+            "fuse_count_short_circuits",
+        ),
+        (
+            "MATCH (w:Well) RETURN w.id AS id ORDER BY id LIMIT 1",
+            "fuse_node_scan_top_k",
+        ),
+        (
+            "MATCH (w:Well) RETURN w.id AS id, count(*) AS c",
+            "fuse_node_scan_aggregate",
+        ),
+    ] {
+        let guarded = lowered(&graph, &format!("EXPLAIN {AS_OF}{body}"), &[]);
+        assert!(
+            guarded.optimizer_tags.iter().any(|t| t == pass),
+            "{body}: {:?}",
+            guarded.optimizer_tags
+        );
+    }
+    for body in [
+        "MATCH (w:Well)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
+        "MATCH (w:Well) RETURN count(w) AS c",
+    ] {
+        let guarded = lowered(&graph, &format!("EXPLAIN {AS_OF}{body}"), &[]);
         for tag in &guarded.optimizer_tags {
             assert!(super::super::planner::is_known_pass(tag));
-            assert!(!tag.starts_with("fuse_"), "{body}: denied pass {tag} ran");
+            assert!(
+                super::super::planner::guard_is_safe(tag),
+                "{body}: denied pass {tag} ran"
+            );
         }
     }
     // An allow-listed pass still rewrites the guarded plan.
@@ -258,19 +288,26 @@ fn read(
         .map_err(|e| e.to_string())
 }
 
+fn well_ids(result: &CypherResult) -> Vec<Value> {
+    let mut ids: Vec<Value> = result.rows.iter().map(|row| row[0].clone()).collect();
+    ids.sort_by_key(|v| format!("{v:?}"));
+    ids
+}
+
 #[test]
-fn execution_refuses_not_yet_and_explain_renders_the_template() {
+fn execution_runs_under_the_filter_and_explain_renders_the_template() {
     let graph = graph();
     let none = HashMap::new();
+    let at_2015 = "FOR VALID_TIME AS OF date('2015-01-01') ";
     for query in [
-        format!("{AS_OF}MATCH (w:Well) RETURN w.id"),
-        format!("PROFILE {AS_OF}MATCH (w:Well) RETURN w.id"),
-        format!("{AS_OF}PROFILE MATCH (w:Well) RETURN w.id"),
-        format!("{AS_OF}CALL db.labels()"),
+        format!("{at_2015}MATCH (w:Well) RETURN w.id"),
+        format!("PROFILE {at_2015}MATCH (w:Well) RETURN w.id"),
+        format!("{at_2015}PROFILE MATCH (w:Well) RETURN w.id"),
     ] {
-        let err = read(&graph, &query, &none).unwrap_err();
-        assert!(err.contains("not executable yet"), "{query}: {err}");
+        let result = read(&graph, &query, &none).unwrap_or_else(|e| panic!("{query}: {e}"));
+        assert_eq!(well_ids(&result), vec![Value::Int64(2)], "{query}");
     }
+    read(&graph, &format!("{AS_OF}CALL db.labels()"), &none).unwrap();
     for query in [
         format!("EXPLAIN {AS_OF}MATCH (w:Well) RETURN w.id"),
         format!("{AS_OF}EXPLAIN MATCH (w:Well) RETURN w.id"),
@@ -313,7 +350,7 @@ fn execution_refuses_not_yet_and_explain_renders_the_template() {
 }
 
 #[test]
-fn the_instant_is_resolved_per_execution_before_the_refusal() {
+fn the_instant_is_resolved_per_execution() {
     let graph = graph();
     let query = "FOR VALID_TIME AS OF $t MATCH (w:Well) RETURN w.id";
     let missing = read(&graph, query, &HashMap::new()).unwrap_err();
@@ -321,24 +358,30 @@ fn the_instant_is_resolved_per_execution_before_the_refusal() {
     let bad = HashMap::from([("t".to_string(), Value::Int64(42))]);
     let err = read(&graph, query, &bad).unwrap_err();
     assert!(err.contains("FOR VALID_TIME AS OF"), "{err}");
-    assert!(!err.contains("not executable yet"), "{err}");
-    let good = HashMap::from([("t".to_string(), Value::String("2006-01-01".into()))]);
-    let err = read(&graph, query, &good).unwrap_err();
-    assert!(err.contains("not executable yet"), "{err}");
+    let good = HashMap::from([("t".to_string(), Value::String("2003-01-01".into()))]);
+    assert_eq!(
+        well_ids(&read(&graph, query, &good).unwrap()),
+        vec![Value::Int64(1)]
+    );
     // EXPLAIN evaluates no parameter.
     read(&graph, &format!("EXPLAIN {query}"), &bad).unwrap();
 }
 
-/// The executor refuses on its own, for callers that bypass the session.
+/// The executor resolves the filter on its own, for callers that bypass
+/// the session.
 #[test]
-fn the_executor_refuses_a_context_directly() {
+fn the_executor_resolves_a_context_directly() {
     let graph = graph();
     let params = HashMap::new();
-    let query = lowered(&graph, &format!("{AS_OF}MATCH (w:Well) RETURN w.id"), &[]);
-    let err = CypherExecutor::with_params(&graph, &params, None)
+    let query = lowered(
+        &graph,
+        "FOR VALID_TIME AS OF date('2003-01-01') MATCH (w:Well) RETURN w.id",
+        &[],
+    );
+    let result = CypherExecutor::with_params(&graph, &params, None)
         .execute(&query)
-        .unwrap_err();
-    assert!(err.contains("not executable yet"), "{err}");
+        .unwrap();
+    assert_eq!(well_ids(&result), vec![Value::Int64(1)]);
 }
 
 #[test]
@@ -389,15 +432,18 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
     assert!(parse_cypher(&prefixed).unwrap().context.is_some());
 }
 
-/// `date()` is today (UTC) at execution: it reaches the "not yet" refusal,
-/// EXPLAIN renders it per execution, and planning keeps the full counts.
+/// `date()` is today (UTC) at execution, EXPLAIN renders it per execution,
+/// and planning keeps the full counts.
 #[test]
 fn no_argument_date_is_today_per_execution() {
     let graph = graph();
     let none = HashMap::new();
     let query = "FOR VALID_TIME AS OF date() MATCH (w:Well) RETURN w.id";
-    let err = read(&graph, query, &none).unwrap_err();
-    assert!(err.contains("not executable yet"), "{err}");
+    // Well 1 closed in 2010; Well 2 is open-ended.
+    assert_eq!(
+        well_ids(&read(&graph, query, &none).unwrap()),
+        vec![Value::Int64(2)]
+    );
     let explained = read(&graph, &format!("EXPLAIN {query}"), &none).unwrap();
     let first = format!("{:?}", explained.rows[0][1]);
     assert!(first.contains("instant: per execution"), "{first}");
@@ -481,36 +527,26 @@ fn topology_scalar_functions_are_refused_under_a_context() {
     assert!(refusal(&nested).unwrap().contains("degree"));
 }
 
-/// The transient equality index binds nodes without the matcher; under a
-/// graph filter the subsequent MATCH goes through the matcher instead. The
-/// statement form meets the refusal; the executor form runs with the filter
-/// set, where a debug assertion guards the index's binding site.
+/// The transient equality index binds nodes without the matcher, so under
+/// a graph filter the subsequent MATCH goes through the matcher instead (a
+/// debug assertion guards the index's binding site): the join sees only the
+/// wells valid at the instant.
 #[test]
 fn the_transient_equality_index_declines_under_a_graph_filter() {
     let graph = graph();
     let none = HashMap::new();
     let text = "UNWIND range(1, 80) AS i MATCH (f:Field) MATCH (w:Well {vf: f.vf}) \
                 RETURN i, w.id";
-    let err = read(&graph, &format!("{AS_OF}{text}"), &none).unwrap_err();
-    assert!(err.contains("not executable yet"), "{err}");
-
-    let plain = lowered(&graph, text, &[]);
-    let unfiltered = CypherExecutor::with_params(&graph, &none, None)
-        .execute(&plain)
-        .unwrap();
-    assert_eq!(unfiltered.rows.len(), 80);
-    let mut executor = CypherExecutor::with_params(&graph, &none, None);
-    executor.graph_filter = Some(Arc::new(GraphFilter {
-        template: Arc::default(),
-        selector: ValidTimeSelector::AsOf(eval::Instant::Date(
-            chrono::NaiveDate::from_ymd_opt(2006, 1, 1).unwrap(),
-        )),
-    }));
-    let filtered = executor.execute(&plain).unwrap();
+    assert_eq!(read(&graph, text, &none).unwrap().rows.len(), 80);
     assert_eq!(
-        format!("{:?}", filtered.rows),
-        format!("{:?}", unfiltered.rows)
+        read(&graph, &format!("{AS_OF}{text}"), &none)
+            .unwrap()
+            .rows
+            .len(),
+        80
     );
+    let closed = format!("FOR VALID_TIME AS OF date('2015-01-01') {text}");
+    assert!(read(&graph, &closed, &none).unwrap().rows.is_empty());
 }
 
 /// Every instant `prepend_valid_time` accepts is written as text its own

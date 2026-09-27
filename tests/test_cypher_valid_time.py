@@ -1,8 +1,9 @@
 """The statement prefix ``FOR VALID_TIME AS OF`` and ``cypher(valid_at=...)``.
 
-In this build a context parses, lowers to a per-scope guard template and
-renders under ``EXPLAIN``; executing a statement that carries one is refused.
-Two properties matter as much as the feature: a query without a prefix plans
+A context parses, lowers to a per-scope guard template, renders under
+``EXPLAIN`` and executes under the filter resolved at its instant (the
+execution goldens are in ``test_cypher_valid_time_execution.py``). Two
+properties matter as much as the feature: a query without a prefix plans
 exactly as before, and a declaration alone changes no plan and no answer.
 """
 
@@ -30,7 +31,7 @@ globals().update(
     }
 )
 
-NOT_YET = "not executable yet in this build"
+NOT_YET = "not available under FOR VALID_TIME AS OF yet"
 AS_OF = "FOR VALID_TIME AS OF date('2006-01-01') "
 
 
@@ -85,19 +86,26 @@ def test_the_template_lists_only_declared_targets(wells):
     )
 
 
+AT_2012 = "FOR VALID_TIME AS OF date('2012-01-01') "
+
+
 @pytest.mark.parametrize(
-    "query",
+    "query,ids",
     [
-        f"{AS_OF}MATCH (w:Well) RETURN w.id",
-        f"PROFILE {AS_OF}MATCH (w:Well) RETURN w.id",
-        f"{AS_OF}PROFILE MATCH (w:Well) RETURN w.id",
-        f"{AS_OF}CALL db.labels()",
-        f"{AS_OF}MATCH (w:Well) RETURN w.id UNION MATCH (f:Field) RETURN f.id AS `w.id`",
+        (f"{AT_2012}MATCH (w:Well) RETURN w.id", [2]),
+        (f"PROFILE {AT_2012}MATCH (w:Well) RETURN w.id", [2]),
+        (f"{AT_2012}PROFILE MATCH (w:Well) RETURN w.id", [2]),
+        (f"{AT_2012}MATCH (w:Well) RETURN w.id UNION MATCH (f:Field) RETURN f.id AS `w.id`", [2, 10]),
     ],
 )
-def test_execution_is_refused_in_this_build(wells, query):
-    with pytest.raises(kglite.KgError, match=NOT_YET):
-        wells.cypher(query).to_list()
+def test_execution_runs_under_the_filter(wells, query, ids):
+    """Well 1 closed in 2010; the undeclared Field is timeless."""
+    assert sorted(row["w.id"] for row in wells.cypher(query).to_list()) == ids
+
+
+def test_metadata_procedures_run_under_a_context(wells):
+    labels = {row["label"] for row in wells.cypher(f"{AS_OF}CALL db.labels()").to_list()}
+    assert {"Well", "Field"} <= labels
 
 
 @pytest.mark.parametrize(
@@ -118,8 +126,7 @@ def test_lowering_refusals_stop_explain_too(wells, query, message):
 
 def test_no_argument_date_is_today_at_execution(wells):
     query = "FOR VALID_TIME AS OF date() MATCH (w:Well) RETURN w.id"
-    with pytest.raises(kglite.KgError, match=NOT_YET):
-        wells.cypher(query).to_list()
+    assert [row["w.id"] for row in wells.cypher(query).to_list()] == [2]
     assert _plan(wells, f"EXPLAIN {query}")[0].endswith("instant: per execution")
     today = wells.cypher("RETURN date() AS d").to_list()[0]["d"]
     utc = datetime.datetime.now(datetime.timezone.utc).date()
@@ -189,8 +196,9 @@ def test_valid_at_writes_the_prefix(wells, valid_at, literal):
     by_hand = _plan(wells, f"FOR VALID_TIME AS OF {literal} EXPLAIN {body}")
     assert via_kwarg == by_hand
     assert via_kwarg[0].startswith("ValidTimeContext axis=VALID_TIME")
-    with pytest.raises(kglite.KgError, match=NOT_YET):
-        wells.cypher(body, valid_at=valid_at).to_list()
+    assert sorted(row["w.id"] for row in wells.cypher(body, valid_at=valid_at).to_list()) == [1, 2]
+    closed = valid_at.replace(year=2012) if not isinstance(valid_at, str) else valid_at.replace("2006", "2012")
+    assert [row["w.id"] for row in wells.cypher(body, valid_at=closed).to_list()] == [2]
 
 
 def test_valid_at_on_a_query_with_a_prefix_names_both(wells):
@@ -233,6 +241,12 @@ GUARD_SAFE_PASSES = {
     "push_distinct_into_match",
     "reorder_predicates_by_cost",
     "mark_disjoint_fixed_trails",
+    "anchor_element_id",
+    "push_limit_into_aggregate",
+    "fuse_count_short_circuits",
+    "fuse_node_scan_aggregate",
+    "fuse_node_scan_top_k",
+    "fuse_order_by_top_k",
 }
 
 
@@ -264,7 +278,12 @@ def test_a_guarded_plan_runs_only_allow_listed_passes(pass_name, case_id, reques
         assert pass_name in fired, guarded
 
 
-@pytest.mark.parametrize("name,fixture,query,params", DIFFERENTIAL_QUERIES, ids=[e[0] for e in DIFFERENTIAL_QUERIES])
+# The corpus's own context entries carry their prefix; the twin is about the
+# prefix-less ones.
+_PREFIXLESS = [entry for entry in DIFFERENTIAL_QUERIES if not entry[2].startswith("FOR VALID_TIME")]
+
+
+@pytest.mark.parametrize("name,fixture,query,params", _PREFIXLESS, ids=[e[0] for e in _PREFIXLESS])
 def test_a_declaration_alone_changes_no_plan_and_no_answer(name, fixture, query, params, request):
     """The twin: the same seeded graph before and after a declaration gives a
     byte-identical EXPLAIN and equal rows for every prefix-less corpus query."""
