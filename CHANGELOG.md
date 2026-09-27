@@ -30,9 +30,12 @@ before upgrading.
   written, unless it is a near miss of a property the target has, which is
   refused as a typo with a "Did you mean" hint; `set_temporal()` follows the
   same rule, and a loader or blueprint counts a bound column it has just
-  written, even all NULL, as present. Later writes are not re-validated, and
-  a property-type constraint (`REQUIRE n.valid_to IS :: DATE`) refuses a bad
-  write up front. It yields
+  written, even all NULL, as present. A declared node label's `from` and `to`
+  count as known properties of it, so the first `CREATE` or `MERGE` that
+  writes the `to` is not refused as an unknown property, and under
+  `lock_schema()` neither is a `SET` of it. Later writes are not
+  re-validated, and a property-type constraint
+  (`REQUIRE n.valid_to IS :: DATE`) refuses a bad write up front. It yields
   `declared`, `rows` and `abutting_rows`: the rows whose `to` equals another
   row's `from` in the same label or from the same source node, which under
   `closed` also earns a query warning. A relationship uses its source's

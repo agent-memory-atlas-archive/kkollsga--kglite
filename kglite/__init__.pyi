@@ -3512,8 +3512,9 @@ class KnowledgeGraph:
         query. It stays silent on: a *sparse* property (one node carrying it
         makes it known, however many leave it null); a property this same
         statement writes; a type with no recorded properties; a property the
-        graph's own :meth:`define_schema` declares but nothing has written
-        yet; a multi-label pattern or a variable rebound by ``WITH``, neither
+        graph's own :meth:`define_schema` declares, or a validity declaration
+        names as its ``from`` / ``to`` bound, but nothing has written yet; a
+        multi-label pattern or a variable rebound by ``WITH``, neither
         of which resolves to one type; and the built-ins ``id``, ``title``,
         ``name``, ``type``. A relationship type the graph has never seen, a
         relationship arrow pointing the wrong way, and a type mismatch read

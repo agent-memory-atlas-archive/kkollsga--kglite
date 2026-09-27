@@ -763,7 +763,8 @@ pub(crate) fn collect_query_warnings(
 ///
 /// One finding is deliberately *not* promoted: a property the graph's
 /// [`schema_definition`](crate::graph::schema::DirGraph::schema_definition)
-/// declares but no node has written yet. The all-null column is real, so the
+/// or a validity declaration's `from` / `to` names, but no node has written
+/// yet. The all-null column is real, so the
 /// warning stands, but the name is not a typo — it is in the user's own
 /// declared model, and the pattern-literal check accepts it for exactly that
 /// reason ([`property_is_declared`](super::property_is_declared)). Rejecting it

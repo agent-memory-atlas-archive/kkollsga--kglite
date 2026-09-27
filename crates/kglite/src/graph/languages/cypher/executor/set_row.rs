@@ -155,6 +155,7 @@ fn enforce_schema_lock(
         value,
         &graph.node_type_metadata,
         graph.schema_definition.as_ref(),
+        &graph.temporal,
     )?;
     if graph.property_type_for(node_type, property).is_none() {
         crate::graph::mutation::validation::validate_property_type(

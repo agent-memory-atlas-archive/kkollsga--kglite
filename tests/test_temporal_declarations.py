@@ -175,6 +175,80 @@ class TestOpenEndedTypes:
             names.set_temporal("Name", "valid_from", "valid_to", convention="half_open")
         assert [r["to"] for r in _declarations(names)] == ["valid_to"]
 
+    DECLARE = "{node: 'Name', from: 'valid_from', to: 'valid_to', convention: 'half_open'}"
+    CLOSED_VERSION = "CREATE (:Name {id: 3, valid_from: date('1990-01-01'), valid_to: date('2000-01-01')})"
+
+    def _as_of_1995(self, g):
+        return g.cypher("MATCH (n:Name) RETURN n.id AS id", valid_at="1995-01-01").to_list()
+
+    @pytest.mark.parametrize(
+        "write",
+        [
+            pytest.param(lambda g, q: g.cypher(q), id="create"),
+            pytest.param(
+                lambda g, q: g.cypher(
+                    "UNWIND $rows AS r CREATE (:Name {id: r.id, valid_from: date(r.f), valid_to: date(r.t)})",
+                    params={"rows": [{"id": 3, "f": "1990-01-01", "t": "2000-01-01"}]},
+                ),
+                id="unwind-create",
+            ),
+            pytest.param(lambda g, q: g.cypher(q.replace("CREATE", "MERGE")), id="merge"),
+            pytest.param(lambda g, q: g.lock_schema().cypher(q), id="locked"),
+        ],
+    )
+    def test_the_first_create_may_write_the_declared_to(self, names, write):
+        """The warning promises every row is open-ended *until one is
+        written*, so the declared `to` is a known property of the label.
+
+        Regression: the CREATE typo guard refused the first write of it
+        ("Unknown property 'valid_to' on Name") until a SET had stored one."""
+        _declare(names, self.DECLARE)
+        write(names, self.CLOSED_VERSION)
+        assert self._as_of_1995(names) == [{"id": 3}]
+
+    def test_set_temporal_allows_the_declared_to_as_well(self, names):
+        with pytest.warns(UserWarning, match=self.WARNING):
+            names.set_temporal("Name", "valid_from", "valid_to", convention="half_open")
+        names.cypher(self.CLOSED_VERSION)
+        assert self._as_of_1995(names) == [{"id": 3}]
+
+    def test_a_transaction_may_write_the_declared_to(self, names):
+        _declare(names, self.DECLARE)
+        with names.begin() as tx:
+            tx.cypher(self.CLOSED_VERSION)
+            tx.commit()
+        assert self._as_of_1995(names) == [{"id": 3}]
+
+    def test_a_locked_graph_may_set_the_declared_to(self, names):
+        _declare(names, self.DECLARE)
+        names.lock_schema()
+        names.cypher("MATCH (n:Name {id: 1}) SET n.valid_to = date('2005-01-01')")
+        assert names.cypher("MATCH (n:Name) RETURN count(*) AS c", valid_at="2010-01-01").to_list() == [{"c": 1}]
+
+    def test_a_typo_on_the_declared_label_is_still_refused(self, names):
+        _declare(names, self.DECLARE)
+        with pytest.raises(kglite.KgError, match="Unknown property 'valid_too' on Name"):
+            names.cypher("CREATE (:Name {id: 3, valid_from: date('1990-01-01'), valid_too: date('2000-01-01')})")
+
+    def test_undeclare_withdraws_the_allowance(self, names):
+        _declare(names, self.DECLARE)
+        names.cypher("CALL db.temporal.undeclare({node: 'Name'})")
+        with pytest.raises(kglite.KgError, match="Unknown property 'valid_to' on Name"):
+            names.cypher(self.CLOSED_VERSION)
+
+    def test_a_relationship_bound_stays_outside_the_guard(self):
+        """Relationship properties are not typo-guarded at all; a declared
+        absent `to` on a relationship type is written by CREATE as before."""
+        g = kglite.KnowledgeGraph()
+        g.cypher("CREATE (:P {id: 1})-[:R {since: date('2000-01-01')}]->(:P {id: 2})")
+        _declare(g, "{relationship: 'R', from: 'since', to: 'until', convention: 'half_open'}")
+        g.cypher(
+            "MATCH (a:P {id: 1}), (b:P {id: 2}) "
+            "CREATE (a)-[:R {since: date('1990-01-01'), until: date('2000-01-01')}]->(b)"
+        )
+        rows = g.cypher("MATCH (:P)-[r:R]->(:P) RETURN r.until AS until", valid_at="1995-01-01").to_list()
+        assert len(rows) == 1
+
     def test_dirty_bound_names_the_node(self, statuses):
         statuses.cypher("CREATE (:Status {id: 9, title: 'Odd', vf: 'someday', vt: null})")
         with pytest.raises(Exception, match=r"node '9', property 'vf'.*'someday'"):

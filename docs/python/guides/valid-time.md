@@ -68,7 +68,9 @@ an integer already stored.
 A `to` property that no row carries yet — every period still open — is
 accepted with a warning ("no row of … carries '…'; every row is open-ended
 until one is written"). A `from` property no row carries is refused, and so is
-a `to` name that is a near miss of a property the type has (a typo).
+a `to` name that is a near miss of a property the type has (a typo). A declared
+bound counts as a known property of the label, so the first `CREATE` or `MERGE`
+that writes the `to` is not refused as an unknown property.
 
 **Choose the convention from what the `to` day means.** `closed` keeps the `to`
 day valid; `half_open` makes it the first day no longer valid. When a source

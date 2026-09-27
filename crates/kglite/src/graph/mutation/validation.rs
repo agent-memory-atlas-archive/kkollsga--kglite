@@ -2,6 +2,7 @@
 //! Schema validation module for validating graph data against a defined schema.
 
 use crate::datatypes::values::Value;
+use crate::graph::features::temporal::declarations::TemporalDeclarations;
 use crate::graph::schema::{
     ConnectionTypeInfo, DirGraph, NodeSchemaDefinition, SchemaDefinition, ValidationError,
 };
@@ -362,18 +363,23 @@ pub fn did_you_mean(input: &str, candidates: &[&str]) -> String {
 /// Built-in fields that are always valid on any node type.
 const BUILTIN_FIELDS: &[&str] = &["id", "title", "name", "type"];
 
-/// Whether `property` is named by the *declared* schema for `node_type`.
+/// Whether `property` is named by the *declared* schema for `node_type`, or is
+/// the `from` / `to` bound of a validity declaration on it.
 ///
 /// `node_type_metadata` records what has been written, not what was declared,
-/// so a property a caller declared through `define_schema` but has not stored
-/// yet is missing from it — and the unknown-property guard below would then
-/// reject the very write that was going to store it. Mirrors
-/// `planner::schema_check::property_is_declared`; keep the two in step.
+/// so a property a caller declared through `define_schema` or as a validity
+/// bound but has not stored yet is missing from it — and the unknown-property
+/// guard below would then reject the very write that was going to store it.
+/// Mirrors `planner::schema_check::property_is_declared`; keep the two in step.
 fn property_is_declared(
     node_type: &str,
     property: &str,
     schema_def: Option<&SchemaDefinition>,
+    temporal: &TemporalDeclarations,
 ) -> bool {
+    if temporal.names_node_bound(node_type, property) {
+        return true;
+    }
     let Some(node) = schema_def.and_then(|s| s.node_schemas.get(node_type)) else {
         return false;
     };
@@ -400,6 +406,7 @@ pub fn validate_node_creation(
     properties: &HashMap<String, Value>,
     node_type_metadata: &HashMap<String, HashMap<String, String>>,
     schema_def: Option<&SchemaDefinition>,
+    temporal: &TemporalDeclarations,
 ) -> Result<(), String> {
     // 1. Check node type exists
     let type_props = match node_type_metadata.get(label) {
@@ -437,7 +444,7 @@ pub fn validate_node_creation(
                     get_value_type_name(prop_value)
                 ));
             }
-        } else if !property_is_declared(label, prop_name, schema_def) {
+        } else if !property_is_declared(label, prop_name, schema_def, temporal) {
             let known: Vec<&str> = type_props.keys().map(|s| s.as_str()).collect();
             let hint = did_you_mean(prop_name, &known);
             let mut sorted: Vec<&str> = known;
@@ -589,12 +596,15 @@ pub fn validate_property_known(
     value: &Value,
     node_type_metadata: &HashMap<String, HashMap<String, String>>,
     schema_def: Option<&SchemaDefinition>,
+    temporal: &TemporalDeclarations,
 ) -> Result<(), String> {
     let Some(type_props) = observed_properties(node_type, property, value, node_type_metadata)
     else {
         return Ok(());
     };
-    if type_props.contains_key(property) || property_is_declared(node_type, property, schema_def) {
+    if type_props.contains_key(property)
+        || property_is_declared(node_type, property, schema_def, temporal)
+    {
         return Ok(());
     }
     let known: Vec<&str> = type_props.keys().map(|s| s.as_str()).collect();

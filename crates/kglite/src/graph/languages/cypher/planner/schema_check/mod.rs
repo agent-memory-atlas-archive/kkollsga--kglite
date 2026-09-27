@@ -1086,12 +1086,24 @@ fn for_each_query_pattern(query: &CypherQuery, visit: &mut impl FnMut(PatternSit
 /// Validate a CREATE / MERGE pattern's node-pattern property names
 /// against the schema. Edge-pattern properties aren't validated —
 /// `connection_type_metadata` is keyed differently and edge schemas
-/// in kglite are looser; revisit if a real divergence shows up.
+/// in kglite are looser; revisit if a real divergence shows up. That is
+/// also why a relationship type's declared validity bounds need no
+/// allowance here.
 fn validate_create_pattern(pattern: &CreatePattern, graph: &DirGraph) -> Result<(), SchemaError> {
     for element in &pattern.elements {
         if let CreateElement::Node(np) = element {
             if let Some(ref node_type) = np.label {
                 for (prop_name, expr) in &np.properties {
+                    // The guard reads the primary type, but a validity
+                    // declaration on a secondary label (`CREATE (:Doc:Ver
+                    // {vt: …})`) names a bound of the node being created.
+                    if np
+                        .extra_labels
+                        .iter()
+                        .any(|label| graph.temporal.names_node_bound(label, prop_name))
+                    {
+                        continue;
+                    }
                     validate_property(node_type, prop_name, graph)
                         .map_err(|err| name_the_null_value(err, prop_name, expr))?;
                 }
@@ -1248,15 +1260,22 @@ fn validate_label(label: &str, graph: &DirGraph) -> Result<(), SchemaError> {
 
 /// Whether `property` is named by the graph's *declared* schema for
 /// `node_type` — `define_schema`'s `required` / `optional` / `types`, the
-/// declared primary key, and any `unique` tuple.
+/// declared primary key, any `unique` tuple, and the `from` / `to` bound of a
+/// validity declaration on the label.
 ///
 /// `node_type_metadata` is observed, not declared: it is populated from the
 /// values that have actually been written, so a property a caller declared up
 /// front but has not stored yet is absent from it. Reading only that map made
 /// the typo-guard reject `CREATE (n:Item {p1: 1})` on a type whose schema
-/// declares `p1`. The guard itself is deliberate for *undeclared* properties
-/// and stays; this closes the case where the answer is written down.
+/// declares `p1`, and the first `CREATE` of a closed version on a label whose
+/// declared `to` no row carried yet. The guard itself is deliberate for
+/// *undeclared* properties and stays; this closes the case where the answer is
+/// written down. A declared `to` that is a near miss of an existing property
+/// never gets here: the declaration refuses it as a typo.
 fn property_is_declared(node_type: &str, property: &str, graph: &DirGraph) -> bool {
+    if graph.temporal.names_node_bound(node_type, property) {
+        return true;
+    }
     let Some(schema) = graph.schema_definition.as_ref() else {
         return false;
     };

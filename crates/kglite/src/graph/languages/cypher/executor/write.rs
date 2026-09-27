@@ -1167,6 +1167,7 @@ fn create_node(
             &properties,
             &graph.node_type_metadata,
             graph.schema_definition.as_ref(),
+            &graph.temporal,
         )?;
     }
 

@@ -383,3 +383,83 @@ fn a_disk_graph_is_validated_without_growing_the_edge_arena() {
     assert_eq!(disk.edge_arena_len(), 0);
     assert_eq!(disk.node_arena_len(), 0);
 }
+
+fn attempt(graph: &mut DirGraph, query: &str) -> Result<(), String> {
+    let params: HashMap<String, Value> = HashMap::new();
+    execute_mut(graph, query, &ExecuteOptions::eager(&params))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// A declared bound counts as a known property of its label for the
+/// unknown-property guards, open schema or locked. Regression: a `to` no row
+/// carried was accepted as open-ended, and the first `CREATE` writing it was
+/// then refused as a typo ("Unknown property 'vt' on Name") until a `SET`
+/// had stored one. A genuine typo on the same label is still refused.
+#[test]
+fn an_open_ended_to_can_be_written_by_the_first_create() {
+    for locked in [false, true] {
+        let mut g = graph(&["CREATE (:Name {id: 1, vf: date('2000-01-01')})"]);
+        let report = declare(&mut g, &node("Name"), "vf", "vt", HalfOpen).unwrap();
+        assert!(report.warning.is_some(), "an absent `to` warns");
+        g.schema_locked = locked;
+        attempt(
+            &mut g,
+            "CREATE (:Name {id: 2, vf: date('1990-01-01'), vt: date('2000-01-01')})",
+        )
+        .unwrap_or_else(|e| panic!("locked={locked}: {e}"));
+        let typo = attempt(&mut g, "CREATE (:Name {id: 3, vtt: date('2000-01-01')})")
+            .expect_err("an undeclared property is still a typo");
+        assert!(
+            typo.contains("Unknown property 'vtt' on Name"),
+            "locked={locked}: {typo}"
+        );
+    }
+}
+
+/// Under a lock, `SET` is refused for a property the type does not know, so
+/// before the fix a locked graph could never write its declared `to` at all.
+#[test]
+fn a_locked_graph_can_set_its_declared_to() {
+    let mut g = graph(&["CREATE (:Name {id: 1, vf: date('2000-01-01')})"]);
+    declare(&mut g, &node("Name"), "vf", "vt", HalfOpen).unwrap();
+    g.schema_locked = true;
+    attempt(
+        &mut g,
+        "MATCH (n:Name {id: 1}) SET n.vt = date('2010-01-01')",
+    )
+    .unwrap();
+}
+
+/// A bound declared on a secondary label is known on a node created with that
+/// label, though the guard reads the primary type.
+#[test]
+fn a_secondary_label_bound_is_known_on_create() {
+    let mut g = graph(&[
+        "CREATE (:Doc {id: 1, vf: date('2000-01-01')})",
+        "MATCH (n:Doc) SET n:Ver",
+    ]);
+    declare(&mut g, &node("Ver"), "vf", "vt", Closed).unwrap();
+    attempt(
+        &mut g,
+        "CREATE (:Doc:Ver {id: 2, vf: date('1990-01-01'), vt: date('1999-12-31')})",
+    )
+    .unwrap();
+}
+
+/// The allowance lasts only as long as the declaration.
+#[test]
+fn undeclare_withdraws_the_bound_allowance() {
+    let mut g = graph(&["CREATE (:Name {id: 1, vf: date('2000-01-01')})"]);
+    declare(&mut g, &node("Name"), "vf", "vt", HalfOpen).unwrap();
+    assert!(undeclare(&mut g, &node("Name")));
+    let refused = attempt(
+        &mut g,
+        "CREATE (:Name {id: 2, vf: date('1990-01-01'), vt: date('2000-01-01')})",
+    )
+    .expect_err("with no declaration and no row carrying it, `vt` is unknown");
+    assert!(
+        refused.contains("Unknown property 'vt' on Name"),
+        "{refused}"
+    );
+}

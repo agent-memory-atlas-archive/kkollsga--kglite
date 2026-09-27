@@ -168,6 +168,16 @@ impl TemporalDeclarations {
         self.nodes.get(label)
     }
 
+    /// Whether `label`'s declaration names `property` as its `from` or `to`
+    /// bound. The unknown-property guards count such a name as known: a `to`
+    /// no row carries yet is absent from the observed schema, and the
+    /// declaration was accepted on the promise that a write may set it.
+    pub(crate) fn names_node_bound(&self, label: &str, property: &str) -> bool {
+        self.nodes
+            .get(label)
+            .is_some_and(|c| c.valid_from == property || c.valid_to == property)
+    }
+
     /// Every config of `rel_type`, in declaration order; empty when none.
     pub(crate) fn edges(&self, rel_type: &str) -> &[TemporalConfig] {
         self.edges.get(rel_type).map_or(&[], Vec::as_slice)

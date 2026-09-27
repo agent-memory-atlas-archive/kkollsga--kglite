@@ -89,7 +89,11 @@ count). Two semantics to keep in mind:
   active on an open schema. It applies only where KGLite knows the shape: a type
   with no recorded properties yet, an unlabelled pattern, and relationship
   properties are all skipped, and `SET n.newprop = …` stores a new property by
-  design (that is how a type grows a column). `lock_schema()` extends the
+  design (that is how a type grows a column). A property the graph declares
+  counts as known before any node carries it: a `define_schema()` field, or the
+  `from` / `to` bound of a
+  [validity declaration](#validity-interval-declarations) on the label.
+  `lock_schema()` extends the
   refusal to *reads* of a property no node of the type has (`WHERE`, `RETURN`,
   `WITH`, `ORDER BY`) and to unknown labels; see
   [Diagnostics](#diagnostics). The bulk loaders (`add_nodes`/`add_connections`)
@@ -3476,9 +3480,10 @@ with a string bound raises while the same statement with an integer bound runs.
 type and reversed arrow stay warnings in both states, and every conservatism
 above still applies under the lock: sparse
 properties, properties the same statement writes, types with no recorded
-properties, fields `define_schema()` declares but nothing has written yet,
-multi-label patterns, `WITH`-rebound variables, the built-ins, and every
-comparison the runtime can actually answer are all left alone.
+properties, fields `define_schema()` declares or a validity declaration names
+as a bound but nothing has written yet, multi-label patterns, `WITH`-rebound
+variables, the built-ins, and every comparison the runtime can actually answer
+are all left alone.
 
 `timeout_ms` resolution: explicit `cypher(..., timeout_ms=N)` >
 `kg.set_default_timeout(ms)` > a default of 180,000 ms. Pass
