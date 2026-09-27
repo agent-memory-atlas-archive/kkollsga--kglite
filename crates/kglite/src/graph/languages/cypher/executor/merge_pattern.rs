@@ -80,9 +80,15 @@ fn match_node_pattern(
             .contains_key(&InternedKey::from_str(label));
 
     let expected_props = merge_expected_props(executor, node_pat, row, graph)?;
+    // `MERGE (n:A:B {…})` matches only a node carrying every label, as `MATCH`
+    // does; the indexes and `nodes_with_label` answer for the primary alone.
+    let wanted = Candidate {
+        props: &expected_props,
+        extra_labels: &node_pat.extra_labels,
+    };
 
     if !label_has_secondary {
-        match probe_node_indexes(graph, label, &expected_props) {
+        match probe_node_indexes(graph, label, &wanted) {
             IndexProbe::Matched(idx) => return Ok(Some(node_result_row(node_pat, idx))),
             IndexProbe::NoMatch => return Ok(None),
             IndexProbe::Unindexed => {}
@@ -94,7 +100,7 @@ fn match_node_pattern(
     // candidates (and is the identical `type_indices` clone when no secondary
     // labels exist).
     for idx in graph.nodes_with_label(label) {
-        if node_matches_all(graph, idx, &expected_props) {
+        if wanted.matches(graph, idx) {
             return Ok(Some(node_result_row(node_pat, idx)));
         }
     }
@@ -110,15 +116,34 @@ enum IndexProbe {
     Unindexed,
 }
 
-fn probe_node_indexes(
-    graph: &DirGraph,
-    label: &str,
-    expected_props: &[(&str, Value)],
-) -> IndexProbe {
+/// What a MERGE node pattern requires of an existing node: every property
+/// value, and every label after the first.
+struct Candidate<'a> {
+    props: &'a [(&'a str, Value)],
+    extra_labels: &'a [String],
+}
+
+impl Candidate<'_> {
+    fn matches(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        node_matches_all(graph, idx, self.props) && self.carries_labels(graph, idx)
+    }
+
+    fn carries_labels(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        self.extra_labels
+            .iter()
+            .all(|label| graph.node_has_label(idx, InternedKey::from_str(label)))
+    }
+}
+
+fn probe_node_indexes(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> IndexProbe {
+    let expected_props = wanted.props;
     // 1. If pattern contains "id" property, use O(1) id_index lookup
     if let Some((_, id_value)) = expected_props.iter().find(|(k, _)| *k == "id") {
         if let Some(idx) = graph.lookup_by_id_readonly(label, id_value) {
-            if expected_props.len() == 1 || node_matches_all(graph, idx, expected_props) {
+            // The id lookup already matched the only property; skip re-reading it.
+            let props_match =
+                expected_props.len() == 1 || node_matches_all(graph, idx, expected_props);
+            if props_match && wanted.carries_labels(graph, idx) {
                 return IndexProbe::Matched(idx);
             }
         }
@@ -135,7 +160,7 @@ fn probe_node_indexes(
         let (key, ref value) = expected_props[0];
         if let Some(candidates) = graph.lookup_by_index(label, key, value) {
             for &idx in &candidates {
-                if node_matches_all(graph, idx, expected_props) {
+                if wanted.matches(graph, idx) {
                     return IndexProbe::Matched(idx);
                 }
             }
@@ -159,7 +184,7 @@ fn probe_node_indexes(
             let values: Vec<Value> = indexable.iter().map(|(_, v)| (*v).clone()).collect();
             if let Some(candidates) = graph.lookup_by_composite_predicate(label, &names, &values) {
                 for &idx in &candidates {
-                    if node_matches_all(graph, idx, expected_props) {
+                    if wanted.matches(graph, idx) {
                         return IndexProbe::Matched(idx);
                     }
                 }

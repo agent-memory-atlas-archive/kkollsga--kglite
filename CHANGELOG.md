@@ -464,6 +464,10 @@ before upgrading.
   an empty or non-literal list (`NOT n.x IN $ids` with `ids = []` keeps every
   row), and a `WHERE` attached to `OPTIONAL MATCH`, which keeps every outer
   row.
+- Cypher `MERGE (n:A:B {…})` matched a node carrying only `A`, running
+  `ON MATCH SET` on it and creating nothing, while `MATCH` with the same
+  pattern found no node. It now matches only a node carrying every label in
+  the pattern, and creates one otherwise.
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.

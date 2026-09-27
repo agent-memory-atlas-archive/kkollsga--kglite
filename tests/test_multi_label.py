@@ -912,3 +912,45 @@ def test_alternation_count_with_duplicate_dynamic_labels_counts_once():
     g = _alternation_graph()
     rows = g.cypher("MATCH (n:$a|$b) RETURN count(n) AS c", params={"a": "Student", "b": "Student"}).to_list()
     assert rows == [{"c": 3}]
+
+
+# ─── MERGE (n:A:B) matches only nodes carrying every label ─────────────────
+
+
+def _merge_graph(mode, tmp_path):
+    if mode == "memory":
+        g = KnowledgeGraph()
+    elif mode == "mapped":
+        g = KnowledgeGraph(storage="mapped")
+    else:
+        g = KnowledgeGraph(storage="disk", path=str(tmp_path / "disk"))
+    g.cypher("CREATE (:Doc {id: 1, k: 'a'}), (:Doc {id: 3, k: 'b'})")
+    g.cypher("MATCH (n:Doc {id: 1}) SET n:Ver")
+    return g
+
+
+@pytest.mark.parametrize("mode", ["memory", "mapped", "disk"])
+def test_merge_with_a_secondary_label_creates_when_only_the_primary_matches(mode, tmp_path):
+    """`MATCH (n:Doc:Ver {k: 'b'})` finds nothing, so the MERGE of the same
+    pattern must create. Regression: the MERGE lookup tested only the primary
+    label, matched the `Doc`-only node 3, ran ON MATCH on it and created
+    nothing."""
+    g = _merge_graph(mode, tmp_path)
+    assert g.cypher("MATCH (n:Doc:Ver {k: 'b'}) RETURN n").to_list() == []
+    rows = g.cypher(
+        "MERGE (n:Doc:Ver {k: 'b'}) ON MATCH SET n.hit = true ON CREATE SET n.made = true "
+        "RETURN labels(n) AS labels, n.hit AS hit, n.made AS made"
+    ).to_list()
+    assert rows == [{"labels": ["Doc", "Ver"], "hit": None, "made": True}]
+    assert g.cypher("MATCH (n:Doc {id: 3}) RETURN n.hit AS hit, labels(n) AS labels").to_list() == [
+        {"hit": None, "labels": ["Doc"]}
+    ]
+    assert g.cypher("MATCH (n:Doc) RETURN count(*) AS c").to_list() == [{"c": 3}]
+
+
+@pytest.mark.parametrize("mode", ["memory", "mapped", "disk"])
+def test_merge_with_a_secondary_label_matches_a_node_carrying_both(mode, tmp_path):
+    g = _merge_graph(mode, tmp_path)
+    rows = g.cypher("MERGE (n:Doc:Ver {k: 'a'}) ON MATCH SET n.hit = true RETURN n.id AS id, n.hit AS hit").to_list()
+    assert rows == [{"id": 1, "hit": True}]
+    assert g.cypher("MATCH (n:Doc) RETURN count(*) AS c").to_list() == [{"c": 2}]
