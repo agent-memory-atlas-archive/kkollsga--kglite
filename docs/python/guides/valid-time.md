@@ -371,29 +371,90 @@ graph.cypher("""
 
 Valid time records when a fact was true in the world, not when the graph
 learned it. `SET r.valid_to = …` overwrites the old bound, and `DELETE` leaves
-no trace: KGLite keeps no recording time. To keep what was known when, store it
-yourself — a second pair of bounds such as `recorded_from` / `recorded_to` —
-and test it by name inside the context:
+no trace: KGLite keeps no recording time. To keep what was known when, store
+it yourself as a second pair of bounds, such as `recorded_from` /
+`recorded_to`, on records you never overwrite.
+
+**Keep each superseded image as its own record.** Some registers deliver their
+own registration time: BAG's `tijdstipRegistratie` / `eindRegistratie`, or the
+BRP's *datum van opneming*. When such a register records a change, it also
+closes the previous version. Until the change was registered, the register knew
+that version as open-ended; from then on, it knows it as closed. Keep both
+images:
+
+- the open-ended image, recorded until the change was registered;
+- the closed image, recorded from then on.
+
+Do not copy `eindRegistratie` onto the final version as its `recorded_to`.
+`eindRegistratie` ends the version's open-endedness, not the version itself.
+
+In the shared graph, the register recorded the merger on 2020-09-01: Eemsdelta,
+and Appingedam's end on 2021-01-01. Until then it knew Appingedam as
+open-ended:
 
 ```python
-# When each version was entered, and when a correction replaced it.
+# When each row was recorded. The loaded Appingedam row is the closed image.
 graph.cypher("""
     MATCH (m:Municipality)
-    SET m.recorded_from = CASE m.id WHEN '1979' THEN date('2020-09-01') ELSE date('1990-01-01') END,
-        m.recorded_to = null
+    SET m.recorded_from = CASE WHEN m.id IN ['0003', '1979'] THEN date('2020-09-01') ELSE date('1990-01-01') END
 """)
-graph.cypher("MATCH (m:Municipality {id: '0003'}) SET m.recorded_to = date('2030-01-01')")
+# The image the merger superseded: Appingedam still open-ended, under its own id.
+graph.cypher("""
+    CREATE (m:Municipality {id: '0003@1990', title: 'Appingedam', recorded_from: date('1990-01-01')})
+    SET m.recorded_to = date('2020-09-01')
+""")
+```
 
-# Valid on 2021-06-30, as the graph knew it on 2020-06-30: Eemsdelta was not yet recorded.
+`recorded_to` is written by `SET` because no row carries it yet. A `CREATE`
+that names it is refused as a typo. Only the declared valid-time bounds count as
+known before any row carries them, and this pair is not declared.
+
+**Give each record its own id.** Records that share an id shadow each other.
+`MATCH (m {id: …})` and `WHERE m.id = …` find one node per id, so the lookup
+can land on an image recorded at another time and return `[]`. The only hint is
+the duplicate-id warning on stderr when the second record is written. Had the
+superseded image above been created with id `'0003'`, asking by id for
+Appingedam on 2020-06-30, as known today, returns `[]`. A scan of the label
+still finds it. As in Model B (section 5), keep the entity key in a
+separate, non-unique property.
+
+**Test a registration chain half-open, by hand.** A registration chain is
+half-open by definition: the new `tijdstipRegistratie` equals the old
+`eindRegistratie`. The named form `valid_at(n, $tt, 'recorded_from',
+'recorded_to')` reads the pair **closed**. At the instant of a registration it
+matches both the old image and the new one. Write the half-open test yourself:
+
+```python
+AS_KNOWN = """
+    FOR VALID_TIME AS OF $vt
+    MATCH (m:Municipality)
+    WHERE m.recorded_from <= date($tt) AND (m.recorded_to IS NULL OR m.recorded_to > date($tt))
+    RETURN m.title AS name ORDER BY name
+"""
+# Valid on 2021-06-30, as known on 2020-06-30: the merger was not yet recorded.
+graph.cypher(AS_KNOWN, params={"vt": "2021-06-30", "tt": "2020-06-30"}).to_list()
+# [{'name': 'Appingedam'}, {'name': 'Het Hogeland'}]
+
+# As known on the day the merger was recorded:
+graph.cypher(AS_KNOWN, params={"vt": "2021-06-30", "tt": "2020-09-01"}).to_list()
+# [{'name': 'Eemsdelta'}, {'name': 'Het Hogeland'}]
+
+# The named form reads the pair closed, so that day shows both states at once:
 graph.cypher("""
     FOR VALID_TIME AS OF $vt
     MATCH (m:Municipality)
     WHERE valid_at(m, $tt, 'recorded_from', 'recorded_to')
-    RETURN m.title AS name
-""", params={"vt": "2021-06-30", "tt": "2020-06-30"}).to_list()   # [{'name': 'Het Hogeland'}]
+    RETURN m.title AS name ORDER BY name
+""", params={"vt": "2021-06-30", "tt": "2020-09-01"}).to_list()
+# [{'name': 'Appingedam'}, {'name': 'Eemsdelta'}, {'name': 'Het Hogeland'}]
 ```
 
-The named form reads the undeclared pair closed, and a property no element of
-the type has raises rather than reading as open. It is a
-stopgap: the second axis is hand-written on every element it must filter, which
-brings back the forgotten-hop trap for that axis.
+The comparison is against `date($tt)`, not `$tt`. The stored bounds are dates,
+and a date never equals a string. With the naive mapping (`recorded_to =
+date('2020-09-01')` on the loaded Appingedam row, and no superseded image), the
+first query answers `[{'name': 'Het Hogeland'}]`. Asked as known today, the
+graph also loses Appingedam on 2020-06-30.
+
+A property no element of the type has makes the named form raise rather than
+read as open. This is a stopgap: the second axis is hand-written on every
+element it must filter, which brings back the forgotten-hop trap for that axis.
