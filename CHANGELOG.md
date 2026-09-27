@@ -342,8 +342,10 @@ before upgrading.
   instead of silently answering false. A datetime bound compares at date grain
   against a date. The closed-interval semantics are otherwise unchanged.
 - `set_temporal()` and `validFrom`/`validTo` column types declare their
-  interval the way `CALL db.temporal.declare` does: both properties must
-  exist, and a stored bound that is not a date, a datetime or an ISO string,
+  interval the way `CALL db.temporal.declare` does: the `from` property must
+  exist (a `to` no row carries yet is accepted with the open-ended warning; a
+  near miss of an existing property is refused), and a stored bound that is
+  not a date, a datetime or an ISO string,
   or a row whose interval is inverted, raises `ArgumentError` naming the
   element (a loader checks this before writing, naming an inverted row of its
   input by position). A different declaration for a type that already has one
@@ -441,9 +443,10 @@ before upgrading.
   `date_from` nor `date_to`, and `traverse(at=…, during=…)` raises
   `ArgumentError` on a relationship type with no declared interval. Each used
   to read the missing property as an open bound and keep every element. Each
-  node is now filtered under its own type's declaration, and named fields that
-  match it follow its convention. The ambient `date()` context still filters
-  only declared types.
+  node is now filtered under the declaration of every declared label it
+  carries (named fields replace its primary type's and follow its convention
+  when they match). The ambient `date()` context still filters only declared
+  types.
 - Cypher `valid_at()` / `valid_during()` refuse a bound property that no element
   of the type has — a misspelled `'validfrom'` — instead of reading it as an
   open bound on every row and answering with a plausible but wrong count. The
