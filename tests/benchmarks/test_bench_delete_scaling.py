@@ -399,9 +399,8 @@ def test_bench_delete_then_id_lookup(benchmark, delete_graphs, size):
     leaf`.
 
     Read the difference between this and `test_bench_delete_leaf` as the
-    rebuild term. It is expected to scale with size — that is a known open
-    issue (`test_bench_write_scaling.py::test_bench_id_index_invalidation_on_
-    create`), not a regression — so the question this cell answers is how much
+    rebuild term. It is expected to scale with size — a known open issue, not
+    a regression — so the question this cell answers is how much
     of the unexplained delete gap it accounts for. If it accounts for all of
     it, the mystery is solved and it was never about deletion.
     """

@@ -40,12 +40,11 @@ from kglite import KnowledgeGraph
 # term to be unmissable and small enough that the fixtures build in seconds.
 SIZES = [1_000, 100_000, 1_000_000]
 
-# Sizes for the one benchmark here that is *expected* to be O(V) per call, and
-# which therefore stops at 100k. 1k -> 100k already moves ~20 us -> ~2,100 us,
-# which shows the linear term unambiguously without a third decade.
+# Sizes for `test_bench_id_index_invalidation_on_create`, a marker for a
+# linear term that stops at 100k: two decades show one unambiguously.
 LINEAR_MARKER_SIZES = [1_000, 100_000]
 
-# The two benchmarks below whose per-call cost is O(V) drive `benchmark.pedantic`
+# Benchmarks whose per-call cost is (or was) O(V) drive `benchmark.pedantic`
 # with an explicit round count, because plain `benchmark(fn)` hangs on these
 # shapes. Auto-calibration times the *first* call to size the round count, and
 # for these statements the first call is ~1000x cheaper than every call after
@@ -58,6 +57,9 @@ LINEAR_MARKER_SIZES = [1_000, 100_000]
 # numbers.
 OV_ROUNDS = 20
 OV_WARMUP_ROUNDS = 1
+ID_INDEX_ROUNDS = 1_000
+ID_INDEX_ITERATIONS = 5
+ID_INDEX_WARMUP_ROUNDS = 20
 
 
 def _graph(size: int, *, primary_key: bool = True) -> KnowledgeGraph:
@@ -67,13 +69,11 @@ def _graph(size: int, *, primary_key: bool = True) -> KnowledgeGraph:
     `Value::String`, so it is what made the old checkpoint expensive in bytes
     rather than merely in count.
 
-    A primary key is declared by default, and that is load-bearing for what
-    these benchmarks measure. Without one, `CREATE` invalidates the whole
-    type's id index (`id_indices.remove`), so the *next* lookup by id rebuilds
-    it — an O(V) cost per statement that has nothing to do with the rollback
-    checkpoint but would swamp it. Measured at 1M nodes: 34,486 us without a
-    declared key, 4.1 us with one. `test_bench_id_index_invalidation_on_create`
-    keeps that separate cost visible.
+    A primary key is declared by default. Without one, `CREATE` used to
+    invalidate the whole type's id index, so the next lookup by id rebuilt it —
+    an O(V) cost per statement (34,486 us at 1M nodes) that would swamp the
+    checkpoint. The index is now maintained on `CREATE` in both cases;
+    `test_bench_id_index_invalidation_on_create` guards that.
     """
     graph = KnowledgeGraph()
     if primary_key:
@@ -187,17 +187,17 @@ def test_bench_single_delete(benchmark, scaled_graphs, size):
 @pytest.mark.benchmark
 @pytest.mark.parametrize("size", LINEAR_MARKER_SIZES)
 def test_bench_id_index_invalidation_on_create(benchmark, scaled_graphs_no_pk, size):
-    """The separate O(V) cost this file exists to keep from being mistaken for
-    the checkpoint.
+    """An id lookup after a `CREATE` on a type with no declared primary key.
 
-    On a type with no declared primary key, `CREATE` drops the type's whole id
-    index rather than inserting into it, so the next `MATCH ... {id: ...}` pays
-    a full rebuild. This benchmark is expected to scale with `size` -- it is a
-    marker for a known open issue, not a regression guard. Compare against
-    `test_bench_multi_clause_write`, which runs the same statement shape on a
-    type that *does* declare a key and stays flat across all three decades.
+    `CREATE` used to drop the type's whole id index here, so every
+    `MATCH ... {id: ...}` paid a full O(V) rebuild. The index is maintained
+    incrementally now and the cell is flat across `size` (about 4.5 us at 1k
+    and at 100k, as on 0.18.1): a 100k/1k ratio well above 1 means the
+    rebuild is back. Compare `test_bench_multi_clause_write`, the same
+    statement on a type that declares a key.
 
-    Capped at `LINEAR_MARKER_SIZES` for termination; see that constant.
+    `ID_INDEX_ROUNDS`, not `OV_ROUNDS`: at 20 rounds the cell's min came out
+    near 4.5 us in some runs and 12-13 us in others on the same build.
     """
     graph = scaled_graphs_no_pk[size]
     ids = iter(range(40_000_000, 1 << 30))
@@ -208,7 +208,9 @@ def test_bench_id_index_invalidation_on_create(benchmark, scaled_graphs_no_pk, s
             params={"i": next(ids)},
         )
 
-    benchmark.pedantic(write, rounds=OV_ROUNDS, iterations=1, warmup_rounds=OV_WARMUP_ROUNDS)
+    benchmark.pedantic(
+        write, rounds=ID_INDEX_ROUNDS, iterations=ID_INDEX_ITERATIONS, warmup_rounds=ID_INDEX_WARMUP_ROUNDS
+    )
 
 
 # ── bulk ingest by repeated single CREATE ────────────────────────────
@@ -234,8 +236,8 @@ def test_bench_id_index_invalidation_on_create(benchmark, scaled_graphs_no_pk, s
 # into it incrementally; with no key nothing probes, so the index is never
 # cached and the invalidation branch is a no-op. The `no_pk` arm is therefore
 # **not** a duplicate of `test_bench_id_index_invalidation_on_create` above:
-# that cell pays the rebuild because its statement also does a `MATCH ... {id:
-# ...}` lookup, and these statements never look anything up.
+# that cell's statement also looks a node up by id, and these statements never
+# look anything up.
 
 #: 2k / 8k / 20k reproduces the input range kglite-visual reported against
 #: (4x input) while keeping the largest arm at a few hundred ms per round.
