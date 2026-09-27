@@ -460,7 +460,10 @@ before upgrading.
   reference inside a function (`coalesce(n.x, 1)`) or under a connective it
   does not decide (`n.x = 1 OR n.y = 2`, `NOT (n.x IS NULL AND …)`) now names
   the absent property without claiming how many rows the `WHERE` keeps; it
-  used to say "filters out every row" there too.
+  used to say "filters out every row" there too. So does a negated `IN` over
+  an empty or non-literal list (`NOT n.x IN $ids` with `ids = []` keeps every
+  row), and a `WHERE` attached to `OPTIONAL MATCH`, which keeps every outer
+  row.
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.

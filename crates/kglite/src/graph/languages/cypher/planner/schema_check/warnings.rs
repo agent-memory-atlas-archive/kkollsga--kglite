@@ -203,9 +203,16 @@ fn absent_property_findings<'q>(
         match clause {
             Clause::Where(w) => scan.predicate(&w.predicate, AbsentSite::Where),
             Clause::Filter(w) => scan.predicate(&w.predicate, AbsentSite::Filter),
-            Clause::Match(m) | Clause::OptionalMatch(m) => {
+            Clause::Match(m) => {
                 if let Some(wc) = &m.where_clause {
                     scan.predicate(&wc.predicate, AbsentSite::Where);
+                }
+            }
+            // An OPTIONAL MATCH's WHERE decides the optional binding, not the
+            // row: every outer row survives, so it claims no row count.
+            Clause::OptionalMatch(m) => {
+                if let Some(wc) = &m.where_clause {
+                    scan.predicate(&wc.predicate, AbsentSite::WherePart);
                 }
             }
             Clause::With(w) => {
@@ -437,10 +444,18 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
                 self.expression(left, site);
                 self.expression(right, site);
             }
-            Predicate::In { expr, .. }
-            | Predicate::InLiteralSet { expr, .. }
-            | Predicate::InExpression { expr, .. }
-            | Predicate::StartsWith { expr, .. }
+            // `null IN []` is false, not null, so under a NOT an IN leaf keeps
+            // every row when its list is empty; only a non-empty literal list
+            // is known not to be.
+            Predicate::In { expr, list } => {
+                let decides = path.all_and && (!path.negated || !list.is_empty());
+                self.expression(expr, if decides { site } else { site.part() })
+            }
+            Predicate::InLiteralSet { expr, .. } | Predicate::InExpression { expr, .. } => {
+                let decides = path.all_and && !path.negated;
+                self.expression(expr, if decides { site } else { site.part() })
+            }
+            Predicate::StartsWith { expr, .. }
             | Predicate::EndsWith { expr, .. }
             | Predicate::Contains { expr, .. } => {
                 let site = if path.all_and { site } else { site.part() };
@@ -1094,6 +1109,9 @@ mod tests {
             ("p.agee = 1 AND p.age = 1", Some(false)),
             ("NOT (p.agee = 1 OR p.age = 1)", Some(false)),
             ("p.agee = 1 XOR p.age = 1", None),
+            ("NOT p.agee IN []", None),
+            ("NOT p.agee IN [1]", Some(false)),
+            ("p.agee IN []", Some(false)),
         ] {
             let query = format!("MATCH (p:Person) WHERE {predicate} RETURN p");
             let q = parse_cypher(&query).unwrap();

@@ -480,3 +480,35 @@ def test_a_leaf_speaks_for_the_whole_where_only_when_it_decides_it():
         assert count == rows, where
         c = _claims(warnings)
         assert (c["every"], c["nothing"]) == claims and c["names"], (where, warnings)
+
+
+def test_a_negated_in_over_an_empty_list_claims_no_row_count():
+    """`null IN []` is false, not null, so `NOT v.imo IN []` keeps every row.
+    Regression: it was worded "filters out every row"."""
+    g = _maritime()
+    for where, params, rows, every in (
+        ("NOT v.imo IN $e", {"e": []}, 3, False),
+        ("NOT v.imo IN []", {}, 3, False),
+        ("NOT v.imo IN [1]", {}, 0, True),
+        ("v.imo IN []", {}, 0, True),
+        ("v.imo IN $e", {"e": []}, 0, True),
+    ):
+        result = g.cypher(f"MATCH (v:Vessel) WHERE {where} RETURN count(*) AS c", params=params)
+        warnings = result.diagnostics["warnings"]
+        assert result.to_list() == [{"c": rows}], where
+        c = _claims(warnings)
+        assert (c["every"], c["nothing"], c["names"]) == (every, False, True), (where, warnings)
+
+
+def test_an_optional_match_where_claims_no_row_count():
+    """An OPTIONAL MATCH's WHERE decides the optional binding; every outer row
+    survives. Regression: it was worded "filters out every row"."""
+    g = _maritime()
+    for where, label in (("p.x = 1", "Port"), ("p.x IS NOT NULL", "Port"), ("v.x = 1", "Voyage")):
+        result = g.cypher(
+            f"MATCH (v:Voyage) OPTIONAL MATCH (v)-[:ARRIVES_AT]->(p:Port) WHERE {where} RETURN count(*) AS c"
+        )
+        warnings = result.diagnostics["warnings"]
+        assert result.to_list() == [{"c": 2}], where
+        assert not any("filters out" in w for w in warnings), (where, warnings)
+        assert any("'x'" in w and f"no {label} node has" in w for w in warnings), (where, warnings)
