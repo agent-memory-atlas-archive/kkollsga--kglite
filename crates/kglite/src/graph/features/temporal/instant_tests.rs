@@ -137,3 +137,55 @@ fn memory_mode_builds_no_instant_mask_and_caches_one_slice_per_instant() {
     assert!(!Arc::ptr_eq(&first, &other));
     assert_eq!(endpoint_index::cached_slice_count(&g), 2);
 }
+
+/// The node vector entry on Disk tests candidates against the instant mask
+/// over the declared node labels, so an ambiguous declaration of a
+/// relationship type the statement never reaches refuses nothing: the answer
+/// is the in-memory one.
+#[test]
+fn an_unreached_ambiguous_relationship_type_does_not_refuse_node_retrieval() {
+    use crate::graph::embeddings::set_embeddings;
+    use crate::graph::schema::TemporalConfig;
+    use crate::graph::session::execute::execute_read;
+
+    let query = "FOR VALID_TIME AS OF date('2005-06-01') MATCH (w:Well) \
+                 RETURN w.id AS id, vector_score(w, 'vf_emb', $v) AS s ORDER BY s DESC LIMIT 5";
+    let params = HashMap::from([(
+        "v".to_string(),
+        Value::List(vec![Value::Float64(1.0), Value::Float64(0.0)]),
+    )]);
+    let answer = |mode: StorageMode| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut g = fixture(mode, &dir);
+        let vectors = [(1, [1.0f32, 0.0]), (2, [0.9, 0.1]), (3, [0.2, 0.8])];
+        set_embeddings(
+            &mut g,
+            "Well",
+            "vf",
+            None,
+            vectors.map(|(id, v)| (Value::Int64(id), v)),
+        )
+        .unwrap();
+        for from in ["a", "b"] {
+            let config = TemporalConfig {
+                valid_from: from.to_string(),
+                valid_to: format!("{from}_to"),
+                convention: IntervalConvention::Closed,
+                source_type: None,
+            };
+            let unreached = TemporalTarget::Relationship {
+                rel_type: "LEGACY".into(),
+                source_type: None,
+            };
+            g.temporal.insert(&unreached, config, None);
+        }
+        assert!(g.temporal.is_ambiguous("LEGACY"));
+        execute_read(&g, query, &ExecuteOptions::eager(&params))
+            .unwrap_or_else(|e| panic!("{mode:?}: {e}"))
+            .result
+            .rows
+    };
+    let memory = answer(StorageMode::Memory);
+    assert_eq!(memory.len(), 2, "wells 1 and 3 are valid: {memory:?}");
+    assert_eq!(answer(StorageMode::Disk), memory);
+}

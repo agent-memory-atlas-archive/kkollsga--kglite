@@ -744,24 +744,29 @@ impl<'a> CypherExecutor<'a> {
                         self.graph_filter().is_none(),
                         "transient equality index reached under a graph filter"
                     );
-                    if !cur.node_bindings.contains_key(idx.bind_var.as_str())
+                    // A probe the index cannot key (a cross-kind text rule)
+                    // falls through to the per-row matcher below.
+                    let hits = if !cur.node_bindings.contains_key(idx.bind_var.as_str())
                         && !cur.projected.contains_key(idx.bind_var.as_str())
                     {
-                        if let Some(probe) = idx.probe_value(cur, self.graph) {
-                            for &node_idx in idx.lookup(&probe) {
-                                self.check_interrupt_periodic(work)?;
-                                work = work.saturating_add(1);
-                                self.budget.reserve_rows(
-                                    expanded.len(),
-                                    1,
-                                    "MATCH indexed join",
-                                )?;
-                                let mut nr = cur.clone();
-                                nr.node_bindings.insert(idx.bind_var.clone(), node_idx);
-                                expanded.push(nr);
-                                if enforce_rel_uniqueness {
-                                    expanded_sets.push(edge_sets[ci].clone());
-                                }
+                        match idx.probe_value(cur, self.graph) {
+                            Some(probe) => idx.lookup(&probe),
+                            None => Some(&[][..]),
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(hits) = hits {
+                        for &node_idx in hits {
+                            self.check_interrupt_periodic(work)?;
+                            work = work.saturating_add(1);
+                            self.budget
+                                .reserve_rows(expanded.len(), 1, "MATCH indexed join")?;
+                            let mut nr = cur.clone();
+                            nr.node_bindings.insert(idx.bind_var.clone(), node_idx);
+                            expanded.push(nr);
+                            if enforce_rel_uniqueness {
+                                expanded_sets.push(edge_sets[ci].clone());
                             }
                         }
                         continue;

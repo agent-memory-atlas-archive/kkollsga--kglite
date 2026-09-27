@@ -404,6 +404,22 @@ pub(crate) fn declared_template(graph: &DirGraph) -> Result<GuardTemplate, Strin
     every_target.template(graph, &temporal::declared(graph))
 }
 
+/// The targets a retrieval index's documents are judged by: every declared
+/// node label and, for a relationship index, its own type's declarations — a
+/// document's validity depends on nothing else, so another relationship
+/// type's ambiguous declarations do not refuse it.
+pub(crate) fn retrieval_template(
+    graph: &DirGraph,
+    rel_type: Option<&str>,
+) -> Result<GuardTemplate, String> {
+    let reach = Reach {
+        any_node: true,
+        rel_types: rel_type.into_iter().map(str::to_string).collect(),
+        ..Reach::default()
+    };
+    reach.template(graph, &temporal::declared(graph))
+}
+
 /// The refusal for a context on a graph with no validity declaration.
 pub(crate) const NO_DECLARATION: &str = "FOR VALID_TIME AS OF needs a validity declaration, \
      and this graph has none; declare one with CALL db.temporal.declare(...)";

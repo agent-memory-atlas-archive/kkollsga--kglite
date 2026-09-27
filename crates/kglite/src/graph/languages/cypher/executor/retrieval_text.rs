@@ -54,9 +54,10 @@ impl CypherExecutor<'_> {
         let score_expr = self.fold_constants_expr(score_call);
         let masked = match self.plain_retrieval_type(matched) {
             Some((variable, node_type)) if self.graph_filter().is_some() => {
-                match self.node_retrieval_filter(node_type)? {
-                    Some(filter) => Some((variable, self.admitted_nodes(node_type, &filter)?)),
-                    None => None,
+                match self.node_retrieval_filter(node_type) {
+                    Ok(Some(filter)) => Some((variable, self.admitted_nodes(node_type, &filter)?)),
+                    Ok(None) => None,
+                    Err(_) => return Ok(None),
                 }
             }
             _ => None,

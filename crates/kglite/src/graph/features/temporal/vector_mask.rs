@@ -56,13 +56,15 @@ pub(crate) fn hnsw_admitted(
     admits: &dyn Fn(usize) -> bool,
 ) -> Option<Vec<u32>> {
     let len = store.len();
-    let want = k.min(admitted);
+    // A `k` past the store (a LIMIT or `top_k` larger than it) asks for every
+    // admitted slot; sizing the fetch by the raw `k` would clamp above `len`.
+    let want = k.min(admitted).min(len);
     if want == 0 {
         return Some(Vec::new());
     }
     let query_norm = crate::graph::algorithms::vector::dot_product(query, query).sqrt();
-    let share = k.saturating_mul(len).div_ceil(admitted.max(1));
-    let mut fetch = share.saturating_mul(OVERFETCH).clamp(k, len);
+    let share = want.saturating_mul(len).div_ceil(admitted.max(1));
+    let mut fetch = share.saturating_mul(OVERFETCH).clamp(want, len);
     loop {
         let ef = fetch.max(index.params().ef_search);
         let raw = index.search(

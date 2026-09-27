@@ -628,7 +628,7 @@ fn cmp_map(a: &crate::datatypes::PropMap, b: &crate::datatypes::PropMap) -> std:
 }
 
 /// Full ISO `YYYY-MM-DDTHH:MM:SS`, falling back to a bare date at midnight.
-fn parse_datetime_string(s: &str) -> Option<chrono::NaiveDateTime> {
+pub(crate) fn parse_datetime_string(s: &str) -> Option<chrono::NaiveDateTime> {
     chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
         .ok()
         .or_else(|| parse_date_string(s).and_then(|d| d.and_hms_opt(0, 0, 0)))

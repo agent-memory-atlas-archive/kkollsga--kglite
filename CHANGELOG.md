@@ -68,8 +68,10 @@ before upgrading.
   a `freeze(valid_at=…)` handle). `text_bm25()` ranks with the statistics of
   the documents valid at the instant — their count, mean length and each
   term's document frequency — so a document scores what it would in an index
-  of the valid documents alone, and `ORDER BY text_bm25(…) DESC LIMIT k`
-  keeps its index route. `vector_score` top-k over `MATCH (n:Label)` scores
+  of the valid documents alone (a relationship document with both endpoints
+  valid under every label they carry, whichever labels the statement names),
+  and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index route.
+  `vector_score` top-k over `MATCH (n:Label)` scores
   only the valid nodes' vectors, exactly (`diagnostics.retrieval`
   `fallback_reason: "exact_mask"`), or from 200,000 valid vectors
   (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) through the HNSW index's valid
@@ -84,7 +86,8 @@ before upgrading.
   `YIELD node` binds the graph's own node. A copy over its cap (128 MiB; on
   Disk also 2,000,000 elements, and a 64 MiB one-bit-per-element instant mask,
   `KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) is refused when the statement runs,
-  naming the cap. Rust: `kglite::api::temporal::DISK_MASK_BYTE_CAP`, and
+  naming the cap; over the mask cap the `vector_score` top-k route instead
+  steps aside to the guarded match. Rust: `kglite::api::temporal::DISK_MASK_BYTE_CAP`, and
   `ValidTimeView::node_count` / `node_types`.
 - Cypher `date()` with no argument returns today's date in UTC; it used to
   raise "requires 1 argument".
@@ -322,6 +325,16 @@ before upgrading.
   blueprint (or re-run the loads) to recover the rows.
 
 ### Fixed
+
+- Cypher: past 64 driving rows, `UNWIND $keys AS k MATCH (n:T {prop: k})`
+  (and `{prop: r.key}`, `WITH x AS k MATCH …`) returned no match for a key
+  of another kind than the stored value that the row-by-row match treats as
+  equal — an integer against a whole float, ISO text against a date or
+  datetime, a date against midnight, a one-element JSON list (`["Oslo"]`)
+  against its string — and the right rows below 64. The query-local index
+  now keys numbers on one spelling and a midnight datetime on its date, and
+  leaves a key it cannot answer that way (text against dates, JSON-list text)
+  to the row-by-row match.
 
 - Cypher: `UNWIND $rows AS r MATCH (n:T {prop: r.key})` over 64 or more rows
   returned no match. Past 64 driving rows the MATCH builds a query-local

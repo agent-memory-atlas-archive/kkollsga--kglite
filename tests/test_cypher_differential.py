@@ -267,6 +267,25 @@ def edge_text_differential_graph():
 
 
 @pytest.fixture
+def cross_type_key_graph():
+    """150 nodes per stored kind — whole floats, dates, one-element JSON list
+    text — plus a NULL key, for the query-local equality index past its
+    64-row threshold, probed with values of another kind."""
+    import datetime as dt
+
+    graph = kglite.KnowledgeGraph()
+    day = dt.date(2000, 1, 1)
+    graph.cypher(
+        "UNWIND $vals AS v CREATE (:F {n: v.n, key: v.f}), (:D {n: v.n, key: v.d}), (:J {n: v.n, key: v.j})",
+        params={
+            "vals": [{"n": i, "f": float(i), "d": day + dt.timedelta(days=i), "j": f'["K{i}"]'} for i in range(150)]
+            + [{"n": -1, "f": None, "d": None, "j": None}]
+        },
+    )
+    return graph
+
+
+@pytest.fixture
 def date_text_graph():
     """Stored dates and datetimes compared against their ISO text, with an
     equality index on the date so the pushed and the indexed routes both run."""
@@ -372,6 +391,27 @@ def _network_context_pair(name: str, query: str) -> list[tuple[str, str, str, di
 
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    # The query-local equality index (past 64 driving rows) against the
+    # per-row matcher's cross-kind equality: int probes on float keys, ISO
+    # text on date keys, plain text on one-element JSON list keys.
+    (
+        "transient_index_int_probe_float_key",
+        "cross_type_key_graph",
+        "UNWIND $ks AS k MATCH (n:F {key: k}) RETURN n.n AS n ORDER BY n",
+        {"ks": list(range(150)) + [None]},
+    ),
+    (
+        "transient_index_text_probe_date_key",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:D {key: r.k}) RETURN n.n AS n ORDER BY n",
+        {"rows": [{"k": f"2000-{1 + i // 28:02d}-{1 + i % 28:02d}"} for i in range(150)] + [{"k": None}]},
+    ),
+    (
+        "transient_index_text_probe_json_list_key",
+        "cross_type_key_graph",
+        "UNWIND $ks AS k MATCH (n:J {key: k}) RETURN n.n AS n ORDER BY n",
+        {"ks": [f"K{i}" for i in range(150)] + [None]},
+    ),
     # Each fusion the planner admits under a FOR VALID_TIME AS OF context,
     # with the prefix and without it on the same declared fixture.
     (

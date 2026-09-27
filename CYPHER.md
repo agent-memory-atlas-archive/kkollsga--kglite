@@ -1563,7 +1563,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   valid at the instant — their count, mean length and each term's document
   frequency — so a document scores what it would in an index of the valid
   documents alone, and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index
-  route. `vector_score(n, …)` top-k over `MATCH (n:Label)` scores the valid
+  route. A relationship document is valid when it and both its endpoints are,
+  under every declared label they carry, whichever labels the statement
+  names, so every statement at the instant scores with the same statistics. `vector_score(n, …)` top-k over `MATCH (n:Label)` scores the valid
   nodes' vectors exactly (`diagnostics.retrieval`: `actual_mode: "exact"`,
   `fallback_reason: "exact_mask"`); from 200,000 valid vectors
   (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) a built HNSW index serves the valid
@@ -1587,6 +1589,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   (`KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) — is refused when the statement
   runs, naming the cap. Disk storage evaluates the bounds of every element
   once per instant into that mask, for retrieval and the algorithms alike.
+  Over the mask cap the `vector_score` top-k route steps aside and the
+  guarded match answers, testing only the nodes it reaches; the embedding
+  query procedures and the algorithms are refused.
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
@@ -1597,7 +1602,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   `degree()` / `inDegree()` / `outDegree()` / `shortest_path_length()` (they
   read a node's relationships outside the pattern matcher; not available under
   a context yet — `COUNT { (n)--() }` is), and a relationship type whose
-  declarations are `ambiguous`.
+  declarations are `ambiguous` — when the statement can reach it; the
+  embedding query procedures and the algorithms reach every type, so any
+  ambiguous type refuses them.
 
 ### Duration semantics
 

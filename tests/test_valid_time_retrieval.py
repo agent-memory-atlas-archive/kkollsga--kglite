@@ -261,3 +261,110 @@ def test_embedding_query_procedures_rank_only_admitted_nodes(full, reference, ro
     indexed = full.cypher(AS_OF + call, params=params).to_list()
     assert {r["m"] for r in indexed} == {"hnsw_mask"}
     assert all(r["vid"] % 3 == VALID for r in indexed)
+
+
+def test_a_limit_past_the_store_size_returns_every_admitted_vector(full, reference, rows, monkeypatch):
+    # k (200, 500) exceeds the store (~103 vectors): the index route must size
+    # its fetch by what the store can give, not panic, and return every
+    # admitted vector.
+    monkeypatch.setenv("KGLITE_TEMPORAL_VECTOR_EXACT_MAX", "1")
+    params = {"t": T, "v": _query_vector(rows, 5)}
+    non_null = (
+        "MATCH (d:Doc) WHERE vector_score(d, 'body_emb', $v) IS NOT NULL "
+        "RETURN d.vid AS vid, vector_score(d, 'body_emb', $v) AS s ORDER BY s DESC LIMIT 200"
+    )
+    expected = _pairs(reference.cypher(non_null.replace("$v)", "$v, {exact: true})"), params=params))
+    assert 0 < len(expected) < 200
+    _close(_pairs(full.cypher(AS_OF + non_null, params=params)), expected)
+    call = (
+        "CALL db.node_embeddings.query({text_column: 'body', vector: $v, top_k: 500}) "
+        "YIELD node, score RETURN node.vid AS vid, score AS s"
+    )
+    got = full.cypher(AS_OF + call, params=params).to_list()
+    assert sorted(r["vid"] for r in got) == sorted(vid for vid, _ in expected)
+
+
+# Relationship BM25: CITES (undeclared) joins Papers to Papers and to Books,
+# both declared. A statement that names only Paper must still score with the
+# statistics of the CITES documents valid at T — an edge whose Book endpoint
+# is invalid is not one — whatever statement computed them first.
+CITE_WORDS = ["graph", "valid", "time", "index", "rank", "query", "edge", "node"]
+
+
+def _citations(graph, keep=None):
+    """Papers p0..p5 and Books b0..b3; odd ones are invalid at T. ``keep``
+    limits the graph to the elements valid at T (the reference)."""
+    valid = PERIODS[VALID]
+    stale = PERIODS[0]
+
+    def period(i):
+        return valid if i % 2 == 0 else stale
+
+    nodes = [("Paper", f"p{i}", period(i)) for i in range(6)] + [("Book", f"b{i}", period(i)) for i in range(4)]
+    alive = {name for _, name, (vf, vt) in nodes if vf <= T and (vt is None or T <= vt)}
+    for label, name, (vf, vt) in nodes:
+        if keep and name not in alive:
+            continue
+        graph.cypher(
+            f"CREATE (:{label} {{id: $id, abstract: $a, vf: $vf, vt: $vt}})",
+            params={"id": name, "a": " ".join(CITE_WORDS[: 2 + len(name) % 5]) + f" {name}", "vf": vf, "vt": vt},
+        )
+    rng = np.random.default_rng(11)
+    targets = [f"p{i}" for i in range(6)] + [f"b{i}" for i in range(4)]
+    k = 0
+    for source in [f"p{i}" for i in range(6)]:
+        for target in targets:
+            if source == target:
+                continue
+            words = [CITE_WORDS[int(i)] for i in rng.integers(0, len(CITE_WORDS), 3 + k % 4)]
+            if target.startswith("b"):
+                words += ["book"] * 3
+            if not keep or (source in alive and target in alive):
+                label = "Book" if target.startswith("b") else "Paper"
+                graph.cypher(
+                    f"MATCH (s:Paper {{id: $s}}), (t:{label} {{id: $t}}) CREATE (s)-[:CITES {{k: $k, note: $n}}]->(t)",
+                    params={"s": source, "t": target, "k": k, "n": " ".join(words)},
+                )
+            k += 1
+    if not keep:
+        graph.set_temporal("Paper", "vf", "vt")
+        graph.set_temporal("Book", "vf", "vt")
+    graph.cypher("CALL db.relationship_text_index.build({type: 'CITES', text_column: 'note'}) YIELD indexed RETURN 1")
+    graph.build_text_index("Paper", "abstract")
+    return graph
+
+
+CITE_QUERIES = [
+    "MATCH (:Paper)-[r:CITES]->(:Paper) RETURN r.k AS vid, text_bm25(r, 'note', $q) AS s ORDER BY vid",
+    "MATCH ()-[r:CITES]->() RETURN r.k AS vid, text_bm25(r, 'note', $q) AS s ORDER BY vid",
+    "MATCH (:Paper)-[r:CITES]->() RETURN r.k AS vid, text_bm25(r, 'note', $q) AS s ORDER BY s DESC, vid LIMIT 5",
+    "MATCH (p:Paper) RETURN p.id AS vid, text_bm25(p, 'abstract', $q) AS s ORDER BY vid",
+]
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped"])
+@pytest.mark.parametrize("q", ["book graph", "valid rank edge"])
+def test_relationship_bm25_scores_with_the_instant_statistics_whichever_query_asks(tmp_path, storage, q):
+    reference = _citations(kglite.KnowledgeGraph(), keep=True)
+    params = {"t": T, "q": q}
+    expected = [_pairs(reference.cypher(query, params=params)) for query in CITE_QUERIES]
+    assert expected[1] != expected[0], "the Paper-only pattern binds fewer edges"
+    # A fresh graph per order and per tier: a view pins the instant's masks,
+    # which would hide what a prefixed statement alone computes first.
+    for order in [CITE_QUERIES, CITE_QUERIES[::-1]]:
+        full = _citations(_graph(storage, tmp_path / f"p{len(order[0])}"))
+        for query in order:
+            _close(_pairs(full.cypher(AS_OF + query, params=params)), expected[CITE_QUERIES.index(query)])
+        view = _citations(_graph(storage, tmp_path / f"v{len(order[0])}")).freeze(valid_at=T)
+        for query in order:
+            _close(_pairs(view.cypher(query, params=params)), expected[CITE_QUERIES.index(query)])
+
+
+def test_a_disk_mask_over_its_cap_declines_the_vector_entry_to_the_guarded_matcher(full, reference, rows, monkeypatch):
+    # Over the Disk mask cap the vector top-k entry cannot mask the store; it
+    # declines, and the guarded matcher answers as every other tier does.
+    monkeypatch.setenv("KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES", "1")
+    params = {"t": T, "v": _query_vector(rows, 5)}
+    expected = _pairs(reference.cypher(VECTOR_EXACT, params=params))
+    _close(_pairs(full.cypher(AS_OF + VECTOR_TOP, params=params)), expected)
+    _close(_pairs(full.cypher(AS_OF + VECTOR_EXACT, params=params)), expected)

@@ -4,6 +4,8 @@ Tests all known edge cases and validates semantics against Neo4j/openCypher
 specifications where applicable.
 """
 
+import datetime as _dt
+
 import pytest
 
 import kglite as rg
@@ -1138,6 +1140,51 @@ class TestTransientEqualityIndex:
         assert shared_key_graph.cypher(query, params=params).to_list() == [{"c": rows}]
         joined = "UNWIND $rows AS r MATCH (a:L {key: r.k}), (b:R {key: r.k}) RETURN count(*) AS c"
         assert shared_key_graph.cypher(joined, params=params).to_list() == [{"c": rows}]
+
+    # (stored value, probe value) per key i: the per-row matcher calls each
+    # pair equal (`values_equal`); the index built past 64 driving rows must
+    # agree with it on every one.
+    CROSS_TYPE_KEYS = {
+        "float_stored_int_probe": (lambda i: float(i), lambda i: i),
+        "int_stored_float_probe": (lambda i: i, lambda i: float(i)),
+        "date_stored_iso_probe": (
+            lambda i: _dt.date(2000, 1, 1) + _dt.timedelta(days=i),
+            lambda i: (_dt.date(2000, 1, 1) + _dt.timedelta(days=i)).isoformat(),
+        ),
+        "iso_stored_date_probe": (
+            lambda i: (_dt.date(2000, 1, 1) + _dt.timedelta(days=i)).isoformat(),
+            lambda i: _dt.date(2000, 1, 1) + _dt.timedelta(days=i),
+        ),
+        "date_stored_midnight_probe": (
+            lambda i: _dt.date(2000, 1, 1) + _dt.timedelta(days=i),
+            lambda i: _dt.datetime(2000, 1, 1) + _dt.timedelta(days=i),
+        ),
+        "timestamp_stored_text_probe": (
+            lambda i: _dt.datetime(2000, 1, 1, 6, 30) + _dt.timedelta(days=i),
+            lambda i: (_dt.datetime(2000, 1, 1, 6, 30) + _dt.timedelta(days=i)).strftime("%Y-%m-%dT%H:%M:%S"),
+        ),
+        "json_list_stored_text_probe": (lambda i: f'["K{i}"]', lambda i: f"K{i}"),
+        "text_stored_json_list_probe": (lambda i: f"K{i}", lambda i: f'["K{i}"]'),
+    }
+
+    @pytest.mark.parametrize("pair", sorted(CROSS_TYPE_KEYS))
+    @pytest.mark.parametrize("rows", [63, 64, 150])
+    def test_the_index_probe_matches_what_the_row_matcher_calls_equal(self, pair, rows):
+        """A key the per-row matcher calls equal across kinds — an int and a
+        whole float, a date and its ISO text, a date and midnight, a
+        one-element JSON list and its string — matches on both sides of the
+        64-row threshold. A NULL key (stored or probed) matches nothing."""
+        stored, probe = self.CROSS_TYPE_KEYS[pair]
+        g = rg.KnowledgeGraph()
+        g.cypher(
+            "UNWIND $vals AS v CREATE (:R {n: v.n, key: v.key})",
+            params={"vals": [{"n": i, "key": stored(i)} for i in range(150)] + [{"n": -1, "key": None}]},
+        )
+        keys = [probe(i) for i in range(rows - 1)] + [None]
+        member = "UNWIND $rows AS r MATCH (n:R {key: r.k}) RETURN count(*) AS c"
+        assert g.cypher(member, params={"rows": [{"k": k} for k in keys]}).to_list() == [{"c": rows - 1}]
+        bare = "UNWIND $ks AS k MATCH (n:R {key: k}) RETURN n.n AS n ORDER BY n"
+        assert g.cypher(bare, params={"ks": keys}).to_list() == [{"n": i} for i in range(rows - 1)]
 
     def test_equals_var_join_below_threshold_correct(self):
         """Below the 64-row threshold, the slow path runs — must still match."""

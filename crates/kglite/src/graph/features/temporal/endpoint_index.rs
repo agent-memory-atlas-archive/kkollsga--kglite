@@ -878,7 +878,9 @@ pub(crate) fn invalidate(graph: &DirGraph) {
 /// only clear elements of targets the query's template does not reach —
 /// its scopes cannot bind them (the template already holds every declared
 /// label a pattern can reach, secondary labels included), and a
-/// relationship type outside it is never traversed.
+/// relationship type outside it is never traversed. A retrieval filter's
+/// template holds every declared node label and its index's relationship
+/// type, whose documents are all a retrieval pass walks.
 fn is_covered_by(key: &SegmentKey, cover: &SegmentKey) -> bool {
     key.iter().all(|pair| cover.contains(pair))
 }
@@ -977,9 +979,11 @@ pub(crate) fn store_disk_masks(graph: &DirGraph, t: Instant, masks: &Arc<Element
 
 /// The statistics cached for `key` at the graph's version, or `build()`'s,
 /// computed outside the lock and cached. One entry serves every query at the
-/// instant: which documents a filter admits at an instant is fixed by the
-/// declarations and the elements (the version) — a node is judged by every
-/// declared label it carries, whichever template asked.
+/// instant, so `build` must admit by a filter no statement's template shapes:
+/// the caller's is the instant's filter over every declared node label and
+/// the index's own relationship type (`instant::retrieval_instant_filter`),
+/// under which the admitted documents are fixed by the declarations and the
+/// elements (the version).
 pub(crate) fn text_stats(
     graph: &DirGraph,
     key: TextStatsKey,

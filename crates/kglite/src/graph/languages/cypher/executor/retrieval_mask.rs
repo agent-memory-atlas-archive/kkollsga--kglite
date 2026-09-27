@@ -1,12 +1,14 @@
 //! Retrieval under a `FOR VALID_TIME AS OF` context: vector and BM25 ranking
-//! over only the elements the statement's filter admits.
+//! over only the elements valid at the instant.
 //!
-//! One filter serves both routes and every tier — a prefixed statement on the
-//! graph, and the same text on a `freeze(valid_at=…)` view (which is that
-//! statement). [`CypherExecutor::retrieval_filter`] is the statement's own
-//! filter in memory and mapped mode; in Disk mode, where that filter would
-//! read the bound properties of every candidate, it is the instant mask
-//! (`features::temporal::instant`).
+//! The same filters serve every tier — a prefixed statement on the graph, and
+//! the same text on a `freeze(valid_at=…)` view (which is that statement).
+//! Node vector retrieval and the embedding procedures test candidates against
+//! the statement's own filter in memory and mapped mode; in Disk mode, where
+//! that filter would read the bound properties of every candidate, against the
+//! instant mask (`features::temporal::instant`). BM25 always uses the
+//! instant's filter ([`CypherExecutor::text_filter`]), since its corpus
+//! statistics are shared by every statement at the instant.
 //!
 //! * **Vector** (`MATCH (n:T) RETURN … vector_score(n, …) AS s ORDER BY s
 //!   DESC LIMIT k`): the admitted nodes of `T` are gathered — bit tests, no
@@ -15,10 +17,12 @@
 //!   index's admitted candidates are. Nodes without a vector score NULL and
 //!   rank first, as the unfused query ranks them.
 //! * **BM25** (`text_bm25()` everywhere it appears): a query prepared under
-//!   the filter carries the admitted documents' statistics — `N`, the mean
-//!   length, each term's document frequency — so every admitted document
-//!   scores what it would in an index of the admitted documents alone. The
-//!   fused top-k then walks the postings with one admit test each.
+//!   the instant's filter over every declared node label (and a relationship
+//!   index's own type) carries the admitted documents' statistics — `N`, the
+//!   mean length, each term's document frequency — so every admitted document
+//!   scores what it would in an index of the admitted documents alone,
+//!   whichever statement asks. The fused top-k then walks the postings with
+//!   one admit test each.
 //!
 //! A type the filter can hide no node of takes the unfiltered routes.
 
@@ -30,7 +34,7 @@ use super::retrieval::{FusedTopK, RetrievalPopulation, VectorScoreArgs};
 use super::*;
 use crate::graph::algorithms::text_index::bm25::PreparedQuery;
 use crate::graph::features::temporal::endpoint_index::{self, TextStatsKey};
-use crate::graph::features::temporal::instant::instant_filter;
+use crate::graph::features::temporal::instant::{instant_filter, retrieval_instant_filter};
 use crate::graph::features::temporal::vector_mask;
 use crate::graph::schema::EmbeddingStore;
 use crate::graph::text_indexes::TextIndexRead;
@@ -53,18 +57,30 @@ impl CypherExecutor<'_> {
         Ok(masked.map(Arc::new))
     }
 
-    /// [`Self::retrieval_filter`] when it can hide a node of `node_type`.
+    /// The filter a node retrieval entry tests `node_type`'s nodes against,
+    /// when it can hide one: the statement's filter in memory and mapped
+    /// mode; on Disk the instant mask over the declared node labels
+    /// ([`retrieval_instant_filter`]), which no relationship declaration can
+    /// refuse. An `Err` (the Disk mask cap, an unreadable bound met by the
+    /// mask pass) means the entry must decline to the guarded matcher, which
+    /// tests only the nodes it reaches.
     pub(super) fn node_retrieval_filter(
         &self,
         node_type: &str,
     ) -> Result<Option<Arc<ElementFilter>>, String> {
-        if self
-            .graph_filter()
-            .is_none_or(|filter| !filter.may_hide_type(self.graph, node_type))
-        {
+        let Some(filter) = self.graph_filter() else {
+            return Ok(None);
+        };
+        if !filter.may_hide_type(self.graph, node_type) {
             return Ok(None);
         }
-        self.retrieval_filter()
+        if !self.graph.graph.is_disk() {
+            return Ok(Some(Arc::clone(filter)));
+        }
+        let instant = filter
+            .instant()
+            .ok_or("a valid-time range cannot filter retrieval")?;
+        Ok(retrieval_instant_filter(self.graph, instant, None)?.map(Arc::new))
     }
 
     /// The nodes of `node_type` that `filter` admits, ascending.
@@ -100,7 +116,10 @@ impl CypherExecutor<'_> {
         let Some((variable, node_type)) = self.plain_retrieval_type(matched) else {
             return Ok(None);
         };
-        let Some(filter) = self.node_retrieval_filter(node_type)? else {
+        let Ok(filter) = self.node_retrieval_filter(node_type) else {
+            return Ok(None);
+        };
+        let Some(filter) = filter else {
             return self.try_whole_type_vector_entry(matched, top, score_call);
         };
         let Some(admitted) = self.admitted_nodes(node_type, &filter)? else {
@@ -246,8 +265,8 @@ impl CypherExecutor<'_> {
         )
     }
 
-    /// A `text_bm25` query over `owner.property`, prepared under the
-    /// statement's filter when it can hide one of the index's documents —
+    /// A `text_bm25` query over `owner.property`, prepared under
+    /// [`Self::text_filter`] when it can hide one of the index's documents —
     /// with the admitted documents' statistics, cached per instant — and
     /// plainly otherwise. The second value is the admitted document count
     /// under a filter.
@@ -277,24 +296,36 @@ impl CypherExecutor<'_> {
         Ok((prepared, Some(stats.docs)))
     }
 
-    /// The retrieval filter when it can hide one of `owner`'s documents.
+    /// The filter `owner`'s text documents are admitted by, when it can hide
+    /// one: the instant's filter over every declared node label and the
+    /// owner's own declarations ([`retrieval_instant_filter`]), never the
+    /// statement's. The corpus statistics are cached per instant and serve
+    /// every statement, and a relationship document is valid by both its
+    /// endpoints under every label they carry — including labels a statement
+    /// does not name, whose declarations its own filter leaves out.
     pub(super) fn text_filter(
         &self,
         relationship: bool,
         owner: &str,
     ) -> Result<Option<Arc<ElementFilter>>, String> {
-        let hides = self.graph_filter().is_some_and(|filter| {
-            if relationship {
-                filter.may_hide_relationship_type(self.graph, owner)
-            } else {
-                filter.may_hide_type(self.graph, owner)
-            }
-        });
-        if hides {
-            self.retrieval_filter()
+        let Some(filter) = self.graph_filter() else {
+            return Ok(None);
+        };
+        let hides = if relationship {
+            filter.may_hide_relationship_type(self.graph, owner)
         } else {
-            Ok(None)
+            filter.may_hide_type(self.graph, owner)
+        };
+        if !hides {
+            return Ok(None);
         }
+        let instant = filter
+            .instant()
+            .ok_or("a valid-time range cannot filter text_bm25()")?;
+        Ok(
+            retrieval_instant_filter(self.graph, instant, relationship.then_some(owner))?
+                .map(Arc::new),
+        )
     }
 
     /// The admit test on a text index slot: a node, or a relationship with

@@ -24,7 +24,7 @@ use super::eval::Instant;
 use super::slice::{slice_at, SliceCaps, SliceKey, ValidSlice};
 use crate::graph::core::graph_filter::{ElementFilter, GraphFilter, ValidTimeSelector};
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::languages::cypher::valid_time::declared_template;
+use crate::graph::languages::cypher::valid_time::{declared_template, retrieval_template};
 use crate::graph::storage::GraphRead;
 
 /// The most bytes a Disk-mode instant mask may take — one bit per node slot
@@ -61,7 +61,7 @@ fn instant_filter_capped(
             segments: Vec::new(),
             instant: Some(t),
         };
-        let masks = disk_masks(graph, &filter, t, cap)?;
+        let masks = disk_masks(graph, &filter, t, cap, true)?;
         return Ok((
             key,
             masks.map(|masks| ElementFilter::from_masks(filter.selector, masks)),
@@ -73,6 +73,36 @@ fn instant_filter_capped(
         instant: (!resolved.guarded.is_empty()).then_some(t),
     };
     Ok((key, ElementFilter::new(&filter, resolved)))
+}
+
+/// The filter a retrieval index's documents are admitted by at `t`: every
+/// declared node label and, for a relationship index on `rel_type`, that
+/// type's declarations ([`retrieval_template`]). It admits exactly the
+/// documents [`instant_filter`] does — a document's validity depends on no
+/// other target — so its statistics are the instant's whichever statement
+/// asks. On Disk it reads the cached instant mask, or builds the full one,
+/// or — when another relationship type's declarations refuse the full
+/// template — a mask over this template alone, not cached.
+pub(crate) fn retrieval_instant_filter(
+    graph: &DirGraph,
+    t: Instant,
+    rel_type: Option<&str>,
+) -> Result<Option<ElementFilter>, String> {
+    let filter = GraphFilter {
+        template: Arc::new(retrieval_template(graph, rel_type)?),
+        selector: ValidTimeSelector::AsOf(t),
+    };
+    if !graph.graph.is_disk() {
+        return Ok(ElementFilter::new(&filter, filter.resolve(graph)));
+    }
+    if let Some(masks) = endpoint_index::cached_disk_masks(graph, t) {
+        return Ok(Some(ElementFilter::from_masks(filter.selector, masks)));
+    }
+    if declared_template(graph).is_ok() {
+        return Ok(instant_filter(graph, t)?.1);
+    }
+    let masks = disk_masks(graph, &filter, t, disk_mask_cap(), false)?;
+    Ok(masks.map(|masks| ElementFilter::from_masks(filter.selector, masks)))
 }
 
 /// The valid slice of `graph` at `t`, from the graph's slice cache or built
@@ -95,15 +125,17 @@ fn disk_mask_cap() -> usize {
         .unwrap_or(DISK_MASK_BYTE_CAP)
 }
 
-/// The Disk-mode instant mask of `filter` (every declared target at `t`):
-/// cached, or built by one pass through the validity evaluator. `None` when
-/// the filter hides nothing. Refused, before anything is allocated, when the
-/// mask would pass the cap.
+/// The Disk-mode instant mask of `filter` at `t`: cached, or built by one
+/// pass through the validity evaluator and cached when `store` (only a
+/// filter over every declared target may be, since the cache is keyed on the
+/// instant alone). `None` when the filter hides nothing. Refused, before
+/// anything is allocated, when the mask would pass the cap.
 fn disk_masks(
     graph: &DirGraph,
     filter: &GraphFilter,
     t: Instant,
     cap: usize,
+    store: bool,
 ) -> Result<Option<Arc<ElementMasks>>, String> {
     if let Some(masks) = endpoint_index::cached_disk_masks(graph, t) {
         return Ok(Some(masks));
@@ -140,7 +172,9 @@ fn disk_masks(
         return Err(err.to_string());
     }
     let masks = Arc::new(ElementMasks { nodes, edges });
-    endpoint_index::store_disk_masks(graph, t, &masks);
+    if store {
+        endpoint_index::store_disk_masks(graph, t, &masks);
+    }
     Ok(Some(masks))
 }
 
