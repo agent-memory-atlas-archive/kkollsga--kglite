@@ -1,0 +1,48 @@
+Registry acceptance fixtures — sources, licences and derivation
+=================================================================
+
+Used by tests/test_registry_acceptance.py and tests/test_sodir_acceptance.py.
+Retrieved 2026-09-25.
+
+rvig_tabel33.csv
+    Rijksdienst voor Identiteitsgegevens (RvIG), BRP Landelijke tabellen,
+    Tabel 33 "Gemeententabel", CSV sorted by code:
+    https://publicaties.rvig.nl/media/13307/download
+    (listed at https://publicaties.rvig.nl/landelijke-tabellen-32-tm-61).
+    Licence: CC0 1.0 — RvIG publishes its content under CC0 unless stated
+    otherwise (https://www.rvig.nl/copyright).
+    Derivation: the downloaded file is UTF-16; this copy is the same content
+    re-encoded as UTF-8, otherwise unchanged. Columns: municipality code,
+    name, successor code, start, end (YYYYMMDD; empty = open). The codes
+    0000, 0997-0999 and 1999 are not municipalities; the tests drop them.
+
+rvig_aantal_gemeenten.csv
+    RvIG, "Cijfers: Aantal gemeenten door de jaren heen":
+    https://www.rvig.nl/cijfers-aantal-gemeenten-door-de-jaren-heen
+    Licence: CC0 1.0 (as above).
+    Derivation: the per-year series (1900-2026) extracted from the page's
+    embedded chart data; read as the count on 1 January of each year.
+
+cbs_gebieden_2009.csv
+    Source: Centraal Bureau voor de Statistiek (CBS), StatLine table 72014ned
+    "Gebieden in Nederland 2009", via the OData v3 API
+    (https://opendata.cbs.nl/ODataApi/odata/72014ned/).
+    Licence: Creative Commons Attribution 4.0 International (CC BY 4.0),
+    https://creativecommons.org/licenses/by/4.0/ — attribution: CBS.
+    Changes: reduced to two columns — the municipality code (RegioS) and the
+    province name (the "Provincies" group's Naam column) — with the table's
+    fixed-width padding stripped, sorted by code. Produced by
+    reduce_cbs_gebieden_2009.py in this directory from the table's
+    TypedDataSet JSON.
+
+sodir/
+    Synthetic. The files follow the column layout of the Norwegian Offshore
+    Directorate's (Sodir) field and production-licence history tables
+    (field_operator_hst, field_licensee_hst, licence, licence_licensee_hst),
+    and the five field names and licence number are those of real fields,
+    but every company, share and date is invented. The fixture was built
+    synthetic because no licence statement for the Sodir data was found with
+    the local copy of the data. It is written by sodir/build_sodir_synthetic.py
+    so that its answers have the shape of the real tables' answers (partner
+    counts 4/1/4/4/2 at 2009-06-30, and 18/11/18/20/19 when two of the three
+    hops are left undated).
