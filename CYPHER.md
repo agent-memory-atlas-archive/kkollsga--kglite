@@ -92,8 +92,10 @@ count). Two semantics to keep in mind:
   design (that is how a type grows a column). A property the graph declares
   counts as known before any node carries it: a `define_schema()` field, or the
   `from` / `to` bound of a
-  [validity declaration](#validity-interval-declarations) on the label.
-  `lock_schema()` extends the
+  [validity declaration](#validity-interval-declarations) on the label (on a
+  secondary label, for the nodes that carry it). Once any node of a type
+  carries a property it is known on the whole type, whichever label declared
+  it. `lock_schema()` extends the
   refusal to *reads* of a property no node of the type has (`WHERE`, `RETURN`,
   `WITH`, `ORDER BY`) and to unknown labels; see
   [Diagnostics](#diagnostics). The bulk loaders (`add_nodes`/`add_connections`)
@@ -3472,6 +3474,18 @@ already rejected `MATCH (p:Person {agee: 1})` and `MATCH (p:Persn)`; the same
 typo written as `WHERE p.agee = 1` or `RETURN p.agee` now raises `SchemaError`
 with the same "did you mean?" hint rather than returning an empty result or a
 null column.
+
+The lock checks the positions these warnings come from, and no others: in a
+`WHERE` (of `MATCH`, `OPTIONAL MATCH` or `WITH`) or a `FILTER`, a property
+tested directly — a comparison, `IN`, `IS [NOT] NULL`, `STARTS WITH` /
+`ENDS WITH` / `CONTAINS`, including through arithmetic or a function argument
+— and the `AND` / `OR` / `XOR` / `NOT` combinations of those; and a property
+read by a `RETURN`, `WITH` or `ORDER BY` item. A property read in a nested or
+derived position is neither refused nor warned about: a predicate used as a
+value (`(p.agee = 1) IS NULL`, `p.agee IS NULL = true`), a `CASE`, a map key
+or list index on it (`p.agee.k`, `p.agee[0]`), a list predicate
+(`any(v IN … WHERE p.agee IS NULL)`), or a `WHERE` inside `EXISTS { }` /
+`COUNT { }`.
 
 **The declared-type family promotes too, but only from its enforced source.** A
 mismatch against an `IS :: T` constraint — `WHERE p.age > 'forty'` where

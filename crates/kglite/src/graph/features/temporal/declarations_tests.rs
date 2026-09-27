@@ -461,31 +461,39 @@ fn a_secondary_label_bound_is_known_wherever_the_label_is() {
     assert!(refused.is_empty(), "{}", refused.join("\n"));
 }
 
-/// The secondary-label allowance is the declared label's, not every label's:
-/// a `Doc` node without `Ver` still has no `vt`.
+/// The secondary-label allowance covers nodes carrying the declaring label.
+/// On a node without it, the bound is refused under the lock only until some
+/// node of the primary type carries it: the lock checks the type's observed
+/// properties, and from then on `vt` is one of `Doc`'s (a type-level schema,
+/// not a per-label one).
 #[test]
-fn a_secondary_label_bound_is_not_known_on_a_node_without_the_label() {
+fn a_secondary_label_bound_is_refused_elsewhere_until_the_primary_type_carries_it() {
     let mut g = graph(&[
         "CREATE (:Doc {id: 1, vf: date('2000-01-01')}), (:Doc {id: 3, vf: date('2000-01-01')})",
         "MATCH (n:Doc {id: 1}) SET n:Ver",
     ]);
     declare(&mut g, &node("Ver"), "vf", "vt", Closed).unwrap();
     g.schema_locked = true;
-    let refused = attempt(
+    for statement in [
+        "MATCH (n:Doc {id: 3}) SET n.vt = date('2010-01-01')",
+        "CREATE (:Doc {id: 4, vt: date('2010-01-01')})",
+    ] {
+        let refused = attempt(&mut g, statement).expect_err(statement);
+        assert!(
+            refused.contains("Unknown property 'vt' on Doc"),
+            "{statement}: {refused}"
+        );
+    }
+    attempt(
+        &mut g,
+        "MATCH (n:Ver {id: 1}) SET n.vt = date('2010-01-01')",
+    )
+    .unwrap();
+    attempt(
         &mut g,
         "MATCH (n:Doc {id: 3}) SET n.vt = date('2010-01-01')",
     )
-    .expect_err("node 3 does not carry Ver");
-    assert!(
-        refused.contains("Unknown property 'vt' on Doc"),
-        "{refused}"
-    );
-    let refused = attempt(&mut g, "CREATE (:Doc {id: 4, vt: date('2010-01-01')})")
-        .expect_err("a CREATE without Ver");
-    assert!(
-        refused.contains("Unknown property 'vt' on Doc"),
-        "{refused}"
-    );
+    .unwrap();
 }
 
 /// The allowance lasts only as long as the declaration.

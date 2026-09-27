@@ -3493,10 +3493,14 @@ class KnowledgeGraph:
         suggestion.
 
         A locked graph also rejects a **property name no node of the type
-        carries**, wherever it is read — ``WHERE p.agee = 1`` (which would
-        filter out every row) and ``RETURN``/``WITH``/``ORDER BY p.agee``
-        (which would produce a column of nulls beside correct-looking
-        siblings). Unlocked, both are non-fatal warnings.
+        carries** where it is read directly — a ``WHERE``/``FILTER`` test
+        such as ``WHERE p.agee = 1`` (which would filter out every row), and
+        a ``RETURN``/``WITH``/``ORDER BY p.agee`` item (which would produce a
+        column of nulls beside correct-looking siblings). Unlocked, both are
+        non-fatal warnings. Nested and derived positions — a ``CASE``, a map
+        key or list index on the property, a list predicate, a predicate used
+        as a value, a ``WHERE`` inside ``EXISTS { }`` / ``COUNT { }`` — are
+        not checked.
 
         It rejects one more thing: a comparison a property's **declared**
         type can never satisfy — ``WHERE p.age > 'forty'`` where
