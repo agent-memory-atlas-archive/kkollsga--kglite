@@ -69,6 +69,11 @@ enum AbsentSite {
     /// NULL`. The filter keeps everything rather than dropping it.
     WhereNullTest,
     FilterNullTest,
+    /// A reference whose effect on the row count is not known here: under a
+    /// connective the leaf does not decide, or inside a function call that
+    /// need not propagate null (`coalesce`). Names the absent property only.
+    WherePart,
+    FilterPart,
     Return,
     With,
     OrderBy,
@@ -80,8 +85,8 @@ impl AbsentSite {
     /// done, because under a lock the query does not run at all.
     fn clause(self) -> &'static str {
         match self {
-            AbsentSite::Where | AbsentSite::WhereNullTest => "WHERE",
-            AbsentSite::Filter | AbsentSite::FilterNullTest => "FILTER",
+            AbsentSite::Where | AbsentSite::WhereNullTest | AbsentSite::WherePart => "WHERE",
+            AbsentSite::Filter | AbsentSite::FilterNullTest | AbsentSite::FilterPart => "FILTER",
             AbsentSite::Return => "RETURN",
             AbsentSite::With => "WITH",
             AbsentSite::OrderBy => "ORDER BY",
@@ -93,6 +98,15 @@ impl AbsentSite {
         match self {
             AbsentSite::Where => AbsentSite::WhereNullTest,
             AbsentSite::Filter => AbsentSite::FilterNullTest,
+            other => other,
+        }
+    }
+
+    /// The filter site that claims no row count. Projections are unchanged.
+    fn part(self) -> Self {
+        match self {
+            AbsentSite::Where | AbsentSite::WhereNullTest => AbsentSite::WherePart,
+            AbsentSite::Filter | AbsentSite::FilterNullTest => AbsentSite::FilterPart,
             other => other,
         }
     }
@@ -110,6 +124,11 @@ impl AbsentSite {
             AbsentSite::WhereNullTest | AbsentSite::FilterNullTest => format!(
                 "{} tests property '{property}', which no {label} node has, for null — the \
                  test is true on every row, so it filters out nothing.{hint}",
+                self.clause()
+            ),
+            AbsentSite::WherePart | AbsentSite::FilterPart => format!(
+                "{} references property '{property}' which no {label} node has — its \
+                 value is null on every row.{hint}",
                 self.clause()
             ),
             AbsentSite::Return => format!(
@@ -307,19 +326,39 @@ struct AbsentPropertyScan<'a, 'q> {
     out: Vec<AbsentProperty>,
 }
 
+/// Where a filter leaf sits: under how many `NOT`s, and whether every
+/// connective above it is an AND (or every one an OR) once the `NOT`s are
+/// pushed down. A leaf null or false on every row decides the whole clause
+/// only through ANDs; one true on every row only through ORs. `XOR` is
+/// neither.
+#[derive(Clone, Copy)]
+struct LeafPath {
+    negated: bool,
+    all_and: bool,
+    all_or: bool,
+}
+
+impl LeafPath {
+    fn below(self, connective: &Predicate) -> Self {
+        let (and, or) = match connective {
+            Predicate::And(..) => (!self.negated, self.negated),
+            Predicate::Or(..) => (self.negated, !self.negated),
+            _ => (false, false),
+        };
+        LeafPath {
+            all_and: self.all_and && and,
+            all_or: self.all_or && or,
+            ..self
+        }
+    }
+}
+
 impl<'q> AbsentPropertyScan<'_, 'q> {
     fn report(&mut self, variable: &'q str, property: &'q str, site: AbsentSite) {
         let Some(&label) = self.var_label.get(variable) else {
             return;
         };
-        // A null test that keeps every row reports a likely typo; on a
-        // declared name (a `define_schema` field or a validity bound nobody has
-        // written yet, as in the `WHERE n.valid_to IS NULL` current-version
-        // idiom) it is the expected answer, not a mistake.
-        let expected_null = matches!(site, AbsentSite::WhereNullTest | AbsentSite::FilterNullTest)
-            && super::property_is_declared(label, property, self.graph);
-        if expected_null
-            || !property_absent(self.graph, label, property)
+        if !property_absent(self.graph, label, property)
             || self.written_any.contains(variable)
             || self.written.contains(&(variable, property))
             || !self.seen.insert((variable, property))
@@ -341,26 +380,60 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
     }
 
     fn predicate(&mut self, pred: &'q Predicate, site: AbsentSite) {
-        self.predicate_under(pred, site, false);
+        let root = LeafPath {
+            negated: false,
+            all_and: true,
+            all_or: true,
+        };
+        self.predicate_under(pred, site, root);
     }
 
-    /// `negated` tracks the enclosing `NOT`s, which decide whether a null test
-    /// on an absent property keeps every row or drops every row. A comparison
-    /// is null either way, and `NOT null` is null, so only the null tests need
-    /// it.
-    fn predicate_under(&mut self, pred: &'q Predicate, site: AbsentSite, negated: bool) {
+    /// Walk a filter predicate, wording each leaf by what it can claim for the
+    /// whole clause (see [`LeafPath`]). A bare `var.prop` on an absent property
+    /// is null on every row, so a comparison or a failing null test drops
+    /// every row and a passing null test keeps every row; a wrapped one may
+    /// not be null (`coalesce`), so it claims neither.
+    fn predicate_under(&mut self, pred: &'q Predicate, site: AbsentSite, path: LeafPath) {
         match pred {
             Predicate::And(a, b) | Predicate::Or(a, b) | Predicate::Xor(a, b) => {
-                self.predicate_under(a, site, negated);
-                self.predicate_under(b, site, negated);
+                let child = path.below(pred);
+                self.predicate_under(a, site, child);
+                self.predicate_under(b, site, child);
             }
-            Predicate::Not(p) => self.predicate_under(p, site, !negated),
-            Predicate::IsNull(expr) | Predicate::IsNotNull(expr)
-                if matches!(pred, Predicate::IsNull(_)) != negated =>
-            {
-                self.expression(expr, site.null_test())
+            Predicate::Not(p) => self.predicate_under(
+                p,
+                site,
+                LeafPath {
+                    negated: !path.negated,
+                    ..path
+                },
+            ),
+            Predicate::IsNull(expr) | Predicate::IsNotNull(expr) => {
+                let Expression::PropertyAccess { variable, property } = expr else {
+                    return self.expression(expr, site.part());
+                };
+                let keeps_all = matches!(pred, Predicate::IsNull(_)) != path.negated;
+                if keeps_all {
+                    // True on every row: a likely typo, but on a declared name
+                    // (a `define_schema` field or a validity bound nobody has
+                    // written yet, as in the `WHERE n.valid_to IS NULL`
+                    // current-version idiom) the expected answer.
+                    let declared = self.var_label.get(variable.as_str()).is_some_and(|label| {
+                        super::property_is_declared(label, property, self.graph)
+                    });
+                    if declared {
+                        return;
+                    }
+                }
+                let leaf_site = match (keeps_all, path.all_or, path.all_and) {
+                    (true, true, _) => site.null_test(),
+                    (false, _, true) => site,
+                    _ => site.part(),
+                };
+                self.report(variable.as_str(), property.as_str(), leaf_site);
             }
             Predicate::Comparison { left, right, .. } => {
+                let site = if path.all_and { site } else { site.part() };
                 self.expression(left, site);
                 self.expression(right, site);
             }
@@ -369,9 +442,10 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
             | Predicate::InExpression { expr, .. }
             | Predicate::StartsWith { expr, .. }
             | Predicate::EndsWith { expr, .. }
-            | Predicate::Contains { expr, .. }
-            | Predicate::IsNull(expr)
-            | Predicate::IsNotNull(expr) => self.expression(expr, site),
+            | Predicate::Contains { expr, .. } => {
+                let site = if path.all_and { site } else { site.part() };
+                self.expression(expr, site)
+            }
             _ => {}
         }
     }
@@ -391,14 +465,16 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
                 self.expression(b, site);
             }
             Expression::Negate(e) => self.expression(e, site),
+            // A function need not propagate null (`coalesce`), and a list of
+            // nulls is not null, so neither keeps a row-count claim.
             Expression::FunctionCall { args, .. } => {
                 for a in args {
-                    self.expression(a, site);
+                    self.expression(a, site.part());
                 }
             }
             Expression::ListLiteral(items) => {
                 for it in items {
-                    self.expression(it, site);
+                    self.expression(it, site.part());
                 }
             }
             _ => {}
@@ -1001,31 +1077,46 @@ mod tests {
     #[test]
     fn a_null_test_is_worded_by_what_it_keeps() {
         let g = graph_with_schema();
-        for (query, keeps_all) in [
-            ("MATCH (p:Person) WHERE p.agee IS NULL RETURN p", true),
-            (
-                "MATCH (p:Person) WHERE NOT p.agee IS NOT NULL RETURN p",
-                true,
-            ),
-            ("MATCH (p:Person) WHERE p.agee IS NOT NULL RETURN p", false),
-            ("MATCH (p:Person) WHERE NOT p.agee IS NULL RETURN p", false),
+        // `Some(true)`: keeps every row; `Some(false)`: drops every row;
+        // `None`: the leaf does not decide the clause, so no count is claimed.
+        for (predicate, claim) in [
+            ("p.agee IS NULL", Some(true)),
+            ("NOT p.agee IS NOT NULL", Some(true)),
+            ("p.agee IS NOT NULL", Some(false)),
+            ("NOT p.agee IS NULL", Some(false)),
+            ("coalesce(p.agee, 1) IS NULL", None),
+            ("toString(p.agee) IS NULL", None),
+            ("coalesce(p.agee, 1) = 1", None),
+            ("p.agee IS NULL OR p.age = 1", Some(true)),
+            ("p.agee IS NULL AND p.age = 1", None),
+            ("NOT (p.agee IS NULL AND p.age = 1)", None),
+            ("p.agee = 1 OR p.age = 1", None),
+            ("p.agee = 1 AND p.age = 1", Some(false)),
+            ("NOT (p.agee = 1 OR p.age = 1)", Some(false)),
+            ("p.agee = 1 XOR p.age = 1", None),
         ] {
-            let q = parse_cypher(query).unwrap();
+            let query = format!("MATCH (p:Person) WHERE {predicate} RETURN p");
+            let q = parse_cypher(&query).unwrap();
             let w = collect_unknown_pattern_warnings(&q, &g);
             assert_eq!(w.len(), 1, "{query}: {w:?}");
+            let said = |text: &str| w[0].contains(text);
             assert_eq!(
-                w[0].contains("filters out nothing"),
-                keeps_all,
+                said("filters out nothing"),
+                claim == Some(true),
                 "{query}: {}",
                 w[0]
             );
             assert_eq!(
-                w[0].contains("filters out every row"),
-                !keeps_all,
+                said("filters out every row"),
+                claim == Some(false),
                 "{query}: {}",
                 w[0]
             );
-            assert!(w[0].contains("Did you mean 'age'"), "{query}: {}", w[0]);
+            assert!(
+                said("no Person node has") && said("Did you mean 'age'"),
+                "{query}: {}",
+                w[0]
+            );
             let found = collect_query_warnings(&q, &g, &HashMap::new()).absent_property;
             let err = strict_read_error(&found, &g).expect("a lock still refuses the typo");
             assert!(

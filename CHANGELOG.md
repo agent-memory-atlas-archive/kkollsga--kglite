@@ -456,7 +456,11 @@ before upgrading.
   has said the test "filters out every row" while the query returned every
   row; it now says the test is true on every row, and stays silent for a
   declared name nothing has written yet (`WHERE n.valid_to IS NULL` on an
-  open-ended validity declaration). `IS NOT NULL` keeps the old wording.
+  open-ended validity declaration). `IS NOT NULL` keeps the old wording. A
+  reference inside a function (`coalesce(n.x, 1)`) or under a connective it
+  does not decide (`n.x = 1 OR n.y = 2`, `NOT (n.x IS NULL AND …)`) now names
+  the absent property without claiming how many rows the `WHERE` keeps; it
+  used to say "filters out every row" there too.
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.

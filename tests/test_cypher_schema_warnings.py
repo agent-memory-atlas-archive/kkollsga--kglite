@@ -422,3 +422,61 @@ def test_the_current_version_idiom_on_a_declared_open_to_is_silent():
     result = g.cypher("MATCH (n:Name) WHERE n.valid_to IS NULL RETURN count(*) AS c")
     assert result.to_list() == [{"c": 2}]
     assert result.diagnostics["warnings"] == []
+
+
+def _claims(warnings):
+    return {
+        "every": any("filters out every row" in w for w in warnings),
+        "nothing": any("filters out nothing" in w for w in warnings),
+        "names": any("'imo'" in w and "no Vessel node has" in w for w in warnings),
+    }
+
+
+def test_a_null_test_over_a_wrapper_claims_nothing_about_the_rows():
+    """Only a bare `v.imo` is known to be null on every row. `coalesce(v.imo,
+    1)` is never null, `toString(v.imo)` always is: the warning must not claim
+    either outcome for a wrapped property, only that the property is absent."""
+    g = _maritime()
+    for where, rows in (
+        ("coalesce(v.imo, 1) IS NULL", 0),
+        ("coalesce(v.imo, 1) IS NOT NULL", 3),
+        ("toString(v.imo) IS NULL", 3),
+        ("toString(v.imo) IS NOT NULL", 0),
+    ):
+        count, warnings = _null_test(g, where)
+        assert count == rows, where
+        assert _claims(warnings) == {"every": False, "nothing": False, "names": True}, (where, warnings)
+
+
+def test_a_wrapped_declared_name_is_not_silenced():
+    """The declared-name silence covers the bare current-version idiom, not a
+    wrapper that drops every row — open or locked."""
+    g = _maritime()
+    g.define_schema({"nodes": {"Vessel": {"optional": ["imo"]}}})
+    for locked in (False, True):
+        if locked:
+            g.lock_schema()
+        count, warnings = _null_test(g, "coalesce(v.imo, 1) IS NULL")
+        assert count == 0, locked
+        assert _claims(warnings) == {"every": False, "nothing": False, "names": True}, (locked, warnings)
+        count, warnings = _null_test(g, "v.imo IS NULL")
+        assert (count, warnings) == (3, []), locked
+
+
+def test_a_leaf_speaks_for_the_whole_where_only_when_it_decides_it():
+    """A leaf that is null on every row decides the WHERE only through ANDs,
+    one that is true on every row only through ORs (after pushing NOTs down);
+    anywhere else the warning names the absent property and claims no count."""
+    g = _maritime()
+    for where, rows, claims in (
+        ("NOT (v.imo IS NULL AND v.name = 'Nordic')", 2, (False, False)),
+        ("v.imo = 1 OR v.name = 'Nordic'", 1, (False, False)),
+        ("v.imo IS NULL AND v.name = 'Nordic'", 1, (False, False)),
+        ("v.imo IS NULL OR v.name = 'Nordic'", 3, (False, True)),
+        ("v.imo = 1 AND v.name = 'Nordic'", 0, (True, False)),
+        ("NOT (v.imo IS NULL OR v.name = 'Nordic')", 0, (True, False)),
+    ):
+        count, warnings = _null_test(g, where)
+        assert count == rows, where
+        c = _claims(warnings)
+        assert (c["every"], c["nothing"]) == claims and c["names"], (where, warnings)
