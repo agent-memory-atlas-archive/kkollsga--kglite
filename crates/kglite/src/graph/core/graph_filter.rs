@@ -7,10 +7,12 @@
 //! (`core::fluent_filter`), through the same template builder
 //! ([`GuardTemplate::for_scope`]).
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
+use chrono::NaiveDate;
 use fixedbitset::FixedBitSet;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
@@ -22,7 +24,7 @@ use crate::graph::features::temporal::endpoint_index::{self, ElementMasks};
 use crate::graph::features::temporal::eval::{self, Instant, TemporalError};
 use crate::graph::features::temporal::{self, DeclarationInfo, IntervalConvention, TemporalTarget};
 use crate::graph::schema::{InternedKey, TemporalConfig};
-use crate::graph::storage::GraphRead;
+use crate::graph::storage::{GraphRead, NodeView};
 use crate::graph::TemporalContext;
 
 /// The declared validity interval of one node label a scope can reach.
@@ -499,7 +501,18 @@ impl ElementFilter {
     #[cold]
     #[inline(never)]
     fn residual_admits_node(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
-        let primary = graph.graph.node_type_of(idx);
+        // The heap backends resolve the node's store once for its type and
+        // every bound; Disk reads each bound from its column store instead of
+        // materialising the node into the query arena.
+        let view = if graph.graph.is_disk() {
+            None
+        } else {
+            graph.graph.node_view(idx)
+        };
+        let primary = match &view {
+            Some(view) => Some(view.node_type()),
+            None => graph.graph.node_type_of(idx),
+        };
         for (label, bounds) in self.node_residual.iter() {
             let carries = primary == Some(*label)
                 || (graph.has_secondary_labels
@@ -510,8 +523,25 @@ impl ElementFilter {
             if !carries {
                 continue;
             }
-            let from = temporal::node_bound(graph, idx, &bounds.from);
-            let to = temporal::node_bound(graph, idx, &bounds.to);
+            if let Some(valid) = view
+                .as_ref()
+                .and_then(|view| self.date_columns_admit(view, bounds))
+            {
+                if !valid {
+                    return false;
+                }
+                continue;
+            }
+            let (from, to) = match &view {
+                Some(view) => (
+                    temporal::view_bound(view, &bounds.from, bounds.from_key),
+                    temporal::view_bound(view, &bounds.to, bounds.to_key),
+                ),
+                None => (
+                    Cow::Owned(temporal::node_bound(graph, idx, &bounds.from)),
+                    Cow::Owned(temporal::node_bound(graph, idx, &bounds.to)),
+                ),
+            };
             let valid = self.evaluate(&from, &to, bounds, || {
                 let id = graph
                     .graph
@@ -524,6 +554,44 @@ impl ElementFilter {
             }
         }
         true
+    }
+
+    /// The node's interval when both bounds are typed date columns, read as
+    /// epoch days: every row is a date or NULL, so no bound can be unreadable
+    /// and `to` is read only when `from` admits. `None` for any other column
+    /// kind (or an `id`/`title` bound), which takes the checked read.
+    #[inline]
+    fn date_columns_admit(&self, view: &NodeView<'_>, bounds: &GuardBounds) -> Option<bool> {
+        if [bounds.from.as_str(), bounds.to.as_str()]
+            .iter()
+            .any(|field| matches!(*field, "id" | "title"))
+        {
+            return None;
+        }
+        let (store, row) = view.column_row()?;
+        let from = store.date_cells(bounds.from_key)?;
+        let to = store.date_cells(bounds.to_key)?;
+        let day = |instant: Instant| epoch_days(instant.date());
+        // An interval is valid at `[start, end]` when it starts by `end` and
+        // still runs at `start` — the instant twice for AS OF.
+        let (start, end) = match self.selector {
+            ValidTimeSelector::AsOf(t) => (day(t), day(t)),
+            ValidTimeSelector::Overlap(a, b) => (day(a), day(b)),
+        };
+        let from = from.epoch_days(row);
+        if from.is_some_and(|from| i64::from(from) > end) {
+            return Some(false);
+        }
+        let to = to.epoch_days(row).map(i64::from);
+        let admits = |to: i64, day: i64| match bounds.convention {
+            IntervalConvention::Closed => to >= day,
+            IntervalConvention::HalfOpen => to > day,
+        };
+        let non_empty = match (from, to) {
+            (Some(from), Some(to)) => admits(to, i64::from(from)),
+            _ => true,
+        };
+        Some(non_empty && to.is_none_or(|to| admits(to, start)))
     }
 
     #[cold]
@@ -585,6 +653,16 @@ impl ElementFilter {
             false
         })
     }
+}
+
+/// Days since 1970-01-01, the unit a typed date column stores.
+#[inline]
+fn epoch_days(date: NaiveDate) -> i64 {
+    const EPOCH: NaiveDate = match NaiveDate::from_ymd_opt(1970, 1, 1) {
+        Some(date) => date,
+        None => unreachable!(),
+    };
+    (date - EPOCH).num_days()
 }
 
 /// A slot past the mask was created after the filter resolved; no declared

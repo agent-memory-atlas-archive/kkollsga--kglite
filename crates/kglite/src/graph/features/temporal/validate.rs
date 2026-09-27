@@ -8,6 +8,7 @@
 //! records. The only buffers are the bounds of one abutment group — one source
 //! node's relationships of the type, or one node label (capped on disk).
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 use chrono::{NaiveDate, NaiveDateTime};
@@ -20,7 +21,7 @@ use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::core::value_operations::format_value_compact;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::{InternedKey, TemporalConfig};
-use crate::graph::storage::GraphRead;
+use crate::graph::storage::{GraphRead, NodeView};
 
 pub(super) struct Walk {
     pub(super) rows: usize,
@@ -191,6 +192,20 @@ impl Seen {
     fn note(&mut self, from: &Value, to: &Value) {
         self.from |= !matches!(from, Value::Null);
         self.to |= !matches!(to, Value::Null);
+    }
+}
+
+/// [`node_bound`] read through a view the caller already resolved, so a
+/// node's two bounds share one store resolution.
+pub(crate) fn view_bound<'a>(
+    view: &NodeView<'a>,
+    property: &str,
+    key: InternedKey,
+) -> Cow<'a, Value> {
+    match property {
+        "id" => view.id(),
+        "title" => view.title(),
+        _ => view.get(key).unwrap_or(Cow::Owned(Value::Null)),
     }
 }
 

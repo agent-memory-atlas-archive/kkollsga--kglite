@@ -42,7 +42,7 @@ pub use request::{
     node_request_config, node_type_has_property, relationship_request_configs,
     relationship_type_has_property, unknown_bound_message,
 };
-pub(crate) use validate::{edge_bound, node_bound};
+pub(crate) use validate::{edge_bound, node_bound, view_bound};
 
 use eval::{BoundSide, TemporalError};
 

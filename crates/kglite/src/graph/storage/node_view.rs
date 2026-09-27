@@ -81,6 +81,13 @@ impl<'a> NodeView<'a> {
         self.data
     }
 
+    /// The column store holding this node's row, and the row; `None` for a
+    /// node whose properties are not columnar.
+    #[inline]
+    pub(crate) fn column_row(&self) -> Option<(&'a ColumnStore, u32)> {
+        self.store
+    }
+
     /// The node's primary type key.
     #[inline]
     pub fn node_type(&self) -> InternedKey {

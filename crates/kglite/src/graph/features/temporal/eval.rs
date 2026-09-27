@@ -183,7 +183,34 @@ pub(crate) fn parse_bounds(
 /// contains no instant, even one on its own day at date grain.
 /// Both bounds are read before either is compared, so a bad bound errors
 /// whatever the instant.
+#[inline]
 pub(crate) fn interval_contains(
+    from: &Value,
+    to: &Value,
+    instant: Instant,
+    convention: IntervalConvention,
+) -> Result<bool, TemporalError> {
+    // Date (or NULL) bounds compare at date grain whatever the instant's
+    // grain, so the common stored shape skips building instants.
+    if let (Some(from), Some(to)) = (date_bound(from), date_bound(to)) {
+        let t = instant.date();
+        let end_admits = |end: NaiveDate, day: NaiveDate| match convention {
+            IntervalConvention::Closed => end >= day,
+            IntervalConvention::HalfOpen => end > day,
+        };
+        let non_empty = match (from, to) {
+            (Some(from), Some(to)) => end_admits(to, from),
+            _ => true,
+        };
+        return Ok(non_empty
+            && from.is_none_or(|from| from <= t)
+            && to.is_none_or(|to| end_admits(to, t)));
+    }
+    contains_parsed(from, to, instant, convention)
+}
+
+/// [`interval_contains`] over parsed instants: every bound shape.
+fn contains_parsed(
     from: &Value,
     to: &Value,
     instant: Instant,
@@ -193,6 +220,17 @@ pub(crate) fn interval_contains(
     Ok(non_empty(from, to, convention)
         && starts_by(from, instant)
         && ends_after(to, instant, convention))
+}
+
+/// A NULL (`Some(None)`) or date (`Some(Some(day))`) bound; `None` for any
+/// other value, which takes the general path.
+#[inline]
+fn date_bound(value: &Value) -> Option<Option<NaiveDate>> {
+    match value {
+        Value::Null => Some(None),
+        Value::DateTime(day) => Some(Some(*day)),
+        _ => None,
+    }
 }
 
 /// Whether the interval holds any instant: false when its end does not
@@ -248,6 +286,31 @@ pub(crate) fn end_admits(end: Instant, t: Instant, convention: IntervalConventio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_date_fast_path_agrees_with_the_parsed_path() {
+        let days = ["2009-06-29", "2009-06-30", "2009-07-01"];
+        let mut bounds: Vec<Value> = days.iter().map(|day| d(day)).collect();
+        bounds.push(Value::Null);
+        let instants = [
+            d("2009-06-30"),
+            ts("2009-06-30T00:00"),
+            ts("2009-06-30T12:00"),
+        ];
+        for from in &bounds {
+            for to in &bounds {
+                for t in &instants {
+                    for c in [CLOSED, HALF_OPEN] {
+                        assert_eq!(
+                            interval_contains(from, to, at(t.clone()), c),
+                            contains_parsed(from, to, at(t.clone()), c),
+                            "{from:?} {to:?} {t:?} {c:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn an_empty_interval_overlaps_no_range() {

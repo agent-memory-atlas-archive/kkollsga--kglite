@@ -186,6 +186,44 @@ class TestErrors:
             statuses.date("2011").select("Status")
 
 
+class TestNamedBounds:
+    """`valid_at` / `valid_during` naming bounds nothing declares read every
+    node's own properties. A pair of typed date columns is read as days (a
+    date column holds nothing unreadable); any other column keeps the checked
+    read, where an unreadable bound raises whatever the instant."""
+
+    @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
+    def test_a_bad_to_raises_on_a_row_whose_from_excludes_the_instant(self, storage, tmp_path):
+        g = _new(storage, tmp_path)
+        g.cypher(
+            "CREATE (:W {title: 'a', vf: date('2001-01-01'), vt: date('2003-01-01')}),"
+            " (:W {title: 'late', vf: date('2020-01-01'), vt: 'not a date'})"
+        ).to_list()
+        with pytest.raises(ValueError, match=r"valid_at\(\): node .*'vt'"):
+            g.select("W").valid_at("2002-01-01", "vf", "vt")
+
+    @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
+    def test_date_columns_answer_as_the_scalar_does(self, storage, tmp_path):
+        g = _new(storage, tmp_path)
+        g.cypher(
+            "UNWIND range(0, 39) AS i CREATE (:W {title: 'w' + i,"
+            " vf: CASE WHEN i % 7 = 3 THEN null ELSE date('2000-01-01') + duration({days: 120 * i}) END,"
+            " vt: CASE WHEN i % 5 = 3 THEN null ELSE date('2001-01-01') + duration({days: 150 * i}) END})"
+        ).to_list()
+        # Node 0's column values come first, so both columns are typed dates;
+        # the instants include a node's exact `from` and `to` day.
+        for day in ("2000-01-01", "2001-01-01", "2003-06-30", "2006-01-01", "2010-12-31"):
+            expected = _cypher_titles(
+                g, f"MATCH (n:W) WHERE valid_at(n, date('{day}'), 'vf', 'vt') RETURN n.title AS t"
+            )
+            assert _titles(g.select("W").valid_at(day, "vf", "vt")) == expected, day
+        overlap = _cypher_titles(
+            g,
+            "MATCH (n:W) WHERE valid_during(n, date('2003-01-01'), date('2004-12-31'), 'vf', 'vt') RETURN n.title AS t",
+        )
+        assert _titles(g.select("W").valid_during("2003-01-01", "2004-12-31", "vf", "vt")) == overlap
+
+
 class TestCountsAndOrphans:
     def test_degrees_count_only_valid_relationships_to_valid_nodes(self, employment):
         assert employment.date("2009-03-01").select("Person").degrees() == {"Pat": 0}

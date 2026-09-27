@@ -454,6 +454,31 @@ def test_bench_select_where(benchmark, undeclared_graph):
     benchmark(lambda: undeclared_graph.select("Item").where({"category": "cat_3"}))
 
 
+@pytest.fixture(scope="module")
+def named_bounds_graph():
+    """20k nodes carrying date bounds, no validity declaration."""
+    n = 20_000
+    period = np.arange(n) % PERIODS
+    vf, vt = _bounds(period)
+    graph = KnowledgeGraph()
+    graph.add_nodes(
+        pd.DataFrame({"nid": np.arange(n), "name": [f"N{i}" for i in range(n)], "vf": vf, "vt": vt}),
+        "E",
+        "nid",
+        "name",
+    )
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_valid_at_named_bounds(benchmark, named_bounds_graph):
+    """Fluent `valid_at` naming its bounds on an undeclared type: every node is
+    read from its properties (no endpoint-index mask can answer)."""
+    selection = named_bounds_graph.select("E")
+    assert selection.valid_at("2009-06-30", "vf", "vt").len() == 20_000 // PERIODS
+    benchmark(lambda: selection.valid_at("2009-06-30", "vf", "vt").len())
+
+
 # ── Default-scale retrieval and algorithm cells ─────────────────────────────
 
 RETRIEVAL_CELLS: dict[str, Cell] = {

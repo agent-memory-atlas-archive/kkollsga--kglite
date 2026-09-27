@@ -353,6 +353,7 @@ def _check(mode, nodes, edges, instant):
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", False, {"t": instant})
             assert _answer(frozen, query, False) == guarded, f"frozen view, {mode} at {instant}: {query}"
         _check_fluent(full, reference, instant, f"fluent, {mode} at {instant}")
+        _check_named_bounds(mode, full, nodes, edges, instant)
         for query in ALGORITHM_QUERIES + (TEXT_QUERIES if texts else []):
             ordered = query in ORDERED
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", ordered, {"t": instant})
@@ -379,6 +380,32 @@ def _check_fluent(full, reference, instant, where):
             reached = selected.traverse(rel, direction="outgoing")
             expected = reference.cypher(f"MATCH (:{label})-[:{rel}]->(b) RETURN DISTINCT b.uid AS uid").to_list()
             assert sorted(set(_uids(reached.collect()))) == _uids(expected), f"{where}: {label}-[:{rel}]->"
+
+
+def _check_named_bounds(mode, full, nodes, edges, instant):
+    """`valid_at` naming its bounds on an undeclared copy reads every node's
+    own properties (typed date columns as days, anything else checked) and
+    answers as the scalar `valid_at` does; for `A`, whose declaration is
+    closed like an undeclared read, as the prefix does on nodes no other
+    declared label judges."""
+    where = f"named bounds, {mode} at {instant}"
+    with _graph(mode) as plain:
+        _write(plain, nodes, edges, declare=False)
+        for label, (frm, to, _) in NODE_BOUNDS.items():
+            fluent = _uids(plain.select(label).valid_at(instant, frm, to).collect())
+            scalar = plain.cypher(
+                f"MATCH (n:{label}) WHERE labels(n)[0] = '{label}' AND valid_at(n, $t, '{frm}', '{to}') "
+                "RETURN n.uid AS uid",
+                params={"t": instant},
+            ).to_list()
+            assert fluent == _uids(scalar), f"{where}: {label}"
+            if label == "A":
+                only_a = {node["uid"] for node in nodes if node["primary"] == "A" and node["secondary"] != "B"}
+                prefixed = full.cypher(
+                    "FOR VALID_TIME AS OF $t MATCH (n:A) WHERE labels(n)[0] = 'A' RETURN n.uid AS uid",
+                    params={"t": instant},
+                ).to_list()
+                assert [u for u in fluent if u in only_a] == [u for u in _uids(prefixed) if u in only_a], where
 
 
 @pytest.mark.parametrize("mode", MODES)

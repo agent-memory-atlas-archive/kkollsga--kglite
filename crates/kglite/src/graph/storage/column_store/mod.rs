@@ -9,6 +9,7 @@
 //! The column *element* (layout, push, spill, materialise) is in
 //! [`typed_column`]; the store around it is here.
 
+mod date_cells;
 mod exact_values;
 #[cfg(test)]
 mod null_overlay_tests;
