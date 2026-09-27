@@ -164,8 +164,8 @@ before upgrading.
   (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX` replaces the threshold), the measured
   crossover; a search that passes its step budget gives way to the exact
   route (`fallback_reason: "exact_mask_visit_limit"`), and so does one that
-  finds fewer than `k` valid vectors among those the index's links reach
-  (`"exact_mask_unreached"`). When the store holds a vector for every node of
+  reaches fewer valid vectors than `k` or than exist, whichever is smaller —
+  a valid vector the index's links do not lead to (`"exact_mask_unreached"`). When the store holds a vector for every node of
   the label and the label's valid count at the instant is indexed (no
   secondary labels in the graph, the label's declaration indexed), neither
   route walks the label first; otherwise one admit test per vector counts

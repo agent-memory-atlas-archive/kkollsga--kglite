@@ -406,8 +406,9 @@ graph.cypher("""
 ```
 
 `recorded_to` is written by `SET` because no row carries it yet. A `CREATE`
-that names it is refused as a typo. Only the declared valid-time bounds count as
-known before any row carries them, and this pair is not declared.
+that names it is refused as a typo. Only a declared name counts as known before
+any row carries it — a valid-time bound, or a `define_schema()` field — and
+this pair is neither.
 
 **Give each record its own id.** Records that share an id shadow each other.
 `MATCH (m {id: …})` and `WHERE m.id = …` find one node per id, so the lookup

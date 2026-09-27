@@ -536,8 +536,8 @@ class ResultView:
           string, or None for HNSW; under a context ``exact_mask`` when the
           valid vectors were scored exactly, ``exact_mask_visit_limit`` when
           the filtered search passed its step budget first,
-          ``exact_mask_unreached`` when it reached fewer than ``k`` valid
-          vectors), and ``store``
+          ``exact_mask_unreached`` when it reached fewer valid vectors than
+          ``k`` or than exist, whichever is smaller), and ``store``
           (``Type.embedding_property`` when established, else None).
           Repeated identical routes are coalesced; this is not a call counter.
           Empty inputs, LIMIT 0, EXPLAIN and queries without an instrumented
