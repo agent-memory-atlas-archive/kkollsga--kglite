@@ -6,6 +6,7 @@
 
 use crate::datatypes::values::BorrowedValue;
 use crate::datatypes::Value;
+use crate::graph::core::fluent_filter::FluentFilter;
 use crate::graph::schema::{CowSelection, DirGraph, InternedKey};
 use crate::graph::storage::disk::csr::{PendingEdge, TOMBSTONE_EDGE};
 use crate::graph::storage::disk::graph::DiskGraph;
@@ -383,7 +384,8 @@ pub fn pass_a_scan_to_file(
 ///
 /// `selection` defines which nodes are kept — typically from the fluent
 /// chain `kg.select(...).expand(...)`. All edges between kept nodes are
-/// included.
+/// included — under `valid_time`, those whose own interval it admits, as
+/// `extract_subgraph` keeps them.
 ///
 /// The output reloads into either portable mode via `kglite.open(path,
 /// storage=...)` or `kglite.load(path, storage=...)`; with no argument both
@@ -393,6 +395,7 @@ pub fn save_subset(
     source: &DirGraph,
     selection: &CowSelection,
     out_path: &Path,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<(), String> {
     use crate::graph::mutation::subgraph::extract_subgraph;
 
@@ -400,7 +403,7 @@ pub fn save_subset(
     //    reads through `GraphRead`, so it works for every source mode, and
     //    inserts the kept nodes into column stores of its own: it never
     //    shares the source's stores.
-    let mut extracted = extract_subgraph(source, selection)?;
+    let mut extracted = extract_subgraph(source, selection, valid_time)?;
 
     // 2. Consolidate every node's properties into column stores. Both save
     //    paths need it.
@@ -444,6 +447,9 @@ pub fn save_subset(
 ///
 /// `edge_filter` keeps only edges whose connection type's interned u64
 /// hash is in the set. `None` keeps every edge between kept nodes.
+/// `valid_time` additionally keeps only edges whose own interval it admits
+/// (the rule `extract_subgraph` applies); `None` or an empty filter reads
+/// no bound.
 ///
 /// Output: a self-contained disk-mode graph at `out_path`. The caller is
 /// responsible for ensuring `out_path` is empty / does not exist —
@@ -453,13 +459,14 @@ pub fn save_subset_streaming_disk(
     kept_per_type: &std::collections::HashMap<String, Vec<u32>>,
     edge_filter: Option<&[u64]>,
     out_path: &Path,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<(), String> {
-    use crate::graph::schema::{EdgeData, NodeData, PropertyStorage};
+    let valid_time = valid_time.filter(|filter| !filter.is_empty());
+    use crate::graph::schema::{NodeData, PropertyStorage};
     use crate::graph::storage::backend::GraphBackend;
     use crate::graph::storage::column_store::ColumnStore;
     use crate::graph::storage::disk::graph::DiskGraph;
     use crate::graph::storage::interner::InternedKey;
-    use petgraph::graph::NodeIndex;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Instant;
@@ -794,7 +801,50 @@ pub fn save_subset_streaming_disk(
     log_phase("writer finalize (close + mmap per type)", phase_finalize);
     let phase_edge_walk = Instant::now();
 
-    // 6. Walk source edges in edge_idx order. For each edge passing the
+    // 6. Walk source edges in edge_idx order (`stream_subset_edges`).
+    let rel_types = stream_subset_edges(source, &mut dest, &rank, edge_filter, valid_time)?;
+    log_phase("edge walk (translate + add_edge)", phase_edge_walk);
+    let phase_save = Instant::now();
+
+    // 7. Rebuild type_indices from the freshly-added nodes: the streaming
+    //    add_node path bypasses the bulk loader's index maintenance, so
+    //    dest.type_indices is empty until we walk node_weights here. The
+    //    saved `type_indices.bin` is what `MATCH (n:Type)` hits after reload
+    //    — without this rebuild the subset reloads with correct node_count
+    //    and edges, but every typed Cypher query returns 0.
+    dest.rebuild_type_indices();
+    crate::graph::mutation::subgraph::retain_subset_types(&mut dest, &rel_types);
+
+    // 8. Save: triggers build_csr_from_pending (the external merge sort).
+    let save_result = dest.save_disk(path_str);
+    log_phase("save_disk (CSR build + sidecars)", phase_save);
+    log_phase("TOTAL", phase_start);
+
+    // 9. Drop dest before cleaning the scratch dir: its column_stores hold
+    //    Arc handles to the scratch mmaps, and the kernel only releases the
+    //    files once those Arcs are gone.
+    drop(dest);
+    let _ = std::fs::remove_dir_all(&scratch_root);
+
+    save_result
+}
+
+/// Step 6 of [`save_subset_streaming_disk`]: append to `dest`'s pending
+/// edges every source edge passing `edge_filter` and `valid_time` with both
+/// endpoints kept, translated through `rank`. Returns the relationship types
+/// written.
+fn stream_subset_edges(
+    source: &DirGraph,
+    dest: &mut DirGraph,
+    rank: &RankIndex,
+    edge_filter: Option<&[u64]>,
+    valid_time: Option<&FluentFilter>,
+) -> Result<std::collections::HashSet<InternedKey>, String> {
+    use crate::graph::schema::EdgeData;
+    use crate::graph::storage::backend::GraphBackend;
+    use petgraph::graph::NodeIndex;
+
+    // Walk source edges in edge_idx order. For each edge passing the
     //    filter and with both endpoints in the kept set, translate via
     //    the rank index and append to dest's pending_edges.
     let edge_filter_set: Option<std::collections::HashSet<u64>> =
@@ -805,6 +855,9 @@ pub fn save_subset_streaming_disk(
         _ => None,
     };
 
+    // The filter reads relationship bounds, which a disk source materialises
+    // into its query arena (protocol in disk/graph.rs).
+    let _arena_guard = valid_time.and_then(|_| source.graph.begin_query());
     let mut rel_types = std::collections::HashSet::new();
     if let Some(sdg) = source_disk {
         // Disk source: sequential read of edge_endpoints.bin with lockstep
@@ -838,6 +891,13 @@ pub fn save_subset_streaming_disk(
                 None => continue,
             };
             let conn_type = InternedKey::from_u64(ep.connection_type);
+            if let Some(filter) = valid_time {
+                let edge = petgraph::graph::EdgeIndex::new(edge_idx);
+                let from = NodeIndex::new(ep.source as usize);
+                if !filter.admits_edge(source, edge, conn_type, from)? {
+                    continue;
+                }
+            }
             rel_types.insert(conn_type);
             let props = sdg
                 .edge_properties_at(edge_idx as u32)
@@ -877,6 +937,11 @@ pub fn save_subset_streaming_disk(
                     Some(x) => NodeIndex::new(x as usize),
                     None => continue,
                 };
+                if let Some(filter) = valid_time {
+                    if !filter.admits_edge(source, er.id(), w.connection_type, er.source())? {
+                        continue;
+                    }
+                }
                 let properties = snapshot_edge_properties(source, w.properties.clone());
                 rel_types.insert(w.connection_type);
                 let edge_data = EdgeData::new_interned(w.connection_type, properties);
@@ -895,30 +960,12 @@ pub fn save_subset_streaming_disk(
         }
     }
 
-    log_phase("edge walk (translate + add_edge)", phase_edge_walk);
-    let phase_save = Instant::now();
-
-    // 7. Rebuild type_indices from the freshly-added nodes: the streaming
-    //    add_node path bypasses the bulk loader's index maintenance, so
-    //    dest.type_indices is empty until we walk node_weights here. The
-    //    saved `type_indices.bin` is what `MATCH (n:Type)` hits after reload
-    //    — without this rebuild the subset reloads with correct node_count
-    //    and edges, but every typed Cypher query returns 0.
-    dest.rebuild_type_indices();
-    crate::graph::mutation::subgraph::retain_subset_types(&mut dest, &rel_types);
-
-    // 8. Save: triggers build_csr_from_pending (the external merge sort).
-    let save_result = dest.save_disk(path_str);
-    log_phase("save_disk (CSR build + sidecars)", phase_save);
-    log_phase("TOTAL", phase_start);
-
-    // 9. Drop dest before cleaning the scratch dir: its column_stores hold
-    //    Arc handles to the scratch mmaps, and the kernel only releases the
-    //    files once those Arcs are gone.
-    drop(dest);
-    let _ = std::fs::remove_dir_all(&scratch_root);
-
-    save_result
+    if let Some(filter) = valid_time {
+        filter
+            .finish()
+            .map_err(|e| format!("save_subset_streaming_disk: {e}"))?;
+    }
+    Ok(rel_types)
 }
 
 /// The type each of `type_name`'s columns is opened with: its metadata type,
@@ -1140,6 +1187,7 @@ mod tests {
             &HashMap::from([("Item".to_string(), vec![0, 1])]),
             None,
             &output,
+            None,
         )
         .unwrap();
         let loaded = load_file(output.to_str().unwrap()).unwrap();
@@ -1195,13 +1243,14 @@ mod tests {
             .get_level_mut(0)
             .unwrap()
             .add_selection(None, vec![NodeIndex::new(1)]);
-        save_subset(&source, &selection, &extract_path).unwrap();
+        save_subset(&source, &selection, &extract_path, None).unwrap();
         let streaming_path = root.path().join("streaming");
         save_subset_streaming_disk(
             &source,
             &HashMap::from([("T".to_string(), vec![1])]),
             None,
             &streaming_path,
+            None,
         )
         .unwrap();
 
@@ -1254,6 +1303,7 @@ mod tests {
             &HashMap::from([("T".to_string(), vec![0, 1])]),
             None,
             &output,
+            None,
         )
         .unwrap();
         let loaded = load_file(output.to_str().unwrap()).unwrap();
@@ -1270,6 +1320,59 @@ mod tests {
                 vec![Value::Int64(1), Value::Float64(1.5)],
                 vec![Value::Int64(2), Value::Int64(9_007_199_254_740_993)],
             ]
+        );
+    }
+
+    /// Under a valid-time filter the streaming writer keeps only the
+    /// relationships the filter admits — what `extract_subgraph` keeps — and
+    /// with no filter it keeps them all.
+    #[test]
+    fn the_streaming_writer_keeps_only_admitted_relationships() {
+        use crate::api::io::save_subset_streaming_disk;
+        use crate::graph::core::fluent_filter::FluentFilter;
+        use crate::graph::io::file::load_file;
+        use crate::graph::session::execute::{execute_mut, execute_read, ExecuteOptions};
+        use crate::graph::storage::mode::{new_dir_graph_in_mode, StorageMode};
+        use crate::graph::TemporalContext;
+        use std::collections::HashMap;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut source =
+            new_dir_graph_in_mode(StorageMode::Disk, Some(&root.path().join("source")))
+                .expect("disk graph");
+        let params = HashMap::new();
+        for query in [
+            "CREATE (:P {id: 1}), (:C {id: 10}), (:C {id: 11})",
+            "MATCH (p:P), (c:C {id: 10}) CREATE (p)-[:AT {vf: '2000-01-01', vt: '2005-01-01'}]->(c)",
+            "MATCH (p:P), (c:C {id: 11}) CREATE (p)-[:AT {vf: '2006-01-01', vt: '2030-01-01'}]->(c)",
+            "CALL db.temporal.declare({relationship: 'AT', from: 'vf', to: 'vt', convention: 'closed'})",
+        ] {
+            execute_mut(&mut source, query, &ExecuteOptions::eager(&params)).unwrap();
+        }
+        let kept = HashMap::from([("P".to_string(), vec![0]), ("C".to_string(), vec![1, 2])]);
+        let targets = |filter: Option<&FluentFilter>, name: &str| {
+            let output = root.path().join(name);
+            save_subset_streaming_disk(&source, &kept, None, &output, filter).unwrap();
+            let loaded = load_file(output.to_str().unwrap()).unwrap();
+            let result = execute_read(
+                &loaded,
+                "MATCH (:P)-[:AT]->(c) RETURN c.id AS id ORDER BY id",
+                &ExecuteOptions::eager(&params),
+            )
+            .unwrap()
+            .result;
+            result.rows
+        };
+        let at_2010 = TemporalContext::At(chrono::NaiveDate::from_ymd_opt(2010, 1, 1).unwrap());
+        let filter = FluentFilter::for_walk(&source, &at_2010, None, "save_subset()").unwrap();
+        assert!(!filter.is_empty());
+        assert_eq!(
+            targets(Some(&filter), "filtered"),
+            vec![vec![Value::Int64(11)]]
+        );
+        assert_eq!(
+            targets(None, "all"),
+            vec![vec![Value::Int64(10)], vec![Value::Int64(11)]]
         );
     }
 

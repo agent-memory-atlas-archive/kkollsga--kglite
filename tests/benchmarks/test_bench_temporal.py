@@ -379,6 +379,38 @@ def test_temporal_control(benchmark, pair, name):
     benchmark(_run, pair.full, CONTROLS[name], {})
 
 
+# ── Fluent cells: the same filter through the fluent chain ──────────────────
+#
+# `date(T).select(...)` and `.traverse(...)` on the declared graph against the
+# same steps on the view twin (undeclared, so its date context builds no
+# filter). The fixture checks the two agree before anything is timed.
+
+FLUENT_CELLS = {
+    "select": lambda kg: kg.date(T).select("E").len(),
+    "select_limit": lambda kg: kg.date(T).select("E", limit=100).len(),
+    "traverse": lambda kg: kg.date(T).select("Field").traverse("HAS_LICENSEE").len(),
+}
+
+
+@pytest.fixture(scope="module")
+def fluent_pair(pair):
+    for name, cell in FLUENT_CELLS.items():
+        assert cell(pair.full) == cell(pair.view), f"fluent {name}: context answer differs from the view"
+    return pair
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", list(FLUENT_CELLS))
+def test_temporal_fluent_context(benchmark, fluent_pair, name):
+    benchmark(FLUENT_CELLS[name], fluent_pair.full)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", list(FLUENT_CELLS))
+def test_temporal_fluent_view(benchmark, fluent_pair, name):
+    benchmark(FLUENT_CELLS[name], fluent_pair.view)
+
+
 # ── Default-scale retrieval and algorithm cells ─────────────────────────────
 
 RETRIEVAL_CELLS: dict[str, Cell] = {

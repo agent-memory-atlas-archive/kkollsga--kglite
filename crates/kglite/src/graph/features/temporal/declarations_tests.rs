@@ -282,34 +282,6 @@ fn an_unkeyed_declaration_is_the_fallback_and_its_own_key() {
     assert_eq!(list(&g).len(), 3);
 }
 
-/// An edge takes its source's keyed config, and the unkeyed one only when
-/// its source has none — whatever order they were declared in.
-#[test]
-fn an_edge_takes_its_sources_keyed_config_before_the_fallback() {
-    use super::{is_temporally_valid_multi, TemporalConfig};
-    use crate::graph::schema::InternedKey;
-    let config = |from: &str, to: &str, source: Option<&str>| TemporalConfig {
-        valid_from: from.into(),
-        valid_to: to.into(),
-        convention: HalfOpen,
-        source_type: source.map(str::to_string),
-    };
-    let s = |t: &str| Value::String(t.into());
-    // Unkeyed first in the list: the keyed one must still win for Field.
-    let configs = [config("f", "t", None), config("f", "t", Some("Field"))];
-    let mut configs_closed_fallback = configs.clone();
-    configs_closed_fallback[0].convention = Closed;
-    let props = [
-        (InternedKey::from_str("f"), s("2000-01-01")),
-        (InternedKey::from_str("t"), s("2009-12-31")),
-    ];
-    let day = chrono::NaiveDate::from_ymd_opt(2009, 12, 31).unwrap();
-    let field = Some(InternedKey::from_str("Field"));
-    let licence = Some(InternedKey::from_str("Licence"));
-    assert!(!is_temporally_valid_multi(&props, &configs_closed_fallback, field, &day).unwrap());
-    assert!(is_temporally_valid_multi(&props, &configs_closed_fallback, licence, &day).unwrap());
-}
-
 #[test]
 fn a_loader_may_name_a_column_it_wrote_entirely_null() {
     let mut g = graph(&["UNWIND [1, 2] AS i CREATE (:Open {id: i, vf: '2000-01-01', vt: null})"]);

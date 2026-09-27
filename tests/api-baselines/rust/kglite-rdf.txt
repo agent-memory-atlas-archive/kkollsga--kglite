@@ -1708,10 +1708,23 @@ impl core::clone::Clone for kglite::api::fluent::MatchBinding
 pub fn kglite::api::fluent::MatchBinding::clone(&self) -> kglite::api::fluent::MatchBinding
 impl core::fmt::Debug for kglite::api::fluent::MatchBinding
 pub fn kglite::api::fluent::MatchBinding::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum kglite::api::fluent::TemporalEdgeFilter
-pub kglite::api::fluent::TemporalEdgeFilter::At(alloc::vec::Vec<kglite::api::TemporalConfig>, chrono::naive::date::NaiveDate)
-pub kglite::api::fluent::TemporalEdgeFilter::During(alloc::vec::Vec<kglite::api::TemporalConfig>, chrono::naive::date::NaiveDate, chrono::naive::date::NaiveDate)
-pub kglite::api::fluent::TemporalEdgeFilter::Undeclared(alloc::string::String)
+pub struct kglite::api::fluent::FluentFilter
+impl kglite::api::fluent::FluentFilter
+pub fn kglite::api::fluent::FluentFilter::finish(&self) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::for_label(graph: &kglite::api::DirGraph, context: &kglite::api::TemporalContext, label: &str, function: &str) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::for_select(graph: &kglite::api::DirGraph, context: &kglite::api::TemporalContext, label: &str, temporal: core::option::Option<bool>) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::for_traverse(graph: &kglite::api::DirGraph, context: &kglite::api::TemporalContext, at: core::option::Option<chrono::naive::date::NaiveDate>, during: core::option::Option<(chrono::naive::date::NaiveDate, chrono::naive::date::NaiveDate)>, temporal: core::option::Option<bool>, rel_type: &str, target_types: core::option::Option<&[alloc::string::String]>) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::for_valid_at(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, date: core::option::Option<chrono::naive::date::NaiveDate>, context: &kglite::api::TemporalContext, from: core::option::Option<&str>, to: core::option::Option<&str>) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::for_valid_during(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, start: chrono::naive::date::NaiveDate, end: chrono::naive::date::NaiveDate, from: core::option::Option<&str>, to: core::option::Option<&str>) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::for_walk(graph: &kglite::api::DirGraph, context: &kglite::api::TemporalContext, rel_type: core::option::Option<&str>, function: &str) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::fluent::FluentFilter::is_empty(&self) -> bool
+pub fn kglite::api::fluent::FluentFilter::retain_level(&self, graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for kglite::api::fluent::FluentFilter
+pub fn kglite::api::fluent::FluentFilter::clone(&self) -> kglite::api::fluent::FluentFilter
+impl core::default::Default for kglite::api::fluent::FluentFilter
+pub fn kglite::api::fluent::FluentFilter::default() -> kglite::api::fluent::FluentFilter
+impl core::fmt::Debug for kglite::api::fluent::FluentFilter
+pub fn kglite::api::fluent::FluentFilter::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::fluent::GroupedPropertyStats
 pub kglite::api::fluent::GroupedPropertyStats::count: usize
 pub kglite::api::fluent::GroupedPropertyStats::max: core::option::Option<f64>
@@ -1833,21 +1846,21 @@ pub fn kglite::api::fluent::contains_point(graph: &kglite::api::DirGraph, select
 pub fn kglite::api::fluent::count_nodes_by_parent(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>) -> alloc::vec::Vec<kglite::api::fluent::StatResult>
 pub fn kglite::api::fluent::count_nodes_in_level(selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>) -> usize
 pub fn kglite::api::fluent::difference_selections(target: &mut kglite::api::CurrentSelection, source: &kglite::api::CurrentSelection) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::fluent::expand_selection(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, hops: usize) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::fluent::extract_subgraph(source: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection) -> core::result::Result<kglite::api::DirGraph, alloc::string::String>
-pub fn kglite::api::fluent::filter_by_connection(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, connection_type: &str, direction: core::option::Option<petgraph::Direction>) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::fluent::expand_selection(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, hops: usize, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::fluent::extract_subgraph(source: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<kglite::api::DirGraph, alloc::string::String>
+pub fn kglite::api::fluent::filter_by_connection(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, connection_type: &str, direction: core::option::Option<petgraph::Direction>, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::filter_nodes(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, conditions: std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>, sort_fields: core::option::Option<alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::filter_nodes_any(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, condition_sets: &[std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>], sort_fields: core::option::Option<alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::filter_nodes_by_label(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, label: &str, sort_fields: core::option::Option<alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::fluent::filter_orphan_nodes(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, include_orphans: bool, sort_fields: core::option::Option<&alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::fluent::filter_orphan_nodes(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, include_orphans: bool, sort_fields: core::option::Option<&alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::format_for_dictionary(property_groups: &[kglite::graph::core::traversal::ChildPropertyGroup], max_length: core::option::Option<usize>) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn kglite::api::fluent::format_for_storage(property_groups: &[kglite::graph::core::traversal::ChildPropertyGroup], max_length: core::option::Option<usize>) -> alloc::vec::Vec<(core::option::Option<petgraph::graph_impl::NodeIndex>, kglite::datatypes::values::Value)>
 pub fn kglite::api::fluent::format_unique_values_for_storage(values: &[kglite::api::fluent::UniqueValues], max_length: core::option::Option<usize>) -> alloc::vec::Vec<(core::option::Option<petgraph::graph_impl::NodeIndex>, kglite::datatypes::values::Value)>
 pub fn kglite::api::fluent::format_value_compact(val: &kglite::datatypes::values::Value) -> alloc::string::String
 pub fn kglite::api::fluent::get_bounds(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, lat_field: &str, lon_field: &str, geom_fallback: core::option::Option<&str>) -> core::option::Option<(f64, f64, f64, f64)>
 pub fn kglite::api::fluent::get_children_properties(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, property: &str) -> alloc::vec::Vec<kglite::graph::core::traversal::ChildPropertyGroup>
-pub fn kglite::api::fluent::get_connections(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>, indices: core::option::Option<&[usize]>, include_node_properties: bool) -> alloc::vec::Vec<kglite::api::fluent::LevelConnections>
-pub fn kglite::api::fluent::get_node_degrees(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection) -> alloc::vec::Vec<(alloc::string::String, usize)>
+pub fn kglite::api::fluent::get_connections(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>, indices: core::option::Option<&[usize]>, include_node_properties: bool, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<alloc::vec::Vec<kglite::api::fluent::LevelConnections>, alloc::string::String>
+pub fn kglite::api::fluent::get_node_degrees(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, usize)>, alloc::string::String>
 pub fn kglite::api::fluent::get_nodes(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>, indices: core::option::Option<&[usize]>, max_nodes: core::option::Option<usize>) -> alloc::vec::Vec<kglite::api::fluent::LevelNodes>
 pub fn kglite::api::fluent::get_parent_child_pairs(selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>) -> alloc::vec::Vec<kglite::graph::core::statistics::ParentChildPair>
 pub fn kglite::api::fluent::get_property_values(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>, properties: &[&str], indices: core::option::Option<&[usize]>, max_nodes: core::option::Option<usize>) -> alloc::vec::Vec<kglite::api::fluent::LevelValues>
@@ -1856,16 +1869,14 @@ pub fn kglite::api::fluent::get_unique_values(graph: &kglite::api::DirGraph, sel
 pub fn kglite::api::fluent::intersection_selections(target: &mut kglite::api::CurrentSelection, source: &kglite::api::CurrentSelection) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::intersects_geometry(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, geometry_field: &str, query_wkt: &str) -> core::result::Result<alloc::vec::Vec<petgraph::graph_impl::NodeIndex>, alloc::string::String>
 pub fn kglite::api::fluent::limit_nodes_per_group(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, max_per_group: usize) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::fluent::make_comparison_traversal(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, target_type: core::option::Option<&str>, config: &kglite::api::fluent::MethodConfig, filter_target: core::option::Option<&std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>>, sort_target: core::option::Option<&alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::fluent::make_traversal(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, connection_type: alloc::string::String, level_index: core::option::Option<usize>, direction: core::option::Option<alloc::string::String>, filter_target: core::option::Option<&std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>>, filter_connection: core::option::Option<&std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>>, sort_target: core::option::Option<&alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>, new_level: core::option::Option<bool>, temporal_filter: core::option::Option<&kglite::api::fluent::TemporalEdgeFilter>, target_type: core::option::Option<&[alloc::string::String]>) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::fluent::make_comparison_traversal(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, target_type: core::option::Option<&str>, config: &kglite::api::fluent::MethodConfig, filter_target: core::option::Option<&std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>>, sort_target: core::option::Option<&alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::fluent::make_traversal(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, connection_type: alloc::string::String, level_index: core::option::Option<usize>, direction: core::option::Option<alloc::string::String>, filter_target: core::option::Option<&std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>>, filter_connection: core::option::Option<&std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::FilterCondition>>, sort_target: core::option::Option<&alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>, new_level: core::option::Option<bool>, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>, target_type: core::option::Option<&[alloc::string::String]>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::near_point(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, lat_field: &str, lon_field: &str, center_lat: f64, center_lon: f64, max_distance: f64, geom_fallback: core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<petgraph::graph_impl::NodeIndex>, alloc::string::String>
 pub fn kglite::api::fluent::near_point_m(graph: &kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, lat_field: &str, lon_field: &str, center_lat: f64, center_lon: f64, max_distance_m: f64, geom_fallback: core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<petgraph::graph_impl::NodeIndex>, alloc::string::String>
-pub fn kglite::api::fluent::node_is_temporally_valid(node: kglite::api::NodeView<'_>, config: &kglite::api::TemporalConfig, reference: &chrono::naive::date::NaiveDate) -> core::result::Result<bool, alloc::string::String>
-pub fn kglite::api::fluent::node_overlaps_range(node: kglite::api::NodeView<'_>, config: &kglite::api::TemporalConfig, start: &chrono::naive::date::NaiveDate, end: &chrono::naive::date::NaiveDate) -> core::result::Result<bool, alloc::string::String>
-pub fn kglite::api::fluent::node_passes_context(node: kglite::api::NodeView<'_>, config: &kglite::api::TemporalConfig, context: &kglite::api::TemporalContext) -> core::result::Result<bool, alloc::string::String>
 pub fn kglite::api::fluent::offset_nodes(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, n: usize) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::parse_pattern(input: &str) -> core::result::Result<kglite::graph::core::pattern_matching::pattern::Pattern, alloc::string::String>
 pub fn kglite::api::fluent::process_equation(graph: &mut kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, expression: &str, level_index: core::option::Option<usize>, store_as: core::option::Option<&str>, aggregate_connections: core::option::Option<bool>) -> core::result::Result<kglite::api::fluent::EvaluationResult, alloc::string::String>
+pub fn kglite::api::fluent::select_nodes(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, node_type: &str, include_secondary: bool, sort_fields: core::option::Option<alloc::vec::Vec<(alloc::string::String, bool)>>, max_nodes: core::option::Option<usize>, valid_time: &kglite::api::fluent::FluentFilter) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::sort_nodes(graph: &kglite::api::DirGraph, selection: &mut kglite::api::CurrentSelection, sort_fields: alloc::vec::Vec<(alloc::string::String, bool)>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::store_count_results(graph: &mut kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, level_index: core::option::Option<usize>, group_by_parent: bool, target_property: &str) -> core::result::Result<kglite::graph::introspection::reporting::CalculationOperationReport, alloc::string::String>
 pub fn kglite::api::fluent::symmetric_difference_selections(target: &mut kglite::api::CurrentSelection, source: &kglite::api::CurrentSelection) -> core::result::Result<(), alloc::string::String>
@@ -2301,8 +2312,8 @@ pub fn kglite::api::io::prepare_save(graph: &mut alloc::sync::Arc<kglite::api::D
 pub fn kglite::api::io::same_checkpoint_path(left: &std::path::Path, right: &std::path::Path) -> core::io::error::Result<bool>
 pub fn kglite::api::io::save_graph(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, path: &str) -> core::result::Result<(), kglite::api::io::SaveError>
 pub fn kglite::api::io::save_graph_with(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, path: &str, fsync: bool) -> core::result::Result<(), kglite::api::io::SaveError>
-pub fn kglite::api::io::save_subset(source: &kglite::api::DirGraph, selection: &kglite::api::CowSelection, out_path: &std::path::Path) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::io::save_subset_streaming_disk(source: &kglite::api::DirGraph, kept_per_type: &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<u32>>, edge_filter: core::option::Option<&[u64]>, out_path: &std::path::Path) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::io::save_subset(source: &kglite::api::DirGraph, selection: &kglite::api::CowSelection, out_path: &std::path::Path, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::io::save_subset_streaming_disk(source: &kglite::api::DirGraph, kept_per_type: &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<u32>>, edge_filter: core::option::Option<&[u64]>, out_path: &std::path::Path, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::io::to_csv(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<(alloc::string::String, alloc::string::String), alloc::string::String>
 pub fn kglite::api::io::to_csv_dir(graph: &kglite::api::DirGraph, output_dir: &str, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<kglite::graph::io::export::ExportSummary, alloc::string::String>
 pub fn kglite::api::io::to_d3_json(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
@@ -3305,14 +3316,6 @@ pub fn kglite::api::temporal::TemporalTarget::fmt(&self, f: &mut core::fmt::Form
 impl core::hash::Hash for kglite::api::temporal::TemporalTarget
 pub fn kglite::api::temporal::TemporalTarget::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
 impl core::marker::StructuralPartialEq for kglite::api::temporal::TemporalTarget
-pub enum kglite::api::temporal::ValidityTest
-pub kglite::api::temporal::ValidityTest::At(chrono::naive::date::NaiveDate)
-pub kglite::api::temporal::ValidityTest::During(chrono::naive::date::NaiveDate, chrono::naive::date::NaiveDate)
-impl core::clone::Clone for kglite::api::temporal::ValidityTest
-pub fn kglite::api::temporal::ValidityTest::clone(&self) -> kglite::api::temporal::ValidityTest
-impl core::fmt::Debug for kglite::api::temporal::ValidityTest
-pub fn kglite::api::temporal::ValidityTest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for kglite::api::temporal::ValidityTest
 pub struct kglite::api::temporal::DeclarationInfo
 pub kglite::api::temporal::DeclarationInfo::abutting_rows: core::option::Option<usize>
 pub kglite::api::temporal::DeclarationInfo::ambiguous: bool
@@ -3344,10 +3347,6 @@ pub struct kglite::api::temporal::LoadDeclaration
 impl kglite::api::temporal::LoadDeclaration
 pub fn kglite::api::temporal::LoadDeclaration::abandon(self, graph: &mut kglite::api::DirGraph)
 pub fn kglite::api::temporal::LoadDeclaration::finish(self, graph: &mut kglite::api::DirGraph) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
-pub struct kglite::api::temporal::NodeValidityRequest<'g>
-impl<'g> kglite::api::temporal::NodeValidityRequest<'g>
-pub fn kglite::api::temporal::NodeValidityRequest<'g>::keep(&self, node: kglite::api::NodeView<'_>) -> core::result::Result<bool, alloc::string::String>
-pub fn kglite::api::temporal::NodeValidityRequest<'g>::new(graph: &'g kglite::api::DirGraph, function: &'static str, from: core::option::Option<&str>, to: core::option::Option<&str>, test: kglite::api::temporal::ValidityTest) -> Self
 pub struct kglite::api::temporal::ValidSlice
 impl kglite::api::temporal::ValidSlice
 pub fn kglite::api::temporal::ValidSlice::bytes(&self) -> usize

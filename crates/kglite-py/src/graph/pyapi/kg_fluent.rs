@@ -152,53 +152,32 @@ impl KnowledgeGraph {
             None
         };
 
-        let to_pyerr = |e: String| -> PyErr {
-            crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-        };
-
-        if include_secondary {
-            // Seed from nodes carrying `node_type` as primary OR secondary
-            // label. On a single-label graph this is identical to the
-            // primary `type == node_type` filter below.
-            kglite_core::api::fluent::filter_nodes_by_label(
-                &self.inner,
-                &mut new_kg.cursor.selection,
-                &node_type,
-                sort_fields,
-                limit,
-            )
-            .map_err(to_pyerr)?;
-        } else {
-            let mut conditions = HashMap::new();
-            conditions.insert(
-                "type".to_string(),
-                FilterCondition::Equals(Value::String(node_type.clone())),
-            );
-            kglite_core::api::fluent::filter_nodes(
-                &self.inner,
-                &mut new_kg.cursor.selection,
-                conditions,
-                sort_fields,
-                limit,
-            )
-            .map_err(to_pyerr)?;
-        }
-
-        let temporal_config = kglite_core::api::temporal::node_config(&self.inner, &node_type);
-        if temporal == Some(true) && temporal_config.is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "select('{node_type}', temporal=True): '{node_type}' has no temporal \
-                 configuration; call set_temporal('{node_type}', valid_from, valid_to) first"
-            )));
-        }
-        if temporal != Some(false) && !self.cursor.temporal_context.is_all() {
-            if let Some(config) = temporal_config {
-                let context = &self.cursor.temporal_context;
-                new_kg.retain_current_level(|node| {
-                    kglite_core::api::fluent::node_passes_context(node, config, context)
-                })?;
+        // A validity error — `temporal=True` on an undeclared type, a bound
+        // the filter cannot read — is a `ValueError`; a seeding error an
+        // `ArgumentError`.
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_select(
+            &self.inner,
+            &self.cursor.temporal_context,
+            &node_type,
+            temporal,
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        kglite_core::api::fluent::select_nodes(
+            &self.inner,
+            &mut new_kg.cursor.selection,
+            &node_type,
+            include_secondary,
+            sort_fields,
+            limit,
+            &valid_time,
+        )
+        .map_err(|e| {
+            if valid_time.finish().is_err() {
+                pyo3::exceptions::PyValueError::new_err(e)
+            } else {
+                fluent_arg_err(e)
             }
-        }
+        })?;
 
         let actual = new_kg
             .cursor
@@ -315,6 +294,13 @@ impl KnowledgeGraph {
             None
         };
 
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            None,
+            "where_orphans()",
+        )
+        .map_err(fluent_arg_err)?;
         self.derive_with(|inner, cursor| {
             kglite_core::api::fluent::filter_orphan_nodes(
                 inner,
@@ -322,6 +308,7 @@ impl KnowledgeGraph {
                 include,
                 sort_fields.as_ref(),
                 limit,
+                Some(&valid_time),
             )
             .map_err(fluent_arg_err)
         })
@@ -377,24 +364,26 @@ impl KnowledgeGraph {
             }
         };
 
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            Some(connection_type),
+            "where_connected()",
+        )
+        .map_err(fluent_arg_err)?;
         self.derive_with(|inner, cursor| {
             kglite_core::api::fluent::filter_by_connection(
                 inner,
                 &mut cursor.selection,
                 connection_type,
                 dir,
+                Some(&valid_time),
             )
             .map_err(fluent_arg_err)
         })
     }
 
-    /// Filter nodes that are valid at a specific date
-    ///
-    /// This is a convenience method for temporal queries. It filters nodes where:
-    /// - date_from_field <= date <= date_to_field
-    ///
-    /// If field names are not specified, auto-detects from set_temporal() config.
-    /// If date is not specified, uses the reference date from date() or today.
+    /// Keep the nodes valid at a date: each under its type's declared or named bounds.
     #[pyo3(signature = (date=None, date_from_field=None, date_to_field=None))]
     fn valid_at(
         &mut self,
@@ -403,52 +392,23 @@ impl KnowledgeGraph {
         date_to_field: Option<&str>,
     ) -> PyResult<Self> {
         let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
-        let ref_date = match date {
-            Some(d) => crate::datatypes::py_in::query_date(d, "date")?.0,
-            None => match &self.cursor.temporal_context {
-                TemporalContext::At(d) => *d,
-                _ => chrono::Local::now().date_naive(),
-            },
+        let date = match date {
+            Some(d) => Some(crate::datatypes::py_in::query_date(d, "date")?.0),
+            None => None,
         };
-        let request = kglite_core::api::temporal::NodeValidityRequest::new(
+        let filter = kglite_core::api::fluent::FluentFilter::for_valid_at(
             &self.inner,
-            "valid_at",
+            &self.cursor.selection,
+            date,
+            &self.cursor.temporal_context,
             date_from_field,
             date_to_field,
-            kglite_core::api::temporal::ValidityTest::At(ref_date),
-        );
-
-        let mut new_kg = self.clone();
-
-        let estimated = new_kg
-            .cursor
-            .selection
-            .get_level(new_kg.cursor.selection.get_level_count().saturating_sub(1))
-            .map(|l| l.node_count())
-            .unwrap_or(0);
-
-        new_kg.retain_current_level(|node| request.keep(node))?;
-
-        let actual = new_kg
-            .cursor
-            .selection
-            .get_level(new_kg.cursor.selection.get_level_count().saturating_sub(1))
-            .map(|l| l.node_count())
-            .unwrap_or(0);
-        new_kg
-            .cursor
-            .selection
-            .add_plan_step(PlanStep::new("VALID_AT", None, estimated).with_actual_rows(actual));
-
-        Ok(new_kg)
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        self.retain_valid(filter, "VALID_AT")
     }
 
-    /// Filter nodes that are valid during a date range
-    ///
-    /// This filters nodes where their validity period overlaps with the given range:
-    /// - date_from_field <= end_date AND date_to_field >= start_date
-    ///
-    /// If field names are not specified, auto-detects from set_temporal() config.
+    /// Keep the nodes whose validity overlaps a range; a partial end date covers its whole period.
     #[pyo3(signature = (start_date, end_date, date_from_field=None, date_to_field=None))]
     fn valid_during(
         &mut self,
@@ -458,39 +418,19 @@ impl KnowledgeGraph {
         date_to_field: Option<&str>,
     ) -> PyResult<Self> {
         let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
-        let (start_parsed, _) = crate::datatypes::py_in::query_date(start_date, "start_date")?;
-        let (end_parsed, _) = crate::datatypes::py_in::query_date(end_date, "end_date")?;
-        let request = kglite_core::api::temporal::NodeValidityRequest::new(
+        let (start, _) = crate::datatypes::py_in::query_date(start_date, "start_date")?;
+        let (end, precision) = crate::datatypes::py_in::query_date(end_date, "end_date")?;
+        let end = kglite_core::api::timeseries::expand_end(end, precision);
+        let filter = kglite_core::api::fluent::FluentFilter::for_valid_during(
             &self.inner,
-            "valid_during",
+            &self.cursor.selection,
+            start,
+            end,
             date_from_field,
             date_to_field,
-            kglite_core::api::temporal::ValidityTest::During(start_parsed, end_parsed),
-        );
-
-        let mut new_kg = self.clone();
-
-        let estimated = new_kg
-            .cursor
-            .selection
-            .get_level(new_kg.cursor.selection.get_level_count().saturating_sub(1))
-            .map(|l| l.node_count())
-            .unwrap_or(0);
-
-        new_kg.retain_current_level(|node| request.keep(node))?;
-
-        let actual = new_kg
-            .cursor
-            .selection
-            .get_level(new_kg.cursor.selection.get_level_count().saturating_sub(1))
-            .map(|l| l.node_count())
-            .unwrap_or(0);
-        new_kg
-            .cursor
-            .selection
-            .add_plan_step(PlanStep::new("VALID_DURING", None, estimated).with_actual_rows(actual));
-
-        Ok(new_kg)
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        self.retain_valid(filter, "VALID_DURING")
     }
 
     /// Update properties on all currently selected nodes

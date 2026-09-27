@@ -810,36 +810,31 @@ impl KnowledgeGraph {
         })
     }
 
-    /// Keep the nodes of the current selection level that `keep` accepts. A
-    /// `keep` error (an unreadable temporal bound) raises `ValueError`.
-    pub(crate) fn retain_current_level(
-        &mut self,
-        keep: impl Fn(kglite_core::api::NodeView<'_>) -> Result<bool, String>,
-    ) -> PyResult<()> {
-        let graph = Arc::clone(&self.inner);
-        let level_idx = self.cursor.selection.get_level_count().saturating_sub(1);
-        let mut failure = None;
-        if let Some(level) = self.cursor.selection.get_level_mut(level_idx) {
-            for nodes in level.selections.values_mut() {
-                nodes.retain(|&idx| {
-                    if failure.is_some() {
-                        return false;
-                    }
-                    let Some(node) = kglite_core::api::GraphRead::node_view(&graph.graph, idx)
-                    else {
-                        return false;
-                    };
-                    keep(node).unwrap_or_else(|e| {
-                        failure = Some(e);
-                        false
-                    })
-                });
-            }
-        }
-        match failure {
-            Some(e) => Err(pyo3::exceptions::PyValueError::new_err(e)),
-            None => Ok(()),
-        }
+    /// A copy of this cursor keeping the current level's nodes `filter`
+    /// admits, with `step` in its plan. An unreadable bound raises
+    /// `ValueError`.
+    pub(crate) fn retain_valid(
+        &self,
+        filter: kglite_core::api::fluent::FluentFilter,
+        step: &str,
+    ) -> PyResult<Self> {
+        let level_nodes = |kg: &Self| {
+            kg.cursor
+                .selection
+                .get_level(kg.cursor.selection.get_level_count().saturating_sub(1))
+                .map(|l| l.node_count())
+                .unwrap_or(0)
+        };
+        let mut new_kg = self.clone();
+        let estimated = level_nodes(&new_kg);
+        filter
+            .retain_level(&self.inner, &mut new_kg.cursor.selection)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let actual = level_nodes(&new_kg);
+        new_kg.cursor.selection.add_plan_step(
+            kglite_core::api::PlanStep::new(step, None, estimated).with_actual_rows(actual),
+        );
+        Ok(new_kg)
     }
 
     /// The registered embedder, or an error carrying the implement-this
@@ -1406,6 +1401,7 @@ pub(crate) fn parse_method_param(
 }
 
 /// Shared comparison traversal logic used by `compare()`.
+// One argument per `compare()` keyword, plus the plan estimate and the filter.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compare_inner(
     inner: &Arc<DirGraph>,
@@ -1416,6 +1412,7 @@ pub(crate) fn compare_inner(
     sort_fields: Option<&Vec<(String, bool)>>,
     limit: Option<usize>,
     estimated: usize,
+    valid_time: &kglite_core::api::fluent::FluentFilter,
 ) -> PyResult<usize> {
     kglite_core::api::fluent::make_comparison_traversal(
         inner,
@@ -1425,6 +1422,7 @@ pub(crate) fn compare_inner(
         conditions,
         sort_fields,
         limit,
+        Some(valid_time),
     )
     // The dispatcher's failures (missing target_type, missing method
     // settings, unknown method) originate in the engine, so they belong to

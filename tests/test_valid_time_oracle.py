@@ -352,6 +352,7 @@ def _check(mode, nodes, edges, instant):
         for query in ELEMENT_QUERIES:
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", False, {"t": instant})
             assert _answer(frozen, query, False) == guarded, f"frozen view, {mode} at {instant}: {query}"
+        _check_fluent(full, reference, instant, f"fluent, {mode} at {instant}")
         for query in ALGORITHM_QUERIES + (TEXT_QUERIES if texts else []):
             ordered = query in ORDERED
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", ordered, {"t": instant})
@@ -359,6 +360,25 @@ def _check(mode, nodes, edges, instant):
             assert guarded == _answer(reference, query, ordered), where
             assert _answer(frozen, query, ordered) == guarded, f"frozen view, {where}"
             assert _answer(sliced, query, ordered) == guarded, f"slice, {where}"
+
+
+def _uids(rows) -> list:
+    return sorted(row["uid"] for row in rows)
+
+
+def _check_fluent(full, reference, instant, where):
+    """The fluent chain under `date(t)` selects and reaches what the
+    reference slice's unguarded patterns do: one filter, two spellings."""
+    context = full.date(instant)
+    rel_types = {row["t"] for row in full.cypher("MATCH ()-[r]->() RETURN DISTINCT type(r) AS t").to_list()}
+    for label in "ABC":
+        selected = context.select(label, include_secondary=True)
+        expected = reference.cypher(f"MATCH (n:{label}) RETURN n.uid AS uid").to_list()
+        assert _uids(selected.collect()) == _uids(expected), f"{where}: select {label}"
+        for rel in sorted(rel_types):
+            reached = selected.traverse(rel, direction="outgoing")
+            expected = reference.cypher(f"MATCH (:{label})-[:{rel}]->(b) RETURN DISTINCT b.uid AS uid").to_list()
+            assert sorted(set(_uids(reached.collect()))) == _uids(expected), f"{where}: {label}-[:{rel}]->"
 
 
 @pytest.mark.parametrize("mode", MODES)

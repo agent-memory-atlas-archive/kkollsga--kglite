@@ -1,4 +1,6 @@
 use crate::datatypes::values::{FilterCondition, Value};
+use crate::graph::core::fluent_filter::FluentFilter;
+use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::schema::{CurrentSelection, DirGraph, InternedKey, SelectionOperation};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
@@ -1066,6 +1068,65 @@ pub fn filter_nodes_by_label(
     Ok(())
 }
 
+/// The fluent `select(node_type)`: seed the current level with the nodes of
+/// `node_type` — by primary type, or every node carrying it as a label when
+/// `include_secondary` — keep those `valid_time` admits, then sort and keep
+/// the first `max_nodes` per group. The filter runs before the sort and the
+/// limit, so a limit counts visible nodes. An empty filter takes the seeding
+/// path unchanged.
+pub fn select_nodes(
+    graph: &DirGraph,
+    selection: &mut CurrentSelection,
+    node_type: &str,
+    include_secondary: bool,
+    sort_fields: Option<Vec<(String, bool)>>,
+    max_nodes: Option<usize>,
+    valid_time: &FluentFilter,
+) -> Result<(), String> {
+    let filtered = !valid_time.is_empty();
+    let (seed_sort, seed_limit) = if filtered {
+        (None, None)
+    } else {
+        (sort_fields.clone(), max_nodes)
+    };
+    if include_secondary {
+        filter_nodes_by_label(graph, selection, node_type, seed_sort, seed_limit)?;
+    } else {
+        let conditions = HashMap::from([(
+            TYPE_FIELD.to_string(),
+            FilterCondition::Equals(Value::String(node_type.to_string())),
+        )]);
+        filter_nodes(graph, selection, conditions, seed_sort, seed_limit)?;
+    }
+    if !filtered {
+        return Ok(());
+    }
+    valid_time.retain_level(graph, selection)?;
+    sort_and_limit_level(graph, selection, sort_fields.as_ref(), max_nodes);
+    Ok(())
+}
+
+/// Sort each group of `selection`'s current level and keep its first
+/// `max_nodes` — what a seeding step does after a filter it had to run
+/// before its limit.
+pub(crate) fn sort_and_limit_level(
+    graph: &DirGraph,
+    selection: &mut CurrentSelection,
+    sort_fields: Option<&Vec<(String, bool)>>,
+    max_nodes: Option<usize>,
+) {
+    if sort_fields.is_none() && max_nodes.is_none() {
+        return;
+    }
+    let current_index = selection.get_level_count().saturating_sub(1);
+    if let Some(level) = selection.get_level_mut(current_index) {
+        for children in level.selections.values_mut() {
+            let nodes = std::mem::take(children);
+            *children = process_nodes(graph, nodes, None, sort_fields, max_nodes);
+        }
+    }
+}
+
 pub fn filter_nodes(
     graph: &DirGraph,
     selection: &mut CurrentSelection,
@@ -1343,13 +1404,16 @@ pub fn offset_nodes(
     Ok(())
 }
 
-/// Filter selection to nodes that have at least one connection of the given type.
+/// Filter selection to nodes that have at least one connection of the given
+/// type — under `valid_time`, one that is visible and reaches a visible node.
 pub fn filter_by_connection(
     graph: &DirGraph,
     selection: &mut CurrentSelection,
     connection_type: &str,
     direction: Option<petgraph::Direction>,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<(), String> {
+    let valid_time = valid_time.filter(|filter| !filter.is_empty());
     // Arena guard: disk-backed node/edge reads materialize into the query
     // arena (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
@@ -1367,33 +1431,43 @@ pub fn filter_by_connection(
     // 80k+ per-call lock + alloc on mapped `where_connected` shapes.
     // Outgoing-only today — the disk index is outgoing-keyed; the
     // incoming side still falls back to the per-node scan.
-    let out_sources: Option<HashSet<u32>> = graph
-        .graph
-        .sources_for_conn_type_bounded(conn_key, None)
-        .map(|v| v.into_iter().collect());
+    // The source list says nothing about validity, so a filter walks.
+    let out_sources: Option<HashSet<u32>> = match valid_time {
+        Some(_) => None,
+        None => graph
+            .graph
+            .sources_for_conn_type_bounded(conn_key, None)
+            .map(|v| v.into_iter().collect()),
+    };
+    let visible = |e: &GraphEdgeRef<'_>, far: NodeIndex| {
+        e.weight().connection_type == conn_key
+            && valid_time.is_none_or(|filter| {
+                filter
+                    .admits_hop(graph, e.id(), conn_key, e.source(), far)
+                    .unwrap_or(false)
+            })
+    };
     let has_conn = |idx: NodeIndex| -> bool {
-        let outgoing_hit = out_sources
-            .as_ref()
-            .map(|set| set.contains(&(idx.index() as u32)))
-            .unwrap_or_else(|| {
-                graph
-                    .graph
-                    .edges_directed_filtered(idx, petgraph::Direction::Outgoing, Some(conn_key))
-                    .any(|e| e.weight().connection_type == conn_key)
-            });
-        match direction {
-            Some(petgraph::Direction::Outgoing) => outgoing_hit,
-            Some(petgraph::Direction::Incoming) => graph
+        let outgoing = || {
+            graph
+                .graph
+                .edges_directed_filtered(idx, petgraph::Direction::Outgoing, Some(conn_key))
+                .any(|e| visible(&e, e.target()))
+        };
+        let incoming = || {
+            graph
                 .graph
                 .edges_directed_filtered(idx, petgraph::Direction::Incoming, Some(conn_key))
-                .any(|e| e.weight().connection_type == conn_key),
-            None => {
-                outgoing_hit
-                    || graph
-                        .graph
-                        .edges_directed_filtered(idx, petgraph::Direction::Incoming, Some(conn_key))
-                        .any(|e| e.weight().connection_type == conn_key)
-            }
+                .any(|e| visible(&e, e.source()))
+        };
+        let outgoing_hit = || match &out_sources {
+            Some(set) => set.contains(&(idx.index() as u32)),
+            None => outgoing(),
+        };
+        match direction {
+            Some(petgraph::Direction::Outgoing) => outgoing_hit(),
+            Some(petgraph::Direction::Incoming) => incoming(),
+            None => outgoing_hit() || incoming(),
         }
     };
 
@@ -1425,16 +1499,21 @@ pub fn filter_by_connection(
         "has_connection({})",
         connection_type
     )));
-    Ok(())
+    valid_time.map_or(Ok(()), FluentFilter::finish)
 }
 
+/// Keep the nodes with no relationship (`include_orphans`) or with some —
+/// under `valid_time`, counting only the relationships it admits to nodes it
+/// admits, and seeding an empty selection with visible nodes only.
 pub fn filter_orphan_nodes(
     graph: &DirGraph,
     selection: &mut CurrentSelection,
     include_orphans: bool,
     sort_fields: Option<&Vec<(String, bool)>>,
     max_nodes: Option<usize>,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<(), String> {
+    let valid_time = valid_time.filter(|filter| !filter.is_empty());
     // Arena guard: disk-backed node/edge reads materialize into the query
     // arena (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
@@ -1443,23 +1522,27 @@ pub fn filter_orphan_nodes(
         .get_level_mut(current_index)
         .ok_or_else(|| "No active selection level".to_string())?;
 
-    let is_orphan = |node_idx: NodeIndex| {
-        graph
-            .graph
-            .neighbors_directed(node_idx, petgraph::Direction::Outgoing)
-            .count()
-            == 0
-            && graph
+    let is_orphan = |node_idx: NodeIndex| match valid_time {
+        Some(filter) => filter.visible_degree(graph, node_idx) == 0,
+        None => {
+            graph
                 .graph
-                .neighbors_directed(node_idx, petgraph::Direction::Incoming)
+                .neighbors_directed(node_idx, petgraph::Direction::Outgoing)
                 .count()
                 == 0
+                && graph
+                    .graph
+                    .neighbors_directed(node_idx, petgraph::Direction::Incoming)
+                    .count()
+                    == 0
+        }
     };
 
     if level.selections.is_empty() {
         let nodes = graph
             .graph
             .node_indices()
+            .filter(|&idx| valid_time.is_none_or(|filter| filter.admits_node(graph, idx)))
             .filter(|&idx| include_orphans == is_orphan(idx))
             .collect::<Vec<_>>();
 
@@ -1498,7 +1581,7 @@ pub fn filter_orphan_nodes(
             .push(SelectionOperation::Sort(fields.clone()));
     }
 
-    Ok(())
+    valid_time.map_or(Ok(()), FluentFilter::finish)
 }
 
 // Test data uses the literal `3.14` as a plain float, not an approximation of PI.

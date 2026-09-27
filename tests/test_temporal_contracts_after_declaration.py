@@ -8,8 +8,9 @@
   bounds. A property-type constraint refuses such a write up front.
 - The fluent date arguments take a `datetime.date`, a `datetime.datetime` or a
   datetime string, as `cypher()` parameters do, at date grain.
-- `traverse()` under a date context filters the relationships, not the target
-  nodes by their own declaration; `.valid_at()` does that.
+- `traverse()` under a date context filters the relationships and the target
+  nodes by their own declarations, as `FOR VALID_TIME AS OF` does;
+  `temporal=False` turns both off.
 - Load errors number rows by 0-based position and say so.
 """
 
@@ -112,7 +113,10 @@ def test_fluent_date_arguments_refuse_other_types() -> None:
     assert g.date("all").select("M").len() == 2
 
 
-def test_traverse_under_a_date_filters_relationships_not_targets() -> None:
+def test_traverse_under_a_date_filters_relationships_and_targets() -> None:
+    """Changed answer: the relationship is valid in 2010 but its target `a`
+    ended in 2005, so the traversal reaches nothing — it used to reach `a`,
+    reading only the relationship's interval."""
     g = kglite.KnowledgeGraph()
     g.cypher(
         "CREATE (a:A {name: 'a', vf: date('2000-01-01'), vt: date('2005-01-01')}), (p:P {name: 'p'}),"
@@ -121,13 +125,15 @@ def test_traverse_under_a_date_filters_relationships_not_targets() -> None:
     g.set_temporal("A", "vf", "vt", convention="half_open")
     g.set_temporal("IN", "vf", "vt", convention="half_open")
     targets = g.date("2010").select("P").traverse("IN", direction="incoming")
-    # The relationship is valid in 2010, so `a` is reached although its own
-    # interval ended in 2005 ...
-    assert [n["title"] for n in targets.collect()] == ["a"]
-    # ... and `.valid_at()` under the same context filters it.
+    assert [n["title"] for n in targets.collect()] == []
     assert targets.valid_at().len() == 0
-    # Relationship dates accept dates too.
-    assert g.select("P", temporal=False).traverse("IN", direction="incoming", at=dt.date(2010, 1, 1)).len() == 1
+    assert g.select("P", temporal=False).traverse("IN", direction="incoming", at=dt.date(2010, 1, 1)).len() == 0
+    # `temporal=False` is the escape hatch: neither the relationship nor `a`
+    # is tested.
+    unfiltered = g.date("2010").select("P").traverse("IN", direction="incoming", temporal=False)
+    assert [n["title"] for n in unfiltered.collect()] == ["a"]
+    # Relationship dates accept dates too, and reach `a` while it is valid.
+    assert g.select("P", temporal=False).traverse("IN", direction="incoming", at=dt.date(2003, 1, 1)).len() == 1
 
 
 def test_load_errors_number_rows_by_zero_based_position() -> None:

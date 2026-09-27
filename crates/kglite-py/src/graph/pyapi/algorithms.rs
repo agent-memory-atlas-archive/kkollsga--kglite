@@ -1015,9 +1015,21 @@ impl KnowledgeGraph {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No selection level")
             })?;
 
-        for (title, degree) in
-            kglite_core::api::fluent::get_node_degrees(&self.inner, &self.cursor.selection)
-        {
+        let argument = |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            None,
+            "degrees()",
+        )
+        .map_err(argument)?;
+        let degrees = kglite_core::api::fluent::get_node_degrees(
+            &self.inner,
+            &self.cursor.selection,
+            Some(&valid_time),
+        )
+        .map_err(argument)?;
+        for (title, degree) in degrees {
             let key = pyo3::types::PyString::new(py, &title).into_any();
             DEGREES_TITLE_KEY.insert(&result_dict, &key, degree)?;
         }
@@ -1392,6 +1404,13 @@ impl KnowledgeGraph {
     #[pyo3(signature = (hops=None))]
     fn expand(&self, hops: Option<usize>) -> PyResult<Self> {
         let hops = hops.unwrap_or(1);
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            None,
+            "expand()",
+        )
+        .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
         self.derive_with(|inner, cursor| {
             // node_count of the last selection level (avoids allocation).
             let last_count = |sel: &kglite_core::api::CowSelection| {
@@ -1400,10 +1419,15 @@ impl KnowledgeGraph {
                     .unwrap_or(0)
             };
             let estimated = last_count(&cursor.selection);
-            kglite_core::api::fluent::expand_selection(inner, &mut cursor.selection, hops)
-                .map_err(|e: String| {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
+            kglite_core::api::fluent::expand_selection(
+                inner,
+                &mut cursor.selection,
+                hops,
+                Some(&valid_time),
+            )
+            .map_err(|e: String| {
+                crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+            })?;
             let actual = last_count(&cursor.selection);
             cursor
                 .selection
@@ -1435,11 +1459,20 @@ impl KnowledgeGraph {
     ///     subgraph.save('north_sea_region.kgl')
     ///     ```
     fn to_subgraph(&self) -> PyResult<Self> {
-        let extracted =
-            kglite_core::api::fluent::extract_subgraph(&self.inner, &self.cursor.selection)
-                .map_err(|e: String| {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
+        let argument = |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            None,
+            "to_subgraph()",
+        )
+        .map_err(argument)?;
+        let extracted = kglite_core::api::fluent::extract_subgraph(
+            &self.inner,
+            &self.cursor.selection,
+            Some(&valid_time),
+        )
+        .map_err(argument)?;
 
         // The extracted graph is a handle derived from this one: it answers the
         // caller's queries, so it answers under the caller's query defaults.
@@ -1477,13 +1510,31 @@ impl KnowledgeGraph {
     ///     )
     ///     ```
     fn save_subset(&self, py: Python<'_>, path: &str) -> PyResult<()> {
+        let argument = |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            None,
+            "save_subset()",
+        )
+        .map_err(argument)?;
         let inner = self.inner.clone();
         let selection = self.cursor.selection.clone();
         let path_owned = path.to_string();
+        let filter = valid_time.clone();
         py.detach(move || {
-            kglite_core::api::io::save_subset(&inner, &selection, std::path::Path::new(&path_owned))
+            kglite_core::api::io::save_subset(
+                &inner,
+                &selection,
+                std::path::Path::new(&path_owned),
+                Some(&filter),
+            )
         })
-        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
+        .map_err(|e| match valid_time.finish() {
+            // A bound the filter could not read is the caller's data, not I/O.
+            Err(_) => argument(e),
+            Ok(()) => PyErr::new::<pyo3::exceptions::PyIOError, _>(e),
+        })
     }
 
     /// Get statistics about the subgraph that would be extracted.

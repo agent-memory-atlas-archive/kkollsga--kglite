@@ -156,13 +156,17 @@ before upgrading.
   form, build a date or datetime from integers — `date({year: y, month: 1,
   day: 1})`. Missing fields default to the start of the period; an impossible
   date, an unknown key or a non-integer component raises.
-- Rust API: `kglite::api::temporal::{NodeValidityRequest, ValidityTest,
-  node_request_config, relationship_request_configs}` resolve an explicit
-  validity request against a type — the rule the fluent filters and Cypher
-  share — and `kglite::api::schema_property_keys` gives a single-typed node
-  set's export columns from the type's schema. `kglite::api::fluent::
-  TemporalEdgeFilter` gains an `Undeclared` variant, so an exhaustive match
-  over it needs a new arm.
+- Rust API: `kglite::api::temporal::{node_request_config,
+  relationship_request_configs}` resolve an explicit validity request against
+  a type — the rule the fluent filters and Cypher share — and
+  `kglite::api::schema_property_keys` gives a single-typed node set's export
+  columns from the type's schema.
+- Rust API: `kglite::api::fluent::FluentFilter`, the valid-time filter a
+  fluent step runs under, resolved from the cursor's `TemporalContext`, a
+  `traverse(at=/during=)` argument or a `valid_at()` / `valid_during()`
+  request into the filter `FOR VALID_TIME AS OF` uses; and
+  `kglite::api::fluent::select_nodes`, the fluent `select()` with the filter
+  applied before its sort and limit.
 - Fluent `date()`, `valid_at()`, `valid_during()` and `traverse(at=…,
   during=…)` take a `datetime.date` or `datetime.datetime`, as `cypher()`
   parameters do, and a datetime string such as `'2009-06-30T12:00'`. The
@@ -243,6 +247,53 @@ before upgrading.
 
 ### Changed
 
+- **The fluent date context is the `FOR VALID_TIME AS OF` filter.**
+  `date()`, `traverse(at=…, during=…)` and `valid_at()` / `valid_during()`
+  resolve to the filter a Cypher statement at that date runs under, so a
+  fluent chain and the pattern it spells return the same nodes. What changes:
+  - `traverse()` under a date context, or with `at=` / `during=`, keeps a
+    target node only when it is valid too — a relationship still valid in
+    2009 no longer reaches a company that closed in 2008. `temporal=False`
+    turns the filtering off for the hop, relationships and targets alike.
+  - `select()`, `valid_at()` and `valid_during()` keep a node only when it
+    is valid under **every** declared label it carries, secondary labels
+    included; they used to read only the node's primary type. (`valid_at()`
+    / `valid_during()` also answered differently on a graph with secondary
+    labels depending on which queries had run before.)
+  - `expand()`, `where_connected()`, `where_orphans()`, `degrees()`,
+    `relationships()` / `connections()`, `compare()` and `to_subgraph()` read
+    the context too: they follow and count only valid relationships to valid
+    nodes (`to_subgraph()` copies only the valid relationships between the
+    selected nodes; `compare()` matches only valid targets). They used to
+    ignore it. `save_subset()` writes the relationships `to_subgraph()`
+    keeps.
+  - A relationship type holding several unkeyed declarations (a graph saved
+    before declarations were keyed by source type) is refused under a date
+    context — as Cypher refuses it — and the message names the fix: remove
+    the unkeyed declarations with `CALL db.temporal.undeclare({relationship:
+    …})`, then declare one per `source_type`.
+    The fluent filter used to pick the first declaration whose properties an
+    edge carried.
+  - Today is the UTC date, the day Cypher's `date()` reads; it was the
+    local date.
+  - `valid_during(a, b)` and `traverse(during=(a, b))` expand a partial end
+    date to the end of its period, as `date(a, b)` does: `'2002'` ends on
+    2002-12-31, not 2002-01-01.
+  - `valid_at()` with no date under a range context (`date(a, b)`) keeps the
+    nodes whose validity overlaps the range; it used to test today.
+  - An unreadable bound's error names the step: `select(): node '2',
+    property 'vt': …`.
+- **Breaking (Rust):** `kglite::api::fluent::{node_is_temporally_valid,
+  node_overlaps_range, node_passes_context}` and
+  `kglite::api::fluent::TemporalEdgeFilter` are removed; the fluent filter is
+  `kglite::api::fluent::FluentFilter`. `make_traversal` takes
+  `Option<&FluentFilter>` where it took `Option<&TemporalEdgeFilter>`, and
+  `expand_selection`, `extract_subgraph`, `filter_by_connection`,
+  `filter_orphan_nodes` and `make_comparison_traversal` take an
+  `Option<&FluentFilter>` (`None` filters nothing); `get_connections` and
+  `get_node_degrees` take one too and return a `Result`, erring only on a
+  bound the filter cannot read. `kglite::api::io::save_subset` and
+  `save_subset_streaming_disk` take a trailing `Option<&FluentFilter>`.
 - The Bolt server, the MCP server, the CLI, the C ABI (and so Java), and the
   graph-carried skill and recipe writers run trailing aggregates through the
   streaming pipeline, as the Python handles do. Performance only: the rows
@@ -316,9 +367,6 @@ before upgrading.
   `CypherExecutionError`, naming the variable, the property and both types,
   instead of silently answering false. A datetime bound compares at date grain
   against a date. The closed-interval semantics are otherwise unchanged.
-- Rust API: `kglite::api::fluent::node_is_temporally_valid`,
-  `node_overlaps_range` and `node_passes_context` return
-  `Result<bool, String>`; the error names the node and the unreadable bound.
 - Cypher filters of the form `x.p IS NULL OR x.p >= $v` (either order, any of
   `<`, `<=`, `>`, `>=`) and `coalesce(x.p, default) >= $v` with a literal or
   parameter default now filter nodes and relationships while the pattern is
@@ -483,11 +531,12 @@ before upgrading.
   (`REQUIRE n.valid_to IS :: DATE`) that refuses a bad write up front.
 - Load errors and warnings (`add_nodes` and the validity-interval check) name
   a row by its 0-based position and now say so: `row 1 (0-based)`.
-- Docs: `date()` and `traverse()` say that a date context filters
-  relationships, not the target nodes by their own declaration (chain
-  `.valid_at()`); FLUENT.md's temporal section covers declarations,
-  conventions, relationship dates and the date context; `column_types` lists
-  `validFrom` / `validTo`.
+- Docs: FLUENT.md's temporal section covers declarations, conventions,
+  relationship dates and the date context; `column_types` lists `validFrom` /
+  `validTo`.
+- Fluent `select(T, limit=n)` (and `sort=`) under a date context applied the
+  limit before the date filter, so it returned fewer than `n` nodes — often
+  none — while valid nodes existed. The filter now runs first.
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.

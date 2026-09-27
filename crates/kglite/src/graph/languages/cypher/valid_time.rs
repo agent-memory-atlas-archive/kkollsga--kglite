@@ -14,7 +14,7 @@
 //! [`check_executable`]). One that lowers executes under the filter
 //! [`execution_filter`] resolves.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Datelike;
@@ -29,14 +29,17 @@ use super::result::{ResultRow, TemporalDiagnostics};
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{
-    EdgeGuard, ElementFilter, GraphFilter, GuardBounds, GuardTemplate, NodeGuard, ValidTimeSelector,
+    EdgeGuard, ElementFilter, GraphFilter, GuardTemplate, TemplateScope, ValidTimeSelector,
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
-use crate::graph::features::temporal::{self, eval, TemporalTarget};
-use crate::graph::schema::{DirGraph, InternedKey};
+use crate::graph::features::temporal::{self, eval};
+use crate::graph::schema::DirGraph;
 
 /// The one axis that lowers.
 const VALID_TIME: &str = "VALID_TIME";
+
+/// What a refused template names a statement's context as.
+const CONTEXT_SURFACE: &str = "FOR VALID_TIME AS OF";
 
 /// Compile `query`'s context into a guard template per scope, or record why
 /// the statement is refused. Without a context this returns on its first
@@ -106,7 +109,8 @@ fn attach_templates(
              louvain, connected_components, …) and the embedding queries"
         ));
     }
-    query.guard = Some(Arc::new(reach.template(graph, declarations)?));
+    let template = GuardTemplate::for_scope(graph, declarations, &reach.scope, CONTEXT_SURFACE)?;
+    query.guard = Some(Arc::new(template));
     for clause in &mut query.clauses {
         match clause {
             Clause::Union(arm) => attach_templates(&mut arm.query, graph, declarations)?,
@@ -131,13 +135,11 @@ fn clear_templates(query: &mut CypherQuery) {
 /// What one scope's read patterns and procedure calls can reach.
 #[derive(Default)]
 struct Reach {
-    /// A node pattern with no label (or a label bound from a parameter), or
-    /// the intermediate nodes of a multi-hop segment.
-    any_node: bool,
-    labels: BTreeSet<String>,
-    /// A relationship pattern with no type (or a type from a parameter).
-    any_rel: bool,
-    rel_types: BTreeSet<String>,
+    /// `any_node`: a node pattern with no label (or a label bound from a
+    /// parameter), or the intermediate nodes of a multi-hop segment.
+    /// `any_rel`: a relationship pattern with no type (or a type from a
+    /// parameter).
+    scope: TemplateScope,
     refused_procedure: Option<String>,
     /// A scalar function that reads relationships without the matcher.
     refused_function: Option<String>,
@@ -156,18 +158,18 @@ impl AstSink for Reach {
             match element {
                 PatternElement::Node(node) => {
                     let labels = node.label_alternatives().iter().chain(&node.extra_labels);
-                    self.labels.extend(labels.cloned());
+                    self.scope.labels.extend(labels.cloned());
                     let labelled =
                         !node.label_alternatives().is_empty() || !node.extra_labels.is_empty();
                     if !labelled || !node.label_params.is_empty() {
-                        self.any_node = true;
+                        self.scope.any_node = true;
                     }
                 }
                 PatternElement::Edge(edge) => {
                     // A segment of two or more hops passes through anonymous,
                     // untyped nodes, which can carry any declared label.
                     if edge.var_length.is_some_and(|(_, max)| max > 1) {
-                        self.any_node = true;
+                        self.scope.any_node = true;
                     }
                     let types = match (&edge.connection_types, &edge.connection_type) {
                         (Some(types), _) => types.as_slice(),
@@ -175,9 +177,9 @@ impl AstSink for Reach {
                         (None, None) => &[],
                     };
                     if types.is_empty() || !edge.type_params.is_empty() {
-                        self.any_rel = true;
+                        self.scope.any_rel = true;
                     }
-                    self.rel_types.extend(types.iter().cloned());
+                    self.scope.rel_types.extend(types.iter().cloned());
                 }
             }
         }
@@ -195,8 +197,8 @@ impl AstSink for Reach {
             return;
         }
         if is_view_routed_procedure(name) || is_mask_routed_procedure(name) {
-            self.any_node = true;
-            self.any_rel = true;
+            self.scope.any_node = true;
+            self.scope.any_rel = true;
             return;
         }
         if self.refused_procedure.is_none() {
@@ -216,57 +218,6 @@ impl AstSink for Reach {
 
     fn nested_scopes(&self) -> bool {
         false
-    }
-}
-
-impl Reach {
-    /// The declared targets this scope reaches, in lookup order. A node
-    /// declaration on label L governs every node carrying L, primary or
-    /// secondary, so once the graph has secondary labels a labelled pattern
-    /// can reach any declared label.
-    fn template(
-        &self,
-        graph: &DirGraph,
-        declarations: &[temporal::DeclarationInfo],
-    ) -> Result<GuardTemplate, String> {
-        let all_nodes = self.any_node || (graph.has_secondary_labels && !self.labels.is_empty());
-        let mut template = GuardTemplate::default();
-        for info in declarations {
-            match &info.target {
-                TemporalTarget::Node(label) => {
-                    if all_nodes || self.labels.contains(label) {
-                        template.nodes.push(NodeGuard {
-                            label: label.clone(),
-                            bounds: GuardBounds::of(&info.config),
-                        });
-                    }
-                }
-                TemporalTarget::Relationship {
-                    rel_type,
-                    source_type,
-                } => {
-                    if !(self.any_rel || self.rel_types.contains(rel_type)) {
-                        continue;
-                    }
-                    if info.ambiguous {
-                        return Err(format!(
-                            "relationship type '{rel_type}' holds several declarations with no \
-                             source type, so which one applies depends on declaration order; \
-                             re-declare them per source_type before querying it under \
-                             FOR VALID_TIME AS OF"
-                        ));
-                    }
-                    template.edges.push(EdgeGuard {
-                        rel_type: rel_type.clone(),
-                        rel_key: InternedKey::from_str(rel_type),
-                        source_type: source_type.clone(),
-                        source_type_key: source_type.as_deref().map(InternedKey::from_str),
-                        bounds: GuardBounds::of(&info.config),
-                    });
-                }
-            }
-        }
-        Ok(template)
     }
 }
 
@@ -429,12 +380,17 @@ fn plain_text_if_timeless(
 /// reach any node and any relationship compiles to. Refused when a
 /// relationship type holds several unkeyed declarations.
 pub(crate) fn declared_template(graph: &DirGraph) -> Result<GuardTemplate, String> {
-    let every_target = Reach {
+    let every_target = TemplateScope {
         any_node: true,
         any_rel: true,
-        ..Reach::default()
+        ..TemplateScope::default()
     };
-    every_target.template(graph, &temporal::declared(graph))
+    GuardTemplate::for_scope(
+        graph,
+        &temporal::declared(graph),
+        &every_target,
+        CONTEXT_SURFACE,
+    )
 }
 
 /// The targets a retrieval index's documents are judged by: every declared
@@ -445,12 +401,12 @@ pub(crate) fn retrieval_template(
     graph: &DirGraph,
     rel_type: Option<&str>,
 ) -> Result<GuardTemplate, String> {
-    let reach = Reach {
+    let scope = TemplateScope {
         any_node: true,
         rel_types: rel_type.into_iter().map(str::to_string).collect(),
-        ..Reach::default()
+        ..TemplateScope::default()
     };
-    reach.template(graph, &temporal::declared(graph))
+    GuardTemplate::for_scope(graph, &temporal::declared(graph), &scope, CONTEXT_SURFACE)
 }
 
 /// The refusal for a context on a graph with no validity declaration.

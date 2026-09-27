@@ -305,12 +305,17 @@ pub mod api {
         // Filtering / sorting / pagination over a selection.
         pub use crate::graph::core::filtering::{
             filter_by_connection, filter_nodes, filter_nodes_any, filter_nodes_by_label,
-            filter_orphan_nodes, limit_nodes_per_group, offset_nodes, sort_nodes,
+            filter_orphan_nodes, limit_nodes_per_group, offset_nodes, select_nodes, sort_nodes,
         };
         // Traversal (parent→child level expansion) + its config/filter types.
+        /// The valid-time filter a fluent step runs under — the one a
+        /// `FOR VALID_TIME AS OF` statement's patterns run under — resolved
+        /// from the cursor's `TemporalContext`, a `traverse(at=/during=)`
+        /// argument, or a `valid_at()` / `valid_during()` request.
+        pub use crate::graph::core::fluent_filter::FluentFilter;
         pub use crate::graph::core::traversal::{
             format_for_dictionary, format_for_storage, get_children_properties,
-            make_comparison_traversal, make_traversal, MethodConfig, TemporalEdgeFilter,
+            make_comparison_traversal, make_traversal, MethodConfig,
         };
         // Per-level calculations / equation evaluation / counts.
         pub use crate::graph::core::calculations::{
@@ -338,10 +343,6 @@ pub mod api {
         pub use crate::graph::features::spatial::{
             calculate_centroid, contains_point, get_bounds, intersects_geometry, near_point,
             near_point_m, within_bounds, wkt_centroid,
-        };
-        // Temporal validity predicates (per NodeData + TemporalConfig).
-        pub use crate::graph::features::temporal::{
-            node_is_temporally_valid, node_overlaps_range, node_passes_context,
         };
     }
 
@@ -479,8 +480,8 @@ pub mod api {
         pub use crate::graph::features::temporal::{
             declare, declare_defaulted, declare_from_column_types, declare_loaded, edge_configs,
             list, node_config, node_request_config, relationship_request_configs, undeclare,
-            DeclarationInfo, DeclareReport, IntervalConvention, LoadDeclaration,
-            NodeValidityRequest, TemporalTarget, ValidityTest, DISK_NODE_ABUTMENT_CAP,
+            DeclarationInfo, DeclareReport, IntervalConvention, LoadDeclaration, TemporalTarget,
+            DISK_NODE_ABUTMENT_CAP,
         };
     }
 

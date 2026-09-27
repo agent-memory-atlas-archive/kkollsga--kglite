@@ -11,7 +11,7 @@ use crate::datatypes::{py_in, py_out};
 use crate::graph::pyapi::kg_core::file_io_err;
 use crate::graph::{
     compare_inner, extract_cypher_param, extract_detail_param, extract_fluent_param, get_graph_mut,
-    parse_method_param, KnowledgeGraph, TemporalContext,
+    parse_method_param, KnowledgeGraph,
 };
 use kglite_core::api::fluent::StatResult;
 use kglite_core::api::introspection;
@@ -625,13 +625,23 @@ impl KnowledgeGraph {
         include_node_properties: Option<bool>,
         flatten_single_parent: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
+        let argument = |e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
+        let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
+            &self.inner,
+            &self.cursor.temporal_context,
+            None,
+            "relationships()",
+        )
+        .map_err(argument)?;
         let connections = kglite_core::api::fluent::get_connections(
             &self.inner,
             &self.cursor.selection,
             None,
             indices.as_deref(),
             include_node_properties.unwrap_or(true),
-        );
+            Some(&valid_time),
+        )
+        .map_err(argument)?;
         Python::attach(|py| {
             py_out::level_connections_to_pydict(
                 py,
@@ -871,50 +881,31 @@ impl KnowledgeGraph {
             None
         };
 
-        // Priority: temporal=False > at > during > config+temporal_context
-        let edge_configs = || {
-            let configs = kglite_core::api::temporal::edge_configs(&self.inner, &connection_type);
-            (!configs.is_empty()).then(|| configs.to_vec())
-        };
-        // An explicit `at=` / `during=` is a request: on an undeclared
-        // relationship type the traversal raises rather than keeping every edge.
-        let requested = |argument: &str, filter: &dyn Fn(Vec<_>) -> _| {
-            match kglite_core::api::temporal::relationship_request_configs(
-                &self.inner,
-                &format!("traverse({argument}=...)"),
-                &connection_type,
-            ) {
-                Ok(configs) => filter(configs),
-                Err(message) => kglite_core::api::fluent::TemporalEdgeFilter::Undeclared(message),
+        let at = at
+            .map(|value| crate::datatypes::py_in::query_date(value, "at"))
+            .transpose()?
+            .map(|(date, _)| date);
+        let during = match &during {
+            Some((start, end)) => {
+                let (start, _) = crate::datatypes::py_in::query_date(start, "during")?;
+                let (end, precision) = crate::datatypes::py_in::query_date(end, "during")?;
+                Some((
+                    start,
+                    kglite_core::api::timeseries::expand_end(end, precision),
+                ))
             }
+            None => None,
         };
-        let temporal_filter = if temporal == Some(false) {
-            None
-        } else if let Some(at_value) = at {
-            let (date, _) = crate::datatypes::py_in::query_date(at_value, "at")?;
-            Some(requested("at", &|configs| {
-                kglite_core::api::fluent::TemporalEdgeFilter::At(configs, date)
-            }))
-        } else if let Some((start_value, end_value)) = &during {
-            let (start, _) = crate::datatypes::py_in::query_date(start_value, "during")?;
-            let (end, _) = crate::datatypes::py_in::query_date(end_value, "during")?;
-            Some(requested("during", &|configs| {
-                kglite_core::api::fluent::TemporalEdgeFilter::During(configs, start, end)
-            }))
-        } else {
-            match &self.cursor.temporal_context {
-                TemporalContext::All => None,
-                TemporalContext::Today => edge_configs().map(|configs| {
-                    let today = chrono::Local::now().date_naive();
-                    kglite_core::api::fluent::TemporalEdgeFilter::At(configs, today)
-                }),
-                TemporalContext::At(d) => edge_configs()
-                    .map(|configs| kglite_core::api::fluent::TemporalEdgeFilter::At(configs, *d)),
-                TemporalContext::During(start, end) => edge_configs().map(|configs| {
-                    kglite_core::api::fluent::TemporalEdgeFilter::During(configs, *start, *end)
-                }),
-            }
-        };
+        let temporal_filter = kglite_core::api::fluent::FluentFilter::for_traverse(
+            &self.inner,
+            &self.cursor.temporal_context,
+            at,
+            during,
+            temporal,
+            &connection_type,
+            target_types.as_deref(),
+        )
+        .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
 
         // All inputs are pure Rust by now — run the traversal off-GIL.
         {
@@ -932,7 +923,7 @@ impl KnowledgeGraph {
                     sort_fields.as_ref(),
                     limit,
                     new_level,
-                    temporal_filter.as_ref(),
+                    Some(&temporal_filter),
                     target_types.as_deref(),
                 )
             })
@@ -1023,6 +1014,16 @@ impl KnowledgeGraph {
             None
         };
 
+        let valid_time = match resolved_target.as_deref() {
+            Some(target) => kglite_core::api::fluent::FluentFilter::for_label(
+                &self.inner,
+                &self.cursor.temporal_context,
+                target,
+                "compare()",
+            )
+            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?,
+            None => kglite_core::api::fluent::FluentFilter::default(),
+        };
         compare_inner(
             &self.inner,
             &mut new_kg.cursor.selection,
@@ -1032,6 +1033,7 @@ impl KnowledgeGraph {
             sort_fields.as_ref(),
             limit,
             estimated,
+            &valid_time,
         )?;
 
         Ok(new_kg)

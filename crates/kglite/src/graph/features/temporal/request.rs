@@ -8,15 +8,10 @@
 //! The ambient `date()` context is not a request: it filters the declared
 //! types and leaves the others alone.
 
-use std::cell::RefCell;
-
-use chrono::NaiveDate;
-
 use super::eval::IntervalConvention;
-use super::{edge_configs, node_config, node_is_temporally_valid, node_overlaps_range};
+use super::{edge_configs, node_config};
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::schema::{InternedKey, TemporalConfig};
-use crate::graph::storage::NodeView;
+use crate::graph::schema::TemporalConfig;
 
 /// Whether nodes of `node_type` record a property `field`, the name of an
 /// identity field included, or declare it as a bound.
@@ -62,71 +57,6 @@ pub fn unknown_bound_message(function: &str, kind: &str, type_name: &str, field:
         "{function}(): property '{field}' does not exist on {kind} '{type_name}' — no element \
          of that type has it — so it cannot bound an interval. Check the property name"
     )
-}
-
-/// What an explicit node request asks of each node.
-#[derive(Clone, Copy, Debug)]
-pub enum ValidityTest {
-    At(NaiveDate),
-    During(NaiveDate, NaiveDate),
-}
-
-/// A fluent `valid_at()` / `valid_during()` over a selection: each node is
-/// tested under its own type's bounds, resolved once per type.
-pub struct NodeValidityRequest<'g> {
-    graph: &'g DirGraph,
-    function: &'static str,
-    from: Option<String>,
-    to: Option<String>,
-    test: ValidityTest,
-    resolved: RefCell<Vec<(InternedKey, TemporalConfig)>>,
-}
-
-impl<'g> NodeValidityRequest<'g> {
-    /// `from` / `to` are the named bound properties; an unnamed one is read
-    /// from the type's declaration.
-    pub fn new(
-        graph: &'g DirGraph,
-        function: &'static str,
-        from: Option<&str>,
-        to: Option<&str>,
-        test: ValidityTest,
-    ) -> Self {
-        Self {
-            graph,
-            function,
-            from: from.map(str::to_string),
-            to: to.map(str::to_string),
-            test,
-            resolved: RefCell::new(Vec::new()),
-        }
-    }
-
-    /// Whether `node` passes, or the error for its type or its bounds.
-    pub fn keep(&self, node: NodeView<'_>) -> Result<bool, String> {
-        let config = self.config_for(&node)?;
-        match self.test {
-            ValidityTest::At(date) => node_is_temporally_valid(node, &config, &date),
-            ValidityTest::During(start, end) => node_overlaps_range(node, &config, &start, &end),
-        }
-    }
-
-    fn config_for(&self, node: &NodeView<'_>) -> Result<TemporalConfig, String> {
-        let key = node.node_type();
-        if let Some((_, config)) = self.resolved.borrow().iter().find(|(k, _)| *k == key) {
-            return Ok(config.clone());
-        }
-        let node_type = node.node_type_str(&self.graph.interner).to_string();
-        let config = node_request_config(
-            self.graph,
-            self.function,
-            &node_type,
-            self.from.as_deref(),
-            self.to.as_deref(),
-        )?;
-        self.resolved.borrow_mut().push((key, config.clone()));
-        Ok(config)
-    }
 }
 
 /// The bounds an explicit request on nodes of `node_type` evaluates under.

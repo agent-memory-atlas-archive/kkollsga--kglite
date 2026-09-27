@@ -1,29 +1,16 @@
 // src/graph/traversal.rs
 use crate::datatypes::values::FilterCondition;
 use crate::datatypes::values::Value;
+use crate::graph::core::fluent_filter::FluentFilter;
 use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::schema::{
-    CurrentSelection, DirGraph, InternedKey, SelectionOperation, SpatialConfig, TemporalConfig,
+    CurrentSelection, DirGraph, InternedKey, SelectionOperation, SpatialConfig,
 };
 use crate::graph::storage::{GraphRead, NodeView};
-use chrono::NaiveDate;
 use geo::geometry::Geometry;
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
 use std::collections::{HashMap, HashSet};
-
-/// Temporal filter for edge traversal.
-/// Carries multiple TemporalConfig entries to support shared connection type names
-/// across source types (e.g., HAS_LICENSEE used by Field, Licence, BusinessArrangement).
-pub enum TemporalEdgeFilter {
-    /// Point-in-time: valid_from <= date AND (valid_to IS NULL OR valid_to >= date)
-    At(Vec<TemporalConfig>, NaiveDate),
-    /// Range overlap: valid_from <= end AND (valid_to IS NULL OR valid_to >= start)
-    During(Vec<TemporalConfig>, NaiveDate, NaiveDate),
-    /// An explicit date on a relationship type nothing declares: the error,
-    /// raised on the first edge of the type the traversal visits.
-    Undeclared(String),
-}
 
 // ── Comparison-based traversal types ─────────────────────────────────────────
 
@@ -150,47 +137,30 @@ fn edge_matches_conditions(
     })
 }
 
-/// Whether a traversed edge passes the connection-property filter and the
-/// temporal filter. An unreadable temporal bound is an error naming the
-/// relationship's endpoints.
-fn edge_passes_filters(
+/// Whether a traversed hop passes the connection-property filter and the
+/// valid-time filter: the relationship and `far`, the node it reaches.
+fn hop_passes_filters(
     graph: &DirGraph,
     edge: &GraphEdgeRef<'_>,
-    connection_type: &str,
+    far: NodeIndex,
     filter_connection: Option<&HashMap<String, FilterCondition>>,
-    temporal_filter: Option<&TemporalEdgeFilter>,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<bool, String> {
-    let properties = &edge.weight().properties;
     if let Some(conn_filter) = filter_connection {
-        if !edge_matches_conditions(properties, conn_filter) {
+        if !edge_matches_conditions(&edge.weight().properties, conn_filter) {
             return Ok(false);
         }
     }
-    use crate::graph::features::temporal::{is_temporally_valid_multi, overlaps_range_multi};
-    let source = || graph.graph.node_type_of(edge.source());
-    let passes = match temporal_filter {
-        None => return Ok(true),
-        Some(TemporalEdgeFilter::At(configs, date)) => {
-            is_temporally_valid_multi(properties, configs, source(), date)
-        }
-        Some(TemporalEdgeFilter::During(configs, start, end)) => {
-            overlaps_range_multi(properties, configs, source(), start, end)
-        }
-        Some(TemporalEdgeFilter::Undeclared(message)) => return Err(message.clone()),
-    };
-    passes.map_err(|reason| {
-        let id = |idx| {
-            graph.graph.get_node_id(idx).map_or_else(
-                || "?".to_string(),
-                |v| crate::graph::core::value_operations::format_value_compact(&v),
-            )
-        };
-        format!(
-            "{connection_type} relationship from node '{}' to node '{}', {reason}",
-            id(edge.source()),
-            id(edge.target())
-        )
-    })
+    match valid_time {
+        None => Ok(true),
+        Some(filter) => filter.admits_hop(
+            graph,
+            edge.id(),
+            edge.weight().connection_type,
+            edge.source(),
+            far,
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -205,7 +175,7 @@ pub fn make_traversal(
     sort_target: Option<&Vec<(String, bool)>>,
     max_nodes: Option<usize>,
     new_level: Option<bool>,
-    temporal_filter: Option<&TemporalEdgeFilter>,
+    valid_time: Option<&FluentFilter>,
     target_type: Option<&[String]>,
 ) -> Result<(), String> {
     // Arena guard: disk-backed node/edge reads materialize into the query
@@ -251,7 +221,7 @@ pub fn make_traversal(
         && sort_target.is_none()
         && max_nodes.is_none()
         && create_new_level
-        && temporal_filter.is_none();
+        && valid_time.is_none_or(FluentFilter::is_empty);
 
     if use_fast_path {
         return make_traversal_fast(
@@ -276,7 +246,7 @@ pub fn make_traversal(
         sort_target,
         max_nodes,
         create_new_level,
-        temporal_filter,
+        valid_time.filter(|filter| !filter.is_empty()),
         target_type,
     )
 }
@@ -426,7 +396,7 @@ fn make_traversal_full(
     sort_target: Option<&Vec<(String, bool)>>,
     max_nodes: Option<usize>,
     create_new_level: bool,
-    temporal_filter: Option<&TemporalEdgeFilter>,
+    valid_time: Option<&FluentFilter>,
     target_type: Option<&[String]>,
 ) -> Result<(), String> {
     // Get source level
@@ -516,14 +486,8 @@ fn make_traversal_full(
                 }
             }
         };
-        let edge_passes = |edge: &GraphEdgeRef<'_>| {
-            edge_passes_filters(
-                graph,
-                edge,
-                &connection_type,
-                filter_connection,
-                temporal_filter,
-            )
+        let hop_passes = |edge: &GraphEdgeRef<'_>, far| {
+            hop_passes_filters(graph, edge, far, filter_connection, valid_time)
         };
 
         // Process edges based on direction. See make_traversal_fast for the
@@ -535,11 +499,8 @@ fn make_traversal_full(
                         g.edges_directed_filtered(source_node, Direction::Outgoing, Some(conn_key))
                     {
                         if edge.weight().connection_type == conn_key {
-                            if !edge_passes(&edge)? {
-                                continue;
-                            }
                             let t = edge.target();
-                            if type_ok(t) {
+                            if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
                             }
                         }
@@ -550,11 +511,8 @@ fn make_traversal_full(
                         g.edges_directed_filtered(source_node, Direction::Incoming, Some(conn_key))
                     {
                         if edge.weight().connection_type == conn_key {
-                            if !edge_passes(&edge)? {
-                                continue;
-                            }
                             let t = edge.source();
-                            if type_ok(t) {
+                            if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
                             }
                         }
@@ -566,11 +524,8 @@ fn make_traversal_full(
                         g.edges_directed_filtered(source_node, Direction::Outgoing, Some(conn_key))
                     {
                         if edge.weight().connection_type == conn_key {
-                            if !edge_passes(&edge)? {
-                                continue;
-                            }
                             let t = edge.target();
-                            if type_ok(t) {
+                            if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
                             }
                         }
@@ -579,11 +534,8 @@ fn make_traversal_full(
                         g.edges_directed_filtered(source_node, Direction::Incoming, Some(conn_key))
                     {
                         if edge.weight().connection_type == conn_key {
-                            if !edge_passes(&edge)? {
-                                continue;
-                            }
                             let t = edge.source();
-                            if type_ok(t) {
+                            if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
                             }
                         }
@@ -608,7 +560,7 @@ fn make_traversal_full(
         level.add_selection(Some(parent), processed_nodes);
     }
 
-    Ok(())
+    valid_time.map_or(Ok(()), FluentFilter::finish)
 }
 
 // ── Comparison-based traversal ───────────────────────────────────────────────
@@ -616,7 +568,12 @@ fn make_traversal_full(
 /// Dispatcher for comparison-based traversal methods.
 /// When `method` is specified, traverse() switches from edge-based to comparison-based mode:
 /// the first arg becomes the target node type, and matches are discovered via spatial,
-/// semantic, or clustering comparisons rather than pre-existing edges.
+/// semantic, or clustering comparisons rather than pre-existing edges. Under
+/// `valid_time` only visible target nodes match, before the sort and the
+/// limit; `cluster` groups the selection itself, which the chain already
+/// filtered.
+// One argument per fluent `compare()` option, as `make_traversal` takes its.
+#[allow(clippy::too_many_arguments)]
 pub fn make_comparison_traversal(
     graph: &DirGraph,
     selection: &mut CurrentSelection,
@@ -625,10 +582,47 @@ pub fn make_comparison_traversal(
     filter_target: Option<&HashMap<String, FilterCondition>>,
     sort_target: Option<&Vec<(String, bool)>>,
     max_nodes: Option<usize>,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<(), String> {
     // Arena guard: disk-backed node/edge reads materialize into the query
     // arena (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
+    let valid_time =
+        valid_time.filter(|filter| !filter.is_empty() && config.method_type != "cluster");
+    let Some(filter) = valid_time else {
+        return compare_by_method(
+            graph,
+            selection,
+            target_type,
+            config,
+            filter_target,
+            sort_target,
+            max_nodes,
+        );
+    };
+    compare_by_method(
+        graph,
+        selection,
+        target_type,
+        config,
+        filter_target,
+        None,
+        None,
+    )?;
+    filter.retain_level(graph, selection)?;
+    crate::graph::core::filtering::sort_and_limit_level(graph, selection, sort_target, max_nodes);
+    Ok(())
+}
+
+fn compare_by_method(
+    graph: &DirGraph,
+    selection: &mut CurrentSelection,
+    target_type: Option<&str>,
+    config: &MethodConfig,
+    filter_target: Option<&HashMap<String, FilterCondition>>,
+    sort_target: Option<&Vec<(String, bool)>>,
+    max_nodes: Option<usize>,
+) -> Result<(), String> {
     match config.method_type.as_str() {
         "contains" => {
             let tt = target_type

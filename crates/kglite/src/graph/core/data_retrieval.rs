@@ -1,5 +1,7 @@
 // src/graph/data_retrieval.rs
 use crate::datatypes::values::{format_value, Value};
+use crate::graph::core::fluent_filter::FluentFilter;
+use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::schema::{CurrentSelection, DirGraph, NodeInfo};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
@@ -26,18 +28,31 @@ pub struct LevelValues {
 /// The result is owned so the disk arena guard never escapes this bulk read.
 /// Using granular title reads and neighbour iterators also avoids retaining one
 /// materialized `NodeData`/`EdgeData` per selected node for the guard lifetime.
-pub fn get_node_degrees(graph: &DirGraph, selection: &CurrentSelection) -> Vec<(String, usize)> {
+/// Each selected node's title and relationship count — under `valid_time`,
+/// the relationships it admits to nodes it admits. Errors only on a bound the
+/// filter could not read.
+pub fn get_node_degrees(
+    graph: &DirGraph,
+    selection: &CurrentSelection,
+    valid_time: Option<&FluentFilter>,
+) -> Result<Vec<(String, usize)>, String> {
     // One guard covers the complete disk read pass; memory/mapped return None.
     let _arena_guard = graph.graph.begin_query();
-
-    selection
+    if let Some(filter) = valid_time.filter(|filter| !filter.is_empty()) {
+        let degrees = selection
+            .current_node_indices()
+            .filter_map(|node_idx| {
+                let title = node_title(graph, node_idx)?;
+                Some((title, filter.visible_degree(graph, node_idx)))
+            })
+            .collect();
+        filter.finish()?;
+        return Ok(degrees);
+    }
+    Ok(selection
         .current_node_indices()
         .filter_map(|node_idx| {
-            let title = GraphRead::get_node_title(&graph.graph, node_idx)?;
-            let title = match title {
-                Value::String(title) => title,
-                other => format!("{other:?}"),
-            };
+            let title = node_title(graph, node_idx)?;
             let degree = GraphRead::neighbors_directed(
                 &graph.graph,
                 node_idx,
@@ -52,7 +67,14 @@ pub fn get_node_degrees(graph: &DirGraph, selection: &CurrentSelection) -> Vec<(
                 .count();
             Some((title, degree))
         })
-        .collect()
+        .collect())
+}
+
+fn node_title(graph: &DirGraph, node_idx: NodeIndex) -> Option<String> {
+    Some(match GraphRead::get_node_title(&graph.graph, node_idx)? {
+        Value::String(title) => title,
+        other => format!("{other:?}"),
+    })
 }
 
 pub fn get_nodes(
@@ -436,13 +458,30 @@ pub struct LevelConnections {
     pub connections: Vec<ConnectionInfo>,
 }
 
+/// The relationships of the selected nodes, grouped by parent — under
+/// `valid_time`, those that are visible and reach a visible node. Errors
+/// only on a bound the filter could not read.
 pub fn get_connections(
     graph: &DirGraph,
     selection: &CurrentSelection,
     level_index: Option<usize>,
     indices: Option<&[usize]>,
     include_node_properties: bool,
-) -> Vec<LevelConnections> {
+    valid_time: Option<&FluentFilter>,
+) -> Result<Vec<LevelConnections>, String> {
+    let visible = |edge: &GraphEdgeRef<'_>, far| {
+        valid_time.is_none_or(|filter| {
+            filter
+                .admits_hop(
+                    graph,
+                    edge.id(),
+                    edge.weight().connection_type,
+                    edge.source(),
+                    far,
+                )
+                .unwrap_or(false)
+        })
+    };
     // Arena guard: disk-backed node/edge reads materialize into the query
     // arena (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
@@ -484,6 +523,7 @@ pub fn get_connections(
                     for edge_ref in graph
                         .graph
                         .edges_directed(node_idx, petgraph::Direction::Incoming)
+                        .filter(|e| visible(e, e.source()))
                     {
                         if let Some(source_node) = graph.node_view(edge_ref.source()) {
                             let edge_data = edge_ref.weight();
@@ -512,6 +552,7 @@ pub fn get_connections(
                     for edge_ref in graph
                         .graph
                         .edges_directed(node_idx, petgraph::Direction::Outgoing)
+                        .filter(|e| visible(e, e.target()))
                     {
                         if let Some(target_node) = graph.node_view(edge_ref.target()) {
                             let edge_data = edge_ref.weight();
@@ -583,7 +624,8 @@ pub fn get_connections(
             });
         }
     }
-    result
+    valid_time.map_or(Ok(()), FluentFilter::finish)?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -633,7 +675,7 @@ mod tests {
             .add_selection(None, vec![a, b, c, a]);
 
         assert_eq!(
-            get_node_degrees(&graph, &selection),
+            get_node_degrees(&graph, &selection, None).unwrap(),
             vec![
                 ("same".to_string(), 5),
                 ("same".to_string(), 2),

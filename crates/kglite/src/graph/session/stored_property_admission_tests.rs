@@ -590,7 +590,7 @@ fn extend_and_subset_resolve_against_the_source_view() {
         .get_level_mut(0)
         .unwrap()
         .add_selection(None, vec![NodeIndex::new(0), NodeIndex::new(1)]);
-    let subset = extract_subgraph(&source, &selection).unwrap();
+    let subset = extract_subgraph(&source, &selection, None).unwrap();
     assert_eq!(
         subset.graph.get_node_property(NodeIndex::new(0), key),
         Some(Value::String("Beta".into()))

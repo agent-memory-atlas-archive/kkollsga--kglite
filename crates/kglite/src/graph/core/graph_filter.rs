@@ -2,8 +2,12 @@
 //! a query may see. Valid time is its first client — a statement prefixed
 //! `FOR VALID_TIME AS OF <instant>` compiles a [`GuardTemplate`] per query
 //! scope at plan time, and the instant becomes a [`ValidTimeSelector`] once
-//! per execution, so a cached plan never carries an instant.
+//! per execution, so a cached plan never carries an instant. The fluent
+//! chain's date context resolves to the same filter
+//! (`core::fluent_filter`), through the same template builder
+//! ([`GuardTemplate::for_scope`]).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
@@ -16,7 +20,7 @@ use crate::graph::features::temporal::duplicate_ids;
 pub(crate) use crate::graph::features::temporal::endpoint_index::ResolvedFilter;
 use crate::graph::features::temporal::endpoint_index::{self, ElementMasks};
 use crate::graph::features::temporal::eval::{self, Instant, TemporalError};
-use crate::graph::features::temporal::{self, IntervalConvention, TemporalTarget};
+use crate::graph::features::temporal::{self, DeclarationInfo, IntervalConvention, TemporalTarget};
 use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::GraphRead;
 use crate::graph::TemporalContext;
@@ -98,6 +102,86 @@ impl fmt::Display for GuardTemplate {
     }
 }
 
+/// What one reader of the graph can reach: a Cypher scope's patterns and
+/// procedure calls, or one fluent step.
+#[derive(Default)]
+pub(crate) struct TemplateScope {
+    /// A node of any label: an unlabelled pattern node, a multi-hop
+    /// segment's intermediates, a fluent hop whose far node's type is open.
+    pub(crate) any_node: bool,
+    pub(crate) labels: BTreeSet<String>,
+    /// A relationship of any type.
+    pub(crate) any_rel: bool,
+    pub(crate) rel_types: BTreeSet<String>,
+}
+
+impl GuardTemplate {
+    /// The declared targets `scope` reaches, in lookup order. A node
+    /// declaration on label L governs every node carrying L, primary or
+    /// secondary, so once the graph has secondary labels a labelled scope
+    /// can reach any declared label. A reached relationship type holding
+    /// several unkeyed declarations is refused — which one applies would
+    /// depend on declaration order — with the fix, naming `surface` as what
+    /// it was reached under.
+    pub(crate) fn for_scope(
+        graph: &DirGraph,
+        declarations: &[DeclarationInfo],
+        scope: &TemplateScope,
+        surface: &str,
+    ) -> Result<Self, String> {
+        let all_nodes = scope.any_node || (graph.has_secondary_labels && !scope.labels.is_empty());
+        let mut template = GuardTemplate::default();
+        for info in declarations {
+            match &info.target {
+                TemporalTarget::Node(label) => {
+                    if all_nodes || scope.labels.contains(label) {
+                        template.nodes.push(NodeGuard {
+                            label: label.clone(),
+                            bounds: GuardBounds::of(&info.config),
+                        });
+                    }
+                }
+                TemporalTarget::Relationship {
+                    rel_type,
+                    source_type,
+                } => {
+                    if !(scope.any_rel || scope.rel_types.contains(rel_type)) {
+                        continue;
+                    }
+                    if info.ambiguous {
+                        return Err(format!(
+                            "relationship type '{rel_type}' holds several declarations with no \
+                             source type, so which one applies depends on declaration order; \
+                             remove them with CALL db.temporal.undeclare({{relationship: \
+                             '{rel_type}'}}) and declare one per source type with CALL \
+                             db.temporal.declare({{relationship: '{rel_type}', source_type: \
+                             ..., ...}}) before querying it under {surface}"
+                        ));
+                    }
+                    template.edges.push(EdgeGuard {
+                        rel_type: rel_type.clone(),
+                        rel_key: InternedKey::from_str(rel_type),
+                        source_type: source_type.clone(),
+                        source_type_key: source_type.as_deref().map(InternedKey::from_str),
+                        bounds: GuardBounds::of(&info.config),
+                    });
+                }
+            }
+        }
+        Ok(template)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.edges.is_empty()
+    }
+}
+
+/// Today's date in UTC — the instant Cypher's `date()` and the fluent
+/// default context both mean by "today".
+pub(crate) fn today_utc() -> chrono::NaiveDate {
+    chrono::Utc::now().date_naive()
+}
+
 /// Which instants a filter keeps: those valid at one instant, or those whose
 /// interval overlaps a range (the fluent two-date form).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,9 +197,7 @@ impl TryFrom<&TemporalContext> for ValidTimeSelector {
     /// has none.
     fn try_from(context: &TemporalContext) -> Result<Self, ()> {
         match context {
-            TemporalContext::Today => Ok(ValidTimeSelector::AsOf(Instant::Date(
-                chrono::Local::now().date_naive(),
-            ))),
+            TemporalContext::Today => Ok(ValidTimeSelector::AsOf(Instant::Date(today_utc()))),
             TemporalContext::At(d) => Ok(ValidTimeSelector::AsOf(Instant::Date(*d))),
             TemporalContext::During(a, b) => Ok(ValidTimeSelector::Overlap(
                 Instant::Date(*a),
@@ -166,7 +248,13 @@ pub(crate) struct ElementFilter {
     /// The first bound the evaluator could not read. The element is rejected
     /// and the execution raises this once it finishes.
     error: OnceLock<String>,
+    /// What that error names the filter by: the statement's context, or the
+    /// fluent step that asked.
+    prefix: Box<str>,
 }
+
+/// The error prefix a statement's context filter reports under.
+const CONTEXT_PREFIX: &str = "FOR VALID_TIME AS OF";
 
 #[derive(Debug)]
 struct EdgeRule {
@@ -225,7 +313,14 @@ impl ElementFilter {
             node_residual,
             edge_rules: edge_rules.into_boxed_slice(),
             error: OnceLock::new(),
+            prefix: CONTEXT_PREFIX.into(),
         })
+    }
+
+    /// This filter reporting an unreadable bound as `<prefix>: <element>, …`.
+    pub(crate) fn with_error_prefix(mut self, prefix: &str) -> Self {
+        self.prefix = prefix.into();
+        self
     }
 
     /// A filter that reads only `masks` — every declared target already
@@ -237,6 +332,7 @@ impl ElementFilter {
             node_residual: Box::default(),
             edge_rules: Box::default(),
             error: OnceLock::new(),
+            prefix: CONTEXT_PREFIX.into(),
         }
     }
 
@@ -480,7 +576,8 @@ impl ElementFilter {
         };
         outcome.unwrap_or_else(|err: TemporalError| {
             let message = format!(
-                "FOR VALID_TIME AS OF: {}, {}",
+                "{}: {}, {}",
+                self.prefix,
                 element(),
                 temporal::describe_bound_error(err, &bounds.from, &bounds.to)
             );

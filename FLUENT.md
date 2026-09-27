@@ -243,18 +243,20 @@ filter that reads it, naming the element. See `set_temporal()` and the
 ### Explicit filters
 
 ```python
-# Nodes valid at a date, under the type's declaration
-graph.select('Employee').valid_at('2024-01-15')
+# Nodes valid at a date, under the type's declaration. `select()` already
+# keeps only today's nodes of a declared type, so opt out of the context first.
+graph.select('Employee', temporal=False).valid_at('2024-01-15')
 
 # Name the bounds instead (an undeclared type defaults to date_from / date_to)
 graph.select('Contract').valid_at('2024-06-01',
     date_from_field='start_date',
     date_to_field='end_date')
 
-# Validity overlapping a range
-graph.select('Regulation').valid_during('2020-01-01', '2022-12-31')
+# Validity overlapping a range (a partial end date covers its whole period)
+graph.select('Regulation', temporal=False).valid_during('2020-01-01', '2022-12-31')
 
-# Relationships valid at a date (the relationship type must be declared)
+# Relationships valid at a date, to nodes valid then (the relationship type
+# must be declared)
 graph.select('Person').traverse('EMPLOYED_AT', at='2019-01-01')
 graph.select('Person').traverse('EMPLOYED_AT', during=('2018', '2020'))
 ```
@@ -274,20 +276,37 @@ relationship type.
 ```python
 g2010 = graph.date('2010')             # point in time
 g2010.select('Municipality')           # declared types: only valid nodes
-g2010.select('Person').traverse('EMPLOYED_AT')   # only valid relationships
+g2010.select('Person').traverse('EMPLOYED_AT')   # valid relationships to valid nodes
 
 graph.date('2010', '2015')             # anything valid during 2010-01-01 .. 2015-12-31
 graph.date('all')                      # no temporal filtering
 graph.select('Municipality', temporal=False)     # opt out for one call
+g2010.select('Person').traverse('EMPLOYED_AT', temporal=False)  # ...or one hop
 ```
 
-The context filters declared types only; undeclared types pass unfiltered.
-`traverse()` filters the relationships, not the target nodes by their own
-declaration — chain `.valid_at()`, which reads the context's date:
+The default context is today, the UTC date — the day Cypher's `date()` reads.
+The context is the filter a `FOR VALID_TIME AS OF` statement at that date runs
+under, so a fluent chain and the Cypher pattern it spells return the same
+nodes:
 
-```python
-g2010.select('Person').traverse('EMPLOYED_AT').valid_at()
-```
+- a node is kept only when it is valid under **every declared label it
+  carries** — its primary type's declaration and any secondary label's;
+- a relationship is judged by the declaration keyed on its own source's type,
+  else the type's unkeyed one, and `traverse()` keeps the node it reaches only
+  when that node is valid too;
+- `expand()`, `where_connected()`, `where_orphans()`, `degrees()`,
+  `relationships()`, `compare()`, `to_subgraph()` and `save_subset()`
+  follow, count and copy only valid relationships and nodes;
+- `valid_at()` / `valid_during()` apply the same label rule: the primary
+  type under the named or declared bounds, every other declared label under
+  its declaration;
+- `select(limit=…)` counts the nodes that pass;
+- a relationship type holding several unkeyed declarations (a graph saved
+  before declarations were keyed by source type) is refused — re-declare them
+  per `source_type`.
+
+Undeclared types pass unfiltered. `valid_at()` with no date reads the context:
+one day, or overlap with a `date(a, b)` range.
 
 ---
 

@@ -61,17 +61,21 @@ mod edge_embedding_durable_recovery_tests;
 // `dir_graph` and is re-exported by `schema` too.
 pub use dir_graph::DirGraph;
 
-/// Temporal context for automatic date filtering on select /
-/// traverse / collect. Set via `KnowledgeGraph::date()` (Python:
-/// `g.date(...)`). Carried through clone (fluent API chaining).
+/// The fluent cursor's valid-time context, set by `date()` and carried
+/// through the chain. Every fluent step that reads declared elements —
+/// `select`, `traverse`, `expand`, `where_connected`, `where_orphans`,
+/// `degrees`, `relationships`, `compare`, `to_subgraph`, `save_subset` —
+/// resolves it into
+/// the filter a
+/// `FOR VALID_TIME AS OF` statement runs under (`api::fluent::FluentFilter`).
 #[derive(Clone, Debug, Default)]
 pub enum TemporalContext {
-    /// Use today's date (default). Resolved at query time.
+    /// Today's UTC date (the default), resolved at each step.
     #[default]
     Today,
-    /// Point-in-time: valid_from <= date AND (valid_to IS NULL OR valid_to >= date).
+    /// Valid at one day, under each declaration's convention.
     At(chrono::NaiveDate),
-    /// Range overlap: valid_from <= end AND (valid_to IS NULL OR valid_to >= start).
+    /// Valid at some point of `[start, end]`.
     During(chrono::NaiveDate, chrono::NaiveDate),
     /// No temporal filtering — show everything regardless of
     /// validity dates.

@@ -188,6 +188,44 @@ class TestLegacyFilesLoad:
         )
         assert [d["ambiguous"] for d in _declarations(g) if d["kind"] == "relationship"] == [False]
 
+    def test_a_fluent_date_context_refuses_the_ambiguous_type_as_cypher_does(self, tmp_path):
+        """Which of two unkeyed declarations applies would depend on the order
+        they were added in, so the fluent context refuses the type exactly as
+        `FOR VALID_TIME AS OF` does, naming the per-source re-declare. It used
+        to pick the first declaration whose properties an edge carried."""
+        g = _load_copy("distinct_duplicates", tmp_path)
+        refusal = (
+            r"relationship type 'HAS_LICENSEE' holds several declarations with no source type, so which one "
+            r"applies depends on declaration order; remove them with CALL db\.temporal\.undeclare\("
+            r"\{relationship: 'HAS_LICENSEE'\}\) and declare one per source type with CALL "
+            r"db\.temporal\.declare\(\{relationship: 'HAS_LICENSEE', source_type: \.\.\., \.\.\.\}\) "
+            r"before querying it under "
+        )
+        fields = g.date("2008-06-01").select("Field")
+        with pytest.raises(kglite.ArgumentError, match=refusal):
+            fields.traverse("HAS_LICENSEE")
+        with pytest.raises(kglite.ArgumentError, match=refusal):
+            g.select("Field", temporal=False).traverse("HAS_LICENSEE", at="2008-06-01")
+        with pytest.raises(kglite.CypherExecutionError, match=refusal):
+            g.cypher(
+                "FOR VALID_TIME AS OF date('2008-06-01') MATCH (:Field)-[:HAS_LICENSEE]->(c) RETURN c.title"
+            ).to_list()
+        # A per-source declaration alone leaves the unkeyed pair, and the refusal.
+        g.cypher(
+            "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field', "
+            "from: 'lic_from', to: 'lic_to', convention: 'closed'})"
+        )
+        with pytest.raises(kglite.ArgumentError, match=refusal):
+            g.date("2008-06-01").select("Field").traverse("HAS_LICENSEE")
+        # The escape hatch reads no declaration: both fields' licensees.
+        assert fields.traverse("HAS_LICENSEE", temporal=False).len() == 2
+        # The fix the message names: undeclare the unkeyed pair (the keyed one
+        # just added stays), then declare per source type.
+        g.cypher("CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE'})")
+        # A cursor holds the graph it was taken from; take a fresh one.
+        fields = g.date("2008-06-01").select("Field")
+        assert sorted(n["title"] for n in fields.traverse("HAS_LICENSEE").collect()) == ["Globex"]
+
 
 @pytest.mark.parity
 @pytest.mark.parametrize("mode", ("memory", "mapped", "disk"))

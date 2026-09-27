@@ -2,9 +2,11 @@
 //! Subgraph extraction and selection expansion operations
 
 use crate::datatypes::values::Value;
+use crate::graph::core::fluent_filter::FluentFilter;
 use crate::graph::schema::{CurrentSelection, DirGraph, EdgeData, SchemaInstall};
 use crate::graph::storage::{GraphRead, GraphWrite};
 use petgraph::graph::{EdgeIndex, NodeIndex};
+use petgraph::Direction;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -12,12 +14,19 @@ use std::sync::Arc;
 ///
 /// This function takes all currently selected nodes and expands the selection
 /// to include all nodes within `hops` distance from any selected node.
-/// The expansion considers edges in both directions (undirected).
+/// The expansion considers edges in both directions (undirected). Under
+/// `valid_time` a hop is followed only when the relationship and the node it
+/// reaches are visible.
 pub fn expand_selection(
     graph: &DirGraph,
     selection: &mut CurrentSelection,
     hops: usize,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<(), String> {
+    let valid_time = valid_time.filter(|filter| !filter.is_empty());
+    // Arena guard: the filtered walk reads relationships, which disk mode
+    // materialises into the query arena (protocol in disk/graph.rs).
+    let _arena_guard = graph.graph.begin_query();
     let level_idx = selection.get_level_count().saturating_sub(1);
     let level = selection
         .get_level(level_idx)
@@ -33,11 +42,27 @@ pub fn expand_selection(
         let mut next_frontier = HashSet::new();
 
         for &node in &frontier {
-            // Add all neighbors (both directions)
-            for neighbor in g.neighbors_undirected(node) {
-                // Only add if not already visited
-                if visited.insert(neighbor) {
-                    next_frontier.insert(neighbor);
+            let Some(filter) = valid_time else {
+                for neighbor in g.neighbors_undirected(node) {
+                    if visited.insert(neighbor) {
+                        next_frontier.insert(neighbor);
+                    }
+                }
+                continue;
+            };
+            let outgoing = g
+                .edges_directed(node, Direction::Outgoing)
+                .map(|e| (e.target(), e));
+            let incoming = g
+                .edges_directed(node, Direction::Incoming)
+                .map(|e| (e.source(), e));
+            for (far, edge) in outgoing.chain(incoming) {
+                let conn = edge.weight().connection_type;
+                if !visited.contains(&far)
+                    && filter.admits_hop(graph, edge.id(), conn, edge.source(), far)?
+                {
+                    visited.insert(far);
+                    next_frontier.insert(far);
                 }
             }
         }
@@ -58,23 +83,42 @@ pub fn expand_selection(
     level_mut.selections.clear();
     level_mut.add_selection(None, visited.into_iter().collect());
 
-    Ok(())
+    valid_time.map_or(Ok(()), FluentFilter::finish)
 }
 
 /// Extract a subgraph containing only the selected nodes and edges between them.
 ///
 /// This creates an independent copy of the graph containing only the nodes
-/// in the current selection and all edges that connect those nodes.
+/// in the current selection and all edges that connect those nodes — under
+/// `valid_time`, those whose own interval is visible (the nodes are the
+/// selection, which the chain's steps already filtered).
 pub fn extract_subgraph(
     source: &DirGraph,
     selection: &CurrentSelection,
+    valid_time: Option<&FluentFilter>,
 ) -> Result<DirGraph, String> {
     let level_idx = selection.get_level_count().saturating_sub(1);
     let level = selection
         .get_level(level_idx)
         .ok_or_else(|| "No active selection level".to_string())?;
     let nodes = level.get_all_nodes();
-    copy_induced_subgraph(source, &nodes, |_| true).map(|(graph, _)| graph)
+    let Some(filter) = valid_time.filter(|filter| !filter.is_empty()) else {
+        return copy_induced_subgraph(source, &nodes, |_| true).map(|(graph, _)| graph);
+    };
+    let visible = |edge: EdgeIndex| {
+        let (Some((from, _)), Some(weight)) = (
+            source.graph.edge_endpoints(edge),
+            source.graph.edge_weight(edge),
+        ) else {
+            return false;
+        };
+        filter
+            .admits_edge(source, edge, weight.connection_type, from)
+            .unwrap_or(false)
+    };
+    let (graph, _) = copy_induced_subgraph(source, &nodes, visible)?;
+    filter.finish()?;
+    Ok(graph)
 }
 
 /// A fresh graph holding `nodes` (copied in the order given) and every

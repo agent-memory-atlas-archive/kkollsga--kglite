@@ -41,7 +41,7 @@
       "classification": "test"
     },
     {
-      "identity": "crates/kglite-py/src/graph/mod.rs::fn:compare_inner:pub(crate) fn compare_inner( inner: &Arc<DirGraph>, selection: &mut CowSelection, target_type: Option<&str>, config: &kglite_core::api::fluent::MethodConfig, conditions: Option<&HashMap<String, FilterCondition>>, sort_fields: Option<&Vec<(String, bool)>>, limit: Option<usize>, estimated: usize, ) ->::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/mod.rs::fn:compare_inner:pub(crate) fn compare_inner( inner: &Arc<DirGraph>, selection: &mut CowSelection, target_type: Option<&str>, config: &kglite_core::api::fluent::MethodConfig, conditions: Option<&HashMap<String, FilterCondition>>, sort_fields: Option<&Vec<(String, bool)>>, limit: Option<usize>, estimated: usize, vali::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -338,6 +338,10 @@
     },
     {
       "identity": "crates/kglite/src/graph/core/traversal.rs::fn:from_components:pub fn from_components( method_type: String, resolve_str: Option<String>, max_distance_m: Option<f64>, geometry_field: Option<String>, property: Option<String>, threshold: Option<f64>, metric: Option<String>, algorithm: Option<String>, features: Option<Vec<String>>, k: Option<usize>, eps: Option<f64::clippy::too_many_arguments",
+      "classification": "transitional"
+    },
+    {
+      "identity": "crates/kglite/src/graph/core/traversal.rs::fn:make_comparison_traversal:pub fn make_comparison_traversal( graph: &DirGraph, selection: &mut CurrentSelection, target_type: Option<&str>, config: &MethodConfig, filter_target: Option<&HashMap<String, FilterCondition>>, sort_target: Option<&Vec<(String, bool)>>, max_nodes: Option<usize>, valid_time: Option<&FluentFilter>, ) ::clippy::too_many_arguments",
       "classification": "transitional"
     },
     {

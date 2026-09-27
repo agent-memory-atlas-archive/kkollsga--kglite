@@ -2712,12 +2712,15 @@ class KnowledgeGraph:
     ) -> KnowledgeGraph:
         """Select all nodes of a given type.
 
-        When a temporal config exists for this node type (via ``set_temporal()``
-        or ``CALL db.temporal.declare``), nodes are auto-filtered to those valid
-        at the reference date (today or ``date()`` context), under the
-        declaration's convention: ``'half_open'`` excludes the ``to`` day
-        (a datetime ``to`` excludes only from its own time, so a ``to`` after
-        midnight leaves its day valid). Pass ``temporal=False`` to include all nodes.
+        Under the cursor's date context (today in UTC, or what ``date()``
+        set) a node is kept only when it is valid under every declared label
+        it carries — its primary type's declaration and any secondary label's
+        (``set_temporal()`` or ``CALL db.temporal.declare``) — the rule
+        ``FOR VALID_TIME AS OF`` applies to ``MATCH (n:node_type)``. Each
+        declaration's convention applies: ``'half_open'`` excludes the ``to``
+        day (a datetime ``to`` excludes only from its own time, so a ``to``
+        after midnight leaves its day valid). *limit* counts the nodes that
+        pass. Pass ``temporal=False`` to include all nodes.
 
         Args:
             node_type: The node type to select (e.g. ``'Person'``).
@@ -2738,7 +2741,8 @@ class KnowledgeGraph:
         Raises:
             ValueError: If ``temporal=True`` and *node_type* has no temporal
                 configuration, or a node's validity bound is not a date, a
-                datetime or an ISO date string.
+                datetime or an ISO date string (the message starts
+                ``select():`` and names the node and the property).
         """
         ...
 
@@ -2818,6 +2822,9 @@ class KnowledgeGraph:
     ) -> KnowledgeGraph:
         """Filter nodes based on whether they have connections.
 
+        Under the cursor's date context only valid relationships to valid
+        nodes count, and an empty selection is seeded with valid nodes only.
+
         Args:
             include_orphans: If ``True``, keep only orphan (disconnected) nodes.
                 If ``False``, keep only connected nodes. Default ``True``.
@@ -2826,6 +2833,12 @@ class KnowledgeGraph:
 
         Returns:
             A new KnowledgeGraph with the filtered selection.
+
+        Raises:
+            ArgumentError: If a relationship type in the graph holds several
+                unkeyed validity declarations (under any date context,
+                including the default, today), or a validity bound the step
+                reads is not a date, a datetime or an ISO date string.
         """
         ...
 
@@ -2885,7 +2898,9 @@ class KnowledgeGraph:
         """Filter nodes that have at least one connection of the given type.
 
         Keeps only nodes from the current selection that participate in
-        edges of the specified type and direction.
+        edges of the specified type and direction. Under the cursor's date
+        context the relationship and the node it reaches must both be valid,
+        as a ``FOR VALID_TIME AS OF`` pattern requires.
 
         Args:
             connection_type: Edge type to check (e.g. ``'KNOWS'``).
@@ -2895,7 +2910,10 @@ class KnowledgeGraph:
             A new KnowledgeGraph with only connected nodes.
 
         Raises:
-            ArgumentError: If *direction* is not one of the valid values.
+            ArgumentError: If *direction* is not one of the valid values, if
+                *connection_type* holds several unkeyed validity declarations
+                under a date context, or if a validity bound it reads is not
+                a date, a datetime or an ISO date string.
         """
         ...
 
@@ -2909,7 +2927,10 @@ class KnowledgeGraph:
 
         Keeps nodes where ``date_from <= date <= date_to``.
 
-        Each node is filtered under its own type's bounds. A field name left
+        A node is kept only when it is valid under every declared label it
+        carries, the rule a ``FOR VALID_TIME AS OF`` statement applies: its
+        primary type under the bounds below, and each other declared label
+        (a secondary label) under that label's declaration. A field name left
         unspecified comes from the type's temporal config (``set_temporal()``
         or ``CALL db.temporal.declare``), whose convention then applies: under
         ``'half_open'`` the ``to`` day is excluded (a datetime ``to`` excludes
@@ -2917,7 +2938,10 @@ class KnowledgeGraph:
         valid). On an undeclared type it defaults to ``date_from`` /
         ``date_to`` and the interval reads closed. Named fields that match the
         declaration follow its convention too; any other pair reads closed.
-        If *date* is not specified, uses the ``date()`` context or today.
+        If *date* is not specified, the ``date()`` context is the test: a
+        single day keeps the nodes valid then, a range (``date(a, b)``) keeps
+        those whose validity overlaps it, and today (UTC) under the default
+        context or ``date('all')``.
 
         Args:
             date: A date string (``'2024'``, ``'2024-01'``, ``'2024-01-15'``,
@@ -2925,7 +2949,7 @@ class KnowledgeGraph:
                 ``'2024-01-15T12:00'``), a ``datetime.date`` or a
                 ``datetime.datetime``. A datetime is taken at its date (an
                 aware one in UTC) — the fluent filters work at date grain.
-                Defaults to the ``date()`` context or today.
+                Defaults to the ``date()`` context, else today (UTC).
             date_from_field: Name of the start-date property. Auto-detected if temporal config exists.
             date_to_field: Name of the end-date property. Auto-detected if temporal config exists.
 
@@ -2960,7 +2984,9 @@ class KnowledgeGraph:
         Args:
             start_date: Start of the query range — a string, ``datetime.date``
                 or ``datetime.datetime``, read as :meth:`valid_at` reads *date*.
-            end_date: End of the query range, likewise.
+            end_date: End of the query range, likewise. A partial date covers
+                its whole period, as in ``date(a, b)``: ``'2002'`` ends on
+                2002-12-31, ``'2002-06'`` on 2002-06-30.
             date_from_field: Name of the start-date property. Auto-detected if temporal config exists.
             date_to_field: Name of the end-date property. Auto-detected if temporal config exists.
 
@@ -3694,6 +3720,10 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Get the relationships of the selected nodes.
 
+        Under the cursor's date context only the valid relationships to
+        valid nodes are listed, as a ``FOR VALID_TIME AS OF`` pattern sees
+        them.
+
         Args:
             indices: Specific node indices to query.
             parent_info: Include parent info in output.
@@ -3705,6 +3735,12 @@ class KnowledgeGraph:
 
             For parent, selected-node, and endpoint key behavior, see
             :ref:`presentation-dictionary-keys`.
+
+        Raises:
+            ArgumentError: If a relationship type in the graph holds several
+                unkeyed validity declarations (under any date context,
+                including the default, today), or a validity bound the step
+                reads is not a date, a datetime or an ISO date string.
         """
         ...
 
@@ -3866,12 +3902,16 @@ class KnowledgeGraph:
                 ``datetime.date`` or a ``datetime.datetime``, read as
                 :meth:`valid_at` reads its date) on the relationships, under
                 the relationship type's declared interval.
-            during: Temporal range filter (e.g. ``('2000', '2010')``), likewise.
-            temporal: Override temporal filtering. ``False`` = disable.
-                Temporal filtering — *at*, *during* or the ``date()`` context
-                — applies to the relationships only; the target nodes are not
-                filtered by their own declaration. Chain ``.valid_at()`` for
-                that.
+            during: Temporal range filter (e.g. ``('2000', '2010')``), likewise;
+                a partial end date covers its whole period (``'2010'`` ends
+                on 2010-12-31).
+            temporal: Override temporal filtering. ``False`` = disable, for
+                the relationships and the target nodes alike. Temporal
+                filtering — *at*, *during* or the ``date()`` context — keeps a
+                relationship valid under its own source's declaration (else
+                the type's unkeyed one) and a target node valid under every
+                declared label it carries, as ``FOR VALID_TIME AS OF`` does
+                for ``MATCH (a)-[:connection_type]->(b)``.
             level_index: Source level in the hierarchy (advanced).
             new_level: Add targets as new hierarchy level. Default ``True``.
 
@@ -3881,7 +3921,10 @@ class KnowledgeGraph:
         Raises:
             ArgumentError: If *at* or *during* is given for a relationship type
                 with no declared validity interval (raised when the traversal
-                reaches an edge of that type), rather than keeping every edge.
+                reaches an edge of that type), rather than keeping every edge;
+                if the type holds several unkeyed declarations (re-declare
+                them per ``source_type``); or if a validity bound it reads is
+                not a date, a datetime or an ISO date string.
 
         Examples::
 
@@ -3924,6 +3967,10 @@ class KnowledgeGraph:
     ) -> KnowledgeGraph:
         """Compare selected nodes against a target type using spatial, semantic,
         or clustering methods.
+
+        Under the cursor's date context only target nodes valid under every
+        declared label they carry can match, before *sort* and *limit*;
+        clustering groups the selection itself.
 
         Args:
             target_type: Node type to compare against (e.g. ``'Well'``).
@@ -6538,6 +6585,9 @@ class KnowledgeGraph:
     def degrees(self) -> dict[str, int]:
         """Get connection count for each selected node.
 
+        Under the cursor's date context only valid relationships to valid
+        nodes are counted.
+
         Returns:
             ``{node_title: degree}``.
 
@@ -6546,7 +6596,11 @@ class KnowledgeGraph:
                 unique — not even within one node type — so keying by title
                 would drop a node's degree with no signal. Use
                 :meth:`degree_centrality`, whose ResultView carries one row
-                per node with its ``type`` and ``id``.
+                per node with its ``type`` and ``id``. Also raised when a
+                relationship type in the graph holds several unkeyed validity
+                declarations (under any date context, including the default,
+                today), or a validity bound the step reads is not a date, a
+                datetime or an ISO date string.
         """
         ...
 
@@ -6709,22 +6763,39 @@ class KnowledgeGraph:
     def expand(self, hops: Optional[int] = None) -> KnowledgeGraph:
         """Expand the selection by *N* hops (breadth-first, undirected).
 
+        Under the cursor's date context a hop is followed only when the
+        relationship and the node it reaches are valid.
+
         Args:
             hops: Number of hops to expand. Default ``1``.
 
         Returns:
             A new KnowledgeGraph with the expanded selection.
+
+        Raises:
+            ArgumentError: If a relationship type in the graph holds several
+                unkeyed validity declarations (under any date context,
+                including the default, today), or a validity bound the step
+                reads is not a date, a datetime or an ISO date string.
         """
         ...
 
     def to_subgraph(self) -> KnowledgeGraph:
         """Extract selected nodes into a new independent graph.
 
-        The new graph contains only selected nodes and the edges between them.
+        The new graph contains only selected nodes and the edges between them
+        — under the cursor's date context, only the edges valid under their
+        own declaration (the nodes are the selection the chain kept).
         Like every other derived handle it carries this graph's captured query
         defaults (``set_default_row_limit``, ``set_default_timeout``,
         ``set_default_max_work_units``); the embedder is not carried — register
         one with :func:`set_embedder` if the subgraph needs it.
+
+        Raises:
+            ArgumentError: If a relationship type in the graph holds several
+                unkeyed validity declarations (under any date context,
+                including the default, today), or a validity bound the step
+                reads is not a date, a datetime or an ISO date string.
         """
         ...
 
@@ -6744,11 +6815,20 @@ class KnowledgeGraph:
         A ``.kgl`` is a file, never a disk-mode directory, so
         ``storage='disk'`` is refused on either entry point; build a disk graph
         with ``kglite.open(dir, storage='disk')`` and ingest into it. All edges
-        between selected nodes are included; node and edge properties
-        round-trip byte-for-byte.
+        between selected nodes are included — under the cursor's date
+        context, only those valid under their own declaration, exactly as
+        :meth:`to_subgraph` keeps them; node and edge properties round-trip
+        byte-for-byte.
 
         Args:
             path: Destination path for the subgraph file.
+
+        Raises:
+            ArgumentError: If a relationship type in the graph holds several
+                unkeyed validity declarations (under any date context,
+                including the default, today), or a validity bound the step
+                reads is not a date, a datetime or an ISO date string.
+            OSError: If the file cannot be written.
 
         Example:
             >>> kg.select("Article").expand(hops=1).save_subset(
@@ -7643,8 +7723,9 @@ class KnowledgeGraph:
         """Declare which two properties bound a node type's or relationship type's validity interval.
 
         After the declaration, ``select()`` auto-filters temporal nodes and
-        ``traverse()`` auto-filters temporal relationships to "current" (today
-        or the ``date()`` context), and a bulk load onto a declared
+        ``traverse()`` auto-filters temporal relationships and the nodes they
+        reach to "current" (today in UTC, or the ``date()`` context), and a
+        bulk load onto a declared
         relationship type keeps each period between the same endpoints as its
         own relationship (see :meth:`add_relationships`). This is
         ``CALL db.temporal.declare`` with a defaulted convention: both
@@ -7698,22 +7779,25 @@ class KnowledgeGraph:
     ) -> KnowledgeGraph:
         """Set the temporal context for auto-filtering.
 
-        Returns a new KnowledgeGraph. All subsequent ``select()`` and
-        ``traverse()`` calls on the returned graph use this context for
-        temporal filtering, on declared types only (``set_temporal()``,
-        ``CALL db.temporal.declare`` or a loader's ``validFrom``/``validTo``):
-        ``select()`` keeps the nodes valid under their type's declaration;
-        ``traverse()`` keeps the relationships valid under the relationship
-        type's declaration, and does **not** filter the target nodes by their
-        own — chain ``.valid_at()`` (which reads this context's date) to do
-        that. Undeclared types pass unfiltered.
+        Returns a new KnowledgeGraph. Every later step that reads declared
+        elements (``set_temporal()``, ``CALL db.temporal.declare`` or a
+        loader's ``validFrom``/``validTo``) runs under the filter a
+        ``FOR VALID_TIME AS OF`` statement at this date runs under:
+        ``select()`` keeps the nodes valid under every declared label they
+        carry; ``traverse()``, ``expand()``, ``where_connected()``,
+        ``where_orphans()``, ``degrees()`` and ``relationships()`` follow or
+        count only valid relationships to valid nodes;
+        ``compare()`` matches only valid targets and ``to_subgraph()`` /
+        ``save_subset()`` copy only valid relationships. Undeclared types pass unfiltered. A
+        relationship type holding several unkeyed declarations is refused,
+        as Cypher refuses it.
 
         Modes:
             - ``date('2013')`` — point-in-time (valid at 2013-01-01).
             - ``date('2010', '2015')`` — range: include everything valid at
               any point during 2010-01-01 to 2015-12-31 (overlap check).
             - ``date('all')`` — disable temporal filtering entirely.
-            - ``date()`` — reset to today (default).
+            - ``date()`` — reset to today, the UTC date (default).
 
         Args:
             date_str: A date string (``'2013'``, ``'2013-06'``,

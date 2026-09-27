@@ -8,6 +8,7 @@
 pub mod calculations;
 pub mod data_retrieval;
 pub mod filtering;
+pub mod fluent_filter;
 pub(crate) mod graph_filter;
 pub mod iterators;
 pub mod membership;

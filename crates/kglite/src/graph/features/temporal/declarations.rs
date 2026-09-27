@@ -2,10 +2,11 @@
 //! label's or relationship type's validity interval, and under which
 //! convention.
 //!
-//! Relationship configs are kept as an ordered list per type because the
-//! fluent `traverse()` picks the first config whose properties an edge carries
-//! (see [`super::is_temporally_valid_multi`]); insertion order is therefore
-//! part of the answer. How the store is saved and loaded is `persist.rs`.
+//! Relationship configs are kept as an ordered list per type: a legacy type
+//! holding several unkeyed configs (which every valid-time filter refuses as
+//! ambiguous) is saved back in the order it was read, and a bulk load's merge
+//! key reads the first config a row carries ([`merge_start_key`]). How the
+//! store is saved and loaded is `persist.rs`.
 
 use std::collections::HashMap;
 
@@ -153,6 +154,15 @@ fn same_interval(a: &TemporalConfig, b: &TemporalConfig) -> bool {
 }
 
 impl TemporalDeclarations {
+    /// Whether nothing is declared — every temporal filter is then empty.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.edges.values().all(Vec::is_empty)
+    }
+
+    pub(crate) fn has_node_declarations(&self) -> bool {
+        !self.nodes.is_empty()
+    }
+
     pub(crate) fn node(&self, label: &str) -> Option<&TemporalConfig> {
         self.nodes.get(label)
     }
