@@ -142,6 +142,7 @@ struct LandedPropertyWrite<'a> {
 ///   `ConstraintViolationError` the constraint raises instead.
 fn enforce_schema_lock(
     graph: &DirGraph,
+    node_idx: NodeIndex,
     node_type: &str,
     property: &str,
     value: &Value,
@@ -155,7 +156,11 @@ fn enforce_schema_lock(
         value,
         &graph.node_type_metadata,
         graph.schema_definition.as_ref(),
-        &graph.temporal,
+        &|property| {
+            crate::graph::features::temporal::declarations::node_names_bound(
+                graph, node_idx, property,
+            )
+        },
     )?;
     if graph.property_type_for(node_type, property).is_none() {
         crate::graph::mutation::validation::validate_property_type(
@@ -262,7 +267,7 @@ pub(super) fn apply_node_property_set<'a>(
     // write whitelist.
     enforce_write_scope(graph, node_type_str)?;
 
-    enforce_schema_lock(graph, node_type_str, property, &value)?;
+    enforce_schema_lock(graph, node_idx, node_type_str, property, &value)?;
 
     // Declared structured shapes (tables.rs): checked pre-write with the
     // indexed error path (`line_items[3].qty: expected integer`).

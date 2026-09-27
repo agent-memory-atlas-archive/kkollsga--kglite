@@ -236,6 +236,29 @@ class TestOpenEndedTypes:
         with pytest.raises(kglite.KgError, match="Unknown property 'valid_to' on Name"):
             names.cypher(self.CLOSED_VERSION)
 
+    @pytest.mark.parametrize("locked", [False, True], ids=["open", "locked"])
+    @pytest.mark.parametrize(
+        "statement",
+        [
+            "CREATE (:Doc:Ver {id: 2, vf: date('1990-01-01'), vt: date('1999-12-31')})",
+            "MERGE (:Doc:Ver {id: 2, vf: date('1990-01-01'), vt: date('1999-12-31')})",
+            "MATCH (n:Ver {id: 1}) SET n.vt = date('2010-01-01')",
+            "MATCH (n:Doc:Ver {vt: date('2010-01-01')}) RETURN n",
+        ],
+        ids=["create", "merge", "set", "read-pattern"],
+    )
+    def test_a_secondary_label_bound_is_known(self, statement, locked):
+        """A declaration on a secondary label names a bound of every node that
+        carries the label. Regression: the locked checks and the read-pattern
+        check read only the primary type ("Unknown property 'vt' on Doc")."""
+        g = kglite.KnowledgeGraph()
+        g.cypher("CREATE (:Doc {id: 1, vf: date('2000-01-01')})")
+        g.cypher("MATCH (n:Doc) SET n:Ver")
+        _declare(g, "{node: 'Ver', from: 'vf', to: 'vt', convention: 'closed'}")
+        if locked:
+            g.lock_schema()
+        g.cypher(statement)
+
     def test_a_relationship_bound_stays_outside_the_guard(self):
         """Relationship properties are not typo-guarded at all; a declared
         absent `to` on a relationship type is written by CREATE as before."""

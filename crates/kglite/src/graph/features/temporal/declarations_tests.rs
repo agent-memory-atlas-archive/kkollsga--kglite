@@ -431,20 +431,61 @@ fn a_locked_graph_can_set_its_declared_to() {
     .unwrap();
 }
 
-/// A bound declared on a secondary label is known on a node created with that
-/// label, though the guard reads the primary type.
+/// A bound declared on a secondary label is known on a node that carries that
+/// label, though the guards read the primary type — on every route that can
+/// write it, open schema or locked, and in a read pattern naming both labels.
+/// Regression: the locked checks and the read-pattern check consulted only the
+/// primary type ("Unknown property 'vt' on Doc").
 #[test]
-fn a_secondary_label_bound_is_known_on_create() {
+fn a_secondary_label_bound_is_known_wherever_the_label_is() {
+    let mut refused = Vec::new();
+    for locked in [false, true] {
+        for statement in [
+            "CREATE (:Doc:Ver {id: 2, vf: date('1990-01-01'), vt: date('1999-12-31')})",
+            "MERGE (:Doc:Ver {id: 2, vf: date('1990-01-01'), vt: date('1999-12-31')})",
+            "MATCH (n:Ver {id: 1}) SET n.vt = date('2010-01-01')",
+            "MATCH (n:Doc {id: 1}) SET n.vt = date('2010-01-01')",
+            "MATCH (n:Doc:Ver {vt: date('2010-01-01')}) RETURN n",
+        ] {
+            let mut g = graph(&[
+                "CREATE (:Doc {id: 1, vf: date('2000-01-01')})",
+                "MATCH (n:Doc) SET n:Ver",
+            ]);
+            declare(&mut g, &node("Ver"), "vf", "vt", Closed).unwrap();
+            g.schema_locked = locked;
+            if let Err(e) = attempt(&mut g, statement) {
+                refused.push(format!("locked={locked} {statement}: {e}"));
+            }
+        }
+    }
+    assert!(refused.is_empty(), "{}", refused.join("\n"));
+}
+
+/// The secondary-label allowance is the declared label's, not every label's:
+/// a `Doc` node without `Ver` still has no `vt`.
+#[test]
+fn a_secondary_label_bound_is_not_known_on_a_node_without_the_label() {
     let mut g = graph(&[
-        "CREATE (:Doc {id: 1, vf: date('2000-01-01')})",
-        "MATCH (n:Doc) SET n:Ver",
+        "CREATE (:Doc {id: 1, vf: date('2000-01-01')}), (:Doc {id: 3, vf: date('2000-01-01')})",
+        "MATCH (n:Doc {id: 1}) SET n:Ver",
     ]);
     declare(&mut g, &node("Ver"), "vf", "vt", Closed).unwrap();
-    attempt(
+    g.schema_locked = true;
+    let refused = attempt(
         &mut g,
-        "CREATE (:Doc:Ver {id: 2, vf: date('1990-01-01'), vt: date('1999-12-31')})",
+        "MATCH (n:Doc {id: 3}) SET n.vt = date('2010-01-01')",
     )
-    .unwrap();
+    .expect_err("node 3 does not carry Ver");
+    assert!(
+        refused.contains("Unknown property 'vt' on Doc"),
+        "{refused}"
+    );
+    let refused = attempt(&mut g, "CREATE (:Doc {id: 4, vt: date('2010-01-01')})")
+        .expect_err("a CREATE without Ver");
+    assert!(
+        refused.contains("Unknown property 'vt' on Doc"),
+        "{refused}"
+    );
 }
 
 /// The allowance lasts only as long as the declaration.

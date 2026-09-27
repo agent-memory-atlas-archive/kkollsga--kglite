@@ -1097,11 +1097,7 @@ fn validate_create_pattern(pattern: &CreatePattern, graph: &DirGraph) -> Result<
                     // The guard reads the primary type, but a validity
                     // declaration on a secondary label (`CREATE (:Doc:Ver
                     // {vt: …})`) names a bound of the node being created.
-                    if np
-                        .extra_labels
-                        .iter()
-                        .any(|label| graph.temporal.names_node_bound(label, prop_name))
-                    {
+                    if names_secondary_bound(&np.extra_labels, prop_name, graph) {
                         continue;
                     }
                     validate_property(node_type, prop_name, graph)
@@ -1111,6 +1107,14 @@ fn validate_create_pattern(pattern: &CreatePattern, graph: &DirGraph) -> Result<
         }
     }
     Ok(())
+}
+
+/// Whether a validity declaration on one of a pattern's secondary labels
+/// names `property` as a bound. The property guards read the primary type.
+fn names_secondary_bound(extra_labels: &[String], property: &str, graph: &DirGraph) -> bool {
+    extra_labels
+        .iter()
+        .any(|label| graph.temporal.names_node_bound(label, property))
 }
 
 /// Append the null observation to a typo refusal whose value is a literal null.
@@ -1167,6 +1171,12 @@ fn validate_pattern(pattern: &Pattern, graph: &DirGraph) -> Result<(), SchemaErr
                 if let Some(ref node_type) = np.node_type {
                     if let Some(ref props) = np.properties {
                         for prop_name in props.keys() {
+                            // As in `validate_create_pattern`: a validity
+                            // bound declared on a secondary label the
+                            // pattern names is known.
+                            if names_secondary_bound(&np.extra_labels, prop_name, graph) {
+                                continue;
+                            }
                             validate_property(node_type, prop_name, graph)?;
                         }
                     }

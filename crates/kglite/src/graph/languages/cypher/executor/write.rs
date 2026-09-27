@@ -1167,7 +1167,11 @@ fn create_node(
             &properties,
             &graph.node_type_metadata,
             graph.schema_definition.as_ref(),
-            &graph.temporal,
+            &|property| {
+                std::iter::once(&label)
+                    .chain(&node_pat.extra_labels)
+                    .any(|l| graph.temporal.names_node_bound(l, property))
+            },
         )?;
     }
 

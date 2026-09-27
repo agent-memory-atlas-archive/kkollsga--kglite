@@ -514,6 +514,23 @@ pub(crate) fn declared(graph: &DirGraph) -> Vec<DeclarationInfo> {
     graph.temporal.entries()
 }
 
+/// Whether a declaration on any label node `idx` carries — its primary type or
+/// a secondary label — names `property` as a bound. The locked `SET` check
+/// reads this: the executor holds the node, not the pattern's labels.
+pub(crate) fn node_names_bound(
+    graph: &DirGraph,
+    idx: petgraph::graph::NodeIndex,
+    property: &str,
+) -> bool {
+    graph.temporal.has_node_declarations()
+        && graph.node_labels(idx).into_iter().any(|key| {
+            graph
+                .interner
+                .try_resolve(key)
+                .is_some_and(|label| graph.temporal.names_node_bound(label, property))
+        })
+}
+
 /// The config declared for node label `label`, if any.
 pub fn node_config<'g>(graph: &'g DirGraph, label: &str) -> Option<&'g TemporalConfig> {
     graph.temporal.node(label)
