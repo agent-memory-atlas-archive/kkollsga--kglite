@@ -535,7 +535,9 @@ class ResultView:
           HNSW search ranked the valid vectors), ``fallback_reason`` (a reason
           string, or None for HNSW; under a context ``exact_mask`` when the
           valid vectors were scored exactly, ``exact_mask_visit_limit`` when
-          the filtered search passed its step budget first), and ``store``
+          the filtered search passed its step budget first,
+          ``exact_mask_unreached`` when it reached fewer than ``k`` valid
+          vectors), and ``store``
           (``Type.embedding_property`` when established, else None).
           Repeated identical routes are coalesced; this is not a call counter.
           Empty inputs, LIMIT 0, EXPLAIN and queries without an instrumented

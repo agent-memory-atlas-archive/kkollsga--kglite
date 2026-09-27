@@ -15,10 +15,11 @@
 //!   a fresh index and enough admitted vectors (`vector_mask`'s rule), one
 //!   filtered search of the index returns the nearest admitted ones. When the
 //!   store holds every node of `T` in node order, its slots are the scan's
-//!   rows and each slot the route touches costs one admit test; otherwise the
-//!   admitted nodes of `T` are gathered first — bit tests, no row — and nodes
-//!   without a vector score NULL and rank first, as the unfused query ranks
-//!   them.
+//!   rows: each slot the route touches costs one admit test, after one more
+//!   per slot to count the admitted ones when the endpoint index cannot
+//!   (`ElementFilter::label_count`). Otherwise the admitted nodes of `T` are
+//!   gathered first — bit tests, no row — and nodes without a vector score
+//!   NULL and rank first, as the unfused query ranks them.
 //! * **BM25** (`text_bm25()` everywhere it appears): a query prepared under
 //!   the instant's filter over every declared node label (and a relationship
 //!   index's own type) carries the admitted documents' statistics — `N`, the
@@ -198,9 +199,11 @@ impl CypherExecutor<'_> {
     /// The node vector entry when `node_type`'s store holds a vector for
     /// every node of the type, in the type's node order: the store's slots
     /// are the scan's rows, so no node scores NULL and slot order breaks ties
-    /// as the scan does. Admission is a test per slot the route touches, the
-    /// admitted count comes from the endpoint index when it has one, and no
-    /// walk over the type precedes the ranking. `Ok(None)` when the store
+    /// as the scan does. Admission is a test per slot the route touches. The
+    /// admitted count comes from the endpoint index when it can give one
+    /// (`ElementFilter::label_count`), and then no walk over the type
+    /// precedes the ranking; otherwise one admit test per slot counts it.
+    /// `Ok(None)` when the store
     /// does not cover the type (the caller walks the admitted nodes);
     /// `Ok(Some(None))` hands the clause to the guarded matcher.
     fn covered_vector_entry(
@@ -275,7 +278,7 @@ impl CypherExecutor<'_> {
     /// ranked them: a filtered search of the index when `embedded` (the
     /// admitted vectors) reaches the threshold and a fresh index serves the
     /// metric, else an exact pass over the admitted slots — also when the
-    /// search passed its visit budget, which the route's reason records.
+    /// search gave way, which the route's reason records.
     fn masked_vector_winners(
         &self,
         store: &EmbeddingStore,
@@ -294,12 +297,12 @@ impl CypherExecutor<'_> {
         }
         if !args.options.exact && vector_mask::prefers_index(embedded, store.len()) {
             match self.indexed_admitted(store, prepared, args, (limit, embedded), admits) {
-                Some(Some(winners)) => {
+                Some(Ok(winners)) => {
                     info.actual_mode = "hnsw_mask".into();
                     info.fallback_reason = None;
                     return Ok((winners, info));
                 }
-                Some(None) => info.fallback_reason = Some(vector_mask::VISIT_LIMIT_REASON.into()),
+                Some(Err(gave_way)) => info.fallback_reason = Some(gave_way.reason().into()),
                 None => {}
             }
         }
@@ -308,7 +311,7 @@ impl CypherExecutor<'_> {
     }
 
     /// The index route of [`Self::masked_vector_winners`]; `None` when no
-    /// fresh index serves the metric, `Some(None)` when its filtered search
+    /// fresh index serves the metric, `Some(Err(_))` when its filtered search
     /// gave way ([`vector_mask::hnsw_admitted`]).
     fn indexed_admitted(
         &self,
@@ -317,7 +320,7 @@ impl CypherExecutor<'_> {
         args: &VectorScoreArgs,
         (limit, embedded): (usize, usize),
         admits: &dyn Fn(usize) -> bool,
-    ) -> Option<Option<Vec<(usize, Value)>>> {
+    ) -> Option<Result<Vec<(usize, Value)>, vector_mask::GaveWay>> {
         use crate::graph::algorithms::hnsw::HnswMetric;
         use crate::graph::algorithms::vector::DistanceMetric;
         let metric = args
@@ -328,11 +331,11 @@ impl CypherExecutor<'_> {
         if metric.and_then(HnswMetric::from_distance) != Some(index.metric()) {
             return None;
         }
-        let Some(slots) =
-            vector_mask::hnsw_admitted(store, &index, &args.query, limit, embedded, admits)
-        else {
-            return Some(None);
-        };
+        let slots =
+            match vector_mask::hnsw_admitted(store, &index, &args.query, limit, embedded, admits) {
+                Ok(slots) => slots,
+                Err(gave_way) => return Some(Err(gave_way)),
+            };
         let mut scored: Vec<(usize, f64)> = slots
             .into_iter()
             .map(|slot| {
@@ -348,12 +351,10 @@ impl CypherExecutor<'_> {
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         scored.truncate(limit);
-        Some(Some(
-            scored
-                .into_iter()
-                .map(|(slot, score)| (slot, Value::Float64(score)))
-                .collect(),
-        ))
+        Some(Ok(scored
+            .into_iter()
+            .map(|(slot, score)| (slot, Value::Float64(score)))
+            .collect()))
     }
 
     /// A `text_bm25` query over `owner.property`, prepared under

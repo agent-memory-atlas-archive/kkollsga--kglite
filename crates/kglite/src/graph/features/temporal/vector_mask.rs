@@ -10,7 +10,7 @@
 //! slowly, the store. The rule compares [`weighted_admitted`] — the admitted
 //! count times the admitted share — with [`MASKED_EXACT_MAX`]: at or above
 //! it, and with a fresh index serving the metric, the search answers;
-//! otherwise, or when the search passes its distance budget, the exact pass.
+//! otherwise, or when the search gives way ([`GaveWay`]), the exact pass.
 //!
 //! Measured 2026-09 (release, 64-d random vectors, uniformly scattered
 //! masks, top-10, whole-query medians): the search overtook the exact pass
@@ -42,9 +42,26 @@ const VISIT_STORE_DIVISOR: usize = 8;
 /// store.
 const VISIT_FLOOR: usize = 1_024;
 
-/// The route reason when a filtered search passed its visit budget and the
-/// exact pass answered.
-pub(crate) const VISIT_LIMIT_REASON: &str = "exact_mask_visit_limit";
+/// Why a filtered search gave way to the exact pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GaveWay {
+    /// It computed its budget of distances first.
+    Budget,
+    /// It walked every slot it could reach within the budget and found fewer
+    /// than `k` admitted ones: an admitted slot sits where layer 0's links
+    /// from the entry point do not lead.
+    Unreached,
+}
+
+impl GaveWay {
+    /// The route reason the exact pass records.
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            GaveWay::Budget => "exact_mask_visit_limit",
+            GaveWay::Unreached => "exact_mask_unreached",
+        }
+    }
+}
 
 /// Whether a masked query over `admitted` of a store's `store_len` vectors
 /// should search the index: when [`weighted_admitted`] reaches the threshold.
@@ -76,7 +93,7 @@ pub(crate) fn admitted_slots(store: &EmbeddingStore, admits: &dyn Fn(usize) -> b
 /// The admitted slots nearest `query`, at least `k` of them (or every
 /// admitted slot, when fewer than `k` exist), nearest first, from one
 /// filtered HNSW search ([`HnswIndex::search_filtered`]) at the index's
-/// `ef_search`; `None` when the search spends its budget
+/// `ef_search`; [`GaveWay`] when the search spends its budget
 /// ([`VISIT_STORE_DIVISOR`]) or comes back short, and the exact pass must
 /// answer. `admitted` is the admitted slot count.
 ///
@@ -88,29 +105,99 @@ pub(crate) fn hnsw_admitted(
     k: usize,
     admitted: usize,
     admits: &dyn Fn(usize) -> bool,
-) -> Option<Vec<u32>> {
+) -> Result<Vec<u32>, GaveWay> {
     // A `k` past the store (a LIMIT or `top_k` larger than it) asks for every
     // admitted slot.
     let want = k.min(admitted).min(store.len());
     if want == 0 {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
     let query_norm = crate::graph::algorithms::vector::dot_product(query, query).sqrt();
     let accept = |slot: u32| admits(store.slot_to_node[slot as usize]);
     let budget = (admitted + store.len() / VISIT_STORE_DIVISOR).max(VISIT_FLOOR);
-    let found = index.search_filtered(
-        (query, query_norm),
-        (want, None),
-        (&store.data, &store.norms),
-        &accept,
-        budget,
-    )?;
-    (found.len() >= want).then(|| found.into_iter().map(|(slot, _)| slot).collect())
+    let found = index
+        .search_filtered(
+            (query, query_norm),
+            (want, None),
+            (&store.data, &store.norms),
+            &accept,
+            budget,
+        )
+        .ok_or(GaveWay::Budget)?;
+    if found.len() < want {
+        return Err(GaveWay::Unreached);
+    }
+    Ok(found.into_iter().map(|(slot, _)| slot).collect())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::weighted_admitted;
+    use super::{hnsw_admitted, weighted_admitted, GaveWay};
+    use crate::graph::algorithms::hnsw::HnswParams;
+    use crate::graph::algorithms::vector::DistanceMetric;
+    use crate::graph::schema::EmbeddingStore;
+
+    /// A store of `n` pseudo-random 8-d vectors, slot `i` holding node `i`,
+    /// with an HNSW index.
+    fn store(n: usize) -> EmbeddingStore {
+        let mut store = EmbeddingStore::new(8);
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        for node in 0..n {
+            let vector: Vec<f32> = (0..8)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    ((state >> 33) as f32 / (1u64 << 31) as f32) - 0.5
+                })
+                .collect();
+            store.set_embedding(node, &vector);
+        }
+        store
+            .build_index(DistanceMetric::Cosine, HnswParams::default(), 3)
+            .expect("an index over the store");
+        store
+    }
+
+    fn search(
+        store: &EmbeddingStore,
+        k: usize,
+        admits: &dyn Fn(usize) -> bool,
+    ) -> Result<Vec<u32>, GaveWay> {
+        let admitted = super::admitted_slots(store, admits);
+        let index = store.index_read().expect("the store's index");
+        let query = store.data[..8].to_vec();
+        hnsw_admitted(store, &index, &query, k, admitted, admits)
+    }
+
+    /// Two ways a filtered search gives way, each named by its own reason:
+    /// an admitted slot no link leads to leaves the walk short
+    /// before its budget; fewer admitted slots than `ef` scattered through
+    /// a large store keep the result set from filling, so the walk runs on
+    /// until the budget is spent.
+    #[test]
+    fn a_short_search_and_a_spent_budget_give_way_with_different_reasons() {
+        let mut small = store(200);
+        let orphan = 160_u32;
+        small
+            .index_mut_for_test()
+            .expect("the store's index")
+            .orphan_for_test(orphan);
+        let admits = |node: usize| node.is_multiple_of(20);
+        assert_eq!(search(&small, 10, &admits), Err(GaveWay::Unreached));
+        assert_eq!(GaveWay::Unreached.reason(), "exact_mask_unreached");
+        // The same search over admitted slots it can reach answers.
+        let reachable = |node: usize| node.is_multiple_of(20) && node != orphan as usize;
+        assert_eq!(
+            search(&small, 9, &reachable).map(|found| found.len()),
+            Ok(9)
+        );
+
+        let large = store(20_000);
+        let rare = |node: usize| node % 500 == 7;
+        assert_eq!(search(&large, 10, &rare), Err(GaveWay::Budget));
+        assert_eq!(GaveWay::Budget.reason(), "exact_mask_visit_limit");
+    }
 
     #[test]
     fn the_weighted_count_is_the_admitted_count_times_the_admitted_share() {

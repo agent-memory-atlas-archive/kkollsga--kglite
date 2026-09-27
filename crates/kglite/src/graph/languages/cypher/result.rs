@@ -405,7 +405,9 @@ pub struct RetrievalDiagnostics {
     pub actual_mode: String,
     /// Why an exact route ran (`exact_mask`: the valid vectors, scored
     /// exactly; `exact_mask_visit_limit`: the same, after the filtered search
-    /// passed its step budget); absent when HNSW served the result.
+    /// passed its step budget; `exact_mask_unreached`: the same, after it
+    /// reached fewer than `k` valid vectors); absent when HNSW served the
+    /// result.
     pub fallback_reason: Option<String>,
     /// `Type.embedding_property` when a single store was established; a
     /// comma-separated list, in type order, when a relationship top-k merged

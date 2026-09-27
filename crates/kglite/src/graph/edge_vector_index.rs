@@ -739,7 +739,7 @@ pub(crate) fn query_admitted_store(
         }) {
             let admitted = vector_mask::admitted_slots(store, admits);
             if vector_mask::prefers_index(admitted, store.len()) {
-                if let Some(slots) =
+                if let Ok(slots) =
                     vector_mask::hnsw_admitted(store, &index, query, top_k, admitted, admits)
                 {
                     let mut hits = score_slots(store, query, metric, slots.into_iter());

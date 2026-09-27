@@ -376,6 +376,27 @@ impl HnswIndex {
         self.entry_point = Some(self.len as u32);
     }
 
+    /// Cut `slot` out of the graph — its own links and every link to it, on
+    /// every layer — so no search reaches it, as HNSW pruning can orphan a
+    /// slot. The entry point cannot be cut out.
+    #[cfg(test)]
+    pub(crate) fn orphan_for_test(&mut self, slot: u32) {
+        assert_ne!(
+            self.entry_point,
+            Some(slot),
+            "the entry point stays reachable"
+        );
+        for (id, layers) in self.links.iter_mut().enumerate() {
+            for layer in layers.iter_mut() {
+                if id == slot as usize {
+                    layer.clear();
+                } else {
+                    layer.retain(|&n| n != slot);
+                }
+            }
+        }
+    }
+
     fn validate_incremental_state(&self) -> Result<(), &'static str> {
         self.params.validate()?;
         if self.len > u32::MAX as usize

@@ -163,8 +163,13 @@ before upgrading.
   valid count weighted by the valid share (`valid² / stored`) reaches 1,500
   (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX` replaces the threshold), the measured
   crossover; a search that passes its step budget gives way to the exact
-  route (`fallback_reason: "exact_mask_visit_limit"`). When the store holds a
-  vector for every node of the label, neither route walks the label first.
+  route (`fallback_reason: "exact_mask_visit_limit"`), and so does one that
+  finds fewer than `k` valid vectors among those the index's links reach
+  (`"exact_mask_unreached"`). When the store holds a vector for every node of
+  the label and the label's valid count at the instant is indexed (no
+  secondary labels in the graph, the label's declaration indexed), neither
+  route walks the label first; otherwise one admit test per vector counts
+  the valid ones.
   Measured against the same question on a graph of only the valid elements
   (release, two runs): 26,000 valid of 130,000 vectors 1.75× (was 14.2×),
   2,600 of 13,000 1.51× (was 2.58×).

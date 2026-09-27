@@ -1602,9 +1602,12 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX` replaces the threshold; `1` sends every
   query with an index to the search): a selective instant is cheaper to score
   exactly, since the search's cost grows as the valid share shrinks. A
-  search that passes its step budget — valid vectors clustered away from the
-  query — gives way to the exact route (`fallback_reason:
-  "exact_mask_visit_limit"`).
+  search gives way to the exact route when it passes its step budget — fewer
+  valid vectors than the index's `ef_search`, or valid vectors clustered away
+  from the query (`fallback_reason: "exact_mask_visit_limit"`) — or when it
+  walks every vector it can reach and finds fewer than `k` valid ones, some
+  valid vector lying where the index's links do not lead
+  (`"exact_mask_unreached"`).
   `db.node_embeddings.query` / `db.relationship_embeddings.query` (and the
   `db.embeddings.query` router) rank only valid nodes — or valid
   relationships with both endpoints valid — and report

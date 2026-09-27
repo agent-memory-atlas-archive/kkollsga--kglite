@@ -392,9 +392,9 @@ def test_the_route_rule_weighs_the_admitted_count_by_the_admitted_share():
 
 
 def test_a_filtered_search_past_its_budget_gives_way_to_the_exact_pass(monkeypatch):
-    # 40 valid versions in 20,000, each far from the query's neighbourhood:
-    # the search walks invalid vectors until its step budget runs out, and
-    # the exact pass answers, saying why.
+    # About 40 valid versions in 20,000: fewer than the index's ef (64), so
+    # the search can never fill its result set, never stops early, and walks
+    # until its step budget runs out; the exact pass answers, saying why.
     monkeypatch.setenv("KGLITE_TEMPORAL_VECTOR_EXACT_MAX", "1")
     rows = _covered_rows(20_000, 8, 0.002, seed=5)
     full = _covered_graph(kglite.KnowledgeGraph(), rows)
