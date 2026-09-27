@@ -133,8 +133,47 @@ class TestRefusals:
             _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt'}")
 
     def test_bad_property_name(self, statuses):
-        with pytest.raises(Exception, match="property 'valid_to' does not exist on node label 'Status'"):
-            _declare(statuses, "{node: 'Status', from: 'vf', to: 'valid_to', convention: 'closed'}")
+        # A near miss of a property the type has is a typo and is refused with the name.
+        with pytest.raises(
+            Exception, match=r"property 'vtt' does not exist on node label 'Status'\. Did you mean 'vt'"
+        ):
+            _declare(statuses, "{node: 'Status', from: 'vf', to: 'vtt', convention: 'closed'}")
+        # A `from` no row carries is refused outright.
+        with pytest.raises(Exception, match="property 'valid_from' does not exist on node label 'Status'"):
+            _declare(statuses, "{node: 'Status', from: 'valid_from', to: 'vt', convention: 'closed'}")
+        assert _declarations(statuses) == []
+
+
+class TestOpenEndedTypes:
+    """A type whose every period is still open holds no `to` value, so the
+    property is absent from the graph. The declaration is accepted with a
+    warning — a fresh fact type is legitimately all-open — and the bound
+    reads as open until a write sets it.
+
+    Regression rationale: this used to be refused as "property 'valid_to'
+    does not exist", which blocked declaring an interval on fresh data."""
+
+    @pytest.fixture
+    def names(self):
+        g = kglite.KnowledgeGraph()
+        g.cypher("UNWIND [1, 2] AS i CREATE (:Name {id: i, valid_from: date('2000-01-01'), valid_to: null})")
+        return g
+
+    WARNING = "no row of node label 'Name' carries 'valid_to'; every row is open-ended until one is written"
+
+    def test_the_procedure_declares_and_warns(self, names):
+        result = _declare(names, "{node: 'Name', from: 'valid_from', to: 'valid_to', convention: 'half_open'}")
+        assert result.to_list() == [{"declared": True, "rows": 2, "abutting_rows": 0}]
+        assert self.WARNING in result.warnings
+        assert names.cypher("MATCH (n:Name) RETURN count(*) AS c", valid_at="1990-01-01").to_list() == [{"c": 0}]
+        assert names.cypher("MATCH (n:Name) RETURN count(*) AS c", valid_at="2010-01-01").to_list() == [{"c": 2}]
+        names.cypher("MATCH (n:Name {id: 1}) SET n.valid_to = date('2005-01-01')")
+        assert names.cypher("MATCH (n:Name) RETURN count(*) AS c", valid_at="2010-01-01").to_list() == [{"c": 1}]
+
+    def test_set_temporal_declares_and_warns(self, names):
+        with pytest.warns(UserWarning, match=self.WARNING):
+            names.set_temporal("Name", "valid_from", "valid_to", convention="half_open")
+        assert [r["to"] for r in _declarations(names)] == ["valid_to"]
 
     def test_dirty_bound_names_the_node(self, statuses):
         statuses.cypher("CREATE (:Status {id: 9, title: 'Odd', vf: 'someday', vt: null})")

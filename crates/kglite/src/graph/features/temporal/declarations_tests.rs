@@ -99,9 +99,17 @@ fn unknown_targets_and_properties_are_refused_by_name() {
     let mut g = graph(&[STATUS]);
     let message = err(&mut g, &node("Nope"), "vf", "vt", Closed);
     assert!(message.contains("no node label 'Nope'"), "{message}");
-    let message = err(&mut g, &node("Status"), "vf", "valid_to", Closed);
+    // A near miss of a property the type has is a typo, whatever its rows hold.
+    let message = err(&mut g, &node("Status"), "vf", "vtt", Closed);
     assert!(
-        message.contains("property 'valid_to' does not exist on node label 'Status'"),
+        message.contains("property 'vtt' does not exist on node label 'Status'"),
+        "{message}"
+    );
+    assert!(message.contains("Did you mean 'vt'?"), "{message}");
+    // An absent `from` is refused even with no near miss.
+    let message = err(&mut g, &node("Status"), "valid_from", "vt", Closed);
+    assert!(
+        message.contains("property 'valid_from' does not exist on node label 'Status'"),
         "{message}"
     );
     let mut g = graph(LICENSEES);
@@ -283,35 +291,48 @@ fn an_unkeyed_declaration_is_the_fallback_and_its_own_key() {
 }
 
 #[test]
-fn a_loader_may_name_a_column_it_wrote_entirely_null() {
+fn a_to_bound_no_row_carries_yet_is_declared_open_with_a_warning() {
+    // Every period is still open, so no row holds `vt`: the declaration is
+    // accepted and says so, rather than refusing a type with no ended row.
     let mut g = graph(&["UNWIND [1, 2] AS i CREATE (:Open {id: i, vf: '2000-01-01', vt: null})"]);
-    let message = err(&mut g, &node("Open"), "vf", "vt", Closed);
-    assert!(
-        message.contains("property 'vt' does not exist"),
-        "{message}"
-    );
-    let report = declare_loaded(&mut g, &node("Open"), "vf", "vt", Closed, &["vf", "vt"]).unwrap();
+    let report = declare(&mut g, &node("Open"), "vf", "vt", HalfOpen).unwrap();
+    assert!(report.changed);
     assert_eq!(report.rows, 2);
-    // The list vouches only for what it names.
-    let mut g = graph(&["CREATE (:Open {id: 1, vf: '2000-01-01'})"]);
-    let message = declare_loaded(&mut g, &node("Open"), "vf", "vtt", Closed, &["vf", "vt"])
-        .unwrap_err()
-        .to_string();
+    let warning = report.warning.expect("an open-ended declaration warns");
     assert!(
-        message.contains("property 'vtt' does not exist"),
-        "{message}"
+        warning.contains("no row of node label 'Open' carries 'vt'"),
+        "{warning}"
     );
+    assert!(warning.contains("open-ended"), "{warning}");
 
     let mut g = graph(&[
         "CREATE (:A {id: 1}), (:C {id: 2})",
         "MATCH (a:A), (c:C) CREATE (a)-[:R {vf: '2000-01-01', vt: null}]->(c)",
     ]);
-    let message = err(&mut g, &rel("R", None), "vf", "vt", Closed);
+    let report = declare(&mut g, &rel("R", None), "vf", "vt", Closed).unwrap();
+    let warning = report.warning.expect("an open-ended declaration warns");
     assert!(
-        message.contains("property 'vt' does not exist on relationship type 'R'"),
+        warning.contains("no row of relationship type 'R' carries 'vt'"),
+        "{warning}"
+    );
+}
+
+#[test]
+fn a_loader_may_name_a_column_it_wrote_entirely_null() {
+    // A column the load just wrote counts as present: no open-ended warning.
+    let mut g = graph(&["UNWIND [1, 2] AS i CREATE (:Open {id: i, vf: '2000-01-01', vt: null})"]);
+    let report = declare_loaded(&mut g, &node("Open"), "vf", "vt", Closed, &["vf", "vt"]).unwrap();
+    assert_eq!(report.rows, 2);
+    assert_eq!(report.warning, None);
+    // The list vouches only for what it names: an absent `from` stays refused.
+    let mut g = graph(&["CREATE (:Open {id: 1, vt: '2000-01-01'})"]);
+    let message = declare_loaded(&mut g, &node("Open"), "vff", "vt", Closed, &["vf", "vt"])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("property 'vff' does not exist"),
         "{message}"
     );
-    assert!(declare_loaded(&mut g, &rel("R", None), "vf", "vt", Closed, &["vt"]).is_ok());
 }
 
 #[test]

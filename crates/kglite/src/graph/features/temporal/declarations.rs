@@ -74,7 +74,8 @@ pub struct DeclareReport {
     /// declare time. `None` when not counted: a no-op, or a disk-mode label
     /// above [`DISK_NODE_ABUTMENT_CAP`] rows.
     pub abutting_rows: Option<usize>,
-    /// The advisory a closed declaration with abutting rows earns.
+    /// The advisory a closed declaration with abutting rows earns, or the one
+    /// a declaration whose `to` property no row carries yet earns.
     pub warning: Option<String>,
 }
 
@@ -378,7 +379,10 @@ impl TemporalDeclarations {
 /// Declare which two properties bound `target`'s validity interval, and
 /// whether the `to` day belongs to it.
 ///
-/// Both properties must exist on the target. Every stored bound is read under
+/// The `from` property must exist on the target. A `to` property no row carries
+/// yet is accepted with a warning — every period is still open — unless it is a
+/// near miss of a property the target has, which is refused as a typo. Every
+/// stored bound is read under
 /// the rule `valid_at` uses; the first one that is not NULL, a date, a
 /// datetime or an ISO date string is refused, naming its element, and so is a
 /// row whose interval is inverted (`from > to`, or `from == to` under
@@ -398,8 +402,8 @@ pub fn declare(
 /// [`declare`] for a loader that has just written the bound columns. The
 /// schema records a property only once some row holds a value for it, so a
 /// column the load wrote entirely NULL (every period still open) is absent
-/// from it; naming it in `written` lets it count as existing. A manual
-/// declaration has no such list, so a mistyped property is still refused.
+/// from it; naming it in `written` lets it count as existing, without the
+/// open-ended warning a manual declaration of such a `to` column earns.
 pub fn declare_loaded(
     graph: &mut DirGraph,
     target: &TemporalTarget,
@@ -424,12 +428,16 @@ pub fn declare_loaded(
             warning: None,
         });
     }
-    let Walk { rows, abutting } = validate::walk(graph, target, &config, written)?;
+    let Walk {
+        rows,
+        abutting,
+        open_ended,
+    } = validate::walk(graph, target, &config, written)?;
     let warning = match abutting {
         Some(count) if count > 0 && convention == IntervalConvention::Closed => {
             Some(validate::abutment_warning(target, count, rows))
         }
-        _ => None,
+        _ => open_ended,
     };
     record_insert(graph, target, config, abutting);
     graph.bump_version();

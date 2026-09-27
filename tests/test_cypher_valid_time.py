@@ -114,8 +114,14 @@ def test_metadata_procedures_run_under_a_context(wells):
         ("FOR SYSTEM_TIME AS OF date('2006-01-01') MATCH (n) RETURN n", "axis SYSTEM_TIME is not supported"),
         (f"{AS_OF}MATCH (w:Well) SET w.x = 1", "cannot write"),
         (f"{AS_OF}CALL orphan_node() YIELD node RETURN node", "procedure orphan_node"),
-        (f"{AS_OF}MATCH (w:Well) RETURN degree(w)", "not available under a valid-time context yet"),
-        (f"{AS_OF}MATCH (w:Well) RETURN outDegree(w)", "not available under a valid-time context yet"),
+        (
+            f"{AS_OF}MATCH (w:Well) RETURN degree(w)",
+            "is not available under a valid-time context; count relationships with COUNT",
+        ),
+        (
+            f"{AS_OF}MATCH (w:Well) RETURN outDegree(w)",
+            "is not available under a valid-time context; count relationships with COUNT",
+        ),
     ],
 )
 def test_lowering_refusals_stop_explain_too(wells, query, message):

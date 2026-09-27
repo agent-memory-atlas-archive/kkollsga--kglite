@@ -98,7 +98,8 @@ fn attach_templates(
     if let Some(name) = reach.refused_function {
         return Err(format!(
             "{name}() counts or walks a node's relationships outside the pattern matcher, \
-             so it is not available under a valid-time context yet"
+             so it is not available under a valid-time context; count relationships with \
+             COUNT {{ (n)--() }}, or bind MATCH p = shortestPath(...) and read length(p)"
         ));
     }
     if let Some(name) = reach.refused_procedure {

@@ -25,6 +25,8 @@ use crate::graph::storage::GraphRead;
 pub(super) struct Walk {
     pub(super) rows: usize,
     pub(super) abutting: Option<usize>,
+    /// Set when no row carries the `to` property yet (every period is open).
+    pub(super) open_ended: Option<String>,
 }
 
 type Bounds = (Option<Instant>, Option<Instant>);
@@ -79,23 +81,79 @@ fn relationship_sources(graph: &DirGraph, rel_type: &str) -> Vec<String> {
 /// Validate every row of `target` under `config` and count abutting rows.
 /// `written` names properties a loader just wrote, which count as existing
 /// even when the schema has not recorded them.
+///
+/// A `from` property no row carries is refused. A `to` property no row
+/// carries is accepted — every period of the type is still open, which a
+/// fresh fact type legitimately is — with a warning in [`Walk::open_ended`],
+/// unless it is a near miss of a property the type does have, which is read
+/// as a typo and refused with the suggestion.
 pub(super) fn walk(
     graph: &DirGraph,
     target: &TemporalTarget,
     config: &TemporalConfig,
     written: &[&str],
 ) -> Result<Walk, String> {
-    let (walk, seen) = match target {
+    let (mut walk, seen) = match target {
         TemporalTarget::Node(label) => walk_nodes(graph, label, config)?,
         TemporalTarget::Relationship {
             rel_type,
             source_type,
         } => walk_edges(graph, rel_type, source_type.as_deref(), config)?,
     };
-    seen.require(config, target, |property| {
-        written.contains(&property) || schema_has(graph, target, &seen, property)
-    })?;
+    let known =
+        |property: &str| written.contains(&property) || schema_has(graph, target, &seen, property);
+    if !seen.from && !known(&config.valid_from) {
+        return Err(missing_property(&config.valid_from, target, ""));
+    }
+    if !seen.to && !known(&config.valid_to) {
+        let names = schema_names(graph, target, &seen);
+        // The declared `from` is never the intended `to`, however close.
+        let names: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| *name != config.valid_from)
+            .collect();
+        let hint = crate::graph::mutation::validation::did_you_mean(&config.valid_to, &names);
+        if !hint.is_empty() {
+            return Err(missing_property(&config.valid_to, target, &hint));
+        }
+        walk.open_ended = Some(format!(
+            "no row of {} carries '{}'; every row is open-ended until one is written",
+            target.describe(),
+            config.valid_to
+        ));
+    }
     Ok(walk)
+}
+
+fn missing_property(property: &str, target: &TemporalTarget, hint: &str) -> String {
+    let stop = if hint.is_empty() { "" } else { "." };
+    format!(
+        "property '{property}' does not exist on {}{stop}{hint}",
+        target.describe()
+    )
+}
+
+/// The property names the schema records for `target`, for a typo hint.
+fn schema_names(graph: &DirGraph, target: &TemporalTarget, seen: &Seen) -> Vec<String> {
+    match target {
+        TemporalTarget::Node(label) => graph
+            .node_type_metadata
+            .iter()
+            .filter(|(node_type, _)| {
+                *node_type == label
+                    || seen
+                        .primary_types
+                        .contains(&InternedKey::from_str(node_type))
+            })
+            .flat_map(|(_, props)| props.keys().cloned())
+            .collect(),
+        TemporalTarget::Relationship { rel_type, .. } => graph
+            .connection_type_metadata
+            .get(rel_type)
+            .map(|info| info.property_types.keys().cloned().collect())
+            .unwrap_or_default(),
+    }
 }
 
 /// Whether the schema records `property` for `target`: the id and title
@@ -133,23 +191,6 @@ impl Seen {
     fn note(&mut self, from: &Value, to: &Value) {
         self.from |= !matches!(from, Value::Null);
         self.to |= !matches!(to, Value::Null);
-    }
-
-    fn require(
-        &self,
-        config: &TemporalConfig,
-        target: &TemporalTarget,
-        known: impl Fn(&str) -> bool,
-    ) -> Result<(), String> {
-        for (property, seen) in [(&config.valid_from, self.from), (&config.valid_to, self.to)] {
-            if !seen && !known(property) {
-                return Err(format!(
-                    "property '{property}' does not exist on {}",
-                    target.describe()
-                ));
-            }
-        }
-        Ok(())
     }
 }
 
@@ -202,6 +243,7 @@ fn walk_nodes(
     let walk = Walk {
         rows,
         abutting: counting.then(|| count_abutting(&group)),
+        open_ended: None,
     };
     Ok((walk, seen))
 }
@@ -248,6 +290,7 @@ fn walk_edges(
     let walk = Walk {
         rows,
         abutting: Some(abutting),
+        open_ended: None,
     };
     Ok((walk, seen))
 }

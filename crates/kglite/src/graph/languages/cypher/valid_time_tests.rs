@@ -537,9 +537,10 @@ fn topology_scalar_functions_are_refused_under_a_context() {
         for text in [query.clone(), format!("EXPLAIN {query}")] {
             let err = read(&graph, &text, &none).unwrap_err();
             assert!(
-                err.contains("not available under a valid-time context yet"),
+                err.contains("is not available under a valid-time context;"),
                 "{text}: {err}"
             );
+            assert!(err.contains("COUNT { (n)--() }"), "{text}: {err}");
         }
         // Without the context the function runs.
         read(&graph, &format!("MATCH (w:Well) RETURN {call} AS x"), &none).unwrap();
