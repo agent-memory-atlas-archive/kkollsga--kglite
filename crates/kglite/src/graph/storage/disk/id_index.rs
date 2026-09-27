@@ -1202,6 +1202,9 @@ mod validation_tests {
         }
         assert_eq!(base.entry_len("M"), Some(2));
         assert_eq!(base.materialize("M").unwrap().len(), 2);
+        // The base memory-maps the file; Windows refuses a rewrite while a
+        // mapping is open (os error 1224), so release it before writing.
+        drop(base);
 
         let mut members = TypeIndexStore::default();
         for index in 0..3 {
