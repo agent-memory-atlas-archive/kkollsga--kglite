@@ -408,6 +408,30 @@
   "tests/test_valid_time_oracle.py::test_valid_time_golden_counts_anchor_the_oracle[memory_guards]": {
     "owner": "storage-parity"
   },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2002-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2002-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2002-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2002-memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2005-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2005-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2005-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_mixed_id_kinds_anchor_the_oracle[2005-memory_guards]": {
+    "owner": "storage-parity"
+  },
   "tests/test_valid_time_oracle.py::test_valid_time_bench_cells_answer_like_their_views[mapped]": {
     "owner": "storage-parity"
   },

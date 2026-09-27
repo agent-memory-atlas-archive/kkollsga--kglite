@@ -406,6 +406,80 @@ pub fn parse_temporal_column_types_from_pairs(
     }
 }
 
+/// The integer a numeric id denotes — the one coercion every id-index
+/// lookup applies: a `UniqueId`, an `Int64` and an integral `Float64` of the
+/// same integer are one id. `None` for any other value, which is only ever
+/// its own id.
+pub(crate) fn id_integer(id: &Value) -> Option<i64> {
+    match id {
+        Value::UniqueId(u) => Some(i64::from(*u)),
+        Value::Int64(i) => Some(*i),
+        Value::Float64(f) if f.fract() == 0.0 => Some(*f as i64),
+        _ => None,
+    }
+}
+
+/// `id` as the compact `Integer` index's key, when it has one.
+pub(crate) fn id_u32(id: &Value) -> Option<u32> {
+    id_integer(id).and_then(|n| u32::try_from(n).ok())
+}
+
+/// The other keys a `General` id index may hold `id` under, in the order a
+/// lookup probes them after missing `id` itself.
+pub(crate) fn id_spellings(id: &Value) -> impl Iterator<Item = Value> {
+    let n = id_integer(id);
+    let own = std::mem::discriminant(id);
+    [
+        n.map(Value::Int64),
+        n.map(|n| Value::Float64(n as f64)),
+        id_u32(id).map(Value::UniqueId),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(move |key| std::mem::discriminant(key) != own)
+}
+
+/// [`TypeIdIndex::insert`] into a `General` map.
+pub(crate) fn insert_general(map: &mut FxHashMap<Value, NodeIndex>, id: Value, idx: NodeIndex) {
+    for key in id_spellings(&id) {
+        map.remove(&key);
+    }
+    map.insert(id, idx);
+}
+
+/// A `General` index's map from `(id, node)` pairs in the type's node
+/// order: one spelling per id, the last node's. Ids of a single numeric kind
+/// cannot spell one id twice, so only a mix pays the dedup.
+pub(crate) fn general_id_map(entries: Vec<(Value, NodeIndex)>) -> FxHashMap<Value, NodeIndex> {
+    let kinds = entries.iter().fold(0u8, |kinds, (id, _)| {
+        kinds
+            | match id {
+                Value::UniqueId(_) => 1,
+                Value::Int64(_) => 2,
+                Value::Float64(_) => 4,
+                _ => 0,
+            }
+    });
+    if kinds.count_ones() < 2 {
+        return entries.into_iter().collect();
+    }
+    let mut map = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
+    for (id, idx) in entries {
+        insert_general(&mut map, id, idx);
+    }
+    map
+}
+
+/// `id` in the spelling all its [`id_spellings`] share, so two ids the index
+/// treats as one compare equal here (integers past 2^53 against a float
+/// aside, where the `Float64` probe itself rounds).
+pub(crate) fn canonical_id(id: &Value) -> Cow<'_, Value> {
+    match id_integer(id) {
+        Some(n) if !matches!(id, Value::Int64(_)) => Cow::Owned(Value::Int64(n)),
+        _ => Cow::Borrowed(id),
+    }
+}
+
 /// Per-type ID index. Uses compact u32 keys when all IDs are UniqueId,
 /// falling back to general Value keys otherwise.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -426,83 +500,28 @@ impl TypeIdIndex {
         }
     }
 
-    /// Look up a node by ID value, with type coercion.
+    /// Look up a node by ID value, with type coercion: `id` itself, then
+    /// each of its [`id_spellings`]. The coercion covers the same numeric
+    /// family as `values_equal` (core/filtering.rs), which is what a type
+    /// scan compares with: the id anchors in `try_index_lookup` treat a miss
+    /// here as an empty result and never scan, so a coercion the index
+    /// declines but the scan would have accepted is a lost row, not a slow
+    /// one. A string id matches only by exact value: `{id:'a1'}` must not
+    /// resolve to `UniqueId(1)` (datasets with a string id form such as
+    /// Wikidata `Q76` store it as another property — query `{nid:'Q76'}`).
     pub fn get(&self, id: &Value) -> Option<NodeIndex> {
         match self {
-            TypeIdIndex::Integer(map) => match id {
-                Value::UniqueId(u) => map.get(u).copied(),
-                Value::Int64(i) => {
-                    if *i >= 0 && *i <= u32::MAX as i64 {
-                        map.get(&(*i as u32)).copied()
-                    } else {
-                        None
-                    }
-                }
-                Value::Float64(f) => {
-                    if f.fract() == 0.0 {
-                        let i = *f as i64;
-                        if i >= 0 && i <= u32::MAX as i64 {
-                            map.get(&(i as u32)).copied()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                // NB: no string→u32 coercion. A `String` id queried against a
-                // UniqueId-keyed index does NOT match (e.g. `{id:'a1'}` must
-                // not resolve to `UniqueId(1)`). Datasets that expose a
-                // string id form (e.g. Wikidata `Q76`) store it as a queryable
-                // property — query `{nid:'Q76'}`, not `{id:'Q76'}`.
-                _ => None,
-            },
-            TypeIdIndex::General(map) => {
-                if let Some(&idx) = map.get(id) {
-                    return Some(idx);
-                }
-                // Type coercion fallback. This must cover the same numeric
-                // family as `values_equal` (core/filtering.rs), which is what
-                // a type scan compares with: the id anchors in
-                // `try_index_lookup` treat a miss here as an empty result and
-                // never scan, so a coercion the index declines but the scan
-                // would have accepted is a lost row, not a slow one.
-                match id {
-                    Value::Int64(i) => {
-                        if let Some(&idx) = map.get(&Value::Float64(*i as f64)) {
-                            return Some(idx);
-                        }
-                        if *i >= 0 && *i <= u32::MAX as i64 {
-                            map.get(&Value::UniqueId(*i as u32)).copied()
-                        } else {
-                            None
-                        }
-                    }
-                    Value::UniqueId(u) => {
-                        if let Some(&idx) = map.get(&Value::Int64(*u as i64)) {
-                            return Some(idx);
-                        }
-                        map.get(&Value::Float64(*u as f64)).copied()
-                    }
-                    Value::Float64(f) => {
-                        if f.fract() == 0.0 {
-                            let i = *f as i64;
-                            if let Some(&idx) = map.get(&Value::Int64(i)) {
-                                return Some(idx);
-                            }
-                            if i >= 0 && i <= u32::MAX as i64 {
-                                return map.get(&Value::UniqueId(i as u32)).copied();
-                            }
-                        }
-                        None
-                    }
-                    // String ids match only by exact value. See the Integer arm.
-                    _ => None,
-                }
-            }
+            TypeIdIndex::Integer(map) => map.get(&id_u32(id)?).copied(),
+            TypeIdIndex::General(map) => map
+                .get(id)
+                .or_else(|| id_spellings(id).find_map(|key| map.get(&key)))
+                .copied(),
         }
     }
 
+    /// Point `id` at `idx`. A `General` index holds one spelling per id, so
+    /// the id's other spellings are dropped: the node inserted last answers
+    /// every spelling, as one stored in a single kind does.
     pub fn insert(&mut self, id: Value, idx: NodeIndex) {
         match self {
             TypeIdIndex::Integer(map) => {
@@ -511,13 +530,11 @@ impl TypeIdIndex {
                 } else {
                     let mut general: FxHashMap<Value, NodeIndex> =
                         map.drain().map(|(k, v)| (Value::UniqueId(k), v)).collect();
-                    general.insert(id, idx);
+                    insert_general(&mut general, id, idx);
                     *self = TypeIdIndex::General(general);
                 }
             }
-            TypeIdIndex::General(map) => {
-                map.insert(id, idx);
-            }
+            TypeIdIndex::General(map) => insert_general(map, id, idx),
         }
     }
 
@@ -545,45 +562,13 @@ impl TypeIdIndex {
             return false;
         }
         match self {
-            TypeIdIndex::Integer(map) => {
-                let key = match id {
-                    Value::UniqueId(u) => Some(*u),
-                    Value::Int64(i) if *i >= 0 && *i <= u32::MAX as i64 => Some(*i as u32),
-                    Value::Float64(f) if f.fract() == 0.0 => {
-                        let i = *f as i64;
-                        if i >= 0 && i <= u32::MAX as i64 {
-                            Some(i as u32)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                key.is_some_and(|k| map.remove(&k).is_some())
-            }
+            TypeIdIndex::Integer(map) => id_u32(id).is_some_and(|k| map.remove(&k).is_some()),
             TypeIdIndex::General(map) => {
-                if map.remove(id).is_some() {
-                    return true;
-                }
-                // `get` resolved it, so it is stored under a coerced spelling.
-                let coerced = match id {
-                    Value::Int64(i) if *i >= 0 && *i <= u32::MAX as i64 => {
-                        Some(Value::UniqueId(*i as u32))
-                    }
-                    Value::UniqueId(u) => Some(Value::Int64(*u as i64)),
-                    Value::Float64(f) if f.fract() == 0.0 => {
-                        let i = *f as i64;
-                        if map.contains_key(&Value::Int64(i)) {
-                            Some(Value::Int64(i))
-                        } else if i >= 0 && i <= u32::MAX as i64 {
-                            Some(Value::UniqueId(i as u32))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                coerced.is_some_and(|k| map.remove(&k).is_some())
+                // The spelling `get` resolved: the first one present.
+                let key = std::iter::once(id.clone())
+                    .chain(id_spellings(id))
+                    .find(|key| map.contains_key(key));
+                key.is_some_and(|k| map.remove(&k).is_some())
             }
         }
     }

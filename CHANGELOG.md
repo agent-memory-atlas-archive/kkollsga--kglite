@@ -34,8 +34,11 @@ before upgrading.
   both endpoints valid. Undeclared types are timeless, a NULL bound is open,
   and a bound that is not a date, datetime or ISO string raises naming the
   element. An id seek finds the version valid at the instant when several
-  version nodes share the id (the one inserted last when more than one is
-  valid, in every storage mode), and inline-map values that are expressions
+  version nodes share the id, whichever numeric kind each stores it as (the
+  last in the type's node order when more than one is valid, in every
+  storage mode; a `.kgl` reload orders a type's nodes by slot, so after a
+  deleted slot is reused that need not be the one created last), and
+  inline-map values that are expressions
   are evaluated under the context. Counts, node scans with an aggregate or
   `ORDER BY … LIMIT`, top-k over matched rows, `COUNT { }` and `elementId`
   anchors keep their fast routes under a context; `PROFILE` runs too. When
@@ -285,6 +288,20 @@ before upgrading.
   blueprint (or re-run the loads) to recover the rows.
 
 ### Fixed
+
+- Cypher: an id seek (`{id: …}`) on a node type whose nodes share an id
+  stored under different numeric kinds — a loaded integer column beside an
+  id written by Cypher `CREATE`, or a float id — returned the node of the
+  kind the query spelled, so `{id: 1}` and `{id: a.id}` could answer with
+  different nodes. The id index now holds one node per id, the last in the
+  type's node order, whatever the kinds.
+
+- Disk: a reopened disk graph whose saved id index held a float id (`{id:
+  1.0}`) returned no rows for `MATCH (n:T {id: 1})`; the saved index now
+  answers every numeric spelling of an id as the in-memory one does. A type
+  whose ids repeat no longer saves its id index: the save orders the type's
+  nodes by slot, so the saved choice among duplicates could disagree with the
+  reopened order. It is rebuilt on first use.
 
 - Cypher: the four-argument `valid_at` / `valid_during` accept a bound
   property that a declared secondary label of the node records; they used to

@@ -38,8 +38,9 @@
 //! General payload is decoded to validate it).
 
 use crate::datatypes::Value;
-use crate::graph::schema::{InternedKey, StringInterner, TypeIdIndex};
+use crate::graph::schema::{id_spellings, id_u32, InternedKey, StringInterner, TypeIdIndex};
 use crate::graph::storage::disk::id_index_layer::TypeEntry;
+use crate::graph::storage::disk::type_index::TypeIndexStore;
 use crate::serde_codec;
 use memmap2::Mmap;
 use petgraph::graph::NodeIndex;
@@ -336,7 +337,7 @@ impl IdIndexBase {
     }
 
     fn lookup_integer(&self, entry: &BaseEntry, id: &Value) -> Option<NodeIndex> {
-        let key_u32 = coerce_to_u32(id)?;
+        let key_u32 = id_u32(id)?;
         let (keys, idxs) = self.integer_bytes(entry)?;
         let index = le_u32_binary_search(keys, key_u32)?;
         Some(NodeIndex::new(read_le_u32(idxs, index)? as usize))
@@ -344,34 +345,9 @@ impl IdIndexBase {
 
     fn lookup_general(&self, name: &str, entry: &BaseEntry, id: &Value) -> Option<NodeIndex> {
         let map = self.general_map(name, entry)?;
-        if let Some(&idx) = map.get(id) {
-            return Some(idx);
-        }
-        // Mirror TypeIdIndex::General numeric coercion fallbacks (Int64 ↔
-        // UniqueId, Float64 → Int/UniqueId). No string→u32 coercion — a
-        // String id matches only by exact value (handled above).
-        match id {
-            Value::Int64(i) => {
-                if *i >= 0 && *i <= u32::MAX as i64 {
-                    return map.get(&Value::UniqueId(*i as u32)).copied();
-                }
-                None
-            }
-            Value::UniqueId(u) => map.get(&Value::Int64(*u as i64)).copied(),
-            Value::Float64(f) => {
-                if f.fract() == 0.0 {
-                    let i = *f as i64;
-                    if let Some(&idx) = map.get(&Value::Int64(i)) {
-                        return Some(idx);
-                    }
-                    if i >= 0 && i <= u32::MAX as i64 {
-                        return map.get(&Value::UniqueId(i as u32)).copied();
-                    }
-                }
-                None
-            }
-            _ => None,
-        }
+        map.get(id)
+            .or_else(|| id_spellings(id).find_map(|key| map.get(&key)))
+            .copied()
     }
 
     fn general_map(
@@ -798,35 +774,6 @@ impl IdIndexStore {
     }
 }
 
-/// Coerce a `Value` to `u32` for binary search on the Integer variant.
-/// Mirrors the matching branches in `TypeIdIndex::get`.
-fn coerce_to_u32(id: &Value) -> Option<u32> {
-    match id {
-        Value::UniqueId(u) => Some(*u),
-        Value::Int64(i) => {
-            if *i >= 0 && *i <= u32::MAX as i64 {
-                Some(*i as u32)
-            } else {
-                None
-            }
-        }
-        Value::Float64(f) => {
-            if f.fract() == 0.0 {
-                let i = *f as i64;
-                if i >= 0 && i <= u32::MAX as i64 {
-                    Some(i as u32)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-        // No string→u32 coercion: a String id matches only by exact value.
-        _ => None,
-    }
-}
-
 /// Write `id_indices.bin` (raw mmap layout). Iterates the store's union view
 /// (overlay + base) so saves capture both fresh mutations and unchanged
 /// base entries.
@@ -848,13 +795,26 @@ fn coerce_to_u32(id: &Value) -> Option<u32> {
 /// them loses nothing. A non-empty unregistered entry would be a broken
 /// invariant, so it fails the save rather than shipping a directory that
 /// cannot be read back.
+///
+/// A type whose ids repeat (fewer entries than `type_indices` members) is not
+/// written either: its index names the last node per id in the bucket's
+/// order, which the type-index writer sorts by `NodeIndex`, so a reused slot
+/// would leave the persisted choice disagreeing with the reloaded order. The
+/// reload rebuilds such an index from the persisted bucket on first use.
 pub fn write_id_indices_bin(
     dir: &Path,
     store: &IdIndexStore,
+    type_indices: &TypeIndexStore,
     interner: &StringInterner,
 ) -> Result<(), String> {
     let mut entries: Vec<(u64, TypeIdIndex)> = Vec::new();
     for (name, materialized) in store.iter() {
+        if type_indices
+            .get(&name)
+            .is_some_and(|members| materialized.len() < members.len())
+        {
+            continue;
+        }
         let Some(key) = interner.try_resolve_to_key(&name) else {
             if materialized.is_empty() {
                 continue;
@@ -1124,7 +1084,7 @@ mod validation_tests {
             (general_name.to_string(), general),
             (integer_name.to_string(), integer),
         ]));
-        write_id_indices_bin(temp.path(), &store, &interner).unwrap();
+        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
 
         let raw = std::fs::read(temp.path().join("id_indices.bin")).unwrap();
         let second_payload_off = u64::from_le_bytes(
@@ -1149,6 +1109,41 @@ mod validation_tests {
             base.lookup(integer_name, &Value::UniqueId(7)),
             Some(NodeIndex::new(4))
         );
+    }
+
+    /// A persisted `General` index answers every numeric spelling of an id
+    /// as the in-memory index does: a float id is found by an integer and a
+    /// `UniqueId` query, and an integer id by a float one.
+    #[test]
+    fn a_persisted_general_index_coerces_like_the_in_memory_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut interner = StringInterner::new();
+        interner.get_or_intern("G");
+        let index = TypeIdIndex::General(FxHashMap::from_iter([
+            (Value::Float64(1.0), NodeIndex::new(0)),
+            (Value::Int64(2), NodeIndex::new(1)),
+            (Value::String("x".into()), NodeIndex::new(2)),
+        ]));
+        let mut store = IdIndexStore::default();
+        store.replace_with(HashMap::from([("G".to_string(), index.clone())]));
+        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
+        let base = IdIndexBase::load_from(temp.path(), &interner)
+            .unwrap()
+            .unwrap();
+        for query in [
+            Value::Float64(1.0),
+            Value::Int64(1),
+            Value::UniqueId(1),
+            Value::Float64(2.0),
+            Value::Int64(2),
+            Value::UniqueId(2),
+            Value::String("x".into()),
+            Value::String("1".into()),
+            Value::Float64(1.5),
+        ] {
+            assert_eq!(base.lookup("G", &query), index.get(&query), "{query:?}");
+        }
+        assert_eq!(base.lookup("G", &Value::Int64(1)), Some(NodeIndex::new(0)));
     }
 
     /// A directory saved before the writer resolved its keys carries an empty
@@ -1204,7 +1199,7 @@ mod validation_tests {
             // Never interned: an id index cached for a type with no rows.
             ("Unregistered".to_string(), TypeIdIndex::default()),
         ]));
-        write_id_indices_bin(temp.path(), &store, &interner).unwrap();
+        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
 
         // Asserted on the bytes, not through the loader: the loader also
         // recovers such an entry (directories written before this fix carry
@@ -1229,7 +1224,9 @@ mod validation_tests {
             "Unregistered".to_string(),
             TypeIdIndex::Integer(FxHashMap::from_iter([(1, NodeIndex::new(0))])),
         );
-        let error = write_id_indices_bin(temp.path(), &store, &interner).unwrap_err();
+        let error =
+            write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner)
+                .unwrap_err();
         assert!(error.contains("Unregistered"), "{error}");
         assert!(error.contains("cannot be read back"), "{error}");
     }

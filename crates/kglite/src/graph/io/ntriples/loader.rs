@@ -559,6 +559,7 @@ fn publish_build_in_place(graph: &DirGraph) -> Result<(), String> {
         crate::graph::storage::disk::id_index::write_id_indices_bin(
             &root_dir,
             &graph.id_indices,
+            &graph.type_indices,
             &graph.interner,
         )
         .map_err(|e| format!("Failed to write id indexes: {e}"))?;

@@ -398,6 +398,7 @@ impl DirGraph {
         crate::graph::storage::disk::id_index::write_id_indices_bin(
             dir,
             &self.id_indices,
+            &self.type_indices,
             &self.interner,
         )?;
 

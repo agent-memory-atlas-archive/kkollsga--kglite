@@ -72,7 +72,8 @@ QUERIES = [
     "MATCH (n) RETURN n.uid AS u, COUNT { (n)-[:R]->() } AS c",
     "MATCH (n) WHERE EXISTS { (n)<-[:S]-() } RETURN n.uid AS u",
     # Id seeks name the node they matched: among versions sharing an id, the
-    # latest-inserted valid one, which is the reference slice's own choice.
+    # last valid one in the type's node order, whichever numeric kind each
+    # stores the id as — the reference slice's own choice.
     "MATCH (n:A {id: 1}) RETURN n.uid AS u",
     "MATCH (n {id: 2}) RETURN n.uid AS u",
     "UNWIND [0, 1, 2, 3] AS x MATCH (n:B {id: x}) RETURN x, n.uid AS u",
@@ -141,7 +142,16 @@ def graphs(draw):
         for label in {primary, secondary} & set(NODE_BOUNDS):
             frm, to, convention = NODE_BOUNDS[label]
             bounds[frm], bounds[to] = draw(interval(convention == "half_open"))
-        nodes.append({"primary": primary, "secondary": secondary, "id": draw(st.integers(0, 3)), "bounds": bounds})
+        # Version nodes share ids; an id is written as an integer or as a
+        # float, which the id index takes for the same id.
+        node_id = draw(st.integers(0, 3))
+        node_id = float(node_id) if draw(st.booleans()) else node_id
+        nodes.append({"primary": primary, "secondary": secondary, "id": node_id, "bounds": bounds})
+    # Integer ids first: a CREATE that meets a type's float id before an
+    # integer one stores the later integers as floats, and the reference
+    # slice's batch (a subset in the same order) must store what the full
+    # graph's does.
+    nodes.sort(key=lambda node: isinstance(node["id"], float))
     edges = []
     for _ in range(draw(st.integers(0, 12))):
         src = draw(st.integers(0, len(nodes) - 1))
@@ -356,6 +366,34 @@ def test_valid_time_golden_counts_anchor_the_oracle(mode):
         assert full.cypher(rels, params={"t": instant}).to_list() == [{"c": 3}]
         unguarded = "MATCH ()-[r]->() RETURN count(r) AS c"
         assert full.cypher(unguarded).to_list() == [{"c": 6}]
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("year", [2002, 2005])
+def test_valid_time_mixed_id_kinds_anchor_the_oracle(mode, year):
+    """Two versions of id 1 on A, one written as an integer (2001–2003) and
+    one as a float (2004–2010): the seek finds whichever is valid, as the
+    reference slice holding only that one answers."""
+    nodes = [
+        {
+            "primary": "A",
+            "secondary": None,
+            "id": 1,
+            "bounds": {"a_from": dt.date(2001, 1, 1), "a_to": dt.date(2003, 1, 1)},
+        },
+        {
+            "primary": "A",
+            "secondary": None,
+            "id": 1.0,
+            "bounds": {"a_from": dt.date(2004, 1, 1), "a_to": dt.date(2010, 1, 1)},
+        },
+    ]
+    _check(mode, nodes, [], dt.date(year, 6, 1))
+    with _graph(mode) as full:
+        _write(full, *_numbered(nodes, []), declare=True)
+        seek = "FOR VALID_TIME AS OF $t MATCH (n:A {id: 1}) RETURN n.uid AS u"
+        expected = 2 if year == 2002 else 3
+        assert full.cypher(seek, params={"t": dt.date(year, 6, 1)}).to_list() == [{"u": expected}]
 
 
 @pytest.mark.parametrize("mode", ("mapped", "disk", "memory_guards"))

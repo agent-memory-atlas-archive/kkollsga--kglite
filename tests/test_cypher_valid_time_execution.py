@@ -172,11 +172,11 @@ def _storage(storage, tmp_path):
 
 
 @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
-def test_an_id_seek_returns_the_latest_inserted_visible_version(storage, tmp_path):
+def test_an_id_seek_returns_the_last_visible_version_in_node_order(storage, tmp_path):
     """Two of three versions sharing an id are valid: every mode returns the
-    one inserted last (the id index's own choice), whichever node the index
-    holds; an id whose only other version has an unreadable bound does not
-    raise from a seek, though a scan that reads it does."""
+    last in the type's node order (the id index's own choice), whichever node
+    the index holds; an id whose only other version has an unreadable bound
+    does not raise from a seek, though a scan that reads it does."""
     graph = _storage(storage, tmp_path)
     graph.cypher(
         "CREATE (:M {id: 1, name: 'a', vf: date('2000-01-01')}),"
@@ -199,6 +199,81 @@ def test_an_id_seek_returns_the_latest_inserted_visible_version(storage, tmp_pat
     assert ids(graph, at("1950-01-01", "MATCH (m:M {id: 363}) RETURN m.name")) == ["old"]
     with pytest.raises(kglite.KgError, match=r"node '999'"):
         graph.cypher(at("1950-01-01", "MATCH (m:M) RETURN m.name")).to_list()
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+@pytest.mark.parametrize("loaded", ["old", "new"])
+def test_an_id_seek_finds_versions_whose_ids_differ_in_numeric_kind(storage, loaded, tmp_path):
+    """One version loaded from a DataFrame (its integer id column is stored
+    as the loader's compact kind), the other written by Cypher `CREATE` (a
+    plain integer): the seek finds whichever is valid, spelled as a literal
+    or as a loaded id."""
+    import pandas as pd
+
+    graph = _storage(storage, tmp_path)
+    graph.add_nodes(pd.DataFrame({"id": [1]}), "A", "id")
+    versions = {"old": ("2000-01-01", "2009-12-31"), "new": ("2010-01-01", None)}
+    vf, vt = versions[loaded]
+    frame = {"id": [1], "name": [loaded], "vf": [pd.Timestamp(vf)], "vt": [pd.Timestamp(vt) if vt else None]}
+    graph.add_nodes(pd.DataFrame(frame), "M", "id", "name")
+    created = "new" if loaded == "old" else "old"
+    vf, vt = versions[created]
+    end = f", vt: date('{vt}')" if vt else ""
+    graph.cypher(f"CREATE (:M {{id: 1, name: '{created}', vf: date('{vf}'){end}}})").to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'M', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    for body in (
+        "MATCH (m:M {id: 1}) RETURN m.name",
+        "MATCH (m:M {id: 1.0}) RETURN m.name",
+        "MATCH (a:A {id: 1}) MATCH (m:M {id: a.id}) RETURN m.name",
+        "UNWIND [1] AS x MATCH (m:M {id: x}) RETURN m.name",
+    ):
+        assert ids(graph, at("2005-01-01", body)) == ["old"], (storage, body)
+        assert ids(graph, at("2020-01-01", body)) == ["new"], (storage, body)
+
+
+def test_a_reopened_disk_graph_finds_a_float_id_by_any_numeric_spelling(tmp_path):
+    """A disk graph's saved id index answers `{id: 1}` for a node stored with
+    id `1.0`, as the in-memory index does, after the graph is reopened."""
+    path = str(tmp_path / "graph")
+    graph = kglite.KnowledgeGraph(storage="disk", path=path)
+    graph.cypher("CREATE (:G {id: 1.0, name: 'f'}), (:G {id: 'x', name: 'x'})").to_list()
+    assert ids(graph, "MATCH (n:G {id: 1}) RETURN n.name") == ["f"]
+    graph.save()
+    reopened = kglite.load(path)
+    for spelling in ("1", "1.0"):
+        assert ids(reopened, f"MATCH (n:G {{id: {spelling}}}) RETURN n.name") == ["f"], spelling
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+def test_an_id_seek_after_a_reload_follows_the_reloaded_node_order(storage, tmp_path):
+    """A version created into a slot a delete freed sits last in node order
+    until a reload orders the type by slot. The seek follows the node-order
+    rule on each side of the reload — not creation order — and agrees with
+    the unprefixed seek."""
+    graph = _storage(storage, tmp_path)
+    graph.cypher("CREATE (:X {id: 0})").to_list()
+    graph.cypher("CREATE (:M {id: 1, name: 'a', vf: date('2000-01-01'), vt: date('2099-01-01')})").to_list()
+    graph.cypher("MATCH (x:X) DETACH DELETE x").to_list()
+    graph.cypher("CREATE (:M {id: 1, name: 'b', vf: date('2000-01-01')})").to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'M', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+
+    def seek_and_order(g):
+        order = [row["n"] for row in g.cypher("MATCH (m:M) RETURN m.name AS n").to_list()]
+        seek = ids(g, at("2020-01-01", "MATCH (m:M {id: 1}) RETURN m.name"))
+        assert ids(g, "MATCH (m:M {id: 1}) RETURN m.name") == seek
+        return order, seek
+
+    before, seek = seek_and_order(graph)
+    assert seek == [before[-1]] == ["b"]
+    if storage == "disk":
+        graph.save()
+        reloaded = kglite.load(str(tmp_path / "graph"))
+    else:
+        graph.save(str(tmp_path / "g.kgl"))
+        reloaded = kglite.load(str(tmp_path / "g.kgl"))
+    after, seek = seek_and_order(reloaded)
+    assert after == list(reversed(before)), "premise: the reload orders the type by slot"
+    assert seek == [after[-1]] == ["a"]
 
 
 @pytest.mark.parametrize(

@@ -393,10 +393,11 @@ fn inline_map_values_are_lowered_and_evaluated_under_the_filter() {
     }
 }
 
-/// Several visible versions share an id: the seek returns the one inserted
-/// last, the id index's own choice, whichever version the index holds.
+/// Several visible versions share an id: the seek returns the last one in
+/// the type's node order (the id index's own choice for its node),
+/// whichever version the index holds.
 #[test]
-fn an_id_seek_returns_the_latest_inserted_visible_version() {
+fn an_id_seek_returns_the_last_visible_version_in_node_order() {
     let mut graph = DirGraph::new();
     for query in [
         "CREATE (:M {id: 1, name: 'a', vf: date('2000-01-01')}), \

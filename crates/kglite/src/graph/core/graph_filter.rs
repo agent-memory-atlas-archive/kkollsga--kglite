@@ -312,39 +312,54 @@ impl ElementFilter {
         self.error.get().map(String::as_str)
     }
 
-    /// The visible node of `node_type` with the id the id index answered
-    /// `hit` for. The index holds one node per (type, id), the last in the
-    /// type's node order, so when version nodes share an id it may hand back
-    /// one that is not visible while another is. Then the nodes it shadows —
-    /// only those, from the type's duplicate-id map — are tested latest
-    /// first, so every mode returns the latest-inserted visible version and
-    /// no other id's bounds are read. A map over the byte cap is not built;
-    /// the type is walked instead, comparing ids before any bound.
+    /// The visible node of `node_type` with id `id`, which the id index
+    /// answered `hit` for: the last visible one in the type's node order.
+    /// The index holds one node per id — the last in the type's node order,
+    /// whatever numeric kind each node spells the id in — so `hit` is the
+    /// answer when it is visible. Otherwise the nodes sharing the id — only
+    /// those, from the type's duplicate-id map — are tested latest first,
+    /// and no other id's bounds are read. A map over the byte cap is not
+    /// built; the type is walked instead, comparing ids before any bound.
     #[cold]
     #[inline(never)]
     pub(crate) fn lookup_id(
         &self,
         graph: &DirGraph,
         node_type: &str,
+        id: &Value,
         hit: Option<NodeIndex>,
     ) -> Option<NodeIndex> {
         let hit = hit?;
-        if self.admits_node(graph, hit) {
+        if self.seek_admits(graph, hit) {
             return Some(hit);
         }
         if let Some(duplicates) = endpoint_index::duplicate_ids(graph, node_type) {
+            let group = duplicate_ids::group_for(graph, node_type, id)?;
             return duplicates
-                .others(hit)
-                .find(|&idx| self.admits_node(graph, idx));
+                .latest_first(group)
+                .filter(|&idx| idx != hit)
+                .find(|&idx| self.seek_admits(graph, idx));
         }
         let nodes = graph.type_indices.get(node_type)?;
         (0..nodes.len())
             .rev()
             .filter_map(|i| nodes.get(i))
+            .filter(|&idx| idx != hit)
             .find(|&idx| {
-                duplicate_ids::shadowed_by(graph, node_type, idx) == Some(hit)
-                    && self.admits_node(graph, idx)
+                seek_probe::walked();
+                graph
+                    .graph
+                    .get_node_id(idx)
+                    .is_some_and(|other| duplicate_ids::same_id(&other, id))
+                    && self.seek_admits(graph, idx)
             })
+    }
+
+    /// [`Self::admits_node`] for an id seek's candidate, counted in tests.
+    #[inline]
+    fn seek_admits(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        seek_probe::admitted();
+        self.admits_node(graph, idx)
     }
 
     #[cold]
@@ -446,4 +461,32 @@ fn bit_admits(bits: &FixedBitSet, slot: usize) -> bool {
 
 fn format_value_compact(value: &Value) -> String {
     crate::graph::core::value_operations::format_value_compact(value)
+}
+
+/// What an id seek under a filter did — admit tests, and nodes a type walk
+/// read the id of — counted per thread in tests, so a test can prove a seek
+/// never walks the type. No-ops outside tests.
+pub(crate) mod seek_probe {
+    #[cfg(test)]
+    thread_local! {
+        static COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    #[inline]
+    pub(super) fn admitted() {
+        #[cfg(test)]
+        COUNTS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    }
+
+    #[inline]
+    pub(super) fn walked() {
+        #[cfg(test)]
+        COUNTS.with(|c| c.set((c.get().0, c.get().1 + 1)));
+    }
+
+    /// The (admit tests, walked nodes) counted since the last call.
+    #[cfg(test)]
+    pub(crate) fn take() -> (usize, usize) {
+        COUNTS.with(|c| c.replace((0, 0)))
+    }
 }

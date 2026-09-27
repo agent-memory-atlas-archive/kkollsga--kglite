@@ -931,7 +931,7 @@ pub(crate) fn cached_slice_count(graph: &DirGraph) -> usize {
 /// `node_type`'s duplicate-id map at the graph's version, built on a miss
 /// outside the lock (a racing builder's map wins) under what the byte cap
 /// leaves; `None` when it does not fit. Every mode builds one: it holds only
-/// shadowed nodes (see [`super::duplicate_ids`]).
+/// nodes whose id repeats (see [`super::duplicate_ids`]).
 pub(crate) fn duplicate_ids(graph: &DirGraph, node_type: &str) -> Option<Arc<DuplicateIds>> {
     let version = graph.version();
     let budget = {

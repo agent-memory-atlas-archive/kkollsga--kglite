@@ -48,7 +48,7 @@ impl PatternExecutor<'_> {
         let hit = self.graph.lookup_by_id_readonly(node_type, id);
         match &self.graph_filter {
             None => hit,
-            Some(filter) => filter.lookup_id(self.graph, node_type, hit),
+            Some(filter) => filter.lookup_id(self.graph, node_type, id, hit),
         }
     }
 

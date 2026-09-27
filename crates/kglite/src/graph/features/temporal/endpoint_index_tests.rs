@@ -641,7 +641,7 @@ fn a_mask_that_cannot_fit_evicts_nothing_and_leaves_its_targets_guarded() {
 }
 
 #[test]
-fn the_duplicate_id_map_holds_only_shadowed_nodes_and_counts_against_the_cap() {
+fn the_duplicate_id_map_holds_only_repeated_ids_and_counts_against_the_cap() {
     let wells = declared_wells();
     assert_eq!(duplicate_ids(&wells, "Well").unwrap().bytes(), 0);
     let versions = &["CREATE (:M {id: 1}), (:M {id: 1}), (:M {id: 2}), (:M {id: 1})"];
@@ -650,10 +650,13 @@ fn the_duplicate_id_map_holds_only_shadowed_nodes_and_counts_against_the_cap() {
     let hit = g.lookup_by_id_readonly("M", &Value::Int64(1)).unwrap();
     assert_eq!(hit, order[3], "the id index keeps the last node");
     let map = duplicate_ids(&g, "M").unwrap();
-    assert_eq!(map.others(hit).collect::<Vec<_>>(), [order[1], order[0]]);
-    assert_eq!(map.others(order[2]).count(), 0);
-    let bytes = crate::graph::features::temporal::duplicate_ids::GROUP_BYTES
-        + 2 * crate::graph::features::temporal::duplicate_ids::MEMBER_BYTES;
+    assert_eq!(
+        map.latest_first(hit).collect::<Vec<_>>(),
+        [order[3], order[1], order[0]]
+    );
+    assert_eq!(map.latest_first(order[2]).count(), 0);
+    // Three entries in the first reserved capacity of sixteen.
+    let bytes = 16 * crate::graph::features::temporal::duplicate_ids::ENTRY_BYTES;
     assert_eq!(map.bytes(), bytes);
     assert_eq!(read_cache(&g).as_ref().unwrap().array_bytes(), bytes);
     let capped = graph(versions);

@@ -1194,8 +1194,7 @@ impl DirGraph {
             warn_on_duplicate_ids(node_type, entry_count, map.len());
             TypeIdIndex::Integer(map)
         } else {
-            // General: mixed ID types.
-            let map: FxHashMap<Value, NodeIndex> = entries.into_iter().collect();
+            let map = crate::graph::schema::general_id_map(entries);
             warn_on_duplicate_ids(node_type, entry_count, map.len());
             TypeIdIndex::General(map)
         }
