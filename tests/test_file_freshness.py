@@ -6,7 +6,6 @@ file state into properties, `check_file_freshness` re-checks for drift.
 
 import hashlib
 import os
-import threading
 
 import pytest
 
@@ -267,38 +266,36 @@ def test_descriptor_snapshot_has_bounded_reads(tmp_path, monkeypatch):
 
 
 def test_descriptor_snapshot_retries_concurrent_in_place_mutation(tmp_path, monkeypatch):
+    """A write that lands between two chunks of one read attempt changes the
+    stat signature, so the attempt is discarded and the retry hashes the new
+    bytes. The writer runs inline from the patched ``os.read`` rather than on
+    a thread: the threaded form waited on a 5 s Event around an ``fsync`` the
+    check never needed, and one slow runner ``fsync`` (2026-09-27, py3.12)
+    timed it out. The page-cache write is visible to the reading descriptor
+    as soon as ``write()`` returns."""
     target = tmp_path / "mutating.bin"
     original = b"a" * (kglite._FILE_SNAPSHOT_CHUNK_BYTES + 8)
     changed = b"b" + original[1:]
     target.write_bytes(original)
-    first_read = threading.Event()
-    mutation_done = threading.Event()
+    # Backdate so the same-size in-place write moves mtime even where write
+    # timestamps come from a coarse per-tick clock (the write would otherwise
+    # share the creation tick and leave the signature unchanged).
+    os.utime(target, ns=(1_000_000_000, 1_000_000_000))
     real_read = os.read
-    read_calls = 0
+    mutated = False
 
-    def coordinated_read(descriptor, count):
-        nonlocal read_calls
+    def mutate_after_first_chunk(descriptor, count):
+        nonlocal mutated
         chunk = real_read(descriptor, count)
-        read_calls += 1
-        if read_calls == 1:
-            first_read.set()
-            assert mutation_done.wait(timeout=5)
+        if not mutated:
+            mutated = True
+            with target.open("r+b") as stream:
+                stream.write(b"b")
         return chunk
 
-    def mutate():
-        assert first_read.wait(timeout=5)
-        with target.open("r+b") as stream:
-            stream.write(b"b")
-            stream.flush()
-            os.fsync(stream.fileno())
-        mutation_done.set()
-
-    monkeypatch.setattr(os, "read", coordinated_read)
-    writer = threading.Thread(target=mutate)
-    writer.start()
+    monkeypatch.setattr(os, "read", mutate_after_first_chunk)
     snapshot = kglite._snapshot_file(target, include_hash=True)
-    writer.join(timeout=5)
-    assert not writer.is_alive()
+    assert mutated
     assert snapshot["hash"] == hashlib.sha256(changed).hexdigest()
 
 
