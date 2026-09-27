@@ -163,6 +163,7 @@ pub(crate) fn try_run_streaming<'q>(
         }
     }
 
+    absorbed_probe::note();
     Ok(StreamingOutcome::Absorbed(StreamingRun {
         absorbed,
         result,
@@ -191,4 +192,25 @@ fn find_top_k(clauses: &[Clause]) -> Option<(Vec<OrderItem>, usize, usize)> {
         _ => return None,
     };
     Some((order, n, 2))
+}
+
+/// Runs the pipeline absorbed, counted per thread in tests so a test can
+/// prove a path streamed. A no-op outside tests.
+pub(crate) mod absorbed_probe {
+    #[cfg(test)]
+    thread_local! {
+        static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[inline]
+    pub(crate) fn note() {
+        #[cfg(test)]
+        RUNS.with(|r| r.set(r.get() + 1));
+    }
+
+    /// The runs absorbed since the last call.
+    #[cfg(test)]
+    pub(crate) fn take() -> usize {
+        RUNS.with(|r| r.replace(0))
+    }
 }

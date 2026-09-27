@@ -42,6 +42,7 @@ fn first_value(graph: &DirGraph, query: &str, params: HashMap<String, Value>) ->
         max_work_units: None,
         row_limit: None,
         lazy_eligible: false,
+        streaming: false,
         disabled_passes: None,
         embedder: None,
         value_codecs: None,

@@ -223,10 +223,11 @@ impl Transaction {
             deadline,
             max_work_units,
             row_limit,
-            // Transactions historically went through the eager path
-            // (mark_lazy off, streaming off) — no lazy materializer
-            // is wired through the tx ResultView. Preserve that.
+            // No lazy materializer is wired through the tx ResultView, so
+            // rows are materialized; the streaming aggregate pipeline needs
+            // none.
             lazy_eligible: false,
+            streaming: true,
             parallel: false,
             disabled_passes: None,
             embedder: self.embedder.clone(),

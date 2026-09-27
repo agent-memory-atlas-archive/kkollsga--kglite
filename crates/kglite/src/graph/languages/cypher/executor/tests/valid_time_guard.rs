@@ -464,12 +464,14 @@ fn an_id_seek_reads_no_other_ids_bounds() {
     assert!(err.contains("node '999'"), "{err}");
 }
 
-/// [`rows`] with the streaming pipeline on (the Python surface's setting);
-/// `rows` runs eager, where the pipeline is off.
-fn streamed_rows(graph: &DirGraph, query: &str) -> Vec<Vec<Value>> {
+/// [`rows`] with the streaming pipeline on, with lazy projection (the
+/// Python live graph's setting) or without it (a frozen view's, a session's
+/// and a transaction's); `rows` runs eager, where the pipeline is off.
+fn streamed_rows(graph: &DirGraph, query: &str, lazy_eligible: bool) -> Vec<Vec<Value>> {
     let params = HashMap::new();
     let options = ExecuteOptions {
-        lazy_eligible: true,
+        lazy_eligible,
+        streaming: true,
         ..ExecuteOptions::eager(&params)
     };
     let result = execute_read(graph, query, &options).unwrap_or_else(|e| panic!("{query}: {e}"));
@@ -499,8 +501,19 @@ fn the_streaming_pipeline_answers_as_the_materialized_path_under_a_context() {
         "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id, sum(COUNT { (t)-[:LINK]->() }) AS n",
     ] {
         let context = at("2008-01-01", query);
+        let probe =
+            crate::graph::languages::cypher::executor::stream::pipeline::absorbed_probe::take;
+        probe();
         let materialized = rows(&graph, &context);
-        assert_eq!(streamed_rows(&graph, &context), materialized, "{query}");
+        assert_eq!(probe(), 0, "{query}: eager options stream nothing");
+        for lazy_eligible in [true, false] {
+            assert_eq!(
+                streamed_rows(&graph, &context, lazy_eligible),
+                materialized,
+                "{query}"
+            );
+            assert!(probe() > 0, "{query}: the streaming options did not stream");
+        }
         assert_ne!(
             materialized,
             rows(&graph, query),

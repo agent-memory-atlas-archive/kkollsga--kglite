@@ -180,6 +180,17 @@ before upgrading.
 
 ### Changed
 
+- Python: `FrozenGraph.cypher()`, `Session.cypher()` and `Transaction.cypher()`
+  fold a trailing aggregate (`count`, `sum`, grouped `RETURN`/`WITH`, `ORDER BY
+  … LIMIT` over it) into its result as rows are matched, as
+  `KnowledgeGraph.cypher()` does, instead of collecting every matched row
+  first. A frozen twin of a graph answered such a query up to ~2× slower than
+  the graph itself; the answers are unchanged.
+- **Breaking (Rust):** `kglite::api::session::ExecuteOptions` has a new field,
+  `streaming`, which turns that pipeline on independently of `lazy_eligible`
+  (it used to follow `lazy_eligible`). A struct literal must name it;
+  `ExecuteOptions::eager` sets it to `false`, as the pipeline was off there
+  before.
 - **Breaking (Python):** a date value comes back as a `datetime.date`, and a
   date column in `to_df()` is `datetime64[ns]`, on every read route —
   `cypher()` / `to_list()`, rows, fluent `collect()` and `to_df()`, `Session`,

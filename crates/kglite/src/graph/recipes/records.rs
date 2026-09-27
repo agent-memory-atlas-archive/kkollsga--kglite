@@ -241,6 +241,7 @@ fn recipe_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
         max_work_units: None,
         row_limit: None,
         lazy_eligible: false,
+        streaming: false,
         parallel: false,
         disabled_passes: None,
         embedder: None,

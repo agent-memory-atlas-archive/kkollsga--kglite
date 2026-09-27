@@ -91,17 +91,24 @@ pub struct ExecuteOptions<'a> {
     pub row_limit: Option<usize>,
     /// Lazy-projection mode.
     ///
-    /// - `true` (Python): `mark_lazy_eligibility` runs after optimize and the
-    ///   executor gets `streaming=true`, so `CypherResult.lazy` may be
-    ///   `Some(LazyResultDescriptor)` and `rows` empty; the caller must
-    ///   materialize via the lazy helper in `pyapi/result_view.rs`.
-    /// - `false` (bolt-server, mcp-server): the executor materializes every
-    ///   row into `CypherResult.rows`.
+    /// - `true` (the Python live graph): `mark_lazy_eligibility` runs after
+    ///   optimize, so `CypherResult.lazy` may be `Some(LazyResultDescriptor)`
+    ///   and `rows` empty; the caller must materialize via the lazy helper in
+    ///   `pyapi/result_view.rs`, which pins the graph the rows are read from.
+    /// - `false` (every other caller): the executor materializes every row
+    ///   into `CypherResult.rows`.
     ///
     /// **Important:** setting `true` without a lazy-materializer to consume
     /// `result.lazy` yields silently empty row sets — the bolt-server bug
     /// fixed during the robustness pass. Default `false` for safety.
     pub lazy_eligible: bool,
+    /// Run a trailing aggregate (`WITH`/`RETURN` with an aggregate, optionally
+    /// `ORDER BY … LIMIT`) through the streaming pipeline, which folds rows
+    /// into aggregate state as they are matched instead of materializing
+    /// them first. Its rows are ordinary materialized rows, so it needs no
+    /// lazy materializer and is independent of [`Self::lazy_eligible`].
+    /// `false` in [`Self::eager`].
+    pub streaming: bool,
     /// Planner passes to disable. `None` uses the static empty set — no
     /// allocation, and the common case.
     pub disabled_passes: Option<&'a HashSet<String>>,
@@ -196,6 +203,7 @@ impl<'a> ExecuteOptions<'a> {
             max_work_units: None,
             row_limit: None,
             lazy_eligible: false,
+            streaming: false,
             disabled_passes: None,
             embedder: None,
             value_codecs: None,
@@ -381,7 +389,7 @@ pub fn execute_read(
     let mut result = cypher::CypherExecutor::with_params(graph, &params, opts.deadline)
         .with_max_work_units(opts.max_work_units)
         .with_row_limit(opts.row_limit)
-        .with_streaming(opts.lazy_eligible)
+        .with_streaming(opts.streaming)
         .with_parallel(opts.parallel)
         .with_cancel(opts.cancel)
         .with_csv_import(opts.csv_import.clone())
@@ -592,7 +600,7 @@ pub fn execute_mut(
         cypher::CypherExecutor::with_params(graph, &params, opts.deadline)
             .with_max_work_units(opts.max_work_units)
             .with_row_limit(opts.row_limit)
-            .with_streaming(opts.lazy_eligible)
+            .with_streaming(opts.streaming)
             .with_parallel(opts.parallel)
             .with_cancel(opts.cancel)
             .execute(&parsed)

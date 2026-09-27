@@ -167,7 +167,8 @@ cancellation flag; a missing flag does not disable timeout/budget rollback.
 Bindings without a lazy materializer must use eager options. If
 `lazy_eligible=true`, the outcome may contain a lazy descriptor instead of
 materialized rows; the wrapper must implement the descriptor contract before
-exposing that mode.
+exposing that mode. `streaming=true` is independent of it: the streaming
+aggregate pipeline returns materialized rows, so any binding may turn it on.
 
 ## Source map
 

@@ -161,6 +161,7 @@ impl FrozenGraph {
                     max_work_units,
                     row_limit,
                     lazy_eligible: false,
+                    streaming: true,
                     parallel: false,
                     disabled_passes: None,
                     embedder,

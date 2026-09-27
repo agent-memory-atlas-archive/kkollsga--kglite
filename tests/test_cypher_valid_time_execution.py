@@ -407,6 +407,47 @@ def network():
     return graph
 
 
+STREAMING_SHAPES = [
+    "MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t) AS c",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(t) AS c",
+    "MATCH (s:Stop)-[r:LINK]->(t) RETURN count(DISTINCT t.id) AS d, count(*) AS c, count(r) AS r",
+    "MATCH (s:Stop)-[:LINK]->(t) WITH s, count(t) AS c WHERE c > 0 RETURN s.id AS s, c",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(*) AS c ORDER BY s DESC LIMIT 2",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN min(t.id) AS lo, max(t.id) AS hi, sum(t.id) AS s, avg(t.id) AS a",
+    "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, sum(COUNT { (t)-[:LINK]->() }) AS n",
+]
+
+
+@pytest.mark.parametrize("shape", STREAMING_SHAPES)
+def test_every_read_handle_answers_the_streaming_shapes_as_the_eager_path(network, shape):
+    """The streaming aggregate pipeline runs on a frozen view, a session and
+    a transaction as on the live graph; each answers as the eager path
+    (`streaming=False`), under a context and without one."""
+    ordered = "ORDER BY" in shape
+    for body in (at("2008-01-01", shape), shape):
+
+        def rows(result, body=body):
+            values = [tuple(sorted(row.items())) for row in result.to_list()]
+            return values if ordered else sorted(values)
+
+        eager = rows(network.cypher(body, streaming=False))
+        session = network.session()
+        tx = network.begin_read()
+        handles = {
+            "live": network.cypher(body),
+            "frozen": network.freeze().cypher(body),
+            "session": session.cypher(body),
+            "session snapshot": session.snapshot().cypher(body),
+            "transaction": tx.cypher(body),
+        }
+        if body == shape:
+            handles["frozen at 2008"] = network.freeze(valid_at="2008-01-01").cypher(shape)
+            eager_at = rows(network.cypher(at("2008-01-01", shape), streaming=False))
+            assert rows(handles.pop("frozen at 2008")) == eager_at
+        for name, result in handles.items():
+            assert rows(result) == eager, (name, body)
+
+
 def _explained(graph, query):
     return [row["operation"] for row in graph.cypher(f"EXPLAIN {query}").to_list()]
 

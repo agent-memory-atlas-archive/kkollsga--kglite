@@ -34,14 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = load_file("graph.kgl")?;
 
     let params = HashMap::new();
-    let opts = session::ExecuteOptions {
-        params: &params,
-        deadline: None,
-        max_work_units: None,
-        lazy_eligible: false,
-        disabled_passes: None,
-        embedder: None,
-    };
+    let opts = session::ExecuteOptions::eager(&params);
     let outcome = session::execute_read(
         &graph,
         "MATCH (n:Person) RETURN n.name LIMIT 10",
@@ -92,10 +85,7 @@ use std::sync::Arc;
 
 let session = Arc::new(Session::new(DirGraph::new()));
 let params: HashMap<String, kglite::api::Value> = HashMap::new();
-let opts = ExecuteOptions {
-    params: &params, deadline: None, max_work_units: None,
-    lazy_eligible: false, disabled_passes: None, embedder: None,
-};
+let opts = ExecuteOptions::eager(&params);
 
 let mut tx = session.begin();
 kglite::api::session::execute_mut(

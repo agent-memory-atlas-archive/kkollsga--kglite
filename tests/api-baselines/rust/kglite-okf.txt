@@ -2714,6 +2714,7 @@ pub kglite::api::session::ExecuteOptions::modified_by: core::option::Option<&'a 
 pub kglite::api::session::ExecuteOptions::parallel: bool
 pub kglite::api::session::ExecuteOptions::params: &'a std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>
 pub kglite::api::session::ExecuteOptions::row_limit: core::option::Option<usize>
+pub kglite::api::session::ExecuteOptions::streaming: bool
 pub kglite::api::session::ExecuteOptions::value_codecs: core::option::Option<&'a [kglite::api::cypher::ValueCodec]>
 pub kglite::api::session::ExecuteOptions::write_scope: core::option::Option<&'a std::collections::hash::set::HashSet<alloc::string::String>>
 impl<'a> kglite::api::session::ExecuteOptions<'a>
