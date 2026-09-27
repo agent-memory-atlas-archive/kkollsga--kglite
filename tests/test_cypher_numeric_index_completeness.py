@@ -227,3 +227,37 @@ def test_soft_alias_range_preserves_title_fallback_candidates():
     assert graph.cypher(query).to_list() == expected
     graph.create_range_index("T", "name")
     assert graph.cypher(query).to_list() == expected
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        (2**63 - 1, 1.0e19),
+        (1.0e19, 2**63 - 1),
+        (float(2**53), 2**53 + 1),
+        (2**53 + 1, float(2**53)),
+    ],
+)
+def test_ids_one_float_apart_at_precision_edges_stay_their_own(tmp_path, storage, first, second):
+    # A float is one id with an integer only when each converts to the other
+    # exactly: creating the second node must not evict the first's index entry.
+    # The leading string id keeps the id column mixed, so each id is stored as
+    # given (a float column would store the integer as its rounded float).
+    graph = kglite.KnowledgeGraph(storage=storage, path=str(tmp_path / "ids") if storage == "disk" else None)
+    graph.cypher("CREATE (:T {id: 'x', name: 'x'})")
+    for name, value in [("first", first), ("second", second)]:
+        graph.cypher("CREATE (:T {id: $id, name: $name})", params={"id": value, "name": name})
+    for name, value in [("first", first), ("second", second)]:
+        rows = graph.cypher("MATCH (n:T {id: $id}) RETURN n.name AS name", params={"id": value}).to_list()
+        assert rows == [{"name": name}], (value, rows)
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
+def test_a_whole_float_id_and_its_integer_remain_one_id(tmp_path, storage):
+    graph = kglite.KnowledgeGraph(storage=storage, path=str(tmp_path / "ids") if storage == "disk" else None)
+    graph.cypher("CREATE (:T {id: 1, name: 'int'})")
+    graph.cypher("CREATE (:T {id: 1.0, name: 'float'})")
+    for value in [1, 1.0]:
+        rows = graph.cypher("MATCH (n:T {id: $id}) RETURN n.name AS name", params={"id": value}).to_list()
+        assert rows == [{"name": "float"}], (value, rows)

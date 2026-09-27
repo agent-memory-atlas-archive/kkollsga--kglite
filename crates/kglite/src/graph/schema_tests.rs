@@ -36,6 +36,58 @@ mod type_id_index_tests {
         assert_eq!(idx.get(&Value::String("Q1".into())), None);
         assert_eq!(idx.get(&Value::String("1".into())), None);
     }
+
+    /// A float and an integer are one id only when each converts to the
+    /// other exactly: a float past `i64` does not saturate onto `i64::MAX`,
+    /// and an integer past 2^53 has no float spelling to evict. Both nodes
+    /// stay reachable by their own id, whichever is inserted last.
+    #[test]
+    fn only_exactly_convertible_numbers_share_an_id() {
+        let two_53 = 9_007_199_254_740_992i64;
+        let cases = [
+            (Value::Int64(i64::MAX), Value::Float64(1.0e19)),
+            (Value::Float64(two_53 as f64), Value::Int64(two_53 + 1)),
+        ];
+        for (first, second) in cases {
+            for (a, b) in [(&first, &second), (&second, &first)] {
+                let mut idx = TypeIdIndex::default();
+                idx.insert(a.clone(), NodeIndex::new(1));
+                idx.insert(b.clone(), NodeIndex::new(2));
+                assert_eq!(idx.get(a), Some(NodeIndex::new(1)), "{a:?} then {b:?}");
+                assert_eq!(idx.get(b), Some(NodeIndex::new(2)), "{a:?} then {b:?}");
+            }
+        }
+        // The documented coercion still holds: `1.0` and `1` are one id.
+        let mut idx = TypeIdIndex::default();
+        idx.insert(Value::Int64(1), NodeIndex::new(1));
+        idx.insert(Value::Float64(1.0), NodeIndex::new(2));
+        assert_eq!(idx.len(), 1);
+        for query in [Value::Int64(1), Value::UniqueId(1), Value::Float64(1.0)] {
+            assert_eq!(idx.get(&query), Some(NodeIndex::new(2)), "{query:?}");
+        }
+        assert_eq!(idx.get(&Value::Int64(two_53)), None);
+    }
+
+    /// A `General` map that spells one id twice — the shape persisted through
+    /// 0.18.1 — keeps the entry of the node last in node order.
+    #[test]
+    fn healing_keeps_one_spelling_per_id_for_the_last_node() {
+        let map = rustc_hash::FxHashMap::from_iter([
+            (Value::Int64(1), NodeIndex::new(7)),
+            (Value::UniqueId(1), NodeIndex::new(3)),
+            (Value::Float64(2.0), NodeIndex::new(1)),
+            (Value::UniqueId(2), NodeIndex::new(4)),
+            (Value::String("1".into()), NodeIndex::new(0)),
+        ]);
+        let healed = TypeIdIndex::General(heal_general_spellings(map));
+        assert_eq!(healed.len(), 3);
+        assert_eq!(healed.get(&Value::UniqueId(1)), Some(NodeIndex::new(7)));
+        assert_eq!(healed.get(&Value::Float64(2.0)), Some(NodeIndex::new(4)));
+        assert_eq!(
+            healed.get(&Value::String("1".into())),
+            Some(NodeIndex::new(0))
+        );
+    }
 }
 
 #[cfg(test)]

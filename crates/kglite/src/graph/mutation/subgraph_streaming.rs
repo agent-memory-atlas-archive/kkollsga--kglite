@@ -397,13 +397,13 @@ pub fn save_subset(
     use crate::graph::mutation::subgraph::extract_subgraph;
 
     // 1. Materialize the filtered subgraph in-memory. `extract_subgraph`
-    //    reads through `GraphRead`, so it works for every source mode; for
-    //    disk sources the extracted graph holds `Arc` references into the
-    //    source's column stores rather than deep-cloning property data.
+    //    reads through `GraphRead`, so it works for every source mode, and
+    //    inserts the kept nodes into column stores of its own: it never
+    //    shares the source's stores.
     let mut extracted = extract_subgraph(source, selection)?;
 
-    // 2. Consolidate properties into self-contained column stores so the
-    //    output is independent of the source's stores. Both save paths need it.
+    // 2. Consolidate every node's properties into column stores. Both save
+    //    paths need it.
     extracted.enable_columnar();
 
     let path_str = out_path.to_str().ok_or_else(|| {

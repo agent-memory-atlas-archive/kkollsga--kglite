@@ -333,7 +333,16 @@ before upgrading.
   id written by Cypher `CREATE`, or a float id — returned the node of the
   kind the query spelled, so `{id: 1}` and `{id: a.id}` could answer with
   different nodes. The id index now holds one node per id, the last in the
-  type's node order, whatever the kinds.
+  type's node order, whatever the kinds. An older disk directory whose saved
+  id index holds one id under two kinds is healed on load, and the next save
+  no longer writes that index back.
+
+- Cypher: a float id and an integer id are one id only when each converts to
+  the other exactly. Creating a node with id `1.0e19` removed the index entry
+  of a node with id `9223372036854775807` (the float saturated onto the
+  largest integer), and an integer id past 2^53 removed the entry of the float
+  it rounds to, so the earlier node's id seek returned no rows. `{id: 1.0}`
+  and `{id: 1}` remain one id.
 
 - `to_subgraph()` and `save_subset()` on a mapped or disk graph copied every
   row of each selected node's type onto the heap (the copy shared the source's

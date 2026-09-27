@@ -1,14 +1,13 @@
 //! The duplicate-id map: per node type and graph version, every node that
 //! shares its id with another node of the type, grouped by id. The id index
-//! keeps one node per (type, id) spelling — for one spelling, the last in the
-//! type's node order — so when version nodes share an id, a seek under a
+//! keeps one node per (type, id) — the last in the type's node order, under
+//! one spelling of the id — so when version nodes share an id, a seek under a
 //! valid-time filter may be handed a version that is not visible while
 //! another is. Ids are grouped as the index compares them
 //! ([`canonical_id`]): a loaded `UniqueId(1)` and a Cypher-created
-//! `Int64(1)` are one id, although the index keys them apart. A group is
-//! named by the node the index answers for the id's canonical spelling, so
-//! the seek admit-tests only nodes carrying the sought id, latest in the
-//! type's node order first.
+//! `Int64(1)` are one id. A group is named by the node the index answers for
+//! the id, so the seek admit-tests only nodes carrying the sought id, latest
+//! in the type's node order first.
 //!
 //! Built lazily — one walk over the type with an id read and an id-index
 //! probe per node, then a walk without id reads to place each group's own

@@ -406,17 +406,30 @@ pub fn parse_temporal_column_types_from_pairs(
     }
 }
 
+/// 2^63: the first float past `i64`, where `as i64` saturates.
+const I64_FLOAT_END: f64 = 9_223_372_036_854_775_808.0;
+
 /// The integer a numeric id denotes — the one coercion every id-index
 /// lookup applies: a `UniqueId`, an `Int64` and an integral `Float64` of the
 /// same integer are one id. `None` for any other value, which is only ever
-/// its own id.
+/// its own id — including a whole float outside `i64`, which would otherwise
+/// saturate onto `i64::MAX` (every whole float inside it converts exactly).
 pub(crate) fn id_integer(id: &Value) -> Option<i64> {
     match id {
         Value::UniqueId(u) => Some(i64::from(*u)),
         Value::Int64(i) => Some(*i),
-        Value::Float64(f) if f.fract() == 0.0 => Some(*f as i64),
+        Value::Float64(f) if f.fract() == 0.0 && (-I64_FLOAT_END..I64_FLOAT_END).contains(f) => {
+            Some(*f as i64)
+        }
         _ => None,
     }
+}
+
+/// `n` as a float, when the float is exactly `n`: past 2^53 an integer
+/// rounds onto a neighbour's float, which is another id.
+fn exact_float(n: i64) -> Option<f64> {
+    let f = n as f64;
+    (f < I64_FLOAT_END && f as i64 == n).then_some(f)
 }
 
 /// `id` as the compact `Integer` index's key, when it has one.
@@ -431,7 +444,7 @@ pub(crate) fn id_spellings(id: &Value) -> impl Iterator<Item = Value> {
     let own = std::mem::discriminant(id);
     [
         n.map(Value::Int64),
-        n.map(|n| Value::Float64(n as f64)),
+        n.and_then(exact_float).map(Value::Float64),
         id_u32(id).map(Value::UniqueId),
     ]
     .into_iter()
@@ -451,16 +464,7 @@ pub(crate) fn insert_general(map: &mut FxHashMap<Value, NodeIndex>, id: Value, i
 /// order: one spelling per id, the last node's. Ids of a single numeric kind
 /// cannot spell one id twice, so only a mix pays the dedup.
 pub(crate) fn general_id_map(entries: Vec<(Value, NodeIndex)>) -> FxHashMap<Value, NodeIndex> {
-    let kinds = entries.iter().fold(0u8, |kinds, (id, _)| {
-        kinds
-            | match id {
-                Value::UniqueId(_) => 1,
-                Value::Int64(_) => 2,
-                Value::Float64(_) => 4,
-                _ => 0,
-            }
-    });
-    if kinds.count_ones() < 2 {
+    if !mixed_numeric_kinds(entries.iter().map(|(id, _)| id)) {
         return entries.into_iter().collect();
     }
     let mut map = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
@@ -470,9 +474,39 @@ pub(crate) fn general_id_map(entries: Vec<(Value, NodeIndex)>) -> FxHashMap<Valu
     map
 }
 
+/// Whether `ids` hold more than one numeric kind — the only way two keys can
+/// spell one id.
+pub(crate) fn mixed_numeric_kinds<'a>(ids: impl Iterator<Item = &'a Value>) -> bool {
+    let kinds = ids.fold(0u8, |kinds, id| {
+        kinds
+            | match id {
+                Value::UniqueId(_) => 1,
+                Value::Int64(_) => 2,
+                Value::Float64(_) => 4,
+                _ => 0,
+            }
+    });
+    kinds.count_ones() > 1
+}
+
+/// `map` with one spelling per id, keeping the entry of the node last in node
+/// order. A `General` index persisted through 0.18.1 kept a key per spelling
+/// (`UniqueId(1)` and `Int64(1)` pointing at different nodes); a persisted
+/// type's node order is ascending `NodeIndex` (the type-index writer sorts
+/// it), so the highest index is the one a fresh build would keep.
+pub(crate) fn heal_general_spellings(
+    map: FxHashMap<Value, NodeIndex>,
+) -> FxHashMap<Value, NodeIndex> {
+    if !mixed_numeric_kinds(map.keys()) {
+        return map;
+    }
+    let mut entries: Vec<(Value, NodeIndex)> = map.into_iter().collect();
+    entries.sort_unstable_by_key(|(_, idx)| *idx);
+    general_id_map(entries)
+}
+
 /// `id` in the spelling all its [`id_spellings`] share, so two ids the index
-/// treats as one compare equal here (integers past 2^53 against a float
-/// aside, where the `Float64` probe itself rounds).
+/// treats as one compare equal here.
 pub(crate) fn canonical_id(id: &Value) -> Cow<'_, Value> {
     match id_integer(id) {
         Some(n) if !matches!(id, Value::Int64(_)) => Cow::Owned(Value::Int64(n)),

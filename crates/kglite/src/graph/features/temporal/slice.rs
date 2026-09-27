@@ -42,7 +42,8 @@ use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::mutation::subgraph::copy_induced_subgraph;
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
-use crate::graph::storage::GraphRead;
+use crate::graph::storage::node_view::NodeView;
+use crate::graph::storage::{GraphRead, StrField};
 
 /// The bytes the cached slices of one graph may hold together, and the most
 /// one slice may estimate at. [`SLICE_BYTE_CAP_ENV`] overrides it.
@@ -182,13 +183,17 @@ pub(crate) fn slice_at(
     };
     let mut nodes = Vec::new();
     let mut properties = 0usize;
+    let mut payloads = 0usize;
     for idx in base.graph.node_indices() {
         if filter.is_some_and(|f| !f.admits_node(base, idx)) {
             continue;
         }
         budget.admit()?;
         nodes.push(idx);
-        properties += base.graph.node_property_count(idx);
+        if let Some(view) = base.graph.node_view(idx) {
+            properties += view.property_count();
+            payloads += string_payload(&view);
+        }
     }
     nodes.sort_unstable();
     let mut kept_edges: Vec<EdgeIndex> = Vec::new();
@@ -210,11 +215,12 @@ pub(crate) fn slice_at(
     if let Some(err) = filter.and_then(ElementFilter::error) {
         return Err(err.to_string());
     }
-    // Refused before the copy on the records alone; the copy's own stores
-    // are then measured and judged again.
+    // Refused before the copy on the records and the kept nodes' string
+    // payloads, so a slice that cannot fit never builds the copy; the copy's
+    // own stores are then measured and judged again.
     let records =
         nodes.len() * NODE_BYTES + kept_edges.len() * EDGE_BYTES + properties * PROPERTY_BYTES;
-    over_cap(records, caps)?;
+    over_cap(records + payloads, caps)?;
     kept_edges.sort_unstable();
     let (graph, _) =
         copy_induced_subgraph(base, &nodes, |edge| kept_edges.binary_search(&edge).is_ok())?;
@@ -238,6 +244,22 @@ pub(crate) fn slice_at(
         to_base: nodes,
         bytes,
     })
+}
+
+/// The string bytes a copy of the node behind `view` puts in its store: its
+/// id, title and string properties, measured one field at a time.
+fn string_payload(view: &NodeView<'_>) -> usize {
+    let len = |field: StrField<'_>| match field {
+        StrField::Str(s) => s.len(),
+        StrField::NotString | StrField::Absent => 0,
+    };
+    len(view.id_field())
+        + len(view.title_field())
+        + view
+            .property_key_set()
+            .into_iter()
+            .map(|key| len(view.str_field(key)))
+            .sum::<usize>()
 }
 
 fn over_cap(bytes: usize, caps: SliceCaps) -> Result<(), String> {

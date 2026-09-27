@@ -140,3 +140,48 @@ fn a_disk_walk_holds_nothing_sized_by_the_graph_before_its_cap_refuses() {
         );
     }
 }
+
+/// A memory-mode slice whose kept rows cannot fit is refused before the copy
+/// is built: the estimate counts the kept rows' string payloads, which the
+/// copy's store would hold, so the refusal allocates a fraction of the copy.
+#[test]
+fn a_memory_slice_over_the_cap_is_refused_before_the_copy() {
+    const PAYLOAD: usize = 1 << 20;
+    let mut g = new_dir_graph_in_mode(StorageMode::Memory, None).expect("graph");
+    let params = HashMap::from([("s".to_string(), Value::String("x".repeat(PAYLOAD)))]);
+    execute_mut(
+        &mut g,
+        "UNWIND range(1, 10) AS i CREATE (:T {id: i, s: $s + toString(i), \
+         vf: date('2000-01-01'), vt: date('2090-01-01')})",
+        &ExecuteOptions::eager(&params),
+    )
+    .expect("load");
+    declare(
+        &mut g,
+        &TemporalTarget::Node("T".into()),
+        "vf",
+        "vt",
+        IntervalConvention::Closed,
+    )
+    .unwrap();
+    let filter = filter(&g);
+    let unlimited = SliceCaps {
+        bytes: usize::MAX,
+        disk_elements: None,
+    };
+    let (slice, copy_peak) = peak_during(|| slice_at(&g, filter.as_ref(), unlimited).unwrap());
+    assert!(slice.bytes() >= 10 * PAYLOAD, "{}", slice.bytes());
+    drop(slice);
+
+    let caps = SliceCaps {
+        bytes: 4 * PAYLOAD,
+        disk_elements: None,
+    };
+    let (result, peak) = peak_during(|| slice_at(&g, filter.as_ref(), caps));
+    let err = result.unwrap_err();
+    assert!(err.contains("slice cap"), "{err}");
+    assert!(
+        peak < copy_peak / 4,
+        "the refusal grew the heap by {peak} bytes; the copy takes {copy_peak}"
+    );
+}

@@ -169,3 +169,86 @@ fn a_label_only_mentioned_by_a_query_does_not_poison_the_next_save() {
     let loaded = load_file(dir.to_str().unwrap()).expect("a saved disk directory must load");
     assert_eq!(count_of_type(&loaded, "Full"), 2);
 }
+
+/// `(name)` of the `M` node each id seek returns: a parameter (`Int64`) and a
+/// bound `UniqueId` from another node.
+fn m_seeks(graph: &DirGraph) -> [Vec<Value>; 2] {
+    let params = std::collections::HashMap::from([("p".to_string(), Value::Int64(1))]);
+    let opts = ExecuteOptions::new(&params);
+    [
+        "MATCH (n:M {id: $p}) RETURN n.name",
+        "MATCH (a:A {id: 1}) MATCH (n:M {id: a.id}) RETURN n.name",
+    ]
+    .map(|query| {
+        execute_read(graph, query, &opts)
+            .unwrap_or_else(|e| panic!("{query}: {e}"))
+            .result
+            .rows
+            .into_iter()
+            .map(|mut row| row.remove(0))
+            .collect()
+    })
+}
+
+/// Through 0.18.1 a type holding one id in two numeric kinds — an `add_nodes`
+/// `UniqueId(1)` beside a Cypher-created `Int64(1)` — was persisted with one
+/// index entry per spelling, so `{id: $p}` and `{id: a.id}` answered with
+/// different nodes. Such a directory is healed on load (the node last in the
+/// type's order answers every spelling, as a fresh index does), and the next
+/// save no longer writes the two-spelling entry back.
+#[test]
+fn an_id_index_saved_with_two_spellings_of_one_id_is_healed_on_load() {
+    use crate::graph::schema::TypeIdIndex;
+    use crate::graph::session::execute_mut;
+    use crate::graph::storage::disk::generation::resolve_snapshot;
+    use crate::graph::storage::disk::id_index::{write_id_indices_bin, IdIndexBase, IdIndexStore};
+    use crate::graph::storage::disk::type_index::TypeIndexStore;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("graph");
+    let mut graph = DirGraph::new();
+    for (query, id) in [
+        ("CREATE (:A {id: $id})", Value::UniqueId(1)),
+        ("CREATE (:M {id: $id, name: 'first'})", Value::UniqueId(1)),
+        ("CREATE (:M {id: $id, name: 'last'})", Value::Int64(1)),
+    ] {
+        let params = std::collections::HashMap::from([("id".to_string(), id)]);
+        execute_mut(&mut graph, query, &ExecuteOptions::eager(&params)).unwrap();
+    }
+    let loaded = disk_round_trip(graph, &dir);
+    let members = loaded.type_indices.get("M").unwrap().to_vec();
+    let interner = loaded.interner.clone();
+    drop(loaded);
+
+    // The 0.18.1 shape, written past the writer's repeat check.
+    let snapshot = resolve_snapshot(&dir).unwrap().snapshot_dir;
+    let mut old = IdIndexStore::default();
+    old.replace_with(std::collections::HashMap::from([(
+        "M".to_string(),
+        TypeIdIndex::General(rustc_hash::FxHashMap::from_iter([
+            (Value::UniqueId(1), members[0]),
+            (Value::Int64(1), members[1]),
+        ])),
+    )]));
+    write_id_indices_bin(&snapshot, &old, &TypeIndexStore::default(), &interner).unwrap();
+
+    let last = vec![Value::String("last".into())];
+    let healed = load_file(dir.to_str().unwrap()).unwrap();
+    assert_eq!(m_seeks(&healed), [last.clone(), last.clone()]);
+
+    let mut handle = healed;
+    save_graph(&mut handle, dir.to_str().unwrap()).unwrap();
+    drop(handle);
+    let snapshot = resolve_snapshot(&dir).unwrap().snapshot_dir;
+    let base = IdIndexBase::load_from(&snapshot, &interner)
+        .unwrap()
+        .unwrap();
+    // Its ids repeat, so the save leaves the index to the reload's rebuild
+    // from the type's node order rather than persisting a spelling per node.
+    assert!(
+        !base.contains("M"),
+        "the two-spelling index was written back"
+    );
+    let reloaded = load_file(dir.to_str().unwrap()).unwrap();
+    assert_eq!(m_seeks(&reloaded), [last.clone(), last]);
+}

@@ -38,7 +38,10 @@
 //! General payload is decoded to validate it).
 
 use crate::datatypes::Value;
-use crate::graph::schema::{id_spellings, id_u32, InternedKey, StringInterner, TypeIdIndex};
+use crate::graph::schema::{
+    canonical_id, heal_general_spellings, id_spellings, id_u32, mixed_numeric_kinds, InternedKey,
+    StringInterner, TypeIdIndex,
+};
 use crate::graph::storage::disk::id_index_layer::TypeEntry;
 use crate::graph::storage::disk::type_index::TypeIndexStore;
 use crate::serde_codec;
@@ -89,8 +92,10 @@ pub struct IdIndexBase {
     /// type_name -> directory entry. Built once at load (88k entries × ~50 bytes ≈ 4 MB).
     /// Strings owned to keep the API HashMap-compatible without lifetime gymnastics.
     dir: HashMap<String, BaseEntry>,
-    /// Decoded General payloads. Filled at load, which decodes every General
-    /// entry to validate it; `general_map` decodes only on a miss.
+    /// Decoded General payloads, one spelling per id: a payload persisted
+    /// through 0.18.1 may spell an id twice, and decoding heals it. Filled at
+    /// load, which decodes every General entry to validate it; `general_map`
+    /// decodes only on a miss.
     /// Integer variant never enters here — it's read directly from mmap.
     general_cache: RwLock<HashMap<String, Arc<FxHashMap<Value, NodeIndex>>>>,
 }
@@ -122,8 +127,14 @@ impl IdIndexBase {
         self.general_map(name, entry)?.get(id).copied()
     }
 
+    /// Ids indexed for `name`: a `General` entry's persisted count can
+    /// exceed it by the spellings healed at load.
     fn entry_len(&self, name: &str) -> Option<usize> {
-        Some(self.dir.get(name)?.num_entries as usize)
+        let entry = self.dir.get(name)?;
+        if entry.variant == 1 {
+            return Some(self.general_map(name, entry)?.len());
+        }
+        Some(entry.num_entries as usize)
     }
 
     /// Load `id_indices.bin` from `dir`. Returns `Ok(None)` if absent, shorter
@@ -255,7 +266,7 @@ impl IdIndexBase {
                         "general payload has duplicate or missing keys",
                     ));
                 }
-                general_cache_map.insert(name.to_string(), Arc::new(map));
+                general_cache_map.insert(name.to_string(), Arc::new(heal_general_spellings(map)));
             }
             if dir_map
                 .insert(
@@ -374,7 +385,7 @@ impl IdIndexBase {
         if map.len() != entry.num_entries as usize {
             return None;
         }
-        let arc = Arc::new(map);
+        let arc = Arc::new(heal_general_spellings(map));
         self.general_cache
             .write()
             .unwrap()
@@ -774,6 +785,19 @@ impl IdIndexStore {
     }
 }
 
+/// The number of distinct ids `index` holds, counting every numeric spelling
+/// of one id once. Only a `General` map mixing numeric kinds pays the count.
+fn distinct_ids(index: &TypeIdIndex) -> usize {
+    match index {
+        TypeIdIndex::General(map) if mixed_numeric_kinds(map.keys()) => map
+            .keys()
+            .map(|id| canonical_id(id).into_owned())
+            .collect::<rustc_hash::FxHashSet<Value>>()
+            .len(),
+        _ => index.len(),
+    }
+}
+
 /// Write `id_indices.bin` (raw mmap layout). Iterates the store's union view
 /// (overlay + base) so saves capture both fresh mutations and unchanged
 /// base entries.
@@ -796,11 +820,14 @@ impl IdIndexStore {
 /// invariant, so it fails the save rather than shipping a directory that
 /// cannot be read back.
 ///
-/// A type whose ids repeat (fewer entries than `type_indices` members) is not
-/// written either: its index names the last node per id in the bucket's
+/// A type whose ids repeat (fewer distinct ids than `type_indices` members) is
+/// not written either: its index names the last node per id in the bucket's
 /// order, which the type-index writer sorts by `NodeIndex`, so a reused slot
 /// would leave the persisted choice disagreeing with the reloaded order. The
-/// reload rebuilds such an index from the persisted bucket on first use.
+/// reload rebuilds such an index from the persisted bucket on first use. Ids
+/// are counted by [`canonical_id`], not by entries: an index holding one id in
+/// two spellings (as one built through 0.18.1 did) repeats although its
+/// length matches the type's.
 pub fn write_id_indices_bin(
     dir: &Path,
     store: &IdIndexStore,
@@ -811,7 +838,7 @@ pub fn write_id_indices_bin(
     for (name, materialized) in store.iter() {
         if type_indices
             .get(&name)
-            .is_some_and(|members| materialized.len() < members.len())
+            .is_some_and(|members| distinct_ids(&materialized) < members.len())
         {
             continue;
         }
@@ -1144,6 +1171,47 @@ mod validation_tests {
             assert_eq!(base.lookup("G", &query), index.get(&query), "{query:?}");
         }
         assert_eq!(base.lookup("G", &Value::Int64(1)), Some(NodeIndex::new(0)));
+    }
+
+    /// An index spelling one id twice (built through 0.18.1) is healed when
+    /// read back, and never written: its ids repeat although it has as many
+    /// entries as the type has nodes.
+    #[test]
+    fn a_general_index_spelling_one_id_twice_is_healed_and_not_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut interner = StringInterner::new();
+        interner.get_or_intern("M");
+        let two_spellings = TypeIdIndex::General(FxHashMap::from_iter([
+            (Value::UniqueId(1), NodeIndex::new(0)),
+            (Value::Int64(1), NodeIndex::new(1)),
+            (Value::Int64(2), NodeIndex::new(2)),
+        ]));
+        let mut store = IdIndexStore::default();
+        store.replace_with(HashMap::from([("M".to_string(), two_spellings)]));
+
+        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
+        let base = IdIndexBase::load_from(temp.path(), &interner)
+            .unwrap()
+            .unwrap();
+        for query in [Value::UniqueId(1), Value::Int64(1), Value::Float64(1.0)] {
+            assert_eq!(
+                base.lookup("M", &query),
+                Some(NodeIndex::new(1)),
+                "{query:?}"
+            );
+        }
+        assert_eq!(base.entry_len("M"), Some(2));
+        assert_eq!(base.materialize("M").unwrap().len(), 2);
+
+        let mut members = TypeIndexStore::default();
+        for index in 0..3 {
+            members.push_to_type("M", NodeIndex::new(index));
+        }
+        write_id_indices_bin(temp.path(), &store, &members, &interner).unwrap();
+        let base = IdIndexBase::load_from(temp.path(), &interner)
+            .unwrap()
+            .unwrap();
+        assert!(!base.contains("M"), "a repeating index must not be written");
     }
 
     /// A directory saved before the writer resolved its keys carries an empty
