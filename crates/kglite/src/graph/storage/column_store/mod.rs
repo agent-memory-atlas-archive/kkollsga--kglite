@@ -441,12 +441,30 @@ impl ColumnStore {
         self.id_column.is_some() || self.title_column.is_some() || self.mmap_store.is_some()
     }
 
-    /// Borrowed view of the id column. Delegates to the underlying
-    /// `MmapColumnStore` when present (the disk-graph case used by
-    /// `save_subset_streaming_disk`); returns `None` otherwise.
-    #[inline]
+    /// Borrowed view of the id, read where [`Self::get_id`] reads it: the
+    /// mmap base when present, else the reserved id column (a disk graph
+    /// written in this session has no mmap base yet).
     pub fn id_borrowed(&self, row_id: u32) -> Option<crate::datatypes::values::BorrowedValue<'_>> {
-        self.mmap_store.as_ref()?.id_borrowed(row_id)
+        use crate::datatypes::values::BorrowedValue;
+        if let Some(ref ms) = self.mmap_store {
+            return ms.id_borrowed(row_id);
+        }
+        let column = self.id_column.as_ref()?;
+        if let Some(s) = column.get_str(row_id) {
+            return Some(BorrowedValue::String(s));
+        }
+        if let Some(value) = column.get_ref(row_id) {
+            return BorrowedValue::of(value);
+        }
+        match column.get(row_id)? {
+            Value::Int64(v) => Some(BorrowedValue::Int64(v)),
+            Value::Float64(v) => Some(BorrowedValue::Float64(v)),
+            Value::UniqueId(v) => Some(BorrowedValue::UniqueId(v)),
+            Value::Boolean(b) => Some(BorrowedValue::Boolean(b)),
+            Value::DateTime(d) => Some(BorrowedValue::DateTime(d)),
+            Value::Timestamp(t) => Some(BorrowedValue::Timestamp(t)),
+            _ => None,
+        }
     }
 
     /// Borrowed view of the title column. See [`Self::id_borrowed`].
@@ -491,24 +509,11 @@ impl ColumnStore {
         }
         let owned = self.row_properties(row_id);
         for (key, val) in owned.iter() {
-            let bv = match val {
-                Value::Null => crate::datatypes::values::BorrowedValue::Null,
-                Value::Boolean(b) => crate::datatypes::values::BorrowedValue::Boolean(*b),
-                Value::Int64(v) => crate::datatypes::values::BorrowedValue::Int64(*v),
-                Value::Float64(v) => crate::datatypes::values::BorrowedValue::Float64(*v),
-                Value::UniqueId(v) => crate::datatypes::values::BorrowedValue::UniqueId(*v),
-                Value::String(s) => crate::datatypes::values::BorrowedValue::String(s.as_str()),
-                Value::DateTime(d) => crate::datatypes::values::BorrowedValue::DateTime(*d),
-                Value::Timestamp(t) => crate::datatypes::values::BorrowedValue::Timestamp(*t),
-                // Native list properties survive the streaming path by
-                // borrowing the slice; the overflow serializer encodes it.
-                Value::List(items) => crate::datatypes::values::BorrowedValue::List(items),
-                Value::Map(entries) => crate::datatypes::values::BorrowedValue::Map(entries),
-                // Point / graph-entity / Duration / NodeRef have no borrowed
-                // form; the overflow codec stores them as null anyway.
-                _ => continue,
-            };
-            f(*key, bv)?;
+            // A kind with no borrowed form is skipped; the overflow codec
+            // stores it as null anyway.
+            if let Some(bv) = crate::datatypes::values::BorrowedValue::of(val) {
+                f(*key, bv)?;
+            }
         }
         Ok(())
     }

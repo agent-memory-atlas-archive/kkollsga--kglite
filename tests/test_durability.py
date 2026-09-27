@@ -2058,7 +2058,6 @@ def test_logged_dematerialize_replays(tmp_path, storage):
 # same position secondary labels occupy. Every value written under it survives
 # replay under the canonical `id`, but without a log entry the *name* did not,
 # so `n.uid` read null on a recovered graph and `{uid: 1}` raised SchemaError.
-# Design: dev-docs/designs/durable-precheckpoint-2026-09.md.
 
 _ALIAS_LOAD = """
         import pandas as pd
@@ -2190,7 +2189,6 @@ def test_alias_declared_after_a_checkpoint_replays(tmp_path, storage):
 # truncated the log and made the loss permanent. Each case runs the same
 # declaration in a crashing child and in a `save()`ing control, and requires
 # the two to agree — the divergence *is* the defect.
-# Design: dev-docs/designs/durable-precheckpoint-2026-09.md.
 
 _SEED = """
         import pandas as pd
@@ -2583,8 +2581,7 @@ def test_temporal_undeclare_after_the_checkpoint_replays_over_it(tmp_path, stora
 # a crash before the first `save()` recovered every row while `timeseries()`,
 # `timeseries_config()`, `list_embeddings()` and `has_vector_index()` all
 # answered as if the load had never happened, and the recovered app's next
-# `save()` baked that in. Design:
-# dev-docs/designs/timeseries-embeddings-wal-2026-09.md.
+# `save()` baked that in.
 
 _PAYLOAD_SEED = """
         import pandas as pd

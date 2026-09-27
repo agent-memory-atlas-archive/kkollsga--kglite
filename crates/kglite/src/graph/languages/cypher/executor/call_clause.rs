@@ -345,7 +345,7 @@ impl<'a> CypherExecutor<'a> {
     /// [`normalize_and_validate_algo_params`] against this executor's graph,
     /// recording its non-fatal warnings on the query rather than returning
     /// them to a caller that would have to know to look at them.
-    fn validate_algo_params(
+    pub(super) fn validate_algo_params(
         &self,
         proc: &str,
         params: &mut HashMap<String, Value>,
@@ -609,7 +609,7 @@ impl<'a> CypherExecutor<'a> {
                 name if super::procedure_registry::is_view_routed_procedure(name) => {
                     self.execute_view_routed_call(name, clause, params)?
                 }
-                _ => self.execute_resolved_call_once(proc_name.as_str(), clause, params)?,
+                _ => self.validate_and_execute_call_once(proc_name.as_str(), clause, params)?,
             };
             self.budget.reserve_rows(
                 joined_rows.len(),
@@ -690,11 +690,29 @@ impl<'a> CypherExecutor<'a> {
     /// Invoke an already-resolved ordinary procedure once for one input row.
     /// Procedure lookup/YIELD expansion belongs to [`Self::execute_call`];
     /// only row-dependent parameter evaluation varies between invocations.
-    pub(super) fn execute_resolved_call_once(
+    pub(super) fn validate_and_execute_call_once(
         &self,
         proc_name: &str,
         clause: &CallClause,
         mut params: HashMap<String, Value>,
+    ) -> Result<Vec<ResultRow>, String> {
+        // Alias the scoping keys and reject unknown config keys, so a typo
+        // errors instead of silently no-op'ing — see
+        // `normalize_and_validate_algo_params`.
+        self.validate_algo_params(proc_name, &mut params)?;
+        self.execute_resolved_call_once(proc_name, clause, params)
+    }
+
+    /// [`Self::validate_and_execute_call_once`] after its parameters were
+    /// normalized and their scope names checked — by this executor, or by the
+    /// parent of a view-routed call, which checks them against the base graph
+    /// because the valid slice carries neither the relationship-type metadata
+    /// nor the schema lock, and holds only the types valid at the instant.
+    pub(super) fn execute_resolved_call_once(
+        &self,
+        proc_name: &str,
+        clause: &CallClause,
+        params: HashMap<String, Value>,
     ) -> Result<Vec<ResultRow>, String> {
         self.check_deadline()?;
 
@@ -735,11 +753,6 @@ impl<'a> CypherExecutor<'a> {
             proc_name,
             "louvain" | "louvain_communities" | "leiden" | "leiden_communities"
         ) && (self.graph.graph.is_disk() || self.graph.graph.is_mapped());
-
-        // Alias the scoping keys and reject unknown config keys, so a typo
-        // errors instead of silently no-op'ing — see
-        // `normalize_and_validate_algo_params`.
-        self.validate_algo_params(proc_name, &mut params)?;
 
         // Built once here so the algorithms stay free of the executor / parser.
         // None ⇒ whole-graph.

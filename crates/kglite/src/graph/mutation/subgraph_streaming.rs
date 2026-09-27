@@ -436,25 +436,6 @@ pub fn save_subset(
     }
 }
 
-/// Copy the graph-level metadata a subset needs to be self-contained on
-/// reload: the interner and type schemas the rows are encoded against, the
-/// alias/tier maps `describe()` and property resolution read, and the caller's
-/// user-schema version.
-///
-/// The version carries because a subset of a graph at user-schema version N
-/// is still at version N — only which rows came along changed — so a
-/// migration runner pointed at the subset must not re-run migrations `1..=N`.
-fn clone_subset_metadata(dest: &mut DirGraph, source: &DirGraph) {
-    dest.interner = source.interner.clone();
-    dest.type_schemas = source.type_schemas.clone();
-    dest.node_type_metadata = source.node_type_metadata.clone();
-    dest.connection_type_metadata = source.connection_type_metadata.clone();
-    dest.id_field_aliases = source.id_field_aliases.clone();
-    dest.title_field_aliases = source.title_field_aliases.clone();
-    dest.parent_types = source.parent_types.clone();
-    dest.user_schema_version = source.user_schema_version;
-}
-
 /// Streaming disk-to-disk subgraph filter.
 ///
 /// `kept_per_type` maps each kept node type to its sorted source node ids
@@ -517,7 +498,7 @@ pub fn save_subset_streaming_disk(
         .map_err(|e| format!("save_subset_streaming_disk: DiskGraph::new_at_path: {}", e))?;
     let mut dest = DirGraph::from_graph(GraphBackend::Disk(Box::new(dest_disk)));
 
-    clone_subset_metadata(&mut dest, source);
+    crate::graph::mutation::subgraph::clone_subset_metadata(&mut dest, source);
 
     // Bulk-loader contract: defer CSR build until save_disk so add_edge
     // appends to the file-backed pending_edges instead of going through
@@ -578,11 +559,7 @@ pub fn save_subset_streaming_disk(
         } else {
             continue; // type with no schema anywhere — nothing to push
         };
-        let meta = source
-            .node_type_metadata
-            .get(type_name)
-            .cloned()
-            .unwrap_or_default();
+        let meta = column_types(source, type_name, &schema);
         let writer_dir = scratch_root.join(sanitize_type_name(type_name));
 
         // Match the source's id/title column types: Wikidata mixes `string`
@@ -828,6 +805,7 @@ pub fn save_subset_streaming_disk(
         _ => None,
     };
 
+    let mut rel_types = std::collections::HashSet::new();
     if let Some(sdg) = source_disk {
         // Disk source: sequential read of edge_endpoints.bin with lockstep
         // `edge_properties_at` lookups (source's prop heap in edge_idx order).
@@ -860,6 +838,7 @@ pub fn save_subset_streaming_disk(
                 None => continue,
             };
             let conn_type = InternedKey::from_u64(ep.connection_type);
+            rel_types.insert(conn_type);
             let props = sdg
                 .edge_properties_at(edge_idx as u32)
                 .map(|cow| cow.into_owned())
@@ -899,6 +878,7 @@ pub fn save_subset_streaming_disk(
                     None => continue,
                 };
                 let properties = snapshot_edge_properties(source, w.properties.clone());
+                rel_types.insert(w.connection_type);
                 let edge_data = EdgeData::new_interned(w.connection_type, properties);
                 let GraphBackend::Disk(ref mut dest_disk) = dest.graph else {
                     unreachable!("streaming subset destination is always disk-backed")
@@ -925,6 +905,7 @@ pub fn save_subset_streaming_disk(
     //    — without this rebuild the subset reloads with correct node_count
     //    and edges, but every typed Cypher query returns 0.
     dest.rebuild_type_indices();
+    crate::graph::mutation::subgraph::retain_subset_types(&mut dest, &rel_types);
 
     // 8. Save: triggers build_csr_from_pending (the external merge sort).
     let save_result = dest.save_disk(path_str);
@@ -938,6 +919,30 @@ pub fn save_subset_streaming_disk(
     let _ = std::fs::remove_dir_all(&scratch_root);
 
     save_result
+}
+
+/// The type each of `type_name`'s columns is opened with: its metadata type,
+/// or Mixed where the column is Mixed now. A column widens to Mixed without
+/// its metadata type changing (a Float64 column takes an integer it cannot
+/// hold exactly that way).
+fn column_types(
+    source: &DirGraph,
+    type_name: &str,
+    schema: &crate::graph::schema::TypeSchema,
+) -> std::collections::HashMap<String, String> {
+    let mut meta = source
+        .node_type_metadata
+        .get(type_name)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(store) = source.column_store(type_name) {
+        for (slot, key) in schema.iter() {
+            if store.column_type_str(slot as usize) == Some("mixed") {
+                meta.insert(source.interner.resolve(key).to_string(), "mixed".into());
+            }
+        }
+    }
+    meta
 }
 
 /// File-system-safe, **collision-free** slug for a node type name.
@@ -1153,6 +1158,118 @@ mod tests {
                 .graph
                 .get_node_property(NodeIndex::new(0), ordinary_key),
             Some(Value::List(vec![Value::Int64(1), Value::Int64(2)]))
+        );
+    }
+
+    /// Both `save_subset` variants carry the source's type metadata, not the
+    /// kept rows' observed properties: a subset whose kept nodes all lack
+    /// `score` still knows `T.score`, so the schema check accepts it there as
+    /// it does on the source. Types the subset holds none of (`U`, and `R`,
+    /// whose one edge leaves the subset) are not carried.
+    #[test]
+    fn both_save_subset_variants_carry_the_source_type_metadata() {
+        use crate::graph::io::file::load_file;
+        use crate::graph::schema::CowSelection;
+        use crate::graph::session::execute::{execute_mut, ExecuteOptions};
+        use crate::graph::storage::mode::{new_dir_graph_in_mode, StorageMode};
+        use petgraph::graph::NodeIndex;
+        use std::collections::HashMap;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut source =
+            new_dir_graph_in_mode(StorageMode::Disk, Some(&root.path().join("source")))
+                .expect("disk graph");
+        let params = HashMap::new();
+        for query in [
+            "CREATE (a:T {id: 1, title: 'one', score: 5}), (b:T {id: 2, title: 'two'}), \
+             (a)-[:R {w: 1}]->(b)",
+            "CREATE (:U {id: 9, title: 'u'})",
+        ] {
+            execute_mut(&mut source, query, &ExecuteOptions::eager(&params)).unwrap();
+        }
+        assert!(source.node_type_metadata["T"].contains_key("score"));
+
+        let extract_path = root.path().join("extract.kgl");
+        let mut selection = CowSelection::new();
+        selection
+            .get_level_mut(0)
+            .unwrap()
+            .add_selection(None, vec![NodeIndex::new(1)]);
+        save_subset(&source, &selection, &extract_path).unwrap();
+        let streaming_path = root.path().join("streaming");
+        save_subset_streaming_disk(
+            &source,
+            &HashMap::from([("T".to_string(), vec![1])]),
+            None,
+            &streaming_path,
+        )
+        .unwrap();
+
+        let extract = load_file(extract_path.to_str().unwrap()).unwrap();
+        let streaming = load_file(streaming_path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            *extract.node_type_metadata,
+            HashMap::from([("T".to_string(), source.node_type_metadata["T"].clone())]),
+            "the extract variant carries the source's metadata for the types it holds"
+        );
+        assert_eq!(extract.node_type_metadata, streaming.node_type_metadata);
+        assert_eq!(extract.id_field_aliases, streaming.id_field_aliases);
+        assert_eq!(extract.title_field_aliases, streaming.title_field_aliases);
+        let rel_types = |g: &DirGraph| {
+            let mut keys: Vec<String> = g.connection_type_metadata.keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(rel_types(&extract), Vec::<String>::new());
+        assert_eq!(rel_types(&streaming), Vec::<String>::new());
+    }
+
+    /// A float column that widened to Mixed for an integer it cannot hold
+    /// exactly still says Float64 in the type metadata; the streaming writer
+    /// opens it by the column's actual kind and keeps the integer exact. The
+    /// source was written in this session, so its ids live in the reserved id
+    /// column rather than an mmap base, and they come through too.
+    #[test]
+    fn a_widened_float_column_streams_as_mixed() {
+        use crate::api::io::save_subset_streaming_disk;
+        use crate::graph::io::file::load_file;
+        use crate::graph::session::execute::{execute_mut, execute_read, ExecuteOptions};
+        use crate::graph::storage::mode::{new_dir_graph_in_mode, StorageMode};
+        use std::collections::HashMap;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut source =
+            new_dir_graph_in_mode(StorageMode::Disk, Some(&root.path().join("source")))
+                .expect("disk graph");
+        let params = HashMap::new();
+        for query in [
+            "CREATE (:T {id: 1, p: 1.5})",
+            "CREATE (:T {id: 2, p: 9007199254740993})",
+        ] {
+            execute_mut(&mut source, query, &ExecuteOptions::eager(&params)).unwrap();
+        }
+        let output = root.path().join("subset");
+        save_subset_streaming_disk(
+            &source,
+            &HashMap::from([("T".to_string(), vec![0, 1])]),
+            None,
+            &output,
+        )
+        .unwrap();
+        let loaded = load_file(output.to_str().unwrap()).unwrap();
+        let result = execute_read(
+            &loaded,
+            "MATCH (n:T) RETURN n.id AS id, n.p AS p ORDER BY id",
+            &ExecuteOptions::eager(&params),
+        )
+        .unwrap()
+        .result;
+        assert_eq!(
+            result.rows,
+            vec![
+                vec![Value::Int64(1), Value::Float64(1.5)],
+                vec![Value::Int64(2), Value::Int64(9_007_199_254_740_993)],
+            ]
         );
     }
 

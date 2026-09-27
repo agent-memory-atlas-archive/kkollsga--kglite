@@ -79,7 +79,8 @@ pub fn extract_subgraph(
 
 /// A fresh graph holding `nodes` (copied in the order given) and every
 /// relationship between two of them that `keep_edge` accepts, with the
-/// source's secondary labels, ontology and schema. The map takes each copied
+/// source's secondary labels, ontology, schema and type metadata
+/// ([`clone_subset_metadata`]). The map takes each copied
 /// source node to its new index. Temporal declarations, embeddings, text and
 /// vector indexes, spatial config and id indexes are not copied. The copy's
 /// column stores hold only the copied nodes' rows.
@@ -94,11 +95,9 @@ pub(crate) fn copy_induced_subgraph(
     let node_set: HashSet<NodeIndex> = nodes.iter().copied().collect();
 
     let mut new_graph = DirGraph::new();
-    // Copy interner so the subgraph can resolve InternedKeys from compact storage
-    new_graph.interner = source.interner.clone();
-
-    // Copy type schemas so compact property storage works correctly
-    new_graph.type_schemas = source.type_schemas.clone();
+    // Before the inserts: they encode rows against the interner and type
+    // schemas, and only add to the type metadata.
+    clone_subset_metadata(&mut new_graph, source);
 
     // Map from old node indices to new node indices
     let mut index_map: HashMap<NodeIndex, NodeIndex> = HashMap::with_capacity(nodes.len());
@@ -134,6 +133,7 @@ pub(crate) fn copy_induced_subgraph(
     }
 
     // Copy edges between selected nodes
+    let mut rel_types = HashSet::new();
     for &old_source_idx in nodes {
         for edge in source.graph.edges(old_source_idx) {
             let old_target_idx = edge.target();
@@ -150,6 +150,7 @@ pub(crate) fn copy_induced_subgraph(
                         &source.graph,
                         properties.iter_mut().map(|(_, value)| value),
                     );
+                    rel_types.insert(edge.weight().connection_type);
                     let edge_data =
                         EdgeData::new_interned(edge.weight().connection_type, properties);
                     GraphWrite::add_edge(&mut new_graph.graph, new_source, new_target, edge_data);
@@ -157,6 +158,8 @@ pub(crate) fn copy_induced_subgraph(
             }
         }
     }
+
+    retain_subset_types(&mut new_graph, &rel_types);
 
     // Carry secondary labels: buckets are keyed above the storage backend
     // (labels.rs), so neither the node copy nor the store share moved them —
@@ -198,6 +201,80 @@ pub(crate) fn copy_induced_subgraph(
     }
 
     Ok((new_graph, index_map))
+}
+
+/// Copy the graph-level metadata a subset needs to be self-contained on
+/// reload: the interner and type schemas the rows are encoded against, the
+/// source's node and relationship type metadata (every property the type has,
+/// not only those the kept rows carry — the schema check reads it), the
+/// alias/tier maps `describe()` and property resolution read, and the caller's
+/// user-schema version. Both subset copies — [`copy_induced_subgraph`] and the
+/// streaming disk writer — take it from here and narrow it with
+/// [`retain_subset_types`] once the copy is built, so both save the same
+/// metadata.
+///
+/// The version carries because a subset of a graph at user-schema version N
+/// is still at version N — only which rows came along changed — so a
+/// migration runner pointed at the subset must not re-run migrations `1..=N`.
+pub(crate) fn clone_subset_metadata(dest: &mut DirGraph, source: &DirGraph) {
+    dest.interner = source.interner.clone();
+    dest.type_schemas = source.type_schemas.clone();
+    dest.node_type_metadata = source.node_type_metadata.clone();
+    dest.connection_type_metadata = source.connection_type_metadata.clone();
+    dest.id_field_aliases = source.id_field_aliases.clone();
+    dest.title_field_aliases = source.title_field_aliases.clone();
+    dest.parent_types = source.parent_types.clone();
+    dest.user_schema_version = source.user_schema_version;
+}
+
+/// Narrow the metadata [`clone_subset_metadata`] copied to the types the
+/// subset holds: the node types with a copied node and `rel_types`, the
+/// relationship types of the copied edges. A type the subset has none of is
+/// not listed by it.
+pub(crate) fn retain_subset_types(
+    dest: &mut DirGraph,
+    rel_types: &HashSet<crate::graph::schema::InternedKey>,
+) {
+    let present = |node_type: &str| dest.type_indices.contains_key(node_type);
+    let node_type_metadata = dest
+        .node_type_metadata
+        .iter()
+        .filter(|(node_type, _)| present(node_type))
+        .map(|(node_type, props)| (node_type.clone(), props.clone()))
+        .collect();
+    let id_field_aliases = dest
+        .id_field_aliases
+        .iter()
+        .filter(|(node_type, _)| present(node_type))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let title_field_aliases = dest
+        .title_field_aliases
+        .iter()
+        .filter(|(node_type, _)| present(node_type))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let parent_types = dest
+        .parent_types
+        .iter()
+        .filter(|(node_type, _)| present(node_type))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let rel_names: HashSet<&str> = rel_types
+        .iter()
+        .map(|key| dest.interner.resolve(*key))
+        .collect();
+    let connection_type_metadata = dest
+        .connection_type_metadata
+        .iter()
+        .filter(|(rel_type, _)| rel_names.contains(rel_type.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    dest.node_type_metadata = Arc::new(node_type_metadata);
+    dest.id_field_aliases = Arc::new(id_field_aliases);
+    dest.title_field_aliases = Arc::new(title_field_aliases);
+    dest.parent_types = Arc::new(parent_types);
+    dest.connection_type_metadata = Arc::new(connection_type_metadata);
 }
 
 /// Get summary statistics about the subgraph that would be extracted.

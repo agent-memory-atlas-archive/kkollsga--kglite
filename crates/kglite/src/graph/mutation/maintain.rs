@@ -593,7 +593,7 @@ fn identity_redeclaration_message(
 /// `n.<field>` to the identity slot for *all* of them, so the older nodes'
 /// business key becomes unreachable while its value sits in a stored column
 /// nothing reads — and the next incoming row that mints the same id silently
-/// overwrites one of them. Design: `dev-docs/designs/id-field-after-create-2026-09.md`.
+/// overwrites one of them.
 ///
 /// A spelling of `"id"`/`"title"` records no alias, so it cannot rebind: that
 /// is the route `add_connections` stub vivification takes, and it stays open.
@@ -1335,7 +1335,7 @@ pub(crate) fn add_connections_with_initial_load(
 /// `MATCH (a:Person)-[:KNOWS]->(b) RETURN count(*)` goes superlinear in the
 /// *node* count at a fixed edge count — measured 27.5 ns/edge at 10k nodes and
 /// 106.4 ns/edge at 300k, exponent 1.40 against the same machine's 1.11
-/// whole-scan floor (`dev-docs/designs/inmem-1hop-scaling-2026-09.md`).
+/// whole-scan floor.
 /// Grouping by source turns the pointer chase into a sequential read: 32.1
 /// ns/edge at 300k, exponent 1.09.
 ///

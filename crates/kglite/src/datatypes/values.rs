@@ -331,6 +331,24 @@ pub enum BorrowedValue<'a> {
 }
 
 impl<'a> BorrowedValue<'a> {
+    /// Borrow `value`, or `None` for a kind with no borrowed form (Point,
+    /// graph entities, Duration, NodeRef).
+    pub(crate) fn of(value: &'a Value) -> Option<Self> {
+        Some(match value {
+            Value::Null => BorrowedValue::Null,
+            Value::Boolean(b) => BorrowedValue::Boolean(*b),
+            Value::Int64(v) => BorrowedValue::Int64(*v),
+            Value::Float64(v) => BorrowedValue::Float64(*v),
+            Value::UniqueId(v) => BorrowedValue::UniqueId(*v),
+            Value::String(s) => BorrowedValue::String(s.as_str()),
+            Value::DateTime(d) => BorrowedValue::DateTime(*d),
+            Value::Timestamp(t) => BorrowedValue::Timestamp(*t),
+            Value::List(items) => BorrowedValue::List(items),
+            Value::Map(entries) => BorrowedValue::Map(entries),
+            _ => return None,
+        })
+    }
+
     /// Materialize into an owned [`Value`]. Allocates for `String` and
     /// `List`; `Map` is a refcount bump. Takes `self` by value since
     /// `BorrowedValue` is `Copy`.
@@ -958,7 +976,9 @@ impl DataFrame {
     /// Type inference scans **every** value in each column and promotes to the
     /// narrowest lossless common type; [`resolve_column_type`] carries the
     /// promotion matrix. Nothing is silently coerced or nulled — a mix no
-    /// column type covers lands in a String column in its natural text form.
+    /// column type covers lands in a String column in its natural text form,
+    /// and so does a float/integer mix holding an integer no float represents
+    /// exactly (past 2^53), which a Float64 column would round.
     pub fn from_cypher_rows(columns: Vec<String>, rows: Vec<Vec<Value>>) -> Result<Self, String> {
         let num_cols = columns.len();
         let num_rows = rows.len();
@@ -976,24 +996,19 @@ impl DataFrame {
 
         // Whole-column type scan: one cheap O(rows × cols) pass recording
         // which value kinds each column contains (bitmask, no allocation),
-        // plus whether every Int64 fits u32 (decides UniqueId vs Int64 for
-        // id-shaped columns).
+        // plus what its Int64s fit (`IntFit`).
         let mut kinds = vec![0u16; num_cols];
-        let mut ints_fit_u32 = vec![true; num_cols];
+        let mut fits = vec![IntFit::default(); num_cols];
         for row in &rows {
             for (col_idx, val) in row.iter().enumerate() {
                 kinds[col_idx] |= value_kind_bit(val);
-                if let Value::Int64(v) = val {
-                    if *v < 0 || *v > u32::MAX as i64 {
-                        ints_fit_u32[col_idx] = false;
-                    }
-                }
+                fits[col_idx].observe(val);
             }
         }
         let col_types: Vec<ColumnType> = kinds
             .iter()
-            .zip(&ints_fit_u32)
-            .map(|(&k, &fits)| resolve_column_type(k, fits))
+            .zip(&fits)
+            .map(|(&k, &fit)| resolve_column_type(k, fit))
             .collect();
 
         let mut col_data: Vec<ColumnData> = col_types
@@ -1215,31 +1230,61 @@ fn value_kind_bit(val: &Value) -> u16 {
     }
 }
 
+/// What a column's `Int64` values fit: `u32` (UniqueId vs Int64 for
+/// id-shaped columns) and `f64` exactly (whether a Float64 column can take
+/// them without rounding one onto another).
+#[derive(Clone, Copy)]
+struct IntFit {
+    u32: bool,
+    f64: bool,
+}
+
+impl Default for IntFit {
+    fn default() -> Self {
+        IntFit {
+            u32: true,
+            f64: true,
+        }
+    }
+}
+
+impl IntFit {
+    fn observe(&mut self, value: &Value) {
+        if let Value::Int64(v) = value {
+            self.u32 &= u32::try_from(*v).is_ok();
+            self.f64 &= crate::graph::schema::exact_float(*v).is_some();
+        }
+    }
+}
+
 /// Promote a column's observed kind set to the narrowest lossless
 /// ColumnType. Promotion matrix:
 ///
 /// - all-null → Int64 (historic default)
 /// - single kind → its natural column type (TEXTUAL → String)
 /// - UniqueId + Int64 → UniqueId if every Int64 fits `u32`, else Int64
-/// - {UniqueId, Int64} + Float64 → Float64
+/// - {UniqueId, Int64} + Float64 → Float64 if every Int64 is exactly a float,
+///   else String
 /// - DateTime + Timestamp → Timestamp (dates embed as midnight)
 /// - any mix containing a List → List (non-list cells wrap as 1-element lists)
 /// - only durations → Duration
 /// - anything else → String, each value in its natural text form
-fn resolve_column_type(kinds: u16, ints_fit_u32: bool) -> ColumnType {
+fn resolve_column_type(kinds: u16, fit: IntFit) -> ColumnType {
     const NUMERIC: u16 = kind::UNIQUE_ID | kind::INT64 | kind::FLOAT64;
     match kinds {
         0 => ColumnType::Int64,
         k if k == kind::UNIQUE_ID => ColumnType::UniqueId,
         k if k == kind::INT64 => ColumnType::Int64,
         k if k == kind::UNIQUE_ID | kind::INT64 => {
-            if ints_fit_u32 {
+            if fit.u32 {
                 ColumnType::UniqueId
             } else {
                 ColumnType::Int64
             }
         }
-        k if k & !NUMERIC == 0 => ColumnType::Float64, // numeric mix with Float64
+        // A numeric mix with Float64.
+        k if k & !NUMERIC == 0 && fit.f64 => ColumnType::Float64,
+        k if k & !NUMERIC == 0 => ColumnType::String,
         k if k == kind::STRING => ColumnType::String,
         k if k == kind::BOOLEAN => ColumnType::Boolean,
         k if k == kind::DATE => ColumnType::DateTime,
@@ -1263,7 +1308,7 @@ pub(crate) enum ValueSetType {
     Empty,
     /// This column type holds every value as itself, give or take the numeric
     /// widening [`DataFrame::from_cypher_rows`] performs (an `Int64` beside a
-    /// `Float64` makes a `Float64` column).
+    /// `Float64` makes a `Float64` column when the float is that integer).
     Uniform(ColumnType),
     /// Every value is one of the variants no column shape names (`Point`,
     /// the query-time graph entities), which a frame renders as
@@ -1283,14 +1328,10 @@ pub(crate) enum ValueSetType {
 pub(crate) fn classify_value_set<'a>(values: impl IntoIterator<Item = &'a Value>) -> ValueSetType {
     const NUMERIC: u16 = kind::UNIQUE_ID | kind::INT64 | kind::FLOAT64;
     let mut kinds = 0u16;
-    let mut ints_fit_u32 = true;
+    let mut fit = IntFit::default();
     for value in values {
         kinds |= value_kind_bit(value);
-        if let Value::Int64(v) = value {
-            if *v < 0 || *v > u32::MAX as i64 {
-                ints_fit_u32 = false;
-            }
-        }
+        fit.observe(value);
     }
     match kinds {
         0 => ValueSetType::Empty,
@@ -1298,10 +1339,13 @@ pub(crate) fn classify_value_set<'a>(values: impl IntoIterator<Item = &'a Value>
         // One kind is trivially its own column type; a numeric mix is the one
         // promotion `resolve_column_type` makes that no reader would call a
         // rewrite — every arm of it stays inside the family `compare_values`
-        // treats as intercomparable.
-        k if k.count_ones() == 1 || k & !NUMERIC == 0 => {
-            ValueSetType::Uniform(resolve_column_type(kinds, ints_fit_u32))
-        }
+        // treats as intercomparable — unless it would take the text fallback
+        // (an Int64 no Float64 holds exactly).
+        k if k.count_ones() == 1 => ValueSetType::Uniform(resolve_column_type(kinds, fit)),
+        k if k & !NUMERIC == 0 => match resolve_column_type(kinds, fit) {
+            ColumnType::String => ValueSetType::Mixed,
+            column => ValueSetType::Uniform(column),
+        },
         _ => ValueSetType::Mixed,
     }
 }
@@ -1862,6 +1906,28 @@ mod tests {
         let df = one_col(vec![Value::Float64(2.5), Value::Int64(7)]);
         assert_eq!(df.get_column_type("c"), Some(ColumnType::Float64));
         assert_eq!(df.get_value(1, "c"), Some(Value::Float64(7.0)));
+    }
+
+    /// A float column holds an integer only when the float is that integer:
+    /// 2^53 + 1 would be stored as 2^53, so the mix takes the text fallback,
+    /// which writes every value exactly.
+    #[test]
+    fn test_promotion_float_with_an_inexact_int_keeps_every_value_exact() {
+        let big = (1i64 << 53) + 1;
+        let df = one_col(vec![Value::Float64(1.5), Value::Int64(big)]);
+        assert_eq!(df.get_column_type("c"), Some(ColumnType::String));
+        assert_eq!(df.get_value(0, "c"), Some(Value::String("1.5".into())));
+        assert_eq!(df.get_value(1, "c"), Some(Value::String(big.to_string())));
+        let exact = one_col(vec![Value::Float64(1.5), Value::Int64(1i64 << 53)]);
+        assert_eq!(exact.get_column_type("c"), Some(ColumnType::Float64));
+        assert_eq!(
+            classify_value_set(&[Value::Float64(1.5), Value::Int64(big)]),
+            ValueSetType::Mixed
+        );
+        assert_eq!(
+            classify_value_set(&[Value::Float64(1.5), Value::Int64(3)]),
+            ValueSetType::Uniform(ColumnType::Float64)
+        );
     }
 
     #[test]

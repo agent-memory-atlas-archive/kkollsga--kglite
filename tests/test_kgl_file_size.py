@@ -1,8 +1,8 @@
 """The lean-file goalpost: a `.kgl` must not get fatter for the same content.
 
 These are **size** gates, not correctness gates, and they exist for exactly one
-reason: the shape-convergence program (`dev-docs/plans/`, "one write regime,
-one durable shape") moves every graph onto the columnar store and makes `save()`
+reason: the shape-convergence program ("one write regime, one durable
+shape") moves every graph onto the columnar store and makes `save()`
 serialize the live store rather than rebuild a fresh one. Two things that live
 happily in memory must therefore never reach the file:
 

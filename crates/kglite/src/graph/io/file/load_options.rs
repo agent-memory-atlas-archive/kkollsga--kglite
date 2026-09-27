@@ -4,9 +4,8 @@
 //! **`storage` is not a memory lever.** For a `.kgl` load, mapped and memory
 //! cost the same resident memory: columns of 256 KB or more are spilled and
 //! mmap'd on *both* paths, and a mapped graph keeps the same heap topology a
-//! memory one does. Measured across four fixtures at release profile, the two
-//! modes agree to within 0.3 MB
-//! (`dev-docs/bench/results/load-rss-2026-08-29.md` §3). The option exists so a
+//! memory one does. Measured across four fixtures at release profile
+//! (2026-08-29), the two modes agree to within 0.3 MB. The option exists so a
 //! caller can decide the backend a loaded graph *continues* in — the spill
 //! policy its later writes follow, and the mode its next save records — not to
 //! make a load cheaper.

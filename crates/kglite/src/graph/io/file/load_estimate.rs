@@ -17,8 +17,8 @@
 //! pages are clean and file-backed. RSS is also allocator-dependent (a 2.3×
 //! swing between libmalloc's default and `MallocSpaceEfficient=1` on the same
 //! bytes), while footprint agreed to 7% across two allocators on the same
-//! fixture. A ceiling calibrated on RSS would refuse loads that fit
-//! comfortably. See `dev-docs/bench/results/load-rss-2026-08-29.md` §0.
+//! fixture (the 2026-08-29 load-footprint measurements). A ceiling calibrated
+//! on RSS would refuse loads that fit comfortably.
 //!
 //! **Touched bytes, not allocated capacity.** The decompression path leaves
 //! `Vec` capacity at 1.2×–1.9× of length, and those slack pages are never
@@ -50,9 +50,9 @@ use super::{FileMetadata, PortableColumnSection};
 // ─── Section-heap constants (HEURISTIC) ──────────────────────────────────────
 //
 // Derivation: fit against the settled footprint of three fixtures measured at
-// release profile under the tight allocator (`dev-docs/bench/results/
-// load-rss-2026-08-29.md` §1, `cli / spaceeff` rows), with the index term
-// subtracted where the fixture declares indexes:
+// release profile under the tight allocator (`MallocSpaceEfficient=1`, loaded
+// through the CLI, 2026-08-29), with the index term subtracted where the
+// fixture declares indexes:
 //
 //   fixture          rows      cells    measured   this model   ratio
 //   sodir          546,850  7,128,312   168.3 MB     218.9 MB   1.30×
@@ -424,16 +424,14 @@ mod tests {
 
     /// One measured fixture, reduced to what the estimator actually reads.
     ///
-    /// The metadata is transcribed from the fixtures' own heads (dumped with
-    /// `dev-docs/bench/scripts/make_indexed_fixture.py`'s output), and the
-    /// footprint is the `cli / spaceeff` settled column of
-    /// `dev-docs/bench/results/load-rss-2026-08-29.md` §1 — the tight-allocator
-    /// route, which §0 shows is the one that measures the graph rather than the
-    /// allocator.
+    /// The metadata is transcribed from the fixtures' own heads, and the
+    /// footprint is the settled footprint of a CLI load under the tight
+    /// allocator — the route that measures the graph rather than the
+    /// allocator (see the module doc).
     ///
     /// Recorded rather than regenerated: building a 500k-row graph inside a
-    /// unit test would cost minutes, and the fixtures themselves live under
-    /// `dev-docs/bench/out/`, which is gitignored and purged at 14 days. What
+    /// unit test would cost minutes, and the fixtures themselves are not kept
+    /// in the repository. What
     /// this pins is the estimator's *arithmetic* against numbers that were
     /// measured once, which is what drifts.
     struct Fixture {

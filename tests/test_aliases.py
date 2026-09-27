@@ -845,8 +845,7 @@ class TestLateIdentityDeclarationRefused:
     The nodes a type already holds were keyed by whatever spelling was in
     force when they were made. Installing a different one leaves them keyed
     by a minted id their business key can no longer reach, and the next row
-    that mints the same id overwrites one of them (design note
-    `dev-docs/designs/id-field-after-create-2026-09.md`).
+    that mints the same id overwrites one of them.
     """
 
     @staticmethod

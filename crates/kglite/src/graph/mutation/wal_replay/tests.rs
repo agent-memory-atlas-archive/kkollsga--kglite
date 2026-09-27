@@ -1129,8 +1129,7 @@ fn a_constraint_the_recovered_rows_violate_refuses_replay_loudly() {
 //
 // Bulk payloads rather than declarations, but the same blind spot before v7:
 // rows recovered while `timeseries()` and `list_embeddings()` answered as if
-// the load had never happened. Design:
-// dev-docs/designs/timeseries-embeddings-wal-2026-09.md.
+// the load had never happened.
 
 use crate::graph::features::timeseries::{NodeTimeseries, TimeseriesConfig};
 use crate::graph::wal::EmbeddingWrite;

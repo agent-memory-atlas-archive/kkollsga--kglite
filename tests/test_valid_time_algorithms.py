@@ -239,3 +239,75 @@ def test_a_frozen_view_counts_what_is_visible(full, reference):
     assert full.freeze().node_count() == len(_elements()[0]) + 1
     assert {"Old", "V"} <= set(full.freeze().node_types)
     assert "valid_at=date('2007-06-30')" in repr(frozen)
+
+
+# ── Scope names are checked against the graph, not the slice ────────────────
+
+_READY = "CALL ready_set({relationship: $rel, done: 'n.status = \"done\"'%s}) YIELD node RETURN node.id AS id"
+
+
+def _tasks():
+    """Two valid tasks joined by ``DEPENDS_ON``, and an ``Old`` node none of
+    whose kind is valid at ``T``."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (a:Task {id: 'A', status: 'todo', vf: date('2000-01-01')}), "
+        "(b:Task {id: 'B', status: 'todo', vf: date('2000-01-01'), vt: date('2040-01-01')}), "
+        "(a)-[:DEPENDS_ON]->(b), "
+        "(:Old {id: 'o', of: date('1990-01-01'), ot: date('1995-01-01')})"
+    ).to_list()
+    graph.set_temporal("Task", "vf", "vt")
+    graph.set_temporal("Old", "of", "ot")
+    return graph
+
+
+def _routed(graph, query, params):
+    """Run ``query`` under the prefix and on a frozen view, returning each
+    result (or the error it raised)."""
+    out = []
+    for run in (
+        lambda: graph.cypher(AS_OF + query, params={**params, "t": T}),
+        lambda: graph.freeze(valid_at=T).cypher(query, params=params),
+    ):
+        try:
+            result = run()
+            out.append((result.to_list(), list(result.warnings)))
+        except kglite.KgError as error:
+            out.append(error)
+    return out
+
+
+def test_a_routed_ready_set_refuses_an_unknown_relationship():
+    """A typo'd relationship makes every node ready vacuously; the slice has
+    no relationship metadata to catch it, so the base graph must."""
+    graph = _tasks()
+    with pytest.raises(kglite.KgError, match="unknown relationship type 'DEPENDS_O'"):
+        graph.cypher(_READY % "", params={"rel": "DEPENDS_O"}).to_list()
+    for outcome in _routed(graph, _READY % "", {"rel": "DEPENDS_O"}):
+        assert isinstance(outcome, kglite.KgError), outcome
+        assert "unknown relationship type 'DEPENDS_O'" in str(outcome)
+    for rows, _ in _routed(graph, _READY % "", {"rel": "DEPENDS_ON"}):
+        assert rows == [{"id": "B"}]
+
+
+def test_a_routed_call_on_a_locked_schema_refuses_an_unknown_node_type():
+    graph = _tasks()
+    graph.lock_schema()
+    query = _READY % ", node_type: 'Tsk'"
+    with pytest.raises(kglite.KgError, match="unknown node type 'Tsk'"):
+        graph.cypher(query, params={"rel": "DEPENDS_ON"}).to_list()
+    for outcome in _routed(graph, query, {"rel": "DEPENDS_ON"}):
+        assert isinstance(outcome, kglite.KgError), outcome
+        assert "unknown node type 'Tsk'" in str(outcome)
+
+
+def test_a_type_with_no_valid_node_is_not_reported_unknown():
+    """``Old`` exists; that none of its nodes is valid at ``T`` makes it empty
+    there, not unknown."""
+    graph = _tasks()
+    query = "CALL pagerank({node_type: 'Old'}) YIELD node RETURN node.id AS id"
+    for outcome in _routed(graph, query, {}):
+        assert not isinstance(outcome, Exception), outcome
+        rows, warnings = outcome
+        assert rows == []
+        assert not any("unknown node type" in w for w in warnings), warnings

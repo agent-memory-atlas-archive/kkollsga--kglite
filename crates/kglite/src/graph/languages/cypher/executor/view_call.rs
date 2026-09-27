@@ -30,11 +30,15 @@ impl CypherExecutor<'_> {
         &self,
         proc_name: &str,
         clause: &CallClause,
-        params: HashMap<String, Value>,
+        mut params: HashMap<String, Value>,
     ) -> Result<Vec<ResultRow>, String> {
         let Some(filter) = self.graph_filter() else {
-            return self.execute_resolved_call_once(proc_name, clause, params);
+            return self.validate_and_execute_call_once(proc_name, clause, params);
         };
+        // The scope names are checked against the graph: the slice has no
+        // relationship-type metadata or schema lock, and a type with no node
+        // valid at the instant is empty there, not unknown.
+        self.validate_algo_params(proc_name, &mut params)?;
         let slice = self.statement_slice(filter, &clause.procedure_name)?;
         let child = CypherExecutor::with_params(slice.graph(), self.params, self.deadline)
             .with_streaming(self.streaming)

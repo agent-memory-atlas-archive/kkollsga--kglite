@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from kglite import KnowledgeGraph
+from kglite import KnowledgeGraph, load
 
 
 class TestExpand:
@@ -56,6 +56,25 @@ class TestSubgraph:
         result = small_graph.select("Person").where({"title": "Alice"}).expand(hops=1)
         explanation = result.explain()
         assert "EXPAND" in explanation.upper() or "expand" in explanation.lower()
+
+    def test_a_property_no_kept_node_carries_is_still_known(self, tmp_path):
+        """The copy keeps the source type's metadata, not only the properties
+        its kept rows hold, so the schema check accepts ``score`` on it as on
+        the source — in memory and after a ``save_subset`` reload."""
+        graph = KnowledgeGraph()
+        graph.cypher(
+            "CREATE (:T {id: 1, title: 'a', score: 5}), (:T {id: 2, title: 'b'}), (:U {id: 9})-[:R]->(:U {id: 10})"
+        ).to_list()
+        chosen = graph.select("T").where({"id": 2})
+        path = str(tmp_path / "subset.kgl")
+        chosen.save_subset(path)
+        for sub in (chosen.to_subgraph(), load(path)):
+            assert sub.node_types == ["T"], "a type the copy holds none of is not listed"
+            assert sub.schema()["connection_types"] == {}
+        for sub in (graph, chosen.to_subgraph(), load(path)):
+            assert sub.cypher("MATCH (n:T {score: 5}) RETURN n.id AS id").to_list() in ([], [{"id": 1}])
+            sub.cypher("CREATE (:T {id: 3, title: 'c', score: 1})").to_list()
+            assert sub.cypher("MATCH (n:T {score: 1}) RETURN n.id AS id").to_list() == [{"id": 3}]
 
 
 class TestExpandExtended:

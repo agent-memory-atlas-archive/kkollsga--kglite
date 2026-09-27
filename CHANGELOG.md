@@ -83,7 +83,11 @@ before upgrading.
   `connected_components`, `k_core`, `ready_set`, `clustering_coefficient`,
   `triangle_count`, `eccentricity`, `diameter` — run on a copy of the valid
   elements, built once per instant and cached until the graph changes, and
-  `YIELD node` binds the graph's own node. A copy over its cap (128 MiB; on
+  `YIELD node` binds the graph's own node. Their `node_type` and
+  `relationship` arguments are checked against the graph, as without a
+  context: an unknown relationship type is refused by `ready_set`, an unknown
+  type is an error under `lock_schema()`, and a type none of whose nodes is
+  valid at the instant is empty, not unknown. A copy over its cap (128 MiB; on
   Disk also 2,000,000 elements, and a 64 MiB one-bit-per-element instant mask,
   `KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) is refused when the statement runs,
   naming the cap; over the mask cap the `vector_score` top-k route instead
@@ -371,7 +375,25 @@ before upgrading.
   row of each selected node's type onto the heap (the copy shared the source's
   file-backed column stores, and its first write cloned them whole); in memory
   mode it held a full copy of each such store too. The copy now holds only the
-  selected nodes' rows.
+  selected nodes' rows. It keeps the source's type metadata, id/title
+  spellings, type hierarchy and user-schema version, so a property none of the
+  selected nodes carries is accepted in `MATCH (n:T {p: …})` and
+  `CREATE (:T {p: …})` on the copy as on the source, and the in-memory and
+  streaming disk `save_subset` variants save the same metadata.
+
+- Rust: `kglite::api::io::save_subset_streaming_disk` wrote every node id as
+  null for a disk graph written in the current session (it read ids only from
+  a reopened graph's file-backed base), and failed on a float column widened
+  to mixed by an integer it cannot hold exactly ("expected Float64/Int64/Null").
+  Both now stream: ids come from wherever the graph holds them, and a mixed
+  column is written as mixed.
+
+- `add_relationships(query=…)` (and Rust `DataFrame::from_cypher_rows`) put a
+  column mixing floats and integers into a float column, rounding an integer
+  past 2^53 onto its neighbour (`9007199254740993` → `9007199254740992.0`).
+  Such a column now takes the text fallback that other mixed columns take, so
+  every value is written exactly; a mix whose integers the float holds exactly
+  is still a float column.
 
 - Disk: a reopened disk graph whose saved id index held a float id (`{id:
   1.0}`) returned no rows for `MATCH (n:T {id: 1})`; the saved index now
