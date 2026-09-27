@@ -3378,7 +3378,8 @@ Keys:
   Five families:
   - a `MATCH` against an unknown node label or relationship type (zero rows);
   - a `WHERE` on a property no node of that type has (null comparison, so
-    every row is filtered out);
+    every row is filtered out; an `IS NULL` test on it is true on every row
+    instead, and is worded that way);
   - a `RETURN` / `WITH` / `ORDER BY` reading such a property (a silently
     all-null column — the sibling `n.name` still resolves, so the rows read as
     half-correct);
@@ -3453,8 +3454,12 @@ gets its own wording, because a cross-type `<>` is *true*: it matches every row
 that has the property rather than filtering them out.
 
 A *sparse* property never warns: `node_type_metadata` records a property as
-soon as one node carries it, so only a genuinely absent one — a typo, or a
-field that belongs to a different type — trips these.
+soon as one node carries it, so only an absent one trips these — a typo, a
+field that belongs to a different type, or a declared name nothing has written
+yet (a `define_schema()` field, or a validity declaration's `from` / `to`
+bound). The declared names still warn, because the all-null result is real,
+with one exception: an `IS NULL` test on one — the `WHERE n.valid_to IS NULL`
+current-version idiom — is the expected answer and stays silent.
 
 **Under `lock_schema()` the two absent-property families above are errors, not
 warnings.** A locked schema is the opt-in "catch my typos" mechanism, and it

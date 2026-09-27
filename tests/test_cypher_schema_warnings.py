@@ -379,3 +379,46 @@ def test_a_cross_family_property_pair_names_both_sides():
         "(schema-defined string) — a cross-type ordering comparison is null in openCypher, "
         "so this filters out every row."
     )
+
+
+# --- null tests on an absent property ---
+
+
+def _null_test(g, where):
+    result = g.cypher(f"MATCH (v:Vessel) WHERE {where} RETURN count(*) AS c")
+    return result.to_list()[0]["c"], result.diagnostics["warnings"]
+
+
+def test_is_null_on_an_absent_property_keeps_every_row_and_says_so():
+    """`IS NULL` on a property no node has is true on every row. The old
+    warning claimed the comparison "filters out every row" while the query
+    returned all of them; the finding stays (it is still a likely typo), but
+    worded for what the test does."""
+    g = _maritime()
+    for where in ("v.imo IS NULL", "NOT v.imo IS NOT NULL"):
+        count, warnings = _null_test(g, where)
+        assert count == 3, where
+        assert not any("filters out every row" in w for w in warnings), (where, warnings)
+        assert any("'imo'" in w and "no Vessel node has" in w and "true on every row" in w for w in warnings), (
+            where,
+            warnings,
+        )
+
+
+def test_is_not_null_on_an_absent_property_filters_every_row():
+    g = _maritime()
+    for where in ("v.imo IS NOT NULL", "NOT v.imo IS NULL"):
+        count, warnings = _null_test(g, where)
+        assert count == 0, where
+        assert any("'imo'" in w and "filters out every row" in w for w in warnings), (where, warnings)
+
+
+def test_the_current_version_idiom_on_a_declared_open_to_is_silent():
+    """`WHERE n.valid_to IS NULL` on a label whose declared `to` no row
+    carries yet: every row is current, the name is declared, not a typo."""
+    g = kglite.KnowledgeGraph()
+    g.cypher("UNWIND [1, 2] AS i CREATE (:Name {id: i, valid_from: date('2000-01-01')})")
+    g.cypher("CALL db.temporal.declare({node: 'Name', from: 'valid_from', to: 'valid_to', convention: 'half_open'})")
+    result = g.cypher("MATCH (n:Name) WHERE n.valid_to IS NULL RETURN count(*) AS c")
+    assert result.to_list() == [{"c": 2}]
+    assert result.diagnostics["warnings"] == []

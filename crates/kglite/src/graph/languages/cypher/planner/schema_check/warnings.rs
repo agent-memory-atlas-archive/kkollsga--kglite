@@ -65,6 +65,10 @@ fn match_var_labels<'q>(query: &'q CypherQuery, graph: &DirGraph) -> HashMap<&'q
 enum AbsentSite {
     Where,
     Filter,
+    /// A null test that holds on every row: `IS NULL`, or `NOT … IS NOT
+    /// NULL`. The filter keeps everything rather than dropping it.
+    WhereNullTest,
+    FilterNullTest,
     Return,
     With,
     OrderBy,
@@ -76,11 +80,20 @@ impl AbsentSite {
     /// done, because under a lock the query does not run at all.
     fn clause(self) -> &'static str {
         match self {
-            AbsentSite::Where => "WHERE",
-            AbsentSite::Filter => "FILTER",
+            AbsentSite::Where | AbsentSite::WhereNullTest => "WHERE",
+            AbsentSite::Filter | AbsentSite::FilterNullTest => "FILTER",
             AbsentSite::Return => "RETURN",
             AbsentSite::With => "WITH",
             AbsentSite::OrderBy => "ORDER BY",
+        }
+    }
+
+    /// The site for a null test that holds on every row.
+    fn null_test(self) -> Self {
+        match self {
+            AbsentSite::Where => AbsentSite::WhereNullTest,
+            AbsentSite::Filter => AbsentSite::FilterNullTest,
+            other => other,
         }
     }
 
@@ -93,6 +106,11 @@ impl AbsentSite {
             AbsentSite::Filter => format!(
                 "FILTER references property '{property}' which no {label} node has — the \
                  comparison is null (always false), so this filters out every row.{hint}"
+            ),
+            AbsentSite::WhereNullTest | AbsentSite::FilterNullTest => format!(
+                "{} tests property '{property}', which no {label} node has, for null — the \
+                 test is true on every row, so it filters out nothing.{hint}",
+                self.clause()
             ),
             AbsentSite::Return => format!(
                 "RETURN projects property '{property}' which no {label} node has — every \
@@ -294,7 +312,14 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
         let Some(&label) = self.var_label.get(variable) else {
             return;
         };
-        if !property_absent(self.graph, label, property)
+        // A null test that keeps every row reports a likely typo; on a
+        // declared name (a `define_schema` field or a validity bound nobody has
+        // written yet, as in the `WHERE n.valid_to IS NULL` current-version
+        // idiom) it is the expected answer, not a mistake.
+        let expected_null = matches!(site, AbsentSite::WhereNullTest | AbsentSite::FilterNullTest)
+            && super::property_is_declared(label, property, self.graph);
+        if expected_null
+            || !property_absent(self.graph, label, property)
             || self.written_any.contains(variable)
             || self.written.contains(&(variable, property))
             || !self.seen.insert((variable, property))
@@ -316,12 +341,25 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
     }
 
     fn predicate(&mut self, pred: &'q Predicate, site: AbsentSite) {
+        self.predicate_under(pred, site, false);
+    }
+
+    /// `negated` tracks the enclosing `NOT`s, which decide whether a null test
+    /// on an absent property keeps every row or drops every row. A comparison
+    /// is null either way, and `NOT null` is null, so only the null tests need
+    /// it.
+    fn predicate_under(&mut self, pred: &'q Predicate, site: AbsentSite, negated: bool) {
         match pred {
             Predicate::And(a, b) | Predicate::Or(a, b) | Predicate::Xor(a, b) => {
-                self.predicate(a, site);
-                self.predicate(b, site);
+                self.predicate_under(a, site, negated);
+                self.predicate_under(b, site, negated);
             }
-            Predicate::Not(p) => self.predicate(p, site),
+            Predicate::Not(p) => self.predicate_under(p, site, !negated),
+            Predicate::IsNull(expr) | Predicate::IsNotNull(expr)
+                if matches!(pred, Predicate::IsNull(_)) != negated =>
+            {
+                self.expression(expr, site.null_test())
+            }
             Predicate::Comparison { left, right, .. } => {
                 self.expression(left, site);
                 self.expression(right, site);
@@ -955,6 +993,47 @@ mod tests {
             w2.iter().any(|m| m.contains("Did you mean 'age'")),
             "{w2:?}"
         );
+    }
+
+    /// A null test on an absent property keeps or drops every row depending
+    /// on its polarity; only the dropping form may say "filters out every
+    /// row". Under a lock both are still promoted, in the WHERE error voice.
+    #[test]
+    fn a_null_test_is_worded_by_what_it_keeps() {
+        let g = graph_with_schema();
+        for (query, keeps_all) in [
+            ("MATCH (p:Person) WHERE p.agee IS NULL RETURN p", true),
+            (
+                "MATCH (p:Person) WHERE NOT p.agee IS NOT NULL RETURN p",
+                true,
+            ),
+            ("MATCH (p:Person) WHERE p.agee IS NOT NULL RETURN p", false),
+            ("MATCH (p:Person) WHERE NOT p.agee IS NULL RETURN p", false),
+        ] {
+            let q = parse_cypher(query).unwrap();
+            let w = collect_unknown_pattern_warnings(&q, &g);
+            assert_eq!(w.len(), 1, "{query}: {w:?}");
+            assert_eq!(
+                w[0].contains("filters out nothing"),
+                keeps_all,
+                "{query}: {}",
+                w[0]
+            );
+            assert_eq!(
+                w[0].contains("filters out every row"),
+                !keeps_all,
+                "{query}: {}",
+                w[0]
+            );
+            assert!(w[0].contains("Did you mean 'age'"), "{query}: {}", w[0]);
+            let found = collect_query_warnings(&q, &g, &HashMap::new()).absent_property;
+            let err = strict_read_error(&found, &g).expect("a lock still refuses the typo");
+            assert!(
+                err.message.contains("referenced in WHERE"),
+                "{}",
+                err.message
+            );
+        }
     }
 
     #[test]

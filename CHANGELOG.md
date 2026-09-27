@@ -447,6 +447,11 @@ before upgrading.
 
 ### Fixed
 
+- The query warning for `WHERE n.x IS NULL` on a property no node of the type
+  has said the test "filters out every row" while the query returned every
+  row; it now says the test is true on every row, and stays silent for a
+  declared name nothing has written yet (`WHERE n.valid_to IS NULL` on an
+  open-ended validity declaration). `IS NOT NULL` keeps the old wording.
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.
