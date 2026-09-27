@@ -24,6 +24,7 @@ fn echo(graph: &DirGraph, query: &str) -> Option<TemporalDiagnostics> {
         .diagnostics
         .expect("every execution attaches diagnostics")
         .temporal
+        .map(|echo| *echo)
 }
 
 /// Wells 1 (closed in 2010) and 2 (from 2005), a `Field` they sit in, and a

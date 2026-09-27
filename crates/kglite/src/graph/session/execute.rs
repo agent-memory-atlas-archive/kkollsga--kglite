@@ -999,7 +999,7 @@ fn attach_diagnostics(
     echo: Option<TemporalDiagnostics>,
 ) {
     let mut diagnostics = result.diagnostics.take().unwrap_or_default();
-    diagnostics.temporal = echo.map(|echo| finish_echo(echo, &diagnostics));
+    diagnostics.temporal = echo.map(|echo| Box::new(finish_echo(echo, &diagnostics)));
     if !prepare_warnings.is_empty() {
         let mut merged = prepare_warnings.to_vec();
         merged.append(&mut diagnostics.warnings);

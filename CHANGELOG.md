@@ -235,7 +235,8 @@ before upgrading.
   `DISK_MASK_BYTE_CAP`); `kglite::api::cypher::prepend_valid_time`, whose
   `PrependError` tells a bad instant from a doubled context,
   `carries_valid_time_context` and `TemporalDiagnostics`
-  (`QueryDiagnostics::temporal`, serialized only when set);
+  (`QueryDiagnostics::temporal`, an `Option<Box<_>>` so a statement with no
+  context carries one pointer, serialized only when set);
   `kglite::api::fluent::FluentFilter`, the filter a fluent step runs under,
   resolved from the cursor's `TemporalContext`, a `traverse(at=/during=)`
   argument or a `valid_at()` / `valid_during()` request, and
@@ -324,8 +325,12 @@ before upgrading.
   bound the filter cannot read. `kglite::api::io::save_subset` and
   `save_subset_streaming_disk` take a trailing `Option<&FluentFilter>`.
 - **Breaking (Rust):** `kglite::api::cypher::QueryDiagnostics` has a new
-  field, `temporal`; a struct literal must name it or end in
-  `..Default::default()`.
+  field, `temporal: Option<Box<TemporalDiagnostics>>`; a struct literal must
+  name it or end in `..Default::default()`.
+- Fluent `valid_at()` / `valid_during()` with named bounds on a type with no
+  declaration (or bounds other than the declared ones) read typed date
+  columns as epoch days without decoding a value per row: about 10% faster
+  than 0.18.1 on a 20k-node type; declared bounds keep the mask route.
 - Cypher `valid_at` / `valid_during` read the query date the way `date()` and
   `datetime()` do: `'2009'` is 2009-01-01 and `'2009-06'` is 2009-06-01, and a
   string with a time part keeps its time, its offset applied and normalised to

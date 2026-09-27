@@ -656,7 +656,7 @@ impl ResultView {
                     retrieval.append(item)?;
                 }
                 dict.set_item("retrieval", retrieval)?;
-                dict.set_item("temporal", temporal_dict(py, d.temporal.as_ref())?)?;
+                dict.set_item("temporal", temporal_dict(py, d.temporal.as_deref())?)?;
                 Ok(dict.into_any().unbind())
             }
             None => Ok(py.None()),

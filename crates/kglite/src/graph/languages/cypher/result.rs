@@ -359,7 +359,7 @@ pub struct QueryDiagnostics {
     /// `valid_at=`) was answered. `None`, and left out of the serialized form,
     /// for a statement without a context.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temporal: Option<TemporalDiagnostics>,
+    pub temporal: Option<Box<TemporalDiagnostics>>,
 }
 
 /// The valid-time echo on [`QueryDiagnostics::temporal`]: the instant a
@@ -910,5 +910,18 @@ pub(crate) fn clear_published_relationship_incarnations(result: &mut CypherResul
 fn clear_published_row(row: &mut [Value]) {
     for value in row {
         value.clear_relationship_incarnations();
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_size_tests {
+    use super::*;
+
+    /// Every statement moves its diagnostics through the session: the
+    /// valid-time echo is boxed so a statement without a context carries one
+    /// pointer for it, not the whole echo.
+    #[test]
+    fn the_temporal_echo_costs_one_pointer() {
+        assert!(std::mem::size_of::<QueryDiagnostics>() <= 112);
     }
 }
