@@ -2,6 +2,7 @@ use crate::datatypes::values::Value;
 use crate::graph::core::filtering::{
     compare_values, may_parse_as_temporal, str_values_equal, values_equal,
 };
+use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::dir_graph::indexes::predicate_queries::string_index_hits;
 use crate::graph::languages::cypher::executor::budget::MatchCeiling;
@@ -22,8 +23,8 @@ use crate::graph::parallel::{self, ParallelInterrupt};
 use super::closure_probe;
 use super::column_filter::{self, ColumnFilter};
 use super::pattern::{
-    AnchorSide, ConnTypeFilter, EdgeDirection, EdgePattern, MatchBinding, NodePattern, PathHop,
-    Pattern, PatternElement, PatternMatch, PropertyMatcher,
+    ConnTypeFilter, EdgeDirection, EdgePattern, MatchBinding, NodePattern, PathHop, Pattern,
+    PatternElement, PatternMatch, PropertyMatcher,
 };
 
 /// Minimum match count to use parallel expansion via rayon.
@@ -1964,6 +1965,44 @@ impl<'a> PatternExecutor<'a> {
         }
     }
 
+    /// The fixed-hop edge tests that read edge properties: the inline filter
+    /// pushed from a downstream WHERE (so the rows it would discard never
+    /// pay for binding allocation and node-property reads), then the
+    /// pattern's own edge properties. The edge is materialised (lazily on
+    /// disk) only when one of them exists.
+    #[inline]
+    fn edge_passes_inline_filters(
+        &self,
+        edge_pattern: &EdgePattern,
+        edge: &GraphEdgeRef<'_>,
+        conn_type: InternedKey,
+        direction: Direction,
+    ) -> bool {
+        if let Some(ref filter) = edge_pattern.edge_filter {
+            let edge_data = edge.weight();
+            let keep = filter.predicate.eval(
+                conn_type,
+                filter.peer_is_start(direction),
+                edge.source(),
+                edge.target(),
+                &|prop: &str| edge_ref_property(self.graph, edge, edge_data, prop),
+            );
+            if !keep {
+                return false;
+            }
+        }
+        if let Some(ref props) = edge_pattern.properties {
+            let edge_data = edge.weight();
+            return props.iter().all(|(key, matcher)| {
+                edge_data
+                    .get_property(key)
+                    .map(|v| self.value_matches(v, matcher))
+                    .unwrap_or_else(|| matcher.accepts_absent())
+            });
+        }
+        true
+    }
+
     fn expand_from_node(
         &self,
         source: NodeIndex,
@@ -2074,48 +2113,8 @@ impl<'a> PatternExecutor<'a> {
                     }
                 }
 
-                // Inline edge filter pushed from a downstream WHERE: eliminates
-                // rows the post-expansion WHERE would have discarded anyway, so
-                // the dominant cost (binding allocation + node-property reads
-                // below) never happens. Reads edge properties, so it
-                // materialises the edge (lazy on disk) only when a filter exists.
-                if let Some(ref filter) = edge_pattern.edge_filter {
-                    let edge_data = edge.weight();
-                    let edge_source = edge.source();
-                    let edge_target = edge.target();
-                    // Map the matcher's `direction` onto "is the peer
-                    // node on the edge's start side?" — the form
-                    // RelEdgePredicate works with.
-                    let peer_is_start = match (filter.anchor, direction) {
-                        (AnchorSide::Source, Direction::Outgoing) => false,
-                        (AnchorSide::Source, Direction::Incoming) => true,
-                        (AnchorSide::Target, Direction::Outgoing) => true,
-                        (AnchorSide::Target, Direction::Incoming) => false,
-                    };
-                    let keep = filter.predicate.eval(
-                        conn_type,
-                        peer_is_start,
-                        edge_source,
-                        edge_target,
-                        &|prop: &str| edge_ref_property(self.graph, &edge, edge_data, prop),
-                    );
-                    if !keep {
-                        continue;
-                    }
-                }
-
-                // Check edge properties if specified — materialise lazily.
-                if let Some(ref props) = edge_pattern.properties {
-                    let edge_data = edge.weight();
-                    let matches = props.iter().all(|(key, matcher)| {
-                        edge_data
-                            .get_property(key)
-                            .map(|v| self.value_matches(v, matcher))
-                            .unwrap_or_else(|| matcher.accepts_absent())
-                    });
-                    if !matches {
-                        continue;
-                    }
+                if !self.edge_passes_inline_filters(edge_pattern, &edge, conn_type, direction) {
+                    continue;
                 }
 
                 let target = match direction {

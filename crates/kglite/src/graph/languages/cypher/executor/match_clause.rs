@@ -105,6 +105,45 @@ fn simple_node_edge_node(pattern: &Pattern) -> Option<(&NodePattern, &EdgePatter
     Some((node_a, edge, node_b))
 }
 
+/// The bound end of a single-hop `(a)-[e]-(b)` pattern, the directions to
+/// sweep from it, and the unbound end's pattern.
+struct BoundHop<'p> {
+    bound_idx: NodeIndex,
+    traverse_dirs: &'static [Direction],
+    other: &'p NodePattern,
+}
+
+/// Exactly one end must be bound (`bound` resolves a variable); `None` when
+/// both or neither is. An undirected pattern sweeps both directions.
+fn bound_hop<'p>(
+    node_a: &'p NodePattern,
+    edge: &EdgePattern,
+    node_b: &'p NodePattern,
+    bound: impl Fn(&str) -> Option<NodeIndex>,
+) -> Option<BoundHop<'p>> {
+    let bound_of = |node: &NodePattern| node.variable.as_deref().and_then(&bound);
+    let (bound_idx, other, traverse_dirs): (_, _, &'static [Direction]) =
+        match (bound_of(node_a), bound_of(node_b)) {
+            (Some(a_idx), None) => match edge.direction {
+                EdgeDirection::Outgoing => (a_idx, node_b, &[Direction::Outgoing]),
+                EdgeDirection::Incoming => (a_idx, node_b, &[Direction::Incoming]),
+                EdgeDirection::Both => (a_idx, node_b, &[Direction::Outgoing, Direction::Incoming]),
+            },
+            // (a)->b: b has incoming; (a)<-b: b has outgoing.
+            (None, Some(b_idx)) => match edge.direction {
+                EdgeDirection::Outgoing => (b_idx, node_a, &[Direction::Incoming]),
+                EdgeDirection::Incoming => (b_idx, node_a, &[Direction::Outgoing]),
+                EdgeDirection::Both => (b_idx, node_a, &[Direction::Outgoing, Direction::Incoming]),
+            },
+            _ => return None,
+        };
+    Some(BoundHop {
+        bound_idx,
+        traverse_dirs,
+        other,
+    })
+}
+
 struct ExistsHop<'a> {
     bound_idx: NodeIndex,
     interned_conn: Option<InternedKey>,
@@ -972,35 +1011,12 @@ impl<'a> CypherExecutor<'a> {
             return None;
         }
 
-        let a_bound = node_a
-            .variable
-            .as_ref()
-            .and_then(|v| row.node_bindings.get(v).copied());
-        let b_bound = node_b
-            .variable
-            .as_ref()
-            .and_then(|v| row.node_bindings.get(v).copied());
-
-        let (bound_idx, other_node, other_var, directions): (NodeIndex, _, _, &[Direction]) =
-            match (a_bound, b_bound) {
-                (Some(idx), None) => {
-                    let dirs: &[Direction] = match edge.direction {
-                        EdgeDirection::Outgoing => &[Direction::Outgoing],
-                        EdgeDirection::Incoming => &[Direction::Incoming],
-                        EdgeDirection::Both => &[Direction::Outgoing, Direction::Incoming],
-                    };
-                    (idx, node_b, &node_b.variable, dirs)
-                }
-                (None, Some(idx)) => {
-                    let dirs: &[Direction] = match edge.direction {
-                        EdgeDirection::Outgoing => &[Direction::Incoming],
-                        EdgeDirection::Incoming => &[Direction::Outgoing],
-                        EdgeDirection::Both => &[Direction::Outgoing, Direction::Incoming],
-                    };
-                    (idx, node_a, &node_a.variable, dirs)
-                }
-                _ => return None, // both bound or neither — fall back
-            };
+        let BoundHop {
+            bound_idx,
+            traverse_dirs: directions,
+            other: other_node,
+        } = bound_hop(node_a, edge, node_b, |v| row.node_bindings.get(v).copied())?;
+        let other_var = &other_node.variable;
 
         // `[:A|B]`: the singular field holds only the first branch, so this
         // sweep used to answer "no such edge" for a node whose only match
@@ -1210,17 +1226,8 @@ impl<'a> CypherExecutor<'a> {
             return Ok(None);
         };
 
-        let a_bound = node_a
-            .variable
-            .as_ref()
-            .and_then(|v| bindings.get(v).copied());
-        let b_bound = node_b
-            .variable
-            .as_ref()
-            .and_then(|v| bindings.get(v).copied());
-
-        // Exactly one end must be bound. Undirected patterns sweep both directions, but each self-loop
-        // contributes one relationship binding (degree still counts two).
+        // Each self-loop of an undirected pattern contributes one
+        // relationship binding (degree still counts two).
         //
         // Contract: the caller guarantees that the bound NodeIndex satisfies
         // any property filter on the bound side of the pattern (the upstream
@@ -1229,33 +1236,16 @@ impl<'a> CypherExecutor<'a> {
         // and only consult `other_props` for the unbound peer. Earlier code
         // bailed out (`return Ok(None)`) when the bound side had properties,
         // which silently produced 0 in the `.unwrap_or(0)` fused callers.
-        type CountFastPath<'p> = (
-            NodeIndex,
-            &'p Option<String>,
-            &'p Option<HashMap<String, PropertyMatcher>>,
-            &'p [Direction],
-            &'p crate::graph::core::pattern_matching::NodePattern,
-        );
-        let (bound_idx, other_type, other_props, traverse_dirs, other_pattern): CountFastPath =
-            match (a_bound, b_bound) {
-                (None, Some(b_idx)) => {
-                    let dirs: &[Direction] = match edge.direction {
-                        EdgeDirection::Outgoing => &[Direction::Incoming], // (a)->b: b has incoming
-                        EdgeDirection::Incoming => &[Direction::Outgoing], // (a)<-b: b has outgoing
-                        EdgeDirection::Both => &[Direction::Outgoing, Direction::Incoming],
-                    };
-                    (b_idx, &node_a.node_type, &node_a.properties, dirs, node_a)
-                }
-                (Some(a_idx), None) => {
-                    let dirs: &[Direction] = match edge.direction {
-                        EdgeDirection::Outgoing => &[Direction::Outgoing],
-                        EdgeDirection::Incoming => &[Direction::Incoming],
-                        EdgeDirection::Both => &[Direction::Outgoing, Direction::Incoming],
-                    };
-                    (a_idx, &node_b.node_type, &node_b.properties, dirs, node_b)
-                }
-                _ => return Ok(None), // both bound or neither bound — fall back
-            };
+        let Some(BoundHop {
+            bound_idx,
+            traverse_dirs,
+            other: other_pattern,
+        }) = bound_hop(node_a, edge, node_b, |v| bindings.get(v).copied())
+        else {
+            return Ok(None);
+        };
+        let other_type = &other_pattern.node_type;
+        let other_props = &other_pattern.properties;
 
         // `[:A|B]` accepts every listed type; reading the singular
         // `connection_type` here counted only the first branch.
@@ -1305,24 +1295,8 @@ impl<'a> CypherExecutor<'a> {
         let edge_filter = edge.edge_filter.as_ref();
 
         for &dir in traverse_dirs {
-            // Translate the matcher's `direction` into the
-            // peer_is_start boolean RelEdgePredicate works with.
-            // bound_idx is always the anchor; `dir` describes its
-            // outward direction. For `Source` anchor:
-            //   Outgoing → peer = edge.target → peer_is_start = false
-            //   Incoming → peer = edge.source → peer_is_start = true
-            // For `Target` anchor (right-bound) it's reversed.
-            let peer_is_start = if let Some(f) = edge_filter {
-                use crate::graph::core::pattern_matching::pattern::AnchorSide;
-                match (f.anchor, dir) {
-                    (AnchorSide::Source, Direction::Outgoing) => false,
-                    (AnchorSide::Source, Direction::Incoming) => true,
-                    (AnchorSide::Target, Direction::Outgoing) => true,
-                    (AnchorSide::Target, Direction::Incoming) => false,
-                }
-            } else {
-                false
-            };
+            // `bound_idx` is the anchor and `dir` its outward direction.
+            let peer_is_start = edge_filter.is_some_and(|f| f.peer_is_start(dir));
 
             for edge_ref in self
                 .graph

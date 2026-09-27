@@ -253,6 +253,20 @@ pub struct RelEdgeFilter {
     pub anchor: AnchorSide,
 }
 
+impl RelEdgeFilter {
+    /// Whether the peer sits on the edge's start side when the matcher
+    /// expands from the anchor in `direction` — the form
+    /// [`RelEdgePredicate::eval`] takes.
+    #[inline]
+    pub fn peer_is_start(&self, direction: petgraph::Direction) -> bool {
+        use petgraph::Direction::{Incoming, Outgoing};
+        match (self.anchor, direction) {
+            (AnchorSide::Source, Outgoing) | (AnchorSide::Target, Incoming) => false,
+            (AnchorSide::Source, Incoming) | (AnchorSide::Target, Outgoing) => true,
+        }
+    }
+}
+
 /// Which pattern endpoint the matcher is treating as the anchor when
 /// expanding edges. The planner records this when compiling
 /// startNode/endNode predicates so the matcher can answer those at
