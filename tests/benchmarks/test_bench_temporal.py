@@ -692,3 +692,39 @@ def test_temporal_heavy_slice_at(benchmark, heavy_pair):
 @pytest.mark.parametrize("name", list(CONTROLS))
 def test_temporal_heavy_control(benchmark, heavy_pair, name):
     benchmark(_run, heavy_pair.full, CONTROLS[name], {})
+
+
+@pytest.fixture(scope="module")
+def subgraph_source():
+    """20k nodes (bounds, a score) and 100k random relationships, undeclared."""
+    rng = np.random.default_rng(SEED)
+    n = 20_000
+    vf, vt = _bounds(np.arange(n) % PERIODS)
+    graph = KnowledgeGraph()
+    graph.add_nodes(
+        pd.DataFrame(
+            {"nid": np.arange(n), "name": [f"N{i}" for i in range(n)], "vf": vf, "vt": vt, "score": rng.random(n)}
+        ),
+        "E",
+        "nid",
+        "name",
+    )
+    graph.add_relationships(
+        pd.DataFrame({"s": rng.integers(0, n, 100_000), "d": rng.integers(0, n, 100_000)}), "R", "E", "s", "E", "d"
+    )
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_to_subgraph(benchmark, subgraph_source):
+    """`to_subgraph` of a whole type: every row of every column copied into the
+    new graph's own stores, and every relationship between kept nodes."""
+    selection = subgraph_source.select("E")
+    assert selection.to_subgraph().select("E").len() == 20_000
+    benchmark(selection.to_subgraph)
+
+
+@pytest.mark.benchmark
+def test_bench_to_subgraph_expand(benchmark, subgraph_source):
+    """`expand(1).to_subgraph()` from 2000 seeds: the BFS plus a partial copy."""
+    benchmark(lambda: subgraph_source.select("E", limit=2000).expand(1).to_subgraph())

@@ -79,10 +79,9 @@ impl DirGraph {
         node_type: &str,
         mut properties: HashMap<String, Value>,
     ) -> NodeIndex {
-        // Freshness provenance: stamp `updated_at` (+ git_sha in phase 3) when
-        // this type opted into `auto_timestamp`. Single chokepoint for every
-        // create route — Cypher CREATE, `add_nodes`, and MERGE-create all land
-        // here. A no-op for types that didn't opt in.
+        // Freshness provenance: stamp `updated_at` (+ git_sha / modified_by)
+        // when this type opted into `auto_timestamp`. A no-op for types that
+        // didn't opt in.
         self.inject_provenance(node_type, &mut properties);
 
         // Register property types in `node_type_metadata` from the values in

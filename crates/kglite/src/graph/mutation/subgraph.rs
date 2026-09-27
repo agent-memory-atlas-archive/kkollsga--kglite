@@ -3,10 +3,15 @@
 
 use crate::datatypes::values::Value;
 use crate::graph::core::fluent_filter::FluentFilter;
-use crate::graph::schema::{CurrentSelection, DirGraph, EdgeData, SchemaInstall};
+use crate::graph::schema::{
+    ColumnarRow, CurrentSelection, DirGraph, EdgeData, InternedKey, NodeData, PropertyStorage,
+    SchemaInstall,
+};
+use crate::graph::storage::column_store::ColumnStore;
 use crate::graph::storage::{GraphRead, GraphWrite};
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::Direction;
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -136,84 +141,48 @@ pub(crate) fn copy_induced_subgraph(
     // Arena guard: disk-backed node/edge reads materialize into the query
     // arena (protocol in disk/graph.rs); no-op on memory/mapped.
     let _arena_guard = source.graph.begin_query();
-    let node_set: HashSet<NodeIndex> = nodes.iter().copied().collect();
 
     let mut new_graph = DirGraph::new();
     // Before the inserts: they encode rows against the interner and type
     // schemas, and only add to the type metadata.
     clone_subset_metadata(&mut new_graph, source);
 
-    // Map from old node indices to new node indices
-    let mut index_map: HashMap<NodeIndex, NodeIndex> = HashMap::with_capacity(nodes.len());
+    let index_map = copy_nodes(source, nodes, &mut new_graph);
 
-    // Each node is inserted into the copy's own column stores, read through
-    // `GraphRead`: the copy never shares the source's store `Arc`s, so its
-    // heap is its own rows — a mapped or disk store is file-backed, and the
-    // first write into a shared one would clone every row of the type.
-    for &old_idx in nodes {
-        let Some(node) = source.graph.node_view(old_idx) else {
-            continue;
-        };
-        let node_type = node.node_type_str(&source.interner).to_string();
-        let mut id = node.id().into_owned();
-        let mut title = node.title().into_owned();
-        let mut properties = node.property_pairs();
-        crate::graph::session::snapshot_property_values(
-            &source.graph,
-            [&mut id, &mut title]
-                .into_iter()
-                .chain(properties.iter_mut().map(|(_, value)| value)),
-        );
-        let properties: HashMap<String, Value> = properties
-            .into_iter()
-            .map(|(key, value)| (source.interner.resolve(key).to_string(), value))
-            .collect();
-        let new_idx = new_graph.insert_node_routed(id, title, &node_type, properties);
-        index_map.insert(old_idx, new_idx);
-        new_graph
-            .type_indices
-            .entry_or_default(node_type)
-            .push(new_idx);
-    }
-
-    // Copy edges between selected nodes
+    // Copy the relationships between copied nodes. A node absent from
+    // `index_map` was not copied, so neither are its relationships.
     let mut rel_types = HashSet::new();
     for &old_source_idx in nodes {
+        let Some(&new_source) = index_map.get(&old_source_idx) else {
+            continue;
+        };
         for edge in source.graph.edges(old_source_idx) {
-            let old_target_idx = edge.target();
-
-            // Only copy edge if target is also in selection
-            if node_set.contains(&old_target_idx) && keep_edge(edge.id()) {
-                if let (Some(&new_source), Some(&new_target)) = (
-                    index_map.get(&old_source_idx),
-                    index_map.get(&old_target_idx),
-                ) {
-                    // Clone edge data (properties are already interned)
-                    let mut properties = edge.weight().properties.clone();
-                    crate::graph::session::snapshot_property_values(
-                        &source.graph,
-                        properties.iter_mut().map(|(_, value)| value),
-                    );
-                    rel_types.insert(edge.weight().connection_type);
-                    let edge_data =
-                        EdgeData::new_interned(edge.weight().connection_type, properties);
-                    GraphWrite::add_edge(&mut new_graph.graph, new_source, new_target, edge_data);
-                }
+            let Some(&new_target) = index_map.get(&edge.target()) else {
+                continue;
+            };
+            if !keep_edge(edge.id()) {
+                continue;
             }
+            // Edge properties are already interned.
+            let mut properties = edge.weight().properties.clone();
+            crate::graph::session::snapshot_property_values(
+                &source.graph,
+                properties.iter_mut().map(|(_, value)| value),
+            );
+            rel_types.insert(edge.weight().connection_type);
+            let edge_data = EdgeData::new_interned(edge.weight().connection_type, properties);
+            GraphWrite::add_edge(&mut new_graph.graph, new_source, new_target, edge_data);
         }
     }
 
     retain_subset_types(&mut new_graph, &rel_types);
 
     // Carry secondary labels: buckets are keyed above the storage backend
-    // (labels.rs), so neither the node copy nor the store share moved them —
-    // pre-2026-08-26 this silently dropped every label from save_subset /
-    // extract_subgraph. Copied through index_map (never re-derived: a manual
-    // label must survive even where an ontology could not explain it), with
-    // the sorted-bucket invariant restored by construction since index_map
-    // values are assigned in ascending old-index iteration order per bucket
-    // — sorted per bucket only if the old bucket was sorted AND add_node
-    // assigned ascending, which holds; assert it anyway.
+    // (labels.rs), so the node copy does not move them — pre-2026-08-26 this
+    // silently dropped every label from save_subset / extract_subgraph.
+    // Copied through index_map (never re-derived: a manual label must survive
+    // even where an ontology could not explain it), then sorted, since
+    // `nodes` need not be in index order.
     for (label, bucket) in &source.secondary_label_index {
         let mut copied: Vec<NodeIndex> = bucket
             .iter()
@@ -245,6 +214,183 @@ pub(crate) fn copy_induced_subgraph(
     }
 
     Ok((new_graph, index_map))
+}
+
+/// One node type's share of a copy: the kept nodes' rows in the source
+/// store, gathered in one pass per column when every kept node of the type
+/// reads its id, title and properties from that store alone.
+struct TypeCopy<'a> {
+    key: InternedKey,
+    store: Option<&'a ColumnStore>,
+    rows: Vec<u32>,
+    new_indices: Vec<NodeIndex>,
+}
+
+/// Copy `nodes` into `dest` in the order given; the map takes each copied
+/// source node to its new index.
+///
+/// The copy's column stores hold only the copied rows and never share a
+/// store or column `Arc` with the source: a mapped or disk column is
+/// file-backed, and the first write into a shared one would clone every row
+/// of the type. A type whose kept nodes all live in one store with nothing
+/// behind its columns (no mmap base or overflow bag) is gathered column by
+/// column ([`ColumnStore::gather_rows`]), keeping each column's stored kind;
+/// any other type — a Disk store, a node holding its id, title or properties
+/// inline — is copied node by node through [`copy_node`].
+fn copy_nodes(
+    source: &DirGraph,
+    nodes: &[NodeIndex],
+    dest: &mut DirGraph,
+) -> HashMap<NodeIndex, NodeIndex> {
+    let mut types: Vec<TypeCopy<'_>> = Vec::new();
+    let mut slot_of: FxHashMap<InternedKey, usize> = FxHashMap::default();
+    // Each kept node with its type's position in `types`. A gathered type's
+    // nodes take the gathered rows in this order; one node that cannot be
+    // gathered sends its whole type to the per-node copy.
+    let mut plan: Vec<(NodeIndex, usize)> = Vec::with_capacity(nodes.len());
+    for &old_idx in nodes {
+        let Some(node) = source.graph.node_view(old_idx) else {
+            continue;
+        };
+        let key = node.node_type();
+        let slot = *slot_of.entry(key).or_insert_with(|| {
+            let store = source
+                .graph
+                .column_store(key)
+                .map(|store| &**store)
+                .filter(|store| !store.has_mmap_base() && !store.has_overflow());
+            types.push(TypeCopy {
+                key,
+                store,
+                rows: Vec::new(),
+                new_indices: Vec::new(),
+            });
+            types.len() - 1
+        });
+        let entry = &mut types[slot];
+        let gathered_row = entry.store.and_then(|store| {
+            let data = node.data();
+            let (node_store, row) = node.column_row()?;
+            (std::ptr::eq(node_store, store)
+                && matches!(data.id, Value::Null)
+                && matches!(data.title, Value::Null))
+            .then_some(row)
+        });
+        match gathered_row {
+            Some(row) => entry.rows.push(row),
+            None => entry.store = None,
+        }
+        plan.push((old_idx, slot));
+    }
+
+    for entry in &types {
+        if let Some(store) = entry.store {
+            install_gathered_store(source, dest, entry.key, store, &entry.rows);
+        }
+    }
+
+    let mut index_map: HashMap<NodeIndex, NodeIndex> = HashMap::with_capacity(plan.len());
+    let mut next_row = vec![0u32; types.len()];
+    for (old_idx, slot) in plan {
+        let entry = &mut types[slot];
+        let new_idx = if entry.store.is_some() {
+            let row = next_row[slot];
+            next_row[slot] += 1;
+            let idx = GraphWrite::add_node(
+                &mut dest.graph,
+                NodeData {
+                    id: Value::Null,
+                    title: Value::Null,
+                    node_type: entry.key,
+                    properties: PropertyStorage::Columnar(ColumnarRow::new(row)),
+                },
+            );
+            // A no-op on the heap backends; the per-node route's step, kept
+            // so both routes build the same node.
+            GraphWrite::update_row_id(&mut dest.graph, idx, row);
+            idx
+        } else {
+            copy_node(source, dest, old_idx)
+        };
+        index_map.insert(old_idx, new_idx);
+        entry.new_indices.push(new_idx);
+    }
+    for entry in types {
+        dest.type_indices
+            .entry_or_default(source.interner.resolve(entry.key).to_string())
+            .extend(entry.new_indices);
+    }
+    index_map
+}
+
+/// Install `rows` of `store` as `node_type`'s store in `dest`, with the
+/// bookkeeping the per-node insert does per row: the type schema holds the
+/// store's keys, a key the type metadata lacks is registered from its first
+/// non-null value, and node references in `Mixed` cells are snapshotted.
+fn install_gathered_store(
+    source: &DirGraph,
+    dest: &mut DirGraph,
+    node_type: InternedKey,
+    store: &ColumnStore,
+    rows: &[u32],
+) {
+    let mut gathered = store
+        .gather_rows(rows)
+        .expect("a store is gathered only when it has no mmap base or overflow bag");
+    crate::graph::session::snapshot_property_values(
+        &source.graph,
+        gathered.heterogeneous_cells_mut(),
+    );
+    let type_name = source.interner.resolve(node_type);
+    let keys: Vec<InternedKey> = gathered.schema().iter().map(|(_, key)| key).collect();
+    dest.ensure_type_schema_keys(type_name, &keys);
+    let known = dest.node_type_metadata.get(type_name);
+    let missing: HashMap<String, String> = gathered
+        .schema()
+        .iter()
+        .filter(|(_, key)| {
+            known.is_none_or(|props| !props.contains_key(source.interner.resolve(*key)))
+        })
+        .filter_map(|(slot, key)| {
+            let value =
+                (0..gathered.row_count()).find_map(|row| gathered.get_by_slot(row, slot))?;
+            Some((
+                source.interner.resolve(key).to_string(),
+                value.type_name().to_string(),
+            ))
+        })
+        .collect();
+    if !missing.is_empty() {
+        dest.upsert_node_type_metadata(type_name, missing);
+    }
+    GraphWrite::install_column_store(&mut dest.graph, node_type, Arc::new(gathered));
+}
+
+/// Copy one node through the routed insert, read through `GraphRead` — the
+/// route for a node [`copy_nodes`] cannot gather. `dest` has no schema
+/// installed yet ([`copy_induced_subgraph`] installs it after the rows), so
+/// an `auto_timestamp` type is not re-stamped: the copy keeps the source's
+/// provenance values.
+fn copy_node(source: &DirGraph, dest: &mut DirGraph, old_idx: NodeIndex) -> NodeIndex {
+    let node = source
+        .graph
+        .node_view(old_idx)
+        .expect("copy_nodes planned only nodes with a view");
+    let node_type = node.node_type_str(&source.interner);
+    let mut id = node.id().into_owned();
+    let mut title = node.title().into_owned();
+    let mut properties = node.property_pairs();
+    crate::graph::session::snapshot_property_values(
+        &source.graph,
+        [&mut id, &mut title]
+            .into_iter()
+            .chain(properties.iter_mut().map(|(_, value)| value)),
+    );
+    let properties: HashMap<String, Value> = properties
+        .into_iter()
+        .map(|(key, value)| (source.interner.resolve(key).to_string(), value))
+        .collect();
+    dest.insert_node_routed(id, title, node_type, properties)
 }
 
 /// Copy the graph-level metadata a subset needs to be self-contained on
@@ -380,3 +526,7 @@ pub struct SubgraphStats {
     pub node_types: HashMap<String, usize>,
     pub connection_types: HashMap<String, usize>,
 }
+
+#[cfg(test)]
+#[path = "subgraph_tests.rs"]
+mod tests;

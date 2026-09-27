@@ -560,7 +560,11 @@ before upgrading.
   spellings, type hierarchy and user-schema version, so a property none of the
   selected nodes carries is accepted in `MATCH (n:T {p: …})` and
   `CREATE (:T {p: …})` on the copy as on the source, and the in-memory and
-  streaming disk `save_subset` variants save the same metadata.
+  streaming disk `save_subset` variants save the same metadata. In memory and
+  mapped modes the copy is gathered one column at a time (a disk source is
+  still copied node by node): `select(T).to_subgraph()` over 20k nodes and
+  100k relationships takes 3.6 ms, against 8.7 ms in 0.18.1 (release build,
+  minimum of two runs; `expand(1).to_subgraph()` 3.5 ms against 6.9 ms).
 - Rust: `kglite::api::io::save_subset_streaming_disk` wrote every node id as
   null for a disk graph written in the current session (it read ids only from
   a reopened graph's file-backed base), and failed on a float column widened

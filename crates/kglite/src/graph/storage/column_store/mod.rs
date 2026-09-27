@@ -11,6 +11,7 @@
 
 mod date_cells;
 mod exact_values;
+mod gather;
 #[cfg(test)]
 mod null_overlay_tests;
 mod overlay;
