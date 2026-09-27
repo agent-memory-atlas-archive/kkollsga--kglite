@@ -337,6 +337,32 @@ def declared_network_graph():
     return graph
 
 
+@pytest.fixture
+def declared_text_graph():
+    """Declared `Doc` versions with a BM25 index: at 2008 the `old` versions
+    (which repeat `alpha`) are hidden, so the valid documents' statistics
+    differ from the corpus's."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "UNWIND range(0, 11) AS i CREATE (:Doc {id: i, "
+        "body: CASE WHEN i % 3 = 0 THEN 'alpha alpha alpha beta' "
+        "WHEN i % 3 = 1 THEN 'alpha gamma delta ' + toString(i) ELSE 'beta beta gamma' END, "
+        "vf: CASE WHEN i % 3 = 0 THEN date('2000-01-01') ELSE date('2005-01-01') END, "
+        "vt: CASE WHEN i % 3 = 0 THEN date('2004-12-31') ELSE null END})"
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'Doc', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    graph.build_text_index("Doc", "body")
+    return graph
+
+
+def _text_context_pair(name: str, query: str) -> list[tuple[str, str, str, dict | None]]:
+    """`query` on `declared_text_graph` as of 2008 and without a context."""
+    return [
+        (f"context_{name}", "declared_text_graph", "FOR VALID_TIME AS OF date('2008-01-01') " + query, None),
+        (f"context_twin_{name}", "declared_text_graph", query, None),
+    ]
+
+
 def _network_context_pair(name: str, query: str) -> list[tuple[str, str, str, dict | None]]:
     """`query` on `declared_network_graph` as of 2008 and without a context."""
     return [
@@ -529,6 +555,28 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     # The streaming pipeline under a context: grouped aggregates in RETURN
     # and WITH (with its WHERE), DISTINCT over a node and a value, a
     # subquery argument and the ORDER BY … LIMIT heap, over matched rows.
+    # Retrieval and algorithm procedures under a context: BM25 with the valid
+    # documents' statistics (the fused top-k and the per-row scalar), and
+    # algorithms on the valid slice yielding the graph's own nodes.
+    *_text_context_pair(
+        "text_bm25_top_k",
+        "MATCH (d:Doc) RETURN d.id AS id, text_bm25(d, 'body', 'alpha gamma') AS s ORDER BY s DESC LIMIT 3",
+    ),
+    *_text_context_pair(
+        "text_bm25_rows",
+        "MATCH (d:Doc) RETURN d.id AS id, text_bm25(d, 'body', 'beta delta') AS s",
+    ),
+    *_network_context_pair(
+        "pagerank_on_the_slice",
+        "CALL pagerank() YIELD node, score RETURN node.id AS id, round(score, 9) AS s",
+    ),
+    *_network_context_pair(
+        "components_on_the_slice",
+        (
+            "CALL connected_components() YIELD node, component WITH component, node.id AS i "
+            "ORDER BY i WITH component, collect(i) AS ids RETURN ids"
+        ),
+    ),
     *_network_context_pair(
         "streaming_var_length_distinct",
         ("MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t) AS c"),
@@ -7033,6 +7081,8 @@ ORDERED_CASES = frozenset(
         "skip_and_limit",
         "order_by_return_alias",
         "text_bm25_top_k",
+        "context_text_bm25_top_k",
+        "context_twin_text_bm25_top_k",
         "text_bm25_complete_top_k",
         "text_bm25_top_k_stale_over_limit",
         "edge_vector_endpoint_parallel_multiplicity",

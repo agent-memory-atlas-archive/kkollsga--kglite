@@ -473,7 +473,8 @@ pub mod api {
         /// prefix, and a consumer that needs a materialised graph asks the
         /// view for its `ValidSlice`.
         pub use crate::graph::features::temporal::view::{
-            view_at, ValidSlice, ValidTimeView, DISK_SLICE_ELEMENT_CAP, SLICE_BYTE_CAP,
+            view_at, ValidSlice, ValidTimeView, DISK_MASK_BYTE_CAP, DISK_SLICE_ELEMENT_CAP,
+            SLICE_BYTE_CAP,
         };
         pub use crate::graph::features::temporal::{
             declare, declare_defaulted, declare_from_column_types, declare_loaded, edge_configs,

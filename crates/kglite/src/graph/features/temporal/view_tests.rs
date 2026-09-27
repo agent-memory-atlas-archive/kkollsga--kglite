@@ -149,10 +149,10 @@ fn a_view_pins_the_masks_of_every_declared_target() {
     // A query on the view that reaches only wells is served the pin.
     let filter = GraphFilter {
         template: Arc::new(GuardTemplate {
-            nodes: view.filter.template.nodes.clone(),
+            nodes: declared_template(&base).unwrap().nodes,
             edges: Vec::new(),
         }),
-        selector: view.filter.selector,
+        selector: ValidTimeSelector::AsOf(view.instant),
     };
     let resolved = filter.resolve(&base);
     assert!(Arc::ptr_eq(resolved.masks.as_ref().unwrap(), &pinned));

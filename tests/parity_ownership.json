@@ -440,5 +440,17 @@
   },
   "tests/test_valid_time_oracle.py::test_valid_time_bench_cells_answer_like_their_views[memory_guards]": {
     "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_retrieval_and_algorithms_anchor_the_oracle[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_retrieval_and_algorithms_anchor_the_oracle[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_retrieval_and_algorithms_anchor_the_oracle[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_oracle.py::test_valid_time_retrieval_and_algorithms_anchor_the_oracle[memory_guards]": {
+    "owner": "storage-parity"
   }
 }

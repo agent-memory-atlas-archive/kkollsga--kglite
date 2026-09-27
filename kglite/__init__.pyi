@@ -7481,14 +7481,20 @@ class KnowledgeGraph:
                 raises ``ValueError`` naming both, since a statement takes
                 one context. The graph needs a validity declaration
                 (``db.temporal.declare``); axes other than ``VALID_TIME``,
-                writing statements, and element-enumerating procedures
-                (``pagerank()`` and the like — metadata procedures such as
-                ``db.labels()`` are fine) are refused. The query answers as
-                if the graph held only the elements valid at the instant: a
-                node valid under every declared label it carries, a
-                relationship valid with both its endpoints; a
-                variable-length path or a ``shortestPath`` crosses only
-                those. ``EXPLAIN`` shows the plan with a leading
+                writing statements, and the element-enumerating procedures
+                that are not routed (the validation rules such as
+                ``orphan_node()``, ``cluster()``, ``kg_knn()``) are refused.
+                The query answers as if the graph held only the elements
+                valid at the instant: a node valid under every declared
+                label it carries, a relationship valid with both its
+                endpoints; a variable-length path or a ``shortestPath``
+                crosses only those, ``text_bm25()`` ranks with the valid
+                documents' statistics, ``vector_score`` top-k and the
+                embedding queries rank only valid elements, and the graph
+                algorithms (``pagerank()``, ``louvain()``,
+                ``connected_components()``, …) run on a cached copy of the
+                valid elements — refused, naming the cap, when that copy
+                would not fit — and yield the graph's own nodes. ``EXPLAIN`` shows the plan with a leading
                 ``ValidTimeContext`` row naming the axis and the declared
                 targets the query reaches, the instant being resolved per
                 execution.
@@ -10289,8 +10295,7 @@ class FrozenGraph:
 
     A handle taken with ``freeze(valid_at=…)`` or ``Session.snapshot(valid_at=…)``
     is **as of** that instant: see :meth:`cypher`. :meth:`node_count` and
-    :attr:`node_types` still describe the whole snapshot, not the elements
-    valid at the instant.
+    :attr:`node_types` count only the nodes visible at the instant.
     """
 
     def cypher(
@@ -10341,14 +10346,21 @@ class FrozenGraph:
         ...
 
     def node_count(self) -> int:
-        """Number of nodes in the snapshot — every node, on a ``valid_at``
-        handle too, not only those valid at its instant."""
+        """Number of nodes in the snapshot. On a ``valid_at`` handle, the
+        nodes visible at its instant — valid under every declared label they
+        carry — as ``MATCH (n) RETURN count(n)`` on the handle counts them.
+
+        Raises:
+            ArgumentError: on a ``valid_at`` handle, when a node's declared
+                bound is not a date, a datetime or an ISO string.
+        """
         ...
 
     @property
     def node_types(self) -> list[str]:
-        """Node type names present in the snapshot, on a ``valid_at`` handle
-        too."""
+        """Node type names present in the snapshot, in no particular order.
+        On a ``valid_at`` handle, only the types with a node visible at its
+        instant."""
         ...
 
 class Transaction:

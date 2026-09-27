@@ -109,6 +109,22 @@ ORDERED = {
     "MATCH (a)-[:R]->(b) RETURN a.uid AS a, sum(b.uid) AS s ORDER BY a DESC LIMIT 3",
 }
 
+# BM25 over `body` text indexes, which the reference and the slice build
+# over their own documents: the prefixed statement ranks with the valid
+# documents' statistics, bit for bit. Disk mode refuses a text index.
+TEXT_QUERIES = [
+    "MATCH (n:A) RETURN n.uid AS u, text_bm25(n, 'body', 'k1 common') AS s",
+    "MATCH (n:A) RETURN n.uid AS u, text_bm25(n, 'body', 'k0 k2 b3') AS s ORDER BY s DESC LIMIT 3",
+]
+# Algorithm procedures, run on the valid slice under the prefix.
+ALGORITHM_QUERIES = [
+    "CALL pagerank() YIELD node, score RETURN node.uid AS u, round(score, 9) AS s",
+    "CALL connected_components() YIELD node, component WITH component, node.uid AS u ORDER BY u "
+    "WITH component, collect(u) AS us RETURN us",
+    "CALL k_core() YIELD node, coreness RETURN node.uid AS u, coreness AS c",
+]
+ORDERED.add(TEXT_QUERIES[1])
+
 YEARS = list(range(2000, 2011))
 BOUND = st.one_of(
     st.sampled_from(YEARS).map(lambda y: dt.date(y, 1, 1)),
@@ -211,7 +227,13 @@ def _write(graph, nodes, edges, declare: bool):
     patterns = []
     for node in nodes:
         labels = node["primary"] + (f":{node['secondary']}" if node["secondary"] else "")
-        props = {"uid": node["uid"], "id": node["id"], **{k: v for k, v in node["bounds"].items() if v is not None}}
+        body = f"'k{node['uid'] % 3} b{node['uid'] % 5} common k{int(node['id'])}'"
+        props = {
+            "uid": node["uid"],
+            "id": node["id"],
+            "body": body,
+            **{k: v for k, v in node["bounds"].items() if v is not None},
+        }
         patterns.append(f"(:{labels} {{{_props(props)}}})")
     if patterns:
         graph.cypher("CREATE " + ", ".join(patterns)).to_list()
@@ -294,6 +316,16 @@ ELEMENT_QUERIES = [
 ]
 
 
+def _index_texts(*graphs):
+    """A BM25 index on `body` for each primary type a graph holds — a node
+    matched as `:A` may be a C node carrying A as its second label."""
+    for graph in graphs:
+        for label in "ABC":
+            present = f"MATCH (n:{label}) WHERE labels(n)[0] = '{label}' RETURN count(n) AS c"
+            if graph.cypher(present).to_list()[0]["c"]:
+                graph.build_text_index(label, "body")
+
+
 def _check(mode, nodes, edges, instant):
     """Three implementations agree on every shape: the guarded statement on
     the full graph (and through a view frozen at the instant), the unguarded
@@ -303,8 +335,13 @@ def _check(mode, nodes, edges, instant):
     with _graph(mode) as full:
         _write(full, nodes, edges, declare=True)
         reference = _reference(full, nodes, edges, instant)
+        texts = mode != "disk"
+        if texts:
+            _index_texts(full, reference)
         frozen = full.freeze(valid_at=instant)
         sliced = frozen._valid_time_slice()
+        if texts:
+            _index_texts(sliced)
         for query in QUERIES:
             ordered = query in ORDERED
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", ordered, {"t": instant})
@@ -315,6 +352,13 @@ def _check(mode, nodes, edges, instant):
         for query in ELEMENT_QUERIES:
             guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", False, {"t": instant})
             assert _answer(frozen, query, False) == guarded, f"frozen view, {mode} at {instant}: {query}"
+        for query in ALGORITHM_QUERIES + (TEXT_QUERIES if texts else []):
+            ordered = query in ORDERED
+            guarded = _answer(full, f"FOR VALID_TIME AS OF $t {query}", ordered, {"t": instant})
+            where = f"{mode} at {instant}: {query}"
+            assert guarded == _answer(reference, query, ordered), where
+            assert _answer(frozen, query, ordered) == guarded, f"frozen view, {where}"
+            assert _answer(sliced, query, ordered) == guarded, f"slice, {where}"
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -413,3 +457,45 @@ def test_valid_time_bench_cells_answer_like_their_views(mode):
             guarded = bench._rows(full, cell.context, params)
             assert guarded == bench._rows(view, cell.plain, params), f"{mode}: {name}"
             assert guarded != bench._rows(full, cell.plain, params), f"{mode}: {name} filters nothing"
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_valid_time_retrieval_and_algorithms_anchor_the_oracle(mode):
+    """The golden-counts draw with its retrieval and algorithm answers
+    written out: at 2004-06-01 node 2 (A, closed 2001-2003) is hidden, so
+    PageRank ranks the three visible nodes only, node 3 (whose relationships
+    all touch node 2) is a component of its own, and BM25 over A ranks the
+    one visible A document."""
+    nodes = [
+        {
+            "primary": "A",
+            "secondary": None,
+            "id": 1,
+            "bounds": {"a_from": dt.date(2001, 1, 1), "a_to": dt.date(2003, 1, 1)},
+        },
+        {
+            "primary": "C",
+            "secondary": "B",
+            "id": 1,
+            "bounds": {"b_from": dt.date(2004, 1, 1), "b_to": dt.date(2010, 1, 1)},
+        },
+    ]
+    edges = [
+        {"src": 0, "dst": 1, "type": "R", "bounds": {"r_from": dt.date(2000, 1, 1)}},
+        {"src": 1, "dst": 0, "type": "S", "bounds": {"s_from": dt.date(2004, 1, 1)}},
+    ]
+    instant = dt.date(2004, 6, 1)
+    _check(mode, nodes, edges, instant)
+    params = {"t": instant}
+    with _graph(mode) as full:
+        _write(full, *_numbered(nodes, edges), declare=True)
+        ranked = full.cypher(f"FOR VALID_TIME AS OF $t {ALGORITHM_QUERIES[0]}", params=params).to_list()
+        assert sorted(row["u"] for row in ranked) == [0, 1, 3]
+        parts = full.cypher(f"FOR VALID_TIME AS OF $t {ALGORITHM_QUERIES[1]}", params=params).to_list()
+        assert sorted(sorted(row["us"]) for row in parts) == [[0, 1], [3]]
+        if mode != "disk":
+            full.build_text_index("A", "body")
+            top = full.cypher(f"FOR VALID_TIME AS OF $t {TEXT_QUERIES[1]}", params=params).to_list()
+            assert [row["u"] for row in top] == [0]
+            everywhere = full.cypher(TEXT_QUERIES[1]).to_list()
+            assert [row["u"] for row in everywhere] == [0, 2]

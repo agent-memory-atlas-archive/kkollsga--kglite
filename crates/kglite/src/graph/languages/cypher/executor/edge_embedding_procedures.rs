@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use petgraph::graph::EdgeIndex;
 
 use crate::datatypes::values::{RelValue, Value};
+use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::edge_embedding_generation::{
     embed_selected_relationships, EdgeGenerationReport, EdgeGenerationRequest,
     EmbeddingExecutionService, SelectedEdgeText,
@@ -198,9 +199,12 @@ pub(super) fn list(
         .collect())
 }
 
+/// Under a valid-time `filter` only the relationships it admits — valid,
+/// with both endpoints visible — are candidates.
 pub(super) fn query(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
+    filter: Option<&ElementFilter>,
 ) -> Result<Vec<EdgeStoreQueryHit>, String> {
     let proc_name = "db.relationship_embeddings.query";
     reject_unknown_keys(
@@ -231,6 +235,25 @@ pub(super) fn query(
             metric,
         },
         Surface::Cypher,
+        filter
+            .map(|filter| {
+                move |edge: usize| {
+                    let edge = EdgeIndex::new(edge);
+                    let graph_ref = &graph.graph;
+                    match (graph_ref.edge_endpoints(edge), graph_ref.edge_weight(edge)) {
+                        (Some((source, target)), Some(weight)) => filter.admits_relationship(
+                            graph,
+                            edge,
+                            weight.connection_type,
+                            source,
+                            target,
+                        ),
+                        _ => false,
+                    }
+                }
+            })
+            .as_ref()
+            .map(|admits| admits as &dyn Fn(usize) -> bool),
     )
 }
 

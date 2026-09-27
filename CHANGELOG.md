@@ -20,7 +20,8 @@ before upgrading.
   the declared validity intervals the statement can reach; `EXPLAIN` shows them
   in a leading `ValidTimeContext` row. Refused under a context: an axis other
   than `VALID_TIME`, a graph with no validity declaration, a writing statement,
-  a procedure that enumerates graph elements (metadata procedures such as
+  a procedure that enumerates graph elements without a valid-time route (the
+  validation rules, `cluster`, `kg_knn`; metadata procedures such as
   `db.labels()` are fine), `degree()` / `inDegree()` / `outDegree()` /
   `shortest_path_length()` (not available under a context yet), a
   relationship type whose declarations are ambiguous, a second prefix, and a prefix inside a UNION arm or a
@@ -58,11 +59,33 @@ before upgrading.
   (`EXPLAIN` / `PROFILE` included); a query carrying its own prefix raises
   `ValueError`. The handle keeps the validity masks it resolved at creation
   for its lifetime, so its queries reuse them however many other instants
-  are queried meanwhile. `node_count()` / `node_types` still describe the
-  whole snapshot. Rust: `kglite::api::temporal::view_at` returns the
+  are queried meanwhile. `node_count()` / `node_types` count only the nodes
+  visible at the instant. Rust: `kglite::api::temporal::view_at` returns the
   `ValidTimeView` behind it, whose `slice()` builds (and caches per
   segment, under a 128 MiB cap, a 2M-element cap on Disk) a materialised
   graph of the valid elements with a map back to the base's nodes.
+- Cypher: retrieval and graph algorithms under `FOR VALID_TIME AS OF` (and on
+  a `freeze(valid_at=…)` handle). `text_bm25()` ranks with the statistics of
+  the documents valid at the instant — their count, mean length and each
+  term's document frequency — so a document scores what it would in an index
+  of the valid documents alone, and `ORDER BY text_bm25(…) DESC LIMIT k`
+  keeps its index route. `vector_score` top-k over `MATCH (n:Label)` scores
+  only the valid nodes' vectors, exactly (`diagnostics.retrieval`
+  `fallback_reason: "exact_mask"`), or from 200,000 valid vectors
+  (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) through the HNSW index's valid
+  candidates (`actual_mode: "hnsw_mask"`). `db.node_embeddings.query`,
+  `db.relationship_embeddings.query` and the `db.embeddings.query` router rank
+  only valid elements (`search_method: "exact_mask"` / `"hnsw_mask"`). The
+  graph algorithm procedures — `pagerank`, `betweenness`, `degree`,
+  `closeness`, `louvain`, `leiden`, `label_propagation`,
+  `connected_components`, `k_core`, `ready_set`, `clustering_coefficient`,
+  `triangle_count`, `eccentricity`, `diameter` — run on a copy of the valid
+  elements, built once per instant and cached until the graph changes, and
+  `YIELD node` binds the graph's own node. A copy over its cap (128 MiB; on
+  Disk also 2,000,000 elements, and a 64 MiB one-bit-per-element instant mask,
+  `KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) is refused when the statement runs,
+  naming the cap. Rust: `kglite::api::temporal::DISK_MASK_BYTE_CAP`, and
+  `ValidTimeView::node_count` / `node_types`.
 - Cypher `date()` with no argument returns today's date in UTC; it used to
   raise "requires 1 argument".
 - `CALL db.temporal.declarations()` yields `empty_rows` and
@@ -299,6 +322,11 @@ before upgrading.
   blueprint (or re-run the loads) to recover the rows.
 
 ### Fixed
+
+- Cypher: `UNWIND $rows AS r MATCH (n:T {prop: r.key})` over 64 or more rows
+  returned no match. Past 64 driving rows the MATCH builds a query-local
+  equality index, and its probe read `r.key` only from a bound node, never
+  from a map (or a projected node value) as the per-row matcher does.
 
 - Cypher: an id seek (`{id: …}`) on a node type whose nodes share an id
   stored under different numeric kinds — a loaded integer column beside an

@@ -94,9 +94,14 @@ def test_the_view_answers_fixed_goldens(sodir):
     later = sodir.freeze(valid_at=dt.datetime(2013, 1, 1, 12))
     assert sorted(r["w.id"] for r in later.cypher("MATCH (w:Well) RETURN w.id").to_list()) == [2, 3]
     assert "valid_at=datetime('2013-01-01T12:00:00')" in repr(later)
-    # node_count and node_types describe the whole snapshot.
-    assert frozen.node_count() == sodir.freeze().node_count()
-    assert sorted(frozen.node_types) == sorted(sodir.freeze().node_types)
+    # node_count and node_types count what is visible: in 2011 well 1 has
+    # closed and well 3's Pad interval has not opened.
+    assert sodir.freeze().node_count() == 5
+    assert frozen.node_count() == 3
+    assert sorted(frozen.node_types) == sorted(sodir.freeze().node_types) == ["Company", "Field", "Well"]
+    early = sodir.freeze(valid_at="1999-01-01")
+    assert early.node_count() == 2
+    assert sorted(early.node_types) == ["Company", "Field"]
 
 
 def test_a_query_with_its_own_context_is_refused(sodir):

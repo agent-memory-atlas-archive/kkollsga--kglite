@@ -757,3 +757,66 @@ fn batch_term_churn_reuses_retired_dictionary_slots() {
     assert_eq!(index.names.len(), index.free_ids.len());
     index.validate().unwrap();
 }
+
+/// A query prepared over a subset scores each admitted document bit for bit
+/// as an index built from that subset alone, and the allowed top-k is the
+/// subset index's top-k — the statistics are the subset's, not the corpus's.
+#[test]
+fn masked_statistics_score_as_an_index_of_the_admitted_documents() {
+    let corpus: Vec<(u32, String)> = (0..40u32)
+        .map(|slot| {
+            let text = match slot % 5 {
+                0 => "rust graph engine rust".to_string(),
+                1 => format!("graph query {slot} planner"),
+                2 => "storage engine columnar".to_string(),
+                3 => format!("rust {} planner graph graph", slot * 7),
+                _ => "unrelated words only".to_string(),
+            };
+            (slot, text)
+        })
+        .collect();
+    let whole = TextIndex::build(corpus.iter().map(|(s, t)| (*s, t.as_str())));
+    let admits = |slot: u32| !slot.is_multiple_of(3) && slot < 33;
+    let subset = TextIndex::build(
+        corpus
+            .iter()
+            .filter(|(s, _)| admits(*s))
+            .map(|(s, t)| (*s, t.as_str())),
+    );
+    let stats = whole.masked_stats(admits);
+    assert_eq!(stats.docs, subset.total_docs());
+    for query in [
+        "rust graph",
+        "planner",
+        "engine columnar storage",
+        "missing",
+        "unrelated",
+    ] {
+        let masked = whole.prepare_query_masked(query, stats, admits);
+        let reference = subset.prepare_query(query);
+        assert_eq!(masked.is_empty(), reference.is_empty(), "{query}");
+        for (slot, _) in corpus.iter().filter(|(s, _)| admits(*s)) {
+            assert_eq!(
+                whole.score(*slot, &masked).to_bits(),
+                subset.score(*slot, &reference).to_bits(),
+                "{query} slot {slot}"
+            );
+        }
+        let top: Vec<(u32, u64)> = whole
+            .top_k_allowed(&masked, 7, admits)
+            .into_iter()
+            .map(|d| (d.slot, d.score.to_bits()))
+            .collect();
+        let expected: Vec<(u32, u64)> = subset
+            .top_k(&reference, 7)
+            .into_iter()
+            .map(|d| (d.slot, d.score.to_bits()))
+            .collect();
+        assert_eq!(top, expected, "{query}");
+    }
+    // The corpus-wide statistics answer differently: the subset changes N,
+    // the mean length and the document frequencies.
+    let plain = whole.prepare_query("rust graph");
+    let masked = whole.prepare_query_masked("rust graph", stats, admits);
+    assert_ne!(whole.score(1, &plain), whole.score(1, &masked));
+}

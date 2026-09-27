@@ -93,10 +93,13 @@ impl<'a> CypherExecutor<'a> {
             ));
         };
         let view = store.read();
-        let score = if store.generation() == cache.generation {
+        let generation = store.generation();
+        let score = if generation == cache.generation {
             view.score_relationship(edge, &cache.prepared)
         } else {
-            view.score_relationship(edge, &view.prepare_query(query_text))
+            let target = (true, cache.node_type.as_str(), cache.prop_name.as_str());
+            let (prepared, _) = self.prepare_text_query(&view, query_text, target, generation)?;
+            view.score_relationship(edge, &prepared)
         };
         Ok(score.map_or(Value::Null, Value::Float64))
     }
@@ -146,8 +149,10 @@ impl<'a> CypherExecutor<'a> {
         }
         let view = store.read();
         let generation = store.generation();
-        let prepared = match query_text.as_deref() {
-            Some(text) => view.prepare_query(text),
+        let (prepared, admitted_docs) = match query_text.as_deref() {
+            Some(text) => {
+                self.prepare_text_query(&view, text, (true, rel_type, &prop_name), generation)?
+            }
             None => Default::default(),
         };
         drop(view);
@@ -159,6 +164,7 @@ impl<'a> CypherExecutor<'a> {
             prepared,
             prop_name,
             generation,
+            admitted_docs,
         })
     }
 }

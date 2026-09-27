@@ -144,6 +144,7 @@ pub fn search_relationship_embeddings(
             metric: options.metric.clone(),
         },
         Surface::Method,
+        None,
     )?;
     let _guard = graph.graph.begin_query();
     Ok(hits

@@ -95,32 +95,8 @@ impl<'a> CypherExecutor<'a> {
                             }
                         }
                         PropertyMatcher::EqualsNodeProp { var, prop } => {
-                            // Resolve by reading the referenced node's property:
-                            // first a bound node, then a projected node VALUE
-                            // (NodeRef/Node) — e.g. `WITH collect(x)[0] AS first
-                            // MATCH (b {id: first.id})`.
-                            let val = row
-                                .node_bindings
-                                .get(var)
-                                .and_then(|idx| self.graph.graph.node_view(*idx))
-                                .map(|node| helpers::resolve_node_property(node, prop, self.graph))
-                                .or_else(|| match row.projected.get(var) {
-                                    Some(Value::NodeRef(i)) => self
-                                        .graph
-                                        .graph
-                                        .node_view(petgraph::graph::NodeIndex::new(*i as usize))
-                                        .map(|n| {
-                                            helpers::resolve_node_property(n, prop, self.graph)
-                                        }),
-                                    Some(Value::Node(nv)) => nv.properties.get(prop).cloned(),
-                                    // A projected MAP value — e.g. a row from
-                                    // `UNWIND $rows AS x MATCH (n {id: x.id})`.
-                                    // Read the member directly; previously this
-                                    // fell through to `In([])` and silently
-                                    // matched nothing.
-                                    Some(Value::Map(m)) => m.get(prop).cloned(),
-                                    _ => None,
-                                });
+                            let val =
+                                transient_index::node_prop_reference(self.graph, row, var, prop);
                             match val {
                                 Some(v) if !matches!(v, Value::Null) => {
                                     *matcher = PropertyMatcher::Equals(v);

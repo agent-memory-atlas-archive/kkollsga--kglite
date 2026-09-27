@@ -3344,9 +3344,12 @@ impl kglite::api::temporal::ValidTimeView
 pub fn kglite::api::temporal::ValidTimeView::as_of(&self) -> &str
 pub fn kglite::api::temporal::ValidTimeView::base(&self) -> &alloc::sync::Arc<kglite::api::DirGraph>
 pub fn kglite::api::temporal::ValidTimeView::cypher_text(&self, query: &str) -> core::result::Result<alloc::string::String, kglite::api::cypher::PrependError>
+pub fn kglite::api::temporal::ValidTimeView::node_count(&self) -> core::result::Result<usize, kglite::error::KgError>
+pub fn kglite::api::temporal::ValidTimeView::node_types(&self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 pub fn kglite::api::temporal::ValidTimeView::slice(&self) -> core::result::Result<alloc::sync::Arc<kglite::api::temporal::ValidSlice>, kglite::error::KgError>
 impl core::fmt::Debug for kglite::api::temporal::ValidTimeView
 pub fn kglite::api::temporal::ValidTimeView::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const kglite::api::temporal::DISK_MASK_BYTE_CAP: usize
 pub const kglite::api::temporal::DISK_NODE_ABUTMENT_CAP: usize
 pub const kglite::api::temporal::DISK_SLICE_ELEMENT_CAP: usize
 pub const kglite::api::temporal::SLICE_BYTE_CAP: usize

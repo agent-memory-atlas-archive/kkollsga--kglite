@@ -245,6 +245,20 @@ impl TextIndexRead<'_> {
             .collect()
     }
 
+    /// [`Self::top_k`] over only the nodes `admits` keeps.
+    pub(crate) fn top_k_allowed(
+        &self,
+        query: &PreparedQuery,
+        k: usize,
+        admits: impl Fn(NodeIndex) -> bool,
+    ) -> Vec<(NodeIndex, f64)> {
+        self.0
+            .top_k_allowed(query, k, |slot| admits(NodeIndex::new(slot as usize)))
+            .into_iter()
+            .map(|ScoredDoc { slot, score }| (NodeIndex::new(slot as usize), score))
+            .collect()
+    }
+
     /// Whether this node has a document.
     pub fn contains_node(&self, node: NodeIndex) -> bool {
         self.0.contains_doc(TextIndexStore::slot(node))

@@ -54,6 +54,12 @@ pub(super) enum RetrievalPopulation<'r> {
         rows: &'r ResultSet,
         slot_rows: &'r [usize],
     },
+    /// The nodes of one type a valid-time filter admits, ascending — the rows
+    /// the guarded scan would produce, in its order, never materialised.
+    Admitted {
+        nodes: &'r [petgraph::graph::NodeIndex],
+        variable: &'r str,
+    },
 }
 
 /// How a population's nodes relate to one embedding store, from one ordered
@@ -75,6 +81,7 @@ impl RetrievalPopulation<'_> {
             Self::WholeType { nodes, .. } => nodes.len(),
             Self::StoreSlots { store, .. } => store.len(),
             Self::RowsBySlot { slot_rows, .. } => slot_rows.len(),
+            Self::Admitted { nodes, .. } => nodes.len(),
         }
     }
 
@@ -102,6 +109,12 @@ impl RetrievalPopulation<'_> {
             Self::RowsBySlot { rows, slot_rows } => {
                 std::borrow::Cow::Borrowed(&rows.rows[slot_rows[index]])
             }
+            Self::Admitted { nodes, variable } => {
+                let mut row = ResultRow::new();
+                row.node_bindings
+                    .insert((*variable).to_owned(), nodes[index]);
+                std::borrow::Cow::Owned(row)
+            }
         }
     }
 }
@@ -109,7 +122,10 @@ impl RetrievalPopulation<'_> {
 impl<'a> CypherExecutor<'a> {
     /// A plain initial scan has no seed, filter, anchor or secondary-label
     /// carriers; only its primary type bucket determines candidate order.
-    fn plain_retrieval_type<'q>(&self, matched: &'q MatchClause) -> Option<(&'q str, &'q str)> {
+    pub(super) fn plain_retrieval_type<'q>(
+        &self,
+        matched: &'q MatchClause,
+    ) -> Option<(&'q str, &'q str)> {
         let [pattern] = matched.patterns.as_slice() else {
             return None;
         };
@@ -215,6 +231,16 @@ impl<'a> CypherExecutor<'a> {
         if limit == 0 {
             return Ok(None);
         }
+        let top = FusedTopK {
+            return_clause,
+            score_item_index,
+            descending: true,
+            limit,
+            non_null_only,
+        };
+        if self.graph_filter().is_some() {
+            return self.try_vector_entry_under_filter(matched, top, score_call);
+        }
         if let Some(result) = self.try_edge_vector_retrieval_entry(
             matched,
             return_clause,
@@ -225,15 +251,18 @@ impl<'a> CypherExecutor<'a> {
         )? {
             return Ok(Some(result));
         }
+        self.try_whole_type_vector_entry(matched, top, score_call)
+    }
+
+    /// The node entry over the whole of the MATCH's type.
+    pub(super) fn try_whole_type_vector_entry(
+        &self,
+        matched: &MatchClause,
+        top: FusedTopK<'_>,
+        score_call: &Expression,
+    ) -> Result<Option<ResultSet>, String> {
         let Some(population) = self.plain_retrieval_population(matched)? else {
             return Ok(None);
-        };
-        let top = FusedTopK {
-            return_clause,
-            score_item_index,
-            descending: true,
-            limit,
-            non_null_only,
         };
         let score_expr = self.fold_constants_expr(score_call);
         Ok(self
@@ -441,26 +470,11 @@ impl<'a> CypherExecutor<'a> {
         return_clause: &ReturnClause,
         score_item_index: usize,
     ) -> Result<ResultSet, String> {
-        let Expression::FunctionCall { args, .. } = score_expr else {
-            unreachable!("constant_vector_args accepted a vector_score call");
-        };
         let seed = population.row(0);
-        let uncached;
-        let prepared = match self.vs_cache.get(args, node_type) {
-            Some(cached) => cached,
-            None => match self
-                .vs_cache
-                .park(self.prepare_vector_score(args, &seed, node_type)?)
-            {
-                Ok(parked) => parked,
-                Err(entry) => {
-                    uncached = entry;
-                    &uncached
-                }
-            },
-        };
-        Self::check_vector_score_dimension(prepared.query_vec.len(), store.dimension)?;
-        let winners = self.exact_vector_winners(store, prepared, limit)?;
+        let winners =
+            self.with_prepared_vector_score(score_expr, &seed, (store, node_type), |prepared| {
+                self.exact_vector_winners(store, prepared, limit, None)
+            })?;
         self.project_retrieval_winners(
             winners.into_iter(),
             score_expr,
@@ -470,11 +484,45 @@ impl<'a> CypherExecutor<'a> {
         )
     }
 
-    fn exact_vector_winners(
+    /// Run `run` with the prepared (and, when its arguments are constant,
+    /// cached) query of `score_expr`, a `vector_score` call over `store`.
+    pub(super) fn with_prepared_vector_score<R>(
+        &self,
+        score_expr: &Expression,
+        seed: &ResultRow,
+        (store, node_type): (&EmbeddingStore, &str),
+        run: impl FnOnce(&VectorScoreCache) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let Expression::FunctionCall { args, .. } = score_expr else {
+            unreachable!("constant_vector_args accepted a vector_score call");
+        };
+        let uncached;
+        let prepared = match self.vs_cache.get(args, node_type) {
+            Some(cached) => cached,
+            None => match self
+                .vs_cache
+                .park(self.prepare_vector_score(args, seed, node_type)?)
+            {
+                Ok(parked) => parked,
+                Err(entry) => {
+                    uncached = entry;
+                    &uncached
+                }
+            },
+        };
+        Self::check_vector_score_dimension(prepared.query_vec.len(), store.dimension)?;
+        run(prepared)
+    }
+
+    /// The exact top-`limit` slots of `store`, best first with ties in slot
+    /// order, as `(slot, score)`; only the slots whose node or relationship
+    /// `admits` keeps are scored when it is given.
+    pub(super) fn exact_vector_winners(
         &self,
         store: &EmbeddingStore,
         prepared: &VectorScoreCache,
         limit: usize,
+        admits: Option<&dyn Fn(usize) -> bool>,
     ) -> Result<Vec<(usize, Value)>, String> {
         let mut collector = TopKCollector::new(
             vec![SortSpec {
@@ -487,6 +535,9 @@ impl<'a> CypherExecutor<'a> {
         for position in 0..store.len() {
             if position % INTERRUPT_POLL_INTERVAL == 0 {
                 self.check_deadline()?;
+            }
+            if admits.is_some_and(|admits| !admits(store.slot_to_node[position])) {
+                continue;
             }
             let start = position * store.dimension;
             let score = prepared.scorer.score(
@@ -738,6 +789,10 @@ impl<'a> CypherExecutor<'a> {
             }
             // The caller proved slot order is row order.
             RetrievalPopulation::StoreSlots { .. } | RetrievalPopulation::RowsBySlot { .. } => None,
+            // Served by the masked entry, never offered here.
+            RetrievalPopulation::Admitted { .. } => {
+                return Ok(HnswOutcome::Exact(info.fallback("unsupported_shape")))
+            }
         };
         info.store = Some(format!("{node_type}.{}", args.property));
 

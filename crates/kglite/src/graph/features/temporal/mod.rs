@@ -10,6 +10,7 @@ mod declarations_tests;
 pub(crate) mod duplicate_ids;
 pub(crate) mod endpoint_index;
 pub(crate) mod eval;
+pub(crate) mod instant;
 mod loader;
 #[cfg(test)]
 mod loader_tests;
@@ -22,6 +23,7 @@ mod persist_tests;
 mod request;
 pub(crate) mod slice;
 mod validate;
+pub(crate) mod vector_mask;
 pub mod view;
 
 pub(crate) use declarations::declared;

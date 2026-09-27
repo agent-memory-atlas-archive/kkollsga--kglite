@@ -228,6 +228,44 @@ impl ElementFilter {
         })
     }
 
+    /// A filter that reads only `masks` — every declared target already
+    /// evaluated into them (a Disk-mode instant mask).
+    pub(crate) fn from_masks(selector: ValidTimeSelector, masks: Arc<ElementMasks>) -> Self {
+        ElementFilter {
+            selector,
+            masks: Some(masks),
+            node_residual: Box::default(),
+            edge_rules: Box::default(),
+            error: OnceLock::new(),
+        }
+    }
+
+    /// The instant the filter keeps elements valid at; `None` for a range.
+    pub(crate) fn instant(&self) -> Option<Instant> {
+        match self.selector {
+            ValidTimeSelector::AsOf(t) => Some(t),
+            ValidTimeSelector::Overlap(..) => None,
+        }
+    }
+
+    /// Whether the filter can hide a node whose primary type is
+    /// `node_type`: the type is declared, or nodes carry secondary labels (one
+    /// of which may be declared). `false` means every node of the type is
+    /// visible, so a caller may take its unfiltered route.
+    pub(crate) fn may_hide_type(&self, graph: &DirGraph, node_type: &str) -> bool {
+        graph.has_secondary_labels || graph.temporal.node(node_type).is_some()
+    }
+
+    /// Whether the filter can hide a relationship of type `rel_type`: the
+    /// type is declared, or either endpoint may be hidden (some node label is
+    /// declared).
+    pub(crate) fn may_hide_relationship_type(&self, graph: &DirGraph, rel_type: &str) -> bool {
+        !graph.temporal.edges(rel_type).is_empty()
+            || temporal::declared(graph)
+                .iter()
+                .any(|info| matches!(info.target, TemporalTarget::Node(_)))
+    }
+
     /// Whether node `idx` is visible.
     #[inline]
     pub(crate) fn admits_node(&self, graph: &DirGraph, idx: NodeIndex) -> bool {

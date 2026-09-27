@@ -324,6 +324,9 @@ pub(super) struct TextBm25Cache {
     pub(super) prepared: crate::graph::algorithms::text_index::bm25::PreparedQuery,
     pub(super) prop_name: String,
     pub(super) generation: u64,
+    /// Under a valid-time filter that can hide documents: how many the filter
+    /// admits — the corpus `prepared` was prepared over.
+    pub(super) admitted_docs: Option<usize>,
 }
 
 /// The label slots a MATCH clause's node patterns constrain, one entry per

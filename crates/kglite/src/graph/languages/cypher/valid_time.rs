@@ -20,7 +20,10 @@ use std::sync::Arc;
 use chrono::Datelike;
 
 use super::ast::{CallClause, Clause, CypherQuery, Expression, StatementContext};
-use super::executor::{is_context_free_procedure, is_mutation_query, CypherExecutor};
+use super::executor::{
+    is_context_free_procedure, is_mask_routed_procedure, is_mutation_query,
+    is_view_routed_procedure, CypherExecutor,
+};
 use super::parameter_presence::{walk_query, AstSink};
 use super::result::ResultRow;
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
@@ -99,7 +102,8 @@ fn attach_templates(
         return Err(format!(
             "procedure {name} enumerates graph elements and is not valid-time aware, so it \
              cannot run under FOR VALID_TIME AS OF; metadata procedures such as db.labels \
-             and db.temporal.declarations can"
+             and db.temporal.declarations can, and so can the graph algorithms (pagerank, \
+             louvain, connected_components, …) and the embedding queries"
         ));
     }
     query.guard = Some(Arc::new(reach.template(graph, declarations)?));
@@ -179,8 +183,23 @@ impl AstSink for Reach {
         }
     }
 
+    /// A context-free procedure reaches nothing. A routed one — an
+    /// algorithm on the valid slice, an embedding query testing each
+    /// candidate — reaches every element, so the scope's template holds every
+    /// declared target; whether its slice fits is decided at execution. Any
+    /// other procedure is refused.
     fn procedure(&mut self, call: &CallClause) {
-        if self.refused_procedure.is_none() && !is_context_free_procedure(&call.procedure_name) {
+        let lowered = call.procedure_name.to_ascii_lowercase();
+        let name = lowered.strip_prefix("kglite.").unwrap_or(&lowered);
+        if is_context_free_procedure(name) {
+            return;
+        }
+        if is_view_routed_procedure(name) || is_mask_routed_procedure(name) {
+            self.any_node = true;
+            self.any_rel = true;
+            return;
+        }
+        if self.refused_procedure.is_none() {
             self.refused_procedure = Some(call.procedure_name.clone());
         }
     }

@@ -255,12 +255,7 @@ impl CypherExecutor<'_> {
                 continue;
             }
 
-            if i == 0
-                && !profiling
-                && query.guard.is_none()
-                && result_set.rows.is_empty()
-                && result_set.columns.is_empty()
-            {
+            if i == 0 && !profiling && result_set.rows.is_empty() && result_set.columns.is_empty() {
                 if let Some(result) = self.try_retrieval_entry(&query.clauses)? {
                     let operator = if matches!(query.clauses[1], Clause::FusedTextBm25TopK { .. }) {
                         "FusedTextBm25TopK"

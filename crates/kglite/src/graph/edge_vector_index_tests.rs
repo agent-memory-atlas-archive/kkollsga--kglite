@@ -570,6 +570,7 @@ fn stores_query(
             metric: metric.map(str::to_string),
         },
         Surface::Cypher,
+        None,
     )
 }
 

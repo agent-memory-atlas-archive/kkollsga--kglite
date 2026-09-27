@@ -248,11 +248,15 @@ pub struct CypherExecutor<'a> {
     /// a context and when the filter removes nothing at the instant. While
     /// set, the operators that read the graph beside the matcher either test
     /// the filter themselves (the fused counts, the simple-pattern counter,
-    /// see `guarded_ops.rs`) or decline: the fast EXISTS probe, the
+    /// see `guarded_ops.rs`; retrieval, `retrieval_mask.rs`; the algorithm
+    /// procedures, on the valid slice, `view_call.rs`) or decline: the fast EXISTS probe, the
     /// histogram aggregate, the transient equality index and `shortestPath`.
     /// Lowering refuses the scalar functions that read relationships
     /// directly (`degree()` and kin).
     graph_filter: OnceLock<std::sync::Arc<ElementFilter>>,
+    /// The valid slice the statement's routed algorithm procedures run on,
+    /// built on the first one (see `view_call.rs`).
+    view_slice: OnceLock<std::sync::Arc<crate::graph::features::temporal::view::ValidSlice>>,
 }
 
 impl<'a> CypherExecutor<'a> {
@@ -281,6 +285,7 @@ impl<'a> CypherExecutor<'a> {
             _arena_guard: graph.graph.begin_query(),
             row_limit: None,
             graph_filter: OnceLock::new(),
+            view_slice: OnceLock::new(),
         }
     }
 
@@ -1019,7 +1024,9 @@ pub(crate) mod ordering;
 mod path_binding;
 mod procedure_params;
 mod procedure_registry;
-pub(crate) use procedure_registry::is_context_free_procedure;
+pub(crate) use procedure_registry::{
+    is_context_free_procedure, is_mask_routed_procedure, is_view_routed_procedure,
+};
 mod guarded_ops;
 pub(crate) mod procedure_router;
 mod projected_targets;
@@ -1030,6 +1037,7 @@ mod relationship_identity;
 mod retrieval;
 mod retrieval_diagnostics;
 mod retrieval_edge;
+mod retrieval_mask;
 mod retrieval_text;
 pub mod return_clause;
 pub mod rev_procedures;
@@ -1051,6 +1059,7 @@ mod temporal_procedures;
 pub mod tests;
 pub mod transient_index;
 mod vector_options;
+mod view_call;
 pub mod where_clause;
 pub mod write;
 pub(crate) mod write_scope;
@@ -1118,12 +1127,15 @@ impl CypherExecutor<'_> {
 }
 
 /// The fused operators that run under a graph filter: the node scans and
-/// the top-k heap read their candidates through the guarded matcher, and the
-/// counts take `execute_fused_count_guarded`.
+/// the top-k heaps read their candidates through the guarded matcher (the
+/// retrieval top-k also through its masked entry, `retrieval_mask.rs`), and
+/// the counts take `execute_fused_count_guarded`.
 fn runs_under_graph_filter(clause: &Clause) -> bool {
     matches!(
         clause,
         Clause::FusedOrderByTopK { .. }
+            | Clause::FusedVectorScoreTopK { .. }
+            | Clause::FusedTextBm25TopK { .. }
             | Clause::FusedNodeScanAggregate { .. }
             | Clause::FusedNodeScanTopK { .. }
             | Clause::FusedCountAll { .. }

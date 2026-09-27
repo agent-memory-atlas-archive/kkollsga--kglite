@@ -190,17 +190,29 @@ impl FrozenGraph {
         }
     }
 
-    /// Number of nodes in the snapshot (excludes the internal schema node).
-    fn node_count(&self) -> usize {
-        // Mirror KnowledgeGraph.node_count: total live nodes minus the
-        // reserved schema node when present.
-        self.inner.graph.node_count()
+    /// Number of nodes in the snapshot; on a valid_at handle, those visible at its instant.
+    fn node_count(&self, py: Python<'_>) -> PyResult<usize> {
+        match &self.view {
+            Some(view) => {
+                let view = Arc::clone(view);
+                py.detach(move || view.node_count().map_err(Box::new))
+                    .map_err(|err| crate::error_py::kg_to_pyerr(*err))
+            }
+            None => Ok(self.inner.graph.node_count()),
+        }
     }
 
-    /// Node type names present in the snapshot.
+    /// Node type names in the snapshot; on a valid_at handle, those with a node visible at its instant.
     #[getter]
-    fn node_types(&self) -> Vec<String> {
-        self.inner.get_node_types()
+    fn node_types(&self, py: Python<'_>) -> PyResult<Vec<String>> {
+        match &self.view {
+            Some(view) => {
+                let view = Arc::clone(view);
+                py.detach(move || view.node_types().map_err(Box::new))
+                    .map_err(|err| crate::error_py::kg_to_pyerr(*err))
+            }
+            None => Ok(self.inner.get_node_types()),
+        }
     }
 
     /// The view's materialised valid slice as a new KnowledgeGraph; a test hook for the tier-agreement oracle.
@@ -220,14 +232,18 @@ impl FrozenGraph {
     }
 
     fn __repr__(&self) -> String {
-        let as_of = self
-            .view
-            .as_ref()
-            .map_or_else(String::new, |view| format!(", valid_at={}", view.as_of()));
-        format!(
-            "FrozenGraph(nodes={}, types={}{as_of})",
-            self.inner.graph.node_count(),
-            self.inner.get_node_types().len()
-        )
+        match &self.view {
+            // Visible counts may walk the snapshot, too much for a repr.
+            Some(view) => format!(
+                "FrozenGraph(valid_at={}, snapshot_nodes={})",
+                view.as_of(),
+                self.inner.graph.node_count()
+            ),
+            None => format!(
+                "FrozenGraph(nodes={}, types={})",
+                self.inner.graph.node_count(),
+                self.inner.get_node_types().len()
+            ),
+        }
     }
 }

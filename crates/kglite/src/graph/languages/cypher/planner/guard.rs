@@ -100,6 +100,16 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "a bounded heap over rows the matcher already admitted",
     ),
     (
+        "fuse_vector_score_order_limit",
+        "its entry ranks only the nodes the filter admits and its per-clause route \
+         ranks rows the matcher admitted (retrieval_mask.rs)",
+    ),
+    (
+        "fuse_text_bm25_order_limit",
+        "its entry and per-clause route rank only admitted documents, under the \
+         admitted corpus's statistics (retrieval_mask.rs)",
+    ),
+    (
         "mark_fast_var_length_paths",
         "the distance frontier has a guarded form that tests every relationship and \
          node it crosses before marking it (matcher_var_length_guarded.rs)",
@@ -130,11 +140,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
         "fuse_match_with_aggregate_top_k",
         "a fused aggregate operator",
     ),
-    (
-        "fuse_vector_score_order_limit",
-        "retrieval from a vector index",
-    ),
-    ("fuse_text_bm25_order_limit", "retrieval from a text index"),
     (
         "mark_skip_target_type_check",
         "skips the node-type check that label guards rely on",

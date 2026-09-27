@@ -79,6 +79,7 @@ use super::eval::{self, Instant, IntervalConvention};
 use super::slice::{SliceKey, ValidSlice};
 use super::validate::{edge_bound, for_each_edge_row, for_each_node_row, node_bound, EdgeRow};
 use crate::datatypes::values::Value;
+use crate::graph::algorithms::text_index::bm25::MaskedStats;
 use crate::graph::core::graph_filter::{GuardBounds, GuardTemplate, ValidTimeSelector};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::{InternedKey, TemporalConfig};
@@ -457,7 +458,7 @@ impl ElementMasks {
         Self::bytes_for(self.nodes.len(), self.edges.len())
     }
 
-    fn bytes_for(nodes: usize, edges: usize) -> usize {
+    pub(crate) fn bytes_for(nodes: usize, edges: usize) -> usize {
         (nodes.div_ceil(64) + edges.div_ceil(64)) * size_of::<u64>()
     }
 }
@@ -492,6 +493,12 @@ pub(crate) struct IndexCache {
     /// Per node type, its duplicate-id map; `None` when it would pass the
     /// cap.
     duplicates: Vec<(String, Option<Arc<DuplicateIds>>)>,
+    /// Disk-mode masks per instant, oldest first, under their own cap (see
+    /// [`super::instant`]).
+    disk_masks: VecDeque<(Instant, Arc<ElementMasks>)>,
+    /// A text index's corpus statistics over the documents visible at an
+    /// instant, oldest first (see [`super::instant::masked_text_stats`]).
+    text_stats: VecDeque<(TextStatsKey, MaskedStats)>,
     /// Replaces the byte cap for this graph (tests).
     cap: Option<usize>,
 }
@@ -513,6 +520,8 @@ impl IndexCache {
         self.pinned.clear();
         self.slices.clear();
         self.duplicates.clear();
+        self.disk_masks.clear();
+        self.text_stats.clear();
     }
 
     fn find(&self, target: &TemporalTarget, config: &TemporalConfig) -> Option<Lookup> {
@@ -920,6 +929,83 @@ pub(crate) fn store_slice(graph: &DirGraph, key: SliceKey, slice: &Arc<ValidSlic
         cache.slices.pop_front();
     }
     cache.slices.push_back((key, Arc::clone(slice)));
+}
+
+/// The most Disk-mode instant masks cached at once.
+const MAX_DISK_MASKS: usize = 2;
+/// The most masked text statistics cached at once (a few dozen bytes each).
+const MAX_TEXT_STATS: usize = 32;
+
+/// Which text index, at which generation, as of which instant: what one
+/// [`MaskedStats`] was computed for. The graph's version stamp covers the
+/// declarations and the elements; the generation covers the index.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TextStatsKey {
+    pub(crate) relationship: bool,
+    pub(crate) owner_type: String,
+    pub(crate) property: String,
+    pub(crate) generation: u64,
+    pub(crate) instant: Instant,
+}
+
+/// The Disk-mode masks cached for instant `t` at the graph's version.
+pub(crate) fn cached_disk_masks(graph: &DirGraph, t: Instant) -> Option<Arc<ElementMasks>> {
+    let read = read_cache(graph);
+    let cache = read.as_ref().filter(|c| c.version == graph.version())?;
+    cache
+        .disk_masks
+        .iter()
+        .find(|(instant, _)| *instant == t)
+        .map(|(_, masks)| Arc::clone(masks))
+}
+
+/// Cache Disk-mode `masks` for instant `t`, dropping the oldest past
+/// [`MAX_DISK_MASKS`]; a racing builder's entry wins.
+pub(crate) fn store_disk_masks(graph: &DirGraph, t: Instant, masks: &Arc<ElementMasks>) {
+    let mut write = write_cache(graph);
+    let cache = write
+        .get_or_insert_with(IndexCache::default)
+        .at(graph.version());
+    if cache.disk_masks.iter().any(|(instant, _)| *instant == t) {
+        return;
+    }
+    if cache.disk_masks.len() >= MAX_DISK_MASKS {
+        cache.disk_masks.pop_front();
+    }
+    cache.disk_masks.push_back((t, Arc::clone(masks)));
+}
+
+/// The statistics cached for `key` at the graph's version, or `build()`'s,
+/// computed outside the lock and cached. One entry serves every query at the
+/// instant: which documents a filter admits at an instant is fixed by the
+/// declarations and the elements (the version) — a node is judged by every
+/// declared label it carries, whichever template asked.
+pub(crate) fn text_stats(
+    graph: &DirGraph,
+    key: TextStatsKey,
+    build: impl FnOnce() -> MaskedStats,
+) -> MaskedStats {
+    let version = graph.version();
+    {
+        let read = read_cache(graph);
+        let hit = read
+            .as_ref()
+            .filter(|c| c.version == version)
+            .and_then(|c| c.text_stats.iter().find(|(k, _)| *k == key));
+        if let Some((_, stats)) = hit {
+            return *stats;
+        }
+    }
+    let stats = build();
+    let mut write = write_cache(graph);
+    let cache = write.get_or_insert_with(IndexCache::default).at(version);
+    if !cache.text_stats.iter().any(|(k, _)| *k == key) {
+        if cache.text_stats.len() >= MAX_TEXT_STATS {
+            cache.text_stats.pop_front();
+        }
+        cache.text_stats.push_back((key, stats));
+    }
+    stats
 }
 
 /// How many slices the graph's cache holds (tests).

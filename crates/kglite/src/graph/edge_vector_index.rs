@@ -481,6 +481,7 @@ pub(crate) fn query_edge_embedding_stores(
     query: &[f32],
     options: EdgeVectorQueryOptions,
     surface: Surface,
+    admits: Option<&dyn Fn(usize) -> bool>,
 ) -> Result<Vec<EdgeStoreQueryHit>, String> {
     validate_finite_vector(query)
         .map_err(|error| format!("Invalid relationship embedding query: {error}"))?;
@@ -507,6 +508,7 @@ pub(crate) fn query_edge_embedding_stores(
         query,
         &options,
         graph.read_only,
+        admits,
     )?
     .into_iter()
     .map(|hit| EdgeStoreQueryHit {
@@ -547,6 +549,7 @@ pub(crate) fn rank_dense_stores(
     query: &[f32],
     options: &EdgeVectorQueryOptions,
     read_only: bool,
+    admits: Option<&dyn Fn(usize) -> bool>,
 ) -> Result<Vec<DenseStoreHit>, String> {
     for (type_name, store) in stores {
         if query.len() != store.dimension {
@@ -582,14 +585,24 @@ pub(crate) fn rank_dense_stores(
             continue;
         }
         let metric = resolve_dense_metric(store, options.metric.as_deref())?;
-        let (ranked, search_method) = query_dense_store(
-            store,
-            query,
-            options.top_k,
-            options.exact,
-            metric,
-            read_only,
-        );
+        let (ranked, search_method) = match admits {
+            None => query_dense_store(
+                store,
+                query,
+                options.top_k,
+                options.exact,
+                metric,
+                read_only,
+            ),
+            Some(admits) => query_admitted_store(
+                store,
+                query,
+                (options.top_k, options.exact),
+                metric,
+                read_only,
+                admits,
+            ),
+        };
         hits.extend(ranked.into_iter().map(|(target, score)| DenseStoreHit {
             type_name: type_name.to_string(),
             target,
@@ -700,6 +713,70 @@ fn resolve_params(options: &EdgeVectorIndexOptions) -> Result<HnswParams, String
         ef_construction: options.ef_construction.unwrap_or(defaults.ef_construction),
         ef_search: options.ef_search.unwrap_or(defaults.ef_search),
     })
+}
+
+/// [`query_dense_store`] over only the targets `admits` keeps (a valid-time
+/// filter): an exact pass over the admitted slots, or — for a large admitted
+/// set with an index serving `metric` — the index's admitted candidates
+/// (`features::temporal::vector_mask`). The route answers `"exact_mask"` or
+/// `"hnsw_mask"`, and refreshes a stale index as [`query_dense_store`] does.
+pub(crate) fn query_admitted_store(
+    store: &EmbeddingStore,
+    query: &[f32],
+    (top_k, exact): (usize, bool),
+    metric: DistanceMetric,
+    read_only: bool,
+    admits: &dyn Fn(usize) -> bool,
+) -> (Vec<(usize, f64)>, &'static str) {
+    use crate::graph::features::temporal::vector_mask;
+    if top_k == 0 || store.len() == 0 {
+        return (vec![], "exact_mask");
+    }
+    if !exact {
+        if let Some(index) = store.index_for_query(read_only).filter(|index| {
+            crate::graph::algorithms::hnsw::HnswMetric::from_distance(metric)
+                == Some(index.metric())
+        }) {
+            let admitted = vector_mask::admitted_slots(store, admits);
+            if vector_mask::prefers_index(admitted) {
+                if let Some(slots) =
+                    vector_mask::hnsw_admitted(store, &index, query, top_k, admitted, admits)
+                {
+                    let mut hits = score_slots(store, query, metric, slots.into_iter());
+                    sort_and_truncate(&mut hits, top_k);
+                    return (hits, "hnsw_mask");
+                }
+            }
+        }
+    }
+    let slots = (0..store.len() as u32).filter(|&slot| admits(store.slot_to_node[slot as usize]));
+    let mut hits = score_slots(store, query, metric, slots);
+    sort_and_truncate(&mut hits, top_k);
+    (hits, "exact_mask")
+}
+
+/// `(target, score)` of each of `slots`.
+fn score_slots(
+    store: &EmbeddingStore,
+    query: &[f32],
+    metric: DistanceMetric,
+    slots: impl Iterator<Item = u32>,
+) -> Vec<(usize, f64)> {
+    let scorer = vs::Scorer::new(metric, query);
+    slots
+        .map(|slot| {
+            let slot = slot as usize;
+            let start = slot * store.dimension;
+            (
+                store.slot_to_node[slot],
+                scorer.score(
+                    query,
+                    &store.data[start..start + store.dimension],
+                    store.norms[slot],
+                ) as f64,
+            )
+        })
+        .collect()
 }
 
 fn query_exact(

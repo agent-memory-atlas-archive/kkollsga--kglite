@@ -63,6 +63,10 @@ pub struct QueryTerm {
 #[derive(Clone, Debug, Default)]
 pub struct PreparedQuery {
     terms: Vec<QueryTerm>,
+    /// The mean document length to normalise by when the query was prepared
+    /// over a subset of the corpus ([`TextIndex::prepare_query_masked`]);
+    /// `None` reads the whole corpus's.
+    avgdl: Option<f64>,
 }
 
 impl PreparedQuery {
@@ -74,6 +78,26 @@ impl PreparedQuery {
     /// and [`TextIndex::top_k`] returns nothing.
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
+    }
+}
+
+/// The corpus statistics of the documents a subset admits — BM25's `N` and
+/// `Σ|D|` over only those documents, from one pass over the corpus. A query
+/// prepared with them ([`TextIndex::prepare_query_masked`]) scores every
+/// admitted document exactly as an index built over those documents alone
+/// would.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaskedStats {
+    pub docs: usize,
+    pub total_len: u64,
+}
+
+impl MaskedStats {
+    fn avgdl(&self) -> f64 {
+        if self.docs == 0 {
+            return 0.0;
+        }
+        self.total_len as f64 / self.docs as f64
     }
 }
 
@@ -139,7 +163,59 @@ impl TextIndex {
                 idf: idf(total, self.postings_of(term).len()),
             });
         }
-        PreparedQuery { terms }
+        PreparedQuery { terms, avgdl: None }
+    }
+
+    /// The statistics of the documents `admits` keeps, from one pass over the
+    /// corpus.
+    pub fn masked_stats(&self, admits: impl Fn(u32) -> bool) -> MaskedStats {
+        let mut stats = MaskedStats::default();
+        for (&slot, doc) in &self.docs {
+            if admits(slot) {
+                stats.docs += 1;
+                stats.total_len += u64::from(doc.len);
+            }
+        }
+        stats
+    }
+
+    /// [`Self::prepare_query`] over only the documents `admits` keeps, whose
+    /// statistics are `stats`: each term's document frequency counts only
+    /// admitted postings, a term no admitted document holds is dropped (as an
+    /// unknown term is), and scores normalise by the admitted documents'
+    /// mean length. An admitted document then scores what it would in an
+    /// index of the admitted documents alone.
+    pub fn prepare_query_masked(
+        &self,
+        query: &str,
+        stats: MaskedStats,
+        admits: impl Fn(u32) -> bool,
+    ) -> PreparedQuery {
+        let mut terms: Vec<QueryTerm> = Vec::new();
+        for token in super::analyze(query) {
+            let Some(term) = self.term_id(&token) else {
+                continue;
+            };
+            if terms.iter().any(|seen| seen.term == term) {
+                continue;
+            }
+            let df = self
+                .postings_of(term)
+                .iter()
+                .filter(|p| admits(p.slot))
+                .count();
+            if df == 0 {
+                continue;
+            }
+            terms.push(QueryTerm {
+                term,
+                idf: idf(stats.docs, df),
+            });
+        }
+        PreparedQuery {
+            terms,
+            avgdl: Some(stats.avgdl()),
+        }
     }
 
     /// BM25 score of one document. `0.0` for an unindexed slot or a document
@@ -150,7 +226,7 @@ impl TextIndex {
         let Some(doc) = self.docs.get(&slot) else {
             return 0.0;
         };
-        let avgdl = self.avgdl();
+        let avgdl = query.avgdl.unwrap_or_else(|| self.avgdl());
         if avgdl <= 0.0 {
             // Every document is empty, so every term frequency is 0 anyway;
             // returning early keeps the 0/0 out of the normalization.
@@ -182,12 +258,27 @@ impl TextIndex {
     ///
     /// Returns fewer than `k` when fewer documents match.
     pub fn top_k(&self, query: &PreparedQuery, k: usize) -> Vec<ScoredDoc> {
+        self.top_k_allowed(query, k, |_| true)
+    }
+
+    /// [`Self::top_k`] over only the documents `admits` keeps: one test per
+    /// posting, before a candidate is scored.
+    pub fn top_k_allowed(
+        &self,
+        query: &PreparedQuery,
+        k: usize,
+        admits: impl Fn(u32) -> bool,
+    ) -> Vec<ScoredDoc> {
         if k == 0 || query.is_empty() {
             return Vec::new();
         }
         let mut candidates: Vec<u32> = Vec::new();
         for term in &query.terms {
-            candidates.extend(self.postings_of(term.term).iter().map(|p| p.slot));
+            let postings = self.postings_of(term.term);
+            // A filtered extend cannot size itself, and growing by doubling
+            // shows on the unfiltered route.
+            candidates.reserve(postings.len());
+            candidates.extend(postings.iter().map(|p| p.slot).filter(|&slot| admits(slot)));
         }
         candidates.sort_unstable();
         candidates.dedup();

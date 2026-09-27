@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use super::endpoint_index::{self, ElementMasks};
 use super::eval::{self, Instant};
-use super::slice::{slice_at, SliceCaps, SliceKey};
+use super::instant::slice_for;
+pub use super::instant::DISK_MASK_BYTE_CAP;
 pub use super::slice::{ValidSlice, DISK_SLICE_ELEMENT_CAP, SLICE_BYTE_CAP};
 use crate::datatypes::values::Value;
 use crate::error::KgError;
@@ -36,13 +37,13 @@ use crate::graph::languages::cypher::valid_time::{
     carries_valid_time_context, declared_template, instant_literal, prefixed, PrependError,
     NO_DECLARATION,
 };
+use crate::graph::storage::GraphRead;
 
 /// A graph as of one valid-time instant; see the module docs.
 pub struct ValidTimeView {
     base: Arc<DirGraph>,
     literal: String,
     instant: Instant,
-    filter: GraphFilter,
     /// Keeps the resolved masks alive for the view's lifetime; the cache
     /// holds only a weak reference to them.
     _pinned: Option<Arc<ElementMasks>>,
@@ -81,7 +82,6 @@ pub fn view_at(graph: Arc<DirGraph>, instant: &Value) -> Result<ValidTimeView, K
     Ok(ValidTimeView {
         literal,
         instant: parsed,
-        filter,
         _pinned: resolved.masks,
         base: graph,
     })
@@ -113,30 +113,81 @@ impl ValidTimeView {
     }
 
     /// The view's materialised [`ValidSlice`], from the graph's slice cache or
-    /// built now and cached. Refused over the slice caps (see
-    /// [`SLICE_BYTE_CAP`] and, in Disk mode, [`DISK_SLICE_ELEMENT_CAP`]) and
-    /// on a bound the validity evaluator cannot read.
+    /// built now and cached — the slice a routed algorithm procedure under
+    /// the same instant runs on. Refused over the slice caps (see
+    /// [`SLICE_BYTE_CAP`] and, in Disk mode, [`DISK_SLICE_ELEMENT_CAP`] and
+    /// [`DISK_MASK_BYTE_CAP`]) and on a bound the validity evaluator cannot
+    /// read.
     pub fn slice(&self) -> Result<Arc<ValidSlice>, KgError> {
-        let resolved = self.filter.resolve(&self.base);
-        let key = SliceKey {
-            segments: resolved.key.clone(),
-            instant: (!resolved.guarded.is_empty()).then_some(self.instant),
+        slice_for(&self.base, self.instant).map_err(KgError::Argument)
+    }
+
+    /// How many nodes are visible as of the view's instant. Counted from the
+    /// endpoint indexes where they answer (a declared label at an instant,
+    /// no secondary labels), else by testing each node of the type.
+    pub fn node_count(&self) -> Result<usize, KgError> {
+        let graph = &self.base;
+        let Some(filter) = self.counting_filter() else {
+            return Ok(graph.graph.node_count());
         };
-        if let Some(slice) = endpoint_index::cached_slice(&self.base, &key) {
-            return Ok(slice);
+        let _arena_guard = graph.graph.begin_query();
+        let count = graph
+            .type_indices
+            .keys()
+            .map(|node_type| visible_of_type(graph, &filter, node_type))
+            .sum();
+        counted(&filter, count)
+    }
+
+    /// The node types with at least one node visible as of the view's
+    /// instant, in [`DirGraph::get_node_types`]'s (unspecified) order.
+    pub fn node_types(&self) -> Result<Vec<String>, KgError> {
+        let graph = &self.base;
+        let mut types = graph.get_node_types();
+        if let Some(filter) = self.counting_filter() {
+            let _arena_guard = graph.graph.begin_query();
+            types.retain(|node_type| visible_of_type(graph, &filter, node_type) > 0);
+            return counted(&filter, types);
         }
-        let filter = ElementFilter::new(&self.filter, resolved);
-        let caps = SliceCaps::for_graph(&self.base);
-        let slice =
-            Arc::new(slice_at(&self.base, filter.as_ref(), caps).map_err(KgError::Argument)?);
-        endpoint_index::store_slice(&self.base, key, &slice, caps.bytes);
-        Ok(slice)
+        Ok(types)
+    }
+
+    /// The whole-graph filter at the view's instant, through property guards
+    /// where no index answers — counting reads each node once, so it never
+    /// needs (or is refused) a Disk-mode instant mask.
+    fn counting_filter(&self) -> Option<ElementFilter> {
+        let filter = GraphFilter {
+            template: Arc::new(declared_template(&self.base).ok()?),
+            selector: ValidTimeSelector::AsOf(self.instant),
+        };
+        ElementFilter::new(&filter, filter.resolve(&self.base))
     }
 
     /// The masks the view pinned (tests).
     #[cfg(test)]
     pub(crate) fn pinned(&self) -> Option<&Arc<ElementMasks>> {
         self._pinned.as_ref()
+    }
+}
+
+/// Visible nodes whose primary type is `node_type`.
+fn visible_of_type(graph: &DirGraph, filter: &ElementFilter, node_type: &str) -> usize {
+    if let Some(count) = filter.label_count(graph, node_type) {
+        return count;
+    }
+    graph.type_indices.get(node_type).map_or(0, |nodes| {
+        nodes
+            .iter()
+            .filter(|&idx| filter.admits_node(graph, idx))
+            .count()
+    })
+}
+
+/// `value`, unless the count met a bound the evaluator could not read.
+fn counted<T>(filter: &ElementFilter, value: T) -> Result<T, KgError> {
+    match filter.error() {
+        Some(error) => Err(KgError::Argument(error.to_string())),
+        None => Ok(value),
     }
 }
 

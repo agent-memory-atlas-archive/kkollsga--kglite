@@ -36,6 +36,10 @@ valid at ``T`` (one of five periods):
   anchored 1-hop, the Q4 time-consistent 3-hop and a per-field
   ``COUNT { }`` over the licensee hop.
 * Agent cells: ``count(*)`` per field, top-k ``ORDER BY … LIMIT``, degree count.
+* Retrieval and algorithm cells (a twin pair with text and 64-d embeddings on
+  ``E``): BM25 top-10, vector top-10, PageRank and Louvain — the procedures on
+  the context's valid slice, cached per segment after the first call (its
+  build is ``slice_at``'s).
 * Disk: one SODIR-shaped licensee hop on a disk graph, edge-declared (the guard
   reads each candidate relationship's bounds) against its node-declared twin
   (the same intervals as ``Stake`` fact nodes), in the ``valid_at`` spelling
@@ -53,7 +57,7 @@ top-10, vector top-10, PageRank and Louvain.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import datetime as dt
 
 import numpy as np
@@ -375,6 +379,72 @@ def test_temporal_control(benchmark, pair, name):
     benchmark(_run, pair.full, CONTROLS[name], {})
 
 
+# ── Default-scale retrieval and algorithm cells ─────────────────────────────
+
+RETRIEVAL_CELLS: dict[str, Cell] = {
+    "bm25_top10": _prefixed(
+        "MATCH (n:E) RETURN n.eid AS e, text_bm25(n, 'body', 'w7 w311') AS s ORDER BY s DESC LIMIT 10"
+    ),
+    "vector_top10": _prefixed(
+        "MATCH (n:E) RETURN n.eid AS e, vector_score(n, 'body_emb', $q) AS s ORDER BY s DESC LIMIT 10"
+    ),
+    "pagerank": _prefixed("CALL pagerank({node_type: 'E'}) YIELD node, score RETURN count(*) AS n"),
+    "louvain": _prefixed("CALL louvain({node_type: 'E'}) YIELD node, community RETURN count(*) AS n"),
+}
+# The view twin's vector cell ranks through its HNSW index (approximate); the
+# context ranks the valid vectors exactly. Compared by recall instead.
+RETRIEVAL_RECALL = {"vector_top10": 0.8}
+
+
+def _retrieval_pair(scale: Scale) -> Pair:
+    frames = _frames(scale)
+    full = _load(frames, declared=True)
+    view_frames = _view_frames(full, frames)
+    view = _load(view_frames, declared=False)
+    _add_retrieval(full, frames)
+    _add_retrieval(view, view_frames)
+    params = {**_params(scale), "q": np.random.default_rng(SEED + 3).standard_normal(DIM).tolist()}
+    frozen = full.freeze(valid_at=T)
+    for name, cell in RETRIEVAL_CELLS.items():
+        guarded = _rows(full, cell.context, params)
+        assert _rows(frozen, cell.plain, params) == guarded, f"{name}: frozen"
+        twin = _rows(view, cell.plain, params)
+        if name in RETRIEVAL_RECALL:
+            hits = len({row[0] for row in guarded} & {row[0] for row in twin})
+            assert hits >= RETRIEVAL_RECALL[name] * len(twin), f"{name}: recall {hits}/{len(twin)}"
+        else:
+            assert guarded == twin, f"{name}: context answer differs from the view"
+    return Pair(full, view, params)
+
+
+@pytest.fixture(scope="module")
+def retrieval_pair() -> Pair:
+    return _retrieval_pair(replace(DEFAULT, text=True))
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", list(RETRIEVAL_CELLS))
+def test_temporal_retrieval_context(benchmark, retrieval_pair, name):
+    benchmark(_run, retrieval_pair.full, RETRIEVAL_CELLS[name].context, retrieval_pair.params)
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", list(RETRIEVAL_CELLS))
+def test_temporal_retrieval_view(benchmark, retrieval_pair, name):
+    benchmark(_run, retrieval_pair.view, RETRIEVAL_CELLS[name].plain, retrieval_pair.params)
+
+
+@pytest.fixture(scope="module")
+def retrieval_frozen(retrieval_pair):
+    return retrieval_pair.frozen
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("name", list(RETRIEVAL_CELLS))
+def test_temporal_retrieval_frozen(benchmark, retrieval_pair, retrieval_frozen, name):
+    benchmark(_run, retrieval_frozen, RETRIEVAL_CELLS[name].plain, retrieval_pair.params)
+
+
 # ── Disk: edge-declared hop against its node-declared twin ───────────────────
 
 DISK_GUARDS = {
@@ -438,6 +508,12 @@ def test_temporal_cells_answer_like_their_views():
     _pair(Scale(260, 100, 600, 6_200, (6, 300), 20, 10))
 
 
+def test_temporal_retrieval_cells_answer_like_their_views():
+    """The retrieval and algorithm cells at a small scale: the prefix and the
+    frozen handle rank as the view twin does (vector by recall)."""
+    _retrieval_pair(Scale(260, 100, 600, 6_200, (6, 300), 20, 10, text=True))
+
+
 # ── bench_heavy: 200k / 1M, I2's full A/B set ────────────────────────────────
 
 HEAVY_CELLS: dict[str, Cell] = {
@@ -449,30 +525,11 @@ HEAVY_CELLS: dict[str, Cell] = {
         "MATCH (a:E)-[:R]->(b:E)-[:R]->(c:E)-[:R]->(d:E) WHERE a.eid IN $ids RETURN count(*) AS n"
     ),
     "global_1hop": _prefixed("MATCH (a:E)-[:R]->(b:E) RETURN sum(b.score) AS s"),
-    "bm25_top10": Cell(
-        "MATCH (n:E) RETURN n.eid AS e, text_bm25(n, 'body', 'w7 w311') AS s ORDER BY s DESC, e LIMIT 10",
-        f"MATCH (n:E) WHERE {_va('n')} "
-        "RETURN n.eid AS e, text_bm25(n, 'body', 'w7 w311') AS s ORDER BY s DESC, e LIMIT 10",
-    ),
-    "vector_top10": Cell(
-        "MATCH (n:E) RETURN n.eid AS e, vector_score(n, 'body_emb', $q) AS s ORDER BY s DESC LIMIT 10",
-        f"MATCH (n:E) WHERE {_va('n')} "
-        "RETURN n.eid AS e, vector_score(n, 'body_emb', $q) AS s ORDER BY s DESC LIMIT 10",
-    ),
-    "pagerank": Cell(
-        "CALL pagerank({node_type: 'E'}) YIELD node, score RETURN count(*) AS n",
-        f"CALL pagerank({{node_type: 'E', where: 'valid_at(n, date(\"{T.isoformat()}\"))'}}) "
-        "YIELD node, score RETURN count(*) AS n",
-    ),
-    "louvain": Cell(
-        "CALL louvain({node_type: 'E'}) YIELD node, community RETURN count(*) AS n",
-        f"CALL louvain({{node_type: 'E', where: 'valid_at(n, date(\"{T.isoformat()}\"))'}}) "
-        "YIELD node, community RETURN count(*) AS n",
-    ),
+    **RETRIEVAL_CELLS,
 }
-# Answers that legitimately differ between the tiers: BM25 statistics come
-# from the whole corpus on the full graph, HNSW is approximate on both.
-HEAVY_UNCOMPARED = {"bm25_top10", "vector_top10"}
+# The view twin's HNSW ranking is approximate; the context's is exact over
+# the valid vectors below 200k of them.
+HEAVY_UNCOMPARED = {"vector_top10"}
 
 
 def _add_retrieval(kg: KnowledgeGraph, frames: dict[str, pd.DataFrame]) -> None:
@@ -511,9 +568,7 @@ def test_temporal_heavy_view(benchmark, heavy_pair, name):
     benchmark(_run, heavy_pair.view, HEAVY_CELLS[name].plain, heavy_pair.params)
 
 
-# The cells whose context is the prefix. The procedure cells scope themselves
-# with `where:`; the prefix refuses an element-enumerating procedure.
-HEAVY_PREFIXED = [name for name, cell in HEAVY_CELLS.items() if cell.context.startswith(AS_OF_T)]
+HEAVY_PREFIXED = list(HEAVY_CELLS)
 
 
 @pytest.mark.bench_heavy

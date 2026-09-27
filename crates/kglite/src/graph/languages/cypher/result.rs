@@ -363,9 +363,12 @@ pub struct QueryDiagnostics {
 pub struct RetrievalDiagnostics {
     /// `auto`, `exact`, or `per_row` when options remain evaluated per row.
     pub requested_policy: String,
-    /// `hnsw` for approximate candidate selection, otherwise `exact`.
+    /// `hnsw` for approximate candidate selection, otherwise `exact`; under
+    /// a `FOR VALID_TIME AS OF` context, `hnsw_mask` when the index's
+    /// candidates were narrowed to the valid ones.
     pub actual_mode: String,
-    /// Why an exact route ran; absent when HNSW served the result.
+    /// Why an exact route ran (`exact_mask`: the valid vectors, scored
+    /// exactly); absent when HNSW served the result.
     pub fallback_reason: Option<String>,
     /// `Type.embedding_property` when a single store was established; a
     /// comma-separated list, in type order, when a relationship top-k merged

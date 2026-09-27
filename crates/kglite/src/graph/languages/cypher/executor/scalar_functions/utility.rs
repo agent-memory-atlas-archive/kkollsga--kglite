@@ -557,10 +557,13 @@ impl CypherExecutor<'_> {
             ));
         };
         let view = store.read();
-        let score = if store.generation() == cache.generation {
+        let generation = store.generation();
+        let score = if generation == cache.generation {
             view.score(node, &cache.prepared)
         } else {
-            view.score(node, &view.prepare_query(query_text))
+            let target = (false, cache.node_type.as_str(), cache.prop_name.as_str());
+            let (prepared, _) = self.prepare_text_query(&view, query_text, target, generation)?;
+            view.score(node, &prepared)
         };
         Ok(score.map_or(Value::Null, Value::Float64))
     }
@@ -633,8 +636,10 @@ impl CypherExecutor<'_> {
         let view = store.read();
         // Read under the guard, for the reason `score_text_bm25_row` documents.
         let generation = store.generation();
-        let prepared = match query_text.as_deref() {
-            Some(text) => view.prepare_query(text),
+        let (prepared, admitted_docs) = match query_text.as_deref() {
+            Some(text) => {
+                self.prepare_text_query(&view, text, (false, node_type, &prop_name), generation)?
+            }
             None => Default::default(),
         };
         drop(view);
@@ -646,6 +651,7 @@ impl CypherExecutor<'_> {
             prepared,
             prop_name,
             generation,
+            admitted_docs,
         })
     }
 

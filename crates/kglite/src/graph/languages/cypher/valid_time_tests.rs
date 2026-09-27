@@ -166,21 +166,34 @@ fn lowering_refusals() {
     let write = lowered(&graph, &format!("{AS_OF}MATCH (w:Well) SET w.x = 1"), &[]);
     assert!(refusal(&write).unwrap().contains("cannot write"));
 
-    let pagerank = lowered(
+    let rule = lowered(
         &graph,
-        &format!("{AS_OF}CALL pagerank() YIELD node RETURN node"),
+        &format!("{AS_OF}CALL orphan_node() YIELD node RETURN node"),
         &[],
     );
-    assert!(refusal(&pagerank).unwrap().contains("procedure pagerank"));
+    assert!(refusal(&rule).unwrap().contains("procedure orphan_node"));
     // Inside a CALL body too, and no scope keeps a template once refused.
     let nested = lowered(
         &graph,
         &format!(
-            "{AS_OF}MATCH (w:Well) CALL {{ CALL pagerank() YIELD node RETURN node }} RETURN w"
+            "{AS_OF}MATCH (w:Well) CALL {{ CALL orphan_node() YIELD node RETURN node }} RETURN w"
         ),
         &[],
     );
     assert!(refusal(&nested).is_some() && nested.guard.is_none());
+
+    // An algorithm routes to the valid slice and an embedding query tests
+    // each candidate: both lower, reaching every declared target.
+    for routed in [
+        "CALL pagerank() YIELD node RETURN node",
+        "CALL kglite.connected_components() YIELD node RETURN node",
+        "CALL db.node_embeddings.query({text_column: 'x', vector: [1.0]}) YIELD node RETURN node",
+    ] {
+        let query = lowered(&graph, &format!("{AS_OF}{routed}"), &[]);
+        assert_eq!(refusal(&query), None, "{routed}");
+        let guard = query.guard.as_ref().expect("a template");
+        assert_eq!(**guard, declared_template(&graph).unwrap(), "{routed}");
+    }
 
     for metadata in ["CALL db.labels()", "CALL db.temporal.declarations()"] {
         let query = lowered(&graph, &format!("{AS_OF}{metadata}"), &[]);

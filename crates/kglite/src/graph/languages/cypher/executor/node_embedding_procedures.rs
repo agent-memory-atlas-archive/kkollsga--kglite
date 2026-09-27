@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use petgraph::graph::NodeIndex;
 
 use crate::datatypes::values::Value;
+use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::edge_embedding_generation::EmbeddingExecutionService;
 use crate::graph::edge_embeddings::vector_index::{
     rank_dense_stores, DenseStoreHit, EdgeVectorQueryOptions,
@@ -340,10 +341,12 @@ pub(super) fn list(
 /// `db.node_embeddings.query`: the relationship query's ranking over node
 /// stores — `type`, `types`, or every store for `text_column` — yielding
 /// `node, score, search_method, type`.
+/// Under a valid-time `filter` only the nodes it admits are candidates.
 pub(super) fn query(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
     yields: &[YieldItem],
+    filter: Option<&ElementFilter>,
 ) -> Result<Vec<ResultRow>, String> {
     let proc_name = "db.node_embeddings.query";
     reject_unknown_keys(
@@ -400,6 +403,10 @@ pub(super) fn query(
             metric: optional_string(params, "metric", proc_name)?,
         },
         graph.read_only,
+        filter
+            .map(|filter| move |node: usize| filter.admits_node(graph, NodeIndex::new(node)))
+            .as_ref()
+            .map(|admits| admits as &dyn Fn(usize) -> bool),
     )?;
     Ok(hits.into_iter().map(|hit| hit_row(hit, yields)).collect())
 }

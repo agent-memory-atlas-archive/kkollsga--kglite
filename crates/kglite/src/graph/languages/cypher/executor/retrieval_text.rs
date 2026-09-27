@@ -9,12 +9,14 @@ use petgraph::graph::NodeIndex;
 enum TextRowLookup<'r> {
     Rows(Vec<u32>),
     WholeType(&'r TypeNodesRef<'r>),
+    Admitted(&'r [NodeIndex]),
 }
 
 impl TextRowLookup<'_> {
     fn position(&self, node: NodeIndex) -> Option<usize> {
         match self {
             Self::Rows(slots) => slots.binary_search(&(node.index() as u32)).ok(),
+            Self::Admitted(nodes) => nodes.binary_search(&node).ok(),
             Self::WholeType(nodes) => {
                 let (mut low, mut high) = (0, nodes.len());
                 while low < high {
@@ -49,10 +51,36 @@ impl CypherExecutor<'_> {
         if limit == 0 || key.ascending || key.nulls != NullsPlacement::First || !sorts_by_score {
             return Ok(None);
         }
+        let score_expr = self.fold_constants_expr(score_call);
+        let masked = match self.plain_retrieval_type(matched) {
+            Some((variable, node_type)) if self.graph_filter().is_some() => {
+                match self.node_retrieval_filter(node_type)? {
+                    Some(filter) => Some((variable, self.admitted_nodes(node_type, &filter)?)),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((variable, admitted)) = masked {
+            let Some(nodes) = admitted.filter(|nodes| !nodes.is_empty()) else {
+                return Ok(None);
+            };
+            let population = RetrievalPopulation::Admitted {
+                nodes: &nodes,
+                variable,
+            };
+            return self.try_text_index_fused_top_k(
+                &score_expr,
+                true,
+                limit,
+                &population,
+                return_clause,
+                score_item_index,
+            );
+        }
         let Some(population) = self.plain_retrieval_population(matched)? else {
             return Ok(None);
         };
-        let score_expr = self.fold_constants_expr(score_call);
         self.try_text_index_fused_top_k(
             &score_expr,
             true,
@@ -105,10 +133,18 @@ impl CypherExecutor<'_> {
             return Ok(None);
         };
         let node_type = node.node_type_str(&self.graph.interner);
-        if matches!(population, RetrievalPopulation::WholeType { .. })
-            && !self.clean_text_entry_store(args, &first_row, node_type, population.len(), limit)?
-        {
-            return Ok(None);
+        // A whole type must equal the corpus, which is known before
+        // preparing; an admitted set is compared with the admitted corpus
+        // after.
+        let entry = match population {
+            RetrievalPopulation::WholeType { .. } => Some(Some((population.len(), limit))),
+            RetrievalPopulation::Admitted { .. } => Some(None),
+            _ => None,
+        };
+        if let Some(corpus) = entry {
+            if !self.clean_text_entry_store(args, &first_row, node_type, corpus)? {
+                return Ok(None);
+            }
         }
         let cache = self.prepare_text_bm25(args, &first_row, node_type)?;
         if cache.query_text.is_none() {
@@ -117,14 +153,27 @@ impl CypherExecutor<'_> {
         let Some(store) = text_index_store(self.graph, node_type, &cache.prop_name) else {
             return Ok(None);
         };
+        // Under a filter that can hide documents the corpus is the admitted
+        // documents, and the population must be exactly those.
+        let filter = match cache.admitted_docs {
+            Some(_) => self.text_filter(false, node_type)?,
+            None => None,
+        };
         let view = store.read();
+        let documents = cache.admitted_docs.unwrap_or_else(|| view.documents());
         if store.generation() != cache.generation
-            || view.documents() != population.len()
-            || limit > view.documents()
+            || documents != population.len()
+            || limit > documents
+            || cache.admitted_docs.is_some() != filter.is_some()
         {
             return Ok(None);
         }
-        let hits = view.top_k(&cache.prepared, limit);
+        let hits = match &filter {
+            Some(filter) => view.top_k_allowed(&cache.prepared, limit, |node| {
+                filter.admits_node(self.graph, node)
+            }),
+            None => view.top_k(&cache.prepared, limit),
+        };
         let hit_count = hits.len();
         let Some(lookup) = self.text_population_coverage(variable, node_type, population, &view)?
         else {
@@ -156,13 +205,16 @@ impl CypherExecutor<'_> {
         .map(Some)
     }
 
+    /// Whether the entry may serve `node_type`'s index: it exists, has no
+    /// pending refresh (which belongs to the established route, with its
+    /// warning) and, for `Some((candidates, limit))`, holds exactly
+    /// `candidates` documents, at least `limit`.
     fn clean_text_entry_store(
         &self,
         args: &[Expression],
         row: &ResultRow,
         node_type: &str,
-        candidates: usize,
-        limit: usize,
+        corpus: Option<(usize, usize)>,
     ) -> Result<bool, String> {
         let Value::String(property) = self.evaluate_expression(&args[1], row)? else {
             return Ok(false);
@@ -173,6 +225,9 @@ impl CypherExecutor<'_> {
         if store.is_stale(self.graph) {
             return Ok(false);
         }
+        let Some((candidates, limit)) = corpus else {
+            return Ok(true);
+        };
         let view = store.read();
         Ok(view.documents() == candidates && limit <= view.documents())
     }
@@ -201,6 +256,9 @@ impl CypherExecutor<'_> {
             RetrievalPopulation::WholeType { nodes, .. } => Ok(self
                 .ordered_text_membership(nodes.iter().map(Some), node_type, view)?
                 .then_some(TextRowLookup::WholeType(nodes))),
+            RetrievalPopulation::Admitted { nodes, .. } => Ok(self
+                .ordered_text_membership(nodes.iter().copied().map(Some), node_type, view)?
+                .then_some(TextRowLookup::Admitted(nodes))),
             // Built only by the vector routes.
             RetrievalPopulation::StoreSlots { .. } | RetrievalPopulation::RowsBySlot { .. } => {
                 Ok(None)

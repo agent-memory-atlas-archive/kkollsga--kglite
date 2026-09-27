@@ -589,6 +589,7 @@ impl<'a> CypherExecutor<'a> {
                     self.graph,
                     &params,
                     &clause.yield_items,
+                    self.retrieval_filter()?.as_deref(),
                 )?,
                 "db.node_text_index.list" => super::node_text_index_procedures::list(
                     self.graph,
@@ -605,6 +606,9 @@ impl<'a> CypherExecutor<'a> {
                     &params,
                     &clause.yield_items,
                 )?,
+                name if super::procedure_registry::is_view_routed_procedure(name) => {
+                    self.execute_view_routed_call(name, clause, params)?
+                }
                 _ => self.execute_resolved_call_once(proc_name.as_str(), clause, params)?,
             };
             self.budget.reserve_rows(
@@ -629,7 +633,8 @@ impl<'a> CypherExecutor<'a> {
         params: &HashMap<String, Value>,
         yields: &[YieldItem],
     ) -> Result<Vec<ResultRow>, String> {
-        let hits = super::edge_embedding_procedures::query(self.graph, params)?;
+        let filter = self.retrieval_filter()?;
+        let hits = super::edge_embedding_procedures::query(self.graph, params, filter.as_deref())?;
         hits.into_iter()
             .map(|hit| {
                 let current = self.graph.graph.edge_weight(hit.edge).ok_or_else(|| {
@@ -685,7 +690,7 @@ impl<'a> CypherExecutor<'a> {
     /// Invoke an already-resolved ordinary procedure once for one input row.
     /// Procedure lookup/YIELD expansion belongs to [`Self::execute_call`];
     /// only row-dependent parameter evaluation varies between invocations.
-    fn execute_resolved_call_once(
+    pub(super) fn execute_resolved_call_once(
         &self,
         proc_name: &str,
         clause: &CallClause,

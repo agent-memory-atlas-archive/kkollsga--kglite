@@ -871,7 +871,9 @@ pub(super) fn is_mutating_procedure(name: &str) -> bool {
 
 /// The read procedures that report metadata — labels, types, indexes,
 /// schemas, declarations, CDC positions — and no graph element, so they
-/// answer the same under a `FOR VALID_TIME AS OF` context. Every other
+/// answer the same under a `FOR VALID_TIME AS OF` context. The algorithm
+/// and embedding-query procedures are routed instead
+/// ([`VIEW_ROUTED_PROCEDURES`], [`MASK_ROUTED_PROCEDURES`]); every other
 /// procedure enumerates elements without the context's guard and is refused
 /// under one. A name list for the reason [`MUTATING_PROCEDURES`] is one;
 /// `every_context_free_procedure_is_registered` closes the drift.
@@ -899,6 +901,48 @@ const CONTEXT_FREE_PROCEDURES: &[&str] = &[
     "db.cdc.current",
     "db.cdc.earliest",
 ];
+
+/// The algorithm procedures that run under a `FOR VALID_TIME AS OF` context
+/// on the valid slice — a materialised copy of the elements valid at the
+/// instant — with the nodes they yield mapped back to the graph's own (see
+/// `executor/view_call.rs`). Each yields nodes and scalars only, never a
+/// relationship, which the slice renumbers.
+const VIEW_ROUTED_PROCEDURES: &[&str] = &[
+    "pagerank",
+    "betweenness",
+    "degree",
+    "closeness",
+    "louvain",
+    "leiden",
+    "label_propagation",
+    "connected_components",
+    "k_core",
+    "ready_set",
+    "clustering_coefficient",
+    "triangle_count",
+    "eccentricity",
+    "diameter",
+];
+
+/// The embedding queries that run under a context by testing each candidate
+/// against the valid-time filter, with no slice.
+const MASK_ROUTED_PROCEDURES: &[&str] = &[
+    "db.node_embeddings.query",
+    "db.embeddings.query",
+    "db.relationship_embeddings.query",
+];
+
+/// Whether `name` (canonical spelling or alias, any case) runs on the valid
+/// slice under a statement context.
+pub(crate) fn is_view_routed_procedure(name: &str) -> bool {
+    find_procedure(name).is_some_and(|spec| VIEW_ROUTED_PROCEDURES.contains(&spec.name))
+}
+
+/// Whether `name` (canonical spelling or alias, any case) tests its
+/// candidates against the valid-time filter under a statement context.
+pub(crate) fn is_mask_routed_procedure(name: &str) -> bool {
+    find_procedure(name).is_some_and(|spec| MASK_ROUTED_PROCEDURES.contains(&spec.name))
+}
 
 /// Whether `name` (canonical spelling or alias, any case) runs unchanged
 /// under a statement context. An unknown name is not — it fails as unknown
@@ -1075,5 +1119,38 @@ mod tests {
         }
         assert!(!is_context_free_procedure("pagerank"));
         assert!(!is_context_free_procedure("no.such.procedure"));
+    }
+
+    /// Every routed name is a registered, non-mutating procedure in its
+    /// canonical spelling, in one list only; aliases route with it.
+    #[test]
+    fn every_routed_procedure_is_registered() {
+        let lists = [
+            ("VIEW_ROUTED_PROCEDURES", VIEW_ROUTED_PROCEDURES),
+            ("MASK_ROUTED_PROCEDURES", MASK_ROUTED_PROCEDURES),
+            ("CONTEXT_FREE_PROCEDURES", CONTEXT_FREE_PROCEDURES),
+        ];
+        for (list, names) in lists {
+            for name in names {
+                let spec = find_procedure(name)
+                    .unwrap_or_else(|| panic!("{list} names unknown procedure {name}"));
+                assert_eq!(spec.name, *name, "use the canonical spelling");
+                assert!(!is_mutating_procedure(name), "{name} mutates");
+                let in_lists = lists.iter().filter(|(_, l)| l.contains(name)).count();
+                assert_eq!(in_lists, 1, "{name} is in {in_lists} routing lists");
+            }
+        }
+        for name in VIEW_ROUTED_PROCEDURES {
+            let spec = find_procedure(name).unwrap();
+            assert!(
+                !spec.columns.contains(&"relationship"),
+                "{name} yields a relationship, which the slice renumbers"
+            );
+        }
+        assert!(is_view_routed_procedure("betweenness_centrality"));
+        assert!(is_view_routed_procedure("PAGERANK"));
+        assert!(is_mask_routed_procedure("db.embeddings.query"));
+        assert!(!is_view_routed_procedure("orphan_node"));
+        assert!(!is_mask_routed_procedure("kg_knn"));
     }
 }

@@ -1537,8 +1537,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
 - **Execution.** The instant is resolved once per execution (a `$param` or
   `date()` is read when the statement runs, so a cached plan never carries
   one). Counts (`count(*)` over a label, a type or the whole graph), node
-  scans with an aggregate or `ORDER BY … LIMIT`, top-k over matched rows and
-  `elementId` anchors keep their fast routes under a context; the fused
+  scans with an aggregate or `ORDER BY … LIMIT`, top-k over matched rows,
+  retrieval top-k and `elementId` anchors keep their fast routes under a
+  context; the fused
   per-group aggregates that read the store beside the pattern matcher do not.
   `PROFILE` runs the same way. `EXPLAIN` leads the plan with a
   `ValidTimeContext` row naming the axis and the declared intervals the query
@@ -1558,12 +1559,41 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   parallel relationship that is not valid is never on it. `OPTIONAL MATCH`
   pads NULLs when every match is invalid; `EXISTS { }`, `COUNT { }` and
   pattern comprehensions (`[(f)-->(c) | c.name]`) see only valid matches.
+- **Retrieval.** `text_bm25()` ranks with the statistics of the documents
+  valid at the instant — their count, mean length and each term's document
+  frequency — so a document scores what it would in an index of the valid
+  documents alone, and `ORDER BY text_bm25(…) DESC LIMIT k` keeps its index
+  route. `vector_score(n, …)` top-k over `MATCH (n:Label)` scores the valid
+  nodes' vectors exactly (`diagnostics.retrieval`: `actual_mode: "exact"`,
+  `fallback_reason: "exact_mask"`); from 200,000 valid vectors
+  (`KGLITE_TEMPORAL_VECTOR_EXACT_MAX`) a built HNSW index serves the valid
+  candidates instead (`actual_mode: "hnsw_mask"`), over-fetching until it has
+  `k` of them or falling back to the exact pass.
+  `db.node_embeddings.query` / `db.relationship_embeddings.query` (and the
+  `db.embeddings.query` router) rank only valid nodes — or valid
+  relationships with both endpoints valid — and report
+  `search_method: "exact_mask"` or `"hnsw_mask"`.
+- **Graph algorithms.** `pagerank`, `betweenness`, `degree`, `closeness`,
+  `louvain`, `leiden`, `label_propagation`, `connected_components`, `k_core`,
+  `ready_set`, `clustering_coefficient`, `triangle_count`, `eccentricity` and
+  `diameter` run on the valid slice: a copy of the elements valid at the
+  instant, built once per instant and cached until the graph changes. Their
+  `{node_type, where}` scope applies within it, and `YIELD node` binds the
+  graph's own node, so `CALL pagerank() YIELD node MATCH (node)-->(x)` reads
+  the full graph as of the instant. A slice over 128 MiB
+  (`KGLITE_TEMPORAL_SLICE_MAX_BYTES`) — or in disk storage over 2,000,000
+  nodes and relationships (`KGLITE_TEMPORAL_DISK_SLICE_MAX_ELEMENTS`), or a
+  graph whose one-bit-per-element mask would pass 64 MiB
+  (`KGLITE_TEMPORAL_DISK_MASK_MAX_BYTES`) — is refused when the statement
+  runs, naming the cap. Disk storage evaluates the bounds of every element
+  once per instant into that mask, for retrieval and the algorithms alike.
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
 - **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
   probe for support), a graph with no validity declaration, a writing
-  statement, a procedure that enumerates graph elements (metadata procedures
-  such as `db.labels()` and `db.temporal.declarations()` are fine),
+  statement, any other procedure that enumerates graph elements — the
+  validation rules (`orphan_node`, …), `cluster`, `kg_knn` — (metadata
+  procedures such as `db.labels()` and `db.temporal.declarations()` are fine),
   `degree()` / `inDegree()` / `outDegree()` / `shortest_path_length()` (they
   read a node's relationships outside the pattern matcher; not available under
   a context yet — `COUNT { (n)--() }` is), and a relationship type whose
