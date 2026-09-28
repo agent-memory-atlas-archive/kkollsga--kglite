@@ -5655,7 +5655,7 @@ class KnowledgeGraph:
                 type into **freshness provenance**: every applicable write
                 (including Cypher ``CREATE``/``INSERT``/``SET``/``MERGE`` and
                 ``add_nodes`` / ``add_relationships``) auto-stamps an
-                ``updated_at`` timestamp, plus the caller-supplied ``git_sha`` /
+                ``updated_at`` timestamp (naive UTC), plus the caller-supplied ``git_sha`` /
                 ``modified_by`` when provided. It is off by default (writes stay
                 deterministic) and independent of ``layer`` / ``lock_schema``::
 

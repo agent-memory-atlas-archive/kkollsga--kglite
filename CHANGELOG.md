@@ -472,6 +472,9 @@ before upgrading.
   until a value arrives, which then types it — `schema()` shows it and
   `describe()` lists it with `coverage="0%"`. A declaration's `to` that every
   row left NULL still warns that every row is open-ended.
+- `auto_timestamp` stamped `updated_at` with the local wall-clock time, while
+  every other naive datetime kglite stores or accepts is UTC. It is now naive
+  UTC. Stamps written before this release keep their stored (local) values.
 - The query warning for `WHERE n.x IS NULL` on a property no node of the type
   has said the test "filters out every row" while the query returned every
   row; it now says the test is true on every row, and stays silent for a

@@ -394,7 +394,7 @@ impl DirGraph {
     }
 
     /// The reserved provenance properties to stamp on a write: `updated_at`
-    /// (wall-clock now, a `Timestamp` matching `datetime()`) plus the
+    /// (now, a naive UTC `Timestamp` like every stored datetime) plus the
     /// caller-supplied `git_sha`/`modified_by` when set on the current mutation
     /// (via `ExecuteOptions` or [`Self::with_write_provenance`]). One clock read
     /// per call. Engine owns these keys: the stamp replaces a user-written
@@ -403,7 +403,7 @@ impl DirGraph {
         let mut v = Vec::with_capacity(3);
         v.push((
             "updated_at",
-            Value::Timestamp(chrono::Local::now().naive_local()),
+            Value::Timestamp(chrono::Utc::now().naive_utc()),
         ));
         if let Some(sha) = &self.active_git_sha {
             v.push(("git_sha", Value::String(sha.clone())));

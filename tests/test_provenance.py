@@ -371,3 +371,33 @@ def test_survives_save_load(tmp_path):
     p = str(tmp_path / "g.kgl")
     g.save(p)
     assert _updated_at(kglite.load(p), "Task", 1) == stamped
+
+
+def test_updated_at_is_naive_utc_whatever_the_local_zone():
+    """`updated_at` is naive UTC, as every other naive datetime in kglite.
+
+    Red proof (user test 3, B6): the stamp was the local wall clock, off by
+    the zone's offset. The probe runs in a child process pinned to a zone with
+    a non-whole-hour offset, so it cannot pass by the machine being in UTC."""
+    import os
+    import subprocess
+    import sys
+
+    probe = (
+        "import datetime as dt, pandas as pd, kglite\n"
+        "g = kglite.KnowledgeGraph()\n"
+        "g.define_schema({'nodes': {'T': {'auto_timestamp': True}},"
+        " 'connections': {'L': {'source': 'T', 'target': 'T', 'auto_timestamp': True}}})\n"
+        "g.cypher('CREATE (:T {id: 1})')\n"
+        "g.add_nodes(pd.DataFrame({'id': [2]}), 'T', 'id')\n"
+        "g.add_relationships(pd.DataFrame({'a': [1], 'b': [2]}), 'L', 'T', 'a', 'T', 'b')\n"
+        "now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)\n"
+        "stamps = [r['u'] for r in g.cypher('MATCH (n:T) RETURN n.updated_at AS u').to_list()]\n"
+        "stamps += [r['u'] for r in g.cypher('MATCH ()-[r:L]->() RETURN r.updated_at AS u').to_list()]\n"
+        "print(max(abs((s - now).total_seconds()) for s in stamps), len(stamps))\n"
+    )
+    env = dict(os.environ, TZ="Asia/Kathmandu")
+    out = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True)
+    drift, count = out.stdout.split()
+    assert int(count) == 3
+    assert float(drift) < 60, out.stdout
