@@ -933,6 +933,7 @@ jobs:
             tests/test_phase3_parity.py tests/test_phase4_parity.py \
             tests/test_phase5_parity.py::test_graph_copy_cow_correctness_memory \
             tests/test_phase5_parity.py::test_graph_copy_cow_correctness_mapped \
+            tests/test_statement_read_after_write_parity.py \
             tests/test_temporal_persistence.py tests/test_valid_time_oracle.py
 
   disk-concurrency:

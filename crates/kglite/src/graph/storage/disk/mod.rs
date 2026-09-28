@@ -56,6 +56,8 @@ pub(crate) fn remove_scratch_dir(path: &std::path::Path) -> std::io::Result<()> 
 }
 
 #[cfg(test)]
+mod flush_tests;
+#[cfg(test)]
 mod index_freshness_tests;
 #[cfg(test)]
 mod lifecycle_tests;

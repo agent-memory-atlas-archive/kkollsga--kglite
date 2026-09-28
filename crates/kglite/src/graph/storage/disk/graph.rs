@@ -124,9 +124,8 @@ pub struct DiskGraph {
     /// edge-property read consults it first (`staged_edge`).
     pub(super) edge_mut_cache: HashMap<u32, EdgeData>,
     /// Cache for `node_weight_mut`: stages Cypher-SET-style exact-row writes
-    /// as `PropertyStorage::Map` until `clear_arenas` drains it — see
-    /// `flush_node_mut_cache` for why the flush must replace whole `Arc`s
-    /// rather than mutate through them.
+    /// as `PropertyStorage::Map` until `clear_arenas` drains it into
+    /// `column_stores` (`flush_node_mut_cache`). Node reads do not consult it.
     pub(super) node_mut_cache: HashMap<u32, NodeData>,
 
     // File-backed (MmapOrVec) to avoid ~14 GB heap allocation at Wikidata scale.
@@ -567,8 +566,9 @@ impl DiskGraph {
 
         // Stage exact-row mutations as `PropertyStorage::Map`, not `Columnar`:
         // a `Columnar` variant routes `node.set_property(k, v)` through
-        // `Arc::make_mut(store)`, which clones the store when DirGraph still
-        // holds another Arc and lands the mutation on a detached copy.
+        // `Arc::make_mut(store)` on the node's own handle, which clones the
+        // store while `column_stores` also holds it and lands the mutation
+        // on a detached copy.
         //
         // Reseed path: `batch.rs::flush_chunk` (and similar bulk paths)
         // transiently assigns `PropertyStorage::Columnar{...}`; a stale one
@@ -1401,11 +1401,17 @@ impl DiskGraph {
     }
 
     /// Drain `node_mut_cache` and apply the staged writes to
-    /// `self.column_stores`, cloning each affected store once and replacing
-    /// the whole `Arc`. Dead slots (tombstoned via `remove_node`) flush a
-    /// `store.tombstone(row_id)` instead. Node analogue of
-    /// `batch.rs::flush_chunk`'s deferred-columnar pass — the only pattern
-    /// proven to survive the Arc sharing between DirGraph and DiskGraph.
+    /// `self.column_stores`. Each affected store is written through
+    /// `Arc::make_mut`: in place when this backend is its only holder, and
+    /// forked once — sharing every column except those written — while a
+    /// statement checkpoint, transaction fork or held view still holds the old
+    /// `Arc` (that holder keeps it). Dead slots (tombstoned via `remove_node`)
+    /// flush a `store.tombstone(row_id)` instead.
+    ///
+    /// Callers flush after every staged row (disk reads never consult this
+    /// cache), so the write must be O(1) per cell once the store is owned:
+    /// cloning the store while the map still held it deep-copied every touched
+    /// column on every flush — O(type rows) per written row.
     fn flush_node_mut_cache(&mut self) {
         if self.node_mut_cache.is_empty() {
             return;
@@ -1422,13 +1428,13 @@ impl DiskGraph {
             by_type.entry(type_key).or_default().push((i, nd));
         }
         for (type_key, updates) in by_type {
-            let Some(current_arc) = self.column_stores.get(&type_key) else {
+            let Some(current) = self.column_stores.get(&type_key) else {
                 continue;
             };
-            // Skip the clone + Arc-replace unless something would actually be
-            // written. `batch.rs::flush_chunk` leaves `PropertyStorage::
-            // Columnar` scratch in the cache (batch persists via its own
-            // full-Arc replacement); those yield nothing to flush.
+            // Skip unless something would actually be written: `make_mut` on a
+            // shared store forks it. `batch.rs::flush_chunk` leaves
+            // `PropertyStorage::Columnar` scratch in the cache (batch persists
+            // via its own full-Arc replacement); those yield nothing to flush.
             let any_writes_needed = updates.iter().any(|(i, nd)| {
                 let slot = self.node_slot(*i as usize);
                 if !slot.is_alive() {
@@ -1443,39 +1449,44 @@ impl DiskGraph {
                 // Columnar scratch may instead carry the unwritten Null sentinel.
                 (matches!(nd.properties, PropertyStorage::Map(_))
                     || !matches!(nd.title, Value::Null))
-                    && current_arc.get_title(slot.row_id).unwrap_or(Value::Null) != nd.title
+                    && current.get_title(slot.row_id).unwrap_or(Value::Null) != nd.title
             });
             if !any_writes_needed {
                 continue;
             }
-            // Copy the store's handles once; only touched columns privatize.
-            let mut new_store: crate::graph::storage::column_store::ColumnStore =
-                (**current_arc).clone();
-            for (i, nd) in updates {
-                let slot = self.node_slot(i as usize);
-                let row_id = slot.row_id;
-                if !slot.is_alive() {
+            // Resolve slots before the store is borrowed mutably (`node_slot`
+            // takes `&self`).
+            let rows: Vec<(u32, bool, NodeData)> = updates
+                .into_iter()
+                .map(|(i, nd)| {
+                    let slot = self.node_slot(i as usize);
+                    (slot.row_id, slot.is_alive(), nd)
+                })
+                .collect();
+            let Some(store_arc) = self.column_stores.get_mut(&type_key) else {
+                continue;
+            };
+            let store = std::sync::Arc::make_mut(store_arc);
+            for (row_id, alive, nd) in rows {
+                if !alive {
                     // Tombstoned by `remove_node` — mark the row dead
                     // in the ColumnStore so reloads skip it.
-                    new_store.tombstone(row_id);
+                    store.tombstone(row_id);
                     continue;
                 }
                 // Avoid redundant title writes while preserving explicit Map clears.
                 if (matches!(nd.properties, PropertyStorage::Map(_))
                     || !matches!(nd.title, Value::Null))
-                    && new_store.get_title(row_id).unwrap_or(Value::Null) != nd.title
+                    && store.get_title(row_id).unwrap_or(Value::Null) != nd.title
                 {
-                    let _ = new_store.set_title(row_id, &nd.title);
+                    let _ = store.set_title(row_id, &nd.title);
                 }
                 if let PropertyStorage::Map(map) = &nd.properties {
                     for (key, value) in map {
-                        let _ = new_store.set(row_id, *key, value, None);
+                        let _ = store.set(row_id, *key, value, None);
                     }
                 }
             }
-            // Publish to this backend; retained snapshots keep their old Arc.
-            self.column_stores
-                .insert(type_key, std::sync::Arc::new(new_store));
         }
     }
 

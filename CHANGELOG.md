@@ -512,6 +512,16 @@ before upgrading.
 
 ### Fixed
 
+- Disk mode: a write statement cost time proportional to the written type's
+  size for every row it wrote. Each staged row was flushed by cloning the
+  type's column store and deep-copying every column the row touched, so an
+  `UNWIND $rows MATCH (n:T {id: r.id}) SET n.x = r.v` of 2,000 rows took
+  780 ms on a 2-million-node type against 60 ms on a 200,000-node one
+  (release). The flush now writes in place: the first write to a column in a
+  statement copies it once (the statement's rollback checkpoint keeps the
+  original) and every later row writes one cell — 2.9 ms and 2.3 ms for the
+  same statements, flat in the type's size and within 1.5× of memory mode.
+  Every read inside the statement still sees the rows written before it.
 - `max_work_units` now bounds a write statement's value expressions. The
   evaluators of `SET`, `CREATE`, `MERGE` and a `FOREACH` list ran on a fresh,
   unlimited budget, so `MATCH (n) SET n.x = size(range(1, 10000))` ran under

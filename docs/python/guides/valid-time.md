@@ -497,9 +497,13 @@ pair as in section 7:
   versions per process — runs correctly with sub-second as-of queries and
   daily deliveries in seconds; a national twin needs either a 64 GB machine in
   memory mode or regional shards.
-- Disk mode is a read substrate: reopening a disk graph to write copies the
-  touched columns back into memory, and a point write costs milliseconds per
-  row on a large type. Serve from disk; ingest in memory or mapped mode.
+- Disk mode is a read substrate. A write statement copies each column it
+  writes into memory once (about 0.4 ms for a 2-million-row integer column)
+  and then costs about 1.2 µs per row whatever the type's size — a 2,000-row
+  close on a 2-million-node disk type applies in about 3 ms — but there is no
+  write-ahead log (a write is durable at the next `save()`), and appending
+  rows to a reopened type re-materialises that type in memory. Serve from
+  disk; ingest in memory or mapped mode.
 
 The per-version cost is dominated by untyped timestamp columns, the id index
 and edge overflow maps, not by the interval filter itself; the storage work

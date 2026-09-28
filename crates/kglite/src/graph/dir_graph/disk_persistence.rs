@@ -343,8 +343,8 @@ impl DirGraph {
         };
 
         // `save_to_dir` runs `clear_arenas` internally, which drains
-        // `node_mut_cache` via the clone-apply-replace flush, updating
-        // each mutated type's Arc in `DiskGraph.column_stores`.
+        // `node_mut_cache` into each mutated type's store in
+        // `DiskGraph.column_stores`.
         dg.save_to_dir_with_edge_embeddings(dir, &self.interner, edge_embeddings_required)
             .map_err(|e| format!("DiskGraph save failed: {}", e))?;
         // No mirror to refresh: `DiskGraph` *is* the owner of the column

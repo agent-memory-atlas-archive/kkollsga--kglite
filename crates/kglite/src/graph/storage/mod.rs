@@ -636,7 +636,7 @@ pub trait GraphWrite: GraphRead {
     /// `&mut self` op, so without an explicit flush the next read goes to
     /// `column_stores` and misses the staged writes — a Cypher SET appears to
     /// silently no-op until the next `add_node`/`save`. The disk override
-    /// routes through `clear_arenas` (clone-apply-replace flush + arena reset).
+    /// routes through `clear_arenas` (in-place store flush + arena reset).
     fn flush_pending_writes(&mut self) {}
 }
 

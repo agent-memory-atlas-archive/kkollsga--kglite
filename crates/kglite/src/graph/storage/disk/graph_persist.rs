@@ -524,9 +524,8 @@ impl DiskGraph {
         edge_embeddings_required: bool,
     ) -> std::io::Result<()> {
         // Drain mutation caches: `edge_mut_cache` → `edge_properties`, and
-        // `node_mut_cache` → `self.column_stores` via clone-apply-replace.
-        // The caller (`DirGraph::save_disk`) mirrors the post-flush Arcs
-        // back into its own side immediately after.
+        // `node_mut_cache` → `self.column_stores`. The caller
+        // (`DirGraph::save_disk`) reads those same stores for the column file.
         self.clear_arenas();
         std::fs::create_dir_all(target_dir)?;
 

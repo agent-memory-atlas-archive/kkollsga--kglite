@@ -28,7 +28,10 @@ still proportional to graph size: the **`disk`** backend. A disk graph has no
 petgraph slot identity for an inverse edit to name, so every mutating statement
 on it opens an O(V+E) checkpoint instead. `memory` and `mapped` both take the
 journal, and a durable graph over either of them does too — durability and
-rollback strategy are independent concerns.
+rollback strategy are independent concerns. Within one disk statement the
+checkpoint is paid once: the first write to a property column copies that
+column, and every later row of the statement writes in place, so a statement's
+cost is one copy per column it writes plus a constant per row.
 
 Two other graph shapes also use the journal:
 
