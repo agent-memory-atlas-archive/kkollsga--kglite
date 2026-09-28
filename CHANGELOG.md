@@ -382,10 +382,12 @@ before upgrading.
   in one call or several. `connections_updated` is 0 on such a type, and a
   dropped copy is counted in no field. Identity compares every property the
   stored relationship holds, whichever API wrote it. Values compare by what
-  they name: a date, a midnight datetime and an ISO string of the same day are
-  one value, on a bound or any other property (a datetime later in the day is
-  its own), and a whole float equals the integer it names exactly (`1.0` and
-  `1`, as a pandas column re-inferred on redelivery gives). `auto_timestamp`
+  they name, as Cypher `=` compares them: a date, a midnight datetime and text
+  naming the same day (`2020-06-30`, `2020/06/30`, `06/30/2020`, …) are one
+  value, on a bound or any other property (a datetime later in the day is its
+  own), a whole float equals the integer it names exactly (`1.0` and `1`, as
+  a pandas column re-inferred on redelivery gives), and lists and maps compare
+  element by element. `auto_timestamp`
   stamps are left out, so a redelivery is a no-op. Close or correct a stored period with Cypher `SET` /
   `DELETE`. The declaration consulted is the one covering each row's source
   type, also when `create_relationships()` is called without `source_type=`;

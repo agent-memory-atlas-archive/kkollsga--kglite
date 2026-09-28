@@ -1269,7 +1269,6 @@ impl ColumnStore {
             .collect()
     }
 
-    /// Demote a column from typed to Mixed, preserving all existing data.
     /// Make column `slot` able to hold `value` after a push or set refused
     /// it. A column that holds no value yet — one every write so far left
     /// NULL — is replaced by an all-null column typed for `value`, so a
@@ -1292,6 +1291,7 @@ impl ColumnStore {
         self.demote_to_mixed(slot);
     }
 
+    /// Demote a column from typed to Mixed, preserving all existing data.
     fn demote_to_mixed(&mut self, slot: usize) {
         self.spillable_growth = true;
         let old_col = &self.columns[slot];

@@ -12,7 +12,7 @@ use chrono::NaiveTime;
 
 use super::eval::{parse_instant, Instant};
 use crate::datatypes::values::Value;
-use crate::graph::core::filtering::may_parse_as_temporal;
+use crate::graph::core::filtering::{may_parse_as_temporal, parse_datetime_string};
 use crate::graph::schema::id_integer;
 use crate::graph::schema::{InternedKey, TemporalConfig};
 
@@ -63,20 +63,44 @@ impl StartValue {
     }
 }
 
-/// A property other than a bound as an image compares it, so a redelivery
-/// whose column came back as another kind is still the same value: a whole
-/// float and the integer it names exactly are one number (`1.0` and `1`, the
-/// id rule of [`id_integer`]), and a date, a datetime and a date-like string
-/// compare as the instant they name, as a bound does — so two strings naming
-/// one day are one value too. `None` for NULL.
+/// A property other than a bound as an image compares it — by the rule
+/// Cypher `=` compares values by, so a redelivery whose column came back as
+/// another kind is still the same value. `None` for NULL. See
+/// [`canonical_value`].
 fn compared_value(value: &Value) -> Option<StartValue> {
+    (!matches!(value, Value::Null)).then(|| StartValue::Raw(canonical_value(value)))
+}
+
+/// `value` spelled the one way every value Cypher `=` equates with it is
+/// spelled: a whole float and the integer it names exactly are one number
+/// (`1.0` and `1`, the id rule of [`id_integer`]); a date, a midnight datetime
+/// and text naming that day are one date, and text naming a later instant is
+/// that datetime — read as `=` reads text against a date
+/// ([`parse_datetime_string`]), so two strings naming one day are one value
+/// too; and a list or map compares element by element under the same rule.
+fn canonical_value(value: &Value) -> Value {
     match value {
-        Value::Null => None,
-        Value::DateTime(_) | Value::Timestamp(_) => StartValue::of(value),
-        Value::String(text) if may_parse_as_temporal(text) => StartValue::of(value),
-        _ => Some(StartValue::Raw(
-            id_integer(value).map_or_else(|| value.clone(), Value::Int64),
-        )),
+        Value::List(items) => Value::List(items.iter().map(canonical_value).collect()),
+        Value::Map(entries) => Value::Map(
+            entries
+                .iter()
+                .map(|(key, item)| (key, canonical_value(item)))
+                .collect(),
+        ),
+        Value::Timestamp(ts) => canonical_instant(*ts),
+        Value::String(text) if may_parse_as_temporal(text) => {
+            parse_datetime_string(text).map_or_else(|| value.clone(), canonical_instant)
+        }
+        _ => id_integer(value).map_or_else(|| value.clone(), Value::Int64),
+    }
+}
+
+/// A datetime at midnight is its date.
+fn canonical_instant(ts: chrono::NaiveDateTime) -> Value {
+    if ts.time() == NaiveTime::MIN {
+        Value::DateTime(ts.date())
+    } else {
+        Value::Timestamp(ts)
     }
 }
 

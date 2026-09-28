@@ -998,3 +998,27 @@ class TestAVersionIsComparedByWhatItHolds:
         assert _counts(self._load(g, pd.DataFrame({**row, "seen": [dt.date(2020, 6, 30)]}))) == (0, 0)
         assert _counts(self._load(g, pd.DataFrame({**row, "seen": ["2020-06-30"]}))) == (0, 0)
         assert _counts(self._load(g, pd.DataFrame({**row, "seen": ["2020-07-01"]}))) == (1, 0)
+
+    @pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+    @pytest.mark.parametrize("spelling", ["2020/06/30", "06/30/2020", "30-06-2020", "20200630"])
+    def test_every_text_spelling_cypher_equates_with_the_date_is_one_version(self, storage, spelling, tmp_path):
+        """Red proof (user-test-3 review 3): identity read text with the
+        `valid_at` parser while Cypher `=` also reads `2020/06/30`,
+        `06/30/2020` and `30-06-2020`, so those redeliveries added a version
+        that `WHERE r.p = '…'` then matched twice."""
+        g = self._graph(storage, tmp_path)
+        row = {"s": ["A"], "t": ["B"], "vf": pd.to_datetime(["2020-01-01"]), "vt": pd.to_datetime([None])}
+        assert _counts(self._load(g, pd.DataFrame({**row, "p": pd.to_datetime(["2020-06-30"])}))) == (1, 0)
+        assert _counts(self._load(g, pd.DataFrame({**row, "p": [spelling]}))) == (0, 0)
+        matched = g.cypher("MATCH ()-[r:R]->() WHERE r.p = $p RETURN count(*) AS n", params={"p": spelling})
+        assert matched.to_list() == [{"n": 1}]
+        assert _counts(self._load(g, pd.DataFrame({**row, "p": ["2020/07/01"]}))) == (1, 0)
+
+    @pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+    def test_a_list_compares_element_by_element(self, storage, tmp_path):
+        g = self._graph(storage, tmp_path)
+        row = {"s": ["A"], "t": ["B"], "vf": pd.to_datetime(["2020-01-01"]), "vt": pd.to_datetime([None])}
+        assert _counts(self._load(g, pd.DataFrame({**row, "l": [[1, 2]]}))) == (1, 0)
+        assert _counts(self._load(g, pd.DataFrame({**row, "l": [[1.0, 2.0]]}))) == (0, 0)
+        assert _counts(self._load(g, pd.DataFrame({**row, "l": [[2, 1]]}))) == (1, 0)
+        assert _counts(self._load(g, pd.DataFrame({**row, "l": [[1, 2.5]]}))) == (1, 0)
