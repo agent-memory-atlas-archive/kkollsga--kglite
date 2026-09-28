@@ -401,7 +401,7 @@ fn gate_node_groups(
 ) -> Result<(), String> {
     for (node_type, group) in node_groups {
         gate_node_rows(target, node_type, "id", "title", || {
-            build_node_dataframe(group)
+            build_node_dataframe(group, "id", "title")
         })?;
     }
     Ok(())
@@ -464,28 +464,31 @@ fn write_node_groups(
     report: &mut ExtendReport,
 ) -> Result<(), String> {
     for (node_type, group) in node_groups {
-        // Carry the source's id/title field aliases for a type the target
-        // doesn't already have, so `MATCH (n {originalIdCol: ...})` keeps
-        // resolving after the merge. For an already-present type the
-        // target's own alias is authoritative — leave it.
+        // For a type the target doesn't already have, load under the source's
+        // own id/title column names, so `add_nodes` records the spellings the
+        // way the source's load did — alias, type metadata and the logged
+        // declaration — and `MATCH (n {originalIdCol: ...})` keeps resolving
+        // after the merge. For an already-present type the target's own
+        // spellings are authoritative — load under `id`/`title`.
         let target_has_type = target.type_indices.get(&node_type).is_some();
-        if !target_has_type {
-            if let Some(alias) = source.id_field_aliases.get(&node_type) {
-                target.declare_id_field_alias(&node_type, alias);
-            }
-            if let Some(alias) = source.title_field_aliases.get(&node_type) {
-                target.declare_title_field_alias(&node_type, alias);
-            }
-        }
+        let spelling = |aliases: &rustc_hash::FxHashMap<String, String>, canonical: &str| {
+            aliases
+                .get(&node_type)
+                .filter(|alias| !target_has_type && !group.columns.contains(alias))
+                .cloned()
+                .unwrap_or_else(|| canonical.to_string())
+        };
+        let id_column = spelling(&source.id_field_aliases, "id");
+        let title_column = spelling(&source.title_field_aliases, "title");
 
-        let df = build_node_dataframe(&group)?;
+        let df = build_node_dataframe(&group, &id_column, &title_column)?;
         let r: NodeOperationReport = add_nodes(
             target,
             df,
             node_type,
-            "id".to_string(),
+            id_column,
             // Always carry the title across (the column is always present).
-            Some("title".to_string()),
+            Some(title_column),
             conflict_handling.clone(),
         )?;
         report.nodes_created += r.nodes_created;
@@ -578,10 +581,14 @@ fn scope_error(which: &str) -> String {
 /// Build a node `DataFrame` with columns `[id, title, <props...>]`.
 /// Property cells absent on a given row are filled with `Value::Null`,
 /// matching how `add_nodes` treats missing values (skip-on-null).
-fn build_node_dataframe(group: &NodeGroup) -> Result<DataFrame, String> {
+fn build_node_dataframe(
+    group: &NodeGroup,
+    id_column: &str,
+    title_column: &str,
+) -> Result<DataFrame, String> {
     let mut columns = Vec::with_capacity(group.columns.len() + 2);
-    columns.push("id".to_string());
-    columns.push("title".to_string());
+    columns.push(id_column.to_string());
+    columns.push(title_column.to_string());
     columns.extend(group.columns.iter().cloned());
 
     let rows: Vec<Vec<Value>> = group

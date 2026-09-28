@@ -486,6 +486,14 @@ before upgrading.
   time the binding spent converting parameters (a `timeout_ms=300` call with a
   large `$rows` reported "limit 60ms"), and a transaction whose own deadline
   had passed reported no figures at all.
+- `extend()` did not carry a node type's id column name into the target's
+  schema. After `dst.extend(src)`, where `src` loaded the type with
+  `add_nodes(df, 'E', 'code', ...)`, `MATCH (e:E {code: 'e1'})` raised
+  `SchemaError: Unknown property 'code'`, and `WHERE e.code = 'e1'` found the
+  row but warned that no `E` node has `code`. A type new to the target is now
+  loaded under the source's id and title column names, so it reads by them
+  exactly as in the source, including after a save or a write-ahead-log
+  recovery.
 - `add_nodes` with the id column also named as the title field —
   `add_nodes(df, 'A', 'id', 'id')`, or `('code', 'code')` — recorded that
   column as the type's *title* spelling, so the identity's own name resolved to

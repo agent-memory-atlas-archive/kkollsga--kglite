@@ -608,3 +608,56 @@ def test_a_refused_abstract_node_group_reaches_no_durable_commit(tmp_path):
     reopened = kglite.open(path, durable=True)
     rows = _all(reopened, "MATCH (n) RETURN labels(n)[0] AS label ORDER BY label")
     assert rows == [{"label": "Marker"}]
+
+
+# ─────────────────────── id / title spellings carried ───────────────────────
+#
+# `extend` loads the source's rows under `id`/`title`, so a type the target
+# lacked must still be readable by the source's own column names afterwards —
+# as a pattern property, in WHERE, as a MERGE key and in `describe()`. extend
+# accepts in-memory graphs only; the saved and the write-ahead-logged
+# round-trips stand in for the other storage paths.
+
+
+def _coded_source(title_field):
+    cols = {"code": ["e1", "e2"]}
+    if title_field == "name":
+        cols["name"] = ["N1", "N2"]
+    src = KnowledgeGraph()
+    src.add_nodes(pd.DataFrame(cols), "E", "code", title_field)
+    return src
+
+
+def _assert_reads_by_code(g, title_field):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _all(g, "MATCH (e:E {code: 'e1'}) RETURN e.id AS i") == [{"i": "e1"}]
+        assert _all(g, "MATCH (e:E) WHERE e.code = 'e1' RETURN e.code AS c") == [{"c": "e1"}]
+        g.cypher("MERGE (e:E {code: 'e1'})")
+        assert _all(g, "MATCH (e:E) RETURN count(e) AS n") == [{"n": 2}]
+    assert 'id_alias="code"' in g.describe(types=["E"])
+    if title_field == "name":
+        assert 'title_alias="name"' in g.describe(types=["E"])
+        assert _all(g, "MATCH (e:E {code: 'e2'}) RETURN e.name AS n") == [{"n": "N2"}]
+
+
+@pytest.mark.parametrize("title_field", [None, "code", "name"])
+@pytest.mark.parametrize("route", ["live", "saved", "durable"])
+def test_extend_carries_the_id_spelling(title_field, route, tmp_path):
+    path = str(tmp_path / "g.kgl")
+    if route == "durable":
+        KnowledgeGraph().save(path)
+        dst = kglite.open(path)
+    else:
+        dst = KnowledgeGraph()
+    dst.extend(_coded_source(title_field))
+    if route == "saved":
+        dst.save(path)
+        dst = kglite.load(path)
+    elif route == "durable":
+        del dst
+        import gc
+
+        gc.collect()
+        dst = kglite.open(path)
+    _assert_reads_by_code(dst, title_field)
