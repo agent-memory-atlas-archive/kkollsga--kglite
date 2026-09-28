@@ -658,7 +658,9 @@ its first call — that is exactly what broke `make refresh-release-constants`
 during the 0.15.0 release.
 
 So: **never hand-edit the version. Run `make bump-version VERSION=X.Y.Z`.**
-It rewrites all five places and verifies with a resolving `cargo metadata`
+It rewrites all five places — and, since 0.19.0, the Maven/Gradle
+coordinates in `kglite-java/README.md`, which `make gate` checks for drift —
+and verifies with a resolving `cargo metadata`
 that every member resolved (`--no-deps` skips resolution entirely and passes
 on exactly the broken tree). The internal requirement carries the full `X.Y.Z`
 rather than the `X.Y` series, because these crates ship in lockstep and this
