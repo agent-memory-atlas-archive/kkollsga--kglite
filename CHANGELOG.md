@@ -542,6 +542,13 @@ before upgrading.
   their declared types, and a graph an earlier release already moved re-types
   its columns and returns to `columns.bin` on its next save. Values were never
   lost; no file-format change.
+- The plan-time warning "WHERE references property 'x' which no L node has —
+  … this filters out every row" fired on a statement that itself writes that
+  property through another variable before reading it, e.g. `MATCH (n:P {id:
+  6}) SET n.flag = true WITH n MATCH (m:P) WHERE m.flag = true`, or creates
+  it in a `CREATE`/`MERGE` pattern. The statement returned the right rows; the
+  warning now treats a property the statement writes on any node of that
+  label — or through a variable of unknown label — as present.
 - `max_work_units` now bounds a write statement's value expressions. The
   evaluators of `SET`, `CREATE`, `MERGE` and a `FOREACH` list ran on a fresh,
   unlimited budget, so `MATCH (n) SET n.x = size(range(1, 10000))` ran under

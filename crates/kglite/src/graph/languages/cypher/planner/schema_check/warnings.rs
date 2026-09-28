@@ -195,10 +195,12 @@ fn absent_property_findings<'q>(
         var_label,
         written: HashSet::new(),
         written_any: HashSet::new(),
+        by_label: LabelWrites::default(),
         seen: HashSet::new(),
         out: Vec::new(),
     };
     collect_written_properties(&query.clauses, &mut scan.written, &mut scan.written_any);
+    scan.by_label = LabelWrites::of(query, var_label, &scan.written, &scan.written_any);
     for clause in &query.clauses {
         match clause {
             Clause::Where(w) => scan.predicate(&w.predicate, AbsentSite::Where),
@@ -316,6 +318,96 @@ fn note_written_set_items<'q>(
     }
 }
 
+/// What the query writes, by label rather than by variable: `SET n.flag = …
+/// WITH n MATCH (m:P) WHERE m.flag = …` reads through `m` a property written
+/// through `n`, and a `CREATE`/`MERGE` pattern writes its literal keys. A
+/// writer whose label is not known could be of any label, so it covers every
+/// label.
+#[derive(Default)]
+struct LabelWrites<'q> {
+    named: HashSet<(&'q str, &'q str)>,
+    /// Properties written through a variable of unknown label.
+    unlabelled: HashSet<&'q str>,
+    /// Labels written wholesale through a non-literal `SET n = map`.
+    any: HashSet<&'q str>,
+    /// A non-literal `SET n = map` through a variable of unknown label.
+    any_unlabelled: bool,
+}
+
+impl<'q> LabelWrites<'q> {
+    fn of(
+        query: &'q CypherQuery,
+        var_label: &HashMap<&'q str, &'q str>,
+        written: &HashSet<(&'q str, &'q str)>,
+        written_any: &HashSet<&'q str>,
+    ) -> Self {
+        let mut writes = LabelWrites::default();
+        let mut labels = var_label.clone();
+        writes.note_patterns(&query.clauses, &mut labels);
+        for &(var, prop) in written {
+            match labels.get(var) {
+                Some(&label) => writes.named.insert((label, prop)),
+                None => writes.unlabelled.insert(prop),
+            };
+        }
+        for &var in written_any {
+            match labels.get(var) {
+                Some(&label) => {
+                    writes.any.insert(label);
+                }
+                None => writes.any_unlabelled = true,
+            }
+        }
+        writes
+    }
+
+    /// Record `CREATE`/`MERGE` pattern keys, and the labels those patterns
+    /// bind their variables to.
+    fn note_patterns(&mut self, clauses: &'q [Clause], labels: &mut HashMap<&'q str, &'q str>) {
+        for clause in clauses {
+            let patterns: Vec<&'q CreatePattern> = match clause {
+                Clause::Create(c) => c.patterns.iter().collect(),
+                Clause::Merge(m) => vec![&m.pattern],
+                Clause::Foreach { body, .. } => {
+                    self.note_patterns(body, labels);
+                    continue;
+                }
+                Clause::CallSubquery { body, .. } => {
+                    self.note_patterns(&body.clauses, labels);
+                    continue;
+                }
+                Clause::Union(u) => {
+                    self.note_patterns(&u.query.clauses, labels);
+                    continue;
+                }
+                _ => continue,
+            };
+            for element in patterns.into_iter().flat_map(|p| &p.elements) {
+                let CreateElement::Node(node) = element else {
+                    continue;
+                };
+                let label = node.label.as_deref();
+                if let (Some(var), Some(label)) = (node.variable.as_deref(), label) {
+                    labels.entry(var).or_insert(label);
+                }
+                for (key, _) in &node.properties {
+                    match label {
+                        Some(label) => self.named.insert((label, key.as_str())),
+                        None => self.unlabelled.insert(key.as_str()),
+                    };
+                }
+            }
+        }
+    }
+
+    fn covers(&self, label: &str, property: &str) -> bool {
+        self.any_unlabelled
+            || self.any.contains(label)
+            || self.unlabelled.contains(property)
+            || self.named.contains(&(label, property))
+    }
+}
+
 /// One query's absent-property walk: the shared state the predicate and
 /// expression recursions thread through, so adding a site is one match arm
 /// rather than another parameter on six signatures.
@@ -326,6 +418,8 @@ struct AbsentPropertyScan<'a, 'q> {
     written: HashSet<(&'q str, &'q str)>,
     /// Vars written wholesale through a non-literal `SET n = map`.
     written_any: HashSet<&'q str>,
+    /// The same writes by label — see [`LabelWrites`].
+    by_label: LabelWrites<'q>,
     /// `(var, prop)` already reported. First site wins, so the same typo in a
     /// `WHERE` and a `RETURN` is one message, worded for the filter — the more
     /// consequential of the two.
@@ -368,6 +462,7 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
         if !property_absent(self.graph, label, property)
             || self.written_any.contains(variable)
             || self.written.contains(&(variable, property))
+            || self.by_label.covers(label, property)
             || !self.seen.insert((variable, property))
         {
             return;
@@ -1249,6 +1344,36 @@ mod tests {
             let w = collect_unknown_pattern_warnings(&q, &g);
             assert!(w.is_empty(), "{query} -> {w:?}");
         }
+    }
+
+    /// A property is not absent from a label when the statement writes it on
+    /// *another* variable of that label, or creates it in a pattern: the later
+    /// read sees the written value. A writer whose label is unknown could be
+    /// of any label, so it silences the warning too; a writer of another label
+    /// does not.
+    #[test]
+    fn no_warning_for_a_property_the_query_writes_through_another_variable() {
+        let g = graph_with_schema();
+        for query in [
+            "MATCH (n:Person {age: 1}) SET n.badprop = true \
+             WITH n MATCH (m:Person) WHERE m.badprop = true RETURN count(m)",
+            "MATCH (n:Person) SET n += {badprop: 1} WITH n MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+            "CREATE (n:Person {badprop: 1}) WITH n MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+            "MERGE (n:Person {badprop: 1}) WITH n MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+            "CREATE (n:Person) SET n.badprop = 1 WITH n MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+            "MATCH (x) SET x.badprop = 1 WITH x MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+            "MATCH (n:Person) SET n = $map WITH n MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+        ] {
+            let q = parse_cypher(query).unwrap();
+            let w = collect_unknown_pattern_warnings(&q, &g);
+            assert!(w.is_empty(), "{query} -> {w:?}");
+        }
+        let q = parse_cypher(
+            "MATCH (n:Paper) SET n.badprop = 1 WITH n MATCH (m:Person) WHERE m.badprop = 1 RETURN m",
+        )
+        .unwrap();
+        let w = collect_unknown_pattern_warnings(&q, &g);
+        assert_eq!(w.len(), 1, "a Paper write says nothing about Person: {w:?}");
     }
 
     #[test]
