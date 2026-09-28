@@ -518,6 +518,10 @@ before upgrading.
 
 ### Fixed
 
+- The `fold_or_to_in` planner pass grouped OR-ed equalities through a hash map,
+  so the rewritten predicate's order, and whether `EXPLAIN` reported the pass
+  at all, changed from run to run. Equalities are now grouped in
+  first-appearance order, so the plan is the same on every run.
 - Disk mode: a write statement cost time proportional to the written type's
   size for every row it wrote. Each staged row was flushed by cloning the
   type's column store and deep-copying every column the row touched, so an
