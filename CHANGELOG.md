@@ -377,11 +377,13 @@ before upgrading.
   a closing `to`, another value of any property) is a new, parallel
   relationship, whatever `conflict_handling` says and whether the rows arrive
   in one call or several. `connections_updated` is 0 on such a type, and a
-  dropped copy is counted in no field. Identity compares every property; the
-  declared bounds compare as the instant they name, so a date, a midnight
-  datetime and an ISO string of the same day are one bound (a datetime later
-  in the day is its own), and `auto_timestamp` stamps are left out, so a
-  redelivery is a no-op. Close or correct a stored period with Cypher `SET` /
+  dropped copy is counted in no field. Identity compares every property the
+  stored relationship holds, whichever API wrote it. Values compare by what
+  they name: a date, a midnight datetime and an ISO string of the same day are
+  one value, on a bound or any other property (a datetime later in the day is
+  its own), and a whole float equals the integer it names exactly (`1.0` and
+  `1`, as a pandas column re-inferred on redelivery gives). `auto_timestamp`
+  stamps are left out, so a redelivery is a no-op. Close or correct a stored period with Cypher `SET` /
   `DELETE`. The declaration consulted is the one covering each row's source
   type, also when `create_relationships()` is called without `source_type=`;
   a legacy type with several unkeyed declarations reads each row by the first

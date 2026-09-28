@@ -932,3 +932,69 @@ class TestAnAmbiguousTypeKeysOnTheDeclarationARowCarries:
         assert _counts(other("2020-01-01")) == (0, 0)
         rows = g.cypher("MATCH (:Field {id: 1})-[r:HAS_LICENSEE]->(:Company {id: 10}) RETURN count(r) AS n").to_list()
         assert rows == [{"n": 3}]
+
+
+class TestAVersionIsComparedByWhatItHolds:
+    """A stored relationship's image is every property it holds, whichever API
+    wrote it, and each value compares as the number or instant it names.
+
+    Red proof (user-test-3 review, F1/F2): a property set by Cypher `SET` was
+    left out of the stored image, so a redelivered row that differs from the
+    edge was dropped as a copy; and `1` against `1.0`, or a date against its
+    ISO text, added a duplicate version."""
+
+    @staticmethod
+    def _graph(storage, tmp_path):
+        path = str(tmp_path / f"versions_{storage}") if storage == "disk" else None
+        g = kglite.KnowledgeGraph(storage=storage, path=path)
+        g.add_nodes(pd.DataFrame({"id": ["A", "B", "C", "D"]}), "N", "id", "id")
+        return g
+
+    @staticmethod
+    def _load(g, frame):
+        return g.add_relationships(frame, "R", "N", "s", "N", "t", column_types=PERIOD_TYPES, convention="half_open")
+
+    @pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+    def test_a_property_set_in_cypher_makes_the_stored_edge_differ(self, storage, tmp_path):
+        g = self._graph(storage, tmp_path)
+        row = pd.DataFrame({"s": ["A"], "t": ["B"], "vf": pd.to_datetime(["2020-01-01"]), "vt": [None], "share": [0.5]})
+        assert _counts(self._load(g, row)) == (1, 0)
+        g.cypher("MATCH ()-[r:R]->() SET r.extra = 'y'")
+        assert _counts(self._load(g, row)) == (1, 0)
+        assert _counts(self._load(g, row)) == (0, 0)
+        rows = g.cypher("MATCH ()-[r:R]->() RETURN r.extra AS extra ORDER BY extra").to_list()
+        assert rows == [{"extra": "y"}, {"extra": None}]
+
+    @pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+    def test_an_integral_float_redelivered_as_an_integer_is_the_same_version(self, storage, tmp_path):
+        g = self._graph(storage, tmp_path)
+        first = pd.DataFrame(
+            {
+                "s": ["A", "C"],
+                "t": ["B", "D"],
+                "vf": pd.to_datetime(["2020-01-01"] * 2),
+                "vt": pd.to_datetime([None, None]),
+                "share": [0.5, 1.0],
+            }
+        )
+        self._load(g, first)
+        again = pd.DataFrame(
+            {"s": ["C"], "t": ["D"], "vf": pd.to_datetime(["2020-01-01"]), "vt": pd.to_datetime([None]), "share": [1]}
+        )
+        assert again.dtypes["share"] == "int64"
+        assert _counts(self._load(g, again)) == (0, 0)
+        count = g.cypher("MATCH (:N {id: 'C'})-[r:R]->() RETURN count(r) AS c", valid_at="2021-01-01").to_list()
+        assert count == [{"c": 1}]
+        # A different number is still a new version.
+        assert _counts(self._load(g, again.assign(share=[2]))) == (1, 0)
+
+    def test_a_date_property_redelivered_as_text_is_the_same_version(self, tmp_path):
+        import datetime as dt
+
+        g = self._graph("default", tmp_path)
+        row = {"s": ["A"], "t": ["B"], "vf": pd.to_datetime(["2020-01-01"]), "vt": [None]}
+        assert _counts(self._load(g, pd.DataFrame({**row, "seen": pd.to_datetime(["2020-06-30"])}))) == (1, 0)
+        # An object column of dates loads as ISO text.
+        assert _counts(self._load(g, pd.DataFrame({**row, "seen": [dt.date(2020, 6, 30)]}))) == (0, 0)
+        assert _counts(self._load(g, pd.DataFrame({**row, "seen": ["2020-06-30"]}))) == (0, 0)
+        assert _counts(self._load(g, pd.DataFrame({**row, "seen": ["2020-07-01"]}))) == (1, 0)

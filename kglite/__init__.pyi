@@ -2387,10 +2387,12 @@ class KnowledgeGraph:
             and any other row — a new period, a closing ``to``, a different
             value of any property — is a new, parallel relationship, so a
             load never loses a stored version and ``connections_updated`` is
-            0. Identity compares every property, with the declared bounds
-            compared as the instant they name (a date, a midnight datetime and
-            an ISO string of the same day are one instant, a datetime later in
-            the day is its own) and ``auto_timestamp`` stamps left out. Close
+            0. Identity compares every property the stored relationship holds,
+            whichever API wrote it, each by what it names: a date, a midnight
+            datetime and an ISO string of the same day are one value (a
+            datetime later in the day is its own), and a whole float equals
+            the integer it names exactly. ``auto_timestamp`` stamps are left
+            out. Close
             or correct a stored period with Cypher ``SET`` / ``DELETE``. A
             legacy type with several unkeyed declarations reads each row's
             bounds by the first declaration whose ``from`` it carries.

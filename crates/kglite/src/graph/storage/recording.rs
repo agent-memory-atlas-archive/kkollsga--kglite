@@ -1156,6 +1156,11 @@ impl<G: GraphRead> GraphRead for RecordingGraph<G> {
     }
 
     #[inline]
+    fn edge_property_list(&self, idx: EdgeIndex) -> Option<Vec<(InternedKey, Value)>> {
+        self.inner.edge_property_list(idx)
+    }
+
+    #[inline]
     fn find_edge(&self, a: NodeIndex, b: NodeIndex) -> Option<EdgeIndex> {
         self.inner.find_edge(a, b)
     }

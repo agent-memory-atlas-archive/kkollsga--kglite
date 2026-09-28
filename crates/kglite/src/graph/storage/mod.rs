@@ -339,6 +339,14 @@ pub trait GraphRead {
             .map(|(_, v)| v.clone())
     }
 
+    /// Every non-NULL property of one edge, without materialising it: the
+    /// whole-edge counterpart of [`GraphRead::get_edge_property`]. `None` if
+    /// the edge is gone. The disk backend overrides it so the read does not
+    /// grow the query arena.
+    fn edge_property_list(&self, idx: EdgeIndex) -> Option<Vec<(InternedKey, Value)>> {
+        Some(non_null_properties(&self.edge_weight(idx)?.properties))
+    }
+
     /// First edge index from `a` to `b`, if one exists.
     fn find_edge(&self, a: NodeIndex, b: NodeIndex) -> Option<EdgeIndex>;
 
@@ -691,3 +699,14 @@ mod mapped_property_index_tests;
 // this exact line survives.
 #[allow(unused_imports)]
 pub use recording::RecordingGraph;
+
+/// `properties` without its NULL entries — what an edge holds.
+pub(crate) fn non_null_properties(
+    properties: &[(InternedKey, Value)],
+) -> Vec<(InternedKey, Value)> {
+    properties
+        .iter()
+        .filter(|(_, value)| !matches!(value, Value::Null))
+        .cloned()
+        .collect()
+}

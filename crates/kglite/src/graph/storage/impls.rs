@@ -1500,6 +1500,11 @@ impl GraphRead for DiskGraph {
     }
 
     #[inline]
+    fn edge_property_list(&self, idx: EdgeIndex) -> Option<Vec<(InternedKey, Value)>> {
+        DiskGraph::edge_property_list(self, idx)
+    }
+
+    #[inline]
     fn find_edge(&self, a: NodeIndex, b: NodeIndex) -> Option<EdgeIndex> {
         DiskGraph::find_edge(self, a, b)
     }

@@ -1,8 +1,8 @@
 //! How a bulk load tells one version of a declared temporal relationship from
 //! another. A row is the relationship already stored between its endpoints
-//! only when it is the same image of it — every property equal, the bounds
-//! compared as the instants they name ([`StartKey::image`]); anything else is a
-//! new, parallel relationship, so no load ever rewrites a stored version. The
+//! only when it is the same image of it — every property equal, numbers and
+//! instants compared by what they name ([`StartKey::image`]); anything else
+//! is a new, parallel relationship, so no load ever rewrites a stored version. The
 //! batch flush buckets candidates on the start ([`StartKey::read`]) before
 //! comparing images.
 
@@ -12,6 +12,8 @@ use chrono::NaiveTime;
 
 use super::eval::{parse_instant, Instant};
 use crate::datatypes::values::Value;
+use crate::graph::core::filtering::may_parse_as_temporal;
+use crate::graph::schema::id_integer;
 use crate::graph::schema::{InternedKey, TemporalConfig};
 
 /// The `from` properties rows of one declared relationship type key on, in
@@ -26,7 +28,8 @@ pub(crate) struct StartKey {
 }
 
 /// A relationship's properties as a declared-type load compares them: sorted
-/// by key, NULLs dropped, each bound as its [`StartValue`].
+/// by key, NULLs dropped, each bound as its [`StartValue`] and every other
+/// value as [`compared_value`] reads it.
 pub(crate) type Image = Vec<(InternedKey, StartValue)>;
 
 /// A row's or stored relationship's start as the load buckets it: the
@@ -60,6 +63,23 @@ impl StartValue {
     }
 }
 
+/// A property other than a bound as an image compares it, so a redelivery
+/// whose column came back as another kind is still the same value: a whole
+/// float and the integer it names exactly are one number (`1.0` and `1`, the
+/// id rule of [`id_integer`]), and a date, a datetime and a date-like string
+/// compare as the instant they name, as a bound does — so two strings naming
+/// one day are one value too. `None` for NULL.
+fn compared_value(value: &Value) -> Option<StartValue> {
+    match value {
+        Value::Null => None,
+        Value::DateTime(_) | Value::Timestamp(_) => StartValue::of(value),
+        Value::String(text) if may_parse_as_temporal(text) => StartValue::of(value),
+        _ => Some(StartValue::Raw(
+            id_integer(value).map_or_else(|| value.clone(), Value::Int64),
+        )),
+    }
+}
+
 impl StartKey {
     pub(super) fn of<'c>(configs: impl IntoIterator<Item = &'c TemporalConfig>) -> Option<Self> {
         fn push(keys: &mut Vec<InternedKey>, name: &str) {
@@ -81,11 +101,6 @@ impl StartKey {
         })
     }
 
-    /// Every `from` and `to` property of the declarations.
-    pub(crate) fn bounds(&self) -> &[InternedKey] {
-        &self.bounds
-    }
-
     /// The image of `properties`, leaving out the keys in `ignore` (the
     /// provenance stamps a load writes afresh on every row).
     pub(crate) fn image<V: Borrow<Value>>(
@@ -101,7 +116,7 @@ impl StartKey {
                 let compared = if self.bounds.contains(&key) {
                     StartValue::of(value)
                 } else {
-                    (!matches!(value, Value::Null)).then(|| StartValue::Raw(value.clone()))
+                    compared_value(value)
                 };
                 compared.map(|compared| (key, compared))
             })

@@ -864,11 +864,10 @@ impl ConnectionBatchProcessor {
     /// so no version of a relationship is lost to a later load.
     ///
     /// Candidates are bucketed on the endpoints and parsed start; an image is
-    /// read only for a bucket hit. A stored image is read property by property
-    /// over every name an edge of the type can carry (the type's recorded
-    /// properties, this batch's, and the declared bounds), which makes it the
-    /// edge's whole image without materialising it. The provenance stamps an
-    /// `auto_timestamp` type writes afresh on every row are left out.
+    /// read only for a bucket hit, from every property the stored edge holds
+    /// (`GraphRead::edge_property_list`, which does not materialise it) —
+    /// whichever API wrote them. The provenance stamps an `auto_timestamp`
+    /// type writes afresh on every row are left out.
     fn flush_declared(
         &mut self,
         graph: &mut DirGraph,
@@ -887,17 +886,6 @@ impl ConnectionBatchProcessor {
         } else {
             Vec::new()
         };
-        let mut names: Vec<InternedKey> = self.schema_properties.iter().copied().collect();
-        names.extend_from_slice(start.bounds());
-        if let Some(info) = graph.connection_type_metadata.get(connection_type) {
-            names.extend(
-                info.property_types
-                    .keys()
-                    .map(|name| InternedKey::from_str(name)),
-            );
-        }
-        names.sort_unstable();
-        names.dedup();
 
         let mut buckets: HashMap<(NodeIndex, NodeIndex, Start), Vec<Candidate>> = HashMap::new();
         let sources: HashSet<NodeIndex> = self.connections.iter().map(|c| c.source_idx).collect();
@@ -923,7 +911,7 @@ impl ConnectionBatchProcessor {
             let bucket = buckets.entry(key).or_default();
             let mut already_stored = false;
             for candidate in bucket.iter_mut() {
-                if candidate.image(graph, start, &names, &ignore) == &image {
+                if candidate.image(graph, start, &ignore) == &image {
                     already_stored = true;
                     break;
                 }
@@ -1138,17 +1126,9 @@ enum Candidate {
 }
 
 impl Candidate {
-    fn image(
-        &mut self,
-        graph: &DirGraph,
-        start: &StartKey,
-        names: &[InternedKey],
-        ignore: &[InternedKey],
-    ) -> &Image {
+    fn image(&mut self, graph: &DirGraph, start: &StartKey, ignore: &[InternedKey]) -> &Image {
         if let Candidate::Stored(edge) = *self {
-            let properties = names
-                .iter()
-                .filter_map(|&name| Some((name, graph.graph.get_edge_property(edge, name)?)));
+            let properties = graph.graph.edge_property_list(edge).unwrap_or_default();
             *self = Candidate::Read(start.image(properties, ignore));
         }
         match self {

@@ -1448,6 +1448,17 @@ impl GraphRead for GraphBackend {
     }
 
     #[inline]
+    fn edge_property_list(&self, idx: EdgeIndex) -> Option<Vec<(InternedKey, Value)>> {
+        match self {
+            Self::Memory(g) => GraphRead::edge_property_list(&**g, idx),
+            Self::Forked(g) => GraphRead::edge_property_list(g.as_ref(), idx),
+            Self::Mapped(g) => GraphRead::edge_property_list(&**g, idx),
+            Self::Disk(g) => GraphRead::edge_property_list(g.as_ref(), idx),
+            Self::Recording(rg) => GraphRead::edge_property_list(rg.as_ref(), idx),
+        }
+    }
+
+    #[inline]
     fn find_edge(&self, a: NodeIndex, b: NodeIndex) -> Option<EdgeIndex> {
         match self {
             Self::Memory(g) => GraphRead::find_edge(&**g, a, b),

@@ -1535,7 +1535,8 @@ CALL db.temporal.declarations()
   that keeps an existing declaration of the same properties and is `closed`
   otherwise. A bulk load onto a declared relationship type never updates a
   stored relationship: a row identical to one already between its endpoints —
-  every property equal, bounds compared as the instants they name, provenance
+  every property it holds equal, values compared by what they name (one day in
+  any spelling is one value, a whole float equals its integer), provenance
   stamps left out — is dropped, and any other row (a new period, a closing
   `to`, another value of any property) is a new, parallel relationship, in
   every `conflict_handling` mode and whether the rows arrive in one call or

@@ -1598,6 +1598,23 @@ impl DiskGraph {
         found(&self.edge_properties.get(ei as u32)?)
     }
 
+    /// [`crate::graph::storage::GraphRead::edge_property_list`], read from the
+    /// staged or stored list the way [`Self::get_edge_property`] reads one key.
+    pub fn edge_property_list(&self, idx: EdgeIndex) -> Option<Vec<(InternedKey, Value)>> {
+        let ei = idx.index();
+        if ei >= self.next_edge_idx as usize || self.edge_endpoint(ei).source == TOMBSTONE_EDGE {
+            return None;
+        }
+        if let Some(staged) = self.staged_edge(ei as u32) {
+            return Some(crate::graph::storage::non_null_properties(
+                &staged.properties,
+            ));
+        }
+        Some(crate::graph::storage::non_null_properties(
+            &self.edge_properties.get(ei as u32).unwrap_or_default(),
+        ))
+    }
+
     pub fn edge_weight_mut(&mut self, idx: EdgeIndex) -> Option<&mut EdgeData> {
         let ei = idx.index();
         if ei >= self.next_edge_idx as usize {
