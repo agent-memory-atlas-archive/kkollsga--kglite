@@ -266,10 +266,6 @@
   "tests/test_phase5_parity.py::test_graph_copy_cow_correctness_mapped": {
     "owner": "storage-parity"
   },
-  "tests/test_phase5_parity.py::test_dead_code_check": {
-    "owner": "workspace-clippy",
-    "reason": "Static cargo clippy check is already required by the workspace clippy CI job."
-  },
   "tests/test_storage_parity.py::test_cypher_parity[filter_eq_string-MATCH (n:Entity) WHERE n.category = 'cat_3' RETURN count(n) AS c]": {
     "owner": "storage-parity"
   },

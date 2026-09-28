@@ -17,8 +17,9 @@ Marker assignment is per-function so the expensive checks stay opt-in:
   - `test_binary_size_regression` — `@pytest.mark.binary_size`
     (needs the release extension built; CI's `python-tests` job
     already builds a release wheel with maturin, so it plugs in there).
-  - `test_dead_code_check` — `@pytest.mark.parity` (runs
-    `cargo clippy -- -D dead_code` in the default/debug profile).
+
+Dead code is the workspace clippy CI job's gate (`-D warnings`), not a test
+here.
 
 Run: pytest tests/test_phase5_parity.py -m parity        (functional)
      pytest tests/test_phase5_parity.py -m binary_size   (release-build gate)
@@ -27,7 +28,6 @@ Run: pytest tests/test_phase5_parity.py -m parity        (functional)
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 import sys
 
 import pandas as pd
@@ -616,18 +616,3 @@ def test_binary_size_regression():
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )
-
-
-@pytest.mark.parity
-def test_dead_code_check():
-    """`cargo clippy -- -D dead_code` flags nothing in the graph module."""
-
-    result = subprocess.run(
-        ["cargo", "clippy", "--", "-D", "dead_code"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        pytest.fail("cargo clippy found dead-code warnings:\n" + (result.stdout or "") + "\n" + (result.stderr or ""))
