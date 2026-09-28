@@ -991,12 +991,14 @@ fn create_registers_type_metadata_without_reading_the_row_back() {
     assert_eq!(mixed.get("b").map(String::as_str), Some("String"));
     assert_eq!(mixed.get("c").map(String::as_str), Some("Float64"));
 
-    // A null-valued property carries no type evidence and registers nothing —
-    // the row stores no column for it either, so the read-back never saw it.
+    // A null-valued property carries no type evidence: it registers as
+    // `Unknown` so the typo guard and the schema lock know the name, and the
+    // first real value types it.
     run(&mut graph, "CREATE (:Mixed {d: null})");
-    assert!(
-        !mixed_after(&graph).contains_key("d"),
-        "a null property must not declare a column type"
+    assert_eq!(
+        mixed_after(&graph).get("d").map(String::as_str),
+        Some("Unknown"),
+        "a null property registers its name without a column type"
     );
 
     fn mixed_after(g: &DirGraph) -> std::collections::HashMap<String, String> {
