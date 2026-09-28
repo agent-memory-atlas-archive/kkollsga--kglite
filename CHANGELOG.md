@@ -645,24 +645,25 @@ before upgrading.
   an empty or non-literal list (`NOT n.x IN $ids` with `ids = []` keeps every
   row), and a `WHERE` attached to `OPTIONAL MATCH`, which keeps every outer
   row.
-- The duplicate-id warning of a Cypher statement — a `CREATE`, `UNWIND …
-  CREATE` or `MERGE` that writes an id the type already holds, or the id
-  lookup that first builds an index over one — is now part of that
+- The duplicate-id warning of a Cypher statement — a `CREATE` or `UNWIND …
+  CREATE` that writes an id the type already holds, or the id lookup that
+  first builds an index over one — is now part of that
   statement's warnings (`result.warnings`, and the diagnostics every binding
   carries), echoed under the query-warning policy. It went only to the
   process's stderr, so a caller reading the result saw nothing, and a
   `CREATE` that gave an existing node's id to a new node of the same type,
   once the type's id index was built (as after `add_nodes`), raised it only
   when the index was next rebuilt — typically at a reload; it now warns at the
-  write. Its advice now reads "MERGE on the id alone, or dedupe the input",
-  since a `MERGE` naming a second label creates a duplicate beside a node
-  without it. Ids stay unique only by declaration (`define_schema`
+  write. Its advice now reads "MERGE on the id alone, or dedupe the input"
+  (a `MERGE` whose pattern names a held id but other labels or properties is
+  refused — see Changed). Ids stay unique only by declaration (`define_schema`
   `primary_key`, or a durable graph). A bulk loader still reports its
   duplicates on stderr.
 - Cypher `MERGE (n:A:B {…})` matched a node carrying only `A`, running
   `ON MATCH SET` on it and creating nothing, while `MATCH` with the same
   pattern found no node. It now matches only a node carrying every label in
-  the pattern, and creates one otherwise.
+  the pattern, and creates one otherwise — unless the pattern names an id the
+  type already holds, which is refused (see Changed).
 - Cypher `valid_at()` / `valid_during()` on a null entity — an unmatched
   `OPTIONAL MATCH` — return null in every form, so `WHERE` drops the row. They
   returned `true`, reporting a missing membership as valid.
