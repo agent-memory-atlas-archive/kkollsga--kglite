@@ -374,12 +374,16 @@ model.
   it deleted underneath them — but there is no retention policy yet, so
   checkpoint on a schedule you have the disk budget for, and prune old
   `generations/gen_*` directories yourself once no reader is using them.
-  A checkpoint keeps the graph's serving shape: every node type goes back
-  into the memory-mapped column file, so reopening after the tenth save costs
-  what reopening after the first did. (Earlier releases moved every type of a
-  reopened graph into heap-decoded per-type files on its first re-save — about
-  six times the reload memory, and slower writes; the next save by this
-  release restores the mapped layout.)
+  A checkpoint keeps the graph's serving shape. A node type whose properties
+  each hold values of one kind — integers, floats, booleans, text or dates —
+  and whose titles are text goes back into the memory-mapped column file, so
+  reopening after the tenth save costs what reopening after the first did. A type with a
+  property holding several kinds (integers beside floats, say) or other
+  values (timestamps, points, lists), or with non-text titles, is saved to a
+  file of its own and loaded into memory. (Earlier releases moved every type of
+  a reopened graph into such per-type files on its first re-save — about six
+  times the reload memory, and slower writes; the next save by this release
+  restores the mapped layout.)
 - **What the log carries.** Nodes, edges, labels; every declaration you make
   about them — the identity-field spellings an `add_nodes` call names
   (`unique_id_field` / `node_title_field`), `set_parent_type`,
