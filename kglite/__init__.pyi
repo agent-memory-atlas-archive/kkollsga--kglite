@@ -582,8 +582,11 @@ class ResultView:
           any other. Keys: ``axis`` (``'VALID_TIME'``); ``instant`` (the
           resolved instant, ISO — ``'2009-06-30'``, or
           ``'2009-06-30T12:00:00'`` naive UTC); ``targets`` (the declared
-          targets the query's patterns reach across every scope, without
-          bounds: ``'(:Well)'``, ``'[:LICENSEE from :Field]'``); ``route``
+          labels the filter judges for the statement's patterns across every
+          scope, including labels widened in through secondary labels — a
+          ``(:A)`` pattern lists ``(:B)`` too when the nodes it may reach can
+          carry a declared ``B`` — without bounds: ``'(:Well)'``,
+          ``'[:LICENSEE from :Field]'``); ``route``
           (``'guarded'`` — filtered, the plan ``EXPLAIN`` shows; ``'plain'``
           — every declared target was valid in full at the instant, so the
           unfiltered plan ran; ``'view'`` — through a
@@ -7676,7 +7679,8 @@ class KnowledgeGraph:
                 valid elements — refused, naming the cap, when that copy
                 would not fit — and yield the graph's own nodes. ``EXPLAIN`` shows the plan with a leading
                 ``ValidTimeContext`` row naming the axis and the declared
-                targets the query reaches, the instant being resolved per
+                targets the filter judges for the query's patterns
+                (secondary labels included), the instant being resolved per
                 execution. :attr:`ResultView.diagnostics` ``["temporal"]``
                 echoes the instant, those targets and the route that
                 answered. ``Session.cypher`` / ``Session.execute``,

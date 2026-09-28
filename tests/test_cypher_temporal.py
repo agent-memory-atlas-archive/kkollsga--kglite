@@ -590,3 +590,22 @@ def test_datetime_accepts_an_offset_without_seconds():
         "datetime('2009-06-30T01:00Z') = datetime('2009-06-30T01:00:00') AS utc"
     ).to_list()
     assert rows == [{"same": True, "utc": True}]
+
+
+def test_datetime_keeps_and_compares_sub_second_digits():
+    """`datetime(str)` keeps fractional seconds, and they take part in
+    comparison. Pins the CYPHER.md Temporal Functions row, which once said the
+    digits truncate (user test 3, B1)."""
+    import datetime as dt
+
+    g = kglite.KnowledgeGraph()
+    row = g.cypher(
+        "RETURN datetime('2021-11-15T21:06:42.317') AS a, "
+        "datetime('2021-11-15T21:06:42.317') = datetime('2021-11-15T21:06:42') AS same, "
+        "datetime('2021-11-15T21:06:42.317') > datetime('2021-11-15T21:06:42.316') AS later, "
+        "datetime('2021-11-15T21:06:42.317+02:00') AS zoned"
+    ).to_list()[0]
+    assert row["a"] == dt.datetime(2021, 11, 15, 21, 6, 42, 317000)
+    assert row["same"] is False
+    assert row["later"] is True
+    assert row["zoned"] == dt.datetime(2021, 11, 15, 19, 6, 42, 317000)

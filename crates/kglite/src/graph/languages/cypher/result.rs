@@ -371,9 +371,12 @@ pub struct TemporalDiagnostics {
     /// The instant this execution resolved, ISO 8601: `2009-06-30` for a
     /// date, `2009-06-30T12:00:00` (naive UTC) for a datetime.
     pub instant: String,
-    /// The declared targets the statement's patterns reach, merged across
-    /// every scope and without bounds (EXPLAIN shows only the top scope,
-    /// with bounds): `(:Well)`, `[:LICENSEE]`, `[:LICENSEE from :Field]`.
+    /// The declared labels the filter judges for the statement's patterns,
+    /// including labels widened in through secondary labels (a `(:A)`
+    /// pattern lists `(:B)` when nodes it may reach can carry a declared
+    /// `B`), merged across every scope and without bounds (EXPLAIN shows only
+    /// the top scope, with bounds): `(:Well)`, `[:LICENSEE]`,
+    /// `[:LICENSEE from :Field]`.
     pub targets: Vec<String>,
     /// `guarded`: the statement ran under the filter (EXPLAIN renders that
     /// plan). `plain`: every declared target was timeless at the instant, so

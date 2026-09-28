@@ -1359,7 +1359,7 @@ covers declaring intervals and modelling history.
 | `date(str)` | Parse a date string to a DateTime (date-only) value: `'YYYY'`, `'YYYY-MM'`, `'YYYY-MM-DD'`, or ISO 8601 basic `'YYYYMMDD'`; anything else is null |
 | `date({year, month, day})` | Build a date from integers (openCypher's map form): `date({year: y, month: 1, day: 1})`. `month` and `day` default to 1; an impossible date, an unknown key or a non-integer component raises; a null component gives null |
 | `datetime({year, month, day, hour, minute, second, millisecond, microsecond, nanosecond})` | Build a zoneless datetime the same way; missing time fields are 0. A `timezone` key is refused |
-| `datetime(str)` | Parse an ISO-8601 stamp to a Timestamp (date + time, second precision). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and a zoned `…Z` / `…±HH:MM`. **A zone is normalised to UTC**, since `Value::Timestamp` carries no zone; sub-second digits truncate. Unparseable input is NULL |
+| `datetime(str)` | Parse an ISO-8601 stamp to a Timestamp (date + time). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and a zoned `…Z` / `…±HH:MM`. **A zone is normalised to UTC**, since `Value::Timestamp` carries no zone. Sub-second digits are kept and compare: `datetime('…42.317')` is later than `datetime('…42')` (a Python `datetime` result carries them to the microsecond). Unparseable input is NULL |
 | `datetime()` | Current local datetime (no-arg form) |
 | `localdatetime()` | Local wall-clock datetime; 1-arg form parses/normalises a string (NULL on bad input). Unlike `datetime(str)` it keeps the wall-clock reading of a zoned input and drops only the zone label |
 | `localtime()` / `time()` | Local wall-clock time-of-day as `HH:MM:SS` string; 1-arg form parses/normalises a string (NULL on bad input) |
@@ -1648,9 +1648,12 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
 - **The echo.** The result's diagnostics carry a `temporal` object (Python
   `diagnostics["temporal"]`, the C / Java diagnostics JSON, the MCP
   `temporal:` line, Bolt's `kglite.temporal` summary key): `axis`, the
-  `instant` resolved (ISO; a datetime in naive UTC), the declared `targets`
-  the statement's patterns reach across every scope, without their bounds
-  (`(:Well)`, `[:LICENSEE]`, `[:LICENSEE from :Field]`), the `route` (`guarded`;
+  `instant` resolved (ISO; a datetime in naive UTC), the `targets` — the
+  declared labels the filter judges for the statement's patterns across every
+  scope, including labels widened in through secondary labels (a node must
+  be valid under every declared label it carries, so a `(:A)` pattern lists
+  `(:B)` too when nodes it reaches can carry a declared `B`), without their bounds (`(:Well)`,
+  `[:LICENSEE]`, `[:LICENSEE from :Field]`), the `route` (`guarded`;
   `plain` when the timeless exit ran; `view` through a `freeze(valid_at=…)`
   handle), `retrieval` (`exact_mask` / `hnsw_mask` for a `vector_score`
   top-k, else null), `slice` (a graph algorithm ran on the valid slice) and
