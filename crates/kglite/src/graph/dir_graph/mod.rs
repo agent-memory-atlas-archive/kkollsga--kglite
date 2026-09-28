@@ -317,17 +317,17 @@ pub struct DirGraph {
     /// Used for alias resolution: querying by original column name maps to the `id` field.
     ///
     /// `Arc`-shared for the rollback shell — see `schema_cow`; write only
-    /// through [`DirGraph::declare_id_field_alias`].
+    /// through `DirGraph::declare_id_field_alias`.
     #[serde(default)]
     pub id_field_aliases: Arc<FxHashMap<String, String>>,
     /// Original title field name per node type (e.g. "Person" → "prospect_name").
     /// Stored when the user-supplied node_title_field differs from "title" and
     /// does not name the type's identity (see
-    /// [`DirGraph::declare_title_field_alias`]).
+    /// `DirGraph::declare_title_field_alias`).
     /// Used for alias resolution: querying by original column name maps to the `title` field.
     ///
     /// `Arc`-shared for the rollback shell — see `schema_cow`; write only
-    /// through [`DirGraph::declare_title_field_alias`].
+    /// through `DirGraph::declare_title_field_alias`.
     #[serde(default)]
     pub title_field_aliases: Arc<FxHashMap<String, String>>,
     /// Parent type for supporting node types: child_type → parent_type.

@@ -84,7 +84,7 @@ impl DirGraph {
 
     /// Record `field` as `node_type`'s id spelling. A title spelling equal to it
     /// is dropped: see [`Self::declare_title_field_alias`].
-    pub fn declare_id_field_alias(&mut self, node_type: &str, field: &str) {
+    pub(crate) fn declare_id_field_alias(&mut self, node_type: &str, field: &str) {
         if self.id_field_aliases.get(node_type).map(String::as_str) != Some(field) {
             self.id_field_aliases_mut()
                 .insert(node_type.to_string(), field.to_string());
@@ -105,7 +105,7 @@ impl DirGraph {
     /// consulted — `MERGE (a:A {id: 'n1'})` probed titles and created a twin on
     /// every run, and the twin read back its fabricated `A_<n>` title as
     /// `a.id` — while the id index and `MATCH {id: …}` still answered by id.
-    pub fn declare_title_field_alias(&mut self, node_type: &str, field: &str) {
+    pub(crate) fn declare_title_field_alias(&mut self, node_type: &str, field: &str) {
         if !self.names_identity(node_type, field)
             && self.title_field_aliases.get(node_type).map(String::as_str) != Some(field)
         {
@@ -115,7 +115,7 @@ impl DirGraph {
     }
 
     /// Whether `field` names `node_type`'s identity: `id`, or its id spelling.
-    pub fn names_identity(&self, node_type: &str, field: &str) -> bool {
+    pub(crate) fn names_identity(&self, node_type: &str, field: &str) -> bool {
         field == "id" || self.id_field_aliases.get(node_type).map(String::as_str) == Some(field)
     }
 
@@ -124,7 +124,7 @@ impl DirGraph {
     /// saved or logged before it did may carry. Their nodes' ids were stored
     /// correctly; only the spelling map misrouted reads, so dropping it is the
     /// whole repair. Returns the affected node types.
-    pub fn drop_identity_shadowing_title_aliases(&mut self) -> Vec<String> {
+    pub(crate) fn drop_identity_shadowing_title_aliases(&mut self) -> Vec<String> {
         let shadowing: Vec<String> = self
             .title_field_aliases
             .iter()
