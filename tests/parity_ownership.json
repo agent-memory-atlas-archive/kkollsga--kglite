@@ -460,5 +460,17 @@
   },
   "tests/test_statement_read_after_write_parity.py::test_statement_reads_its_own_writes[disk_reopened]": {
     "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_mixed_kind_column_values_keep_their_kind[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_mixed_kind_column_values_keep_their_kind[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_mixed_kind_column_values_keep_their_kind[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_mixed_kind_column_values_keep_their_kind[disk_reopened]": {
+    "owner": "storage-parity"
   }
 }

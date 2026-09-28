@@ -544,10 +544,16 @@ before upgrading.
   included, was stored untyped. The next load decoded them onto the heap
   (about 55 → 330 bytes per row) and every later save kept them there, which
   also made later writes to those types several times slower. A save now
-  writes the effective values of a mapped type back into `columns.bin` with
-  their declared types, and a graph an earlier release already moved re-types
-  its columns and returns to `columns.bin` on its next save. Values were never
-  lost; no file-format change.
+  writes the effective values of a mapped type back into `columns.bin`, each
+  column typed by the one kind its values hold, and a graph an earlier release
+  already moved re-types such columns and returns to `columns.bin` on its next
+  save; a column holding several kinds of value stays in its own file. Values
+  were never lost; no file-format change.
+- Disk mode: saving a reopened disk graph no longer changes the kind of a
+  value in a column holding several kinds. A column holding an integer beside
+  a float, with the type's declared kind widened to float by a `SET`, was
+  rebuilt as a float column and read `7` back as `7.0` after the reload;
+  memory and mapped mode keep `7`.
 - The plan-time warning "WHERE references property 'x' which no L node has —
   … this filters out every row" fired on a statement that itself writes that
   property through another variable before reading it, e.g. `MATCH (n:P {id:

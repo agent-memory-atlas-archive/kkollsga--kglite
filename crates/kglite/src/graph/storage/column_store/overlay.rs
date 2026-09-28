@@ -5,7 +5,118 @@ use std::borrow::Cow;
 
 type OverflowBytes<'a> = (Cow<'a, [u8]>, Cow<'a, [u8]>);
 
+/// The kinds of one column's values, tallied for [`ColumnStore::flattened_owned`].
+///
+/// A typed column may convert what it is handed — a Float64 column stores an
+/// exact Int64 as a float — so a copy that must return every value as it was
+/// types a column only by a kind every non-null value already has.
+#[derive(Default)]
+struct FlattenKind {
+    shared: Option<&'static str>,
+    split: bool,
+}
+
+impl FlattenKind {
+    fn note(&mut self, value: &Value) {
+        if matches!(value, Value::Null) {
+            return;
+        }
+        let kind = TypedColumn::type_str_for_value(value);
+        match self.shared {
+            None => self.shared = Some(kind),
+            Some(shared) if shared != kind => self.split = true,
+            Some(_) => {}
+        }
+    }
+
+    /// The one kind every non-null value has, else `mixed`; `None` when every
+    /// value is null, where the declared type (or the column default) stands.
+    fn column_type(&self) -> Option<&'static str> {
+        let shared = self.shared?;
+        Some(if self.split { "mixed" } else { shared })
+    }
+}
+
 impl ColumnStore {
+    /// Whether a `Mixed` id, title or property column holds values that all
+    /// have one kind (or none at all), so [`Self::flattened_owned`] would
+    /// type it.
+    pub(crate) fn has_retypable_mixed_column(&self) -> bool {
+        let retypable = |column: &TypedColumn| match column {
+            TypedColumn::Mixed { data } => {
+                let mut kind = FlattenKind::default();
+                data.iter().for_each(|value| kind.note(value));
+                kind.column_type() != Some("mixed")
+            }
+            _ => false,
+        };
+        self.columns_ref().any(retypable)
+            || self.id_column_ref().is_some_and(retypable)
+            || self.title_column_ref().is_some_and(retypable)
+    }
+
+    /// An owned heap copy of this store's **effective** rows — local
+    /// overrides, null clears and tombstones applied over any mmap base —
+    /// with row ids preserved. Each column takes the one kind its values all
+    /// have ([`FlattenKind`]), or the declared type (`type_meta`) when every
+    /// value is null — never a type that would convert a value.
+    pub(crate) fn flattened_owned(
+        &self,
+        type_meta: &HashMap<String, String>,
+        interner: &StringInterner,
+    ) -> ColumnStore {
+        let mut id = FlattenKind::default();
+        let mut title = FlattenKind::default();
+        let mut columns: Vec<(InternedKey, FlattenKind)> = Vec::new();
+        let mut slots: HashMap<InternedKey, usize> = HashMap::new();
+        for row_id in 0..self.row_count {
+            id.note(&self.get_id(row_id).unwrap_or(Value::Null));
+            title.note(&self.get_title(row_id).unwrap_or(Value::Null));
+            for (key, value) in self.row_properties(row_id) {
+                let slot = *slots.entry(key).or_insert_with(|| {
+                    columns.push((key, FlattenKind::default()));
+                    columns.len() - 1
+                });
+                columns[slot].1.note(&value);
+            }
+        }
+        let mut meta: HashMap<String, String> = type_meta.clone();
+        for (key, kind) in &columns {
+            if let Some(kind) = kind.column_type() {
+                meta.insert(interner.resolve(*key).to_string(), kind.to_string());
+            }
+        }
+        let mut owned = Self::new(self.schema.clone(), &meta, interner);
+        // A key outside the schema (an overflow-bag value) gets its column up
+        // front too; `push_row` would type it from its first value.
+        for (key, kind) in &columns {
+            if owned.schema.slot(*key).is_none() {
+                owned.append_column_typed(*key, kind.column_type().unwrap_or("mixed"));
+            }
+        }
+        if let Some(kind) = id.column_type() {
+            owned.id_column = Some(Arc::new(TypedColumn::from_type_str(kind)));
+        }
+        if let Some(kind) = title.column_type() {
+            owned.title_column = Some(Arc::new(TypedColumn::from_type_str(kind)));
+        }
+        for row_id in 0..self.row_count {
+            owned.push_id(&self.get_id(row_id).unwrap_or(Value::Null));
+            owned.push_title(&self.get_title(row_id).unwrap_or(Value::Null));
+            let properties = self.row_properties(row_id);
+            let new_row = owned.push_row(&properties);
+            if self
+                .tombstones
+                .get(row_id as usize)
+                .copied()
+                .unwrap_or(false)
+            {
+                owned.tombstone(new_row);
+            }
+        }
+        owned
+    }
+
     pub(super) fn is_null_override(&self, row: u32, key: InternedKey) -> bool {
         self.null_overrides.as_ref().is_some_and(|clears| {
             self.schema
@@ -243,3 +354,7 @@ impl ColumnStore {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "flatten_tests.rs"]
+mod flatten_tests;

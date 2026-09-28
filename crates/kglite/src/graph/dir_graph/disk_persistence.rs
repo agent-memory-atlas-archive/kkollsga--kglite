@@ -1,7 +1,6 @@
 //! Disk-mode lifecycle and persistence orchestration.
 
 use super::*;
-use crate::graph::storage::column_store::TypedColumn;
 use crate::graph::storage::packed_codec::IntColumnEncoding;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -9,30 +8,6 @@ static DISK_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Column stores by type name, as one save writes them.
 type SaveStores = HashMap<String, Arc<ColumnStore>>;
-
-/// Whether `store` holds a `Mixed` id or title column, or a `Mixed` property
-/// column whose declared type (`type_meta`) names a typed column — the shape
-/// the all-`Mixed` sidecar writer left behind, which a rebuild re-types.
-fn retypes_on_save(
-    store: &ColumnStore,
-    type_meta: &HashMap<String, String>,
-    interner: &StringInterner,
-) -> bool {
-    let mixed = |column: &TypedColumn| matches!(column, TypedColumn::Mixed { .. });
-    if store.id_column_ref().is_some_and(mixed) || store.title_column_ref().is_some_and(mixed) {
-        return true;
-    }
-    store
-        .schema()
-        .iter()
-        .zip(store.columns_ref())
-        .any(|((_, key), column)| {
-            mixed(column)
-                && type_meta
-                    .get(interner.resolve(key))
-                    .is_some_and(|declared| !mixed(&TypedColumn::from_type_str(declared)))
-        })
-}
 
 /// A unique scratch-directory name for a disk conversion: `prefix` + pid +
 /// wall-clock nanos + a process-local sequence, so two conversions in the same
@@ -669,9 +644,11 @@ impl DirGraph {
 
     /// The column stores a save writes, by type name: the live stores, except
     /// that an mmap-backed store is flattened into an owned typed store, and a
-    /// heap store holding `Mixed` columns its declared property types would
-    /// type is re-typed (a graph an earlier build saved through the all-`Mixed`
-    /// sidecar writer heals on its next save).
+    /// heap store holding a `Mixed` column whose values all have one kind is
+    /// re-typed (a graph an earlier build saved through the all-`Mixed`
+    /// sidecar writer heals on its next save). A column holding values of
+    /// several kinds stays `Mixed`, and so in a sidecar: typing it would
+    /// convert values (see `ColumnStore::flattened_owned`).
     ///
     /// Written as is, an mmap-backed store can only go to a sidecar, and one
     /// whose every column is `Mixed` (id and title included); the next load
@@ -685,8 +662,7 @@ impl DirGraph {
             .map(|(name, store)| {
                 let empty = HashMap::new();
                 let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
-                let store = if store.has_mmap_base() || retypes_on_save(store, meta, &self.interner)
-                {
+                let store = if store.has_mmap_base() || store.has_retypable_mixed_column() {
                     Arc::new(store.flattened_owned(meta, &self.interner))
                 } else {
                     Arc::clone(store)

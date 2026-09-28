@@ -594,34 +594,6 @@ impl ColumnStore {
         }
     }
 
-    /// An owned heap copy of this store's **effective** rows — local
-    /// overrides, null clears and tombstones applied over any mmap base —
-    /// with each property column typed from `type_meta` (the type's declared
-    /// property types) rather than copied in its current shape. Row ids are
-    /// preserved.
-    pub(crate) fn flattened_owned(
-        &self,
-        type_meta: &HashMap<String, String>,
-        interner: &StringInterner,
-    ) -> ColumnStore {
-        let mut owned = Self::new(self.schema.clone(), type_meta, interner);
-        for row_id in 0..self.row_count {
-            owned.push_id(&self.get_id(row_id).unwrap_or(Value::Null));
-            owned.push_title(&self.get_title(row_id).unwrap_or(Value::Null));
-            let properties = self.row_properties(row_id);
-            let new_row = owned.push_row(&properties);
-            if self
-                .tombstones
-                .get(row_id as usize)
-                .copied()
-                .unwrap_or(false)
-            {
-                owned.tombstone(new_row);
-            }
-        }
-        owned
-    }
-
     /// Number of live (non-tombstoned) rows.
     #[allow(dead_code)] // Test-only.
     pub fn live_count(&self) -> u32 {
