@@ -235,9 +235,15 @@ graph.cypher("CALL db.temporal.declare({node: 'Employee', from: 'start_date', "
              "to: 'end_date', convention: 'half_open'})")
 ```
 
-The declaration validates the rows stored when it is made. Later writes onto
-the type are not re-validated: a bound that is not a date raises from the next
-filter that reads it, naming the element. See `set_temporal()` and the
+The declaration validates the rows stored when it is made, and later writes
+answer to the same rule: a load (`add_nodes`, `add_relationships`, and a label
+stamped by `add_nodes(labels=…)` or `add_label`) refuses a row with an inverted
+interval, an empty one under `half_open`, or a bound that is not a date, with
+`ArgumentError` naming the row (or the node), before writing anything; a Cypher
+`CREATE` / `MERGE` / `SET` raises `CypherExecutionError` naming the element and
+rolls back. A fluent `update()` is not judged: a bound it leaves that is not a
+date raises from the next filter that reads it, naming the element. See
+`set_temporal()` and the
 [Cypher validity-interval declarations](https://kglite.readthedocs.io/en/latest/reference/cypher-reference.html#validity-interval-declarations).
 
 ### Explicit filters
