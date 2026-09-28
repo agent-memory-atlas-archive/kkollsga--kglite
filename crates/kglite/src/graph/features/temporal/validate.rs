@@ -1,7 +1,8 @@
 //! The full-column pass a temporal declaration runs before it is stored:
 //! every bound must read under the rule `valid_at` uses, no row may hold an
-//! inverted interval, and rows whose `to` bound is another row's `from` bound
-//! are counted.
+//! inverted interval, and two kinds of row are counted: those whose `to`
+//! bound is another row's `from` bound, and those whose interval is empty
+//! under `half_open` (valid at no instant, and kept).
 //!
 //! The pass streams: nodes are read one property at a time and relationships
 //! through [`GraphRead::get_edge_property`], so disk mode materialises no
@@ -26,8 +27,63 @@ use crate::graph::storage::{GraphRead, NodeView};
 pub(super) struct Walk {
     pub(super) rows: usize,
     pub(super) abutting: Option<usize>,
+    pub(super) empty: EmptyIntervals,
     /// Set when no row carries the `to` property yet (every period is open).
     pub(super) open_ended: Option<String>,
+}
+
+/// The rows of one walk, load or statement whose interval is empty — not
+/// inverted, yet admitting no instant, which only `half_open` allows — and
+/// the first of them by name. Such a row is written and counted, never
+/// refused: a register delivers a version registered and superseded on the
+/// same day.
+#[derive(Debug, Default)]
+pub(crate) struct EmptyIntervals {
+    rows: usize,
+    empty: usize,
+    first: Option<String>,
+}
+
+impl EmptyIntervals {
+    /// Count one row, naming it when it is the first empty one.
+    pub(crate) fn note(&mut self, empty: bool, name: impl FnOnce() -> String) {
+        self.rows += 1;
+        if empty {
+            self.empty += 1;
+            if self.first.is_none() {
+                self.first = Some(name());
+            }
+        }
+    }
+
+    /// Add another count of the same write, `self` holding its earlier rows.
+    pub(crate) fn absorb(&mut self, other: EmptyIntervals) {
+        self.rows += other.rows;
+        self.empty += other.empty;
+        if self.first.is_none() {
+            self.first = other.first;
+        }
+    }
+
+    /// The warning for a write: `None` when no row was empty.
+    pub(crate) fn warning(&self) -> Option<String> {
+        self.worded("written")
+    }
+
+    /// The warning for a declaration of `target`.
+    pub(super) fn declaration_warning(&self, target: &TemporalTarget) -> Option<String> {
+        self.worded(&format!("of {}", target.describe()))
+    }
+
+    fn worded(&self, scope: &str) -> Option<String> {
+        let first = self.first.as_deref()?;
+        Some(format!(
+            "{} of {} rows {scope} have an empty interval under convention 'half_open' (the \
+             from bound equals the to bound) and are valid at no instant; the first is {first}. \
+             They are stored and counted in db.temporal.declarations() as empty_rows.",
+            self.empty, self.rows
+        ))
+    }
 }
 
 type Bounds = (Option<Instant>, Option<Instant>);
@@ -241,7 +297,7 @@ fn walk_nodes(
         !graph.graph.is_disk() || graph.label_cardinality(label) <= DISK_NODE_ABUTMENT_CAP;
     let mut group: Vec<Bounds> = Vec::new();
     let mut seen = Seen::default();
-    let mut rows = 0usize;
+    let mut empty = EmptyIntervals::default();
     let mut visit = |idx: NodeIndex| -> Result<(), String> {
         let from = node_bound(graph, idx, &config.valid_from);
         let to = node_bound(graph, idx, &config.valid_to);
@@ -253,7 +309,9 @@ fn walk_nodes(
         }
         let bounds = check_row(&from, &to, config)
             .map_err(|reason| format!("node '{}', {reason}", node_name(graph, idx)))?;
-        rows += 1;
+        empty.note(is_empty(bounds, config), || {
+            format!("node '{}'", node_name(graph, idx))
+        });
         if counting {
             group.push(bounds);
         }
@@ -261,8 +319,9 @@ fn walk_nodes(
     };
     for_each_node_row(graph, label, &mut visit)?;
     let walk = Walk {
-        rows,
+        rows: empty.rows,
         abutting: counting.then(|| count_abutting(&group)),
+        empty,
         open_ended: None,
     };
     Ok((walk, seen))
@@ -285,11 +344,10 @@ fn walk_edges(
     let to_key = InternedKey::from_str(&config.valid_to);
     let mut group: Vec<Bounds> = Vec::new();
     let mut seen = Seen::default();
-    let mut rows = 0usize;
+    let mut empty = EmptyIntervals::default();
     let mut abutting = 0usize;
     for_each_edge_row(graph, rel_type, source_type, |row| {
         let EdgeRow::Edge { id, source, target } = row else {
-            rows += group.len();
             abutting += count_abutting(&group);
             group.clear();
             return Ok::<(), String>(());
@@ -297,19 +355,23 @@ fn walk_edges(
         let from = edge_bound(graph, id, from_key);
         let to = edge_bound(graph, id, to_key);
         seen.note(&from, &to);
-        let bounds = check_row(&from, &to, config).map_err(|reason| {
+        let name = || {
             format!(
-                "{rel_type} relationship from node '{}' to node '{}', {reason}",
+                "{rel_type} relationship from node '{}' to node '{}'",
                 node_name(graph, source),
                 node_name(graph, target)
             )
-        })?;
+        };
+        let bounds =
+            check_row(&from, &to, config).map_err(|reason| format!("{}, {reason}", name()))?;
+        empty.note(is_empty(bounds, config), name);
         group.push(bounds);
         Ok(())
     })?;
     let walk = Walk {
-        rows,
+        rows: empty.rows,
         abutting: Some(abutting),
+        empty,
         open_ended: None,
     };
     Ok((walk, seen))
@@ -398,14 +460,27 @@ pub(super) fn for_each_edge_row<E>(
     Ok(())
 }
 
-/// Refuse a load whose own rows hold an unreadable, inverted or empty
-/// interval, naming the first by its position in the load. A bound column the
-/// load does not carry reads as NULL.
-pub(super) fn check_frame(frame: &DataFrame, config: &TemporalConfig) -> Result<(), String> {
-    let from = frame.get_column_index(&config.valid_from);
-    let to = frame.get_column_index(&config.valid_to);
-    if from.is_none() && to.is_none() {
-        return Ok(());
+/// Refuse a load whose own rows hold an unreadable or inverted interval under
+/// any of `configs`, naming the first by its position in the load, and count
+/// its empty ones. A bound column the load does not carry reads as NULL.
+pub(super) fn check_frame(
+    frame: &DataFrame,
+    configs: &[&TemporalConfig],
+) -> Result<EmptyIntervals, String> {
+    let mut empty = EmptyIntervals::default();
+    let columns: Vec<(&TemporalConfig, Option<usize>, Option<usize>)> = configs
+        .iter()
+        .map(|c| {
+            (
+                *c,
+                frame.get_column_index(&c.valid_from),
+                frame.get_column_index(&c.valid_to),
+            )
+        })
+        .filter(|(_, from, to)| from.is_some() || to.is_some())
+        .collect();
+    if columns.is_empty() {
+        return Ok(empty);
     }
     let cell = |row: usize, column: Option<usize>| {
         column
@@ -413,14 +488,28 @@ pub(super) fn check_frame(frame: &DataFrame, config: &TemporalConfig) -> Result<
             .unwrap_or(Value::Null)
     };
     for row in 0..frame.row_count() {
-        check_row(&cell(row, from), &cell(row, to), config)
-            .map_err(|reason| format!("row {row} (0-based) of the load, {reason}"))?;
+        let mut row_empty = false;
+        for &(config, from, to) in &columns {
+            let bounds = check_row(&cell(row, from), &cell(row, to), config)
+                .map_err(|reason| format!("row {row} (0-based) of the load, {reason}"))?;
+            row_empty |= is_empty(bounds, config);
+        }
+        empty.note(row_empty, || format!("row {row} (0-based) of the load"));
     }
-    Ok(())
+    Ok(empty)
 }
 
-/// Read one row's bounds; refuse an unreadable or inverted one. The error is
-/// completed with the element's name by the caller.
+/// Whether a row's interval, read and not inverted, admits no instant: the
+/// evaluator's end test refuses the interval's own start. Only `half_open`
+/// has such rows — `from == to`, or a date `from` ending at that day's
+/// midnight.
+pub(super) fn is_empty((from, to): Bounds, config: &TemporalConfig) -> bool {
+    matches!((from, to), (Some(f), Some(t)) if !eval::end_admits(t, f, config.convention))
+}
+
+/// Read one row's bounds; refuse an unreadable or inverted one. An empty one
+/// ([`is_empty`]) is returned like any other. The error is completed with the
+/// element's name by the caller.
 pub(super) fn check_row(
     from: &Value,
     to: &Value,
@@ -436,17 +525,13 @@ pub(super) fn check_row(
         };
         format!("property '{property}': {err}")
     })?;
-    // Empty exactly when the evaluator's end test refuses the interval's own
-    // start: then no instant it could be asked about is admitted.
+    // Inverted at the evaluator's grain: a date equals any instant on its
+    // day, so a timestamp `from` later on a date `to`'s day is not inverted
+    // (under `half_open` it is empty).
     if let (Some(f), Some(t)) = (from_at, to_at) {
-        if !eval::end_admits(t, f, config.convention) {
-            let relation = if f.chrono_cmp(t) == Ordering::Greater {
-                "is after"
-            } else {
-                "equals"
-            };
+        if f.chrono_cmp(t) == Ordering::Greater {
             return Err(format!(
-                "the from bound {} ('{}') {relation} the to bound {} ('{}'), an empty interval \
+                "the from bound {} ('{}') is after the to bound {} ('{}'), an inverted interval \
                  under convention '{}'",
                 eval::shown(from),
                 config.valid_from,
@@ -597,18 +682,28 @@ mod tests {
         }
     }
 
+    /// `check_row`, then [`is_empty`]: `Err` for a refusal, else emptiness.
+    fn judged(from: &Value, to: &Value, config: &TemporalConfig) -> Result<bool, String> {
+        check_row(from, to, config).map(|bounds| is_empty(bounds, config))
+    }
+
     #[test]
-    fn inverted_and_empty_rows_are_refused() {
+    fn inverted_rows_are_refused_and_empty_ones_kept() {
         let s = |t: &str| Value::String(t.into());
         let closed = config(IntervalConvention::Closed);
         let half = config(IntervalConvention::HalfOpen);
-        let err = check_row(&s("2010-01-01"), &s("2009-01-01"), &closed).unwrap_err();
-        assert!(err.contains("is after the to bound"), "{err}");
-        assert!(check_row(&s("2009-01-01"), &s("2009-01-01"), &closed).is_ok());
-        let err = check_row(&s("2009-01-01"), &s("2009-01-01"), &half).unwrap_err();
-        assert!(err.contains("equals the to bound"), "{err}");
-        assert!(err.contains("'half_open'"), "{err}");
-        assert!(check_row(&Value::Null, &s("2009-01-01"), &half).is_ok());
+        for convention in [&closed, &half] {
+            let err = judged(&s("2010-01-01"), &s("2009-01-01"), convention).unwrap_err();
+            assert!(err.contains("is after the to bound"), "{err}");
+            assert!(err.contains("an inverted interval"), "{err}");
+        }
+        assert_eq!(
+            judged(&s("2009-01-01"), &s("2009-01-01"), &closed),
+            Ok(false)
+        );
+        assert_eq!(judged(&s("2009-01-01"), &s("2009-01-01"), &half), Ok(true));
+        assert_eq!(judged(&Value::Null, &s("2009-01-01"), &half), Ok(false));
+        assert_eq!(judged(&s("2009-01-01"), &Value::Null, &half), Ok(false));
     }
 
     #[test]
@@ -618,18 +713,49 @@ mod tests {
             |t: &str| Value::Timestamp(NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M").unwrap());
         let half = config(IntervalConvention::HalfOpen);
         // Valid on 06-30 until 18:00 / 20:00: not empty.
-        assert!(check_row(&dv("2009-06-30"), &tv("2009-06-30T18:00"), &half).is_ok());
-        assert!(check_row(&tv("2009-06-30T08:00"), &tv("2009-06-30T20:00"), &half).is_ok());
+        assert_eq!(
+            judged(&dv("2009-06-30"), &tv("2009-06-30T18:00"), &half),
+            Ok(false)
+        );
+        assert_eq!(
+            judged(&tv("2009-06-30T08:00"), &tv("2009-06-30T20:00"), &half),
+            Ok(false)
+        );
         // Ends at the from day's midnight, or a date end on a timestamp
-        // from's day: empty.
-        let err = check_row(&dv("2009-06-30"), &tv("2009-06-30T00:00"), &half).unwrap_err();
-        assert!(err.contains("an empty interval"), "{err}");
-        let err = check_row(&tv("2009-06-30T08:00"), &dv("2009-06-30"), &half).unwrap_err();
-        assert!(err.contains("an empty interval"), "{err}");
+        // from's day: empty, and kept.
+        assert_eq!(
+            judged(&dv("2009-06-30"), &tv("2009-06-30T00:00"), &half),
+            Ok(true)
+        );
+        assert_eq!(
+            judged(&tv("2009-06-30T08:00"), &dv("2009-06-30"), &half),
+            Ok(true)
+        );
+        // Two timestamps on one day, the end first: inverted.
+        let err = judged(&tv("2009-06-30T20:00"), &tv("2009-06-30T08:00"), &half).unwrap_err();
+        assert!(err.contains("an inverted interval"), "{err}");
         // Closed keeps the date grain: a date from and a same-day end is a
         // one-day interval.
         let closed = config(IntervalConvention::Closed);
-        assert!(check_row(&dv("2009-06-30"), &tv("2009-06-30T00:00"), &closed).is_ok());
+        assert_eq!(
+            judged(&dv("2009-06-30"), &tv("2009-06-30T00:00"), &closed),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn empty_rows_are_warned_about_once_naming_the_first() {
+        let mut empty = EmptyIntervals::default();
+        empty.note(false, || unreachable!("a non-empty row is never named"));
+        assert_eq!(empty.warning(), None);
+        empty.note(true, || "node 'a'".into());
+        empty.note(true, || "node 'b'".into());
+        let warning = empty.warning().unwrap();
+        assert!(
+            warning.starts_with("2 of 3 rows written have an empty interval"),
+            "{warning}"
+        );
+        assert!(warning.contains("the first is node 'a'."), "{warning}");
     }
 
     #[test]

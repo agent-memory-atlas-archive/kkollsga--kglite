@@ -73,13 +73,89 @@ fn a_load_row_is_judged_before_the_load_writes() {
         &["id", "vf", "vt"],
         vec![
             vec![Value::Int64(2), day("2011-01-01"), Value::Null],
-            vec![Value::Int64(3), day("2012-01-01"), day("2012-01-01")],
+            vec![Value::Int64(3), day("2012-01-01"), day("2011-01-01")],
         ],
     );
     let err = load(&mut graph, rows, None).unwrap_err();
     assert!(err.starts_with("row 1 (0-based) of the load, "), "{err}");
-    assert!(err.contains("equals the to bound"), "{err}");
+    assert!(err.contains("is after the to bound"), "{err}");
     assert_eq!(status_count(&mut graph), 1, "nothing written");
+}
+
+#[test]
+fn an_empty_half_open_load_row_is_written_and_counted() {
+    let mut graph = statuses(HalfOpen);
+    let rows = frame(
+        &["id", "vf", "vt"],
+        vec![
+            vec![Value::Int64(2), day("2011-01-01"), Value::Null],
+            vec![Value::Int64(3), day("2012-01-01"), day("2012-01-01")],
+            vec![Value::Int64(4), day("2013-01-01"), day("2013-01-01")],
+        ],
+    );
+    load(&mut graph, rows, None).unwrap();
+    assert_eq!(status_count(&mut graph), 4);
+    assert_eq!(list(&graph)[0].empty_rows, Some(2));
+}
+
+#[test]
+fn an_empty_half_open_cypher_write_is_kept_with_one_warning() {
+    let mut graph = statuses(HalfOpen);
+    let params: HashMap<String, Value> = HashMap::new();
+    let result = execute_mut(
+        &mut graph,
+        "UNWIND [2, 3, 4] AS i CREATE (:Status {id: i, vf: date('2011-01-01'), \
+         vt: CASE WHEN i = 4 THEN null ELSE date('2011-01-01') END})",
+        &ExecuteOptions::eager(&params),
+    )
+    .unwrap();
+    let warnings = result
+        .result
+        .diagnostics
+        .map(|d| d.warnings)
+        .unwrap_or_default();
+    let empty: Vec<&String> = warnings
+        .iter()
+        .filter(|w| w.contains("empty interval"))
+        .collect();
+    assert_eq!(empty.len(), 1, "one warning per statement: {warnings:?}");
+    assert!(
+        empty[0]
+            .starts_with("2 of 3 rows written have an empty interval under convention 'half_open'"),
+        "{}",
+        empty[0]
+    );
+    assert!(empty[0].contains("the first is node '2'"), "{}", empty[0]);
+    assert_eq!(status_count(&mut graph), 4);
+    assert_eq!(list(&graph)[0].empty_rows, Some(2));
+
+    // A SET that leaves an empty interval is kept and warned about too.
+    let result = execute_mut(
+        &mut graph,
+        "MATCH (s:Status {id: 1}) SET s.vt = s.vf",
+        &ExecuteOptions::eager(&params),
+    )
+    .unwrap();
+    let warnings = result
+        .result
+        .diagnostics
+        .map(|d| d.warnings)
+        .unwrap_or_default();
+    assert!(
+        warnings.iter().any(
+            |w| w.starts_with("1 of 1 rows written have an empty interval")
+                && w.contains("node '1'")
+        ),
+        "{warnings:?}"
+    );
+    assert_eq!(list(&graph)[0].empty_rows, Some(3));
+    // An inverted SET is still refused.
+    let err = run(
+        &mut graph,
+        "MATCH (s:Status {id: 1}) SET s.vt = date('1999-01-01')",
+    )
+    .unwrap_err();
+    assert!(err.contains("is after the to bound"), "{err}");
 }
 
 #[test]
@@ -186,12 +262,13 @@ fn a_create_is_judged_before_it_inserts() {
     let mut graph = statuses(HalfOpen);
     let err = run(
         &mut graph,
-        "CREATE (:Status {id: 2, vf: date('2011-01-01'), vt: date('2011-01-01')})",
+        "CREATE (:Status {id: 2, vf: date('2011-01-01'), vt: date('2010-01-01')})",
     )
     .unwrap_err();
     assert!(err.contains("node '2', the from bound"), "{err}");
     assert!(
-        err.contains("an empty interval under convention 'half_open'"),
+        err.contains("is after the to bound")
+            && err.contains("an inverted interval under convention 'half_open'"),
         "{err}"
     );
     assert_eq!(status_count(&mut graph), 1);

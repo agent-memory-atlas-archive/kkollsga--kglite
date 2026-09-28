@@ -6,9 +6,9 @@
 //! earlier release printed. A declaration adds what distinguishes it:
 //! `temporal_convention`, `temporal_source` and `temporal_abutting` (rows
 //! whose end met another row's start when it was declared), and — only when
-//! a write since has left any — `temporal_empty` / `temporal_unreadable`
-//! (rows valid at no instant, and rows with a bound no query can read,
-//! counted at the current version). A relationship
+//! the type holds any — `temporal_empty` / `temporal_unreadable` (rows valid
+//! at no instant, and rows with a bound no query can read, counted at the
+//! current version). A relationship
 //! type with several declarations prints them once each in one `temporal`
 //! attribute, since an element cannot repeat an attribute, in lookup order:
 //! the source-keyed ones, then the unkeyed one as `other sources`, which is

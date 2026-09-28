@@ -3,7 +3,7 @@
 //! written through the batch engine.
 
 use crate::datatypes::Value;
-use crate::graph::features::temporal::{merge_start_key, StartKey};
+use crate::graph::features::temporal::{merge_start_key, EmptyIntervals, StartKey};
 use crate::graph::mutation::batch::{
     BatchMetrics, ConflictHandling, ConnectionBatchProcessor, ConnectionBatchStats,
 };
@@ -27,6 +27,8 @@ pub(super) struct Written {
     /// Rows the batch rejected, and their messages.
     pub failed: usize,
     pub errors: Vec<String>,
+    /// The rows written with an empty validity interval.
+    pub empty_intervals: EmptyIntervals,
 }
 
 /// One merge key's share of the pending edges.
@@ -54,8 +56,9 @@ impl PendingEdges {
         schema_types: Option<(&str, &str)>,
     ) -> Result<Written, String> {
         let groups = self.split_by_start_key(graph, connection_type, source_type);
+        let mut empty_intervals = EmptyIntervals::default();
         for group in &groups {
-            gate_property_rows(
+            empty_intervals.absorb(gate_property_rows(
                 graph,
                 connection_type,
                 &group.edges.endpoints,
@@ -63,13 +66,14 @@ impl PendingEdges {
                 conflict_mode,
                 RowFolding::for_load(false),
                 group.start_key.as_ref(),
-            )?;
+            )?);
         }
         let mut written = Written {
             stats: ConnectionBatchStats::default(),
             metrics: BatchMetrics::default(),
             failed: 0,
             errors: Vec::new(),
+            empty_intervals,
         };
         for KeyedEdges { start_key, edges } in groups {
             let mut batch = ConnectionBatchProcessor::new(edges.endpoints.len());

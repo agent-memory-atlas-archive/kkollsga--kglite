@@ -1986,9 +1986,11 @@ class KnowledgeGraph:
         Raises:
             ArgumentError: ``label`` has a declared validity interval and a
                 node that would gain it holds bounds the declaration refuses
-                (an inverted interval, an empty one under ``'half_open'``, a
-                bound that is not a date), naming the node as Cypher
-                ``SET n:Label`` does. Nothing is labelled.
+                (an inverted interval, a bound that is not a date), naming the
+                node as Cypher ``SET n:Label`` does. Nothing is labelled. A
+                node whose interval is empty under ``'half_open'`` (``from``
+                equal to ``to``) gains the label, with one ``UserWarning``
+                naming the first such node.
 
         Example::
 
@@ -2164,20 +2166,27 @@ class KnowledgeGraph:
                 the declaration, it is checked before anything is written: a
                 declaration of the type naming other properties or another
                 ``convention``, a row of this call whose interval is inverted
-                (or empty under ``'half_open'``), and a stored bound that is
-                not a date, a datetime or an ISO date string each raise
+                (``from`` after ``to``), and a stored bound that is not a
+                date, a datetime or an ISO date string each raise
                 :class:`ArgumentError`. A closed declaration whose rows end on
                 the day another begins emits a ``UserWarning`` suggesting
                 ``'half_open'``. **A load onto a type that is already declared
                 answers to the same rule**, with or without these column
                 types: before anything is written, a row that would leave a
-                node with an inverted interval (or an empty one under
-                ``'half_open'``) or a bound that is not a date, a datetime or
-                an ISO date string raises :class:`ArgumentError` naming the
-                row by its 0-based position. An update row is judged by the
-                bounds it leaves under ``conflict_handling`` — a row carrying
-                only the ``to`` bound against the stored ``from``. NULL bounds
-                are open and always accepted.
+                node with an inverted interval or a bound that is not a date,
+                a datetime or an ISO date string raises
+                :class:`ArgumentError` naming the row by its 0-based position.
+                A row whose interval is empty under ``'half_open'`` (``from``
+                equal to ``to``: valid at no instant, as a register version
+                registered and superseded on one day is) is written, and the
+                load emits one ``UserWarning`` counting such rows and naming
+                the first; ``db.temporal.declarations()`` counts them in
+                ``empty_rows``, and no as-of query returns them. Under
+                ``'closed'`` ``from`` equal to ``to`` is a one-day interval.
+                An update row is judged by the bounds it leaves under
+                ``conflict_handling`` — a row carrying only the ``to`` bound
+                against the stored ``from``. NULL bounds are open and always
+                accepted.
             nullable_int_downcast: When ``True``, Float64 columns whose non-null
                 values are all integer-valued (e.g. ``pd.NA``-bearing ints that
                 pandas auto-promoted to float64) are silently downcast to Int64.
@@ -2362,7 +2371,8 @@ class KnowledgeGraph:
                 already has its own or the type-wide one names other
                 properties; then it covers this source type only. A load onto
                 a type already declared refuses a row whose interval breaks
-                the declaration, as :meth:`add_nodes` does.
+                the declaration, and warns about rows whose interval is empty,
+                as :meth:`add_nodes` does.
             query: Cypher query string (alternative to ``data``). Must be a
                 read-only query whose RETURN clause includes columns matching
                 ``source_id_field`` and ``target_id_field``.
@@ -7842,20 +7852,24 @@ class KnowledgeGraph:
         is accepted with a warning, unless it is a near miss of a property
         the type has), every stored bound must read as a date, a
         datetime or an ISO date string, and no row's interval may be inverted
-        (or empty under ``'half_open'``). Re-declaring the same interval is a
-        no-op; a different one for the same type (and source type) is
-        refused — undeclare it first.
+        (``from`` after ``to``). A row whose interval is empty under
+        ``'half_open'`` (``from`` equal to ``to``) is valid at no instant: it
+        is accepted with a ``UserWarning`` counting such rows and naming the
+        first, counted in ``empty_rows``, and never returned as of an
+        instant. Re-declaring the same interval is a no-op; a different one
+        for the same type (and source type) is refused — undeclare it first.
 
         Later writes onto the type answer to the same rule: a load
         (:meth:`add_nodes`, :meth:`add_relationships`) refuses a row that
         would break it with :class:`ArgumentError`, naming the row by its
         0-based position and writing nothing, and a Cypher ``CREATE``,
         ``MERGE`` or ``SET`` raises :class:`CypherExecutionError` naming the
-        element and rolls the statement back. A ``SET`` is judged once its
-        clause has applied every item. A fluent ``update()`` is not judged; a
-        bound it leaves that is not a date raises, naming the element, from
-        the next temporal filter that reads it, and an inverted interval is
-        valid on no date.
+        element and rolls the statement back. An empty interval is written,
+        with one warning per load (a ``UserWarning``) or statement (in
+        ``result.warnings``). A ``SET`` is judged once its clause has applied
+        every item. A fluent ``update()`` is not judged; a bound it leaves
+        that is not a date raises, naming the element, from the next temporal
+        filter that reads it, and an inverted interval is valid on no date.
 
         A *type_name* that is both a node type and a relationship type is the
         node type unless *source_type* is given.
@@ -7885,8 +7899,10 @@ class KnowledgeGraph:
         Warns:
             UserWarning: A closed declaration whose rows end on the day another
                 row of the same label (or from the same source node) begins,
-                or a *valid_to* no row carries yet (every row is open-ended
-                until one is written).
+                a half-open one with rows whose interval is empty (``from``
+                equal to ``to``: counted, naming the first), or a *valid_to*
+                no row carries yet (every row is open-ended until one is
+                written).
         """
         ...
 

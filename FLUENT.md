@@ -238,11 +238,15 @@ graph.cypher("CALL db.temporal.declare({node: 'Employee', from: 'start_date', "
 The declaration validates the rows stored when it is made, and later writes
 answer to the same rule: a load (`add_nodes`, `add_relationships`, and a label
 stamped by `add_nodes(labels=…)` or `add_label`) refuses a row with an inverted
-interval, an empty one under `half_open`, or a bound that is not a date, with
-`ArgumentError` naming the row (or the node), before writing anything; a Cypher
-`CREATE` / `MERGE` / `SET` raises `CypherExecutionError` naming the element and
-rolls back. A fluent `update()` is not judged: a bound it leaves that is not a
-date raises from the next filter that reads it, naming the element. See
+interval or a bound that is not a date, with `ArgumentError` naming the row (or
+the node), before writing anything; a Cypher `CREATE` / `MERGE` / `SET` raises
+`CypherExecutionError` naming the element and rolls back. A row whose interval
+is empty under `half_open` (`from` equal to `to`) is written, with one warning
+per load (`UserWarning`) or statement (`result.warnings`) naming the first; it
+is valid at no instant, so no temporal filter returns it, and
+`db.temporal.declarations()` counts it in `empty_rows`. A fluent `update()` is
+not judged: a bound it leaves that is not a date raises from the next filter
+that reads it, naming the element. See
 `set_temporal()` and the
 [Cypher validity-interval declarations](https://kglite.readthedocs.io/en/latest/reference/cypher-reference.html#validity-interval-declarations).
 

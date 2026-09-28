@@ -24,7 +24,11 @@ before upgrading.
   one (the `to` day is the first day no longer valid; a datetime `to`
   excludes only from its own time). The declaration reads every stored
   bound first and refuses a missing `from` property, an unreadable bound or
-  an inverted interval, naming the node or the relationship's endpoints. A
+  an inverted interval (`from` after `to`), naming the node or the
+  relationship's endpoints. A row whose interval is empty under `half_open`
+  (`from == to`, valid at no instant — a register version registered and
+  superseded on the same day) is accepted, with one warning counting such
+  rows and naming the first. A
   `to` property no row carries yet (every period still open, as on fresh
   data) is accepted with a warning that every row is open-ended until one is
   written, unless it is a near miss of a property the target has, which is
@@ -40,12 +44,16 @@ before upgrading.
   `closed` also earns a query warning. A relationship uses its source's
   `source_type` declaration first and the unkeyed one otherwise.
   `CALL db.temporal.undeclare({...})` removes one, and
-  `CALL db.temporal.declarations()` lists them, with `empty_rows` and
-  `unreadable_rows`: rows the declaration would refuse — an empty interval
-  (valid at no instant) or a bound that is not NULL, a date, a datetime or
-  an ISO string — which only a fluent `update()`, an undeclare that hands a
-  source's relationships to the unkeyed declaration, or a graph saved by an
-  earlier version can leave; counted at the graph's current state by a walk
+  `CALL db.temporal.declarations()` lists them, with `empty_rows` (rows valid
+  at no instant: `from == to` under `half_open`, which declarations and
+  writes keep, or an inverted interval) and `unreadable_rows` (a bound that
+  is not NULL, a date, a datetime or an ISO string); an inverted or
+  unreadable row is refused by every judged write, so only a fluent
+  `update()`, an undeclare that hands a source's relationships to the
+  unkeyed declaration, or a graph saved by an earlier version can leave one.
+  No as-of route (the context, `valid_at` / `valid_during`, a frozen view,
+  the fluent filters) returns an empty row; a statement without the context
+  still reads it. Both are counted at the graph's current state by a walk
   over each declared type's rows, repeated after a write (including one
   earlier in the same statement). `describe()` shows each declaration's
   convention, and `temporal_empty` / `temporal_unreadable` (`empty=` /
@@ -374,8 +382,9 @@ before upgrading.
   not a date, a datetime or an ISO string,
   or a row whose interval is inverted, raises `ArgumentError` naming the
   element (a loader checks this before writing, naming an inverted row of its
-  input by position). A different declaration for a type that already has one
-  is refused instead of added beside it.
+  input by position); rows whose interval is empty under `half_open` are
+  kept with one `UserWarning`. A different declaration for a type that
+  already has one is refused instead of added beside it.
 - **Breaking (Cypher):** a node `MERGE` whose pattern names an id its type
   already holds, but whose other labels or properties that node lacks
   (`MERGE (n:A:B {id: 'x'})` beside an `A`-only node), raises
@@ -398,10 +407,10 @@ before upgrading.
   accepted before. `add_nodes`, `add_relationships` (and
   `replace_relationships`, `create_relationships()`, `extend()`, blueprints
   and the C ABI's edge batch) refuse, before writing anything, a row that
-  would leave an inverted interval, an empty one under `half_open`
-  (`from == to`), or a bound that is not NULL, a date, a datetime or an ISO
-  string, raising `ArgumentError` naming the row by its 0-based position
-  ("row 3 (0-based) of the load, the from bound … is after the to bound …")
+  would leave an inverted interval (`from` after `to`) or a bound that is not
+  NULL, a date, a datetime or an ISO string, raising `ArgumentError` naming
+  the row by its 0-based position ("row 3 (0-based) of the load, the from
+  bound … is after the to bound …, an inverted interval …")
   — `create_relationships()` and the C ABI's edge batch name the
   relationship's endpoints instead; an update row is judged by the bounds it
   leaves under `conflict_handling`. A writer that gives a node a declared
@@ -415,8 +424,18 @@ before upgrading.
   label) raises `CypherExecutionError` naming the node's id or the
   relationship's endpoints, and the statement rolls back; a `SET` is judged
   once its clause has applied every item. NULL bounds stay open, and `closed`
-  accepts `from == to`. A fluent `update()` is not judged. The check reads
-  only a type that has a declaration.
+  accepts `from == to` as a one-day interval. A row left with an empty
+  interval under `half_open` (`from == to`) is written: each load emits one
+  `UserWarning` ("N of M rows written have an empty interval under
+  convention 'half_open' … the first is row k (0-based) of the load") and
+  each Cypher statement adds one entry to `result.warnings` naming the first
+  element; the Rust reports carry it in a new `warnings` field
+  (`NodeOperationReport`, `ConnectionOperationReport`, `EdgeSpecReport`,
+  `ExtendReport`, `RecordsReport`), and
+  `kglite::api::temporal::check_label_stamp` / `check_labelled_load` return
+  it as `Ok(Some(_))`. Such a row is counted in `empty_rows` and valid at no
+  instant. A fluent `update()` is not judged. The check reads only a type
+  that has a declaration.
 - **Breaking:** a bulk load (`add_relationships`, `replace_relationships`,
   `create_relationships()`, `extend()`, blueprints, the C ABI's edge batch)
   onto a relationship type with a declared validity interval writes its rows

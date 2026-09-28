@@ -84,6 +84,8 @@ superseded on 2019-07-03, so it arrives as two images, `P2.1:r` and `P2.1:e`.
 `P1.1` is a zero-length voorkomen, whose `begin` equals its `eind`:
 
 ```python
+import warnings
+
 import kglite
 import pandas as pd
 
@@ -102,33 +104,35 @@ DECLARED = {"begin": "validFrom", "eind": "validTo",
 
 graph = kglite.KnowledgeGraph()
 graph.add_nodes(pd.DataFrame({"id": ["P1", "P2"]}), "Pand", "id", "id")
-graph.add_nodes(pand_versions, "PandVersie", "id", "status",
-                column_types=DECLARED, convention="half_open")
-# ArgumentError: Invalid argument: row 0 (0-based) of the load, the from bound
-# 2020-03-01 ('begin') equals the to bound 2020-03-01 ('eind'), an empty
-# interval under convention 'half_open'
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    graph.add_nodes(pand_versions, "PandVersie", "id", "status",
+                    column_types=DECLARED, convention="half_open")
+[str(w.message) for w in caught]
+# ["1 of 5 rows written have an empty interval under convention 'half_open' (the
+# from bound equals the to bound) and are valid at no instant; the first is row
+# 0 (0-based) of the load. They are stored and counted in
+# db.temporal.declarations() as empty_rows."]
+graph.add_relationships(pand_versions[["id", "pand"]], "VAN", "PandVersie", "id", "Pand", "pand")
 ```
 
-**A zero-length version is valid at no instant under `half_open`**, so the
-declaration refuses it, and so does every later load or Cypher `CREATE`,
-`MERGE` or `SET` onto the declared type. The load writes nothing. Such rows
-are legitimate in a register (a status corrected on the day it was set), and
-no as-of question can return them, so keep them out of the declared load and
-store them under a label of their own that has no declaration. The check reads
-only declared types. Lineage and audit queries name both labels:
+**A zero-length version is valid at no instant under `half_open`.** Such rows
+are legitimate in a register (a status corrected on the day it was set), so
+the load keeps them, warns once with their count and the first of them, and
+`db.temporal.declarations()` counts them in `empty_rows`. Every later load or
+Cypher `CREATE`, `MERGE` or `SET` onto the declared type does the same, while
+an inverted interval, whose `eind` precedes its `begin`, is refused. No as-of
+question returns a zero-length version. On the day of `P1.1`, only its
+successor is valid:
 
 ```python
-empty = pand_versions["begin"] == pand_versions["eind"]
-graph.add_nodes(pand_versions[~empty], "PandVersie", "id", "status",
-                column_types=DECLARED, convention="half_open")
-graph.add_nodes(pand_versions[empty], "PandVersieLeeg", "id", "status",
-                column_types={c: "datetime" for c in DECLARED})
-for label, rows in [("PandVersie", pand_versions[~empty]), ("PandVersieLeeg", pand_versions[empty])]:
-    graph.add_relationships(rows[["id", "pand"]], "VAN", label, "id", "Pand", "pand")
+graph.cypher("MATCH (v:PandVersie {pand: 'P1'}) RETURN v.id AS id",
+             valid_at="2020-03-01").to_list()
+# [{'id': 'P1.2:r'}]
 ```
 
-Do not give such a node the declared label as a secondary label: every writer
-that stamps a declared label judges the node by that label's declaration.
+Lineage and audit queries, which run without the context, still read it
+(section 3).
 
 **On a declared relationship type, a load writes versions.** `add_relationships`
 (and `replace_relationships`, `create_relationships()`, `extend()` and
@@ -157,14 +161,14 @@ Close or correct a stored relationship period with Cypher `SET` when that is
 what you mean. `db.temporal.declarations()` lists what is declared. Its
 `abutting_rows` counts the rows whose `eind` is another row's `begin`, which
 is the register chain showing through, and its `empty_rows` counts the rows
-the declaration would refuse:
+valid at no instant, here the zero-length voorkomen:
 
 ```python
 graph.cypher("""
     CALL db.temporal.declarations() YIELD kind, name, convention, abutting_rows, empty_rows
     RETURN kind, name, convention, abutting_rows, empty_rows
 """).to_list()
-# [{'kind': 'node', 'name': 'PandVersie', 'convention': 'half_open', 'abutting_rows': 1, 'empty_rows': 0},
+# [{'kind': 'node', 'name': 'PandVersie', 'convention': 'half_open', 'abutting_rows': 2, 'empty_rows': 1},
 #  {'kind': 'relationship', 'name': 'IN_PAND', 'convention': 'half_open', 'abutting_rows': 0, 'empty_rows': 0}]
 ```
 
@@ -254,7 +258,7 @@ apply_delivery(graph, "2021-11-25", ["P1.3:r"], [
      "begin": "2021-11-25", "eind": "2021-11-24"},
 ], [])
 # CypherExecutionError: Cypher execution error: node 'P1.4:r', the from bound
-# 2021-11-25 ('begin') is after the to bound 2021-11-24 ('eind'), an empty
+# 2021-11-25 ('begin') is after the to bound 2021-11-24 ('eind'), an inverted
 # interval under convention 'half_open'
 graph.cypher("MATCH (v:PandVersie {id: 'P1.3:r'}) RETURN v.recorded_to AS recorded_to").to_list()
 # [{'recorded_to': None}]
@@ -392,11 +396,12 @@ template, as section 6 does, rather than typing it on each hop.
 ### Lineage
 
 A voorkomen chain joins versions that never coexist, so ask it **without** the
-context, with only the recording test. Name the zero-length label too:
+context, with only the recording test. Without the context the zero-length
+voorkomen is there too:
 
 ```python
 LINEAGE = """
-    MATCH (v:PandVersie|PandVersieLeeg {pand: $pand})
+    MATCH (v:PandVersie {pand: $pand})
     WHERE v.recorded_from <= date($tt) AND (v.recorded_to IS NULL OR v.recorded_to > date($tt))
     RETURN v.vk AS vk, v.status AS status, toString(v.begin) AS begin, toString(v.eind) AS eind
     ORDER BY vk
@@ -454,7 +459,7 @@ recording test is ordinary `WHERE` text and does not appear there:
 ```python
 graph.cypher(AS_KNOWN, params={"tt": "2021-11-20"}, valid_at="2021-12-01").diagnostics["temporal"]
 # {'axis': 'VALID_TIME', 'instant': '2021-12-01', 'targets': ['(:PandVersie)'], 'route': 'guarded',
-#  'retrieval': None, 'slice': False, 'session_version': 25}
+#  'retrieval': None, 'slice': False, 'session_version': 19}
 ```
 
 The other bindings follow the same rule. Java passes a `ValidAt` to `query`,
@@ -471,13 +476,13 @@ route the recording instant is a query parameter.
 |---|---|---|
 | Valid-time declaration, closed or half-open | native | `validFrom` / `validTo`, `set_temporal()`, `db.temporal.declare`, blueprint `temporal` |
 | As of a valid instant, every hop, path, subquery and algorithm | native | `FOR VALID_TIME AS OF`, `valid_at=`, `freeze(valid_at=)`, fluent `date()` |
-| Write-time validation of valid-time bounds | native | loads and Cypher writes onto a declared type refuse an inverted or empty interval |
+| Write-time validation of valid-time bounds | native | loads and Cypher writes onto a declared type refuse an inverted interval |
 | Redelivery of a declared relationship type | native | identical rows dropped, differing rows become versions |
 | Atomic delivery | native | `begin()` (Python), `beginTransaction()` (Java); a failure rolls the whole transaction back |
 | Valid-time echo | native | `diagnostics["temporal"]`, MCP `temporal:`, Bolt `kglite.temporal` |
 | Recording ("as known at") time | modelled | a second pair of properties, tested half-open by hand on every hop |
 | Superseded images | modelled | one record per image, each with its own id |
-| Zero-length versions | modelled | an undeclared label of their own |
+| Zero-length versions | native | kept with a warning and counted in `empty_rows`; valid at no instant, so only queries without the valid-time context (lineage, audit) see them |
 | Changed since, delivery replay | modelled | queries on the recording pair |
 | Reproducing an earlier answer | modelled | the recording pair, or keeping each published `.kgl` |
 | Engine transaction time / audit trail | not there | `SET` overwrites and `DELETE` leaves no trace; CDC is process-local |
@@ -504,6 +509,8 @@ against a fresh interpreter. It builds the recording test from one template
 so every hop gets the same predicate:
 
 ```python
+import warnings
+
 import kglite
 import pandas as pd
 
@@ -529,13 +536,14 @@ in_pand = pd.DataFrame({
 graph = kglite.KnowledgeGraph()
 graph.add_nodes(pd.DataFrame({"id": ["P1", "P2"]}), "Pand", "id", "id")
 graph.add_nodes(pd.DataFrame({"id": ["V1"]}), "Verblijfsobject", "id", "id")
-empty = pand_versions["begin"] == pand_versions["eind"]
-graph.add_nodes(pand_versions[~empty], "PandVersie", "id", "status",
-                column_types=DECLARED, convention="half_open")
-graph.add_nodes(pand_versions[empty], "PandVersieLeeg", "id", "status",
-                column_types={c: "datetime" for c in DECLARED})
-for label, rows in [("PandVersie", pand_versions[~empty]), ("PandVersieLeeg", pand_versions[empty])]:
-    graph.add_relationships(rows[["id", "pand"]], "VAN", label, "id", "Pand", "pand")
+# The zero-length voorkomen P1.1 is kept, with one warning.
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    graph.add_nodes(pand_versions, "PandVersie", "id", "status",
+                    column_types=DECLARED, convention="half_open")
+for warning in caught:
+    print(warning.message)
+graph.add_relationships(pand_versions[["id", "pand"]], "VAN", "PandVersie", "id", "Pand", "pand")
 graph.add_relationships(in_pand, "IN_PAND", "Verblijfsobject", "vbo", "Pand", "pand",
                         column_types=DECLARED, convention="half_open")
 
@@ -597,7 +605,7 @@ for tt in ["2021-11-19", "2021-11-20"]:
     print(tt, graph.cypher(BOTH_AXES, params={"tt": tt}, valid_at="2021-12-01").to_list())
 
 LINEAGE = f"""
-    MATCH (v:PandVersie|PandVersieLeeg {{pand: $pand}})
+    MATCH (v:PandVersie {{pand: $pand}})
     WHERE {KNOWN.format(x='v')}
     RETURN v.vk AS vk, v.status AS status, toString(v.begin) AS begin, toString(v.eind) AS eind
     ORDER BY vk
@@ -615,6 +623,7 @@ print(graph.cypher("""
 It prints:
 
 ```text
+1 of 5 rows written have an empty interval under convention 'half_open' (the from bound equals the to bound) and are valid at no instant; the first is row 0 (0-based) of the load. They are stored and counted in db.temporal.declarations() as empty_rows.
 2021-11-19 [{'vbo': 'V1', 'pand': 'P2', 'status': 'Verbouwing pand'}]
 2021-11-20 [{'vbo': 'V1', 'pand': 'P2', 'status': 'Verbouwing pand'}, {'vbo': 'V2', 'pand': 'P1', 'status': 'Pand in gebruik'}]
 {'vk': 1, 'status': 'Bouwvergunning verleend', 'begin': '2020-03-01', 'eind': '2020-03-01'}

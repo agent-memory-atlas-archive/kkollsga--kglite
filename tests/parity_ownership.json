@@ -472,5 +472,89 @@
   },
   "tests/test_mixed_kind_column_save_parity.py::test_mixed_kind_column_values_keep_their_kind[disk_reopened]": {
     "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_declaration_accepts_warns_and_counts[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_declaration_accepts_warns_and_counts[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_declaration_accepts_warns_and_counts[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_declaration_accepts_warns_and_counts[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_cypher_context_never_returns_an_empty_row[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_cypher_context_never_returns_an_empty_row[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_cypher_context_never_returns_an_empty_row[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_cypher_context_never_returns_an_empty_row[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_validity_functions_never_admit_an_empty_row[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_validity_functions_never_admit_an_empty_row[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_validity_functions_never_admit_an_empty_row[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_validity_functions_never_admit_an_empty_row[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_frozen_view_its_slice_and_an_algorithm_never_hold_an_empty_row[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_frozen_view_its_slice_and_an_algorithm_never_hold_an_empty_row[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_frozen_view_its_slice_and_an_algorithm_never_hold_an_empty_row[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_frozen_view_its_slice_and_an_algorithm_never_hold_an_empty_row[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_fluent_filters_never_return_an_empty_row[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_fluent_filters_never_return_an_empty_row[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_fluent_filters_never_return_an_empty_row[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_the_fluent_filters_never_return_an_empty_row[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[memory_guards]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_load_keeps_an_empty_row_with_one_warning[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_load_keeps_an_empty_row_with_one_warning[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_load_keeps_an_empty_row_with_one_warning[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_temporal_empty_intervals.py::test_a_load_keeps_an_empty_row_with_one_warning[memory_guards]": {
+    "owner": "storage-parity"
   }
 }

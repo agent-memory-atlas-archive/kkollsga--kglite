@@ -63,6 +63,10 @@ pub struct NodeOperationReport {
     pub processing_time_ms: f64,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub errors: Vec<String>,
+    /// Advisories about rows the call wrote, such as rows whose validity
+    /// interval is empty under a `half_open` declaration. Not errors: the
+    /// rows are stored.
+    pub warnings: Vec<String>,
 }
 
 impl NodeOperationReport {
@@ -81,6 +85,7 @@ impl NodeOperationReport {
             processing_time_ms,
             timestamp: chrono::Utc::now(),
             errors: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -107,6 +112,10 @@ pub struct ConnectionOperationReport {
     pub processing_time_ms: f64,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub errors: Vec<String>,
+    /// Advisories about rows the call wrote, such as rows whose validity
+    /// interval is empty under a `half_open` declaration. Not errors: the
+    /// rows are stored.
+    pub warnings: Vec<String>,
 }
 
 impl ConnectionOperationReport {
@@ -127,6 +136,7 @@ impl ConnectionOperationReport {
             processing_time_ms,
             timestamp: chrono::Utc::now(),
             errors: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 

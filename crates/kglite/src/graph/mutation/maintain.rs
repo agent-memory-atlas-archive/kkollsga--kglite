@@ -887,7 +887,8 @@ pub fn add_nodes(
         &title_field,
         derived_titles.as_deref(),
     )?;
-    check_node_load(graph, &node_type, &df_data, id_idx, (conflict_mode, &[]))?;
+    let empty_intervals =
+        check_node_load(graph, &node_type, &df_data, id_idx, (conflict_mode, &[]))?;
 
     install_node_type_metadata(
         graph,
@@ -1015,6 +1016,7 @@ pub fn add_nodes(
     if !errors.is_empty() {
         report = report.with_errors(errors);
     }
+    report.warnings.extend(empty_intervals.warning());
 
     graph.bump_version();
     Ok(report)
@@ -1180,7 +1182,7 @@ pub(crate) fn add_connections_with_initial_load(
     // mutating passes below; the helper also snapshots stored values while
     // preserving endpoint identity cells. A missing source/target type is no
     // error: an edge to it vivifies a stub node, registering the type (Pass B).
-    let (resolved, titles) = prepare_connection_admission(
+    let (resolved, titles, empty_intervals) = prepare_connection_admission(
         graph,
         &mut df_data,
         ConnectionAdmissionFields {
@@ -1340,11 +1342,11 @@ pub(crate) fn add_connections_with_initial_load(
 
     let mut report = batch_report("add_connections", &stats, skipped_count, &metrics);
     report.stubs_vivified = stubs_vivified;
+    report.warnings.extend(empty_intervals.warning());
 
     if !errors.is_empty() {
         report = report.with_errors(errors);
     }
-
     graph.bump_version();
     Ok(report)
 }
@@ -1864,7 +1866,8 @@ pub fn replace_connections(
         target_id_idx,
     )?;
     // A declared validity interval judges the rows before the delete, as
-    // `add_connections` judges them before its writes.
+    // `add_connections` judges them before its writes; that call reports
+    // the empty ones.
     check_edge_load(graph, &connection_type, &source_type, &df_data)?;
     // 3. Declared relationship constraints. `add_connections` gates them too,
     //    but that gate runs *after* the delete below — so the frame is judged
@@ -2170,6 +2173,7 @@ pub fn create_connections(
     if !written.errors.is_empty() {
         report = report.with_errors(written.errors);
     }
+    report.warnings.extend(written.empty_intervals.warning());
 
     graph.bump_version();
     Ok(report)

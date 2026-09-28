@@ -158,16 +158,43 @@ fn a_dirty_bound_is_refused_naming_its_element() {
 }
 
 #[test]
-fn an_inverted_row_is_refused_and_an_empty_one_under_half_open() {
+fn an_inverted_row_is_refused_under_either_convention() {
     let mut g = graph(&["CREATE (:Span {id: 7, vf: '2010-01-01', vt: '2009-01-01'})"]);
     let message = err(&mut g, &node("Span"), "vf", "vt", Closed);
     assert!(message.contains("node '7'"), "{message}");
     assert!(message.contains("is after the to bound"), "{message}");
-
-    let mut g = graph(&["CREATE (:Span {id: 8, vf: '2010-01-01', vt: '2010-01-01'})"]);
     let message = err(&mut g, &node("Span"), "vf", "vt", HalfOpen);
-    assert!(message.contains("node '8'"), "{message}");
-    assert!(declare(&mut g, &node("Span"), "vf", "vt", Closed).is_ok());
+    assert!(message.contains("is after the to bound"), "{message}");
+    assert!(list(&g).is_empty(), "a refused declaration stores nothing");
+}
+
+#[test]
+fn an_empty_half_open_row_is_accepted_with_a_warning_and_counted() {
+    let spans = "CREATE (:Span {id: 8, vf: '2010-01-01', vt: '2010-01-01'}), \
+                 (:Span {id: 9, vf: '2010-01-01', vt: '2011-01-01'}), \
+                 (:Span {id: 10, vf: '2012-01-01', vt: '2012-01-01'})";
+    let mut g = graph(&[spans]);
+    let report = declare(&mut g, &node("Span"), "vf", "vt", HalfOpen).unwrap();
+    assert!(report.changed);
+    assert_eq!(report.rows, 3);
+    let warning = report.warning.expect("an empty row earns a warning");
+    assert!(
+        warning.starts_with(
+            "2 of 3 rows of node label 'Span' have an empty interval under convention \
+             'half_open'"
+        ),
+        "{warning}"
+    );
+    assert!(warning.contains("the first is node '8'"), "{warning}");
+    assert_eq!(list(&g)[0].empty_rows, Some(2));
+
+    // Closed reads the same rows as one-day intervals: none is empty (row 8
+    // ends on the day row 9 begins, which is the abutment advisory).
+    let mut g = graph(&[spans]);
+    let report = declare(&mut g, &node("Span"), "vf", "vt", Closed).unwrap();
+    let warning = report.warning.unwrap_or_default();
+    assert!(!warning.contains("empty interval"), "{warning}");
+    assert_eq!(list(&g)[0].empty_rows, Some(0));
 }
 
 #[test]

@@ -45,7 +45,7 @@ pub use request::{
     node_request_config, node_type_has_property, relationship_request_configs,
     relationship_type_has_property, unknown_bound_message,
 };
-pub(crate) use validate::{edge_bound, node_bound, view_bound};
+pub(crate) use validate::{edge_bound, node_bound, view_bound, EmptyIntervals};
 #[cfg(test)]
 pub(crate) use write_check::unchecked;
 pub(crate) use write_check::{

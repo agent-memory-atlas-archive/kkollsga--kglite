@@ -1,10 +1,12 @@
 //! The elements a `SET` clause moved a declared validity bound of, judged
 //! once the clause has applied every item — so `SET n.vf = …, n.vt = …` is
 //! judged as the interval it leaves, not item by item. A refusal fails the
-//! statement, whose checkpoint undoes the clause.
+//! statement, whose checkpoint undoes the clause; an element left with an
+//! empty interval is counted into the statement's warning.
 
 use crate::graph::features::temporal::{
     check_stored_edge, check_stored_node, declarations::node_names_bound, edge_property_is_bound,
+    EmptyIntervals,
 };
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
@@ -51,8 +53,13 @@ impl BoundWrites {
         }
     }
 
-    /// Refuse the clause when a noted element now breaks its declaration.
-    pub(super) fn check(mut self, graph: &DirGraph) -> Result<(), String> {
+    /// Refuse the clause when a noted element now breaks its declaration;
+    /// count those it leaves empty into `empty`.
+    pub(super) fn check(
+        mut self,
+        graph: &DirGraph,
+        empty: &mut EmptyIntervals,
+    ) -> Result<(), String> {
         if self.nodes.is_empty() && self.edges.is_empty() {
             return Ok(());
         }
@@ -60,12 +67,12 @@ impl BoundWrites {
         self.nodes.sort_unstable();
         self.nodes.dedup();
         for idx in self.nodes {
-            check_stored_node(graph, idx)?;
+            check_stored_node(graph, idx, empty)?;
         }
         self.edges.sort_unstable();
         self.edges.dedup();
         for edge in self.edges {
-            check_stored_edge(graph, edge)?;
+            check_stored_edge(graph, edge, empty)?;
         }
         Ok(())
     }

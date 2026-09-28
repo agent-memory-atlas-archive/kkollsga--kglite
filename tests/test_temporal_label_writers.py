@@ -5,10 +5,15 @@ its rows (and an existing node that gains the label) before writing,
 ``labels``, ``from_records`` labels and ontology materialisation (a
 materialised ancestor stamped on new and existing nodes) do the same.
 
+An inverted interval is refused; an empty one under ``half_open`` (from =
+to) gains the label, with one warning naming the first such node, and is
+counted in ``empty_rows``.
+
 Red proof: ``add_nodes(labels=…)`` and ``add_label`` stamped the label with no
 check, leaving a row under ``Status`` that ``db.temporal.declarations()``
 then counted in ``empty_rows``; ontology materialisation and the ancestor
-stamped on a new node did likewise.
+stamped on a new node did likewise. Before the empty rule changed, every
+empty row below was refused.
 """
 
 from __future__ import annotations
@@ -50,6 +55,17 @@ def _status(g) -> list:
 
 def _clean(g) -> None:
     assert all(r["empty_rows"] == 0 for r in g.cypher(COUNTS).to_list())
+
+
+def _empty_rows(g) -> dict:
+    return {r["name"]: r["empty_rows"] for r in g.cypher(COUNTS).to_list()}
+
+
+def _caught(call) -> list[str]:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        call()
+    return [str(w.message) for w in caught if "empty interval" in str(w.message)]
 
 
 def _frame(rows):
@@ -111,6 +127,33 @@ def test_ontology_materialisation_judges_the_ancestor_it_stamps(storage, tmp_pat
     _clean(g)
 
 
+@pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
+def test_an_empty_row_gains_a_declared_label_with_one_warning(storage, tmp_path) -> None:
+    g = _graph(storage, tmp_path)
+    rows = _frame([(63, "2003-01-01", "2003-01-01"), (64, "2004-01-01", None), (65, "2005-01-01", "2005-01-01")])
+    caught = _caught(lambda: g.add_nodes(rows, "Other", "id", labels=["Status"]))
+    assert len(caught) == 1, caught
+    assert caught[0].startswith("2 of 3 rows written have an empty interval under convention 'half_open'"), caught
+    assert "the first is row 0 (0-based) of the load" in caught[0], caught
+    assert _status(g) == [1, 63, 64, 65]
+    g.cypher("CREATE (:Other {id: 66, vf: date('2006-01-01'), vt: date('2006-01-01')})").to_list()
+    caught = _caught(lambda: g.add_label("Other", [66], "Status"))
+    assert len(caught) == 1 and "the first is node '66'" in caught[0], caught
+    assert _status(g) == [1, 63, 64, 65, 66]
+    assert _empty_rows(g) == {"Status": 3}
+    assert g.cypher("MATCH (s:Status) RETURN s.id AS id", valid_at="2006-01-01").to_list() == [{"id": 64}]
+
+
+@pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
+def test_ontology_materialisation_stamps_an_empty_row(storage, tmp_path) -> None:
+    g = _graph(storage, tmp_path)
+    g.cypher("MATCH (o:Other {id: 50}) SET o.vt = o.vf").to_list()
+    g.define_ontology({"classes": {"Status": {}, "Other": {"is_a": "Status"}}})
+    g.materialize_ontology()
+    assert _status(g) == [1, 50, 51]
+    assert _empty_rows(g) == {"Status": 1}
+
+
 def test_a_blueprint_label_onto_a_declared_type_is_refused(tmp_path) -> None:
     pd.DataFrame({"sid": [1], "vf": ["2000-01-01"], "vt": ["2001-01-01"]}).to_csv(tmp_path / "status.csv", index=False)
     pd.DataFrame({"oid": [9], "vf": ["2010-01-01"], "vt": ["2001-01-01"]}).to_csv(tmp_path / "other.csv", index=False)
@@ -147,3 +190,40 @@ def test_extend_judges_a_label_it_unions_onto_a_declared_label() -> None:
         target.extend(source)
     assert target.cypher("MATCH (o:Other) RETURN count(o) AS c").to_list() == [{"c": 2}]
     assert _status(target) == [1]
+    source = kglite.KnowledgeGraph()
+    source.cypher("CREATE (:Other:Status {id: 81, vf: date('2010-01-01'), vt: date('2010-01-01')})").to_list()
+    caught = _caught(lambda: target.extend(source))
+    assert len(caught) == 1 and "node '81'" in caught[0], caught
+    assert _status(target) == [1, 81]
+    assert _empty_rows(target) == {"Status": 1}
+
+
+def test_a_blueprint_label_keeps_an_empty_row_with_a_warning(tmp_path) -> None:
+    pd.DataFrame({"sid": [1], "vf": ["2000-01-01"], "vt": ["2001-01-01"]}).to_csv(tmp_path / "status.csv", index=False)
+    pd.DataFrame({"oid": [9], "vf": ["2010-01-01"], "vt": ["2010-01-01"]}).to_csv(tmp_path / "other.csv", index=False)
+    bp = {
+        "settings": {"root": str(tmp_path)},
+        "nodes": {
+            "Status": {
+                "csv": "status.csv",
+                "pk": "sid",
+                "properties": {"vf": "date", "vt": "date"},
+                "temporal": {"from": "vf", "to": "vt", "convention": "half_open"},
+            },
+            "Other": {
+                "csv": "other.csv",
+                "pk": "oid",
+                "properties": {"vf": "date", "vt": "date"},
+                "labels": ["Status"],
+            },
+        },
+    }
+    path = tmp_path / "blueprint.json"
+    path.write_text(json.dumps(bp), encoding="utf-8")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        g = from_blueprint(path, save=False)
+    empty = [str(w.message) for w in caught if "empty interval" in str(w.message)]
+    assert len(empty) == 1 and "node '9'" in empty[0], [str(w.message) for w in caught]
+    assert _status(g) == [1, 9]
+    assert _empty_rows(g) == {"Status": 1}

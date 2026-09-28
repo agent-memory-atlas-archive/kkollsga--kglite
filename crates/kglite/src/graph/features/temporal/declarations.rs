@@ -74,8 +74,10 @@ pub struct DeclareReport {
     /// declare time. `None` when not counted: a no-op, or a disk-mode label
     /// above [`DISK_NODE_ABUTMENT_CAP`] rows.
     pub abutting_rows: Option<usize>,
-    /// The advisory a closed declaration with abutting rows earns, or the one
-    /// a declaration whose `to` property no row carries yet earns.
+    /// The advisory a declaration earns, at most one applying: a half-open
+    /// one with rows whose interval is empty (valid at no instant, kept and
+    /// counted), a closed one with abutting rows, or one whose `to` property
+    /// no row carries yet.
     pub warning: Option<String>,
 }
 
@@ -95,13 +97,13 @@ pub struct DeclarationInfo {
     /// depends on the order they were added in. Re-declare them per
     /// `source_type` to resolve it. Always `false` for a node label.
     pub ambiguous: bool,
-    /// Rows whose interval is empty now — `from` after `to`, or equal under
-    /// half-open — which are valid at no instant. A declaration and every
-    /// load or Cypher write refuse them, so they come from a writer the
-    /// check does not judge: a fluent `update()`, an undeclare that hands a
-    /// source's relationships to the unkeyed declaration, or a graph saved
-    /// by an earlier version. Counted at the graph's current version; `None`
-    /// where not counted.
+    /// Rows whose interval is empty now, valid at no instant: `from == to`
+    /// under half-open, which a declaration and every load or Cypher write
+    /// accept with a warning, or `from` after `to`, which they refuse and
+    /// only a writer the check does not judge can leave (a fluent
+    /// `update()`, an undeclare that hands a source's relationships to the
+    /// unkeyed declaration, or a graph saved by an earlier version). Counted
+    /// at the graph's current version; `None` where not counted.
     pub empty_rows: Option<usize>,
     /// Rows holding a bound that is now unreadable (not NULL, a date, a
     /// datetime or an ISO string) — left as [`Self::empty_rows`] are.
@@ -406,10 +408,10 @@ impl TemporalDeclarations {
 /// stored bound is read under
 /// the rule `valid_at` uses; the first one that is not NULL, a date, a
 /// datetime or an ISO date string is refused, naming its element, and so is a
-/// row whose interval is inverted (`from > to`, or `from == to` under
-/// half-open, which would be empty). Re-declaring an identical interval is a
-/// no-op; a different one for the same target is refused. A real change bumps
-/// the graph version.
+/// row whose interval is inverted (`from > to`). A row whose interval is
+/// empty under half-open (`from == to`) is accepted, counted and warned
+/// about. Re-declaring an identical interval is a no-op; a different one for
+/// the same target is refused. A real change bumps the graph version.
 pub fn declare(
     graph: &mut DirGraph,
     target: &TemporalTarget,
@@ -433,6 +435,24 @@ pub fn declare_loaded(
     convention: IntervalConvention,
     written: &[&str],
 ) -> Result<DeclareReport, String> {
+    declare_walked(
+        graph,
+        target,
+        (valid_from, valid_to, convention),
+        written,
+        true,
+    )
+}
+
+/// [`declare_loaded`]; `warn_empty` false leaves the empty-row warning to a
+/// load that has already reported the same rows.
+pub(super) fn declare_walked(
+    graph: &mut DirGraph,
+    target: &TemporalTarget,
+    (valid_from, valid_to, convention): (&str, &str, IntervalConvention),
+    written: &[&str],
+    warn_empty: bool,
+) -> Result<DeclareReport, String> {
     let config = TemporalConfig {
         valid_from: valid_from.to_string(),
         valid_to: valid_to.to_string(),
@@ -452,13 +472,19 @@ pub fn declare_loaded(
     let Walk {
         rows,
         abutting,
+        empty,
         open_ended,
     } = validate::walk(graph, target, &config, written)?;
+    // Empty rows exist only under half-open and abutment warns only under
+    // closed; an open-ended `to` leaves no row with two bounds.
+    let empty_warning = warn_empty
+        .then(|| empty.declaration_warning(target))
+        .flatten();
     let warning = match abutting {
         Some(count) if count > 0 && convention == IntervalConvention::Closed => {
             Some(validate::abutment_warning(target, count, rows))
         }
-        _ => open_ended,
+        _ => empty_warning.or(open_ended),
     };
     record_insert(graph, target, config, abutting);
     graph.bump_version();

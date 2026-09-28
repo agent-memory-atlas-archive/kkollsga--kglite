@@ -203,8 +203,9 @@ pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<String>,
 
 /// Declare every interval the specs name a convention for, over the rows the
 /// build wrote. A declaration the rows refuse — an unreadable bound, or an
-/// inverted or empty interval — fails the build, naming the row. A spec that
-/// wrote no rows of its target declares nothing and says so.
+/// inverted interval — fails the build, naming the row; rows with an empty
+/// interval under `half_open` are kept and reported in the build's warnings.
+/// A spec that wrote no rows of its target declares nothing and says so.
 pub(super) fn declare_blueprint_temporal(
     graph: &mut DirGraph,
     all_specs: &[&FlatSpec],

@@ -234,11 +234,12 @@ fn date_bound(value: &Value) -> Option<Option<NaiveDate>> {
 }
 
 /// Whether the interval holds any instant: false when its end does not
-/// admit its own start — inverted, or `from == to` under half-open — which a
-/// declaration and a write refuse and only an unjudged writer (a fluent
-/// `update()`, an older version's file) can leave. Checked apart from
-/// the instant, because at date grain an inverted pair of timestamps on one
-/// day (`[08:00, 00:00]`) would otherwise read as covering that day.
+/// admit its own start — `from == to` under half-open, which a declaration
+/// and every write accept (counted and warned about), or inverted, which they
+/// refuse and only an unjudged writer (a fluent `update()`, an older
+/// version's file) can leave. Checked apart from the instant, because at
+/// date grain an inverted pair of timestamps on one day (`[08:00, 00:00]`)
+/// would otherwise read as covering that day.
 fn non_empty(from: Option<Instant>, to: Option<Instant>, convention: IntervalConvention) -> bool {
     match (from, to) {
         (Some(from), Some(to)) => end_admits(to, from, convention),
@@ -247,8 +248,7 @@ fn non_empty(from: Option<Instant>, to: Option<Instant>, convention: IntervalCon
 }
 
 /// Whether the element's interval shares an instant with the closed query
-/// range `[a, b]`. An empty interval — inverted, or `from == to` under
-/// half-open, which a write after the declaration can leave — shares none, as
+/// range `[a, b]`. An empty interval (see [`non_empty`]) shares none, as
 /// [`interval_contains`] finds it valid on no date.
 pub(crate) fn interval_overlaps(
     from: &Value,

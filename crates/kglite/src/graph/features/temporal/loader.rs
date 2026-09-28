@@ -57,11 +57,13 @@ enum Stage {
 /// judges its own rows against it (`write_check::check_node_load`,
 /// `check_edge_load`). Otherwise, before anything is
 /// written, a conflicting declaration of the same key is refused, and so is a
-/// row of `frame` holding an unreadable, inverted or empty interval (named by
-/// its position). A target that already exists is then declared at once —
-/// its stored rows validated; a target whose first rows the load writes is
+/// row of `frame` holding an unreadable or inverted interval (named by its
+/// position). A target that already exists is then declared at once — its
+/// stored rows validated; a target whose first rows the load writes is
 /// installed unvalidated and validated by [`LoadDeclaration::finish`]. Either
-/// way the load itself merges under the declared relationship key.
+/// way the load itself merges under the declared relationship key. The load
+/// warns about the empty intervals it writes; a declaration made at once
+/// warns about those the target already stored.
 ///
 /// A relationship load names its source type. It declares the type-wide
 /// (unkeyed) declaration — the one every build before source types applied —
@@ -113,9 +115,9 @@ pub fn declare_from_column_types(
         });
         return Ok(load);
     }
-    validate::check_frame(frame, &load.config)?;
+    validate::check_frame(frame, &[&load.config])?;
     if validate::check_target(graph, &load.target).is_ok() {
-        load.stage = Stage::Declared(load.declare(graph)?);
+        load.stage = Stage::Declared(load.declare(graph, true)?);
     } else {
         record_insert(graph, &load.target, load.config.clone(), None);
     }
@@ -123,15 +125,20 @@ pub fn declare_from_column_types(
 }
 
 impl LoadDeclaration {
-    fn declare(&self, graph: &mut DirGraph) -> Result<DeclareReport, String> {
+    /// `warn_empty` false once the load has written every row the walk
+    /// reads: its own row check has warned about their empty intervals.
+    fn declare(&self, graph: &mut DirGraph, warn_empty: bool) -> Result<DeclareReport, String> {
         let written: Vec<&str> = self.written.iter().map(String::as_str).collect();
-        declarations::declare_loaded(
+        declarations::declare_walked(
             graph,
             &self.target,
-            &self.config.valid_from,
-            &self.config.valid_to,
-            self.config.convention,
+            (
+                &self.config.valid_from,
+                &self.config.valid_to,
+                self.config.convention,
+            ),
             &written,
+            warn_empty,
         )
     }
 
@@ -143,7 +150,7 @@ impl LoadDeclaration {
             Stage::Declared(report) => Ok(report),
             Stage::Installed => {
                 record_remove(graph, &self.target);
-                self.declare(graph)
+                self.declare(graph, false)
             }
         }
     }

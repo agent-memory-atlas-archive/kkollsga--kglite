@@ -1105,6 +1105,7 @@ impl KnowledgeGraph {
         )
         .map_err(|message| super::kg_mutation::bulk_write_err(graph, message))?;
         self.commit_wal()?;
+        crate::graph::warn_all(py, &result.warnings)?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 

@@ -443,6 +443,7 @@ pub kglite::api::blueprint::RecordsReport::edges_added: usize
 pub kglite::api::blueprint::RecordsReport::edges_dropped_missing_endpoint: usize
 pub kglite::api::blueprint::RecordsReport::node_types: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::blueprint::RecordsReport::nodes_added: usize
+pub kglite::api::blueprint::RecordsReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::blueprint::RecordsReport
 pub fn kglite::api::blueprint::RecordsReport::clone(&self) -> kglite::api::blueprint::RecordsReport
 impl core::default::Default for kglite::api::blueprint::RecordsReport
@@ -2369,6 +2370,7 @@ pub kglite::api::mutation::ConnectionOperationReport::processing_time_ms: f64
 pub kglite::api::mutation::ConnectionOperationReport::property_fields_tracked: usize
 pub kglite::api::mutation::ConnectionOperationReport::stubs_vivified: usize
 pub kglite::api::mutation::ConnectionOperationReport::timestamp: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub kglite::api::mutation::ConnectionOperationReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::api::mutation::ConnectionOperationReport
 pub fn kglite::api::mutation::ConnectionOperationReport::new(operation_type: alloc::string::String, connections_created: usize, connections_skipped: usize, property_fields_tracked: usize, processing_time_ms: f64) -> Self
 pub fn kglite::api::mutation::ConnectionOperationReport::with_errors(self, errors: alloc::vec::Vec<alloc::string::String>) -> Self
@@ -2410,6 +2412,7 @@ pub struct kglite::api::mutation::EdgeSpecReport
 pub kglite::api::mutation::EdgeSpecReport::connections_created: usize
 pub kglite::api::mutation::EdgeSpecReport::connections_updated: usize
 pub kglite::api::mutation::EdgeSpecReport::skipped_missing_endpoint: usize
+pub kglite::api::mutation::EdgeSpecReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::mutation::EdgeSpecReport
 pub fn kglite::api::mutation::EdgeSpecReport::clone(&self) -> kglite::api::mutation::EdgeSpecReport
 impl core::default::Default for kglite::api::mutation::EdgeSpecReport
@@ -2428,6 +2431,7 @@ pub kglite::api::mutation::ExtendReport::nodes_created: usize
 pub kglite::api::mutation::ExtendReport::nodes_skipped: usize
 pub kglite::api::mutation::ExtendReport::nodes_updated: usize
 pub kglite::api::mutation::ExtendReport::processing_time_ms: f64
+pub kglite::api::mutation::ExtendReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::mutation::ExtendReport
 pub fn kglite::api::mutation::ExtendReport::clone(&self) -> kglite::api::mutation::ExtendReport
 impl core::fmt::Debug for kglite::api::mutation::ExtendReport
@@ -2440,6 +2444,7 @@ pub kglite::api::mutation::NodeOperationReport::nodes_updated: usize
 pub kglite::api::mutation::NodeOperationReport::operation_type: alloc::string::String
 pub kglite::api::mutation::NodeOperationReport::processing_time_ms: f64
 pub kglite::api::mutation::NodeOperationReport::timestamp: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub kglite::api::mutation::NodeOperationReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::api::mutation::NodeOperationReport
 pub fn kglite::api::mutation::NodeOperationReport::new(operation_type: alloc::string::String, nodes_created: usize, nodes_updated: usize, nodes_skipped: usize, processing_time_ms: f64) -> Self
 pub fn kglite::api::mutation::NodeOperationReport::with_errors(self, errors: alloc::vec::Vec<alloc::string::String>) -> Self
@@ -3364,8 +3369,8 @@ pub const kglite::api::temporal::DISK_MASK_BYTE_CAP: usize
 pub const kglite::api::temporal::DISK_NODE_ABUTMENT_CAP: usize
 pub const kglite::api::temporal::DISK_SLICE_ELEMENT_CAP: usize
 pub const kglite::api::temporal::SLICE_BYTE_CAP: usize
-pub fn kglite::api::temporal::check_label_stamp(graph: &kglite::api::DirGraph, nodes: &[petgraph::graph_impl::NodeIndex], label: &str) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::temporal::check_labelled_load(graph: &mut kglite::api::DirGraph, frame: &kglite::datatypes::values::DataFrame, (node_type, unique_id_field): (&str, &str), conflict_handling: core::option::Option<&str>, labels: &[&str]) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::temporal::check_label_stamp(graph: &kglite::api::DirGraph, nodes: &[petgraph::graph_impl::NodeIndex], label: &str) -> core::result::Result<core::option::Option<alloc::string::String>, alloc::string::String>
+pub fn kglite::api::temporal::check_labelled_load(graph: &mut kglite::api::DirGraph, frame: &kglite::datatypes::values::DataFrame, (node_type, unique_id_field): (&str, &str), conflict_handling: core::option::Option<&str>, labels: &[&str]) -> core::result::Result<core::option::Option<alloc::string::String>, alloc::string::String>
 pub fn kglite::api::temporal::declare(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: kglite::api::temporal::IntervalConvention) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::declare_defaulted(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::declare_from_column_types(graph: &mut kglite::api::DirGraph, target: kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>, frame: &kglite::datatypes::values::DataFrame) -> core::result::Result<kglite::api::temporal::LoadDeclaration, alloc::string::String>

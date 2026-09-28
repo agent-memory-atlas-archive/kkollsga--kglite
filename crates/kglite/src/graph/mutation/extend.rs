@@ -67,7 +67,7 @@
 
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::features::temporal;
-use crate::graph::features::temporal::merge_start_key;
+use crate::graph::features::temporal::{merge_start_key, EmptyIntervals};
 use crate::graph::introspection::reporting::{ConnectionOperationReport, NodeOperationReport};
 use crate::graph::mutation::batch::ConflictHandling;
 use crate::graph::mutation::edge_props::resolve_edge_property_columns;
@@ -96,6 +96,10 @@ pub struct ExtendReport {
     pub labels_unioned: usize,
     pub processing_time_ms: f64,
     pub errors: Vec<String>,
+    /// Advisories about rows the merge wrote, such as rows whose validity
+    /// interval is empty under a `half_open` declaration — stored and
+    /// counted, valid at no instant.
+    pub warnings: Vec<String>,
 }
 
 /// Per-type node rows accumulated from the source graph, ready to be
@@ -290,6 +294,7 @@ pub fn extend_graph(
         labels_unioned: 0,
         processing_time_ms: 0.0,
         errors: Vec::new(),
+        warnings: Vec::new(),
     };
 
     // The temporal declarations go in before any row, so the edge merge — and
@@ -387,7 +392,8 @@ fn merge_rows(
         .collect();
     gate_node_groups(target, &node_groups)?;
     gate_edge_groups(target, &edge_groups, &owned, conflict_mode)?;
-    gate_label_carriers(target, &node_groups, &label_carriers, conflict_mode)?;
+    let empty_labels = gate_label_carriers(target, &node_groups, &label_carriers, conflict_mode)?;
+    report.warnings.extend(empty_labels.warning());
     write_node_groups(target, source, node_groups, conflict_handling, report)?;
     union_labels(target, label_carriers, report);
     copy_spatial_configs(target, source);
@@ -396,16 +402,17 @@ fn merge_rows(
 
 /// Judge each node the label union will give a label declared in the target
 /// by the bounds the node pass leaves it — before anything is written, so a
-/// refusal writes nothing.
+/// refusal writes nothing — and count those it leaves an empty interval.
 fn gate_label_carriers(
     target: &DirGraph,
     node_groups: &BTreeMap<String, NodeGroup>,
     label_carriers: &[(String, Value, Vec<String>)],
     conflict_mode: ConflictHandling,
-) -> Result<(), String> {
+) -> Result<EmptyIntervals, String> {
+    let mut empty = EmptyIntervals::default();
     let declared = |labels: &[String]| labels.iter().any(|l| target.temporal.node(l).is_some());
     if !label_carriers.iter().any(|(_, _, labels)| declared(labels)) {
-        return Ok(());
+        return Ok(empty);
     }
     let mut rows_by_id: HashMap<&str, HashMap<&Value, &HashMap<String, Value>>> = HashMap::new();
     for (node_type, id, labels) in label_carriers {
@@ -429,12 +436,12 @@ fn gate_label_carriers(
             target,
             (node_type, id),
             |property| props.and_then(|p| p.get(property).cloned()),
-            labels,
-            conflict_mode,
+            (labels, conflict_mode),
+            &mut empty,
         )
         .map_err(|e| format!("extend: {e}"))?;
     }
-    Ok(())
+    Ok(empty)
 }
 
 /// Judge every node group against the target's node constraints, as its
@@ -539,6 +546,7 @@ fn write_node_groups(
         report.nodes_updated += r.nodes_updated;
         report.nodes_skipped += r.nodes_skipped;
         report.errors.extend(r.errors);
+        report.warnings.extend(r.warnings);
     }
     Ok(())
 }
@@ -594,6 +602,7 @@ fn merge_edge_groups(
         report.edges_updated += r.connections_updated;
         report.edges_skipped += r.connections_skipped;
         report.errors.extend(r.errors);
+        report.warnings.extend(r.warnings);
     }
     Ok(())
 }

@@ -1327,6 +1327,9 @@ impl KnowledgeGraph {
             .map(|cfg| prepare_timeseries(py, data, &unique_id_field, cfg))
             .transpose()?
             .flatten();
+        // The load's empty-interval warning, widened to the labels it stamps
+        // when it stamps any; it then replaces the one `add_nodes` reports.
+        let mut labelled_warning = None;
         let labels = labels
             .as_ref()
             .filter(|list| !list.is_empty())
@@ -1334,7 +1337,7 @@ impl KnowledgeGraph {
                 // The labels land after the rows, so a declared validity
                 // interval on one judges the rows now, before any is written.
                 let stamped: Vec<&str> = list.iter().map(String::as_str).collect();
-                kglite_core::api::temporal::check_labelled_load(
+                labelled_warning = kglite_core::api::temporal::check_labelled_load(
                     graph,
                     &converted.df,
                     (&node_type, &unique_id_field),
@@ -1387,6 +1390,10 @@ impl KnowledgeGraph {
         self.commit_wal()?;
         self.add_report(OperationReport::NodeOperation(result.clone()));
         declared?;
+        match labelled_warning {
+            Some(warning) => crate::graph::warn_all(py, &[warning])?,
+            None => crate::graph::warn_all(py, &result.warnings)?,
+        }
 
         Python::attach(|py| build_node_report_dict(py, &result, on_invalid))
     }
@@ -1437,6 +1444,7 @@ impl KnowledgeGraph {
 
         self.cursor.selection.clear();
         self.commit_wal()?;
+        crate::graph::warn_all(py, &result.warnings)?;
         build_extend_report_dict(py, &result)
     }
 
@@ -1611,11 +1619,12 @@ impl KnowledgeGraph {
                 None => missing += 1,
             }
         }
-        kglite_core::api::temporal::check_label_stamp(g, &indices, label)
+        let warning = kglite_core::api::temporal::check_label_stamp(g, &indices, label)
             .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
         let (labelled, bulk_skipped) = g.add_node_labels_bulk(&indices, key);
         let skipped = missing + bulk_skipped;
         self.commit_wal()?;
+        crate::graph::warn_all(py, warning.as_slice())?;
         let result = PyDict::new(py);
         result.set_item("labelled", labelled)?;
         result.set_item("skipped", skipped)?;
@@ -1715,6 +1724,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let result_dict = PyDict::new(py);
+        let mut warnings: Vec<String> = Vec::new();
 
         for item in nodes.iter() {
             let spec = item.cast::<PyDict>()?;
@@ -1776,10 +1786,12 @@ impl KnowledgeGraph {
             })?;
 
             result_dict.set_item(&node_type, report.nodes_created + report.nodes_updated)?;
+            warnings.extend(report.warnings);
         }
 
         self.cursor.selection.clear();
         self.commit_wal()?;
+        crate::graph::warn_all(py, &warnings)?;
         Ok(result_dict.into())
     }
 
@@ -1836,6 +1848,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let result_dict = PyDict::new(py);
+        let mut warnings: Vec<String> = Vec::new();
         let loaded_types: std::collections::HashSet<String> = if filter_to_loaded {
             self.inner.all_node_types().into_iter().collect()
         } else {
@@ -1937,10 +1950,12 @@ impl KnowledgeGraph {
             })?;
 
             result_dict.set_item(&connection_name, report.connections_created)?;
+            warnings.extend(report.warnings);
         }
 
         self.cursor.selection.clear();
         self.commit_wal()?;
+        crate::graph::warn_all(py, &warnings)?;
         Ok(result_dict.into())
     }
 }

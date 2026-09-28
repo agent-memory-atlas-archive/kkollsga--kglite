@@ -1,9 +1,10 @@
 //! The row check a write onto a declared type runs: the rule a declaration
 //! validates its stored rows by ([`validate::check_row`]) — every bound NULL,
-//! a date, a datetime or an ISO string, and no interval inverted, or empty
-//! under `half_open` — applied to the rows a load or a Cypher write leaves,
-//! and worded as the declaration words it. A type with no declaration costs
-//! one map lookup.
+//! a date, a datetime or an ISO string, and no interval inverted — applied to
+//! the rows a load or a Cypher write leaves, and worded as the declaration
+//! words it. A row whose interval is empty under `half_open` is written, and
+//! counted into the one warning ([`EmptyIntervals`]) its load or statement
+//! reports. A type with no declaration costs one map lookup.
 //!
 //! A loader row is judged before anything is written, by the values it will
 //! leave under its conflict mode; a Cypher `CREATE` before its insert; a
@@ -13,7 +14,7 @@
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
-use super::validate::{self, check_row};
+use super::validate::{self, check_row, is_empty, EmptyIntervals};
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::core::value_operations::format_value_compact;
 use crate::graph::dir_graph::DirGraph;
@@ -21,18 +22,19 @@ use crate::graph::mutation::batch::ConflictHandling;
 use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::GraphRead;
 
-/// [`check_row`] for a write, completed with the element's name.
+/// [`check_row`] for a write, completed with the element's name: whether
+/// the row's interval is empty.
 fn judge(
     from: &Value,
     to: &Value,
     config: &TemporalConfig,
     name: impl FnOnce() -> String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if suspended() {
-        return Ok(());
+        return Ok(false);
     }
     check_row(from, to, config)
-        .map(|_| ())
+        .map(|bounds| is_empty(bounds, config))
         .map_err(|reason| format!("{}, {reason}", name()))
 }
 
@@ -135,21 +137,32 @@ pub(crate) fn edge_property_is_bound(graph: &DirGraph, rel_type: &str, property:
 }
 
 /// Refuse the stored state of node `idx` when it breaks a declaration on one
-/// of its labels, naming the node as a declaration does.
-pub(crate) fn check_stored_node(graph: &DirGraph, idx: NodeIndex) -> Result<(), String> {
+/// of its labels, naming the node as a declaration does, and count it into
+/// `empty`.
+pub(crate) fn check_stored_node(
+    graph: &DirGraph,
+    idx: NodeIndex,
+    empty: &mut EmptyIntervals,
+) -> Result<(), String> {
+    let name = || format!("node '{}'", node_name(graph, idx));
+    let mut row_empty = false;
     for config in node_configs(graph, idx) {
         let from = validate::node_bound(graph, idx, &config.valid_from);
         let to = validate::node_bound(graph, idx, &config.valid_to);
-        judge(&from, &to, config, || {
-            format!("node '{}'", node_name(graph, idx))
-        })?;
+        row_empty |= judge(&from, &to, config, name)?;
     }
+    empty.note(row_empty, name);
     Ok(())
 }
 
 /// Refuse the stored state of relationship `edge` when it breaks the
-/// declaration governing it, naming its endpoints as a declaration does.
-pub(crate) fn check_stored_edge(graph: &DirGraph, edge: EdgeIndex) -> Result<(), String> {
+/// declaration governing it, naming its endpoints as a declaration does, and
+/// count it into `empty`.
+pub(crate) fn check_stored_edge(
+    graph: &DirGraph,
+    edge: EdgeIndex,
+    empty: &mut EmptyIntervals,
+) -> Result<(), String> {
     let Some(rel_key) = graph.graph.edge_weight(edge).map(|e| e.connection_type) else {
         return Ok(());
     };
@@ -162,48 +175,61 @@ pub(crate) fn check_stored_edge(graph: &DirGraph, edge: EdgeIndex) -> Result<(),
     let Some((source, target)) = graph.graph.edge_endpoints(edge) else {
         return Ok(());
     };
+    let name = || edge_name(graph, rel_type, source, target);
+    let mut row_empty = false;
     let source_type = graph
         .graph
         .node_type_of(source)
         .and_then(|key| resolve(graph, key));
-    for config in edge_configs_for(graph, rel_type, source_type) {
+    let configs = edge_configs_for(graph, rel_type, source_type);
+    if configs.is_empty() {
+        return Ok(());
+    }
+    for config in configs {
         let from = validate::edge_bound(graph, edge, InternedKey::from_str(&config.valid_from));
         let to = validate::edge_bound(graph, edge, InternedKey::from_str(&config.valid_to));
-        judge(&from, &to, config, || {
-            edge_name(graph, rel_type, source, target)
-        })?;
+        row_empty |= judge(&from, &to, config, name)?;
     }
+    empty.note(row_empty, name);
     Ok(())
 }
 
 /// Refuse a node a Cypher `CREATE` is about to insert with `labels`, when the
-/// bounds `read` gives break a declaration on one of them. `id` names it.
+/// bounds `read` gives break a declaration on one of them, and count it into
+/// `empty` when one is declared. `id` names it.
 pub(crate) fn check_new_node<'l>(
     graph: &DirGraph,
     labels: impl IntoIterator<Item = &'l str>,
-    id: &Value,
-    read: impl Fn(&str) -> Option<Value>,
+    (id, read): (&Value, impl Fn(&str) -> Option<Value>),
+    empty: &mut EmptyIntervals,
 ) -> Result<(), String> {
     if !graph.temporal.has_node_declarations() {
         return Ok(());
     }
+    let name = || format!("node '{}'", format_value_compact(id));
+    let mut declared = false;
+    let mut row_empty = false;
     for config in labels.into_iter().filter_map(|l| graph.temporal.node(l)) {
+        declared = true;
         let from = read(&config.valid_from).unwrap_or(Value::Null);
         let to = read(&config.valid_to).unwrap_or(Value::Null);
-        judge(&from, &to, config, || {
-            format!("node '{}'", format_value_compact(id))
-        })?;
+        row_empty |= judge(&from, &to, config, name)?;
+    }
+    if declared {
+        empty.note(row_empty, name);
     }
     Ok(())
 }
 
 /// Refuse a `rel_type` relationship a Cypher `CREATE` is about to insert from
-/// `source` to `target`, when the bounds `read` gives break its declaration.
+/// `source` to `target`, when the bounds `read` gives break its declaration,
+/// and count it into `empty` when the type is declared.
 pub(crate) fn check_new_edge(
     graph: &DirGraph,
     rel_type: &str,
     (source, target): (NodeIndex, NodeIndex),
     read: impl Fn(&str) -> Option<Value>,
+    empty: &mut EmptyIntervals,
 ) -> Result<(), String> {
     if graph.temporal.edges(rel_type).is_empty() {
         return Ok(());
@@ -212,13 +238,18 @@ pub(crate) fn check_new_edge(
         .graph
         .node_type_of(source)
         .and_then(|key| resolve(graph, key));
-    for config in edge_configs_for(graph, rel_type, source_type) {
+    let name = || edge_name(graph, rel_type, source, target);
+    let configs = edge_configs_for(graph, rel_type, source_type);
+    if configs.is_empty() {
+        return Ok(());
+    }
+    let mut row_empty = false;
+    for config in configs {
         let from = read(&config.valid_from).unwrap_or(Value::Null);
         let to = read(&config.valid_to).unwrap_or(Value::Null);
-        judge(&from, &to, config, || {
-            edge_name(graph, rel_type, source, target)
-        })?;
+        row_empty |= judge(&from, &to, config, name)?;
     }
+    empty.note(row_empty, name);
     Ok(())
 }
 
@@ -314,19 +345,21 @@ fn load_configs<'g>(
 
 /// Refuse an `add_nodes` load onto `node_type` — stamping `labels` besides
 /// its type — whose rows would leave a node breaking a declaration on the
-/// labels it ends up with, naming the first by its position in the load.
-/// Runs before the load writes. A row is judged by the bounds it leaves
-/// under `mode`; a declaration whose bounds the load does not carry is read
-/// only for an existing node that gains its label.
+/// labels it ends up with, naming the first by its position in the load, and
+/// count the rows it leaves with an empty interval. Runs before the load
+/// writes. A row is judged by the bounds it leaves under `mode`; a
+/// declaration whose bounds the load does not carry is read only for an
+/// existing node that gains its label.
 pub(crate) fn check_node_load(
     graph: &DirGraph,
     node_type: &str,
     frame: &DataFrame,
     id_column: usize,
     (mode, labels): (ConflictHandling, &[&str]),
-) -> Result<(), String> {
+) -> Result<EmptyIntervals, String> {
+    let mut empty = EmptyIntervals::default();
     if !graph.temporal.has_node_declarations() || suspended() {
-        return Ok(());
+        return Ok(empty);
     }
     let configs = load_configs(graph, node_type, labels, frame);
     // A secondary label an existing node carries can be declared although
@@ -334,7 +367,7 @@ pub(crate) fn check_node_load(
     let secondary = graph.has_secondary_labels;
     let carried = |c: &LoadConfig<'_>| c.columns.0.is_some() || c.columns.1.is_some();
     if !secondary && !configs.iter().any(|c| c.stamped || carried(c)) {
-        return Ok(());
+        return Ok(empty);
     }
     let cell = |row: usize, column: Option<usize>| {
         column
@@ -347,6 +380,7 @@ pub(crate) fn check_node_load(
             Some(id) => id,
         };
         let row_name = || format!("row {row} (0-based) of the load");
+        let mut row_empty = false;
         // Looked up only when a stored bound can show through, so the
         // common row — both bounds present, a mode that writes them — costs
         // no id lookup.
@@ -363,11 +397,11 @@ pub(crate) fn check_node_load(
                 ConflictHandling::Skip | ConflictHandling::Preserve => false,
             };
             if decided && load.columns.0.is_some() && load.columns.1.is_some() {
-                judge(&from, &to, load.config, row_name)?;
+                row_empty |= judge(&from, &to, load.config, row_name)?;
                 continue;
             }
             let Some(idx) = lookup() else {
-                judge(&from, &to, load.config, row_name)?;
+                row_empty |= judge(&from, &to, load.config, row_name)?;
                 continue;
             };
             let gains = load.stamped && !graph.node_has_label(idx, load.label);
@@ -385,102 +419,127 @@ pub(crate) fn check_node_load(
                     loaded_bound(graph, Some(idx), mode, &load.config.valid_to, to),
                 )
             };
-            judge(&from, &to, load.config, row_name)?;
+            row_empty |= judge(&from, &to, load.config, row_name)?;
         }
-        if !secondary || mode == ConflictHandling::Skip {
-            continue;
-        }
-        let Some(idx) = lookup() else {
-            continue;
-        };
-        for config in node_configs(graph, idx) {
-            if configs.iter().any(|c| std::ptr::eq(c.config, config)) {
-                continue;
+        if secondary && mode != ConflictHandling::Skip {
+            if let Some(idx) = lookup() {
+                row_empty |= check_secondary_labels(graph, &configs, (idx, mode), frame, row)?;
             }
-            let from_column = frame.get_column_index(&config.valid_from);
-            let to_column = frame.get_column_index(&config.valid_to);
-            if from_column.is_none() && to_column.is_none() {
-                continue;
-            }
-            let from = loaded_bound(
-                graph,
-                Some(idx),
-                mode,
-                &config.valid_from,
-                cell(row, from_column),
-            );
-            let to = loaded_bound(
-                graph,
-                Some(idx),
-                mode,
-                &config.valid_to,
-                cell(row, to_column),
-            );
-            judge(&from, &to, config, row_name)?;
         }
+        empty.note(row_empty, row_name);
     }
-    Ok(())
+    Ok(empty)
+}
+
+/// The declarations on the secondary labels an existing node `idx` already
+/// carries, other than `configs`, judged on the bounds row `row` leaves it.
+fn check_secondary_labels(
+    graph: &DirGraph,
+    configs: &[LoadConfig<'_>],
+    (idx, mode): (NodeIndex, ConflictHandling),
+    frame: &DataFrame,
+    row: usize,
+) -> Result<bool, String> {
+    let cell = |column: Option<usize>| {
+        column
+            .and_then(|column| frame.get_value_by_index(row, column))
+            .unwrap_or(Value::Null)
+    };
+    let row_name = || format!("row {row} (0-based) of the load");
+    let mut row_empty = false;
+    for config in node_configs(graph, idx) {
+        if configs.iter().any(|c| std::ptr::eq(c.config, config)) {
+            continue;
+        }
+        let from_column = frame.get_column_index(&config.valid_from);
+        let to_column = frame.get_column_index(&config.valid_to);
+        if from_column.is_none() && to_column.is_none() {
+            continue;
+        }
+        let from = loaded_bound(
+            graph,
+            Some(idx),
+            mode,
+            &config.valid_from,
+            cell(from_column),
+        );
+        let to = loaded_bound(graph, Some(idx), mode, &config.valid_to, cell(to_column));
+        row_empty |= judge(&from, &to, config, row_name)?;
+    }
+    Ok(row_empty)
 }
 
 /// Refuse an `add_nodes` load onto `node_type` that also stamps `labels` on
 /// every row, before anything is written, when a row would leave a node
 /// breaking a declaration on the labels it ends up with — the check
 /// `add_nodes` itself runs, widened to the labels a binding stamps after it.
-/// `conflict_handling` is the load's.
+/// `conflict_handling` is the load's. `Ok` carries the warning for the rows
+/// the load leaves with an empty interval — the one `add_nodes` reports for
+/// its own type, widened the same way.
 pub fn check_labelled_load(
     graph: &mut DirGraph,
     frame: &DataFrame,
     (node_type, unique_id_field): (&str, &str),
     conflict_handling: Option<&str>,
     labels: &[&str],
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     if !graph.temporal.has_node_declarations() {
-        return Ok(());
+        return Ok(None);
     }
     let mode = crate::graph::mutation::maintain::parse_conflict_mode(conflict_handling)?;
     let Some(id_column) = frame.get_column_index(unique_id_field) else {
-        return Ok(());
+        return Ok(None);
     };
     graph.build_id_index(node_type);
-    check_node_load(graph, node_type, frame, id_column, (mode, labels))
+    check_node_load(graph, node_type, frame, id_column, (mode, labels)).map(|e| e.warning())
 }
 
 /// Refuse stamping `label` on `nodes` when it is declared and a node that
 /// does not carry it yet holds bounds its declaration refuses — the rule
-/// and wording of Cypher `SET n:Label`, naming the node.
-pub fn check_label_stamp(graph: &DirGraph, nodes: &[NodeIndex], label: &str) -> Result<(), String> {
+/// and wording of Cypher `SET n:Label`, naming the node. `Ok` carries the
+/// warning for the nodes gaining it whose interval is empty.
+pub fn check_label_stamp(
+    graph: &DirGraph,
+    nodes: &[NodeIndex],
+    label: &str,
+) -> Result<Option<String>, String> {
     let Some(config) = graph.temporal.node(label) else {
-        return Ok(());
+        return Ok(None);
     };
     let key = InternedKey::from_str(label);
     let _arena_guard = graph.graph.begin_query();
+    let mut empty = EmptyIntervals::default();
     for &idx in nodes {
         if graph.graph.node_type_of(idx) == Some(key) || graph.node_has_label(idx, key) {
             continue;
         }
         let from = validate::node_bound(graph, idx, &config.valid_from);
         let to = validate::node_bound(graph, idx, &config.valid_to);
-        judge(&from, &to, config, || {
-            format!("node '{}'", node_name(graph, idx))
-        })?;
+        let name = || format!("node '{}'", node_name(graph, idx));
+        let row_empty = judge(&from, &to, config, name)?;
+        empty.note(row_empty, name);
     }
-    Ok(())
+    Ok(empty.warning())
 }
 
 /// Refuse giving the `node_type` node with id `id` — written (or merged,
 /// under `mode`) with the properties `read` gives — the declared `labels`
-/// among `labels`, when it would break one, naming the node. The pre-write
-/// check for a writer that stamps labels per node (`extend`).
+/// among `labels`, when it would break one, naming the node, and count it
+/// into `empty` when a label it gains is declared. The pre-write check for a
+/// writer that stamps labels per node (`extend`).
 pub(crate) fn check_labelled_node(
     graph: &DirGraph,
     (node_type, id): (&str, &Value),
     read: impl Fn(&str) -> Option<Value>,
-    labels: &[String],
-    mode: ConflictHandling,
+    (labels, mode): (&[String], ConflictHandling),
+    empty: &mut EmptyIntervals,
 ) -> Result<(), String> {
     if !graph.temporal.has_node_declarations() {
         return Ok(());
     }
+    let name = || format!("node '{}'", format_value_compact(id));
+    let mut judged = false;
+    let mut row_empty = false;
     let existing = graph.lookup_by_id_normalized(node_type, id);
     for label in labels {
         let Some(config) = graph.temporal.node(label) else {
@@ -497,57 +556,56 @@ pub(crate) fn check_labelled_node(
             }
         };
         let (from, to) = (bound(&config.valid_from), bound(&config.valid_to));
-        judge(&from, &to, config, || {
-            format!("node '{}'", format_value_compact(id))
-        })?;
+        judged = true;
+        row_empty |= judge(&from, &to, config, name)?;
+    }
+    if judged {
+        empty.note(row_empty, name);
     }
     Ok(())
 }
 
 /// Refuse an `add_relationships` load of `rel_type` from `source_type` whose
 /// rows break the declaration governing them, naming the first by its
-/// position in the load. A declared type's rows are versions — each is
-/// stored as it is or matches an identical stored one — so the row is what
-/// the relationship will hold.
+/// position in the load, and count its rows with an empty interval. A
+/// declared type's rows are versions — each is stored as it is or matches an
+/// identical stored one — so the row is what the relationship will hold.
 pub(crate) fn check_edge_load(
     graph: &DirGraph,
     rel_type: &str,
     source_type: &str,
     frame: &DataFrame,
-) -> Result<(), String> {
-    if graph.temporal.edges(rel_type).is_empty() {
-        return Ok(());
+) -> Result<EmptyIntervals, String> {
+    if graph.temporal.edges(rel_type).is_empty() || suspended() {
+        return Ok(EmptyIntervals::default());
     }
-    if suspended() {
-        return Ok(());
-    }
-    for config in edge_configs_for(graph, rel_type, Some(source_type)) {
-        validate::check_frame(frame, config)?;
-    }
-    Ok(())
+    validate::check_frame(frame, &edge_configs_for(graph, rel_type, Some(source_type)))
 }
 
 /// Refuse edge rows already resolved to their endpoints — the shape
 /// `add_edges_from_specs` and `create_connections` hold, row `i` of
 /// `endpoints` reading `properties[i]` — when a row breaks the declaration
-/// governing it, naming its endpoints.
+/// governing it, naming its endpoints, and count those with an empty
+/// interval.
 pub(crate) fn check_edge_rows(
     graph: &DirGraph,
     rel_type: &str,
     endpoints: &[(usize, NodeIndex, NodeIndex)],
     properties: &[Vec<(InternedKey, Value)>],
-) -> Result<(), String> {
+) -> Result<EmptyIntervals, String> {
+    let mut empty = EmptyIntervals::default();
     if graph.temporal.edges(rel_type).is_empty() {
-        return Ok(());
+        return Ok(empty);
     }
     for &(row, source, target) in endpoints {
         let Some(row) = properties.get(row) else {
             continue;
         };
-        check_new_edge(graph, rel_type, (source, target), |property| {
+        let read = |property: &str| {
             let key = InternedKey::from_str(property);
             row.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
-        })?;
+        };
+        check_new_edge(graph, rel_type, (source, target), read, &mut empty)?;
     }
-    Ok(())
+    Ok(empty)
 }

@@ -386,13 +386,15 @@ class TestHalfOpenTimestampEnd:
         got = shifts.select("Shift", temporal=False).valid_during("2009-06-30", "2009-07-10")
         assert _titles(got) == ["Day", "Month"]
 
-    def test_declare_accepts_a_mid_day_end_and_refuses_a_midnight_one(self):
+    def test_declare_counts_a_midnight_end_as_empty_and_a_mid_day_one_as_not(self):
         g = kglite.KnowledgeGraph()
         g.cypher("CREATE (:S {id: 1, vf: date('2009-06-30'), vt: datetime('2009-06-30T18:00')})")
         _declare(g, "{node: 'S', from: 'vf', to: 'vt', convention: 'half_open'}")
         g.cypher("CREATE (:T {id: 1, vf: date('2009-06-30'), vt: datetime('2009-06-30T00:00')})")
-        with pytest.raises(Exception, match="an empty interval"):
-            _declare(g, "{node: 'T', from: 'vf', to: 'vt', convention: 'half_open'}")
+        result = g.cypher("CALL db.temporal.declare({node: 'T', from: 'vf', to: 'vt', convention: 'half_open'})")
+        assert any("1 of 1 rows of node label 'T' have an empty interval" in w for w in result.warnings)
+        counts = g.cypher("CALL db.temporal.declarations() YIELD name, empty_rows RETURN name, empty_rows").to_list()
+        assert sorted((r["name"], r["empty_rows"]) for r in counts) == [("S", 0), ("T", 1)]
 
 
 class TestSetTemporalBesideDeclaration:

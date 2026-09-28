@@ -565,8 +565,12 @@ fn stamp_declared_labels(
         };
         let indices: Vec<petgraph::graph::NodeIndex> = nodes.iter().collect();
         for label in &spec.spec.labels {
-            crate::graph::features::temporal::check_label_stamp(graph, &indices, label)
-                .map_err(|e| format!("node '{}': labels: {e}", spec.node_type))?;
+            let warning =
+                crate::graph::features::temporal::check_label_stamp(graph, &indices, label)
+                    .map_err(|e| format!("node '{}': labels: {e}", spec.node_type))?;
+            report
+                .warnings
+                .extend(warning.map(|w| format!("node '{}': labels: {w}", spec.node_type)));
         }
         for label in &spec.spec.labels {
             let key = graph.interner.get_or_intern(label);

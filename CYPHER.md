@@ -1506,10 +1506,12 @@ CALL db.temporal.declarations()
   with a warning ("no row of … carries '…'; every row is open-ended until one
   is written"), unless it is a near miss of a property the target has, which
   is refused as a typo with a "Did you mean" hint. Every stored bound must be
-  NULL, a date, a datetime or an ISO string, with `from` before `to`
-  (strictly before under `half_open`; `from == to` is a one-day interval under
-  `closed`). The first row that fails is refused, naming the node's id or the
-  relationship's endpoints.
+  NULL, a date, a datetime or an ISO string, with `from` not after `to`. The
+  first row that fails is refused, naming the node's id or the relationship's
+  endpoints. `from == to` is a one-day interval under `closed`; under
+  `half_open` it is an **empty interval**, valid at no instant, which is
+  accepted: the declaration warns once, counting such rows and naming the
+  first, and counts them in `empty_rows`.
 - **Later writes answer to the same rule.** A `CREATE`, `MERGE` or `SET` —
   including `SET n:Label` onto a declared label — and an `add_nodes` /
   `add_relationships` / blueprint load onto a declared type refuse a row the
@@ -1525,18 +1527,28 @@ CALL db.temporal.declarations()
   bounds stay open. A load judges an update row by the bounds it leaves — a
   row carrying only `to` against the stored `from` — under its conflict mode.
   A fluent `update()` is not judged.
+- **Empty intervals are kept.** A row a write leaves with `from == to` under
+  `half_open` — a register version registered and superseded on the same day
+  — is written. The statement reports one warning in `result.warnings` ("N of
+  M rows written have an empty interval under convention 'half_open' … the
+  first is node '…'"); a load emits the same text once as a `UserWarning`,
+  naming the first row by its 0-based position. Such a row is valid at no
+  instant: no `FOR VALID_TIME AS OF` statement, `valid_at` / `valid_during`
+  call, frozen view or fluent temporal filter returns it, while a statement
+  without the context (a lineage or as-known-at query) still reads it.
 - **What the counts report.** `db.temporal.declarations()` counts, at the
-  graph's current state, the rows the declaration would refuse: `empty_rows`
-  (an inverted interval, or `from == to` under `half_open` — valid at no
-  instant) and `unreadable_rows` (a bound that is not NULL, a date, a
-  datetime or an ISO string). Only a writer the check does not judge leaves
-  one: a fluent `update()`, an undeclare that hands a source's relationships
-  to the unkeyed declaration, or a graph saved by an earlier version, which
-  accepted such writes. A bound that is not a date raises from the next
-  `valid_at` / `valid_during` (or fluent temporal filter) that reads it,
-  naming the node's id or the relationship's endpoints and the property; an
-  inverted interval is valid on no date. Counting reads every row of the
-  declared type once after each write.
+  graph's current state, `empty_rows` (rows valid at no instant: `from ==
+  to` under `half_open`, kept with a warning, or an inverted interval) and
+  `unreadable_rows` (a bound that is not NULL, a date, a datetime or an ISO
+  string). An inverted interval or an unreadable bound is refused by every
+  judged write, so only a writer the check does not judge leaves one: a
+  fluent `update()`, an undeclare that hands a source's relationships to the
+  unkeyed declaration, or a graph saved by an earlier version, which accepted
+  such writes. A bound that is not a date raises from the next `valid_at` /
+  `valid_during` (or fluent temporal filter) that reads it, naming the node's
+  id or the relationship's endpoints and the property; an inverted interval
+  is valid on no date. Counting reads every row of the declared type once
+  after each write.
 - **Re-declaring** the same target with the same properties and convention is
   a no-op (`declared: false`); different ones are refused until the target is
   undeclared.

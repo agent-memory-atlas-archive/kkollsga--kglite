@@ -203,7 +203,9 @@ impl DirGraph {
             };
             states.insert(label.clone(), state);
             // A declared validity interval on the ancestor judges the members
-            // that gain it, as `SET n:Label` does — before any stamp.
+            // that gain it, as `SET n:Label` does — before any stamp. Members
+            // left with an empty interval are stamped; `empty_rows` counts
+            // them, and this report has no warning channel.
             crate::graph::features::temporal::check_label_stamp(self, members, label)
                 .map_err(|e| format!("materializing label '{label}': {e}"))?;
         }

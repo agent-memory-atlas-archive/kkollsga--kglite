@@ -25,6 +25,7 @@ use super::{clause_display_name, delete_clause, merge_pattern, schema_ddl, Cyphe
 // mutation module rather than the clause file that owns it.
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::Interrupt;
+use crate::graph::features::temporal::{check_new_node, EmptyIntervals};
 use crate::graph::schema::{DirGraph, EdgeData, InternedKey};
 use crate::graph::storage::{GraphRead, GraphWrite};
 use petgraph::graph::NodeIndex;
@@ -148,6 +149,9 @@ pub(super) struct MutationCtx<'a> {
     /// `LOAD CSV` suffix, where the stripped `LOAD CSV … AS row` still
     /// declares `row` for correlated-subquery import validation.
     pub leading: &'a [Clause],
+    /// The statement's writes onto declared types whose interval is empty,
+    /// reported as one warning once the statement succeeds.
+    pub empty_intervals: &'a std::sync::Mutex<EmptyIntervals>,
 }
 
 /// The owned half of the mutation context: everything [`finalize_mutation`]
@@ -295,6 +299,7 @@ pub(crate) fn execute_mutable_with_csv(
     let relationship_identities = std::sync::Arc::new(std::sync::Mutex::new(
         super::relationship_identity::StatementRelationshipIdentities::new(),
     ));
+    let empty_intervals = std::sync::Mutex::new(EmptyIntervals::default());
     let mut stats = MutationStats::default();
     let profiling = query.profile;
     let mut profile_stats: Vec<ClauseStats> = Vec::new();
@@ -314,6 +319,7 @@ pub(crate) fn execute_mutable_with_csv(
             relationship_identities: &relationship_identities,
             embedding_service,
             leading: &query.clauses[..1],
+            empty_intervals: &empty_intervals,
         };
         let source = {
             let executor = CypherExecutor::with_params(graph, &params, interrupt.deadline)
@@ -347,6 +353,7 @@ pub(crate) fn execute_mutable_with_csv(
             relationship_identities: &relationship_identities,
             embedding_service,
             leading: &[],
+            empty_intervals: &empty_intervals,
         };
         run_clause_pipeline(
             graph,
@@ -377,6 +384,12 @@ pub(crate) fn execute_mutable_with_csv(
         .get_or_insert_with(QueryDiagnostics::default);
     target.retrieval.extend(d.retrieval);
     target.warnings.extend(d.warnings);
+    let empty = empty_intervals
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(warning) = empty.warning() {
+        super::retrieval_diagnostics::record_warning(&mut target.warnings, warning);
+    }
     Ok(result)
 }
 
@@ -431,6 +444,7 @@ fn run_clause_pipeline(
         interrupt,
         budget,
         relationship_identities: ctx.relationship_identities,
+        empty_intervals: ctx.empty_intervals,
     };
 
     for (i, clause) in clauses.iter().enumerate() {
@@ -751,6 +765,26 @@ pub(super) struct WriteClauseCtx<'a> {
     pub(super) relationship_identities: &'a std::sync::Arc<
         std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
     >,
+    pub(super) empty_intervals: &'a std::sync::Mutex<EmptyIntervals>,
+}
+
+impl WriteClauseCtx<'_> {
+    /// The statement's empty-interval count, for a write check to add to.
+    pub(super) fn empty_intervals(&self) -> std::sync::MutexGuard<'_, EmptyIntervals> {
+        self.empty_intervals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// [`check_new_node`], counting into the statement's empty intervals.
+    fn check_new_node<'l>(
+        &self,
+        graph: &DirGraph,
+        labels: impl IntoIterator<Item = &'l str>,
+        row: (&Value, impl Fn(&str) -> Option<Value>),
+    ) -> Result<(), String> {
+        check_new_node(graph, labels, row, &mut self.empty_intervals())
+    }
 }
 
 /// Apply one clause inside a FOREACH body. Only update clauses and nested
@@ -1034,6 +1068,7 @@ fn create_pattern_edges(
                 &edge_pat.connection_type,
                 (actual_source, actual_target),
                 |property| edge_props.get(property).cloned(),
+                &mut ctx.empty_intervals(),
             )?;
 
             // Register both the lightweight cache (for `has_connection_type`)
@@ -1205,7 +1240,7 @@ fn create_node(
     let labels = std::iter::once(label.as_str())
         .chain(node_pat.extra_labels.iter().map(String::as_str))
         .chain(ancestors.iter().copied());
-    crate::graph::features::temporal::check_new_node(graph, labels, &id, constraint_read)?;
+    ctx.check_new_node(graph, labels, (&id, constraint_read))?;
     let unique_claims = graph.unique_claims(&label, constraint_read);
     let unique = graph.check_unique_claims(&unique_claims, None);
     if let Err(violation) = unique {
@@ -1656,7 +1691,7 @@ fn execute_folded_set(
 ) -> Result<(), String> {
     let mut bound_writes = BoundWrites::default();
     execute_set_items(graph, set, result_set, ctx, stats, &mut bound_writes)?;
-    bound_writes.check(graph)
+    bound_writes.check(graph, &mut ctx.empty_intervals())
 }
 
 fn execute_set_items(

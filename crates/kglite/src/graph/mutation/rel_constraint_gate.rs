@@ -57,7 +57,7 @@ use petgraph::Direction;
 use crate::datatypes::values::Value;
 use crate::datatypes::DataFrame;
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::features::temporal::StartKey;
+use crate::graph::features::temporal::{EmptyIntervals, StartKey};
 use crate::graph::storage::interner::InternedKey;
 use crate::graph::storage::GraphRead;
 
@@ -110,12 +110,17 @@ pub(crate) fn gate_property_rows(
     conflict_mode: ConflictHandling,
     folding: RowFolding,
     start_key: Option<&StartKey>,
-) -> Result<(), String> {
+) -> Result<EmptyIntervals, String> {
     // A declared validity interval gates these rows as it gates a load.
-    crate::graph::features::temporal::check_edge_rows(graph, connection_type, matched, properties)?;
+    let empty = crate::graph::features::temporal::check_edge_rows(
+        graph,
+        connection_type,
+        matched,
+        properties,
+    )?;
     // The gate's own fast-out, taken before the column list is built.
     if !graph.has_rel_constraints() || !graph.type_has_rel_constraints(connection_type) {
-        return Ok(());
+        return Ok(empty);
     }
     let mut keys: Vec<InternedKey> = Vec::new();
     for (key, _) in properties.iter().flatten() {
@@ -146,7 +151,8 @@ pub(crate) fn gate_property_rows(
         folding,
         start_key,
     }
-    .run(graph)
+    .run(graph)?;
+    Ok(empty)
 }
 
 /// One bulk frame, as its gate sees it.

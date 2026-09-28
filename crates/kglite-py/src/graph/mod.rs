@@ -806,6 +806,7 @@ impl KnowledgeGraph {
                 );
             }
 
+            warn_all(py, &result.warnings)?;
             Ok(report_dict.into())
         })
     }
@@ -1047,6 +1048,22 @@ pub(crate) fn warn_declaration(
         message.as_c_str(),
         1,
     )
+}
+
+/// Raise each of a write's advisories — the `warnings` its report carries,
+/// such as rows stored with an empty validity interval — as a `UserWarning`,
+/// the channel [`warn_declaration`] uses.
+pub(crate) fn warn_all(py: Python<'_>, warnings: &[String]) -> PyResult<()> {
+    for warning in warnings {
+        let message = std::ffi::CString::new(warning.as_str()).unwrap_or_default();
+        PyErr::warn(
+            py,
+            py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
+            message.as_c_str(),
+            1,
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) use kglite_core::api::timeseries::{InlineTimeseriesConfig, TimeSpec};

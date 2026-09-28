@@ -97,16 +97,22 @@ under `closed`, because 34 of them end that day.
 
 **The declaration validates the rows it finds, and later writes answer to the
 same rule.** An `add_nodes` / `add_relationships` load onto the declared type
-refuses a row whose interval is inverted, empty under `half_open`, or whose
-bound is not a date, naming the row by its 0-based position and writing
-nothing; a Cypher `CREATE`, `MERGE` or `SET` refuses it naming the element,
-and the statement rolls back:
+refuses a row whose interval is inverted or whose bound is not a date, naming
+the row by its 0-based position and writing nothing; a Cypher `CREATE`,
+`MERGE` or `SET` refuses it naming the element, and the statement rolls back:
 
 ```python
 graph.cypher(
     "MATCH (m:Municipality {code: '0001'}) SET m.valid_to = date('1800-01-01')"
 )  # CypherExecutionError: node '0001', the from bound ... is after the to bound ...
 ```
+
+A row whose interval is empty under `half_open` (`valid_from == valid_to`) is
+valid at no instant, and is kept: the declaration, the load or the statement
+that leaves it reports one warning counting such rows and naming the first
+(a `UserWarning` from a load, `result.warnings` from Cypher), and
+`db.temporal.declarations()` counts them in `empty_rows`. No as-of question
+returns such a row; section 5 has the modelling consequences.
 
 A `SET` is judged once its clause has applied every item, so
 `SET m.valid_from = …, m.valid_to = …` moves an interval in one step. NULL
@@ -302,11 +308,13 @@ relationship.
 **Observations become intervals.** A series of dated observations (a count on
 1 January of each year) is a set of periods `[date, next date)`: set each row's
 `valid_to` to the next row's date and declare `half_open`. A point fact with
-`valid_from == valid_to` would be empty under `half_open`: the declaration (or
-a `validFrom` / `validTo` load) refuses such a row, naming it, and so does a
-later load or Cypher write onto the declared type. Only a fluent `update()`
-or a graph saved by an earlier version can hold one on a node, and
-`db.temporal.declarations()` then counts it in `empty_rows`.
+`valid_from == valid_to` is empty under `half_open`: it is stored, with a
+warning from the declaration, the load or the Cypher write that leaves it,
+and counted in `empty_rows`, but no as-of question returns it, since it is
+valid at no instant. A statement without the context (a lineage query) still
+reads it. To have a point fact answer as of its own day, give it the next
+day as `valid_to`, or declare the type `closed`, where `valid_from ==
+valid_to` is a one-day interval.
 
 **Language is a parameter, not an axis.** Pick the language in the query and
 fall back with `coalesce`:

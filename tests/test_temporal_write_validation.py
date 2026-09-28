@@ -1,12 +1,15 @@
 """A write onto a declared type answers to the declaration's row rule: an
-inverted interval, an empty one under ``half_open`` (from = to) and a bound
-that is not a date are refused by ``add_nodes``, ``add_relationships`` and
-Cypher ``CREATE`` / ``MERGE`` / ``SET`` with the declaration's own wording,
-naming the load row or the element. NULL bounds stay open.
+inverted interval and a bound that is not a date are refused by
+``add_nodes``, ``add_relationships`` and Cypher ``CREATE`` / ``MERGE`` /
+``SET`` with the declaration's own wording, naming the load row or the
+element. An empty interval under ``half_open`` (from = to) is written, with
+one warning per load or statement naming the first such row, and counted in
+``empty_rows``. NULL bounds stay open.
 
 Red proof: before the check every refused write below was accepted, and
 ``db.temporal.declarations()`` counted it afterwards in ``empty_rows`` /
-``unreadable_rows``.
+``unreadable_rows``; before the empty rule changed, every empty write below
+was refused.
 """
 
 from __future__ import annotations
@@ -66,6 +69,17 @@ def _clean(g) -> None:
     ]
 
 
+def _counts(g) -> list:
+    return g.cypher(COUNTS).to_list()
+
+
+def _load_warnings(call) -> list[str]:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        call()
+    return [str(w.message) for w in caught if "empty interval" in str(w.message)]
+
+
 def _frame(rows):
     return pd.DataFrame(
         {
@@ -80,19 +94,30 @@ def _frame(rows):
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
-def test_add_nodes_refuses_an_inverted_or_empty_row_naming_it(storage, tmp_path) -> None:
+def test_add_nodes_refuses_an_inverted_row_naming_it(storage, tmp_path) -> None:
     g = _graph(storage, tmp_path)
     before = _statuses(g)
     inverted = _frame([(3, "2010-01-01", None), (4, "2012-01-01", "2011-01-01")])
-    with pytest.raises(kglite.ArgumentError, match=r"row 1 \(0-based\) of the load, .*is after the to bound"):
-        g.add_nodes(inverted, "Status", "id")
-    empty = _frame([(5, "2013-01-01", "2013-01-01")])
     with pytest.raises(
-        kglite.ArgumentError, match=r"row 0 \(0-based\) of the load, .*equals the to bound.*'half_open'"
+        kglite.ArgumentError, match=r"row 1 \(0-based\) of the load, .*is after the to bound.*an inverted interval"
     ):
-        g.add_nodes(empty, "Status", "id")
+        g.add_nodes(inverted, "Status", "id")
     assert _statuses(g) == before
     _clean(g)
+
+
+@pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
+def test_add_nodes_writes_an_empty_row_with_one_warning(storage, tmp_path) -> None:
+    g = _graph(storage, tmp_path)
+    empty = _frame([(5, "2013-01-01", "2013-01-01"), (6, "2014-01-01", None), (7, "2015-01-01", "2015-01-01")])
+    caught = _load_warnings(lambda: g.add_nodes(empty, "Status", "id"))
+    assert len(caught) == 1, caught
+    assert caught[0].startswith("2 of 3 rows written have an empty interval under convention 'half_open'"), caught
+    assert "the first is row 0 (0-based) of the load" in caught[0], caught
+    assert [r["id"] for r in _statuses(g)] == [1, 2, 5, 6, 7]
+    assert _counts(g)[0] == {"empty_rows": 2, "unreadable_rows": 0}
+    # Valid at no instant; the lineage still reads it.
+    assert g.cypher("MATCH (s:Status) RETURN s.id AS id", valid_at="2013-01-01").to_list() == [{"id": 2}]
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
@@ -122,7 +147,7 @@ def test_add_nodes_refuses_an_unreadable_bound() -> None:
         g.add_nodes(frame, "Status", "id")
 
 
-def test_the_reproducer_second_load_is_refused() -> None:
+def test_the_reproducer_second_load_is_kept_with_a_warning() -> None:
     """User test 4 §8 B3: a column-typed load onto the declared type."""
     df = pd.DataFrame(
         {"id": ["a.1", "a.3"], "ident": ["a", "a"], "begin": ["2020-01-01", "2021-01-01"], "eind": ["2021-01-01", None]}
@@ -131,29 +156,42 @@ def test_the_reproducer_second_load_is_refused() -> None:
     types = {"begin": "validFrom", "eind": "validTo"}
     g.add_nodes(df, "P", "id", "ident", column_types=types, convention="half_open")
     row = pd.DataFrame({"id": ["a.2"], "ident": ["a"], "begin": ["2021-01-01"], "eind": ["2021-01-01"]})
-    with pytest.raises(kglite.ArgumentError, match=r"row 0 \(0-based\) of the load, .*an empty interval"):
-        g.add_nodes(row, "P", "id", "ident", column_types=types, convention="half_open")
-    assert g.cypher("MATCH (p:P) RETURN count(p) AS n").to_list() == [{"n": 2}]
+    caught = _load_warnings(lambda: g.add_nodes(row, "P", "id", "ident", column_types=types, convention="half_open"))
+    assert len(caught) == 1, caught
+    assert "the first is row 0 (0-based) of the load" in caught[0], caught
+    assert g.cypher("MATCH (p:P) RETURN count(p) AS n").to_list() == [{"n": 3}]
+    # A first load that declares keeps its empty row with one warning too.
+    fresh = kglite.KnowledgeGraph()
+    both = pd.concat([df, row], ignore_index=True)
+    caught = _load_warnings(
+        lambda: fresh.add_nodes(both, "P", "id", "ident", column_types=types, convention="half_open")
+    )
+    assert len(caught) == 1, caught
+    assert caught[0].startswith("1 of 3 rows written"), caught
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
-def test_add_relationships_refuses_an_inverted_or_empty_row(storage, tmp_path) -> None:
+def test_add_relationships_refuses_an_inverted_row_and_keeps_an_empty_one(storage, tmp_path) -> None:
     g = _graph(storage, tmp_path)
     frame = pd.DataFrame(
         {
             "s": [1, 2],
             "t": [10, 11],
             "vf": pd.to_datetime(["2002-01-01", "2006-01-01"]),
-            "vt": pd.to_datetime(["2003-01-01", "2006-01-01"]),
+            "vt": pd.to_datetime(["2003-01-01", "2005-01-01"]),
         }
     )
-    with pytest.raises(kglite.ArgumentError, match=r"row 1 \(0-based\) of the load, .*equals the to bound"):
+    with pytest.raises(kglite.ArgumentError, match=r"row 1 \(0-based\) of the load, .*is after the to bound"):
         g.add_relationships(frame, "OP", "Status", "s", "Co", "t")
     assert _ops(g) == 1
-    frame.loc[1, "vt"] = pd.NaT
-    g.add_relationships(frame, "OP", "Status", "s", "Co", "t")
+    frame.loc[1, "vt"] = pd.Timestamp("2006-01-01")
+    caught = _load_warnings(lambda: g.add_relationships(frame, "OP", "Status", "s", "Co", "t"))
+    assert len(caught) == 1, caught
+    assert caught[0].startswith("1 of 2 rows written have an empty interval"), caught
+    assert "the first is row 1 (0-based) of the load" in caught[0], caught
     assert _ops(g) == 3
-    _clean(g)
+    assert _counts(g)[1] == {"empty_rows": 1, "unreadable_rows": 0}
+    assert g.cypher("MATCH ()-[r:OP]->() RETURN count(r) AS n", valid_at="2006-01-01").to_list() == [{"n": 0}]
 
 
 def test_a_blueprint_row_is_refused(tmp_path) -> None:
@@ -183,19 +221,25 @@ def test_a_blueprint_row_is_refused(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
-def test_create_refuses_an_inverted_or_empty_node(storage, tmp_path) -> None:
+def test_create_refuses_an_inverted_node_and_keeps_an_empty_one(storage, tmp_path) -> None:
     g = _graph(storage, tmp_path)
-    with pytest.raises(kglite.CypherExecutionError, match=r"node '3', the from bound .*is after the to bound"):
-        g.cypher("CREATE (:Status {id: 3, vf: date('2010-01-01'), vt: date('2009-01-01')})")
     with pytest.raises(
-        kglite.CypherExecutionError, match=r"node '3', .*an empty interval under convention 'half_open'"
+        kglite.CypherExecutionError,
+        match=r"node '3', the from bound .*is after the to bound.*an inverted interval under convention 'half_open'",
     ):
-        g.cypher("CREATE (:Status {id: 3, vf: date('2010-01-01'), vt: date('2010-01-01')})")
+        g.cypher("CREATE (:Status {id: 3, vf: date('2010-01-01'), vt: date('2009-01-01')})")
     with pytest.raises(kglite.CypherExecutionError, match=r"node '3', property 'vt'.*someday"):
         g.cypher("CREATE (:Status {id: 3, vf: date('2010-01-01'), vt: 'someday'})")
     assert len(_statuses(g)) == 2
     g.cypher("CREATE (:Status {id: 3, vf: null, vt: date('2010-01-01')})")
     _clean(g)
+    result = g.cypher("UNWIND [4, 5] AS i CREATE (:Status {id: i, vf: date('2010-01-01'), vt: date('2010-01-01')})")
+    empty = [w for w in result.warnings if "empty interval" in w]
+    assert len(empty) == 1, result.warnings
+    assert empty[0].startswith("2 of 2 rows written have an empty interval under convention 'half_open'"), empty
+    assert "the first is node '4'" in empty[0], empty
+    assert len(_statuses(g)) == 5
+    assert _counts(g)[0] == {"empty_rows": 2, "unreadable_rows": 0}
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
@@ -226,10 +270,11 @@ def test_merge_refuses_on_create_and_on_match(storage, tmp_path) -> None:
         g.cypher("MERGE (s:Status {id: 3, vf: date('2010-01-01'), vt: date('2009-01-01')})")
     with pytest.raises(kglite.CypherExecutionError, match="node '3'.*is after the to bound"):
         g.cypher("MERGE (s:Status {id: 3}) ON CREATE SET s.vf = date('2010-01-01'), s.vt = date('2009-01-01')")
-    with pytest.raises(kglite.CypherExecutionError, match="node '1'.*equals the to bound"):
-        g.cypher("MERGE (s:Status {id: 1}) ON MATCH SET s.vt = date('2000-01-01')")
     assert len(_statuses(g)) == 2
     _clean(g)
+    result = g.cypher("MERGE (s:Status {id: 1}) ON MATCH SET s.vt = date('2000-01-01')")
+    assert any("empty interval" in w and "node '1'" in w for w in result.warnings), result.warnings
+    assert _counts(g)[0] == {"empty_rows": 1, "unreadable_rows": 0}
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
@@ -238,8 +283,6 @@ def test_set_refuses_and_rolls_back(storage, tmp_path) -> None:
     before = _statuses(g)
     with pytest.raises(kglite.CypherExecutionError, match="node '1', the from bound 2000-01-01.*is after the to bound"):
         g.cypher("MATCH (s:Status) SET s.vt = date('1999-01-01')")
-    with pytest.raises(kglite.CypherExecutionError, match="node '1'.*equals the to bound"):
-        g.cypher("MATCH (s:Status {id: 1}) SET s += {vt: date('2000-01-01')}")
     with pytest.raises(kglite.CypherExecutionError, match="node '2', property 'vf'"):
         g.cypher("MATCH (s:Status {id: 2}) SET s = {vf: 2005}")
     assert _statuses(g) == before
@@ -247,6 +290,12 @@ def test_set_refuses_and_rolls_back(storage, tmp_path) -> None:
     g.cypher("MATCH (s:Status {id: 1}) SET s.vf = date('2020-01-01'), s.vt = date('2021-01-01')")
     g.cypher("MATCH (s:Status {id: 1}) SET s.vt = null")
     _clean(g)
+    result = g.cypher("MATCH (s:Status {id: 1}) SET s += {vt: s.vf}")
+    assert [w for w in result.warnings if "empty interval" in w] == [
+        "1 of 1 rows written have an empty interval under convention 'half_open' (the from bound "
+        "equals the to bound) and are valid at no instant; the first is node '1'. They are stored "
+        "and counted in db.temporal.declarations() as empty_rows."
+    ], result.warnings
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
@@ -261,7 +310,7 @@ def test_relationship_create_and_set_are_refused(storage, tmp_path) -> None:
             "CREATE (s)-[:OP {vf: date('2010-01-01'), vt: date('2009-01-01')}]->(c)"
         )
     with pytest.raises(kglite.CypherExecutionError, match="OP relationship from node '1' to node '10'"):
-        g.cypher("MATCH ()-[r:OP]->() SET r.vt = date('2000-01-01')")
+        g.cypher("MATCH ()-[r:OP]->() SET r.vt = date('1999-01-01')")
     with pytest.raises(kglite.CypherExecutionError, match="OP relationship from node '1' to node '10'"):
         g.cypher(
             "MATCH (s:Status {id: 1}), (c:Co {id: 10}) "
@@ -270,6 +319,10 @@ def test_relationship_create_and_set_are_refused(storage, tmp_path) -> None:
     assert _ops(g) == 1
     g.cypher("MATCH ()-[r:OP]->() SET r.vt = null")
     _clean(g)
+    result = g.cypher("MATCH ()-[r:OP]->() SET r.vt = date('2000-01-01')")
+    empty = [w for w in result.warnings if "empty interval" in w]
+    assert len(empty) == 1 and "the first is OP relationship from node '1' to node '10'" in empty[0], result.warnings
+    assert _counts(g)[1] == {"empty_rows": 1, "unreadable_rows": 0}
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)

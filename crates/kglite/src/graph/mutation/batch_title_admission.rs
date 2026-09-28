@@ -2,7 +2,7 @@
 
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::constraints::UniqueConstraintKey;
-use crate::graph::features::temporal::check_edge_load;
+use crate::graph::features::temporal::{check_edge_load, EmptyIntervals};
 use crate::graph::mutation::endpoints::{
     resolve_endpoints, title_column_indices, ResolvedEndpoints,
 };
@@ -138,8 +138,8 @@ pub(super) fn prepare_connection_admission(
     graph: &mut DirGraph,
     frame: &mut DataFrame,
     fields: ConnectionAdmissionFields<'_>,
-) -> Result<(ResolvedEndpoints, ConnectionTitles), String> {
-    check_edge_load(graph, fields.connection_type, fields.source_type, frame)?;
+) -> Result<(ResolvedEndpoints, ConnectionTitles, EmptyIntervals), String> {
+    let empty = check_edge_load(graph, fields.connection_type, fields.source_type, frame)?;
     let source_id_idx = frame
         .get_column_index(fields.source_id)
         .ok_or_else(|| format!("Source ID column '{}' not found", fields.source_id))?;
@@ -185,7 +185,7 @@ pub(super) fn prepare_connection_admission(
             titles: &titles,
         },
     )?;
-    Ok((resolved, titles))
+    Ok((resolved, titles, empty))
 }
 
 fn snapshot_column(graph: &DirGraph, frame: &DataFrame, column: usize) -> Vec<Value> {

@@ -145,14 +145,14 @@ BOUND = st.one_of(
 
 
 @st.composite
-def interval(draw, half_open: bool):
+def interval(draw):
+    """Never inverted, which a declaration refuses. Under half-open, equal
+    bounds are drawn as they come: an empty interval is stored, and no route
+    may find it valid."""
     start = draw(st.one_of(st.none(), BOUND))
     end = draw(st.one_of(st.none(), BOUND))
     if start is not None and end is not None:
-        a, b = sorted([start, end], key=_day_key)
-        if half_open and _day_key(a) >= _day_key(b):
-            return (a, None)
-        return (a, b)
+        return tuple(sorted([start, end], key=_day_key))
     return (start, end)
 
 
@@ -168,8 +168,8 @@ def graphs(draw):
         secondary = draw(st.sampled_from([None] + [label for label in "ABC" if label != primary]))
         bounds = {}
         for label in {primary, secondary} & set(NODE_BOUNDS):
-            frm, to, convention = NODE_BOUNDS[label]
-            bounds[frm], bounds[to] = draw(interval(convention == "half_open"))
+            frm, to, _ = NODE_BOUNDS[label]
+            bounds[frm], bounds[to] = draw(interval())
         # Version nodes share ids; an id is written as an integer or as a
         # float, which the id index takes for the same id.
         node_id = draw(st.integers(0, 3))
@@ -188,8 +188,8 @@ def graphs(draw):
         key = (rel, "A" if rel == "S" and nodes[src]["primary"] == "A" else None)
         bounds = {}
         if key in EDGE_BOUNDS:
-            frm, to, convention = EDGE_BOUNDS[key]
-            bounds[frm], bounds[to] = draw(interval(convention == "half_open"))
+            frm, to, _ = EDGE_BOUNDS[key]
+            bounds[frm], bounds[to] = draw(interval())
         edges.append({"src": src, "dst": dst, "type": rel, "bounds": bounds})
     day = draw(st.sampled_from(YEARS))
     shift = draw(st.sampled_from([-1, 0, 1, 180]))

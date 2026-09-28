@@ -2,7 +2,7 @@
 //! type — the DataFrame-free edge-ingest path ([`add_edges_from_specs`]).
 
 use crate::datatypes::Value;
-use crate::graph::features::temporal::{merge_start_key, StartKey};
+use crate::graph::features::temporal::{merge_start_key, EmptyIntervals, StartKey};
 use crate::graph::mutation::batch::{ConflictHandling, ConnectionBatchProcessor};
 use crate::graph::mutation::maintain::{
     preflight_interner_names, source_owns_its_edges, update_schema_node,
@@ -41,6 +41,10 @@ pub struct EdgeSpecReport {
     /// declared type. Unlike [`add_connections`](crate::graph::mutation::maintain::add_connections), this primitive does NOT
     /// vivify stub endpoints — endpoints must already exist.
     pub skipped_missing_endpoint: usize,
+    /// Advisories about the edges written, such as edges whose validity
+    /// interval is empty under a `half_open` declaration (stored and
+    /// counted, valid at no instant).
+    pub warnings: Vec<String>,
 }
 
 /// Bulk-create edges from explicit specs, addressed by stable node id +
@@ -163,8 +167,9 @@ pub fn add_edges_from_specs(
         });
     }
 
+    let mut empty_intervals = EmptyIntervals::default();
     for group in &prepared {
-        group.gate(graph)?;
+        empty_intervals.absorb(group.gate(graph)?);
     }
 
     for group in prepared {
@@ -191,6 +196,7 @@ pub fn add_edges_from_specs(
         report.connections_created += stats.connections_created;
         report.connections_updated += stats.connections_updated;
     }
+    report.warnings.extend(empty_intervals.warning());
     graph.bump_version();
     Ok(report)
 }
@@ -211,7 +217,7 @@ struct PreparedSpecGroup {
 impl PreparedSpecGroup {
     /// Judge the group against the declared relationship constraints with the
     /// gate `add_connections` uses, under the regime its batch will run in.
-    fn gate(&self, graph: &mut DirGraph) -> Result<(), String> {
+    fn gate(&self, graph: &mut DirGraph) -> Result<EmptyIntervals, String> {
         gate_property_rows(
             graph,
             &self.edge_type,
