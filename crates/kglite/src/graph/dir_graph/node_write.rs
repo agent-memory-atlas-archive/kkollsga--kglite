@@ -195,9 +195,11 @@ impl DirGraph {
     /// `define_schema`'d `float64` survives the first row that happens to carry
     /// an integer — a column typed from the wrong value is a column the next
     /// write demotes to `Mixed`, and `Mixed` is the one shape that cannot be
-    /// spilled. `Null` carries no type evidence and registers nothing, matching
-    /// what the read-back-based `ensure_type_metadata` records (it enumerates
-    /// through `NodeView`, which skips nulls).
+    /// spilled. The exception is an entry that holds no evidence (`Unknown`),
+    /// which the first concrete value types. A key written as `Null` registers
+    /// as `Unknown`, so the name is known to the `CREATE` typo guard and the
+    /// schema lock before any row carries a value for it — an ingest whose
+    /// first delivery had nothing in a column is not refused on the second.
     ///
     /// The common case — every key already registered — costs one hash lookup
     /// per property and allocates nothing.
@@ -205,9 +207,22 @@ impl DirGraph {
         let known = self.node_type_metadata.get(node_type);
         let missing: Vec<(String, String)> = properties
             .iter()
-            .filter(|(_, value)| !matches!(value, Value::Null))
-            .filter(|(key, _)| known.is_none_or(|props| !props.contains_key(*key)))
-            .map(|(key, value)| (key.clone(), value.type_name().to_string()))
+            .filter_map(|(key, value)| {
+                let recorded = known.and_then(|props| props.get(key));
+                let observed = value.type_name();
+                let register = match recorded {
+                    None => true,
+                    Some(prior) => prior == "Unknown" && observed != "Null",
+                };
+                register.then(|| {
+                    let observed = if observed == "Null" {
+                        "Unknown"
+                    } else {
+                        observed
+                    };
+                    (key.clone(), observed.to_string())
+                })
+            })
             .collect();
         if missing.is_empty() {
             return;

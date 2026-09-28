@@ -568,3 +568,86 @@ class TestIntrospection:
         g = _make_graph()
         desc = g.describe()
         assert "schema-locked" not in desc
+
+
+# ── A column every earlier write left NULL ──────────────────────────────────
+
+
+def _null_column_graph(storage, tmp_path, writer):
+    import datetime as dt
+
+    import pandas as pd
+
+    path = str(tmp_path / f"null_column_{storage}_{writer}") if storage == "disk" else None
+    g = kglite.KnowledgeGraph(storage=storage, path=path)
+    if writer == "add_nodes":
+        frame = pd.DataFrame({"id": ["P1.1"], "begin": pd.to_datetime([dt.date(2000, 1, 1)]), "eind": [None]})
+        g.add_nodes(frame, "Voorkomen", "id")
+    else:
+        g.cypher(
+            "UNWIND $rows AS r CREATE (:Voorkomen {id: r.id, begin: r.begin, eind: r.eind})",
+            params={"rows": [{"id": "P1.1", "begin": dt.date(2000, 1, 1), "eind": None}]},
+        )
+    return g
+
+
+class TestAColumnWrittenOnlyAsNull:
+    """A column a write named but left NULL on every row is known: a later
+    CREATE that carries a value is not refused as a typo, open or under
+    lock_schema(), and the column's type stays open until a value arrives.
+
+    Red proof (user test 3, B5): the CREATE typo guard refused the second
+    delivery of one UNWIND ... CREATE ("Unknown property 'eind'"), and a
+    loader-written all-None column was recorded as String, so the lock then
+    refused a date."""
+
+    DELIVERY = "UNWIND $rows AS r CREATE (:Voorkomen {id: r.id, begin: r.begin, eind: r.eind})"
+
+    @pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+    @pytest.mark.parametrize("writer", ["add_nodes", "cypher"])
+    @pytest.mark.parametrize("locked", [False, True])
+    def test_a_later_value_is_accepted(self, storage, writer, locked, tmp_path):
+        import datetime as dt
+
+        g = _null_column_graph(storage, tmp_path, writer)
+        assert g.schema()["node_types"]["Voorkomen"]["properties"]["eind"] == "Unknown"
+        if locked:
+            g.lock_schema()
+        g.cypher(
+            self.DELIVERY,
+            params={"rows": [{"id": "P2.1", "begin": dt.date(2019, 3, 1), "eind": dt.date(2020, 9, 9)}]},
+        )
+        g.cypher("CREATE (:Voorkomen {id: 'P3.1', eind: date('2021-01-01')})")
+        assert g.cypher("MATCH (v:Voorkomen) WHERE v.eind IS NOT NULL RETURN count(v) AS n").to_list() == [{"n": 2}]
+        assert g.schema()["node_types"]["Voorkomen"]["properties"]["eind"] == "DateTime"
+
+    @pytest.mark.parametrize("writer", ["add_nodes", "cypher"])
+    def test_a_typo_is_still_refused(self, writer, tmp_path):
+        g = _null_column_graph("default", tmp_path, writer)
+        with pytest.raises(Exception, match="Unknown property 'einde'"):
+            g.cypher("CREATE (:Voorkomen {id: 'P9', einde: 1})")
+        g.lock_schema()
+        with pytest.raises(Exception, match="Unknown property 'einde'"):
+            g.cypher("CREATE (:Voorkomen {id: 'P9', einde: 1})")
+
+    @pytest.mark.parametrize("writer", ["add_nodes", "cypher"])
+    def test_the_column_survives_save_and_load(self, writer, tmp_path):
+        g = _null_column_graph("default", tmp_path, writer)
+        path = str(tmp_path / "null_column.kgl")
+        g.save(path)
+        loaded = kglite.load(path)
+        assert loaded.schema()["node_types"]["Voorkomen"]["properties"]["eind"] == "Unknown"
+        assert "eind" in loaded.describe(types=["Voorkomen"])
+        loaded.lock_schema()
+        loaded.cypher("CREATE (:Voorkomen {id: 'P2.1', eind: 5})")
+
+    def test_a_later_null_column_does_not_retype_a_typed_one(self):
+        import datetime as dt
+
+        import pandas as pd
+
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "eind": pd.to_datetime([dt.date(2020, 1, 1)])}), "Voorkomen", "id")
+        report = g.add_nodes(pd.DataFrame({"id": [2], "eind": [None]}), "Voorkomen", "id")
+        assert not report.get("errors"), report
+        assert g.schema()["node_types"]["Voorkomen"]["properties"]["eind"] == "DateTime"

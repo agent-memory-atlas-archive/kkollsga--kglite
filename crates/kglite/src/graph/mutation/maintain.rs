@@ -338,6 +338,27 @@ fn get_column_types(df_data: &DataFrame) -> HashMap<String, String> {
     types
 }
 
+/// The types `add_nodes` records for its frame's columns: a column with a
+/// value records its frame type, and one whose every cell is NULL records
+/// `Unknown` — the name is known to the `CREATE` typo guard and the schema
+/// lock, but its dtype (an all-`None` object column reads as `String`) is no
+/// evidence of what a later value will be. An `Unknown` never displaces a
+/// type the node type already records.
+fn recorded_column_types(
+    df_data: &DataFrame,
+    existing: Option<&HashMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut types = get_column_types(df_data);
+    types.retain(|name, recorded| {
+        if df_data.column_has_values(name) {
+            return true;
+        }
+        *recorded = "Unknown".to_string();
+        existing.is_none_or(|props| !props.contains_key(name))
+    });
+    types
+}
+
 pub(crate) fn preflight_interner_names<'a>(
     graph: &DirGraph,
     names: impl IntoIterator<Item = &'a str>,
@@ -683,7 +704,7 @@ fn install_node_type_metadata(
     should_update_title: bool,
     errors: &mut Vec<String>,
 ) {
-    let df_column_types = get_column_types(df_data);
+    let df_column_types = recorded_column_types(df_data, graph.get_node_type_metadata(node_type));
 
     if let Some(existing_meta) = graph.get_node_type_metadata(node_type) {
         for (col_name, col_type) in &df_column_types {

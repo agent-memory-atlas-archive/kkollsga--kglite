@@ -88,13 +88,18 @@ count). Two semantics to keep in mind:
 - **Matching is type-exact**: `'42'` ≠ `42`. Keep id types consistent across
   writes and reads.
 - **Property typos are caught where the type's shape is known.** A `CREATE` or
-  `MERGE` node pattern naming a property the type has never carried is rejected
+  `MERGE` node pattern naming a property no write to the type has named is rejected
   with a `Valid properties: …` / "did you mean?" hint — a deliberate typo-guard,
   active on an open schema. It applies only where KGLite knows the shape: a type
   with no recorded properties yet, an unlabelled pattern, and relationship
   properties are all skipped, and `SET n.newprop = …` stores a new property by
-  design (that is how a type grows a column). A property the graph declares
-  counts as known before any node carries it: a `define_schema()` field, or the
+  design (that is how a type grows a column). A property a write named counts
+  as known even when every value written so far was NULL — an `add_nodes`
+  column that was empty throughout, or a `CREATE` / `UNWIND … CREATE` map entry
+  that evaluated to NULL — so a later delivery carrying a value is accepted,
+  open or locked; `schema()` records such a property as `Unknown` until a value
+  arrives, and `describe()` lists it with `coverage="0%"`. A property the graph
+  declares counts as known before any node carries it: a `define_schema()` field, or the
   `from` / `to` bound of a
   [validity declaration](#validity-interval-declarations) on the label (on a
   secondary label, for the nodes that carry it). Once any node of a type

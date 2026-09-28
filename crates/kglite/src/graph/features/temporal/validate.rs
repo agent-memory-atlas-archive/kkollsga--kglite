@@ -106,17 +106,22 @@ pub(super) fn walk(
     if !seen.from && !known(&config.valid_from) {
         return Err(missing_property(&config.valid_from, target, ""));
     }
-    if !seen.to && !known(&config.valid_to) {
-        let names = schema_names(graph, target, &seen);
-        // The declared `from` is never the intended `to`, however close.
-        let names: Vec<&str> = names
-            .iter()
-            .map(String::as_str)
-            .filter(|name| *name != config.valid_from)
-            .collect();
-        let hint = crate::graph::mutation::validation::did_you_mean(&config.valid_to, &names);
-        if !hint.is_empty() {
-            return Err(missing_property(&config.valid_to, target, &hint));
+    // A `to` the schema knows but no row carries — one every earlier write
+    // left NULL — is open-ended too; only an unknown one can be a typo. A
+    // column this load just wrote counts as present, NULL or not.
+    if !seen.to && !written.contains(&config.valid_to.as_str()) {
+        if !known(&config.valid_to) {
+            let names = schema_names(graph, target, &seen);
+            // The declared `from` is never the intended `to`, however close.
+            let names: Vec<&str> = names
+                .iter()
+                .map(String::as_str)
+                .filter(|name| *name != config.valid_from)
+                .collect();
+            let hint = crate::graph::mutation::validation::did_you_mean(&config.valid_to, &names);
+            if !hint.is_empty() {
+                return Err(missing_property(&config.valid_to, target, &hint));
+            }
         }
         walk.open_ended = Some(format!(
             "no row of {} carries '{}'; every row is open-ended until one is written",

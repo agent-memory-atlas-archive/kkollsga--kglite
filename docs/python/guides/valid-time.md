@@ -405,10 +405,10 @@ graph.cypher("""
 """)
 ```
 
-`recorded_to` is written by `SET` because no row carries it yet. A `CREATE`
-that names it is refused as a typo. Only a declared name counts as known before
-any row carries it — a valid-time bound, or a `define_schema()` field — and
-this pair is neither.
+`recorded_to` is written by `SET` because no write has named it yet. A `CREATE`
+that names it is refused as a typo. A name counts as known once any write has
+named it, even with a NULL value on every row, or when it is declared — a
+valid-time bound, or a `define_schema()` field.
 
 **Load images as new relationships.** On a declared relationship type,
 `add_relationships()` (and `create_relationships()`, `extend()` and

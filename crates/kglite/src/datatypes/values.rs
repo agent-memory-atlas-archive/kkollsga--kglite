@@ -776,6 +776,22 @@ impl Column {
 }
 
 impl ColumnData {
+    /// Whether any cell holds a value (is not NULL).
+    fn has_values(&self) -> bool {
+        match self {
+            ColumnData::UniqueId(vec) => vec.iter().any(Option::is_some),
+            ColumnData::Int64(vec) => vec.iter().any(Option::is_some),
+            ColumnData::Float64(vec) => vec.iter().any(Option::is_some),
+            ColumnData::String(vec) => vec.iter().any(Option::is_some),
+            ColumnData::Boolean(vec) => vec.iter().any(Option::is_some),
+            ColumnData::DateTime(vec) => vec.iter().any(Option::is_some),
+            ColumnData::Timestamp(vec) => vec.iter().any(Option::is_some),
+            ColumnData::List(vec) => vec.iter().any(Option::is_some),
+            ColumnData::Map(vec) => vec.iter().any(Option::is_some),
+            ColumnData::Duration(vec) => vec.iter().any(Option::is_some),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             ColumnData::UniqueId(vec) => vec.len(),
@@ -864,6 +880,15 @@ impl DataFrame {
 
     pub fn get_column_names(&self) -> Vec<String> {
         self.columns.iter().map(|col| col.name.clone()).collect()
+    }
+
+    /// Whether column `col_name` holds any non-NULL cell; `false` for an
+    /// absent column.
+    pub fn column_has_values(&self, col_name: &str) -> bool {
+        self.column_indices
+            .get(col_name)
+            .and_then(|&idx| self.columns.get(idx))
+            .is_some_and(|col| col.data.has_values())
     }
 
     pub fn get_column_type(&self, col_name: &str) -> Option<ColumnType> {

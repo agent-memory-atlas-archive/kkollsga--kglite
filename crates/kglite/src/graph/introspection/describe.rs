@@ -990,6 +990,61 @@ fn truncated_value_displays(values: &[Value], truncate_at: Option<usize>) -> Vec
         .collect()
 }
 
+/// The properties a type's `<properties>` block lists: those some node holds
+/// a value for, then the `unwritten` ones ([`unwritten_properties`]).
+fn listed_properties<'a>(
+    stats: &'a [PropertyStatInfo],
+    unwritten: &'a [PropertyStatInfo],
+) -> Vec<&'a PropertyStatInfo> {
+    stats
+        .iter()
+        .filter(|p| !matches!(p.property_name.as_str(), "type" | "title" | "id"))
+        // Reserved provenance keys (updated_at, …) are engine metadata, not
+        // user data — keep them out of the schema's property listing.
+        .filter(|p| !crate::graph::schema::is_reserved_provenance_key(&p.property_name))
+        .filter(|p| p.non_null > 0)
+        .chain(unwritten)
+        // Display-only suppression (rationale on
+        // `is_uninformative_false_bool`): the column stays present and
+        // queryable, and a genuinely mixed boolean keeps showing.
+        .filter(|p| !is_uninformative_false_bool(p))
+        .collect()
+}
+
+/// The properties `node_type` records as `Unknown` that no node holds a value
+/// for: columns every write so far left NULL. They carry no stats, but a
+/// `CREATE` may name them, so they are listed with `coverage="0%"`.
+fn unwritten_properties(
+    graph: &DirGraph,
+    node_type: &str,
+    stats: &[PropertyStatInfo],
+) -> Vec<PropertyStatInfo> {
+    let Some(recorded) = graph.node_type_metadata.get(node_type) else {
+        return Vec::new();
+    };
+    let mut unwritten: Vec<PropertyStatInfo> = recorded
+        .iter()
+        .filter(|(name, kind)| {
+            kind.as_str() == "Unknown"
+                && !crate::graph::schema::is_reserved_provenance_key(name)
+                && !stats
+                    .iter()
+                    .any(|p| &p.property_name == *name && p.non_null > 0)
+        })
+        .map(|(name, kind)| PropertyStatInfo {
+            property_name: name.clone(),
+            type_string: kind.clone(),
+            non_null: 0,
+            unique: 0,
+            values: None,
+            sample: None,
+            approx: false,
+        })
+        .collect();
+    unwritten.sort_by(|a, b| a.property_name.cmp(&b.property_name));
+    unwritten
+}
+
 /// Percentage of a type's nodes on which a property is non-null, as a
 /// `coverage="51%"` attribute — emitted only when the property is *not*
 /// present on every node.
@@ -1005,6 +1060,9 @@ fn coverage_attr(non_null: usize, type_count: usize) -> String {
     }
     // Floored, so a property missing from even one node can never round up to
     // a `100%` that would read as "always present".
+    if non_null == 0 {
+        return " coverage=\"0%\"".to_string();
+    }
     let percent = non_null * 100 / type_count;
     if percent == 0 {
         " coverage=\"<1%\"".to_string()
@@ -1201,18 +1259,8 @@ fn write_type_detail(
             Some(200)
         },
     ) {
-        let filtered: Vec<&PropertyStatInfo> = stats
-            .iter()
-            .filter(|p| !matches!(p.property_name.as_str(), "type" | "title" | "id"))
-            // Reserved provenance keys (updated_at, …) are engine metadata, not
-            // user data — keep them out of the schema's property listing.
-            .filter(|p| !crate::graph::schema::is_reserved_provenance_key(&p.property_name))
-            .filter(|p| p.non_null > 0)
-            // Display-only suppression (rationale on
-            // `is_uninformative_false_bool`): the column stays present and
-            // queryable, and a genuinely mixed boolean keeps showing.
-            .filter(|p| !is_uninformative_false_bool(p))
-            .collect();
+        let unwritten = unwritten_properties(graph, node_type, &stats);
+        let filtered = listed_properties(&stats, &unwritten);
         if !filtered.is_empty() {
             xml.push_str(&format!("{}  <properties>\n", indent));
             for prop in &filtered {

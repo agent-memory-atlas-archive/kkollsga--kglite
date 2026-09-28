@@ -462,6 +462,16 @@ before upgrading.
   while the same rows in one call were kept as separate relationships. Rows
   are now versions (see Changed): nothing stored is updated, identical rows
   are dropped, and one call and several calls leave the same relationships.
+- A property a write named but left NULL on every row was not known to the
+  `CREATE` typo guard or to `lock_schema()`: `UNWIND $rows AS r CREATE (:T
+  {x: r.x})` whose first delivery had `x` NULL throughout refused the second
+  delivery ("Unknown property 'x'"), and an `add_nodes` column that was empty
+  throughout was recorded as `String` (from its object dtype), so a locked
+  graph then refused a date, and a later empty column re-typed a typed one. A
+  NULL-written property is now recorded as `Unknown` — known, its type open
+  until a value arrives, which then types it — `schema()` shows it and
+  `describe()` lists it with `coverage="0%"`. A declaration's `to` that every
+  row left NULL still warns that every row is open-ended.
 - The query warning for `WHERE n.x IS NULL` on a property no node of the type
   has said the test "filters out every row" while the query returned every
   row; it now says the test is true on every row, and stays silent for a

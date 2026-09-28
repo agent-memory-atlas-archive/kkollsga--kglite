@@ -230,9 +230,13 @@ class TestOpenEndedTypes:
         with pytest.raises(kglite.KgError, match="Unknown property 'valid_too' on Name"):
             names.cypher("CREATE (:Name {id: 3, valid_from: date('1990-01-01'), valid_too: date('2000-01-01')})")
 
-    def test_undeclare_withdraws_the_allowance(self, names):
-        _declare(names, self.DECLARE)
-        names.cypher("CALL db.temporal.undeclare({node: 'Name'})")
+    def test_undeclare_withdraws_the_allowance(self):
+        # No write here names `valid_to`, even as NULL — a NULL-written
+        # column is known on its own (TestAColumnWrittenOnlyAsNull).
+        g = kglite.KnowledgeGraph()
+        g.cypher("UNWIND [1, 2] AS i CREATE (:Name {id: i, valid_from: date('2000-01-01')})")
+        _declare(g, self.DECLARE)
+        g.cypher("CALL db.temporal.undeclare({node: 'Name'})")
         with pytest.raises(kglite.KgError, match="Unknown property 'valid_to' on Name"):
             g.cypher(self.CLOSED_VERSION)
 
