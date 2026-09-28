@@ -1425,7 +1425,8 @@ def analyse(
 #: "a thin KGLite 0.14.3 frontend" is rot, and no regex separates them. So the
 #: checker surfaces every candidate and this table records the adjudicated ones,
 #: in the same spirit as `scripts/check_lint_allowances.py`.
-#: Key: ``(repo, path suffix, package)``.
+#: Key: ``(repo, path relative to the repo root, package)`` — the whole path, so
+#: ``README.md`` names the root README and never ``kglite-java/README.md``.
 #: A one-off can instead carry the inline `version-check: ignore` marker.
 _BRIDGE = "0.13.4 is the documented pre-0.14 artifact-conversion bridge"
 ACKNOWLEDGED: dict[tuple[str, str, str], str] = {
@@ -1455,17 +1456,33 @@ ACKNOWLEDGED: dict[tuple[str, str, str], str] = {
 }
 
 
+#: Each repo's root as ``main`` resolved it (the upstream may be the current
+#: checkout rather than ``<root>/KGLite``), for :func:`_repo_relative`.
+REPO_ROOTS: dict[str, Path] = {}
+
+
+def _repo_relative(d: Declaration) -> str | None:
+    """``d``'s path relative to its repo's root, or None outside it."""
+    root = REPO_ROOTS.get(d.repo, ECOSYSTEM_ROOT / d.repo)
+    try:
+        return d.path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
 def _acknowledged(d: Declaration) -> str | None:
     """Reason this documented version is deliberate, or None.
 
     Keyed by repo as well as path: several repos have a ``README.md`` and a
     ``docs/index.md``, and an unscoped suffix match silently exonerated
-    sonagram's genuinely stale strings.
+    sonagram's genuinely stale strings. The path is matched whole: a suffix
+    match let the root README's key exonerate ``kglite-java/README.md``,
+    whose install snippet then sat stale unreported.
     """
-    posix = d.path.as_posix()
+    rel = _repo_relative(d)
     pkg = d.package.lower().replace("_", "-")
-    for (repo, suffix, want_pkg), reason in ACKNOWLEDGED.items():
-        if repo == d.repo and want_pkg == pkg and posix.endswith(suffix):
+    for (repo, path, want_pkg), reason in ACKNOWLEDGED.items():
+        if repo == d.repo and want_pkg == pkg and rel == path:
             return reason
     return None
 
@@ -2196,6 +2213,8 @@ def main(argv: list[str] | None = None) -> int:
         repos[UPSTREAM_REPO] = REPO_ROOT
         if UPSTREAM_REPO in missing:
             missing.remove(UPSTREAM_REPO)
+    REPO_ROOTS.clear()
+    REPO_ROOTS.update(repos)
 
     if missing:
         msg = f"note: {len(missing)} sibling repo(s) not present under {ECOSYSTEM_ROOT}: {', '.join(missing)}"

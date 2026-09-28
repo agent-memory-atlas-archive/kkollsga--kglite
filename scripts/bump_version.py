@@ -21,7 +21,10 @@ cargo dies on its first call. That happened during the 0.14.5 -> 0.15.0
 release and broke `make refresh-release-constants` on its first step.
 
 This script edits all five places at once and then *verifies* with
-`cargo metadata` that every member actually resolved.
+`cargo metadata` that every member actually resolved. It also moves the
+install snippets a reader copies (``DOC_SNIPPETS``: the Java README's Maven
+and Gradle coordinates), which name the release they install and which no
+build reads, so nothing else would notice them go stale.
 
 Why the internal requirement carries the full `X.Y.Z` and not the `X.Y`
 series it used to:
@@ -80,6 +83,34 @@ BODY_PATH_RE = re.compile(r'path\s*=\s*"(?P<path>[^"]*)"')
 # The crates `release.yml` pushes to crates.io, in lockstep at one
 # version. A divergence here is a broken publish set, not a warning.
 PUBLISHED_CRATES = ("kglite", "kglite-bolt-server", "kglite-c", "kglite-cli", "kglite-mcp-server")
+
+
+#: Install snippets that name the release they install: ``(file, pattern)``,
+#: the pattern's group 2 being the version. The Java build reads the workspace
+#: version itself; its README's two coordinates are the only hand-written copy.
+#: Each pattern must match at least once, so a reworded snippet fails the
+#: check instead of passing it vacuously.
+DOC_SNIPPETS: tuple[tuple[Path, re.Pattern[str]], ...] = (
+    (
+        Path("kglite-java/README.md"),
+        re.compile(r"(<artifactId>kglite</artifactId>\s*<version>)([^<]+)(</version>)"),
+    ),
+    (
+        Path("kglite-java/README.md"),
+        re.compile(r"(io\.github\.kkollsga:kglite:)(\d+\.\d+\.\d+[^\s\"')]*)()"),
+    ),
+)
+
+
+def doc_snippet_versions() -> list[tuple[Path, str]]:
+    """Every version a ``DOC_SNIPPETS`` pattern finds, as ``(file, version)``;
+    a pattern that finds none is reported with version ``""``."""
+    found: list[tuple[Path, str]] = []
+    for rel, pattern in DOC_SNIPPETS:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        versions = [match.group(2) for match in pattern.finditer(text)]
+        found.extend((rel, version) for version in versions or [""])
+    return found
 
 
 class BumpError(RuntimeError):
@@ -154,6 +185,11 @@ def check() -> list[str]:
                     f"{rel}:{lineno}: internal dependency {key!r} requires "
                     f"{requirement!r} but the workspace is at {workspace_version!r}"
                 )
+    for rel, version in doc_snippet_versions():
+        if not version:
+            problems.append(f"{rel}: no install snippet found to keep at the workspace version")
+        elif version != workspace_version:
+            problems.append(f"{rel}: install snippet names {version!r} but the workspace is at {workspace_version!r}")
     return problems
 
 
@@ -189,6 +225,17 @@ def bump(new_version: str) -> list[Path]:
         if dirty:
             manifest.write_text("".join(lines), encoding="utf-8", newline="\n")
             changed.append(manifest)
+
+    for rel, pattern in DOC_SNIPPETS:
+        path = REPO_ROOT / rel
+        text = path.read_text(encoding="utf-8")
+        rewritten, count = pattern.subn(rf"\g<1>{new_version}\g<3>", text)
+        if count == 0:
+            raise BumpError(f"{rel}: no install snippet found to rewrite")
+        if rewritten != text:
+            path.write_text(rewritten, encoding="utf-8", newline="\n")
+            if path not in changed:
+                changed.append(path)
     return changed
 
 
@@ -265,7 +312,7 @@ def main() -> int:
         if args.check:
             problems = check()
             if problems:
-                print("internal kglite dependency requirements are out of sync:", file=sys.stderr)
+                print("the workspace version is not written everywhere it should be:", file=sys.stderr)
                 for problem in problems:
                     print(f"  {problem}", file=sys.stderr)
                 print(
@@ -274,7 +321,7 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 1
-            print(f"internal dependency requirements in sync at {read_workspace_version()}")
+            print(f"internal dependency requirements and install snippets in sync at {read_workspace_version()}")
             return 0
 
         changed = bump(args.set)

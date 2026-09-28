@@ -409,6 +409,33 @@ def test_stale_documented_version_is_reported(ecosystem: Path) -> None:
     assert code == 0, out
 
 
+def test_a_stale_java_readme_snippet_is_reported_beside_an_acknowledged_root_readme(
+    ecosystem: Path,
+) -> None:
+    """The acknowledged key ``("KGLite", "README.md", "kglite")`` names the
+    root README's conversion-bridge version. It used to match by path suffix,
+    so it also exonerated ``kglite-java/README.md`` and that file's install
+    snippet sat stale, unreported, for three releases."""
+    upstream = ecosystem / "KGLite"
+    _write(upstream / "README.md", "# KGLite\n\nConvert pre-0.14 files with kglite 0.13.4 first.\n")
+    _write(
+        upstream / "kglite-java" / "README.md",
+        "# kglite-java\n\n```xml\n<dependency>\n"
+        "  <groupId>io.github.kkollsga</groupId>\n"
+        "  <artifactId>kglite</artifactId>\n"
+        "  <version>0.14.3</version>\n"
+        "</dependency>\n```\n\n"
+        '```kotlin\nimplementation("io.github.kkollsga:kglite:0.14.3")\n```\n',
+    )
+    code, out = run(ecosystem)
+    stale = out.split("STALE DOCUMENTED VERSIONS", 1)[1].split("ACKNOWLEDGED HISTORICAL REFERENCES", 1)[0]
+    acknowledged = out.split("ACKNOWLEDGED HISTORICAL REFERENCES", 1)[1]
+    assert "kglite-java/README.md" in stale and "0.14.3" in stale, out
+    assert "kglite-java" not in acknowledged, out
+    assert "KGLite/README.md" in acknowledged and "0.13.4" in acknowledged, out
+    assert code == 0, out
+
+
 def test_stale_maven_xml_dependency_is_reported(ecosystem: Path) -> None:
     """A Maven `<dependency>` block splits the coordinate over three lines, so
     the `:`-separated coordinate regex cannot see it — yet it is the form a

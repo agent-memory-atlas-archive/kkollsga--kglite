@@ -53,6 +53,36 @@ def test_the_four_publishing_members_actually_pin_the_engine():
     assert pinned == {"kglite-bolt-server", "kglite-c", "kglite-cli", "kglite-mcp-server"}
 
 
+def test_the_java_readme_install_snippets_are_found():
+    """Guards the discovery of the install snippets `check()` holds at the
+    workspace version: both coordinates, each found."""
+    found = bump_version.doc_snippet_versions()
+    assert [rel.as_posix() for rel, _ in found] == ["kglite-java/README.md"] * 2
+    assert all(version for _, version in found), found
+
+
+def test_a_stale_install_snippet_fails_the_check_and_the_bump_moves_it(tmp_path, monkeypatch):
+    readme = tmp_path / "kglite-java" / "README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text(
+        "<artifactId>kglite</artifactId>\n  <version>0.1.0</version>\n"
+        'implementation("io.github.kkollsga:kglite:0.1.0")\n',
+        encoding="utf-8",
+    )
+    workspace = bump_version.read_workspace_version()
+    monkeypatch.setattr(bump_version, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(bump_version, "ROOT_MANIFEST", tmp_path / "Cargo.toml")
+    monkeypatch.setattr(bump_version, "member_manifests", lambda: [])
+    (tmp_path / "Cargo.toml").write_text(f'[workspace.package]\nversion = "{workspace}"\n', encoding="utf-8")
+    assert bump_version.doc_snippet_versions() == [(Path("kglite-java/README.md"), "0.1.0")] * 2
+    problems = bump_version.check()
+    assert len(problems) == 2 and all("install snippet names '0.1.0'" in p for p in problems), problems
+    assert bump_version.bump(workspace) == [readme]
+    assert bump_version.check() == []
+    readme.write_text("no snippet here\n", encoding="utf-8")
+    assert any("no install snippet found" in p for p in bump_version.check())
+
+
 def test_pins_carry_the_full_x_y_z_not_the_series():
     version = bump_version.read_workspace_version()
     assert version.count(".") == 2
