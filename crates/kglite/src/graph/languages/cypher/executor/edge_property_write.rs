@@ -14,11 +14,10 @@ use super::super::ast::Expression;
 use super::super::result::ResultRow;
 use super::write_scope::enforce_bound_edge_write_scope as enforce_edge_write_scope;
 use crate::datatypes::values::Value;
-use crate::graph::algorithms::Interrupt;
 use crate::graph::languages::cypher::result::MutationStats;
 use crate::graph::schema::{DirGraph, EdgeData};
 use crate::graph::storage::{GraphRead, GraphWrite};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Apply one `SET r.p = …` to a relationship, reporting whether the variable
 /// was in fact bound to one.
@@ -35,7 +34,7 @@ pub(super) fn set_edge_property(
     graph: &mut DirGraph,
     row: &ResultRow,
     item: (&String, &String, &Expression),
-    (params, interrupt): (&HashMap<String, Value>, &Interrupt),
+    ctx: &super::write::WriteClauseCtx<'_>,
     stats: &mut MutationStats,
     edges_to_stamp: &mut HashSet<petgraph::graph::EdgeIndex>,
 ) -> Result<bool, String> {
@@ -52,7 +51,7 @@ pub(super) fn set_edge_property(
     enforce_edge_write_scope(graph, edge_binding)?;
     let edge_index = edge_binding.edge_index;
     let mut value = {
-        let executor = super::write::row_evaluator(graph, params, interrupt);
+        let executor = super::write::row_evaluator(graph, ctx);
         executor.evaluate_expression(expression, row)?
     };
     crate::graph::session::snapshot_property_values(&graph.graph, std::iter::once(&mut value));

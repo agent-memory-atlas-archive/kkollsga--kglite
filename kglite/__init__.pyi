@@ -7566,6 +7566,9 @@ class KnowledgeGraph:
                 and note that with ``timeout_ms`` set too, the budget is
                 usually what fires on a runaway pattern, since it bounds what
                 the query holds while the deadline bounds how long it runs.
+                A write clause's value expressions (``SET``, ``CREATE``,
+                ``MERGE``, a ``FOREACH`` list) charge it as a read's
+                projection does, cumulatively across the statement's rows.
                 A refusal during mutation execution restores that statement's
                 earlier writes. Defaults to ``set_default_max_work_units()``.
             row_limit: Cap on the result rows this call **retains** — the
@@ -10700,8 +10703,9 @@ class Transaction:
             modified_by: Actor id stamped on opted-in types.
             timeout_ms: Per-query timeout in milliseconds (merged with transaction deadline).
             max_work_units: Work budget for the statement — intermediate rows,
-                retained collection items and scan work, not a result-row cap.
-                Exceeding it raises an error and rolls back the statement.
+                retained collection items and scan work (a write clause's value
+                expressions included), not a result-row cap. Exceeding it
+                raises an error and rolls back the statement.
             valid_at: Run the query as of an instant, exactly as
                 :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does — the
                 statement prefix ``FOR VALID_TIME AS OF`` on the transaction's

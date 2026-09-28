@@ -272,6 +272,18 @@ impl<'a> CypherExecutor<'a> {
         params: &'a HashMap<String, Value>,
         deadline: Option<Instant>,
     ) -> Self {
+        Self::with_params_and_budget(graph, params, deadline, ExecutionBudget::default())
+    }
+
+    /// [`Self::with_params`] charging `budget` — built with it rather than
+    /// replacing a fresh default, so an executor made per written row (the
+    /// write path's `row_evaluator`) allocates no budget of its own.
+    pub(super) fn with_params_and_budget(
+        graph: &'a DirGraph,
+        params: &'a HashMap<String, Value>,
+        deadline: Option<Instant>,
+        budget: ExecutionBudget,
+    ) -> Self {
         CypherExecutor {
             graph,
             params,
@@ -280,7 +292,7 @@ impl<'a> CypherExecutor<'a> {
             validity_cache: OnceLock::new(),
             deadline,
             cancel: None,
-            budget: ExecutionBudget::default(),
+            budget,
             spatial_node_cache: OnceLock::new(),
             alias_name_hashes: OnceLock::new(),
             streaming: true,

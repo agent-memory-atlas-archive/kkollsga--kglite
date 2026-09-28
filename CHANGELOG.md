@@ -506,6 +506,15 @@ before upgrading.
 
 ### Fixed
 
+- `max_work_units` now bounds a write statement's value expressions. The
+  evaluators of `SET`, `CREATE`, `MERGE` and a `FOREACH` list ran on a fresh,
+  unlimited budget, so `MATCH (n) SET n.x = size(range(1, 10000))` ran under
+  `max_work_units=5000` (only the 10,000,000 backstop applied); they now
+  charge the statement's budget exactly as a read's projection does,
+  cumulatively across rows, in `cypher()`, `Transaction` and
+  `Session.execute`, and a refusal rolls the statement back. Ordinary
+  expressions charge nothing: a 1,000,000-row `UNWIND … CREATE` runs under a
+  budget of exactly its row count.
 - A write statement could run far past its `timeout_ms`, and one whose last
   clause was the write could commit after the deadline and report success.
   Write loops checked the deadline only every 4,096 rows and a write clause's

@@ -226,13 +226,20 @@ pub(super) fn take_write_polls() -> usize {
 
 /// The evaluator for a write clause's value expressions. It carries the
 /// statement's deadline and cancel flag, so a slow expression inside one row
-/// (`range()`, a list comprehension, a `COUNT { }`) polls them as a read would.
+/// (`range()`, a list comprehension, a `COUNT { }`) polls them as a read
+/// would, and the statement's budget, which it charges as a read's projection
+/// does — cumulatively across the statement's rows.
 pub(super) fn row_evaluator<'a>(
     graph: &'a DirGraph,
-    params: &'a HashMap<String, Value>,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'a>,
 ) -> CypherExecutor<'a> {
-    CypherExecutor::with_params(graph, params, interrupt.deadline).with_cancel(interrupt.cancel)
+    CypherExecutor::with_params_and_budget(
+        graph,
+        ctx.params,
+        ctx.interrupt.deadline,
+        ctx.budget.clone(),
+    )
+    .with_cancel(ctx.interrupt.cancel)
 }
 
 /// Mutable execution with the same row/collection budget used by reads.
@@ -469,7 +476,7 @@ fn run_clause_pipeline(
         let mut wrote = true;
         match clause {
             Clause::Create(create) => {
-                result_set = execute_create(graph, create, result_set, params, stats, interrupt)?;
+                result_set = execute_create(graph, create, result_set, stats, &write_ctx)?;
             }
             Clause::Set(set) => {
                 apply_set_clause(graph, set, &result_set, stats, &write_ctx)?;
@@ -488,7 +495,7 @@ fn run_clause_pipeline(
                 apply_remove_clause(graph, rem, &result_set, stats, &write_ctx)?;
             }
             Clause::Merge(merge) => {
-                result_set = execute_merge(graph, merge, result_set, params, stats, interrupt)?;
+                result_set = execute_merge(graph, merge, result_set, stats, &write_ctx)?;
                 // MERGE may run ON MATCH SET / ON CREATE SET; flush as above.
                 GraphWrite::flush_pending_writes(&mut graph.graph);
             }
@@ -697,18 +704,13 @@ fn execute_foreach(
     stats: &mut MutationStats,
     ctx: &WriteClauseCtx<'_>,
 ) -> Result<(), String> {
-    let params = ctx.params;
     let interrupt = ctx.interrupt;
     let budget = ctx.budget;
     for row in outer.rows.iter() {
         check_interrupt_row(interrupt)?;
         // Evaluate the list in this row's context (read-only borrow of the
         // graph, dropped before the per-element mutations below).
-        let list_val = {
-            let executor = CypherExecutor::with_params(graph, params, interrupt.deadline)
-                .with_cancel(interrupt.cancel);
-            executor.evaluate_expression(list, row)?
-        };
+        let list_val = row_evaluator(graph, ctx).evaluate_expression(list, row)?;
         let items = match list_val {
             Value::List(items) => items,
             // FOREACH over null is a no-op (Neo4j semantics).
@@ -738,12 +740,12 @@ fn execute_foreach(
 }
 
 /// The statement-invariant inputs every write clause shares — built once per
-/// pipeline run and handed to SET / REMOVE and to each FOREACH body clause.
-struct WriteClauseCtx<'a> {
-    params: &'a HashMap<String, Value>,
-    interrupt: &'a Interrupt,
-    budget: &'a super::budget::ExecutionBudget,
-    relationship_identities: &'a std::sync::Arc<
+/// pipeline run and handed to every write clause and each FOREACH body clause.
+pub(super) struct WriteClauseCtx<'a> {
+    pub(super) params: &'a HashMap<String, Value>,
+    pub(super) interrupt: &'a Interrupt,
+    pub(super) budget: &'a super::budget::ExecutionBudget,
+    pub(super) relationship_identities: &'a std::sync::Arc<
         std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
     >,
 }
@@ -759,7 +761,6 @@ fn apply_foreach_body_clause(
     stats: &mut MutationStats,
     ctx: &WriteClauseCtx<'_>,
 ) -> Result<ResultSet, String> {
-    let params = ctx.params;
     let interrupt = ctx.interrupt;
     let relationship_identities = ctx.relationship_identities;
     // The flush is per element, not per clause: on disk a property read in the
@@ -769,9 +770,7 @@ fn apply_foreach_body_clause(
     // needs the disk read path to consult the mut-cache, a deeper storage
     // change. (Memory mode pays ~nothing.)
     match clause {
-        Clause::Create(create) => {
-            execute_create(graph, create, result_set, params, stats, interrupt)
-        }
+        Clause::Create(create) => execute_create(graph, create, result_set, stats, ctx),
         Clause::Set(set) => {
             apply_set_clause(graph, set, &result_set, stats, ctx)?;
             Ok(result_set)
@@ -793,7 +792,7 @@ fn apply_foreach_body_clause(
             Ok(result_set)
         }
         Clause::Merge(merge) => {
-            let rs = execute_merge(graph, merge, result_set, params, stats, interrupt)?;
+            let rs = execute_merge(graph, merge, result_set, stats, ctx)?;
             GraphWrite::flush_pending_writes(&mut graph.graph);
             Ok(rs)
         }
@@ -816,9 +815,8 @@ fn execute_create(
     graph: &mut DirGraph,
     create: &CreateClause,
     existing: ResultSet,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<ResultSet, String> {
     // On disk, node properties route through the per-type ColumnStore in
     // `DirGraph::insert_node_routed`, which writes into the store the backend
@@ -833,7 +831,7 @@ fn execute_create(
     let mut new_rows = Vec::with_capacity(source_rows.len());
 
     for row in source_rows.iter() {
-        check_interrupt_row(interrupt)?;
+        check_interrupt_row(ctx.interrupt)?;
         let mut new_row = row.clone();
 
         // Positional element -> NodeIndex record for the pattern part being
@@ -869,8 +867,7 @@ fn execute_create(
                         }
                     }
 
-                    let node_idx =
-                        create_node(graph, node_pat, &new_row, params, stats, interrupt)?;
+                    let node_idx = create_node(graph, node_pat, &new_row, stats, ctx)?;
 
                     // Recorded by position as well as by name: an anonymous
                     // endpoint has no name to record under — see
@@ -883,15 +880,7 @@ fn execute_create(
             }
 
             // Second pass: create edges.
-            create_pattern_edges(
-                graph,
-                pattern,
-                &element_nodes,
-                &mut new_row,
-                params,
-                stats,
-                interrupt,
-            )?;
+            create_pattern_edges(graph, pattern, &element_nodes, &mut new_row, stats, ctx)?;
         }
 
         new_rows.push(new_row);
@@ -926,9 +915,8 @@ fn create_pattern_edges(
     pattern: &CreatePattern,
     element_nodes: &[Option<NodeIndex>],
     new_row: &mut ResultRow,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<(), String> {
     let mut i = 1;
     while i < pattern.elements.len() {
@@ -992,7 +980,7 @@ fn create_pattern_edges(
             // so relationship constraints are unaffected.
             let mut edge_props = HashMap::new();
             {
-                let executor = row_evaluator(graph, params, interrupt);
+                let executor = row_evaluator(graph, ctx);
                 for (key, expr) in &edge_pat.properties {
                     let val = executor.evaluate_expression(expr, new_row)?;
                     if matches!(val, Value::Null) {
@@ -1107,10 +1095,9 @@ fn evaluate_properties(
     graph: &DirGraph,
     properties: &[(String, Expression)],
     row: &ResultRow,
-    params: &HashMap<String, Value>,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<HashMap<String, Value>, String> {
-    let executor = row_evaluator(graph, params, interrupt);
+    let executor = row_evaluator(graph, ctx);
     properties
         .iter()
         .map(|(key, expr)| Ok((key.clone(), executor.evaluate_expression(expr, row)?)))
@@ -1121,11 +1108,10 @@ fn create_node(
     graph: &mut DirGraph,
     node_pat: &CreateNodePattern,
     row: &ResultRow,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<petgraph::graph::NodeIndex, String> {
-    let mut properties = evaluate_properties(graph, &node_pat.properties, row, params, interrupt)?;
+    let mut properties = evaluate_properties(graph, &node_pat.properties, row, ctx)?;
     let label = node_pat.label.clone().unwrap_or_else(|| "Node".to_string());
 
     // Identity fields, under whichever spelling this node type declares — see
@@ -1231,7 +1217,7 @@ fn create_node(
 
     // Last abort point: a single-node CREATE runs with no rollback checkpoint
     // (`can_skip_rollback_checkpoint`), so no deadline error may follow the insert.
-    super::check_interrupt(interrupt)?;
+    super::check_interrupt(ctx.interrupt)?;
 
     // Every backend writes id/title/properties through the per-type
     // ColumnStore — see `DirGraph::insert_node_routed`.
@@ -1483,10 +1469,8 @@ enum PropSetFlow {
 }
 
 /// One `SET var.prop[...path...] = expr` against one result row — extracted
-/// from `execute_set`, which is at its complexity ceiling.
-// One row-loop arm extracted whole from execute_set (complexity ceiling);
-// the argument set IS that loop's working state.
-#[allow(clippy::too_many_arguments)]
+/// from `execute_set`, which is at its complexity ceiling; the argument set
+/// is that loop's working state.
 fn execute_property_set_item<'a>(
     graph: &mut DirGraph,
     row: &ResultRow,
@@ -1496,11 +1480,13 @@ fn execute_property_set_item<'a>(
         &'a [crate::graph::languages::cypher::ast::SetPathStep],
         &'a Expression,
     ),
-    (params, interrupt): (&HashMap<String, Value>, &Interrupt),
+    ctx: &WriteClauseCtx<'_>,
     stats: &mut MutationStats,
     (memos, bound_writes): (&mut SetMemos<'a>, &mut BoundWrites),
-    edges_to_stamp: &mut std::collections::HashSet<petgraph::graph::EdgeIndex>,
-    nodes_to_stamp: &mut HashMap<NodeIndex, String>,
+    (edges_to_stamp, nodes_to_stamp): (
+        &mut std::collections::HashSet<petgraph::graph::EdgeIndex>,
+        &mut HashMap<NodeIndex, String>,
+    ),
 ) -> Result<PropSetFlow, String> {
     if !path.is_empty() && row.edge_bindings.contains_key(variable) {
         return Err(format!(
@@ -1514,7 +1500,7 @@ fn execute_property_set_item<'a>(
         graph,
         row,
         (variable, property, expression),
-        (params, interrupt),
+        ctx,
         stats,
         edges_to_stamp,
     )? {
@@ -1541,7 +1527,7 @@ fn execute_property_set_item<'a>(
     // (`o.line_items[2].qty`) does its whole-value read-modify-write in
     // set_path.rs, with the same evaluator.
     let value = {
-        let executor = row_evaluator(graph, params, interrupt);
+        let executor = row_evaluator(graph, ctx);
         let value = executor.evaluate_expression(expression, row)?;
         if path.is_empty() {
             value
@@ -1591,7 +1577,7 @@ fn apply_set_clause(
         promote_projected_relationships(graph, result_set, &set_clause_variables(set), &identities)?
     };
     let rows = promoted.as_ref().unwrap_or(result_set);
-    execute_set(graph, set, rows, ctx.params, stats, ctx.interrupt)?;
+    execute_set(graph, set, rows, stats, ctx)?;
     GraphWrite::flush_pending_writes(&mut graph.graph);
     Ok(())
 }
@@ -1621,19 +1607,11 @@ fn execute_set(
     graph: &mut DirGraph,
     set: &SetClause,
     result_set: &ResultSet,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<(), String> {
     let mut bound_writes = BoundWrites::default();
-    execute_set_items(
-        graph,
-        set,
-        result_set,
-        (params, interrupt),
-        stats,
-        &mut bound_writes,
-    )?;
+    execute_set_items(graph, set, result_set, ctx, stats, &mut bound_writes)?;
     bound_writes.check(graph)
 }
 
@@ -1641,10 +1619,11 @@ fn execute_set_items(
     graph: &mut DirGraph,
     set: &SetClause,
     result_set: &ResultSet,
-    (params, interrupt): (&HashMap<String, Value>, &Interrupt),
+    ctx: &WriteClauseCtx<'_>,
     stats: &mut MutationStats,
     bound_writes: &mut BoundWrites,
 ) -> Result<(), String> {
+    let interrupt = ctx.interrupt;
     // Freshness provenance: nodes (of opted-in types) modified by this SET get a
     // single `updated_at` bump after the loop (engine-managed reserved key) —
     // collected here so multiple property writes on one node stamp it once.
@@ -1672,11 +1651,10 @@ fn execute_set_items(
                         graph,
                         row,
                         (variable, property, path, expression),
-                        (params, interrupt),
+                        ctx,
                         stats,
                         (&mut memos, &mut *bound_writes),
-                        &mut edges_to_stamp,
-                        &mut nodes_to_stamp,
+                        (&mut edges_to_stamp, &mut nodes_to_stamp),
                     )?;
                     if matches!(outcome, PropSetFlow::SkipRow) {
                         continue;
@@ -1687,10 +1665,7 @@ fn execute_set_items(
                     expression,
                     replace,
                 } => {
-                    let value = {
-                        let executor = row_evaluator(graph, params, interrupt);
-                        executor.evaluate_expression(expression, row)?
-                    };
+                    let value = row_evaluator(graph, ctx).evaluate_expression(expression, row)?;
                     let Value::Map(map) = value else {
                         return Err(format!(
                             "SET {} {} expects a map expression",
@@ -1756,7 +1731,7 @@ fn execute_set_items(
                             graph,
                             &SetClause { items: properties },
                             &one_row,
-                            (params, interrupt),
+                            ctx,
                             stats,
                             bound_writes,
                         )?;
@@ -2092,9 +2067,8 @@ fn execute_merge(
     graph: &mut DirGraph,
     merge: &MergeClause,
     existing: ResultSet,
-    params: &HashMap<String, Value>,
     stats: &mut MutationStats,
-    interrupt: &Interrupt,
+    ctx: &WriteClauseCtx<'_>,
 ) -> Result<ResultSet, String> {
     // As in `execute_create`: one MERGE per incoming row, none for zero rows.
     // The implicit start row for a leading MERGE is seeded by the pipeline.
@@ -2103,13 +2077,13 @@ fn execute_merge(
     let mut new_rows = Vec::with_capacity(source_rows.len());
 
     for mut new_row in source_rows.into_iter() {
-        check_interrupt_row(interrupt)?;
+        check_interrupt_row(ctx.interrupt)?;
         // Equality against null is undefined, so a null-bearing MERGE key
         // cannot identify either a match or a safe entity to create.
         // (Block-scoped: the executor holds the disk arena guard, whose
         // borrow of `graph` must end before the &mut mutation calls below.)
         {
-            let executor = row_evaluator(graph, params, interrupt);
+            let executor = row_evaluator(graph, ctx);
             for element in &merge.pattern.elements {
                 let properties = match element {
                     CreateElement::Node(node) => &node.properties,
@@ -2137,13 +2111,7 @@ fn execute_merge(
                 }
             }
         }
-        let matched = merge_pattern::try_match_merge_pattern(
-            graph,
-            &merge.pattern,
-            &new_row,
-            params,
-            interrupt,
-        )?;
+        let matched = merge_pattern::try_match_merge_pattern(graph, &merge.pattern, &new_row, ctx)?;
 
         if let Some(bound_row) = matched {
             for (var, idx) in &bound_row.node_bindings {
@@ -2162,7 +2130,7 @@ fn execute_merge(
                     columns: Vec::new(),
                     lazy_return_items: None,
                 };
-                execute_set(graph, &set_clause, &temp_rs, params, stats, interrupt)?;
+                execute_set(graph, &set_clause, &temp_rs, stats, ctx)?;
             }
         } else {
             let create_clause = CreateClause {
@@ -2173,7 +2141,7 @@ fn execute_merge(
                 columns: existing.columns.clone(),
                 lazy_return_items: None,
             };
-            let created = execute_create(graph, &create_clause, temp_rs, params, stats, interrupt)?;
+            let created = execute_create(graph, &create_clause, temp_rs, stats, ctx)?;
 
             if let Some(created_row) = created.rows.into_iter().next() {
                 for (var, idx) in created_row.node_bindings {
@@ -2193,7 +2161,7 @@ fn execute_merge(
                     columns: Vec::new(),
                     lazy_return_items: None,
                 };
-                execute_set(graph, &set_clause, &temp_rs, params, stats, interrupt)?;
+                execute_set(graph, &set_clause, &temp_rs, stats, ctx)?;
             }
         }
 

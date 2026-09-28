@@ -272,7 +272,13 @@ graph.set_default_max_work_units(10_000)
 
 `max_work_units` is a **work budget, not a row cap**. It counts every quantity
 the executor holds or walks on the way to an answer, so it can be far larger
-than the result. To bound the rows you get *back*, write `LIMIT`.
+than the result. To bound the rows you get *back*, write `LIMIT`. A write
+statement is charged the same way: the value expressions of `SET`, `CREATE`,
+`MERGE` and a `FOREACH` list charge the statement's budget as a read's
+`RETURN` does, cumulatively across its rows — `UNWIND range(1, 200) AS i
+CREATE (:M {x: size(range(1, i))})` is refused under the budget that refuses
+the same `RETURN`. Ordinary arithmetic, string and property expressions charge
+nothing.
 
 **Size it from a probe, and leave headroom.** Run the pattern once as
 `count(*)` to learn roughly how much work it does, then budget well above that
