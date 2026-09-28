@@ -1,10 +1,38 @@
 //! Disk-mode lifecycle and persistence orchestration.
 
 use super::*;
+use crate::graph::storage::column_store::TypedColumn;
 use crate::graph::storage::packed_codec::IntColumnEncoding;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static DISK_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Column stores by type name, as one save writes them.
+type SaveStores = HashMap<String, Arc<ColumnStore>>;
+
+/// Whether `store` holds a `Mixed` id or title column, or a `Mixed` property
+/// column whose declared type (`type_meta`) names a typed column — the shape
+/// the all-`Mixed` sidecar writer left behind, which a rebuild re-types.
+fn retypes_on_save(
+    store: &ColumnStore,
+    type_meta: &HashMap<String, String>,
+    interner: &StringInterner,
+) -> bool {
+    let mixed = |column: &TypedColumn| matches!(column, TypedColumn::Mixed { .. });
+    if store.id_column_ref().is_some_and(mixed) || store.title_column_ref().is_some_and(mixed) {
+        return true;
+    }
+    store
+        .schema()
+        .iter()
+        .zip(store.columns_ref())
+        .any(|((_, key), column)| {
+            mixed(column)
+                && type_meta
+                    .get(interner.resolve(key))
+                    .is_some_and(|declared| !mixed(&TypedColumn::from_type_str(declared)))
+        })
+}
 
 /// A unique scratch-directory name for a disk conversion: `prefix` + pid +
 /// wall-clock nanos + a process-local sequence, so two conversions in the same
@@ -381,8 +409,10 @@ impl DirGraph {
         // older JSON representation remains a read-only data fallback.
         crate::graph::io::file::write_interner_bin(dir, self)?;
 
-        self.write_unified_column_file(dir)?;
-        self.write_column_sidecars(dir)?;
+        let stores = self.column_stores_for_save();
+        self.write_unified_column_file(dir, &stores)?;
+        self.write_column_sidecars(dir, &stores)?;
+        drop(stores);
 
         // 0.8.13: type_indices uses a flat CSR binary keyed by interner
         // hashes. 0.8.28+: id_indices uses an mmap-resident raw `.bin`
@@ -623,19 +653,47 @@ impl DirGraph {
     /// A pre-existing `columns.bin` (the legacy flat root or the segmented
     /// `seg_000/`) means the ntriples builder already wrote one;
     /// [`Self::write_column_sidecars`] covers the types added since.
-    fn write_unified_column_file(&self, dir: &std::path::Path) -> Result<(), String> {
+    fn write_unified_column_file(
+        &self,
+        dir: &std::path::Path,
+        stores: &SaveStores,
+    ) -> Result<(), String> {
         let preexisting_columns_bin =
             dir.join("seg_000/columns.bin").exists() || dir.join("columns.bin").exists();
-        if !preexisting_columns_bin && self.column_store_count() > 0 {
-            let stores: HashMap<String, Arc<crate::graph::storage::column_store::ColumnStore>> =
-                self.column_stores_by_name()
-                    .into_iter()
-                    .map(|(name, store)| (name.to_string(), Arc::clone(store)))
-                    .collect();
-            crate::graph::io::unified_columns::write_unified_columns(dir, &stores, &self.interner)
+        if !preexisting_columns_bin && !stores.is_empty() {
+            crate::graph::io::unified_columns::write_unified_columns(dir, stores, &self.interner)
                 .map_err(|e| format!("unified columns write failed: {}", e))?;
         }
         Ok(())
+    }
+
+    /// The column stores a save writes, by type name: the live stores, except
+    /// that an mmap-backed store is flattened into an owned typed store, and a
+    /// heap store holding `Mixed` columns its declared property types would
+    /// type is re-typed (a graph an earlier build saved through the all-`Mixed`
+    /// sidecar writer heals on its next save).
+    ///
+    /// Written as is, an mmap-backed store can only go to a sidecar, and one
+    /// whose every column is `Mixed` (id and title included); the next load
+    /// decodes that onto the heap and every later save keeps it there — so a
+    /// reopened graph left the mmap-served `columns.bin` on its first re-save,
+    /// write or not. The copies are save-scoped: the live stores keep serving
+    /// from the mapping they have.
+    fn column_stores_for_save(&self) -> SaveStores {
+        self.column_stores_by_name()
+            .into_iter()
+            .map(|(name, store)| {
+                let empty = HashMap::new();
+                let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
+                let store = if store.has_mmap_base() || retypes_on_save(store, meta, &self.interner)
+                {
+                    Arc::new(store.flattened_owned(meta, &self.interner))
+                } else {
+                    Arc::clone(store)
+                };
+                (name.to_string(), store)
+            })
+            .collect()
     }
 
     /// Which node types the graph's `columns.bin` already covers.
@@ -682,11 +740,15 @@ impl DirGraph {
     /// Types added post-build via `add_nodes` / `add_node` are absent from an
     /// ntriples-built `columns.bin` and were silently dropped on save before
     /// this existed. Covered types keep the fast mmap path.
-    fn write_column_sidecars(&self, dir: &std::path::Path) -> Result<(), String> {
+    fn write_column_sidecars(
+        &self,
+        dir: &std::path::Path,
+        stores: &SaveStores,
+    ) -> Result<(), String> {
         let types_in_columns_bin = Self::types_in_columns_bin(dir)?;
         let columns_dir = dir.join("columns");
         let mut sidecars_written = 0usize;
-        for (type_name, store) in self.column_stores_by_name() {
+        for (type_name, store) in stores {
             if types_in_columns_bin.contains(type_name) {
                 continue; // covered by the fast mmap path on reload
             }
@@ -738,3 +800,7 @@ impl DirGraph {
 #[cfg(test)]
 #[path = "disk_deferred_tests.rs"]
 mod disk_deferred_tests;
+
+#[cfg(test)]
+#[path = "disk_save_shape_tests.rs"]
+mod disk_save_shape_tests;

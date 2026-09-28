@@ -220,3 +220,26 @@ impl ColumnStore {
         Ok(buf)
     }
 }
+
+#[cfg(test)]
+impl ColumnStore {
+    /// Rewrite every column, the id and the title as `Mixed` — the shape an
+    /// all-`Mixed` sidecar written by `write_packed_from_mmap` loads back as.
+    pub(crate) fn demote_to_mixed_for_test(&mut self) {
+        let rows = self.row_count;
+        let mixed = |column: &TypedColumn| TypedColumn::Mixed {
+            data: (0..rows)
+                .map(|row| column.get(row).unwrap_or(Value::Null))
+                .collect(),
+        };
+        for column in &mut self.columns {
+            *column = Arc::new(mixed(column));
+        }
+        for column in [&mut self.id_column, &mut self.title_column]
+            .into_iter()
+            .flatten()
+        {
+            *column = Arc::new(mixed(column));
+        }
+    }
+}

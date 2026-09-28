@@ -532,6 +532,16 @@ before upgrading.
   materialising it, and the slice's copy materialises each kept relationship
   once instead of three times; the 200,000-relationship call now peaks near
   the mask size.
+- Disk mode: saving a reopened disk graph — after a write or with none —
+  moved every node type out of the memory-mapped `columns.bin` into per-type
+  `columns/<type>/columns.zst` files whose every column, id and title
+  included, was stored untyped. The next load decoded them onto the heap
+  (about 55 → 330 bytes per row) and every later save kept them there, which
+  also made later writes to those types several times slower. A save now
+  writes the effective values of a mapped type back into `columns.bin` with
+  their declared types, and a graph an earlier release already moved re-types
+  its columns and returns to `columns.bin` on its next save. Values were never
+  lost; no file-format change.
 - `max_work_units` now bounds a write statement's value expressions. The
   evaluators of `SET`, `CREATE`, `MERGE` and a `FOREACH` list ran on a fresh,
   unlimited budget, so `MATCH (n) SET n.x = size(range(1, 10000))` ran under
