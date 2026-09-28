@@ -73,7 +73,10 @@ bound counts as a known property of the label, so the first `CREATE` or `MERGE`
 that writes the `to` is not refused as an unknown property.
 
 **Choose the convention from what the `to` day means.** `closed` keeps the `to`
-day valid; `half_open` makes it the first day no longer valid. When a source
+day valid; `half_open` makes it the first day no longer valid. The Python
+routes (`add_nodes`, `set_temporal`) keep the convention of a declaration the
+type already has and default to `closed` otherwise; `db.temporal.declare` and
+a blueprint require the convention to be named. When a source
 ends one period on the day the next begins — a register, a price list, a
 licence transfer table that writes the successor's start as the predecessor's
 end — the data is half-open. A closed declaration of such data counts both

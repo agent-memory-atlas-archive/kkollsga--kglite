@@ -253,7 +253,8 @@ date raises from the next filter that reads it, naming the element. See
 # keeps only today's nodes of a declared type, so opt out of the context first.
 graph.select('Employee', temporal=False).valid_at('2024-01-15')
 
-# Name the bounds instead (an undeclared type defaults to date_from / date_to)
+# Name the bounds instead (an undeclared type defaults to date_from / date_to;
+# `Contract` is undeclared here, so there is no context to opt out of)
 graph.select('Contract').valid_at('2024-06-01',
     date_from_field='start_date',
     date_to_field='end_date')
@@ -1554,7 +1555,8 @@ graph.report_history()    # all reports
 | **Spatial — point filters** | `within_bounds`, `near_point`, `near_point_m`, `contains_point` | `distance()`, `contains()` in WHERE |
 | **Spatial — geometry** | `intersects_geometry`, `set_spatial`, `spatial` | `intersects()`, `centroid()`, `area()`, `perimeter()` |
 | **Spatial — bounds/centroid** | `bounds()`, `centroid()`, `wkt_centroid()` | Manual via `latitude()`, `longitude()` |
-| **Temporal — point-in-time** | `valid_at()` | `valid_at(e, date, 'from', 'to')` |
+| **Temporal — as-of context** | `date()` on the graph or `select(..., temporal=True)` (the default for a declared type) | `FOR VALID_TIME AS OF …` prefix, or `valid_at=` on the binding |
+| **Temporal — point-in-time** | `valid_at()` | `valid_at(e, date)` under the declaration; `valid_at(e, date, 'from', 'to')` reads closed unless the declaration names the same pair |
 | **Temporal — range overlap** | `valid_during()` | `valid_during(e, start, end, 'from', 'to')` |
 | **Timeseries — load** | `add_timeseries`, `add_ts_channel`, `set_time_index` | N/A (load via fluent) |
 | **Timeseries — extract** | `timeseries()`, `time_index()` | `ts_series()` |
