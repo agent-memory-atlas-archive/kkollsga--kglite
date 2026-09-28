@@ -238,6 +238,7 @@ fn recipe_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
     ExecuteOptions {
         params,
         deadline: None,
+        deadline_origin: None,
         max_work_units: None,
         row_limit: None,
         lazy_eligible: false,

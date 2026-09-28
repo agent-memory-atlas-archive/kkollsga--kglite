@@ -37,7 +37,9 @@ Exception
 
 `CypherSyntaxError` always has `.line` and `.col` attributes (either may be
 `None`). `CypherExecutionError` has them when the executor can identify the
-source position. Timeout messages report the elapsed and configured limit.
+source position. Timeout messages report the configured limit and the elapsed
+time, both measured from when the call resolved its deadline — so time spent
+converting parameters or forking a transaction's working copy counts toward it.
 
 ## Stable codes
 

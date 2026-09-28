@@ -160,7 +160,7 @@ pub(crate) fn run_cypher_write_output(
     opts.write_scope = scope.as_ref();
     opts.git_sha = authz.git_sha;
     opts.modified_by = authz.modified_by;
-    opts.deadline = policy.deadline();
+    policy.apply_deadline(&mut opts);
     let executed = {
         let dir = kglite::api::make_dir_graph_mut(active.kg.dir_mut());
         let executed = kglite::api::session::execute_mut(dir, query, &opts);

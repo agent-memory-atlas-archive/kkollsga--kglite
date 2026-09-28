@@ -11,7 +11,7 @@ use crate::graph::{CursorState, GraphLifecycle, KnowledgeGraph};
 use kglite_core::api::{CowSelection, DirGraph};
 use std::sync::Arc;
 
-pub(crate) use kglite_core::api::session::{deadline_from, QueryDefaults};
+pub(crate) use kglite_core::api::session::{deadline_span, QueryDefaults};
 
 impl KnowledgeGraph {
     /// The captured policy this handle runs its own queries under, and the
@@ -99,6 +99,6 @@ mod tests {
         let inherited = policy.resolve(None, None, None);
         assert!(inherited.deadline.is_none());
         assert_eq!(inherited.row_limit, Some(2));
-        assert!(deadline_from(Some(0)).is_none());
+        assert!(deadline_span(Some(0)).is_none());
     }
 }

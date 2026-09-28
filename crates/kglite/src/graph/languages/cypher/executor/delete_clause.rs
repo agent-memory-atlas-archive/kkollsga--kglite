@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use super::projected_targets::projected_edge_binding;
 use super::relationship_identity::StatementRelationshipIdentities;
-use super::write::check_interrupt_periodic;
+use super::write::check_interrupt_row;
 use super::write_scope::{enforce_bound_edge_write_scope, enforce_node_write_scope};
 use crate::datatypes::values::{RelValue, Value};
 use crate::graph::algorithms::Interrupt;
@@ -82,8 +82,8 @@ fn collect_delete_targets(
     relationship_identities: &StatementRelationshipIdentities,
 ) -> Result<DeleteTargets, String> {
     let mut targets = DeleteTargets::default();
-    for (row_idx, row) in result_set.rows.iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
+    for row in result_set.rows.iter() {
+        check_interrupt_row(interrupt)?;
         for expr in &delete.expressions {
             let var_name = match expr {
                 Expression::Variable(name) => name,
@@ -266,8 +266,8 @@ fn verify_nodes_keep_no_edges(
     // materialize into the query arena (protocol in disk/graph.rs); scoped so
     // the borrow ends before the caller's &mut commits.
     let _arena_guard = graph.graph.begin_query();
-    for (node_count, &node_idx) in targets.nodes.iter().enumerate() {
-        check_interrupt_periodic(interrupt, node_count)?;
+    for &node_idx in targets.nodes.iter() {
+        check_interrupt_row(interrupt)?;
         let has_edges = graph
             .graph
             .edges_directed(node_idx, petgraph::Direction::Outgoing)

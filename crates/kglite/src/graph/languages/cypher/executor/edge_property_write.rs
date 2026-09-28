@@ -13,8 +13,8 @@
 use super::super::ast::Expression;
 use super::super::result::ResultRow;
 use super::write_scope::enforce_bound_edge_write_scope as enforce_edge_write_scope;
-use super::CypherExecutor;
 use crate::datatypes::values::Value;
+use crate::graph::algorithms::Interrupt;
 use crate::graph::languages::cypher::result::MutationStats;
 use crate::graph::schema::{DirGraph, EdgeData};
 use crate::graph::storage::{GraphRead, GraphWrite};
@@ -35,7 +35,7 @@ pub(super) fn set_edge_property(
     graph: &mut DirGraph,
     row: &ResultRow,
     item: (&String, &String, &Expression),
-    params: &HashMap<String, Value>,
+    (params, interrupt): (&HashMap<String, Value>, &Interrupt),
     stats: &mut MutationStats,
     edges_to_stamp: &mut HashSet<petgraph::graph::EdgeIndex>,
 ) -> Result<bool, String> {
@@ -52,7 +52,7 @@ pub(super) fn set_edge_property(
     enforce_edge_write_scope(graph, edge_binding)?;
     let edge_index = edge_binding.edge_index;
     let mut value = {
-        let executor = CypherExecutor::with_params(graph, params, None);
+        let executor = super::write::row_evaluator(graph, params, interrupt);
         executor.evaluate_expression(expression, row)?
     };
     crate::graph::session::snapshot_property_values(&graph.graph, std::iter::once(&mut value));

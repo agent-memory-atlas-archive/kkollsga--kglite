@@ -519,11 +519,12 @@ impl<'a> ExecPolicy<'a> {
         Self { timeout_ms, ..self }
     }
 
-    /// The instant this execution must stop at.
-    pub(crate) fn deadline(&self) -> Option<std::time::Instant> {
-        kglite::api::session::QueryDefaults::default()
-            .resolve(self.timeout_ms, None, None)
-            .deadline
+    /// Set the deadline this execution must stop at, and its origin.
+    pub(crate) fn apply_deadline(&self, opts: &mut kglite::api::session::ExecuteOptions<'_>) {
+        let resolved =
+            kglite::api::session::QueryDefaults::default().resolve(self.timeout_ms, None, None);
+        opts.deadline = resolved.deadline;
+        opts.deadline_origin = resolved.deadline_origin;
     }
 }
 
@@ -561,7 +562,7 @@ pub(crate) fn execute_cypher_inner(
     // A permission, not an instruction: the engine still applies its own
     // per-operator row × cost-class gate, so a small query is unaffected.
     opts.parallel = policy.parallel;
-    opts.deadline = policy.deadline();
+    policy.apply_deadline(&mut opts);
     kglite::api::session::execute_read(kg.dir(), query, &opts).map_err(CypherRunError::engine)
 }
 

@@ -2737,6 +2737,7 @@ pub struct kglite::api::session::ExecuteOptions<'a>
 pub kglite::api::session::ExecuteOptions::cancel: core::option::Option<&'static core::sync::atomic::AtomicBool>
 pub kglite::api::session::ExecuteOptions::csv_import: kglite::api::session::CsvImportPolicy
 pub kglite::api::session::ExecuteOptions::deadline: core::option::Option<std::time::Instant>
+pub kglite::api::session::ExecuteOptions::deadline_origin: core::option::Option<std::time::Instant>
 pub kglite::api::session::ExecuteOptions::disabled_passes: core::option::Option<&'a std::collections::hash::set::HashSet<alloc::string::String>>
 pub kglite::api::session::ExecuteOptions::embedder: core::option::Option<alloc::sync::Arc<dyn kglite::api::Embedder>>
 pub kglite::api::session::ExecuteOptions::git_sha: core::option::Option<&'a str>
@@ -2752,6 +2753,7 @@ pub kglite::api::session::ExecuteOptions::write_scope: core::option::Option<&'a 
 impl<'a> kglite::api::session::ExecuteOptions<'a>
 pub fn kglite::api::session::ExecuteOptions<'a>::eager(params: &'a std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>) -> Self
 pub fn kglite::api::session::ExecuteOptions<'a>::new(params: &'a std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>) -> Self
+pub fn kglite::api::session::ExecuteOptions<'a>::set_timeout_ms(&mut self, timeout_ms: core::option::Option<u64>)
 pub fn kglite::api::session::ExecuteOptions<'a>::with_csv_import(self, policy: kglite::api::session::CsvImportPolicy) -> Self
 pub fn kglite::api::session::ExecuteOptions<'a>::with_parallel(self, parallel: bool) -> Self
 pub struct kglite::api::session::ExecuteOutcome
@@ -2774,6 +2776,7 @@ pub fn kglite::api::session::QueryDefaults::fmt(&self, f: &mut core::fmt::Format
 impl core::marker::Copy for kglite::api::session::QueryDefaults
 pub struct kglite::api::session::ResolvedQueryOptions
 pub kglite::api::session::ResolvedQueryOptions::deadline: core::option::Option<std::time::Instant>
+pub kglite::api::session::ResolvedQueryOptions::deadline_origin: core::option::Option<std::time::Instant>
 pub kglite::api::session::ResolvedQueryOptions::max_work_units: core::option::Option<usize>
 pub kglite::api::session::ResolvedQueryOptions::row_limit: core::option::Option<usize>
 pub kglite::api::session::ResolvedQueryOptions::timeout_ms: core::option::Option<u64>
@@ -2806,6 +2809,7 @@ pub fn kglite::api::session::Transaction::working_mut(&mut self) -> core::result
 pub const kglite::api::session::DEFAULT_TIMEOUT_MS: u64
 pub const kglite::api::session::QUERY_THREAD_STACK_SIZE: usize
 pub fn kglite::api::session::deadline_from(timeout_ms: core::option::Option<u64>) -> core::option::Option<std::time::Instant>
+pub fn kglite::api::session::deadline_span(timeout_ms: core::option::Option<u64>) -> core::option::Option<(std::time::Instant, std::time::Instant)>
 pub fn kglite::api::session::execute_mut(graph: &mut kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::session::execute_read(graph: &kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::session::resolve_noderef_value<'v>(graph: &kglite::api::storage::GraphBackend, value: &'v kglite::datatypes::values::Value) -> alloc::borrow::Cow<'v, kglite::datatypes::values::Value>

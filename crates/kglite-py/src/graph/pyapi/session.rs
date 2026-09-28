@@ -150,6 +150,7 @@ fn may_invoke_embedder(parsed: &mut cypher::CypherQuery, params: &HashMap<String
 struct QueryOpts {
     to_df: bool,
     deadline: Option<std::time::Instant>,
+    deadline_origin: Option<std::time::Instant>,
     max_work_units: Option<usize>,
     row_limit: Option<usize>,
     output_csv: bool,
@@ -177,6 +178,7 @@ impl QueryOpts {
         QueryOpts {
             to_df,
             deadline: effective.deadline,
+            deadline_origin: effective.deadline_origin,
             max_work_units: effective.max_work_units,
             row_limit: effective.row_limit,
             output_csv: csv,
@@ -235,12 +237,14 @@ impl Session {
         let embedder = self.embedder.clone();
         let query_owned = query.to_string();
         let deadline = qopts.deadline;
+        let deadline_origin = qopts.deadline_origin;
         let max_work_units = qopts.max_work_units;
         let row_limit = qopts.row_limit;
         let result = py.enter_kg(move |cancel| -> Result<cypher::CypherResult, KgError> {
             let opts = ExecuteOptions {
                 params: &param_map,
                 deadline,
+                deadline_origin,
                 max_work_units,
                 row_limit,
                 lazy_eligible: false,
@@ -284,6 +288,7 @@ impl Session {
         let write_lock = &self.write_lock;
         let query_owned = query.to_string();
         let deadline = qopts.deadline;
+        let deadline_origin = qopts.deadline_origin;
         let max_work_units = qopts.max_work_units;
         let row_limit = qopts.row_limit;
         let write_scope = qopts.write_scope;
@@ -330,6 +335,7 @@ impl Session {
             let opts = ExecuteOptions {
                 params: &param_map,
                 deadline,
+                deadline_origin,
                 max_work_units,
                 row_limit,
                 lazy_eligible: false,

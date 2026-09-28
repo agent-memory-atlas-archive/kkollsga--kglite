@@ -254,12 +254,14 @@ zero-row mystery into an actionable typo hint.
 ### Timeouts and work budgets
 
 ```python
-# Abort after 500 ms; raises kglite.CypherTimeoutError (no partial result)
+# Abort after 500 ms; raises kglite.CypherTimeoutError (no partial result).
+# A write that times out is rolled back, even one that finished its last
+# clause late; the overrun is bounded by about one row's work.
 graph.cypher(long_query, timeout_ms=500)
 
 # Budget the work — intermediate rows, retained collection items and scan
 # work — NOT the rows returned. Exceeding the budget raises an error; it never
-# truncates. Use Session/Transaction for rollback-safe writes.
+# truncates, and the failed statement's writes are rolled back.
 graph.cypher(broad_query, max_work_units=1000)
 
 # Set graph-wide defaults (per-query args still override)

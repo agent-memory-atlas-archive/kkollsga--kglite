@@ -99,6 +99,7 @@ fn rows_of(graph: &DirGraph, query: &str) -> Vec<Vec<(String, Value)>> {
     let opts = ExecuteOptions {
         params: &params,
         deadline: None,
+        deadline_origin: None,
         max_work_units: None,
         row_limit: None,
         lazy_eligible: false,
@@ -414,6 +415,7 @@ fn keys_invariant_holds_across_both_property_storage_shapes() {
     let opts = ExecuteOptions {
         params: &params,
         deadline: None,
+        deadline_origin: None,
         max_work_units: None,
         row_limit: None,
         lazy_eligible: false,

@@ -71,6 +71,9 @@ pub struct Transaction {
     pub(crate) inner: Option<CoreTransaction>,
     /// Optional transaction-level deadline — all operations fail after this instant.
     pub(crate) deadline: Option<std::time::Instant>,
+    /// When `begin()` resolved `deadline`: a statement stopped by it reports
+    /// the transaction's configured limit, measured from here.
+    pub(crate) deadline_origin: Option<std::time::Instant>,
 }
 
 #[pymethods]
@@ -136,18 +139,13 @@ impl Transaction {
         let write_scope_set: Option<std::collections::HashSet<String>> =
             write_scope.map(|v| v.into_iter().collect());
         // Check transaction-level deadline first
-        if let Some(tx_deadline) = self.deadline {
+        if let (Some(tx_deadline), Some(origin)) = (self.deadline, self.deadline_origin) {
             if std::time::Instant::now() >= tx_deadline {
                 // Typed exception, not the built-in PyTimeoutError.
                 return Err(crate::error_py::kg_to_pyerr(
                     crate::error::KgError::CypherTimeout {
-                        // The transaction's budget is a wall-clock instant the
-                        // core never saw a start for, so neither figure is
-                        // measurable here; `limit_ms == 0` suppresses the
-                        // "(elapsed …ms, limit …ms)" tail rather than showing
-                        // two zeroes.
-                        elapsed_ms: 0,
-                        limit_ms: 0,
+                        elapsed_ms: origin.elapsed().as_millis() as u64,
+                        limit_ms: tx_deadline.saturating_duration_since(origin).as_millis() as u64,
                         message: "Transaction deadline expired before the statement ran. \
                                   Begin a new transaction, or raise timeout_ms on begin()."
                             .to_string(),
@@ -162,12 +160,15 @@ impl Transaction {
         let effective = self.defaults.resolve(timeout_ms, max_work_units, row_limit);
         let max_work_units = effective.max_work_units;
         let row_limit = effective.row_limit;
-        let query_deadline = effective.deadline;
-        let deadline = match (self.deadline, query_deadline) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
+        // The earlier deadline wins, and brings its own origin so a timeout
+        // reports that deadline's configured limit.
+        let transaction_deadline = self.deadline.map(|dl| (dl, self.deadline_origin));
+        let query_deadline = effective.deadline.map(|dl| (dl, effective.deadline_origin));
+        let (deadline, deadline_origin) = match (transaction_deadline, query_deadline) {
+            (Some(tx), Some(query)) if tx.0 <= query.0 => (Some(tx.0), tx.1),
+            (_, Some(query)) => (Some(query.0), query.1),
+            (Some(tx), None) => (Some(tx.0), tx.1),
+            (None, None) => (None, None),
         };
 
         // Convert params
@@ -225,6 +226,7 @@ impl Transaction {
         let opts = kglite_core::api::session::ExecuteOptions {
             params: &param_map,
             deadline,
+            deadline_origin,
             max_work_units,
             row_limit,
             // No lazy materializer is wired through the tx ResultView, so

@@ -153,6 +153,7 @@ impl FrozenGraph {
         };
         let effective = self.defaults.resolve(timeout_ms, max_work_units, row_limit);
         let deadline = effective.deadline;
+        let deadline_origin = effective.deadline_origin;
         let max_work_units = effective.max_work_units;
         let row_limit = effective.row_limit;
 
@@ -171,6 +172,7 @@ impl FrozenGraph {
                 let opts = ExecuteOptions {
                     params: &param_map,
                     deadline,
+                    deadline_origin,
                     max_work_units,
                     row_limit,
                     lazy_eligible: false,

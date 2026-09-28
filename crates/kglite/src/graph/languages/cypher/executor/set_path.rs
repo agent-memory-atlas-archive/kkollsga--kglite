@@ -22,17 +22,14 @@ use super::CypherExecutor;
 /// and no lost-update window between an application-level read and write.
 pub(super) fn read_modify(
     graph: &crate::graph::dir_graph::DirGraph,
+    executor: &CypherExecutor<'_>,
     node_idx: petgraph::graph::NodeIndex,
     property: &str,
     steps: &[SetPathStep],
     new_value: Value,
-    params: &std::collections::HashMap<String, Value>,
     row: &ResultRow,
 ) -> Result<Value, String> {
-    let resolved = {
-        let executor = CypherExecutor::with_params(graph, params, None);
-        resolve_steps(&executor, row, steps)?
-    };
+    let resolved = resolve_steps(executor, row, steps)?;
     let current = {
         use crate::graph::storage::GraphRead;
         let _guard = graph.graph.begin_query();

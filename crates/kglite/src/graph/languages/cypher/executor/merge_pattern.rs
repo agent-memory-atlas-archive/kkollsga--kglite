@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use super::identity_fields::merge_expected_props;
 use super::CypherExecutor;
 use crate::datatypes::values::Value;
+use crate::graph::algorithms::Interrupt;
 use crate::graph::languages::cypher::ast::{
     CreateEdgeDirection, CreateEdgePattern, CreateElement, CreateNodePattern, CreatePattern,
 };
@@ -23,8 +24,9 @@ pub(super) fn try_match_merge_pattern(
     pattern: &CreatePattern,
     row: &ResultRow,
     params: &HashMap<String, Value>,
+    interrupt: &Interrupt,
 ) -> Result<Option<ResultRow>, String> {
-    let executor = CypherExecutor::with_params(graph, params, None);
+    let executor = super::write::row_evaluator(graph, params, interrupt);
 
     match pattern.elements.len() {
         // Node-only MERGE: (var:Label {key: val, ...})

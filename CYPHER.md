@@ -3537,9 +3537,17 @@ server (`cypher_query`'s `timeout_ms` argument) both apply the 180,000 ms
 default; the CLI applies none and takes `--timeout-ms` per call; the Bolt
 server applies none, per the Neo4j "absent `tx_timeout` means no timeout" wire
 contract. Expanding, aggregation,
-set-operation, subquery-join, procedure, and mutation loops poll cooperatively.
-Use `Session.execute()` or `Transaction` when a failed/timed-out mutation must
-roll back; direct `KnowledgeGraph.cypher()` writes execute in place.
+set-operation, subquery-join and procedure loops poll cooperatively. Mutation
+loops poll before every row, and a write clause's value expressions poll as a
+read's do, so a write overruns its deadline by at most about one row's work.
+A statement that times out — including one whose last clause finishes after the
+deadline — raises `CypherTimeoutError` and is rolled back as a whole, whether
+it ran through `KnowledgeGraph.cypher()`, `Session.execute()` or a
+`Transaction`; use a `Transaction` to roll back several statements as a group.
+A few one-shot builds a statement can trigger are not interruptible: deferred
+index materialisation, the disk statement checkpoint, the temporal endpoint
+index and the lazy disk id index. The deadline is checked as soon as each
+finishes.
 
 ## Parallel runtime
 

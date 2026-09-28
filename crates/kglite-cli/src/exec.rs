@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use kglite::api::param::kglite_value_to_json;
 use kglite::api::session::{
-    deadline_from, execute_mut, execute_read, CsvImportPolicy, ExecuteOptions, ExecuteOutcome,
+    execute_mut, execute_read, CsvImportPolicy, ExecuteOptions, ExecuteOutcome,
 };
 use kglite::api::{make_dir_graph_mut, DirGraph, Value};
 
@@ -47,7 +47,7 @@ pub fn execute(
     options: &QueryOptions,
 ) -> Result<ExecuteOutcome> {
     let mut opts = ExecuteOptions::new(params).with_csv_import(CsvImportPolicy::LocalFilesystem);
-    opts.deadline = deadline_from(options.timeout_ms);
+    opts.set_timeout_ms(options.timeout_ms);
     opts.cancel = options.cancel;
     opts.write_scope = options.write_scope.as_ref();
     opts.git_sha = options.git_sha.as_deref();
@@ -75,7 +75,7 @@ pub fn execute_readonly(
     let mut opts = ExecuteOptions::new(params)
         .with_csv_import(CsvImportPolicy::LocalFilesystem)
         .with_parallel(options.parallel);
-    opts.deadline = deadline_from(options.timeout_ms);
+    opts.set_timeout_ms(options.timeout_ms);
     opts.streaming = true;
     Ok(execute_read(graph, query, &opts)?)
 }

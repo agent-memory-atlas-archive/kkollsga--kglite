@@ -20,7 +20,6 @@ use kglite::api::{Embedder, Value};
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
 
 /// Opaque handle for a session. See [`KgliteGraph`](crate::KgliteGraph)
 /// for the rationale on the empty `#[repr(C)]` facade pattern.
@@ -261,7 +260,7 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
             let snapshot = session_state.inner.snapshot();
             let mut opts = session_state.make_opts(&params);
             if timeout_ms > 0 {
-                opts.deadline = Some(Instant::now() + Duration::from_millis(timeout_ms));
+                opts.set_timeout_ms(Some(timeout_ms));
             }
             if max_work_units > 0 {
                 opts.max_work_units = Some(max_work_units as usize);
@@ -386,7 +385,7 @@ unsafe fn execute_mut_impl(
             let session_state = unsafe { SessionState::from_handle(session) };
             let mut opts = session_state.make_opts(&params);
             if timeout_ms > 0 {
-                opts.deadline = Some(Instant::now() + Duration::from_millis(timeout_ms));
+                opts.set_timeout_ms(Some(timeout_ms));
             }
             if max_work_units > 0 {
                 opts.max_work_units = Some(max_work_units as usize);

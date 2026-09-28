@@ -287,14 +287,16 @@ pub enum KgError {
 
     /// Cypher query exceeded its `timeout_ms` budget. Both elapsed and
     /// limit reported so the agent can decide whether to retry with a
-    /// longer budget or rewrite the query.
+    /// longer budget or rewrite the query. `limit_ms` is the configured
+    /// budget and `elapsed_ms` is measured from the same origin — the instant
+    /// the caller resolved the deadline (see
+    /// `ExecuteOptions::deadline_origin`).
     ///
     /// `message` is the abort site's own prose, which carries the hint that
     /// applies to *where* the deadline fired — the generic
     /// "anchor the query" advice from the executor's poll, the
     /// "add an index on a predicate property" advice from an unanchored node
-    /// scan. `limit_ms == 0` means the deadline was not a per-query budget the
-    /// core could measure (the transaction-level pre-check), and the numbers
+    /// scan. `limit_ms == 0` means no budget was measurable, and the numbers
     /// are then omitted from the rendered message rather than shown as zeroes.
     CypherTimeout {
         elapsed_ms: u64,

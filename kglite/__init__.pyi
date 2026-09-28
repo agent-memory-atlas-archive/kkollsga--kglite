@@ -10300,7 +10300,8 @@ class KnowledgeGraph:
         Args:
             timeout_ms: Optional transaction-level timeout in milliseconds.
                 If set, operations after the deadline raise
-                ``CypherTimeoutError``.
+                ``CypherTimeoutError``, and a statement still running at the
+                deadline raises it too, with its writes discarded.
 
         Can be used as a context manager::
 

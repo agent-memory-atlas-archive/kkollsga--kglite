@@ -39,6 +39,7 @@ fn first_value(graph: &DirGraph, query: &str, params: HashMap<String, Value>) ->
     let opts = ExecuteOptions {
         params: &params,
         deadline: None,
+        deadline_origin: None,
         max_work_units: None,
         row_limit: None,
         lazy_eligible: false,

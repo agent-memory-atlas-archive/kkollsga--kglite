@@ -38,6 +38,13 @@ pub struct ExecuteOptions<'a> {
     pub params: &'a HashMap<String, Value>,
     /// Past this, the executor returns `CypherTimeout`.
     pub deadline: Option<Instant>,
+    /// The instant the caller's timeout was resolved to [`Self::deadline`].
+    /// A `CypherTimeout` measures both its `elapsed_ms` and its `limit_ms`
+    /// from here, so it reports the configured limit even when the binding
+    /// spent part of the budget before execution began (converting a large
+    /// parameter, forking a transaction's working copy). `None` measures from
+    /// the start of execution. [`Self::set_timeout_ms`] sets both fields.
+    pub deadline_origin: Option<Instant>,
     /// Work budget for one query, **not** a result-row cap.
     ///
     /// It is charged against intermediate rows, retained collection items, and
@@ -202,6 +209,7 @@ impl<'a> ExecuteOptions<'a> {
         Self {
             params,
             deadline: None,
+            deadline_origin: None,
             max_work_units: None,
             row_limit: None,
             lazy_eligible: false,
@@ -225,6 +233,14 @@ impl<'a> ExecuteOptions<'a> {
     pub fn with_csv_import(mut self, policy: CsvImportPolicy) -> Self {
         self.csv_import = policy;
         self
+    }
+
+    /// Give this execution a deadline `timeout_ms` from now — `None` or `0`
+    /// means none — measured from now (see [`Self::deadline_origin`]).
+    pub fn set_timeout_ms(&mut self, timeout_ms: Option<u64>) {
+        let span = super::query_defaults::deadline_span(timeout_ms);
+        self.deadline_origin = span.map(|(origin, _)| origin);
+        self.deadline = span.map(|(_, deadline)| deadline);
     }
 
     /// Opt this execution in to the parallel runtime. Builder form for the
@@ -251,15 +267,24 @@ fn deadline_expired(opts: &ExecuteOptions<'_>) -> bool {
     opts.deadline.is_some_and(|dl| Instant::now() > dl)
 }
 
+/// `(elapsed_ms, limit_ms)`, both measured from the deadline's origin — the
+/// instant the caller resolved it, else `started`.
+fn deadline_figures(opts: &ExecuteOptions<'_>, started: Instant) -> (u64, Option<u64>) {
+    let origin = opts.deadline_origin.unwrap_or(started);
+    (
+        origin.elapsed().as_millis() as u64,
+        opts.deadline
+            .map(|dl| dl.saturating_duration_since(origin).as_millis() as u64),
+    )
+}
+
 /// Build the typed timeout, sizing it from the same two quantities
 /// [`attach_diagnostics`] reports.
 fn timeout_err(opts: &ExecuteOptions<'_>, started: Instant, message: String) -> KgError {
+    let (elapsed_ms, limit_ms) = deadline_figures(opts, started);
     KgError::CypherTimeout {
-        elapsed_ms: started.elapsed().as_millis() as u64,
-        limit_ms: opts
-            .deadline
-            .map(|dl| dl.saturating_duration_since(started).as_millis() as u64)
-            .unwrap_or(0),
+        elapsed_ms,
+        limit_ms: limit_ms.unwrap_or(0),
         message,
     }
 }
@@ -1048,10 +1073,7 @@ fn attach_diagnostics(
         merged.append(&mut diagnostics.warnings);
         diagnostics.warnings = merged;
     }
-    diagnostics.elapsed_ms = started.elapsed().as_millis() as u64;
-    diagnostics.timeout_ms = opts
-        .deadline
-        .map(|deadline| deadline.saturating_duration_since(started).as_millis() as u64);
+    (diagnostics.elapsed_ms, diagnostics.timeout_ms) = deadline_figures(opts, started);
     result.diagnostics = Some(diagnostics);
 }
 

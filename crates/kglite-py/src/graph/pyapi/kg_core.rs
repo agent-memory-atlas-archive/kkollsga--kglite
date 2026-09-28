@@ -1730,6 +1730,7 @@ impl KnowledgeGraph {
         let effective_max_work_units = effective.max_work_units;
         let effective_row_limit = effective.row_limit;
         let deadline = effective.deadline;
+        let deadline_origin = effective.deadline_origin;
 
         let param_map = if let Some(params_dict) = params {
             let mut map = std::collections::HashMap::new();
@@ -1775,6 +1776,7 @@ impl KnowledgeGraph {
             let opts = kglite_core::api::session::ExecuteOptions {
                 params: &param_map,
                 deadline,
+                deadline_origin,
                 max_work_units: effective_max_work_units,
                 row_limit: effective_row_limit,
                 lazy_eligible: streaming,
@@ -1833,6 +1835,7 @@ impl KnowledgeGraph {
             let opts = kglite_core::api::session::ExecuteOptions {
                 params: &param_map,
                 deadline,
+                deadline_origin,
                 max_work_units: effective_max_work_units,
                 row_limit: effective_row_limit,
                 lazy_eligible: streaming,
@@ -1963,14 +1966,15 @@ impl KnowledgeGraph {
                 kg.embedder.clone(),
             ))
         })?;
-        let deadline = super::query_defaults::deadline_from(timeout_ms);
+        let deadline = super::query_defaults::deadline_span(timeout_ms);
         Ok(Transaction {
             owner: slf,
             inner: Some(core_tx.0),
             defaults: core_tx.1,
             ownership_epoch: core_tx.2,
             embedder: core_tx.3,
-            deadline,
+            deadline_origin: deadline.map(|(origin, _)| origin),
+            deadline: deadline.map(|(_, deadline)| deadline),
         })
     }
 
@@ -2004,14 +2008,15 @@ impl KnowledgeGraph {
                 kg.embedder.clone(),
             ))
         })?;
-        let deadline = super::query_defaults::deadline_from(timeout_ms);
+        let deadline = super::query_defaults::deadline_span(timeout_ms);
         Ok(Transaction {
             owner: slf,
             inner: Some(core_tx.0),
             defaults: core_tx.1,
             ownership_epoch: core_tx.2,
             embedder: core_tx.3,
-            deadline,
+            deadline_origin: deadline.map(|(origin, _)| origin),
+            deadline: deadline.map(|(_, deadline)| deadline),
         })
     }
 }

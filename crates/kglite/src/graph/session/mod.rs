@@ -56,7 +56,7 @@ pub(crate) use self::noderefs::{
 };
 pub use self::noderefs::{resolve_noderef_value, resolve_noderefs};
 pub use self::query_defaults::{
-    deadline_from, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,
+    deadline_from, deadline_span, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,
 };
 pub use self::transaction::{CommitOutcome, Session, Transaction};
 

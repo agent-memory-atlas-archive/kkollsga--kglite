@@ -11,9 +11,9 @@ properties and optional secondary labels. Duplicate ids are possible; use
 
 **Selections** (fluent API) are lightweight views — a set of node indices that flow through chained operations like `select().where().traverse()`. They don't copy data.
 
-**Atomicity.** Direct `graph.cypher()` mutations execute in place; if a later
-clause, timeout, or row-budget check fails, earlier work may remain visible.
-Use `graph.session().execute()` or `graph.begin()` when failure must roll back.
+**Atomicity.** Each `graph.cypher()` statement is atomic: if a later clause,
+the deadline, or the work budget fails it, its earlier writes are rolled back.
+Use `graph.begin()` when several statements must roll back together.
 `save()` publishes a snapshot atomically, and `open()` is write-ahead logged by
 default so each committed mutation survives a hard crash; context-managed graphs
 also auto-save on clean exit. A `with` block is not a transaction — use

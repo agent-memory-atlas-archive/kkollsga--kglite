@@ -459,9 +459,29 @@ before upgrading.
   matched, as a plain `x.p >= $v` does, instead of after. A relationship's
   `r.p IS NULL` / `r.p IS NOT NULL` filters during expansion too. Answers are
   unchanged.
+- **Breaking (Rust):** `kglite::api::session::ExecuteOptions` has a new field,
+  `deadline_origin` — the instant the caller resolved `deadline` at, from which
+  a `CypherTimeout` measures its `elapsed_ms` and `limit_ms`. A struct literal
+  must name it (`None` measures from the start of execution, as before);
+  `ExecuteOptions::eager` sets `None`, and the new
+  `ExecuteOptions::set_timeout_ms` sets both fields. `ResolvedQueryOptions`
+  carries the same `deadline_origin`, and `deadline_span` returns a timeout's
+  `(origin, deadline)` pair.
 
 ### Fixed
 
+- A write statement could run far past its `timeout_ms`, and one whose last
+  clause was the write could commit after the deadline and report success.
+  Write loops checked the deadline only every 4,096 rows and a write clause's
+  value expressions not at all, so a slow write of fewer rows (a disk `SET`, or
+  an expensive `SET`/`CREATE`/`MERGE` value) overran by the whole clause — 3–6×
+  measured — and nothing checked after the last clause. Writes now check before
+  every row and inside their value expressions, so the overrun is about one
+  row's work, and a statement that finishes late raises `CypherTimeoutError`
+  and is rolled back on every surface. The error also reports the configured
+  limit: it used to subtract the time the binding spent converting parameters
+  (a `timeout_ms=300` call with a large `$rows` reported "limit 60ms"), and a
+  transaction whose own deadline had passed reported no figures at all.
 - `add_nodes` with the id column also named as the title field —
   `add_nodes(df, 'A', 'id', 'id')`, or `('code', 'code')` — recorded that
   column as the type's *title* spelling, so the identity's own name resolved to

@@ -2,7 +2,7 @@
 //!
 //! Both engines route their deadline/cancel polls through here: the read
 //! executor via `CypherExecutor::check_deadline`, the mutation engine via
-//! `write::check_interrupt_periodic`. Keeping the wording in one place is what
+//! `write::check_interrupt_row`. Keeping the wording in one place is what
 //! lets the session layer classify the abort — a passed deadline is
 //! [`KgError::CypherTimeout`], a raised cancel flag is [`KgError::Cancelled`] —
 //! off the interrupt state rather than off this prose.

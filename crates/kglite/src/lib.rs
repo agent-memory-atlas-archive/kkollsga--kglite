@@ -947,7 +947,7 @@ pub mod api {
         /// how two surfaces come to disagree about what "the default" is;
         /// *whether* a surface adopts it stays a per-binding decision.
         pub use crate::graph::session::{
-            deadline_from, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,
+            deadline_from, deadline_span, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,
         };
         pub use crate::graph::session::{
             execute_mut, execute_read, resolve_noderef_value, resolve_noderefs, CommitOutcome,

@@ -37,6 +37,9 @@ pub struct QueryDefaults {
 pub struct ResolvedQueryOptions {
     pub timeout_ms: Option<u64>,
     pub deadline: Option<Instant>,
+    /// The instant `deadline` was resolved at; see
+    /// [`ExecuteOptions::deadline_origin`](super::ExecuteOptions::deadline_origin).
+    pub deadline_origin: Option<Instant>,
     pub max_work_units: Option<usize>,
     pub row_limit: Option<usize>,
 }
@@ -45,9 +48,16 @@ pub struct ResolvedQueryOptions {
 /// on every surface, and so does `None` — a caller that wants the default
 /// applied goes through [`QueryDefaults::resolve`], which supplies it.
 pub fn deadline_from(timeout_ms: Option<u64>) -> Option<Instant> {
-    timeout_ms
-        .filter(|ms| *ms != 0)
-        .map(|ms| Instant::now() + Duration::from_millis(ms))
+    deadline_span(timeout_ms).map(|(_, deadline)| deadline)
+}
+
+/// [`deadline_from`] together with the instant it was measured from:
+/// `(origin, deadline)`, `deadline - origin` being exactly `timeout_ms`.
+pub fn deadline_span(timeout_ms: Option<u64>) -> Option<(Instant, Instant)> {
+    timeout_ms.filter(|ms| *ms != 0).map(|ms| {
+        let origin = Instant::now();
+        (origin, origin + Duration::from_millis(ms))
+    })
 }
 
 impl QueryDefaults {
@@ -60,9 +70,11 @@ impl QueryDefaults {
         row_limit: Option<usize>,
     ) -> ResolvedQueryOptions {
         let timeout_ms = timeout_ms.or(self.timeout_ms).or(Some(DEFAULT_TIMEOUT_MS));
+        let span = deadline_span(timeout_ms);
         ResolvedQueryOptions {
             timeout_ms: timeout_ms.filter(|ms| *ms != 0),
-            deadline: deadline_from(timeout_ms),
+            deadline: span.map(|(_, deadline)| deadline),
+            deadline_origin: span.map(|(origin, _)| origin),
             max_work_units: max_work_units.or(self.max_work_units),
             row_limit: row_limit.or(self.row_limit),
         }

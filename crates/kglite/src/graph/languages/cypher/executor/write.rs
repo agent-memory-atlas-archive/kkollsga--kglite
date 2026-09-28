@@ -193,19 +193,45 @@ impl MutationCtx<'_> {
     }
 }
 
-/// Poll the abort check at the read path's cadence — every
-/// `INTERRUPT_POLL_INTERVAL` units, starting before the first — and report
-/// through the read path's [`check_interrupt`](super::check_interrupt), so a
-/// timed-out write says "timed out" and a cancelled one says "cancelled".
+/// Poll the abort check before a write row, reporting through the read
+/// path's [`check_interrupt`](super::check_interrupt), so a timed-out write
+/// says "timed out" and a cancelled one says "cancelled".
+///
+/// Every row, not the read path's 4,096-unit cadence: a write row is never
+/// reliably microsecond-cheap — on disk one SET row clones the touched
+/// column, and a row's value expression can be arbitrarily slow — so a count
+/// cadence gave no time bound (a 2,025-row SET polled once and overran a
+/// 180 s deadline to 402 s). One clock read and one relaxed atomic load per
+/// row bounds the overrun to one row's work.
 #[inline]
-pub(super) fn check_interrupt_periodic(
+pub(super) fn check_interrupt_row(interrupt: &Interrupt) -> Result<(), String> {
+    #[cfg(test)]
+    TEST_WRITE_POLLS.with(|polls| polls.set(polls.get() + 1));
+    super::check_interrupt(interrupt)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Polls [`check_interrupt_row`] performed on this thread —
+    /// the timing-free meter `write_deadline_tests` reads per statement.
+    static TEST_WRITE_POLLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Read and reset this thread's write-poll count.
+#[cfg(test)]
+pub(super) fn take_write_polls() -> usize {
+    TEST_WRITE_POLLS.with(|polls| polls.replace(0))
+}
+
+/// The evaluator for a write clause's value expressions. It carries the
+/// statement's deadline and cancel flag, so a slow expression inside one row
+/// (`range()`, a list comprehension, a `COUNT { }`) polls them as a read would.
+pub(super) fn row_evaluator<'a>(
+    graph: &'a DirGraph,
+    params: &'a HashMap<String, Value>,
     interrupt: &Interrupt,
-    iteration: usize,
-) -> Result<(), String> {
-    if iteration & (super::INTERRUPT_POLL_INTERVAL - 1) == 0 {
-        super::check_interrupt(interrupt)?;
-    }
-    Ok(())
+) -> CypherExecutor<'a> {
+    CypherExecutor::with_params(graph, params, interrupt.deadline).with_cancel(interrupt.cancel)
 }
 
 /// Mutable execution with the same row/collection budget used by reads.
@@ -557,6 +583,9 @@ fn run_clause_pipeline(
         stream_established = true;
     }
 
+    // The loop polls *before* each clause, so without this a statement whose
+    // last clause finished past the deadline would commit and report success.
+    super::check_interrupt(interrupt)?;
     Ok(result_set)
 }
 
@@ -673,8 +702,8 @@ fn execute_foreach(
     let params = ctx.params;
     let interrupt = ctx.interrupt;
     let budget = ctx.budget;
-    for (row_idx, row) in outer.rows.iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
+    for row in outer.rows.iter() {
+        check_interrupt_row(interrupt)?;
         // Evaluate the list in this row's context (read-only borrow of the
         // graph, dropped before the per-element mutations below).
         let list_val = {
@@ -693,8 +722,8 @@ fn execute_foreach(
 
         budget.check_work(items.len(), "FOREACH")?;
 
-        for (item_idx, item) in items.into_iter().enumerate() {
-            check_interrupt_periodic(interrupt, item_idx)?;
+        for item in items.into_iter() {
+            check_interrupt_row(interrupt)?;
             let mut elem_row = row.clone();
             elem_row.projected.insert(variable.to_string(), item);
             let mut elem_set = ResultSet {
@@ -805,8 +834,8 @@ fn execute_create(
 
     let mut new_rows = Vec::with_capacity(source_rows.len());
 
-    for (row_idx, row) in source_rows.iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
+    for row in source_rows.iter() {
+        check_interrupt_row(interrupt)?;
         let mut new_row = row.clone();
 
         // Positional element -> NodeIndex record for the pattern part being
@@ -842,7 +871,8 @@ fn execute_create(
                         }
                     }
 
-                    let node_idx = create_node(graph, node_pat, &new_row, params, stats)?;
+                    let node_idx =
+                        create_node(graph, node_pat, &new_row, params, stats, interrupt)?;
 
                     // Recorded by position as well as by name: an anonymous
                     // endpoint has no name to record under — see
@@ -855,7 +885,15 @@ fn execute_create(
             }
 
             // Second pass: create edges.
-            create_pattern_edges(graph, pattern, &element_nodes, &mut new_row, params, stats)?;
+            create_pattern_edges(
+                graph,
+                pattern,
+                &element_nodes,
+                &mut new_row,
+                params,
+                stats,
+                interrupt,
+            )?;
         }
 
         new_rows.push(new_row);
@@ -892,6 +930,7 @@ fn create_pattern_edges(
     new_row: &mut ResultRow,
     params: &HashMap<String, Value>,
     stats: &mut MutationStats,
+    interrupt: &Interrupt,
 ) -> Result<(), String> {
     let mut i = 1;
     while i < pattern.elements.len() {
@@ -955,7 +994,7 @@ fn create_pattern_edges(
             // so relationship constraints are unaffected.
             let mut edge_props = HashMap::new();
             {
-                let executor = CypherExecutor::with_params(graph, params, None);
+                let executor = row_evaluator(graph, params, interrupt);
                 for (key, expr) in &edge_pat.properties {
                     let val = executor.evaluate_expression(expr, new_row)?;
                     if matches!(val, Value::Null) {
@@ -1064,11 +1103,12 @@ fn create_node(
     row: &ResultRow,
     params: &HashMap<String, Value>,
     stats: &mut MutationStats,
+    interrupt: &Interrupt,
 ) -> Result<petgraph::graph::NodeIndex, String> {
     // Evaluate property expressions (borrow graph immutably, then drop)
     let mut properties = HashMap::new();
     {
-        let executor = CypherExecutor::with_params(graph, params, None);
+        let executor = row_evaluator(graph, params, interrupt);
         for (key, expr) in &node_pat.properties {
             let val = executor.evaluate_expression(expr, row)?;
             properties.insert(key.clone(), val);
@@ -1438,7 +1478,7 @@ fn execute_property_set_item<'a>(
         &'a [crate::graph::languages::cypher::ast::SetPathStep],
         &'a Expression,
     ),
-    params: &HashMap<String, Value>,
+    (params, interrupt): (&HashMap<String, Value>, &Interrupt),
     stats: &mut MutationStats,
     memos: &mut SetMemos<'a>,
     edges_to_stamp: &mut std::collections::HashSet<petgraph::graph::EdgeIndex>,
@@ -1456,7 +1496,7 @@ fn execute_property_set_item<'a>(
         graph,
         row,
         (variable, property, expression),
-        params,
+        (params, interrupt),
         stats,
         edges_to_stamp,
     )? {
@@ -1476,18 +1516,17 @@ fn execute_property_set_item<'a>(
         return Ok(PropSetFlow::SkipRow);
     };
 
-    // Evaluate the expression (borrows graph immutably)
+    // Evaluate the expression (borrows graph immutably). A nested l-value
+    // (`o.line_items[2].qty`) does its whole-value read-modify-write in
+    // set_path.rs, with the same evaluator.
     let value = {
-        let executor = CypherExecutor::with_params(graph, params, None);
-        executor.evaluate_expression(expression, row)?
-    };
-
-    // Nested l-value (`o.line_items[2].qty`): the whole-value
-    // read-modify-write lives in set_path.rs.
-    let value = if path.is_empty() {
-        value
-    } else {
-        super::set_path::read_modify(graph, node_idx, property, path, value, params, row)?
+        let executor = row_evaluator(graph, params, interrupt);
+        let value = executor.evaluate_expression(expression, row)?;
+        if path.is_empty() {
+            value
+        } else {
+            super::set_path::read_modify(graph, &executor, node_idx, property, path, value, row)?
+        }
     };
 
     apply_node_property_set(
@@ -1575,8 +1614,8 @@ fn execute_set(
     // constant across the statement's rows (see `set_row::SetMemos`).
     let mut memos = SetMemos::default();
 
-    for (row_idx, row) in result_set.rows.iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
+    for row in result_set.rows.iter() {
+        check_interrupt_row(interrupt)?;
         for item in &set.items {
             match item {
                 SetItem::Property {
@@ -1589,7 +1628,7 @@ fn execute_set(
                         graph,
                         row,
                         (variable, property, path, expression),
-                        params,
+                        (params, interrupt),
                         stats,
                         &mut memos,
                         &mut edges_to_stamp,
@@ -1605,7 +1644,7 @@ fn execute_set(
                     replace,
                 } => {
                     let value = {
-                        let executor = CypherExecutor::with_params(graph, params, None);
+                        let executor = row_evaluator(graph, params, interrupt);
                         executor.evaluate_expression(expression, row)?
                     };
                     let Value::Map(map) = value else {
@@ -1832,8 +1871,8 @@ fn execute_remove(
     stats: &mut MutationStats,
     interrupt: &Interrupt,
 ) -> Result<(), String> {
-    for (row_idx, row) in result_set.rows.iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
+    for row in result_set.rows.iter() {
+        check_interrupt_row(interrupt)?;
         for item in &remove.items {
             match item {
                 RemoveItem::Property { variable, property } => {
@@ -2012,14 +2051,14 @@ fn execute_merge(
 
     let mut new_rows = Vec::with_capacity(source_rows.len());
 
-    for (row_idx, mut new_row) in source_rows.into_iter().enumerate() {
-        check_interrupt_periodic(interrupt, row_idx)?;
+    for mut new_row in source_rows.into_iter() {
+        check_interrupt_row(interrupt)?;
         // Equality against null is undefined, so a null-bearing MERGE key
         // cannot identify either a match or a safe entity to create.
         // (Block-scoped: the executor holds the disk arena guard, whose
         // borrow of `graph` must end before the &mut mutation calls below.)
         {
-            let executor = CypherExecutor::with_params(graph, params, None);
+            let executor = row_evaluator(graph, params, interrupt);
             for element in &merge.pattern.elements {
                 let properties = match element {
                     CreateElement::Node(node) => &node.properties,
@@ -2047,8 +2086,13 @@ fn execute_merge(
                 }
             }
         }
-        let matched =
-            merge_pattern::try_match_merge_pattern(graph, &merge.pattern, &new_row, params)?;
+        let matched = merge_pattern::try_match_merge_pattern(
+            graph,
+            &merge.pattern,
+            &new_row,
+            params,
+            interrupt,
+        )?;
 
         if let Some(bound_row) = matched {
             for (var, idx) in &bound_row.node_bindings {
@@ -2127,3 +2171,7 @@ mod update_tail_tests;
 #[cfg(test)]
 #[path = "write_mutation_query_tests.rs"]
 mod is_mutation_query_tests;
+
+#[cfg(test)]
+#[path = "write_deadline_tests.rs"]
+mod deadline_tests;
