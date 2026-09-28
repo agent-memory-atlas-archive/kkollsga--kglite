@@ -565,15 +565,14 @@ impl DiskGraph {
         let key = i as u32;
 
         // Stage exact-row mutations as `PropertyStorage::Map`, not `Columnar`:
-        // a `Columnar` variant routes `node.set_property(k, v)` through
-        // `Arc::make_mut(store)` on the node's own handle, which clones the
-        // store while `column_stores` also holds it and lands the mutation
-        // on a detached copy.
+        // a `Columnar` record is only a row reference (`ColumnarRow` carries
+        // the row id, no store), and a property write through it is refused,
+        // so it can never hold a staged write.
         //
         // Reseed path: `batch.rs::flush_chunk` (and similar bulk paths)
-        // transiently assigns `PropertyStorage::Columnar{...}`; a stale one
-        // still in the cache is replaced with Map, since batch already
-        // persisted it via full-Arc replacement.
+        // assigns `PropertyStorage::Columnar{...}` through this cache while
+        // writing the column stores directly; such an entry holds no write,
+        // so it is replaced with an empty Map.
         let needs_reseed = match self.node_mut_cache.get(&key) {
             None => true,
             Some(nd) => !matches!(nd.properties, crate::graph::schema::PropertyStorage::Map(_)),
