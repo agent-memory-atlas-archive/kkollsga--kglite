@@ -15,6 +15,7 @@ import pytest
 import kglite
 
 BUDGET = r"exceeding the max_work_units budget of 5000"
+BUDGET_CONSUMED = r"consumed \d+ collection items.*budget of 5000"
 
 
 def _graph() -> kglite.KnowledgeGraph:
@@ -101,3 +102,30 @@ def test_the_transaction_and_session_paths_charge_the_budget() -> None:
     assert session.cypher("MATCH (m:M) RETURN count(m) AS c").to_list() == [{"c": 0}]
     session.execute("CREATE (:M {x: size(range(1, 10000))})", max_work_units=50_000)
     assert session.cypher("MATCH (m:M) RETURN count(m) AS c").to_list() == [{"c": 1}]
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        "MATCH (n:N) SET n.x = size(range(1, 600))",
+        "MATCH (n:N) SET n.x = size(range(1, 600)) + 1, n.y = size(range(1, 600))",
+        "UNWIND range(1, 10) AS i CREATE (:M {i: i, x: size(range(1, 600))})",
+        "UNWIND range(1, 10) AS i MERGE (m:M {id: i}) ON CREATE SET m.x = size(range(1, 600))",
+        "MATCH (n:N) CREATE (n)-[:R {x: size(range(1, 600))}]->(:M)",
+    ],
+    ids=["set", "set-two-items", "unwind-create", "merge-on-create", "create-rel"],
+)
+def test_a_row_invariant_expression_is_charged_once_per_clause_as_in_a_read(write) -> None:
+    """A read folds an expression that is the same on every row once per
+    clause, so ``RETURN size(range(1, 600))`` over 10 rows charges 600; a write
+    clause folds it the same way, instead of charging it on every row."""
+    g = kglite.KnowledgeGraph()
+    g.cypher("UNWIND range(1, 10) AS i CREATE (:N {id: i})").to_list()
+    read = "MATCH (n:N) RETURN size(range(1, 600)) AS x"
+    assert len(g.cypher(read, max_work_units=5000).to_list()) == 10
+    g.cypher(write, max_work_units=5000).to_list()
+    # A row-dependent expression is still charged per row, in both.
+    with pytest.raises(kglite.CypherExecutionError, match=BUDGET_CONSUMED):
+        g.cypher("MATCH (n:N) RETURN size(range(1, 600 + n.id)) AS x", max_work_units=5000).to_list()
+    with pytest.raises(kglite.CypherExecutionError, match=BUDGET_CONSUMED):
+        g.cypher("MATCH (n:N) SET n.z = size(range(1, 600 + n.id))", max_work_units=5000).to_list()

@@ -7578,8 +7578,9 @@ class KnowledgeGraph:
                 the query holds while the deadline bounds how long it runs.
                 A write clause's value expressions (``SET``, ``CREATE``,
                 ``MERGE``, a ``FOREACH`` list) charge it as a read's
-                projection does, cumulatively across the statement's rows.
-                A refusal during mutation execution restores that statement's
+                projection does, cumulatively across the statement's rows;
+                an expression that is the same on every row is folded once
+                per clause and charged once. A refusal during mutation execution restores that statement's
                 earlier writes. Defaults to ``set_default_max_work_units()``.
             row_limit: Cap on the result rows this call **retains** — the
                 opposite number to ``max_work_units``, which bounds work and

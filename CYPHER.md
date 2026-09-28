@@ -3259,7 +3259,10 @@ graph.cypher("""
 A write clause's value expressions — `SET`, `CREATE`, `MERGE` (its pattern
 and `ON CREATE` / `ON MATCH SET`) and a `FOREACH` list — charge the
 statement's `max_work_units` budget as a read's projection does, cumulatively
-across the statement's rows (a `range()` charges its length); with no budget
+across the statement's rows (a `range()` charges its length). As in a read, an
+expression that is the same on every row is folded once per clause, so it is
+charged once and every row gets the one value (`datetime()` included;
+`rand()` and `randomUUID()` stay per row); with no budget
 set, the 10,000,000 backstop applies.
 
 ```python

@@ -1082,6 +1082,7 @@ mod vector_options;
 mod view_call;
 pub mod where_clause;
 pub mod write;
+mod write_folding;
 pub(crate) mod write_scope;
 
 pub(super) use clause_pipeline::order_by_scope_after;

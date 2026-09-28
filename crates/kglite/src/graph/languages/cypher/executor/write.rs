@@ -706,6 +706,9 @@ fn execute_foreach(
 ) -> Result<(), String> {
     let interrupt = ctx.interrupt;
     let budget = ctx.budget;
+    let folded =
+        (!outer.rows.is_empty()).then(|| row_evaluator(graph, ctx).fold_constants_expr(list));
+    let list = folded.as_ref().unwrap_or(list);
     for row in outer.rows.iter() {
         check_interrupt_row(interrupt)?;
         // Evaluate the list in this row's context (read-only borrow of the
@@ -826,6 +829,26 @@ fn execute_create(
     // seed (`clause_needs_implicit_row`) — this function must not synthesize
     // one, because from here an empty `existing` is indistinguishable from a
     // preceding MATCH that found nothing.
+    let folded = (!existing.rows.is_empty())
+        .then(|| super::write_folding::fold_create(&row_evaluator(graph, ctx), create));
+    execute_folded_create(
+        graph,
+        folded.as_ref().unwrap_or(create),
+        existing,
+        stats,
+        ctx,
+    )
+}
+
+/// [`execute_create`] of a clause whose values are already folded — MERGE's
+/// create arm, which folded its pattern once for all its rows.
+fn execute_folded_create(
+    graph: &mut DirGraph,
+    create: &CreateClause,
+    existing: ResultSet,
+    stats: &mut MutationStats,
+    ctx: &WriteClauseCtx<'_>,
+) -> Result<ResultSet, String> {
     let source_rows = existing.rows;
 
     let mut new_rows = Vec::with_capacity(source_rows.len());
@@ -1603,9 +1626,28 @@ fn apply_remove_clause(
     Ok(())
 }
 
-/// One `SET` clause over `result_set`, refused when it leaves an element
-/// breaking a validity declaration ([`BoundWrites`]).
+/// One `SET` clause over `result_set`, its row-invariant values folded once
+/// (`write_folding`), refused when it leaves an element breaking a validity
+/// declaration ([`BoundWrites`]).
 fn execute_set(
+    graph: &mut DirGraph,
+    set: &SetClause,
+    result_set: &ResultSet,
+    stats: &mut MutationStats,
+    ctx: &WriteClauseCtx<'_>,
+) -> Result<(), String> {
+    if result_set.rows.is_empty() {
+        return Ok(());
+    }
+    let folded = SetClause {
+        items: super::write_folding::fold_set_items(&row_evaluator(graph, ctx), &set.items),
+    };
+    execute_folded_set(graph, &folded, result_set, stats, ctx)
+}
+
+/// [`execute_set`] of a clause whose values are already folded — MERGE's
+/// `ON CREATE` / `ON MATCH SET`, folded once for all its rows.
+fn execute_folded_set(
     graph: &mut DirGraph,
     set: &SetClause,
     result_set: &ResultSet,
@@ -2075,6 +2117,9 @@ fn execute_merge(
     // As in `execute_create`: one MERGE per incoming row, none for zero rows.
     // The implicit start row for a leading MERGE is seeded by the pipeline.
     let source_rows = existing.rows;
+    let folded = (!source_rows.is_empty())
+        .then(|| super::write_folding::fold_merge(&row_evaluator(graph, ctx), merge));
+    let merge = folded.as_ref().unwrap_or(merge);
 
     let mut new_rows = Vec::with_capacity(source_rows.len());
 
@@ -2132,7 +2177,7 @@ fn execute_merge(
                     columns: Vec::new(),
                     lazy_return_items: None,
                 };
-                execute_set(graph, &set_clause, &temp_rs, stats, ctx)?;
+                execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
             }
         } else {
             let create_clause = CreateClause {
@@ -2143,7 +2188,7 @@ fn execute_merge(
                 columns: existing.columns.clone(),
                 lazy_return_items: None,
             };
-            let created = execute_create(graph, &create_clause, temp_rs, stats, ctx)?;
+            let created = execute_folded_create(graph, &create_clause, temp_rs, stats, ctx)?;
 
             if let Some(created_row) = created.rows.into_iter().next() {
                 for (var, idx) in created_row.node_bindings {
@@ -2163,7 +2208,7 @@ fn execute_merge(
                     columns: Vec::new(),
                     lazy_return_items: None,
                 };
-                execute_set(graph, &set_clause, &temp_rs, stats, ctx)?;
+                execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
             }
         }
 

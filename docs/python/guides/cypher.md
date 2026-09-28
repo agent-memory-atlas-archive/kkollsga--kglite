@@ -277,8 +277,9 @@ statement is charged the same way: the value expressions of `SET`, `CREATE`,
 `MERGE` and a `FOREACH` list charge the statement's budget as a read's
 `RETURN` does, cumulatively across its rows — `UNWIND range(1, 200) AS i
 CREATE (:M {x: size(range(1, i))})` is refused under the budget that refuses
-the same `RETURN`. Ordinary arithmetic, string and property expressions charge
-nothing.
+the same `RETURN`, and an expression that is the same on every row
+(`size(range(1, 600))`) is folded once per clause and charged once in both.
+Ordinary arithmetic, string and property expressions charge nothing.
 
 **Size it from a probe, and leave headroom.** Run the pattern once as
 `count(*)` to learn roughly how much work it does, then budget well above that
