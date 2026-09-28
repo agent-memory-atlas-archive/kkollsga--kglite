@@ -760,6 +760,11 @@ before upgrading.
   declarations, conventions, relationship dates and the date context;
   `column_types` lists `validFrom` / `validTo`; and the temporal examples in
   the data-loading and blueprint guides run as written.
+- Docs: a bitemporal registers guide (`docs/python/guides/bitemporal.md`)
+  covers declared valid time beside a modelled recording-time pair: set-up,
+  day deliveries, as-known-at and both-axes queries, lineage, changed-since, a
+  feature checklist and a runnable example. The valid-time guide's audit-trail
+  section now points to it.
 - Cypher: past 64 driving rows, `UNWIND $keys AS k MATCH (n:T {prop: k})`
   (and `{prop: r.key}`, `WITH x AS k MATCH …`) returned no match for a key
   of another kind than the stored value that the row-by-row match treats as

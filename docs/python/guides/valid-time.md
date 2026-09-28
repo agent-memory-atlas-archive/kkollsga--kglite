@@ -113,7 +113,9 @@ A `SET` is judged once its clause has applied every item, so
 bounds stay open. Every writer that gives a node a declared label —
 `add_nodes(labels=[…])`, `add_label`, a blueprint's `labels`, ontology
 materialisation — judges the node by that label's declaration too. A fluent
-`update()` is not judged.
+`update()` is not judged. A bulk load onto a declared relationship type adds
+each row that differs from the stored relationships as a new version, rather
+than updating one; {doc}`bitemporal` shows this on a register feed.
 
 `CALL db.temporal.declarations()` lists every declaration with its convention,
 the rows that abut at declare time and, counted at the graph's current state,
@@ -388,108 +390,16 @@ graph.cypher("""
 Valid time records when a fact was true in the world, not when the graph
 learned it. `SET r.valid_to = …` overwrites the old bound, and `DELETE` leaves
 no trace: KGLite keeps no recording time. To keep what was known when, store
-it yourself as a second pair of bounds, such as `recorded_from` /
-`recorded_to`, on records you never overwrite.
-
-**Keep each superseded image as its own record.** Some registers deliver their
-own registration time: BAG's `tijdstipRegistratie` / `eindRegistratie`, or the
-BRP's *datum van opneming*. When such a register records a change, it also
-closes the previous version. Until the change was registered, the register knew
-that version as open-ended; from then on, it knows it as closed. Keep both
-images:
-
-- the open-ended image, recorded until the change was registered;
-- the closed image, recorded from then on.
-
-Do not copy `eindRegistratie` onto the final version as its `recorded_to`.
-`eindRegistratie` ends the version's open-endedness, not the version itself.
-
-In the shared graph, the register recorded the merger on 2020-09-01: Eemsdelta,
-and Appingedam's end on 2021-01-01. Until then it knew Appingedam as
-open-ended:
-
-```python
-# When each row was recorded. The loaded Appingedam row is the closed image.
-graph.cypher("""
-    MATCH (m:Municipality)
-    SET m.recorded_from = CASE WHEN m.id IN ['0003', '1979'] THEN date('2020-09-01') ELSE date('1990-01-01') END
-""")
-# The image the merger superseded: Appingedam still open-ended, under its own id.
-graph.cypher("""
-    CREATE (m:Municipality {id: '0003@1990', title: 'Appingedam', recorded_from: date('1990-01-01')})
-    SET m.recorded_to = date('2020-09-01')
-""")
-```
-
-`recorded_to` is written by `SET` because no write has named it yet. A `CREATE`
-that names it is refused as a typo. A name counts as known once any write has
-named it, even with a NULL value on every row, or when it is declared — a
-valid-time bound, or a `define_schema()` field.
-
-**Load images as new relationships.** On a declared relationship type,
-`add_relationships()` (and `create_relationships()`, `extend()` and
-blueprints) never rewrites a stored relationship: a row identical to one
-already between its endpoints is dropped, so a redelivery is harmless, and a
-row that differs in anything — its `to`, its `recorded_from` — is a new
-relationship beside the old one. `connections_updated` stays 0 on such a type.
-Close a stored period in Cypher, with `SET`, when that is what you mean.
-
-**Give each record its own id.** Records that share an id shadow each other.
-`MATCH (m {id: …})` and `WHERE m.id = …` find one node per id, so the lookup
-can land on an image recorded at another time and return `[]`. The only hint is
-the duplicate-id warning in the `result.warnings` of the write that makes the
-second record. Had the
-superseded image above been created with id `'0003'`, asking by id for
-Appingedam on 2020-06-30, as known today, returns `[]`. A scan of the label
-still finds it. As in Model B (section 5), keep the entity key in a
-separate, non-unique property.
-
-**Test a registration chain half-open, by hand.** A registration chain is
-half-open by definition: the new `tijdstipRegistratie` equals the old
-`eindRegistratie`. The named form `valid_at(n, $tt, 'recorded_from',
-'recorded_to')` reads the pair **closed**. At the instant of a registration it
-matches both the old image and the new one. Write the half-open test yourself:
-
-```python
-AS_KNOWN = """
-    FOR VALID_TIME AS OF $vt
-    MATCH (m:Municipality)
-    WHERE m.recorded_from <= date($tt) AND (m.recorded_to IS NULL OR m.recorded_to > date($tt))
-    RETURN m.title AS name ORDER BY name
-"""
-# Valid on 2021-06-30, as known on 2020-06-30: the merger was not yet recorded.
-graph.cypher(AS_KNOWN, params={"vt": "2021-06-30", "tt": "2020-06-30"}).to_list()
-# [{'name': 'Appingedam'}, {'name': 'Het Hogeland'}]
-
-# As known on the day the merger was recorded:
-graph.cypher(AS_KNOWN, params={"vt": "2021-06-30", "tt": "2020-09-01"}).to_list()
-# [{'name': 'Eemsdelta'}, {'name': 'Het Hogeland'}]
-
-# The named form reads the pair closed, so that day shows both states at once:
-graph.cypher("""
-    FOR VALID_TIME AS OF $vt
-    MATCH (m:Municipality)
-    WHERE valid_at(m, $tt, 'recorded_from', 'recorded_to')
-    RETURN m.title AS name ORDER BY name
-""", params={"vt": "2021-06-30", "tt": "2020-09-01"}).to_list()
-# [{'name': 'Appingedam'}, {'name': 'Eemsdelta'}, {'name': 'Het Hogeland'}]
-```
-
-The comparison is against `date($tt)`, not `$tt`. The stored bounds are dates,
-and a date never equals a string. With the naive mapping (`recorded_to =
-date('2020-09-01')` on the loaded Appingedam row, and no superseded image), the
-first query answers `[{'name': 'Het Hogeland'}]`. Asked as known today, the
-graph also loses Appingedam on 2020-06-30.
-
-A property no element of the type has makes the named form raise rather than
-read as open. This is a stopgap: the second axis is hand-written on every
-element it must filter, which brings back the forgotten-hop trap for that axis.
+it yourself as a second pair of bounds on records you never overwrite.
+{doc}`bitemporal` covers that pattern: superseded images, one id per record,
+loading a register feed, and the as-known-at, both-axes, lineage and
+changed-since questions.
 
 ## 8. Scale: what one process holds today
 
 Measured on this release line (release build, Apple M4, 16 GB), with every
 element carrying a declared half-open interval and a hand-written recording
-pair as in section 7:
+pair as in {doc}`bitemporal`:
 
 - **One million versions** (a synthetic register, three versions per object,
   one relationship per version) load in about 2.2 s in every storage mode,

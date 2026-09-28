@@ -29,6 +29,7 @@ Domain-specific surfaces — pull them in when your data has the shape:
 | {doc}`spatial` | …your nodes have coordinates. R-tree indexing, distance-based filters, GeoJSON I/O. |
 | {doc}`timeseries` | …nodes carry numeric series over time (monthly production, sensor readings). `ts_*()` aggregation, range and lookup functions. |
 | {doc}`valid-time` | …your data is history: versions valid over periods, as a register or a licence table keeps them. Declared intervals, `FOR VALID_TIME AS OF` / `valid_at=`, the fluent date context, modelling and lineage. |
+| {doc}`bitemporal` | …your data is a register that records when it knew each fact as well as when it was true. What is native (valid time) and what you model (recording time): superseded images, day deliveries in one transaction, as-known-at, both axes on every hop, lineage and changed-since, with the feature checklist and the scale envelope. |
 | {doc}`semantic-search` | …you want fuzzy / meaning-based lookup. `text_score()` in Cypher, embedding model registration. |
 | {doc}`text-search` | …you want keyword search, or keyword *and* meaning in one ranking. BM25 via `build_text_index()` + `text_bm25()`, the index-freshness contract, and hybrid retrieval with `score_fuse()`. |
 | {doc}`graph-algorithms` | …you need PageRank, community detection, shortest paths, centrality. |

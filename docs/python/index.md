@@ -43,6 +43,7 @@ guides/text-search
 guides/spatial
 guides/timeseries
 guides/valid-time
+guides/bitemporal
 guides/graph-algorithms
 guides/import-export
 guides/schema-migrations
