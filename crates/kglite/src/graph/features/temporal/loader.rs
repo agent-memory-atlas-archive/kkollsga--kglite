@@ -53,8 +53,9 @@ enum Stage {
 /// before the load writes `frame`. `convention` defaults as in
 /// [`declare_defaulted`].
 ///
-/// An identical declaration makes the whole thing a no-op: rows written onto
-/// a declared target are not validated. Otherwise, before anything is
+/// An identical declaration makes the whole thing a no-op here; the load
+/// judges its own rows against it (`write_check::check_node_load`,
+/// `check_edge_load`). Otherwise, before anything is
 /// written, a conflicting declaration of the same key is refused, and so is a
 /// row of `frame` holding an unreadable, inverted or empty interval (named by
 /// its position). A target that already exists is then declared at once —

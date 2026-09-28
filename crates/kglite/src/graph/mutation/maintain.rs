@@ -1,7 +1,7 @@
 use crate::datatypes::values::{classify_value_set, ValueSetType};
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::constraints::{ConstraintResult, UniqueConstraintKey};
-use crate::graph::features::temporal::merge_start_key;
+use crate::graph::features::temporal::{check_edge_load, check_node_load, merge_start_key};
 use crate::graph::introspection::reporting::{ConnectionOperationReport, NodeOperationReport};
 use crate::graph::mutation::batch::{
     BatchProcessor, BatchStats, ConflictHandling, ConnectionBatchProcessor, NodeAction,
@@ -887,6 +887,7 @@ pub fn add_nodes(
         &title_field,
         derived_titles.as_deref(),
     )?;
+    check_node_load(graph, &node_type, &df_data, id_idx, conflict_mode)?;
 
     install_node_type_metadata(
         graph,
@@ -1175,15 +1176,15 @@ pub(crate) fn add_connections_with_initial_load(
         ));
     }
 
-    // A source/target type that doesn't exist yet is not an error: an edge to a
-    // missing endpoint vivifies a stub node, which registers the type (Pass B).
-
-    // Resolve and gate every row before the mutating passes below. The helper
-    // also snapshots stored values while preserving endpoint identity cells.
+    // Resolve and gate every row (its validity interval included) before the
+    // mutating passes below; the helper also snapshots stored values while
+    // preserving endpoint identity cells. A missing source/target type is no
+    // error: an edge to it vivifies a stub node, registering the type (Pass B).
     let (resolved, titles) = prepare_connection_admission(
         graph,
         &mut df_data,
         ConnectionAdmissionFields {
+            connection_type: &connection_type,
             source_type: &source_type,
             source_id: &source_id_field,
             source_title: source_title_field.as_deref(),
@@ -1862,6 +1863,9 @@ pub fn replace_connections(
         source_id_idx,
         target_id_idx,
     )?;
+    // A declared validity interval judges the rows before the delete, as
+    // `add_connections` judges them before its writes.
+    check_edge_load(graph, &connection_type, &source_type, &df_data)?;
     // 3. Declared relationship constraints. `add_connections` gates them too,
     //    but that gate runs *after* the delete below — so the frame is judged
     //    here as well, against the state the replace will leave: the delete

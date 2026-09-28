@@ -92,20 +92,27 @@ On the full register (1,474 municipalities) the two readings disagree on every
 boundary day: on 2019-01-01, 355 municipalities exist under `half_open` and 389
 under `closed`, because 34 of them end that day.
 
-**The declaration validates the rows it finds; later writes are not
-re-validated.** A bound written afterwards that is not a date raises from the
-next query that reads it, naming the element. To refuse such writes up front,
-add a property-type constraint:
+**The declaration validates the rows it finds, and later writes answer to the
+same rule.** An `add_nodes` / `add_relationships` load onto the declared type
+refuses a row whose interval is inverted, empty under `half_open`, or whose
+bound is not a date, naming the row by its 0-based position and writing
+nothing; a Cypher `CREATE`, `MERGE` or `SET` refuses it naming the element,
+and the statement rolls back:
 
 ```python
 graph.cypher(
-    "CREATE CONSTRAINT FOR (m:Municipality) REQUIRE m.valid_to IS :: DATE"
-)
+    "MATCH (m:Municipality {code: '0001'}) SET m.valid_to = date('1800-01-01')"
+)  # CypherExecutionError: node '0001', the from bound ... is after the to bound ...
 ```
+
+A `SET` is judged once its clause has applied every item, so
+`SET m.valid_from = …, m.valid_to = …` moves an interval in one step. NULL
+bounds stay open. A fluent `update()` is not judged.
 
 `CALL db.temporal.declarations()` lists every declaration with its convention,
 the rows that abut at declare time and, counted at the graph's current state,
-the rows a later write left empty or unreadable.
+the rows the declaration would refuse — which only a writer the check does not
+judge leaves: a fluent `update()`, or a graph saved by an earlier version.
 
 ## 2. Ask as of an instant
 
@@ -286,9 +293,10 @@ relationship.
 1 January of each year) is a set of periods `[date, next date)`: set each row's
 `valid_to` to the next row's date and declare `half_open`. A point fact with
 `valid_from == valid_to` would be empty under `half_open`: the declaration (or
-a `validFrom` / `validTo` load) refuses such a row, naming it. Only a later
-write can leave one, and `db.temporal.declarations()` then counts it in
-`empty_rows`.
+a `validFrom` / `validTo` load) refuses such a row, naming it, and so does a
+later load or Cypher write onto the declared type. Only a fluent `update()`
+or a graph saved by an earlier version can hold one, and
+`db.temporal.declarations()` then counts it in `empty_rows`.
 
 **Language is a parameter, not an axis.** Pick the language in the query and
 fall back with `coalesce`:

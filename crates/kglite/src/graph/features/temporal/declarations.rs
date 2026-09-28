@@ -96,12 +96,15 @@ pub struct DeclarationInfo {
     /// `source_type` to resolve it. Always `false` for a node label.
     pub ambiguous: bool,
     /// Rows whose interval is empty now — `from` after `to`, or equal under
-    /// half-open — which are valid at no instant. A declaration refuses
-    /// them, so they come from later writes. Counted at the graph's current
-    /// version; `None` where not counted.
+    /// half-open — which are valid at no instant. A declaration and every
+    /// load or Cypher write refuse them, so they come from a writer the
+    /// check does not judge: a fluent `update()`, an undeclare that hands a
+    /// source's relationships to the unkeyed declaration, or a graph saved
+    /// by an earlier version. Counted at the graph's current version; `None`
+    /// where not counted.
     pub empty_rows: Option<usize>,
     /// Rows holding a bound that is now unreadable (not NULL, a date, a
-    /// datetime or an ISO string) — left by a write after the declaration.
+    /// datetime or an ISO string) — left as [`Self::empty_rows`] are.
     /// A query that filters on such a row raises. Counted like
     /// [`Self::empty_rows`].
     pub unreadable_rows: Option<usize>,
@@ -176,6 +179,14 @@ impl TemporalDeclarations {
         self.nodes
             .get(label)
             .is_some_and(|c| c.valid_from == property || c.valid_to == property)
+    }
+
+    /// Whether any node declaration names `property` as a bound — the check a
+    /// write settles before resolving the written node's labels.
+    pub(crate) fn names_any_node_bound(&self, property: &str) -> bool {
+        self.nodes
+            .values()
+            .any(|c| c.valid_from == property || c.valid_to == property)
     }
 
     /// Every config of `rel_type`, in declaration order; empty when none.
@@ -522,7 +533,7 @@ pub(crate) fn node_names_bound(
     idx: petgraph::graph::NodeIndex,
     property: &str,
 ) -> bool {
-    graph.temporal.has_node_declarations()
+    graph.temporal.names_any_node_bound(property)
         && graph.node_labels(idx).into_iter().any(|key| {
             graph
                 .interner

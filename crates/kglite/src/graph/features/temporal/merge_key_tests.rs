@@ -556,20 +556,28 @@ fn a_datetime_within_the_day_is_its_own_start() {
     assert_eq!(periods(&graph).len(), 2);
 }
 
-/// Rows loaded onto a declared type are not validated, so a start the
-/// evaluator cannot read still keys the row, on its raw value.
+/// A load onto a declared type refuses a start the evaluator cannot read;
+/// one a graph already holds (an earlier version accepted such writes) keys
+/// its row on the raw value.
 #[test]
 fn an_unreadable_start_keys_on_its_raw_value() {
     let mut graph = first_period(Some(in_type(None)));
-    for (value, expected) in [
-        (text("garbage"), (1, 0)),
-        (text("garbage"), (0, 0)),
-        (Value::Int64(2009), (1, 0)),
-        (Value::Int64(2009), (0, 0)),
-    ] {
-        let report = load(&mut graph, vec![(value.clone(), Value::Null)], None).unwrap();
-        assert_eq!(counts(&report), expected, "{value:?}");
-    }
+    let err = load(&mut graph, vec![(text("garbage"), Value::Null)], None).unwrap_err();
+    assert!(
+        err.contains("row 0 (0-based) of the load, property"),
+        "{err}"
+    );
+    super::unchecked(|| {
+        for (value, expected) in [
+            (text("garbage"), (1, 0)),
+            (text("garbage"), (0, 0)),
+            (Value::Int64(2009), (1, 0)),
+            (Value::Int64(2009), (0, 0)),
+        ] {
+            let report = load(&mut graph, vec![(value.clone(), Value::Null)], None).unwrap();
+            assert_eq!(counts(&report), expected, "{value:?}");
+        }
+    });
     assert_eq!(periods(&graph).len(), 3);
 }
 

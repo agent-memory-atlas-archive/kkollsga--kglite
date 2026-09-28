@@ -2,6 +2,7 @@
 
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::constraints::UniqueConstraintKey;
+use crate::graph::features::temporal::check_edge_load;
 use crate::graph::mutation::endpoints::{
     resolve_endpoints, title_column_indices, ResolvedEndpoints,
 };
@@ -36,6 +37,9 @@ struct ConnectionTitleInput<'a> {
 }
 
 pub(super) struct ConnectionAdmissionFields<'a> {
+    /// Judged against its declared validity interval, if any, before the
+    /// endpoints are resolved.
+    pub connection_type: &'a str,
     pub source_type: &'a str,
     pub source_id: &'a str,
     pub source_title: Option<&'a str>,
@@ -135,6 +139,7 @@ pub(super) fn prepare_connection_admission(
     frame: &mut DataFrame,
     fields: ConnectionAdmissionFields<'_>,
 ) -> Result<(ResolvedEndpoints, ConnectionTitles), String> {
+    check_edge_load(graph, fields.connection_type, fields.source_type, frame)?;
     let source_id_idx = frame
         .get_column_index(fields.source_id)
         .ok_or_else(|| format!("Source ID column '{}' not found", fields.source_id))?;

@@ -181,9 +181,13 @@ class TestRequests:
 
 class TestErrors:
     def test_an_unreadable_bound_names_the_step(self, statuses):
-        statuses.cypher("MATCH (s:Status {id: 2}) SET s.vt = 20210101").to_list()
+        # Refused as a write; a graph an earlier version saved can hold it,
+        # written here through the one writer the check does not judge.
+        with pytest.raises(kglite.CypherExecutionError, match="node '2', property 'vt'"):
+            statuses.cypher("MATCH (s:Status {id: 2}) SET s.vt = 20210101").to_list()
+        held = statuses.select("Status", temporal=False).where({"id": 2}).update({"vt": 20210101})["graph"]
         with pytest.raises(ValueError, match=r"select\(\): node '2', property 'vt'"):
-            statuses.date("2011").select("Status")
+            held.date("2011").select("Status")
 
 
 class TestNamedBounds:

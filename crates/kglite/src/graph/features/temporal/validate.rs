@@ -421,7 +421,11 @@ pub(super) fn check_frame(frame: &DataFrame, config: &TemporalConfig) -> Result<
 
 /// Read one row's bounds; refuse an unreadable or inverted one. The error is
 /// completed with the element's name by the caller.
-fn check_row(from: &Value, to: &Value, config: &TemporalConfig) -> Result<Bounds, String> {
+pub(super) fn check_row(
+    from: &Value,
+    to: &Value,
+    config: &TemporalConfig,
+) -> Result<Bounds, String> {
     let (from_at, to_at) = eval::parse_bounds(from, to).map_err(|err| {
         let property = match &err {
             TemporalError::Bound {

@@ -2161,16 +2161,16 @@ class KnowledgeGraph:
                 not a date, a datetime or an ISO date string each raise
                 :class:`ArgumentError`. A closed declaration whose rows end on
                 the day another begins emits a ``UserWarning`` suggesting
-                ``'half_open'``. **Writes onto a type that is already declared
-                are not validated** — a later ``add_nodes`` with these column
-                types, a Cypher ``SET``/``CREATE``, a fluent ``update()`` — so
-                that the declaration costs the write path nothing. A bound
-                that is not a date then raises, naming the element and the
-                property, from the next ``valid_at``/``valid_during`` or
-                date-filtered ``select()``/``traverse()`` that reads it; an
-                inverted interval is valid on no date. To refuse such a write,
-                declare a property-type constraint:
-                ``CREATE CONSTRAINT FOR (m:T) REQUIRE m.valid_to IS :: DATE``.
+                ``'half_open'``. **A load onto a type that is already declared
+                answers to the same rule**, with or without these column
+                types: before anything is written, a row that would leave a
+                node with an inverted interval (or an empty one under
+                ``'half_open'``) or a bound that is not a date, a datetime or
+                an ISO date string raises :class:`ArgumentError` naming the
+                row by its 0-based position. An update row is judged by the
+                bounds it leaves under ``conflict_handling`` — a row carrying
+                only the ``to`` bound against the stored ``from``. NULL bounds
+                are open and always accepted.
             nullable_int_downcast: When ``True``, Float64 columns whose non-null
                 values are all integer-valued (e.g. ``pd.NA``-bearing ints that
                 pandas auto-promoted to float64) are silently downcast to Int64.
@@ -2350,7 +2350,9 @@ class KnowledgeGraph:
                 is written as in :meth:`add_nodes`. The declaration covers the
                 type from every source type, unless this ``source_type``
                 already has its own or the type-wide one names other
-                properties; then it covers this source type only.
+                properties; then it covers this source type only. A load onto
+                a type already declared refuses a row whose interval breaks
+                the declaration, as :meth:`add_nodes` does.
             query: Cypher query string (alternative to ``data``). Must be a
                 read-only query whose RETURN clause includes columns matching
                 ``source_id_field`` and ``target_id_field``.
@@ -7830,12 +7832,16 @@ class KnowledgeGraph:
         no-op; a different one for the same type (and source type) is
         refused — undeclare it first.
 
-        Only the rows stored when the declaration is made are validated.
-        Later writes onto the type (a load, a Cypher ``SET``/``CREATE``, a
-        fluent ``update()``) are not: a bound that is not a date raises,
-        naming the element, from the next temporal filter that reads it, and
-        an inverted interval is valid on no date. A property-type constraint
-        (``REQUIRE n.valid_to IS :: DATE``) refuses such writes up front.
+        Later writes onto the type answer to the same rule: a load
+        (:meth:`add_nodes`, :meth:`add_relationships`) refuses a row that
+        would break it with :class:`ArgumentError`, naming the row by its
+        0-based position and writing nothing, and a Cypher ``CREATE``,
+        ``MERGE`` or ``SET`` raises :class:`CypherExecutionError` naming the
+        element and rolls the statement back. A ``SET`` is judged once its
+        clause has applied every item. A fluent ``update()`` is not judged; a
+        bound it leaves that is not a date raises, naming the element, from
+        the next temporal filter that reads it, and an inverted interval is
+        valid on no date.
 
         A *type_name* that is both a node type and a relationship type is the
         node type unless *source_type* is given.

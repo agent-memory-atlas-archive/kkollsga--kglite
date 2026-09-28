@@ -1499,21 +1499,32 @@ CALL db.temporal.declarations()
   is written"), unless it is a near miss of a property the target has, which
   is refused as a typo with a "Did you mean" hint. Every stored bound must be
   NULL, a date, a datetime or an ISO string, with `from` before `to`
-  (strictly before under `half_open`). The first row that fails is refused,
-  naming the node's id or the relationship's endpoints.
-- **Later writes are not re-validated.** Only the rows stored at declare time
-  are checked; a `SET`, `CREATE` or load onto a declared type is not, so a
-  declaration adds no cost to the write path. A bound that is not a date then
-  raises from the next `valid_at` / `valid_during` (or fluent temporal filter)
-  that reads it, naming the node's id or the relationship's endpoints and the
-  property; an inverted interval is valid on no date. To refuse such writes,
-  add a property-type constraint:
-  `CREATE CONSTRAINT FOR (m:FieldStatus) REQUIRE m.date_to IS :: DATE`.
-  `db.temporal.declarations()` reports what such writes left, counted at the
-  graph's current state: `empty_rows` (an inverted interval, or `from == to`
-  under `half_open` — valid at no instant) and `unreadable_rows` (a bound that
-  is not NULL, a date, a datetime or an ISO string). Counting reads every row
-  of the declared type once after each write.
+  (strictly before under `half_open`; `from == to` is a one-day interval under
+  `closed`). The first row that fails is refused, naming the node's id or the
+  relationship's endpoints.
+- **Later writes answer to the same rule.** A `CREATE`, `MERGE` or `SET` —
+  including `SET n:Label` onto a declared label — and an `add_nodes` /
+  `add_relationships` / blueprint load onto a declared type refuse a row the
+  declaration would refuse, with the same wording: Cypher names the node's id
+  or the relationship's endpoints and fails the statement (which rolls back,
+  an `UNWIND … CREATE` included); a load names the row by its 0-based position
+  and writes nothing. A `SET` is judged once its clause has applied every
+  item, so `SET n.from = …, n.to = …` moves an interval in one step. NULL
+  bounds stay open. A load judges an update row by the bounds it leaves — a
+  row carrying only `to` against the stored `from` — under its conflict mode.
+  A fluent `update()` is not judged.
+- **What the counts report.** `db.temporal.declarations()` counts, at the
+  graph's current state, the rows the declaration would refuse: `empty_rows`
+  (an inverted interval, or `from == to` under `half_open` — valid at no
+  instant) and `unreadable_rows` (a bound that is not NULL, a date, a
+  datetime or an ISO string). Only a writer the check does not judge leaves
+  one: a fluent `update()`, an undeclare that hands a source's relationships
+  to the unkeyed declaration, or a graph saved by an earlier version, which
+  accepted such writes. A bound that is not a date raises from the next
+  `valid_at` / `valid_during` (or fluent temporal filter) that reads it,
+  naming the node's id or the relationship's endpoints and the property; an
+  inverted interval is valid on no date. Counting reads every row of the
+  declared type once after each write.
 - **Re-declaring** the same target with the same properties and convention is
   a no-op (`declared: false`); different ones are refused until the target is
   undeclared.

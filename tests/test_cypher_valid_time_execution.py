@@ -171,6 +171,13 @@ def _storage(storage, tmp_path):
     return kglite.KnowledgeGraph(storage=storage) if storage != "memory" else kglite.KnowledgeGraph()
 
 
+def _legacy_write(graph, label, node_id, **props):
+    """Write bounds the write check refuses, through the one writer it does
+    not judge (a fluent ``update()``) — the rows a graph saved by an earlier
+    version, which accepted such writes, can hold."""
+    return graph.select(label, temporal=False).where({"id": node_id}).update(props)["graph"]
+
+
 @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
 def test_an_id_seek_returns_the_last_visible_version_in_node_order(storage, tmp_path):
     """Two of three versions sharing an id are valid: every mode returns the
@@ -187,7 +194,7 @@ def test_an_id_seek_returns_the_last_visible_version_in_node_order(storage, tmp_
         " (:M {id: 999, name: 'bad', vf: date('1900-01-01')})"
     ).to_list()
     graph.cypher("CALL db.temporal.declare({node: 'M', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
-    graph.cypher("MATCH (m:M {id: 999}) SET m.vt = 42").to_list()
+    graph = _legacy_write(graph, "M", 999, vt=42)
     for body in (
         "MATCH (m:M {id: 1}) RETURN m.name",
         "MATCH (m {id: 1}) RETURN m.name",
@@ -340,7 +347,7 @@ def test_a_wrong_typed_bound_raises():
     graph = kglite.KnowledgeGraph()
     graph.cypher("CREATE (:Site {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')})").to_list()
     graph.cypher("CALL db.temporal.declare({node: 'Site', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
-    graph.cypher("MATCH (s:Site) SET s.vt = 42").to_list()
+    graph = _legacy_write(graph, "Site", 1, vt=42)
     with pytest.raises(kglite.KgError, match=r"node '1'.*property 'vt'"):
         graph.cypher(at("2006-01-01", "MATCH (s:Site) RETURN s.id")).to_list()
 

@@ -152,11 +152,13 @@ fn a_traversal_drops_a_target_that_is_not_valid() {
 /// The unreadable-bound error names the fluent step, not the Cypher context.
 #[test]
 fn an_unreadable_bound_is_reported_under_the_steps_name() {
-    let g = graph(&[
-        "CREATE (:S {title: 's', vf: '2000-01-01', vt: '2005-01-01'})",
-        "CALL db.temporal.declare({node: 'S', from: 'vf', to: 'vt', convention: 'closed'})",
-        "MATCH (s:S) SET s.vt = 20210101",
-    ]);
+    let g = crate::graph::features::temporal::unchecked(|| {
+        graph(&[
+            "CREATE (:S {title: 's', vf: '2000-01-01', vt: '2005-01-01'})",
+            "CALL db.temporal.declare({node: 'S', from: 'vf', to: 'vt', convention: 'closed'})",
+            "MATCH (s:S) SET s.vt = 20210101",
+        ])
+    });
     let mut selection = CurrentSelection::new();
     selection.add_level();
     let filter =

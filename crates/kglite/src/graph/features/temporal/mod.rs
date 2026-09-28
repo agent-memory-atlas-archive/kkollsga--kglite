@@ -27,6 +27,9 @@ pub(crate) mod slice;
 mod validate;
 pub(crate) mod vector_mask;
 pub mod view;
+mod write_check;
+#[cfg(test)]
+mod write_check_tests;
 
 pub(crate) use declarations::declared;
 pub(crate) use declarations::merge_start_key;
@@ -43,6 +46,12 @@ pub use request::{
     relationship_type_has_property, unknown_bound_message,
 };
 pub(crate) use validate::{edge_bound, node_bound, view_bound};
+#[cfg(test)]
+pub(crate) use write_check::unchecked;
+pub(crate) use write_check::{
+    check_edge_load, check_edge_rows, check_new_edge, check_new_node, check_node_load,
+    check_stored_edge, check_stored_node, edge_property_is_bound,
+};
 
 use eval::{BoundSide, TemporalError};
 

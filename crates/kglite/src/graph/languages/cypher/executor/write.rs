@@ -5,6 +5,7 @@
 
 use super::super::ast::*;
 use super::super::result::*;
+use super::bound_writes::BoundWrites;
 use super::columnar_write::{
     set_via_column_master, write_column_master, ColumnMasterWrite, MasterCell, PriorCell,
 };
@@ -1017,6 +1018,12 @@ fn create_pattern_edges(
                     edge_props.get(property).cloned()
                 })?;
             }
+            crate::graph::features::temporal::check_new_edge(
+                graph,
+                &edge_pat.connection_type,
+                (actual_source, actual_target),
+                |property| edge_props.get(property).cloned(),
+            )?;
 
             // Register both the lightweight cache (for `has_connection_type`)
             // AND the metadata map: the metadata is what `connection_types()`,
@@ -1185,6 +1192,9 @@ fn create_node(
             }
         }
     }
+    let labels =
+        std::iter::once(label.as_str()).chain(node_pat.extra_labels.iter().map(String::as_str));
+    crate::graph::features::temporal::check_new_node(graph, labels, &id, constraint_read)?;
     let unique_claims = graph.unique_claims(&label, constraint_read);
     let unique = graph.check_unique_claims(&unique_claims, None);
     if let Err(violation) = unique {
@@ -1488,7 +1498,7 @@ fn execute_property_set_item<'a>(
     ),
     (params, interrupt): (&HashMap<String, Value>, &Interrupt),
     stats: &mut MutationStats,
-    memos: &mut SetMemos<'a>,
+    (memos, bound_writes): (&mut SetMemos<'a>, &mut BoundWrites),
     edges_to_stamp: &mut std::collections::HashSet<petgraph::graph::EdgeIndex>,
     nodes_to_stamp: &mut HashMap<NodeIndex, String>,
 ) -> Result<PropSetFlow, String> {
@@ -1508,6 +1518,9 @@ fn execute_property_set_item<'a>(
         stats,
         edges_to_stamp,
     )? {
+        if let Some(binding) = row.edge_bindings.get(variable) {
+            bound_writes.edge_property(graph, binding.edge_index, property);
+        }
         return Ok(PropSetFlow::Applied);
     }
 
@@ -1548,6 +1561,7 @@ fn execute_property_set_item<'a>(
         stats,
         nodes_to_stamp,
     )?;
+    bound_writes.node_property(graph, node_idx, property);
     Ok(PropSetFlow::Applied)
 }
 
@@ -1601,6 +1615,8 @@ fn apply_remove_clause(
     Ok(())
 }
 
+/// One `SET` clause over `result_set`, refused when it leaves an element
+/// breaking a validity declaration ([`BoundWrites`]).
 fn execute_set(
     graph: &mut DirGraph,
     set: &SetClause,
@@ -1608,6 +1624,26 @@ fn execute_set(
     params: &HashMap<String, Value>,
     stats: &mut MutationStats,
     interrupt: &Interrupt,
+) -> Result<(), String> {
+    let mut bound_writes = BoundWrites::default();
+    execute_set_items(
+        graph,
+        set,
+        result_set,
+        (params, interrupt),
+        stats,
+        &mut bound_writes,
+    )?;
+    bound_writes.check(graph)
+}
+
+fn execute_set_items(
+    graph: &mut DirGraph,
+    set: &SetClause,
+    result_set: &ResultSet,
+    (params, interrupt): (&HashMap<String, Value>, &Interrupt),
+    stats: &mut MutationStats,
+    bound_writes: &mut BoundWrites,
 ) -> Result<(), String> {
     // Freshness provenance: nodes (of opted-in types) modified by this SET get a
     // single `updated_at` bump after the loop (engine-managed reserved key) —
@@ -1638,7 +1674,7 @@ fn execute_set(
                         (variable, property, path, expression),
                         (params, interrupt),
                         stats,
-                        &mut memos,
+                        (&mut memos, &mut *bound_writes),
                         &mut edges_to_stamp,
                         &mut nodes_to_stamp,
                     )?;
@@ -1716,19 +1752,25 @@ fn execute_set(
                         })
                         .collect();
                     if !properties.is_empty() {
-                        execute_set(
+                        execute_set_items(
                             graph,
                             &SetClause { items: properties },
                             &one_row,
-                            params,
+                            (params, interrupt),
                             stats,
-                            interrupt,
+                            bound_writes,
                         )?;
                     }
                 }
                 SetItem::Label {
                     variable, label, ..
-                } => set_node_label(graph, row, (variable, label), stats, &mut nodes_to_stamp)?,
+                } => set_node_label(
+                    graph,
+                    row,
+                    (variable, label),
+                    stats,
+                    (&mut nodes_to_stamp, &mut *bound_writes),
+                )?,
             }
             flush_disk_item_writes(graph);
         }
@@ -1777,7 +1819,7 @@ fn set_node_label(
     row: &ResultRow,
     item: (&str, &str),
     stats: &mut MutationStats,
-    nodes_to_stamp: &mut HashMap<NodeIndex, String>,
+    (nodes_to_stamp, bound_writes): (&mut HashMap<NodeIndex, String>, &mut BoundWrites),
 ) -> Result<(), String> {
     let (variable, label) = item;
     // Null target (OPTIONAL MATCH miss): no-op for this row.
@@ -1790,6 +1832,7 @@ fn set_node_label(
     enforce_node_write_scope(graph, node_idx)?;
     let key = graph.interner.get_or_intern(label);
     if graph.add_node_label(node_idx, key) {
+        bound_writes.node_label(graph, node_idx, label);
         stats.properties_set += 1;
         // A label add is a modification — bump `updated_at` if the node's type
         // opted in (same post-loop stamp as a property SET).

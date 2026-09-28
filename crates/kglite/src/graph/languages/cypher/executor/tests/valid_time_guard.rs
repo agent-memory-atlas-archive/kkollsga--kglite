@@ -353,7 +353,7 @@ fn an_unreadable_bound_raises() {
          YIELD declared RETURN declared",
         "MATCH (s:Site) SET s.vt = 42",
     ] {
-        run(&mut graph, query);
+        crate::graph::features::temporal::unchecked(|| run(&mut graph, query));
     }
     let err = error(&graph, &at("2006-01-01", "MATCH (s:Site) RETURN s.id"));
     assert!(
@@ -447,7 +447,7 @@ fn an_id_seek_reads_no_other_ids_bounds() {
          YIELD declared RETURN declared",
         "MATCH (m:Muni {id: 999}) SET m.vt = 42",
     ] {
-        run(&mut graph, query);
+        crate::graph::features::temporal::unchecked(|| run(&mut graph, query));
     }
     let seek = "MATCH (m:Muni {id: 363}) RETURN m.name";
     assert_eq!(

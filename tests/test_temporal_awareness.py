@@ -422,11 +422,14 @@ class TestFluentBoundKinds:
         # set_temporal validates the stored bounds...
         with pytest.raises(kglite.ArgumentError, match="node 'bad'.*someday"):
             g.set_temporal("T", "vf", "vt")
-        # ...but a write onto a declared type is not validated, so the fluent
-        # filters report a bound written afterwards.
+        # ...and so does a later write. A bound a graph already holds (an
+        # earlier version accepted such writes; written here through the one
+        # writer the check does not judge) is reported by the fluent filters.
         g.cypher("MATCH (n:T) SET n.vf = date('2015-01-01')")
         g.set_temporal("T", "vf", "vt")
-        g.cypher("MATCH (n:T) SET n.vf = 'someday'")
+        with pytest.raises(kglite.CypherExecutionError, match="node 'bad'.*someday"):
+            g.cypher("MATCH (n:T) SET n.vf = 'someday'")
+        g = g.select("T", temporal=False).update({"vf": "someday"})["graph"]
         with pytest.raises(ValueError, match="someday"):
             g.date("2015").select("T")
         with pytest.raises(ValueError, match="bad"):

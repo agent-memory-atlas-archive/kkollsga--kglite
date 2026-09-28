@@ -432,7 +432,9 @@ fn setting_the_version_directly_empties_the_cache() {
 #[test]
 fn an_unreadable_bound_leaves_the_target_to_property_guards_and_is_counted() {
     let mut g = declared_wells();
-    run(&mut g, "MATCH (w:Well {id: 2}) SET w.vt = 2019");
+    crate::graph::features::temporal::unchecked(|| {
+        run(&mut g, "MATCH (w:Well {id: 2}) SET w.vt = 2019")
+    });
     let config = well_config(&g);
     assert_eq!(
         index(&g, &node("Well"), &config).unwrap_err(),
@@ -455,10 +457,12 @@ fn an_unreadable_bound_leaves_the_target_to_property_guards_and_is_counted() {
 #[test]
 fn an_empty_row_written_after_the_declaration_is_counted_and_valid_nowhere() {
     let mut g = declared_wells();
-    run(
-        &mut g,
-        "MATCH (w:Well {id: 1}) SET w.vt = date('1990-01-01')",
-    );
+    crate::graph::features::temporal::unchecked(|| {
+        run(
+            &mut g,
+            "MATCH (w:Well {id: 1}) SET w.vt = date('1990-01-01')",
+        )
+    });
     let listed = list(&g);
     assert_eq!(listed[0].target, node("Well"));
     assert_eq!(listed[0].empty_rows, Some(1));

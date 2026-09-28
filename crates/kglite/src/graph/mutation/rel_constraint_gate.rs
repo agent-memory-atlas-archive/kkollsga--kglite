@@ -111,6 +111,8 @@ pub(crate) fn gate_property_rows(
     folding: RowFolding,
     start_key: Option<&StartKey>,
 ) -> Result<(), String> {
+    // A declared validity interval gates these rows as it gates a load.
+    crate::graph::features::temporal::check_edge_rows(graph, connection_type, matched, properties)?;
     // The gate's own fast-out, taken before the column list is built.
     if !graph.has_rel_constraints() || !graph.type_has_rel_constraints(connection_type) {
         return Ok(());

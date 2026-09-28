@@ -190,7 +190,9 @@ fn the_evaluator_route_slices_as_the_mask_route_does() {
 #[test]
 fn an_unreadable_bound_is_an_error_naming_the_element() {
     let mut g = fixture();
-    run(&mut g, "MATCH (w:Well {id: 3}) SET w.vt = 42");
+    crate::graph::features::temporal::unchecked(|| {
+        run(&mut g, "MATCH (w:Well {id: 3}) SET w.vt = 42")
+    });
     let err = slice_at(&g, filter_at(&g, "2005-06-01").as_ref(), unlimited()).unwrap_err();
     assert!(err.contains("node '3'"), "{err}");
 }

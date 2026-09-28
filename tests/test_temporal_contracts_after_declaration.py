@@ -1,11 +1,12 @@
 """The temporal contracts a declared type keeps after it is declared.
 
-- Writes onto a declared type are not re-validated (the declaration costs the
-  write path nothing). A non-date bound written later raises from the next
-  temporal filter that reads it, naming the element and the property; an
-  inverted interval is valid on no date — `valid_during` over any range
-  included, which used to report it as overlapping a range that covered both
-  bounds. A property-type constraint refuses such a write up front.
+- A write onto a declared type is judged as the declaration judges its rows
+  (`test_temporal_write_validation.py`). A non-date bound a graph already
+  holds — an earlier version accepted one — raises from the next temporal
+  filter that reads it, naming the element and the property; an inverted
+  interval is valid on no date — `valid_during` over any range included, which
+  used to report it as overlapping a range that covered both bounds. A
+  property-type constraint refuses such a write with its own error.
 - The fluent date arguments take a `datetime.date`, a `datetime.datetime` or a
   datetime string, as `cypher()` parameters do, at date grain.
 - `traverse()` under a date context filters the relationships and the target
@@ -44,11 +45,19 @@ def _graph(storage, tmp_path) -> kglite.KnowledgeGraph:
     return g
 
 
+def _legacy_write(g, label, key, value, **props):
+    """Write bounds the write check refuses, through the one writer it does
+    not judge (a fluent ``update()``) — the rows a graph saved by an earlier
+    version, which accepted such writes, can hold."""
+    return g.select(label, temporal=False).where({key: value}).update(props)["graph"]
+
+
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
 def test_a_later_non_date_bound_raises_naming_the_element(storage, tmp_path) -> None:
     g = _graph(storage, tmp_path)
-    # Accepted: writes onto a declared type are not re-validated.
-    g.cypher("MATCH (m:M {code: '2'}) SET m.vt = 20210101").to_list()
+    with pytest.raises(kglite.CypherExecutionError, match=r"node '2', property 'vt'"):
+        g.cypher("MATCH (m:M {code: '2'}) SET m.vt = 20210101").to_list()
+    g = _legacy_write(g, "M", "code", "2", vt=20210101)
     named = r"(vt on node '2'|node '2', property 'vt').*20210101 \(INTEGER\) is not a date"
     for query in (
         "MATCH (m:M) WHERE valid_at(m, '2003') RETURN m.code",
@@ -65,7 +74,7 @@ def test_a_later_non_date_bound_raises_naming_the_element(storage, tmp_path) -> 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
 def test_an_inverted_interval_is_valid_on_no_date(storage, tmp_path) -> None:
     g = _graph(storage, tmp_path)
-    g.cypher("MATCH (m:M {code: '1'}) SET m.vt = date('1990-01-01')").to_list()
+    g = _legacy_write(g, "M", "code", "1", vt=dt.date(1990, 1, 1))
     for year in ("1980", "1995", "2003"):
         rows = g.cypher(f"MATCH (m:M {{code: '1'}}) WHERE valid_at(m, '{year}') RETURN m").to_list()
         assert rows == []

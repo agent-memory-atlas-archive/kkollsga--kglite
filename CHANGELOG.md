@@ -33,18 +33,19 @@ before upgrading.
   written, even all NULL, as present. A declared node label's `from` and `to`
   count as known properties of it, so the first `CREATE` or `MERGE` that
   writes the `to` is not refused as an unknown property, and under
-  `lock_schema()` neither is a `SET` of it. Later writes are not
-  re-validated, and a property-type constraint
-  (`REQUIRE n.valid_to IS :: DATE`) refuses a bad write up front. It yields
+  `lock_schema()` neither is a `SET` of it. Later writes answer to the same
+  rule (see Changed). It yields
   `declared`, `rows` and `abutting_rows`: the rows whose `to` equals another
   row's `from` in the same label or from the same source node, which under
   `closed` also earns a query warning. A relationship uses its source's
   `source_type` declaration first and the unkeyed one otherwise.
   `CALL db.temporal.undeclare({...})` removes one, and
   `CALL db.temporal.declarations()` lists them, with `empty_rows` and
-  `unreadable_rows`: rows a write since the declaration left with an empty
-  interval (valid at no instant) or with a bound that is not NULL, a date, a
-  datetime or an ISO string, counted at the graph's current state by a walk
+  `unreadable_rows`: rows the declaration would refuse — an empty interval
+  (valid at no instant) or a bound that is not NULL, a date, a datetime or
+  an ISO string — which only a fluent `update()`, an undeclare that hands a
+  source's relationships to the unkeyed declaration, or a graph saved by an
+  earlier version can leave; counted at the graph's current state by a walk
   over each declared type's rows, repeated after a write (including one
   earlier in the same statement). `describe()` shows each declaration's
   convention, and `temporal_empty` / `temporal_unreadable` (`empty=` /
@@ -374,8 +375,25 @@ before upgrading.
   or a row whose interval is inverted, raises `ArgumentError` naming the
   element (a loader checks this before writing, naming an inverted row of its
   input by position). A different declaration for a type that already has one
-  is refused instead of added beside it. Rows written onto a declared type
-  later are not validated.
+  is refused instead of added beside it.
+- **Breaking:** a write onto a type with a declared validity interval is
+  judged by the rule the declaration judges its rows by, where it was
+  accepted before. `add_nodes`, `add_relationships` (and
+  `replace_relationships`, `create_relationships()`, `extend()`, blueprints
+  and the C ABI's edge batch) refuse, before writing anything, a row that
+  would leave an inverted interval, an empty one under `half_open`
+  (`from == to`), or a bound that is not NULL, a date, a datetime or an ISO
+  string, raising `ArgumentError` naming the row by its 0-based position
+  ("row 3 (0-based) of the load, the from bound … is after the to bound …")
+  — `create_relationships()` and the C ABI's edge batch name the
+  relationship's endpoints instead; an update row is judged by the bounds it
+  leaves under `conflict_handling`.
+  A Cypher `CREATE`, `MERGE` or `SET` (including `SET n:Label` onto a declared
+  label) raises `CypherExecutionError` naming the node's id or the
+  relationship's endpoints, and the statement rolls back; a `SET` is judged
+  once its clause has applied every item. NULL bounds stay open, and `closed`
+  accepts `from == to`. A fluent `update()` is not judged. The check reads
+  only a type that has a declaration.
 - **Breaking:** a bulk load (`add_relationships`, `replace_relationships`,
   `create_relationships()`, `extend()`, blueprints, the C ABI's edge batch)
   onto a relationship type with a declared validity interval writes its rows

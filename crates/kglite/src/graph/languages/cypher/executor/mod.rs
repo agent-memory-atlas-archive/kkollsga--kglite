@@ -994,6 +994,7 @@ impl<'a> CypherExecutor<'a> {
 
 pub mod affected_tests;
 mod analysis_procedures;
+mod bound_writes;
 pub(crate) mod budget;
 pub mod call_clause;
 pub mod call_subquery;

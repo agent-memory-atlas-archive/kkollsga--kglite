@@ -40,7 +40,8 @@ pub(crate) type Start = Option<(InternedKey, StartValue)>;
 /// A start value, normalised so one instant compares equal however it was
 /// written: a date, a datetime at midnight and an ISO string of either are
 /// the same day; any other datetime is exact. A value the evaluator cannot
-/// read keys on itself — rows loaded onto a declared type are not validated.
+/// read keys on itself: a load refuses one, but a stored relationship an
+/// earlier version accepted can hold one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum StartValue {
     At(Instant),
