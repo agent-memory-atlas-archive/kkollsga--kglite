@@ -522,6 +522,16 @@ before upgrading.
   original) and every later row writes one cell — 2.9 ms and 2.3 ms for the
   same statements, flat in the type's size and within 1.5× of memory mode.
   Every read inside the statement still sees the rows written before it.
+- Disk mode: the first valid-time algorithm call or retrieval at an instant
+  (`FOR VALID_TIME AS OF … CALL degree()`, `freeze(valid_at=…)`, a text or
+  vector search under a context) held a copy of every relationship's
+  properties in memory while it built its instant mask — about 140 bytes per
+  relationship (28 MB at 200,000 relationships), against a mask of one bit
+  each. The mask, the valid slice and the fluent traversal and
+  `visible_degree` walks now read a relationship's type without
+  materialising it, and the slice's copy materialises each kept relationship
+  once instead of three times; the 200,000-relationship call now peaks near
+  the mask size.
 - `max_work_units` now bounds a write statement's value expressions. The
   evaluators of `SET`, `CREATE`, `MERGE` and a `FOREACH` list ran on a fresh,
   unlimited budget, so `MATCH (n) SET n.x = size(range(1, 10000))` ran under

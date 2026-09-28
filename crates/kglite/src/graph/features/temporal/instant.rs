@@ -162,8 +162,9 @@ fn disk_masks(
             nodes.set(idx.index(), false);
         }
         for edge in graph.graph.edges(idx) {
-            let conn = edge.weight().connection_type;
-            if !evaluator.admits_edge(graph, edge.id(), conn, idx) {
+            // `connection_type()`, not `weight()`: on Disk `weight()` parks a
+            // copy of the relationship's properties until the guard drops.
+            if !evaluator.admits_edge(graph, edge.id(), edge.connection_type(), idx) {
                 edges.set(edge.id().index(), false);
             }
         }

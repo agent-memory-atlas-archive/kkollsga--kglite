@@ -153,13 +153,9 @@ fn hop_passes_filters(
     }
     match valid_time {
         None => Ok(true),
-        Some(filter) => filter.admits_hop(
-            graph,
-            edge.id(),
-            edge.weight().connection_type,
-            edge.source(),
-            far,
-        ),
+        Some(filter) => {
+            filter.admits_hop(graph, edge.id(), edge.connection_type(), edge.source(), far)
+        }
     }
 }
 
@@ -305,7 +301,7 @@ fn make_traversal_fast(
                 for edge in
                     g.edges_directed_filtered(source_node, Direction::Outgoing, Some(conn_key))
                 {
-                    if edge.weight().connection_type == conn_key {
+                    if edge.connection_type() == conn_key {
                         let t = edge.target();
                         if type_ok(t) {
                             targets.insert(t);
@@ -317,7 +313,7 @@ fn make_traversal_fast(
                 for edge in
                     g.edges_directed_filtered(source_node, Direction::Incoming, Some(conn_key))
                 {
-                    if edge.weight().connection_type == conn_key {
+                    if edge.connection_type() == conn_key {
                         let t = edge.source();
                         if type_ok(t) {
                             targets.insert(t);
@@ -330,7 +326,7 @@ fn make_traversal_fast(
                 for edge in
                     g.edges_directed_filtered(source_node, Direction::Outgoing, Some(conn_key))
                 {
-                    if edge.weight().connection_type == conn_key {
+                    if edge.connection_type() == conn_key {
                         let t = edge.target();
                         if type_ok(t) {
                             targets.insert(t);
@@ -340,7 +336,7 @@ fn make_traversal_fast(
                 for edge in
                     g.edges_directed_filtered(source_node, Direction::Incoming, Some(conn_key))
                 {
-                    if edge.weight().connection_type == conn_key {
+                    if edge.connection_type() == conn_key {
                         let t = edge.source();
                         if type_ok(t) {
                             targets.insert(t);
@@ -498,7 +494,7 @@ fn make_traversal_full(
                     for edge in
                         g.edges_directed_filtered(source_node, Direction::Outgoing, Some(conn_key))
                     {
-                        if edge.weight().connection_type == conn_key {
+                        if edge.connection_type() == conn_key {
                             let t = edge.target();
                             if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
@@ -510,7 +506,7 @@ fn make_traversal_full(
                     for edge in
                         g.edges_directed_filtered(source_node, Direction::Incoming, Some(conn_key))
                     {
-                        if edge.weight().connection_type == conn_key {
+                        if edge.connection_type() == conn_key {
                             let t = edge.source();
                             if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
@@ -523,7 +519,7 @@ fn make_traversal_full(
                     for edge in
                         g.edges_directed_filtered(source_node, Direction::Outgoing, Some(conn_key))
                     {
-                        if edge.weight().connection_type == conn_key {
+                        if edge.connection_type() == conn_key {
                             let t = edge.target();
                             if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);
@@ -533,7 +529,7 @@ fn make_traversal_full(
                     for edge in
                         g.edges_directed_filtered(source_node, Direction::Incoming, Some(conn_key))
                     {
-                        if edge.weight().connection_type == conn_key {
+                        if edge.connection_type() == conn_key {
                             let t = edge.source();
                             if type_ok(t) && hop_passes(&edge, t)? {
                                 targets.insert(t);

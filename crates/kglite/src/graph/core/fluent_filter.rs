@@ -386,8 +386,7 @@ impl FluentFilter {
                         petgraph::Direction::Outgoing => edge.target(),
                         petgraph::Direction::Incoming => edge.source(),
                     };
-                    let conn = edge.weight().connection_type;
-                    self.admits_hop(graph, edge.id(), conn, edge.source(), far)
+                    self.admits_hop(graph, edge.id(), edge.connection_type(), edge.source(), far)
                         .unwrap_or(false)
                 })
                 .count()

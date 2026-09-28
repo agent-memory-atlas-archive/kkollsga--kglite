@@ -199,17 +199,18 @@ pub(crate) fn slice_at(
     let mut kept_edges: Vec<EdgeIndex> = Vec::new();
     for &source in &nodes {
         for edge in base.graph.edges(source) {
-            let weight = edge.weight();
+            // `weight()` only for kept edges: on Disk it parks a copy of the
+            // relationship's properties until the guard drops.
             if nodes.binary_search(&edge.target()).is_err()
                 || filter.is_some_and(|f| {
-                    !f.admits_edge(base, edge.id(), weight.connection_type, source)
+                    !f.admits_edge(base, edge.id(), edge.connection_type(), source)
                 })
             {
                 continue;
             }
             budget.admit()?;
             kept_edges.push(edge.id());
-            properties += weight.properties.len();
+            properties += edge.weight().properties.len();
         }
     }
     if let Some(err) = filter.and_then(ElementFilter::error) {

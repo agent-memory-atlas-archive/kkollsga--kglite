@@ -169,8 +169,9 @@ pub(crate) fn copy_induced_subgraph(
                 &source.graph,
                 properties.iter_mut().map(|(_, value)| value),
             );
-            rel_types.insert(edge.weight().connection_type);
-            let edge_data = EdgeData::new_interned(edge.weight().connection_type, properties);
+            // `connection_type()`: each Disk `weight()` parks another copy.
+            rel_types.insert(edge.connection_type());
+            let edge_data = EdgeData::new_interned(edge.connection_type(), properties);
             GraphWrite::add_edge(&mut new_graph.graph, new_source, new_target, edge_data);
         }
     }

@@ -189,3 +189,69 @@ fn an_unreached_ambiguous_relationship_type_does_not_refuse_node_retrieval() {
     assert_eq!(memory.len(), 2, "wells 1 and 3 are valid: {memory:?}");
     assert_eq!(answer(StorageMode::Disk), memory);
 }
+
+/// The mask walk and the slice walk read each relationship's type and bounds
+/// without materialising it: on Disk, `weight()` parks an owned copy of the
+/// relationship's properties in the query arena until the walk's guard drops,
+/// so a walk over every relationship held one record per relationship at once.
+/// Under an outer guard (which keeps whatever an inner query parks), the mask
+/// build must park none, and the slice one record per kept relationship for
+/// its property count plus one for the induced copy — never one per walked
+/// relationship.
+#[test]
+fn the_disk_mask_and_slice_walks_park_no_unkept_relationship() {
+    const WELLS: usize = 2_000;
+    let dir = tempfile::tempdir().unwrap();
+    let mut g = new_dir_graph_in_mode(StorageMode::Disk, Some(dir.path())).expect("graph");
+    let params: HashMap<String, Value> = HashMap::new();
+    for query in [
+        "CREATE (:Field {id: 0})".to_string(),
+        format!(
+            "MATCH (f:Field {{id: 0}}) UNWIND range(1, {WELLS}) AS i \
+             CREATE (w:Well {{id: i, vf: date('2000-01-01')}})\
+                    -[:IN {{f: date('2000-01-01'), t: CASE WHEN i % 100 = 0 \
+                      THEN date('2030-01-01') ELSE date('2004-01-01') END}}]->(f)"
+        ),
+    ] {
+        execute_mut(&mut g, &query, &ExecuteOptions::eager(&params)).expect("load");
+    }
+    let well = TemporalTarget::Node("Well".into());
+    declare(&mut g, &well, "vf", "vt", IntervalConvention::Closed).unwrap();
+    let rel = TemporalTarget::Relationship {
+        rel_type: "IN".into(),
+        source_type: None,
+    };
+    declare(&mut g, &rel, "f", "t", IntervalConvention::HalfOpen).unwrap();
+    assert_eq!(g.graph.edge_count(), WELLS);
+
+    let disk = g.graph.as_disk().expect("disk backend");
+    let _outer = g.graph.begin_query();
+    let (_, filter) = instant_filter(&g, at("2010-06-01")).unwrap();
+    let filter = filter.expect("the declarations hide the ended relationships");
+    assert_eq!(
+        disk.edge_arena_len(),
+        0,
+        "the mask walk over {WELLS} relationships parked relationship records"
+    );
+
+    let slice = slice_at(
+        &g,
+        Some(&filter),
+        SliceCaps {
+            bytes: usize::MAX,
+            disk_elements: None,
+        },
+    )
+    .unwrap();
+    let kept = slice.graph().graph.edge_count();
+    assert_eq!(
+        kept,
+        WELLS / 100,
+        "non-vacuity: the slice keeps the running ones"
+    );
+    assert!(
+        disk.edge_arena_len() <= 2 * kept,
+        "the slice walk parked {} relationship records for {kept} kept relationships",
+        disk.edge_arena_len()
+    );
+}
