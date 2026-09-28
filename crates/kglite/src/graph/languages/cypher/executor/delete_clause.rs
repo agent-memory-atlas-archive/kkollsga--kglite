@@ -48,6 +48,11 @@ pub(super) fn execute_delete(
     if !delete.detach {
         verify_nodes_keep_no_edges(graph, &targets, interrupt)?;
     }
+    // The last abort point: the removal below is not interruptible, and a
+    // terminal DELETE runs with no rollback checkpoint
+    // (`can_skip_rollback_checkpoint`), so a deadline error after it would
+    // report a failure that kept the deletes.
+    super::check_interrupt(interrupt)?;
 
     // Retire every relationship slot that this DELETE is about to remove.
     // DETACH DELETE owns incident edges that do not appear as named bindings,

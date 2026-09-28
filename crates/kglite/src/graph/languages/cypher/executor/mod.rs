@@ -49,6 +49,13 @@ use budget::ExecutionBudget;
 use execution_support::*;
 use interrupt::check_interrupt;
 
+/// The abort check, for the session layer's late-statement poll.
+pub(crate) fn check_statement_interrupt(
+    interrupt: &crate::graph::algorithms::Interrupt,
+) -> Result<(), String> {
+    check_interrupt(interrupt)
+}
+
 pub(super) const INTERRUPT_POLL_INTERVAL: usize = 4096;
 
 type SpatialCacheShard = RwLock<HashMap<usize, Option<NodeSpatialData>>>;

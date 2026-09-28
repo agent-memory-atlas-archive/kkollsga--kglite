@@ -128,3 +128,77 @@ def test_timeout_reports_the_configured_limit_despite_a_large_parameter():
     elapsed, limit = timeout_numbers(excinfo.value)
     assert limit == 300
     assert elapsed >= 300
+
+
+# ── statements that run without a rollback checkpoint ────────────────────
+#
+# A terminal variable-only DELETE and a single-node CREATE on the in-memory
+# backend run with no checkpoint (nothing after their first write can fail).
+# A deadline error from such a statement must therefore fire before anything
+# is applied: the error means "nothing changed", on every path.
+
+FAST_NODES = 200_000
+
+
+def fast_graph() -> kglite.KnowledgeGraph:
+    g = kglite.KnowledgeGraph()
+    g.cypher(f"UNWIND range(1, {FAST_NODES}) AS i CREATE (:A {{id: i}})")
+    return g
+
+
+def count_a(target) -> int:
+    return target.cypher("MATCH (n:A) RETURN count(n) AS c").to_list()[0]["c"]
+
+
+def delete_window_ms() -> float:
+    g = fast_graph()
+    started = time.perf_counter()
+    g.cypher("MATCH (n:A) DELETE n", timeout_ms=0)
+    return (time.perf_counter() - started) * 1000
+
+
+@pytest.mark.parametrize("surface", ["graph", "transaction"])
+def test_checkpoint_free_delete_that_times_out_deletes_nothing(surface):
+    full = delete_window_ms()
+    raised = 0
+    for fraction in (0.02, 0.2, 0.4, 0.6, 0.8, 0.9, 1.0):
+        g = fast_graph()
+        target = g.begin() if surface == "transaction" else g
+        try:
+            target.cypher("MATCH (n:A) DELETE n", timeout_ms=max(1, int(full * fraction)))
+        except kglite.CypherTimeoutError:
+            raised += 1
+            assert count_a(target) == FAST_NODES, f"timed out at {fraction:.0%} of the window and kept deletes"
+            if surface == "transaction":
+                target.commit()
+                assert count_a(g) == FAST_NODES, "commit published a timed-out DELETE"
+        else:
+            assert count_a(target) == 0
+    assert raised, "no sampled timeout fired; the test measured nothing"
+
+
+def test_checkpoint_free_create_that_times_out_creates_nothing():
+    """The value expression runs past the deadline without polling (``replace``
+    over a parameter list); the node must not be inserted."""
+    params = {"items": list(range(300)), "s": "a" * 20_000}
+    query = "CREATE (:T {v: reduce(acc = 0, j IN $items | acc + size(replace($s, 'a', 'bb')))})"
+    g = kglite.KnowledgeGraph()
+    started = time.perf_counter()
+    g.cypher(query, params=params, timeout_ms=0)
+    full = (time.perf_counter() - started) * 1000
+    assert full >= 20, f"expression too cheap ({full:.1f} ms) to outrun a deadline"
+    g = kglite.KnowledgeGraph()
+    with pytest.raises(kglite.CypherTimeoutError):
+        g.cypher(query, params=params, timeout_ms=max(1, int(full / 4)))
+    assert g.cypher("MATCH (t:T) RETURN count(t) AS c").to_list()[0]["c"] == 0
+
+
+def test_transaction_statement_elapsed_is_the_statement_not_the_transaction_age():
+    g = kglite.KnowledgeGraph()
+    g.cypher("CREATE (:A {id: 'x'})")
+    tx = g.begin(timeout_ms=60_000)
+    time.sleep(1.5)
+    diagnostics = tx.cypher("MATCH (a:A) RETURN a.id AS i").diagnostics
+    tx.rollback()
+    assert diagnostics["elapsed_ms"] < 100, diagnostics
+    assert diagnostics["timeout_ms"] == 60_000, diagnostics

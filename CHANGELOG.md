@@ -476,12 +476,16 @@ before upgrading.
   value expressions not at all, so a slow write of fewer rows (a disk `SET`, or
   an expensive `SET`/`CREATE`/`MERGE` value) overran by the whole clause — 3–6×
   measured — and nothing checked after the last clause. Writes now check before
-  every row and inside their value expressions, so the overrun is about one
-  row's work, and a statement that finishes late raises `CypherTimeoutError`
-  and is rolled back on every surface. The error also reports the configured
-  limit: it used to subtract the time the binding spent converting parameters
-  (a `timeout_ms=300` call with a large `$rows` reported "limit 60ms"), and a
-  transaction whose own deadline had passed reported no figures at all.
+  every row and inside their value expressions, so before its commit phase a
+  write overruns by about one row's work; the commit phase itself (the removal
+  phase of `DELETE`) is not interrupted. A statement that raises
+  `CypherTimeoutError` has changed nothing on any surface: one that finishes
+  late is rolled back, and a terminal `DELETE` or single-node `CREATE`, which
+  run without a rollback checkpoint, check the deadline just before they
+  write. The error also reports the configured limit: it used to subtract the
+  time the binding spent converting parameters (a `timeout_ms=300` call with a
+  large `$rows` reported "limit 60ms"), and a transaction whose own deadline
+  had passed reported no figures at all.
 - `add_nodes` with the id column also named as the title field —
   `add_nodes(df, 'A', 'id', 'id')`, or `('code', 'code')` — recorded that
   column as the type's *title* spelling, so the identity's own name resolved to

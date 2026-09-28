@@ -583,9 +583,6 @@ fn run_clause_pipeline(
         stream_established = true;
     }
 
-    // The loop polls *before* each clause, so without this a statement whose
-    // last clause finished past the deadline would commit and report success.
-    super::check_interrupt(interrupt)?;
     Ok(result_set)
 }
 
@@ -1097,6 +1094,22 @@ pub(crate) fn reject_abstract_create(graph: &DirGraph, label: &str) -> Result<()
     })
 }
 
+/// Evaluate a CREATE pattern's property expressions against `row`. The
+/// evaluator borrows `graph` immutably and is dropped before the caller writes.
+fn evaluate_properties(
+    graph: &DirGraph,
+    properties: &[(String, Expression)],
+    row: &ResultRow,
+    params: &HashMap<String, Value>,
+    interrupt: &Interrupt,
+) -> Result<HashMap<String, Value>, String> {
+    let executor = row_evaluator(graph, params, interrupt);
+    properties
+        .iter()
+        .map(|(key, expr)| Ok((key.clone(), executor.evaluate_expression(expr, row)?)))
+        .collect()
+}
+
 fn create_node(
     graph: &mut DirGraph,
     node_pat: &CreateNodePattern,
@@ -1105,16 +1118,7 @@ fn create_node(
     stats: &mut MutationStats,
     interrupt: &Interrupt,
 ) -> Result<petgraph::graph::NodeIndex, String> {
-    // Evaluate property expressions (borrow graph immutably, then drop)
-    let mut properties = HashMap::new();
-    {
-        let executor = row_evaluator(graph, params, interrupt);
-        for (key, expr) in &node_pat.properties {
-            let val = executor.evaluate_expression(expr, row)?;
-            properties.insert(key.clone(), val);
-        }
-    }
-
+    let mut properties = evaluate_properties(graph, &node_pat.properties, row, params, interrupt)?;
     let label = node_pat.label.clone().unwrap_or_else(|| "Node".to_string());
 
     // Identity fields, under whichever spelling this node type declares — see
@@ -1214,6 +1218,10 @@ fn create_node(
             },
         )?;
     }
+
+    // Last abort point: a single-node CREATE runs with no rollback checkpoint
+    // (`can_skip_rollback_checkpoint`), so no deadline error may follow the insert.
+    super::check_interrupt(interrupt)?;
 
     // Every backend writes id/title/properties through the per-type
     // ColumnStore — see `DirGraph::insert_node_routed`.

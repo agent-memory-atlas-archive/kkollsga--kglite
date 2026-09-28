@@ -278,8 +278,8 @@ fn deadline_figures(opts: &ExecuteOptions<'_>, started: Instant) -> (u64, Option
     )
 }
 
-/// Build the typed timeout, sizing it from the same two quantities
-/// [`attach_diagnostics`] reports.
+/// Build the typed timeout. Unlike [`attach_diagnostics`], its `elapsed_ms`
+/// runs from the deadline's origin, so it and `limit_ms` share one clock.
 fn timeout_err(opts: &ExecuteOptions<'_>, started: Instant, message: String) -> KgError {
     let (elapsed_ms, limit_ms) = deadline_figures(opts, started);
     KgError::CypherTimeout {
@@ -464,9 +464,11 @@ fn read_statement(
 ///
 /// Both shapes are safe only on the default in-memory backend and without an
 /// execution budget, which is checked after a write. Deadline/cancellation is
-/// safe: CREATE polls before insertion, while DELETE completes every poll and
-/// validation in its preflight phase before entering a non-interruptible commit
-/// phase. Every other mutation retains the full rollback checkpoint.
+/// safe: CREATE polls immediately before insertion, and DELETE immediately
+/// before its non-interruptible removal phase, so a deadline error from either
+/// has applied nothing — which is also why the late-statement check in
+/// `mut_statement` runs only when a checkpoint is open. Every other mutation
+/// retains the full rollback checkpoint.
 fn can_skip_rollback_checkpoint(
     graph: &DirGraph,
     query: &CypherQuery,
@@ -645,6 +647,17 @@ fn mut_statement(
             )
         });
         graph.active_write_scope = None;
+        // Write loops poll before each row and clause, so a statement whose
+        // last write (or trailing RETURN) finished past the deadline would
+        // otherwise commit and report success. Only with a checkpoint: a
+        // checkpoint-free statement polled for the last time before its first
+        // write, and a deadline error must never follow writes it cannot undo.
+        let r = r.and_then(|result| {
+            if matches!(checkpoint, StatementCheckpoint::None) {
+                return Ok(result);
+            }
+            cypher::executor::check_statement_interrupt(&interrupt).map(|()| result)
+        });
         let r = match r {
             Ok(result) => result,
             Err(message) => {
@@ -1055,10 +1068,9 @@ fn timeless_route(
 /// diagnostics, and those keep their place after the schema ones, which
 /// explain an empty result before any runtime advisory does.
 ///
-/// `timeout_ms` is derived from the deadline that was actually in force. A
-/// binding that knows the configured figure (the wheel reports the caller's
-/// `timeout_ms`, including its `Some(0)` = "disabled" escape hatch) overwrites
-/// it; core can only see the instant.
+/// `timeout_ms` is the deadline that was actually in force, measured from its
+/// origin (see [`ExecuteOptions::deadline_origin`]). The Python read path
+/// overwrites it with the caller's resolved `timeout_ms`.
 fn attach_diagnostics(
     result: &mut CypherResult,
     prepare_warnings: &[String],
@@ -1073,7 +1085,11 @@ fn attach_diagnostics(
         merged.append(&mut diagnostics.warnings);
         diagnostics.warnings = merged;
     }
-    (diagnostics.elapsed_ms, diagnostics.timeout_ms) = deadline_figures(opts, started);
+    // `elapsed_ms` is this statement's duration, not time since the deadline
+    // was resolved (a transaction's deadline is resolved at `begin()`);
+    // `timeout_ms` is the configured limit.
+    diagnostics.elapsed_ms = started.elapsed().as_millis() as u64;
+    diagnostics.timeout_ms = deadline_figures(opts, started).1;
     result.diagnostics = Some(diagnostics);
 }
 

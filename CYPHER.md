@@ -3539,15 +3539,19 @@ server applies none, per the Neo4j "absent `tx_timeout` means no timeout" wire
 contract. Expanding, aggregation,
 set-operation, subquery-join and procedure loops poll cooperatively. Mutation
 loops poll before every row, and a write clause's value expressions poll as a
-read's do, so a write overruns its deadline by at most about one row's work.
-A statement that times out — including one whose last clause finishes after the
-deadline — raises `CypherTimeoutError` and is rolled back as a whole, whether
-it ran through `KnowledgeGraph.cypher()`, `Session.execute()` or a
-`Transaction`; use a `Transaction` to roll back several statements as a group.
-A few one-shot builds a statement can trigger are not interruptible: deferred
-index materialisation, the disk statement checkpoint, the temporal endpoint
-index and the lazy disk id index. The deadline is checked as soon as each
-finishes.
+read's do, so before its commit phase a write overruns its deadline by about
+one row's work. A statement that raises `CypherTimeoutError` has changed
+nothing, whether it ran through `KnowledgeGraph.cypher()`, `Session.execute()`
+or a `Transaction`: one that finishes its last clause after the deadline is
+rolled back, and a statement that runs without a rollback checkpoint (a
+terminal `DELETE`, a single-node `CREATE`) checks the deadline once more just
+before it writes. Use a `Transaction` to roll back several statements as a
+group. Some phases are not interruptible, and their own duration is not
+bounded by the deadline: the removal phase of `DELETE` / `DETACH DELETE` (it
+starts only if the statement is not yet late, then runs to completion), and
+the one-shot builds a statement can trigger — deferred index materialisation,
+the disk statement checkpoint, the temporal endpoint index and the lazy disk id
+index. The deadline is checked as soon as each build finishes.
 
 ## Parallel runtime
 

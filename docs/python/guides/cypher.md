@@ -255,8 +255,9 @@ zero-row mystery into an actionable typo hint.
 
 ```python
 # Abort after 500 ms; raises kglite.CypherTimeoutError (no partial result).
-# A write that times out is rolled back, even one that finished its last
-# clause late; the overrun is bounded by about one row's work.
+# A write that raises the timeout has changed nothing, even one that finished
+# its last clause late. Before its commit phase it overruns by about one row's
+# work; the commit phase itself (e.g. DELETE's removal) is not interrupted.
 graph.cypher(long_query, timeout_ms=500)
 
 # Budget the work — intermediate rows, retained collection items and scan
