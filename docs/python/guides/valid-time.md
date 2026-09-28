@@ -468,3 +468,33 @@ graph also loses Appingedam on 2020-06-30.
 A property no element of the type has makes the named form raise rather than
 read as open. This is a stopgap: the second axis is hand-written on every
 element it must filter, which brings back the forgotten-hop trap for that axis.
+
+## 8. Scale: what one process holds today
+
+Measured on this release line (release build, Apple M4, 16 GB), with every
+element carrying a declared half-open interval and a hand-written recording
+pair as in section 7:
+
+- **One million versions** (a synthetic register, three versions per object,
+  one relationship per version) load in about 2.2 s in every storage mode,
+  take 1.5 GB of resident memory in memory and mapped mode, save to a 16 MB
+  `.kgl`, and answer an as-of join in about 5 ms and a 127-instant series in
+  about 17 ms (memory and mapped; disk mode pays roughly 60 ms per instant).
+  A 10 000-version delivery applies in one transaction in 70–100 ms.
+- **The real BAG register** (Kadaster's extract with history, 64.5 million
+  versions) does not fit one 16 GB process: building costs about 0.9 KB per
+  version in every storage mode, so each mode stops between 11 and 14 million
+  versions, and a whole-type row-returning join retains about 0.9 KB per
+  returned row. A single municipality or region — up to about 8 million
+  versions per process — runs correctly with sub-second as-of queries and
+  daily deliveries in seconds; a national twin needs either a 64 GB machine in
+  memory mode or regional shards.
+- Disk mode is a read substrate: reopening a disk graph to write copies the
+  touched columns back into memory, and a point write costs milliseconds per
+  row on a large type. Serve from disk; ingest in memory or mapped mode.
+
+The per-version cost is dominated by untyped timestamp columns, the id index
+and edge overflow maps, not by the interval filter itself; the storage work
+that would let a register-sized graph build and serve on 16 GB is scoped in
+the project's backlog, and the numbers above are the honest envelope until it
+ships.
