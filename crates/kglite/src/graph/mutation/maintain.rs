@@ -565,7 +565,7 @@ impl RowBuilder<'_> {
 
 /// Parse the user-facing `conflict_handling` option shared by `add_nodes`
 /// and `add_connections`; `None` and `"update"` are the default mode.
-pub(super) fn parse_conflict_mode(option: Option<&str>) -> Result<ConflictHandling, String> {
+pub(crate) fn parse_conflict_mode(option: Option<&str>) -> Result<ConflictHandling, String> {
     match option {
         Some("replace") => Ok(ConflictHandling::Replace),
         Some("skip") => Ok(ConflictHandling::Skip),
@@ -887,7 +887,7 @@ pub fn add_nodes(
         &title_field,
         derived_titles.as_deref(),
     )?;
-    check_node_load(graph, &node_type, &df_data, id_idx, conflict_mode)?;
+    check_node_load(graph, &node_type, &df_data, id_idx, (conflict_mode, &[]))?;
 
     install_node_type_metadata(
         graph,

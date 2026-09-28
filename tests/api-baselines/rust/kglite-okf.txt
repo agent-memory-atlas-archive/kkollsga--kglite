@@ -3368,6 +3368,8 @@ pub const kglite::api::temporal::DISK_MASK_BYTE_CAP: usize
 pub const kglite::api::temporal::DISK_NODE_ABUTMENT_CAP: usize
 pub const kglite::api::temporal::DISK_SLICE_ELEMENT_CAP: usize
 pub const kglite::api::temporal::SLICE_BYTE_CAP: usize
+pub fn kglite::api::temporal::check_label_stamp(graph: &kglite::api::DirGraph, nodes: &[petgraph::graph_impl::NodeIndex], label: &str) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::temporal::check_labelled_load(graph: &mut kglite::api::DirGraph, frame: &kglite::datatypes::values::DataFrame, (node_type, unique_id_field): (&str, &str), conflict_handling: core::option::Option<&str>, labels: &[&str]) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::temporal::declare(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: kglite::api::temporal::IntervalConvention) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::declare_defaulted(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::declare_from_column_types(graph: &mut kglite::api::DirGraph, target: kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>, frame: &kglite::datatypes::values::DataFrame) -> core::result::Result<kglite::api::temporal::LoadDeclaration, alloc::string::String>

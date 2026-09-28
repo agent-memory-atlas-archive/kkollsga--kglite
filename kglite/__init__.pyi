@@ -1983,6 +1983,13 @@ class KnowledgeGraph:
             Dict with ``labelled`` (newly added) and ``skipped``
             (unknown ids, or label already present).
 
+        Raises:
+            ArgumentError: ``label`` has a declared validity interval and a
+                node that would gain it holds bounds the declaration refuses
+                (an inverted interval, an empty one under ``'half_open'``, a
+                bound that is not a date), naming the node as Cypher
+                ``SET n:Label`` does. Nothing is labelled.
+
         Example::
 
             graph.add_label('Agent', ['ag_001', 'ag_002'], 'Reviewer')
@@ -2210,7 +2217,10 @@ class KnowledgeGraph:
                 labels=['Reviewer'])`` creates ``Agent``-typed nodes
                 that also wear the ``Reviewer`` label, queryable via
                 ``MATCH (a:Reviewer)`` or ``MATCH (a:Agent:Reviewer)``.
-                For per-row labels, call :meth:`add_label` after.
+                For per-row labels, call :meth:`add_label` after. A label
+                with a declared validity interval judges the rows (and an
+                existing node that gains it, by its stored bounds) before
+                anything is written, as the load's own type does.
             git_sha: Commit SHA stamped on opted-in ``auto_timestamp`` types.
             modified_by: Actor id stamped on opted-in ``auto_timestamp`` types.
             on_invalid: What to do about input rows this call cannot use —

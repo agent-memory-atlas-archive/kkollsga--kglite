@@ -1330,7 +1330,20 @@ impl KnowledgeGraph {
         let labels = labels
             .as_ref()
             .filter(|list| !list.is_empty())
-            .map(|list| prepare_batch_labels(graph, data, &unique_id_field, list))
+            .map(|list| {
+                // The labels land after the rows, so a declared validity
+                // interval on one judges the rows now, before any is written.
+                let stamped: Vec<&str> = list.iter().map(String::as_str).collect();
+                kglite_core::api::temporal::check_labelled_load(
+                    graph,
+                    &converted.df,
+                    (&node_type, &unique_id_field),
+                    conflict_handling.as_deref(),
+                    &stamped,
+                )
+                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
+                prepare_batch_labels(graph, data, &unique_id_field, list)
+            })
             .transpose()?;
         let declaration = converted
             .temporal_cfg
@@ -1598,6 +1611,8 @@ impl KnowledgeGraph {
                 None => missing += 1,
             }
         }
+        kglite_core::api::temporal::check_label_stamp(g, &indices, label)
+            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
         let (labelled, bulk_skipped) = g.add_node_labels_bulk(&indices, key);
         let skipped = missing + bulk_skipped;
         self.commit_wal()?;

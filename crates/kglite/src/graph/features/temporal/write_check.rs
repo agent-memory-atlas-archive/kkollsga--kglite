@@ -256,35 +256,84 @@ fn loaded_bound(
     }
 }
 
-/// Refuse an `add_nodes` load onto `node_type` whose rows would leave a node
-/// breaking a declaration on its labels, naming the first by its position in
-/// the load. Runs before the load writes; a load that carries neither bound
-/// of a declaration cannot move one and is not read.
+/// The labels a new `node_type` node is born with besides its type: the
+/// declared ontology ancestors a materialized ontology stamps on it.
+pub(crate) fn ancestor_labels<'g>(graph: &'g DirGraph, node_type: &str) -> Vec<&'g str> {
+    if graph.managed_labels.is_empty() || graph.suppress_ontology_stamp {
+        return Vec::new();
+    }
+    graph
+        .ontology_ancestors_of(InternedKey::from_str(node_type))
+        .iter()
+        .filter_map(|&key| resolve(graph, key))
+        .collect()
+}
+
+/// One declaration a load's rows answer to: the load's own type's, or that of
+/// a label the load stamps (`stamped` — an existing node that lacks it gains
+/// it, so its stored bounds answer too).
+struct LoadConfig<'g> {
+    config: &'g TemporalConfig,
+    label: InternedKey,
+    columns: (Option<usize>, Option<usize>),
+    stamped: bool,
+}
+
+/// The declarations of `node_type` and of every label a load onto it stamps
+/// — `labels`, then the type's ontology ancestors — each once.
+fn load_configs<'g>(
+    graph: &'g DirGraph,
+    node_type: &str,
+    labels: &[&str],
+    frame: &DataFrame,
+) -> Vec<LoadConfig<'g>> {
+    let ancestors = ancestor_labels(graph, node_type);
+    let names = std::iter::once(node_type)
+        .chain(labels.iter().copied())
+        .chain(ancestors);
+    let mut configs: Vec<LoadConfig<'g>> = Vec::new();
+    for (position, name) in names.enumerate() {
+        let Some(config) = graph.temporal.node(name) else {
+            continue;
+        };
+        if configs.iter().any(|c| std::ptr::eq(c.config, config)) {
+            continue;
+        }
+        configs.push(LoadConfig {
+            config,
+            label: InternedKey::from_str(name),
+            columns: (
+                frame.get_column_index(&config.valid_from),
+                frame.get_column_index(&config.valid_to),
+            ),
+            stamped: position > 0,
+        });
+    }
+    configs
+}
+
+/// Refuse an `add_nodes` load onto `node_type` — stamping `labels` besides
+/// its type — whose rows would leave a node breaking a declaration on the
+/// labels it ends up with, naming the first by its position in the load.
+/// Runs before the load writes. A row is judged by the bounds it leaves
+/// under `mode`; a declaration whose bounds the load does not carry is read
+/// only for an existing node that gains its label.
 pub(crate) fn check_node_load(
     graph: &DirGraph,
     node_type: &str,
     frame: &DataFrame,
     id_column: usize,
-    mode: ConflictHandling,
+    (mode, labels): (ConflictHandling, &[&str]),
 ) -> Result<(), String> {
     if !graph.temporal.has_node_declarations() || suspended() {
         return Ok(());
     }
-    let columns = |config: &TemporalConfig| {
-        (
-            frame.get_column_index(&config.valid_from),
-            frame.get_column_index(&config.valid_to),
-        )
-    };
-    let own = graph
-        .temporal
-        .node(node_type)
-        .map(|config| (config, columns(config)))
-        .filter(|(_, (from, to))| from.is_some() || to.is_some());
+    let configs = load_configs(graph, node_type, labels, frame);
     // A secondary label an existing node carries can be declared although
     // the load's type is not.
     let secondary = graph.has_secondary_labels;
-    if own.is_none() && !secondary {
+    let carried = |c: &LoadConfig<'_>| c.columns.0.is_some() || c.columns.1.is_some();
+    if !secondary && !configs.iter().any(|c| c.stamped || carried(c)) {
         return Ok(());
     }
     let cell = |row: usize, column: Option<usize>| {
@@ -292,59 +341,165 @@ pub(crate) fn check_node_load(
             .and_then(|column| frame.get_value_by_index(row, column))
             .unwrap_or(Value::Null)
     };
-    let row_name = |row: usize| move || format!("row {row} (0-based) of the load");
     for row in 0..frame.row_count() {
         let id = match frame.get_value_by_index(row, id_column) {
             Some(Value::Null) | None => continue,
             Some(id) => id,
         };
-        // The row's own bounds are what it leaves unless a stored one can
-        // show through — a NULL cell under a merging mode, or `preserve` —
-        // so the common row costs no id lookup.
-        if let (Some((config, (from, to))), false) = (own, secondary) {
-            let (from, to) = (cell(row, from), cell(row, to));
-            let own_bounds = match mode {
+        let row_name = || format!("row {row} (0-based) of the load");
+        // Looked up only when a stored bound can show through, so the
+        // common row — both bounds present, a mode that writes them — costs
+        // no id lookup.
+        let mut existing: Option<Option<NodeIndex>> = None;
+        let mut lookup =
+            || *existing.get_or_insert_with(|| graph.id_indices.lookup(node_type, &id));
+        for load in &configs {
+            let (from, to) = (cell(row, load.columns.0), cell(row, load.columns.1));
+            let decided = match mode {
                 ConflictHandling::Replace => true,
                 ConflictHandling::Update | ConflictHandling::Sum => {
                     !matches!(from, Value::Null) && !matches!(to, Value::Null)
                 }
                 ConflictHandling::Skip | ConflictHandling::Preserve => false,
             };
-            if own_bounds {
-                judge(&from, &to, config, row_name(row))?;
+            if decided && load.columns.0.is_some() && load.columns.1.is_some() {
+                judge(&from, &to, load.config, row_name)?;
                 continue;
             }
+            let Some(idx) = lookup() else {
+                judge(&from, &to, load.config, row_name)?;
+                continue;
+            };
+            let gains = load.stamped && !graph.node_has_label(idx, load.label);
+            if !gains && (mode == ConflictHandling::Skip || !carried(load)) {
+                continue;
+            }
+            let (from, to) = if mode == ConflictHandling::Skip {
+                (
+                    validate::node_bound(graph, idx, &load.config.valid_from),
+                    validate::node_bound(graph, idx, &load.config.valid_to),
+                )
+            } else {
+                (
+                    loaded_bound(graph, Some(idx), mode, &load.config.valid_from, from),
+                    loaded_bound(graph, Some(idx), mode, &load.config.valid_to, to),
+                )
+            };
+            judge(&from, &to, load.config, row_name)?;
         }
-        let existing = graph.id_indices.lookup(node_type, &id);
-        // `Skip` leaves an existing node as it is.
-        if existing.is_some() && mode == ConflictHandling::Skip {
+        if !secondary || mode == ConflictHandling::Skip {
             continue;
         }
-        let configs: Vec<&TemporalConfig> = match existing {
-            Some(idx) if secondary => node_configs(graph, idx).collect(),
-            _ => own.map(|(config, _)| config).into_iter().collect(),
+        let Some(idx) = lookup() else {
+            continue;
         };
-        for config in configs {
-            let (from_column, to_column) = columns(config);
+        for config in node_configs(graph, idx) {
+            if configs.iter().any(|c| std::ptr::eq(c.config, config)) {
+                continue;
+            }
+            let from_column = frame.get_column_index(&config.valid_from);
+            let to_column = frame.get_column_index(&config.valid_to);
             if from_column.is_none() && to_column.is_none() {
                 continue;
             }
             let from = loaded_bound(
                 graph,
-                existing,
+                Some(idx),
                 mode,
                 &config.valid_from,
                 cell(row, from_column),
             );
             let to = loaded_bound(
                 graph,
-                existing,
+                Some(idx),
                 mode,
                 &config.valid_to,
                 cell(row, to_column),
             );
-            judge(&from, &to, config, row_name(row))?;
+            judge(&from, &to, config, row_name)?;
         }
+    }
+    Ok(())
+}
+
+/// Refuse an `add_nodes` load onto `node_type` that also stamps `labels` on
+/// every row, before anything is written, when a row would leave a node
+/// breaking a declaration on the labels it ends up with — the check
+/// `add_nodes` itself runs, widened to the labels a binding stamps after it.
+/// `conflict_handling` is the load's.
+pub fn check_labelled_load(
+    graph: &mut DirGraph,
+    frame: &DataFrame,
+    (node_type, unique_id_field): (&str, &str),
+    conflict_handling: Option<&str>,
+    labels: &[&str],
+) -> Result<(), String> {
+    if !graph.temporal.has_node_declarations() {
+        return Ok(());
+    }
+    let mode = crate::graph::mutation::maintain::parse_conflict_mode(conflict_handling)?;
+    let Some(id_column) = frame.get_column_index(unique_id_field) else {
+        return Ok(());
+    };
+    graph.build_id_index(node_type);
+    check_node_load(graph, node_type, frame, id_column, (mode, labels))
+}
+
+/// Refuse stamping `label` on `nodes` when it is declared and a node that
+/// does not carry it yet holds bounds its declaration refuses — the rule
+/// and wording of Cypher `SET n:Label`, naming the node.
+pub fn check_label_stamp(graph: &DirGraph, nodes: &[NodeIndex], label: &str) -> Result<(), String> {
+    let Some(config) = graph.temporal.node(label) else {
+        return Ok(());
+    };
+    let key = InternedKey::from_str(label);
+    let _arena_guard = graph.graph.begin_query();
+    for &idx in nodes {
+        if graph.graph.node_type_of(idx) == Some(key) || graph.node_has_label(idx, key) {
+            continue;
+        }
+        let from = validate::node_bound(graph, idx, &config.valid_from);
+        let to = validate::node_bound(graph, idx, &config.valid_to);
+        judge(&from, &to, config, || {
+            format!("node '{}'", node_name(graph, idx))
+        })?;
+    }
+    Ok(())
+}
+
+/// Refuse giving the `node_type` node with id `id` — written (or merged,
+/// under `mode`) with the properties `read` gives — the declared `labels`
+/// among `labels`, when it would break one, naming the node. The pre-write
+/// check for a writer that stamps labels per node (`extend`).
+pub(crate) fn check_labelled_node(
+    graph: &DirGraph,
+    (node_type, id): (&str, &Value),
+    read: impl Fn(&str) -> Option<Value>,
+    labels: &[String],
+    mode: ConflictHandling,
+) -> Result<(), String> {
+    if !graph.temporal.has_node_declarations() {
+        return Ok(());
+    }
+    let existing = graph.lookup_by_id_normalized(node_type, id);
+    for label in labels {
+        let Some(config) = graph.temporal.node(label) else {
+            continue;
+        };
+        if existing.is_some_and(|idx| graph.node_has_label(idx, InternedKey::from_str(label))) {
+            continue;
+        }
+        let bound = |property: &str| {
+            let cell = read(property).unwrap_or(Value::Null);
+            match (existing, mode) {
+                (Some(idx), ConflictHandling::Skip) => validate::node_bound(graph, idx, property),
+                _ => loaded_bound(graph, existing, mode, property, cell),
+            }
+        };
+        let (from, to) = (bound(&config.valid_from), bound(&config.valid_to));
+        judge(&from, &to, config, || {
+            format!("node '{}'", format_value_compact(id))
+        })?;
     }
     Ok(())
 }

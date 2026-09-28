@@ -146,6 +146,10 @@ fn stamp_declared_labels(
         };
         let indices: Vec<petgraph::graph::NodeIndex> = nodes.iter().collect();
         for label in labels {
+            crate::graph::features::temporal::check_label_stamp(graph, &indices, label)
+                .map_err(|e| format!("from_records: node '{node_type}': labels: {e}"))?;
+        }
+        for label in labels {
             let key = graph.interner.get_or_intern(label);
             graph.add_node_labels_bulk(&indices, key);
         }

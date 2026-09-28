@@ -1178,8 +1178,10 @@ fn create_node(
             }
         }
     }
-    let labels =
-        std::iter::once(label.as_str()).chain(node_pat.extra_labels.iter().map(String::as_str));
+    let ancestors = crate::graph::features::temporal::ancestor_labels(graph, &label);
+    let labels = std::iter::once(label.as_str())
+        .chain(node_pat.extra_labels.iter().map(String::as_str))
+        .chain(ancestors.iter().copied());
     crate::graph::features::temporal::check_new_node(graph, labels, &id, constraint_read)?;
     let unique_claims = graph.unique_claims(&label, constraint_read);
     let unique = graph.check_unique_claims(&unique_claims, None);

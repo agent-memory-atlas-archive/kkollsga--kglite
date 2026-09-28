@@ -1513,7 +1513,11 @@ CALL db.temporal.declarations()
 - **Later writes answer to the same rule.** A `CREATE`, `MERGE` or `SET` —
   including `SET n:Label` onto a declared label — and an `add_nodes` /
   `add_relationships` / blueprint load onto a declared type refuse a row the
-  declaration would refuse, with the same wording: Cypher names the node's id
+  declaration would refuse, with the same wording. So does every writer that
+  gives a node a declared label: `add_nodes(labels=[…])`, `add_label`, a
+  blueprint's or `from_records` spec's `labels`, `extend()`'s label union,
+  ontology materialisation and the materialised ancestors a new node is born
+  with. Cypher names the node's id
   or the relationship's endpoints and fails the statement (which rolls back,
   an `UNWIND … CREATE` included); a load names the row by its 0-based position
   and writes nothing. A `SET` is judged once its clause has applied every

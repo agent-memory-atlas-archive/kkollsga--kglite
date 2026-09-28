@@ -202,6 +202,10 @@ impl DirGraph {
                     .unwrap_or(ManagedLabelState::Closed)
             };
             states.insert(label.clone(), state);
+            // A declared validity interval on the ancestor judges the members
+            // that gain it, as `SET n:Label` does — before any stamp.
+            crate::graph::features::temporal::check_label_stamp(self, members, label)
+                .map_err(|e| format!("materializing label '{label}': {e}"))?;
         }
 
         let mut report = Vec::new();

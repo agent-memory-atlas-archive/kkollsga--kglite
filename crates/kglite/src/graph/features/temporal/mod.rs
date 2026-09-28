@@ -49,9 +49,10 @@ pub(crate) use validate::{edge_bound, node_bound, view_bound};
 #[cfg(test)]
 pub(crate) use write_check::unchecked;
 pub(crate) use write_check::{
-    check_edge_load, check_edge_rows, check_new_edge, check_new_node, check_node_load,
-    check_stored_edge, check_stored_node, edge_property_is_bound,
+    ancestor_labels, check_edge_load, check_edge_rows, check_labelled_node, check_new_edge,
+    check_new_node, check_node_load, check_stored_edge, check_stored_node, edge_property_is_bound,
 };
+pub use write_check::{check_label_stamp, check_labelled_load};
 
 use eval::{BoundSide, TemporalError};
 

@@ -107,12 +107,17 @@ graph.cypher(
 
 A `SET` is judged once its clause has applied every item, so
 `SET m.valid_from = …, m.valid_to = …` moves an interval in one step. NULL
-bounds stay open. A fluent `update()` is not judged.
+bounds stay open. Every writer that gives a node a declared label —
+`add_nodes(labels=[…])`, `add_label`, a blueprint's `labels`, ontology
+materialisation — judges the node by that label's declaration too. A fluent
+`update()` is not judged.
 
 `CALL db.temporal.declarations()` lists every declaration with its convention,
 the rows that abut at declare time and, counted at the graph's current state,
 the rows the declaration would refuse — which only a writer the check does not
-judge leaves: a fluent `update()`, or a graph saved by an earlier version.
+judge leaves: a fluent `update()`, an undeclare that hands a source type's
+relationships to the unkeyed declaration, or a graph saved by an earlier
+version.
 
 ## 2. Ask as of an instant
 
@@ -295,7 +300,7 @@ relationship.
 `valid_from == valid_to` would be empty under `half_open`: the declaration (or
 a `validFrom` / `validTo` load) refuses such a row, naming it, and so does a
 later load or Cypher write onto the declared type. Only a fluent `update()`
-or a graph saved by an earlier version can hold one, and
+or a graph saved by an earlier version can hold one on a node, and
 `db.temporal.declarations()` then counts it in `empty_rows`.
 
 **Language is a parameter, not an axis.** Pick the language in the query and

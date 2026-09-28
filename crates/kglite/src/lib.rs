@@ -478,9 +478,10 @@ pub mod api {
             SLICE_BYTE_CAP,
         };
         pub use crate::graph::features::temporal::{
-            declare, declare_defaulted, declare_from_column_types, declare_loaded, edge_configs,
-            list, node_config, node_request_config, relationship_request_configs, undeclare,
-            DeclarationInfo, DeclareReport, IntervalConvention, LoadDeclaration, TemporalTarget,
+            check_label_stamp, check_labelled_load, declare, declare_defaulted,
+            declare_from_column_types, declare_loaded, edge_configs, list, node_config,
+            node_request_config, relationship_request_configs, undeclare, DeclarationInfo,
+            DeclareReport, IntervalConvention, LoadDeclaration, TemporalTarget,
             DISK_NODE_ABUTMENT_CAP,
         };
     }

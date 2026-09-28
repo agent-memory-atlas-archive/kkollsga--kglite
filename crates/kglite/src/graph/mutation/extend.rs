@@ -387,10 +387,54 @@ fn merge_rows(
         .collect();
     gate_node_groups(target, &node_groups)?;
     gate_edge_groups(target, &edge_groups, &owned, conflict_mode)?;
+    gate_label_carriers(target, &node_groups, &label_carriers, conflict_mode)?;
     write_node_groups(target, source, node_groups, conflict_handling, report)?;
     union_labels(target, label_carriers, report);
     copy_spatial_configs(target, source);
     merge_edge_groups(target, edge_groups, &owned, conflict_handling, report)
+}
+
+/// Judge each node the label union will give a label declared in the target
+/// by the bounds the node pass leaves it — before anything is written, so a
+/// refusal writes nothing.
+fn gate_label_carriers(
+    target: &DirGraph,
+    node_groups: &BTreeMap<String, NodeGroup>,
+    label_carriers: &[(String, Value, Vec<String>)],
+    conflict_mode: ConflictHandling,
+) -> Result<(), String> {
+    let declared = |labels: &[String]| labels.iter().any(|l| target.temporal.node(l).is_some());
+    if !label_carriers.iter().any(|(_, _, labels)| declared(labels)) {
+        return Ok(());
+    }
+    let mut rows_by_id: HashMap<&str, HashMap<&Value, &HashMap<String, Value>>> = HashMap::new();
+    for (node_type, id, labels) in label_carriers {
+        if !declared(labels) {
+            continue;
+        }
+        let rows = rows_by_id.entry(node_type.as_str()).or_insert_with(|| {
+            node_groups
+                .get(node_type)
+                .map(|group| {
+                    group
+                        .rows
+                        .iter()
+                        .map(|(id, _, props)| (id, props))
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let props = rows.get(id).copied();
+        temporal::check_labelled_node(
+            target,
+            (node_type, id),
+            |property| props.and_then(|p| p.get(property).cloned()),
+            labels,
+            conflict_mode,
+        )
+        .map_err(|e| format!("extend: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Judge every node group against the target's node constraints, as its

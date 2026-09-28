@@ -404,7 +404,13 @@ before upgrading.
   ("row 3 (0-based) of the load, the from bound … is after the to bound …")
   — `create_relationships()` and the C ABI's edge batch name the
   relationship's endpoints instead; an update row is judged by the bounds it
-  leaves under `conflict_handling`.
+  leaves under `conflict_handling`. A writer that gives a node a declared
+  label answers to that label's declaration too: `add_nodes(labels=[…])`
+  (before writing, an existing node that gains the label judged by its stored
+  bounds), `add_label` (`ArgumentError` naming the node, nothing labelled),
+  blueprint and `from_records` `labels`, `extend()`'s label union,
+  `materialize_ontology()` and the ancestors a materialised ontology stamps
+  on a new node.
   A Cypher `CREATE`, `MERGE` or `SET` (including `SET n:Label` onto a declared
   label) raises `CypherExecutionError` naming the node's id or the
   relationship's endpoints, and the statement rolls back; a `SET` is judged
