@@ -374,7 +374,7 @@ def test_survives_save_load(tmp_path):
 
 
 def test_updated_at_is_naive_utc_whatever_the_local_zone():
-    """`updated_at` is naive UTC, as every other naive datetime in kglite.
+    """`updated_at` is naive UTC, whatever the process's local zone.
 
     Red proof (user test 3, B6): the stamp was the local wall clock, off by
     the zone's offset. The probe runs in a child process pinned to a zone with

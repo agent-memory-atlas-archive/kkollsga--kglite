@@ -261,7 +261,7 @@ before upgrading.
   applied before its sort and limit; `kglite::api::blueprint::TemporalSpec`,
   the `temporal` field's type on `NodeSpec`, `FkEdge` and `JunctionEdge`;
   `kglite::api::timeseries::parse_date_or_datetime_query`;
-  `TemporalConfig::convention` / `source_type`; `GraphRead::get_edge_property`,
+  `GraphRead::get_edge_property`,
   which reads one relationship property without materialising the
   relationship; and `kglite::api::schema_property_keys`, a single-typed node
   set's export columns from the type's schema.
@@ -283,9 +283,7 @@ before upgrading.
   A Cartesian or 3D map is refused, since KGLite points are 2D WGS-84.
 - Cypher: pattern comprehensions — `[(p)-[:KNOWS]->(f) WHERE f.age > 30 | f.name]`
   gives one element per match of the pattern, correlated with the current
-  row; `[p = (a)-->(b) | length(p)]` binds each match's path. In the Rust API,
-  `kglite::api::cypher::Expression` gains a `PatternComprehension` variant, so
-  an exhaustive match over it needs a new arm.
+  row; `[p = (a)-->(b) | length(p)]` binds each match's path.
 
 ### Changed
 
@@ -347,6 +345,13 @@ before upgrading.
 - **Breaking (Rust):** `kglite::api::cypher::QueryDiagnostics` has a new
   field, `temporal: Option<Box<TemporalDiagnostics>>`; a struct literal must
   name it or end in `..Default::default()`.
+- **Breaking (Rust):** `kglite::api::TemporalConfig` has two new public
+  fields, `convention` and `source_type`, and `kglite::api::blueprint::NodeSpec`,
+  `FkEdge` and `JunctionEdge` a new `temporal: Option<TemporalSpec>`; a struct
+  literal must name them. `kglite::api::cypher::Expression` gains a
+  `PatternComprehension` variant (pattern comprehensions, above), and
+  `ColumnType` and `ColumnData` a `Duration` variant (durations load as
+  durations, below); an exhaustive match over them needs a new arm.
 - Fluent `valid_at()` / `valid_during()` with named bounds on a type with no
   declaration (or bounds other than the declared ones) read typed date
   columns as epoch days without decoding a value per row: about 10% faster
@@ -371,7 +376,7 @@ before upgrading.
   input by position). A different declaration for a type that already has one
   is refused instead of added beside it. Rows written onto a declared type
   later are not validated.
-- A bulk load (`add_relationships`, `replace_relationships`,
+- **Breaking:** a bulk load (`add_relationships`, `replace_relationships`,
   `create_relationships()`, `extend()`, blueprints, the C ABI's edge batch)
   onto a relationship type with a declared validity interval writes its rows
   as versions and never updates a stored relationship: a row identical to a
@@ -400,7 +405,9 @@ before upgrading.
   FK and junction edges write one relationship per row
   — repeated endpoint pairs included — when the relationship type has no
   relationship from that load's source node type yet; a later load from a
-  source node type it already has relationships from merges as before. A
+  source node type it already has relationships from merges as before on a
+  type without a declared validity interval (a declared type follows the
+  version rule above). A
   load that writes no relationship (an empty frame, every id null) records
   nothing, so it does not turn the next load into a merge. A relationship
   type an N-Triples load or an older file registered without its endpoint
@@ -530,8 +537,12 @@ before upgrading.
   first value types both the record and the column. A declaration's `to` that every
   row left NULL still warns that every row is open-ended.
 - `auto_timestamp` stamped `updated_at` with the local wall-clock time, while
-  every other naive datetime kglite stores or accepts is UTC. It is now naive
-  UTC. Stamps written before this release keep their stored (local) values.
+  kglite reads a validity instant as naive UTC and normalises the aware
+  datetimes it accepts (query parameters, loader cells, a zoned
+  `datetime(str)`) to naive UTC. It is now naive UTC. Stamps written
+  before this release keep their stored (local) values. The no-argument
+  `datetime()` and `localdatetime()` still return local wall time, as
+  documented.
 - A recipe's `parameters` schema had to carry `required: []` even when every
   property has a default (boot failed with "root required is required"); an
   absent `required` now means none are required, as in JSON Schema, and still
@@ -554,10 +565,15 @@ before upgrading.
   lookup that first builds an index over one — is now part of that
   statement's warnings (`result.warnings`, and the diagnostics every binding
   carries), echoed under the query-warning policy. It went only to the
-  process's stderr, so a caller reading the result saw nothing. Its advice now
-  reads "MERGE on the id alone, or dedupe the input", since a `MERGE` naming a
-  second label creates a duplicate beside a node without it. A bulk loader
-  still reports its duplicates on stderr.
+  process's stderr, so a caller reading the result saw nothing, and a
+  `CREATE` that gave an existing node's id to a new node of the same type,
+  once the type's id index was built (as after `add_nodes`), raised it only
+  when the index was next rebuilt — typically at a reload; it now warns at the
+  write. Its advice now reads "MERGE on the id alone, or dedupe the input",
+  since a `MERGE` naming a second label creates a duplicate beside a node
+  without it. Ids stay unique only by declaration (`define_schema`
+  `primary_key`, or a durable graph). A bulk loader still reports its
+  duplicates on stderr.
 - Cypher `MERGE (n:A:B {…})` matched a node carrying only `A`, running
   `ON MATCH SET` on it and creating nothing, while `MATCH` with the same
   pattern found no node. It now matches only a node carrying every label in
@@ -608,9 +624,10 @@ before upgrading.
   between the same endpoints collapsed into one relationship on merge and its
   spatial types lost their configuration. An `extend()` whose relationships
   are refused copies no declaration.
-- A Cypher statement that fails on what it was given — a malformed
-  `valid_at` date, a property the type does not have, a type with no declared
-  validity interval — is a client error on every wire: the Bolt server sends
+- **Breaking (Bolt, C ABI, HTTP):** a Cypher statement that fails on what it
+  was given — a malformed `valid_at` date, a property the type does not have,
+  a type with no declared validity interval — is a client error on every
+  wire: the Bolt server sends
   `Neo.ClientError.Statement.ArgumentError` (Neo4j drivers raise
   `ClientError`) instead of `Neo.DatabaseError.Statement.ExecutionFailed`,
   which told drivers and retry logic the server broke, and
@@ -715,14 +732,15 @@ before upgrading.
   ignored, running the whole statement. It is now a syntax error: the keyword
   leads the statement. `EXPLAIN PROFILE …` and `EXPLAIN` after a clause name
   the same rule instead of reporting an unexpected token.
+- Cypher: `EXPLAIN` of a `WHERE` that ORs equalities on several properties
+  (`p.email = 'x' OR p.city = 'Oslo' OR p.city = 'Bergen'`) no longer changes
+  from run to run. The planner pass that folds such equalities into `IN`
+  lists grouped them in hash order, so the rewritten predicate's order, and
+  whether the plan listed the pass at all, varied between runs; it now keeps
+  the order the query wrote them in. Answers are unchanged.
 - After a `.kgl` save and load, `to_df()` and `collect()` over more than 50
   nodes of one type no longer add all-None columns named after the loader's
   id and title columns (`add_nodes(df, 'T', 'code', 'name')`).
-- A Cypher `CREATE` that gives an existing node's id to a new node of the same
-  type prints the duplicate-id warning as it writes it when the type's id
-  index is built (as after `add_nodes`), instead of staying silent until the
-  index was next rebuilt — typically at a reload. Ids stay unique only by declaration (`define_schema`
-  `primary_key`, or a durable graph); use `MERGE` to upsert.
 - Fluent `traverse()` and `compare()` on an empty selection return an empty
   selection instead of raising `No source nodes available for traversal`, so
   a per-group loop no longer fails on a group with no members.
@@ -747,8 +765,7 @@ before upgrading.
   properties unchanged when read afterwards: `add_relationships` with
   `conflict_handling='update'`, `'sum'` or `'preserve'`, rows folding into one
   relationship within a single `add_relationships`, `replace_relationships` or
-  `create_relationships` call, and a repeated `from` start on a relationship
-  type with a declared validity interval. The merged values reached reads only
+  `create_relationships` call. The merged values reached reads only
   after certain later writes or a save; reads now return them straight after
   the call. `add_properties` on a disk graph had the same fault for the node
   properties it wrote.
@@ -838,8 +855,7 @@ before upgrading.
   duration (it was refused). A duration holds whole seconds: a cell with a
   sub-second part is stored as NULL and reported through `on_invalid`, and
   such a parameter is refused. Blueprints gain a `"duration"` property type,
-  whose cells are `{"months", "days", "seconds"}` objects. In the Rust API,
-  `ColumnType` and `ColumnData` gain a `Duration` variant.
+  whose cells are `{"months", "days", "seconds"}` objects.
 - `from_records` loads a Python `date`, `datetime` or `timedelta` typed; it
   refused them before. A `time` is still refused.
 

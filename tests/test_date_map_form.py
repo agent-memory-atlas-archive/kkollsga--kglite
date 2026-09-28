@@ -1,8 +1,8 @@
 """`date({year, month, day})` and `datetime({...})`: openCypher's map form.
 
 Only strings were accepted, so building a date from integers needed
-`date(toString(y) + '-01-01')`. `point()` took its map form in 0.18.1; the
-temporal constructors now do too.
+`date(toString(y) + '-01-01')`. `point()` takes its map form in the same
+release.
 """
 
 from __future__ import annotations

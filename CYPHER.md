@@ -3101,7 +3101,7 @@ g.define_schema({
 > either mode; drop them with `DROP CONSTRAINT`.
 
 Every write to an opted-in type then stamps a reserved **`updated_at`** (a
-`Timestamp`, naive UTC like every stored datetime) — Cypher `CREATE`/`INSERT`/`MERGE`/`SET` and
+`Timestamp` in naive UTC) — Cypher `CREATE`/`INSERT`/`MERGE`/`SET` and
 `add_nodes`/`add_connections`.
 Pass `git_sha` / `modified_by` to record who/where too:
 

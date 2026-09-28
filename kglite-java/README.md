@@ -22,18 +22,22 @@ Version boundary: 0.15.9 ships the core wrapper — `KnowledgeGraph`, Cypher
 in/out, `WriterLease`, storage modes. The **Transactions** and **Cypher DSL**
 sections below, and the any-thread `close()` guarantee under **Threading**,
 ship in **0.15.10**; the **Embeddings and vector search** section ships in
-**0.15.11**. Each section works from the release named there onward.
+**0.15.11**; the **Warnings and diagnostics** section's `queryResult` and
+`cypherResult` ship in **0.18.1**; and the **As of an instant** section
+(`ValidAt`, `queryBatch`), `Transaction.commitResults()` and
+`QueryResult.profile()` ship in **0.19.0**. Each section works from the
+release named there onward.
 
 ```xml
 <dependency>
   <groupId>io.github.kkollsga</groupId>
   <artifactId>kglite</artifactId>
-  <version>0.15.9</version>
+  <version>0.19.0</version>
 </dependency>
 ```
 
 ```kotlin
-implementation("io.github.kkollsga:kglite:0.15.9")
+implementation("io.github.kkollsga:kglite:0.19.0")
 ```
 
 The jar carries its own native library — nothing to install, no

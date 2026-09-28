@@ -394,7 +394,7 @@ impl DirGraph {
     }
 
     /// The reserved provenance properties to stamp on a write: `updated_at`
-    /// (now, a naive UTC `Timestamp` like every stored datetime) plus the
+    /// (now, a naive UTC `Timestamp`) plus the
     /// caller-supplied `git_sha`/`modified_by` when set on the current mutation
     /// (via `ExecuteOptions` or [`Self::with_write_provenance`]). One clock read
     /// per call. Engine owns these keys: the stamp replaces a user-written
