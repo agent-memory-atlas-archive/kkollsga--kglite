@@ -13,7 +13,7 @@ use crate::graph::languages::cypher::ast::{
     CreateEdgeDirection, CreateEdgePattern, CreateElement, CreateNodePattern, CreatePattern,
 };
 use crate::graph::languages::cypher::result::{EdgeBinding, ResultRow};
-use crate::graph::schema::{DirGraph, EdgeData, InternedKey};
+use crate::graph::schema::{canonical_id, DirGraph, EdgeData, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
 
@@ -92,7 +92,7 @@ fn match_node_pattern(
     if !label_has_secondary {
         match probe_node_indexes(graph, label, &wanted) {
             IndexProbe::Matched(idx) => return Ok(Some(node_result_row(node_pat, idx))),
-            IndexProbe::NoMatch => return Ok(None),
+            IndexProbe::NoMatch => return refuse_duplicate_id(graph, label, &wanted),
             IndexProbe::Unindexed => {}
         }
     }
@@ -106,7 +106,60 @@ fn match_node_pattern(
             return Ok(Some(node_result_row(node_pat, idx)));
         }
     }
-    Ok(None)
+    refuse_duplicate_id(graph, label, &wanted)
+}
+
+/// The miss a node MERGE reports once no node matched: `Ok(None)` — create
+/// it — unless the pattern names an id a `label` node already holds. The id
+/// is the node's identity, so creating would give the type a second node
+/// under it; that node matched on its id but not on the pattern's other
+/// labels or properties, and the refusal names which.
+fn refuse_duplicate_id(
+    graph: &DirGraph,
+    label: &str,
+    wanted: &Candidate<'_>,
+) -> Result<Option<ResultRow>, String> {
+    let Some((_, id)) = wanted.props.iter().find(|(key, _)| *key == "id") else {
+        return Ok(None);
+    };
+    let Some(existing) = graph.lookup_by_id_readonly(label, id) else {
+        return Ok(None);
+    };
+    let id = match id {
+        Value::String(text) => format!("'{text}'"),
+        other => crate::graph::core::value_operations::format_value_compact(other),
+    };
+    let missing: Vec<&str> = wanted
+        .extra_labels
+        .iter()
+        .filter(|l| !graph.node_has_label(existing, InternedKey::from_str(l)))
+        .map(String::as_str)
+        .collect();
+    let lead = format!("MERGE would create a second :{label} node with id {id}");
+    if let Some(first) = missing.first() {
+        let lacks: Vec<String> = missing.iter().map(|l| format!(":{l}")).collect();
+        return Err(format!(
+            "{lead}; the existing node lacks label {} — match on the id and add the label \
+             (`MERGE (n:{label} {{id: {id}}}) SET n:{first}`), or use ON MATCH SET",
+            lacks.join(", ")
+        ));
+    }
+    let differing: Vec<&str> = wanted
+        .props
+        .iter()
+        .filter(|(key, value)| {
+            *key != "id" && !node_matches_all(graph, existing, &[(*key, value.clone())])
+        })
+        .map(|(key, _)| *key)
+        .collect();
+    let (named, first) = match differing.first() {
+        Some(first) => (differing.join(", "), *first),
+        None => ("its properties".to_string(), "property"),
+    };
+    Err(format!(
+        "{lead}; the existing node differs in {named} — match on the id alone and set the \
+         properties (`MERGE (n:{label} {{id: {id}}}) SET n.{first} = …`), or use ON MATCH SET"
+    ))
 }
 
 /// What the index short-circuits settled. `NoMatch` is authoritative — the
@@ -207,9 +260,11 @@ fn node_matches_all(graph: &DirGraph, idx: NodeIndex, props: &[(&str, Value)]) -
         let value = node.resolved_field(node_type, key, InternedKey::from_str(key));
         value.as_deref().is_some_and(|value| {
             if *key == "id" {
-                // Identity matching keeps its normalization policy; ordinary
-                // properties use Cypher predicate equality.
-                value == expected
+                // Identity matching keeps the id index's normalization — a
+                // loaded `UniqueId(1)` is the id `1` — so a pattern naming the
+                // id beside other properties matches the node the id alone
+                // does; ordinary properties use Cypher predicate equality.
+                canonical_id(value) == canonical_id(expected)
             } else {
                 crate::graph::core::filtering::values_equal(value, expected)
             }

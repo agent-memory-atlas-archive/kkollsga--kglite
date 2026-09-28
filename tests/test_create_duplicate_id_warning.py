@@ -94,9 +94,8 @@ MODES = pytest.mark.parametrize("mode", ["memory", "mapped", "disk"])
     [
         "CREATE (:M {id: '0003', name: 'Dup'})",
         "UNWIND ['0003'] AS c CREATE (:M {id: c, name: 'Dup'})",
-        "MERGE (n:M:Extra {id: '0003'}) RETURN n.id",
     ],
-    ids=["create", "unwind-create", "merge-create"],
+    ids=["create", "unwind-create"],
 )
 def test_the_forking_statement_reports_the_duplicate_in_its_warnings(mode, statement, tmp_path):
     """Regression: the warning went only to the process's stderr, so a caller
@@ -105,6 +104,16 @@ def test_the_forking_statement_reports_the_duplicate_in_its_warnings(mode, state
     warned = _warned(g.cypher(statement))
     assert len(warned) == 1, warned
     assert "MERGE on the id alone, or dedupe the input" in warned[0], warned
+
+
+@MODES
+def test_a_merge_refuses_to_fork_the_id(mode, tmp_path):
+    """`MERGE (n:M:Extra {id})` misses the `M`-only node; it used to create a
+    second `M` under the id and warn — `test_merge_duplicate_id.py`."""
+    g = _loaded(mode, tmp_path)
+    with pytest.raises(kglite.CypherExecutionError, match="lacks label :Extra"):
+        g.cypher("MERGE (n:M:Extra {id: '0003'}) RETURN n.id")
+    assert g.cypher("MATCH (m:M) RETURN count(m) AS c").to_list() == [{"c": 2}]
 
 
 @MODES

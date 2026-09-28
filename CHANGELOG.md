@@ -376,6 +376,17 @@ before upgrading.
   element (a loader checks this before writing, naming an inverted row of its
   input by position). A different declaration for a type that already has one
   is refused instead of added beside it.
+- **Breaking (Cypher):** a node `MERGE` whose pattern names an id its type
+  already holds, but whose other labels or properties that node lacks
+  (`MERGE (n:A:B {id: 'x'})` beside an `A`-only node), raises
+  `CypherExecutionError` — "MERGE would create a second :A node with id 'x';
+  the existing node lacks label :B — match on the id and add the label
+  (`MERGE (n:A {id: 'x'}) SET n:B`), or use ON MATCH SET" (or "differs in
+  name …" for a property) — instead of creating a second node under the id
+  with only a duplicate-id warning; the statement rolls back. This holds on a
+  declared valid-time type too: a node version takes its own id. `CREATE`
+  keeps the opt-in rule, and a `MERGE` naming no id or a new one creates as
+  before.
 - **Breaking:** a write onto a type with a declared validity interval is
   judged by the rule the declaration judges its rows by, where it was
   accepted before. `add_nodes`, `add_relationships` (and

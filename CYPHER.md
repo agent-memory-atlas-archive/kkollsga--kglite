@@ -79,8 +79,13 @@ count). Two semantics to keep in mind:
   (`define_schema({'nodes': {'T': {'primary_key': 'id'}}})`, after which the
   second `CREATE` is rejected), or use **`MERGE` on the id alone, not
   `CREATE`** — `MERGE (:T {id: $k})` is idempotent either way. A `MERGE` that
-  also names a second label (`MERGE (:T:U {id: $k})`) matches only a node
-  carrying both, so it creates a duplicate beside a `T`-only node. Constraint DDL is deliberately
+  also names a second label (`MERGE (:T:U {id: $k})`) or another property
+  matches only a node carrying them; when the `T` node with that id lacks one,
+  the `MERGE` is refused rather than creating a second node under the id,
+  naming what differs: "MERGE would create a second :T node with id 'k'; the
+  existing node lacks label :U — match on the id and add the label
+  (`MERGE (n:T {id: 'k'}) SET n:U`), or use ON MATCH SET". A `MERGE` naming no
+  id, or an id the type does not hold, creates as before. Constraint DDL is deliberately
   *not* the route here: `REQUIRE t.id IS UNIQUE` is refused, because `id` is a
   structural field rather than a stored property and the unique secondary index
   would never see the write — see
@@ -4473,7 +4478,8 @@ storage mode (in-memory / mapped / disk). `CREATE (n {id: X})` and
 `add_nodes(unique_id_field='id')` both make `X` the identity; `MATCH (n {id: X})`
 finds it; it survives save → load. `id` is unique by convention — if duplicate
 ids are created, `MATCH (n {id: X})` returns one node per id (the statement's
-warnings say so; `MERGE` on the id alone, or dedupe the input). Precisely: one node per
+warnings say so; `MERGE` on the id alone, or dedupe the input; a `MERGE` never
+forks an id). Precisely: one node per
 **(type, id)** — an unlabeled `{id: X}` (or `WHERE id(n) = X`) anchors through
 every type's id index and returns one node per type holding X, in
 deterministic order, identically for literal and `$param` spellings. With
