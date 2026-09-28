@@ -2102,6 +2102,39 @@ def run_notify(
 #: Add an entry when a release removes or changes a public symbol; never edit
 #: an existing release's set to mean "the current release".
 BREAKING_SYMBOLS_BY_VERSION: dict[str, list[str]] = {
+    # 0.19.0 — the valid-time programs (semver-major set, shipped in a minor
+    # per project policy): the fluent temporal helpers were removed in favour
+    # of the core FluentFilter, six fluent api fns and two io fns gained a
+    # filter argument, and externally-constructible structs gained fields or
+    # variants.
+    "0.19.0": [
+        "node_is_temporally_valid",
+        "node_overlaps_range",
+        "node_passes_context",
+        "TemporalEdgeFilter",
+        "temporal_node_configs",
+        "temporal_edge_configs",
+        "make_traversal",
+        "expand_selection",
+        "extract_subgraph",
+        "filter_by_connection",
+        "filter_orphan_nodes",
+        "make_comparison_traversal",
+        "get_connections",
+        "get_node_degrees",
+        "save_subset",
+        "save_subset_streaming_disk",
+        "QueryDiagnostics",
+        "ExecuteOptions",
+        "ResolvedQueryOptions",
+        "TemporalConfig",
+        "NodeSpec",
+        "FkEdge",
+        "JunctionEdge",
+        "Expression",
+        "ColumnType",
+        "ColumnData",
+    ],
     # 0.18.0 — the relationship-embedding programs (semver-major set, shipped
     # in a minor per project policy): externally-constructible structs gained
     # fields, RawOp gained WAL variants and a field, and four api fns changed

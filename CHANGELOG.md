@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-28
+
 ### Added
 
 - **Valid time.** A node label or relationship type can declare the two
