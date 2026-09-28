@@ -108,7 +108,8 @@ default is effectively required however the schema describes it.
 
 In a recipe's closed schema the two halves must agree: a property with a
 `default` is the one thing `required` may leave out, and listing it as required
-anyway is refused at boot. A default must also satisfy its own property — its
+anyway is refused at boot. When every property has a default, `required` itself
+may be left out: absent means none, as in JSON Schema. A default must also satisfy its own property — its
 type, `enum`, `minimum`/`maximum` — or the catalogue fails to compile, so a
 wrong default is an operator's boot failure rather than an agent's call-time
 error. Manifest `tools:` schemas are published as written and never compiled,

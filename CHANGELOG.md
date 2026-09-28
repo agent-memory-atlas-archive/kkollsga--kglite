@@ -475,6 +475,11 @@ before upgrading.
 - `auto_timestamp` stamped `updated_at` with the local wall-clock time, while
   every other naive datetime kglite stores or accepts is UTC. It is now naive
   UTC. Stamps written before this release keep their stored (local) values.
+- A recipe's `parameters` schema had to carry `required: []` even when every
+  property has a default (boot failed with "root required is required"); an
+  absent `required` now means none are required, as in JSON Schema, and still
+  fails when a property without a default would be left out. The published
+  `cypher_recipes.json` schema no longer lists `required` as mandatory.
 - The query warning for `WHERE n.x IS NULL` on a property no node of the type
   has said the test "filters out every row" while the query returned every
   row; it now says the test is true on every row, and stays silent for a

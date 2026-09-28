@@ -523,7 +523,8 @@ every `tool:` route it registers, so a recipe added to the graph, or a `tool:`
 added to one, is served after a restart, not on the next `reload_graph`. (Skills differ: they *are* re-resolved on a graph swap.)
 KGLite parses every stored query, requires
 an exact match between `$parameters` and root `properties`, requires
-`required` to list every property that has no `default`, and
+`required` to list every property that has no `default` (so `required` may be
+left out when every property has one — absent means none), and
 rejects mutations, `EXPLAIN`, `PROFILE`, `FORMAT CSV`, and `LOAD CSV`.
 Supported schema keywords are deliberately limited to `type`, `properties`,
 `required`, `items`, `enum`, `minimum`, `maximum`, `minItems`, `maxItems`,

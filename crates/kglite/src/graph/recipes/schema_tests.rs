@@ -206,3 +206,37 @@ fn apply_defaults_fills_only_absent_keys() {
     schema.apply_defaults(&mut null);
     assert_eq!(null["limit"], Value::Null, "an explicit null stays null");
 }
+
+/// `required` may be left out, meaning none — the JSON Schema default — so a
+/// schema whose every property has a default needs no `required: []`.
+/// Red proof (user test 3, B4): boot refused it with "root required is
+/// required".
+#[test]
+fn an_absent_required_means_none_are_required() {
+    let without = |properties: &str| -> Value {
+        serde_json::from_str(&format!(
+            r#"{{"type":"object","properties":{properties},"additionalProperties":false}}"#
+        ))
+        .unwrap()
+    };
+    let names = ["limit".to_string()];
+    let schema = ParameterSchema::compile_root(
+        &without(r#"{"limit":{"type":"integer","default":5}}"#),
+        &names,
+    )
+    .expect("every property has a default, so nothing is required");
+    assert!(
+        !schema.as_json().contains_key("required"),
+        "the author's schema is published unchanged"
+    );
+    ParameterSchema::compile_root(&without("{}"), &[]).expect("no parameters at all");
+    let error = ParameterSchema::compile_root(&without(r#"{"limit":{"type":"integer"}}"#), &names)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(r#"optional=["limit"]"#), "{error}");
+    // An empty and a populated `required` keep working.
+    compile_with_limit(r#"{"type":"integer","default":5}"#, r#"["query"]"#).unwrap();
+    let mut empty = without(r#"{"limit":{"type":"integer","default":5}}"#);
+    empty["required"] = Value::Array(Vec::new());
+    ParameterSchema::compile_root(&empty, &names).unwrap();
+}

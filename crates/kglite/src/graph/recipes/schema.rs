@@ -89,7 +89,9 @@ impl ParameterSchema {
             .as_object()
             .ok_or_else(|| invalid("must be a mapping"))?;
         reject_unknown_keys(raw_map, ROOT_KEYWORDS, "parameters")?;
-        for required_keyword in ["properties", "required", "additionalProperties"] {
+        // `required` may be left out: absent means none, as in JSON Schema,
+        // which the check below allows only when every property has a default.
+        for required_keyword in ["properties", "additionalProperties"] {
             if !raw_map.contains_key(required_keyword) {
                 return Err(invalid(format!("root {required_keyword} is required")));
             }

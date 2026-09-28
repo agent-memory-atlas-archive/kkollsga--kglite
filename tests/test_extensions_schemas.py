@@ -206,7 +206,7 @@ def test_recipe_schema_declares_the_closed_runtime_subset() -> None:
     assert root["properties"]["properties"]["additionalProperties"] == {"$ref": "#/$defs/topLevelParameterSchema"}
     assert root["properties"]["type"] == {"const": "object"}
     assert root["properties"]["additionalProperties"] == {"const": False}
-    assert root["required"] == ["type", "properties", "required", "additionalProperties"]
+    assert root["required"] == ["type", "properties", "additionalProperties"]
 
 
 def test_recipe_schema_supports_nullable_type_arrays_and_rejects_workflow_fields() -> None:
@@ -263,6 +263,14 @@ def test_recipe_schema_acceptance_matches_structural_parser_fixtures() -> None:
     parameters = defaulted["code_review"]["queries"]["resolve_function"]["parameters"]
     parameters["properties"]["limit"] = {"type": "integer", "default": 5, "minimum": 1}
     assert _schema_accepts(defaulted, schema, schema), "a top-level property may declare a default"
+
+    all_defaulted = deepcopy(defaulted)
+    parameters = all_defaulted["code_review"]["queries"]["resolve_function"]["parameters"]
+    parameters["properties"]["qualified_name"]["default"] = None
+    del parameters["required"]
+    assert _schema_accepts(all_defaulted, schema, schema), "an absent required means none are required"
+    parameters["required"] = []
+    assert _schema_accepts(all_defaulted, schema, schema), "an empty required is the same"
 
     invalid: list[dict[str, Any]] = []
     for field in ("description",):

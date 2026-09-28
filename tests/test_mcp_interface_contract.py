@@ -152,3 +152,41 @@ def test_cypher_query_declares_its_deadline_and_the_default(mcp_contract):
         described = properties["timeout_ms"].get("description", "")
         assert "180000" in described, f"{mode}: the default must be named, got {described!r}"
         assert "0" in described, f"{mode}: the disable spelling must be named"
+
+
+def test_a_recipe_whose_every_parameter_has_a_default_needs_no_required(tmp_path):
+    """`required` may be left out of a recipe's parameters: absent means none.
+
+    Red proof (user test 3, B4): boot refused the catalogue with "root
+    required is required" even though every property had a default."""
+    from tests.test_mcp_server_smoke import _text_content
+
+    graph = tmp_path / "fixture.kgl"
+    _build_fixture_graph(graph)
+    manifest = tmp_path / "recipe_mcp.yaml"
+    manifest.write_text(
+        "name: Defaults Contract\n"
+        "extensions:\n"
+        "  cypher_recipes:\n"
+        "    people:\n"
+        "      description: Person lookups.\n"
+        "      queries:\n"
+        "        greeting:\n"
+        "          description: Echo a word.\n"
+        "          tool: echo_word\n"
+        "          parameters:\n"
+        "            type: object\n"
+        "            properties:\n"
+        "              x: {type: string, default: hello}\n"
+        "            additionalProperties: false\n"
+        '          cypher: "RETURN $x AS x"\n',
+        encoding="utf-8",
+    )
+    client = _spawn(["--graph", str(graph), "--mcp-config", str(manifest)], env_remove=["GITHUB_TOKEN", "GH_TOKEN"])
+    try:
+        tools = {tool["name"]: tool for tool in client.list_tools()}
+        assert "echo_word" in tools
+        assert tools["echo_word"]["inputSchema"].get("required", []) == []
+        assert "hello" in _text_content(client.call_tool("echo_word", {}))
+    finally:
+        client.shutdown()
