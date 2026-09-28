@@ -322,8 +322,18 @@ fn a_vault_recipe_that_declares_a_tool_is_served_under_that_name() {
             "recipe": "vault", "query": "by_keyword", "variables": arguments
         }),
     );
+    // `elapsed_ms` is wall-clock time and differs between two runs of the same
+    // query; compare the envelopes with it blanked.
+    let without_timing = |envelope: &serde_json::Value| {
+        let mut copy = envelope["structuredContent"].clone();
+        if let Some(elapsed) = copy.pointer_mut("/result/diagnostics/elapsed_ms") {
+            *elapsed = serde_json::Value::Null;
+        }
+        copy
+    };
     assert_eq!(
-        named["structuredContent"], fixed["structuredContent"],
+        without_timing(&named),
+        without_timing(&fixed),
         "one envelope, whichever route reached the query"
     );
     assert_eq!(named.get("isError"), fixed.get("isError"));
