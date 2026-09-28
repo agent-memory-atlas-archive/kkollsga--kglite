@@ -387,6 +387,12 @@ before upgrading.
   declared valid-time type too: a node version takes its own id. `CREATE`
   keeps the opt-in rule, and a `MERGE` naming no id or a new one creates as
   before.
+- **Breaking (Cypher):** `datetime()` with no argument returns now in naive
+  UTC — the clock every stored datetime, validity instant and `auto_timestamp`
+  stamp uses — instead of the local wall clock, and `time()` with no argument
+  the UTC time of day. `localdatetime()` and `localtime()` keep the local
+  clock, and `date()` stays today in UTC. A query comparing `datetime()`
+  against local wall-clock values should use `localdatetime()`.
 - **Breaking:** a write onto a type with a declared validity interval is
   judged by the rule the declaration judges its rows by, where it was
   accepted before. `add_nodes`, `add_relationships` (and
@@ -578,9 +584,7 @@ before upgrading.
   kglite reads a validity instant as naive UTC and normalises the aware
   datetimes it accepts (query parameters, loader cells, a zoned
   `datetime(str)`) to naive UTC. It is now naive UTC. Stamps written
-  before this release keep their stored (local) values. The no-argument
-  `datetime()` and `localdatetime()` still return local wall time, as
-  documented.
+  before this release keep their stored (local) values.
 - A recipe's `parameters` schema had to carry `required: []` even when every
   property has a default (boot failed with "root required is required"); an
   absent `required` now means none are required, as in JSON Schema, and still

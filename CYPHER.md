@@ -1367,9 +1367,10 @@ covers declaring intervals and modelling history.
 | `date({year, month, day})` | Build a date from integers (openCypher's map form): `date({year: y, month: 1, day: 1})`. `month` and `day` default to 1; an impossible date, an unknown key or a non-integer component raises; a null component gives null |
 | `datetime({year, month, day, hour, minute, second, millisecond, microsecond, nanosecond})` | Build a zoneless datetime the same way; missing time fields are 0. A `timezone` key is refused |
 | `datetime(str)` | Parse an ISO-8601 stamp to a Timestamp (date + time). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and a zoned `…Z` / `…±HH:MM`. **A zone is normalised to UTC**, since `Value::Timestamp` carries no zone. Sub-second digits are kept and compare: `datetime('…42.317')` is later than `datetime('…42')` (a Python `datetime` result carries them to the microsecond). Unparseable input is NULL |
-| `datetime()` | Current local datetime (no-arg form) |
+| `datetime()` | Now in naive UTC (no-arg form) — the clock every stored datetime, validity instant and `auto_timestamp` uses |
 | `localdatetime()` | Local wall-clock datetime; 1-arg form parses/normalises a string (NULL on bad input). Unlike `datetime(str)` it keeps the wall-clock reading of a zoned input and drops only the zone label |
-| `localtime()` / `time()` | Local wall-clock time-of-day as `HH:MM:SS` string; 1-arg form parses/normalises a string (NULL on bad input) |
+| `time()` | Time of day in UTC as an `HH:MM:SS` string (no-arg form); 1-arg form parses/normalises a string as `localtime(str)` does (NULL on bad input) |
+| `localtime()` | Local wall-clock time of day as an `HH:MM:SS` string; 1-arg form parses/normalises a string (NULL on bad input) |
 | `n.d.year`, `n.d.month`, `n.d.day` | Extract component from a DateTime property (chained accessor — works in `RETURN`, `WHERE`, `ORDER BY`) |
 | `n.d.dayOfWeek`, `n.d.dayOfYear`, `n.d.epochSeconds` | Other temporal field accessors |
 | `duration({days: N, months: M, ...})` | Build a Duration value (see [Duration semantics](#duration-semantics) below) |
@@ -1430,7 +1431,9 @@ on two integers raise `CypherExecutionError` when the result leaves the signed
 no wire format kglite ships over can carry, so promoting it would move the
 silence one layer out rather than remove it.
 
-**`datetime()` and `localdatetime()` return timestamp values.** An offset-bearing
+**`datetime()` and `localdatetime()` return timestamp values.** With no
+argument, `datetime()` (like `date()` and `time()`) reads the clock in UTC and
+`localdatetime()` (like `localtime()`) in the process's local zone. An offset-bearing
 `datetime(str)` is normalized to naive UTC; `localdatetime(str)` keeps the local
 wall-clock reading and drops the zone. `localtime()` and `time()` return
 `HH:MM:SS` strings because KGLite has no time-only value type. Each single-string
@@ -1568,8 +1571,9 @@ A statement prefixed `FOR VALID_TIME AS OF <instant>` asks the whole query as
 of that instant on the declared types. The prefix stands before or after
 `EXPLAIN` / `PROFILE`; the instant is a quoted ISO date or datetime, `$param`,
 `date(…)` / `datetime(…)` of a literal or parameter, or `date()` for today in
-UTC. `datetime()` with no argument is refused there: it reads the local clock,
-and a valid-time instant is UTC.
+UTC. `datetime()` with no argument is refused there: the statement resolves its
+instant more than once, and the clock moves between readings; pass the moment
+as a `$param`.
 Every binding's `valid_at` writes the same prefix: Python
 `KnowledgeGraph.cypher`, `Session.cypher` / `execute`, `Transaction.cypher` and
 `FrozenGraph.cypher`; the MCP `cypher_query`, `run_recipe_query` and named

@@ -219,7 +219,7 @@ impl<'a> CypherExecutor<'a> {
             }
             "localdatetime" => self.eval_local_temporal(args, row, LocalTemporalKind::DateTime),
             "localtime" => self.eval_local_temporal(args, row, LocalTemporalKind::Time),
-            "time" => self.eval_local_temporal(args, row, LocalTemporalKind::Time),
+            "time" => self.eval_time(args, row),
             _ => return Ok(None),
         };
         result.map(Some)
@@ -283,13 +283,23 @@ impl CypherExecutor<'_> {
         }
     }
 
+    /// `time()`: the time of day in UTC as `HH:MM:SS`, as `datetime()` reads
+    /// the clock; the one-string form parses as `localtime(str)` does.
+    fn eval_time(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
+        if args.is_empty() {
+            let now = chrono::Utc::now().format("%H:%M:%S").to_string();
+            return Ok(Value::String(now));
+        }
+        self.eval_local_temporal(args, row, LocalTemporalKind::Time)
+    }
+
     /// `datetime()`, `datetime(string | map | date | datetime)`.
     fn eval_datetime(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
-        // The no-argument form keeps local wall time; offset-bearing
-        // input below is normalised to UTC. Both retain fractions.
+        // Now in naive UTC, as every stored datetime, validity instant and
+        // `auto_timestamp` is; offset-bearing input below is normalised to UTC
+        // too. Both retain fractions. `localdatetime()` is the local clock.
         if args.is_empty() {
-            let now = chrono::Local::now().naive_local();
-            return Ok(Value::Timestamp(now));
+            return Ok(Value::Timestamp(chrono::Utc::now().naive_utc()));
         }
         if args.len() != 1 {
             return Err(

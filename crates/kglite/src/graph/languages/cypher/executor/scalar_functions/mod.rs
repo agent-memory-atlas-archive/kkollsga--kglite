@@ -43,11 +43,12 @@ impl<'a> CypherExecutor<'a> {
         self.eval_collection_fn(name, args, row)
     }
 
-    /// Evaluate `localdatetime()` / `localtime()` / `time()`. No-arg form
-    /// returns the local wall-clock "now" as an ISO-8601 string; the
-    /// single-string form validates/normalises and returns `Null` on
-    /// unparseable input (mirrors `datetime()`'s Null-on-bad-input
-    /// contract). Any other arity/type is an error.
+    /// Evaluate `localdatetime()` / `localtime()` (and `time(str)`). The no-arg
+    /// form reads the local wall clock — a timestamp for `localdatetime()`, an
+    /// `HH:MM:SS` string for `localtime()`; the single-string form
+    /// validates/normalises and returns `Null` on unparseable input (mirrors
+    /// `datetime()`'s Null-on-bad-input contract). Any other arity/type is an
+    /// error.
     fn eval_local_temporal(
         &self,
         args: &[Expression],

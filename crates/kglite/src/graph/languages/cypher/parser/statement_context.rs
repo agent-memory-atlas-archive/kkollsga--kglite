@@ -81,8 +81,10 @@ impl CypherParser {
 
 /// A literal string, a parameter, or `date` / `datetime` of one — and
 /// `date()` with no argument, today in UTC when the statement executes.
-/// `datetime()` with no argument is not accepted: it reads the local clock,
-/// while an instant is naive UTC.
+/// `datetime()` with no argument is not accepted: the statement resolves its
+/// instant more than once (the timeless-plan check, the execution filter, the
+/// diagnostics echo) and a clock reading to the microsecond differs between
+/// them, while today's date does not.
 fn is_context_instant(expression: &Expression) -> bool {
     let operand = |e: &Expression| {
         matches!(

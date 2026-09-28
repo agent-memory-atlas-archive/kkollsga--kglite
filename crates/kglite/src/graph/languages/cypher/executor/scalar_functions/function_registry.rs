@@ -352,7 +352,7 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "datetime",
         aliases: &[],
         category: "temporal",
-        description: "Now, a parsed ISO-8601 datetime normalised to UTC, or one built from a {year, month, day, hour, minute, second, ...} map",
+        description: "Now in UTC, a parsed ISO-8601 datetime normalised to UTC, or one built from a {year, month, day, hour, minute, second, ...} map",
         signature: "datetime(input :: STRING | MAP?) :: DATETIME",
     },
     FunctionSpec {
@@ -422,7 +422,7 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "time",
         aliases: &[],
         category: "temporal",
-        description: "Local time of day as HH:MM:SS; KGLite has no zoned time type",
+        description: "Time of day in UTC as HH:MM:SS (localtime() is the local clock); KGLite has no zoned time type",
         signature: "time(input :: STRING?) :: STRING",
     },
     // ── graph ─────────────────────────────────────────────────────────────

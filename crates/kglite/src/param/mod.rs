@@ -951,10 +951,19 @@ mod temporal_now_contract_tests {
         let graph = crate::graph::dir_graph::DirGraph::new();
         let params = std::collections::HashMap::new();
         let options = crate::api::session::ExecuteOptions::eager(&params);
-        for query in ["RETURN datetime() AS t", "RETURN localdatetime() AS t"] {
-            let before = chrono::Local::now().naive_local();
+        // `datetime()` reads the clock in UTC; `localdatetime()` in the local zone.
+        let utc = || chrono::Utc::now().naive_utc();
+        let local = || chrono::Local::now().naive_local();
+        for (query, now) in [
+            (
+                "RETURN datetime() AS t",
+                &utc as &dyn Fn() -> chrono::NaiveDateTime,
+            ),
+            ("RETURN localdatetime() AS t", &local),
+        ] {
+            let before = now();
             let result = crate::api::session::execute_read(&graph, query, &options).unwrap();
-            let after = chrono::Local::now().naive_local();
+            let after = now();
             let Value::Timestamp(actual) = result.result.rows[0][0] else {
                 panic!("expected Timestamp")
             };
