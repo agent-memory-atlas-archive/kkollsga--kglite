@@ -457,13 +457,12 @@ before upgrading.
 
 ### Fixed
 
-- A later bulk load onto a declared relationship type updated the stored
-  relationship with the same endpoints and `from` bound in place
-  (`connections_updated=1`), so a registration image — the open version a
-  closing row supersedes, or a version recorded at another time — was lost,
-  while the same rows in one call were kept as separate relationships. Rows
-  are now versions (see Changed): nothing stored is updated, identical rows
-  are dropped, and one call and several calls leave the same relationships.
+- A later bulk load onto a declared relationship type merged each row into
+  the stored relationship between the same endpoints, whatever its `from`
+  bound, and updated it in place (`connections_updated`): a row for a new
+  period overwrote the stored one — dropping that period or leaving an
+  inverted interval — and a closing row erased the open version it
+  superseded. Such rows now keep every version; the rule is under Changed.
 - A property a write named but left NULL on every row was not known to the
   `CREATE` typo guard or to `lock_schema()`: `UNWIND $rows AS r CREATE (:T
   {x: r.x})` whose first delivery had `x` NULL throughout refused the second
