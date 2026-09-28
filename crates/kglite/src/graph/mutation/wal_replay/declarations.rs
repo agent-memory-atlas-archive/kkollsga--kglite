@@ -392,13 +392,13 @@ impl Declarations {
             ] {
                 let Some(field) = field else { continue };
                 if is_id {
-                    graph
-                        .id_field_aliases_mut()
-                        .insert(node_type.clone(), field.clone());
+                    graph.declare_id_field_alias(node_type, field);
+                } else if graph.names_identity(node_type, field) {
+                    // Logged before the declaration refused it; see
+                    // `DirGraph::declare_title_field_alias`.
+                    continue;
                 } else {
-                    graph
-                        .title_field_aliases_mut()
-                        .insert(node_type.clone(), field.clone());
+                    graph.declare_title_field_alias(node_type, field);
                 }
                 // Absent only when this frame declared a spelling without
                 // writing a row of that type; whatever the checkpoint holds

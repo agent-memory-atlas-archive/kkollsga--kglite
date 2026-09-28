@@ -82,6 +82,64 @@ impl DirGraph {
         cow_mut(&mut self.title_field_aliases)
     }
 
+    /// Record `field` as `node_type`'s id spelling. A title spelling equal to it
+    /// is dropped: see [`Self::declare_title_field_alias`].
+    pub fn declare_id_field_alias(&mut self, node_type: &str, field: &str) {
+        if self.id_field_aliases.get(node_type).map(String::as_str) != Some(field) {
+            self.id_field_aliases_mut()
+                .insert(node_type.to_string(), field.to_string());
+        }
+        if self.title_field_aliases.get(node_type).map(String::as_str) == Some(field) {
+            self.title_field_aliases_mut().remove(node_type);
+        }
+    }
+
+    /// Record `field` as `node_type`'s title spelling — unless it names the
+    /// type's identity (`id`, or the declared id spelling), which records
+    /// nothing.
+    ///
+    /// A title column that *is* the id column (`add_nodes(df, 'A', 'id', 'id')`)
+    /// means what omitting the title field means: the title is filled from the
+    /// id column. Registering the spelling as a title alias instead made the
+    /// identity's own name resolve to the title slot wherever the maps are
+    /// consulted — `MERGE (a:A {id: 'n1'})` probed titles and created a twin on
+    /// every run, and the twin read back its fabricated `A_<n>` title as
+    /// `a.id` — while the id index and `MATCH {id: …}` still answered by id.
+    pub fn declare_title_field_alias(&mut self, node_type: &str, field: &str) {
+        if !self.names_identity(node_type, field)
+            && self.title_field_aliases.get(node_type).map(String::as_str) != Some(field)
+        {
+            self.title_field_aliases_mut()
+                .insert(node_type.to_string(), field.to_string());
+        }
+    }
+
+    /// Whether `field` names `node_type`'s identity: `id`, or its id spelling.
+    pub fn names_identity(&self, node_type: &str, field: &str) -> bool {
+        field == "id" || self.id_field_aliases.get(node_type).map(String::as_str) == Some(field)
+    }
+
+    /// Read-compat: drop every title spelling that names its type's identity,
+    /// which [`Self::declare_title_field_alias`] refuses to record but graphs
+    /// saved or logged before it did may carry. Their nodes' ids were stored
+    /// correctly; only the spelling map misrouted reads, so dropping it is the
+    /// whole repair. Returns the affected node types.
+    pub fn drop_identity_shadowing_title_aliases(&mut self) -> Vec<String> {
+        let shadowing: Vec<String> = self
+            .title_field_aliases
+            .iter()
+            .filter(|(node_type, field)| self.names_identity(node_type, field))
+            .map(|(node_type, _)| node_type.clone())
+            .collect();
+        if !shadowing.is_empty() {
+            let aliases = self.title_field_aliases_mut();
+            for node_type in &shadowing {
+                aliases.remove(node_type);
+            }
+        }
+        shadowing
+    }
+
     /// Writable `parent_types`; see [`Self::node_type_metadata_mut`].
     pub fn parent_types_mut(&mut self) -> &mut HashMap<String, String> {
         cow_mut(&mut self.parent_types)

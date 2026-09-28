@@ -656,7 +656,8 @@ fn reject_identity_redeclaration(
         }
     }
     if let Some(title_field) = node_title_field {
-        if title_field != "title" {
+        // A title field naming the id column declares no title spelling.
+        if title_field != "title" && title_field != "id" && title_field != unique_id_field {
             let declared = graph
                 .title_field_aliases
                 .get(node_type)
@@ -725,19 +726,17 @@ fn install_node_type_metadata(
     // Record original field name aliases so users can query by original column name
     let declared_id = (unique_id_field != "id").then_some(unique_id_field);
     if let Some(field) = declared_id {
-        graph
-            .id_field_aliases_mut()
-            .insert(node_type.to_string(), field.to_string());
+        graph.declare_id_field_alias(node_type, field);
     }
-    // Only register the title alias when the caller explicitly named one.
-    // Otherwise a follow-up add_nodes(..., node_title_field=None) would
-    // silently rebind the alias to unique_id_field, making `s.id` resolve
-    // to the stored title.
-    let declared_title = (should_update_title && title_field != "title").then_some(title_field);
+    // Only register the title alias when the caller explicitly named one, and
+    // never one naming the id column: either would make `s.id` resolve to the
+    // stored title (see `DirGraph::declare_title_field_alias`).
+    let declared_title = (should_update_title
+        && title_field != "title"
+        && !graph.names_identity(node_type, title_field))
+    .then_some(title_field);
     if let Some(field) = declared_title {
-        graph
-            .title_field_aliases_mut()
-            .insert(node_type.to_string(), field.to_string());
+        graph.declare_title_field_alias(node_type, field);
     }
     // The maps above live on `DirGraph`, so the write-capture seam under the
     // backend cannot see them; log the declaration itself or a durable graph

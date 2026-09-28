@@ -2094,8 +2094,11 @@ class KnowledgeGraph:
                 :class:`ArgumentError` and writes nothing. Re-declaring the
                 same spelling (every chunked load) and declaring on an empty
                 or new type are unaffected.
-            node_title_field: Column used as display title. Defaults to ``unique_id_field``.
-                Fixed once the type has nodes, exactly like ``unique_id_field``.
+            node_title_field: Column used as display title. Defaults to ``unique_id_field``,
+                and naming the id column (``add_nodes(df, 'A', 'id', 'id')``) means
+                the same as omitting it: ``n.id`` and ``{id: ...}`` keep naming
+                the identity. Fixed once the type has nodes, exactly like
+                ``unique_id_field``.
             columns: Whitelist of columns to include. ``None`` = all.
             conflict_handling: ``'update'`` (default), ``'replace'``, ``'skip'``,
                 ``'preserve'``, or ``'sum'``. ``'sum'`` acts as ``'update'`` for nodes.

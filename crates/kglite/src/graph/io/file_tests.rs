@@ -92,6 +92,31 @@ mod atomic_save_tests {
         assert!(g.ontology.is_empty());
     }
 
+    /// Read-compat: a file saved while `add_nodes(df, T, 'id', 'id')` (or
+    /// `('code', 'code')`) recorded the id column as a *title* spelling loads
+    /// with that spelling dropped, so the identity's name reads the identity.
+    #[test]
+    fn a_saved_title_alias_naming_the_identity_is_dropped_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.kgl");
+        let mut g = DirGraph::new();
+        fill_docs(&mut g, 2);
+        g.title_field_aliases_mut()
+            .insert("Doc".into(), "id".into());
+        g.id_field_aliases_mut()
+            .insert("Other".into(), "code".into());
+        g.title_field_aliases_mut()
+            .insert("Other".into(), "code".into());
+        g.title_field_aliases_mut()
+            .insert("Kept".into(), "name".into());
+        write_kgl(&ready_for_save(g), path.to_str().unwrap()).unwrap();
+        let loaded = load_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.resolve_alias("Doc", "id"), "id");
+        assert_eq!(loaded.resolve_alias("Other", "code"), "id");
+        assert!(!loaded.title_field_aliases.contains_key("Other"));
+        assert_eq!(loaded.resolve_alias("Kept", "name"), "title");
+    }
+
     #[test]
     fn atomic_save_roundtrips() {
         let dir = tempfile::tempdir().unwrap();

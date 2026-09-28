@@ -582,6 +582,9 @@ impl FileMetadata {
         graph.connection_type_metadata = Arc::new(self.connection_type_metadata);
         graph.id_field_aliases = Arc::new(self.id_field_aliases);
         graph.title_field_aliases = Arc::new(self.title_field_aliases);
+        // Read-compat for files saved while a title field naming the id column
+        // was recorded as a title spelling.
+        graph.drop_identity_shadowing_title_aliases();
         graph.auto_vacuum_threshold = self.auto_vacuum_threshold;
         graph.parent_types = Arc::new(self.parent_types);
         graph.ontology = Arc::new(self.ontology);

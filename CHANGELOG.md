@@ -462,6 +462,22 @@ before upgrading.
 
 ### Fixed
 
+- `add_nodes` with the id column also named as the title field —
+  `add_nodes(df, 'A', 'id', 'id')`, or `('code', 'code')` — recorded that
+  column as the type's *title* spelling, so the identity's own name resolved to
+  the title on some routes and not others. `MERGE (a:A {id: 'n1'})` then
+  missed the node it had made and created another on every run; each such node
+  kept `n1` as its id but read back its fabricated title (`A_1`, `A_2`, …) as
+  `a.id` (and, for `('code', 'code')`, as `a.code`), so `WHERE a.id = 'n1'`
+  disagreed with `MATCH (a:A {id: 'n1'})` and a `GROUP BY a.id` duplicate
+  audit reported none. Naming the id column as the title field now means what
+  omitting it means: the title is filled from that column and no title
+  spelling is recorded, so every route reads the identity. A title column
+  literally named `id` beside a different id column no longer shadows the
+  identity either. Graphs saved or logged by an affected version load with the
+  stray spelling dropped and read consistently; nodes an affected `MERGE`
+  already duplicated stay in the graph (their true ids now show up in a
+  duplicate audit) and need deduplicating.
 - A later bulk load onto a declared relationship type merged each row into
   the stored relationship between the same endpoints, whatever its `from`
   bound, and updated it in place (`connections_updated`): a row for a new

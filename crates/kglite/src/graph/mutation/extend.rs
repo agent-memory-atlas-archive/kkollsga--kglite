@@ -471,14 +471,10 @@ fn write_node_groups(
         let target_has_type = target.type_indices.get(&node_type).is_some();
         if !target_has_type {
             if let Some(alias) = source.id_field_aliases.get(&node_type) {
-                target
-                    .id_field_aliases_mut()
-                    .insert(node_type.clone(), alias.clone());
+                target.declare_id_field_alias(&node_type, alias);
             }
             if let Some(alias) = source.title_field_aliases.get(&node_type) {
-                target
-                    .title_field_aliases_mut()
-                    .insert(node_type.clone(), alias.clone());
+                target.declare_title_field_alias(&node_type, alias);
             }
         }
 
