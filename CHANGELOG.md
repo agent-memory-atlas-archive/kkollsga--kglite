@@ -268,6 +268,9 @@ before upgrading.
 - Rust API: `SchemaDefinition::reject_reserved_provenance_constraints` and
   `NodeSchemaDefinition` / `ConnectionSchemaDefinition::constrained_properties`,
   the check every constraint-declaring surface shares.
+- Rust API: `GraphRead::edge_property_list` (every non-NULL property of a
+  relationship without materialising it; implemented by every backend) and
+  `DataFrame::column_has_values`.
 - Java: `Transaction.commitResults()` commits like `commit()` and returns one
   `QueryResult` per statement, so a transaction's statements expose their
   `warnings()` and `diagnostics()` as `queryResult`/`cypherResult` do.

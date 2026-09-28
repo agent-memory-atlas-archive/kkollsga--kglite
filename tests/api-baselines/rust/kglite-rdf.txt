@@ -1257,6 +1257,7 @@ pub fn kglite::api::durable::RecordingGraph<G>::edge_count(&self) -> usize
 pub fn kglite::api::durable::RecordingGraph<G>::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_indices(&self) -> Self::EdgeIndicesIter
+pub fn kglite::api::durable::RecordingGraph<G>::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_references(&self) -> Self::EdgeReferencesIter
 pub fn kglite::api::durable::RecordingGraph<G>::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -2395,6 +2396,7 @@ impl kglite::datatypes::values::DataFrame
 pub fn kglite::datatypes::values::DataFrame::add_column(&mut self, name: alloc::string::String, col_type: kglite::datatypes::values::ColumnType, data: kglite::datatypes::values::ColumnData) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::add_constant_column(&mut self, name: alloc::string::String, value: kglite::datatypes::values::Value) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::column_count(&self) -> usize
+pub fn kglite::datatypes::values::DataFrame::column_has_values(&self, col_name: &str) -> bool
 pub fn kglite::datatypes::values::DataFrame::from_cypher_rows(columns: alloc::vec::Vec<alloc::string::String>, rows: alloc::vec::Vec<alloc::vec::Vec<kglite::datatypes::values::Value>>) -> core::result::Result<Self, alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::get_column_index(&self, name: &str) -> core::option::Option<usize>
 pub fn kglite::datatypes::values::DataFrame::get_column_names(&self) -> alloc::vec::Vec<alloc::string::String>
@@ -2924,6 +2926,7 @@ pub fn kglite::api::storage::GraphBackend::edge_count(&self) -> usize
 pub fn kglite::api::storage::GraphBackend::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::storage::GraphBackend::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::storage::GraphBackend::edge_indices(&self) -> kglite::graph::core::iterators::GraphEdgeIndices<'_>
+pub fn kglite::api::storage::GraphBackend::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::storage::GraphBackend::edge_references(&self) -> kglite::graph::core::iterators::GraphEdgeReferences<'_>
 pub fn kglite::api::storage::GraphBackend::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::storage::GraphBackend::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -3011,6 +3014,7 @@ pub fn kglite::api::storage::DiskGraph::edge_count(&self) -> usize
 pub fn kglite::api::storage::DiskGraph::edge_endpoints_fn(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::storage::DiskGraph::edge_indices_iter(&self) -> kglite::graph::core::iterators::DiskEdgeIndices<'_>
 pub fn kglite::api::storage::DiskGraph::edge_properties_at(&self, edge_idx: u32) -> core::option::Option<alloc::borrow::Cow<'_, [(kglite::api::InternedKey, kglite::datatypes::values::Value)]>>
+pub fn kglite::api::storage::DiskGraph::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::storage::DiskGraph::edge_property_overlay_len(&self) -> usize
 pub fn kglite::api::storage::DiskGraph::edge_references_iter(&self) -> kglite::graph::core::iterators::DiskEdgeReferences<'_>
 pub fn kglite::api::storage::DiskGraph::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
@@ -3091,6 +3095,7 @@ pub fn kglite::api::storage::DiskGraph::edge_count(&self) -> usize
 pub fn kglite::api::storage::DiskGraph::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::storage::DiskGraph::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::storage::DiskGraph::edge_indices(&self) -> kglite::graph::core::iterators::GraphEdgeIndices<'_>
+pub fn kglite::api::storage::DiskGraph::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::storage::DiskGraph::edge_references(&self) -> kglite::graph::core::iterators::GraphEdgeReferences<'_>
 pub fn kglite::api::storage::DiskGraph::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::storage::DiskGraph::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -4768,6 +4773,7 @@ pub fn kglite::api::GraphRead::edge_count(&self) -> usize
 pub fn kglite::api::GraphRead::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::GraphRead::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::GraphRead::edge_indices(&self) -> Self::EdgeIndicesIter
+pub fn kglite::api::GraphRead::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::GraphRead::edge_references(&self) -> Self::EdgeReferencesIter
 pub fn kglite::api::GraphRead::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::GraphRead::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -4822,6 +4828,7 @@ pub fn kglite::api::storage::DiskGraph::edge_count(&self) -> usize
 pub fn kglite::api::storage::DiskGraph::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::storage::DiskGraph::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::storage::DiskGraph::edge_indices(&self) -> kglite::graph::core::iterators::GraphEdgeIndices<'_>
+pub fn kglite::api::storage::DiskGraph::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::storage::DiskGraph::edge_references(&self) -> kglite::graph::core::iterators::GraphEdgeReferences<'_>
 pub fn kglite::api::storage::DiskGraph::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::storage::DiskGraph::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -4869,6 +4876,7 @@ pub fn kglite::api::storage::GraphBackend::edge_count(&self) -> usize
 pub fn kglite::api::storage::GraphBackend::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::storage::GraphBackend::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::storage::GraphBackend::edge_indices(&self) -> kglite::graph::core::iterators::GraphEdgeIndices<'_>
+pub fn kglite::api::storage::GraphBackend::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::storage::GraphBackend::edge_references(&self) -> kglite::graph::core::iterators::GraphEdgeReferences<'_>
 pub fn kglite::api::storage::GraphBackend::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::storage::GraphBackend::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -4962,6 +4970,7 @@ pub fn kglite::api::durable::RecordingGraph<G>::edge_count(&self) -> usize
 pub fn kglite::api::durable::RecordingGraph<G>::edge_endpoint_keys<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = (petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)> + 'a)>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_endpoints(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex)>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_indices(&self) -> Self::EdgeIndicesIter
+pub fn kglite::api::durable::RecordingGraph<G>::edge_property_list(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_references(&self) -> Self::EdgeReferencesIter
 pub fn kglite::api::durable::RecordingGraph<G>::edge_weight(&self, idx: petgraph::graph_impl::EdgeIndex) -> core::option::Option<&kglite::api::EdgeData>
 pub fn kglite::api::durable::RecordingGraph<G>::edge_weights<'a>(&'a self) -> alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a kglite::api::EdgeData> + 'a)>
@@ -5291,6 +5300,7 @@ impl kglite::datatypes::values::DataFrame
 pub fn kglite::datatypes::values::DataFrame::add_column(&mut self, name: alloc::string::String, col_type: kglite::datatypes::values::ColumnType, data: kglite::datatypes::values::ColumnData) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::add_constant_column(&mut self, name: alloc::string::String, value: kglite::datatypes::values::Value) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::column_count(&self) -> usize
+pub fn kglite::datatypes::values::DataFrame::column_has_values(&self, col_name: &str) -> bool
 pub fn kglite::datatypes::values::DataFrame::from_cypher_rows(columns: alloc::vec::Vec<alloc::string::String>, rows: alloc::vec::Vec<alloc::vec::Vec<kglite::datatypes::values::Value>>) -> core::result::Result<Self, alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::get_column_index(&self, name: &str) -> core::option::Option<usize>
 pub fn kglite::datatypes::values::DataFrame::get_column_names(&self) -> alloc::vec::Vec<alloc::string::String>
@@ -5423,6 +5433,7 @@ impl kglite::datatypes::values::DataFrame
 pub fn kglite::datatypes::values::DataFrame::add_column(&mut self, name: alloc::string::String, col_type: kglite::datatypes::values::ColumnType, data: kglite::datatypes::values::ColumnData) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::add_constant_column(&mut self, name: alloc::string::String, value: kglite::datatypes::values::Value) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::column_count(&self) -> usize
+pub fn kglite::datatypes::values::DataFrame::column_has_values(&self, col_name: &str) -> bool
 pub fn kglite::datatypes::values::DataFrame::from_cypher_rows(columns: alloc::vec::Vec<alloc::string::String>, rows: alloc::vec::Vec<alloc::vec::Vec<kglite::datatypes::values::Value>>) -> core::result::Result<Self, alloc::string::String>
 pub fn kglite::datatypes::values::DataFrame::get_column_index(&self, name: &str) -> core::option::Option<usize>
 pub fn kglite::datatypes::values::DataFrame::get_column_names(&self) -> alloc::vec::Vec<alloc::string::String>
