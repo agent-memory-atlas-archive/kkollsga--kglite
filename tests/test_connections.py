@@ -623,7 +623,7 @@ class TestSharedRelationshipTypeOwnership:
         assert (report["connections_created"], report["connections_updated"]) == (0, 1)
         assert len(self._periods(g, "Field")) == 2
 
-    def test_a_same_source_reload_on_a_declared_type_keys_on_from(self):
+    def test_a_same_source_reload_on_a_declared_type_adds_versions(self):
         g = self._graph()
         self._load(g, "Field", 10, self.FIELD)
         self._load(g, "Licence", 50, self.LICENCE)
@@ -631,12 +631,16 @@ class TestSharedRelationshipTypeOwnership:
             "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field', "
             "from: 'vf', to: 'vt', convention: 'closed'})"
         )
-        report = self._load(g, "Field", 10, [("2005-01-01", "2009-12-31"), ("2010-01-01", None)])
-        # The 2005 row closes the open period it starts; the 2010 row starts
-        # a period nothing stored starts, so it is a new relationship.
-        assert (report["connections_created"], report["connections_updated"]) == (1, 1)
+        report = self._load(
+            g, "Field", 10, [("2001-01-01", "2004-12-31"), ("2005-01-01", "2009-12-31"), ("2010-01-01", None)]
+        )
+        # The stored 2001 row is dropped as a copy; the 2005 row closing the
+        # open period and the 2010 row are new versions, and the open 2005
+        # version stays.
+        assert (report["connections_created"], report["connections_updated"]) == (2, 0)
         assert self._periods(g, "Field") == [
             ("2001-01-01", "2004-12-31"),
+            ("2005-01-01", None),
             ("2005-01-01", "2009-12-31"),
             ("2010-01-01", None),
         ]

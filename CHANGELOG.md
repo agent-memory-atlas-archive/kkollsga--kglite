@@ -369,21 +369,24 @@ before upgrading.
   is refused instead of added beside it. Rows written onto a declared type
   later are not validated.
 - A bulk load (`add_relationships`, `replace_relationships`,
-  `create_relationships()`, `extend()`, the C ABI's edge batch) onto a
-  relationship type with a declared validity interval keys rows on their
-  `from` bound as well as the endpoints: a row starting a period no stored
-  relationship between the pair starts is a new relationship, whatever
-  `conflict_handling` says, where it used to merge into the stored one and
-  leave an inverted interval or drop a period. A row starting the same period
-  merges as before. Starts compare as the instant they name, so a date, a
-  midnight datetime and an ISO string of the same day are one start (a pandas
-  column holding one time of day loads as datetimes, and re-loading it as
-  dates merges); a datetime later in the day is its own start. The
-  declaration consulted is the one covering each row's source type, also when
-  `create_relationships()` is called without `source_type=`. A legacy type
-  with several unkeyed declarations keys each row on the first declared
-  `from` property it carries. Relationship constraints judge rows by the same
-  key. Undeclared types are unchanged.
+  `create_relationships()`, `extend()`, blueprints, the C ABI's edge batch)
+  onto a relationship type with a declared validity interval writes its rows
+  as versions and never updates a stored relationship: a row identical to a
+  relationship already between its endpoints — stored, or written by an
+  earlier row of the same call — is dropped, and any other row (a new period,
+  a closing `to`, another value of any property) is a new, parallel
+  relationship, whatever `conflict_handling` says and whether the rows arrive
+  in one call or several. `connections_updated` is 0 on such a type, and a
+  dropped copy is counted in no field. Identity compares every property; the
+  declared bounds compare as the instant they name, so a date, a midnight
+  datetime and an ISO string of the same day are one bound (a datetime later
+  in the day is its own), and `auto_timestamp` stamps are left out, so a
+  redelivery is a no-op. Close or correct a stored period with Cypher `SET` /
+  `DELETE`. The declaration consulted is the one covering each row's source
+  type, also when `create_relationships()` is called without `source_type=`;
+  a legacy type with several unkeyed declarations reads each row by the first
+  declaration whose `from` it carries. Relationship constraints judge each
+  row as the relationship it would create. Undeclared types are unchanged.
 - One relationship type loaded from several source node types: each source
   node type's first load owns its rows. `add_relationships`,
   `replace_relationships`, `extend()`, the C ABI's edge batch and blueprint
@@ -452,6 +455,13 @@ before upgrading.
 
 ### Fixed
 
+- A later bulk load onto a declared relationship type updated the stored
+  relationship with the same endpoints and `from` bound in place
+  (`connections_updated=1`), so a registration image — the open version a
+  closing row supersedes, or a version recorded at another time — was lost,
+  while the same rows in one call were kept as separate relationships. Rows
+  are now versions (see Changed): nothing stored is updated, identical rows
+  are dropped, and one call and several calls leave the same relationships.
 - The query warning for `WHERE n.x IS NULL` on a property no node of the type
   has said the test "filters out every row" while the query returned every
   row; it now says the test is true on every row, and stays silent for a

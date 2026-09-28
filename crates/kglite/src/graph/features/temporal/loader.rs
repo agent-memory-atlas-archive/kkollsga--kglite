@@ -45,7 +45,7 @@ enum Stage {
     /// Declared already — before the load, or identically by an earlier one.
     Declared(DeclareReport),
     /// Installed unvalidated because the load creates the target's first
-    /// rows: the merge key applies to the load, and `finish` validates.
+    /// rows: the load writes them as versions, and `finish` validates.
     Installed,
 }
 

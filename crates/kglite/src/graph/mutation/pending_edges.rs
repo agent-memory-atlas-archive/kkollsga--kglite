@@ -41,7 +41,7 @@ impl PendingEdges {
     /// constraint refuses the whole call rather than the rows after the first
     /// violation.
     ///
-    /// On a declared temporal type each edge keys on the `from` bound of the
+    /// On a declared temporal type each edge's bounds are read by the
     /// declaration covering its source: `source_type` when the caller named
     /// the level, else each edge's own source node type. Edges whose sources
     /// key alike share one batch.

@@ -410,6 +410,14 @@ that names it is refused as a typo. Only a declared name counts as known before
 any row carries it — a valid-time bound, or a `define_schema()` field — and
 this pair is neither.
 
+**Load images as new relationships.** On a declared relationship type,
+`add_relationships()` (and `create_relationships()`, `extend()` and
+blueprints) never rewrites a stored relationship: a row identical to one
+already between its endpoints is dropped, so a redelivery is harmless, and a
+row that differs in anything — its `to`, its `recorded_from` — is a new
+relationship beside the old one. `connections_updated` stays 0 on such a type.
+Close a stored period in Cypher, with `SET`, when that is what you mean.
+
 **Give each record its own id.** Records that share an id shadow each other.
 `MATCH (m {id: …})` and `WHERE m.id = …` find one node per id, so the lookup
 can land on an image recorded at another time and return `[]`. The only hint is

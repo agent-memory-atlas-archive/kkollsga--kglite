@@ -4,8 +4,8 @@
 //!
 //! Relationship configs are kept as an ordered list per type: a legacy type
 //! holding several unkeyed configs (which every valid-time filter refuses as
-//! ambiguous) is saved back in the order it was read, and a bulk load's merge
-//! key reads the first config a row carries ([`merge_start_key`]). How the
+//! ambiguous) is saved back in the order it was read, and a bulk load reads a
+//! row's start from the first config it carries ([`merge_start_key`]). How the
 //! store is saved and loaded is `persist.rs`.
 
 use std::collections::HashMap;
@@ -542,10 +542,10 @@ pub fn edge_configs<'g>(graph: &'g DirGraph, rel_type: &str) -> &'g [TemporalCon
     graph.temporal.edges(rel_type)
 }
 
-/// The `from` properties a bulk load of `rel_type` relationships from
-/// `source_type` adds to its merge key, so that a row starting a different
-/// period between the same endpoints becomes a parallel relationship instead
-/// of merging into the stored one: the source's keyed declaration's, else
+/// The bounds a bulk load of `rel_type` relationships from `source_type` reads
+/// its rows' versions by (`ConnectionBatchProcessor::configure`), so that a row
+/// that is not an identical copy of a stored relationship between the same
+/// endpoints becomes a parallel one: the source's keyed declaration's, else
 /// every unkeyed declaration's in declaration order (a legacy type can hold
 /// several; each row keys on the first it carries). `None` as the source takes
 /// only the unkeyed declarations, and `None` is returned when none applies.

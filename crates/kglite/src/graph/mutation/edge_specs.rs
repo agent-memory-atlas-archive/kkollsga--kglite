@@ -32,9 +32,10 @@ pub struct EdgeSpecReport {
     /// Edges the batch engine actually created.
     pub connections_created: usize,
     /// Specs that met an existing edge of the same type between the same
-    /// endpoints — and the same `from` bound, for a declared temporal type —
-    /// and merged their properties into it (the default `update` conflict
-    /// mode), creating nothing.
+    /// endpoints and merged their properties into it (the default `update`
+    /// conflict mode), creating nothing. Always 0 on a declared temporal type,
+    /// where a spec identical to a stored edge is dropped and any other is a
+    /// new edge.
     pub connections_updated: usize,
     /// Edges skipped because a source or target id had no node of its
     /// declared type. Unlike [`add_connections`](crate::graph::mutation::maintain::add_connections), this primitive does NOT

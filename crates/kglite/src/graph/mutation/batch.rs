@@ -1,5 +1,5 @@
 use crate::datatypes::Value;
-use crate::graph::features::temporal::{Start, StartKey};
+use crate::graph::features::temporal::{Image, Start, StartKey};
 use crate::graph::schema::{
     DirGraph, EdgeData, InternedKey, NodeData, PropertyStorage, PROVISIONAL_KEY,
 };
@@ -691,7 +691,8 @@ struct ConnectionCreation {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ConnectionBatchStats {
     pub connections_created: usize,
-    /// Rows merged into an existing relationship per the conflict mode.
+    /// Rows merged into an existing relationship per the conflict mode. Always
+    /// 0 on a declared temporal type, whose rows never update in place.
     pub connections_updated: usize,
     pub properties_tracked: usize,
 }
@@ -721,8 +722,8 @@ pub struct ConnectionBatchProcessor {
     conflict_mode: ConflictHandling,
     accumulated_stats: ConnectionBatchStats,
     skip_existence_check: bool,
-    /// Set for a declared temporal relationship type: the `from` properties
-    /// whose start joins the endpoint pair in the merge key (see [`MergeKey`]).
+    /// Set for a declared temporal relationship type: its rows are versions,
+    /// matched by image rather than merged ([`Self::flush_declared`]).
     start_key: Option<StartKey>,
     /// Rows queued over the batch's life — `connections` is drained per flush.
     queued_rows: usize,
@@ -763,12 +764,15 @@ impl ConnectionBatchProcessor {
     /// type (`maintain::source_owns_its_edges`), and held across every chunk
     /// of a chunked load (`maintain::InitialLoad`) — so "on" does not imply
     /// the type has no stored edges, only that this load owns every one that
-    /// leaves its source type. Otherwise a row merges per `mode` into the stored or
-    /// earlier-queued edge with the same key: the endpoint pair, plus — when
-    /// `start_key` names a declared temporal relationship type's `from`
-    /// properties (`features::temporal::merge_start_key`) — the first of them
-    /// the row carries and its parsed start, so a row starting a different
-    /// period is a new, parallel edge.
+    /// leaves its source type. Otherwise a row merges per `mode` into the
+    /// stored or earlier-queued edge between the same endpoints.
+    ///
+    /// A `start_key` (`features::temporal::merge_start_key`) marks a declared
+    /// temporal relationship type, whose rows are versions: a row identical
+    /// to a stored or earlier-queued relationship between its endpoints is
+    /// dropped, and any other row is a new relationship, under every `mode`
+    /// and whether or not `skip_existence_check` is set — so one call and
+    /// several calls holding the same rows leave the same relationships.
     pub(crate) fn configure(
         &mut self,
         mode: ConflictHandling,
@@ -796,22 +800,8 @@ impl ConnectionBatchProcessor {
         // (single chokepoint for every `add_connections` route; registered into
         // `schema_properties` below so the columnar edge store gets a slot).
         graph.inject_edge_provenance_interned(connection_type, &mut properties);
-        if let (false, Some(start)) = (self.skip_existence_check, &self.start_key) {
-            if self.conflict_mode == ConflictHandling::Skip {
-                let conn_type_key = graph.interner.get_or_intern(connection_type);
-                let row = start.of_properties(&properties);
-                if graph
-                    .graph
-                    .edges_connecting(source_idx, target_idx)
-                    .any(|e| {
-                        e.connection_type() == conn_type_key
-                            && stored_start(graph, start, e.id()) == row
-                    })
-                {
-                    return Ok(());
-                }
-            }
-        } else if !self.skip_existence_check {
+        // A declared type's rows are matched at the flush, in every mode.
+        if self.start_key.is_none() && !self.skip_existence_check {
             let conn_type_key = graph.interner.get_or_intern(connection_type);
             let existing_edge = graph
                 .graph
@@ -863,8 +853,102 @@ impl ConnectionBatchProcessor {
         // loop with no per-row branch on the start key.
         match self.start_key.clone() {
             None => Ok(self.flush_keyed(graph, connection_type, Endpoints)),
-            Some(key) => Ok(self.flush_keyed(graph, connection_type, EndpointsAndStart(key))),
+            Some(key) => Ok(self.flush_declared(graph, connection_type, &key)),
         }
+    }
+
+    /// Write a declared temporal type's queued rows as versions: a row whose
+    /// [`Image`] equals a relationship's already between its endpoints — one
+    /// stored, or one an earlier row of this load created — is dropped, and
+    /// every other row is a new relationship. Nothing stored is ever updated,
+    /// so no version of a relationship is lost to a later load.
+    ///
+    /// Candidates are bucketed on the endpoints and parsed start; an image is
+    /// read only for a bucket hit. A stored image is read property by property
+    /// over every name an edge of the type can carry (the type's recorded
+    /// properties, this batch's, and the declared bounds), which makes it the
+    /// edge's whole image without materialising it. The provenance stamps an
+    /// `auto_timestamp` type writes afresh on every row are left out.
+    fn flush_declared(
+        &mut self,
+        graph: &mut DirGraph,
+        connection_type: &str,
+        start: &StartKey,
+    ) -> ConnectionBatchStats {
+        let began = Instant::now();
+        let mut stats = ConnectionBatchStats::default();
+        let conn_type_key = graph.interner.get_or_intern(connection_type);
+
+        let ignore: Vec<InternedKey> = if graph.auto_timestamp_for_connection(connection_type) {
+            crate::graph::schema::RESERVED_PROVENANCE_KEYS
+                .iter()
+                .map(|name| InternedKey::from_str(name))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut names: Vec<InternedKey> = self.schema_properties.iter().copied().collect();
+        names.extend_from_slice(start.bounds());
+        if let Some(info) = graph.connection_type_metadata.get(connection_type) {
+            names.extend(
+                info.property_types
+                    .keys()
+                    .map(|name| InternedKey::from_str(name)),
+            );
+        }
+        names.sort_unstable();
+        names.dedup();
+
+        let mut buckets: HashMap<(NodeIndex, NodeIndex, Start), Vec<Candidate>> = HashMap::new();
+        let sources: HashSet<NodeIndex> = self.connections.iter().map(|c| c.source_idx).collect();
+        for source in sources {
+            for edge in graph.graph.edges_directed(source, Direction::Outgoing) {
+                if edge.connection_type() == conn_type_key {
+                    let key = (source, edge.target(), stored_start(graph, start, edge.id()));
+                    buckets
+                        .entry(key)
+                        .or_default()
+                        .push(Candidate::Stored(edge.id()));
+                }
+            }
+        }
+
+        for conn in self.connections.drain(..) {
+            let key = (
+                conn.source_idx,
+                conn.target_idx,
+                start.of_properties(&conn.properties),
+            );
+            let image = start.image(conn.properties.iter().map(|(k, v)| (*k, v)), &ignore);
+            let bucket = buckets.entry(key).or_default();
+            let mut already_stored = false;
+            for candidate in bucket.iter_mut() {
+                if candidate.image(graph, start, &names, &ignore) == &image {
+                    already_stored = true;
+                    break;
+                }
+            }
+            if already_stored {
+                continue;
+            }
+            let edge_data = EdgeData::new_interned(conn_type_key, conn.properties);
+            let new_id = GraphWrite::add_edge(
+                &mut graph.graph,
+                conn.source_idx,
+                conn.target_idx,
+                edge_data,
+            );
+            crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+            bucket.push(Candidate::Read(image));
+            stats.connections_created += 1;
+        }
+
+        graph.invalidate_edge_type_counts_cache();
+        self.metrics.processing_time += began.elapsed().as_secs_f64();
+        self.metrics.batch_count += 1;
+        self.metrics.memory_used = self.connections.capacity();
+        stats.properties_tracked = self.schema_properties.len();
+        stats
     }
 
     fn flush_keyed<K: MergeKey>(
@@ -1045,31 +1129,32 @@ impl MergeKey for Endpoints {
     }
 }
 
-/// The endpoint pair plus the start held by the first of a declared temporal
-/// type's `from` properties the row carries ([`Start`]: none carried or NULL is
-/// `None`, and one instant is one start however it is spelled), so each period
-/// between a pair is its own relationship.
-struct EndpointsAndStart(StartKey);
+/// A relationship a declared-type row may be a copy of: a stored edge whose
+/// image is read on first comparison, or an image already read (a stored
+/// edge's, or a row this load wrote).
+enum Candidate {
+    Stored(EdgeIndex),
+    Read(Image),
+}
 
-impl MergeKey for EndpointsAndStart {
-    type Key = (NodeIndex, NodeIndex, Start);
-
-    fn stored(
-        &self,
+impl Candidate {
+    fn image(
+        &mut self,
         graph: &DirGraph,
-        edge: EdgeIndex,
-        source: NodeIndex,
-        target: NodeIndex,
-    ) -> Self::Key {
-        (source, target, stored_start(graph, &self.0, edge))
-    }
-
-    fn row(&self, conn: &ConnectionCreation) -> Self::Key {
-        (
-            conn.source_idx,
-            conn.target_idx,
-            self.0.of_properties(&conn.properties),
-        )
+        start: &StartKey,
+        names: &[InternedKey],
+        ignore: &[InternedKey],
+    ) -> &Image {
+        if let Candidate::Stored(edge) = *self {
+            let properties = names
+                .iter()
+                .filter_map(|&name| Some((name, graph.graph.get_edge_property(edge, name)?)));
+            *self = Candidate::Read(start.image(properties, ignore));
+        }
+        match self {
+            Candidate::Read(image) => image,
+            Candidate::Stored(_) => unreachable!("read above"),
+        }
     }
 }
 

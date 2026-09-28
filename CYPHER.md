@@ -1528,9 +1528,14 @@ CALL db.temporal.declarations()
 - **From Python.** `set_temporal()` and the loaders' `validFrom`/`validTo`
   column types declare through the same rules, with an optional `convention`
   that keeps an existing declaration of the same properties and is `closed`
-  otherwise. A bulk load onto a declared relationship type keys each row on
-  its `from` bound as well as its endpoints, so a new period between the same
-  pair is a parallel relationship rather than a merge. A blueprint declares
+  otherwise. A bulk load onto a declared relationship type never updates a
+  stored relationship: a row identical to one already between its endpoints —
+  every property equal, bounds compared as the instants they name, provenance
+  stamps left out — is dropped, and any other row (a new period, a closing
+  `to`, another value of any property) is a new, parallel relationship, in
+  every `conflict_handling` mode and whether the rows arrive in one call or
+  several. To close or correct a stored period, `SET` or `DELETE` it in
+  Cypher. A blueprint declares
   through a spec's `temporal` key, which must name its convention.
 
 ### Statement context: `FOR VALID_TIME AS OF`

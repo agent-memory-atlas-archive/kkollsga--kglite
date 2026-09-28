@@ -13,9 +13,9 @@
 //!   `preserve` / `sum`),
 //! - `TypeSchema` / interner extension for new properties,
 //! - eager id-index rebuild (`build_id_index`),
-//! - edge dedup keyed on `(connection_type, src, tgt)`, plus a declared
-//!   temporal `from` bound, with per-mode
-//!   property merge.
+//! - edge dedup keyed on `(connection_type, src, tgt)` with per-mode
+//!   property merge, and on a declared temporal type the drop of an
+//!   identical copy of a stored relationship,
 //!
 //! Re-implementing any of that here would risk drift. Instead we
 //! materialise the source's nodes/edges into `DataFrame`s grouped the
@@ -35,10 +35,10 @@
 //!   onto the matched/created target node via
 //!   [`DirGraph::add_node_label`] — idempotent, never removes a label.
 //! - **Edges** dedup exactly as `add_connections` does: an edge with the
-//!   same `(connection_type, src, tgt)` — plus the same `from` bound when
-//!   the type carries a temporal declaration — that already exists in the
-//!   target is *not* duplicated; its properties merge per
-//!   `conflict_handling`. This is the defensible choice over petgraph's
+//!   same `(connection_type, src, tgt)` that already exists in the target is
+//!   *not* duplicated; its properties merge per `conflict_handling`. On a
+//!   type with a temporal declaration nothing merges: an edge identical to
+//!   one the target holds is dropped and any other is a new edge. This is the defensible choice over petgraph's
 //!   raw parallel-edge capability — a merge that silently doubled every
 //!   shared edge would be surprising. Parallel edges the *source* itself
 //!   carries between one pair follow `add_connections`' ownership rule
@@ -293,8 +293,8 @@ pub fn extend_graph(
     };
 
     // The temporal declarations go in before any row, so the edge merge — and
-    // the gate below, which must model it — key declared relationship types on
-    // their `from` bound. They are validated once the edges have landed, or
+    // the gate below, which must model it — treat declared relationship types'
+    // rows as versions. They are validated once the edges have landed, or
     // withdrawn when the merge fails before then.
     let adopted =
         temporal::adopt_declarations(target, temporal::declared(source), &mut report.errors);

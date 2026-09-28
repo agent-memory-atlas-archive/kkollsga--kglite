@@ -2376,18 +2376,21 @@ class KnowledgeGraph:
             nothing to merge into, so it writes one relationship per row and
             repeated pairs in its frame stay parallel; a later load from the
             same ``source_type`` merges, rows within its frame included. On a
-            relationship type with a declared validity interval the ``from``
-            bound joins that key: a row starting a period no stored
-            relationship between the pair starts is a new, parallel
-            relationship (every ``conflict_handling`` mode), and one starting
-            the same period merges as above — closing an open period, or
-            re-loading it. Correcting a stored ``from`` bound is therefore a
-            delete of the old relationship plus a load of the new one. Starts
-            compare as the instant they name: a date, a midnight datetime and
-            an ISO string of the same day are one start, while a datetime later
-            in the day is its own. A legacy type with several unkeyed
-            declarations keys each row on the first declared ``from`` property
-            it carries.
+            relationship type with a declared validity interval nothing is
+            merged or updated, in every ``conflict_handling`` mode and on a
+            first load or a later one alike: a row identical to a
+            relationship already between its endpoints (a stored one, or one
+            an earlier row of the call wrote) is dropped and counted nowhere,
+            and any other row — a new period, a closing ``to``, a different
+            value of any property — is a new, parallel relationship, so a
+            load never loses a stored version and ``connections_updated`` is
+            0. Identity compares every property, with the declared bounds
+            compared as the instant they name (a date, a midnight datetime and
+            an ISO string of the same day are one instant, a datetime later in
+            the day is its own) and ``auto_timestamp`` stamps left out. Close
+            or correct a stored period with Cypher ``SET`` / ``DELETE``. A
+            legacy type with several unkeyed declarations reads each row's
+            bounds by the first declaration whose ``from`` it carries.
         """
         ...
 
@@ -2496,8 +2499,8 @@ class KnowledgeGraph:
         Returns:
             Operation report dict with ``connections_created``,
             ``connections_updated``, ``connections_skipped``, etc. Rows of a
-            type with a declared validity interval are keyed on their
-            ``from`` bound as in :meth:`add_relationships`.
+            type with a declared validity interval are versions, never merged,
+            as in :meth:`add_relationships`.
         """
         ...
 
@@ -2572,10 +2575,11 @@ class KnowledgeGraph:
           missing or cyclic title references become ``None``. This includes
           node titles and nested list/map properties. Structural node and edge
           IDs remain identity.
-        - **Edges** dedup on ``(connection_type, source, target)`` — plus the
-          ``from`` bound on a type with a declared validity interval: an edge
+        - **Edges** dedup on ``(connection_type, source, target)``: an edge
           that already exists here is **not** duplicated — its properties merge
-          per ``conflict_handling``. Exact-duplicate edges present in both
+          per ``conflict_handling``. On a type with a declared validity
+          interval an edge identical to one here is dropped and any other is a
+          new, parallel edge, as in :meth:`add_relationships`. Exact-duplicate edges present in both
           graphs are created once, not twice (mirrors ``add_relationships``'
           dedup so a merge never silently doubles shared edges). Parallel
           edges *other* carries between one pair are all copied when this
@@ -7804,8 +7808,9 @@ class KnowledgeGraph:
         ``traverse()`` auto-filters temporal relationships and the nodes they
         reach to "current" (today in UTC, or the ``date()`` context), and a
         bulk load onto a declared
-        relationship type keeps each period between the same endpoints as its
-        own relationship (see :meth:`add_relationships`). This is
+        relationship type keeps each version between the same endpoints as its
+        own relationship and never updates a stored one (see
+        :meth:`add_relationships`). This is
         ``CALL db.temporal.declare`` with a defaulted convention: the
         ``valid_from`` property must exist (a ``valid_to`` no row carries yet
         is accepted with a warning, unless it is a near miss of a property

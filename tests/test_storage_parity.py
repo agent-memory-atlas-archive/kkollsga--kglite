@@ -1120,36 +1120,44 @@ def test_replace_relationships_parity(tmp_path):
 
 
 def test_declared_temporal_relationship_merge_parity(tmp_path):
-    """On a declared interval type the merge key is the endpoints plus the
-    start: a repeated start merges into the stored relationship (closing its
-    open period), a new start is a parallel relationship — in every mode."""
+    """On a declared interval type a row identical to a stored relationship is
+    dropped and every other row — a closing row, a new start, another value —
+    is a new, parallel relationship; nothing is updated in place. One call
+    and several calls holding the same rows leave the same relationships, in
+    every mode."""
     periods = {"vf": "validFrom", "vt": "validTo"}
+    rows = [
+        (1, 100, "2000-01-01", None, 1),
+        (1, 100, "2000-01-01", "2005-01-01", 2),
+        (1, 100, "2010-01-01", None, 3),
+        (1, 100, "2010-01-01", "2012-01-01", 4),
+        (1, 100, "2010-01-01", "2012-01-01", 4),
+    ]
+    query = "MATCH (:A)-[r:IN]->(:C) RETURN toString(r.vf) AS vf, toString(r.vt) AS vt, r.w AS w ORDER BY w"
+    expected = [
+        {"vf": "2000-01-01", "vt": None, "w": 1},
+        {"vf": "2000-01-01", "vt": "2005-01-01", "w": 2},
+        {"vf": "2010-01-01", "vt": None, "w": 3},
+        {"vf": "2010-01-01", "vt": "2012-01-01", "w": 4},
+    ]
     for mode in STORAGE_MODES:
-        kg = _new_graph(mode, tmp_path, "temporal_merge")
-        _merge_endpoints(kg)
-
-        def link(rows, conflict=None):
-            frame = pd.DataFrame(rows, columns=["s", "t", "vf", "vt", "w"])
-            return kg.add_relationships(
-                frame, "IN", "A", "s", "C", "t", conflict_handling=conflict, column_types=periods
-            )
-
-        link([(1, 100, "2000-01-01", None, 1)])
-        report = link([(1, 100, "2000-01-01", "2005-01-01", 2), (1, 100, "2010-01-01", None, 3)], "update")
-        assert (report["connections_created"], report["connections_updated"]) == (1, 1), mode
-        query = "MATCH (:A)-[r:IN]->(:C) RETURN toString(r.vf) AS vf, toString(r.vt) AS vt, r.w AS w ORDER BY vf"
-        expected = [
-            {"vf": "2000-01-01", "vt": "2005-01-01", "w": 2},
-            {"vf": "2010-01-01", "vt": None, "w": 3},
-        ]
-        assert kg.cypher(query).to_list() == expected, mode
-        # A merge-only call: no new relationship in the batch to flush it.
-        report = link([(1, 100, "2010-01-01", "2012-01-01", 4)], "update")
-        assert (report["connections_created"], report["connections_updated"]) == (0, 1), mode
-        expected[1] = {"vf": "2010-01-01", "vt": "2012-01-01", "w": 4}
-        assert kg.cypher(query).to_list() == expected, mode
-        reopened = _reopen(kg, mode, tmp_path, "temporal_merge")
-        assert reopened.cypher(query).to_list() == expected, mode
+        results = {}
+        for shape, chunks in (("one_call", [rows]), ("several_calls", [[row] for row in rows])):
+            kg = _new_graph(mode, tmp_path, f"temporal_merge_{shape}")
+            _merge_endpoints(kg)
+            counts = []
+            for chunk in chunks:
+                frame = pd.DataFrame(chunk, columns=["s", "t", "vf", "vt", "w"])
+                report = kg.add_relationships(
+                    frame, "IN", "A", "s", "C", "t", conflict_handling="update", column_types=periods
+                )
+                counts.append((report["connections_created"], report["connections_updated"]))
+            assert sum(c for c, _ in counts) == 4 and all(u == 0 for _, u in counts), (mode, shape, counts)
+            assert kg.cypher(query).to_list() == expected, (mode, shape)
+            reopened = _reopen(kg, mode, tmp_path, f"temporal_merge_{shape}")
+            assert reopened.cypher(query).to_list() == expected, (mode, shape)
+            results[shape] = counts
+        assert results["several_calls"][-1] == (0, 0), mode
 
 
 def test_add_properties_parity(tmp_path):
