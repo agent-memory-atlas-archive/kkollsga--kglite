@@ -132,22 +132,12 @@ impl FluentFilter {
         if temporal == Some(false) {
             return Ok(Self::default());
         }
-        let (selector, function) = match (at, during) {
-            (Some(day), _) => (
-                ValidTimeSelector::AsOf(Instant::Date(day)),
-                "traverse(at=...)",
-            ),
-            (None, Some((start, end))) => (
-                ValidTimeSelector::Overlap(Instant::Date(start), Instant::Date(end)),
-                "traverse(during=...)",
-            ),
-            (None, None) => match ValidTimeSelector::try_from(context) {
-                Ok(selector) => (selector, "traverse()"),
-                Err(()) => return Ok(Self::default()),
-            },
+        let function = match (at, during) {
+            (Some(_), _) => "traverse(at=...)",
+            (None, Some(_)) => "traverse(during=...)",
+            (None, None) => "traverse()",
         };
-        let requested = at.is_some() || during.is_some();
-        if requested {
+        if at.is_some() || during.is_some() {
             if let Err(message) = temporal::relationship_request_configs(graph, function, rel_type)
             {
                 return Ok(Self {
@@ -156,9 +146,21 @@ impl FluentFilter {
                 });
             }
         }
+        // Before the selector: the default `Today` context reads the clock,
+        // a cost every traverse() on an undeclared graph would pay.
         if graph.temporal.is_empty() {
             return Ok(Self::default());
         }
+        let selector = match (at, during) {
+            (Some(day), _) => ValidTimeSelector::AsOf(Instant::Date(day)),
+            (None, Some((start, end))) => {
+                ValidTimeSelector::Overlap(Instant::Date(start), Instant::Date(end))
+            }
+            (None, None) => match ValidTimeSelector::try_from(context) {
+                Ok(selector) => selector,
+                Err(()) => return Ok(Self::default()),
+            },
+        };
         let scope = TemplateScope {
             any_node: target_types.is_none(),
             labels: target_types.into_iter().flatten().cloned().collect(),
