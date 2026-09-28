@@ -13,15 +13,12 @@ from pathlib import Path
 import pytest
 
 REGISTRY = Path(__file__).resolve().parents[1] / "tests" / "parity_ownership.json"
-STATIC_CASE = "tests/test_phase5_parity.py::test_dead_code_check"
 
 
 def load_registry(path=REGISTRY):
     owners = json.loads(path.read_text(encoding="utf-8"))
     for nodeid, entry in owners.items():
-        if entry["owner"] == "storage-parity":
-            continue
-        if nodeid != STATIC_CASE or entry["owner"] != "workspace-clippy" or not entry.get("reason", "").strip():
+        if entry["owner"] != "storage-parity":
             raise ValueError(f"Undeclared parity exclusion: {nodeid}: {entry}")
     return owners
 
