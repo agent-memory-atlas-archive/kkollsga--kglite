@@ -97,8 +97,10 @@ count). Two semantics to keep in mind:
   as known even when every value written so far was NULL — an `add_nodes`
   column that was empty throughout, or a `CREATE` / `UNWIND … CREATE` map entry
   that evaluated to NULL — so a later delivery carrying a value is accepted,
-  open or locked; `schema()` records such a property as `Unknown` until a value
-  arrives, and `describe()` lists it with `coverage="0%"`. A property the graph
+  open or locked. Where nothing names its type yet (a Cypher NULL, an
+  all-`None` object column) `schema()` records it as `Unknown` and
+  `describe()` lists it with `coverage="0%"` until the first value types it;
+  an `add_nodes` column with a dtype keeps that type. A property the graph
   declares counts as known before any node carries it: a `define_schema()` field, or the
   `from` / `to` bound of a
   [validity declaration](#validity-interval-declarations) on the label (on a

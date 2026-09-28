@@ -339,11 +339,13 @@ fn get_column_types(df_data: &DataFrame) -> HashMap<String, String> {
 }
 
 /// The types `add_nodes` records for its frame's columns: a column with a
-/// value records its frame type, and one whose every cell is NULL records
-/// `Unknown` — the name is known to the `CREATE` typo guard and the schema
-/// lock, but its dtype (an all-`None` object column reads as `String`) is no
-/// evidence of what a later value will be. An `Unknown` never displaces a
-/// type the node type already records.
+/// value records its frame type. One whose every cell is NULL records its
+/// frame type too when the frame carries one (a datetime64, float or nullable
+/// integer column, which also shapes a typed column), and `Unknown` when it
+/// does not — an all-`None` object column reads as `String`, which is no
+/// evidence of what a later value will be. Either way the name is known to
+/// the `CREATE` typo guard and the schema lock, and an all-NULL column never
+/// displaces a type the node type already records.
 fn recorded_column_types(
     df_data: &DataFrame,
     existing: Option<&HashMap<String, String>>,
@@ -353,7 +355,9 @@ fn recorded_column_types(
         if df_data.column_has_values(name) {
             return true;
         }
-        *recorded = "Unknown".to_string();
+        if recorded.as_str() == "String" {
+            *recorded = "Unknown".to_string();
+        }
         existing.is_none_or(|props| !props.contains_key(name))
     });
     types

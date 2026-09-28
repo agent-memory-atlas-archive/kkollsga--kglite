@@ -651,3 +651,76 @@ class TestAColumnWrittenOnlyAsNull:
         report = g.add_nodes(pd.DataFrame({"id": [2], "eind": [None]}), "Voorkomen", "id")
         assert not report.get("errors"), report
         assert g.schema()["node_types"]["Voorkomen"]["properties"]["eind"] == "DateTime"
+
+
+class TestAnEmptyColumnKeepsItsShape:
+    """A column a load wrote with no value keeps the shape its frame dtype
+    gives (datetime64 → date, float → float, nullable integer → integer), so
+    it costs what the same column with values costs, stays typed after the
+    first `SET` fills it and after save/load. An all-`None` object column has
+    no dtype to go by; the first real value types it.
+
+    Red proof (user-test-3 review, F3): every such column was built as a
+    `Mixed` column, about 1.6x the heap, which cannot be spilled and stayed
+    `Mixed` once filled."""
+
+    N = 2000
+
+    @staticmethod
+    def _heap(g):
+        return g.graph_info()["columnar_heap_bytes"]
+
+    def _pair(self, empty, full, **kwargs):
+        import pandas as pd
+
+        ids = list(range(self.N))
+        graphs = []
+        for column in (empty, full):
+            g = kglite.KnowledgeGraph()
+            g.add_nodes(pd.DataFrame({"id": ids, **column}), "T", "id", "id", **kwargs)
+            graphs.append(g)
+        return graphs
+
+    @pytest.mark.parametrize(
+        "kind",
+        ["datetime64", "float", "nullable_int", "declared_open_to"],
+    )
+    def test_the_empty_column_costs_what_the_typed_one_does(self, kind, tmp_path):
+        import pandas as pd
+
+        n = self.N
+        kwargs = {}
+        if kind == "datetime64":
+            empty, full = pd.to_datetime([None] * n), pd.to_datetime(["2020-01-01"] * n)
+        elif kind == "float":
+            empty, full = [float("nan")] * n, [1.5] * n
+        elif kind == "nullable_int":
+            empty, full = pd.array([None] * n, dtype="Int64"), pd.array([1] * n, dtype="Int64")
+        else:
+            empty, full = [None] * n, pd.to_datetime(["2021-01-01"] * n)
+            kwargs = {"column_types": {"vf": "validFrom", "x": "validTo"}, "convention": "half_open"}
+        vf = {"vf": pd.to_datetime(["2020-01-01"] * n)} if kind == "declared_open_to" else {}
+        blank, typed = self._pair({**vf, "x": empty}, {**vf, "x": full}, **kwargs)
+        assert self._heap(blank) == self._heap(typed)
+        path = str(tmp_path / "empty_column.kgl")
+        blank.save(path)
+        assert self._heap(kglite.load(path)) == self._heap(typed)
+
+    def test_the_first_value_types_an_object_column_left_empty(self):
+        import pandas as pd
+
+        blank, typed = self._pair({"x": [None] * self.N}, {"x": pd.to_datetime(["2020-01-01"] * self.N)})
+        assert blank.schema()["node_types"]["T"]["properties"]["x"] == "Unknown"
+        blank.cypher("MATCH (n:T) SET n.x = date('2020-01-01')")
+        assert self._heap(blank) == self._heap(typed)
+        assert blank.schema()["node_types"]["T"]["properties"]["x"] == "DateTime"
+
+    def test_a_cypher_create_that_left_a_property_null_types_it_on_the_first_value(self):
+        g = kglite.KnowledgeGraph()
+        g.cypher("UNWIND range(1, 200) AS i CREATE (:T {id: i, x: null})")
+        g.cypher("UNWIND range(201, 400) AS i CREATE (:T {id: i, x: date('2020-01-01')})")
+        typed = kglite.KnowledgeGraph()
+        # The control never names `x` before its first value.
+        typed.cypher("UNWIND range(1, 200) AS i CREATE (:T {id: i})")
+        typed.cypher("UNWIND range(201, 400) AS i CREATE (:T {id: i, x: date('2020-01-01')})")
+        assert self._heap(g) == self._heap(typed)

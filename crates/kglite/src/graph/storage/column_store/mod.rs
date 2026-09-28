@@ -631,7 +631,7 @@ impl ColumnStore {
     /// column afterwards — the precondition [`Self::restore_schema`] relies on
     /// to undo it by truncation.
     fn append_column(&mut self, key: InternedKey, value: &Value) -> u16 {
-        self.append_column_typed(key, TypedColumn::type_str_for_value(value))
+        self.append_column_typed(key, column_type_for(value))
     }
 
     /// [`Self::append_column`] with the column type named outright.
@@ -696,7 +696,7 @@ impl ColumnStore {
                 if col.push(value).is_err() {
                     // Type mismatch or storage growth failure: preserve the
                     // row through the infallible heap-backed fallback.
-                    self.demote_to_mixed(slot);
+                    self.widen_for(slot, value);
                     if let Some(col) = self.column_mut(slot) {
                         let _ = col.push(value);
                     }
@@ -996,7 +996,7 @@ impl ColumnStore {
                 // permanently, at 24-32 B per row of the type.
                 let type_str = type_meta
                     .and_then(TypedColumn::canonical_type_str)
-                    .unwrap_or_else(|| TypedColumn::type_str_for_value(value));
+                    .unwrap_or_else(|| column_type_for(value));
                 self.append_column_typed(key, type_str)
             }
         };
@@ -1031,10 +1031,11 @@ impl ColumnStore {
         // `set_memory_limit`'s bound survives the write: `heap_bytes` for the
         // touched column stays 0 instead of growing by the whole column.
         //
-        // Only a type mismatch materialises: `demote_to_mixed` rebuilds the
-        // column as a heap `Vec<Value>`, because `Mixed` cannot be mmap'd.
+        // Only a type mismatch materialises: `widen_for` retypes a column
+        // that holds no value yet, and otherwise rebuilds it as a heap
+        // `Vec<Value>`, because `Mixed` cannot be mmap'd.
         if col.set(row_id, value).is_err() {
-            self.demote_to_mixed(slot as usize);
+            self.widen_for(slot as usize, value);
             if let Some(col) = self.column_mut(slot as usize) {
                 let _ = col.set(row_id, value);
             }
@@ -1269,6 +1270,28 @@ impl ColumnStore {
     }
 
     /// Demote a column from typed to Mixed, preserving all existing data.
+    /// Make column `slot` able to hold `value` after a push or set refused
+    /// it. A column that holds no value yet — one every write so far left
+    /// NULL — is replaced by an all-null column typed for `value`, so a
+    /// property's first real value decides its shape; any other column is
+    /// demoted to `Mixed`. The scan for a present value stops at the first
+    /// one, and runs only on this mismatch path.
+    fn widen_for(&mut self, slot: usize, value: &Value) {
+        let column = &self.columns[slot];
+        let kind = TypedColumn::type_str_for_value(value);
+        let rows = column.len() as u32;
+        if kind != "mixed" && !(0..rows).any(|row| column.is_present(row)) {
+            self.spillable_growth = true;
+            let mut typed = TypedColumn::from_type_str(kind);
+            for _ in 0..rows {
+                typed.push_null();
+            }
+            self.columns[slot] = Arc::new(typed);
+            return;
+        }
+        self.demote_to_mixed(slot);
+    }
+
     fn demote_to_mixed(&mut self, slot: usize) {
         self.spillable_growth = true;
         let old_col = &self.columns[slot];
@@ -2270,6 +2293,17 @@ impl ColumnStore {
         } else {
             Ok(())
         }
+    }
+}
+
+/// The column shape a new property's first written value asks for: its own
+/// kind, or for a NULL the `unknown` placeholder, which the first real value
+/// retypes (`ColumnStore::widen_for`) instead of leaving a `Mixed` column.
+fn column_type_for(value: &Value) -> &'static str {
+    if matches!(value, Value::Null) {
+        "unknown"
+    } else {
+        TypedColumn::type_str_for_value(value)
     }
 }
 

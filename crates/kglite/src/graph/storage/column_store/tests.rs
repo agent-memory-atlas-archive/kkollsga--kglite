@@ -992,13 +992,42 @@ fn push_row_types_an_appended_column_from_the_value_in_hand() {
     store.push_row(&[(InternedKey::from_str("score"), Value::Int64(7))]);
     store.push_row(&[(InternedKey::from_str("ratio"), Value::Float64(0.5))]);
     store.push_row(&[(InternedKey::from_str("flag"), Value::Boolean(true))]);
-    // No type evidence — `Mixed` is the honest answer, not a guess.
+    // No type evidence: the `unknown` placeholder, which the first value
+    // retypes (below), not a `Mixed` column that would stay `Mixed`.
     store.push_row(&[(InternedKey::from_str("blank"), Value::Null)]);
 
     assert_eq!(store.column_type_str(width), Some("int64"));
     assert_eq!(store.column_type_str(width + 1), Some("float64"));
     assert_eq!(store.column_type_str(width + 2), Some("bool"));
-    assert_eq!(store.column_type_str(width + 3), Some("mixed"));
+    assert_eq!(store.column_type_str(width + 3), Some("string"));
+}
+
+/// A column every row so far left NULL takes its first value's type, by push
+/// or by set, instead of demoting to `Mixed`; one holding a value demotes.
+#[test]
+fn the_first_value_types_a_column_that_holds_none() {
+    let (schema, meta, interner) = make_schema_and_meta();
+    let mut store = ColumnStore::new(schema, &meta, &interner);
+    let width = store.column_count();
+    let blank = InternedKey::from_str("blank");
+    let day = Value::DateTime(chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
+
+    store.push_row(&[(blank, Value::Null)]);
+    store.push_row(&[(blank, Value::Null)]);
+    store.push_row(&[(blank, day.clone())]);
+    assert_eq!(store.column_type_str(width), Some("date"));
+    assert_eq!(store.get(0, blank), None);
+    assert_eq!(store.get(2, blank), Some(day.clone()));
+
+    let set_later = InternedKey::from_str("set_later");
+    store.push_row(&[(set_later, Value::Null)]);
+    assert!(store.set(1, set_later, &Value::Int64(4), None));
+    assert_eq!(store.column_type_str(width + 1), Some("int64"));
+    assert_eq!(store.get(1, set_later), Some(Value::Int64(4)));
+
+    store.push_row(&[(blank, Value::Int64(1))]);
+    assert_eq!(store.column_type_str(width), Some("mixed"));
+    assert_eq!(store.get(2, blank), Some(day));
 }
 
 #[test]

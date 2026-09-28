@@ -398,7 +398,11 @@ impl TypedColumn {
                 data: MmapOrVec::new(),
                 nulls: MmapOrVec::new(),
             },
-            "string" => TypedColumn::Str {
+            // `unknown` — a property every write so far left NULL — takes the
+            // shape an all-null object column always had: a `Str` column of
+            // nulls. The first value of another kind retypes it rather than
+            // demoting it (`ColumnStore::widen_for`).
+            "string" | "unknown" => TypedColumn::Str {
                 offsets: MmapOrVec::from_vec(vec![0u64]),
                 data: MmapBytes::new(),
                 nulls: MmapOrVec::new(),

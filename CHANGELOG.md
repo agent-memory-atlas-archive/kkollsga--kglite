@@ -470,9 +470,12 @@ before upgrading.
   delivery ("Unknown property 'x'"), and an `add_nodes` column that was empty
   throughout was recorded as `String` (from its object dtype), so a locked
   graph then refused a date, and a later empty column re-typed a typed one. A
-  NULL-written property is now recorded as `Unknown` — known, its type open
-  until a value arrives, which then types it — `schema()` shows it and
-  `describe()` lists it with `coverage="0%"`. A declaration's `to` that every
+  NULL-written property is now known. An `add_nodes` column whose frame dtype
+  names a type (datetime64, float, nullable integer, a `validTo` column) keeps
+  that type and its typed column; one with no dtype to go by (all-`None`
+  object) and a Cypher map entry left NULL are recorded as `Unknown` —
+  `schema()` shows it and `describe()` lists it with `coverage="0%"` — and the
+  first value types both the record and the column. A declaration's `to` that every
   row left NULL still warns that every row is open-ended.
 - `auto_timestamp` stamped `updated_at` with the local wall-clock time, while
   every other naive datetime kglite stores or accepts is UTC. It is now naive
