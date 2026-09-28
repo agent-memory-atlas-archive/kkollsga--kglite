@@ -71,12 +71,16 @@ count). Two semantics to keep in mind:
 
 - **Uniqueness is opt-in**: with no constraint declared, `CREATE` does not reject
   a duplicate `id` — two `CREATE (:T {id: 'k'})` make two nodes, and a
-  duplicate-id warning goes to stderr (at the write when the type's id index
-  is built, as after `add_nodes`; otherwise at the next id lookup). Either declare
-  the node type's primary key
+  duplicate-id warning joins the statement's warnings (`result.warnings`,
+  echoed to stderr like any query warning): at the write when the type's id
+  index is built, as after `add_nodes`, otherwise at the next id lookup. A bulk
+  loader has no statement to carry it, so its duplicates are reported on
+  stderr. Either declare the node type's primary key
   (`define_schema({'nodes': {'T': {'primary_key': 'id'}}})`, after which the
-  second `CREATE` is rejected), or use **`MERGE`, not `CREATE`** —
-  `MERGE (:T {id: $k})` is idempotent either way. Constraint DDL is deliberately
+  second `CREATE` is rejected), or use **`MERGE` on the id alone, not
+  `CREATE`** — `MERGE (:T {id: $k})` is idempotent either way. A `MERGE` that
+  also names a second label (`MERGE (:T:U {id: $k})`) matches only a node
+  carrying both, so it creates a duplicate beside a `T`-only node. Constraint DDL is deliberately
   *not* the route here: `REQUIRE t.id IS UNIQUE` is refused, because `id` is a
   structural field rather than a stored property and the unique secondary index
   would never see the write — see
@@ -4429,8 +4433,8 @@ structural questions.
 storage mode (in-memory / mapped / disk). `CREATE (n {id: X})` and
 `add_nodes(unique_id_field='id')` both make `X` the identity; `MATCH (n {id: X})`
 finds it; it survives save → load. `id` is unique by convention — if duplicate
-ids are created, `MATCH (n {id: X})` returns one node per id (a stderr warning
-is emitted; use `MERGE` or dedupe the input). Precisely: one node per
+ids are created, `MATCH (n {id: X})` returns one node per id (the statement's
+warnings say so; `MERGE` on the id alone, or dedupe the input). Precisely: one node per
 **(type, id)** — an unlabeled `{id: X}` (or `WHERE id(n) = X`) anchors through
 every type's id index and returns one node per type holding X, in
 deterministic order, identically for literal and `$param` spellings. With

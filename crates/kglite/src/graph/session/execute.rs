@@ -356,6 +356,18 @@ pub fn execute_read(
     query: &str,
     opts: &ExecuteOptions<'_>,
 ) -> Result<ExecuteOutcome, KgError> {
+    let (outcome, id_warnings) =
+        crate::graph::dir_graph::collect_id_warnings(|| read_statement(graph, query, opts));
+    outcome.map(|outcome| with_id_warnings(outcome, id_warnings))
+}
+
+// KgError deliberately carries structured context; boxing it would change the public result type.
+#[allow(clippy::result_large_err)]
+fn read_statement(
+    graph: &DirGraph,
+    query: &str,
+    opts: &ExecuteOptions<'_>,
+) -> Result<ExecuteOutcome, KgError> {
     let started = Instant::now();
     let (
         PreparedQuery {
@@ -470,6 +482,37 @@ fn can_skip_rollback_checkpoint(
 // KgError deliberately carries structured context; boxing it would change the public result type.
 #[allow(clippy::result_large_err)]
 pub fn execute_mut(
+    graph: &mut DirGraph,
+    query: &str,
+    opts: &ExecuteOptions<'_>,
+) -> Result<ExecuteOutcome, KgError> {
+    let (outcome, id_warnings) =
+        crate::graph::dir_graph::collect_id_warnings(|| mut_statement(graph, query, opts));
+    outcome.map(|outcome| with_id_warnings(outcome, id_warnings))
+}
+
+/// Add the duplicate-id warnings a statement raised to its diagnostics, echoed
+/// like the other query warnings. A failed statement is rolled back, so the
+/// caller drops its warnings with it.
+fn with_id_warnings(mut outcome: ExecuteOutcome, id_warnings: Vec<String>) -> ExecuteOutcome {
+    if !id_warnings.is_empty() {
+        cypher::emit_query_warnings(&id_warnings);
+        let diagnostics = outcome
+            .result
+            .diagnostics
+            .get_or_insert_with(Default::default);
+        for warning in id_warnings {
+            if !diagnostics.warnings.contains(&warning) {
+                diagnostics.warnings.push(warning);
+            }
+        }
+    }
+    outcome
+}
+
+// KgError deliberately carries structured context; boxing it would change the public result type.
+#[allow(clippy::result_large_err)]
+fn mut_statement(
     graph: &mut DirGraph,
     query: &str,
     opts: &ExecuteOptions<'_>,

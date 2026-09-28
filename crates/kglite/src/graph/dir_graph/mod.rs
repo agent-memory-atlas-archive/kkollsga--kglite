@@ -59,6 +59,7 @@ mod columnar_rebuild;
 pub mod constraints;
 mod declarations;
 mod disk_persistence;
+mod duplicate_ids;
 mod id_index_reuse;
 mod independent_copy;
 mod index_keys;
@@ -77,6 +78,7 @@ pub(crate) mod rollback;
 pub(crate) mod schema_cow;
 mod schema_ops;
 
+pub(crate) use duplicate_ids::{collect_id_warnings, warn_on_duplicate_ids};
 pub use node_remap::NodeRemap;
 
 /// Version-keyed cache of per-`(type, property)` distinct-value counts (NDV)
@@ -742,31 +744,6 @@ impl Drop for DirGraph {
 impl Default for DirGraph {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Warn (rate-limited, stderr) when a type's id index collapses duplicate
-/// ids — `MATCH (n {id: …})` then returns only one node per id. Detected
-/// where the index already probes the id (a build, a bulk fold, a `CREATE`
-/// into a cached index) rather than by a per-mutation scan, so bulk
-/// `UNWIND … CREATE` and `add_nodes` stay O(n), not O(n²). `id` is meant to
-/// be unique (like `add_nodes(unique_id_field=…)`); use MERGE or dedupe input.
-pub(crate) fn warn_on_duplicate_ids(node_type: &str, entry_count: usize, unique_count: usize) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static WARN_COUNT: AtomicUsize = AtomicUsize::new(0);
-    if unique_count >= entry_count {
-        return;
-    }
-    let dups = entry_count - unique_count;
-    let seen = WARN_COUNT.fetch_add(1, Ordering::Relaxed);
-    if seen < 5 {
-        eprintln!(
-            "warning: {dups} duplicate id(s) on type '{node_type}' — \
-             `MATCH (n {{id: …}})` returns only one node per id. ids must be \
-             unique; use MERGE or dedupe the input."
-        );
-    } else if seen == 5 {
-        eprintln!("warning: further duplicate-id warnings suppressed.");
     }
 }
 

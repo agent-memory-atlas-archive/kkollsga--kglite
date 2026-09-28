@@ -61,3 +61,63 @@ def test_a_primary_key_refuses_the_fork() -> None:
     with pytest.raises(kglite.KgError):
         g.cypher("CREATE (:M {code: '0003', name: 'Dup'})").to_list()
     assert g.cypher("MATCH (m:M {id: '0003'}) RETURN m.name AS n").to_list() == [{"n": "B"}]
+
+
+# --- the warning belongs to the statement that forks the id ---
+
+DUPLICATE = "duplicate id(s) on type 'M'"
+
+
+def _loaded(mode, tmp_path):
+    import pandas as pd
+
+    if mode == "memory":
+        g = kglite.KnowledgeGraph()
+    elif mode == "mapped":
+        g = kglite.KnowledgeGraph(storage="mapped")
+    else:
+        g = kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / "disk"))
+    g.add_nodes(pd.DataFrame({"code": ["0001", "0003"], "name": ["A", "B"]}), "M", "code", "name")
+    return g
+
+
+def _warned(result):
+    return [w for w in result.warnings if DUPLICATE in w]
+
+
+MODES = pytest.mark.parametrize("mode", ["memory", "mapped", "disk"])
+
+
+@MODES
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "CREATE (:M {id: '0003', name: 'Dup'})",
+        "UNWIND ['0003'] AS c CREATE (:M {id: c, name: 'Dup'})",
+        "MERGE (n:M:Extra {id: '0003'}) RETURN n.id",
+    ],
+    ids=["create", "unwind-create", "merge-create"],
+)
+def test_the_forking_statement_reports_the_duplicate_in_its_warnings(mode, statement, tmp_path):
+    """Regression: the warning went only to the process's stderr, so a caller
+    reading `result.warnings` (an agent, MCP, Bolt, the C ABI) saw `[]`."""
+    g = _loaded(mode, tmp_path)
+    warned = _warned(g.cypher(statement))
+    assert len(warned) == 1, warned
+    assert "MERGE on the id alone, or dedupe the input" in warned[0], warned
+
+
+@MODES
+def test_a_transaction_write_reports_the_duplicate(mode, tmp_path):
+    g = _loaded(mode, tmp_path)
+    with g.begin() as tx:
+        warned = _warned(tx.cypher("CREATE (:M {id: '0003', name: 'Dup'})"))
+        tx.commit()
+    assert len(warned) == 1, warned
+
+
+@MODES
+def test_a_unique_id_reports_nothing(mode, tmp_path):
+    g = _loaded(mode, tmp_path)
+    assert _warned(g.cypher("CREATE (:M {id: '0004', name: 'New'})")) == []
+    assert _warned(g.cypher("MERGE (n:M {id: '0003'}) RETURN n.id")) == []

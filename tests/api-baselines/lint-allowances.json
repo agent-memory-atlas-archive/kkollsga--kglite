@@ -561,7 +561,15 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:mut_statement:fn mut_statement( graph: &mut DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare:fn prepare( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:read_statement:fn read_statement( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {

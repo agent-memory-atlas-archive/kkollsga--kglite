@@ -413,7 +413,8 @@ this pair is neither.
 **Give each record its own id.** Records that share an id shadow each other.
 `MATCH (m {id: …})` and `WHERE m.id = …` find one node per id, so the lookup
 can land on an image recorded at another time and return `[]`. The only hint is
-the duplicate-id warning on stderr when the second record is written. Had the
+the duplicate-id warning in the `result.warnings` of the write that makes the
+second record. Had the
 superseded image above been created with id `'0003'`, asking by id for
 Appingedam on 2020-06-30, as known today, returns `[]`. A scan of the label
 still finds it. As in Model B (section 5), keep the entity key in a

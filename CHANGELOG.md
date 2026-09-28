@@ -464,6 +464,15 @@ before upgrading.
   an empty or non-literal list (`NOT n.x IN $ids` with `ids = []` keeps every
   row), and a `WHERE` attached to `OPTIONAL MATCH`, which keeps every outer
   row.
+- The duplicate-id warning of a Cypher statement — a `CREATE`, `UNWIND …
+  CREATE` or `MERGE` that writes an id the type already holds, or the id
+  lookup that first builds an index over one — is now part of that
+  statement's warnings (`result.warnings`, and the diagnostics every binding
+  carries), echoed under the query-warning policy. It went only to the
+  process's stderr, so a caller reading the result saw nothing. Its advice now
+  reads "MERGE on the id alone, or dedupe the input", since a `MERGE` naming a
+  second label creates a duplicate beside a node without it. A bulk loader
+  still reports its duplicates on stderr.
 - Cypher `MERGE (n:A:B {…})` matched a node carrying only `A`, running
   `ON MATCH SET` on it and creating nothing, while `MATCH` with the same
   pattern found no node. It now matches only a node carrying every label in
