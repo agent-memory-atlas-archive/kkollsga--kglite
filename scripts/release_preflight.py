@@ -121,8 +121,10 @@ def check_member_inheritance(version: str) -> Check:
         rel = manifest.relative_to(REPO_ROOT)
         if declared is None:
             problems.append(f"{rel}: [package] declares no version at all")
-        elif declared != "workspace" and declared != version:
-            problems.append(f"{rel}: [package] version = {declared!r}, workspace is {version!r}")
+        elif declared != "workspace":
+            # Even a value equal to the workspace's is drift: it resolves
+            # today and goes stale at the next bump.
+            problems.append(f"{rel}: [package] version = {declared!r} instead of inheriting (workspace is {version!r})")
     if problems:
         return Check(
             "member inheritance",

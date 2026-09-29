@@ -242,7 +242,8 @@ def bump(new_version: str) -> list[Path]:
 def declared_member_version(manifest: Path) -> str | None:
     """What the member's own ``[package]`` table says its version is.
 
-    ``"workspace"`` when it inherits via ``version.workspace = true``, the
+    ``"workspace"`` when it inherits via ``version.workspace = true`` (or the
+    inline ``version = { workspace = true }``), the
     literal string when it hard-codes one, ``None`` when it declares
     neither. A hard-coded value still *resolves* — cargo is perfectly
     happy with a member pinned to a stale version — so this is drift that
@@ -256,7 +257,9 @@ def declared_member_version(manifest: Path) -> str | None:
             continue
         if not in_package:
             continue
-        if re.match(r"^version\s*\.\s*workspace\s*=\s*true\s*$", stripped):
+        if re.match(r"^version\s*\.\s*workspace\s*=\s*true\s*$", stripped) or re.match(
+            r"^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}\s*$", stripped
+        ):
             return "workspace"
         literal = re.match(r'^version\s*=\s*"([^"]+)"', stripped)
         if literal:

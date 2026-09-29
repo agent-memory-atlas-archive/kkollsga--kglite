@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,7 +34,7 @@ def test_runtime_python_api_matches_reviewed_baseline():
     actual = capture_python_api()
     assert actual == expected, (
         "Python public API drifted. Review additions/signature/default/error-hierarchy changes, "
-        "then run `python scripts/interface_contracts.py --write` and commit the baseline."
+        "then run `uv run --no-sync python scripts/interface_contracts.py --write` and commit the baseline."
     )
 
 
@@ -212,3 +213,53 @@ def test_result_view_str_is_its_repr():
 
     stub = (ROOT / "kglite" / "__init__.pyi").read_text(encoding="utf-8")
     assert "Vertical card format" not in stub
+
+
+# Loads the script as `python scripts/interface_contracts.py` would, with the
+# given directory first on `sys.path` and ROOT and both baselines redirected
+# into tmp so neither outcome can touch the committed baseline.
+_WRITE_DRIVER = """
+import importlib.util, sys
+from pathlib import Path
+fake_parent, root, script = sys.argv[1:4]
+sys.path.insert(0, fake_parent)
+spec = importlib.util.spec_from_file_location("interface_contracts", script)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.ROOT = Path(root).resolve()
+mod.PYTHON_BASELINE = mod.ROOT / "python-api.json"
+mod.CLI_BASELINE = mod.ROOT / "cli-interface.json"
+sys.argv = ["interface_contracts.py", "--write"]
+raise SystemExit(mod.main())
+"""
+
+
+def _run_write(tmp_path: Path, kglite_parent: Path) -> subprocess.CompletedProcess[str]:
+    fake = kglite_parent / "kglite"
+    fake.mkdir(parents=True)
+    (fake / "__init__.py").write_text("__all__ = []\n", encoding="utf-8")
+    script = ROOT / "scripts" / "interface_contracts.py"
+    return subprocess.run(
+        [sys.executable, "-c", _WRITE_DRIVER, str(kglite_parent), str(tmp_path / "repo"), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_write_refuses_a_kglite_imported_from_outside_the_repo(tmp_path):
+    """An interpreter outside `.venv` imports an installed kglite; `--write`
+    must refuse rather than record that release's surface as the baseline."""
+    (tmp_path / "repo").mkdir()
+    proc = _run_write(tmp_path, tmp_path / "site-packages")
+    assert proc.returncode != 0, proc.stdout
+    assert "refusing to write" in proc.stderr, proc.stderr
+    assert not (tmp_path / "repo" / "python-api.json").exists()
+
+
+def test_write_accepts_the_repo_kglite(tmp_path):
+    """Control: the same driver with kglite under ROOT writes, so the refusal
+    above is the guard and not a broken harness."""
+    proc = _run_write(tmp_path, tmp_path / "repo")
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "repo" / "python-api.json").exists()

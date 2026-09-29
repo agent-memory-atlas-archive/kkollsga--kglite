@@ -147,6 +147,26 @@ def _cli_binary() -> Path:
     return binary
 
 
+def _require_repo_kglite() -> None:
+    """Refuse to write a baseline captured from an installed kglite.
+
+    Run as a file, this script's `sys.path[0]` is `scripts/`, not the repo, so
+    an interpreter outside `.venv` imports whatever kglite its site-packages
+    holds and would record that release's surface as this tree's baseline.
+    Kept out of `capture_python_api`, which the contract test imports
+    in-process.
+    """
+    import kglite
+
+    imported = Path(kglite.__file__).resolve()
+    if not imported.is_relative_to(ROOT):
+        raise SystemExit(
+            f"refusing to write {PYTHON_BASELINE.relative_to(ROOT)}: imported kglite from {imported}, "
+            f"not from this repository ({ROOT}). Run it with the repo interpreter: "
+            "`uv run --no-sync python scripts/interface_contracts.py --write`"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help=f"write {PYTHON_BASELINE.relative_to(ROOT)}")
@@ -161,6 +181,8 @@ def main() -> int:
         CLI_BASELINE.write_text(rendered, encoding="utf-8", newline="\n")
         print(f"wrote {CLI_BASELINE.relative_to(ROOT)}")
         return 0
+    if args.write:
+        _require_repo_kglite()
     rendered = json.dumps(capture_python_api(), indent=2, sort_keys=True) + "\n"
     if args.write:
         PYTHON_BASELINE.write_text(rendered, encoding="utf-8", newline="\n")

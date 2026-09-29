@@ -258,7 +258,7 @@ check-lint-allowances:
 ## semver-check` step; this target only applies the version you give it.
 bump-version:
 	@test -n "$(VERSION)" || { echo "usage: make bump-version VERSION=X.Y.Z"; exit 1; }
-	python3 scripts/bump_version.py --set $(VERSION)
+	$(ACTIVATE) && python scripts/bump_version.py --set $(VERSION)
 
 ## Report whether the tree is ready for the release commit. Asserts workspace
 ## coherence -- every member inherits [workspace.package] version, the

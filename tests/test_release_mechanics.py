@@ -223,3 +223,33 @@ def test_published_crate_list_matches_the_publish_workflow():
     workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     published = set(re.findall(r"cargo publish -p ([\w-]+)", workflow))
     assert published == set(bump_version.PUBLISHED_CRATES)
+
+
+release_preflight = _load("release_preflight")
+
+
+def _member(tmp_path: Path, name: str, version_line: str) -> Path:
+    manifest = tmp_path / name / "Cargo.toml"
+    manifest.parent.mkdir()
+    manifest.write_text(f'[package]\nname = "{name}"\n{version_line}\n\n[dependencies]\n', encoding="utf-8")
+    return manifest
+
+
+@pytest.mark.parametrize(
+    ("version_line", "ok"),
+    [
+        ("version.workspace = true", True),
+        ("version = { workspace = true }", True),
+        # The workspace's own version, hard-coded: it resolves today and goes
+        # stale at the next bump, so preflight must refuse it now.
+        ('version = "0.19.0"', False),
+        ('version = "0.18.1"', False),
+        ('edition = "2021"', False),
+    ],
+)
+def test_preflight_member_inheritance_accepts_only_workspace_inheritance(tmp_path, monkeypatch, version_line, ok):
+    manifest = _member(tmp_path, "kglite-fixture", version_line)
+    monkeypatch.setattr(release_preflight, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(release_preflight.bump_version, "member_manifests", lambda: [manifest])
+    result = release_preflight.check_member_inheritance("0.19.0")
+    assert result.ok is ok, result.detail
