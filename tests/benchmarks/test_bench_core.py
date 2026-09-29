@@ -414,16 +414,19 @@ def hop1_graph_memory():
 
 @pytest.mark.benchmark
 def test_bench_hop1_deg3_memory(benchmark, hop1_graph_memory):
-    """Whole-graph 1-hop expansion, in-memory — the doctrine cell.
+    """Whole-graph typed 1-hop ``count(*)``, in-memory — no longer an expansion.
 
-    Nothing measured whole-graph 1-hop across storage modes before 0.17.1,
-    which is how a 2.3x *cross-mode inversion* reached 0.17.0 unnoticed: the
-    expansion dereferences petgraph's edge arena in insertion order, so with
-    uncorrelated row order it went superlinear in the node count while Mapped
-    stayed flat. In-memory is the core product and must not be the slower of
-    the two; the Mapped half of that comparison is `hop1_deg3_mapped` in
-    `test_bench_scan_program.py`, which cannot live here because it measures
-    ~17% slower than the 0.13.2 wheel CI's leg 1 gates this file against.
+    Since 0.17.3 this shape plans as ``FusedCountTypedEdge :KNOWS`` (see
+    ``EXPLAIN``), an O(1) read of the cached per-type edge count, so the cell
+    times that lookup (~1 us), not the edge walk. The 0.13.2 wheel CI's leg 1
+    runs against, and the Linux baseline row (a scaled 0.13.2 estimate), still
+    time the full expansion, so neither leg can go red for a 1-hop expansion
+    regression. The cell was added in 0.17.1 to catch the 2.3x cross-mode
+    inversion that reached 0.17.0 (petgraph's edge arena dereferenced in
+    insertion order went superlinear while Mapped stayed flat); restoring that
+    purpose needs an unfused shape such as ``RETURN sum(b.pid)`` plus a
+    qualified recapture of both platform baselines. ``hop1_deg3_mapped`` in
+    ``test_bench_scan_program.py`` runs the same fused shape in Mapped mode.
     """
 
     def query_and_consume():

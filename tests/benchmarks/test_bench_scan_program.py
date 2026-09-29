@@ -11,10 +11,11 @@ These two are not, so they live here and run under `make bench`:
   1 000-element list, macOS/M4 2026-09-08) — the cost of 0.17.0's strict
   parameter validation, deliberate and not a regression to gate against a
   three-year-old wheel.
-- ``hop1_deg3_mapped`` measures ~17% slower than 0.13.2 (12.3 ms vs
-  10.52/10.34 ms on the same fixture, same machine): longitudinal drift that
-  predates this program, and a cell that close to the 20% line is a coin-flip
-  on a shared runner.
+- ``hop1_deg3_mapped`` measured ~17% slower than 0.13.2 (12.3 ms vs
+  10.52/10.34 ms on the same fixture, same machine, 2026-09-08) while it was
+  an expansion. Since 0.17.3 its ``count(*)`` shape plans as
+  ``FusedCountTypedEdge``, an O(1) cached count, so that figure no longer
+  describes what the cell times; see its docstring.
 
 The fixtures are duplicated from the core harness rather than imported: the
 core file must stay self-contained because CI copies it out of the checkout on
@@ -124,11 +125,13 @@ def test_bench_param_list_conversion(benchmark, bench_graph):
 
 @pytest.mark.benchmark
 def test_bench_hop1_deg3_mapped(benchmark, hop1_graph_mapped):
-    """Cross-mode control for the core harness's `hop1_deg3_memory`.
+    """Mapped twin of the core harness's `hop1_deg3_memory` — a fused count.
 
-    In-memory is the core product and must not be the slower of the two — the
-    2.3x inversion that reached 0.17.0 is what both cells exist to catch, so
-    read this number next to that one.
+    Both cells were added to catch the 2.3x in-memory/Mapped inversion that
+    reached 0.17.0, but since 0.17.3 their ``count(*)`` shape plans as
+    ``FusedCountTypedEdge :KNOWS`` in both modes: an O(1) cached count, not a
+    1-hop expansion, so the pair cannot show that inversion. An unfused shape
+    (``RETURN sum(b.pid)``) would restore it.
     """
 
     def query_and_consume():
