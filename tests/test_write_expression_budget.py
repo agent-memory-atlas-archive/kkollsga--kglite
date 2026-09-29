@@ -129,3 +129,33 @@ def test_a_row_invariant_expression_is_charged_once_per_clause_as_in_a_read(writ
         g.cypher("MATCH (n:N) RETURN size(range(1, 600 + n.id)) AS x", max_work_units=5000).to_list()
     with pytest.raises(kglite.CypherExecutionError, match=BUDGET_CONSUMED):
         g.cypher("MATCH (n:N) SET n.z = size(range(1, 600 + n.id))", max_work_units=5000).to_list()
+
+
+@pytest.mark.parametrize(
+    ("setup", "write"),
+    [
+        (None, "UNWIND [1] AS i MERGE (:M {x: size(range(i, 1000))})"),
+        ("CREATE (:M {x: 1000})", "UNWIND [1] AS i MERGE (:M {x: size(range(i, 1000))})"),
+        (None, "UNWIND [1] AS i MATCH (n:N) MERGE (n)-[:R {x: size(range(i, 1000))}]->(n)"),
+    ],
+    ids=["merge-create", "merge-match", "merge-rel-create"],
+)
+def test_a_row_dependent_merge_property_is_charged_once_per_row(setup, write) -> None:
+    """MERGE evaluates each row-dependent pattern property once per row and
+    hands that value to both its match and its create arm, so the smallest
+    budget that runs the MERGE is the read's. Evaluating it for the null
+    check, again for the match and again for the create charged 2-3x."""
+    read = "UNWIND [1] AS i RETURN size(range(i, 1000)) AS x"
+    g = _graph()
+    with pytest.raises(kglite.CypherExecutionError, match="budget of 999"):
+        g.cypher(read, max_work_units=999).to_list()
+    g.cypher(read, max_work_units=1000).to_list()
+    for budget, runs in ((999, False), (1000, True)):
+        g = _graph()
+        if setup:
+            g.cypher(setup).to_list()
+        if runs:
+            g.cypher(write, max_work_units=budget).to_list()
+        else:
+            with pytest.raises(kglite.CypherExecutionError, match="budget of 999"):
+                g.cypher(write, max_work_units=budget).to_list()

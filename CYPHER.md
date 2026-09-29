@@ -1731,6 +1731,10 @@ A `Duration` value carries three independent components:
 | `days`    | `weeks` + `days` from constructor   | clock days         |
 | `seconds` | `hours` + `minutes` + `seconds`     | clock seconds      |
 
+Each constructor value is a whole number of its unit: `duration({seconds: 90.0})`
+is accepted, `duration({seconds: 1.5})` is refused — there is no sub-second
+precision.
+
 **Components stay separate by design.** Calendar arithmetic
 (`+ duration({months: 1})`) is fundamentally different from clock
 arithmetic (`+ duration({days: 30})`) because months have variable

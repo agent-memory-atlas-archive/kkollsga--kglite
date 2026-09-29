@@ -60,9 +60,7 @@ impl<'a> CypherExecutor<'a> {
                                 f as i64
                             }
                             Value::Null => 0,
-                            _ => {
-                                return Err(format!("duration({{{key}: ...}}) expects a number"));
-                            }
+                            other => return Err(duration_component_error(key, &other)),
                         };
                         match key.as_str() {
                             "years" => checked_component_add(&mut months, n, 12, "years")?,
@@ -415,4 +413,19 @@ fn temporal_from_map(function: &str, map: &crate::datatypes::PropMap) -> Result<
                 .ok_or_else(impossible)
         }
     }
+}
+
+/// A `duration()` map value that is not a whole count of its unit — named with
+/// the key and what it got, since a fractional number *is* a number.
+fn duration_component_error(key: &str, got: &Value) -> String {
+    let got = match got {
+        Value::Float64(f) => f.to_string(),
+        other => other.type_name().to_string(),
+    };
+    let note = if key == "seconds" {
+        " (sub-second durations are not supported)"
+    } else {
+        ""
+    };
+    format!("duration(): '{key}' must be a whole number of {key}, got {got}{note}")
 }

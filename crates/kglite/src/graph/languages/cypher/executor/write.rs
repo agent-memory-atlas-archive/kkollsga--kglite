@@ -2183,40 +2183,14 @@ fn execute_merge(
 
     for mut new_row in source_rows.into_iter() {
         check_interrupt_row(ctx.interrupt)?;
-        // Equality against null is undefined, so a null-bearing MERGE key
-        // cannot identify either a match or a safe entity to create.
         // (Block-scoped: the executor holds the disk arena guard, whose
         // borrow of `graph` must end before the &mut mutation calls below.)
-        {
+        let row_pattern = {
             let executor = row_evaluator(graph, ctx);
-            for element in &merge.pattern.elements {
-                let properties = match element {
-                    CreateElement::Node(node) => &node.properties,
-                    CreateElement::Edge(edge) => &edge.properties,
-                };
-                for (name, expression) in properties {
-                    let mut value = executor.evaluate_expression(expression, &new_row)?;
-                    let is_identity = match element {
-                        CreateElement::Node(node) => {
-                            let label = node.label.as_deref().unwrap_or("Node");
-                            let aliases = IdentityAliases::for_type(graph, label);
-                            aliases.canonical(name) == "id"
-                        }
-                        CreateElement::Edge(_) => false,
-                    };
-                    if !is_identity {
-                        crate::graph::session::snapshot_property_values(
-                            &graph.graph,
-                            std::iter::once(&mut value),
-                        );
-                    }
-                    if matches!(value, Value::Null) {
-                        return Err(format!("MERGE cannot use null for property '{}'", name));
-                    }
-                }
-            }
-        }
-        let matched = merge_pattern::try_match_merge_pattern(graph, &merge.pattern, &new_row, ctx)?;
+            evaluate_merge_pattern(graph, &executor, &merge.pattern, &new_row)?
+        };
+        let pattern = row_pattern.as_ref().unwrap_or(&merge.pattern);
+        let matched = merge_pattern::try_match_merge_pattern(graph, pattern, &new_row, ctx)?;
 
         if let Some(bound_row) = matched {
             for (var, idx) in &bound_row.node_bindings {
@@ -2239,7 +2213,7 @@ fn execute_merge(
             }
         } else {
             let create_clause = CreateClause {
-                patterns: vec![merge.pattern.clone()],
+                patterns: vec![pattern.clone()],
             };
             let temp_rs = ResultSet {
                 rows: vec![new_row.clone()],
@@ -2278,6 +2252,69 @@ fn execute_merge(
         columns: existing.columns,
         lazy_return_items: None,
     })
+}
+
+/// One row's MERGE pattern with every property already a value: each
+/// row-dependent expression is evaluated once here and handed to both the
+/// match and the create arm as a literal, so the statement's budget is charged
+/// once per row and a non-deterministic key (`rand()`) is created with the
+/// value the match looked for. `None` when every property is already a literal
+/// (folded once for the clause by `fold_merge`).
+///
+/// Equality against null is undefined, so a null-bearing MERGE key identifies
+/// neither a match nor a safe entity to create — refused here. The non-identity
+/// values are snapshotted before the null test, as both arms store and compare
+/// them; the arms snapshot again, which leaves a resolved value unchanged.
+fn evaluate_merge_pattern(
+    graph: &DirGraph,
+    executor: &CypherExecutor<'_>,
+    pattern: &CreatePattern,
+    row: &ResultRow,
+) -> Result<Option<CreatePattern>, String> {
+    let is_literal = |properties: &[(String, Expression)]| {
+        properties
+            .iter()
+            .all(|(_, expression)| matches!(expression, Expression::Literal(_)))
+    };
+    let mut row_pattern = None;
+    for (position, element) in pattern.elements.iter().enumerate() {
+        let (properties, identity) = match element {
+            CreateElement::Node(node) => (
+                &node.properties,
+                Some(IdentityAliases::for_type(
+                    graph,
+                    node.label.as_deref().unwrap_or("Node"),
+                )),
+            ),
+            CreateElement::Edge(edge) => (&edge.properties, None),
+        };
+        let mut evaluated = Vec::with_capacity(properties.len());
+        for (name, expression) in properties {
+            let mut value = executor.evaluate_expression(expression, row)?;
+            let is_identity = identity
+                .as_ref()
+                .is_some_and(|aliases| aliases.canonical(name) == "id");
+            if !is_identity {
+                crate::graph::session::snapshot_property_values(
+                    &graph.graph,
+                    std::iter::once(&mut value),
+                );
+            }
+            if matches!(value, Value::Null) {
+                return Err(format!("MERGE cannot use null for property '{}'", name));
+            }
+            evaluated.push((name.clone(), Expression::Literal(value)));
+        }
+        if is_literal(properties) {
+            continue;
+        }
+        let row_pattern = row_pattern.get_or_insert_with(|| pattern.clone());
+        match &mut row_pattern.elements[position] {
+            CreateElement::Node(node) => node.properties = evaluated,
+            CreateElement::Edge(edge) => edge.properties = evaluated,
+        }
+    }
+    Ok(row_pattern)
 }
 
 #[cfg(test)]

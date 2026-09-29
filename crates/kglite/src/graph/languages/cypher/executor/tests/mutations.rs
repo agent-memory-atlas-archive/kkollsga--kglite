@@ -792,6 +792,43 @@ fn merge_matches_a_relationship_including_its_properties() {
     assert_eq!(graph.graph.edge_count(), 2);
 }
 
+/// A MERGE key evaluates once per row, and the create arm stores the value the
+/// match arm looked for. With the key re-evaluated for the create, a
+/// non-deterministic key could miss on one value and store another that an
+/// existing node already holds: over 500 rows drawing from ten values that
+/// duplicates a key with probability ~0.9996, while the per-row value can only
+/// ever create a key no node has.
+#[test]
+fn merge_creates_the_key_it_matched_against() {
+    let mut graph = DirGraph::new();
+    let merge =
+        parser::parse_cypher("UNWIND range(1, 500) AS i MERGE (:M {k: toInteger(rand() * 10)})")
+            .unwrap();
+    execute_mutable(
+        &mut graph,
+        &merge,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap();
+    let read =
+        parser::parse_cypher("MATCH (m:M) RETURN count(m) AS nodes, count(DISTINCT m.k) AS keys")
+            .unwrap();
+    let rows = execute_mutable(
+        &mut graph,
+        &read,
+        HashMap::new(),
+        crate::graph::algorithms::Interrupt::default(),
+    )
+    .unwrap()
+    .rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0][0], rows[0][1],
+        "a MERGE created a key it did not match on"
+    );
+}
+
 #[test]
 fn test_merge_on_match_set() {
     let mut graph = build_test_graph();

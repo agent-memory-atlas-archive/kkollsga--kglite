@@ -26,6 +26,15 @@ before upgrading.
   `.kgl` metadata, and `valid_at(r, d, 'from', 'to')` naming it raised
   "does not exist on relationship type" once any relationship of the type
   left it null.
+- `MERGE` evaluates each row-dependent pattern property once per row and uses
+  that value for both the match and the create. It was evaluated up to three
+  times, so the statement charged `max_work_units` two to three times what a
+  read of the same expression charges, and a non-deterministic key such as
+  `MERGE (:M {k: toInteger(rand() * 10)})` could miss on one value and create
+  a node with another — a duplicate of a key it had just failed to match.
+- `duration({seconds: 1.5})` (and any fractional or non-numeric component)
+  now says the component must be a whole number of its unit and names the key
+  and the value it got; it said "expects a number".
 
 ## [0.19.0] - 2026-09-28
 
