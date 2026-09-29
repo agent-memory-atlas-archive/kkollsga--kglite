@@ -885,6 +885,43 @@ def test_session_legacy_unknown_and_nonstring_formats_keep_default_fallback(tmp_
     assert responses[1]["rows"] == [{"n": 2}]
 
 
+def test_session_json_rows_keep_the_query_column_order(tmp_path):
+    """Session rows list columns in RETURN order, as the one-shot JSON does.
+
+    Asserted on the emitted text: a parsed dict compares equal whatever the
+    key order, so it cannot see the alphabetised form this guards against.
+    """
+    import json
+
+    import kglite
+
+    p = tmp_path / "column-order.kgl"
+    kglite.KnowledgeGraph().save(str(p))
+    query = "RETURN 1 AS zz, 2 AS aa, 3 AS mm"
+    payload = "".join(
+        json.dumps(r) + "\n"
+        for r in (
+            {"id": "q", "op": "query", "query": query},
+            {"id": "w", "op": "write", "query": query},
+            {"op": "exit"},
+        )
+    )
+    proc = subprocess.run(
+        [str(BINARY), "session", str(p), "--format", "json"],
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.splitlines()
+    for line in lines[:2]:
+        assert '"rows":[{"zz":1,"aa":2,"mm":3}]' in line, line
+        assert json.loads(line)["ok"] is True
+    # The envelope's own keys are unchanged: sorted, with rows last.
+    assert lines[0] == '{"id":"q","ok":true,"op":"query","rows":[{"zz":1,"aa":2,"mm":3}]}'
+
+
 def test_session_agent_expands_retained_snapshot_without_replay(tmp_path, monkeypatch):
     import json
 

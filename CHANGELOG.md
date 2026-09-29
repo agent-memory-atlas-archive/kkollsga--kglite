@@ -60,6 +60,9 @@ before upgrading.
 - A disk-graph save no longer re-copies a node type's column store on every
   save when one of its columns holds only nulls and the type declares no kind
   for it.
+- `kglite session --format json` lists each row's columns in the query's
+  `RETURN` order, as one-shot `--format json` does; the session sorted them
+  alphabetically.
 
 ## [0.19.0] - 2026-09-28
 

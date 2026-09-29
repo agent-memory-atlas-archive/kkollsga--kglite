@@ -119,7 +119,7 @@ pub fn render_csv(columns: &[String], rows: &[Vec<Value>]) -> String {
 /// depend on whether the CLI is in the graph. serde_json's *serializer*
 /// writes `serialize_map` entries in iteration order, so serialising an
 /// ordered `Vec` fixes the order here without touching the shared crate.
-struct JsonRow<'a> {
+pub(crate) struct JsonRow<'a> {
     entries: Vec<(&'a str, serde_json::Value)>,
 }
 
@@ -158,8 +158,14 @@ fn json_row<'a>(columns: &'a [String], row: &[Value]) -> JsonRow<'a> {
 /// converter (so ints/floats/bools/lists keep their JSON types, not
 /// stringified).
 pub fn render_json(columns: &[String], rows: &[Vec<Value>]) -> String {
-    let arr: Vec<JsonRow<'_>> = rows.iter().map(|row| json_row(columns, row)).collect();
-    serde_json::to_string_pretty(&arr).unwrap_or_else(|e| format!("json error: {e}"))
+    serde_json::to_string_pretty(&json_rows(columns, rows))
+        .unwrap_or_else(|e| format!("json error: {e}"))
+}
+
+/// Every row as an ordered [`JsonRow`] — the shared shape behind `--format
+/// json` and the JSONL session's `rows`.
+pub(crate) fn json_rows<'a>(columns: &'a [String], rows: &[Vec<Value>]) -> Vec<JsonRow<'a>> {
+    rows.iter().map(|row| json_row(columns, row)).collect()
 }
 
 /// Stringify a result cell. `Value` already implements `Display`

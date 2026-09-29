@@ -1060,8 +1060,50 @@ fn run_session(
 }
 
 enum SessionAction {
-    Continue(serde_json::Value),
-    Exit(serde_json::Value),
+    Continue(SessionReply),
+    Exit(SessionReply),
+}
+
+/// One session response line. A JSON-mode query's rows stay out of `head`
+/// because a `serde_json::Value` row would alphabetise its columns; they are
+/// written as the final `rows` entry — the position the sorted envelope gave
+/// them (`id`, `ok`, `op` < `rows`).
+struct SessionReply {
+    head: serde_json::Value,
+    rows: Option<exec::OrderedJsonRows>,
+}
+
+impl From<serde_json::Value> for SessionReply {
+    fn from(head: serde_json::Value) -> Self {
+        SessionReply { head, rows: None }
+    }
+}
+
+impl SessionReply {
+    /// The whole response as one `Value`, for a consumer that edits it (the
+    /// agent budget pass); row keys sort again on this path.
+    fn into_value(self) -> serde_json::Value {
+        let mut head = self.head;
+        if let (Some(rows), Some(obj)) = (self.rows, head.as_object_mut()) {
+            obj.insert("rows".to_owned(), rows.to_value());
+        }
+        head
+    }
+}
+
+impl serde::Serialize for SessionReply {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (Some(rows), Some(head)) = (&self.rows, self.head.as_object()) else {
+            return self.head.serialize(serializer);
+        };
+        let mut map = serializer.serialize_map(Some(head.len() + 1))?;
+        for (key, value) in head {
+            map.serialize_entry(key, value)?;
+        }
+        map.serialize_entry("rows", rows)?;
+        map.end()
+    }
 }
 
 fn handle_session_line(
@@ -1075,7 +1117,9 @@ fn handle_session_line(
     let request: serde_json::Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => {
-            return SessionAction::Continue(json_error("parse", format!("invalid JSON: {e}")));
+            return SessionAction::Continue(
+                json_error("parse", format!("invalid JSON: {e}")).into(),
+            );
         }
     };
     let op = request
@@ -1087,16 +1131,15 @@ fn handle_session_line(
     let result = match op {
         "query" => session_query(graph, graph_path, &request, default_format),
         "write" => session_write(graph, graph_path, &request, default_format, base_options),
-        "response_expand" => session_response_expand(&request),
-        "describe" => session_describe(graph, &request),
-        "save" => {
-            session_save(graph, ownership).map(|()| serde_json::json!({"ok": true, "op": "save"}))
-        }
-        "help" => Ok(session_help()),
+        "response_expand" => session_response_expand(&request).map(SessionReply::from),
+        "describe" => session_describe(graph, &request).map(SessionReply::from),
+        "save" => session_save(graph, ownership)
+            .map(|()| serde_json::json!({"ok": true, "op": "save"}).into()),
+        "help" => Ok(session_help().into()),
         "exit" | "quit" => {
             let mut value = serde_json::json!({"ok": true, "op": op});
             insert_request_id(&mut value, request_id);
-            return SessionAction::Exit(value);
+            return SessionAction::Exit(value.into());
         }
         other => Err(anyhow::anyhow!(
             "unknown op {other:?}; valid ops: {} — send {{\"op\":\"help\"}} for details",
@@ -1104,18 +1147,19 @@ fn handle_session_line(
         )),
     };
     SessionAction::Continue(match result {
-        Ok(value) if agent_intent => agent_response::finalize_session(
-            value,
+        Ok(reply) if agent_intent => agent_response::finalize_session(
+            reply.into_value(),
             op,
             request_id,
             session_effective_agent_options(&request),
-        ),
-        Ok(mut value) => {
-            if let Some(obj) = value.as_object_mut() {
+        )
+        .into(),
+        Ok(mut reply) => {
+            if let Some(obj) = reply.head.as_object_mut() {
                 obj.entry("op").or_insert_with(|| serde_json::json!(op));
             }
-            insert_request_id(&mut value, request_id);
-            value
+            insert_request_id(&mut reply.head, request_id);
+            reply
         }
         Err(e) if agent_intent => {
             let query = request
@@ -1142,12 +1186,12 @@ fn handle_session_line(
                     "isError":true
                 }),
             };
-            agent_response::finalize_session(value, op, request_id, options)
+            agent_response::finalize_session(value, op, request_id, options).into()
         }
         Err(e) => {
             let mut value = json_error(op, e.to_string());
             insert_request_id(&mut value, request_id);
-            value
+            value.into()
         }
     })
 }
@@ -1216,7 +1260,7 @@ fn session_query(
     graph_path: &Path,
     request: &serde_json::Value,
     default_format: OutputFormat,
-) -> Result<serde_json::Value> {
+) -> Result<SessionReply> {
     let query = request_string(request, "query")?;
     let agent = session_agent_options(request, default_format)?;
     if let Some(response) = agent {
@@ -1231,7 +1275,8 @@ fn session_query(
                 exec::execute_readonly(graph, &query, &HashMap::new(), &QueryOptions::default())
             },
         );
-        return session_agent_operation(graph_path, &query, operation, response);
+        return session_agent_operation(graph_path, &query, operation, response)
+            .map(SessionReply::from);
     }
     let mode = session_mode(request, default_format)?;
     let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(&query)
@@ -1241,7 +1286,7 @@ fn session_query(
     }
     let params = HashMap::new();
     let outcome = exec::execute_readonly(graph, &query, &params, &QueryOptions::default())?;
-    Ok(session_outcome_response(mode, &outcome))
+    Ok(session_outcome_response(mode, outcome))
 }
 
 fn session_write(
@@ -1250,7 +1295,7 @@ fn session_write(
     request: &serde_json::Value,
     default_format: OutputFormat,
     base_options: &QueryOptions,
-) -> Result<serde_json::Value> {
+) -> Result<SessionReply> {
     let query = request_string(request, "query")?;
     let agent = session_agent_options(request, default_format)?;
     let params = HashMap::new();
@@ -1275,11 +1320,12 @@ fn session_write(
             kglite::api::cypher::QueryWarningSink::Silent,
             || exec::execute(graph, &query, &params, &options),
         );
-        return session_agent_operation(graph_path, &query, operation, response);
+        return session_agent_operation(graph_path, &query, operation, response)
+            .map(SessionReply::from);
     }
     let mode = session_mode(request, default_format)?;
     let outcome = exec::execute(graph, &query, &params, &options)?;
-    Ok(session_outcome_response(mode, &outcome))
+    Ok(session_outcome_response(mode, outcome))
 }
 
 fn session_agent_operation(
@@ -1365,9 +1411,9 @@ fn session_save(graph: &mut Arc<DirGraph>, ownership: &mut WriteOwnership) -> Re
         .map_err(|refusal| write_refusal(&path, refusal))
 }
 
-fn write_json_line(value: serde_json::Value) -> Result<()> {
+fn write_json_line(reply: SessionReply) -> Result<()> {
     let mut stdout = io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &value)?;
+    serde_json::to_writer(&mut stdout, &reply)?;
     stdout.write_all(b"\n")?;
     stdout.flush()?;
     Ok(())
@@ -1375,20 +1421,21 @@ fn write_json_line(value: serde_json::Value) -> Result<()> {
 
 fn session_outcome_response(
     mode: Mode,
-    outcome: &kglite::api::session::ExecuteOutcome,
-) -> serde_json::Value {
+    outcome: kglite::api::session::ExecuteOutcome,
+) -> SessionReply {
     if mode == Mode::Json {
-        serde_json::json!({
-            "ok": true,
-            "rows": exec::outcome_rows_json(outcome),
-        })
+        SessionReply {
+            head: serde_json::json!({"ok": true}),
+            rows: Some(exec::OrderedJsonRows::from_outcome(outcome)),
+        }
     } else {
         serde_json::json!({
             "ok": true,
             // The session speaks a machine protocol: a rendered table here is
             // still data a caller parses, so it is never width-truncated.
-            "output": exec::render_outcome(mode, outcome, None),
+            "output": exec::render_outcome(mode, &outcome, None),
         })
+        .into()
     }
 }
 

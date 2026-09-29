@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::Result;
-use kglite::api::param::kglite_value_to_json;
 use kglite::api::session::{
     execute_mut, execute_read, CsvImportPolicy, ExecuteOptions, ExecuteOutcome,
 };
@@ -88,25 +87,35 @@ pub fn render_outcome(mode: Mode, outcome: &ExecuteOutcome, cap: CellCap) -> Str
     render(mode, &r.columns, &r.rows, cap)
 }
 
-/// Convert a Cypher outcome to typed JSON rows for agent protocols.
-pub fn outcome_rows_json(outcome: &ExecuteOutcome) -> serde_json::Value {
-    let r = &outcome.result;
-    let arr: Vec<serde_json::Value> = r
-        .rows
-        .iter()
-        .map(|row| {
-            let mut obj = serde_json::Map::new();
-            for (i, col) in r.columns.iter().enumerate() {
-                let value = row
-                    .get(i)
-                    .map(kglite_value_to_json)
-                    .unwrap_or(serde_json::Value::Null);
-                obj.insert(col.clone(), value);
-            }
-            serde_json::Value::Object(obj)
-        })
-        .collect();
-    serde_json::Value::Array(arr)
+/// A Cypher outcome's rows for the JSONL session, serialised through
+/// [`crate::format::json_rows`] so each row object lists its columns in the
+/// query's order. Built as a `serde_json::Value` the rows would come out
+/// alphabetised (`Value::Object` is a `BTreeMap`; the `preserve_order` feature
+/// is off by design — see `JsonRow`).
+pub struct OrderedJsonRows {
+    columns: Vec<String>,
+    rows: Vec<Vec<Value>>,
+}
+
+impl OrderedJsonRows {
+    pub fn from_outcome(outcome: ExecuteOutcome) -> Self {
+        OrderedJsonRows {
+            columns: outcome.result.columns,
+            rows: outcome.result.rows,
+        }
+    }
+
+    /// The rows as a `Value`, for a consumer that edits the response as one
+    /// (the agent budget pass). Row keys sort again on this path.
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+}
+
+impl serde::Serialize for OrderedJsonRows {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::format::json_rows(&self.columns, &self.rows).serialize(serializer)
+    }
 }
 
 /// Write CLI output, treating a closed downstream pipe as successful exit.
