@@ -2180,16 +2180,16 @@ fn execute_merge(
     let merge = folded.as_ref().unwrap_or(merge);
 
     let mut new_rows = Vec::with_capacity(source_rows.len());
+    let mut row_pattern = merge_row_scratch(&merge.pattern);
 
     for mut new_row in source_rows.into_iter() {
         check_interrupt_row(ctx.interrupt)?;
         // (Block-scoped: the executor holds the disk arena guard, whose
         // borrow of `graph` must end before the &mut mutation calls below.)
-        let row_pattern = {
+        let pattern = {
             let executor = row_evaluator(graph, ctx);
-            evaluate_merge_pattern(graph, &executor, &merge.pattern, &new_row)?
+            evaluate_merge_pattern(graph, &executor, &merge.pattern, &mut row_pattern, &new_row)?
         };
-        let pattern = row_pattern.as_ref().unwrap_or(&merge.pattern);
         let matched = merge_pattern::try_match_merge_pattern(graph, pattern, &new_row, ctx)?;
 
         if let Some(bound_row) = matched {
@@ -2254,42 +2254,55 @@ fn execute_merge(
     })
 }
 
+/// The clause's pattern, cloned once, whose row-dependent property slots
+/// [`evaluate_merge_pattern`] overwrites with each row's values. `None` when
+/// `fold_merge` already made every property a literal: rows then use the
+/// clause's pattern itself.
+fn merge_row_scratch(pattern: &CreatePattern) -> Option<CreatePattern> {
+    let all_literal = pattern.elements.iter().all(|element| {
+        merge_element_properties(element)
+            .iter()
+            .all(|(_, expression)| matches!(expression, Expression::Literal(_)))
+    });
+    (!all_literal).then(|| pattern.clone())
+}
+
+fn merge_element_properties(element: &CreateElement) -> &[(String, Expression)] {
+    match element {
+        CreateElement::Node(node) => &node.properties,
+        CreateElement::Edge(edge) => &edge.properties,
+    }
+}
+
 /// One row's MERGE pattern with every property already a value: each
 /// row-dependent expression is evaluated once here and handed to both the
 /// match and the create arm as a literal, so the statement's budget is charged
 /// once per row and a non-deterministic key (`rand()`) is created with the
-/// value the match looked for. `None` when every property is already a literal
-/// (folded once for the clause by `fold_merge`).
+/// value the match looked for. The values land in `scratch` (from
+/// [`merge_row_scratch`]) in place, so matching a row allocates no pattern or
+/// name (the create arm still clones the pattern into its clause, as before);
+/// with no scratch every property is a literal and `pattern` is returned.
 ///
 /// Equality against null is undefined, so a null-bearing MERGE key identifies
 /// neither a match nor a safe entity to create — refused here. The non-identity
 /// values are snapshotted before the null test, as both arms store and compare
 /// them; the arms snapshot again, which leaves a resolved value unchanged.
-fn evaluate_merge_pattern(
+fn evaluate_merge_pattern<'p>(
     graph: &DirGraph,
     executor: &CypherExecutor<'_>,
-    pattern: &CreatePattern,
+    pattern: &'p CreatePattern,
+    scratch: &'p mut Option<CreatePattern>,
     row: &ResultRow,
-) -> Result<Option<CreatePattern>, String> {
-    let is_literal = |properties: &[(String, Expression)]| {
-        properties
-            .iter()
-            .all(|(_, expression)| matches!(expression, Expression::Literal(_)))
-    };
-    let mut row_pattern = None;
+) -> Result<&'p CreatePattern, String> {
     for (position, element) in pattern.elements.iter().enumerate() {
-        let (properties, identity) = match element {
-            CreateElement::Node(node) => (
-                &node.properties,
-                Some(IdentityAliases::for_type(
-                    graph,
-                    node.label.as_deref().unwrap_or("Node"),
-                )),
-            ),
-            CreateElement::Edge(edge) => (&edge.properties, None),
+        let identity = match element {
+            CreateElement::Node(node) => Some(IdentityAliases::for_type(
+                graph,
+                node.label.as_deref().unwrap_or("Node"),
+            )),
+            CreateElement::Edge(_) => None,
         };
-        let mut evaluated = Vec::with_capacity(properties.len());
-        for (name, expression) in properties {
+        for (slot, (name, expression)) in merge_element_properties(element).iter().enumerate() {
             let mut value = executor.evaluate_expression(expression, row)?;
             let is_identity = identity
                 .as_ref()
@@ -2303,18 +2316,22 @@ fn evaluate_merge_pattern(
             if matches!(value, Value::Null) {
                 return Err(format!("MERGE cannot use null for property '{}'", name));
             }
-            evaluated.push((name.clone(), Expression::Literal(value)));
-        }
-        if is_literal(properties) {
-            continue;
-        }
-        let row_pattern = row_pattern.get_or_insert_with(|| pattern.clone());
-        match &mut row_pattern.elements[position] {
-            CreateElement::Node(node) => node.properties = evaluated,
-            CreateElement::Edge(edge) => edge.properties = evaluated,
+            if matches!(expression, Expression::Literal(_)) {
+                continue;
+            }
+            if let Some(scratch) = scratch.as_mut() {
+                let properties = match &mut scratch.elements[position] {
+                    CreateElement::Node(node) => &mut node.properties,
+                    CreateElement::Edge(edge) => &mut edge.properties,
+                };
+                properties[slot].1 = Expression::Literal(value);
+            }
         }
     }
-    Ok(row_pattern)
+    Ok(match scratch {
+        Some(scratch) => scratch,
+        None => pattern,
+    })
 }
 
 #[cfg(test)]
@@ -2336,3 +2353,7 @@ mod is_mutation_query_tests;
 #[cfg(test)]
 #[path = "write_deadline_tests.rs"]
 mod deadline_tests;
+
+#[cfg(test)]
+#[path = "write_merge_scratch_tests.rs"]
+mod merge_scratch_tests;
