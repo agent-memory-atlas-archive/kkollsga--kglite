@@ -293,7 +293,7 @@ exit code.
 
 An abstract `domain` is what lets one declaration cover a union edge —
 `HAS_OPERATOR` from every `Licensable` — and it is also what makes a single
-nonconforming source poison the whole rule. If one upstream register never
+nonconforming source poison the whole rule. If one upstream source never
 carried the date the others do, `required_properties: ["validFrom"]` can
 never be promoted past `advisory`: the rule you want to enforce for the
 sources you control is permanently red because of a source you do not.
@@ -322,7 +322,7 @@ g.define_ontology({
             "domain": "Licensable", "range": "Company",
             "required_properties": ["validFrom"],
             "enforcement": {"required_properties": "error"},
-            # the petroleum register has no start date; the others must have one
+            # the Petreg source has no start date; the others must have one
             "exempt": {"required_properties": ["PetregLicence"]},
         },
     },

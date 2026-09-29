@@ -831,7 +831,7 @@ pub(super) fn write_topic_temporal(xml: &mut String) {
     xml.push_str("      <fn name=\"valid_during(entity, start, end[, 'from_field', 'to_field'])\">True if entity's validity period overlaps [start, end], under the same bounds and convention rule as valid_at. NULL = open-ended.</fn>\n");
     xml.push_str("    </functions>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"declared type\">MATCH (m:Municipality) WHERE valid_at(m, date('2010-01-01')) RETURN count(*)</ex>\n");
+    xml.push_str("      <ex desc=\"declared type\">MATCH (t:Team) WHERE valid_at(t, date('2010-01-01')) RETURN count(*)</ex>\n");
     xml.push_str("      <ex desc=\"node valid at date\">MATCH (e:Estimate) WHERE valid_at(e, '2020-06-15', 'date_from', 'date_to') RETURN e.title, e.value</ex>\n");
     xml.push_str("      <ex desc=\"edge valid at date\">MATCH (a)-[r:EMPLOYED_AT]->(b) WHERE valid_at(r, '2023-01-01', 'start_date', 'end_date') RETURN a.name, b.name</ex>\n");
     xml.push_str("      <ex desc=\"range overlap\">MATCH (p:Prospect) WHERE valid_during(p, '2021-01-01', '2022-12-31', 'date_from', 'date_to') RETURN p.title</ex>\n");

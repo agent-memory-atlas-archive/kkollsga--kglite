@@ -1528,8 +1528,8 @@ CALL db.temporal.declarations()
   row carrying only `to` against the stored `from` — under its conflict mode.
   A fluent `update()` is not judged.
 - **Empty intervals are kept.** A row a write leaves with `from == to` under
-  `half_open` — a register version registered and superseded on the same day
-  — is written. The statement reports one warning in `result.warnings` ("N of
+  `half_open` — an assignment created and cancelled on the same day — is
+  written. The statement reports one warning in `result.warnings` ("N of
   M rows written have an empty interval under convention 'half_open' … the
   first is node '…'"); a load emits the same text once as a `UserWarning`,
   naming the first row by its 0-based position. Such a row is valid at no

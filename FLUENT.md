@@ -286,12 +286,12 @@ relationship type.
 
 ```python
 g2010 = graph.date('2010')             # point in time
-g2010.select('Municipality')           # declared types: only valid nodes
+g2010.select('Team')                   # declared types: only valid nodes
 g2010.select('Person').traverse('EMPLOYED_AT')   # valid relationships to valid nodes
 
 graph.date('2010', '2015')             # anything valid during 2010-01-01 .. 2015-12-31
 graph.date('all')                      # no temporal filtering
-graph.select('Municipality', temporal=False)     # opt out for one call
+graph.select('Team', temporal=False)             # opt out for one call
 g2010.select('Person').traverse('EMPLOYED_AT', temporal=False)  # ...or one hop
 ```
 

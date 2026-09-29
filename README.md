@@ -377,9 +377,9 @@ building saves a lot of argument later.
 **What is special here: valid time is a declared property of the graph, not a
 filter you remember to write, so one instant governs every hop, path, algorithm
 and ranking in every binding, and recording time is modelled beside it in the
-same embedded engine.** Registers, licence tables and price lists keep history:
-each fact is valid over a period, and the usual question is *"as of when?"*.
-Declare a type's interval
+same embedded engine.** Org charts, licence tables and price lists keep
+history: each fact is valid over a period, and the usual question is *"as of
+when?"*. Declare a type's interval
 properties once (closed or half-open); after that one prefix, or `valid_at=` on
 any binding, answers as if the graph held only what was valid then, on every
 hop, path, algorithm and ranking.
@@ -389,38 +389,40 @@ the type is temporal from then on (`set_temporal()`, `CALL db.temporal.declare`
 and a blueprint's `temporal` key do the same for data already loaded):
 
 ```python
-municipalities = pd.DataFrame({
-    "code": ["0003", "1979", "0014"],
-    "name": ["Appingedam", "Eemsdelta", "Groningen"],
-    "valid_from": ["1900-01-01", "2021-01-01", "1900-01-01"],
-    "valid_to":   ["2021-01-01", None, None],          # None = still valid
+memberships = pd.DataFrame({
+    "employee":   ["ada", "ada", "ben"],
+    "team":       ["data", "platform", "platform"],
+    "valid_from": ["2020-03-01", "2024-06-01", "2022-01-01"],
+    "valid_to":   ["2024-06-01", None, None],         # None = still valid
 })
-graph.add_nodes(municipalities, "Municipality", "code", "name",
-                column_types={"valid_from": "validFrom", "valid_to": "validTo"},
-                convention="half_open")                # a register chain ends where the next begins
+graph.add_relationships(memberships, "MEMBER_OF", "Employee", "employee", "Team", "team",
+                        column_types={"valid_from": "validFrom", "valid_to": "validTo"},
+                        convention="half_open")       # a transfer ends where the next begins
 ```
 
-Rows on a declared type are versions, so a later load of the same code with a
-new interval adds a version rather than overwriting. Then ask as of a date:
+Rows on a declared relationship type are versions, so a later load of the same
+pair with a new interval adds a version rather than overwriting. Then ask as of
+a date:
 
 ```cypher
 // Every hop sees only what was valid on that day; no hop can be left undated
-FOR VALID_TIME AS OF date('2020-06-30')
-MATCH (m:Municipality)-[:IN_PROVINCE]->(p:Province) RETURN p.title, count(m)
+FOR VALID_TIME AS OF date('2023-06-30')
+MATCH (e:Employee)-[:MEMBER_OF]->(t:Team)-[:PART_OF]->(d:Department) RETURN d.title, count(e)
 // Per-element tests, when only one side of a pattern is dated
-MATCH (m:Municipality) WHERE valid_at(m, date('2021-06-30')) RETURN m.title
-MATCH (m:Municipality) WHERE valid_during(m, date('2020-06-01'), date('2021-06-01')) RETURN m.title
+MATCH (e:Employee)-[m:MEMBER_OF]->(t:Team) WHERE valid_at(m, date('2024-06-30')) RETURN e.title, t.title
+MATCH (e:Employee)-[m:MEMBER_OF]->(t:Team) WHERE valid_during(m, date('2024-01-01'), date('2024-12-31')) RETURN e.title, t.title
 ```
 
-`graph.cypher(q, valid_at="2020-06-30")`, the fluent `graph.date("2020-06-30")`
+`graph.cypher(q, valid_at="2023-06-30")`, the fluent `graph.date("2023-06-30")`
 context, the MCP tools and Java's `ValidAt` write the same prefix, and every
 write onto a declared type is checked against its declaration. Recording time
 (*"as known when?"*) is a second pair of bounds, such as `recorded_from` /
-`recorded_to`, that you load beside the first and test in the query; the register
-guide shows the full pattern on BAG-shaped data with a runnable example.
+`recorded_to`, that you load beside the first and test in the query; the
+bitemporal guide shows the full pattern on an HR change feed with a runnable
+example.
 
 - **[Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)**: declarations, as-of queries, the fluent context, modelling history, scale.
-- **[Bitemporal registers](https://kglite.readthedocs.io/en/latest/python/guides/bitemporal.html)**: register feeds and deliveries, as-known-at, lineage, the feature checklist.
+- **[Bitemporal data](https://kglite.readthedocs.io/en/latest/python/guides/bitemporal.html)**: late-recorded changes and daily deliveries, as-known-at, lineage, the feature checklist.
 - **[Cypher reference](https://kglite.readthedocs.io/en/latest/reference/cypher-reference.html)**: `FOR VALID_TIME`, `valid_at()` / `valid_during()`, `db.temporal.*`.
 
 ## Licensing and embedded distribution
@@ -544,6 +546,8 @@ directory has runnable, self-contained artifacts:
   end-to-end pandas → graph with laws, regulations, court decisions, citation edges.
 - **[`incremental_update.py`](https://github.com/kkollsga/kglite/blob/main/examples/incremental_update.py)**:
   merge a second snapshot with `add_nodes(conflict_handling='update')`.
+- **[`bitemporal_org_chart.py`](https://github.com/kkollsga/kglite/blob/main/examples/bitemporal_org_chart.py)**:
+  valid time and a modelled recording time on an HR change feed, applied in one transaction.
 - **[`spatial_graph.py`](https://github.com/kkollsga/kglite/blob/main/examples/spatial_graph.py)**:
   declarative CSV→graph loading via a JSON blueprint; lat/lon coordinates and
   pipeline-path traversal.
@@ -615,7 +619,7 @@ Quick reference to the feature set; each row links into the appropriate guide.
 | **Label model** | One immutable primary type per node plus optional secondary labels: `CREATE (n:A:B)`, `SET n:B`, `REMOVE n:B`, and `labels(n)` returns the list (primary first). Details in the [Cypher reference](CYPHER.md) callout. |
 | **Text predicates** | `text_edit_distance`, `text_normalize`, `text_jaccard`, `text_ngrams`, `text_contains_any` / `text_starts_with_any` |
 | **[Ontology](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html)** | Declared semantic layer: `is_a` class forest + relationship semantics (`define_ontology`), `SHOW ONTOLOGY`, no-arg validators, `CALL ontology_audit()` scorecard, blueprint data-quality gate, opt-in materialization. Annotations, not axioms: SKOS in spirit, never OWL. |
-| **[Valid time](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)** | Declared validity intervals (closed or half-open), `FOR VALID_TIME AS OF` / `valid_at=` as-of queries across every hop, `valid_at()` / `valid_during()`, `date()`/`datetime()`, date arithmetic; recording time beside it in [bitemporal registers](https://kglite.readthedocs.io/en/latest/python/guides/bitemporal.html) |
+| **[Valid time](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)** | Declared validity intervals (closed or half-open), `FOR VALID_TIME AS OF` / `valid_at=` as-of queries across every hop, `valid_at()` / `valid_during()`, `date()`/`datetime()`, date arithmetic; recording time beside it in [bitemporal data](https://kglite.readthedocs.io/en/latest/python/guides/bitemporal.html) |
 | **[Structured data](https://kglite.readthedocs.io/en/latest/python/guides/structured-data.html)** | DataFrame table properties (`set_table_property`/`get_table_property`), declared `list<map{...}>` shapes with indexed error paths, atomic nested `SET o.items[2].qty = 8`, `table.upsert`/`table.delete`, `attach_rows`. |
 | **[Spatial](https://kglite.readthedocs.io/en/latest/python/guides/spatial.html)** | Coordinates, WKT geometry, distance + containment, `kg_knn` k-nearest-neighbour. Pragmatic primitives, not a full GIS stack. |
 | **[Timeseries](https://kglite.readthedocs.io/en/latest/python/guides/timeseries.html)** | Time-indexed values with `ts_*()` Cypher functions. For graphs whose nodes carry value-over-time series. |

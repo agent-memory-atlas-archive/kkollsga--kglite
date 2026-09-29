@@ -140,6 +140,6 @@ graph.timeseries(node_id, start='2020', end='2020')
 
 Timeseries attaches numeric channels to a node. *Validity* is a different
 axis: nodes and relationships that each hold a period — a role from its start
-to its end date, a municipality from its founding to its merger — asked as of
+to its end date, a team membership from one transfer to the next — asked as of
 an instant with `FOR VALID_TIME AS OF`, `cypher(valid_at=…)` or the fluent
 `date()` context. See {doc}`valid-time`.

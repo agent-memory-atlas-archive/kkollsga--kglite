@@ -93,7 +93,7 @@ def build_tiny_graph(target_path: Path) -> None:
         "Steam injection in a home oven for crusty bread.",
         "Cold retard fermentation overnight for flavour development.",
         "Scoring patterns for visually striking bread loaves.",
-        "Dutch oven vs baking stone: which gives a better crust.",
+        "Cast-iron pot vs baking stone: which gives a better crust.",
         "Whole wheat sourdough techniques and grain blends.",
         "Brioche dough enriched with butter and eggs.",
         "Croissant lamination: butter blocks and tri-folds.",

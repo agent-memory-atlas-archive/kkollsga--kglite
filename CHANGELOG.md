@@ -9,6 +9,14 @@ before upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
+  data") use one org-chart example, with the declaration rules gathered in a
+  closing section and the full bitemporal walk-through shipped as
+  `examples/bitemporal_org_chart.py`; the README's temporal section follows
+  the same example.
+
 ## [0.19.0] - 2026-09-28
 
 ### Added

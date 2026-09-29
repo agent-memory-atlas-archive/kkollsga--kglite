@@ -2177,8 +2177,8 @@ class KnowledgeGraph:
                 a datetime or an ISO date string raises
                 :class:`ArgumentError` naming the row by its 0-based position.
                 A row whose interval is empty under ``'half_open'`` (``from``
-                equal to ``to``: valid at no instant, as a register version
-                registered and superseded on one day is) is written, and the
+                equal to ``to``: valid at no instant, as an assignment created
+                and cancelled on one day is) is written, and the
                 load emits one ``UserWarning`` counting such rows and naming
                 the first; ``db.temporal.declarations()`` counts them in
                 ``empty_rows``, and no as-of query returns them. Under
