@@ -2089,6 +2089,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "yaml-rust2",
 ]
 
 [[package]]

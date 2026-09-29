@@ -129,7 +129,8 @@ pub struct GraphState {
     /// it rather than a bare pid. Server-config, set once at boot via
     /// [`with_lease_label`](Self::with_lease_label).
     pub(crate) lease_label: Option<Arc<str>>,
-    /// Run after a lazy workspace rebuild has installed a new graph — and only
+    /// Run after a lazy workspace rebuild, or a `--graph` server's per-call
+    /// re-read of its rewritten file, has installed a new graph — and only
     /// then, never after a no-op freshness check.
     ///
     /// Boot fills it with the skill refresher, which is the whole reason it

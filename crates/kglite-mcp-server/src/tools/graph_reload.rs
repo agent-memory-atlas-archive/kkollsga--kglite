@@ -87,7 +87,12 @@ impl GraphState {
             self.ensure_workspace_graph_fresh();
             return;
         }
-        self.ensure_reloaded_graph_fresh();
+        if self.ensure_reloaded_graph_fresh() {
+            // Outside the reload gate and every lock the re-read took, as on
+            // the workspace path: the callback re-resolves the skill registry
+            // against the graph just installed, which reads it.
+            self.notify_after_rebuild();
+        }
     }
 
     /// Read out everything the freshness decision needs under one short read
@@ -104,42 +109,42 @@ impl GraphState {
     }
 
     /// Re-read the served file when the filesystem says it is not the one this
-    /// graph came from.
-    fn ensure_reloaded_graph_fresh(&self) {
+    /// graph came from. Returns whether new bytes were installed.
+    fn ensure_reloaded_graph_fresh(&self) -> bool {
         let Some(probe) = self.freshness_probe() else {
-            return;
+            return false;
         };
         let Some(current) = self.capture_served_identity(&probe.path) else {
-            return;
+            return false;
         };
         if current == probe.synced {
             // The overwhelmingly common case, and the one the self-written
             // file lands in: `publish` recaptured the identity, so a server
             // never re-reads what it just saved.
             self.clear_divergence_note();
-            return;
+            return false;
         }
         if probe.dirty {
             self.note_divergence_while_dirty();
-            return;
+            return false;
         }
         if !self.reload_is_due(&current) {
-            return;
+            return false;
         }
         // Single-flight: two concurrent tool calls that both saw the change
         // must not both load the file. The loser waits here and re-probes.
         let _reload_owner = self.rebuild_gate.enter();
         let Some(probe) = self.freshness_probe() else {
-            return;
+            return false;
         };
         let Some(current) = self.capture_served_identity(&probe.path) else {
-            return;
+            return false;
         };
         // Everything is re-decided inside the gate: the winner may have
         // installed exactly these bytes, and a write may have landed between
         // the precheck and the gate.
         if current == probe.synced || probe.dirty || !self.reload_is_due(&current) {
-            return;
+            return false;
         }
         tracing::info!(
             path = %probe.path.display(),
@@ -150,8 +155,12 @@ impl GraphState {
         // `reload_graph` tool does. The load runs off-lock and every failure
         // returns *before* the write lock, so the active graph survives it. A
         // success clears the failure bookkeeping from inside `open_or_create`.
-        if let Err(error) = self.open_or_create(&probe.path, None) {
-            self.record_graph_reload_failure(&error, current);
+        match self.open_or_create(&probe.path, None) {
+            Ok(_) => true,
+            Err(error) => {
+                self.record_graph_reload_failure(&error, current);
+                false
+            }
         }
     }
 

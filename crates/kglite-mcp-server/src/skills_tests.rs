@@ -1311,6 +1311,59 @@ mod skill_layer_tests {
         assert!(served.prompts.is_empty(), "{:?}", served.prompts);
     }
 
+    /// Whether a manifest *declared* `skills` is a question about the top-level
+    /// mapping, not about the text: a flow mapping declares it off column 0,
+    /// and a mention inside another key's string declares nothing.
+    #[test]
+    fn a_skills_declaration_is_read_from_the_parsed_top_level_mapping() {
+        let cases: &[(&str, &str, bool)] = &[
+            ("block false", "name: X\nskills: false\n", true),
+            ("block true", "name: X\nskills: true\n", true),
+            ("flow mapping", "{name: x, skills: false}\n", true),
+            ("explicit null", "name: X\nskills: ~\n", true),
+            ("absent", "name: X\n", false),
+            (
+                "inside a multi-line instructions string",
+                "name: X\ninstructions: \"Explain what the\nskills: key does.\"\n",
+                false,
+            ),
+            (
+                "inside a block scalar",
+                "name: X\ninstructions: |\n  skills: are described here\n",
+                false,
+            ),
+            (
+                "nested key",
+                "name: X\nextensions:\n  skills: true\n",
+                false,
+            ),
+        ];
+        let temp = tempfile::tempdir().expect("tempdir");
+        for (label, body, declared) in cases {
+            // Every fixture is a manifest the real loader accepts, so the
+            // answer is about manifests an operator can actually serve.
+            let manifest = manifest_file(temp.path(), body);
+            assert_eq!(
+                manifest_declares_skills(&manifest),
+                *declared,
+                "{label}: {body:?}"
+            );
+        }
+    }
+
+    /// The flow-mapping refusal end to end: `skills: false` written as a flow
+    /// mapping silences the producer layer exactly as the block form does.
+    #[test]
+    fn a_flow_mapping_skills_false_silences_the_producer_layer() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = GraphState::new(None);
+        let refused = manifest_file(temp.path(), "{name: Producer, skills: false}\n");
+        let (registry, _) =
+            compose_with_producer(Some(&refused), &[producer_record()], &Mode::Bare, &state);
+        let served = served_with_tools(&registry, &["cypher_query"]);
+        assert!(served.prompts.is_empty(), "{:?}", served.prompts);
+    }
+
     /// **Precedence pin (D2).** `bundled < producer < graph < project layer`,
     /// asserted on one name so each step is the *observable* difference between
     /// two bodies. A regression here is invisible otherwise: the layers would

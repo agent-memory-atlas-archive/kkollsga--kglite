@@ -63,6 +63,15 @@ before upgrading.
 - `kglite session --format json` lists each row's columns in the query's
   `RETURN` order, as one-shot `--format json` does; the session sorted them
   alphabetically.
+- MCP server: when a `--graph` server re-reads its file because it was
+  rewritten on disk, it now re-resolves the graph's skills and tells the client
+  its tool list changed, as `reload_graph` does. It kept serving the skills it
+  booted with until something called `reload_graph`.
+- MCP server: an embedding application's own skill layer
+  (`ServerExtensions::with_skills`) now honours a manifest's `skills: false`
+  written as a flow mapping (`{name: x, skills: false}`), and a line starting
+  `skills:` inside a multi-line quoted string no longer counts as declaring
+  the key.
 
 ## [0.19.0] - 2026-09-28
 

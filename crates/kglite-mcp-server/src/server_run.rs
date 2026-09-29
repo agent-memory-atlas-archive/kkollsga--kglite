@@ -1146,10 +1146,10 @@ pub(crate) async fn run_async(
 
     let _watch_handle = spawn_mode_watcher(&mode, &graph_state)?;
 
-    // The lazy watcher rebuild's own skill refresh. Armed after
-    // `boot_skills` below would be too late for the first rebuild and too
-    // early here only in the sense that the refresher is still unarmed — which
-    // `SkillRefresher::refresh` treats as the no-op it is.
+    // The skill refresh for lazy swaps (watcher rebuild, `--graph` re-read).
+    // Armed after `boot_skills` below would be too late for the first rebuild
+    // and too early here only in the sense that the refresher is still unarmed
+    // — which `SkillRefresher::refresh` treats as the no-op it is.
     {
         let refresher = skill_refresher.clone();
         graph_state.set_after_rebuild(Arc::new(move || refresher.refresh()));

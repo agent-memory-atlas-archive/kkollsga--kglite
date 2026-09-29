@@ -186,12 +186,10 @@ What that costs, and where it stops:
   bare `stat`. A **legacy flat directory** (CSR files at the root, no `CURRENT`)
   is not refreshed: its files are rewritten in place, so there is no pointer to
   compare and `reload_graph` remains its refresh path.
-- **The automatic re-read does not refresh skills.** It runs from inside the
-  graph's own write path, where re-reading the graph's `KgliteSkill` records
-  would take a lock the swap still holds. A server whose file is rebuilt
-  externally keeps the skill layer it booted with until something calls
-  `reload_graph` — which does re-resolve it, and tells the client its tool list
-  changed. Graph-carried recipe queries are fixed for the session either way.
+- **The automatic re-read refreshes skills.** When it installs new bytes it
+  re-resolves the skill layer from the graph's `KgliteSkill` records and tells
+  the client its tool list changed, as `reload_graph` does. Graph-carried
+  recipe queries are fixed for the session either way.
 - **`extensions.graph_watch` is retired.** The key is still parsed — a
   non-boolean value still fails boot — but any boolean now only logs a
   retirement warning and arms nothing, because the refresh it used to opt into

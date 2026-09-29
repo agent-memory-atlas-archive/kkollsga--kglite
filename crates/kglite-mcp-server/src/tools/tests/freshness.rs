@@ -73,6 +73,50 @@ fn an_external_rewrite_is_served_by_the_next_call() {
     );
 }
 
+/// The skill layer is resolved from the served graph, so a re-read that
+/// installed new bytes has to re-resolve it, as a workspace rebuild does. Only
+/// an install counts: an unchanged file, a dirty server and a failed re-read
+/// leave the boot-resolved skills correct.
+#[test]
+fn a_reread_that_installs_new_bytes_runs_the_after_rebuild_callback() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let served = tmp.path().join("skills.kgl");
+    let rebuilt = tmp.path().join("rebuilt.kgl");
+    seed_kgl(&served, 2);
+    seed_kgl(&rebuilt, 5);
+    let state = serving(&served);
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&refreshes);
+    state.set_after_rebuild(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    state.ensure_graph_fresh();
+    assert_eq!(refreshes.load(Ordering::SeqCst), 0, "nothing was re-read");
+
+    std::fs::rename(&rebuilt, &served).expect("republish");
+    state.ensure_graph_fresh();
+    assert_eq!(nodes(&state), 5);
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        1,
+        "a re-read that installed new bytes must re-resolve the skills read from them"
+    );
+
+    state.ensure_graph_fresh();
+    assert_eq!(refreshes.load(Ordering::SeqCst), 1, "no second install");
+
+    std::fs::write(&served, b"not a kgl file").expect("torn republish");
+    state.ensure_graph_fresh();
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        1,
+        "a failed re-read installed nothing"
+    );
+}
+
 /// A server holding unsaved changes must not have them replaced by a peer's
 /// republish — and must say so, because `save_graph` will now refuse.
 #[test]

@@ -248,24 +248,24 @@ fn bundled_only() -> SkillsSource {
 /// `SkillsSource::Disabled`, and exposes no "was it declared?" flag, so the
 /// only remaining primitive is the file. Read at boot, once.
 ///
-/// A top-level block-mapping key is the sole YAML construct that can begin a
-/// line at column 0 with `skills:` — nested keys are indented, block-scalar
-/// content is indented, and a comment starts with `#` — so a mention inside
-/// `instructions:` cannot be mistaken for a declaration. The construct this
-/// does miss is a whole-document *flow* mapping (`{name: x, skills: false}`),
-/// which would be read as undeclared and let the producer layer surface
-/// against the operator's wish; no manifest in this project, its tests or
-/// mcp-methods' own examples is written that way, and an unreadable file is
-/// likewise treated as undeclared because the manifest that failed to load is
-/// not the one that will be served.
+/// An unreadable or unparseable file is treated as undeclared, because the
+/// manifest that failed to load is not the one that will be served.
 fn manifest_declares_skills(manifest: &Manifest) -> bool {
-    let Ok(text) = std::fs::read_to_string(&manifest.yaml_path) else {
+    std::fs::read_to_string(&manifest.yaml_path).is_ok_and(|text| yaml_declares_skills(&text))
+}
+
+/// Whether the first YAML document is a mapping with a `skills` key, in block
+/// or flow form. Any value counts, `false` and `~` included: the operator
+/// wrote the key. Parsed rather than scanned, so a `skills:` line inside
+/// another key's multi-line string is not a declaration.
+fn yaml_declares_skills(text: &str) -> bool {
+    use yaml_rust2::{Yaml, YamlLoader};
+    let Ok(docs) = YamlLoader::load_from_str(text) else {
         return false;
     };
-    text.lines().any(|line| {
-        line.strip_prefix("skills")
-            .is_some_and(|rest| rest.trim_start().starts_with(':'))
-    })
+    docs.first()
+        .and_then(Yaml::as_hash)
+        .is_some_and(|map| map.contains_key(&Yaml::String("skills".to_owned())))
 }
 
 /// Compose, serve and index the skill registry at boot.
@@ -752,19 +752,11 @@ fn render_skills_index(active: &[ActiveSkill]) -> Option<String> {
 /// declared — are settled before the allowlist, and the catalogue is
 /// documented immutable after boot.
 ///
-/// **One swap path does not refresh.** The per-call freshness re-read
-/// (`GraphState::ensure_graph_fresh`, which re-opens the served file when the
-/// bytes on disk change under a `--graph` server) runs from inside the
-/// graph's own write path, where re-reading the skill records would take the
-/// read lock the swap still holds; a `--graph` server whose file is rewritten
-/// under it therefore keeps the skills it booted with until something calls
-/// `reload_graph`.
-///
-/// The watcher's lazy workspace rebuild used to be in the same list, and was
-/// a real defect once a vault could carry `.kglite/skills/*.md`: editing a
-/// skill rebuilt the graph and served the old skill set until restart. It now
-/// refreshes through `GraphState::after_rebuild`, which
-/// `ensure_workspace_graph_fresh` fires outside every lock the rebuild took.
+/// Both lazy swap paths refresh through `GraphState::after_rebuild`, which
+/// `GraphState::ensure_graph_fresh` fires outside every lock the swap took,
+/// and only when new bytes were installed: the watcher's workspace rebuild
+/// (a vault's `.kglite/skills/*.md` is a build input), and a `--graph`
+/// server's per-call re-read of a file rewritten under it.
 #[derive(Clone, Default)]
 pub(crate) struct SkillRefresher {
     inner: Arc<RwLock<Option<Box<RefreshInner>>>>,

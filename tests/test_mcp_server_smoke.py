@@ -2813,6 +2813,36 @@ class TestGraphCarriedSkills:
         assert "wells [lazy]" not in overview, overview
         assert "notifications/tools/list_changed" in notified, notified
 
+    def test_an_external_rewrite_swaps_the_skill_layer_on_the_next_call(self, skill_graph: Path):
+        """The per-call re-read of a rewritten `--graph` file re-resolves the
+        skill layer too: a plain `cypher_query`, with no `reload_graph`, is
+        enough for the new file's skills to be served and announced."""
+        manifest = skill_graph.parent / "reread_mcp.yaml"
+        manifest.write_text("name: Reread\nskills: true\n", encoding="utf-8")
+        client = _spawn(["--graph", str(skill_graph), "--mcp-config", str(manifest)])
+        try:
+            before = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            g = kglite.open(str(skill_graph))
+            g.delete_skill("wells")
+            g.set_skill(
+                "cores",
+                "Core-sample methodology for this graph.",
+                body="# Cores\n\nREREAD-SKILL-MARKER\n",
+                references_tools=["cypher_query"],
+            )
+            g.save(str(skill_graph))
+            del g
+            client.call_tool("cypher_query", {"query": "RETURN 1 AS x"})
+            after = {t["name"]: (t.get("description") or "") for t in client.list_tools()}
+            notified = [n.get("method") for n in client.notifications]
+        finally:
+            client.shutdown()
+
+        assert "mcp-skill:wells" in before["cypher_query"]
+        assert "mcp-skill:cores" in after["cypher_query"], after["cypher_query"][:600]
+        assert "mcp-skill:wells" not in after["cypher_query"], after["cypher_query"][:600]
+        assert "notifications/tools/list_changed" in notified, notified
+
     def test_without_the_skills_opt_in_the_graph_layer_is_silent(self, skill_graph: Path):
         manifest = skill_graph.parent / "unskilled_mcp.yaml"
         manifest.write_text("name: Unskilled\n", encoding="utf-8")
