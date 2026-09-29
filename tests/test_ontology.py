@@ -262,7 +262,7 @@ def test_adopt_collision_policy(school):
     with pytest.raises(ValueError, match="adopt"):
         school.materialize_ontology()
     report = school.materialize_ontology(adopt=True)
-    assert report == [{"label": "Person", "stamped": 3, "state": "open"}]
+    assert report == [{"label": "Person", "stamped": 3, "state": "open", "warnings": []}]
     diff = school.ontology_diff()
     assert diff == [{"label": "Person", "state": "open", "extra": 1, "missing": 0}]
 
@@ -290,7 +290,7 @@ def test_dematerialize_withdraws_the_labels_and_re_materialize_restores_them(mat
     assert mat.dematerialize_ontology() == 0
 
     # Declarations survive the exit, so the label can be rebuilt from them.
-    assert mat.materialize_ontology() == [{"label": "Person", "stamped": 3, "state": "closed"}]
+    assert mat.materialize_ontology() == [{"label": "Person", "stamped": 3, "state": "closed", "warnings": []}]
     assert mat.cypher("MATCH (p:Person) RETURN count(p) AS c").scalar() == 3
 
 

@@ -1352,6 +1352,7 @@ impl KnowledgeGraph {
             d.set_item("label", entry.label)?;
             d.set_item("stamped", entry.stamped)?;
             d.set_item("state", entry.state.as_str())?;
+            d.set_item("warnings", entry.warnings)?;
             out.append(d)?;
         }
         Ok(out.into())

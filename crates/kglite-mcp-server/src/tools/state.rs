@@ -660,6 +660,9 @@ impl GraphState {
                         // Open, which only disables optimizations.
                         match dir.materialize_ontology(true) {
                             Ok(report) => {
+                                for w in report.iter().flat_map(|r| &r.warnings) {
+                                    tracing::warn!("manifest ontology: {w}");
+                                }
                                 let stamped: usize = report.iter().map(|r| r.stamped).sum();
                                 tracing::info!(
                                     labels = report.len(),

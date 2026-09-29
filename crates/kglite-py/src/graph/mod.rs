@@ -789,23 +789,7 @@ impl KnowledgeGraph {
                 );
             }
 
-            // Vivification is not an error — but the caller implicitly
-            // created stub nodes, so surface it the same way.
-            if result.stubs_vivified > 0 {
-                let msg = format!(
-                    "add_relationships('{}'): {} stub node(s) vivified for missing endpoints — \
-                     call purge_provisional() to drop any left unpromoted.",
-                    connection_type, result.stubs_vivified
-                );
-                let cmsg = std::ffi::CString::new(msg).unwrap_or_default();
-                let _ = PyErr::warn(
-                    py,
-                    py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
-                    cmsg.as_c_str(),
-                    1,
-                );
-            }
-
+            // Includes the core's stub-vivification advisory, when any.
             warn_all(py, &result.warnings)?;
             Ok(report_dict.into())
         })

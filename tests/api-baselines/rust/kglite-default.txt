@@ -4060,7 +4060,6 @@ pub fn kglite::api::DirGraph::set_version(&mut self, v: u64)
 pub fn kglite::api::DirGraph::take_column_store(&mut self, node_type: &str) -> core::option::Option<alloc::sync::Arc<kglite::graph::storage::column_store::ColumnStore>>
 pub fn kglite::api::DirGraph::take_constraint_error(&mut self, message: &str) -> core::option::Option<kglite::error::KgError>
 pub fn kglite::api::DirGraph::upsert_connection_type_metadata(&mut self, conn_type: &str, source_type: &str, target_type: &str, prop_types: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>)
-pub fn kglite::api::DirGraph::upsert_node_type_metadata(&mut self, node_type: &str, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>)
 pub fn kglite::api::DirGraph::vacuum(&mut self) -> kglite::api::NodeRemap
 pub fn kglite::api::DirGraph::version(&self) -> u64
 impl kglite::api::DirGraph
@@ -4094,6 +4093,7 @@ pub fn kglite::api::DirGraph::set_instructions(&mut self, text: &str, channel: c
 pub fn kglite::api::DirGraph::set_schema(&mut self, schema: kglite::api::SchemaDefinition, mode: kglite::api::SchemaInstall) -> core::result::Result<(), kglite::error::KgError>
 pub fn kglite::api::DirGraph::shape_for(&self, node_type: &str, property: &str) -> core::option::Option<&kglite::api::PropertyShape>
 pub fn kglite::api::DirGraph::shapes_for_type(&self, node_type: &str) -> alloc::vec::Vec<(alloc::string::String, &kglite::api::PropertyShape)>
+pub fn kglite::api::DirGraph::upsert_node_type_metadata(&mut self, node_type: &str, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>)
 pub fn kglite::api::DirGraph::with_write_provenance<R>(&mut self, git_sha: core::option::Option<&str>, modified_by: core::option::Option<&str>, write: impl core::ops::function::FnOnce(&mut Self) -> R) -> R
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::compact_disk(&mut self) -> core::result::Result<usize, alloc::string::String>
@@ -4336,6 +4336,7 @@ pub struct kglite::api::MaterializedLabel
 pub kglite::api::MaterializedLabel::label: alloc::string::String
 pub kglite::api::MaterializedLabel::stamped: usize
 pub kglite::api::MaterializedLabel::state: kglite::api::ManagedLabelState
+pub kglite::api::MaterializedLabel::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::MaterializedLabel
 pub fn kglite::api::MaterializedLabel::clone(&self) -> kglite::api::MaterializedLabel
 impl core::cmp::Eq for kglite::api::MaterializedLabel

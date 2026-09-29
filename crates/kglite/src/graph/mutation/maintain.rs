@@ -1306,13 +1306,12 @@ pub(crate) fn add_connections_with_initial_load(
     }
 
     // Pass B — vivify the missing endpoints as provisional stub nodes.
-    let mut stubs_vivified = 0usize;
-    if !missing_sources.is_empty() {
-        stubs_vivified += vivify_stubs(graph, &source_type, &missing_sources)?;
-    }
-    if !missing_targets.is_empty() {
-        stubs_vivified += vivify_stubs(graph, &target_type, &missing_targets)?;
-    }
+    let (stubs_vivified, stub_advisories) = vivify_endpoints(
+        graph,
+        &connection_type,
+        (&source_type, &missing_sources),
+        (&target_type, &missing_targets),
+    )?;
 
     // Pass C — replay the deferred rows now that every endpoint exists.
     if !deferred.is_empty() {
@@ -1379,6 +1378,7 @@ pub(crate) fn add_connections_with_initial_load(
 
     let mut report = batch_report("add_connections", &stats, skipped_count, &metrics);
     report.stubs_vivified = stubs_vivified;
+    report.warnings.extend(stub_advisories);
     report.warnings.extend(empty_intervals.warning());
 
     if !errors.is_empty() {
@@ -1437,6 +1437,52 @@ fn apply_titles_then_order_by_source(
         titles.apply(graph, node_types, (source_idx, target_idx), row_idx, frame);
     }
     sort_source_major(matched);
+}
+
+/// Pass B of a relationship load: vivify the missing source and target ids as
+/// stubs, returning how many were created and one advisory per stub type.
+fn vivify_endpoints(
+    graph: &mut DirGraph,
+    connection_type: &str,
+    sources: (&str, &[Value]),
+    targets: (&str, &[Value]),
+) -> Result<(usize, Vec<String>), String> {
+    let mut by_type: Vec<(&str, usize)> = Vec::new();
+    for (node_type, ids) in [sources, targets] {
+        if ids.is_empty() {
+            continue;
+        }
+        let created = vivify_stubs(graph, node_type, ids)?;
+        match by_type.iter_mut().find(|(seen, _)| *seen == node_type) {
+            Some((_, count)) => *count += created,
+            None => by_type.push((node_type, created)),
+        }
+    }
+    let advisories = by_type
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(node_type, count)| stub_advisory(graph, connection_type, node_type, *count))
+        .collect();
+    Ok((by_type.iter().map(|(_, count)| count).sum(), advisories))
+}
+
+/// The advisory for `count` stubs vivified on `node_type` — the one text every
+/// binding and the blueprint build report. A stub carries no validity bounds,
+/// so on a label with a valid-time declaration it is valid at every instant
+/// until a node row with bounds promotes it, and the advisory says so.
+fn stub_advisory(graph: &DirGraph, connection_type: &str, node_type: &str, count: usize) -> String {
+    if crate::graph::features::temporal::node_config(graph, node_type).is_some() {
+        format!(
+            "{count} stub node(s) vivified for missing '{connection_type}' endpoints on \
+             declared label '{node_type}' carry no bounds and are valid at every instant until \
+             promoted (call purge_provisional() to drop any left unpromoted)."
+        )
+    } else {
+        format!(
+            "{count} stub node(s) vivified for missing '{connection_type}' endpoints of type \
+             '{node_type}' — call purge_provisional() to drop any left unpromoted."
+        )
+    }
 }
 
 /// Auto-vivify missing edge endpoints as provisional stub nodes.
@@ -1929,13 +1975,12 @@ pub fn replace_connections(
     }
     .run(graph)?;
 
-    let mut stubs_vivified = 0usize;
-    if !resolved.missing_sources.is_empty() {
-        stubs_vivified += vivify_stubs(graph, &source_type, &resolved.missing_sources)?;
-    }
-    if !resolved.missing_targets.is_empty() {
-        stubs_vivified += vivify_stubs(graph, &target_type, &resolved.missing_targets)?;
-    }
+    let (stubs_vivified, stub_advisories) = vivify_endpoints(
+        graph,
+        &connection_type,
+        (&source_type, &resolved.missing_sources),
+        (&target_type, &resolved.missing_targets),
+    )?;
     drop(resolved);
 
     let mut seen: HashSet<Value> = HashSet::new();
@@ -1994,6 +2039,7 @@ pub fn replace_connections(
     // The stubs vivified above are this call's, so they belong in its count —
     // `add_connections` found those endpoints already present and reported none.
     report.stubs_vivified += stubs_vivified;
+    report.warnings.splice(0..0, stub_advisories);
     Ok(report)
 }
 

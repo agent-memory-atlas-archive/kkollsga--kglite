@@ -693,6 +693,47 @@ fn create_edges(session: *mut KgliteSession, edges: &str) -> (KgliteStatusCode, 
     (rc, text)
 }
 
+/// The batch report carries the core's `warnings`: always present, empty for
+/// an ordinary batch, and naming an edge whose validity interval is empty on
+/// a `half_open` declaration (stored, valid at no instant).
+#[test]
+fn create_edges_batch_reports_empty_interval_warnings() {
+    let session = seed_notes(
+        "CREATE (a:P {id: 1})-[:R {vf: date('2000-01-01'), vt: date('2001-01-01')}]->(b:P {id: 2})",
+    );
+    execute_mut_ok(
+        session,
+        "CALL db.temporal.declare({relationship: 'R', from: 'vf', to: 'vt', \
+         convention: 'half_open'})",
+    );
+    let (rc, report) = create_edges(
+        session,
+        r#"[{"src_id":2,"src_type":"P","dst_id":1,"dst_type":"P","type":"R",
+             "props":{"vf":{"$date":"2020-01-01"},"vt":{"$date":"2021-01-01"}}}]"#,
+    );
+    assert_eq!(rc, KgliteStatusCode::Ok, "{report}");
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["warnings"], serde_json::json!([]));
+
+    let (rc, report) = create_edges(
+        session,
+        r#"[{"src_id":1,"src_type":"P","dst_id":2,"dst_type":"P","type":"R",
+             "props":{"vf":{"$date":"2020-01-01"},"vt":{"$date":"2020-01-01"}}}]"#,
+    );
+    assert_eq!(rc, KgliteStatusCode::Ok, "{report}");
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["connections_created"], serde_json::json!(1));
+    let warnings = report["warnings"].as_array().expect("a warnings array");
+    assert_eq!(warnings.len(), 1, "{report}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning
+            .starts_with("1 of 1 rows written have an empty interval under convention 'half_open'"),
+        "{warning}"
+    );
+    unsafe { kglite_session_free(session) };
+}
+
 /// Declared relationship constraints refuse a violating batch whole, with the
 /// typed status, exactly as a Cypher write would be refused.
 #[test]
@@ -750,6 +791,7 @@ fn create_edges_batch_enforces_relationship_constraints() {
             "connections_created": 2,
             "connections_updated": 0,
             "skipped_missing_endpoint": 0,
+            "warnings": [],
         })
     );
     assert_eq!(count(session), serde_json::json!([{"c": 2}]));

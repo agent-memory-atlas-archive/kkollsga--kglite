@@ -332,3 +332,66 @@ def test_gaining_a_declared_label_answers_to_it(storage, tmp_path) -> None:
     with pytest.raises(kglite.CypherExecutionError, match="node '7'"):
         g.cypher("MATCH (d:Draft {id: 7}) SET d:Status")
     assert g.cypher("MATCH (s:Status) RETURN count(s) AS n").to_list() == [{"n": 2}]
+
+
+# ── Stub vivification advisory ──────────────────────────────────────────
+
+
+def _stub_warnings(call) -> list[str]:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        call()
+    return [str(w.message) for w in caught if "stub node(s)" in str(w.message)]
+
+
+def test_a_stub_on_a_declared_label_is_named_as_valid_at_every_instant() -> None:
+    """A relationship load that vivifies a missing endpoint on a label with a
+    valid-time declaration says the stub carries no bounds and is valid at
+    every instant until promoted; on an undeclared label it keeps the plain
+    advisory. One text, built by the core loader."""
+    g = kglite.KnowledgeGraph()
+    g.add_nodes(pd.DataFrame({"id": ["ada", "ben"], "name": ["Ada", "Ben"]}), "Employee", "id", "name")
+    teams = pd.DataFrame({"id": ["ops"], "name": ["Ops"], "valid_from": ["2015-01-01"], "valid_to": ["2019-01-01"]})
+    g.add_nodes(teams, "Team", "id", "name", column_types={"valid_from": "validFrom", "valid_to": "validTo"})
+    members = pd.DataFrame({"employee": ["ada", "ben"], "team": ["ops", "ghost"]})
+    report = {}
+
+    def load_members():
+        report.update(g.add_relationships(members, "MEMBER_OF", "Employee", "employee", "Team", "team"))
+
+    assert _stub_warnings(load_members) == [
+        "1 stub node(s) vivified for missing 'MEMBER_OF' endpoints on declared label 'Team' carry no "
+        "bounds and are valid at every instant until promoted (call purge_provisional() to drop any "
+        "left unpromoted)."
+    ]
+    assert report["stubs_vivified"] == 1
+
+    projects = pd.DataFrame({"employee": ["ada"], "project": ["apollo"]})
+    assert _stub_warnings(
+        lambda: g.add_relationships(projects, "WORKS_ON", "Employee", "employee", "Project", "project")
+    ) == [
+        "1 stub node(s) vivified for missing 'WORKS_ON' endpoints of type 'Project' — call "
+        "purge_provisional() to drop any left unpromoted."
+    ]
+
+
+def test_a_blueprint_reports_the_loader_stub_advisory(tmp_path) -> None:
+    pd.DataFrame({"eid": ["ada", "ben"], "team": ["ops", "ghost"]}).to_csv(tmp_path / "employees.csv", index=False)
+    pd.DataFrame({"tid": ["ops"]}).to_csv(tmp_path / "teams.csv", index=False)
+    bp = {
+        "settings": {"root": str(tmp_path)},
+        "nodes": {
+            "Team": {"csv": "teams.csv", "pk": "tid"},
+            "Employee": {
+                "csv": "employees.csv",
+                "pk": "eid",
+                "connections": {"fk_edges": {"MEMBER_OF": {"target": "Team", "fk": "team"}}},
+            },
+        },
+    }
+    path = tmp_path / "blueprint.json"
+    path.write_text(json.dumps(bp), encoding="utf-8")
+    assert _stub_warnings(lambda: from_blueprint(path, save=False)) == [
+        "[Employee] -[MEMBER_OF]-> Team: 1 stub node(s) vivified for missing 'MEMBER_OF' endpoints "
+        "of type 'Team' — call purge_provisional() to drop any left unpromoted."
+    ]

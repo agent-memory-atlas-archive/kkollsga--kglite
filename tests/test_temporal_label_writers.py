@@ -149,9 +149,15 @@ def test_ontology_materialisation_stamps_an_empty_row(storage, tmp_path) -> None
     g = _graph(storage, tmp_path)
     g.cypher("MATCH (o:Other {id: 50}) SET o.vt = o.vf").to_list()
     g.define_ontology({"classes": {"Status": {}, "Other": {"is_a": "Status"}}})
-    g.materialize_ontology()
+    report = {entry["label"]: entry["warnings"] for entry in g.materialize_ontology()}
     assert _status(g) == [1, 50, 51]
     assert _empty_rows(g) == {"Status": 1}
+    # The report names the empty member, as the other label writers warn.
+    (warning,) = report["Status"]
+    assert warning.startswith("1 of 2 rows written have an empty interval under convention 'half_open'"), warning
+    assert "the first is node '50'" in warning, warning
+    # Re-applying stamps nothing, so judges nothing.
+    assert [entry["warnings"] for entry in g.materialize_ontology()] == [[] for _ in report]
 
 
 def test_a_blueprint_label_onto_a_declared_type_is_refused(tmp_path) -> None:

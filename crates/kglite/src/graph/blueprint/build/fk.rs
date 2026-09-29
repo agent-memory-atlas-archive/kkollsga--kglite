@@ -922,12 +922,11 @@ pub(super) fn connect(
                     source_type, connection_type, target_type, r.connections_skipped, detail
                 ));
             }
-            if r.stubs_vivified > 0 {
-                report.warnings.push(format!(
-                    "[{}] -[{}]-> {}: {} stub node(s) vivified for missing endpoints",
-                    source_type, connection_type, target_type, r.stubs_vivified
-                ));
-            }
+            // The loader's own advisories — stub vivification, empty
+            // intervals — under this edge's heading.
+            report.warnings.extend(r.warnings.iter().map(|warning| {
+                format!("[{source_type}] -[{connection_type}]-> {target_type}: {warning}")
+            }));
             // Rows that landed, merged ones included: the summary compares
             // this input count with the stored edges to report dedupes.
             Ok(r.connections_created + r.connections_updated)

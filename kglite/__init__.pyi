@@ -5571,7 +5571,11 @@ class KnowledgeGraph:
 
         Returns:
             One dict per managed label: ``label``, ``stamped`` (nodes that
-            gained it in this call), ``state``.
+            gained it in this call), ``state``, and ``warnings`` — advisories
+            about the members stamped, such as members whose validity
+            interval is empty under the label's ``half_open`` declaration
+            (stamped, valid at no instant, counted in ``empty_rows``); an
+            empty list when there are none.
 
         Raises:
             ValueError: No ontology declared, or a collision without

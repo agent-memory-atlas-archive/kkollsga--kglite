@@ -40,6 +40,10 @@ pub struct MaterializedLabel {
     pub label: String,
     pub stamped: usize,
     pub state: ManagedLabelState,
+    /// Advisories about the members stamped, such as members whose validity
+    /// interval is empty under the label's `half_open` declaration (stamped,
+    /// valid at no instant, counted in `empty_rows`).
+    pub warnings: Vec<String>,
 }
 
 impl DirGraph {
@@ -168,6 +172,7 @@ impl DirGraph {
         // Collision scan before any write: refuse-all-or-stamp-all, so a
         // failed apply leaves the graph untouched.
         let mut states: BTreeMap<String, ManagedLabelState> = BTreeMap::new();
+        let mut warnings: BTreeMap<String, Option<String>> = BTreeMap::new();
         for (label, members) in &closure_members {
             let key = InternedKey::from_str(label);
             let foreign = self
@@ -204,10 +209,11 @@ impl DirGraph {
             states.insert(label.clone(), state);
             // A declared validity interval on the ancestor judges the members
             // that gain it, as `SET n:Label` does — before any stamp. Members
-            // left with an empty interval are stamped; `empty_rows` counts
-            // them, and this report has no warning channel.
-            crate::graph::features::temporal::check_label_stamp(self, members, label)
+            // left with an empty interval are stamped, counted in
+            // `empty_rows`, and named in the label's report warnings.
+            let warning = crate::graph::features::temporal::check_label_stamp(self, members, label)
                 .map_err(|e| format!("materializing label '{label}': {e}"))?;
+            warnings.insert(label.clone(), warning);
         }
 
         let mut report = Vec::new();
@@ -216,10 +222,12 @@ impl DirGraph {
             let (stamped, _skipped) = self.add_node_labels_bulk(&members, key);
             let state = states[&label];
             self.managed_labels.insert(label.clone(), state);
+            let warnings = warnings.remove(&label).flatten().into_iter().collect();
             report.push(MaterializedLabel {
                 label,
                 stamped,
                 state,
+                warnings,
             });
         }
         Ok(report)

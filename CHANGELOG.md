@@ -9,6 +9,16 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- `materialize_ontology()` returns a `warnings` list per label naming members
+  stamped with an empty validity interval under the label's `half_open`
+  declaration (they were stamped and counted in `empty_rows` with no report);
+  the MCP server logs them when it materializes a manifest ontology.
+- The C ABI's `kglite_create_edges_batch` report JSON carries a `warnings`
+  array (empty when there are none), such as the empty-interval advisory the
+  engine already produced for the batch.
+
 ### Changed
 
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
@@ -16,6 +26,12 @@ before upgrading.
   closing section and the full bitemporal walk-through shipped as
   `examples/bitemporal_org_chart.py`; the README's temporal section follows
   the same example.
+- A relationship load that vivifies stub endpoints on a label with a
+  valid-time declaration now warns that the stubs carry no bounds and are
+  valid at every instant until promoted, naming the label; on an undeclared
+  label the advisory names the relationship and the stub type. The Python
+  loaders (a `UserWarning`) and blueprint builds report the same
+  engine-built text.
 
 ### Fixed
 

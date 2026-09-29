@@ -1492,9 +1492,12 @@ KgliteStatusCode kglite_session_execute_mut_batch(struct KgliteSession *session,
  *
  * On success `out_report_json` is set to an owned JSON object
  * `{"connections_created": N, "connections_updated": U,
- * "skipped_missing_endpoint": M}`, where `connections_updated` counts specs
- * that met an existing edge of the same type between the same endpoints and
- * merged their properties into it; free it with
+ * "skipped_missing_endpoint": M, "warnings": [...]}`, where
+ * `connections_updated` counts specs that met an existing edge of the same
+ * type between the same endpoints and merged their properties into it, and
+ * `warnings` lists advisories about the edges written (such as edges whose
+ * validity interval is empty under a `half_open` declaration; empty when
+ * there are none); free it with
  * [`kglite_free_string`](crate::kglite_free_string).
  *
  * This wraps the shared core primitive
