@@ -743,6 +743,8 @@ jobs:
         run: |
           mkdir -p "$HARNESS_DIR"
           cp tests/benchmarks/test_bench_core.py "$HARNESS_DIR/test_bench_core.py"
+          mkdir -p "$RUNNER_TEMP/kglite-edge-harness"
+          cp tests/benchmarks/test_bench_edge_embeddings.py "$RUNNER_TEMP/kglite-edge-harness/test_bench_edge_embeddings.py"
 
       - name: Benchmark published 0.13.2 wheel
         working-directory: ${{ runner.temp }}/kglite-core-harness
@@ -832,6 +834,21 @@ jobs:
               --benchmark-json="$GITHUB_WORKSPACE/.bench-candidate-retry.json"
           )
           compare .bench-candidate-retry.json
+
+      - name: Relationship-embedding ratio guards
+        # `db.relationship_embeddings.*` does not exist in the 0.13.2 reference,
+        # so these cells cannot live in the core harness. Each asserts a ratio
+        # against a twin measured in the same process (its node twin, or a
+        # sibling shape), so the candidate alone is the gate: no reference
+        # wheel, no committed baseline. Run from outside the checkout for the
+        # same reason as the core harness — the repo's `kglite/` package would
+        # otherwise shadow the installed candidate wheel.
+        working-directory: ${{ runner.temp }}/kglite-edge-harness
+        env:
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_edge_embeddings.py -m benchmark
 
       - name: Diagnose grouped-count plans after measurement
         if: ${{ always() && steps.perf_compare.outcome != 'skipped' }}

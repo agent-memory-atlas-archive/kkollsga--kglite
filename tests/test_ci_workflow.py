@@ -386,8 +386,10 @@ def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
     # Reference, candidate, and the single retry recapture — each on the frozen
     # core harness, each selecting the benchmark marker, each writing its own
     # JSON so the evidence artifact can carry all of them.
-    benchmark_runs = _pytest_invocations(perf)
-    assert len(benchmark_runs) == 3, f"perf-regression runs {len(benchmark_runs)} pytest invocations, expected 3"
+    # The fourth invocation is the relationship-embedding ratio step, guarded
+    # by test_perf_gate_runs_the_relationship_embedding_ratio_guards.
+    benchmark_runs = [args for args in _pytest_invocations(perf) if "test_bench_edge_embeddings.py" not in args]
+    assert len(benchmark_runs) == 3, f"perf-regression runs {len(benchmark_runs)} core captures, expected 3"
     for args in benchmark_runs:
         assert "test_bench_core.py" in args
         assert _markers(args) == ["benchmark"]
@@ -430,6 +432,34 @@ def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
     upload = uploads[0]
     assert upload["with"]["include-hidden-files"] is True
     assert upload["if"] == "always()"
+
+
+EDGE_RATIO_COMMAND = '"$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_edge_embeddings.py -m benchmark'
+
+
+def test_perf_gate_runs_the_relationship_embedding_ratio_guards() -> None:
+    """The relationship-embedding cells must run, blocking, on the candidate.
+
+    They cannot join the core harness (the 0.13.2 reference has no
+    `db.relationship_embeddings.*`), so their own ratio guards against
+    same-process node twins are the only gate they have. A step that is
+    absent, tolerated, or run from inside the checkout (where the repo's
+    `kglite/` package shadows the installed candidate) gates nothing.
+    """
+    perf = _ci_job("perf-regression")
+    assert "continue-on-error" not in perf, "a job-level continue-on-error makes every step here decorative"
+    _assert_runs(
+        perf,
+        "cp tests/benchmarks/test_bench_edge_embeddings.py "
+        '"$RUNNER_TEMP/kglite-edge-harness/test_bench_edge_embeddings.py"',
+    )
+    step = _step_running(perf, EDGE_RATIO_COMMAND)
+    assert "continue-on-error" not in step, "the ratio step must be able to fail the job"
+    assert "if" not in step, f"the ratio step runs conditionally: {step.get('if')!r}"
+    assert step.get("working-directory") == "${{ runner.temp }}/kglite-edge-harness"
+    assert (step.get("env") or {}).get("PYTHONPATH") == ""
+    edge_runs = [args for args in _pytest_invocations(perf) if "test_bench_edge_embeddings.py" in args]
+    assert len(edge_runs) == 1, f"expected exactly one relationship-embedding run, found {len(edge_runs)}"
 
 
 def test_loom_and_unsafe_jobs_use_the_intended_commands() -> None:
@@ -1861,6 +1891,52 @@ def test_java_matrix_builds_exactly_the_platforms_the_loader_promises() -> None:
         assert re.search(rf"(?<![\w-]){re.escape(platform)}(?![\w-])", inspected), (
             f"the assemble job never checks the built JAR for {platform}"
         )
+
+
+JAVA_SMOKE_ARGS = (
+    '--enable-native-access=ALL-UNNAMED "-Dkglite.native.path=target/release/${{ matrix.library }}" '
+    "-cp kglite-java/build/classes/java/main kglite-java/smoke/NativeSmoke.java"
+)
+JAVA_FLOOR_LEG = "matrix.platform == 'linux-x86_64'"
+
+
+def test_java_every_native_is_loaded_on_its_own_runner_before_upload() -> None:
+    """Each matrix leg loads the native it built and runs a query through it.
+
+    The assemble job's test suite runs on Linux x86_64 only, so without this
+    step the darwin, Windows and linux-aarch64 natives would ship having never
+    been loaded. The step must run on every leg (no `if:`), must be able to
+    fail, and must sit between the build and the upload, so a native that does
+    not load never reaches the JAR. One leg repeats it on the JDK 22 floor.
+    """
+    build = _java_job("build-native")
+    steps = _steps(build)
+    platforms = {leg["platform"] for leg in build["strategy"]["matrix"]["include"]}
+
+    smoke = _step_running(build, f"java {JAVA_SMOKE_ARGS}")
+    assert "if" not in smoke, f"the smoke is skipped on some legs: {smoke.get('if')!r}"
+    assert "continue-on-error" not in smoke
+
+    cargo = _step_running(build, "cargo build -p kglite-c --release")
+    compile_java = _step_running(build, "gradle -p kglite-java compileJava")
+    assert "if" not in compile_java
+    uploads = _steps_using(build, "actions/upload-artifact@")
+    assert len(uploads) == 1, "build-native should upload exactly one native per leg"
+    order = [steps.index(step) for step in (cargo, compile_java, smoke, uploads[0])]
+    assert order == sorted(order), "build, compile, smoke and upload must run in that order"
+
+    source = (REPO_ROOT / "kglite-java" / "smoke" / "NativeSmoke.java").read_text(encoding="utf-8")
+    assert 'graph.cypher("RETURN 1 AS x")' in source
+
+    floor = _step_running(build, f'"${{{{ steps.jdk22.outputs.path }}}}/bin/java" {JAVA_SMOKE_ARGS}')
+    assert floor.get("if") == JAVA_FLOOR_LEG
+    assert "continue-on-error" not in floor
+    assert "linux-x86_64" in platforms, "the JDK 22 leg names a platform the matrix does not build"
+    jdk22 = [step for step in _steps_using(build, "actions/setup-java@") if step.get("id") == "jdk22"]
+    assert len(jdk22) == 1, "no setup-java step with id jdk22"
+    assert str(jdk22[0]["with"]["java-version"]) == "22"
+    assert jdk22[0].get("if") == JAVA_FLOOR_LEG
+    assert steps.index(cargo) < steps.index(floor) < steps.index(uploads[0])
 
 
 def test_java_linux_natives_keep_a_conservative_glibc_floor() -> None:

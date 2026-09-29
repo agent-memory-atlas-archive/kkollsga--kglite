@@ -84,6 +84,41 @@ jobs:
         # test validates against kglite.h, so what ships is what the contract
         # describes.
         run: cargo build -p kglite-c --release
+      # Load the native this leg just built, on its own OS and architecture.
+      # The assemble job's test suite runs on Linux x86_64 only, so without
+      # this the darwin, Windows and linux-aarch64 natives ship having never
+      # been loaded by anything. The JDK 22 launcher (the Java floor, see
+      # kglite-java/build.gradle.kts) runs the same smoke on one leg: every
+      # other Java run here and in ci.yml uses JDK 26.
+      - name: Set up JDK 22 (floor launcher)
+        id: jdk22
+        if: matrix.platform == 'linux-x86_64'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '22'
+      - name: Set up JDK 26
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '26'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        with:
+          gradle-version: '9.7.0'
+      - name: Compile the Java wrapper
+        run: gradle -p kglite-java compileJava
+      - name: Smoke-test the built native
+        shell: bash
+        run: |
+          set -euo pipefail
+          java --enable-native-access=ALL-UNNAMED "-Dkglite.native.path=target/release/${{ matrix.library }}" -cp kglite-java/build/classes/java/main kglite-java/smoke/NativeSmoke.java
+      - name: Smoke-test the built native on the JDK 22 floor
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.jdk22.outputs.path }}/bin/java" --enable-native-access=ALL-UNNAMED "-Dkglite.native.path=target/release/${{ matrix.library }}" -cp kglite-java/build/classes/java/main kglite-java/smoke/NativeSmoke.java
       - name: Stage the native under its platform name
         shell: bash
         run: |

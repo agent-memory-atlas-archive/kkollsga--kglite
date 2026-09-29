@@ -5,7 +5,8 @@ published 0.13.2 wheel, where ``db.relationship_embeddings.*`` does not exist, s
 relationship cell can never live there. Each cell here instead carries a
 **self-contained ratio guard** against a twin measured in the same process
 (its node twin, or for the parameter cell its sibling shape), which needs no
-baseline row. Run explicitly, release build only::
+baseline row. CI's perf job runs this file on the release-built candidate
+wheel as a blocking step. Locally, release build only::
 
     uv run --no-sync maturin develop --release
     pytest tests/benchmarks/test_bench_edge_embeddings.py -m benchmark -v -s
