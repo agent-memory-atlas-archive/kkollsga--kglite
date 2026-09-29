@@ -181,8 +181,10 @@ def test_duration_rejects_fractional_or_non_finite_components(
     graph: kglite.KnowledgeGraph,
 ) -> None:
     for value in (1.5, float("inf"), float("nan")):
-        with pytest.raises(kglite.CypherExecutionError, match="expects a number"):
+        with pytest.raises(kglite.CypherExecutionError, match="must be a whole number of seconds") as err:
             graph.cypher("RETURN duration({seconds: $value}) AS d", params={"value": value})
+        # The sub-second explanation belongs to a finite fraction only.
+        assert ("sub-second" in str(err.value)) == (value == 1.5), str(err.value)
 
 
 def test_date_and_timestamp_arithmetic_return_null_on_unrepresentable_shift(

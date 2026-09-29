@@ -418,14 +418,16 @@ fn temporal_from_map(function: &str, map: &crate::datatypes::PropMap) -> Result<
 /// A `duration()` map value that is not a whole count of its unit — named with
 /// the key and what it got, since a fractional number *is* a number.
 fn duration_component_error(key: &str, got: &Value) -> String {
+    // The sub-second note explains a finite fraction only; inf/NaN are not one.
+    let note = match got {
+        Value::Float64(f) if key == "seconds" && f.is_finite() => {
+            " (sub-second durations are not supported)"
+        }
+        _ => "",
+    };
     let got = match got {
         Value::Float64(f) => f.to_string(),
         other => other.type_name().to_string(),
-    };
-    let note = if key == "seconds" {
-        " (sub-second durations are not supported)"
-    } else {
-        ""
     };
     format!("duration(): '{key}' must be a whole number of {key}, got {got}{note}")
 }
