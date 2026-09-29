@@ -1969,3 +1969,114 @@ fn a_relationship_value_without_a_statement_token_is_refused_by_set() {
         vec![(Some(0), None), (Some(1), None)]
     );
 }
+
+/// `SET r.p` records `p` in the relationship type's property catalogue, as
+/// `SET n.p` does for a node type — and `SET r += {…}` / `SET r = {…}` follow,
+/// since both desugar to the same item. `valid_at(r, d, 'rf', 'rt')` and
+/// `describe()` read that catalogue, so a name only a `SET` wrote used to be
+/// refused as nonexistent on the first relationship that left it null. A null `SET` records nothing, as `CREATE` does.
+#[test]
+fn test_set_relationship_property_records_it_on_the_type() {
+    let run = |graph: &mut DirGraph, cypher: &str| {
+        let q = parser::parse_cypher(cypher).unwrap();
+        execute_mutable(
+            graph,
+            &q,
+            HashMap::new(),
+            crate::graph::algorithms::Interrupt::default(),
+        )
+        .unwrap()
+    };
+    let mut graph = DirGraph::new();
+    run(
+        &mut graph,
+        "CREATE (a:A {id: 1})-[:H {rf: date('2000-01-01')}]->(b:B {id: 1}), (a)-[:H {rf: date('2002-01-01')}]->(:B {id: 2})",
+    );
+    run(
+        &mut graph,
+        "MATCH ()-[h:H]->(:B {id: 1}) SET h.rt = date('2001-01-01')",
+    );
+    run(
+        &mut graph,
+        "MATCH ()-[h:H]->(:B {id: 1}) SET h += {note: 'x'}",
+    );
+    run(
+        &mut graph,
+        "MATCH ()-[h:H]->(:B {id: 2}) SET h = {rf: date('2002-01-01'), w: 1.5}",
+    );
+    run(&mut graph, "MATCH ()-[h:H]->() SET h.gone = null");
+
+    let types = |graph: &DirGraph| {
+        let mut v: Vec<(String, String)> = graph.connection_type_metadata["H"]
+            .property_types
+            .iter()
+            .map(|(k, t)| (k.clone(), t.clone()))
+            .collect();
+        v.sort();
+        v
+    };
+    let expected = vec![
+        ("note".to_string(), "String".to_string()),
+        ("rf".to_string(), "DateTime".to_string()),
+        ("rt".to_string(), "DateTime".to_string()),
+        ("w".to_string(), "Float64".to_string()),
+    ];
+    assert_eq!(types(&graph), expected);
+
+    // A later CREATE unions with the recorded names; it never replaces them.
+    run(
+        &mut graph,
+        "MATCH (a:A) CREATE (a)-[:H {rf: date('2003-01-01')}]->(:B {id: 3})",
+    );
+    assert_eq!(types(&graph), expected);
+
+    // The bound the SET introduced is known to valid_at on a row that leaves it null.
+    let result = run(
+        &mut graph,
+        "MATCH ()-[h:H]->() WHERE valid_at(h, date('2000-06-01'), 'rf', 'rt') RETURN count(*) AS n",
+    );
+    assert_eq!(result.rows, vec![vec![Value::Int64(1)]]);
+}
+
+/// A `SET` on an `auto_timestamp` relationship type records the provenance key
+/// it stamps, as the node stamp does — here for a type opted in after its
+/// edge was written, so no `CREATE` ever carried `updated_at`.
+#[test]
+fn test_edge_provenance_stamp_records_its_key_on_the_type() {
+    use crate::graph::schema::{ConnectionSchemaDefinition, SchemaDefinition};
+    let run = |graph: &mut DirGraph, cypher: &str| {
+        let q = parser::parse_cypher(cypher).unwrap();
+        execute_mutable(
+            graph,
+            &q,
+            HashMap::new(),
+            crate::graph::algorithms::Interrupt::default(),
+        )
+        .unwrap();
+    };
+    let mut graph = DirGraph::new();
+    run(
+        &mut graph,
+        "CREATE (:P {id: 1})-[:LINKS {w: 1}]->(:P {id: 2})",
+    );
+    let mut schema = SchemaDefinition::new();
+    schema.add_connection_schema(
+        "LINKS".into(),
+        ConnectionSchemaDefinition {
+            source_type: "P".into(),
+            target_type: "P".into(),
+            cardinality: None,
+            required_properties: Vec::new(),
+            property_types: HashMap::new(),
+            auto_timestamp: Some(true),
+        },
+    );
+    graph.schema_definition = Some(schema);
+    run(&mut graph, "MATCH ()-[r:LINKS]->() SET r.w = 2");
+    let info = &graph.connection_type_metadata["LINKS"];
+    assert!(
+        info.property_types.contains_key("updated_at"),
+        "{:?}",
+        info.property_types
+    );
+}

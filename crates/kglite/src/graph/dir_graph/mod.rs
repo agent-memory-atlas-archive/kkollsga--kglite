@@ -1430,6 +1430,32 @@ impl DirGraph {
         }
     }
 
+    /// Record one relationship property write — a `SET r.p` — in the type's
+    /// property catalogue, unioned with what it holds. The endpoint pairs are
+    /// left alone: the edge already exists, so its writer recorded them.
+    ///
+    /// Check-first like [`Self::upsert_connection_type_metadata`]: the `SET`
+    /// path calls this per written row, and only a new name or a widened type
+    /// takes the `&mut` that forks the shared map.
+    pub(crate) fn record_connection_property_type(
+        &mut self,
+        conn_type: &str,
+        property: &str,
+        observed: &str,
+    ) {
+        if self
+            .connection_type_metadata
+            .get(conn_type)
+            .is_some_and(|info| info.records(property, observed))
+        {
+            return;
+        }
+        self.connection_type_metadata_mut()
+            .entry(conn_type.to_string())
+            .or_default()
+            .record_property_type(property.to_string(), observed.to_string());
+    }
+
     pub fn has_node_type(&self, node_type: &str) -> bool {
         self.type_indices.contains_key(node_type) || self.node_type_metadata.contains_key(node_type)
     }

@@ -17,6 +17,16 @@ before upgrading.
   `examples/bitemporal_org_chart.py`; the README's temporal section follows
   the same example.
 
+### Fixed
+
+- Cypher `SET r.p` on a relationship now records `p` in the relationship
+  type's property metadata (as `SET n.p` does for a node type), and a `SET` on
+  an `auto_timestamp` relationship type records the provenance keys it stamps.
+  A property only a `SET` had written was missing from `describe()` and
+  `.kgl` metadata, and `valid_at(r, d, 'from', 'to')` naming it raised
+  "does not exist on relationship type" once any relationship of the type
+  left it null.
+
 ## [0.19.0] - 2026-09-28
 
 ### Added

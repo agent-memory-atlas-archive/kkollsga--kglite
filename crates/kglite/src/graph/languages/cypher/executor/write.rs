@@ -1832,39 +1832,62 @@ fn execute_set_items(
 
     stamp_node_provenance(graph, &nodes_to_stamp);
 
-    // Edge freshness provenance: bump the reserved keys (updated_at + caller
-    // git_sha/modified_by) once per modified edge of an opted-in type.
-    if !edges_to_stamp.is_empty() {
-        let provenance = graph.provenance_props();
-        let interned: Vec<(InternedKey, Value)> = provenance
-            .iter()
-            .map(|(k, v)| (graph.interner.get_or_intern(k), v.clone()))
-            .collect();
-        for edge_index in &edges_to_stamp {
-            if let Some(EdgeData {
-                properties: edge_props,
-                ..
-            }) = GraphWrite::edge_weight_mut(&mut graph.graph, *edge_index)
-            {
-                for (key, val) in &interned {
-                    if let Some((_, existing)) = edge_props.iter_mut().find(|(ek, _)| ek == key) {
-                        *existing = val.clone();
-                    } else {
-                        edge_props.push((*key, val.clone()));
-                    }
-                }
-            }
-            for (name, _) in &provenance {
-                crate::graph::index_freshness::write_hooks::note_edge_property_written(
-                    graph,
-                    *edge_index,
-                    Some(name),
-                );
-            }
-        }
-    }
+    stamp_edge_provenance(graph, &edges_to_stamp);
 
     Ok(())
+}
+
+/// Stamp the reserved provenance keys (`updated_at` + the caller's
+/// `git_sha`/`modified_by`) on every edge of an opted-in type a `SET`
+/// modified, once per edge.
+fn stamp_edge_provenance(
+    graph: &mut DirGraph,
+    edges_to_stamp: &std::collections::HashSet<petgraph::graph::EdgeIndex>,
+) {
+    if edges_to_stamp.is_empty() {
+        return;
+    }
+    let provenance = graph.provenance_props();
+    let interned: Vec<(InternedKey, Value)> = provenance
+        .iter()
+        .map(|(k, v)| (graph.interner.get_or_intern(k), v.clone()))
+        .collect();
+    let mut stamped_types: std::collections::HashSet<InternedKey> =
+        std::collections::HashSet::new();
+    for edge_index in edges_to_stamp {
+        if let Some(EdgeData {
+            connection_type,
+            properties: edge_props,
+            ..
+        }) = GraphWrite::edge_weight_mut(&mut graph.graph, *edge_index)
+        {
+            stamped_types.insert(*connection_type);
+            for (key, val) in &interned {
+                if let Some((_, existing)) = edge_props.iter_mut().find(|(ek, _)| ek == key) {
+                    *existing = val.clone();
+                } else {
+                    edge_props.push((*key, val.clone()));
+                }
+            }
+        }
+        for (name, _) in &provenance {
+            crate::graph::index_freshness::write_hooks::note_edge_property_written(
+                graph,
+                *edge_index,
+                Some(name),
+            );
+        }
+    }
+    // Once per stamped type, as `stamp_node_provenance` records the node
+    // keys: a type opted in after its edges were written, or a
+    // `git_sha`/`modified_by` its creating write did not carry, is
+    // otherwise stamped without its catalogue knowing the key.
+    for type_key in stamped_types {
+        let conn_type = graph.interner.resolve(type_key).to_string();
+        for (name, value) in &provenance {
+            graph.record_connection_property_type(&conn_type, name, value.type_name());
+        }
+    }
 }
 
 /// Apply one `SET n:Label` item to a row.

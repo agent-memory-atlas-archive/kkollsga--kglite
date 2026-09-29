@@ -64,12 +64,15 @@ pub(super) fn set_edge_property(
         graph.check_rel_property_write(&rel_type, property, Some(&value))?;
     }
 
+    let observed_type = (!matches!(value, Value::Null)).then(|| value.type_name());
     let key = graph.interner.get_or_intern(property);
+    let mut written = false;
     if let Some(EdgeData {
         properties: edge_props,
         ..
     }) = GraphWrite::edge_weight_mut(&mut graph.graph, edge_index)
     {
+        written = true;
         // `SET r.p = null` leaves the property absent, not present-and-null —
         // the node rule (a null cell is skipped by the columnar store, so
         // `keys(n)` never reports it), applied to the key/value vector an edge
@@ -92,8 +95,6 @@ pub(super) fn set_edge_property(
         Some(property),
     );
 
-    // Record for the post-loop stamp if the edge type opted in. A write to
-    // `updated_at` itself is recorded too, so the stamp overwrites it.
     // Arena guard: edge_weight materializes on the disk backend (protocol
     // in disk/graph.rs); scoped so the borrow ends before the next item's
     // &mut uses.
@@ -106,6 +107,14 @@ pub(super) fn set_edge_property(
     };
     if let Some(ct_key) = ct_key {
         let ct = graph.interner.resolve(ct_key).to_string();
+        // The type's property catalogue learns the name, as `SET n.p` teaches a
+        // node type: `valid_at`'s named bounds, `db.temporal.declare` and
+        // `describe()` read it, and a name only a SET wrote used to read as absent.
+        if let Some(observed) = observed_type.filter(|_| written) {
+            graph.record_connection_property_type(&ct, property, observed);
+        }
+        // Record for the post-loop stamp if the edge type opted in. A write to
+        // `updated_at` itself is recorded too, so the stamp overwrites it.
         if graph.auto_timestamp_for_connection(&ct) {
             edges_to_stamp.insert(edge_index);
         }
