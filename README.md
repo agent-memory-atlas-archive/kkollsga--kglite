@@ -374,10 +374,9 @@ building saves a lot of argument later.
 
 ## Temporal data
 
-**What is special here: valid time is a declared property of the graph, not a
-filter you remember to write, so one instant governs every hop, path, algorithm
-and ranking in every binding, and recording time is modelled beside it in the
-same embedded engine.** Org charts, licence tables and price lists keep
+**Valid time is a declared property of the graph, not a filter you remember to
+write, so one instant governs every hop, path, algorithm and ranking in every
+binding, and recording time is modelled beside it in the same embedded engine.** Org charts, licence tables and price lists keep
 history: each fact is valid over a period, and the usual question is *"as of
 when?"*. Declare a type's interval
 properties once (closed or half-open); after that one prefix, or `valid_at=` on
