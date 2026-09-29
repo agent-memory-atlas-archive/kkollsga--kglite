@@ -662,7 +662,7 @@ impl DirGraph {
             .map(|(name, store)| {
                 let empty = HashMap::new();
                 let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
-                let store = if store.has_mmap_base() || store.has_retypable_mixed_column() {
+                let store = if store.has_mmap_base() || store.has_retypable_mixed_column(meta) {
                     Arc::new(store.flattened_owned(meta, &self.interner))
                 } else {
                     Arc::clone(store)

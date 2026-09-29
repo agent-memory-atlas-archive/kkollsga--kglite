@@ -206,7 +206,7 @@
     {
       "path": "crates/kglite/src/graph/languages/cypher/executor/scalar_functions/temporal.rs",
       "qualified_name": "crate::CypherExecutor<'a>::eval_temporal_fn",
-      "lines": 217,
+      "lines": 215,
       "branches": 86,
       "nesting": 5
     },

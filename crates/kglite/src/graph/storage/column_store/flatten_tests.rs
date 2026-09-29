@@ -86,3 +86,49 @@ fn a_column_is_typed_only_by_a_kind_its_values_already_have() {
         Some("float64")
     );
 }
+
+/// An all-null `Mixed` column is re-typable only when the type declares a
+/// concrete kind for it: with none (an undeclared key, or the id and title
+/// columns, which carry no declaration) the flattened copy would be `Mixed`
+/// again, and every save would flatten the store once more for nothing.
+#[test]
+fn an_all_null_mixed_column_is_retypable_only_under_a_declared_kind() {
+    // An all-null column flattened with no declaration is `Mixed` — the shape
+    // a save of such a column produces and a reload decodes.
+    let (nulls, meta, interner) =
+        store_with(&[("v", Value::Null), ("v", Value::Null)], &[("v", "int64")]);
+    let store = nulls.flattened_owned(&HashMap::new(), &interner);
+    assert_eq!(store.column_type_str(0), Some("mixed"));
+    assert!(!store.has_retypable_mixed_column(&HashMap::new()));
+    let undeclared: HashMap<String, String> = [("v".to_string(), "mixed".to_string())].into();
+    assert!(!store.has_retypable_mixed_column(&undeclared));
+
+    assert!(store.has_retypable_mixed_column(&meta));
+    let flat = store.flattened_owned(&meta, &interner);
+    assert_eq!(flat.column_type_str(0), Some("int64"));
+    assert!(!flat.has_retypable_mixed_column(&meta));
+
+    // A Mixed column whose values share one kind stays re-typable without a
+    // declaration, and one holding two kinds never is.
+    let mut interner = StringInterner::new();
+    let key = interner.get_or_intern("v");
+    let declared_mixed: HashMap<String, String> = [("v".to_string(), "mixed".to_string())].into();
+    let mut store = ColumnStore::new(
+        Arc::new(TypeSchema::from_keys([key])),
+        &declared_mixed,
+        &interner,
+    );
+    for row in 0..2 {
+        store.push_id(&Value::Int64(row));
+        store.push_title(&Value::String(format!("t{row}")));
+        store.push_row(&[(key, Value::Int64(3))]);
+    }
+    assert_eq!(store.column_type_str(0), Some("mixed"));
+    assert!(store.has_retypable_mixed_column(&HashMap::new()));
+    let (store, meta, _) = store_with(
+        &[("v", Value::Int64(3)), ("v", Value::String("x".into()))],
+        &[("v", "int64")],
+    );
+    assert_eq!(store.column_type_str(0), Some("mixed"));
+    assert!(!store.has_retypable_mixed_column(&meta));
+}

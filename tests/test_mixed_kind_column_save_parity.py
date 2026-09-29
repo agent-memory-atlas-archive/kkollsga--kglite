@@ -73,3 +73,50 @@ def test_mixed_kind_column_values_keep_their_kind(mode, tmp_path):
             )
     uniform = graph.cypher("MATCH (n:U) RETURN n.v AS v ORDER BY v").to_list()
     assert [(r["v"], type(r["v"])) for r in uniform] == [(7, int), (8, int)]
+
+
+@pytest.mark.parametrize("mode", ["memory", "mapped", "disk", "disk_reopened"])
+def test_a_float_column_reports_the_type_it_stores_after_an_int_batch(mode, tmp_path):
+    """A float column stores a later batch's exact integers as floats — and a
+    Cypher SET or CREATE of one — so the recorded type stays Float64:
+    ``schema()``, ``describe()`` and the load report say what the column holds.
+    They said the type was now Int64 while every value read back a float."""
+    import re
+    import warnings
+
+    import pandas as pd
+
+    if mode == "memory":
+        graph = kglite.KnowledgeGraph()
+    elif mode == "mapped":
+        graph = kglite.KnowledgeGraph(storage="mapped")
+    else:
+        graph = kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / "g"))
+    first = pd.DataFrame({"id": [1, 2], "title": ["a", "b"], "rating": [1.5, 2.5]})
+    graph.add_nodes(first, "Employee", "id", "title")
+    second = pd.DataFrame({"id": [3], "title": ["c"], "rating": [9]})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report = graph.add_nodes(second, "Employee", "id", "title")
+    messages = [str(w.message) for w in caught] + list(report.get("errors", []))
+    assert not any("now 'Int64'" in message for message in messages), messages
+    assert any("stored in the 'Float64' column, which stays the recorded type" in m for m in messages), messages
+    # A Cypher SET and CREATE of an integer land in the same float column.
+    graph.cypher("MATCH (n:Employee {id: 2}) SET n.rating = 4")
+    graph.cypher("CREATE (:Employee {id: 4, title: 'd', rating: 5})")
+    if mode in ("disk", "disk_reopened"):
+        graph.save()
+    if mode == "disk_reopened":
+        del graph
+        graph = kglite.load(str(tmp_path / "g"))
+
+    rows = graph.cypher("MATCH (n:Employee) RETURN n.rating AS r ORDER BY n.id").to_list()
+    assert [(row["r"], type(row["r"])) for row in rows] == [
+        (1.5, float),
+        (4.0, float),
+        (9.0, float),
+        (5.0, float),
+    ]
+    assert graph.schema()["node_types"]["Employee"]["properties"]["rating"] == "Float64"
+    described = re.search(r'<prop name="rating" type="([^"]+)"', graph.describe(types=["Employee"]))
+    assert described and described.group(1) == "Float64"

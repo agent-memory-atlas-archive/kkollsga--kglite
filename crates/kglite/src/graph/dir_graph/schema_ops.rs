@@ -1,7 +1,7 @@
 //! Schema-definition accessors on `DirGraph` — set/get/clear the declared
-//! `SchemaDefinition` and resolve a node type's declared PRIMARY KEY. Split
-//! out of `mod.rs` to keep it under the god-file LoC ceiling; these are a
-//! small, cohesive group with no other dependencies.
+//! `SchemaDefinition`, resolve a node type's declared PRIMARY KEY, and upsert
+//! node-type property metadata. Split out of `mod.rs` to keep it under the
+//! god-file LoC ceiling.
 
 use std::collections::HashMap;
 
@@ -11,6 +11,72 @@ use crate::error::KgError;
 use crate::graph::schema::{InternedKey, SchemaDefinition, SchemaInstall};
 
 impl DirGraph {
+    /// Upsert node type metadata — merges new property types into existing.
+    ///
+    /// **Checks before it writes**, and that check is load-bearing rather than
+    /// a micro-optimisation: `node_type_metadata` is `Arc`-shared with the
+    /// rollback shell (see `schema_cow`), so taking `&mut` forks the whole
+    /// catalogue whether or not anything changes. The Cypher `SET` path calls
+    /// this once per written row with a property the type almost always
+    /// already declares, so an unconditional `&mut` would put the
+    /// O(types x properties) copy back on every mutating statement.
+    ///
+    /// A type that is absent still falls through, so declaring a type with no
+    /// properties creates its (empty) entry exactly as before.
+    ///
+    /// A `Float64` record whose stored column is still a float column is kept
+    /// when an `Int64` arrives ([`Self::float_column_absorbs_int`]): the column
+    /// stores the integer as a float, so an `Int64` record would contradict
+    /// every value read back.
+    pub fn upsert_node_type_metadata(
+        &mut self,
+        node_type: &str,
+        mut props: HashMap<String, String>,
+    ) {
+        if let Some(existing) = self.node_type_metadata.get(node_type) {
+            for (key, kind) in props.iter_mut() {
+                if let Some(recorded) = existing.get(key) {
+                    if self.float_column_absorbs_int(node_type, key, recorded, kind) {
+                        kind.clone_from(recorded);
+                    }
+                }
+            }
+            if props.iter().all(|(k, v)| existing.get(k) == Some(v)) {
+                return;
+            }
+        }
+        let entry = self
+            .node_type_metadata_mut()
+            .entry(node_type.to_string())
+            .or_default();
+        for (k, v) in props {
+            entry.insert(k, v);
+        }
+    }
+
+    /// Whether an `incoming` Int64 value of `node_type.key`, recorded
+    /// `Float64`, lands in a stored float column — which converts an integer
+    /// it can hold exactly (`TypedColumn::push`), so the record stays the
+    /// float one.
+    pub(crate) fn float_column_absorbs_int(
+        &self,
+        node_type: &str,
+        key: &str,
+        recorded: &str,
+        incoming: &str,
+    ) -> bool {
+        use crate::graph::storage::column_store::TypedColumn;
+        TypedColumn::canonical_type_str(recorded) == Some("float64")
+            && TypedColumn::canonical_type_str(incoming) == Some("int64")
+            && self.column_store(node_type).is_some_and(|store| {
+                store
+                    .schema()
+                    .slot(InternedKey::from_str(key))
+                    .and_then(|slot| store.column_type_str(slot as usize))
+                    == Some("float64")
+            })
+    }
+
     /// Run one write with caller-supplied freshness provenance, restoring the
     /// prior context after the callback returns (including `Result::Err`).
     /// This is shared by Cypher execution and direct bulk mutation bindings;

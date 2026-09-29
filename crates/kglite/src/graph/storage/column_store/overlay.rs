@@ -39,20 +39,32 @@ impl FlattenKind {
 
 impl ColumnStore {
     /// Whether a `Mixed` id, title or property column holds values that all
-    /// have one kind (or none at all), so [`Self::flattened_owned`] would
-    /// type it.
-    pub(crate) fn has_retypable_mixed_column(&self) -> bool {
-        let retypable = |column: &TypedColumn| match column {
+    /// have one kind, so [`Self::flattened_owned`] would type it. An all-null
+    /// column counts only when `type_meta` declares a concrete kind for its
+    /// key (never the id or title column, which carry no declaration): without
+    /// one the copy would be `Mixed` again and every save would re-flatten it.
+    pub(crate) fn has_retypable_mixed_column(&self, type_meta: &HashMap<String, String>) -> bool {
+        let declared_slots: HashSet<u16> = type_meta
+            .iter()
+            .filter(|(_, kind)| TypedColumn::canonical_type_str(kind).is_some())
+            .filter_map(|(key, _)| self.schema.slot(InternedKey::from_str(key)))
+            .collect();
+        let retypable = |column: &TypedColumn, declared: bool| match column {
             TypedColumn::Mixed { data } => {
                 let mut kind = FlattenKind::default();
                 data.iter().for_each(|value| kind.note(value));
-                kind.column_type() != Some("mixed")
+                match kind.column_type() {
+                    Some(kind) => kind != "mixed",
+                    None => declared,
+                }
             }
             _ => false,
         };
-        self.columns_ref().any(retypable)
-            || self.id_column_ref().is_some_and(retypable)
-            || self.title_column_ref().is_some_and(retypable)
+        self.columns_ref()
+            .enumerate()
+            .any(|(slot, column)| retypable(column, declared_slots.contains(&(slot as u16))))
+            || self.id_column_ref().is_some_and(|c| retypable(c, false))
+            || self.title_column_ref().is_some_and(|c| retypable(c, false))
     }
 
     /// An owned heap copy of this store's **effective** rows — local

@@ -45,3 +45,22 @@ def test_a_matching_follow_up_load_reports_nothing() -> None:
         pd.DataFrame({"code": ["b"], "vt": [dt.date(2011, 1, 1)]}), "M", "code", column_types={"vt": "date"}
     )
     assert not report.get("errors")
+
+
+def test_an_integer_a_float_column_cannot_hold_records_mixed() -> None:
+    """A float column stores an exact integer as a float and keeps its Float64
+    record; an integer it would round (past 2**53) demotes the column to mixed,
+    and the record and the report say so rather than Float64 or Int64."""
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(pd.DataFrame({"id": [1], "title": ["a"], "score": [1.5]}), "Team", "id", "title")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        report = graph.add_nodes(
+            pd.DataFrame({"id": [2, 3], "title": ["b", "c"], "score": [9, 2**53 + 1]}), "Team", "id", "title"
+        )
+    (message,) = report["errors"]
+    assert message.endswith("The values were written, and the property's recorded type is now 'mixed'"), message
+    assert graph.schema()["node_types"]["Team"]["properties"]["score"] == "mixed"
+    rows = graph.cypher("MATCH (t:Team) RETURN t.score AS s ORDER BY t.id").to_list()
+    assert [row["s"] for row in rows] == [1.5, 9.0, 2**53 + 1]
+    assert isinstance(rows[2]["s"], int)

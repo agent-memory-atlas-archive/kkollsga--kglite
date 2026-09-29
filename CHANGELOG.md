@@ -35,6 +35,15 @@ before upgrading.
 - `duration({seconds: 1.5})` (and any fractional or non-numeric component)
   now says the component must be a whole number of its unit and names the key
   and the value it got; it said "expects a number".
+- A float property that receives integers — a later `add_nodes` batch, a
+  Cypher `SET` or `CREATE`, or a fluent `.update()` — keeps its recorded
+  `Float64` type while the column stores those integers as floats: `schema()`,
+  `describe()` and the load report said the type was now `Int64` while every
+  value read back as a float. An integer the float column cannot hold exactly
+  (past 2**53) records `mixed`, as the column then holds both kinds.
+- A disk-graph save no longer re-copies a node type's column store on every
+  save when one of its columns holds only nulls and the type declares no kind
+  for it.
 
 ## [0.19.0] - 2026-09-28
 

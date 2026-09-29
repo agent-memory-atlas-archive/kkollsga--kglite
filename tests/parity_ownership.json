@@ -556,5 +556,17 @@
   },
   "tests/test_temporal_empty_intervals.py::test_a_load_keeps_an_empty_row_with_one_warning[memory_guards]": {
     "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_a_float_column_reports_the_type_it_stores_after_an_int_batch[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_a_float_column_reports_the_type_it_stores_after_an_int_batch[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_a_float_column_reports_the_type_it_stores_after_an_int_batch[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_mixed_kind_column_save_parity.py::test_a_float_column_reports_the_type_it_stores_after_an_int_batch[disk_reopened]": {
+    "owner": "storage-parity"
   }
 }

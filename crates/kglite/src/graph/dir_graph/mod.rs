@@ -1365,33 +1365,6 @@ impl DirGraph {
         })
     }
 
-    /// Upsert node type metadata — merges new property types into existing.
-    ///
-    /// **Checks before it writes**, and that check is load-bearing rather than
-    /// a micro-optimisation: `node_type_metadata` is `Arc`-shared with the
-    /// rollback shell (see `schema_cow`), so taking `&mut` forks the whole
-    /// catalogue whether or not anything changes. The Cypher `SET` path calls
-    /// this once per written row with a property the type almost always
-    /// already declares, so an unconditional `&mut` would put the
-    /// O(types x properties) copy back on every mutating statement.
-    ///
-    /// A type that is absent still falls through, so declaring a type with no
-    /// properties creates its (empty) entry exactly as before.
-    pub fn upsert_node_type_metadata(&mut self, node_type: &str, props: HashMap<String, String>) {
-        if let Some(existing) = self.node_type_metadata.get(node_type) {
-            if props.iter().all(|(k, v)| existing.get(k) == Some(v)) {
-                return;
-            }
-        }
-        let entry = self
-            .node_type_metadata_mut()
-            .entry(node_type.to_string())
-            .or_default();
-        for (k, v) in props {
-            entry.insert(k, v);
-        }
-    }
-
     /// Upsert connection type metadata — merges property types (see
     /// [`ConnectionTypeInfo::record_property_type`]) and accumulates type pairs.
     pub fn upsert_connection_type_metadata(

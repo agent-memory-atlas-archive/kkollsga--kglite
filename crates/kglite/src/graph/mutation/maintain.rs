@@ -679,20 +679,45 @@ fn reject_identity_redeclaration(
 
 /// The report line for a write whose values disagree with the property's
 /// recorded type — `None` when they agree, when the record already says
-/// `"mixed"`, or when either side carries no concrete type. It is a diagnostic, not a refusal: a column may
-/// hold several types, so the values are written, and the recorded type
-/// becomes the observed one (node metadata is last-write-wins; `describe()`
-/// derives `mixed` from the stored values). The line says both, because a
-/// report entry under `errors` otherwise reads as a skipped row.
-fn type_mismatch_message(property: &str, recorded: &str, observed: &str) -> Option<String> {
+/// `"mixed"`, or when either side carries no concrete type. It is a
+/// diagnostic, not a refusal: a column may hold several types, so the values
+/// are written. `now` is the type recorded after the write — usually the
+/// observed one (node metadata is last-write-wins; `describe()` derives
+/// `mixed` from the stored values), but a float column that stores exact
+/// integers as floats keeps its record. The line says what happened, because
+/// a report entry under `errors` otherwise reads as a skipped row.
+fn type_mismatch_message(
+    property: &str,
+    recorded: &str,
+    observed: &str,
+    now: &str,
+) -> Option<String> {
+    let outcome = if now == recorded {
+        format!("were stored in the '{recorded}' column, which stays the recorded type")
+    } else {
+        format!("were written, and the property's recorded type is now '{now}'")
+    };
     (crate::graph::schema::merged_property_type(recorded, observed).as_deref() == Some("mixed"))
         .then(|| {
             format!(
                 "Type mismatch for property '{property}': existing schema has '{recorded}', but \
-             data has '{observed}'. The values were written, and the property's recorded type \
-             is now '{observed}'"
+                 data has '{observed}'. The values {outcome}"
             )
         })
+}
+
+/// Whether every value of this call's `column` converts to a float exactly —
+/// what a stored float column needs to keep holding floats only
+/// (`TypedColumn::push` demotes the column to mixed for one that would round).
+fn converts_exactly_to_float(df_data: &DataFrame, column: &str) -> bool {
+    let Some(index) = df_data.get_column_index(column) else {
+        return false;
+    };
+    (0..df_data.row_count()).all(|row| match df_data.get_value_by_index(row, index) {
+        Some(Value::Int64(n)) => crate::graph::schema::exact_float(n).is_some(),
+        Some(Value::Null) | None => true,
+        Some(_) => false,
+    })
 }
 
 /// Merge this call's column types into the node type's metadata and register
@@ -709,15 +734,27 @@ fn install_node_type_metadata(
     should_update_title: bool,
     errors: &mut Vec<String>,
 ) {
-    let df_column_types = recorded_column_types(df_data, graph.get_node_type_metadata(node_type));
+    let mut df_column_types =
+        recorded_column_types(df_data, graph.get_node_type_metadata(node_type));
 
     if let Some(existing_meta) = graph.get_node_type_metadata(node_type) {
-        for (col_name, col_type) in &df_column_types {
-            if let Some(existing_type) = existing_meta.get(col_name) {
-                if let Some(message) = type_mismatch_message(col_name, existing_type, col_type) {
-                    errors.push(message);
-                }
+        for (col_name, col_type) in df_column_types.iter_mut() {
+            let Some(existing_type) = existing_meta.get(col_name) else {
+                continue;
+            };
+            let now =
+                if !graph.float_column_absorbs_int(node_type, col_name, existing_type, col_type) {
+                    col_type.clone()
+                } else if converts_exactly_to_float(df_data, col_name) {
+                    existing_type.clone()
+                } else {
+                    // One integer the float column cannot hold demotes it to mixed.
+                    "mixed".to_string()
+                };
+            if let Some(message) = type_mismatch_message(col_name, existing_type, col_type, &now) {
+                errors.push(message);
             }
+            *col_type = now;
         }
     }
 
@@ -2261,19 +2298,24 @@ pub fn update_node_properties(
     let type_string = observed_type_string(&nodes, &validated_nodes);
 
     for node_type in node_types.keys() {
-        if let Some(existing_meta) = graph.get_node_type_metadata(node_type) {
-            if let Some(existing_type) = existing_meta.get(&property_string) {
-                if let Some(message) =
-                    type_mismatch_message(&property_string, existing_type, &type_string)
-                {
-                    errors.push(message);
-                }
-            }
-        }
-
+        let recorded = graph
+            .get_node_type_metadata(node_type)
+            .and_then(|meta| meta.get(&property_string))
+            .cloned();
         let mut new_prop_types = HashMap::new();
         new_prop_types.insert(property_string.clone(), type_string.clone());
         graph.upsert_node_type_metadata(node_type, new_prop_types);
+        if let Some(recorded) = recorded {
+            let now = graph
+                .get_node_type_metadata(node_type)
+                .and_then(|meta| meta.get(&property_string))
+                .map_or(type_string.as_str(), String::as_str);
+            if let Some(message) =
+                type_mismatch_message(&property_string, &recorded, &type_string, now)
+            {
+                errors.push(message);
+            }
+        }
     }
 
     let batch_size = nodes.len();
