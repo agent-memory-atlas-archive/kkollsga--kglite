@@ -378,7 +378,26 @@ Registers, licence tables and price lists keep history: each fact is valid over
 a period, and the usual question is *"as of when?"*. Declare a type's interval
 properties once (closed or half-open); after that one prefix, or `valid_at=` on
 any binding, answers as if the graph held only what was valid then, on every
-hop, path, algorithm and ranking:
+hop, path, algorithm and ranking.
+
+Loading is the declaration: name the two bound columns and the convention, and
+the type is temporal from then on (`set_temporal()`, `CALL db.temporal.declare`
+and a blueprint's `temporal` key do the same for data already loaded):
+
+```python
+municipalities = pd.DataFrame({
+    "code": ["0003", "1979", "0014"],
+    "name": ["Appingedam", "Eemsdelta", "Groningen"],
+    "valid_from": ["1900-01-01", "2021-01-01", "1900-01-01"],
+    "valid_to":   ["2021-01-01", None, None],          # None = still valid
+})
+graph.add_nodes(municipalities, "Municipality", "code", "name",
+                column_types={"valid_from": "validFrom", "valid_to": "validTo"},
+                convention="half_open")                # a register chain ends where the next begins
+```
+
+Rows on a declared type are versions, so a later load of the same code with a
+new interval adds a version rather than overwriting. Then ask as of a date:
 
 ```cypher
 // Every hop sees only what was valid on that day; no hop can be left undated
@@ -389,11 +408,12 @@ MATCH (m:Municipality) WHERE valid_at(m, date('2021-06-30')) RETURN m.title
 MATCH (m:Municipality) WHERE valid_during(m, date('2020-06-01'), date('2021-06-01')) RETURN m.title
 ```
 
-`graph.cypher(q, valid_at="2020-06-30")`, the fluent `graph.date(...)` context,
-the MCP tools and Java's `ValidAt` write the same prefix. Loads onto a declared
-type write versions and every write is checked against the declaration.
-Recording time (*"as known when?"*) is a second pair of bounds you model beside
-it, shown on BAG-shaped register data with a runnable example.
+`graph.cypher(q, valid_at="2020-06-30")`, the fluent `graph.date("2020-06-30")`
+context, the MCP tools and Java's `ValidAt` write the same prefix, and every
+write onto a declared type is checked against its declaration. Recording time
+(*"as known when?"*) is a second pair of bounds, such as `recorded_from` /
+`recorded_to`, that you load beside the first and test in the query; the register
+guide shows the full pattern on BAG-shaped data with a runnable example.
 
 - **[Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)**: declarations, as-of queries, the fluent context, modelling history, scale.
 - **[Bitemporal registers](https://kglite.readthedocs.io/en/latest/python/guides/bitemporal.html)**: register feeds and deliveries, as-known-at, lineage, the feature checklist.
