@@ -453,6 +453,39 @@ fn read_statement(
     })
 }
 
+/// Whether the only writes a statement makes are plain `SET var.prop = expr`
+/// items, so on disk every one reaches the column stores through the staged
+/// node-write flush that `StatementCheckpoint::DiskCells` journals.
+///
+/// A whitelist: `CREATE`, `MERGE`, `DELETE`, `REMOVE`, `SET var += map`, labels
+/// and every procedure call fall out of it, and a statement with no `SET` at all
+/// is not a property write.
+fn is_property_set_only(query: &CypherQuery) -> bool {
+    use cypher::ast::SetItem;
+    let mut any_set = false;
+    let only_property_writes = query.clauses.iter().all(|clause| match clause {
+        Clause::Set(set) => {
+            any_set = true;
+            set.items
+                .iter()
+                .all(|item| matches!(item, SetItem::Property { path, .. } if path.is_empty()))
+        }
+        Clause::Match(_)
+        | Clause::OptionalMatch(_)
+        | Clause::Where(_)
+        | Clause::Filter(_)
+        | Clause::Return(_)
+        | Clause::Finish
+        | Clause::With(_)
+        | Clause::OrderBy(_)
+        | Clause::Skip(_)
+        | Clause::Limit(_)
+        | Clause::Unwind(_) => true,
+        _ => false,
+    });
+    only_property_writes && any_set
+}
+
 /// Whether this statement has no fallible operation after its first write.
 ///
 /// This is intentionally a proof whitelist, not a general optimiser:
@@ -598,9 +631,11 @@ fn mut_statement(
     // it MUST be closed on every exit path — `commit` is what uninstalls the
     // capture journal.
     let checkpoint = if is_mutation && !can_skip_rollback_checkpoint(graph, &parsed, opts) {
-        StatementCheckpoint::open_with_cdc(
+        StatementCheckpoint::open_for_statement(
             graph,
             cypher::executor::write::mutates_cdc_configuration(&parsed),
+            // Only a disk graph has a route for it; skip the clause walk elsewhere.
+            graph.graph.as_disk().is_some() && is_property_set_only(&parsed),
         )
     } else {
         StatementCheckpoint::None

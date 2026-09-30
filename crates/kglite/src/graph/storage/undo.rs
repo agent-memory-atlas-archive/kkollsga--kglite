@@ -33,6 +33,12 @@
 //!   `embeddings`, captured at their documented choke-point APIs, because
 //!   those structures sit *above* storage and a backend cannot see them.
 //!
+//! A third, narrower seam serves a disk graph's property-`SET`-only statements:
+//! the flush that folds staged node writes into the column stores
+//! (`storage::disk::cell_undo`) journals the same columnar entries into a
+//! journal the disk backend holds for the statement, and nothing else — the
+//! rest of that statement's state is restored from a graph snapshot.
+//!
 //! Everything else a statement can touch is O(schema)-sized and is restored
 //! verbatim from a cheap shell clone — see
 //! [`crate::graph::dir_graph::rollback`], which owns the restore half and
@@ -80,7 +86,7 @@ use crate::graph::schema::{
     CompositeIndexKey, CompositeValue, EdgeData, IndexKey, InternedKey, NodeData, RemovedEmbedding,
     TypeSchema, VectorIndexState,
 };
-use crate::graph::storage::column_store::ColumnStore;
+use crate::graph::storage::column_store::{ColumnStore, DisplacedColumn};
 
 #[cfg(test)]
 thread_local! {
@@ -445,6 +451,23 @@ pub enum UndoEntry {
     /// Undo clears the flag; the row's values were hidden, never overwritten,
     /// so nothing else has to be restored.
     ColumnarTombstone { node_type: InternedKey, row_id: u32 },
+    /// A write whose value the column could not hold rebuilt the column — a
+    /// typed column demoted to `Mixed`, an all-null one retyped, a title column
+    /// promoted. Undo reinstates the column that stood there, restoring its
+    /// *type* (the paired cell entries restore only values, and a rebuilt
+    /// column would otherwise stay behind: on disk a `Mixed` column has no
+    /// file representation, and the heap copy of a base-served column stays
+    /// resident).
+    ///
+    /// Captured *after* the cell pre-images of the write that caused it, so
+    /// reverse replay reinstates the column first and then lets those cell
+    /// entries restore into it. Only the disk cell journal records it; a
+    /// heap-backed store has no caller that could observe the difference (the
+    /// module-level residue note in `dir_graph::rollback`).
+    ColumnarColumnReplaced {
+        node_type: InternedKey,
+        displaced: DisplacedColumn,
+    },
 }
 
 /// Which cells of a columnar row a property write is about to change.
@@ -751,6 +774,51 @@ impl UndoJournal {
     pub fn note_columnar_tombstone(&mut self, node_type: InternedKey, row_id: u32) {
         self.entries
             .push(UndoEntry::ColumnarTombstone { node_type, row_id });
+    }
+
+    /// Capture the cell `(row_id, key)` of `store` before it is overwritten,
+    /// and the schema it is about to grow when `key` has no column yet.
+    ///
+    /// The allocation-free form of [`ColumnarPreImages`] for a caller that
+    /// writes one cell at a time and owns both the store and the journal.
+    #[inline]
+    pub(crate) fn note_columnar_cell(
+        &mut self,
+        store: &ColumnStore,
+        node_type: InternedKey,
+        row_id: u32,
+        key: InternedKey,
+    ) {
+        if store.slot(key).is_none() {
+            self.entries.push(UndoEntry::ColumnarSchemaGrown {
+                node_type,
+                prior_schema: store.schema_arc(),
+                prior_column_count: store.column_count(),
+            });
+        }
+        #[cfg(test)]
+        JOURNAL_COLUMNAR_CELLS.set(JOURNAL_COLUMNAR_CELLS.get() + 1);
+        self.entries.push(UndoEntry::ColumnarCell {
+            node_type,
+            row_id,
+            key,
+            prior: store.get(row_id, key),
+        });
+    }
+
+    /// Journal the columns a write replaced (see
+    /// [`UndoEntry::ColumnarColumnReplaced`]), oldest first.
+    pub(crate) fn note_columns_displaced(
+        &mut self,
+        node_type: InternedKey,
+        displaced: impl IntoIterator<Item = DisplacedColumn>,
+    ) {
+        for displaced in displaced {
+            self.entries.push(UndoEntry::ColumnarColumnReplaced {
+                node_type,
+                displaced,
+            });
+        }
     }
 
     #[inline]

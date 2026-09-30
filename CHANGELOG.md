@@ -111,6 +111,14 @@ before upgrading.
   label the advisory names the relationship and the stub type. The Python
   loaders (a `UserWarning`) and blueprint builds report the same
   engine-built text.
+- A property `SET` statement on a disk graph no longer deep-copies each column
+  it writes the first time it writes it: the statement undoes itself from a
+  journal of the cells, titles and column types it overwrote instead of holding
+  a copy-on-write share of every column. The per-statement cost of closing 2,000
+  rows in a 2-million-row register dropped from a term that grew with the table
+  (steady state 1.5 us/row there, 2.7 us/row at 8 million) to a flat 1.2-1.3
+  us/row, 1.4-1.5x the same statement in memory. A statement that fails part-way
+  still leaves the graph, including each column's stored type, as it found it.
 
 ### Fixed
 

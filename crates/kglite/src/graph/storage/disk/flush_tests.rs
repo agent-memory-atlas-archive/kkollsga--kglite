@@ -1,5 +1,6 @@
-//! The per-row node flush writes in place: its cost is one copy of each
-//! touched column per statement (the checkpoint's share), not one per row.
+//! The per-row node flush writes in place: a property-`SET` statement copies
+//! no column (the cell journal stands in for the checkpoint's share), and a
+//! statement the journal does not cover copies each touched column once.
 use crate::datatypes::Value;
 use crate::graph::schema::DirGraph;
 use crate::graph::session::execute::{execute_mut, ExecuteOptions};
@@ -49,10 +50,11 @@ fn prop(graph: &DirGraph, id: i64, key: &str) -> Option<Value> {
 
 /// A statement writing two columns over `WRITTEN` rows used to deep-copy each
 /// touched column once per row (the flush cloned the store while the map
-/// still held it): 1,000 column copies here, each O(type rows). In place, the
-/// statement checkpoint's share makes the first write per column copy it once.
+/// still held it): 1,000 column copies here, each O(type rows). Written in
+/// place, the statement's checkpoint took one copy of each touched column at
+/// its first write; the cell journal takes none.
 #[test]
-fn a_disk_set_statement_copies_each_touched_column_once() {
+fn a_disk_set_statement_copies_no_column() {
     let dir = tempfile::tempdir().unwrap();
     let mut graph = disk_graph(dir.path());
 
@@ -68,12 +70,12 @@ fn a_disk_set_statement_copies_each_touched_column_once() {
     let columns = column_clones();
     let stores = column_store_clones();
 
-    assert!(
-        columns <= 2 && stores <= 1,
+    assert_eq!(
+        (columns, stores),
+        (0, 0),
         "one statement writing 2 columns over {WRITTEN} rows of a {ROWS}-row disk type \
-         copied {columns} columns and {stores} whole stores; expected at most one copy per \
-         touched column (the checkpoint's share) and one store. A reading near \
-         {} is the per-row clone-and-replace flush.",
+         copied {columns} columns and {stores} whole stores; the cell journal copies none. \
+         A reading near {} is the per-row clone-and-replace flush.",
         2 * WRITTEN
     );
     // Non-vacuity: the writes landed.

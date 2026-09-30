@@ -42,6 +42,7 @@ impl ColumnStore {
             slot_scratch: Vec::new(),
             spill_token: next_spill_token(),
             spillable_growth: true,
+            displaced: None,
         })
     }
 

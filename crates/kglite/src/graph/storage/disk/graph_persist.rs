@@ -1056,6 +1056,7 @@ impl DiskGraph {
             edge_properties,
             edge_mut_cache: HashMap::new(),
             node_mut_cache: HashMap::new(),
+            statement_undo: None,
             pending_edges: UnsafeCell::new(MmapOrVec::new()),
             overflow_out,
             overflow_in,

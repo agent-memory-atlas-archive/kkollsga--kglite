@@ -246,6 +246,7 @@ impl DiskGraph {
             edge_properties: EdgePropertyStore::new(),
             edge_mut_cache: HashMap::new(),
             node_mut_cache: HashMap::new(),
+            statement_undo: None,
             pending_edges: UnsafeCell::new(
                 MmapOrVec::mapped(&data_dir.join("_pending_edges.bin"), 1 << 20)
                     .unwrap_or_else(|_| MmapOrVec::new()),
@@ -448,6 +449,7 @@ impl DiskGraph {
             edge_properties,
             edge_mut_cache: HashMap::new(),
             node_mut_cache: HashMap::new(),
+            statement_undo: None,
             pending_edges: UnsafeCell::new(MmapOrVec::new()),
             overflow_out: HashMap::new(),
             overflow_in: HashMap::new(),

@@ -20,9 +20,11 @@ mod timestamp_cells;
 #[cfg(test)]
 mod timestamp_column_tests;
 mod typed_column;
+pub(crate) use displaced::DisplacedColumn;
 pub(crate) use exact_values::ExactValueColumns;
 
 pub use typed_column::TypedColumn;
+mod displaced;
 mod mapped_append;
 #[cfg(test)]
 pub(crate) use typed_column::{column_clones, reset_column_clones};
@@ -128,6 +130,9 @@ pub struct ColumnStore {
     /// Whether spillable heap may have grown since this store last spilled.
     /// See [`ColumnStore::may_have_grown_spillable_heap`] for the contract.
     spillable_growth: bool,
+    /// Columns a type change replaced while a statement's undo is recording.
+    /// See [`displaced`].
+    displaced: Option<Vec<DisplacedColumn>>,
 }
 
 static NEXT_SPILL_TOKEN: AtomicU64 = AtomicU64::new(0);
@@ -214,6 +219,7 @@ impl Clone for ColumnStore {
             // bytes at any write and owes a spill check from the moment it
             // exists.
             spillable_growth: true,
+            displaced: None,
         }
     }
 }
@@ -248,6 +254,7 @@ impl ColumnStore {
             slot_scratch: Vec::new(),
             spill_token: next_spill_token(),
             spillable_growth: true,
+            displaced: None,
         }
     }
 
@@ -271,6 +278,7 @@ impl ColumnStore {
             slot_scratch: Vec::new(),
             spill_token: next_spill_token(),
             spillable_growth: true,
+            displaced: None,
         }
     }
 
@@ -293,6 +301,7 @@ impl ColumnStore {
             slot_scratch: Vec::new(),
             spill_token: next_spill_token(),
             spillable_growth: true,
+            displaced: None,
         }
     }
 
@@ -413,7 +422,7 @@ impl ColumnStore {
                 for i in 0..row_count {
                     mixed.push(ms.get_title(i).unwrap_or(Value::Null));
                 }
-                self.title_column = Some(Arc::new(TypedColumn::Mixed { data: mixed }));
+                self.swap_title_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
             } else {
                 return false;
             }
@@ -429,7 +438,7 @@ impl ColumnStore {
                 .map(|i| col.get(i as u32).unwrap_or(Value::Null))
                 .collect();
             mixed[row_id as usize] = value.clone();
-            *col = TypedColumn::Mixed { data: mixed };
+            self.swap_title_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
         }
         true
     }
@@ -1330,7 +1339,7 @@ impl ColumnStore {
             for _ in 0..rows {
                 typed.push_null();
             }
-            self.columns[slot] = Arc::new(typed);
+            self.swap_column(slot, Arc::new(typed));
             return;
         }
         self.demote_to_mixed(slot);
@@ -1344,7 +1353,7 @@ impl ColumnStore {
         for i in 0..old_col.len() {
             mixed_data.push(old_col.get(i as u32).unwrap_or(Value::Null));
         }
-        self.columns[slot] = Arc::new(TypedColumn::Mixed { data: mixed_data });
+        self.swap_column(slot, Arc::new(TypedColumn::Mixed { data: mixed_data }));
     }
 
     /// Materialize all columns to file-backed mmap in the given directory.

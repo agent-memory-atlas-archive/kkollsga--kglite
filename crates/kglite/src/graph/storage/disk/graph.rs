@@ -127,6 +127,9 @@ pub struct DiskGraph {
     /// as `PropertyStorage::Map` until `clear_arenas` drains it into
     /// `column_stores` (`flush_node_mut_cache`). Node reads do not consult it.
     pub(super) node_mut_cache: HashMap<u32, NodeData>,
+    /// Cell undo of the open `DiskCells` statement checkpoint; `None` outside
+    /// one. Never cloned. See [`super::cell_undo`].
+    pub(crate) statement_undo: Option<Box<crate::graph::storage::undo::UndoJournal>>,
 
     // File-backed (MmapOrVec) to avoid ~14 GB heap allocation at Wikidata scale.
     // Interior mutability: see item 2 of the SAFETY block below.
@@ -1466,26 +1469,12 @@ impl DiskGraph {
                 continue;
             };
             let store = std::sync::Arc::make_mut(store_arc);
-            for (row_id, alive, nd) in rows {
-                if !alive {
-                    // Tombstoned by `remove_node` — mark the row dead
-                    // in the ColumnStore so reloads skip it.
-                    store.tombstone(row_id);
-                    continue;
-                }
-                // Avoid redundant title writes while preserving explicit Map clears.
-                if (matches!(nd.properties, PropertyStorage::Map(_))
-                    || !matches!(nd.title, Value::Null))
-                    && store.get_title(row_id).unwrap_or(Value::Null) != nd.title
-                {
-                    let _ = store.set_title(row_id, &nd.title);
-                }
-                if let PropertyStorage::Map(map) = &nd.properties {
-                    for (key, value) in map {
-                        let _ = store.set(row_id, *key, value, None);
-                    }
-                }
-            }
+            super::cell_undo::write_staged_rows(
+                store,
+                type_key,
+                rows,
+                self.statement_undo.as_deref_mut(),
+            );
         }
     }
 
@@ -2159,6 +2148,7 @@ impl Clone for DiskGraph {
             // them; a clone that dropped them would lose those writes.
             edge_mut_cache: self.edge_mut_cache.clone(),
             node_mut_cache: self.node_mut_cache.clone(),
+            statement_undo: None,
             // SAFETY: cloning takes `&self`; every mutation of pending_edges is
             // gated by `&mut self`, so no writer can overlap this read.
             pending_edges: UnsafeCell::new(unsafe { &*self.pending_edges.get() }.clone()),

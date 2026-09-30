@@ -8,6 +8,7 @@
 //! - [`builder`] — CSR construction (merge-sort + partitioned) + histogram rebuild
 
 pub mod builder;
+pub(crate) mod cell_undo;
 pub mod csr;
 pub mod csr_build;
 pub mod edge_properties;
@@ -55,6 +56,8 @@ pub(crate) fn remove_scratch_dir(path: &std::path::Path) -> std::io::Result<()> 
     }
 }
 
+#[cfg(test)]
+mod cell_undo_tests;
 #[cfg(test)]
 mod flush_tests;
 #[cfg(test)]
