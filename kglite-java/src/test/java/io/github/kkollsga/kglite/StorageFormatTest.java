@@ -10,13 +10,13 @@ import org.junit.jupiter.api.Test;
 class StorageFormatTest {
 
     @Test
-    @DisplayName("the .kgl format version is the current container version (6)")
+    @DisplayName("the .kgl format version is the current container version (7)")
     void kglFormatIsCurrent() {
         // Moves with the `.kgl` container magic the native build writes
-        // (kglite::graph::io::magic::CURRENT_CONTAINER_VERSION). Bumping the
-        // container to v7 bumps this pin — that is the point of the number.
+        // (kglite::graph::io::magic::CURRENT_CONTAINER_VERSION); a container
+        // bump moves this pin — that is the point of the number.
         StorageFormat format = KnowledgeGraph.storageFormatVersion();
-        assertEquals(6L, format.kgl(), "the .kgl snapshot format version");
+        assertEquals(7L, format.kgl(), "the .kgl snapshot format version");
     }
 
     @Test
@@ -37,7 +37,7 @@ class StorageFormatTest {
         StorageFormat format = KnowledgeGraph.storageFormatVersion();
         String abi = KnowledgeGraph.nativeAbiVersion();
         assertTrue(abi.matches("\\d+\\.\\d+\\.\\d+"), "abi version is a semver string: " + abi);
-        // The .kgl format (6) is not the engine major/minor/patch of 0.16.x.
-        assertEquals(6L, format.kgl());
+        // The .kgl format (7) is not the engine major/minor/patch of 0.19.x.
+        assertEquals(7L, format.kgl());
     }
 }
