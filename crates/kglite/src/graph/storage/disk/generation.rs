@@ -258,6 +258,144 @@ impl Drop for GraphDirectoryLock {
     }
 }
 
+/// Generations some live value in this process still reads from.
+static PINNED: std::sync::Mutex<std::collections::BTreeMap<PathBuf, usize>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn pinned_map() -> std::sync::MutexGuard<'static, std::collections::BTreeMap<PathBuf, usize>> {
+    PINNED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The key a generation directory is pinned and looked up under: spelled the
+/// same way however a handle reached it.
+fn pin_key(generation_dir: &Path) -> PathBuf {
+    fs::canonicalize(generation_dir).unwrap_or_else(|_| generation_dir.to_path_buf())
+}
+
+/// A claim that something in this process maps files of one generation.
+///
+/// Retention never deletes a pinned generation. Every value that can outlive
+/// the save that replaced its generation carries one: the graph handle (and so
+/// every transaction fork and independent copy cloned from it), the id index
+/// and type index it serves from, and each column store mapped from the
+/// generation's files. Dropping the last holder releases it, and the
+/// generation is pruned by a later save.
+#[derive(Debug)]
+pub(crate) struct GenerationPin {
+    key: PathBuf,
+}
+
+impl GenerationPin {
+    /// A pin on the generation `path` lies in (a generation directory, or any
+    /// file or directory beneath one); `None` for a path outside `generations/`
+    /// — a legacy flat directory, a workspace, a scratch root — which retention
+    /// never touches.
+    pub(crate) fn containing(path: &Path) -> Option<std::sync::Arc<Self>> {
+        let generation = path.ancestors().find(|ancestor| {
+            ancestor.parent().and_then(|parent| parent.file_name())
+                == Some(std::ffi::OsStr::new(GENERATIONS_DIR))
+                && ancestor
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| parse_generation_name(name).is_ok())
+        })?;
+        let key = pin_key(generation);
+        *pinned_map().entry(key.clone()).or_insert(0) += 1;
+        Some(std::sync::Arc::new(Self { key }))
+    }
+}
+
+impl Drop for GenerationPin {
+    fn drop(&mut self) {
+        let mut pinned = pinned_map();
+        if let Some(count) = pinned.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                pinned.remove(&self.key);
+            }
+        }
+    }
+}
+
+pub(crate) fn is_pinned(generation_dir: &Path) -> bool {
+    pinned_map().contains_key(&pin_key(generation_dir))
+}
+
+/// Previous generations kept besides the current one when `KGLITE_KEEP_GENERATIONS`
+/// does not say otherwise.
+const DEFAULT_KEEP_PREVIOUS: usize = 1;
+
+/// How many generations older than the current one a save keeps; `None` keeps
+/// every one. Read from `KGLITE_KEEP_GENERATIONS`: a count, or `all`. A value
+/// that is neither takes the default rather than deleting more than asked.
+pub(crate) fn keep_previous_generations() -> Option<usize> {
+    parse_keep_previous(std::env::var("KGLITE_KEEP_GENERATIONS").ok().as_deref())
+}
+
+fn parse_keep_previous(value: Option<&str>) -> Option<usize> {
+    match value.map(str::trim) {
+        Some(text) if text.eq_ignore_ascii_case("all") => None,
+        Some(text) => Some(text.parse().unwrap_or(DEFAULT_KEEP_PREVIOUS)),
+        None => Some(DEFAULT_KEEP_PREVIOUS),
+    }
+}
+
+/// What a retention pass did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct PruneReport {
+    pub(crate) removed: Vec<u64>,
+    /// Older than the kept window but still mapped by a live value here.
+    pub(crate) held: Vec<u64>,
+    /// Older than the kept window but refused removal (a platform that will
+    /// not delete a mapped file, or another process's map).
+    pub(crate) undeletable: Vec<u64>,
+}
+
+/// Delete generations older than the `keep_previous` newest ones below the one
+/// `CURRENT` selects. A generation that cannot go now — pinned here, or the
+/// platform refuses — stays, and the next save tries again; this never fails a
+/// save. Files shared with a newer generation by hard link survive the unlink.
+///
+/// Must run while the writer lease is held, after `CURRENT` names the
+/// generation just published.
+pub(crate) fn prune_generations(root: &Path, keep_previous: Option<usize>) -> PruneReport {
+    let mut report = PruneReport::default();
+    let Some(keep_previous) = keep_previous else {
+        return report;
+    };
+    let Ok(current) = resolve_snapshot(root) else {
+        return report;
+    };
+    let Some(current_id) = current.generation else {
+        return report;
+    };
+    let generations = root.join(GENERATIONS_DIR);
+    let Ok(entries) = fs::read_dir(&generations) else {
+        return report;
+    };
+    let mut older: Vec<(u64, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| {
+            let id = parse_generation_name(entry.file_name().to_str()?).ok()?;
+            (id < current_id).then(|| (id, entry.path()))
+        })
+        .collect();
+    older.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+    for (id, dir) in older.into_iter().skip(keep_previous) {
+        if is_pinned(&dir) {
+            report.held.push(id);
+        } else if fs::remove_dir_all(&dir).is_ok() {
+            report.removed.push(id);
+        } else {
+            report.undeletable.push(id);
+        }
+    }
+    report
+}
+
 #[derive(Debug)]
 pub(crate) struct GenerationTxn {
     root: PathBuf,
@@ -403,6 +541,41 @@ mod tests {
     fn complete_stage(txn: &GenerationTxn) {
         fs::write(txn.stage_dir().join("metadata.json"), b"{}").unwrap();
         fs::write(txn.stage_dir().join("disk_graph_meta.json"), b"{}").unwrap();
+    }
+
+    #[test]
+    fn a_pin_holds_a_generation_until_every_holder_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let generation = root.path().join(GENERATIONS_DIR).join(generation_name(3));
+        let segment = generation.join("seg_000");
+        fs::create_dir_all(&segment).unwrap();
+        assert!(!is_pinned(&generation));
+
+        // A path anywhere beneath the generation pins the generation itself.
+        let first = GenerationPin::containing(&segment.join("x.bin")).unwrap();
+        let second = GenerationPin::containing(&generation).unwrap();
+        assert!(is_pinned(&generation));
+        drop(first);
+        assert!(is_pinned(&generation), "one holder remains");
+        drop(second);
+        assert!(!is_pinned(&generation));
+
+        // Outside `generations/gen_<id>` there is nothing to pin.
+        assert!(GenerationPin::containing(root.path()).is_none());
+        assert!(GenerationPin::containing(&root.path().join("seg_000")).is_none());
+        let stage = root.path().join(GENERATIONS_DIR).join(".stage-1");
+        assert!(GenerationPin::containing(&stage).is_none());
+    }
+
+    #[test]
+    fn the_retention_setting_reads_a_count_or_all_and_defaults_otherwise() {
+        assert_eq!(parse_keep_previous(None), Some(1));
+        assert_eq!(parse_keep_previous(Some("0")), Some(0));
+        assert_eq!(parse_keep_previous(Some(" 4 ")), Some(4));
+        assert_eq!(parse_keep_previous(Some("ALL")), None);
+        assert_eq!(parse_keep_previous(Some("-1")), Some(1));
+        assert_eq!(parse_keep_previous(Some("lots")), Some(1));
+        assert_eq!(parse_keep_previous(Some("")), Some(1));
     }
 
     #[test]

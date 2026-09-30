@@ -172,6 +172,7 @@ fn open_column_stores(
     validate_utf8: bool,
 ) -> io::Result<Vec<(String, crate::graph::storage::column_store::ColumnStore)>> {
     let shared_path = dir.join("columns.bin");
+    let pin = crate::graph::storage::disk::generation::GenerationPin::containing(dir);
     let mut shared: Option<Arc<memmap2::Mmap>> = None;
     let mut stores = Vec::with_capacity(meta.types.len());
     for type_meta in &meta.types {
@@ -200,7 +201,10 @@ fn open_column_stores(
         }
         let mut store = type_meta.to_mmap_store(mmap);
         if meta.files.contains_key(&type_meta.type_name) {
-            store.origin = Some(Arc::new(ColumnFileOrigin { path: path.clone() }));
+            store.origin = Some(Arc::new(ColumnFileOrigin {
+                path: path.clone(),
+                _pin: pin.clone(),
+            }));
         }
         if validate_utf8 {
             store.validate_utf8(&type_meta.type_name)?;

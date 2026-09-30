@@ -100,6 +100,26 @@ before upgrading.
   disk directory 0.19.0 wrote with an integer-title type moves that type into
   its own column file on the next `save()`, with identical answers.
 
+- **A disk `save()` no longer keeps every generation it ever published, and
+  no longer rewrites the column file of a node type it did not change.** The
+  generation a save replaces lends the new one the column file of every type
+  whose rows nothing touched (a hard link, a copy where links are unavailable
+  and always on Windows), so those bytes exist once on disk and cost no write
+  time; the files of a type with a `SET`, an appended row, a delete or any other
+  change, and the CSR, node slots, edge properties and indexes, are still written
+  in full. A save then deletes the generations older than the one before the
+  generation it just published: a generation a reader in the same process still
+  has mapped (another handle, a transaction, a copy) waits until that reader is
+  gone, and a platform that refuses to delete a mapped file defers the deletion
+  to a later save without failing the save. Before this a directory kept every
+  generation forever, *N* saves leaving *N* full copies. Set
+  `KGLITE_KEEP_GENERATIONS` in the saving process to the number of previous
+  generations to keep (the default is `1`, `0` keeps only the current one, `all`
+  keeps every generation as before). A reader in another process cannot be seen
+  by the writer, so one that falls more than the kept window behind can lose
+  files it opens lazily; use `all` when a long-lived reader shares a directory
+  with a frequent writer. `KGLITE_LOAD_TIMING=1` now also logs a line for each
+  stage of a disk save.
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
   data") use one org-chart example, with the declaration rules gathered in a
   closing section and the full bitemporal walk-through shipped as

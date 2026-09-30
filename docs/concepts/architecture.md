@@ -168,7 +168,11 @@ non-persistent index structures can be rebuilt on load.
 Disk mode uses a different lifecycle: writers build a staged generation,
 write completion metadata, rename it into `generations/`, then atomically
 replace `CURRENT`. A failed or incomplete stage is never selected by a new
-reader. Existing readers keep their old immutable generation alive.
+reader. Existing readers keep their old immutable generation alive. A type
+whose column file did not change is hard-linked into the new generation rather
+than rewritten, and a save then deletes generations older than the previous one
+(`KGLITE_KEEP_GENERATIONS`), except any generation a live value in the process
+still maps.
 
 A directory carries its own layout revision: `disk_graph_meta.json` holds a
 `disk_format` number, `columns_meta.json` is an envelope

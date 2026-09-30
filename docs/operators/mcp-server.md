@@ -454,8 +454,11 @@ is a graph republished atomically, so it is served lease-free and locked only
 between a first unsaved change and the `save_graph` that publishes it. Several
 servers can therefore serve one directory and arbitrate per write. Reading one
 lock-free is safe because a publish never touches the generation a reader has
-mapped — it stages a new one and swings the pointer — and kglite deletes no
-generation, so nothing disappears under a live mapping. These `generations/`
+mapped — it stages a new one and swings the pointer — and the writer deletes
+only generations older than the one before the generation it just published
+(`KGLITE_KEEP_GENERATIONS`, default one previous generation, `all` to keep
+every one), so a reader that re-reads `CURRENT` per call always finds its
+generation. These `generations/`
 directories are the disk mode's own on-disk versions and are unrelated to the
 `load` counter in the footer: `load` counts one server's installs and is not
 written anywhere, while a generation is a published artifact every process
@@ -471,11 +474,12 @@ live mappings. A created path joins the lazy lifecycle once its first
 long as the server serves it.
 
 Budget for the directory's growth before you enable `save_graph` on one: every
-disk save writes a complete new generation and the superseded ones are retained
-deliberately, so *N* saves leave *N* full copies. There is no retention policy
-— prune old `generations/gen_*` directories yourself once no reader is using
-them, as described under *Durability* in the
-[durable-apps guide](../python/guides/durable-apps.md).
+disk save publishes a new generation, sharing (by hard link) the column file of
+every node type it did not change, and keeps the current generation plus one
+previous — older ones are deleted, which is the `KGLITE_KEEP_GENERATIONS`
+setting described under *Durability* in the
+[durable-apps guide](../python/guides/durable-apps.md). Set it to `all` if a
+reader in another process can stay more than one generation behind.
 
 Operating notes:
 

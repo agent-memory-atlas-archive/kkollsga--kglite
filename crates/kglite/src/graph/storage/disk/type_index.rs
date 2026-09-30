@@ -106,6 +106,8 @@ pub struct TypeIndexBase {
     mmap: Arc<Mmap>,
     /// type_name -> (file-relative offset, num_entries). Built once at load.
     dir: HashMap<String, BaseEntry>,
+    /// Keeps the generation this file lies in from being pruned while it is mapped.
+    _pin: Option<std::sync::Arc<super::generation::GenerationPin>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -223,6 +225,7 @@ impl TypeIndexBase {
         Ok(Some(Self {
             mmap: Arc::new(mmap),
             dir: dir_map,
+            _pin: super::generation::GenerationPin::containing(dir),
         }))
     }
 

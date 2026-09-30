@@ -119,6 +119,7 @@ impl DiskGraph {
     ) -> std::io::Result<()> {
         self.logical_root = logical_root;
         self.data_dir = snapshot_dir.join(segment_subdir(0));
+        self.generation_pin = super::generation::GenerationPin::containing(&self.data_dir);
 
         // Re-map the CSR arrays onto the generation just published.
         //
@@ -246,6 +247,7 @@ impl DiskGraph {
             overflow_in: HashMap::new(),
             free_edge_slots: Vec::new(),
             data_dir: data_dir.to_path_buf(),
+            generation_pin: None,
             logical_root: root_dir.to_path_buf(),
             writer_lock: None,
             lease_cell: super::graph::new_lease_cell(),
@@ -446,6 +448,7 @@ impl DiskGraph {
             overflow_in: HashMap::new(),
             free_edge_slots: Vec::new(),
             data_dir: data_dir.to_path_buf(),
+            generation_pin: None,
             logical_root: root_dir.to_path_buf(),
             writer_lock: None,
             lease_cell: super::graph::new_lease_cell(),

@@ -368,12 +368,28 @@ model.
   commit is ever lost — the acknowledgement point is your `save()` call.
 
   **Budget for the checkpoint's cost before you sprinkle `save()` calls.**
-  Every disk `save()` writes a complete new generation and the superseded ones
-  are retained, so *N* checkpoints leave *N* full copies of the graph on disk.
-  That is deliberate — readers hold their generation mmap'd and must not have
-  it deleted underneath them — but there is no retention policy yet, so
-  checkpoint on a schedule you have the disk budget for, and prune old
-  `generations/gen_*` directories yourself once no reader is using them.
+  Every disk `save()` publishes a complete new generation, but a node type
+  nothing has touched since the previous generation is not written again: its
+  column file is hard-linked from the previous generation (a copy where links
+  are unavailable, and always on Windows), so those bytes exist once on disk and
+  cost no write time. The CSR, node slots, edge properties, indexes and the
+  files of any type you changed are still rewritten in full, so a checkpoint's
+  cost follows what you touched plus the size of the graph's topology, not the
+  size of the whole graph alone.
+
+  Older generations are pruned for you. A save keeps the generation it just
+  published and one before it, and deletes the rest, except that a generation a
+  reader in the same process still has mapped (another handle loaded from the
+  directory, a transaction, a copy) is kept until that reader is gone and is
+  removed by a later save; a platform that refuses to delete a mapped file
+  defers the deletion the same way, and a failed deletion never fails the
+  save. Set `KGLITE_KEEP_GENERATIONS` in the saving process to the number of
+  *previous* generations to keep (`0` keeps only the current one, `all` keeps
+  every generation and leaves pruning to you; the default is `1`). A reader in
+  *another process* cannot be seen, so one that stays more than that many
+  generations behind the writer can lose the files it opens lazily: raise the
+  setting (or use `all`) when a long-lived reader shares a directory with a
+  frequent writer.
   A checkpoint keeps the graph's serving shape. A node type whose properties
   each hold values of one kind — integers, floats, booleans, text or dates —
   and whose titles are text goes back into the memory-mapped column file, so

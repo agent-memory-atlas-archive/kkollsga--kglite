@@ -115,6 +115,9 @@ pub struct MmapColumnStore {
 #[derive(Debug)]
 pub(crate) struct ColumnFileOrigin {
     pub(crate) path: std::path::PathBuf,
+    /// Keeps the generation the file lies in from being pruned while this
+    /// store maps it.
+    pub(crate) _pin: Option<Arc<crate::graph::storage::disk::generation::GenerationPin>>,
 }
 
 // ─── Constructor ─────────────────────────────────────────────────────────────

@@ -148,6 +148,9 @@ pub struct IdIndexBase {
     /// decodes only on a miss.
     /// Integer variant never enters here — it's read directly from mmap.
     general_cache: RwLock<HashMap<String, Arc<FxHashMap<Value, NodeIndex>>>>,
+    /// Keeps the generation this file lies in from being pruned: a type the
+    /// writer left alone keeps serving from this mapping after later saves.
+    _pin: Option<Arc<super::generation::GenerationPin>>,
 }
 
 #[derive(Clone, Copy)]
@@ -395,6 +398,7 @@ impl IdIndexBase {
             mmap: Arc::new(mmap),
             dir: dir_map,
             general_cache: RwLock::new(general_cache_map),
+            _pin: super::generation::GenerationPin::containing(dir),
         }))
     }
 

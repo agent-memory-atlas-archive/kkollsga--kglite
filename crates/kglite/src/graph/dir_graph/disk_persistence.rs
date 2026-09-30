@@ -326,10 +326,18 @@ impl DirGraph {
         self.rebase_after_publish(&published);
         clock.mark("save_rebase");
         if let GraphBackend::Disk(disk) = &mut self.graph {
-            disk.finish_generation(root, published)
+            disk.finish_generation(root.clone(), published)
                 .map_err(|e| format!("Failed to activate published disk generation: {e}"))?;
         }
         clock.mark("save_finish_generation");
+        // Older generations than the kept window go now that this handle maps
+        // the new one. Last, and never an error: a generation something still
+        // maps, or the platform will not delete, waits for a later save.
+        crate::graph::storage::disk::generation::prune_generations(
+            &root,
+            crate::graph::storage::disk::generation::keep_previous_generations(),
+        );
+        clock.mark("save_prune_generations");
         // The lease was held across the whole snapshot-write / publish /
         // rebase sequence by this local `Arc`; `finish_generation` cleared the
         // graph's own reference, so dropping it here is what actually releases

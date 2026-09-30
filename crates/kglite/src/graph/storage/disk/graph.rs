@@ -141,6 +141,9 @@ pub struct DiskGraph {
     pub(super) free_edge_slots: Vec<u32>,
 
     pub(crate) data_dir: PathBuf,
+    /// Keeps the generation `data_dir` lies in from being pruned while this
+    /// handle, or any clone of it, can still read its files.
+    pub(super) generation_pin: Option<Arc<super::generation::GenerationPin>>,
     /// User-visible graph root; also the directory the writer lease locks.
     pub(crate) logical_root: PathBuf,
     /// Cross-process writer lease, held for the dirty window only: taken by
@@ -2156,6 +2159,7 @@ impl Clone for DiskGraph {
             overflow_in: self.overflow_in.clone(),
             free_edge_slots: self.free_edge_slots.clone(),
             data_dir: self.data_dir.clone(),
+            generation_pin: self.generation_pin.clone(),
             logical_root: self.logical_root.clone(),
             writer_lock: None,
             // A fresh slot, deliberately not the parent's: a generic clone has
