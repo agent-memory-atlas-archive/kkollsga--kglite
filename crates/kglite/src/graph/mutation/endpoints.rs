@@ -7,7 +7,7 @@
 
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::schema::DirGraph;
-use crate::graph::storage::lookups::CombinedTypeLookup;
+use crate::graph::storage::lookups::EndpointResolver;
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
 
@@ -31,9 +31,10 @@ pub(super) struct ResolvedEndpoints {
 /// Resolve every row's endpoints against the endpoint types' id indices.
 ///
 /// Probes `graph.id_indices` in place when both types are overlay-resident —
-/// the case for every heap-resident graph — and otherwise falls back to
-/// exactly the lookup this replaced (`CombinedTypeLookup::from_id_indices`,
-/// which materializes a base entry or, failing that, scans the graph).
+/// the case for every heap-resident graph — and otherwise resolves each row
+/// through the index of either kind (a binary search of the mapped file for a
+/// type still served from its mapping), or scans the graph when a type has no
+/// index. It never copies a type's whole index onto the heap.
 pub(super) fn resolve_endpoints(
     graph: &DirGraph,
     df_data: &DataFrame,
@@ -57,7 +58,7 @@ pub(super) fn resolve_endpoints(
     {
         return Ok(resolved);
     }
-    let lookup = CombinedTypeLookup::from_id_indices(
+    let lookup = EndpointResolver::new(
         &graph.id_indices,
         &graph.graph,
         source_type.to_string(),
@@ -158,7 +159,7 @@ pub(super) fn resolve_pairs(
     {
         return Ok(resolved);
     }
-    let lookup = CombinedTypeLookup::from_id_indices(
+    let lookup = EndpointResolver::new(
         &graph.id_indices,
         &graph.graph,
         source_type.to_string(),

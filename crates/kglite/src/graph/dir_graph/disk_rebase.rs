@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use super::DirGraph;
+use crate::graph::storage::disk::id_index::IdIndexBase;
 use crate::graph::storage::disk::type_index::{TypeIndexBase, TypeIndexStore};
 
 #[cfg(test)]
@@ -35,8 +36,8 @@ pub(crate) fn with_failing_stage<T>(stage: &'static str, body: impl FnOnce() -> 
 }
 
 impl DirGraph {
-    /// Re-point the column stores and the type index at the generation
-    /// `published`, best effort. See the module header for why it never fails.
+    /// Re-point the column stores, the type index and the id index at the
+    /// generation `published`, best effort. See the module header for why it never fails.
     pub(super) fn rebase_after_publish(&mut self, published: &Path) {
         if let Err(error) =
             crate::graph::io::file::remap_column_stores_to_generation(published, self)
@@ -52,6 +53,30 @@ impl DirGraph {
                  failed ({error}); continuing with the in-memory copy"
             );
         }
+        if let Err(error) = self.rebase_id_indices(published) {
+            eprintln!(
+                "warning: the save was published, but re-mapping the id index onto it \
+                 failed ({error}); continuing with the in-memory copy"
+            );
+        }
+    }
+
+    /// Serve `id_indices` from the published `id_indices.bin`. The heap overlay
+    /// that built an index (60-90 B per id for a `General` map) is dropped for
+    /// every type the file covers, and a type the writer skipped keeps its
+    /// overlay entry. Installed only when the file agrees with each covered
+    /// overlay entry on its id count, so the swap cannot change an answer.
+    fn rebase_id_indices(&mut self, published: &Path) -> std::io::Result<()> {
+        #[cfg(test)]
+        if post_publish_failpoint("rebase_id_indices") {
+            return Err(std::io::Error::other("injected id-index rebase failure"));
+        }
+        let Some(base) = IdIndexBase::load_from(published, &self.interner)? else {
+            return Ok(());
+        };
+        self.id_indices
+            .rebase_onto(base)
+            .map_err(std::io::Error::other)
     }
 
     /// Serve `type_indices` from the published `type_indices.bin` instead of the

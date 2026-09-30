@@ -53,8 +53,22 @@ before upgrading.
   under `seg_000/type_columns/`, named by a hash of the type name, instead of
   one shared `columns.bin` (a directory 0.19.0 wrote keeps its `columns.bin`
   until its next `save()` splits it per type); and `id_indices.bin` is version
-  3, which is the version later changes may add directory variants to. `graph_info()['format_version']` and the C
+  3, which adds a directory variant that version 2 readers cannot decode (see
+  the integer-id entry below). `graph_info()['format_version']` and the C
   ABI's `kglite_storage_format_version().kgl` report 7; no C symbol changed.
+
+- A disk graph whose ids are all integers and do not fit 32 bits (register
+  numbers, Wikidata-style keys) persists its id index as a sorted array of
+  12 bytes an id, searched in the mapping, instead of a `HashMap<Value, node>`
+  decoded onto the heap at 60 to 90 bytes an id. The first write after a reopen
+  layers a small delta over the mapping instead of copying it, a `save()` merges
+  that delta into the next file while streaming it (no copy of the index is
+  made), and the saved graph then serves the index from the file it just wrote.
+  On a 200,000-version register built in four saved chunks (debug build, macOS),
+  reloading the saved directory adds no `phys_footprint` where it added 31 MB, and
+  the footprint after the saves fell from 12/22/21/29 MB to 9/12/15/19 MB. A
+  version-2 `id_indices.bin` still loads and is rewritten in the new layout by
+  the next save.
 
 - Datetime properties (`Value::Timestamp`) are stored in a typed column of
   microseconds instead of a heterogeneous one: 8 bytes and a null byte a row
@@ -100,6 +114,11 @@ before upgrading.
 
 ### Fixed
 
+- `add_relationships`, `add_connections` and the spec-based edge creators no
+  longer copy both endpoint types' whole id index onto the heap on every call
+  when a type's index is still served from a disk graph's file: each row is one
+  probe of the index. At 24.7 million versions that copy was a 5.8 GB transient
+  and 3 to 5 seconds per call.
 - A copy made by the streaming disk subgraph writer (`save_subset_streaming_disk`)
   from a reloaded disk graph — or, since the disk layout above, from a disk graph
   just after `save()` — kept only the whole seconds of every timestamp property:

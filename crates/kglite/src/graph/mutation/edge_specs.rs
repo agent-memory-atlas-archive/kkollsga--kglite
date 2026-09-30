@@ -9,7 +9,7 @@ use crate::graph::mutation::maintain::{
 };
 use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding};
 use crate::graph::schema::{DirGraph, InternedKey, RESERVED_PROVENANCE_KEYS};
-use crate::graph::storage::lookups::CombinedTypeLookup;
+use crate::graph::storage::lookups::EndpointResolver;
 use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
 
@@ -49,7 +49,7 @@ pub struct EdgeSpecReport {
 
 /// Bulk-create edges from explicit specs, addressed by stable node id +
 /// type. The DataFrame-free sibling of [`add_connections`](crate::graph::mutation::maintain::add_connections): same
-/// `ConnectionBatchProcessor`, and the same `CombinedTypeLookup` that
+/// `ConnectionBatchProcessor`, and the same `EndpointResolver` that
 /// `add_connections` falls back to, but a spec list instead of a
 /// [`DataFrame`](crate::datatypes::DataFrame) — the path the C ABI takes (`kglite_create_edges_batch`,
 /// and through it the Java binding), plus any caller that already holds
@@ -113,11 +113,11 @@ pub fn add_edges_from_specs(
     // cache it per node-type pair instead of rebuilding the full type scan for
     // every edge type over the same pair (e.g. Person KNOWS/FOLLOWS/BLOCKS
     // Person was K identical materializations; now one).
-    let mut lookup_cache: HashMap<(String, String), CombinedTypeLookup> = HashMap::new();
+    let mut lookup_cache: HashMap<(String, String), EndpointResolver<'_>> = HashMap::new();
     for ((source_type, target_type, edge_type), edges) in groups {
         let pair = (source_type.clone(), target_type.clone());
         if !lookup_cache.contains_key(&pair) {
-            let lookup = CombinedTypeLookup::from_id_indices(
+            let lookup = EndpointResolver::new(
                 &graph.id_indices,
                 &graph.graph,
                 source_type.clone(),

@@ -3,8 +3,8 @@ chunk and reopened: pins today's footprint, reload cost and answers.
 
 The footprint numbers are measurements (debug extension, macOS, 2026-09-30)
 with 30 % headroom. They are ceilings on a shape that is known to be heavy, so
-later storage work tightens them; they were last tightened when a save began
-re-pointing the live graph at the column files it wrote. Only Darwin asserts them: the
+later storage work tightens them; they were last tightened when the int64 id index began
+to be served from the file a save wrote. Only Darwin asserts them: the
 Linux allocator has not been measured, so there the numbers are recorded in
 the failure message of a functional assertion instead of gating.
 """
@@ -41,19 +41,24 @@ HEADROOM = 1.3
 #   so it under-reads what moving columns onto files saves.
 # * `phys_footprint` (`proc_pid_rusage`, macOS only): what the OS charges the
 #   process, which excludes clean file-backed pages. It is the figure the
-#   register-scale promise is stated in, and it shows the storage work: on the
-#   pre-P4 build the same fixture read (26, 33, 46, 43) MB after the saves and
-#   71 MB after the reload; now (12, 22, 21, 29) and 31.
+#   register-scale promise is stated in, and it shows the storage work.
 #
 # The figures are the worst seen across contexts (the file alone, after other
 # disk tests, after the temporal tests); a long-lived process reads lower after
 # saves because freed heap is reused, so these are ceilings, not typical values.
-# What is left after a save is chiefly the id index, a heap map until it is
-# served from a file, and it is what the remaining storage work removes.
-MEASURED_SAVE_MB = (21.3, 39.0, 47.0, 63.7)  # USS after the save of chunk 0..3 (chunk 1 keeps its P1 pin)
-MEASURED_RELOAD_MB = 68.3  # USS: `kglite.load` of the saved directory, after dropping the writer
-MEASURED_PHYS_SAVE_MB = (13.4, 23.4, 21.6, 29.6)  # phys_footprint after the save of chunk 0..3
-MEASURED_PHYS_RELOAD_MB = 30.8  # phys_footprint: `kglite.load`
+# History of the same fixture on the same metrics (debug, macOS): before the
+# column files were re-pointed, `phys_footprint` read (26, 33, 46, 43) MB after the
+# saves and 71 MB after the reload; then (12, 22, 21, 29) and 31, where the id
+# index (a heap map until it is served from a file) was most of what was left;
+# now the id index is a 12-byte-per-id array searched in the mapping and the
+# reload adds nothing `phys_footprint` charges. USS still counts the mapped
+# pages the reload and the lookups touched.
+MEASURED_SAVE_MB = (18.4, 30.7, 43.7, 56.8)  # USS after the save of chunk 0..3
+MEASURED_RELOAD_MB = 37.9  # USS: `kglite.load` of the saved directory, after dropping the writer
+MEASURED_PHYS_SAVE_MB = (9.6, 11.9, 15.4, 19.2)  # phys_footprint after the save of chunk 0..3
+# `phys_footprint` after `kglite.load` reads 0.0 in every context: below the
+# allocator's resolution, so the pin is a 3 MB noise floor, not a measurement.
+MEASURED_PHYS_RELOAD_MB = 3.0
 ENFORCE_FOOTPRINT = sys.platform == "darwin"
 
 AS_OF = ("2005-06-30T12:34:56.789012", "2020-01-01T00:00:00", "a stored valid_to")

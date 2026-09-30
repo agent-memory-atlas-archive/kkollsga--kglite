@@ -2467,6 +2467,8 @@ mod disk_column_files_tests;
 #[cfg(test)]
 mod disk_hostile_names_tests;
 #[cfg(test)]
+mod disk_id_index_tests;
+#[cfg(test)]
 mod edge_embedding_disk_tests;
 #[cfg(test)]
 mod timestamp_retype_disk_tests;

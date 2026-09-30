@@ -178,9 +178,13 @@ A directory carries its own layout revision: `disk_graph_meta.json` holds a
 envelope, and every reader maps those files read-only. A type whose columns
 the mmap layout cannot hold (a column mixing kinds) is a zstd sidecar under
 `columns/<hex>/`, and the envelope's `sidecars` map records which directory
-holds which type; a type or property name never becomes a path component. A save re-points the
-live graph at the files it just published, so a saved graph holds no heap copy
-of the columns it wrote. This build reads directories written before the
+holds which type; a type or property name never becomes a path component.
+A type whose ids are all `Int64` has its id index stored as a sorted
+`(i64, node)` array, 12 bytes an id, searched in the mapping; a write after a
+reopen layers a small delta over it and the next save merges the delta into the
+new file as it streams. A save re-points the live graph at the files it just
+published, so a saved graph holds no heap copy of the columns or the id index it
+wrote. This build reads directories written before the
 revision existed (their shared `columns.bin` is split per type on the next
 save) and refuses one newer than it knows, naming both numbers; kglite 0.19.0
 and earlier cannot read a directory this build saves.

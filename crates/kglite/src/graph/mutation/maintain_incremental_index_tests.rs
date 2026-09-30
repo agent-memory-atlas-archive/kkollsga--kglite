@@ -249,11 +249,15 @@ fn appending_to_an_invalidated_index_rebuilds_it_whole() {
 #[test]
 fn the_folded_index_equals_the_rebuilt_one() {
     fn snapshot(graph: &DirGraph) -> (bool, Vec<(String, usize)>) {
-        let (_, index) = graph
+        assert!(
+            graph.id_indices.contains_key("Person"),
+            "Person must be indexed"
+        );
+        let index = graph
             .id_indices
-            .iter()
+            .values()
             .into_iter()
-            .find(|(name, _)| name == "Person")
+            .next()
             .expect("Person must be indexed");
         let compact = matches!(index, crate::graph::schema::TypeIdIndex::Integer(_));
         let mut entries: Vec<(String, usize)> = index

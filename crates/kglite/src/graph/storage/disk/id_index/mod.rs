@@ -17,7 +17,7 @@
 //!
 //! Directory at [dir_offset]: 48 bytes per entry, sorted by type_key:
 //!   [ 0.. 8]  type_key:    u64 LE  (InternedKey)
-//!   [ 8.. 9]  variant:     u8      (0 = Integer, 1 = General)
+//!   [ 8.. 9]  variant:     u8      (0 = Integer, 1 = General, 2 = Int64Sorted)
 //!   [ 9..16]  padding:     [u8; 7]
 //!   [16..24]  num_entries: u64 LE
 //!   [24..32]  payload_off: u64 LE   (file-relative)
@@ -30,20 +30,27 @@
 //!     [payload_off + 4*num_entries..payload_off + payload_len] idxs: [u32]
 //!   General (variant=1):
 //!     Postcard of HashMap<Value, NodeIndex>, length = payload_len
+//!   Int64Sorted (variant=2; written by version 3, unknown to version 2):
+//!     [payload_off..payload_off + 8*num_entries]               keys: [i64 sorted asc, unique]
+//!     [payload_off + 8*num_entries..payload_off + payload_len] idxs: [u32]   (12 B per id)
 //! ```
 //!
-//! Lookup is `O(log n)` binary search on `keys` for the Integer variant
-//! (cache-friendly, ~24 comparisons even at 13M entries) and a single
+//! Lookup is `O(log n)` binary search on `keys` for the Integer and Int64Sorted
+//! variants (cache-friendly, ~24 comparisons even at 13M entries) and a single
 //! `HashMap` probe for the General variant (decoded at load, where each
-//! General payload is decoded to validate it).
+//! General payload is decoded to validate it). The writer emits Int64Sorted for
+//! every type whose ids are all `Int64` and would otherwise have been a General
+//! `HashMap<Value, NodeIndex>` at 60-90 B per id on the heap; an Int64Sorted
+//! entry is searched in the mapping and never decoded onto the heap. The first
+//! write to such a type layers a small delta over it ([`TypeEntry::OverBase`])
+//! instead of cloning it, and a save merges the sorted delta into the sorted
+//! base while streaming the new file.
 
 use crate::datatypes::Value;
 use crate::graph::schema::{
-    canonical_id, heal_general_spellings, id_spellings, id_u32, mixed_numeric_kinds, InternedKey,
-    StringInterner, TypeIdIndex,
+    heal_general_spellings, id_spellings, id_u32, InternedKey, StringInterner, TypeIdIndex,
 };
 use crate::graph::storage::disk::id_index_layer::TypeEntry;
-use crate::graph::storage::disk::type_index::TypeIndexStore;
 use crate::serde_codec;
 use memmap2::Mmap;
 use petgraph::graph::NodeIndex;
@@ -58,6 +65,12 @@ const VERSION: u32 = 3;
 /// carry directory variants a version-2 reader has no decoder for, so writing
 /// it makes those readers refuse the file by version instead of misreading it.
 const VERSION_2: u32 = 2;
+/// Directory variant tags.
+const VARIANT_INTEGER: u8 = 0;
+const VARIANT_GENERAL: u8 = 1;
+pub(crate) const VARIANT_INT64: u8 = 2;
+/// Bytes per id of an Int64Sorted payload: an `i64` key and a `u32` node.
+const INT64_ENTRY_BYTES: usize = 12;
 const HEADER_BYTES: usize = 32;
 const DIR_ENTRY_BYTES: usize = 48;
 const MAX_GENERAL_INDEX_DECODE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -74,6 +87,39 @@ fn read_le_u32(bytes: &[u8], index: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(start..start.checked_add(4)?)?.try_into().ok()?,
     ))
+}
+
+fn read_le_i64(bytes: &[u8], index: usize) -> Option<i64> {
+    let start = index.checked_mul(8)?;
+    Some(i64::from_le_bytes(
+        bytes.get(start..start.checked_add(8)?)?.try_into().ok()?,
+    ))
+}
+
+fn le_i64_binary_search(bytes: &[u8], wanted: i64) -> Option<usize> {
+    let mut low = 0usize;
+    let mut high = bytes.len() / 8;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        match read_le_i64(bytes, mid)?.cmp(&wanted) {
+            std::cmp::Ordering::Less => low = mid + 1,
+            std::cmp::Ordering::Greater => high = mid,
+            std::cmp::Ordering::Equal => return Some(mid),
+        }
+    }
+    None
+}
+
+// Test-only tally of full `id -> node` maps built from a mapped entry. A
+// per-row lookup must never move this.
+#[cfg(test)]
+thread_local! {
+    static FULL_MAPS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn full_maps_built() -> usize {
+    FULL_MAPS_BUILT.with(|count| count.get())
 }
 
 fn le_u32_binary_search(bytes: &[u8], wanted: u32) -> Option<usize> {
@@ -112,10 +158,26 @@ struct BaseEntry {
     payload_len: u64,
 }
 
+impl std::fmt::Debug for IdIndexBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdIndexBase")
+            .field("types", &self.dir.len())
+            .finish()
+    }
+}
+
 impl IdIndexBase {
-    fn lookup_exact(&self, name: &str, id: &Value) -> Option<NodeIndex> {
+    /// The stored spelling only, no numeric normalisation: what
+    /// [`TypeIdIndex::get_exact`] answers for the same entry.
+    pub(crate) fn lookup_exact(&self, name: &str, id: &Value) -> Option<NodeIndex> {
         let entry = self.dir.get(name)?;
-        if entry.variant == 0 {
+        if entry.variant == VARIANT_INT64 {
+            return match id {
+                Value::Int64(wanted) => self.search_int64(name, *wanted),
+                _ => None,
+            };
+        }
+        if entry.variant == VARIANT_INTEGER {
             let Value::UniqueId(wanted) = id else {
                 return None;
             };
@@ -133,12 +195,32 @@ impl IdIndexBase {
 
     /// Ids indexed for `name`: a `General` entry's persisted count can
     /// exceed it by the spellings healed at load.
-    fn entry_len(&self, name: &str) -> Option<usize> {
+    pub(crate) fn entry_len(&self, name: &str) -> Option<usize> {
         let entry = self.dir.get(name)?;
-        if entry.variant == 1 {
+        if entry.variant == VARIANT_GENERAL {
             return Some(self.general_map(name, entry)?.len());
         }
         Some(entry.num_entries as usize)
+    }
+
+    /// `(keys, node indices)` of an Int64Sorted entry — little-endian `i64`s and
+    /// `u32`s, both sorted by key — or `None` for any other variant.
+    pub(crate) fn int64_parts(&self, name: &str) -> Option<(&[u8], &[u8])> {
+        let entry = self.dir.get(name)?;
+        if entry.variant != VARIANT_INT64 {
+            return None;
+        }
+        let keys_len = (entry.num_entries as usize).checked_mul(8)?;
+        let start = usize::try_from(entry.payload_off).ok()?;
+        let end = start.checked_add(usize::try_from(entry.payload_len).ok()?)?;
+        self.mmap.get(start..end)?.split_at_checked(keys_len)
+    }
+
+    /// Binary search of an Int64Sorted entry, in the mapping.
+    fn search_int64(&self, name: &str, wanted: i64) -> Option<NodeIndex> {
+        let (keys, nodes) = self.int64_parts(name)?;
+        let position = le_i64_binary_search(keys, wanted)?;
+        Some(NodeIndex::new(read_le_u32(nodes, position)? as usize))
     }
 
     /// Load `id_indices.bin` from `dir`. Returns `Ok(None)` if absent, shorter
@@ -201,7 +283,7 @@ impl IdIndexBase {
                 return Err(invalid_index("directory keys are not strictly increasing"));
             }
             previous_key = Some(type_key);
-            if !matches!(variant, 0 | 1) {
+            if !matches!(variant, VARIANT_INTEGER | VARIANT_GENERAL | VARIANT_INT64) {
                 return Err(invalid_index("directory contains an unknown variant"));
             }
             let num_entries = u32::try_from(num_entries_u64)
@@ -218,7 +300,7 @@ impl IdIndexBase {
                     "payloads overlap, contain gaps, or exceed the file",
                 ));
             }
-            if variant == 0 {
+            if variant == VARIANT_INTEGER {
                 let expected_len = num_entries_u64
                     .checked_mul(8)
                     .ok_or_else(|| invalid_index("integer payload size overflow"))?;
@@ -231,6 +313,22 @@ impl IdIndexBase {
                     let key = read_le_u32(&mmap[payload_off_usize..keys_end], index).unwrap();
                     if previous.is_some_and(|prior| key <= prior) {
                         return Err(invalid_index("integer keys are not strictly increasing"));
+                    }
+                    previous = Some(key);
+                }
+            } else if variant == VARIANT_INT64 {
+                let expected_len = num_entries_u64
+                    .checked_mul(INT64_ENTRY_BYTES as u64)
+                    .ok_or_else(|| invalid_index("int64 payload size overflow"))?;
+                if payload_len != expected_len {
+                    return Err(invalid_index("int64 payload has invalid size"));
+                }
+                let keys_end = payload_off_usize + num_entries as usize * 8;
+                let mut previous = None;
+                for index in 0..num_entries as usize {
+                    let key = read_le_i64(&mmap[payload_off_usize..keys_end], index).unwrap();
+                    if previous.is_some_and(|prior| key <= prior) {
+                        return Err(invalid_index("int64 keys are not strictly increasing"));
                     }
                     previous = Some(key);
                 }
@@ -253,7 +351,7 @@ impl IdIndexBase {
                 }
                 return Err(invalid_index("directory contains an unresolved type key"));
             };
-            if variant == 1 {
+            if variant == VARIANT_GENERAL {
                 let blob = &mmap[payload_off_usize..payload_end];
                 let map: FxHashMap<Value, NodeIndex> = serde_codec::decode_exact_with(
                     serde_codec::CURRENT_CODEC,
@@ -307,18 +405,30 @@ impl IdIndexBase {
     pub fn lookup(&self, name: &str, id: &Value) -> Option<NodeIndex> {
         let entry = self.dir.get(name)?;
         match entry.variant {
-            0 => self.lookup_integer(entry, id),
-            1 => self.lookup_general(name, entry, id),
+            VARIANT_INTEGER => self.lookup_integer(entry, id),
+            VARIANT_GENERAL => self.lookup_general(name, entry, id),
+            // An Int64-only General index answers a query through the integer
+            // it denotes (`UniqueId`, `Int64` and a whole `Float64` alike) and
+            // matches nothing else, so the same rule is one search here.
+            VARIANT_INT64 => self.search_int64(name, crate::graph::schema::id_integer(id)?),
             _ => None,
         }
     }
 
-    /// Materialize a base entry into an owned `TypeIdIndex` (used on save and
-    /// on first mutation when the entry must be promoted into the overlay).
+    /// Materialize a base entry into an owned `TypeIdIndex`: an entry heap map.
+    ///
+    /// **A full map, one heap entry per id.** It is for the callers that need
+    /// every id at once — the N-Triples export walking the whole index, and the
+    /// fallbacks that must hand a heap index to code written against one. A
+    /// caller that resolves ids one at a time uses [`Self::lookup`] and never
+    /// pays this; [`IdIndexStore::entry_or_default`] layers a delta over an
+    /// Int64Sorted entry instead of calling it.
     pub fn materialize(&self, name: &str) -> Option<TypeIdIndex> {
         let entry = self.dir.get(name)?;
+        #[cfg(test)]
+        FULL_MAPS_BUILT.with(|count| count.set(count.get() + 1));
         match entry.variant {
-            0 => {
+            VARIANT_INTEGER => {
                 let (keys, idxs) = self.integer_bytes(entry)?;
                 let mut map: FxHashMap<u32, NodeIndex> = FxHashMap::with_capacity_and_hasher(
                     entry.num_entries as usize,
@@ -332,9 +442,23 @@ impl IdIndexBase {
                 }
                 Some(TypeIdIndex::Integer(map))
             }
-            1 => {
+            VARIANT_GENERAL => {
                 let map = self.general_map(name, entry)?;
                 Some(TypeIdIndex::General((*map).clone()))
+            }
+            VARIANT_INT64 => {
+                let (keys, nodes) = self.int64_parts(name)?;
+                let mut map: FxHashMap<Value, NodeIndex> = FxHashMap::with_capacity_and_hasher(
+                    entry.num_entries as usize,
+                    Default::default(),
+                );
+                for index in 0..entry.num_entries as usize {
+                    map.insert(
+                        Value::Int64(read_le_i64(keys, index)?),
+                        NodeIndex::new(read_le_u32(nodes, index)? as usize),
+                    );
+                }
+                Some(TypeIdIndex::General(map))
             }
             _ => None,
         }
@@ -457,6 +581,31 @@ impl IdIndexStore {
         }
     }
 
+    /// After a save publishes `id_indices.bin`, serve every type it covers from
+    /// that mapping and drop the heap entries it made redundant, so a saved
+    /// graph holds no heap copy of an index it just wrote. A type the writer
+    /// skipped (its ids repeat, or it was an empty cache entry) keeps its
+    /// overlay entry.
+    ///
+    /// Installs nothing unless every overlay entry the file covers agrees with
+    /// it on its id count, so the swap cannot change an answer.
+    pub fn rebase_onto(&mut self, base: IdIndexBase) -> Result<(), String> {
+        for (name, entry) in self.overlay.get_mut().unwrap().iter() {
+            if base.contains(name) && base.entry_len(name) != Some(entry.len()) {
+                return Err(format!(
+                    "the published id index for type '{name}' differs from the live one"
+                ));
+            }
+        }
+        self.overlay
+            .get_mut()
+            .unwrap()
+            .retain(|name, _| !base.contains(name));
+        self.removed.clear();
+        self.base = Some(Arc::new(base));
+        Ok(())
+    }
+
     pub fn contains_key(&self, name: &str) -> bool {
         if self.overlay.read().unwrap().contains_key(name) {
             return true;
@@ -563,8 +712,8 @@ impl IdIndexStore {
     /// Borrow `source`'s and `target`'s **overlay-resident** id indices in
     /// place for the length of one bulk pass, and run `f` against them.
     ///
-    /// This is the probing counterpart to [`Self::materialize_type`]: one
-    /// lock acquisition and two borrowed entries, where materializing pays a
+    /// This is the bulk-pass counterpart to materializing a type's whole map:
+    /// one lock acquisition and two borrowed entries, where materializing pays a
     /// map insert per node *of the whole type* before the first row is looked
     /// at. On a property-free `add_connections` at 100k nodes / 24k edges,
     /// materializing was 53% of the call (samply, 2026-08-15) and grew with
@@ -573,10 +722,8 @@ impl IdIndexStore {
     /// Returns `None` — without calling `f` — unless **both** types are in the
     /// overlay, which is every heap-resident graph and every type a loaded
     /// graph has since mutated. A base (mmap) entry is deliberately excluded:
-    /// its Integer variant answers a probe with a binary search over the
-    /// mapped file, so trading one materialization for R such probes is a
-    /// regime question rather than a win, and the caller keeps the
-    /// materializing path there.
+    /// a caller resolves such a type row by row through [`Self::lookup`], a
+    /// binary search over the mapped file.
     ///
     /// `f` must not re-enter the store — the read lock is held for its whole
     /// execution.
@@ -594,27 +741,6 @@ impl IdIndexStore {
             overlay.get(target)?
         };
         Some(f(source_entry, target_entry))
-    }
-
-    /// Materialize the full `id → NodeIndex` map for a type, or None when the
-    /// type isn't indexed. Used by `CombinedTypeLookup::from_id_indices`, which
-    /// resolves connection rows' endpoints against the endpoint types.
-    pub fn materialize_type(&self, name: &str) -> Option<FxHashMap<Value, NodeIndex>> {
-        {
-            let ov = self.overlay.read().unwrap();
-            if let Some(entry) = ov.get(name) {
-                return Some(entry.materialize().iter().collect());
-            }
-        }
-        if self.removed.contains(name) {
-            return None;
-        }
-        let base = self.base.as_deref()?;
-        if base.contains(name) {
-            base.materialize(name).map(|ti| ti.iter().collect())
-        } else {
-            None
-        }
     }
 
     pub fn insert(&mut self, name: String, idx: TypeIdIndex) {
@@ -667,17 +793,12 @@ impl IdIndexStore {
         true
     }
 
-    pub fn remove(&mut self, name: &str) -> Option<TypeIdIndex> {
-        let prev = self
-            .overlay
-            .get_mut()
-            .unwrap()
-            .remove(name)
-            .map(|entry| entry.materialize());
+    /// Drop `name`'s index; the next read rebuilds it from the graph.
+    pub fn remove(&mut self, name: &str) {
+        self.overlay.get_mut().unwrap().remove(name);
         if self.base.as_ref().is_some_and(|b| b.contains(name)) {
             self.removed.insert(name.to_string());
         }
-        prev
     }
 
     pub fn clear(&mut self) {
@@ -706,17 +827,12 @@ impl IdIndexStore {
     }
 
     /// Owned snapshot of every live `TypeIdIndex` (overlay first, then base
-    /// entries that aren't shadowed/removed). Cold path — used by N-Triples
-    /// export. Returns owned indices because the read lock can't be held
-    /// across the caller's iteration.
+    /// entries that aren't shadowed/removed): **a full heap map per type**, for
+    /// the N-Triples build, which walks every id of every type. Returns owned
+    /// indices because the read lock can't be held across the caller's
+    /// iteration. A save does not use it; see [`write_id_indices_bin`].
     pub fn values(&self) -> Vec<TypeIdIndex> {
         self.snapshot().into_iter().map(|(_, v)| v).collect()
-    }
-
-    /// Owned `(name, TypeIdIndex)` snapshot of every live entry. Cold path —
-    /// used by save.
-    pub fn iter(&self) -> Vec<(String, TypeIdIndex)> {
-        self.snapshot()
     }
 
     fn snapshot(&self) -> Vec<(String, TypeIdIndex)> {
@@ -737,23 +853,29 @@ impl IdIndexStore {
         out
     }
 
-    /// HashMap-`entry`-shaped accessor: materialize any base entry into the
-    /// overlay (or default-construct), then hand back a `&mut` to it. Used
-    /// wherever the index is maintained incrementally: the N-Triples and RDF
-    /// loaders' per-entity build, and the create paths. `&mut self` gives
-    /// exclusive access, so `get_mut()` is uncontended (no lock cost).
+    /// HashMap-`entry`-shaped accessor: bring a base entry into the overlay (or
+    /// default-construct one), then hand back a `&mut` to it. Used wherever the
+    /// index is maintained incrementally: the N-Triples and RDF loaders'
+    /// per-entity build, and the create paths. `&mut self` gives exclusive
+    /// access, so `get_mut()` is uncontended (no lock cost).
+    ///
+    /// An Int64Sorted base entry comes in as a delta over the mapping
+    /// ([`TypeEntry::OverBase`]) — the first write costs nothing in proportion
+    /// to the type's size. Any other base entry is copied onto the heap first.
     pub fn entry_or_default(&mut self, name: String) -> &mut TypeEntry {
-        let needs_materialize = {
+        let needs_promotion = {
             let overlay = self.overlay.get_mut().unwrap();
             !overlay.contains_key(&name) && !self.removed.contains(&name)
         };
-        if needs_materialize {
-            if let Some(base) = self.base.as_deref() {
-                if let Some(materialized) = base.materialize(&name) {
-                    self.overlay
-                        .get_mut()
-                        .unwrap()
-                        .insert(name.clone(), TypeEntry::from(materialized));
+        if needs_promotion {
+            if let Some(base) = self.base.as_ref() {
+                let promoted = if base.int64_parts(&name).is_some() {
+                    Some(TypeEntry::over_base(Arc::clone(base), &name))
+                } else {
+                    base.materialize(&name).map(TypeEntry::from)
+                };
+                if let Some(entry) = promoted {
+                    self.overlay.get_mut().unwrap().insert(name.clone(), entry);
                 }
             }
         }
@@ -789,558 +911,10 @@ impl IdIndexStore {
     }
 }
 
-/// The number of distinct ids `index` holds, counting every numeric spelling
-/// of one id once. Only a `General` map mixing numeric kinds pays the count.
-fn distinct_ids(index: &TypeIdIndex) -> usize {
-    match index {
-        TypeIdIndex::General(map) if mixed_numeric_kinds(map.keys()) => map
-            .keys()
-            .map(|id| canonical_id(id).into_owned())
-            .collect::<rustc_hash::FxHashSet<Value>>()
-            .len(),
-        _ => index.len(),
-    }
-}
-
-/// Write `id_indices.bin` (raw mmap layout). Iterates the store's union view
-/// (overlay + base) so saves capture both fresh mutations and unchanged
-/// base entries.
-///
-/// Directory keys are `InternedKey` hashes and the loader turns each one back
-/// into a type name through the interner sidecar that ships with the same
-/// snapshot. Names are therefore *resolved*, never interned here: deriving a
-/// key from the name alone — the old `interner.clone().try_get_or_intern`,
-/// which registered the name in a throwaway clone — manufactured keys for
-/// names the persisted interner never carried, and a single such entry made
-/// the whole directory unloadable ("directory contains an unresolved type
-/// key").
-///
-/// Only an empty index can carry an unregistered name: creating a node interns
-/// its type (`mutation/batch.rs`), so any index holding ids names an interned
-/// type. Empty entries do reach the store — the read path caches a
-/// build-on-miss index for a label a query merely mentioned
-/// ([`IdIndexStore::lookup_or_build`]) — and they are pure cache, so dropping
-/// them loses nothing. A non-empty unregistered entry would be a broken
-/// invariant, so it fails the save rather than shipping a directory that
-/// cannot be read back.
-///
-/// A type whose ids repeat (fewer distinct ids than `type_indices` members) is
-/// not written either: its index names the last node per id in the bucket's
-/// order, which the type-index writer sorts by `NodeIndex`, so a reused slot
-/// would leave the persisted choice disagreeing with the reloaded order. The
-/// reload rebuilds such an index from the persisted bucket on first use. Ids
-/// are counted by [`canonical_id`], not by entries: an index holding one id in
-/// two spellings (as one built through 0.18.1 did) repeats although its
-/// length matches the type's.
-pub fn write_id_indices_bin(
-    dir: &Path,
-    store: &IdIndexStore,
-    type_indices: &TypeIndexStore,
-    interner: &StringInterner,
-) -> Result<(), String> {
-    let mut entries: Vec<(u64, TypeIdIndex)> = Vec::new();
-    for (name, materialized) in store.iter() {
-        if type_indices
-            .get(&name)
-            .is_some_and(|members| distinct_ids(&materialized) < members.len())
-        {
-            continue;
-        }
-        let Some(key) = interner.try_resolve_to_key(&name) else {
-            if materialized.is_empty() {
-                continue;
-            }
-            return Err(format!(
-                "id index for type '{name}' holds {} ids but the type name is \
-                 not in the graph's interner; refusing to write an \
-                 id_indices.bin that cannot be read back",
-                materialized.len()
-            ));
-        };
-        entries.push((key.as_u64(), materialized));
-    }
-    entries.sort_by_key(|(k, _)| *k);
-
-    let num_types = entries.len();
-    let header_size = HEADER_BYTES;
-    let dir_size = DIR_ENTRY_BYTES * num_types;
-    let data_offset = header_size + dir_size;
-
-    // Pre-compute payload offsets/lengths so we can emit the directory first.
-    struct Plan {
-        type_key: u64,
-        variant: u8,
-        num_entries: u64,
-        payload_off: u64,
-        payload_len: u64,
-        data: Vec<u8>,
-    }
-
-    let mut plans: Vec<Plan> = Vec::with_capacity(num_types);
-    let mut cursor = data_offset as u64;
-
-    for (type_key, idx) in &entries {
-        match idx {
-            TypeIdIndex::Integer(map) => {
-                let mut pairs: Vec<(u32, u32)> =
-                    map.iter().map(|(k, v)| (*k, v.index() as u32)).collect();
-                pairs.sort_by_key(|(k, _)| *k);
-                let n = pairs.len();
-                let mut data = Vec::with_capacity(n * 8);
-                for (k, _) in &pairs {
-                    data.extend_from_slice(&k.to_le_bytes());
-                }
-                for (_, v) in &pairs {
-                    data.extend_from_slice(&v.to_le_bytes());
-                }
-                let len = data.len() as u64;
-                plans.push(Plan {
-                    type_key: *type_key,
-                    variant: 0,
-                    num_entries: n as u64,
-                    payload_off: cursor,
-                    payload_len: len,
-                    data,
-                });
-                cursor += len;
-            }
-            TypeIdIndex::General(map) => {
-                let blob = serde_codec::encode_versioned(
-                    serde_codec::CURRENT_CODEC,
-                    map,
-                    MAX_GENERAL_INDEX_DECODE_BYTES,
-                )
-                .map_err(|e| format!("id_indices General-variant codec failed: {e}"))?;
-                let len = blob.len() as u64;
-                plans.push(Plan {
-                    type_key: *type_key,
-                    variant: 1,
-                    num_entries: map.len() as u64,
-                    payload_off: cursor,
-                    payload_len: len,
-                    data: blob,
-                });
-                cursor += len;
-            }
-        }
-    }
-
-    let total = cursor as usize;
-    let mut out = Vec::with_capacity(total);
-    // Header
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&VERSION.to_le_bytes());
-    out.extend_from_slice(&(num_types as u32).to_le_bytes());
-    out.extend_from_slice(&(HEADER_BYTES as u64).to_le_bytes());
-    out.extend_from_slice(&(data_offset as u64).to_le_bytes());
-
-    // Directory
-    for plan in &plans {
-        out.extend_from_slice(&plan.type_key.to_le_bytes());
-        out.push(plan.variant);
-        out.extend_from_slice(&[0u8; 7]);
-        out.extend_from_slice(&plan.num_entries.to_le_bytes());
-        out.extend_from_slice(&plan.payload_off.to_le_bytes());
-        out.extend_from_slice(&plan.payload_len.to_le_bytes());
-        out.extend_from_slice(&[0u8; 8]);
-    }
-
-    // Data
-    for plan in plans {
-        out.extend_from_slice(&plan.data);
-    }
-
-    debug_assert_eq!(out.len(), total);
-
-    std::fs::write(dir.join("id_indices.bin"), out)
-        .map_err(|e| format!("Failed to write id_indices.bin: {}", e))?;
-    Ok(())
-}
+mod write;
+pub use write::write_id_indices_bin;
 
 #[cfg(test)]
-mod validation_tests {
-    use super::*;
-    use crate::graph::storage::disk::temp_owner::{TempGraphDir, TrackedOwner};
-
-    fn integer_fixture(type_key: u64, pairs: &[(u32, u32)]) -> Vec<u8> {
-        let data_offset = HEADER_BYTES + DIR_ENTRY_BYTES;
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&VERSION.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&(HEADER_BYTES as u64).to_le_bytes());
-        bytes.extend_from_slice(&(data_offset as u64).to_le_bytes());
-        bytes.extend_from_slice(&type_key.to_le_bytes());
-        bytes.push(0);
-        bytes.extend_from_slice(&[0; 7]);
-        bytes.extend_from_slice(&(pairs.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&(data_offset as u64).to_le_bytes());
-        bytes.extend_from_slice(&((pairs.len() * 8) as u64).to_le_bytes());
-        bytes.extend_from_slice(&[0; 8]);
-        for (key, _) in pairs {
-            bytes.extend_from_slice(&key.to_le_bytes());
-        }
-        for (_, node) in pairs {
-            bytes.extend_from_slice(&node.to_le_bytes());
-        }
-        bytes
-    }
-
-    /// A loaded [`IdIndexBase`] together with the temp directory its `mmap`
-    /// points into. Field order is the contract: `base` drops before `temp`,
-    /// and `temp`'s guard asserts it.
-    ///
-    /// The previous helper returned the base alone, so the `TempDir` local
-    /// was dropped the moment `load` returned and every assertion below ran
-    /// against an unlinked inode — valid on Unix, and therefore silent.
-    struct LoadedIndex {
-        base: TrackedOwner<IdIndexBase>,
-        /// Held only for its `Drop`: it asserts `base` above is gone.
-        _temp: TempGraphDir,
-    }
-
-    impl LoadedIndex {
-        fn base(&self) -> &IdIndexBase {
-            &self.base
-        }
-    }
-
-    fn load(bytes: &[u8], interner: &StringInterner) -> std::io::Result<Option<LoadedIndex>> {
-        let temp = TempGraphDir::new();
-        std::fs::write(temp.path().join("id_indices.bin"), bytes).unwrap();
-        let Some(base) = IdIndexBase::load_from(temp.path(), interner)? else {
-            return Ok(None);
-        };
-        let base = temp.own("IdIndexBase", base);
-        Ok(Some(LoadedIndex { base, _temp: temp }))
-    }
-
-    fn assert_invalid(bytes: &[u8], interner: &StringInterner) {
-        let outcome = std::panic::catch_unwind(|| load(bytes, interner));
-        match outcome.expect("invalid index must not panic") {
-            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::InvalidData),
-            Ok(_) => panic!("invalid index loaded successfully"),
-        }
-    }
-
-    #[test]
-    fn integer_fixture_reads_canonical_little_endian_bytes() {
-        let mut interner = StringInterner::new();
-        let key = interner.get_or_intern("Person").as_u64();
-        let loaded = load(&integer_fixture(key, &[(7, 70), (42, 420)]), &interner)
-            .unwrap()
-            .unwrap();
-        let base = loaded.base();
-        assert_eq!(
-            base.lookup("Person", &Value::UniqueId(7)),
-            Some(NodeIndex::new(70))
-        );
-        assert_eq!(
-            base.lookup("Person", &Value::UniqueId(42)),
-            Some(NodeIndex::new(420))
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_header_directory_and_variant() {
-        let mut interner = StringInterner::new();
-        let key = interner.get_or_intern("Person").as_u64();
-        let valid = integer_fixture(key, &[(7, 70)]);
-
-        let mut huge_count = valid.clone();
-        huge_count[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert_invalid(&huge_count, &interner);
-        let mut bad_dir = valid.clone();
-        bad_dir[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert_invalid(&bad_dir, &interner);
-        let mut bad_data = valid.clone();
-        bad_data[24..32].copy_from_slice(&33u64.to_le_bytes());
-        assert_invalid(&bad_data, &interner);
-        let mut bad_variant = valid.clone();
-        bad_variant[40] = 2;
-        assert_invalid(&bad_variant, &interner);
-    }
-
-    #[test]
-    fn rejects_bad_counts_ranges_and_integer_ordering() {
-        let mut interner = StringInterner::new();
-        let key = interner.get_or_intern("Person").as_u64();
-        let valid = integer_fixture(key, &[(7, 70), (42, 420)]);
-
-        let mut too_many = valid.clone();
-        too_many[48..56].copy_from_slice(&(u32::MAX as u64 + 1).to_le_bytes());
-        assert_invalid(&too_many, &interner);
-        let mut past_eof = valid.clone();
-        past_eof[56..64].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert_invalid(&past_eof, &interner);
-        let mut wrong_len = valid.clone();
-        wrong_len[64..72].copy_from_slice(&15u64.to_le_bytes());
-        assert_invalid(&wrong_len, &interner);
-        assert_invalid(&integer_fixture(key, &[(42, 1), (7, 2)]), &interner);
-        assert_invalid(&integer_fixture(key, &[(7, 1), (7, 2)]), &interner);
-    }
-
-    #[test]
-    fn rejects_malformed_general_postcard_during_load() {
-        let mut interner = StringInterner::new();
-        let key = interner.get_or_intern("StringIds").as_u64();
-        let mut bytes = integer_fixture(key, &[(1, 1)]);
-        bytes[40] = 1;
-        bytes[64..72].copy_from_slice(&16u64.to_le_bytes());
-        bytes.truncate(HEADER_BYTES + DIR_ENTRY_BYTES);
-        bytes.extend_from_slice(&1u64.to_le_bytes());
-        bytes.extend_from_slice(&[0xff; 8]);
-        assert_invalid(&bytes, &interner);
-    }
-
-    #[test]
-    fn writer_round_trip_accepts_unaligned_integer_payload_after_general() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut interner = StringInterner::new();
-        let candidates = ["Alpha", "Beta"];
-        for name in candidates {
-            interner.get_or_intern(name);
-        }
-        let mut ordered = candidates;
-        ordered.sort_by_key(|name| InternedKey::from_str(name).as_u64());
-        let general_name = ordered[0];
-        let integer_name = ordered[1];
-        let general = TypeIdIndex::General(FxHashMap::from_iter([(
-            Value::String("x".into()),
-            NodeIndex::new(3),
-        )]));
-        let integer = TypeIdIndex::Integer(FxHashMap::from_iter([(7, NodeIndex::new(4))]));
-        let mut store = IdIndexStore::default();
-        store.replace_with(HashMap::from([
-            (general_name.to_string(), general),
-            (integer_name.to_string(), integer),
-        ]));
-        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
-
-        let raw = std::fs::read(temp.path().join("id_indices.bin")).unwrap();
-        let second_payload_off = u64::from_le_bytes(
-            raw[HEADER_BYTES + DIR_ENTRY_BYTES + 24..HEADER_BYTES + DIR_ENTRY_BYTES + 32]
-                .try_into()
-                .unwrap(),
-        );
-        assert_ne!(
-            second_payload_off % 4,
-            0,
-            "fixture must exercise an unaligned integer payload"
-        );
-
-        let base = IdIndexBase::load_from(temp.path(), &interner)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            base.lookup(general_name, &Value::String("x".into())),
-            Some(NodeIndex::new(3))
-        );
-        assert_eq!(
-            base.lookup(integer_name, &Value::UniqueId(7)),
-            Some(NodeIndex::new(4))
-        );
-    }
-
-    /// A persisted `General` index answers every numeric spelling of an id
-    /// as the in-memory index does: a float id is found by an integer and a
-    /// `UniqueId` query, and an integer id by a float one.
-    #[test]
-    fn a_persisted_general_index_coerces_like_the_in_memory_one() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut interner = StringInterner::new();
-        interner.get_or_intern("G");
-        let index = TypeIdIndex::General(FxHashMap::from_iter([
-            (Value::Float64(1.0), NodeIndex::new(0)),
-            (Value::Int64(2), NodeIndex::new(1)),
-            (Value::String("x".into()), NodeIndex::new(2)),
-        ]));
-        let mut store = IdIndexStore::default();
-        store.replace_with(HashMap::from([("G".to_string(), index.clone())]));
-        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
-        let base = IdIndexBase::load_from(temp.path(), &interner)
-            .unwrap()
-            .unwrap();
-        for query in [
-            Value::Float64(1.0),
-            Value::Int64(1),
-            Value::UniqueId(1),
-            Value::Float64(2.0),
-            Value::Int64(2),
-            Value::UniqueId(2),
-            Value::String("x".into()),
-            Value::String("1".into()),
-            Value::Float64(1.5),
-        ] {
-            assert_eq!(base.lookup("G", &query), index.get(&query), "{query:?}");
-        }
-        assert_eq!(base.lookup("G", &Value::Int64(1)), Some(NodeIndex::new(0)));
-    }
-
-    /// An index spelling one id twice (built through 0.18.1) is healed when
-    /// read back, and never written: its ids repeat although it has as many
-    /// entries as the type has nodes.
-    #[test]
-    fn a_general_index_spelling_one_id_twice_is_healed_and_not_written() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut interner = StringInterner::new();
-        interner.get_or_intern("M");
-        let two_spellings = TypeIdIndex::General(FxHashMap::from_iter([
-            (Value::UniqueId(1), NodeIndex::new(0)),
-            (Value::Int64(1), NodeIndex::new(1)),
-            (Value::Int64(2), NodeIndex::new(2)),
-        ]));
-        let mut store = IdIndexStore::default();
-        store.replace_with(HashMap::from([("M".to_string(), two_spellings)]));
-
-        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
-        let base = IdIndexBase::load_from(temp.path(), &interner)
-            .unwrap()
-            .unwrap();
-        for query in [Value::UniqueId(1), Value::Int64(1), Value::Float64(1.0)] {
-            assert_eq!(
-                base.lookup("M", &query),
-                Some(NodeIndex::new(1)),
-                "{query:?}"
-            );
-        }
-        assert_eq!(base.entry_len("M"), Some(2));
-        assert_eq!(base.materialize("M").unwrap().len(), 2);
-        // The base memory-maps the file; Windows refuses a rewrite while a
-        // mapping is open (os error 1224), so release it before writing.
-        drop(base);
-
-        let mut members = TypeIndexStore::default();
-        for index in 0..3 {
-            members.push_to_type("M", NodeIndex::new(index));
-        }
-        write_id_indices_bin(temp.path(), &store, &members, &interner).unwrap();
-        let base = IdIndexBase::load_from(temp.path(), &interner)
-            .unwrap()
-            .unwrap();
-        assert!(!base.contains("M"), "a repeating index must not be written");
-    }
-
-    /// A directory saved before the writer resolved its keys carries an empty
-    /// index under a type key the interner sidecar never received. Both
-    /// variants of that entry are recovered rather than failing the load; a
-    /// populated entry under an unresolvable key still fails (asserted in
-    /// `rejects_unsupported_unresolved_and_trailing_data`).
-    #[test]
-    fn an_empty_entry_with_an_unresolved_type_key_is_recovered() {
-        let mut interner = StringInterner::new();
-        interner.get_or_intern("Person");
-        let stale = InternedKey::from_str("NeverInterned").as_u64();
-
-        let loaded = load(&integer_fixture(stale, &[]), &interner)
-            .expect("a stale empty entry must not fail the load")
-            .unwrap();
-        assert!(!loaded.base().contains("NeverInterned"));
-
-        // The General variant is what a type with no rows actually produced:
-        // `num_entries` is 0, but the Postcard payload of an empty map is not.
-        let blob = serde_codec::encode_versioned(
-            serde_codec::CURRENT_CODEC,
-            &HashMap::<Value, NodeIndex>::new(),
-            MAX_GENERAL_INDEX_DECODE_BYTES,
-        )
-        .unwrap();
-        let mut bytes = integer_fixture(stale, &[]);
-        bytes[40] = 1;
-        bytes[64..72].copy_from_slice(&(blob.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&blob);
-        let loaded = load(&bytes, &interner)
-            .expect("a stale empty General entry must not fail the load")
-            .unwrap();
-        assert!(!loaded.base().contains("NeverInterned"));
-    }
-
-    /// The writer resolves names against the interner it is handed, so it can
-    /// never emit a directory key that the matching `interner.bin.zst` fails
-    /// to resolve. An unregistered name is dropped when its index is empty
-    /// (pure cache, rebuilt on demand) and fails the save when it is not.
-    #[test]
-    fn writer_never_emits_a_key_the_interner_cannot_resolve() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut interner = StringInterner::new();
-        interner.get_or_intern("Known");
-
-        let mut store = IdIndexStore::default();
-        store.replace_with(HashMap::from([
-            (
-                "Known".to_string(),
-                TypeIdIndex::Integer(FxHashMap::from_iter([(7, NodeIndex::new(1))])),
-            ),
-            // Never interned: an id index cached for a type with no rows.
-            ("Unregistered".to_string(), TypeIdIndex::default()),
-        ]));
-        write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner).unwrap();
-
-        // Asserted on the bytes, not through the loader: the loader also
-        // recovers such an entry (directories written before this fix carry
-        // them), so a round trip alone would not pin the writer.
-        let raw = std::fs::read(temp.path().join("id_indices.bin")).unwrap();
-        assert_eq!(
-            u32::from_le_bytes(raw[12..16].try_into().unwrap()),
-            1,
-            "the unregistered name must not reach the directory at all"
-        );
-
-        let base = IdIndexBase::load_from(temp.path(), &interner)
-            .expect("the written directory must load")
-            .unwrap();
-        assert_eq!(
-            base.lookup("Known", &Value::UniqueId(7)),
-            Some(NodeIndex::new(1))
-        );
-        assert!(!base.contains("Unregistered"));
-
-        store.insert(
-            "Unregistered".to_string(),
-            TypeIdIndex::Integer(FxHashMap::from_iter([(1, NodeIndex::new(0))])),
-        );
-        let error =
-            write_id_indices_bin(temp.path(), &store, &TypeIndexStore::default(), &interner)
-                .unwrap_err();
-        assert!(error.contains("Unregistered"), "{error}");
-        assert!(error.contains("cannot be read back"), "{error}");
-    }
-
-    /// A version-2 file (what 0.19.0 wrote) still opens; the writer emits 3.
-    #[test]
-    fn version_2_is_still_read_and_version_3_is_written() {
-        let mut interner = StringInterner::new();
-        let key = interner.get_or_intern("Person").as_u64();
-        let mut bytes = integer_fixture(key, &[(7, 70)]);
-        assert_eq!(
-            &bytes[8..12],
-            &VERSION.to_le_bytes(),
-            "fixtures carry the current version"
-        );
-        assert_eq!(VERSION, 3, "the version that may carry variant 2 is 3");
-
-        bytes[8..12].copy_from_slice(&VERSION_2.to_le_bytes());
-        let loaded = load(&bytes, &interner).unwrap().unwrap();
-        assert_eq!(
-            loaded.base().lookup("Person", &Value::UniqueId(7)),
-            Some(NodeIndex::new(70))
-        );
-
-        bytes[8..12].copy_from_slice(&(VERSION + 1).to_le_bytes());
-        assert_invalid(&bytes, &interner);
-    }
-
-    #[test]
-    fn rejects_unsupported_unresolved_and_trailing_data() {
-        let mut interner = StringInterner::new();
-        let key = interner.get_or_intern("Person").as_u64();
-        let valid = integer_fixture(key, &[(7, 70)]);
-        let mut version = valid.clone();
-        version[8..12].copy_from_slice(&(VERSION + 1).to_le_bytes());
-        assert_invalid(&version, &interner);
-        let mut trailing = valid.clone();
-        trailing.push(0);
-        assert_invalid(&trailing, &interner);
-        assert_invalid(&integer_fixture(key.wrapping_add(1), &[(7, 70)]), &interner);
-    }
-}
+mod int64_tests;
+#[cfg(test)]
+mod validation_tests;

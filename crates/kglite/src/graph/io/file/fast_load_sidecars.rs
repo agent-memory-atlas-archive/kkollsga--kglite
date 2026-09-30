@@ -195,7 +195,7 @@ pub(crate) fn read_interner_bin(dir: &std::path::Path, graph: &mut DirGraph) -> 
 //
 // Read-only fallback for graphs saved by 0.8.13–0.8.27. Fresh saves use
 // the mmap-resident `id_indices.bin` raw layout from
-// `storage/disk/id_index.rs::write_id_indices_bin`.
+// `storage/disk/id_index/write.rs::write_id_indices_bin`.
 
 pub(crate) const ID_INDICES_MAGIC: &[u8; 8] = b"KGLIIDX1";
 pub(crate) const ID_INDICES_VERSION: u32 = 1;

@@ -56,6 +56,18 @@ impl TypeLookup {
     }
 }
 
+// Test-only tally of the whole-graph scans that build an endpoint lookup, so a
+// test can prove a resolution was answered from an id index instead.
+#[cfg(test)]
+thread_local! {
+    static GRAPH_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn graph_scans() -> usize {
+    GRAPH_SCANS.with(|scans| scans.get())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CombinedTypeLookup {
     source_uid_to_index: FxHashMap<Value, NodeIndex>,
@@ -75,6 +87,8 @@ impl CombinedTypeLookup {
         if source_type.is_empty() || target_type.is_empty() {
             return Err("Node types cannot be empty".to_string());
         }
+        #[cfg(test)]
+        GRAPH_SCANS.with(|scans| scans.set(scans.get() + 1));
 
         let same_type = source_type == target_type;
         let mut source_uid_to_index = FxHashMap::default();
@@ -111,47 +125,6 @@ impl CombinedTypeLookup {
         })
     }
 
-    /// Fast constructor using pre-built id_indices from DirGraph (avoids full-graph scan).
-    /// Falls back to graph scan if id_indices has been invalidated for either type.
-    pub fn from_id_indices(
-        id_indices: &crate::graph::storage::disk::id_index::IdIndexStore,
-        graph: &GraphBackend,
-        source_type: String,
-        target_type: String,
-    ) -> Result<Self, String> {
-        if source_type.is_empty() || target_type.is_empty() {
-            return Err("Node types cannot be empty".to_string());
-        }
-        let same_type = source_type == target_type;
-        let has_source = id_indices.contains_key(&source_type);
-        let has_target = same_type || id_indices.contains_key(&target_type);
-
-        if has_source && has_target {
-            let source_uid = id_indices
-                .materialize_type(&source_type)
-                .unwrap_or_default();
-            let target_uid = if same_type {
-                None
-            } else {
-                Some(
-                    id_indices
-                        .materialize_type(&target_type)
-                        .unwrap_or_default(),
-                )
-            };
-            Ok(CombinedTypeLookup {
-                source_uid_to_index: source_uid,
-                target_uid_to_index: target_uid,
-                source_type,
-                target_type,
-                same_type,
-            })
-        } else {
-            // id_indices invalidated — fall back to graph scan
-            Self::new(graph, source_type, target_type)
-        }
-    }
-
     pub fn check_source(&self, uid: &Value) -> Option<NodeIndex> {
         Self::lookup_with_type_fallback(&self.source_uid_to_index, uid)
     }
@@ -165,51 +138,112 @@ impl CombinedTypeLookup {
         Self::lookup_with_type_fallback(map, uid)
     }
 
-    /// Helper function to handle Int64/UniqueId/Float64 type mismatches during lookup.
-    ///
-    /// IDs in CSV sources sometimes arrive as floats (e.g. 260.0 instead of 260)
-    /// due to pandas nullable-int promotion.  This method tries all plausible
-    /// numeric representations so that a Float64(260.0) matches an Int64(260) node.
     fn lookup_with_type_fallback(
         map: &FxHashMap<Value, NodeIndex>,
         uid: &Value,
     ) -> Option<NodeIndex> {
-        // First try direct lookup
-        if let Some(idx) = map.get(uid).copied() {
-            return Some(idx);
-        }
+        lookup_coerced(|v| map.get(v).copied(), uid)
+    }
+}
 
-        match uid {
-            Value::Float64(f) => {
-                // Float that is a whole number → try Int64 and UniqueId
-                if f.is_finite() && f.fract() == 0.0 {
-                    let i = *f as i64;
-                    if let Some(idx) = map.get(&Value::Int64(i)).copied() {
-                        return Some(idx);
-                    }
-                    if i >= 0 && i <= u32::MAX as i64 {
-                        return map.get(&Value::UniqueId(i as u32)).copied();
-                    }
-                }
-                None
-            }
-            Value::Int64(i) => {
-                // Try UniqueId, then Float64
-                if *i >= 0 && *i <= u32::MAX as i64 {
-                    if let Some(idx) = map.get(&Value::UniqueId(*i as u32)).copied() {
-                        return Some(idx);
-                    }
-                }
-                map.get(&Value::Float64(*i as f64)).copied()
-            }
-            Value::UniqueId(u) => {
-                // Try Int64, then Float64
-                if let Some(idx) = map.get(&Value::Int64(*u as i64)).copied() {
+/// Resolve `uid` through `get`, then through the numeric spellings the id may
+/// have been stored under.
+///
+/// IDs in CSV sources sometimes arrive as floats (e.g. 260.0 instead of 260)
+/// due to pandas nullable-int promotion. This tries all plausible numeric
+/// representations so that a `Float64(260.0)` matches an `Int64(260)` node: a
+/// whole `Float64` as `Int64` then `UniqueId`, an `Int64` as `UniqueId` then
+/// `Float64`, a `UniqueId` as `Int64` then `Float64`.
+pub(crate) fn lookup_coerced(
+    get: impl Fn(&Value) -> Option<NodeIndex>,
+    uid: &Value,
+) -> Option<NodeIndex> {
+    if let Some(idx) = get(uid) {
+        return Some(idx);
+    }
+    match uid {
+        Value::Float64(f) => {
+            // Float that is a whole number → try Int64 and UniqueId
+            if f.is_finite() && f.fract() == 0.0 {
+                let i = *f as i64;
+                if let Some(idx) = get(&Value::Int64(i)) {
                     return Some(idx);
                 }
-                map.get(&Value::Float64(*u as f64)).copied()
+                if i >= 0 && i <= u32::MAX as i64 {
+                    return get(&Value::UniqueId(i as u32));
+                }
             }
-            _ => None,
+            None
+        }
+        Value::Int64(i) => {
+            // Try UniqueId, then Float64
+            if *i >= 0 && *i <= u32::MAX as i64 {
+                if let Some(idx) = get(&Value::UniqueId(*i as u32)) {
+                    return Some(idx);
+                }
+            }
+            get(&Value::Float64(*i as f64))
+        }
+        // Try Int64, then Float64
+        Value::UniqueId(u) => {
+            get(&Value::Int64(*u as i64)).or_else(|| get(&Value::Float64(*u as f64)))
+        }
+        _ => None,
+    }
+}
+
+/// Resolves the endpoint ids of one `(source_type, target_type)` pair to nodes.
+///
+/// When both types have an id index — heap, mapped, or a delta over a mapped
+/// entry — each id is one probe of that index, so the cost is the number of
+/// ids resolved and never the size of either type: on a disk graph a type's
+/// index stays in its mapping and is never copied onto the heap to answer a
+/// batch of edges. When either index is missing, one scan of the graph builds
+/// both maps.
+pub enum EndpointResolver<'a> {
+    Indexed {
+        ids: &'a crate::graph::storage::disk::id_index::IdIndexStore,
+        source_type: String,
+        target_type: String,
+    },
+    Scanned(CombinedTypeLookup),
+}
+
+impl<'a> EndpointResolver<'a> {
+    pub fn new(
+        ids: &'a crate::graph::storage::disk::id_index::IdIndexStore,
+        graph: &GraphBackend,
+        source_type: String,
+        target_type: String,
+    ) -> Result<Self, String> {
+        if source_type.is_empty() || target_type.is_empty() {
+            return Err("Node types cannot be empty".to_string());
+        }
+        if ids.contains_key(&source_type) && ids.contains_key(&target_type) {
+            return Ok(Self::Indexed {
+                ids,
+                source_type,
+                target_type,
+            });
+        }
+        CombinedTypeLookup::new(graph, source_type, target_type).map(Self::Scanned)
+    }
+
+    pub fn check_source(&self, uid: &Value) -> Option<NodeIndex> {
+        match self {
+            Self::Indexed {
+                ids, source_type, ..
+            } => lookup_coerced(|v| ids.lookup(source_type, v), uid),
+            Self::Scanned(lookup) => lookup.check_source(uid),
+        }
+    }
+
+    pub fn check_target(&self, uid: &Value) -> Option<NodeIndex> {
+        match self {
+            Self::Indexed {
+                ids, target_type, ..
+            } => lookup_coerced(|v| ids.lookup(target_type, v), uid),
+            Self::Scanned(lookup) => lookup.check_target(uid),
         }
     }
 }
