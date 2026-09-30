@@ -12,7 +12,7 @@ use crate::graph::schema::exact_float;
 use crate::graph::storage::mapped::mmap_vec::{MmapBytes, MmapOrVec, MmapPod};
 use crate::graph::storage::packed_codec::write_packed_values;
 use crate::graph::storage::StrField;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Timelike};
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use std::io;
@@ -50,6 +50,14 @@ pub enum TypedColumn {
     /// Days since Unix epoch (1970-01-01)
     Date {
         data: MmapOrVec<i32>,
+        nulls: MmapOrVec<u8>,
+    },
+    /// `Value::Timestamp` as microseconds since the Unix epoch (UTC-naive).
+    /// A timestamp [`exact_micros`] cannot encode (finer than a microsecond,
+    /// or a leap second) is refused by `push`/`set`; the store's write sites
+    /// then demote the column to `Mixed`, so the representation is exact.
+    Timestamp {
+        data: MmapOrVec<i64>,
         nulls: MmapOrVec<u8>,
     },
     /// Offset-based string storage: `offsets[i]..offsets[i+1]` is the byte range in `data`.
@@ -130,6 +138,10 @@ impl Clone for TypedColumn {
                 data: data.clone(),
                 nulls: nulls.clone(),
             },
+            Self::Timestamp { data, nulls } => Self::Timestamp {
+                data: data.clone(),
+                nulls: nulls.clone(),
+            },
             Self::Str {
                 offsets,
                 data,
@@ -158,6 +170,7 @@ impl TypedColumn {
             | TypedColumn::UniqueId { .. }
             | TypedColumn::Bool { .. }
             | TypedColumn::Date { .. }
+            | TypedColumn::Timestamp { .. }
             | TypedColumn::Str { .. } => None,
         }
     }
@@ -204,6 +217,11 @@ impl TypedColumn {
             }
             Self::Date { data, nulls } if matches!(value, Value::DateTime(_) | Value::Null) => {
                 scalar!(Date, data, nulls)
+            }
+            Self::Timestamp { data, nulls }
+                if matches!(value, Value::Timestamp(_) | Value::Null) =>
+            {
+                scalar!(Timestamp, data, nulls)
             }
             Self::Str {
                 offsets,
@@ -351,6 +369,36 @@ const UNIX_EPOCH_DATE: NaiveDate = match NaiveDate::from_ymd_opt(1970, 1, 1) {
     None => unreachable!(),
 };
 
+/// Microseconds since the Unix epoch, or `None` when `t` is not exactly a
+/// whole number of microseconds: a sub-microsecond part cannot be held, and a
+/// leap second (`nanosecond() >= 1e9`) would encode as the next second's
+/// value. The one encoder for the `Timestamp` column and the temporal
+/// endpoint index, so the two agree on which timestamps are admissible.
+#[inline]
+pub(crate) fn exact_micros(t: chrono::NaiveDateTime) -> Option<i64> {
+    let nanos = t.nanosecond();
+    if !nanos.is_multiple_of(1_000) || nanos >= 1_000_000_000 {
+        return None;
+    }
+    Some(t.and_utc().timestamp_micros())
+}
+
+#[inline]
+pub(crate) fn micros_to_timestamp(micros: i64) -> Option<chrono::NaiveDateTime> {
+    const DAY_US: i64 = 86_400_000_000;
+    /// `NaiveDate::num_days_from_ce` of 1970-01-01.
+    const EPOCH_DAYS_FROM_CE: i64 = 719_163;
+    let days = micros.div_euclid(DAY_US);
+    let of_day = micros.rem_euclid(DAY_US);
+    let date =
+        NaiveDate::from_num_days_from_ce_opt(i32::try_from(days + EPOCH_DAYS_FROM_CE).ok()?)?;
+    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(
+        (of_day / 1_000_000) as u32,
+        (of_day % 1_000_000) as u32 * 1_000,
+    )?;
+    Some(chrono::NaiveDateTime::new(date, time))
+}
+
 impl TypedColumn {
     /// The dense-column tag `type_str` names, or `None` when it names nothing
     /// this store can hold densely.
@@ -369,6 +417,7 @@ impl TypedColumn {
             "uniqueid" => "uniqueid",
             "bool" | "boolean" => "bool",
             "date" | "datetime" => "date",
+            "timestamp" => "timestamp",
             "string" => "string",
             _ => return None,
         })
@@ -395,6 +444,10 @@ impl TypedColumn {
                 nulls: MmapOrVec::new(),
             },
             "date" | "datetime" => TypedColumn::Date {
+                data: MmapOrVec::new(),
+                nulls: MmapOrVec::new(),
+            },
+            "timestamp" => TypedColumn::Timestamp {
                 data: MmapOrVec::new(),
                 nulls: MmapOrVec::new(),
             },
@@ -426,8 +479,9 @@ impl TypedColumn {
     /// `Value::type_name`.
     ///
     /// Values with no dense representation (`List`, `Map`, `Point`, `Duration`,
-    /// `Timestamp`, graph entities) and `Null` — which carries no type
-    /// evidence — still answer `"mixed"`.
+    /// a `Timestamp` finer than a microsecond or on a leap second, graph
+    /// entities) and `Null` — which carries no type evidence — still answer
+    /// `"mixed"`.
     pub fn type_str_for_value(value: &Value) -> &'static str {
         match value {
             Value::Int64(_) => "int64",
@@ -435,6 +489,9 @@ impl TypedColumn {
             Value::UniqueId(_) => "uniqueid",
             Value::Boolean(_) => "bool",
             Value::DateTime(_) => "date",
+            // A timestamp the column cannot hold exactly types as `mixed`, so
+            // no write site builds a `Timestamp` column that then refuses it.
+            Value::Timestamp(t) if exact_micros(*t).is_some() => "timestamp",
             Value::String(_) => "string",
             _ => "mixed",
         }
@@ -453,6 +510,7 @@ impl TypedColumn {
             | TypedColumn::UniqueId { nulls, .. }
             | TypedColumn::Bool { nulls, .. }
             | TypedColumn::Date { nulls, .. }
+            | TypedColumn::Timestamp { nulls, .. }
             | TypedColumn::Str { nulls, .. } => nulls.len(),
             TypedColumn::Mixed { data } => data.len(),
         }
@@ -499,6 +557,13 @@ impl TypedColumn {
                 push_pair(data, days, nulls, 0)?;
             }
             (TypedColumn::Date { data, nulls }, Value::Null) => {
+                push_pair(data, 0, nulls, 1)?;
+            }
+            (TypedColumn::Timestamp { data, nulls }, Value::Timestamp(t)) => {
+                let micros = exact_micros(*t).ok_or(ColumnPushError::TypeMismatch)?;
+                push_pair(data, micros, nulls, 0)?;
+            }
+            (TypedColumn::Timestamp { data, nulls }, Value::Null) => {
                 push_pair(data, 0, nulls, 1)?;
             }
             (
@@ -601,6 +666,12 @@ impl TypedColumn {
                 let date = UNIX_EPOCH_DATE + chrono::Duration::days(data.get(idx) as i64);
                 Some(Value::DateTime(date))
             }
+            TypedColumn::Timestamp { data, nulls } => {
+                if idx >= nulls.len() || nulls.get(idx) != 0 {
+                    return None;
+                }
+                micros_to_timestamp(data.get(idx)).map(Value::Timestamp)
+            }
             TypedColumn::Str {
                 offsets,
                 data,
@@ -665,6 +736,7 @@ impl TypedColumn {
             | TypedColumn::UniqueId { nulls, .. }
             | TypedColumn::Bool { nulls, .. }
             | TypedColumn::Date { nulls, .. }
+            | TypedColumn::Timestamp { nulls, .. }
             | TypedColumn::Str { nulls, .. } => nulls.as_slice().get(idx).copied() == Some(0),
             TypedColumn::Mixed { data } => data.get(idx).is_some_and(|v| !matches!(v, Value::Null)),
         }
@@ -788,6 +860,21 @@ impl TypedColumn {
                 data.set(idx, 0);
                 nulls.set(idx, 1);
             }
+            (TypedColumn::Timestamp { data, nulls }, Value::Timestamp(t)) => {
+                let micros = exact_micros(*t).ok_or(())?;
+                if idx >= data.len() {
+                    return Err(());
+                }
+                data.set(idx, micros);
+                nulls.set(idx, 0);
+            }
+            (TypedColumn::Timestamp { data, nulls }, Value::Null) => {
+                if idx >= data.len() {
+                    return Err(());
+                }
+                data.set(idx, 0);
+                nulls.set(idx, 1);
+            }
             (
                 TypedColumn::Str {
                     offsets,
@@ -897,6 +984,10 @@ impl TypedColumn {
                 data.truncate(len);
                 nulls.truncate(len);
             }
+            TypedColumn::Timestamp { data, nulls } => {
+                data.truncate(len);
+                nulls.truncate(len);
+            }
             TypedColumn::Str {
                 offsets,
                 data,
@@ -925,6 +1016,7 @@ impl TypedColumn {
             TypedColumn::UniqueId { data, .. } => data.is_mapped(),
             TypedColumn::Bool { data, .. } => data.is_mapped(),
             TypedColumn::Date { data, .. } => data.is_mapped(),
+            TypedColumn::Timestamp { data, .. } => data.is_mapped(),
             TypedColumn::Str { data, .. } => data.is_mapped(),
             TypedColumn::Mixed { .. } => false,
         }
@@ -938,6 +1030,7 @@ impl TypedColumn {
             TypedColumn::UniqueId { data, nulls } => data.heap_bytes() + nulls.heap_bytes(),
             TypedColumn::Bool { data, nulls } => data.heap_bytes() + nulls.heap_bytes(),
             TypedColumn::Date { data, nulls } => data.heap_bytes() + nulls.heap_bytes(),
+            TypedColumn::Timestamp { data, nulls } => data.heap_bytes() + nulls.heap_bytes(),
             TypedColumn::Str {
                 offsets,
                 data,
@@ -975,7 +1068,8 @@ impl TypedColumn {
             | TypedColumn::Float64 { .. }
             | TypedColumn::UniqueId { .. }
             | TypedColumn::Bool { .. }
-            | TypedColumn::Date { .. } => self.heap_bytes(),
+            | TypedColumn::Date { .. }
+            | TypedColumn::Timestamp { .. } => self.heap_bytes(),
             TypedColumn::Str {
                 offsets,
                 data,
@@ -1008,6 +1102,10 @@ impl TypedColumn {
             }
             TypedColumn::Date { data, nulls } => {
                 data.materialize_to_file(&base_dir.join(format!("{col_name}.i32")))?;
+                nulls.materialize_to_file(&base_dir.join(format!("{col_name}.null")))?;
+            }
+            TypedColumn::Timestamp { data, nulls } => {
+                data.materialize_to_file(&base_dir.join(format!("{col_name}.ts")))?;
                 nulls.materialize_to_file(&base_dir.join(format!("{col_name}.null")))?;
             }
             TypedColumn::Str {
@@ -1059,6 +1157,10 @@ impl TypedColumn {
                 record(data.flush_and_release_pages());
                 record(nulls.flush_and_release_pages());
             }
+            TypedColumn::Timestamp { data, nulls } => {
+                record(data.flush_and_release_pages());
+                record(nulls.flush_and_release_pages());
+            }
             TypedColumn::Str {
                 offsets,
                 data,
@@ -1097,6 +1199,10 @@ impl TypedColumn {
                 nulls.materialize_to_heap();
             }
             TypedColumn::Date { data, nulls } => {
+                data.materialize_to_heap();
+                nulls.materialize_to_heap();
+            }
+            TypedColumn::Timestamp { data, nulls } => {
                 data.materialize_to_heap();
                 nulls.materialize_to_heap();
             }
@@ -1140,6 +1246,10 @@ impl TypedColumn {
                 write_packed_values(nulls, writer)?;
             }
             TypedColumn::Date { data, nulls } => {
+                write_packed_values(data, writer)?;
+                write_packed_values(nulls, writer)?;
+            }
+            TypedColumn::Timestamp { data, nulls } => {
                 write_packed_values(data, writer)?;
                 write_packed_values(nulls, writer)?;
             }
@@ -1199,6 +1309,7 @@ impl TypedColumn {
             TypedColumn::UniqueId { .. } => "uniqueid",
             TypedColumn::Bool { .. } => "bool",
             TypedColumn::Date { .. } => "date",
+            TypedColumn::Timestamp { .. } => "timestamp",
             TypedColumn::Str { .. } => "string",
             TypedColumn::Mixed { .. } => "mixed",
         }

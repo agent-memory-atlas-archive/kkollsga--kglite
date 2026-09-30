@@ -157,101 +157,6 @@ pub fn write_unified_columns(
                     // Defensive — should have been caught by store_needs_sidecar.
                     unreachable!("Mixed column slipped past store_needs_sidecar");
                 }
-                TypedColumn::Int64 { data, nulls } => {
-                    let (data_r, c) = plan_region(cursor, data.as_raw_bytes());
-                    cursor = c;
-                    sources.push((data_r.offset, data.as_raw_bytes().to_vec()));
-                    let (nulls_r, c) = plan_region(cursor, nulls.as_raw_bytes());
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls.as_raw_bytes().to_vec()));
-                    let idx = fixed_cols.len();
-                    fixed_cols.push(FixedColMeta {
-                        col_type_str: "int64".into(),
-                        data: data_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: "int64".into(),
-                        idx,
-                    });
-                }
-                TypedColumn::Float64 { data, nulls } => {
-                    let (data_r, c) = plan_region(cursor, data.as_raw_bytes());
-                    cursor = c;
-                    sources.push((data_r.offset, data.as_raw_bytes().to_vec()));
-                    let (nulls_r, c) = plan_region(cursor, nulls.as_raw_bytes());
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls.as_raw_bytes().to_vec()));
-                    let idx = fixed_cols.len();
-                    fixed_cols.push(FixedColMeta {
-                        col_type_str: "float64".into(),
-                        data: data_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: "float64".into(),
-                        idx,
-                    });
-                }
-                TypedColumn::UniqueId { data, nulls } => {
-                    let (data_r, c) = plan_region(cursor, data.as_raw_bytes());
-                    cursor = c;
-                    sources.push((data_r.offset, data.as_raw_bytes().to_vec()));
-                    let (nulls_r, c) = plan_region(cursor, nulls.as_raw_bytes());
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls.as_raw_bytes().to_vec()));
-                    let idx = fixed_cols.len();
-                    fixed_cols.push(FixedColMeta {
-                        col_type_str: "uniqueid".into(),
-                        data: data_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: "uniqueid".into(),
-                        idx,
-                    });
-                }
-                TypedColumn::Bool { data, nulls } => {
-                    let (data_r, c) = plan_region(cursor, data.as_raw_bytes());
-                    cursor = c;
-                    sources.push((data_r.offset, data.as_raw_bytes().to_vec()));
-                    let (nulls_r, c) = plan_region(cursor, nulls.as_raw_bytes());
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls.as_raw_bytes().to_vec()));
-                    let idx = fixed_cols.len();
-                    fixed_cols.push(FixedColMeta {
-                        col_type_str: "bool".into(),
-                        data: data_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: "bool".into(),
-                        idx,
-                    });
-                }
-                TypedColumn::Date { data, nulls } => {
-                    let (data_r, c) = plan_region(cursor, data.as_raw_bytes());
-                    cursor = c;
-                    sources.push((data_r.offset, data.as_raw_bytes().to_vec()));
-                    let (nulls_r, c) = plan_region(cursor, nulls.as_raw_bytes());
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls.as_raw_bytes().to_vec()));
-                    let idx = fixed_cols.len();
-                    fixed_cols.push(FixedColMeta {
-                        col_type_str: "date".into(),
-                        data: data_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: "date".into(),
-                        idx,
-                    });
-                }
                 TypedColumn::Str {
                     offsets,
                     data,
@@ -279,6 +184,27 @@ pub fn write_unified_columns(
                     col_map.push(ColMapEntry {
                         key_u64: ik.as_u64(),
                         col_type_str: "string".into(),
+                        idx,
+                    });
+                }
+                fixed => {
+                    let (tag, data, nulls) = fixed_width_parts(fixed)
+                        .expect("Mixed and Str are handled above; the rest are fixed-width");
+                    let (data_r, c) = plan_region(cursor, data);
+                    cursor = c;
+                    sources.push((data_r.offset, data.to_vec()));
+                    let (nulls_r, c) = plan_region(cursor, nulls);
+                    cursor = c;
+                    sources.push((nulls_r.offset, nulls.to_vec()));
+                    let idx = fixed_cols.len();
+                    fixed_cols.push(FixedColMeta {
+                        col_type_str: tag.into(),
+                        data: data_r,
+                        nulls: nulls_r,
+                    });
+                    col_map.push(ColMapEntry {
+                        key_u64: ik.as_u64(),
+                        col_type_str: tag.into(),
                         idx,
                     });
                 }
@@ -466,6 +392,26 @@ fn pack_str_column(
         new_offsets.extend_from_slice(&(new_data.len() as u64).to_le_bytes());
     }
     (new_data, new_offsets, nulls_bytes)
+}
+
+/// The type tag and raw `(data, nulls)` bytes of a fixed-width column; `None`
+/// for `Str` and `Mixed`.
+fn fixed_width_parts(col: &TypedColumn) -> Option<(&'static str, &[u8], &[u8])> {
+    Some(match col {
+        TypedColumn::Int64 { data, nulls } => ("int64", data.as_raw_bytes(), nulls.as_raw_bytes()),
+        TypedColumn::Float64 { data, nulls } => {
+            ("float64", data.as_raw_bytes(), nulls.as_raw_bytes())
+        }
+        TypedColumn::UniqueId { data, nulls } => {
+            ("uniqueid", data.as_raw_bytes(), nulls.as_raw_bytes())
+        }
+        TypedColumn::Bool { data, nulls } => ("bool", data.as_raw_bytes(), nulls.as_raw_bytes()),
+        TypedColumn::Date { data, nulls } => ("date", data.as_raw_bytes(), nulls.as_raw_bytes()),
+        TypedColumn::Timestamp { data, nulls } => {
+            ("timestamp", data.as_raw_bytes(), nulls.as_raw_bytes())
+        }
+        TypedColumn::Str { .. } | TypedColumn::Mixed { .. } => return None,
+    })
 }
 
 fn store_needs_sidecar(store: &ColumnStore) -> bool {

@@ -838,4 +838,4 @@ fn kgl_reload_preserves_column_slot_order() {
 
 /// sha256 of the `.kgl` bytes for [`kgl_fixture_bytes`]. Regenerate only via
 /// `KGLITE_REGEN_VALUE_BYTE_GOLDEN=1`, and only for a deliberate format change.
-const KGL_FIXTURE_DIGEST: &str = "3265245f881548ef4659edb0b84f2c7190c1c660b7d9ecaf6e33ef6a6523f1db";
+const KGL_FIXTURE_DIGEST: &str = "837dacc48fd0e372b70e5d168e290541b5135c80893d6d139d9b9aa0878ba219";

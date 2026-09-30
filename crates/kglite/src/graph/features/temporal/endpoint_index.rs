@@ -70,7 +70,7 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard, Weak};
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, NaiveDate};
 use fixedbitset::FixedBitSet;
 
 use super::declarations::TemporalTarget;
@@ -83,6 +83,7 @@ use crate::graph::algorithms::text_index::bm25::MaskedStats;
 use crate::graph::core::graph_filter::{GuardBounds, GuardTemplate, ValidTimeSelector};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::{InternedKey, TemporalConfig};
+use crate::graph::storage::column_store::exact_micros;
 use crate::graph::storage::GraphRead;
 
 /// The bytes one graph's endpoint arrays and cached masks may hold together.
@@ -116,22 +117,11 @@ fn day_start(date: NaiveDate) -> i64 {
     (i64::from(date.num_days_from_ce()) - EPOCH_DAYS_FROM_CE) * DAY_US
 }
 
-/// A timestamp in microseconds; `None` when it is finer than that (or a
-/// leap second), which no key can hold exactly.
-fn micros(ts: NaiveDateTime) -> Option<i64> {
-    let nanos = ts.nanosecond();
-    if !nanos.is_multiple_of(1_000) || nanos >= 1_000_000_000 {
-        return None;
-    }
-    let of_day = i64::from(ts.num_seconds_from_midnight()) * 1_000_000 + i64::from(nanos / 1_000);
-    Some(day_start(ts.date()) + of_day)
-}
-
 fn from_key(from: Option<Instant>) -> Option<i64> {
     match from {
         None => Some(i64::MIN),
         Some(Instant::Date(d)) => Some(day_start(d)),
-        Some(Instant::Timestamp(ts)) => micros(ts),
+        Some(Instant::Timestamp(ts)) => exact_micros(ts),
     }
 }
 
@@ -140,7 +130,7 @@ fn to_key(to: Option<Instant>, convention: IntervalConvention) -> Option<i64> {
         None => Some(i64::MAX),
         Some(Instant::Date(d)) if convention.is_closed() => Some(day_start(d) + DAY_US - 1),
         Some(Instant::Date(d)) => Some(day_start(d)),
-        Some(Instant::Timestamp(ts)) => micros(ts),
+        Some(Instant::Timestamp(ts)) => exact_micros(ts),
     }
 }
 
@@ -148,7 +138,7 @@ fn to_key(to: Option<Instant>, convention: IntervalConvention) -> Option<i64> {
 fn cutoffs(t: Instant) -> Option<(i64, i64)> {
     match t {
         Instant::Date(d) => Some((day_start(d) + DAY_US - 1, day_start(d))),
-        Instant::Timestamp(ts) => micros(ts).map(|us| (us, us)),
+        Instant::Timestamp(ts) => exact_micros(ts).map(|us| (us, us)),
     }
 }
 
@@ -329,7 +319,6 @@ impl Builder {
         to: Option<Instant>,
         empty: bool,
     ) -> Result<(), Unindexed> {
-        let slot = u32::try_from(slot).map_err(|_| Unindexed::OverBudget)?;
         let keys = if empty {
             None
         } else {
@@ -337,7 +326,13 @@ impl Builder {
             let to = to_key(to, self.convention).ok_or(Unindexed::Unrepresentable)?;
             Some((from, to))
         };
-        self.reserve_one(empty)?;
+        self.push_keys(slot, keys)
+    }
+
+    /// Add one row by its finished keys — `None` for an empty interval.
+    fn push_keys(&mut self, slot: usize, keys: Option<(i64, i64)>) -> Result<(), Unindexed> {
+        let slot = u32::try_from(slot).map_err(|_| Unindexed::OverBudget)?;
+        self.reserve_one(keys.is_none())?;
         match keys {
             None => self.empty.push(slot),
             Some((from, to)) => {
@@ -395,6 +390,25 @@ impl Scan {
             }
         }
     }
+
+    /// [`Self::visit`] for a row whose bounds are typed timestamp cells, read
+    /// as epoch microseconds (`None` is an open bound). Such a bound is never
+    /// unreadable, and its key is the cell itself.
+    fn visit_micros(&mut self, slot: usize, from: Option<i64>, to: Option<i64>) {
+        self.counts.rows += 1;
+        let empty = match (from, to) {
+            (Some(from), Some(to)) if self.convention.is_closed() => to < from,
+            (Some(from), Some(to)) => to <= from,
+            _ => false,
+        };
+        self.counts.empty_rows += usize::from(empty);
+        if let Ok(builder) = &mut self.builder {
+            let keys = (!empty).then(|| (from.unwrap_or(i64::MIN), to.unwrap_or(i64::MAX)));
+            if let Err(reason) = builder.push_keys(slot, keys) {
+                self.builder = Err(reason);
+            }
+        }
+    }
 }
 
 /// Walk `target`'s rows under `config` — the rows its declaration governs,
@@ -415,7 +429,30 @@ fn scan(
     };
     match target {
         TemporalTarget::Node(label) => {
+            let (from_key, to_key) = (
+                InternedKey::from_str(&config.valid_from),
+                InternedKey::from_str(&config.valid_to),
+            );
+            // `id`/`title` bounds and disk graphs read through the general path.
+            let cells = !graph.graph.is_disk()
+                && ![config.valid_from.as_str(), config.valid_to.as_str()]
+                    .iter()
+                    .any(|field| matches!(*field, "id" | "title"));
             for_each_node_row(graph, label, |idx| {
+                let micros = cells
+                    .then(|| graph.graph.node_view(idx))
+                    .flatten()
+                    .and_then(|view| {
+                        let (store, row) = view.column_row()?;
+                        Some((
+                            store.timestamp_cells(from_key)?.micros(row),
+                            store.timestamp_cells(to_key)?.micros(row),
+                        ))
+                    });
+                if let Some((from, to)) = micros {
+                    scan.visit_micros(idx.index(), from, to);
+                    return Ok::<(), Infallible>(());
+                }
                 let from = node_bound(graph, idx, &config.valid_from);
                 let to = node_bound(graph, idx, &config.valid_to);
                 scan.visit(idx.index(), &from, &to);

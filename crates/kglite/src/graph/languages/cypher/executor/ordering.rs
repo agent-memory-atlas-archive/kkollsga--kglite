@@ -12,6 +12,7 @@
 
 use super::super::ast::{NullsPlacement, OrderItem};
 use crate::datatypes::values::Value;
+use crate::graph::storage::column_store::exact_micros;
 use std::cmp::Ordering;
 
 /// Per-key sort spec: direction plus the *resolved* NULLS placement
@@ -92,7 +93,7 @@ pub(crate) fn compare_sort_keys(a: &[Value], b: &[Value], specs: &[SortSpec]) ->
     Ordering::Equal
 }
 
-/// One key comparison. The three arms here are the same-type cases of
+/// One key comparison. The four arms here are the same-type cases of
 /// [`crate::graph::core::filtering::total_order`], repeated only so they
 /// inline: every other pair — cross-type numerics, temporals, cross-*type*
 /// pairs ranked by type — falls through to that function, which remains the
@@ -108,6 +109,7 @@ fn compare_one(a: &Value, b: &Value) -> Ordering {
         }
         (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
         (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Timestamp(x), Value::Timestamp(y)) => x.cmp(y),
         _ => crate::graph::core::filtering::total_order(a, b),
     }
 }
@@ -229,6 +231,34 @@ impl<P> TopKCollector<P> {
         }
     }
 
+    /// The first sort key of the worst retained entry as epoch microseconds,
+    /// once the heap is full and that key is a whole-microsecond timestamp.
+    ///
+    /// A candidate whose first key is a timestamp strictly on the wrong side
+    /// of it ([`Self::beats_first_micros`]) cannot enter the top-K whatever its
+    /// later keys or position, so a scan can skip it from the raw cell.
+    pub(crate) fn first_key_micros(&self) -> Option<i64> {
+        if self.heap.len() < self.limit || self.specs.is_empty() {
+            return None;
+        }
+        match self.heap.first()?.keys.first()? {
+            Value::Timestamp(t) => exact_micros(*t),
+            _ => None,
+        }
+    }
+
+    /// Whether a timestamp first key of `micros` is not strictly worse than
+    /// `cutoff` ([`Self::first_key_micros`]) under the first sort spec — the
+    /// candidates that still need the full comparison.
+    #[inline]
+    pub(crate) fn beats_first_micros(&self, micros: i64, cutoff: i64) -> bool {
+        match self.specs.first() {
+            Some(spec) if spec.ascending => micros <= cutoff,
+            Some(_) => micros >= cutoff,
+            None => true,
+        }
+    }
+
     /// Offer a candidate. Below capacity it is retained; at capacity it
     /// replaces the worst retained entry if it ranks better, reusing that
     /// entry's key buffer, and is dropped otherwise.
@@ -324,6 +354,50 @@ mod tests {
             ascending: false,
             nulls: NullsPlacement::First,
         }
+    }
+
+    fn stamp(micros: i64) -> Value {
+        Value::Timestamp(
+            chrono::DateTime::from_timestamp_micros(micros)
+                .unwrap()
+                .naive_utc(),
+        )
+    }
+
+    /// The raw pre-check is a work guard only: whatever it rejects, the full
+    /// comparison would have rejected, and ties still reach the full path.
+    #[test]
+    fn the_timestamp_cutoff_never_rejects_a_candidate_the_heap_would_keep() {
+        for spec in [asc(), desc()] {
+            let mut heap: TopKCollector<usize> = TopKCollector::new(vec![spec], 3);
+            assert_eq!(heap.first_key_micros(), None, "not full yet");
+            for (seq, micros) in [50, 10, 30].into_iter().enumerate() {
+                heap.push(&[stamp(micros)], seq, seq);
+            }
+            let cutoff = heap.first_key_micros().expect("full heap, timestamp key");
+            assert_eq!(cutoff, if spec.ascending { 50 } else { 10 });
+            for micros in [-5, 9, 10, 11, 29, 30, 31, 49, 50, 51, 500] {
+                let skipped = !heap.beats_first_micros(micros, cutoff);
+                if skipped {
+                    assert!(!heap.accepts(&[stamp(micros)], 99), "{micros} {spec:?}");
+                }
+            }
+            assert!(
+                heap.beats_first_micros(cutoff, cutoff),
+                "a tie is not skipped"
+            );
+        }
+        // A non-timestamp first key, or a sub-microsecond one, has no cutoff.
+        let mut heap: TopKCollector<usize> = TopKCollector::new(vec![asc()], 1);
+        heap.push(&[Value::Int64(1)], 0, 0);
+        assert_eq!(heap.first_key_micros(), None);
+        let fine = chrono::NaiveDate::from_ymd_opt(2020, 1, 1)
+            .unwrap()
+            .and_hms_nano_opt(0, 0, 0, 7)
+            .unwrap();
+        let mut heap: TopKCollector<usize> = TopKCollector::new(vec![asc()], 1);
+        heap.push(&[Value::Timestamp(fine)], 0, 0);
+        assert_eq!(heap.first_key_micros(), None);
     }
 
     /// Reference implementation: stable full sort by the same comparator.

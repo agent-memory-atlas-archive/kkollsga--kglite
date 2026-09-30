@@ -208,6 +208,17 @@ impl<'g> ScanRuntime<'g> {
         self.current_type = Some(type_key);
     }
 
+    /// The raw microseconds of `slot` when it is a stored property held in a
+    /// typed timestamp column and the node has a value there; `None`
+    /// otherwise, and the caller reads the value through [`Self::read`].
+    #[inline]
+    pub(super) fn timestamp_micros(&self, node: Option<NodeView<'_>>, slot: usize) -> Option<i64> {
+        match self.routes[slot] {
+            PropRoute::Stored(key) => node?.timestamp_micros(key),
+            _ => None,
+        }
+    }
+
     #[inline]
     fn read(&self, node: Option<NodeView<'_>>, slot: usize) -> Value {
         match node {

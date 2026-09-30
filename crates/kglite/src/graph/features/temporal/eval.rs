@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 
+/// `NaiveDate::num_days_from_ce` of 1970-01-01.
+const EPOCH_DAYS_FROM_CE: i64 = 719_163;
+
 /// A point on the time line, at the grain it was written in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Instant {
@@ -282,6 +285,77 @@ pub(crate) fn end_admits(end: Instant, t: Instant, convention: IntervalConventio
         }
         (IntervalConvention::HalfOpen, _, _) => end.chrono_cmp(t) == Ordering::Greater,
     }
+}
+
+/// Microseconds in a day.
+pub(crate) const DAY_US: i64 = 86_400_000_000;
+
+/// A query instant read against timestamp bounds held as epoch microseconds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MicrosProbe {
+    /// A timestamp, compared with a bound exactly.
+    Timestamp(i64),
+    /// A date, compared with a bound at date grain (`day`: days since the
+    /// epoch), except a half-open end, which is compared with the day's
+    /// midnight exactly.
+    Date { day: i64 },
+}
+
+impl MicrosProbe {
+    /// The probe for `t`; `None` for a timestamp the microsecond encoding
+    /// cannot hold exactly, which takes the general path.
+    pub(crate) fn of(t: Instant) -> Option<Self> {
+        match t {
+            Instant::Date(date) => {
+                let days_from_ce = i64::from(chrono::Datelike::num_days_from_ce(&date));
+                Some(MicrosProbe::Date {
+                    day: days_from_ce - EPOCH_DAYS_FROM_CE,
+                })
+            }
+            Instant::Timestamp(ts) => {
+                crate::graph::storage::column_store::exact_micros(ts).map(MicrosProbe::Timestamp)
+            }
+        }
+    }
+
+    /// [`Instant::chrono_cmp`] of the bound `bound` against this instant.
+    #[inline]
+    fn cmp_bound(self, bound: i64) -> Ordering {
+        match self {
+            MicrosProbe::Timestamp(us) => bound.cmp(&us),
+            MicrosProbe::Date { day } => bound.div_euclid(DAY_US).cmp(&day),
+        }
+    }
+
+    /// [`end_admits`] for an `end` bound.
+    #[inline]
+    fn end_admits(self, end: i64, convention: IntervalConvention) -> bool {
+        match (convention, self) {
+            (IntervalConvention::Closed, _) => self.cmp_bound(end) != Ordering::Less,
+            (IntervalConvention::HalfOpen, MicrosProbe::Date { day }) => end > day * DAY_US,
+            (IntervalConvention::HalfOpen, MicrosProbe::Timestamp(us)) => end > us,
+        }
+    }
+}
+
+/// [`interval_overlaps`] over timestamp bounds in epoch microseconds (`None`
+/// is an open bound); [`interval_contains`] is the case `a == b`. Answers as
+/// [`non_empty`], [`starts_by`] and [`ends_after`] do for the same bounds.
+#[inline]
+pub(crate) fn micros_interval_overlaps(
+    from: Option<i64>,
+    to: Option<i64>,
+    a: MicrosProbe,
+    b: MicrosProbe,
+    convention: IntervalConvention,
+) -> bool {
+    let non_empty = match (from, to) {
+        (Some(from), Some(to)) => MicrosProbe::Timestamp(from).end_admits(to, convention),
+        _ => true,
+    };
+    non_empty
+        && from.is_none_or(|from| b.cmp_bound(from) != Ordering::Greater)
+        && to.is_none_or(|to| a.end_admits(to, convention))
 }
 
 #[cfg(test)]
@@ -587,5 +661,72 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// The integer comparison over epoch microseconds answers exactly as the
+    /// parsed-instant path, for every mix of bound shape (open, timestamp),
+    /// instant grain (date, timestamp), convention and range, around midnight
+    /// and either side of the epoch.
+    #[test]
+    fn the_micros_path_agrees_with_the_parsed_path() {
+        let stamps: Vec<NaiveDateTime> = [
+            "1900-01-01T12:00:00",
+            "1969-12-31T23:59:59",
+            "1970-01-01T00:00:00",
+            "2009-06-29T23:59:59",
+            "2009-06-30T00:00:00",
+            "2009-06-30T08:00:00",
+            "2009-06-30T20:00:00",
+            "2009-07-01T00:00:00",
+        ]
+        .iter()
+        .map(|t| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S").unwrap())
+        .collect();
+        let micros = |t: NaiveDateTime| crate::graph::storage::column_store::exact_micros(t);
+        let bound = |t: Option<NaiveDateTime>| t.map_or(Value::Null, Value::Timestamp);
+        let mut bounds: Vec<Option<NaiveDateTime>> = vec![None];
+        bounds.extend(stamps.iter().copied().map(Some));
+        let mut instants: Vec<Instant> = stamps.iter().copied().map(Instant::Timestamp).collect();
+        instants.extend(stamps.iter().map(|t| Instant::Date(t.date())));
+        for from in &bounds {
+            for to in &bounds {
+                for &a in &instants {
+                    for &b in &instants {
+                        for c in [CLOSED, HALF_OPEN] {
+                            let want =
+                                interval_overlaps(&bound(*from), &bound(*to), a, b, c).unwrap();
+                            let got = micros_interval_overlaps(
+                                from.and_then(micros),
+                                to.and_then(micros),
+                                MicrosProbe::of(a).unwrap(),
+                                MicrosProbe::of(b).unwrap(),
+                                c,
+                            );
+                            assert_eq!(got, want, "{from:?} {to:?} [{a:?}, {b:?}] {c:?}");
+                        }
+                    }
+                    let want = interval_contains(&bound(*from), &bound(*to), a, HALF_OPEN).unwrap();
+                    let p = MicrosProbe::of(a).unwrap();
+                    let got = micros_interval_overlaps(
+                        from.and_then(micros),
+                        to.and_then(micros),
+                        p,
+                        p,
+                        HALF_OPEN,
+                    );
+                    assert_eq!(got, want, "{from:?} {to:?} at {a:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_timestamp_instant_the_encoding_cannot_hold_has_no_micros_probe() {
+        let fine = NaiveDate::from_ymd_opt(2009, 6, 30)
+            .unwrap()
+            .and_hms_nano_opt(12, 0, 0, 123)
+            .unwrap();
+        assert!(MicrosProbe::of(Instant::Timestamp(fine)).is_none());
+        assert!(MicrosProbe::of(Instant::Date(fine.date())).is_some());
     }
 }

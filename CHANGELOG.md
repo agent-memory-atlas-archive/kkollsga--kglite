@@ -53,6 +53,20 @@ before upgrading.
   may add directory variants to. `graph_info()['format_version']` and the C
   ABI's `kglite_storage_format_version().kgl` report 7; no C symbol changed.
 
+- Datetime properties (`Value::Timestamp`) are stored in a typed column of
+  microseconds instead of a heterogeneous one: 8 bytes and a null byte a row
+  instead of a boxed value, file-backed in mapped and disk mode, and read
+  without a per-row clone. Range and equality filters and `ORDER BY … LIMIT`
+  over such a property compare the stored integers instead of decoding each
+  value. Query results and the Python types are unchanged. A
+  timestamp finer than a microsecond (nanoseconds from `datetime('…123456789')`
+  or `localdatetime()` on Linux) or on a leap second is not representable
+  exactly, so a property that receives one keeps a heterogeneous column and its
+  full precision. A disk directory written by 0.19.0 stores such properties in
+  heterogeneous columns; its next `save()` types every column whose values are
+  all exact timestamps. `.kgl` files this build writes carry the new column
+  tag, which is inside the v7 container above.
+
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
   data") use one org-chart example, with the declaration rules gathered in a
   closing section and the full bitemporal walk-through shipped as

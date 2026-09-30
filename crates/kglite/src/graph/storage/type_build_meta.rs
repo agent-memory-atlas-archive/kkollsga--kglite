@@ -15,6 +15,8 @@ pub enum ColType {
     UniqueId,
     Bool,
     Date,
+    /// Microseconds since the Unix epoch (`TypedColumn::Timestamp`).
+    Timestamp,
     Str,
 }
 
@@ -22,7 +24,7 @@ impl ColType {
     /// Bytes per value for fixed-width types. None for Str.
     pub fn value_size(&self) -> Option<usize> {
         match self {
-            ColType::Int64 | ColType::Float64 => Some(8),
+            ColType::Int64 | ColType::Float64 | ColType::Timestamp => Some(8),
             ColType::UniqueId | ColType::Date => Some(4),
             ColType::Bool => Some(1),
             ColType::Str => None,
@@ -51,6 +53,7 @@ impl ColType {
             ColType::UniqueId => "uniqueid",
             ColType::Bool => "bool",
             ColType::Date => "date",
+            ColType::Timestamp => "timestamp",
             ColType::Str => "string",
         }
     }

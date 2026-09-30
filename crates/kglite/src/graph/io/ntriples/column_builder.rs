@@ -75,6 +75,7 @@ fn col_type_from_str(s: &str) -> ColType {
         "uniqueid" => ColType::UniqueId,
         "bool" => ColType::Bool,
         "date" => ColType::Date,
+        "timestamp" => ColType::Timestamp,
         "string" => ColType::Str,
         _ => ColType::Str,
     }

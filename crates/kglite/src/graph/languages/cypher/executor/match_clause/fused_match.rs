@@ -1413,6 +1413,7 @@ impl<'a> CypherExecutor<'a> {
         let mut collector: TopKCollector<petgraph::graph::NodeIndex> =
             TopKCollector::new(specs, limit);
         let mut key_buf: Vec<Value> = Vec::with_capacity(folded_keys.len());
+        let mut cutoff: Option<i64> = None;
 
         // Both the sort keys and the filter run on every candidate, so both are
         // compiled against the scan's node variable (see `scan_eval`); the
@@ -1450,6 +1451,17 @@ impl<'a> CypherExecutor<'a> {
                 }
             }
 
+            // A first key held in a typed timestamp column is compared as the
+            // stored integer: a row strictly worse than the worst retained one
+            // cannot enter the top-K, so it is skipped without being decoded.
+            if let (Some(ScanExpr::Prop(slot)), Some(cutoff)) = (compiled_keys.first(), cutoff) {
+                if let Some(micros) = runtime.timestamp_micros(node, *slot) {
+                    if !collector.beats_first_micros(micros, cutoff) {
+                        continue;
+                    }
+                }
+            }
+
             // Evaluate the sort-key tuple; only a candidate that would enter
             // the top-K pays for an owned key tuple.
             key_buf.clear();
@@ -1458,6 +1470,7 @@ impl<'a> CypherExecutor<'a> {
             }
             if collector.accepts(&key_buf, scan_count) {
                 collector.push(&key_buf, scan_count, node_idx);
+                cutoff = collector.first_key_micros();
             }
         }
         let winners = collector.into_sorted();

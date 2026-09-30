@@ -45,7 +45,9 @@ use std::collections::HashMap;
 
 use crate::datatypes::values::Value;
 use crate::graph::schema::NodeData;
-use crate::graph::storage::column_store::{ColumnStore, TypedColumn};
+use crate::graph::storage::column_store::{
+    exact_micros, micros_to_timestamp, ColumnStore, TypedColumn,
+};
 use crate::graph::storage::StrField;
 
 use super::matcher::{str_field_test, value_matches};
@@ -77,6 +79,11 @@ enum ColumnData<'a> {
         data: &'a [u8],
         nulls: &'a [u8],
     },
+    /// Epoch microseconds; decoded to a `NaiveDateTime` per read.
+    Timestamp {
+        data: &'a [i64],
+        nulls: &'a [u8],
+    },
     /// Strings, dates and `Mixed` keep the column: their reads are already
     /// single-dispatch (`str_at`) or decode through `chrono`, so there is
     /// nothing for a slice to remove.
@@ -105,6 +112,10 @@ impl<'a> ColumnData<'a> {
                 data: data.as_slice(),
                 nulls: nulls.as_slice(),
             },
+            TypedColumn::Timestamp { data, nulls } => ColumnData::Timestamp {
+                data: data.as_slice(),
+                nulls: nulls.as_slice(),
+            },
             other => ColumnData::Whole(other),
         }
     }
@@ -129,6 +140,10 @@ impl<'a> ColumnData<'a> {
             },
             ColumnData::Bool { data, nulls } => match nulls.get(idx)? {
                 0 => Some(Value::Boolean(*data.get(idx)? != 0)),
+                _ => None,
+            },
+            ColumnData::Timestamp { data, nulls } => match nulls.get(idx)? {
+                0 => micros_to_timestamp(*data.get(idx)?).map(Value::Timestamp),
                 _ => None,
             },
             ColumnData::Whole(col) => col.get(row),
@@ -201,6 +216,84 @@ struct ColumnPredicate<'a> {
     source: Source,
     matcher: &'a PropertyMatcher,
     kind: Kind,
+    /// The matcher decided on the raw cells of a hoisted `Timestamp` column,
+    /// so no row is decoded to a `NaiveDateTime`.
+    micros: Option<MicrosTest>,
+}
+
+/// A comparison against exact-microsecond `Timestamp` thresholds, answered on
+/// the stored `i64` — [`value_matches`]'s answer for a `Timestamp` cell, since
+/// two timestamps that are whole microseconds order as their encodings do.
+#[derive(Clone, Copy)]
+enum MicrosTest {
+    Greater(i64),
+    GreaterOrEqual(i64),
+    Less(i64),
+    LessOrEqual(i64),
+    Equals(i64),
+    Range {
+        lower: i64,
+        lower_inclusive: bool,
+        upper: i64,
+        upper_inclusive: bool,
+    },
+}
+
+impl MicrosTest {
+    /// The raw-cell form of `matcher`, or `None` when it is not a comparison
+    /// against timestamps the microsecond encoding holds exactly.
+    fn of(matcher: &PropertyMatcher) -> Option<Self> {
+        let micros = |v: &Value| match v {
+            Value::Timestamp(t) => exact_micros(*t),
+            _ => None,
+        };
+        Some(match matcher {
+            PropertyMatcher::GreaterThan(v) => Self::Greater(micros(v)?),
+            PropertyMatcher::GreaterOrEqual(v) => Self::GreaterOrEqual(micros(v)?),
+            PropertyMatcher::LessThan(v) => Self::Less(micros(v)?),
+            PropertyMatcher::LessOrEqual(v) => Self::LessOrEqual(micros(v)?),
+            PropertyMatcher::Equals(v) => Self::Equals(micros(v)?),
+            PropertyMatcher::Range {
+                lower,
+                lower_inclusive,
+                upper,
+                upper_inclusive,
+            } => Self::Range {
+                lower: micros(lower)?,
+                lower_inclusive: *lower_inclusive,
+                upper: micros(upper)?,
+                upper_inclusive: *upper_inclusive,
+            },
+            _ => return None,
+        })
+    }
+
+    #[inline]
+    fn holds(self, cell: i64) -> bool {
+        match self {
+            Self::Greater(t) => cell > t,
+            Self::GreaterOrEqual(t) => cell >= t,
+            Self::Less(t) => cell < t,
+            Self::LessOrEqual(t) => cell <= t,
+            Self::Equals(t) => cell == t,
+            Self::Range {
+                lower,
+                lower_inclusive,
+                upper,
+                upper_inclusive,
+            } => {
+                (if lower_inclusive {
+                    cell >= lower
+                } else {
+                    cell > lower
+                }) && (if upper_inclusive {
+                    cell <= upper
+                } else {
+                    cell < upper
+                })
+            }
+        }
+    }
 }
 
 /// A type's whole property filter, compiled against that type's column store.
@@ -251,11 +344,17 @@ impl<'a> ColumnFilter<'a> {
                 (true, false) => Kind::StrField,
                 (false, _) => Kind::Value,
             };
+            let column = ColumnData::new(col, hoist);
+            let micros = match (&column, kind) {
+                (ColumnData::Timestamp { .. }, Kind::Value) => MicrosTest::of(matcher),
+                _ => None,
+            };
             preds.push(ColumnPredicate {
-                column: ColumnData::new(col, hoist),
+                column,
                 source,
                 matcher,
                 kind,
+                micros,
             });
         }
         Some(ColumnFilter {
@@ -313,9 +412,18 @@ impl<'a> ColumnFilter<'a> {
                             .expect("Kind was decided by this same function");
                         pred.column.str_field(row).is(test)
                     }
-                    Kind::Value => match pred.column.value(row) {
-                        Some(value) => value_matches(params, &value, pred.matcher),
-                        None => pred.matcher.accepts_absent(),
+                    Kind::Value => match (&pred.micros, &pred.column) {
+                        (Some(test), ColumnData::Timestamp { data, nulls }) => {
+                            let idx = row as usize;
+                            match (nulls.get(idx), data.get(idx)) {
+                                (Some(0), Some(cell)) => test.holds(*cell),
+                                _ => pred.matcher.accepts_absent(),
+                            }
+                        }
+                        _ => match pred.column.value(row) {
+                            Some(value) => value_matches(params, &value, pred.matcher),
+                            None => pred.matcher.accepts_absent(),
+                        },
                     },
                 }
             };

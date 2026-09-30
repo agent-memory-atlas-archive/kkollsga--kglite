@@ -568,5 +568,248 @@
   },
   "tests/test_mixed_kind_column_save_parity.py::test_a_float_column_reports_the_type_it_stores_after_an_int_batch[disk_reopened]": {
     "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_microsecond_timestamps_round_trip_with_nulls_and_set[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_microsecond_timestamps_round_trip_with_nulls_and_set[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_microsecond_timestamps_round_trip_with_nulls_and_set[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_microsecond_timestamps_round_trip_with_nulls_and_set[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_microsecond_timestamps_round_trip_with_nulls_and_set[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_microsecond_timestamps_round_trip_with_nulls_and_set[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_rollback_restores_a_timestamp_column[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_rollback_restores_a_timestamp_column[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_rollback_restores_a_timestamp_column[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_localdatetime_rows_read_back_in_order[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_localdatetime_rows_read_back_in_order[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_localdatetime_rows_read_back_in_order[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_localdatetime_rows_read_back_in_order[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_localdatetime_rows_read_back_in_order[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_localdatetime_rows_read_back_in_order[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory-closed-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory-closed-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory-half_open-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory-half_open-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped-closed-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped-closed-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped-half_open-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped-half_open-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk-closed-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk-closed-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk-half_open-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk-half_open-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk_reopened-closed-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk_reopened-closed-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk_reopened-half_open-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[disk_reopened-half_open-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory_kgl-closed-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory_kgl-closed-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory_kgl-half_open-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[memory_kgl-half_open-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped_kgl-closed-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped_kgl-closed-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped_kgl-half_open-indexed]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_on_timestamp_bounds[mapped_kgl-half_open-residual]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_order_by_and_where_over_a_timestamp_column[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_order_by_and_where_over_a_timestamp_column[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_order_by_and_where_over_a_timestamp_column[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_order_by_and_where_over_a_timestamp_column[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_order_by_and_where_over_a_timestamp_column[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_order_by_and_where_over_a_timestamp_column[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_timestamp_comparisons_agree_with_a_python_oracle[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_timestamp_comparisons_agree_with_a_python_oracle[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_timestamp_comparisons_agree_with_a_python_oracle[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_timestamp_comparisons_agree_with_a_python_oracle[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_timestamp_comparisons_agree_with_a_python_oracle[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_timestamp_comparisons_agree_with_a_python_oracle[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[mapped_kgl]": {
+    "owner": "storage-parity"
   }
 }

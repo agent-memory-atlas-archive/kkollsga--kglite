@@ -117,6 +117,10 @@ impl TypedColumn {
                 let (data, nulls) = gather_fixed(data, nulls, rows);
                 TypedColumn::Date { data, nulls }
             }
+            TypedColumn::Timestamp { data, nulls } => {
+                let (data, nulls) = gather_fixed(data, nulls, rows);
+                TypedColumn::Timestamp { data, nulls }
+            }
             TypedColumn::Str { .. } => {
                 let mut offsets = Vec::with_capacity(rows.len() + 1);
                 offsets.push(0u64);

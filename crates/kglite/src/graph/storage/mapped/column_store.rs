@@ -455,6 +455,14 @@ impl MmapColumnStore {
                 let date = UNIX_EPOCH_DATE + chrono::Duration::days(days as i64);
                 Value::DateTime(date)
             }
+            ColType::Timestamp => {
+                match crate::graph::storage::column_store::micros_to_timestamp(
+                    self.read_i64(&fc.data, row),
+                ) {
+                    Some(t) => Value::Timestamp(t),
+                    None => Value::Null,
+                }
+            }
             ColType::Str => unreachable!("string columns use ColRef::Str"),
         }
     }
@@ -555,6 +563,14 @@ impl MmapColumnStore {
                                 BorrowedValue::DateTime(
                                     UNIX_EPOCH_DATE + chrono::Duration::days(days as i64),
                                 )
+                            }
+                            ColType::Timestamp => {
+                                match crate::graph::storage::column_store::micros_to_timestamp(
+                                    self.read_i64(&fc.data, row),
+                                ) {
+                                    Some(t) => BorrowedValue::Timestamp(t),
+                                    None => continue,
+                                }
                             }
                             ColType::Str => unreachable!("string columns use ColRef::Str"),
                         };

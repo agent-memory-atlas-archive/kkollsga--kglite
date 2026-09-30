@@ -15,12 +15,16 @@ mod gather;
 #[cfg(test)]
 mod null_overlay_tests;
 mod overlay;
+mod timestamp_cells;
+#[cfg(test)]
+mod timestamp_column_tests;
 mod typed_column;
 pub(crate) use exact_values::ExactValueColumns;
 
 pub use typed_column::TypedColumn;
 #[cfg(test)]
 pub(crate) use typed_column::{column_clones, reset_column_clones};
+pub(crate) use typed_column::{exact_micros, micros_to_timestamp};
 use typed_column::{MMAP_THRESHOLD, NEXT_TEMP_COLUMN_FILE};
 
 use crate::datatypes::values::Value;
@@ -2012,6 +2016,12 @@ impl ColumnStore {
                     data_blob, rc, temp_dir, col_name, type_tag, "i32",
                 )?;
                 Ok(TypedColumn::Date { data, nulls })
+            }
+            "timestamp" => {
+                let (data, nulls) = Self::unpack_fixed_width::<i64>(
+                    data_blob, rc, temp_dir, col_name, type_tag, "ts",
+                )?;
+                Ok(TypedColumn::Timestamp { data, nulls })
             }
             "string" => Self::unpack_string_column(data_blob, rc, temp_dir, col_name),
             _ => Self::unpack_mixed_column(codec, data_blob, col_name),

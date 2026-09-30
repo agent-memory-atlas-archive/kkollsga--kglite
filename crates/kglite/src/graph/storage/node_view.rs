@@ -162,6 +162,15 @@ impl<'a> NodeView<'a> {
         }
     }
 
+    /// The raw microseconds of a present typed-timestamp property, read
+    /// without building a `Value`; `None` for anything else, which the
+    /// caller reads through [`Self::get_value`].
+    #[inline]
+    pub(crate) fn timestamp_micros(&self, key: InternedKey) -> Option<i64> {
+        let (store, row_id) = self.store?;
+        store.timestamp_micros(row_id, key)
+    }
+
     /// Read a property by name (excludes `id` / `title`).
     #[inline]
     pub fn get_property(&self, key: &str) -> Option<Cow<'a, Value>> {

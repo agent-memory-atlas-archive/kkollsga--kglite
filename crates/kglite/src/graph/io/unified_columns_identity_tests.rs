@@ -132,3 +132,74 @@ fn unsupported_identity_columns_require_lossless_sidecars() {
         assert!(!dir.path().join("seg_000/columns.bin").exists());
     }
 }
+
+/// A `Timestamp` column is typed, saves into both the packed sidecar and
+/// `columns.bin`, and reads back as the same `Value::Timestamp`; a value it
+/// cannot hold exactly is refused by the column, never truncated.
+#[test]
+fn timestamp_column_round_trips_through_packed_and_unified_layouts() {
+    use chrono::NaiveDate;
+    let mut interner = StringInterner::new();
+    let ts_key = interner.get_or_intern("rec_from");
+    let schema = Arc::new(TypeSchema::from_keys(vec![ts_key]));
+    let meta = HashMap::from([("rec_from".to_string(), "Timestamp".to_string())]);
+    let t1 = NaiveDate::from_ymd_opt(2009, 11, 6)
+        .unwrap()
+        .and_hms_micro_opt(12, 0, 0, 123_456)
+        .unwrap();
+    let t0 = NaiveDate::from_ymd_opt(1601, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let mut store = ColumnStore::new(schema.clone(), &meta, &interner);
+    for v in [Value::Timestamp(t1), Value::Null, Value::Timestamp(t0)] {
+        store.push_id(&Value::Int64(store.row_count() as i64));
+        store.push_title(&Value::String("row".into()));
+        store.push_row(&[(ts_key, v)]);
+    }
+    assert!(matches!(
+        store.column(0),
+        Some(TypedColumn::Timestamp { .. })
+    ));
+    assert_eq!(store.column_type_str(0), Some("timestamp"));
+
+    // packed sidecar codec
+    let packed = store.write_packed(&interner).unwrap();
+    let loaded =
+        ColumnStore::load_packed(schema.clone(), &meta, &interner, &packed, 3, None).unwrap();
+    assert!(matches!(
+        loaded.column(0),
+        Some(TypedColumn::Timestamp { .. })
+    ));
+    assert_eq!(loaded.get(0, ts_key), Some(Value::Timestamp(t1)));
+    assert_eq!(loaded.get(1, ts_key), None);
+    assert_eq!(loaded.get(2, ts_key), Some(Value::Timestamp(t0)));
+
+    // columns.bin (mmap) layout
+    let dir = tempfile::tempdir().unwrap();
+    let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
+    let result = write_unified_columns(dir.path(), &stores, &interner).unwrap();
+    assert!(
+        result.written.contains("T"),
+        "a Timestamp column must not force a sidecar"
+    );
+    let metas = crate::graph::io::columns_meta::read(&dir.path().join("seg_000/columns_meta.json"))
+        .unwrap();
+    let file = File::open(dir.path().join("seg_000/columns.bin")).unwrap();
+    // SAFETY: the test owns this immutable file.
+    let mmap = unsafe { MmapOptions::new().map_copy(&file).unwrap() };
+    let mapped = ColumnStore::from_mmap_store(Arc::new(metas[0].to_mmap_store(Arc::new(mmap))));
+    assert_eq!(mapped.get(0, ts_key), Some(Value::Timestamp(t1)));
+    assert_eq!(mapped.get(1, ts_key), None);
+    assert_eq!(mapped.get(2, ts_key), Some(Value::Timestamp(t0)));
+
+    // sub-microsecond precision and leap seconds are refused, not truncated
+    let mut col = TypedColumn::from_type_str("timestamp");
+    let ns = t1 + chrono::Duration::nanoseconds(1);
+    assert!(col.push(&Value::Timestamp(ns)).is_err());
+    let leap = chrono::NaiveDate::from_ymd_opt(2016, 12, 31)
+        .unwrap()
+        .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+        .unwrap();
+    assert!(col.push(&Value::Timestamp(leap)).is_err());
+}

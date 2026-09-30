@@ -2460,3 +2460,5 @@ mod disk_snapshot_tests;
 
 #[cfg(test)]
 mod edge_embedding_disk_tests;
+#[cfg(test)]
+mod timestamp_retype_disk_tests;

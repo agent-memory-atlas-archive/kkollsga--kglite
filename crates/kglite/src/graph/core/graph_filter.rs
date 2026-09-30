@@ -21,7 +21,7 @@ use crate::graph::dir_graph::DirGraph;
 use crate::graph::features::temporal::duplicate_ids;
 pub(crate) use crate::graph::features::temporal::endpoint_index::ResolvedFilter;
 use crate::graph::features::temporal::endpoint_index::{self, ElementMasks};
-use crate::graph::features::temporal::eval::{self, Instant, TemporalError};
+use crate::graph::features::temporal::eval::{self, Instant, MicrosProbe, TemporalError};
 use crate::graph::features::temporal::{self, DeclarationInfo, IntervalConvention, TemporalTarget};
 use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::{GraphRead, NodeView};
@@ -523,10 +523,10 @@ impl ElementFilter {
             if !carries {
                 continue;
             }
-            if let Some(valid) = view
-                .as_ref()
-                .and_then(|view| self.date_columns_admit(view, bounds))
-            {
+            if let Some(valid) = view.as_ref().and_then(|view| {
+                self.date_columns_admit(view, bounds)
+                    .or_else(|| self.timestamp_columns_admit(view, bounds))
+            }) {
                 if !valid {
                     return false;
                 }
@@ -592,6 +592,34 @@ impl ElementFilter {
             _ => true,
         };
         Some(non_empty && to.is_none_or(|to| admits(to, start)))
+    }
+
+    /// [`Self::date_columns_admit`] for two typed timestamp columns, read as
+    /// epoch microseconds. `None` when either bound is another column kind,
+    /// or the query instant is a timestamp the microsecond encoding cannot
+    /// hold exactly; those take the checked read.
+    #[inline]
+    fn timestamp_columns_admit(&self, view: &NodeView<'_>, bounds: &GuardBounds) -> Option<bool> {
+        if [bounds.from.as_str(), bounds.to.as_str()]
+            .iter()
+            .any(|field| matches!(*field, "id" | "title"))
+        {
+            return None;
+        }
+        let (store, row) = view.column_row()?;
+        let from = store.timestamp_cells(bounds.from_key)?;
+        let to = store.timestamp_cells(bounds.to_key)?;
+        let (start, end) = match self.selector {
+            ValidTimeSelector::AsOf(t) => (MicrosProbe::of(t)?, MicrosProbe::of(t)?),
+            ValidTimeSelector::Overlap(a, b) => (MicrosProbe::of(a)?, MicrosProbe::of(b)?),
+        };
+        Some(eval::micros_interval_overlaps(
+            from.micros(row),
+            to.micros(row),
+            start,
+            end,
+            bounds.convention,
+        ))
     }
 
     #[cold]
