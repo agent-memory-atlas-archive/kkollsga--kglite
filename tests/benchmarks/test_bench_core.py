@@ -315,6 +315,41 @@ def test_bench_add_connections(benchmark):
 
 
 @pytest.mark.benchmark
+def test_bench_delete_after_create(benchmark):
+    """DELETE of 1 000 nodes a statement created moments ago, in a 1 000 000-node type.
+
+    Each round first deletes 1 000 older nodes (freeing low slots) and creates 1 000
+    new ones, which reuse those slots and so land at the end of the type's index
+    out of order; the timed statement then deletes the new ones by id. Its cost
+    is about the 1 000 rows, not the 1 000 000 the type holds.
+    """
+    size, batch = 1_000_000, 1_000
+    graph = KnowledgeGraph()
+    graph.add_nodes(
+        pd.DataFrame({"nid": list(range(size)), "name": [f"Node_{i}" for i in range(size)]}),
+        "Item",
+        "nid",
+        "name",
+    )
+    state = {"older": 0, "fresh": size + 10}
+    delete = "UNWIND $rows AS c MATCH (n:Item {id: c.id}) DELETE n"
+
+    def setup():
+        older = [{"id": state["older"] + i} for i in range(batch)]
+        state["older"] += batch
+        graph.cypher(delete, params={"rows": older})
+        fresh = [{"id": state["fresh"] + i} for i in range(batch)]
+        state["fresh"] += batch + 5
+        graph.cypher("UNWIND $rows AS c CREATE (:Item {id: c.id, nid: c.id, name: 'new'})", params={"rows": fresh})
+        return (fresh,), {}
+
+    def delete_fresh(rows):
+        graph.cypher(delete, params={"rows": rows})
+
+    benchmark.pedantic(delete_fresh, setup=setup, rounds=100, warmup_rounds=20, iterations=1)
+
+
+@pytest.mark.benchmark
 def test_bench_cypher_match(benchmark, bench_graph):
     """Simple MATCH...RETURN query."""
     benchmark(bench_graph.cypher, "MATCH (n:Item) RETURN n.title, n.value LIMIT 100")

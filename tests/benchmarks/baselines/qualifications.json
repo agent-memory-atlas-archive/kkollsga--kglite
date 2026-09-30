@@ -132,6 +132,12 @@
       "sha256": "c91f79caff3a83176dc5463295afea0ca35a0be744220e3a2779fe059692b33c",
       "status": "accepted"
     },
+    "0_19_0_del_cell.json": {
+      "evidence": "0_19_0_ts_cells.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and the exact-set CI legs need every harness cell in the reference. 2026-09-30 on Mac16,10 (M4, 16 GiB), two agreeing release runs of the fixed build (min 0.663/0.649 ms) against 0.13.2 at 35.4/34.9 ms and 0.19.0 at 4.87/5.06 ms on the same interpreter, machine load 2.7-5.3 from external processes; every other row is byte-identical to 0_19_0_ts_cells.json.",
+      "platform": "Darwin/arm64",
+      "sha256": "0129c1f20543ec7719d4e267405cd92d756c054d72ed8ef348420b8aced4a4ae",
+      "status": "accepted"
+    },
     "0_19_0_ts_cells.json": {
       "evidence": "0_19_0.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0), and the exact-set CI legs need every harness cell in the reference. 2026-09-30 10:33-10:42 on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, under heavy external load (Blender render, load avg 4.8-12.8, no rustc running); two release runs of the new cells agree within 1.4% min (where_scan 1.749/1.751 ms, order_by_limit 2.101/2.073 ms, median/min 1.02-1.03) and the same-interpreter (Python 3.14, pandas 3.0.3) A/B against the published 0.13.2 wheel reads the candidate 53% faster (1.78 vs 3.78 ms) and 17% faster (2.07 vs 2.50 ms). Unchanged rows are byte-identical to accepted 0_19_0.json; controls in the same runs: cypher_match -10.8/-10.9%, save_kgl -11.7/-7.1%, untyped_edge_count_1m -3.3/-4.1% vs it (a uniform machine offset, not code). Statistic: min.",
       "platform": "Darwin/arm64",
@@ -139,15 +145,15 @@
       "status": "accepted"
     },
     "current.json": {
-      "evidence": "0_19_0.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0), and the exact-set CI legs need every harness cell in the reference. 2026-09-30 10:33-10:42 on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, under heavy external load (Blender render, load avg 4.8-12.8, no rustc running); two release runs of the new cells agree within 1.4% min (where_scan 1.749/1.751 ms, order_by_limit 2.101/2.073 ms, median/min 1.02-1.03) and the same-interpreter (Python 3.14, pandas 3.0.3) A/B against the published 0.13.2 wheel reads the candidate 53% faster (1.78 vs 3.78 ms) and 17% faster (2.07 vs 2.50 ms). Unchanged rows are byte-identical to accepted 0_19_0.json; controls in the same runs: cypher_match -10.8/-10.9%, save_kgl -11.7/-7.1%, untyped_edge_count_1m -3.3/-4.1% vs it (a uniform machine offset, not code). Statistic: min.",
+      "evidence": "0_19_0_ts_cells.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and the exact-set CI legs need every harness cell in the reference. 2026-09-30 on Mac16,10 (M4, 16 GiB), two agreeing release runs of the fixed build (min 0.663/0.649 ms) against 0.13.2 at 35.4/34.9 ms and 0.19.0 at 4.87/5.06 ms on the same interpreter, machine load 2.7-5.3 from external processes; every other row is byte-identical to 0_19_0_ts_cells.json.",
       "platform": "Darwin/arm64",
-      "sha256": "4ae58fb2d36253958c564d0f7197897f007b6f59db4f2a100beaf3039e006470",
+      "sha256": "0129c1f20543ec7719d4e267405cd92d756c054d72ed8ef348420b8aced4a4ae",
       "status": "accepted"
     },
     "current.linux.json": {
-      "evidence": "Verified released kglite==0.13.2 Linux/Python3.12 wheel and complete workload; provenance retained in kglite_baseline.",
+      "evidence": "reference_0_19_0_ts_cells_measured_7763.linux.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement: kglite 0.13.2 macOS slower-of-two min 35.36 ms x 3.9 = 137.9 ms, which only ever loosens the leg-2 gate for this one cell; it is replaced by a Linux measurement once a CI artifact carries the cell.",
       "platform": "Linux/x86_64",
-      "sha256": "fd0307b39bfbb4283285bcf6c89147a6bfbd9cbbf0b5e09c4820b7f6fafe3276",
+      "sha256": "5876a30901735a438b59050497b176fa41e96e589f966a7ae251f2c096092f01",
       "status": "accepted"
     },
     "reference_0_16_23.linux.json": {
@@ -160,6 +166,12 @@
       "evidence": "reference_0_16_23.linux.json plus one cell: the harness gained test_bench_hop1_deg3_memory mid-cycle (859d874d, deep-scan program) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement \u2014 kglite 0.13.2 run unmodified on macOS/M4 2026-09-08 (15.405 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the eleven existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",
       "platform": "Linux/x86_64",
       "sha256": "8b894493a8a352901e1dadbcf78ee9407b06b83b82b449d69fbd1e03935dfb43",
+      "status": "accepted"
+    },
+    "reference_0_19_0_del_cell.linux.json": {
+      "evidence": "reference_0_19_0_ts_cells_measured_7763.linux.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement: kglite 0.13.2 macOS slower-of-two min 35.36 ms x 3.9 = 137.9 ms, which only ever loosens the leg-2 gate for this one cell; it is replaced by a Linux measurement once a CI artifact carries the cell.",
+      "platform": "Linux/x86_64",
+      "sha256": "5876a30901735a438b59050497b176fa41e96e589f966a7ae251f2c096092f01",
       "status": "accepted"
     },
     "reference_0_19_0_ts_cells.linux.json": {
@@ -182,8 +194,8 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_0_ts_cells.json",
-    "Linux/x86_64": "reference_0_19_0_ts_cells_measured_7763.linux.json"
+    "Darwin/arm64": "0_19_0_del_cell.json",
+    "Linux/x86_64": "reference_0_19_0_del_cell.linux.json"
   },
   "schema_version": 1
 }

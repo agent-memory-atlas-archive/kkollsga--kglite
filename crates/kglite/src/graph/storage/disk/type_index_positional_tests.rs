@@ -85,18 +85,40 @@ fn removing_every_member_empties_the_bucket() {
     assert!(bucket(&store, "T").is_empty());
 }
 
-/// A misplaced member outside the last slot still uses the full retain.
+/// A misplaced member far from the newest entries still uses the full retain.
 #[test]
 fn an_out_of_order_interior_member_declines_the_positional_path() {
-    let mut store = seeded(&[1, 2, 3, 0, 4, 5, 6, 7]);
+    let mut members: Vec<usize> = (10..410).collect();
+    members.insert(150, 5);
+    let mut store = seeded(&members);
     assert!(bucket(&store, "T")
-        .binary_search(&NodeIndex::new(0))
+        .binary_search(&NodeIndex::new(5))
         .is_err());
-    assert!(store.positions_of("T", &[NodeIndex::new(0)]).is_none());
-    store.retain_in_type("T", |member| *member != NodeIndex::new(0));
+    assert!(store.positions_of("T", &[NodeIndex::new(5)]).is_none());
+    store.retain_in_type("T", |member| *member != NodeIndex::new(5));
     assert_eq!(
         bucket(&store, "T"),
-        (1..8).map(NodeIndex::new).collect::<Vec<_>>()
+        (10..410).map(NodeIndex::new).collect::<Vec<_>>()
+    );
+}
+
+/// Members created after slot reuse sit out of order among the newest entries;
+/// all of them are found without a pass over the bucket.
+#[test]
+fn a_run_of_reused_slots_at_the_end_resolves_every_member() {
+    let mut members: Vec<usize> = (1000..5000).collect();
+    members.extend(0..300);
+    let mut store = seeded(&members);
+    let doomed: Vec<NodeIndex> = (0..300).map(NodeIndex::new).collect();
+    let hits = store.positions_of("T", &doomed).expect("inside the window");
+    assert_eq!(hits.len(), 300);
+    assert!(hits
+        .iter()
+        .all(|(position, member)| { *position >= 4000 && *position == 4000 + member.index() }));
+    store.remove_positions("T", &hits);
+    assert_eq!(
+        bucket(&store, "T"),
+        (1000..5000).map(NodeIndex::new).collect::<Vec<_>>()
     );
 }
 

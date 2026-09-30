@@ -76,6 +76,18 @@ fn le_u32_binary_search(bytes: &[u8], wanted: u32) -> bool {
     false
 }
 
+// Test-only tally of whole-bucket retains: a delete that can locate its members
+// by position must not take one.
+#[cfg(test)]
+thread_local! {
+    static FULL_RETAINS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn full_retains() -> usize {
+    FULL_RETAINS.with(|count| count.get())
+}
+
 // Test-only tally of mapped buckets copied onto the heap. An append to a type
 // the file serves must never move it.
 #[cfg(test)]
@@ -771,11 +783,13 @@ impl TypeIndexStore {
 
     /// Locate `members` in `name`'s bucket, ascending by position.
     ///
-    /// Binary search handles sorted buckets. A reused low `NodeIndex` is
-    /// appended out of order, so a miss also checks the last slot: deleting a
-    /// just-created node can then avoid a full-bucket retain. Both searches
-    /// return only verified equal-member coordinates; other misses return
-    /// `None` for the caller's order-preserving retain fallback.
+    /// A bucket is ascending until a create reuses a slot a delete freed: that
+    /// member is appended with a low `NodeIndex`, out of order. So each member
+    /// is binary-searched (a hit is a verified equal member wherever the search
+    /// lands), and the ones the search misses are looked for in the newest
+    /// entries, which is where a recently created member sits. The window is
+    /// `2 * members + 64` entries, so the cost is O(k log N + k); a member
+    /// outside it returns `None` for the caller's order-preserving retain.
     ///
     /// Promotes the bucket into a flat, owned overlay entry (as the retain
     /// does), which is what makes the returned positions valid coordinates for
@@ -794,14 +808,26 @@ impl TypeIndexStore {
         }
         let bucket = self.entry_or_default(name.to_string());
         let mut hits: Vec<(usize, NodeIndex)> = Vec::with_capacity(members.len());
+        let mut missed: rustc_hash::FxHashSet<NodeIndex> = Default::default();
         for member in members {
-            let position = bucket.binary_search(member).ok().or_else(|| {
-                bucket
-                    .last()
-                    .filter(|last| *last == member)
-                    .map(|_| bucket.len() - 1)
-            })?;
-            hits.push((position, *member));
+            match bucket.binary_search(member) {
+                Ok(position) => hits.push((position, *member)),
+                Err(_) => {
+                    missed.insert(*member);
+                }
+            }
+        }
+        if !missed.is_empty() {
+            let newest = bucket.len().saturating_sub(members.len() * 2 + 64);
+            for (offset, member) in bucket[newest..].iter().enumerate() {
+                if missed.remove(member) {
+                    hits.push((newest + offset, *member));
+                }
+            }
+            // A member still missing, or requested twice, takes the retain.
+            if hits.len() != members.len() {
+                return None;
+            }
         }
         hits.sort_unstable();
         // Repeated requested coordinates cannot be removed twice. Preserve the
@@ -848,6 +874,8 @@ impl TypeIndexStore {
     /// Promote a single type into the overlay if needed, then run `predicate`
     /// on its Vec via `Vec::retain`. No-op if the type is absent.
     pub fn retain_in_type<F: FnMut(&NodeIndex) -> bool>(&mut self, name: &str, predicate: F) {
+        #[cfg(test)]
+        FULL_RETAINS.with(|count| count.set(count.get() + 1));
         if let Some(bucket) = self.overlay.get_mut(name) {
             bucket.to_mut().retain(predicate);
             return;

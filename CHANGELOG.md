@@ -199,6 +199,16 @@ before upgrading.
   `SET` adds an overlay column) indexed only the rows the `SET` had written and
   missed every other row of the type, for `create_index` and the global
   title/id index. It now reads each row through the store.
+- Deleting nodes that an earlier statement created moments ago (`UNWIND ... MATCH
+  ... DELETE` over rows a `CREATE` or `MERGE` just added) no longer scales with
+  the size of the node type, in any storage mode. A created node reuses the slot
+  a delete freed, so it sits out of order at the end of the type's index, and the
+  delete made a pass over the whole index when it could not find it by binary
+  search. It now looks for the node among the newest entries. Deleting 1 000
+  such nodes took 3.2 / 11 / 21 ms at 0.5 / 2 / 4 M nodes and takes 0.7 ms at
+  each; deleting older nodes was already about 1 ms. A disk type served from its
+  file copies its index bucket onto the heap once, at its first delete after a
+  load or save.
 
 ### Security
 

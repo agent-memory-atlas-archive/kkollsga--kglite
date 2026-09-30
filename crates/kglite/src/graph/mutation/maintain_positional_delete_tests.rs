@@ -228,3 +228,45 @@ fn a_multi_type_delete_edits_each_bucket_independently() {
     assert_eq!(bucket(&graph, "Item"), vec![item_survivor]);
     assert_eq!(bucket(&graph, "Tag"), vec![tag_survivor]);
 }
+
+/// Nodes created after a delete reuse its freed slots, so they sit out of order
+/// at the end of the bucket. Deleting them is still an in-place edit, never a
+/// pass over the bucket, and every survivor keeps its place.
+#[test]
+fn deleting_nodes_created_into_reused_slots_takes_no_full_retain() {
+    let mut graph = seeded(8_000);
+    let old: Vec<i64> = (0..150).collect();
+    delete(&mut graph, &old);
+    for id in 10_000..10_150 {
+        run(&mut graph, &format!("CREATE (:Item {{id: {id}, v: {id}}})"));
+    }
+    graph.build_id_index("Item");
+    let before = bucket(&graph, "Item");
+    let fresh: Vec<i64> = (10_000..10_150).collect();
+    let doomed: HashSet<NodeIndex> = fresh
+        .iter()
+        .map(|id| {
+            graph
+                .lookup_by_id_readonly("Item", &Value::Int64(*id))
+                .unwrap()
+        })
+        .collect();
+    assert!(
+        before.windows(2).any(|pair| pair[0] > pair[1]),
+        "the new members must be out of order for this to test anything"
+    );
+    let retains = crate::graph::storage::disk::type_index::full_retains();
+
+    assert_eq!(delete(&mut graph, &fresh), (150, 0));
+
+    assert_eq!(
+        crate::graph::storage::disk::type_index::full_retains(),
+        retains,
+        "the delete fell back to a pass over the whole bucket"
+    );
+    let expected: Vec<NodeIndex> = before
+        .into_iter()
+        .filter(|idx| !doomed.contains(idx))
+        .collect();
+    assert_eq!(bucket(&graph, "Item"), expected);
+}
