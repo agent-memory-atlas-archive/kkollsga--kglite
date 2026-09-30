@@ -123,6 +123,58 @@ impl MmapColumnStore {
     pub(crate) fn title_is_int(&self) -> bool {
         self.title.offsets.len == 0 && self.title.data.len != 0
     }
+
+    /// The column kind of `key` as a [`TypedColumn::type_tag`] string, or
+    /// `None` when the base has no column for it.
+    pub(crate) fn column_kind(&self, key: InternedKey) -> Option<&'static str> {
+        Some(match self.col_map.get(&key)? {
+            ColRef::Fixed(index) => self.fixed_cols[*index].col_type.type_tag(),
+            ColRef::Str(_) => "string",
+        })
+    }
+
+    /// The id column's kind as a [`TypedColumn::type_tag`] string.
+    pub(crate) fn id_kind(&self) -> &'static str {
+        if self.id_is_string {
+            "string"
+        } else if self
+            .id_fixed
+            .as_ref()
+            .is_some_and(|column| matches!(column.col_type, ColType::Int64))
+        {
+            "int64"
+        } else {
+            "uniqueid"
+        }
+    }
+
+    /// Whether the file holds an id column at all (a type built without ids
+    /// carries an empty region).
+    pub(crate) fn has_id_column(&self) -> bool {
+        if self.id_is_string {
+            self.id_str
+                .as_ref()
+                .is_some_and(|column| column.nulls.len != 0)
+        } else {
+            self.id_fixed
+                .as_ref()
+                .is_some_and(|column| column.data.len != 0)
+        }
+    }
+
+    /// Whether the file holds a title column.
+    pub(crate) fn has_title_column(&self) -> bool {
+        self.title.nulls.len != 0 || self.title.data.len != 0
+    }
+
+    /// The title column's kind as a [`TypedColumn::type_tag`] string.
+    pub(crate) fn title_kind(&self) -> &'static str {
+        if self.title_is_int() {
+            "int64"
+        } else {
+            "string"
+        }
+    }
 }
 
 // ─── Low-level mmap readers ──────────────────────────────────────────────────

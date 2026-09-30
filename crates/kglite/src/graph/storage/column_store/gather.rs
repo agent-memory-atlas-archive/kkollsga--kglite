@@ -43,6 +43,7 @@ impl ColumnStore {
             spill_token: next_spill_token(),
             spillable_growth: true,
             displaced: None,
+            tail: None,
         })
     }
 

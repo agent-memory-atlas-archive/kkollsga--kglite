@@ -23,6 +23,7 @@ impl ColumnStore {
         let Some(base) = self.mmap_store.as_ref() else {
             return layout;
         };
+        let tail_layout = self.tail.as_ref().map(|tail| tail.property_layout());
         let heap_len = layout.len();
         let mut keys: Vec<InternedKey> = base.col_map.keys().copied().collect();
         keys.sort_by_key(|key| key.as_u64());
@@ -33,6 +34,15 @@ impl ColumnStore {
             };
             match layout[..heap_len].iter_mut().find(|(k, _)| *k == key) {
                 Some((_, heap_kind)) if *heap_kind != kind => *heap_kind = "mixed",
+                Some(_) => {}
+                None => layout.push((key, kind)),
+            }
+        }
+        // Tail columns join the layout; a key both parts hold with different
+        // kinds is `mixed`, as for a heap column over the base.
+        for (key, kind) in tail_layout.into_iter().flatten() {
+            match layout.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, known)) if *known != kind => *known = "mixed",
                 Some(_) => {}
                 None => layout.push((key, kind)),
             }

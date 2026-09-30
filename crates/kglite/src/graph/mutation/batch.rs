@@ -195,7 +195,7 @@ impl BatchProcessor {
         // `dir_graph::node_write`), so there is one path.
         let mut deferred_columnar: DeferredColumnarRows = Vec::new();
         let mut owned_stores: OwnedColumnStores =
-            Self::detach_columnar_stores(&self.creates_interned, graph)?;
+            Self::detach_columnar_stores(&self.creates_interned, graph);
 
         // The store this chunk is currently appending to, held out of the map
         // for as long as consecutive rows share a type — which is every row of
@@ -339,49 +339,33 @@ impl BatchProcessor {
     fn detach_columnar_stores(
         creates: &[NodeCreationInterned],
         graph: &mut DirGraph,
-    ) -> Result<OwnedColumnStores, String> {
+    ) -> OwnedColumnStores {
         let mut owned_stores: OwnedColumnStores = HashMap::new();
         let affected_types: HashSet<String> = creates.iter().map(|c| c.node_type.clone()).collect();
         for node_type in &affected_types {
             let store_was_new = graph.column_store(node_type).is_none();
             // Nodes hold a row id and no store handle, so the backend map is
-            // the sole owner and `try_unwrap` succeeds outright. Existing row
-            // ids stay valid across `materialize_for_append`.
+            // the sole owner and `try_unwrap` succeeds outright.
             if let Some(arc_store) = graph.take_column_store(node_type) {
                 let mut store = Arc::try_unwrap(arc_store).unwrap_or_else(|a| (*a).clone());
-                let meta = graph
-                    .node_type_metadata
-                    .get(node_type)
-                    .cloned()
-                    .unwrap_or_default();
-                // On disk, a store that is a pure mmap base moves into
-                // workspace-file-backed columns instead of being flattened onto
-                // the heap. A failed move must not lose the store `take_column_store`
-                // just removed, so everything taken so far goes back first.
-                let spill_dir = graph
-                    .graph
-                    .as_disk()
-                    .and_then(|disk| disk.append_spill_dir());
-                if let Some(dir) = spill_dir {
-                    match store.mapped_owned_for_append(&dir) {
-                        Ok(Some(mapped)) => store = mapped,
-                        Ok(None) => {}
-                        Err(error) => {
-                            graph.install_column_store(node_type, Arc::new(store));
-                            for (taken_type, taken) in owned_stores {
-                                graph.install_column_store(&taken_type, Arc::new(taken));
-                            }
-                            return Err(format!(
-                                "could not move '{node_type}' into file-backed columns \
-                                 for the append: {error}"
-                            ));
-                        }
-                    }
+                // On disk, a store served from its column file takes the chunk
+                // in a tail of its own, typed like a fresh store; the base is
+                // not copied or written.
+                if store.has_mmap_base() {
+                    let schema = graph
+                        .type_schemas
+                        .get(node_type)
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(crate::graph::schema::TypeSchema::new()));
+                    let meta = graph
+                        .node_type_metadata
+                        .get(node_type)
+                        .cloned()
+                        .unwrap_or_default();
+                    store.prepare_append(schema, &meta, &graph.interner);
                 }
-                store.materialize_for_append(&meta, &graph.interner);
-                // After the materialization, never across it: it re-derives the
-                // store's columns, so a pre-image taken on the far side names a
-                // schema that no longer describes them.
+                // After the tail is prepared: the pre-image names the row count
+                // the append starts from.
                 Self::journal_append_pre_image(graph, node_type, &store, store_was_new);
                 owned_stores.insert(node_type.clone(), store);
             } else {
@@ -398,7 +382,7 @@ impl BatchProcessor {
                 );
             }
         }
-        Ok(owned_stores)
+        owned_stores
     }
 
     /// Journal the pre-image that reverses this chunk's appends to one type's

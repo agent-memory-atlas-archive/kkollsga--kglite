@@ -7,7 +7,6 @@ use crate::graph::io::columns_meta::{self, ColumnsMeta};
 use crate::graph::io::file::{load_file, save_graph};
 use crate::graph::mutation::maintain;
 use crate::graph::session::execute::{execute_mut, ExecuteOptions};
-use crate::graph::storage::column_store::TypedColumn;
 use crate::graph::storage::disk::type_index::TypeNodesRef;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -195,7 +194,7 @@ fn a_string_property_index_over_a_mapped_store_indexes_that_property() {
 }
 
 #[test]
-fn an_append_to_a_mapped_type_is_file_backed_and_survives_the_next_save() {
+fn an_append_to_a_mapped_type_lands_in_a_tail_and_survives_the_next_save() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap();
     let mut graph = saved_graph(path);
@@ -203,22 +202,29 @@ fn an_append_to_a_mapped_type_is_file_backed_and_survives_the_next_save() {
     add_employees(&mut graph, 50_000, 50_100);
     {
         let store = graph.column_store("Employee").unwrap();
-        assert!(!store.has_mmap_base(), "the appended store is owned");
         assert!(
-            store
-                .columns_ref()
-                .all(|c| !matches!(c, TypedColumn::Mixed { .. })),
-            "no Mixed column after the append"
+            store.has_mmap_base(),
+            "the base is still served from its file"
         );
-        // One-byte null columns sit under the mmap threshold at this size and
-        // stay on the heap; the 8-byte data arrays must not.
+        assert_eq!(store.tail_rows(), 100);
+        assert_eq!(store.row_count(), 50_100);
         assert!(
-            store.heap_bytes() <= 50_100 * 4,
-            "the appended store is file-backed, not a heap copy: {} heap bytes",
+            store.heap_bytes() < 50_000,
+            "the append costs the new rows, not the type: {} heap bytes",
             store.heap_bytes()
         );
+        assert_eq!(store.get_title(50_050), Some(Value::Int64(1_050_050)));
+        assert_eq!(store.get_title(3), Some(Value::Int64(1_000_003)));
     }
     graph.save_disk(path).unwrap();
+    {
+        let store = graph.column_store("Employee").unwrap();
+        assert!(
+            store.pure_mmap_store().is_some(),
+            "the save folds the tail into the published file the live store re-points at"
+        );
+        assert_eq!(store.row_count(), 50_100);
+    }
     drop(graph);
 
     let reloaded = load_owned(path);
@@ -227,50 +233,6 @@ fn an_append_to_a_mapped_type_is_file_backed_and_survives_the_next_save() {
     assert_eq!(store.row_count(), 50_100);
     assert_eq!(store.get_title(50_050), Some(Value::Int64(1_050_050)));
     assert_eq!(store.get_title(3), Some(Value::Int64(1_000_003)));
-}
-
-#[test]
-fn an_append_that_cannot_spill_returns_the_error_and_keeps_the_store() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().to_str().unwrap();
-    let mut graph = saved_graph(path);
-    // A file where the spill directory has to be: `create_dir_all` cannot mint it.
-    let spill = graph
-        .graph
-        .as_disk()
-        .and_then(|disk| disk.append_spill_dir());
-    assert!(spill.is_none(), "no workspace before the first mutation");
-    graph.prepare_mutation().unwrap();
-    let spill = graph
-        .graph
-        .as_disk()
-        .and_then(|disk| disk.append_spill_dir())
-        .expect("a workspace exists once a mutation has begun");
-    std::fs::create_dir_all(spill.parent().unwrap()).unwrap();
-    std::fs::write(&spill, b"in the way").unwrap();
-
-    let rows = (50_000..50_010)
-        .map(|i| vec![Value::Int64(i), Value::Int64(i), Value::Int64(i)])
-        .collect();
-    let frame =
-        DataFrame::from_cypher_rows(vec!["id".into(), "badge".into(), "grade".into()], rows)
-            .unwrap();
-    let error = maintain::add_nodes(
-        &mut graph,
-        frame,
-        "Employee".into(),
-        "id".into(),
-        Some("badge".into()),
-        None,
-    )
-    .expect_err("the spill failure must surface, not be swallowed");
-    assert!(error.contains("file-backed columns"), "{error}");
-
-    let store = graph
-        .column_store("Employee")
-        .expect("the store the failed append took out is back in the graph");
-    assert_eq!(store.row_count(), 50_000);
-    assert_eq!(store.get_title(7), Some(Value::Int64(1_000_007)));
 }
 
 #[test]
@@ -385,9 +347,9 @@ fn a_save_after_an_append_leaves_no_heap_type_index_and_a_failed_rebase_is_not_a
     assert!(
         matches!(
             graph.type_indices.get("Employee"),
-            Some(TypeNodesRef::Overlay(_))
+            Some(TypeNodesRef::MmapLayered { appended, .. }) if appended.iter().map(|l| l.len()).sum::<usize>() == 1_000
         ),
-        "an append grows the heap overlay"
+        "an append layers its members over the mapped payload"
     );
 
     let result = super::with_failing_stage("rebase_type_indices", || graph.save_disk(path));
@@ -395,16 +357,16 @@ fn a_save_after_an_append_leaves_no_heap_type_index_and_a_failed_rebase_is_not_a
     assert!(
         matches!(
             graph.type_indices.get("Employee"),
-            Some(TypeNodesRef::Overlay(_))
+            Some(TypeNodesRef::MmapLayered { .. })
         ),
-        "the failed rebase kept the overlay"
+        "the failed rebase kept the layered index"
     );
 
     add_employees(&mut graph, 51_000, 51_010);
     graph.save_disk(path).unwrap();
     match graph.type_indices.get("Employee") {
         Some(TypeNodesRef::Mmap(bytes)) => assert_eq!(bytes.len(), 51_010 * 4),
-        Some(_) => panic!("the type index still holds a heap copy after the save"),
+        Some(_) => panic!("the type index still holds appended members after the save"),
         None => panic!("the type index lost Employee"),
     }
     assert_eq!(

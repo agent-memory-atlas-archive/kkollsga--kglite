@@ -652,8 +652,8 @@ impl DirGraph {
 
     /// The column stores a save writes, by type name: the live stores, except
     /// that an mmap-backed store with local changes is flattened into an owned
-    /// typed store (one that is nothing but its base is left alone and re-emitted
-    /// from its mapping), and a heap store holding a `Mixed` column whose values
+    /// typed store (one that is nothing but its base, or that base plus a
+    /// same-kind tail, is left alone and re-emitted from its mapping), and a heap store holding a `Mixed` column whose values
     /// all have one kind is
     /// re-typed (a graph an earlier build saved through the all-`Mixed`
     /// sidecar writer heals on its next save). A column holding values of
@@ -673,8 +673,12 @@ impl DirGraph {
                 let empty = HashMap::new();
                 let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
                 // A store that is nothing but an mmap base re-emits its regions
-                // directly (`write_unified_columns`), so it is not flattened.
-                let flatten = (store.has_mmap_base() && store.pure_mmap_store().is_none())
+                // directly (`write_unified_columns`), so it is not flattened;
+                // neither is one that is that base plus a tail of the same
+                // column kinds, whose regions follow the base's.
+                let flatten = (store.has_mmap_base()
+                    && store.pure_mmap_store().is_none()
+                    && store.base_and_tail().is_none())
                     || store.has_retypable_mixed_column(meta);
                 let store = if flatten {
                     Arc::new(store.flattened_owned(meta, &self.interner))

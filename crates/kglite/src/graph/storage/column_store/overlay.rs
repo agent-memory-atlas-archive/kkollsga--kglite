@@ -37,6 +37,18 @@ impl FlattenKind {
     }
 }
 
+// Test-only tally of `flattened_owned` calls: a save that can write a store's
+// regions must not flatten it onto the heap.
+#[cfg(test)]
+thread_local! {
+    static FLATTENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn flattens() -> usize {
+    FLATTENS.with(|count| count.get())
+}
+
 impl ColumnStore {
     /// Whether a `Mixed` id, title or property column holds values that all
     /// have one kind, so [`Self::flattened_owned`] would type it. An all-null
@@ -77,11 +89,13 @@ impl ColumnStore {
         type_meta: &HashMap<String, String>,
         interner: &StringInterner,
     ) -> ColumnStore {
+        #[cfg(test)]
+        FLATTENS.with(|count| count.set(count.get() + 1));
         let mut id = FlattenKind::default();
         let mut title = FlattenKind::default();
         let mut columns: Vec<(InternedKey, FlattenKind)> = Vec::new();
         let mut slots: HashMap<InternedKey, usize> = HashMap::new();
-        for row_id in 0..self.row_count {
+        for row_id in 0..self.row_count() {
             id.note(&self.get_id(row_id).unwrap_or(Value::Null));
             title.note(&self.get_title(row_id).unwrap_or(Value::Null));
             for (key, value) in self.row_properties(row_id) {
@@ -112,17 +126,12 @@ impl ColumnStore {
         if let Some(kind) = title.column_type() {
             owned.title_column = Some(Arc::new(TypedColumn::from_type_str(kind)));
         }
-        for row_id in 0..self.row_count {
+        for row_id in 0..self.row_count() {
             owned.push_id(&self.get_id(row_id).unwrap_or(Value::Null));
             owned.push_title(&self.get_title(row_id).unwrap_or(Value::Null));
             let properties = self.row_properties(row_id);
             let new_row = owned.push_row(&properties);
-            if self
-                .tombstones
-                .get(row_id as usize)
-                .copied()
-                .unwrap_or(false)
-            {
+            if self.is_tombstoned(row_id) {
                 owned.tombstone(new_row);
             }
         }
@@ -280,10 +289,14 @@ impl ColumnStore {
         interner: &StringInterner,
         codec: crate::serde_codec::CodecVersion,
     ) -> io::Result<Vec<u8>> {
-        let rows = self.row_count;
+        let rows = self.row_count();
         let mut keys: Vec<_> = base.col_map.keys().copied().collect();
         let mut seen: HashSet<_> = keys.iter().copied().collect();
-        for (_, key) in self.schema.iter() {
+        for (_, key) in self
+            .schema
+            .iter()
+            .chain(self.tail.iter().flat_map(|tail| tail.schema.iter()))
+        {
             if seen.insert(key) {
                 keys.push(key);
             }
@@ -308,6 +321,20 @@ impl ColumnStore {
                 .get(&key)
                 .is_some_and(|&slot| columns[slot].is_present(row))
                 || self.is_null_override(row, key)
+        });
+        // Tail rows carry no overflow entry: repeat the last offset so the bag
+        // still names `rows + 1` offsets.
+        let overflow = overflow.map(|(offsets, data)| {
+            let missing = (rows as usize + 1).saturating_sub(offsets.len() / 8);
+            if missing == 0 || offsets.len() < 8 {
+                return (offsets, data);
+            }
+            let mut padded = offsets.into_owned();
+            let last: [u8; 8] = padded[padded.len() - 8..].try_into().expect("offset width");
+            for _ in 0..missing {
+                padded.extend_from_slice(&last);
+            }
+            (Cow::Owned(padded), data)
         });
         let mut buf = Vec::new();
         let count = columns.len() as u32 + 2 + if overflow.is_some() { 2 } else { 0 };

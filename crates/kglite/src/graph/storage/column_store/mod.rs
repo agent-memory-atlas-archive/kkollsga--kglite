@@ -15,7 +15,11 @@ mod gather;
 #[cfg(test)]
 mod null_overlay_tests;
 mod overlay;
+mod packed_write;
 mod property_layout;
+mod tail;
+#[cfg(test)]
+mod tail_tests;
 mod timestamp_cells;
 #[cfg(test)]
 mod timestamp_column_tests;
@@ -25,7 +29,8 @@ pub(crate) use exact_values::ExactValueColumns;
 
 pub use typed_column::TypedColumn;
 mod displaced;
-mod mapped_append;
+#[cfg(test)]
+pub(crate) use overlay::flattens;
 #[cfg(test)]
 pub(crate) use typed_column::{column_clones, reset_column_clones};
 pub(crate) use typed_column::{exact_micros, micros_to_timestamp};
@@ -133,6 +138,15 @@ pub struct ColumnStore {
     /// Columns a type change replaced while a statement's undo is recording.
     /// See [`displaced`].
     displaced: Option<Vec<DisplacedColumn>>,
+    /// Rows appended past an mmap base, served from their own owned store.
+    /// See [`tail`].
+    ///
+    /// Only ever present beside `mmap_store`. While it is, every field above
+    /// describes the **base part** — rows `0..row_count` — and the tail holds
+    /// rows `row_count..`, addressed `row - row_count` inside it. The public
+    /// accessors ([`Self::row_count`] and every per-row reader) answer for the
+    /// whole.
+    tail: Option<Arc<ColumnStore>>,
 }
 
 static NEXT_SPILL_TOKEN: AtomicU64 = AtomicU64::new(0);
@@ -220,6 +234,7 @@ impl Clone for ColumnStore {
             // exists.
             spillable_growth: true,
             displaced: None,
+            tail: self.tail.clone(),
         }
     }
 }
@@ -255,6 +270,7 @@ impl ColumnStore {
             spill_token: next_spill_token(),
             spillable_growth: true,
             displaced: None,
+            tail: None,
         }
     }
 
@@ -279,6 +295,7 @@ impl ColumnStore {
             spill_token: next_spill_token(),
             spillable_growth: true,
             displaced: None,
+            tail: None,
         }
     }
 
@@ -302,6 +319,7 @@ impl ColumnStore {
             spill_token: next_spill_token(),
             spillable_growth: true,
             displaced: None,
+            tail: None,
         }
     }
 
@@ -355,6 +373,10 @@ impl ColumnStore {
     /// hold; as an `Int64` column the same ids are 450 kB and spill.
     /// A heterogeneous id set still demotes to `Mixed` through the fallback.
     pub fn push_id(&mut self, value: &Value) {
+        if let Some(tail) = self.tail_for_append() {
+            tail.push_id(value);
+            return;
+        }
         self.spillable_growth = true;
         let col = TypedColumn::make_mut_for_append(
             self.id_column
@@ -378,6 +400,10 @@ impl ColumnStore {
     /// and eligible for a disk column file; a `Mixed` column is 32 and neither), `Str`
     /// otherwise. A later value of the other kind demotes the column to `Mixed`.
     pub fn push_title(&mut self, value: &Value) {
+        if let Some(tail) = self.tail_for_append() {
+            tail.push_title(value);
+            return;
+        }
         self.spillable_growth = true;
         let col = TypedColumn::make_mut_for_append(
             self.title_column.get_or_insert_with(|| {
@@ -406,6 +432,9 @@ impl ColumnStore {
 
     /// Overwrite the title value at `row_id`. Returns `true` on success.
     pub fn set_title(&mut self, row_id: u32, value: &Value) -> bool {
+        if let Some((tail, row)) = self.tail_for_mut(row_id) {
+            return tail.set_title(row, value);
+        }
         if (row_id as usize) >= self.row_count as usize {
             return false;
         }
@@ -445,6 +474,9 @@ impl ColumnStore {
 
     #[inline]
     pub fn get_id(&self, row_id: u32) -> Option<Value> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.get_id(row);
+        }
         if let Some(ref ms) = self.mmap_store {
             return ms.get_id(row_id);
         }
@@ -453,6 +485,9 @@ impl ColumnStore {
 
     #[inline]
     pub fn get_title(&self, row_id: u32) -> Option<Value> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.get_title(row);
+        }
         // Same overlay rule as `get`: in-memory `title_column`
         // (populated lazily by `set_title` on first override) always
         // wins over the mmap-backed read.
@@ -477,6 +512,9 @@ impl ColumnStore {
     /// written in this session has no mmap base yet).
     pub fn id_borrowed(&self, row_id: u32) -> Option<crate::datatypes::values::BorrowedValue<'_>> {
         use crate::datatypes::values::BorrowedValue;
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.id_borrowed(row);
+        }
         if let Some(ref ms) = self.mmap_store {
             return ms.id_borrowed(row_id);
         }
@@ -501,6 +539,9 @@ impl ColumnStore {
     /// Borrowed view of the title column. See [`Self::id_borrowed`].
     #[inline]
     pub fn title_borrowed(&self, row_id: u32) -> Option<&str> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.title_borrowed(row);
+        }
         if let Some(column) = self.title_column.as_ref() {
             return column
                 .get_str(row_id)
@@ -545,6 +586,9 @@ impl ColumnStore {
     where
         F: FnMut(InternedKey, crate::datatypes::values::BorrowedValue<'_>) -> Result<(), E>,
     {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.try_for_each_property_borrowed(row, f);
+        }
         if row_id >= self.row_count
             || self
                 .tombstones
@@ -576,17 +620,11 @@ impl ColumnStore {
     /// matching column file format on the dest side.
     pub fn id_type_str(&self) -> Option<&'static str> {
         if let Some(ref ms) = self.mmap_store {
-            return Some(if ms.id_is_string {
-                "string"
-            } else if ms.id_fixed.as_ref().is_some_and(|column| {
-                matches!(
-                    column.col_type,
-                    crate::graph::storage::type_build_meta::ColType::Int64
-                )
-            }) {
-                "int64"
-            } else {
-                "uniqueid"
+            let base = ms.id_kind();
+            // A tail whose ids are another kind makes the whole column mixed.
+            return Some(match self.tail.as_ref().and_then(|t| t.id_type_str()) {
+                Some(tail) if tail != base => "mixed",
+                _ => base,
             });
         }
         self.id_column.as_ref().map(|c| c.type_tag())
@@ -597,21 +635,25 @@ impl ColumnStore {
     /// the base's — `"int64"` for an integer title, `"string"` otherwise — or
     /// `None` if there is no title column.
     pub fn title_type_str(&self) -> Option<&'static str> {
-        if let Some(column) = self.title_column.as_ref() {
-            return Some(column.type_tag());
+        let base = match self.title_column.as_ref() {
+            Some(column) => Some(column.type_tag()),
+            None => self.mmap_store.as_ref().map(|ms| ms.title_kind()),
+        };
+        match (base, self.tail.as_ref().and_then(|t| t.title_type_str())) {
+            (Some(base), Some(tail)) if tail != base => Some("mixed"),
+            (base, _) => base,
         }
-        self.mmap_store
-            .as_ref()
-            .map(|ms| if ms.title_is_int() { "int64" } else { "string" })
     }
 
-    /// Number of rows (including tombstoned).
+    /// Number of rows (including tombstoned), the tail's among them.
     pub fn row_count(&self) -> u32 {
-        self.row_count
+        self.row_count + self.tail.as_ref().map_or(0, |tail| tail.row_count())
     }
 
-    /// Whether this store still reads through an mmap base. Rows may not be
-    /// appended while it does — see [`Self::materialize_for_append`].
+    /// Whether this store still reads through an mmap base. Every column-level
+    /// reader that walks the overlay columns directly must decline while it
+    /// does: they cover the base part's rows only, and appended rows live in
+    /// the tail (see [`tail`]).
     #[inline]
     pub(crate) fn has_mmap_base(&self) -> bool {
         self.mmap_store.is_some()
@@ -631,6 +673,7 @@ impl ColumnStore {
             && self.null_overrides.is_none()
             && self.overflow_offsets.is_none()
             && !self.tombstones.iter().any(|t| *t)
+            && !self.has_tail_rows()
             && self.row_count == ms.row_count();
         pure.then_some(ms)
     }
@@ -651,10 +694,10 @@ impl ColumnStore {
         self.overflow_offsets.is_some()
     }
 
-    /// Convert an mmap-backed store into a fully owned store before rows are
-    /// appended. Append overlays start at row zero, so keeping the mmap base
-    /// alongside them would misalign id/title/property columns and make a
-    /// subsequent packed save advertise more rows than it serialized.
+    /// Convert an mmap-backed store (tail and overlay included) into a fully
+    /// owned heap store, for the callers that write columns directly
+    /// ([`Self::prepare_exact_values`]). An ordinary append needs no such copy:
+    /// it goes to the tail.
     pub(crate) fn materialize_for_append(
         &mut self,
         type_meta: &HashMap<String, String>,
@@ -669,6 +712,7 @@ impl ColumnStore {
     #[allow(dead_code)] // Test-only.
     pub fn live_count(&self) -> u32 {
         self.row_count - self.tombstones.iter().filter(|&&t| t).count() as u32
+            + self.tail.as_ref().map_or(0, |tail| tail.live_count())
     }
 
     pub fn schema(&self) -> &Arc<TypeSchema> {
@@ -714,6 +758,10 @@ impl ColumnStore {
     /// papered over it by rebuilding the entire store whenever the type schema
     /// had grown, paying O(rows x cols) per new key to avoid a silent drop.
     pub fn push_row(&mut self, values: &[(InternedKey, Value)]) -> u32 {
+        if let Some(tail) = self.tail_for_append() {
+            let row = tail.push_row(values);
+            return self.row_count + row;
+        }
         self.spillable_growth = true;
         #[cfg(test)]
         COLUMN_STORE_ROW_PUSHES.set(COLUMN_STORE_ROW_PUSHES.get() + 1);
@@ -798,6 +846,9 @@ impl ColumnStore {
     /// (`n.vec[i]`), which would otherwise clone the entire list once per
     /// element access.
     pub fn get_cow(&self, row_id: u32, key: InternedKey) -> Option<std::borrow::Cow<'_, Value>> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.get_cow(row, key);
+        }
         if row_id >= self.row_count {
             return None;
         }
@@ -844,6 +895,9 @@ impl ColumnStore {
     ///
     /// Equality is [`str_values_equal`] — see `GraphRead::str_prop_eq`.
     pub fn str_prop_eq(&self, row_id: u32, key: InternedKey, target: &str) -> Option<bool> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.str_prop_eq(row, key, target);
+        }
         if row_id >= self.row_count
             || self
                 .tombstones
@@ -879,6 +933,9 @@ impl ColumnStore {
     ///
     /// Resolution mirrors `get`: local value, explicit clear, then immutable base.
     pub fn str_field(&self, row_id: u32, key: InternedKey) -> StrField<'_> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.str_field(row, key);
+        }
         if row_id >= self.row_count
             || self
                 .tombstones
@@ -914,6 +971,9 @@ impl ColumnStore {
     /// resolution without materialising the value — a presence probe used to
     /// clone a whole string out of the column to then throw it away.
     pub fn contains_value(&self, row_id: u32, key: InternedKey) -> bool {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.contains_value(row, key);
+        }
         if row_id >= self.row_count
             || self
                 .tombstones
@@ -942,6 +1002,9 @@ impl ColumnStore {
     /// Borrowed read of the reserved title column. Mirrors [`Self::get_title`].
     #[inline]
     pub fn title_field(&self, row_id: u32) -> StrField<'_> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.title_field(row);
+        }
         if let Some(ref col) = self.title_column {
             return col.str_field(row_id);
         }
@@ -954,6 +1017,9 @@ impl ColumnStore {
     /// Borrowed read of the reserved id column. Mirrors [`Self::get_id`].
     #[inline]
     pub fn id_field(&self, row_id: u32) -> StrField<'_> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.id_field(row);
+        }
         if let Some(ref ms) = self.mmap_store {
             return ms.id_field(row_id);
         }
@@ -1008,11 +1074,18 @@ impl ColumnStore {
     #[inline]
     #[allow(dead_code)] // Test-only.
     pub fn get_by_slot(&self, row_id: u32, slot: u16) -> Option<Value> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.get(row, self.base_key_at(slot)?);
+        }
         self.columns.get(slot as usize)?.get(row_id)
     }
 
     #[inline]
     pub fn get_str_by_slot(&self, row_id: u32, slot: u16) -> Option<&str> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            let tail_slot = tail.slot(self.base_key_at(slot)?)?;
+            return tail.get_str_by_slot(row, tail_slot);
+        }
         self.columns.get(slot as usize)?.get_str(row_id)
     }
 
@@ -1020,9 +1093,7 @@ impl ColumnStore {
     #[inline]
     #[allow(dead_code)] // Test-only.
     pub fn compare_str_by_slot(&self, row_id: u32, slot: u16, target: &str) -> bool {
-        self.columns
-            .get(slot as usize)
-            .and_then(|c| c.get_str(row_id))
+        self.get_str_by_slot(row_id, slot)
             .is_some_and(|s| s == target)
     }
 
@@ -1034,6 +1105,9 @@ impl ColumnStore {
         value: &Value,
         type_meta: Option<&str>,
     ) -> bool {
+        if let Some((tail, row)) = self.tail_for_mut(row_id) {
+            return tail.set(row, key, value, type_meta);
+        }
         if row_id >= self.row_count {
             return false;
         }
@@ -1070,7 +1144,15 @@ impl ColumnStore {
     /// this with `slot`, which is why nothing here grows the schema.
     pub fn set_at_slot(&mut self, row_id: u32, slot: u16, value: &Value) -> bool {
         if row_id >= self.row_count {
-            return false;
+            // A tail row: the slot names a column of the base part, so carry
+            // its key across to the tail's own schema.
+            let Some(key) = self.base_key_at(slot) else {
+                return false;
+            };
+            return match self.tail_for_mut(row_id) {
+                Some((tail, row)) => tail.set(row, key, value, None),
+                None => false,
+            };
         }
         let Some(handle) = self.columns.get_mut(slot as usize) else {
             return false;
@@ -1099,6 +1181,10 @@ impl ColumnStore {
     }
 
     pub fn tombstone(&mut self, row_id: u32) {
+        if let Some((tail, row)) = self.tail_for_mut(row_id) {
+            tail.tombstone(row);
+            return;
+        }
         if let Some(t) = self.tombstones.get_mut(row_id as usize) {
             *t = true;
         }
@@ -1109,6 +1195,10 @@ impl ColumnStore {
     /// values were never overwritten, only hidden, so clearing the flag is the
     /// whole restore.
     pub fn untombstone(&mut self, row_id: u32) {
+        if let Some((tail, row)) = self.tail_for_mut(row_id) {
+            tail.untombstone(row);
+            return;
+        }
         if let Some(t) = self.tombstones.get_mut(row_id as usize) {
             *t = false;
         }
@@ -1118,6 +1208,9 @@ impl ColumnStore {
     /// the `unwrap_or(false)` every reader here uses.
     #[inline]
     pub fn is_tombstoned(&self, row_id: u32) -> bool {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.is_tombstoned(row);
+        }
         self.tombstones
             .get(row_id as usize)
             .copied()
@@ -1135,16 +1228,25 @@ impl ColumnStore {
     /// after a rollback lands on the row the rolled-back one vacated instead of
     /// leaking a hole.
     ///
-    /// An mmap-backed store is never in a position to need this: a row cannot
-    /// be appended to one until `materialize_for_append` has made it owned.
+    /// On an mmap-backed store the appended rows are the tail's, so that is
+    /// what shrinks (and the tail goes once it is empty); its base rows were
+    /// never appended to and are never truncated.
     pub fn truncate_rows(&mut self, row_count: u32) {
+        if let Some(tail) = self.tail.as_mut() {
+            // Appended rows live in the tail; the base part is never truncated.
+            if let Some(keep) = row_count.checked_sub(self.row_count) {
+                Arc::make_mut(tail).truncate_rows(keep);
+                self.drop_empty_tail();
+                return;
+            }
+        }
         if row_count >= self.row_count {
             return;
         }
         debug_assert!(
             self.mmap_store.is_none(),
-            "an mmap-backed store cannot have been appended to, so it cannot \
-             need a row truncation"
+            "an mmap-backed store's base rows are never appended to, so they \
+             cannot need a row truncation"
         );
         let len = row_count as usize;
         for col in self.columns_mut() {
@@ -1214,6 +1316,14 @@ impl ColumnStore {
                 }
             }
         }
+        if let Some(tail) = self.tail.as_deref() {
+            let offset = self.row_count;
+            rows.extend(
+                tail.node_ref_candidate_rows(&mut hit as &mut dyn FnMut(&Value) -> bool)
+                    .into_iter()
+                    .map(|row| row + offset),
+            );
+        }
         rows
     }
 
@@ -1229,6 +1339,9 @@ impl ColumnStore {
     /// allocate and free one `Vec` per row — the consolidation rebuild behind
     /// `save`/`vacuum`/`unspill`, which does exactly that once per node.
     pub fn row_properties_into(&self, row_id: u32, result: &mut Vec<(InternedKey, Value)>) {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.row_properties_into(row, result);
+        }
         result.clear();
         if row_id >= self.row_count
             || self
@@ -1270,6 +1383,9 @@ impl ColumnStore {
     /// payload ends the row), and reproducing that from a key-only walk is how
     /// the two would silently drift.
     pub fn row_property_keys(&self, row_id: u32) -> Vec<InternedKey> {
+        if let Some((tail, row)) = self.tail_for(row_id) {
+            return tail.row_property_keys(row);
+        }
         if row_id >= self.row_count
             || self
                 .tombstones
@@ -1361,6 +1477,9 @@ impl ColumnStore {
     /// Files are named by slot ([`spill_stem`]), never by property name: a
     /// property called `../../x` must not choose where its file is written.
     pub fn materialize_to_files(&mut self, dir: &Path) -> io::Result<()> {
+        if let Some(tail) = self.tail.as_mut() {
+            Arc::make_mut(tail).materialize_to_files(dir)?;
+        }
         // One directory per *store instance*, not per type: two stores of the
         // same type can be live at once (a graph and a copy of it), and they
         // must not write each other's column files. See `spill_token`.
@@ -1422,6 +1541,11 @@ impl ColumnStore {
                 first_err.get_or_insert(e);
             }
         }
+        if let Some(tail) = self.tail.as_ref() {
+            if let Err(e) = tail.flush_and_release_pages() {
+                first_err.get_or_insert(e);
+            }
+        }
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
@@ -1445,6 +1569,7 @@ impl ColumnStore {
     /// Whether any column is file-backed.
     pub fn is_mapped(&self) -> bool {
         self.columns.iter().any(|c| c.is_mapped())
+            || self.tail.as_ref().is_some_and(|tail| tail.is_mapped())
     }
 
     /// Heap-resident bytes across all columns (0 if fully mmap'd).
@@ -1460,6 +1585,7 @@ impl ColumnStore {
             + overflow_bytes
             + self.tombstones.len()
             + self.null_override_heap_bytes()
+            + self.tail.as_ref().map_or(0, |tail| tail.heap_bytes())
     }
 
     /// The subset of [`Self::heap_bytes`] that [`Self::materialize_to_files`]
@@ -1490,7 +1616,13 @@ impl ColumnStore {
             .title_column
             .as_ref()
             .map_or(0, |c| c.spillable_heap_bytes());
-        col_bytes + id_bytes + title_bytes
+        col_bytes
+            + id_bytes
+            + title_bytes
+            + self
+                .tail
+                .as_ref()
+                .map_or(0, |tail| tail.spillable_heap_bytes())
     }
 
     /// Whether this store may have grown spillable heap since the last
@@ -1506,6 +1638,10 @@ impl ColumnStore {
     #[inline]
     pub fn may_have_grown_spillable_heap(&self) -> bool {
         self.spillable_growth
+            || self
+                .tail
+                .as_ref()
+                .is_some_and(|tail| tail.may_have_grown_spillable_heap())
     }
 
     pub fn columns_ref(&self) -> impl ExactSizeIterator<Item = &TypedColumn> {
@@ -1635,129 +1771,6 @@ impl ColumnStore {
             TypedColumn::Mixed { data } => Some(data),
             _ => None,
         }
-    }
-
-    /// Serialize all columns to a packed byte buffer for the v3 file format.
-    ///
-    /// Format per column:
-    ///   [2B] col_name_len  [NB] col_name_utf8
-    ///   [2B] type_tag_len  [NB] type_tag
-    ///   [8B] data_len      [NB] data_bytes (+ null_bytes for typed columns)
-    ///   For "string": data_bytes = offsets + str_data + null_bitmap
-    ///   For "mixed": data_bytes = the selected codec's Vec<Value>
-    ///   For "int64d" (`.kgl` v6 only): data_bytes = zigzag-varint deltas +
-    ///   null_bytes — see [`encode_int64_delta_if_smaller`].
-    ///
-    /// Emits fixed-width integer columns only. The `.kgl` v6 writer calls
-    /// [`Self::write_packed_with_codec`] with [`IntColumnEncoding::Auto`]
-    /// instead; every other consumer of this layout (the disk-graph column
-    /// sidecars) must keep the bytes a 0.15.14 reader understands.
-    pub fn write_packed(&self, interner: &StringInterner) -> io::Result<Vec<u8>> {
-        self.write_packed_with_codec(
-            interner,
-            crate::serde_codec::CURRENT_CODEC,
-            IntColumnEncoding::Raw,
-        )
-    }
-
-    pub(crate) fn write_packed_with_codec(
-        &self,
-        interner: &StringInterner,
-        codec: crate::serde_codec::CodecVersion,
-        int_encoding: IntColumnEncoding,
-    ) -> io::Result<Vec<u8>> {
-        if let Some(ref mmap_store) = self.mmap_store {
-            return self.write_packed_from_mmap(mmap_store, interner, codec);
-        }
-
-        let mut buf: Vec<u8> = Vec::new();
-        let overflow = self.effective_overflow_bytes();
-
-        // Write ALL schema columns (including empty ones) to preserve metadata round-trip.
-        // Empty columns are cheap — just type tag + zero-length data blob.
-        let extra = self.id_column.is_some() as u32
-            + self.title_column.is_some() as u32
-            + if overflow.is_some() { 2 } else { 0 };
-        let num_cols = self.columns.len() as u32 + extra;
-        buf.extend_from_slice(&num_cols.to_le_bytes());
-
-        for (slot, ik) in self.schema.iter() {
-            let col_name = interner.resolve(ik);
-            let col = &*self.columns[slot as usize];
-            if col.len() < self.row_count as usize {
-                // Schema growth and mmap-to-owned mutation can leave a typed
-                // column shorter than the store. Persist a dense, null-padded
-                // view; otherwise the framed row_count makes reload over-read
-                // the shorter blob and reject the newly published generation.
-                let mut padded = col.clone();
-                while padded.len() < self.row_count as usize {
-                    padded.push_null();
-                }
-                Self::write_packed_column(&mut buf, col_name, &padded, codec, int_encoding)?;
-            } else {
-                Self::write_packed_column(&mut buf, col_name, col, codec, int_encoding)?;
-            }
-        }
-
-        if let Some(col) = self.id_column.as_deref() {
-            let mut padded = col.clone();
-            while padded.len() < self.row_count as usize {
-                padded.push_null();
-            }
-            Self::write_packed_column(&mut buf, "__id__", &padded, codec, int_encoding)?;
-        }
-        if let Some(col) = self.title_column.as_deref() {
-            let mut padded = col.clone();
-            while padded.len() < self.row_count as usize {
-                padded.push_null();
-            }
-            Self::write_packed_column(&mut buf, "__title__", &padded, codec, int_encoding)?;
-        }
-
-        Self::write_overflow_columns(&mut buf, overflow.as_ref());
-
-        Ok(buf)
-    }
-
-    fn write_packed_column(
-        buf: &mut Vec<u8>,
-        col_name: &str,
-        col: &TypedColumn,
-        codec: crate::serde_codec::CodecVersion,
-        int_encoding: IntColumnEncoding,
-    ) -> io::Result<()> {
-        // A v6 writer may swap an `Int64` column's fixed-width array for the
-        // delta-varint form when that is smaller. The choice is recorded in the
-        // per-column type tag, so the reader needs no side channel and a column
-        // that declines the swap is byte-identical to what v5 wrote.
-        let delta_blob = match (int_encoding, col) {
-            (IntColumnEncoding::Auto, TypedColumn::Int64 { data, nulls }) => {
-                encode_int64_delta_if_smaller(data, nulls)
-            }
-            _ => None,
-        };
-        let type_tag = match delta_blob {
-            Some(_) => INT64_DELTA_TAG,
-            None => col.type_tag(),
-        };
-
-        let name_bytes = col_name.as_bytes();
-        buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
-        buf.extend_from_slice(name_bytes);
-
-        let tag_bytes = type_tag.as_bytes();
-        buf.extend_from_slice(&(tag_bytes.len() as u16).to_le_bytes());
-        buf.extend_from_slice(tag_bytes);
-
-        let len_offset = buf.len();
-        buf.extend_from_slice(&0u64.to_le_bytes());
-        match delta_blob {
-            Some(blob) => buf.extend_from_slice(&blob),
-            None => col.write_to_with_codec(buf, codec)?,
-        }
-        let data_len = (buf.len() - len_offset - 8) as u64;
-        buf[len_offset..len_offset + 8].copy_from_slice(&data_len.to_le_bytes());
-        Ok(())
     }
 
     /// Load columns from the portable packed byte representation.

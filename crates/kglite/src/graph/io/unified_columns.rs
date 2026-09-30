@@ -54,6 +54,23 @@ pub struct WriteResult {
     pub unhandled: HashSet<String>,
 }
 
+/// A run of one region's bytes: borrowed or owned data, or `len` copies of
+/// one byte, which is how a column one part of a store lacks is written
+/// without building it.
+enum Part<'a> {
+    Bytes(Cow<'a, [u8]>),
+    Fill(u8, usize),
+}
+
+impl Part<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Part::Bytes(bytes) => bytes.len(),
+            Part::Fill(_, len) => *len,
+        }
+    }
+}
+
 /// The bytes of one type's file, planned but not yet written.
 struct PlannedType<'a> {
     type_name: String,
@@ -61,7 +78,7 @@ struct PlannedType<'a> {
     /// Path relative to `seg_000/`, recorded in the sidecar.
     file: String,
     /// `(offset, bytes)` in ascending, gap-free offset order.
-    sources: Vec<(usize, Cow<'a, [u8]>)>,
+    sources: Vec<(usize, Part<'a>)>,
     /// Bytes the regions cover; a file with none is padded to one byte.
     len: usize,
 }
@@ -70,19 +87,26 @@ struct PlannedType<'a> {
 #[derive(Default)]
 struct RegionPlanner<'a> {
     cursor: usize,
-    sources: Vec<(usize, Cow<'a, [u8]>)>,
+    sources: Vec<(usize, Part<'a>)>,
 }
 
 impl<'a> RegionPlanner<'a> {
     fn push(&mut self, bytes: impl Into<Cow<'a, [u8]>>) -> RegionMeta {
-        let bytes = bytes.into();
-        let region = RegionMeta {
-            offset: self.cursor,
-            len: bytes.len(),
-        };
-        self.cursor += bytes.len();
-        self.sources.push((region.offset, bytes));
-        region
+        self.push_parts([Part::Bytes(bytes.into())])
+    }
+
+    /// One region made of consecutive parts.
+    fn push_parts(&mut self, parts: impl IntoIterator<Item = Part<'a>>) -> RegionMeta {
+        let offset = self.cursor;
+        for part in parts {
+            let start = self.cursor;
+            self.cursor += part.len();
+            self.sources.push((start, part));
+        }
+        RegionMeta {
+            offset,
+            len: self.cursor - offset,
+        }
     }
 
     /// A region that is not present.
@@ -166,6 +190,10 @@ fn plan_type<'s>(type_name: &str, store: &'s ColumnStore) -> Option<PlannedType<
     // no flatten onto the heap, no per-row decode.
     if let Some(ms) = store.pure_mmap_store() {
         return Some(plan_mmap_store(type_name, ms));
+    }
+    // The base's regions followed by the tail's, in one file.
+    if let Some((ms, tail)) = store.base_and_tail() {
+        return tail_plan::plan_base_and_tail(type_name, ms, tail);
     }
     if store_needs_sidecar(store) {
         return None;
@@ -396,10 +424,21 @@ fn write_type_file(seg0: &Path, plan: &PlannedType<'_>) -> io::Result<()> {
         .open(&path)?;
     let mut out = BufWriter::with_capacity(1 << 20, file);
     let mut position = 0usize;
-    for (offset, bytes) in &plan.sources {
+    for (offset, part) in &plan.sources {
         debug_assert_eq!(*offset, position, "regions are planned gap-free");
-        out.write_all(bytes)?;
-        position += bytes.len();
+        match part {
+            Part::Bytes(bytes) => out.write_all(bytes)?,
+            Part::Fill(byte, len) => {
+                let block = [*byte; 1 << 16];
+                let mut left = *len;
+                while left > 0 {
+                    let step = left.min(block.len());
+                    out.write_all(&block[..step])?;
+                    left -= step;
+                }
+            }
+        }
+        position += part.len();
     }
     debug_assert_eq!(position, plan.len);
     if position == 0 {
@@ -604,6 +643,9 @@ fn extract_title_column(store: &ColumnStore) -> PackedStr<'_> {
         _ => (empty(), empty(), empty()),
     }
 }
+
+#[path = "unified_columns_tail.rs"]
+mod tail_plan;
 
 #[cfg(test)]
 #[path = "unified_columns_identity_tests.rs"]

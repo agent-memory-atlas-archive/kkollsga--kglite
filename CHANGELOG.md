@@ -184,6 +184,21 @@ before upgrading.
   stays compact. A float id that is not a whole number (`2.5`, `inf`, or beyond
   the 64-bit range) now raises `ArgumentError` naming the column, row and value
   instead of being skipped.
+- Appending rows to a node type a reopened disk graph serves from its column
+  file (`add_nodes`, `CREATE`, `MERGE`) now costs the new rows, not the type.
+  The new rows go into a tail store beside the mapped file, the type's index
+  bucket and id index are layered over their files, and a save writes the file's
+  regions and the tail's into the next generation; the file is never copied or
+  written. A 1 000-row append to the 24.7 M-version national register took
+  27.4 s and left 185 MB on the heap; it now takes 0.02 s and leaves 0.7 MB, and
+  at 2 M and 8 M versions stays at 11 and 26 ms (a once-per-session lock and
+  workspace cost) against 0.62 and 2.4 s. A failed statement that started the
+  tail leaves the type as a pure file-backed store again. The writer's workspace
+  no longer holds a per-type `append_columns` copy.
+- A property index built on a disk graph after a `SET` on a reopened type (the
+  `SET` adds an overlay column) indexed only the rows the `SET` had written and
+  missed every other row of the type, for `create_index` and the global
+  title/id index. It now reads each row through the store.
 
 ### Security
 

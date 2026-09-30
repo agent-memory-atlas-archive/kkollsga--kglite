@@ -76,6 +76,18 @@ fn le_u32_binary_search(bytes: &[u8], wanted: u32) -> bool {
     false
 }
 
+// Test-only tally of mapped buckets copied onto the heap. An append to a type
+// the file serves must never move it.
+#[cfg(test)]
+thread_local! {
+    static BUCKETS_MATERIALIZED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn buckets_materialized() -> usize {
+    BUCKETS_MATERIALIZED.with(|count| count.get())
+}
+
 /// Mmap-backed read-only view of `type_indices.bin`.
 #[derive(Debug)]
 pub struct TypeIndexBase {
@@ -221,6 +233,8 @@ impl TypeIndexBase {
     /// promote it into the overlay (first mutation, or a full materialization).
     pub fn materialize(&self, name: &str) -> Option<Vec<NodeIndex>> {
         let slice = self.slice_for(name)?;
+        #[cfg(test)]
+        BUCKETS_MATERIALIZED.with(|count| count.set(count.get() + 1));
         Some(
             le_u32_iter(slice)
                 .map(|u| NodeIndex::new(u as usize))
@@ -240,6 +254,12 @@ pub enum TypeNodesRef<'a> {
     Overlay(&'a [NodeIndex]),
     Mmap(&'a [u8]),
     Layered(&'a [Arc<Vec<NodeIndex>>]),
+    /// The mmap payload followed by members appended since it was loaded
+    /// ([`TypeIndexStore::push_to_type`] on a base-served type), in order.
+    MmapLayered {
+        base: &'a [u8],
+        appended: &'a [Arc<Vec<NodeIndex>>],
+    },
 }
 
 impl<'a> TypeNodesRef<'a> {
@@ -248,6 +268,9 @@ impl<'a> TypeNodesRef<'a> {
             TypeNodesRef::Overlay(s) => s.len(),
             TypeNodesRef::Mmap(s) => s.len() / 4,
             TypeNodesRef::Layered(levels) => levels.iter().map(|level| level.len()).sum(),
+            TypeNodesRef::MmapLayered { base, appended } => {
+                base.len() / 4 + appended.iter().map(|level| level.len()).sum::<usize>()
+            }
         }
     }
 
@@ -264,6 +287,14 @@ impl<'a> TypeNodesRef<'a> {
                 level: 0,
                 pos: 0,
             },
+            TypeNodesRef::MmapLayered { base, appended } => {
+                TypeNodesIter::MmapLayered(Box::new(MmapLayeredIter {
+                    base: base.as_chunks::<4>().0.iter(),
+                    levels: appended,
+                    level: 0,
+                    pos: 0,
+                }))
+            }
         }
     }
 
@@ -274,6 +305,14 @@ impl<'a> TypeNodesRef<'a> {
             TypeNodesRef::Layered(levels) => {
                 let mut out = Vec::with_capacity(self.len());
                 for level in levels.iter() {
+                    out.extend_from_slice(level);
+                }
+                out
+            }
+            TypeNodesRef::MmapLayered { base, appended } => {
+                let mut out = Vec::with_capacity(self.len());
+                out.extend(le_u32_iter(base).map(|u| NodeIndex::new(u as usize)));
+                for level in appended.iter() {
                     out.extend_from_slice(level);
                 }
                 out
@@ -295,6 +334,20 @@ impl<'a> TypeNodesRef<'a> {
                 }
                 None
             }
+            TypeNodesRef::MmapLayered { base, appended } => {
+                let base_len = base.len() / 4;
+                if i < base_len {
+                    return read_le_u32(base, i).map(|u| NodeIndex::new(u as usize));
+                }
+                let mut i = i - base_len;
+                for level in appended.iter() {
+                    if i < level.len() {
+                        return Some(level[i]);
+                    }
+                    i -= level.len();
+                }
+                None
+            }
         }
     }
 
@@ -307,6 +360,10 @@ impl<'a> TypeNodesRef<'a> {
             TypeNodesRef::Overlay(s) => s.contains(idx),
             TypeNodesRef::Mmap(s) => le_u32_iter(s).any(|u| u as usize == idx.index()),
             TypeNodesRef::Layered(levels) => levels.iter().any(|level| level.contains(idx)),
+            TypeNodesRef::MmapLayered { base, appended } => {
+                le_u32_iter(base).any(|u| u as usize == idx.index())
+                    || appended.iter().any(|level| level.contains(idx))
+            }
         }
     }
 
@@ -355,6 +412,14 @@ impl<'a> TypeNodesRef<'a> {
             TypeNodesRef::Layered(levels) => {
                 levels.iter().any(|level| level.binary_search(&idx).is_ok())
             }
+            // The mapped payload is sorted; each appended level is a
+            // contiguous run of the whole, as for `Layered`.
+            TypeNodesRef::MmapLayered { base, appended } => {
+                le_u32_binary_search(base, idx.index() as u32)
+                    || appended
+                        .iter()
+                        .any(|level| level.binary_search(&idx).is_ok())
+            }
         }
     }
 }
@@ -375,6 +440,48 @@ pub enum TypeNodesIter<'a> {
         level: u32,
         pos: u32,
     },
+    /// The mapped payload, then the appended levels. Boxed so this rarely
+    /// reached arm does not widen the enum the label scan iterates.
+    MmapLayered(Box<MmapLayeredIter<'a>>),
+}
+
+pub struct MmapLayeredIter<'a> {
+    base: std::slice::Iter<'a, [u8; 4]>,
+    levels: &'a [Arc<Vec<NodeIndex>>],
+    level: u32,
+    pos: u32,
+}
+
+impl Iterator for MmapLayeredIter<'_> {
+    type Item = NodeIndex;
+    #[inline]
+    fn next(&mut self) -> Option<NodeIndex> {
+        if let Some(bytes) = self.base.next() {
+            return Some(NodeIndex::new(u32::from_le_bytes(*bytes) as usize));
+        }
+        while (self.level as usize) < self.levels.len() {
+            if let Some(idx) = self.levels[self.level as usize].get(self.pos as usize) {
+                self.pos += 1;
+                return Some(*idx);
+            }
+            self.level += 1;
+            self.pos = 0;
+        }
+        None
+    }
+}
+
+impl MmapLayeredIter<'_> {
+    fn remaining(&self) -> usize {
+        self.base.len()
+            + self
+                .levels
+                .iter()
+                .skip(self.level as usize)
+                .map(|entries| entries.len())
+                .sum::<usize>()
+                .saturating_sub(self.pos as usize)
+    }
 }
 
 impl<'a> Iterator for TypeNodesIter<'a> {
@@ -397,6 +504,7 @@ impl<'a> Iterator for TypeNodesIter<'a> {
                 }
                 None
             }
+            TypeNodesIter::MmapLayered(it) => it.next(),
         }
     }
 
@@ -417,6 +525,7 @@ impl ExactSizeIterator for TypeNodesIter<'_> {
                 .map(|entries| entries.len())
                 .sum::<usize>()
                 .saturating_sub(*pos as usize),
+            TypeNodesIter::MmapLayered(it) => it.remaining(),
         }
     }
 }
@@ -430,6 +539,12 @@ impl ExactSizeIterator for TypeNodesIter<'_> {
 #[derive(Default, Clone)]
 pub struct TypeIndexStore {
     overlay: HashMap<String, TypeBucket>,
+    /// Members appended to a type the base serves, in append order: the type's
+    /// members are the mapped payload followed by these. Keeps a `CREATE` on a
+    /// reopened graph from copying the payload into `overlay`. A type leaves
+    /// `deltas` (folded into `overlay`) the first time anything but an append
+    /// needs it as one `Vec`.
+    deltas: HashMap<String, TypeBucket>,
     /// Types that exist in `base` but were removed/invalidated post-load.
     removed: std::collections::HashSet<String>,
     base: Option<Arc<TypeIndexBase>>,
@@ -443,6 +558,7 @@ impl TypeIndexStore {
     pub fn from_base(base: TypeIndexBase) -> Self {
         Self {
             overlay: HashMap::new(),
+            deltas: HashMap::new(),
             removed: std::collections::HashSet::new(),
             base: Some(Arc::new(base)),
         }
@@ -456,7 +572,7 @@ impl TypeIndexStore {
     /// view, write again" returns to the flat representation on the next write. Per
     /// bucket this is an `Arc::get_mut` probe plus an O(delta) merge.
     pub fn try_compact(&mut self) {
-        for bucket in self.overlay.values_mut() {
+        for bucket in self.overlay.values_mut().chain(self.deltas.values_mut()) {
             bucket.try_compact();
         }
     }
@@ -473,6 +589,14 @@ impl TypeIndexStore {
             bucket.push(idx);
             return;
         }
+        if let Some(bucket) = self.deltas.get_mut(name) {
+            bucket.push(idx);
+            return;
+        }
+        if !self.removed.contains(name) && self.base.as_ref().is_some_and(|b| b.contains(name)) {
+            self.deltas.entry(name.to_string()).or_default().push(idx);
+            return;
+        }
         self.entry_or_default(name.to_string()).push(idx);
     }
 
@@ -485,6 +609,14 @@ impl TypeIndexStore {
     pub fn undo_append(&mut self, name: &str, idx: NodeIndex) {
         if let Some(bucket) = self.overlay.get_mut(name) {
             if bucket.undo_append(idx) {
+                return;
+            }
+        }
+        if let Some(bucket) = self.deltas.get_mut(name) {
+            if bucket.undo_append(idx) {
+                if bucket.levels().iter().all(|level| level.is_empty()) {
+                    self.deltas.remove(name);
+                }
                 return;
             }
         }
@@ -513,7 +645,14 @@ impl TypeIndexStore {
             return None;
         }
         let base = self.base.as_deref()?;
-        base.slice_for(name).map(TypeNodesRef::Mmap)
+        let payload = base.slice_for(name)?;
+        Some(match self.deltas.get(name) {
+            Some(delta) => TypeNodesRef::MmapLayered {
+                base: payload,
+                appended: delta.levels(),
+            },
+            None => TypeNodesRef::Mmap(payload),
+        })
     }
 
     pub fn remove(&mut self, name: &str) -> Option<Vec<NodeIndex>> {
@@ -521,6 +660,7 @@ impl TypeIndexStore {
             .overlay
             .remove(name)
             .map(|mut bucket| std::mem::take(bucket.to_mut()));
+        self.deltas.remove(name);
         if self.base.as_ref().is_some_and(|b| b.contains(name)) {
             self.removed.insert(name.to_string());
         }
@@ -529,6 +669,7 @@ impl TypeIndexStore {
 
     pub fn clear(&mut self) {
         self.overlay.clear();
+        self.deltas.clear();
         if let Some(base) = &self.base {
             self.removed.extend(base.dir.keys().cloned());
         }
@@ -593,8 +734,17 @@ impl TypeIndexStore {
                     !self.overlay.contains_key(k.as_str()) && !self.removed.contains(k.as_str())
                 })
                 .filter_map(|(k, _)| {
-                    base.slice_for(k.as_str())
-                        .map(|s| (k.as_str(), TypeNodesRef::Mmap(s)))
+                    let payload = base.slice_for(k.as_str())?;
+                    Some((
+                        k.as_str(),
+                        match self.deltas.get(k.as_str()) {
+                            Some(delta) => TypeNodesRef::MmapLayered {
+                                base: payload,
+                                appended: delta.levels(),
+                            },
+                            None => TypeNodesRef::Mmap(payload),
+                        },
+                    ))
                 })
                 .collect(),
             None => Vec::new(),
@@ -611,10 +761,8 @@ impl TypeIndexStore {
     /// stays O(1) while shared.
     pub fn entry_or_default(&mut self, name: String) -> &mut Vec<NodeIndex> {
         if !self.overlay.contains_key(&name) && !self.removed.contains(&name) {
-            if let Some(base) = self.base.as_deref() {
-                if let Some(v) = base.materialize(&name) {
-                    self.overlay.insert(name.clone(), TypeBucket::from(v));
-                }
+            if let Some(v) = self.materialize_base(&name) {
+                self.overlay.insert(name.clone(), TypeBucket::from(v));
             }
         }
         self.removed.remove(&name);
@@ -707,12 +855,22 @@ impl TypeIndexStore {
         if self.removed.contains(name) {
             return;
         }
-        if let Some(base) = self.base.as_deref() {
-            if let Some(mut v) = base.materialize(name) {
-                v.retain(predicate);
-                self.overlay.insert(name.to_string(), TypeBucket::from(v));
+        if let Some(mut v) = self.materialize_base(name) {
+            v.retain(predicate);
+            self.overlay.insert(name.to_string(), TypeBucket::from(v));
+        }
+    }
+
+    /// `name`'s members as one owned `Vec` — the mapped payload followed by
+    /// what was appended to it — consuming the appended part.
+    fn materialize_base(&mut self, name: &str) -> Option<Vec<NodeIndex>> {
+        let mut members = self.base.as_deref()?.materialize(name)?;
+        if let Some(delta) = self.deltas.remove(name) {
+            for level in delta.levels() {
+                members.extend_from_slice(level);
             }
         }
+        Some(members)
     }
 
     /// Run `predicate.retain(...)` across every live Vec. Materializes every
@@ -723,11 +881,12 @@ impl TypeIndexStore {
                 if !self.overlay.contains_key(name.as_str())
                     && !self.removed.contains(name.as_str())
                 {
-                    if let Some(v) = base.materialize(name) {
+                    if let Some(v) = self.materialize_base(name) {
                         self.overlay.insert(name.clone(), TypeBucket::from(v));
                     }
                 }
             }
+            self.deltas.clear();
             // After full materialization, drop the base reference so subsequent
             // reads come exclusively from the overlay.
             self.base = None;
@@ -743,6 +902,7 @@ impl TypeIndexStore {
             .into_iter()
             .map(|(name, members)| (name, TypeBucket::from(members)))
             .collect();
+        self.deltas.clear();
         self.removed.clear();
         self.base = None;
     }
@@ -800,6 +960,8 @@ pub fn write_type_indices_bin(
         Slice(&'a [u8]),
         Vec(&'a [NodeIndex]),
         Levels(&'a [Arc<Vec<NodeIndex>>]),
+        /// The mapped payload, then the members appended to it.
+        Appended(&'a [u8], &'a [Arc<Vec<NodeIndex>>]),
         /// A payload the loop below had to reorder. Owned, because the
         /// borrowed forms are the graph's live buckets and a save must not
         /// mutate them.
@@ -811,6 +973,9 @@ pub fn write_type_indices_bin(
                 Source::Slice(s) => s.len() / 4,
                 Source::Vec(s) => s.len(),
                 Source::Levels(levels) => levels.iter().map(|level| level.len()).sum(),
+                Source::Appended(base, levels) => {
+                    base.len() / 4 + levels.iter().map(|level| level.len()).sum::<usize>()
+                }
                 Source::Sorted(members) => members.len(),
             }
         }
@@ -824,6 +989,14 @@ pub fn write_type_indices_bin(
                         .flat_map(|level| level.iter())
                         .map(|n| n.index() as u32),
                 ),
+                Source::Appended(base, levels) => strictly_increasing(
+                    le_u32_iter(base).chain(
+                        levels
+                            .iter()
+                            .flat_map(|level| level.iter())
+                            .map(|n| n.index() as u32),
+                    ),
+                ),
                 Source::Sorted(members) => strictly_increasing(members.iter().copied()),
             }
         }
@@ -835,6 +1008,14 @@ pub fn write_type_indices_bin(
                     .iter()
                     .flat_map(|level| level.iter())
                     .map(|n| n.index() as u32)
+                    .collect(),
+                Source::Appended(base, levels) => le_u32_iter(base)
+                    .chain(
+                        levels
+                            .iter()
+                            .flat_map(|level| level.iter())
+                            .map(|n| n.index() as u32),
+                    )
                     .collect(),
                 Source::Sorted(members) => members.clone(),
             }
@@ -848,6 +1029,14 @@ pub fn write_type_indices_bin(
                     }
                 }
                 Source::Levels(levels) => {
+                    for level in levels.iter() {
+                        for n in level.iter() {
+                            out.extend_from_slice(&(n.index() as u32).to_le_bytes());
+                        }
+                    }
+                }
+                Source::Appended(base, levels) => {
+                    out.extend_from_slice(base);
                     for level in levels.iter() {
                         for n in level.iter() {
                             out.extend_from_slice(&(n.index() as u32).to_le_bytes());
@@ -869,6 +1058,7 @@ pub fn write_type_indices_bin(
             TypeNodesRef::Overlay(s) => Source::Vec(s),
             TypeNodesRef::Mmap(s) => Source::Slice(s),
             TypeNodesRef::Layered(levels) => Source::Levels(levels),
+            TypeNodesRef::MmapLayered { base, appended } => Source::Appended(base, appended),
         };
         let Some(key) = interner.try_resolve_to_key(name) else {
             if src.len() == 0 {

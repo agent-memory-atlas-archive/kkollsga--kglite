@@ -1831,26 +1831,26 @@ impl DirGraph {
             self.install_column_store(node_type, Arc::new(store));
         }
 
-        // An mmap-backed store must become owned before a row is appended.
-        // `push_id`/`push_title` create their overlay columns at row zero, so
-        // alongside a live mmap base every appended id/title lands `row_count`
-        // rows too early — the overlay then shadows the mapped originals on
-        // every read, and a save serializes a title column shorter than the
-        // rows it advertises. O(rows) once per store: afterwards there is no
-        // mmap base to check.
+        // A row appended to an mmap-backed store goes into the store's tail,
+        // typed from the type's registered schema and declared property types
+        // like a fresh store; the base is neither copied nor written. O(1).
         if self
             .column_store(node_type)
             .is_some_and(|store| store.has_mmap_base())
         {
+            let schema = self
+                .type_schemas
+                .get(node_type)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(TypeSchema::new()));
             let meta = self
                 .node_type_metadata
                 .get(node_type)
                 .cloned()
                 .unwrap_or_default();
-            if let Some(arc) = self.take_column_store(node_type) {
-                let mut store = Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone());
-                store.materialize_for_append(&meta, &self.interner);
-                self.install_column_store(node_type, Arc::new(store));
+            let interner = self.interner.clone();
+            if let Some(store) = self.column_store_mut(node_type) {
+                Arc::make_mut(store).prepare_append(schema, &meta, &interner);
             }
         }
 
@@ -2468,6 +2468,8 @@ mod disk_column_files_tests;
 mod disk_hostile_names_tests;
 #[cfg(test)]
 mod disk_id_index_tests;
+#[cfg(test)]
+mod disk_tail_tests;
 #[cfg(test)]
 mod edge_embedding_disk_tests;
 #[cfg(test)]

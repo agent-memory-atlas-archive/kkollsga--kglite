@@ -75,7 +75,13 @@ impl DiskGraph {
         //      path used by the pattern matcher — slower but correct for
         //      exotic cases (non-columnar properties, map storage).
         let col_store = self.column_stores.get(&type_key);
-        let schema_slot = col_store.and_then(|cs| cs.schema().slot(prop_key));
+        // An mmap-backed store keeps only its local overlay in `schema()` (a
+        // SET adds a column, an appended row lands in the tail), so a slot read
+        // would miss every row the overlay does not cover: those stores take
+        // the keyed read below.
+        let schema_slot = col_store
+            .filter(|cs| !cs.has_mmap_base())
+            .and_then(|cs| cs.schema().slot(prop_key));
         // Heuristic: "title" or "id" literals, and anything stored outside
         // the regular schema, goes through the NodeData materialisation
         // path so title/id aliases and mapped-mode stores resolve
@@ -306,7 +312,13 @@ impl DiskGraph {
             let cached = type_cache.entry(nslot.node_type).or_insert_with(|| {
                 let tk = InternedKey::from_u64(nslot.node_type);
                 self.column_stores.get(&tk).cloned().map(|cs| {
-                    let slot = cs.schema().slot(prop_key);
+                    // As in `build_property_index`: an mmap-backed store's
+                    // schema names its overlay only, so it has no slot here.
+                    let slot = if cs.has_mmap_base() {
+                        None
+                    } else {
+                        cs.schema().slot(prop_key)
+                    };
                     (cs, slot)
                 })
             });
