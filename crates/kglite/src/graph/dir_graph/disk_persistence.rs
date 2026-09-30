@@ -680,33 +680,11 @@ impl DirGraph {
     fn types_in_columns_bin(
         dir: &std::path::Path,
     ) -> Result<std::collections::HashSet<String>, String> {
-        let columns_meta_path = [
-            "seg_000/columns_meta.bin.zst",
-            "seg_000/columns_meta.json",
-            "columns_meta.bin.zst",
-            "columns_meta.json",
-        ]
-        .into_iter()
-        .map(|name| dir.join(name))
-        .find(|path| path.exists());
-        let Some(meta_path) = columns_meta_path else {
+        let Some(meta_path) = crate::graph::io::columns_meta::locate(dir) else {
             return Ok(std::collections::HashSet::new());
         };
-        use crate::graph::io::ntriples::ColumnTypeMeta;
-        let metas: Vec<ColumnTypeMeta> = if meta_path.extension().and_then(|s| s.to_str())
-            == Some("zst")
-        {
-            let compressed = std::fs::read(&meta_path)
-                .map_err(|e| format!("read {}: {}", meta_path.display(), e))?;
-            let bytes = zstd::decode_all(compressed.as_slice())
-                .map_err(|e| format!("decompress columns_meta: {}", e))?;
-            crate::graph::io::file::decode_disk_serde(&bytes, bytes.capacity() as u64)
-                .map_err(|e| format!("parse columns_meta.bin: {}", e))?
-        } else {
-            let json = std::fs::read_to_string(&meta_path)
-                .map_err(|e| format!("read {}: {}", meta_path.display(), e))?;
-            serde_json::from_str(&json).map_err(|e| format!("parse columns_meta.json: {}", e))?
-        };
+        let metas = crate::graph::io::columns_meta::read(&meta_path)
+            .map_err(|e| format!("read {}: {}", meta_path.display(), e))?;
         Ok(metas.into_iter().map(|tm| tm.type_name).collect())
     }
 

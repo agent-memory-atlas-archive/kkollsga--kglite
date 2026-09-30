@@ -144,10 +144,10 @@ parsing.
 
 ## Persistence
 
-`.kgl` snapshots use the current RGF v6 container:
+`.kgl` snapshots use the current RGF v7 container:
 
 ```text
-magic RGF\x06
+magic RGF\x07
 codec tag (Postcard)
 core-data version (u32 LE)
 JSON metadata length + metadata
@@ -159,7 +159,7 @@ optional rebuildable index sections: node and relationship HNSW, BM25 text
 ```
 
 Container, codec, and core-data versions are separate. The current reader
-accepts RGF v6 and RGF v5. RGF v4/bincode and older containers are detected
+accepts RGF v7, v6 and v5. RGF v4/bincode and older containers are detected
 and refused with a 0.13.4 conversion or rebuild message. Within v5, metadata
 additions use serde defaults where compatible, while incompatible embedded
 cache layouts are detected explicitly. Index definitions are stored so
@@ -169,6 +169,13 @@ Disk mode uses a different lifecycle: writers build a staged generation,
 write completion metadata, rename it into `generations/`, then atomically
 replace `CURRENT`. A failed or incomplete stage is never selected by a new
 reader. Existing readers keep their old immutable generation alive.
+
+A directory carries its own layout revision: `disk_graph_meta.json` holds a
+`disk_format` number, `columns_meta.json` is an envelope
+(`{"format": 2, "types": [...]}`), and `id_indices.bin` has a version. This
+build reads directories written before the revision existed and refuses one
+newer than it knows, naming both numbers; kglite 0.19.0 and earlier cannot read
+a directory this build saves.
 
 ## Code-graph ingestion
 

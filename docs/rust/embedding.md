@@ -232,8 +232,8 @@ other:
   → Python loads via `kglite.load("graph.kgl")`
 - Future Go binding writes → TypeScript binding reads, etc.
 
-The current writer emits RGF v6 with an explicit Postcard codec tag. The
-reader accepts v5/Postcard and rejects v4/bincode and older containers with a
+The current writer emits RGF v7 with an explicit Postcard codec tag. The
+reader accepts v6 and v5/Postcard and rejects v4/bincode and older containers with a
 migration/rebuild message. Format drift is tracked via
 `tests/test_phase4_parity.py::GOLDEN_V3_DIGEST` etc. (see CLAUDE.md →
 "Captured-constant refresh at release time").

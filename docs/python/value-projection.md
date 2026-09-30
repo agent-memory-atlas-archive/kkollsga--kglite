@@ -31,8 +31,8 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | **`List(Vec<Value>)`** | ordered heterogeneous list | LIST (sized) |
 | **`Map(BTreeMap<String, Value>)`** | string-keyed map (deterministic order) | MAP (sized) |
 
-Persistence uses the explicitly versioned RGF v6/Postcard container. The
-current reader accepts v6 and v5; it rejects v4/bincode and older containers
+Persistence uses the explicitly versioned RGF v7/Postcard container. The
+current reader accepts v7, v6 and v5; it rejects v4/bincode and older containers
 with a clear migration/rebuild error.
 
 Timestamp JSON, query CSV, SQL export, and semantic string conversion preserve
@@ -240,10 +240,10 @@ row. Accessors convert those values to Python objects when returning data.
 
 ## In `.kgl` files
 
-The current `.kgl` format is an RGF v6 binary container:
+The current `.kgl` format is an RGF v7 binary container:
 
 ```
-[0..4]    Magic: b"RGF\x06"
+[0..4]    Magic: b"RGF\x07"
 [4]       codec tag: 2 (Postcard)
 [5..9]    core_data_version: u32 LE (currently 3)
 [9..13]   metadata_length: u32 LE
@@ -263,7 +263,7 @@ intentionally stable for the first 10 variants (UniqueId=0 .. Duration=9;
 Null=7, NodeRef=8)
 so future enum changes append at the end (Timestamp is discriminant 15).
 The container and codec tags make compatibility explicit: the current reader
-selects v6 or v5/Postcard by header and refuses v4/bincode or older containers rather
+selects v7, v6 or v5/Postcard by header and refuses v4/bincode or older containers rather
 than guessing. Kglite 0.13.4 is the conversion bridge for pre-0.14 artifacts.
 
 The `tests/test_phase4_parity.py::test_kgl_v3_golden_hash` byte-level

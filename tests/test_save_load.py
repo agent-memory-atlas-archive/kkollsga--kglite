@@ -124,7 +124,7 @@ class TestV3Format:
             graph.save(path)
             with open(path, "rb") as f:
                 header = f.read(5)
-            assert header == b"RGF\x06\x02", f"Expected v6/Postcard header, got {header!r}"
+            assert header == b"RGF\x07\x02", f"Expected v7/Postcard header, got {header!r}"
         finally:
             os.unlink(path)
 
@@ -146,7 +146,7 @@ class TestV3Format:
                 core_version = struct.unpack("<I", f.read(4))[0]
                 metadata_len = struct.unpack("<I", f.read(4))[0]
 
-            assert magic == b"RGF\x06"
+            assert magic == b"RGF\x07"
             assert codec == b"\x02"
             # 2 — Value enum; 3 — 0.10.29 (embedding model_id + text_hashes)
             assert core_version == 3

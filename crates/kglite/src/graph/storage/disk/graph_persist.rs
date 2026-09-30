@@ -68,7 +68,19 @@ struct DiskGraphMeta {
     /// `load_from_dir` bumps those to `node_count` on load.
     #[serde(default)]
     sealed_nodes_bound: u32,
+    /// The on-disk layout revision of the directory as a whole. Absent (0) in
+    /// everything written by 0.19.0 and earlier; a reader refuses a value above
+    /// [`CURRENT_DISK_FORMAT`] by name before it maps anything. Readers that
+    /// predate the field ignore it, which is why format 2 also changes the
+    /// shape of `columns_meta.json` — that is what stops them (see
+    /// `io::columns_meta`).
+    #[serde(default)]
+    disk_format: u8,
 }
+
+/// The directory layout this build writes and the newest it reads. 2 = the
+/// `columns_meta` envelope and `id_indices.bin` version 3.
+pub(crate) const CURRENT_DISK_FORMAT: u8 = 2;
 
 fn default_has_tombstones() -> bool {
     true
@@ -77,6 +89,16 @@ fn default_has_tombstones() -> bool {
 const MAX_DISK_CODEC_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 fn validate_disk_format(meta: &DiskGraphMeta) -> std::io::Result<crate::serde_codec::CodecVersion> {
+    if meta.disk_format > CURRENT_DISK_FORMAT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "disk graph uses on-disk format {}, but this library only supports up to \
+                 format {CURRENT_DISK_FORMAT}. Please upgrade kglite.",
+                meta.disk_format
+            ),
+        ));
+    }
     if meta.serde_codec_version != crate::serde_codec::CURRENT_CODEC.tag()
         || meta.edge_properties_format < 2
     {
@@ -391,6 +413,7 @@ impl DiskGraph {
             // Persist the watermark so reloads know which nodes already
             // live in sealed segments vs which are tail.
             sealed_nodes_bound: self.sealed_nodes_bound,
+            disk_format: CURRENT_DISK_FORMAT,
         };
         let json = serde_json::to_string_pretty(&meta).map_err(std::io::Error::other)?;
         std::fs::write(dir.join("disk_graph_meta.json"), json)
@@ -1665,5 +1688,51 @@ fn load_csr_for_layout(
             peer_count_entries: load_raw_or_zst_optional(&dir.join("peer_count_entries")),
         };
         Ok((dir.to_path_buf(), csr))
+    }
+}
+
+#[cfg(test)]
+mod disk_format_tests {
+    use super::*;
+
+    /// The metadata a 0.19.0 writer produced has no `disk_format` at all.
+    fn meta_with(extra: &str) -> DiskGraphMeta {
+        let json = format!(
+            r#"{{"serde_codec_version":2,"node_count":0,"node_slots_len":0,"edge_count":0,
+            "next_edge_idx":0,"out_offsets_len":0,"out_edges_len":0,"in_offsets_len":0,
+            "in_edges_len":0,"edge_endpoints_len":0,"free_node_slots":[],"free_edge_slots":[],
+            "edge_properties_format":2{extra}}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn a_directory_without_the_field_is_readable() {
+        let meta = meta_with("");
+        assert_eq!(meta.disk_format, 0);
+        validate_disk_format(&meta).unwrap();
+    }
+
+    #[test]
+    fn the_current_format_is_readable() {
+        let meta = meta_with(&format!(r#","disk_format":{CURRENT_DISK_FORMAT}"#));
+        validate_disk_format(&meta).unwrap();
+    }
+
+    #[test]
+    fn a_newer_format_is_refused_by_name_before_anything_else_is_checked() {
+        // A format-3 directory may also change the codec or the edge-property
+        // framing; the format check must be the one that speaks.
+        let mut meta = meta_with(&format!(r#","disk_format":{}"#, CURRENT_DISK_FORMAT + 1));
+        meta.serde_codec_version = 9;
+        let error = validate_disk_format(&meta).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let message = error.to_string();
+        assert!(
+            message.contains("on-disk format 3")
+                && message.contains("up to format 2")
+                && message.contains("Please upgrade kglite"),
+            "{message}"
+        );
     }
 }

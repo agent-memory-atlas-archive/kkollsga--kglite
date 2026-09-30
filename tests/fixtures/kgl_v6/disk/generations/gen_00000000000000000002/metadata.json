@@ -1,0 +1,39 @@
+{
+  "core_data_version": 3,
+  "library_version": "0.19.0",
+  "schema_definition": null,
+  "property_index_keys": [],
+  "composite_index_keys": [],
+  "range_index_keys": [],
+  "node_type_metadata": {},
+  "connection_type_metadata": {},
+  "id_field_aliases": {},
+  "title_field_aliases": {
+    "Pand": "ident",
+    "Unit": "name"
+  },
+  "auto_vacuum_threshold": 0.3,
+  "storage_mode": "disk",
+  "parent_types": {},
+  "spatial_configs": {},
+  "timeseries_configs": {},
+  "temporal_node_configs": {},
+  "temporal_edge_configs": {},
+  "temporal_declarations": [
+    {
+      "kind": "node",
+      "name": "Pand",
+      "from": "vf",
+      "to": "vt",
+      "convention": "half_open",
+      "abutting_rows": 3
+    }
+  ],
+  "timeseries_data_version": 2,
+  "topology_compressed_size": 0,
+  "column_sections": [],
+  "embeddings_compressed_size": 0,
+  "timeseries_compressed_size": 0,
+  "secondary_labels_compressed_size": 0,
+  "vector_index_compressed_size": 0
+}

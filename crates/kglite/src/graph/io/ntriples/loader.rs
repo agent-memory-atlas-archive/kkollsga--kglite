@@ -20,7 +20,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::column_builder::ColumnTypeMeta;
 use super::parser::{
     extract_lang_text, language_matches, parse_line, parse_qcode_number, typed_literal_to_value,
     CompactNTripleEdge, EdgeBuffer, EntityAccumulator, Object, Predicate, Subject,
@@ -311,10 +310,8 @@ fn finalize_disk_graph(
         if mmap_path.exists() && meta_path.exists() {
             let reload_start = Instant::now();
             let reload_result: Result<(), String> = (|| {
-                let meta_json = std::fs::read_to_string(&meta_path)
+                let columns_meta = crate::graph::io::columns_meta::read(&meta_path)
                     .map_err(|e| format!("read columns_meta.json: {}", e))?;
-                let columns_meta: Vec<ColumnTypeMeta> = serde_json::from_str(&meta_json)
-                    .map_err(|e| format!("parse columns_meta.json: {}", e))?;
 
                 let file = std::fs::OpenOptions::new()
                     .read(true)

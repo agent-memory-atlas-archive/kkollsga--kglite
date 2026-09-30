@@ -1,0 +1,180 @@
+[
+  {
+    "type_name": "Tag",
+    "row_count": 2,
+    "id_is_string": true,
+    "id_data": {
+      "offset": 0,
+      "len": 0
+    },
+    "id_nulls": {
+      "offset": 29,
+      "len": 2
+    },
+    "id_str_data": {
+      "offset": 0,
+      "len": 13
+    },
+    "id_str_offsets": {
+      "offset": 13,
+      "len": 16
+    },
+    "title_data": {
+      "offset": 31,
+      "len": 9
+    },
+    "title_offsets": {
+      "offset": 40,
+      "len": 16
+    },
+    "title_nulls": {
+      "offset": 56,
+      "len": 2
+    },
+    "col_map": [
+      {
+        "key_u64": 7571106081475641113,
+        "col_type_str": "float64",
+        "idx": 0
+      }
+    ],
+    "fixed_cols": [
+      {
+        "col_type_str": "float64",
+        "data": {
+          "offset": 58,
+          "len": 16
+        },
+        "nulls": {
+          "offset": 74,
+          "len": 2
+        }
+      }
+    ],
+    "str_cols": [],
+    "overflow_offsets": {
+      "offset": 0,
+      "len": 0
+    },
+    "overflow_data": {
+      "offset": 0,
+      "len": 0
+    },
+    "has_overflow": false
+  },
+  {
+    "type_name": "Unit",
+    "row_count": 4,
+    "id_is_string": false,
+    "id_data": {
+      "offset": 76,
+      "len": 32
+    },
+    "id_nulls": {
+      "offset": 108,
+      "len": 4
+    },
+    "id_str_data": {
+      "offset": 0,
+      "len": 0
+    },
+    "id_str_offsets": {
+      "offset": 0,
+      "len": 0
+    },
+    "title_data": {
+      "offset": 112,
+      "len": 24
+    },
+    "title_offsets": {
+      "offset": 136,
+      "len": 32
+    },
+    "title_nulls": {
+      "offset": 168,
+      "len": 4
+    },
+    "col_map": [
+      {
+        "key_u64": 9894459526856489156,
+        "col_type_str": "float64",
+        "idx": 0
+      },
+      {
+        "key_u64": 11545668865037648829,
+        "col_type_str": "int64",
+        "idx": 1
+      },
+      {
+        "key_u64": 5499651717430306356,
+        "col_type_str": "string",
+        "idx": 0
+      },
+      {
+        "key_u64": 7313978883058895983,
+        "col_type_str": "bool",
+        "idx": 2
+      }
+    ],
+    "fixed_cols": [
+      {
+        "col_type_str": "float64",
+        "data": {
+          "offset": 172,
+          "len": 32
+        },
+        "nulls": {
+          "offset": 204,
+          "len": 4
+        }
+      },
+      {
+        "col_type_str": "int64",
+        "data": {
+          "offset": 208,
+          "len": 32
+        },
+        "nulls": {
+          "offset": 240,
+          "len": 4
+        }
+      },
+      {
+        "col_type_str": "bool",
+        "data": {
+          "offset": 315,
+          "len": 4
+        },
+        "nulls": {
+          "offset": 319,
+          "len": 4
+        }
+      }
+    ],
+    "str_cols": [
+      {
+        "data": {
+          "offset": 244,
+          "len": 35
+        },
+        "offsets": {
+          "offset": 279,
+          "len": 32
+        },
+        "nulls": {
+          "offset": 311,
+          "len": 4
+        }
+      }
+    ],
+    "overflow_offsets": {
+      "offset": 0,
+      "len": 0
+    },
+    "overflow_data": {
+      "offset": 0,
+      "len": 0
+    },
+    "has_overflow": false
+  }
+]

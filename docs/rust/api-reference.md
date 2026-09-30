@@ -191,7 +191,7 @@ is internal and may move freely in any release.
 | Internal rearrangement (non-api items) | Patch |
 
 The `.kgl` format is versioned separately from the source API. The current
-writer emits RGF v6/Postcard and the reader accepts v6 and v5. RGF
+writer emits RGF v7/Postcard and the reader accepts v7, v6 and v5. RGF
 v4/bincode and older containers are
 rejected with a clear migration/rebuild path. Convert pre-0.14 artifacts with
 kglite 0.13.4 before handing them to a current binding.

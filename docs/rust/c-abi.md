@@ -101,10 +101,10 @@ The header exposes:
 - JSON result metadata/rows, memory statistics, and embedder binding.
 
 `.kgl` is the cross-binding handoff format. The current writer emits RGF
-v6/Postcard and the current reader accepts v6 and v5. RGF v4/bincode and
+v7/Postcard and the current reader accepts v7, v6 and v5. RGF v4/bincode and
 older containers are rejected with a clear migration/rebuild message; convert
-them with kglite 0.13.4 before crossing the C boundary. A v6 file cannot be
-read by kglite 0.15.14 or earlier, so a prebuilt consumer must be rebuilt
+them with kglite 0.13.4 before crossing the C boundary. A v7 file cannot be
+read by kglite 0.19.0 or earlier, so a prebuilt consumer must be rebuilt
 against this engine before it is handed one.
 
 ## Sessions and transactions

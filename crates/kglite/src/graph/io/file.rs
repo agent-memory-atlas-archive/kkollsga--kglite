@@ -1,8 +1,8 @@
 // Versioned binary format for KnowledgeGraph persistence.
 //
-// File format v6 layout (v5 is identical apart from the magic and the
-// per-column encodings noted below, and is still read):
-//   [0..4]     Magic: b"RGF\x06" (Rusty Graph Format, version 6)
+// File format v7 layout (v5 and v6 are identical apart from the magic and the
+// per-column encodings noted below, and are still read):
+//   [0..4]     Magic: b"RGF\x07" (Rusty Graph Format, version 7)
 //   [4]        Codec tag: 2 (Postcard v1)
 //   [5..9]     core_data_version: u32 LE
 //   [9..13]    metadata_length: u32 LE
@@ -26,7 +26,12 @@
 // that is smaller than the fixed-width `"int64"` array, and is re-typed to the
 // same in-memory column on load. A v5 reader would take the unknown tag for a
 // `Mixed` column and fail decoding it, so the container version is what stops
-// it: this writer emits v6 only, and 0.15.14 refuses it by version number.
+// it: 0.15.14 refuses a v6 file by version number.
+//
+// v7 vs v6: identical layout, metadata and codec. The bump is a forward guard —
+// the 0.19.x readers refuse a v7 file by version number ("Please upgrade
+// kglite") instead of decoding whatever a later writer puts in these sections.
+// This writer emits v7 only; v5 and v6 are still read.
 //
 // Pre-v5 magic values are retained only for explicit rejection and migration
 // guidance; their payloads are never decoded by the current reader.
@@ -58,9 +63,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::graph::io::columns_meta;
 use crate::graph::io::magic::{
     newer_portable_format_error, unrecognized_magic_error, V3_HARD_BREAK_MSG, V3_MAGIC, V4_MAGIC,
-    V5_MAGIC, V6_MAGIC,
+    V5_MAGIC, V6_MAGIC, V7_MAGIC,
 };
 use crate::serde_codec;
 
@@ -926,7 +932,7 @@ pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<(
 /// and durably (temp + fsync + rename — see [`write_kgl_with`]). Heavy
 /// I/O, safe to run without the GIL.
 ///
-/// The bytes are the v6 container: `V6_MAGIC`, an explicit Postcard codec
+/// The bytes are the v7 container: `V7_MAGIC`, an explicit Postcard codec
 /// tag, and `CURRENT_CORE_DATA_VERSION`.
 ///
 /// The graph MUST have columnar storage enabled before calling this function;
@@ -1118,7 +1124,7 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
 
     // Header: magic (4B) + codec (1B) + core_data_version (4B) +
     // metadata_length (4B). The codec byte prevents implicit byte sniffing.
-    writer.write_all(&V6_MAGIC)?;
+    writer.write_all(&V7_MAGIC)?;
     writer.write_all(&[codec.tag()])?;
     writer.write_all(&core_version.to_le_bytes())?;
     writer.write_all(&(metadata_json.len() as u32).to_le_bytes())?;
@@ -1315,7 +1321,9 @@ pub(crate) fn io_context(operation: &str, path: impl AsRef<Path>, error: io::Err
 /// "too small to be a `.kgl`" is phrased in terms of what the caller was
 /// handed (a file, a buffer).
 fn portable_container_format(prefix: &[u8], origin: &str) -> io::Result<&'static str> {
-    if prefix[..4] == V6_MAGIC {
+    if prefix[..4] == V7_MAGIC {
+        Ok("v7")
+    } else if prefix[..4] == V6_MAGIC {
         Ok("v6")
     } else if prefix[..4] == V5_MAGIC {
         Ok("v5")
@@ -1323,7 +1331,7 @@ fn portable_container_format(prefix: &[u8], origin: &str) -> io::Result<&'static
         Err(pre_014_bincode_error(".kgl container v4"))
     } else if prefix[..4] == V3_MAGIC {
         Err(invalid_data(V3_HARD_BREAK_MSG))
-    } else if prefix[..3] == V6_MAGIC[..3] && prefix[3] > V6_MAGIC[3] {
+    } else if prefix[..3] == V7_MAGIC[..3] && prefix[3] > V7_MAGIC[3] {
         Err(newer_portable_format_error(prefix[3]))
     } else {
         Err(unrecognized_magic_error(&prefix[..4], origin))
@@ -1788,27 +1796,14 @@ fn load_disk_column_stores(dir: &std::path::Path, graph: &mut DirGraph) -> io::R
             dir.join("columns.bin")
         }
     };
-    let meta_bin_path = {
-        let seg0 = dir.join("seg_000/columns_meta.bin.zst");
-        if seg0.exists() {
-            seg0
-        } else {
-            dir.join("columns_meta.bin.zst")
-        }
-    };
-    let meta_json_path = {
-        let seg0 = dir.join("seg_000/columns_meta.json");
-        if seg0.exists() {
-            seg0
-        } else {
-            dir.join("columns_meta.json")
-        }
-    };
-    let has_mmap = mmap_path.exists() && (meta_bin_path.exists() || meta_json_path.exists());
+    let meta_path = columns_meta::locate(dir).filter(|_| mmap_path.exists());
     let t = stage_timer();
-    if has_mmap {
-        use crate::graph::io::ntriples::ColumnTypeMeta;
+    if let Some(meta_path) = meta_path {
         use memmap2::MmapMut;
+
+        // Read the metadata before mapping anything, so a directory laid out by
+        // a newer build is refused by its declared format, not by what maps.
+        let type_metas = columns_meta::read(&meta_path)?;
 
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -1822,23 +1817,6 @@ fn load_disk_column_stores(dir: &std::path::Path, graph: &mut DirGraph) -> io::R
         let mmap = unsafe { MmapMut::map_mut(&file) }
             .map_err(|e| io_context("memory-mapping", &mmap_path, e))?;
         let mmap_arc = std::sync::Arc::new(mmap);
-
-        // Prefer the binary sidecar over JSON (slow for 295 MB).
-        let type_metas: Vec<ColumnTypeMeta> = if meta_bin_path.exists() {
-            let compressed = std::fs::read(&meta_bin_path)
-                .map_err(|e| io_context("reading", &meta_bin_path, e))?;
-            let bytes = zstd_decompress(&compressed)?;
-            decode_disk_serde(&bytes, bytes.capacity() as u64)?
-        } else {
-            let meta_json = std::fs::read_to_string(&meta_json_path)
-                .map_err(|e| io_context("reading", &meta_json_path, e))?;
-            serde_json::from_str(&meta_json).map_err(|e| {
-                invalid_data(format!(
-                    "disk graph column metadata '{}' is not valid JSON: {e}",
-                    meta_json_path.display()
-                ))
-            })?
-        };
 
         // `columns.bin` bytes are untrusted disk input, but the hot string
         // readers use `from_utf8_unchecked` (see MmapColumnStore::read_str).
@@ -1975,7 +1953,7 @@ fn apply_disk_metadata(dir: &std::path::Path, graph: &mut DirGraph) -> io::Resul
     Ok(())
 }
 
-/// Decode a v5 or v6 container. The two share a header, a codec and a section
+/// Decode a v5, v6 or v7 container. They share a header, a codec and a section
 /// layout; they differ only in which per-column encodings the column sections
 /// may use, and the column reader dispatches on the section's own type tags.
 /// `format_name` is the version the caller matched, and appears in errors.
@@ -2244,7 +2222,7 @@ fn load_memory_refusal(
     io::Error::new(io::ErrorKind::OutOfMemory, message)
 }
 
-/// The fields [`load_portable_container`] reads out of a v5/v6 container's
+/// The fields [`load_portable_container`] reads out of a v5/v6/v7 container's
 /// fixed-size header, carried as one value so the loader's signature does not
 /// grow a parameter per header field.
 struct PortableHeader {
@@ -2255,7 +2233,7 @@ struct PortableHeader {
     metadata_start: usize,
 }
 
-/// Load the shared v5/v6 columnar section layout through the codec selected by
+/// Load the shared v5/v6/v7 columnar section layout through the codec selected by
 /// the already-validated container header.
 fn load_portable_columnar(
     buf: &[u8],

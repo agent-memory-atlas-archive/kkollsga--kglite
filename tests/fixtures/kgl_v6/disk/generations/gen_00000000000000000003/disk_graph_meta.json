@@ -1,0 +1,23 @@
+{
+  "serde_codec_version": 2,
+  "node_count": 18,
+  "node_slots_len": 18,
+  "edge_count": 12,
+  "next_edge_idx": 12,
+  "out_offsets_len": 19,
+  "out_edges_len": 12,
+  "in_offsets_len": 19,
+  "in_edges_len": 12,
+  "edge_endpoints_len": 12,
+  "free_node_slots": [],
+  "free_edge_slots": [],
+  "csr_sorted_by_type": true,
+  "has_tombstones": false,
+  "edge_properties_format": 2,
+  "edge_properties_meta": {
+    "offsets_len": 13,
+    "heap_len": 208
+  },
+  "csr_layout_version": 1,
+  "sealed_nodes_bound": 18
+}

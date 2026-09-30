@@ -386,11 +386,7 @@ fn publish_column_metadata(
     // earlier column writes are intentionally not transactionally rolled back.
     let json_path = data_dir.join("columns_meta.json");
     if !columns.is_empty() {
-        let json = serde_json::to_string(columns).map_err(std::io::Error::other)?;
-        std::fs::write(&json_path, json)?;
-        let bytes = crate::graph::io::file::encode_disk_serde(columns)?;
-        let compressed = zstd::encode_all(bytes.as_slice(), 3)?;
-        std::fs::write(data_dir.join("columns_meta.bin.zst"), compressed)?;
+        crate::graph::io::columns_meta::publish(data_dir, columns)?;
     }
     if verbose {
         eplog!(

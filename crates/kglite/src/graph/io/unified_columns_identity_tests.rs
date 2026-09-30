@@ -2,6 +2,7 @@ use super::*;
 use crate::datatypes::values::{BorrowedValue, Value};
 use crate::graph::schema::TypeSchema;
 use memmap2::MmapOptions;
+use std::fs::File;
 
 fn store(ids: &[Value]) -> ColumnStore {
     let mut store = ColumnStore::new(
@@ -29,10 +30,8 @@ fn mapped(store: ColumnStore) -> (ColumnTypeMeta, MmapMut) {
     ]);
     let result = write_unified_columns(dir.path(), &stores, &StringInterner::new()).unwrap();
     assert!(result.written.contains("Subject"));
-    let metas: Vec<ColumnTypeMeta> = serde_json::from_slice(
-        &std::fs::read(dir.path().join("seg_000/columns_meta.json")).unwrap(),
-    )
-    .unwrap();
+    let metas = crate::graph::io::columns_meta::read(&dir.path().join("seg_000/columns_meta.json"))
+        .unwrap();
     let file = File::open(dir.path().join("seg_000/columns.bin")).unwrap();
     // SAFETY: the test owns this immutable file; the private map survives its unlink.
     let mmap = unsafe { MmapOptions::new().map_copy(&file).unwrap() };

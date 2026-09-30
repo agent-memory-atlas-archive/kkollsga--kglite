@@ -10,7 +10,7 @@
 //! ```text
 //! Header (32 bytes):
 //!   [ 0.. 8]  magic           = b"KGLIIDXR"  (R = raw, mmap-friendly)
-//!   [ 8..12]  version         = u32 LE (= 2)
+//!   [ 8..12]  version         = u32 LE (= 3; 2 is still read)
 //!   [12..16]  num_types       = u32 LE
 //!   [16..24]  dir_offset      = u64 LE   (always 32)
 //!   [24..32]  data_offset     = u64 LE   (32 + 48 * num_types)
@@ -53,7 +53,11 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 const MAGIC: &[u8; 8] = b"KGLIIDXR";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
+/// The previous file version. Identical layout; version 3 is the one that may
+/// carry directory variants a version-2 reader has no decoder for, so writing
+/// it makes those readers refuse the file by version instead of misreading it.
+const VERSION_2: u32 = 2;
 const HEADER_BYTES: usize = 32;
 const DIR_ENTRY_BYTES: usize = 48;
 const MAX_GENERAL_INDEX_DECODE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -164,7 +168,7 @@ impl IdIndexBase {
                     "id_indices.bin v1",
                 ));
             }
-            VERSION => {}
+            VERSION | VERSION_2 => {}
             _ => return Err(invalid_index("unsupported raw index version")),
         }
         let num_types = u32::from_le_bytes(mmap[12..16].try_into().unwrap()) as usize;
@@ -1300,6 +1304,30 @@ mod validation_tests {
                 .unwrap_err();
         assert!(error.contains("Unregistered"), "{error}");
         assert!(error.contains("cannot be read back"), "{error}");
+    }
+
+    /// A version-2 file (what 0.19.0 wrote) still opens; the writer emits 3.
+    #[test]
+    fn version_2_is_still_read_and_version_3_is_written() {
+        let mut interner = StringInterner::new();
+        let key = interner.get_or_intern("Person").as_u64();
+        let mut bytes = integer_fixture(key, &[(7, 70)]);
+        assert_eq!(
+            &bytes[8..12],
+            &VERSION.to_le_bytes(),
+            "fixtures carry the current version"
+        );
+        assert_eq!(VERSION, 3, "the version that may carry variant 2 is 3");
+
+        bytes[8..12].copy_from_slice(&VERSION_2.to_le_bytes());
+        let loaded = load(&bytes, &interner).unwrap().unwrap();
+        assert_eq!(
+            loaded.base().lookup("Person", &Value::UniqueId(7)),
+            Some(NodeIndex::new(70))
+        );
+
+        bytes[8..12].copy_from_slice(&(VERSION + 1).to_le_bytes());
+        assert_invalid(&bytes, &interner);
     }
 
     #[test]

@@ -129,7 +129,7 @@ def _parity_query(kg: KnowledgeGraph) -> list[tuple]:
 # Changing this digest without a format bump is a refactor bug — the
 # whole point of this test is to trip loudly when the `.kgl` byte layout
 # silently drifts.
-GOLDEN_V3_DIGEST = "bd5f1ea394a09881662baeff809bc6a10f1baa303973b68eabcc5589b616e43b"
+GOLDEN_V3_DIGEST = "cc35e258b4cd52365614edbb75276888f66894dfa9c444193188581bb0b9b989"
 
 # The v3 → v4 format break cleared this set. The
 # v4 loader rejects v3 files (per the user-decided hard break
@@ -144,6 +144,15 @@ GOLDEN_V3_DIGEST = "bd5f1ea394a09881662baeff809bc6a10f1baa303973b68eabcc5589b616
 # back to a working v4 era.
 ACCEPTABLE_DIGESTS: frozenset[str] = frozenset(
     {
+        # Demoted from GOLDEN_V3_DIGEST by the register-scale program, which
+        # bumps the container to `.kgl` **v7**. The only byte that moves is the
+        # magic (`RGF\x06` -> `RGF\x07`): layout, metadata and codec are v6's
+        # (checked by hashing this build's output with the magic put back to v6,
+        # which reproduces the 0.19.0-era digest). This IS a format change:
+        # 0.19.0 refuses a v7 file by version number. This build still reads v6
+        # and v5, which `tests/test_kgl_v6_compat.py` and
+        # `tests/test_kgl_format_compat.py` pin against wheel-written files.
+        "bd5f1ea394a09881662baeff809bc6a10f1baa303973b68eabcc5589b616e43b",
         # Demoted from GOLDEN_V3_DIGEST by T2-3 (deep scan 2026-09-07):
         # `add_connections` now inserts a load's rows grouped by source node,
         # so the fixture's edges occupy the petgraph arena — and therefore the

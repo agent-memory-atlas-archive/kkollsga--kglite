@@ -248,9 +248,8 @@ fn assert_column_layout_is_valid(data_dir: &Path) {
     let file_len = std::fs::metadata(data_dir.join("columns.bin"))
         .unwrap()
         .len() as usize;
-    let metadata: Vec<ColumnTypeMeta> =
-        serde_json::from_slice(&std::fs::read(data_dir.join("columns_meta.json")).unwrap())
-            .unwrap();
+    let metadata =
+        crate::graph::io::columns_meta::read(&data_dir.join("columns_meta.json")).unwrap();
     let human = metadata.iter().find(|m| m.type_name == "Human").unwrap();
     let dense = InternedKey::from_str("dense").as_u64();
     let sparse = InternedKey::from_str("sparse").as_u64();

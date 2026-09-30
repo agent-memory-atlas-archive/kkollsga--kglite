@@ -25,14 +25,14 @@
 //! sidecar for those.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, OpenOptions};
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
 use memmap2::MmapMut;
-use serde_json;
 
+use crate::graph::io::columns_meta;
 use crate::graph::io::ntriples::{
     ColMapEntry, ColumnTypeMeta, FixedColMeta, RegionMeta, StrColMeta,
 };
@@ -370,10 +370,7 @@ pub fn write_unified_columns(
 
     // ── Pass 3: emit metadata ─────────────────────────────────────
     let metas: Vec<ColumnTypeMeta> = planned.iter().map(|pt| pt.meta.clone()).collect();
-    let json = serde_json::to_string_pretty(&metas).map_err(io::Error::other)?;
-    let mut f = File::create(&json_path)?;
-    f.write_all(json.as_bytes())?;
-    f.sync_all()?;
+    columns_meta::publish_json_synced(&seg0, &metas)?;
 
     let written: HashSet<String> = planned.into_iter().map(|pt| pt.type_name).collect();
     Ok(WriteResult { written, unhandled })

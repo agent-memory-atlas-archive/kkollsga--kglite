@@ -145,10 +145,10 @@ mod atomic_save_tests {
     /// path stamped a hard-coded `3` (the container version of the day, frozen in
     /// 2026-03) while a fresh save stamped `2`, so the same graph reported two
     /// different "on-disk layout versions" either side of a round-trip and
-    /// neither matched the v6 container actually on disk.
+    /// neither matched the container actually on disk.
     #[test]
     fn format_version_is_the_container_version_on_both_sides_of_a_roundtrip() {
-        let expected = u32::from(V6_MAGIC[3]);
+        let expected = u32::from(V7_MAGIC[3]);
         assert_eq!(
             crate::graph::schema::KGL_FORMAT_VERSION,
             expected,
@@ -173,28 +173,30 @@ mod atomic_save_tests {
         let g = tiny_graph(4);
         let mut buf: Vec<u8> = Vec::new();
         write_kgl_to(&g, &mut buf).unwrap();
-        assert_eq!(&buf[..4], &V6_MAGIC, "buffer must carry the v6 magic");
+        assert_eq!(&buf[..4], &V7_MAGIC, "buffer must carry the v7 magic");
         assert_eq!(
             buf[4],
             serde_codec::CodecVersion::PostcardV1.tag(),
-            "v6 header must select Postcard explicitly"
+            "v7 header must select Postcard explicitly"
         );
         let loaded = load_kgl_bytes(&buf).unwrap();
         assert_eq!(loaded.graph.node_count(), g.graph.node_count());
     }
 
-    /// The v5 container is still decoded. This checks the *dispatch* only —
-    /// that a v5 magic reaches the shared reader rather than the
+    /// The v5 and v6 containers are still decoded. This checks the *dispatch*
+    /// only — that each magic reaches the shared reader rather than the
     /// unrecognised-format arm; `tests/test_kgl_format_compat.py` pins the real
-    /// thing against files a published 0.15.14 wheel wrote.
+    /// thing against files published 0.15.14 and 0.19.0 wheels wrote.
     #[test]
-    fn v5_magic_still_reaches_the_shared_reader() {
+    fn older_readable_magics_still_reach_the_shared_reader() {
         let g = tiny_graph(4);
         let mut buf: Vec<u8> = Vec::new();
         write_kgl_to(&g, &mut buf).unwrap();
-        buf[3] = V5_MAGIC[3];
-        let loaded = load_kgl_bytes(&buf).unwrap();
-        assert_eq!(loaded.graph.node_count(), g.graph.node_count());
+        for magic in [V5_MAGIC, V6_MAGIC] {
+            buf[3] = magic[3];
+            let loaded = load_kgl_bytes(&buf).unwrap();
+            assert_eq!(loaded.graph.node_count(), g.graph.node_count());
+        }
     }
 
     #[test]
@@ -207,12 +209,17 @@ mod atomic_save_tests {
 
     #[test]
     fn newer_container_and_invalid_codec_are_rejected_clearly() {
-        let newer = [b'R', b'G', b'F', 7];
+        let newer = [b'R', b'G', b'F', 8];
         let error = load_kgl_bytes(&newer).err().unwrap().to_string();
-        assert!(error.contains("version 7") && error.contains("upgrade kglite"));
+        assert!(
+            error.contains("version 8")
+                && error.contains("up to version 7")
+                && error.contains("upgrade kglite"),
+            "{error}"
+        );
 
         // Both readable containers validate the codec byte the same way.
-        for version in [5u8, 6u8] {
+        for version in [5u8, 6u8, 7u8] {
             let mut invalid = vec![b'R', b'G', b'F', version, 99];
             invalid.extend_from_slice(&CURRENT_CORE_DATA_VERSION.to_le_bytes());
             invalid.extend_from_slice(&0u32.to_le_bytes());
@@ -240,7 +247,7 @@ mod atomic_save_tests {
         assert!(err.to_string().contains("export_csv"));
         // An unrecognized *kglite* container carries the hint too — it is a
         // real graph this binary cannot read, so there is something to export.
-        let unreadable_container = [V6_MAGIC[0], V6_MAGIC[1], V6_MAGIC[2], 2, 0, 0];
+        let unreadable_container = [V7_MAGIC[0], V7_MAGIC[1], V7_MAGIC[2], 2, 0, 0];
         let err = load_kgl_bytes(&unreadable_container).err().unwrap();
         assert!(err.to_string().contains("from_blueprint"), "{err}");
         // Bytes that are not a kglite container at all get the *opposite*
@@ -700,7 +707,7 @@ mod atomic_save_tests {
     }
 
     fn rewrite_metadata(buf: &[u8], mutate: impl FnOnce(&mut FileMetadata)) -> Vec<u8> {
-        assert_eq!(&buf[..4], &V6_MAGIC);
+        assert_eq!(&buf[..4], &V7_MAGIC);
         let old_len = u32::from_le_bytes(buf[9..13].try_into().unwrap()) as usize;
         let mut metadata: FileMetadata = serde_json::from_slice(&buf[13..13 + old_len]).unwrap();
         mutate(&mut metadata);
@@ -958,12 +965,12 @@ mod atomic_save_tests {
     //
     // The stamp is the caller's data-model revision, not an engine version.
 
-    /// Rewrite a v6 buffer's metadata as raw JSON, so a test can delete a key
+    /// Rewrite a v7 buffer's metadata as raw JSON, so a test can delete a key
     /// outright. `rewrite_metadata` above round-trips through the typed struct
     /// and would re-add any key it knows about; this simulates a file written
     /// by a build whose `FileMetadata` never had the field at all.
     fn rewrite_metadata_json(buf: &[u8], mutate: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
-        assert_eq!(&buf[..4], &V6_MAGIC);
+        assert_eq!(&buf[..4], &V7_MAGIC);
         let old_len = u32::from_le_bytes(buf[9..13].try_into().unwrap()) as usize;
         let mut raw: serde_json::Value =
             serde_json::from_slice(&buf[13..13 + old_len]).expect("metadata is JSON");
@@ -1046,10 +1053,10 @@ mod atomic_save_tests {
     // refused **by name**: quietly falling back to memory would hand back a
     // graph in a mode nobody asked for, indistinguishable from success.
 
-    /// Parse the metadata JSON out of a v6 buffer, so a test can assert on the
+    /// Parse the metadata JSON out of a v7 buffer, so a test can assert on the
     /// bytes actually written rather than on a round-tripped struct.
     fn metadata_json_of(buf: &[u8]) -> serde_json::Value {
-        assert_eq!(&buf[..4], &V6_MAGIC);
+        assert_eq!(&buf[..4], &V7_MAGIC);
         let len = u32::from_le_bytes(buf[9..13].try_into().unwrap()) as usize;
         serde_json::from_slice(&buf[13..13 + len]).expect("metadata is JSON")
     }

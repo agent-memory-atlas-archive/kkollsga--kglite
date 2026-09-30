@@ -1,14 +1,17 @@
-"""`.kgl` container compatibility: v6 is written, v5 is still read.
+"""`.kgl` container compatibility: v7 is written, v5 and v6 are still read.
 
 The shape-convergence program bumped the container to **v6** (Phase 6b) so an
 integer column can choose a delta-varint encoding when that is smaller than the
-fixed-width array. Compatibility is deliberately one-way, by user decision:
+fixed-width array; the register-scale program bumped it to **v7** so 0.19.x
+readers turn away files that carry content they cannot decode (v6 read-compat is
+pinned separately, in ``tests/test_kgl_v6_compat.py``). Compatibility is
+deliberately one-way, by user decision:
 
-* this build **writes** v6 only;
-* this build **reads** v5 and v6;
-* 0.15.14 cannot read v6 and says so by version number — see
-  ``test_v6_is_refused_by_name_and_number``, which pins the message shape a
-  0.15.14 user will actually see.
+* this build **writes** v7 only;
+* this build **reads** v5, v6 and v7;
+* 0.15.14 cannot read v6 and 0.19.0 cannot read v7; both say so by version
+  number — see ``test_a_newer_container_is_refused_by_name_and_number``, which
+  pins the message shape an older binary's user will actually see.
 
 The v5 half of that cannot be asserted with files this tree writes — that would
 be a round-trip test wearing a compatibility label. So the fixtures under
@@ -36,7 +39,7 @@ import kglite
 
 FIXTURES = Path(__file__).parent / "fixtures" / "kgl_v5"
 V5_HEADER = b"RGF\x05\x02"
-V6_HEADER = b"RGF\x06\x02"
+V7_HEADER = b"RGF\x07\x02"
 
 
 def _expected(name: str) -> dict:
@@ -92,12 +95,12 @@ def test_fixtures_are_v5_containers():
     )
 
 
-def test_this_build_writes_v6(tmp_path):
+def test_this_build_writes_v7(tmp_path):
     graph = kglite.KnowledgeGraph()
     graph.cypher("CREATE (:Item {id: 1, name: 'x'})")
     path = tmp_path / "written.kgl"
     graph.save(str(path))
-    assert path.read_bytes()[:5] == V6_HEADER
+    assert path.read_bytes()[:5] == V7_HEADER
 
 
 # ── v6 encodings ─────────────────────────────────────────────────────────────
@@ -133,7 +136,7 @@ def test_v6_round_trips_every_value_shape(tmp_path):
 
     path = tmp_path / "values.kgl"
     graph.save(str(path))
-    assert path.read_bytes()[:5] == V6_HEADER
+    assert path.read_bytes()[:5] == V7_HEADER
     assert kglite.load(str(path)).cypher(VALUE_QUERY).to_list() == before
 
 
@@ -218,14 +221,14 @@ def test_v5_secondary_labels_survive_the_load(tmp_path):
     assert legacy == [{"id": 10}]
 
 
-def test_v5_resaves_as_v6(tmp_path):
-    """Loading a v5 file and saving it writes v6 — the one-way migration."""
+def test_v5_resaves_as_v7(tmp_path):
+    """Loading a v5 file and saving it writes v7 — the one-way migration."""
     path = _copy(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.load(str(path))
     out = tmp_path / "migrated.kgl"
     graph.save(str(out))
-    assert out.read_bytes()[:5] == V6_HEADER
-    _assert_matches(kglite.load(str(out)), _queries("QUERIES"), _expected("graph"), "v5→v6 resave")
+    assert out.read_bytes()[:5] == V7_HEADER
+    _assert_matches(kglite.load(str(out)), _queries("QUERIES"), _expected("graph"), "v5→v7 resave")
 
 
 def test_v5_durable_directory_recovers(tmp_path):
@@ -249,18 +252,19 @@ def test_v5_durable_directory_recovers(tmp_path):
 # ── the other direction, recorded rather than fixed ──────────────────────────
 
 
-def test_v6_is_refused_by_name_and_number(tmp_path):
-    """What an older binary sees. 0.15.14 rejects any container above 5 with
-    this message; it is reproduced here because we cannot change what 0.15.14
-    does, only make sure the sentence it prints is the one users are told to
-    expect. Asserted through this build's own reader on a v7 buffer, which
-    takes the identical branch.
+def test_a_newer_container_is_refused_by_name_and_number(tmp_path):
+    """What an older binary sees. Every reader since 0.15.14 rejects a container
+    above the one it knows with this sentence (0.15.14 above 5, 0.19.0 above 6);
+    it is reproduced here because we cannot change what those binaries do, only
+    make sure the sentence they print is the one users are told to expect.
+    Asserted through this build's own reader on a v8 buffer, which takes the
+    identical branch.
     """
     forged = tmp_path / "future.kgl"
-    forged.write_bytes(b"RGF\x07\x02" + b"\x00" * 40)
-    with pytest.raises(Exception) as excinfo:
+    forged.write_bytes(b"RGF\x08\x02" + b"\x00" * 40)
+    with pytest.raises(kglite.FileFormatError) as excinfo:
         kglite.load(str(forged))
     message = str(excinfo.value)
-    assert "container version 7" in message
-    assert "only supports up to version 6" in message
-    assert "upgrade kglite" in message
+    assert "container version 8" in message
+    assert "only supports up to version 7" in message
+    assert "Please upgrade kglite" in message

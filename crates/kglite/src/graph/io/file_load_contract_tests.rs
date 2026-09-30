@@ -464,7 +464,7 @@ mod load_error_reporting_tests {
     #[test]
     fn a_container_version_from_the_future_is_invalid_data() {
         let mut bytes = tiny_bytes();
-        bytes[3] = V6_MAGIC[3] + 1;
+        bytes[3] = V7_MAGIC[3] + 1;
         let error = load_bytes_from_file(&bytes);
         assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
         assert!(error.to_string().contains("upgrade kglite"), "{error}");

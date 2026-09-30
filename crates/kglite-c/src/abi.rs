@@ -149,8 +149,8 @@ mod tests {
             kglite::api::io::MIN_READABLE_WAL_FORMAT_VERSION as u32
         );
         // The `.kgl` format is the one an embedder reports: the container
-        // version this build writes, currently 6. The pin moves with a
+        // version this build writes, currently 7. The pin moves with a
         // container bump — that is the number changing, which is the point.
-        assert_eq!(f.kgl, 6);
+        assert_eq!(f.kgl, 7);
     }
 }

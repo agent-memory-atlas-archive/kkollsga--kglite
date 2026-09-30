@@ -73,7 +73,7 @@ fn a_non_kglite_file_is_not_reported_as_an_older_version() {
 #[test]
 fn a_genuinely_older_kglite_container_still_gets_rebuild_advice() {
     // "RGF\x02" — the container magic with a version this binary predates.
-    // v3..v6 have their own dedicated messages; v0..v2 fall to the generic
+    // v3..v7 have their own dedicated messages; v0..v2 fall to the generic
     // older-version arm, which is the one under test.
     let message = refusal_for(b"\x52\x47\x46\x02padding-bytes", "older");
     assert!(

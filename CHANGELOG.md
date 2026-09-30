@@ -21,6 +21,38 @@ before upgrading.
 
 ### Changed
 
+- **Breaking: the `.kgl` container is now v7 and a disk-graph directory has a
+  new layout revision; files and directories this version saves cannot be read
+  by kglite 0.19.0 or earlier.** This build reads v7, v6 and v5 containers and
+  opens every disk directory 0.19.0 wrote (a `save()` migrates it forward), so
+  nothing you already have stops loading; the break is one-way and deliberate,
+  and it lands before the register-scale storage changes that follow so an
+  older binary is turned away by name now rather than misreading a later file.
+  The v7 container is v6 byte for byte apart from its magic. An older binary
+  handed the new files refuses them instead of misreading them — 0.19.0 raises
+  `kglite.FileFormatError: File uses .kgl container version 7, but this library
+  only supports up to version 6. Please upgrade kglite.` for a `.kgl` (through
+  `load()`, `open()` and `from_bytes()` alike), and `kglite.FileFormatError: disk
+  graph column metadata '<dir>/generations/<gen>/seg_000/columns_meta.json' is
+  not valid JSON: invalid type: map, expected a sequence at line 1 column 0` for
+  a disk directory whose columns are mmap-served (a directory whose types are
+  all served from per-type sidecars is refused by `invalid id_indices.bin:
+  unsupported raw index version` instead). Both are ordinary exceptions; before
+  this, 0.19.0 mapped a column type it did not know as a string column and
+  panicked in a fixed-width read. Bundled MCP, Bolt and CLI binaries link the
+  engine, so a prebuilt one from 0.19.0 or earlier cannot read files this
+  version writes and must be rebuilt.
+
+  The disk layout changes in three places, all recognised by this build's own
+  readers: `disk_graph_meta.json` carries a `disk_format` field (this build
+  refuses a value newer than it knows, naming both numbers); `columns_meta.json`
+  is `{"format": 2, "types": [...]}` instead of a bare array, and its compact
+  binary twin moved to `columns_meta.v2.bin.zst` (older readers preferred the
+  old file name whenever it existed, so reusing it would have bypassed the
+  guard); and `id_indices.bin` is version 3, which is the version later changes
+  may add directory variants to. `graph_info()['format_version']` and the C
+  ABI's `kglite_storage_format_version().kgl` report 7; no C symbol changed.
+
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
   data") use one org-chart example, with the declaration rules gathered in a
   closing section and the full bitemporal walk-through shipped as

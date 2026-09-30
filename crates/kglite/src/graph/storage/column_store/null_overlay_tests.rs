@@ -1,6 +1,5 @@
 //! Exact merged-value and persistence oracles for immutable-base overrides.
 use super::*;
-use crate::graph::io::ntriples::ColumnTypeMeta;
 use crate::graph::io::unified_columns::write_unified_columns;
 use memmap2::MmapOptions;
 
@@ -63,10 +62,9 @@ fn map_fixture(store: ColumnStore, interner: StringInterner) -> Fixture {
     let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
     let written = write_unified_columns(directory.path(), &stores, &interner).unwrap();
     assert!(written.written.contains("T"));
-    let metas: Vec<ColumnTypeMeta> = serde_json::from_slice(
-        &std::fs::read(directory.path().join("seg_000/columns_meta.json")).unwrap(),
-    )
-    .unwrap();
+    let metas =
+        crate::graph::io::columns_meta::read(&directory.path().join("seg_000/columns_meta.json"))
+            .unwrap();
     let file = std::fs::File::open(directory.path().join("seg_000/columns.bin")).unwrap();
     // SAFETY: this fixture owns the immutable file and retains its directory.
     let map = unsafe { MmapOptions::new().map_copy(&file).unwrap() };

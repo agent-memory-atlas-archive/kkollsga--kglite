@@ -35,16 +35,23 @@ pub(crate) const V4_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x04];
 /// written.
 pub(crate) const V5_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x05];
 
-/// Magic bytes for the v6 columnar format — what this binary writes. v6 is v5
-/// plus per-column integer encodings inside the packed column sections (see
-/// `io::file`'s module header). Both are decoded by the same reader.
+/// Magic bytes for the v6 columnar format: v5 plus per-column integer
+/// encodings inside the packed column sections (see `io::file`'s module
+/// header). Still read; no longer written.
 pub(crate) const V6_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x06];
+
+/// Magic bytes for the v7 columnar format — what this binary writes. The
+/// section layout, metadata schema and codec are v6's; v7 exists so that
+/// content a later change adds to those sections (which a v6 reader would
+/// misparse rather than refuse) is turned away by version number. All three
+/// containers are decoded by the same reader.
+pub(crate) const V7_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x07];
 
 /// The container version byte this build writes — the number
 /// [`crate::graph::schema::KGL_FORMAT_VERSION`] reports to `graph_info()` and
-/// to the C ABI. Bumping the written container means adding a `V7_MAGIC` and
+/// to the C ABI. Bumping the written container means adding a `V8_MAGIC` and
 /// pointing this at it; nothing else needs to move.
-pub(crate) const CURRENT_CONTAINER_VERSION: u8 = V6_MAGIC[3];
+pub(crate) const CURRENT_CONTAINER_VERSION: u8 = V7_MAGIC[3];
 
 /// Hard-break message for v3 files in a v4 binary. Per the
 /// user decision in docs/history/bolt-implementation.md: no read-compat
@@ -64,7 +71,7 @@ pub(crate) const V3_HARD_BREAK_MSG: &str = "kglite .kgl file format v3 is not su
 pub(crate) fn newer_portable_format_error(version: u8) -> io::Error {
     invalid_data(format!(
         "File uses .kgl container version {version}, but this library only supports up to version {}. Please upgrade kglite.",
-        V6_MAGIC[3]
+        V7_MAGIC[3]
     ))
 }
 
@@ -87,7 +94,7 @@ pub(crate) fn newer_portable_format_error(version: u8) -> io::Error {
 /// `origin` names what was refused (a quoted path, or "the byte buffer") so
 /// the message is actionable when several files are being loaded at once.
 pub(crate) fn unrecognized_magic_error(prefix: &[u8], origin: &str) -> io::Error {
-    if prefix.len() >= 3 && prefix[..3] == V6_MAGIC[..3] {
+    if prefix.len() >= 3 && prefix[..3] == V7_MAGIC[..3] {
         return invalid_data(format!(
             "Unrecognized .kgl container version {} in {origin}. This file was saved with an \
              older version of kglite. Please rebuild the graph with the current version and \

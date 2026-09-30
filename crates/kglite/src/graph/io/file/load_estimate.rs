@@ -4,7 +4,7 @@
 //!
 //! # What it reads
 //!
-//! Only the JSON metadata block at the head of a v5/v6 container: the u32 at
+//! Only the JSON metadata block at the head of a v5-v7 container: the u32 at
 //! bytes `[9..13]` gives its length, the block itself starts at 13. That block
 //! is 0.01%–0.35% of the file on the four measured fixtures, so an estimate
 //! costs one short read and no decompression at all.

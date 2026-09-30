@@ -483,7 +483,7 @@ fn mask_version_fields(bytes: &[u8], version: &[u8]) -> Vec<u8> {
     const METADATA_LEN_START: usize = 4 + 1 + std::mem::size_of::<u32>();
     const METADATA_LEN_END: usize = METADATA_LEN_START + std::mem::size_of::<u32>();
 
-    assert!(bytes.starts_with(&crate::graph::io::magic::V6_MAGIC));
+    assert!(bytes.starts_with(&crate::graph::io::magic::V7_MAGIC));
     let mut normalized = bytes.to_vec();
     let metadata_len = u32::from_le_bytes(
         normalized[METADATA_LEN_START..METADATA_LEN_END]
@@ -520,7 +520,7 @@ fn mask_version_fields(bytes: &[u8], version: &[u8]) -> Vec<u8> {
 fn version_mask_is_independent_of_the_version_string_length() {
     fn container(version: &str) -> Vec<u8> {
         let metadata = format!(r#"{{"library_version":"{version}"}}"#);
-        let mut bytes = crate::graph::io::magic::V6_MAGIC.to_vec();
+        let mut bytes = crate::graph::io::magic::V7_MAGIC.to_vec();
         bytes.push(CURRENT_CODEC.tag());
         bytes.extend_from_slice(&0_u32.to_le_bytes());
         bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
@@ -838,4 +838,4 @@ fn kgl_reload_preserves_column_slot_order() {
 
 /// sha256 of the `.kgl` bytes for [`kgl_fixture_bytes`]. Regenerate only via
 /// `KGLITE_REGEN_VALUE_BYTE_GOLDEN=1`, and only for a deliberate format change.
-const KGL_FIXTURE_DIGEST: &str = "86ddc120d72b865caf3f2c3be1959b7e852f16bf27145f3f745016747d3d7f56";
+const KGL_FIXTURE_DIGEST: &str = "3265245f881548ef4659edb0b84f2c7190c1c660b7d9ecaf6e33ef6a6523f1db";
