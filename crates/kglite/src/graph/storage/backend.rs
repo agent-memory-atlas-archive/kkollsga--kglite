@@ -553,6 +553,23 @@ impl GraphBackend {
         }
     }
 
+    /// The journal that records a statement's writes to the per-type column
+    /// stores: [`Self::undo_journal_mut`] on the heap backends, and on a disk
+    /// graph the cell journal its `DiskCells` checkpoint opened.
+    ///
+    /// Separate from `undo_journal_mut` because a disk graph's journal carries
+    /// the columnar entries alone — everything else of its statement is
+    /// restored from a snapshot — so the call sites that capture anything else
+    /// must keep seeing `None` there.
+    #[inline]
+    pub(crate) fn columnar_undo_mut(&mut self) -> Option<&mut UndoJournal> {
+        match self {
+            GraphBackend::Disk(g) => g.statement_undo.as_deref_mut(),
+            GraphBackend::Recording(rg) => rg.inner_mut().columnar_undo_mut(),
+            other => other.undo_journal_mut(),
+        }
+    }
+
     /// Number of raw WAL-capture ops buffered by a `Recording` wrapper, or
     /// `None` for a backend that captures nothing. Paired with
     /// [`Self::truncate_recorded_ops`] so a rolled-back statement's writes

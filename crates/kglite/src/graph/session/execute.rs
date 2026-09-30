@@ -453,22 +453,43 @@ fn read_statement(
     })
 }
 
-/// Whether the only writes a statement makes are plain `SET var.prop = expr`
-/// items, so on disk every one reaches the column stores through the staged
-/// node-write flush that `StatementCheckpoint::DiskCells` journals.
+/// Whether every write a statement can make to a disk graph's column stores
+/// goes through the two channels `StatementCheckpoint::DiskCells` journals:
+/// the staged-node flush (every `SET`/`REMOVE` of a property, including a
+/// `MERGE`'s `ON CREATE`/`ON MATCH` items) and the node append of a `CREATE` or
+/// a `MERGE` that creates.
 ///
-/// A whitelist: `CREATE`, `MERGE`, `DELETE`, `REMOVE`, `SET var += map`, labels
-/// and every procedure call fall out of it, and a statement with no `SET` at all
-/// is not a property write.
-fn is_property_set_only(query: &CypherQuery) -> bool {
-    use cypher::ast::SetItem;
-    let mut any_set = false;
-    let only_property_writes = query.clauses.iter().all(|clause| match clause {
+/// A whitelist: a statement with no write at all is not one, and everything it
+/// does not name falls out — `FOREACH`, procedure calls, `LOAD CSV`, label
+/// changes, `SET var += map` and nested `SET` paths — because each of those
+/// either reaches a store another way or has not been shown not to.
+/// `DELETE` qualifies: it frees the node's slot and edges (restored from the
+/// snapshot) and writes no column.
+fn writes_only_journaled_disk_cells(query: &CypherQuery) -> bool {
+    use cypher::ast::{RemoveItem, SetItem};
+    let plain_set =
+        |item: &SetItem| matches!(item, SetItem::Property { path, .. } if path.is_empty());
+    let mut any_write = false;
+    let journaled = query.clauses.iter().all(|clause| match clause {
         Clause::Set(set) => {
-            any_set = true;
-            set.items
+            any_write = true;
+            set.items.iter().all(plain_set)
+        }
+        Clause::Remove(remove) => {
+            any_write = true;
+            remove
+                .items
                 .iter()
-                .all(|item| matches!(item, SetItem::Property { path, .. } if path.is_empty()))
+                .all(|item| matches!(item, RemoveItem::Property { .. }))
+        }
+        Clause::Merge(merge) => {
+            any_write = true;
+            merge.on_create.iter().flatten().all(plain_set)
+                && merge.on_match.iter().flatten().all(plain_set)
+        }
+        Clause::Create(_) | Clause::Delete(_) => {
+            any_write = true;
+            true
         }
         Clause::Match(_)
         | Clause::OptionalMatch(_)
@@ -483,7 +504,7 @@ fn is_property_set_only(query: &CypherQuery) -> bool {
         | Clause::Unwind(_) => true,
         _ => false,
     });
-    only_property_writes && any_set
+    journaled && any_write
 }
 
 /// Whether this statement has no fallible operation after its first write.
@@ -635,7 +656,7 @@ fn mut_statement(
             graph,
             cypher::executor::write::mutates_cdc_configuration(&parsed),
             // Only a disk graph has a route for it; skip the clause walk elsewhere.
-            graph.graph.as_disk().is_some() && is_property_set_only(&parsed),
+            graph.graph.as_disk().is_some() && writes_only_journaled_disk_cells(&parsed),
         )
     } else {
         StatementCheckpoint::None

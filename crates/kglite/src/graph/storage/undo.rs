@@ -33,11 +33,12 @@
 //!   `embeddings`, captured at their documented choke-point APIs, because
 //!   those structures sit *above* storage and a backend cannot see them.
 //!
-//! A third, narrower seam serves a disk graph's property-`SET`-only statements:
-//! the flush that folds staged node writes into the column stores
-//! (`storage::disk::cell_undo`) journals the same columnar entries into a
-//! journal the disk backend holds for the statement, and nothing else — the
-//! rest of that statement's state is restored from a graph snapshot.
+//! A third, narrower seam serves a disk graph's cell-journaled statements: the
+//! flush that folds staged node writes into the column stores
+//! (`storage::disk::cell_undo`) and the node append (`DirGraph::push_node_row`)
+//! journal the same columnar entries into a journal the disk backend holds for
+//! the statement, and nothing else — the rest of that statement's state is
+//! restored from a graph snapshot.
 //!
 //! Everything else a statement can touch is O(schema)-sized and is restored
 //! verbatim from a cheap shell clone — see

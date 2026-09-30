@@ -257,8 +257,8 @@ fn journal_covers(graph: &DirGraph) -> bool {
     // Mapped, whose `MappedGraph.inner` is the same StableDiGraph. Disk has no
     // petgraph and no NodeIndex identity to restore, and every UndoEntry
     // variant but the columnar ones is keyed on one, so it takes the
-    // whole-graph checkpoint — except a property-`SET`-only statement, whose
-    // only disk writes are cells and which `open_for_statement` routes to
+    // whole-graph checkpoint — except a statement whose column writes are all
+    // journaled cells and row appends, which `open_for_statement` routes to
     // `DiskCells`.
     graph.graph.supports_undo_journal()
 }
@@ -284,19 +284,20 @@ pub(crate) enum StatementCheckpoint {
         edge_embedding_base_capture: Option<bool>,
         cdc: Option<CdcCheckpoint>,
     },
-    /// A disk property-`SET`-only statement (see `session::execute`).
+    /// A disk statement whose column-store writes all pass through the two
+    /// channels the disk backend journals (`session::execute`).
     ///
     /// The snapshot is the whole-graph clone **minus its column stores**, so
-    /// the live stores stay uniquely owned and the flush writes them in place
-    /// instead of deep-copying every touched column on its first write. The
-    /// disk backend journals each cell, title and column type it overwrites
-    /// ([`DiskGraph::begin_cell_undo`]); rollback replays that journal into the
-    /// live stores — the same entries and replay a heap-backed statement uses —
-    /// and then moves those stores into the snapshot.
+    /// the live stores stay uniquely owned and are written in place instead of
+    /// deep-copying every touched column on the first write. The disk backend
+    /// journals each cell, title and column type it overwrites and each row it
+    /// appends ([`DiskGraph::begin_cell_undo`]); rollback replays that journal
+    /// into the live stores — the same entries and replay a heap-backed
+    /// statement uses — and then moves those stores into the snapshot, which
+    /// restores everything else (slots, edges, indexes, schema) by itself.
     ///
-    /// Sufficient only because the statement's every column write is a flush
-    /// cell write: a statement that appends rows, tombstones, or writes a
-    /// column any other way has no entry that would undo it.
+    /// Sufficient only while no other write reaches a column store inside a
+    /// statement: one that does has no entry to undo it.
     DiskCells {
         snapshot: Box<DirGraph>,
         cdc: Option<CdcCheckpoint>,
@@ -395,14 +396,15 @@ impl StatementCheckpoint {
     }
 
     /// [`Self::open_with_cdc`], taking the disk cell-journal route when the
-    /// caller proved the statement is property-`SET`-only.
+    /// caller proved the statement writes column stores only through the
+    /// journaled channels.
     pub(crate) fn open_for_statement(
         graph: &mut DirGraph,
         capture_cdc: bool,
-        property_set_only: bool,
+        journaled_disk_writes: bool,
     ) -> Self {
         let cdc = capture_cdc.then(|| CdcCheckpoint::capture(graph));
-        if property_set_only && graph.graph.as_disk().is_some() {
+        if journaled_disk_writes && graph.graph.as_disk().is_some() {
             let mut snapshot = graph.fork_transaction();
             if let Some(disk) = snapshot.graph.as_disk_mut() {
                 disk.column_stores = Default::default();

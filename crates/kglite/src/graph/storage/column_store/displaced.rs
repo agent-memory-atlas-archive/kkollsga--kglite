@@ -9,10 +9,11 @@
 //! disk it is not, because a `Mixed` column has no file representation, and
 //! the heap copy of a column the base serves stays resident.
 //!
-//! While a disk statement's undo is open, the flush arms the log around its own
-//! writes ([`ColumnStore::begin_displaced_log`]); the displaced column is
-//! moved into it, not copied, so the log costs a refcount on the statement that
-//! changes a column's type and nothing on any other.
+//! While a disk statement's undo is open, the staged-node flush and the node
+//! append arm the log around their own writes
+//! ([`ColumnStore::begin_displaced_log`]); the displaced column is moved into
+//! it, not copied, so the log costs a refcount on the statement that changes a
+//! column's type and nothing on any other.
 
 use std::sync::Arc;
 
@@ -23,6 +24,8 @@ use super::{ColumnStore, TypedColumn};
 pub(crate) enum ColumnRole {
     /// The property column at this schema slot.
     Property(u16),
+    /// The reserved id column.
+    Id,
     /// The reserved title column.
     Title,
 }
@@ -32,7 +35,7 @@ pub(crate) enum ColumnRole {
 pub(crate) struct DisplacedColumn {
     pub(crate) role: ColumnRole,
     /// `None` only for a title column that did not exist yet (the store read
-    /// titles through its mmap base).
+    /// titles through its mmap base); always `Some` for a property or id column.
     pub(crate) prior: Option<Arc<TypedColumn>>,
 }
 
@@ -70,6 +73,7 @@ impl ColumnStore {
                     *handle = prior;
                 }
             }
+            (ColumnRole::Id, prior) => self.id_column = prior,
             (ColumnRole::Title, prior) => self.title_column = prior,
             (ColumnRole::Property(_), None) => {}
         }
@@ -82,6 +86,17 @@ impl ColumnStore {
             log.push(DisplacedColumn {
                 role: ColumnRole::Property(slot as u16),
                 prior: Some(old),
+            });
+        }
+    }
+
+    /// [`Self::swap_column`] for the id column.
+    pub(super) fn swap_id_column(&mut self, column: Option<Arc<TypedColumn>>) {
+        let old = std::mem::replace(&mut self.id_column, column);
+        if let Some(log) = self.displaced.as_mut() {
+            log.push(DisplacedColumn {
+                role: ColumnRole::Id,
+                prior: old,
             });
         }
     }

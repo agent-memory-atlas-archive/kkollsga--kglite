@@ -369,7 +369,7 @@ impl ColumnStore {
                 mixed.push(col.get(i as u32).unwrap_or(Value::Null));
             }
             mixed.push(value.clone());
-            *col = TypedColumn::Mixed { data: mixed };
+            self.swap_id_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
         }
     }
 
@@ -400,7 +400,7 @@ impl ColumnStore {
                 mixed.push(col.get(i as u32).unwrap_or(Value::Null));
             }
             mixed.push(value.clone());
-            *col = TypedColumn::Mixed { data: mixed };
+            self.swap_title_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
         }
     }
 

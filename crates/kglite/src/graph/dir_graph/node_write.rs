@@ -161,11 +161,12 @@ impl DirGraph {
         // The type-name hash stays behind the journal check: an unjournalled
         // create path (bulk ingest, WAL replay) must pay nothing for an undo
         // nobody will read.
-        if self.graph.undo_journal_mut().is_some() {
-            let type_key = InternedKey::from_str(node_type);
+        let journaled = self.graph.columnar_undo_mut().is_some();
+        let type_key = journaled.then(|| InternedKey::from_str(node_type));
+        if let Some(type_key) = type_key {
             let first_append = self
                 .graph
-                .undo_journal_mut()
+                .columnar_undo_mut()
                 .is_some_and(|journal| journal.claim_columnar_append(type_key));
             let captured = first_append
                 .then(|| {
@@ -173,10 +174,14 @@ impl DirGraph {
                         .map(|store| ColumnarAppendPreImage::capture(store))
                 })
                 .flatten();
-            if let (Some(captured), Some(journal)) = (captured, self.graph.undo_journal_mut()) {
+            if let (Some(captured), Some(journal)) = (captured, self.graph.columnar_undo_mut()) {
                 captured.record(journal, type_key, store_was_new);
             }
         }
+        // A disk statement also restores a column type a pushed value demoted
+        // (see `ColumnStore::begin_displaced_log`); the heap backends leave it
+        // demoted, which their rollback documents as an observational no-op.
+        let log_displaced = journaled && self.graph.as_disk().is_some();
         // `ensure_column_store_for_push` already ran; take the mutable handle
         // directly rather than paying its existence and mmap-base checks twice
         // on a path that runs once per node created.
@@ -184,9 +189,20 @@ impl DirGraph {
             self.column_store_mut(node_type)
                 .expect("ensure_column_store_for_push installed it"),
         );
+        if log_displaced {
+            store.begin_displaced_log();
+        }
         store.push_id(id);
         store.push_title(title);
-        store.push_row(interned_props)
+        let row_id = store.push_row(interned_props);
+        if log_displaced {
+            let displaced = store.take_displaced();
+            store.end_displaced_log();
+            if let (Some(type_key), Some(journal)) = (type_key, self.graph.columnar_undo_mut()) {
+                journal.note_columns_displaced(type_key, displaced);
+            }
+        }
+        row_id
     }
 
     /// Record the property types this type has not registered yet.

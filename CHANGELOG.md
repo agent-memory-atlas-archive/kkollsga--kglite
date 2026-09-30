@@ -111,17 +111,16 @@ before upgrading.
   label the advisory names the relationship and the stub type. The Python
   loaders (a `UserWarning`) and blueprint builds report the same
   engine-built text.
-- A property `SET` statement on a disk graph no longer deep-copies each column
-  it writes the first time it writes it: the statement undoes itself from a
-  journal of the cells, titles and column types it overwrote instead of holding
-  a copy-on-write share of every column. The per-statement cost of closing 2,000
-  rows in a 2-million-row register dropped from a term that grew with the table
-  (steady state 1.5 us/row there, 2.7 us/row at 8 million) to a flat 1.2-1.3
-  us/row, 1.4-1.5x the same statement in memory. A statement that fails part-way
+- A `SET`, `REMOVE`, `CREATE` or `MERGE` statement on a disk graph no
+  longer deep-copies every column it writes the first time it writes it: the
+  statement undoes itself from a journal of the cells, titles, appended rows and
+  column types it changed instead of holding a copy-on-write share of the whole
+  type. Closing 2,000 rows of a 2-million-row register dropped from a per-row
+  cost that grew with the table (steady state 1.5 us/row there, 2.7 us/row at 8
+  million) to a flat 1.2-1.7 us/row, 1.4-1.7x the same statement in memory; a
+  one-row `CREATE` or `MERGE` that creates dropped from 12 ms at 2 million rows
+  (85 ms at 8 million) to under 0.1 ms at either. A statement that fails part-way
   still leaves the graph, including each column's stored type, as it found it.
-
-### Fixed
-
 - `add_relationships`, `add_connections` and the spec-based edge creators no
   longer copy both endpoint types' whole id index onto the heap on every call
   when a type's index is still served from a disk graph's file: each row is one
