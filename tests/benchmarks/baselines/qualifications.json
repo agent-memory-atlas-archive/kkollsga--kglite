@@ -147,7 +147,7 @@
     "current.linux.json": {
       "evidence": "Verified released kglite==0.13.2 Linux/Python3.12 wheel and complete workload; provenance retained in kglite_baseline.",
       "platform": "Linux/x86_64",
-      "sha256": "fbdbae11b6a113941fd999e4a931b3e4fa939004646d553d1238dbc214ea53ad",
+      "sha256": "fd0307b39bfbb4283285bcf6c89147a6bfbd9cbbf0b5e09c4820b7f6fafe3276",
       "status": "accepted"
     },
     "reference_0_16_23.linux.json": {
@@ -173,11 +173,17 @@
       "platform": "Linux/x86_64",
       "sha256": "fbdbae11b6a113941fd999e4a931b3e4fa939004646d553d1238dbc214ea53ad",
       "status": "accepted"
+    },
+    "reference_0_19_0_ts_cells_measured_7763.linux.json": {
+      "evidence": "Verified released kglite==0.13.2 Linux/Python3.12 wheel and complete workload; provenance retained in kglite_baseline.",
+      "platform": "Linux/x86_64",
+      "sha256": "fd0307b39bfbb4283285bcf6c89147a6bfbd9cbbf0b5e09c4820b7f6fafe3276",
+      "status": "accepted"
     }
   },
   "references": {
     "Darwin/arm64": "0_19_0_ts_cells.json",
-    "Linux/x86_64": "reference_0_19_0_ts_cells_measured.linux.json"
+    "Linux/x86_64": "reference_0_19_0_ts_cells_measured_7763.linux.json"
   },
   "schema_version": 1
 }
