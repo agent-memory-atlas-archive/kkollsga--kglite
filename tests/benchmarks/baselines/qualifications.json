@@ -145,9 +145,9 @@
       "status": "accepted"
     },
     "current.linux.json": {
-      "evidence": "reference_0_17_0_cells.linux.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0) and CI leg 2 requires an exact cell-set match. The new rows are PROVISIONAL scaled estimates, not Linux measurements: kglite 0.13.2 run unmodified on macOS/M4 2026-09-30 (3.815 and 2.501 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",
+      "evidence": "Verified released kglite==0.13.2 Linux/Python3.12 wheel and complete workload; provenance retained in kglite_baseline.",
       "platform": "Linux/x86_64",
-      "sha256": "3deb0b49799cebb2d0faaf2d509fc884ed8fff9a4968d8866383269c40fdf81a",
+      "sha256": "fbdbae11b6a113941fd999e4a931b3e4fa939004646d553d1238dbc214ea53ad",
       "status": "accepted"
     },
     "reference_0_16_23.linux.json": {
@@ -167,11 +167,17 @@
       "platform": "Linux/x86_64",
       "sha256": "3deb0b49799cebb2d0faaf2d509fc884ed8fff9a4968d8866383269c40fdf81a",
       "status": "accepted"
+    },
+    "reference_0_19_0_ts_cells_measured.linux.json": {
+      "evidence": "Verified released kglite==0.13.2 Linux/Python3.12 wheel and complete workload; provenance retained in kglite_baseline.",
+      "platform": "Linux/x86_64",
+      "sha256": "fbdbae11b6a113941fd999e4a931b3e4fa939004646d553d1238dbc214ea53ad",
+      "status": "accepted"
     }
   },
   "references": {
     "Darwin/arm64": "0_19_0_ts_cells.json",
-    "Linux/x86_64": "reference_0_19_0_ts_cells.linux.json"
+    "Linux/x86_64": "reference_0_19_0_ts_cells_measured.linux.json"
   },
   "schema_version": 1
 }

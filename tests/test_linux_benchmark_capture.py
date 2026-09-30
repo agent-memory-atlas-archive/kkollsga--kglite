@@ -88,4 +88,5 @@ def test_committed_linux_and_generic_baselines_track_the_same_workloads() -> Non
     baselines = REPO_ROOT / "tests" / "benchmarks" / "baselines"
     generic = json.loads((baselines / "current.json").read_text(encoding="utf-8"))
     linux = json.loads((baselines / "current.linux.json").read_text(encoding="utf-8"))
-    assert benchmark_names(linux) == benchmark_names(generic)
+    # Same workload set; file order follows each capture's collection order.
+    assert sorted(benchmark_names(linux)) == sorted(benchmark_names(generic))
