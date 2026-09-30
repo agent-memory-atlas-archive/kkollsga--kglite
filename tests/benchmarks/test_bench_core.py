@@ -571,6 +571,65 @@ def test_bench_shortest_path(benchmark, bench_graph):
 
 
 # ---------------------------------------------------------------------------
+# Timestamp columns
+# ---------------------------------------------------------------------------
+
+TIMESTAMP_ROWS = 100_000
+_TIMESTAMP_BASE = pd.Timestamp("2000-01-01")
+_TIMESTAMP_STEP_US = 6_311_111  # rank k sits at base + k * step, so ranks span ~20 years
+
+
+class TimestampGraph(NamedTuple):
+    graph: KnowledgeGraph
+    frame: pd.DataFrame
+
+
+@pytest.fixture(scope="module")
+def timestamp_graph():
+    """100k nodes with a µs-precision datetime64 column `t` (no sub-µs part).
+
+    Ranks are a permutation of the node ids (48271 is coprime with 100k), so
+    `t` is unique and unsorted in insertion order; the jitter stays below one
+    step and never reorders ranks.
+    """
+    n = TIMESTAMP_ROWS
+    nid = pd.RangeIndex(n).to_series()
+    rank = (nid * 48_271) % n
+    offset_us = rank * _TIMESTAMP_STEP_US + (nid % 997)
+    t = (_TIMESTAMP_BASE + pd.to_timedelta(offset_us, unit="us")).astype("datetime64[us]")
+    frame = pd.DataFrame({"nid": nid.to_numpy(), "name": [f"T{i}" for i in range(n)], "t": t.to_numpy()})
+    graph = KnowledgeGraph()
+    graph.add_nodes(frame, "T", "nid", "name")
+    return TimestampGraph(graph, frame)
+
+
+@pytest.mark.benchmark
+def test_bench_timestamp_where_scan(benchmark, timestamp_graph):
+    """Range filter over a timestamp column, `$t` selecting exactly half."""
+    graph, frame = timestamp_graph
+    cutoff = (_TIMESTAMP_BASE + pd.Timedelta(microseconds=(TIMESTAMP_ROWS // 2) * _TIMESTAMP_STEP_US)).to_pydatetime()
+    expected = int((frame["t"] >= cutoff).sum())
+    assert expected == TIMESTAMP_ROWS // 2
+
+    def query_and_consume():
+        return graph.cypher("MATCH (n:T) WHERE n.t >= $t RETURN count(*) AS c", params={"t": cutoff}).to_list()
+
+    assert benchmark(query_and_consume) == [{"c": expected}]
+
+
+@pytest.mark.benchmark
+def test_bench_timestamp_order_by_limit(benchmark, timestamp_graph):
+    """Top-10 nodes by a timestamp column, whole nodes projected."""
+    graph, frame = timestamp_graph
+    expected = frame.sort_values("t", ascending=False)["nid"].head(10).tolist()
+
+    def query_and_consume():
+        return graph.cypher("MATCH (n:T) RETURN n ORDER BY n.t DESC LIMIT 10").to_list()
+
+    assert [row["n"]["id"] for row in benchmark(query_and_consume)] == expected
+
+
+# ---------------------------------------------------------------------------
 # Save throughput
 # ---------------------------------------------------------------------------
 #

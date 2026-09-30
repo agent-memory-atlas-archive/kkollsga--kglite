@@ -729,3 +729,50 @@ def test_bench_to_subgraph(benchmark, subgraph_source):
 def test_bench_to_subgraph_expand(benchmark, subgraph_source):
     """`expand(1).to_subgraph()` from 2000 seeds: the BFS plus a partial copy."""
     benchmark(lambda: subgraph_source.select("E", limit=2000).expand(1).to_subgraph())
+
+
+# ── Timestamp-bounded declaration ───────────────────────────────────────────
+
+ROLE_ROWS = 100_000
+ROLE_AS_OF = pd.Timestamp("2014-06-30 12:34:56.789012")
+
+
+@pytest.fixture(scope="module")
+def timestamp_roles():
+    """100k role assignments whose declared bounds are µs datetimes (not
+    dates), declared with `set_temporal`: starts spread over 2000-2025, 60% closed after 30-3,000 days."""
+    rng = np.random.default_rng(SEED)
+    n = ROLE_ROWS
+    start = pd.Timestamp("2000-01-01") + pd.to_timedelta(rng.integers(0, 25 * 365 * 86_400 * 10**6, n), unit="us")
+    length = pd.to_timedelta(rng.integers(30 * 86_400 * 10**6, 3_000 * 86_400 * 10**6, n), unit="us")
+    end = pd.Series(start + length).where(rng.random(n) < 0.6)
+    frame = pd.DataFrame(
+        {
+            "rid": np.arange(n),
+            "name": [f"Role{i}" for i in range(n)],
+            "valid_from": pd.Series(start).astype("datetime64[us]"),
+            "valid_to": end.astype("datetime64[us]"),
+        }
+    )
+    graph = KnowledgeGraph()
+    graph.add_nodes(frame, "Role", "rid", "name")
+    # set_temporal keeps the datetime bounds; the loaders' validFrom/validTo
+    # column types would convert them to dates and drop the time of day.
+    graph.set_temporal("Role", "valid_from", "valid_to", convention="half_open")
+    valid = (frame["valid_from"] <= ROLE_AS_OF) & (frame["valid_to"].isna() | (frame["valid_to"] > ROLE_AS_OF))
+    return graph, int(valid.sum())
+
+
+@pytest.mark.benchmark
+def test_bench_timestamp_valid_at(benchmark, timestamp_roles):
+    """`FOR VALID_TIME AS OF` count on timestamp bounds, cold: every round runs
+    on a fresh copy, so it pays the endpoint-index build (the
+    `test_temporal_view_at_cold` convention). Not a core cell: 0.13.2 has no
+    declarations, and the core harness must run unmodified on it."""
+    graph, expected = timestamp_roles
+    query = f"FOR VALID_TIME AS OF datetime('{ROLE_AS_OF.isoformat()}') MATCH (r:Role) RETURN count(*) AS c"
+    assert graph.copy().cypher(query).to_list() == [{"c": expected}]
+    assert expected != ROLE_ROWS
+    benchmark.pedantic(
+        lambda kg: kg.cypher(query).to_list(), setup=lambda: ((graph.copy(),), {}), rounds=20, iterations=1
+    )

@@ -65,5 +65,5 @@ Regenerate with `python scripts/render_docs_facts.py`. CI checks this file for d
 - CPU: `Apple M4`
 - Python: `CPython 3.14.3`
 - pytest-benchmark schema/plugin version: `5.2.3`
-- Recorded benchmarks: `37`
-- Reference qualification: `accepted`; approved comparison capture: `0_19_0.json`
+- Recorded benchmarks: `39`
+- Reference qualification: `accepted`; approved comparison capture: `0_19_0_ts_cells.json`

@@ -132,16 +132,22 @@
       "sha256": "c91f79caff3a83176dc5463295afea0ca35a0be744220e3a2779fe059692b33c",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release 0.19.0, 2026-09-28 23:22-23:28 local: one 37-cell capture on Mac16,10 (M4, 16 GiB) right after a cold release build following make prune-target; load avg 2.7 at start, 3.4 at end, no ppid-1 CPU hogs; other desktop work running. vs accepted 0_18_1 (min): OK, worst +13.2% (cypher_match, a 5 us cell that spikes episodically), median about +3%, exists_var_length_witness -6.9%. Machine state: the published 0.18.1 wheel re-measured the same evening reads +5..+12% over the 0_18_1 capture on this machine (scratchpad ab314/ab4 same-interpreter A/B), so ~half of the offset is instrument drift; the same-session tree-vs-wheel A/B (Python 3.14 both) had a 37-cell median of +0.8% with five cells 10-17% faster and traversal fixed (f004809b). bench-anchor OK worst +19.7%.",
+    "0_19_0_ts_cells.json": {
+      "evidence": "0_19_0.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0), and the exact-set CI legs need every harness cell in the reference. 2026-09-30 10:33-10:42 on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, under heavy external load (Blender render, load avg 4.8-12.8, no rustc running); two release runs of the new cells agree within 1.4% min (where_scan 1.749/1.751 ms, order_by_limit 2.101/2.073 ms, median/min 1.02-1.03) and the same-interpreter (Python 3.14, pandas 3.0.3) A/B against the published 0.13.2 wheel reads the candidate 53% faster (1.78 vs 3.78 ms) and 17% faster (2.07 vs 2.50 ms). Unchanged rows are byte-identical to accepted 0_19_0.json; controls in the same runs: cypher_match -10.8/-10.9%, save_kgl -11.7/-7.1%, untyped_edge_count_1m -3.3/-4.1% vs it (a uniform machine offset, not code). Statistic: min.",
       "platform": "Darwin/arm64",
-      "sha256": "c91f79caff3a83176dc5463295afea0ca35a0be744220e3a2779fe059692b33c",
+      "sha256": "4ae58fb2d36253958c564d0f7197897f007b6f59db4f2a100beaf3039e006470",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "0_19_0.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0), and the exact-set CI legs need every harness cell in the reference. 2026-09-30 10:33-10:42 on Mac16,10 (M4, 16 GiB), Darwin 25.6.0, under heavy external load (Blender render, load avg 4.8-12.8, no rustc running); two release runs of the new cells agree within 1.4% min (where_scan 1.749/1.751 ms, order_by_limit 2.101/2.073 ms, median/min 1.02-1.03) and the same-interpreter (Python 3.14, pandas 3.0.3) A/B against the published 0.13.2 wheel reads the candidate 53% faster (1.78 vs 3.78 ms) and 17% faster (2.07 vs 2.50 ms). Unchanged rows are byte-identical to accepted 0_19_0.json; controls in the same runs: cypher_match -10.8/-10.9%, save_kgl -11.7/-7.1%, untyped_edge_count_1m -3.3/-4.1% vs it (a uniform machine offset, not code). Statistic: min.",
+      "platform": "Darwin/arm64",
+      "sha256": "4ae58fb2d36253958c564d0f7197897f007b6f59db4f2a100beaf3039e006470",
       "status": "accepted"
     },
     "current.linux.json": {
-      "evidence": "reference_0_16_23.linux.json plus one cell: the harness gained test_bench_hop1_deg3_memory mid-cycle (859d874d, deep-scan program) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement \u2014 kglite 0.13.2 run unmodified on macOS/M4 2026-09-08 (15.405 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the eleven existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",
+      "evidence": "reference_0_17_0_cells.linux.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0) and CI leg 2 requires an exact cell-set match. The new rows are PROVISIONAL scaled estimates, not Linux measurements: kglite 0.13.2 run unmodified on macOS/M4 2026-09-30 (3.815 and 2.501 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",
       "platform": "Linux/x86_64",
-      "sha256": "8b894493a8a352901e1dadbcf78ee9407b06b83b82b449d69fbd1e03935dfb43",
+      "sha256": "3deb0b49799cebb2d0faaf2d509fc884ed8fff9a4968d8866383269c40fdf81a",
       "status": "accepted"
     },
     "reference_0_16_23.linux.json": {
@@ -155,11 +161,17 @@
       "platform": "Linux/x86_64",
       "sha256": "8b894493a8a352901e1dadbcf78ee9407b06b83b82b449d69fbd1e03935dfb43",
       "status": "accepted"
+    },
+    "reference_0_19_0_ts_cells.linux.json": {
+      "evidence": "reference_0_17_0_cells.linux.json plus two cells: the harness gained test_bench_timestamp_where_scan and test_bench_timestamp_order_by_limit (register-scale T1 P0) and CI leg 2 requires an exact cell-set match. The new rows are PROVISIONAL scaled estimates, not Linux measurements: kglite 0.13.2 run unmodified on macOS/M4 2026-09-30 (3.815 and 2.501 ms min, the slower of two agreeing runs) scaled 3.9x, per the cells_added note and the precedent of the existing estimated rows. Acceptance preserves the secondary check; it does not convert an estimate into an observation.",
+      "platform": "Linux/x86_64",
+      "sha256": "3deb0b49799cebb2d0faaf2d509fc884ed8fff9a4968d8866383269c40fdf81a",
+      "status": "accepted"
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_0.json",
-    "Linux/x86_64": "reference_0_17_0_cells.linux.json"
+    "Darwin/arm64": "0_19_0_ts_cells.json",
+    "Linux/x86_64": "reference_0_19_0_ts_cells.linux.json"
   },
   "schema_version": 1
 }
