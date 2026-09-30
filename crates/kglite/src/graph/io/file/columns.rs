@@ -8,6 +8,7 @@
 //! its row.
 
 use super::*;
+use crate::graph::storage::mapped::column_store::ColumnFileOrigin;
 
 /// Load the per-type zstd sidecars onto the storage backend.
 /// Skips entries whose type is already loaded (from the mmap column files).
@@ -197,7 +198,10 @@ fn open_column_stores(
                 type_meta.extent()
             )));
         }
-        let store = type_meta.to_mmap_store(mmap);
+        let mut store = type_meta.to_mmap_store(mmap);
+        if meta.files.contains_key(&type_meta.type_name) {
+            store.origin = Some(Arc::new(ColumnFileOrigin { path: path.clone() }));
+        }
         if validate_utf8 {
             store.validate_utf8(&type_meta.type_name)?;
         }

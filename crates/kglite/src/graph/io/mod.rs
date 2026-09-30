@@ -4,6 +4,7 @@
 //! Disk-specific bulk-load internals stay under `ntriples`, while reusable
 //! storage primitives live under `storage::disk`.
 
+pub(crate) mod column_link;
 pub(crate) mod columns_meta;
 pub mod export;
 pub mod export_sql;

@@ -308,22 +308,28 @@ impl DirGraph {
         let publication = writer_lock
             .publication_permit()
             .map_err(|e| format!("Failed to retain disk publication authority: {e}"))?;
+        let mut clock = crate::graph::io::load_timing::StageClock::start();
         let generation = crate::graph::storage::disk::generation::GenerationTxn::begin(&root)
             .map_err(|e| format!("Failed to begin disk generation: {e}"))?;
-        self.write_disk_snapshot(generation.stage_dir())?;
+        clock.mark("save_begin");
+        self.write_disk_snapshot(generation.stage_dir(), generation.previous_snapshot())?;
+        clock.mark("save_snapshot_total");
         let published = generation
             .publish()
             .map_err(|e| format!("Failed to publish disk generation: {e}"))?;
+        clock.mark("save_publish");
         // The save is durable from here on; this only shrinks the handle's
         // footprint and never fails the call (see `disk_rebase`). It runs before
         // `finish_generation` clears the mutation workspace: an append parks
         // file-backed columns there, and a store still mapping them would keep
         // the directory alive on platforms that refuse to remove mapped files.
         self.rebase_after_publish(&published);
+        clock.mark("save_rebase");
         if let GraphBackend::Disk(disk) = &mut self.graph {
             disk.finish_generation(root, published)
                 .map_err(|e| format!("Failed to activate published disk generation: {e}"))?;
         }
+        clock.mark("save_finish_generation");
         // The lease was held across the whole snapshot-write / publish /
         // rebase sequence by this local `Arc`; `finish_generation` cleared the
         // graph's own reference, so dropping it here is what actually releases
@@ -338,8 +344,18 @@ impl DirGraph {
     /// of a generation publish, with no pointer swap and no rebase of the live
     /// handle. `pub(crate)` because disk-mode *creation* stages its initial
     /// empty generation through it too (`storage::mode`).
-    pub(crate) fn write_disk_snapshot(&mut self, dir: &std::path::Path) -> Result<(), String> {
+    ///
+    /// `previous` is the published generation this one replaces; a node type
+    /// whose column file nothing has changed is linked from it rather than
+    /// rewritten (see `io::column_link`).
+    pub(crate) fn write_disk_snapshot(
+        &mut self,
+        dir: &std::path::Path,
+        previous: Option<&std::path::Path>,
+    ) -> Result<(), String> {
+        let mut clock = crate::graph::io::load_timing::StageClock::start();
         self.consolidate_disk_for_save(dir)?;
+        clock.mark("save_consolidate");
 
         let edge_embeddings_required =
             crate::graph::edge_embeddings::has_persisted_edge_embeddings(self);
@@ -356,6 +372,7 @@ impl DirGraph {
         // `DiskGraph.column_stores`.
         dg.save_to_dir_with_edge_embeddings(dir, &self.interner, edge_embeddings_required)
             .map_err(|e| format!("DiskGraph save failed: {}", e))?;
+        clock.mark("save_csr_and_edges");
         // No mirror to refresh: `DiskGraph` *is* the owner of the column
         // stores, so the sidecar writer below reads the same `Arc`s
         // `save_to_dir` just flushed into. An earlier shape kept a
@@ -370,6 +387,7 @@ impl DirGraph {
         // parses in milliseconds.
         crate::graph::io::file::write_node_type_metadata_bin(dir, self)?;
         crate::graph::io::file::write_connection_type_metadata_bin(dir, self)?;
+        clock.mark("save_type_metadata");
         // Secondary labels — disk's columnar layout has no slot for
         // NodeData.extra_labels, so we persist the inverted index as
         // a sidecar. Skipped when the graph has no secondaries
@@ -389,11 +407,15 @@ impl DirGraph {
         // re-derived on load. Unframed binary data is rejected, while the
         // older JSON representation remains a read-only data fallback.
         crate::graph::io::file::write_interner_bin(dir, self)?;
+        clock.mark("save_interner_and_metadata");
 
         let stores = self.column_stores_for_save();
-        self.write_unified_column_file(dir, &stores)?;
+        clock.mark("save_columns_prepare");
+        self.write_unified_column_file(dir, &stores, previous)?;
+        clock.mark("save_columns_files");
         self.write_column_sidecars(dir, &stores)?;
         drop(stores);
+        clock.mark("save_column_sidecars");
 
         // 0.8.13: type_indices uses a flat CSR binary keyed by interner
         // hashes. 0.8.28+: id_indices uses an mmap-resident raw `.bin`
@@ -406,12 +428,14 @@ impl DirGraph {
             &self.type_indices,
             &self.interner,
         )?;
+        clock.mark("save_type_indices");
         crate::graph::storage::disk::id_index::write_id_indices_bin(
             dir,
             &self.id_indices,
             &self.type_indices,
             &self.interner,
         )?;
+        clock.mark("save_id_indices");
 
         // BTreeMap view for byte-determinism — same rationale as write_kgl.
         if !self.embeddings.is_empty() {
@@ -445,7 +469,9 @@ impl DirGraph {
     /// Bring a disk graph's CSR, overflow edges and global indexes to their
     /// final saved state before anything is written.
     fn consolidate_disk_for_save(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        let mut clock = crate::graph::io::load_timing::StageClock::start();
         self.ensure_disk_edges_built()?;
+        clock.mark("save_consolidate_edges_built");
         // Merge overflow edges back so conn_type_index and
         // peer_count_histogram reflect every live edge — the one-shot the
         // per-batch build path defers (see `ensure_disk_edges_built`).
@@ -473,9 +499,11 @@ impl DirGraph {
         // graph's current root and leaves the already-published columns in
         // place, so renumbering rows there would leave every slot naming a row
         // the published file does not have.
+        clock.mark("save_consolidate_compact");
         if rewriting {
             self.drop_dead_column_rows();
         }
+        clock.mark("save_consolidate_drop_dead_rows");
         if let GraphBackend::Disk(ref mut dg) = self.graph {
             // Auto-build the cross-type global title index so that
             // `MATCH (n {title: 'X'})` and `g.search(text)` are O(log N)
@@ -485,6 +513,7 @@ impl DirGraph {
             // node-only graphs (no edges) still get the index built.
             dg.build_global_property_index("title")
                 .map_err(|e| format!("title index build failed: {e}"))?;
+            clock.mark("save_consolidate_title_index");
             // Likewise index `nid` — the string id form for prefixed-id
             // datasets (Wikidata `"Q42"`). Since 0.11.0 `{nid: 'Q42'}` is a
             // plain string-property lookup (not the integer id-index), so the
@@ -492,6 +521,7 @@ impl DirGraph {
             // no type has a `nid` column.
             dg.build_global_property_index("nid")
                 .map_err(|e| format!("nid index build failed: {e}"))?;
+            clock.mark("save_consolidate_nid_index");
             // Every *other* bundle the next generation will carry, rebuilt if
             // the graph has moved under it. `copy_persisted_indexes` copies
             // bundles into the new generation verbatim, and a stale one that
@@ -500,6 +530,7 @@ impl DirGraph {
             // skipped, so an unmutated save costs what it always did.
             dg.refresh_persistent_indexes(false)
                 .map_err(|e| format!("property index rebuild failed: {e}"))?;
+            clock.mark("save_consolidate_refresh_indexes");
         }
         Ok(())
     }
@@ -639,13 +670,20 @@ impl DirGraph {
         &self,
         dir: &std::path::Path,
         stores: &SaveStores,
+        previous: Option<&std::path::Path>,
     ) -> Result<(), String> {
         let preexisting_columns_bin = dir.join("seg_000/columns.bin").exists()
             || dir.join("columns.bin").exists()
             || crate::graph::io::columns_meta::locate(dir).is_some();
         if !preexisting_columns_bin && !stores.is_empty() {
-            crate::graph::io::unified_columns::write_unified_columns(dir, stores, &self.interner)
-                .map_err(|e| format!("unified columns write failed: {}", e))?;
+            let previous = previous.and_then(crate::graph::io::column_link::PreviousColumns::open);
+            crate::graph::io::unified_columns::write_unified_columns(
+                dir,
+                stores,
+                &self.interner,
+                previous.as_ref(),
+            )
+            .map_err(|e| format!("unified columns write failed: {}", e))?;
         }
         Ok(())
     }

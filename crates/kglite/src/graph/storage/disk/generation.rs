@@ -265,6 +265,8 @@ pub(crate) struct GenerationTxn {
     stage: PathBuf,
     final_dir: PathBuf,
     name: String,
+    /// The generation `CURRENT` selects now, which this one replaces.
+    previous: Option<PathBuf>,
 }
 
 impl GenerationTxn {
@@ -280,7 +282,8 @@ impl GenerationTxn {
                 fs::remove_dir_all(entry.path())?;
             }
         }
-        let mut max_id = resolve_snapshot(root)?.generation.unwrap_or(0);
+        let current = resolve_snapshot(root)?;
+        let mut max_id = current.generation.unwrap_or(0);
         for entry in fs::read_dir(&generations)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -309,11 +312,19 @@ impl GenerationTxn {
             stage,
             final_dir,
             name,
+            previous: current.generation.map(|_| current.snapshot_dir),
         })
     }
 
     pub(crate) fn stage_dir(&self) -> &Path {
         &self.stage
+    }
+
+    /// The published generation this one replaces; `None` for a directory with
+    /// no `CURRENT` yet. Its files are immutable, so a save may link them into
+    /// the stage.
+    pub(crate) fn previous_snapshot(&self) -> Option<&Path> {
+        self.previous.as_deref()
     }
 
     pub(crate) fn publish(self) -> io::Result<PathBuf> {

@@ -28,7 +28,7 @@ fn mapped(store: ColumnStore) -> (ColumnTypeMeta, MmapMut) {
             Arc::new(self::store(&[Value::UniqueId(7)])),
         ),
     ]);
-    let result = write_unified_columns(dir.path(), &stores, &StringInterner::new()).unwrap();
+    let result = write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
     assert!(result.written.contains("Subject"));
     type_file(dir.path(), "Subject")
 }
@@ -139,7 +139,8 @@ fn unsupported_identity_columns_require_lossless_sidecars() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let stores = HashMap::from([("Subject".into(), Arc::new(store(&[value])))]);
-        let result = write_unified_columns(dir.path(), &stores, &StringInterner::new()).unwrap();
+        let result =
+            write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
         assert!(result.unhandled.contains("Subject"));
         assert!(result.written.is_empty());
         assert!(!dir.path().join("seg_000/type_columns").exists());
@@ -191,7 +192,7 @@ fn timestamp_column_round_trips_through_packed_and_unified_layouts() {
     // per-type file (mmap) layout
     let dir = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
-    let result = write_unified_columns(dir.path(), &stores, &interner).unwrap();
+    let result = write_unified_columns(dir.path(), &stores, &interner, None).unwrap();
     assert!(
         result.written.contains("T"),
         "a Timestamp column must not force a sidecar"
@@ -219,7 +220,7 @@ fn timestamp_column_round_trips_through_packed_and_unified_layouts() {
 fn a_type_file_is_never_overwritten() {
     let dir = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Subject".to_string(), Arc::new(store(&[Value::Int64(1)])))]);
-    write_unified_columns(dir.path(), &stores, &StringInterner::new()).unwrap();
+    write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
     let relative =
         crate::graph::io::columns_meta::read(&dir.path().join("seg_000/columns_meta.json"))
             .unwrap()
@@ -227,7 +228,7 @@ fn a_type_file_is_never_overwritten() {
             .clone();
     let file = dir.path().join("seg_000").join(&relative);
     let before = std::fs::read(&file).unwrap();
-    let error = write_unified_columns(dir.path(), &stores, &StringInterner::new())
+    let error = write_unified_columns(dir.path(), &stores, &StringInterner::new(), None)
         .err()
         .expect("the second write must not replace the published file");
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
@@ -242,7 +243,7 @@ fn an_empty_type_gets_a_mappable_file() {
     empty.truncate_rows(0);
     let dir = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Empty".to_string(), Arc::new(empty))]);
-    let result = write_unified_columns(dir.path(), &stores, &StringInterner::new()).unwrap();
+    let result = write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
     assert!(result.written.contains("Empty") && result.unhandled.is_empty());
     let (meta, mmap) = type_file(dir.path(), "Empty");
     assert_eq!(mmap.len(), 1);

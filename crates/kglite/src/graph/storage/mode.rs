@@ -153,7 +153,7 @@ fn publish_initial_generation(dir: &Path) -> Result<(), String> {
     seed.graph = GraphBackend::Disk(Box::new(
         DiskGraph::new_at_path(scratch.path()).map_err(|e| describe("seed", e))?,
     ));
-    seed.write_disk_snapshot(txn.stage_dir())?;
+    seed.write_disk_snapshot(txn.stage_dir(), None)?;
     drop(seed);
     txn.publish().map_err(|e| describe("publish", e))?;
     Ok(())

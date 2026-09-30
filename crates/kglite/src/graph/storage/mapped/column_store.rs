@@ -104,6 +104,17 @@ pub struct MmapColumnStore {
     pub(crate) overflow_data: Region,
     /// Whether this type has overflow data.
     pub(crate) has_overflow: bool,
+    /// The per-type column file this store maps, when it maps one a saved
+    /// generation owns. A later save links that file into its stage instead
+    /// of rewriting it, and only for a store whose origin it finds in the
+    /// generation it is replacing.
+    pub(crate) origin: Option<Arc<ColumnFileOrigin>>,
+}
+
+/// Where a file-backed [`MmapColumnStore`] was mapped from.
+#[derive(Debug)]
+pub(crate) struct ColumnFileOrigin {
+    pub(crate) path: std::path::PathBuf,
 }
 
 // ─── Constructor ─────────────────────────────────────────────────────────────
@@ -844,6 +855,7 @@ mod tests {
             overflow_offsets: Region::EMPTY,
             overflow_data: Region::EMPTY,
             has_overflow: false,
+            origin: None,
         };
         (store, data_bytes.len())
     }

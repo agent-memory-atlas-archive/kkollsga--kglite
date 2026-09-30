@@ -78,7 +78,8 @@ struct Mapped {
 fn mapped_store(rows: std::ops::Range<i64>) -> Mapped {
     let directory = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Employee".to_string(), Arc::new(heap_store(rows)))]);
-    let result = write_unified_columns(directory.path(), &stores, &StringInterner::new()).unwrap();
+    let result =
+        write_unified_columns(directory.path(), &stores, &StringInterner::new(), None).unwrap();
     assert!(result.written.contains("Employee"));
     Mapped {
         store: open_type_file(directory.path()),
@@ -340,7 +341,8 @@ fn a_rolled_back_first_append_leaves_a_pure_mapped_store() {
 fn saved_and_reloaded(store: &ColumnStore) -> Mapped {
     let directory = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Employee".to_string(), Arc::new(store.clone()))]);
-    let result = write_unified_columns(directory.path(), &stores, &StringInterner::new()).unwrap();
+    let result =
+        write_unified_columns(directory.path(), &stores, &StringInterner::new(), None).unwrap();
     assert!(
         result.written.contains("Employee"),
         "the store was written as column regions, not a sidecar: {:?}",

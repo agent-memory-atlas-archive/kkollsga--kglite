@@ -549,6 +549,7 @@ impl DiskGraph {
         // Drain mutation caches: `edge_mut_cache` → `edge_properties`, and
         // `node_mut_cache` → `self.column_stores`. The caller
         // (`DirGraph::save_disk`) reads those same stores for the column file.
+        let mut clock = crate::graph::io::load_timing::StageClock::start();
         self.clear_arenas();
         std::fs::create_dir_all(target_dir)?;
 
@@ -582,6 +583,7 @@ impl DiskGraph {
         // Immutable generations inherit base indexes, then overlay rebuilt
         // workspace indexes so the latter win without touching the snapshot.
         self.copy_persisted_indexes(&csr_target)?;
+        clock.mark("save_copy_persisted_indexes");
 
         // Always persist the core CSR arrays, regardless of mmap vs heap
         // backing: after a prior seal (`reconcile_seg0_csr`) they are
@@ -601,6 +603,7 @@ impl DiskGraph {
         self.in_edges
             .save_to_file(&csr_target.join("in_edges.bin"))?;
         self.save_logical_edge_endpoints(&csr_target.join("edge_endpoints.bin"))?;
+        clock.mark("save_csr_files");
 
         if !self.overflow_out.is_empty() || !self.overflow_in.is_empty() {
             let overflow = (&self.overflow_out, &self.overflow_in);
@@ -623,6 +626,7 @@ impl DiskGraph {
         let upper = self.next_edge_idx;
         self.edge_properties.save_to(&csr_target, upper)?;
         let edge_props_meta = EdgePropertyStore::meta_for(&csr_target);
+        clock.mark("save_edge_properties");
 
         // Trim the conn_type_index mmap'd files to their logical length.
         // `MmapOrVec::mapped(path, initial_cap)` has a 64-element minimum,

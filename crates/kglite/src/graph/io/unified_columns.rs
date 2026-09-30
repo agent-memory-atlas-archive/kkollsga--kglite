@@ -33,6 +33,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::graph::io::column_link::{self, Carried, PreviousColumns, Reusable};
 use crate::graph::io::columns_meta::{self, ColumnsMeta};
 use crate::graph::io::ntriples::{
     ColMapEntry, ColumnTypeMeta, FixedColMeta, RegionMeta, StrColMeta,
@@ -52,6 +53,9 @@ pub struct WriteResult {
     /// Types with columns unrepresentable in the mmap layout, or with no bytes
     /// to map. Caller uses the legacy zstd sidecar path for these.
     pub unhandled: HashSet<String>,
+    /// The subset of `written` whose file came from the previous generation
+    /// instead of being written (see [`crate::graph::io::column_link`]).
+    pub carried: HashMap<String, Carried>,
 }
 
 /// A run of one region's bytes: borrowed or owned data, or `len` copies of
@@ -128,17 +132,21 @@ impl<'a> RegionPlanner<'a> {
 /// Write every column store that fits the mmap layout into its own file under
 /// `dir/seg_000/type_columns/`, plus `seg_000/columns_meta.json`.
 ///
-/// Returns the set of types that landed in a file (caller skips them during
-/// sidecar emission) plus the set that needs sidecar fallback.
-pub fn write_unified_columns<'s>(
+/// A type whose store is an unchanged view of a file `previous` holds is carried
+/// into the stage instead of written. Returns the set of types that landed in a
+/// file (caller skips them during sidecar emission) plus the set that needs
+/// sidecar fallback.
+pub(crate) fn write_unified_columns<'s>(
     dir: &Path,
     column_stores: &'s HashMap<String, Arc<ColumnStore>>,
     _interner: &StringInterner,
+    previous: Option<&PreviousColumns>,
 ) -> io::Result<WriteResult> {
     let seg0 = dir.join("seg_000");
     fs::create_dir_all(&seg0)?;
 
     let mut planned: Vec<PlannedType<'s>> = Vec::with_capacity(column_stores.len());
+    let mut reused: Vec<(String, Reusable)> = Vec::new();
     let mut unhandled: HashSet<String> = HashSet::new();
     let mut used_files: HashSet<String> = HashSet::new();
 
@@ -147,41 +155,74 @@ pub fn write_unified_columns<'s>(
     type_names.sort();
 
     for type_name in type_names {
-        match plan_type(type_name, &column_stores[type_name]) {
-            Some(mut plan) => {
-                plan.file = columns_meta::type_file_name(type_name, &mut used_files);
-                planned.push(plan);
-            }
+        let store = &column_stores[type_name];
+        if let Some(reuse) = previous.and_then(|prev| prev.reusable(type_name, store)) {
+            // A carried file keeps its name, so it is reserved before any new
+            // file is named: two names sharing a key must not swap files.
+            used_files.insert(reuse.file.clone());
+            reused.push((type_name.clone(), reuse));
+            continue;
+        }
+        match plan_type(type_name, store) {
+            Some(plan) => planned.push(plan),
             None => {
                 unhandled.insert(type_name.clone());
             }
         }
     }
+    for plan in &mut planned {
+        plan.file = columns_meta::type_file_name(&plan.type_name, &mut used_files);
+    }
 
-    if planned.is_empty() {
+    if planned.is_empty() && reused.is_empty() {
         let _ = fs::remove_file(seg0.join("columns_meta.json"));
         return Ok(WriteResult {
             written: HashSet::new(),
             unhandled,
+            carried: HashMap::new(),
         });
     }
 
+    let mut carried = HashMap::new();
+    for (type_name, reuse) in &reused {
+        carried.insert(
+            type_name.clone(),
+            column_link::carry(&reuse.source, &seg0, &reuse.file)?,
+        );
+    }
     for plan in &planned {
         write_type_file(&seg0, plan)?;
     }
 
+    let mut entries: Vec<(&str, &ColumnTypeMeta, &str)> = planned
+        .iter()
+        .map(|plan| (plan.type_name.as_str(), &plan.meta, plan.file.as_str()))
+        .chain(
+            reused
+                .iter()
+                .map(|(name, reuse)| (name.as_str(), &reuse.meta, reuse.file.as_str())),
+        )
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
     let meta = ColumnsMeta {
-        types: planned.iter().map(|plan| plan.meta.clone()).collect(),
-        files: planned
+        types: entries.iter().map(|(_, meta, _)| (*meta).clone()).collect(),
+        files: entries
             .iter()
-            .map(|plan| (plan.type_name.clone(), plan.file.clone()))
+            .map(|(name, _, file)| ((*name).to_string(), (*file).to_string()))
             .collect(),
         sidecars: Default::default(),
     };
     columns_meta::publish_json_synced(&seg0, &meta)?;
 
-    let written: HashSet<String> = planned.into_iter().map(|plan| plan.type_name).collect();
-    Ok(WriteResult { written, unhandled })
+    let written: HashSet<String> = entries
+        .iter()
+        .map(|(name, _, _)| (*name).to_string())
+        .collect();
+    Ok(WriteResult {
+        written,
+        unhandled,
+        carried,
+    })
 }
 
 /// Plan one type, or `None` when its store needs the sidecar.

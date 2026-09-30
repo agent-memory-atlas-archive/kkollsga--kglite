@@ -226,6 +226,7 @@ impl ColumnTypeMeta {
             overflow_offsets: self.overflow_offsets.to_region(),
             overflow_data: self.overflow_data.to_region(),
             has_overflow: self.has_overflow,
+            origin: None,
         }
     }
 }
@@ -1366,6 +1367,7 @@ fn assemble_column_stores(
                 Region::EMPTY
             },
             has_overflow,
+            origin: None,
         };
 
         // Collect metadata for serialization

@@ -60,7 +60,7 @@ fn fixture(mapped: bool, pure_overflow: bool) -> Fixture {
 fn map_fixture(store: ColumnStore, interner: StringInterner) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
-    let written = write_unified_columns(directory.path(), &stores, &interner).unwrap();
+    let written = write_unified_columns(directory.path(), &stores, &interner, None).unwrap();
     assert!(written.written.contains("T"));
     let seg0 = directory.path().join("seg_000");
     let mut columns =

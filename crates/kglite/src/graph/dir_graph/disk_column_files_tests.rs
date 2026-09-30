@@ -265,17 +265,25 @@ fn a_published_column_file_is_never_written_by_a_later_set_and_save() {
         first,
         "the save published a new generation"
     );
+    // A retained generation is only ever compared while it is still the
+    // previous one: by the third save retention has removed the first.
+    assert_eq!(
+        before,
+        files_of(&first),
+        "the first generation's files are byte-for-byte unchanged"
+    );
     // A second cycle from the new generation, with another write.
+    let second = current_generation(path);
+    let second_before = files_of(&second);
     run(
         &mut graph,
         "MATCH (e:Employee) WHERE e.id < 10 SET e.grade = -2",
     );
     graph.save_disk(path).unwrap();
-
-    let after = files_of(&first);
     assert_eq!(
-        before, after,
-        "the first generation's files are byte-for-byte unchanged"
+        second_before,
+        files_of(&second),
+        "the second generation's files are byte-for-byte unchanged"
     );
     assert_eq!(
         run(

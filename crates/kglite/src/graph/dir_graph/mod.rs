@@ -2469,6 +2469,8 @@ mod disk_hostile_names_tests;
 #[cfg(test)]
 mod disk_id_index_tests;
 #[cfg(test)]
+mod disk_link_tests;
+#[cfg(test)]
 mod disk_tail_tests;
 #[cfg(test)]
 mod edge_embedding_disk_tests;
