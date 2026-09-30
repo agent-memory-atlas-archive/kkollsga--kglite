@@ -16,6 +16,15 @@ thread_local! {
     static PUBLISH_FAILPOINT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
 }
 
+/// Run `body` with publication failing at `stage` on this thread only.
+#[cfg(test)]
+pub(crate) fn with_publish_failpoint<T>(stage: &'static str, body: impl FnOnce() -> T) -> T {
+    PUBLISH_FAILPOINT.with(|point| point.set(Some(stage)));
+    let result = body();
+    PUBLISH_FAILPOINT.with(|point| point.set(None));
+    result
+}
+
 fn publish_failpoint(stage: &'static str) -> io::Result<()> {
     #[cfg(test)]
     if PUBLISH_FAILPOINT.with(|point| point.get() == Some(stage)) {

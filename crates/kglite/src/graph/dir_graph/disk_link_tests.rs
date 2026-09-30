@@ -88,6 +88,27 @@ pub(super) fn link_count(path: &Path) -> u64 {
     std::fs::metadata(path).unwrap().nlink()
 }
 
+/// Every file under `generation`, by relative path, with its bytes.
+pub(super) fn snapshot(generation: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut out = BTreeMap::new();
+    let mut stack = vec![generation.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                stack.push(entry.path());
+            } else {
+                let relative = entry.path().strip_prefix(generation).unwrap().to_owned();
+                out.insert(
+                    relative.to_string_lossy().into_owned(),
+                    std::fs::read(entry.path()).unwrap(),
+                );
+            }
+        }
+    }
+    out
+}
+
 const SIBLINGS: [&str; 2] = ["Department", "Office"];
 
 /// Three types saved as generation 1 at `path`; the live handle maps them.
@@ -405,25 +426,6 @@ fn a_previous_generation_is_byte_identical_after_the_next_one_links_and_rewrites
     let path = dir.path().to_str().unwrap();
     let mut graph = saved_graph(path);
     let generation_one = current_generation(path);
-    let snapshot = |generation: &Path| -> BTreeMap<String, Vec<u8>> {
-        let mut out = BTreeMap::new();
-        let mut stack = vec![generation.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).unwrap() {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    stack.push(entry.path());
-                } else {
-                    let relative = entry.path().strip_prefix(generation).unwrap().to_owned();
-                    out.insert(
-                        relative.to_string_lossy().into_owned(),
-                        std::fs::read(entry.path()).unwrap(),
-                    );
-                }
-            }
-        }
-        out
-    };
     let before = snapshot(&generation_one);
     assert!(before.len() > 10, "the snapshot covers a whole generation");
 
@@ -454,4 +456,74 @@ fn a_previous_generation_is_byte_identical_after_the_next_one_links_and_rewrites
         second,
         "generation 3 altered a file of generation 2"
     );
+}
+
+/// A save that fails after it has linked files, at any point of the publish,
+/// leaves the previous generation selected and byte-for-byte as it was, and the
+/// next save from the same handle publishes what the failed one would have.
+#[test]
+fn a_publish_that_fails_after_linking_leaves_the_previous_generation_selected_and_untouched() {
+    use crate::graph::storage::disk::generation::with_publish_failpoint;
+    for stage in [
+        "before_generation_rename",
+        "after_generation_rename",
+        "before_current_replace",
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_str().unwrap();
+        let mut graph = saved_graph(path);
+        let previous = current_generation(path);
+        let before = snapshot(&previous);
+        run(
+            &mut graph,
+            "MATCH (e:Employee) WHERE e.id = 3 SET e.grade = -7",
+        );
+
+        let failed = with_publish_failpoint(stage, || graph.save_disk(path));
+        assert!(
+            failed.is_err(),
+            "{stage}: the injected failure did not surface"
+        );
+        assert_eq!(current_generation(path), previous, "{stage}: CURRENT moved");
+        assert_eq!(
+            snapshot(&previous),
+            before,
+            "{stage}: the failed save altered the previous generation"
+        );
+        let mut view = load_owned(path);
+        assert_eq!(
+            run(
+                &mut view,
+                "MATCH (e:Employee) WHERE e.id = 3 RETURN e.grade AS g"
+            ),
+            vec![vec![Value::Int64(9)]],
+            "{stage}: the previous generation no longer reads as it did"
+        );
+        drop(view);
+
+        graph.save_disk(path).unwrap();
+        assert_ne!(current_generation(path), previous, "{stage}");
+        drop(graph);
+        let mut reopened = load_owned(path);
+        assert_eq!(
+            run(
+                &mut reopened,
+                "MATCH (e:Employee) WHERE e.id = 3 RETURN e.grade AS g"
+            ),
+            vec![vec![Value::Int64(-7)]],
+            "{stage}: the retry did not publish the change"
+        );
+        assert_eq!(
+            run(&mut reopened, "MATCH (o:Office) RETURN count(o) AS c"),
+            vec![vec![Value::Int64(40)]],
+            "{stage}: a linked type lost rows"
+        );
+        // No stage directory survives the retry.
+        let stale: Vec<_> = std::fs::read_dir(Path::new(path).join("generations"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".stage-"))
+            .collect();
+        assert!(stale.is_empty(), "{stage}: {stale:?}");
+    }
 }
