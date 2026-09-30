@@ -109,6 +109,12 @@ def test_fixtures_carry_the_0_19_0_signature():
     for path in (FIXTURES / "disk").rglob("id_indices.bin"):
         assert path.read_bytes()[8:12] == struct.pack("<I", 2), path
 
+    int_title = FIXTURES / "disk_int_title"
+    for meta in int_title.rglob("disk_graph_meta.json"):
+        assert "disk_format" not in json.loads(meta.read_text(encoding="utf-8")), meta
+    assert not list(int_title.rglob("columns_meta.json")), "0.19.0 kept an integer-title type off the mmap path"
+    assert list(int_title.rglob("columns.zst")), "the integer-title type must sit in a per-type sidecar"
+
 
 # ── .kgl: v6 read-compat, v7 written ─────────────────────────────────────────
 
@@ -208,6 +214,50 @@ def test_disk_directory_from_0_19_0_resaves_into_format_2_and_reopens_identicall
     _assert_matches(kglite.load(str(directory)), queries, expected, "format 2 -> resave -> reopen")
 
 
+def test_int_title_directory_from_0_19_0_opens_with_pinned_answers(tmp_path):
+    directory = _copy(FIXTURES / "disk_int_title", tmp_path)
+    _assert_matches(
+        kglite.load(str(directory)), _queries("INT_TITLE_QUERIES"), _expected("disk_int_title"), "0.19.0 int-title load"
+    )
+
+
+def test_int_title_type_moves_from_its_sidecar_into_a_column_file_and_reopens_identically(tmp_path):
+    """0.19.0 sent a type with an integer title to a per-type zstd sidecar (a
+    non-string title forced one). The first save here gives it its own column
+    file with a typed integer title, leaves no sidecar, and answers the same."""
+    directory = _copy(FIXTURES / "disk_int_title", tmp_path)
+    expected = _expected("disk_int_title")
+    queries = _queries("INT_TITLE_QUERIES")
+
+    graph = kglite.load(str(directory))
+    graph.save()
+    del graph
+
+    (envelope,) = _sidecars(directory, "columns_meta.json")
+    body = json.loads(envelope.read_text(encoding="utf-8"))
+    assert body["format"] == DISK_FORMAT
+    (entry,) = [t for t in body["types"] if t["type_name"] == "Badge"]
+    assert entry["title_offsets"]["len"] == 0 and entry["title_data"]["len"] == 5 * 8, "the title is a bare i64 region"
+    column_file = envelope.parent / body["files"]["Badge"]
+    assert column_file.is_file() and column_file.stat().st_size >= 5 * 8
+    assert not (_current_generation(directory) / "columns").exists(), "the type is still on a sidecar"
+
+    _assert_matches(kglite.load(str(directory)), queries, expected, "0.19.0 int-title -> resave -> reopen")
+
+    # A write after the migration lands in the next generation and survives it.
+    graph = kglite.load(str(directory))
+    graph.cypher("MATCH (b:Badge {id: 3400000000003}) SET b.grade = 40")
+    graph.save()
+    del graph
+    reopened = kglite.load(str(directory))
+    assert reopened.cypher("MATCH (b:Badge {id: 3400000000003}) RETURN b.grade AS g, b.title AS t").to_list() == [
+        {"g": 40, "t": 7100000000003}
+    ]
+    assert reopened.cypher("MATCH (b:Badge) WHERE b.title = 7100000000004 RETURN b.id AS id").to_list() == [
+        {"id": 3400000000004}
+    ]
+
+
 def test_fresh_disk_build_writes_the_forward_guards(tmp_path):
     """A directory built by this tree, not migrated: the same three guards."""
     import pandas as pd
@@ -229,15 +279,18 @@ def test_fresh_disk_build_writes_the_forward_guards(tmp_path):
 
 
 def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_version(tmp_path):
-    """A type with an integer title is served from a per-type sidecar, so such a
-    directory has no ``columns_meta`` for the envelope to guard; the
-    ``id_indices.bin`` version is what stops an older reader there."""
+    """A type holding a ``Mixed`` column (here: an integer beside a string in one
+    property) is served from a per-type sidecar, so such a directory has no
+    ``columns_meta`` for the envelope to guard; the ``id_indices.bin`` version is
+    what stops an older reader there."""
     import pandas as pd
 
     directory = tmp_path / "sidecar_only"
     graph = kglite.KnowledgeGraph(storage="disk", path=str(directory))
     frame = pd.DataFrame({"id": [3100000000001, 3100000000002], "ident": [3100000000001, 3100000000002], "v": [1, 2]})
     graph.add_nodes(frame, "Pand", "id", "ident")
+    graph.cypher("MATCH (p:Pand {id: 3100000000001}) SET p.note = 7")
+    graph.cypher("MATCH (p:Pand {id: 3100000000002}) SET p.note = 'seven'")
     graph.save()
     del graph
     assert not _sidecars(directory, "columns_meta.json") and not _sidecars(directory, "columns.bin"), (

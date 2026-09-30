@@ -543,8 +543,10 @@ jobs:
         # `importorskip` there would turn a missing parser into a skip, and a
         # skip is a pass — to pytest and to the `ci-success` aggregate job
         # alike — which is the exact "gate that cannot fail" shape those tests
-        # exist to prevent.
-        run: pip install maturin pytest pytest-timeout pandas hypothesis pyyaml -r requirements/coverage.txt -r requirements/examples.txt
+        # exist to prevent. psutil is what tests/test_register_scale_disk_build.py
+        # measures its footprint with; without it only that file's footprint
+        # arms skip, and its answer arms still run.
+        run: pip install maturin pytest pytest-timeout pandas hypothesis pyyaml psutil -r requirements/coverage.txt -r requirements/examples.txt
 
       - name: Install pyarrow for the coexistence canary (newest-python leg only)
         # Only the newest-python leg installs pyarrow, so tests/test_pyarrow_coexistence.py

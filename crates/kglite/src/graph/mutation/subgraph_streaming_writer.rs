@@ -33,7 +33,7 @@
 
 use crate::datatypes::values::{BorrowedValue, Value};
 use crate::graph::schema::{exact_float, InternedKey, StringInterner, TypeSchema};
-use crate::graph::storage::column_store::{ColumnStore, TypedColumn};
+use crate::graph::storage::column_store::{exact_micros, ColumnStore, TypedColumn};
 use crate::graph::storage::mapped::mmap_vec::{MmapBytes, MmapOrVec};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -110,6 +110,14 @@ enum ColumnWriter {
         nulls_path: PathBuf,
     },
     Date {
+        data: BufWriter<File>,
+        nulls: BufWriter<File>,
+        len: u32,
+        data_path: PathBuf,
+        nulls_path: PathBuf,
+    },
+    /// Microseconds since the Unix epoch, as `TypedColumn::Timestamp` holds them.
+    Timestamp {
         data: BufWriter<File>,
         nulls: BufWriter<File>,
         len: u32,
@@ -489,6 +497,18 @@ impl ColumnWriter {
                     nulls_path,
                 },
             ),
+            "timestamp" => Self::open_fixed(
+                col_name,
+                out_dir,
+                "ts",
+                |data, nulls, len, data_path, nulls_path| ColumnWriter::Timestamp {
+                    data,
+                    nulls,
+                    len,
+                    data_path,
+                    nulls_path,
+                },
+            ),
             "string" => {
                 let offsets_path = out_dir.join(format!("{col_name}.off"));
                 let data_path = out_dir.join(format!("{col_name}.str"));
@@ -621,6 +641,9 @@ impl ColumnWriter {
                 nulls.write_all(&[is_null])?;
                 *len = len.checked_add(1).ok_or_else(row_overflow)?;
             }
+            ColumnWriter::Timestamp {
+                data, nulls, len, ..
+            } => write_timestamp_borrowed(data, nulls, len, value)?,
             ColumnWriter::Str {
                 offsets,
                 data,
@@ -758,6 +781,21 @@ impl ColumnWriter {
                 nulls.write_all(&[is_null])?;
                 *len = len.checked_add(1).ok_or_else(row_overflow)?;
             }
+            ColumnWriter::Timestamp {
+                data, nulls, len, ..
+            } => {
+                let cell = match value {
+                    Value::Timestamp(t) => Some(*t),
+                    Value::Null => None,
+                    other => {
+                        return Err(io::Error::other(format!(
+                            "TypeWriter::push: expected Timestamp/Null, got {:?}",
+                            value_kind(other)
+                        )))
+                    }
+                };
+                write_timestamp(data, nulls, len, cell)?;
+            }
             ColumnWriter::Str {
                 offsets,
                 data,
@@ -860,6 +898,19 @@ impl ColumnWriter {
                 let nulls = MmapOrVec::<u8>::load_mapped(&nulls_path, row_count as usize)?;
                 Ok(TypedColumn::Date { data, nulls })
             }
+            ColumnWriter::Timestamp {
+                data,
+                nulls,
+                len,
+                data_path,
+                nulls_path,
+            } => {
+                close_buf_writers([data, nulls])?;
+                expect_len(len, row_count, &data_path)?;
+                let data = MmapOrVec::<i64>::load_mapped(&data_path, row_count as usize)?;
+                let nulls = MmapOrVec::<u8>::load_mapped(&nulls_path, row_count as usize)?;
+                Ok(TypedColumn::Timestamp { data, nulls })
+            }
             ColumnWriter::Str {
                 offsets,
                 data,
@@ -895,6 +946,53 @@ impl ColumnWriter {
             }
         }
     }
+}
+
+/// [`write_timestamp`] for a borrowed cell.
+fn write_timestamp_borrowed(
+    data: &mut BufWriter<File>,
+    nulls: &mut BufWriter<File>,
+    len: &mut u32,
+    value: BorrowedValue<'_>,
+) -> io::Result<()> {
+    let cell = match value {
+        BorrowedValue::Timestamp(t) => Some(t),
+        BorrowedValue::Null => None,
+        other => {
+            return Err(io::Error::other(format!(
+                "TypeWriter::push_borrowed: expected Timestamp/Null, got {:?}",
+                borrowed_kind(&other)
+            )))
+        }
+    };
+    write_timestamp(data, nulls, len, cell)
+}
+
+/// Append one timestamp cell (`None` = null) to a `Timestamp` column's writers.
+///
+/// The source column is typed, so every value it holds is exact; one that is
+/// not is refused here rather than truncated to microseconds.
+fn write_timestamp(
+    data: &mut BufWriter<File>,
+    nulls: &mut BufWriter<File>,
+    len: &mut u32,
+    cell: Option<chrono::NaiveDateTime>,
+) -> io::Result<()> {
+    let (micros, is_null): (i64, u8) = match cell {
+        None => (0, 1),
+        Some(t) => match exact_micros(t) {
+            Some(micros) => (micros, 0),
+            None => {
+                return Err(io::Error::other(format!(
+                    "TypeWriter: {t} is not a whole number of microseconds"
+                )))
+            }
+        },
+    };
+    data.write_all(&micros.to_le_bytes())?;
+    nulls.write_all(&[is_null])?;
+    *len = len.checked_add(1).ok_or_else(row_overflow)?;
+    Ok(())
 }
 
 fn open_buf_writer(path: &Path) -> io::Result<BufWriter<File>> {
@@ -1048,6 +1146,81 @@ mod tests {
                 Value::Float64(i as f64 * 1.5)
             );
         }
+    }
+
+    /// A `timestamp` column and an `int64` title stream into typed columns —
+    /// not into the heap-buffered `Mixed` fallback an unknown kind gets, which
+    /// would hold every value of a Wikidata-scale type in memory until finalize.
+    #[test]
+    fn timestamp_and_integer_title_columns_stay_typed() {
+        use chrono::NaiveDate;
+        let mut interner = StringInterner::new();
+        let schema = make_schema(&mut interner, &["seen"]);
+        let mut meta: HashMap<String, String> = HashMap::new();
+        meta.insert("seen".to_string(), "Timestamp".to_string());
+        let key_seen = interner.get_or_intern("seen");
+        let t = |micros: u32| {
+            NaiveDate::from_ymd_opt(2009, 11, 6)
+                .unwrap()
+                .and_hms_micro_opt(12, 0, 0, micros)
+                .unwrap()
+        };
+
+        let dir = TempDir::new().unwrap();
+        let mut writer = TypeWriter::new(
+            Arc::clone(&schema),
+            meta,
+            dir.path().to_path_buf(),
+            &interner,
+            "int64",
+            "int64",
+        )
+        .unwrap();
+        writer
+            .push_row(
+                &Value::Int64(1),
+                &Value::Int64(7_100_000_000_001),
+                &[(key_seen, Value::Timestamp(t(123_456)))],
+            )
+            .unwrap();
+        writer
+            .push_row_borrowed(
+                BorrowedValue::Int64(2),
+                BorrowedValue::Int64(7_100_000_000_002),
+                |row| row.push_property(key_seen, BorrowedValue::Timestamp(t(7))),
+            )
+            .unwrap();
+        writer
+            .push_row(&Value::Int64(3), &Value::Null, &[(key_seen, Value::Null)])
+            .unwrap();
+        let store = writer.finalize(&interner).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(store.column_type_str(0), Some("timestamp"));
+        assert_eq!(store.title_type_str(), Some("int64"));
+        assert_eq!(store.get(0, key_seen), Some(Value::Timestamp(t(123_456))));
+        assert_eq!(store.get(1, key_seen), Some(Value::Timestamp(t(7))));
+        assert_eq!(store.get(2, key_seen), None);
+        assert_eq!(store.get_title(1), Some(Value::Int64(7_100_000_000_002)));
+        assert_eq!(store.get_title(2), None);
+
+        // A value the column cannot hold exactly is refused, never truncated.
+        let dir = TempDir::new().unwrap();
+        let mut strict = TypeWriter::new(
+            schema,
+            HashMap::from([("seen".to_string(), "timestamp".to_string())]),
+            dir.path().to_path_buf(),
+            &interner,
+            "int64",
+            "int64",
+        )
+        .unwrap();
+        let nanos = t(1) + chrono::Duration::nanoseconds(1);
+        assert!(strict
+            .push_row(
+                &Value::Int64(4),
+                &Value::Null,
+                &[(key_seen, Value::Timestamp(nanos))]
+            )
+            .is_err());
     }
 
     /// Null values for every typed column should round-trip as Null on

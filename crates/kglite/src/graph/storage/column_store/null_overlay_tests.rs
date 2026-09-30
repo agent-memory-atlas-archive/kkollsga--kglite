@@ -62,18 +62,22 @@ fn map_fixture(store: ColumnStore, interner: StringInterner) -> Fixture {
     let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
     let written = write_unified_columns(directory.path(), &stores, &interner).unwrap();
     assert!(written.written.contains("T"));
-    let metas =
-        crate::graph::io::columns_meta::read(&directory.path().join("seg_000/columns_meta.json"))
-            .unwrap();
-    let file = std::fs::File::open(directory.path().join("seg_000/columns.bin")).unwrap();
+    let seg0 = directory.path().join("seg_000");
+    let mut columns =
+        crate::graph::io::columns_meta::read(&seg0.join("columns_meta.json")).unwrap();
+    let relative = columns.files.remove("T").unwrap();
+    let file = std::fs::File::open(seg0.join(relative)).unwrap();
     // SAFETY: this fixture owns the immutable file and retains its directory.
     let map = unsafe { MmapOptions::new().map_copy(&file).unwrap() };
-    let meta = metas
+    let meta = columns
+        .types
         .into_iter()
         .find(|meta| meta.type_name == "T")
         .unwrap();
     Fixture {
-        store: ColumnStore::from_mmap_store(Arc::new(meta.to_mmap_store(Arc::new(map)))),
+        store: ColumnStore::from_mmap_store(Arc::new(
+            meta.to_mmap_store(Arc::new(map.make_read_only().unwrap())),
+        )),
         interner,
         _directory: Some(directory),
     }

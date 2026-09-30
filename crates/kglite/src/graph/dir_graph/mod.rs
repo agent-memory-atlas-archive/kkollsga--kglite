@@ -59,6 +59,9 @@ mod columnar_rebuild;
 pub mod constraints;
 mod declarations;
 mod disk_persistence;
+mod disk_rebase;
+#[cfg(test)]
+pub(crate) use disk_rebase::{post_publish_failpoint, with_failing_stage};
 mod duplicate_ids;
 mod id_index_reuse;
 mod independent_copy;
@@ -2458,6 +2461,8 @@ mod fork_apportionment_tests;
 #[cfg(test)]
 mod disk_snapshot_tests;
 
+#[cfg(test)]
+mod disk_column_files_tests;
 #[cfg(test)]
 mod edge_embedding_disk_tests;
 #[cfg(test)]

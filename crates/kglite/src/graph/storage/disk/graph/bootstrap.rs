@@ -105,6 +105,15 @@ impl DiskGraph {
         paths
     }
 
+    /// Where an append may park file-backed columns: a directory inside the
+    /// live writer's private workspace, never the published generation the
+    /// handle reads from. `None` before the first mutation has minted a workspace.
+    pub(crate) fn append_spill_dir(&self) -> Option<PathBuf> {
+        self.mutation_workspace
+            .as_ref()
+            .map(|workspace| workspace.segment_dir().join("append_columns"))
+    }
+
     pub(crate) fn active_write_dir(&self) -> &Path {
         self.mutation_workspace
             .as_ref()

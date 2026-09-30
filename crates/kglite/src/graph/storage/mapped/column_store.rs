@@ -16,7 +16,7 @@ use crate::graph::schema::InternedKey;
 use crate::graph::storage::type_build_meta::ColType;
 use crate::graph::storage::StrField;
 use chrono::NaiveDate;
-use memmap2::MmapMut;
+use memmap2::Mmap;
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -73,8 +73,12 @@ pub(crate) enum ColRef {
 /// Clone is cheap: it clones the `Arc` and small metadata vecs, not the mmap data.
 #[derive(Clone, Debug)]
 pub struct MmapColumnStore {
-    /// Shared reference to the mmap file containing all column data.
-    pub(crate) mmap: Arc<MmapMut>,
+    /// Shared reference to the mmap file containing this type's column data.
+    ///
+    /// Read-only by construction: a published generation's files are
+    /// immutable, and a shared writable mapping of one would let a stray write
+    /// alter every generation that hard-links the same inode.
+    pub(crate) mmap: Arc<Mmap>,
     /// Number of rows in this type.
     pub(crate) row_count: u32,
     /// Whether the id column is stored as string (true) or UniqueId (false).
@@ -83,7 +87,7 @@ pub struct MmapColumnStore {
     pub(crate) id_fixed: Option<FixedColumnMeta>,
     /// Id column if stored as string.
     pub(crate) id_str: Option<StrColumnMeta>,
-    /// Title column (always string).
+    /// Title column: strings, or (`title_is_int`) a bare i64 data region.
     pub(crate) title: StrColumnMeta,
     /// Property key → column reference (fixed or string).
     /// FxHash, not the std SipHasher: `InternedKey` is already a
@@ -109,6 +113,15 @@ impl MmapColumnStore {
     #[inline]
     pub fn row_count(&self) -> u32 {
         self.row_count
+    }
+
+    /// An `Int64` title is stored as a fixed-width i64 region in `title.data`
+    /// with no offsets region — the same shape-disambiguation the id column
+    /// uses, so `ColumnTypeMeta` needs no new field. A string title always
+    /// carries a non-empty offsets region.
+    #[inline]
+    pub(crate) fn title_is_int(&self) -> bool {
+        self.title.offsets.len == 0 && self.title.data.len != 0
     }
 }
 
@@ -168,11 +181,13 @@ impl MmapColumnStore {
     /// string column reachable here was validated **once, at load
     /// time**: the disk-graph loader (`io/file.rs::load_disk_dir`)
     /// calls [`Self::validate_utf8`] on each store mapped from an
-    /// existing `columns.bin` (whole-blob UTF-8 check + offset
+    /// existing column file (whole-blob UTF-8 check + offset
     /// monotonicity/bounds + char-boundary check per row), and the
-    /// only other constructor path is the same-process direct-write
+    /// only other constructor paths are same-process: the direct-write
     /// builder (`ntriples/column_builder.rs`), which writes the bytes
-    /// from `String::as_bytes()` itself. Skipping the per-access
+    /// from `String::as_bytes()` itself, and the re-point after a save
+    /// (`io/file/columns.rs::remap_column_stores_to_generation`), which maps
+    /// the files that save just wrote from strings this process already held. Skipping the per-access
     /// validator matters on the Wikidata streaming workload: at 30
     /// strings × 17 M rows × ~50 bytes it was processing ~25 GB of
     /// data per save, far more than the actual work.
@@ -197,7 +212,7 @@ impl MmapColumnStore {
     /// Validate every string column of this store — bytes come from
     /// disk and are untrusted until proven UTF-8. Runs **once at load
     /// time** (called by `load_disk_dir` for stores mapped from an
-    /// existing `columns.bin`), never on the per-access read path; the
+    /// existing column file), never on the per-access read path; the
     /// hot readers keep their `from_utf8_unchecked` with this pass as
     /// the soundness citation.
     ///
@@ -212,7 +227,9 @@ impl MmapColumnStore {
         if let Some(sc) = &self.id_str {
             self.validate_str_column(sc, type_name, "__id__")?;
         }
-        self.validate_str_column(&self.title, type_name, "__title__")?;
+        if !self.title_is_int() {
+            self.validate_str_column(&self.title, type_name, "__title__")?;
+        }
         for (i, sc) in self.str_cols.iter().enumerate() {
             self.validate_str_column(sc, type_name, &format!("str_col[{i}]"))?;
         }
@@ -317,6 +334,9 @@ impl MmapColumnStore {
         if self.read_null(&self.title.nulls, row) {
             return None;
         }
+        if self.title_is_int() {
+            return Some(Value::Int64(self.read_i64(&self.title.data, row)));
+        }
         Some(Value::String(
             self.read_str(&self.title.data, &self.title.offsets, row)
                 .to_string(),
@@ -408,6 +428,9 @@ impl MmapColumnStore {
         }
         if self.read_null(&self.title.nulls, row) {
             return StrField::Absent;
+        }
+        if self.title_is_int() {
+            return StrField::NotString;
         }
         StrField::Str(Cow::Borrowed(self.read_str(
             &self.title.data,
@@ -514,7 +537,7 @@ impl MmapColumnStore {
         if self.title.nulls.len == 0 && self.title.data.len == 0 {
             return None;
         }
-        if self.read_null(&self.title.nulls, row) {
+        if self.read_null(&self.title.nulls, row) || self.title_is_int() {
             return None;
         }
         Some(self.read_str(&self.title.data, &self.title.offsets, row))
@@ -718,6 +741,15 @@ mod tests {
     /// row. Returns the store plus the byte range of the title data
     /// (so tests can corrupt it).
     fn store_with_titles(titles: &[&str]) -> (MmapColumnStore, usize) {
+        store_with_patched_titles(titles, |_, _| {})
+    }
+
+    /// [`store_with_titles`] with `patch(bytes, data_len)` applied to the
+    /// mapping before it is made read-only, so a test can corrupt it.
+    fn store_with_patched_titles(
+        titles: &[&str],
+        patch: impl FnOnce(&mut [u8], usize),
+    ) -> (MmapColumnStore, usize) {
         let data_bytes: Vec<u8> = titles.iter().flat_map(|t| t.bytes()).collect();
         let mut offsets: Vec<u8> = Vec::new();
         let mut end = 0u64;
@@ -732,9 +764,10 @@ mod tests {
         mmap[..data_bytes.len()].copy_from_slice(&data_bytes);
         mmap[data_bytes.len()..data_bytes.len() + offsets.len()].copy_from_slice(&offsets);
         mmap[data_bytes.len() + offsets.len()..total].copy_from_slice(&nulls);
+        patch(&mut mmap, data_bytes.len());
 
         let store = MmapColumnStore {
-            mmap: Arc::new(mmap),
+            mmap: Arc::new(mmap.make_read_only().unwrap()),
             row_count: titles.len() as u32,
             id_is_string: false,
             id_fixed: None,
@@ -772,12 +805,8 @@ mod tests {
 
     #[test]
     fn validate_utf8_rejects_invalid_bytes() {
-        let (mut store, _) = store_with_titles(&["Zebra", "Fjord"]);
-        {
-            // Corrupt a title byte: 0xFF is never valid UTF-8.
-            let m = Arc::get_mut(&mut store.mmap).unwrap();
-            m[2] = 0xFF;
-        }
+        // Corrupt a title byte: 0xFF is never valid UTF-8.
+        let (store, _) = store_with_patched_titles(&["Zebra", "Fjord"], |m, _| m[2] = 0xFF);
         let err = store.validate_utf8("T").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("invalid UTF-8"), "{err}");
@@ -789,13 +818,11 @@ mod tests {
     /// `from_utf8_unchecked` readers' invariant.
     #[test]
     fn validate_utf8_rejects_offset_splitting_code_point() {
-        let (mut store, data_len) = store_with_titles(&["blåbær", "xyz"]);
-        {
-            let m = Arc::get_mut(&mut store.mmap).unwrap();
-            // Row 0's end offset is 8 ("blåbær" = 8 bytes: å/æ are 2 each).
-            // Move it to 3, landing inside the 2-byte 'å'.
+        // Row 0's end offset is 8 ("blåbær" = 8 bytes: å/æ are 2 each).
+        // Move it to 3, landing inside the 2-byte 'å'.
+        let (store, _) = store_with_patched_titles(&["blåbær", "xyz"], |m, data_len| {
             m[data_len..data_len + 8].copy_from_slice(&3u64.to_le_bytes());
-        }
+        });
         let err = store.validate_utf8("T").unwrap_err();
         assert!(
             err.to_string().contains("splits a UTF-8 code point"),
@@ -805,12 +832,10 @@ mod tests {
 
     #[test]
     fn validate_utf8_rejects_out_of_range_offset() {
-        let (mut store, data_len) = store_with_titles(&["abc", "def"]);
-        {
-            let m = Arc::get_mut(&mut store.mmap).unwrap();
-            // Row 1's end offset claims bytes past the data region.
+        // Row 1's end offset claims bytes past the data region.
+        let (store, _) = store_with_patched_titles(&["abc", "def"], |m, data_len| {
             m[data_len + 8..data_len + 16].copy_from_slice(&999u64.to_le_bytes());
-        }
+        });
         let err = store.validate_utf8("T").unwrap_err();
         assert!(err.to_string().contains("out-of-range"), "{err}");
     }

@@ -120,13 +120,6 @@
       "nesting": 5
     },
     {
-      "path": "crates/kglite/src/graph/io/unified_columns.rs",
-      "qualified_name": "crate::write_unified_columns",
-      "lines": 243,
-      "branches": 20,
-      "nesting": 3
-    },
-    {
       "path": "crates/kglite/src/graph/languages/cypher/executor/aggregation/materialized.rs",
       "qualified_name": "crate::CypherExecutor<'a>::evaluate_aggregate_with_rows",
       "lines": 284,
@@ -304,8 +297,8 @@
     {
       "path": "crates/kglite/src/graph/mutation/subgraph_streaming.rs",
       "qualified_name": "crate::save_subset_streaming_disk",
-      "lines": 374,
-      "branches": 39,
+      "lines": 373,
+      "branches": 37,
       "nesting": 3
     },
     {

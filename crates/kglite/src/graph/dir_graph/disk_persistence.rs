@@ -314,6 +314,12 @@ impl DirGraph {
         let published = generation
             .publish()
             .map_err(|e| format!("Failed to publish disk generation: {e}"))?;
+        // The save is durable from here on; this only shrinks the handle's
+        // footprint and never fails the call (see `disk_rebase`). It runs before
+        // `finish_generation` clears the mutation workspace: an append parks
+        // file-backed columns there, and a store still mapping them would keep
+        // the directory alive on platforms that refuse to remove mapped files.
+        self.rebase_after_publish(&published);
         if let GraphBackend::Disk(disk) = &mut self.graph {
             disk.finish_generation(root, published)
                 .map_err(|e| format!("Failed to activate published disk generation: {e}"))?;
@@ -582,9 +588,9 @@ impl DirGraph {
         // replacement stores, and the node-slot overlay, which takes one entry
         // per renumbered slot because a published generation's
         // `node_slots.bin` may be mapped by other readers and must not be
-        // written through. A rewriting save already materialises every
-        // column as bytes to write `columns.bin`, so this is a constant factor
-        // on a path already sized by the graph, not a new order of growth.
+        // written through. A rewriting save already writes every column's bytes
+        // into its type file, so this is a constant factor on a path already
+        // sized by the graph, not a new order of growth.
         let mut pairs: Vec<(InternedKey, Value)> = Vec::new();
         if let GraphBackend::Disk(ref mut dg) = self.graph {
             for index in 0..slot_count {
@@ -616,25 +622,27 @@ impl DirGraph {
         dropped
     }
 
-    /// Write the unified `columns.bin` mega-file for a graph that has none.
+    /// Write one column file per node type, plus their `columns_meta.json`, for
+    /// a graph whose stage has none.
     ///
     /// Since 0.9.15 a fresh save — streaming carve, `save_subset`, or the
-    /// mutation persist of an in-memory build — emits the same layout the
+    /// mutation persist of an in-memory build — emits the region layout the
     /// ntriples builder produces, so the saved graph reloads through the mmap
     /// fast path. Without it a saved `DiskGraph` fell back to per-type zstd
     /// sidecars and took ~70 s to load on a 17 M-node Wikidata carve against
     /// ~150 ms for the full graph.
     ///
-    /// A pre-existing `columns.bin` (the legacy flat root or the segmented
-    /// `seg_000/`) means the ntriples builder already wrote one;
-    /// [`Self::write_column_sidecars`] covers the types added since.
+    /// A stage that already holds column metadata (or a legacy `columns.bin`)
+    /// means the ntriples builder wrote one; [`Self::write_column_sidecars`]
+    /// covers the types added since.
     fn write_unified_column_file(
         &self,
         dir: &std::path::Path,
         stores: &SaveStores,
     ) -> Result<(), String> {
-        let preexisting_columns_bin =
-            dir.join("seg_000/columns.bin").exists() || dir.join("columns.bin").exists();
+        let preexisting_columns_bin = dir.join("seg_000/columns.bin").exists()
+            || dir.join("columns.bin").exists()
+            || crate::graph::io::columns_meta::locate(dir).is_some();
         if !preexisting_columns_bin && !stores.is_empty() {
             crate::graph::io::unified_columns::write_unified_columns(dir, stores, &self.interner)
                 .map_err(|e| format!("unified columns write failed: {}", e))?;
@@ -643,26 +651,32 @@ impl DirGraph {
     }
 
     /// The column stores a save writes, by type name: the live stores, except
-    /// that an mmap-backed store is flattened into an owned typed store, and a
-    /// heap store holding a `Mixed` column whose values all have one kind is
+    /// that an mmap-backed store with local changes is flattened into an owned
+    /// typed store (one that is nothing but its base is left alone and re-emitted
+    /// from its mapping), and a heap store holding a `Mixed` column whose values
+    /// all have one kind is
     /// re-typed (a graph an earlier build saved through the all-`Mixed`
     /// sidecar writer heals on its next save). A column holding values of
     /// several kinds stays `Mixed`, and so in a sidecar: typing it would
     /// convert values (see `ColumnStore::flattened_owned`).
     ///
-    /// Written as is, an mmap-backed store can only go to a sidecar, and one
-    /// whose every column is `Mixed` (id and title included); the next load
-    /// decodes that onto the heap and every later save keeps it there — so a
-    /// reopened graph left the mmap-served `columns.bin` on its first re-save,
-    /// write or not. The copies are save-scoped: the live stores keep serving
-    /// from the mapping they have.
-    fn column_stores_for_save(&self) -> SaveStores {
+    /// Written as is, an mmap-backed store with local changes can only go to a
+    /// sidecar, and one whose every column is `Mixed` (id and title included);
+    /// the next load decodes that onto the heap and every later save keeps it
+    /// there — so a reopened graph left its mmap-served column files on its
+    /// first re-save, write or not. The copies are save-scoped: the live stores
+    /// keep serving from the mapping they have until the post-publish re-point.
+    pub(super) fn column_stores_for_save(&self) -> SaveStores {
         self.column_stores_by_name()
             .into_iter()
             .map(|(name, store)| {
                 let empty = HashMap::new();
                 let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
-                let store = if store.has_mmap_base() || store.has_retypable_mixed_column(meta) {
+                // A store that is nothing but an mmap base re-emits its regions
+                // directly (`write_unified_columns`), so it is not flattened.
+                let flatten = (store.has_mmap_base() && store.pure_mmap_store().is_none())
+                    || store.has_retypable_mixed_column(meta);
+                let store = if flatten {
                     Arc::new(store.flattened_owned(meta, &self.interner))
                 } else {
                     Arc::clone(store)
@@ -672,7 +686,7 @@ impl DirGraph {
             .collect()
     }
 
-    /// Which node types the graph's `columns.bin` already covers.
+    /// Which node types the stage's column files already cover.
     ///
     /// Read from whichever `columns_meta` sidecar exists — the binary form and
     /// the older JSON one, at the segmented (`seg_000/`) or the legacy flat
@@ -683,13 +697,13 @@ impl DirGraph {
         let Some(meta_path) = crate::graph::io::columns_meta::locate(dir) else {
             return Ok(std::collections::HashSet::new());
         };
-        let metas = crate::graph::io::columns_meta::read(&meta_path)
+        let meta = crate::graph::io::columns_meta::read(&meta_path)
             .map_err(|e| format!("read {}: {}", meta_path.display(), e))?;
-        Ok(metas.into_iter().map(|tm| tm.type_name).collect())
+        Ok(meta.types.into_iter().map(|tm| tm.type_name).collect())
     }
 
     /// Write a per-type `columns.zst` sidecar for every type the unified
-    /// `columns.bin` does not cover.
+    /// column files do not cover.
     ///
     /// Types added post-build via `add_nodes` / `add_node` are absent from an
     /// ntriples-built `columns.bin` and were silently dropped on save before

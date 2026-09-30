@@ -119,10 +119,37 @@ impl RegionMeta {
 }
 
 impl ColumnTypeMeta {
+    /// The first byte past every region this type names — the file length the
+    /// metadata needs.
+    pub(crate) fn extent(&self) -> usize {
+        let fixed = self.fixed_cols.iter().flat_map(|c| [&c.data, &c.nulls]);
+        let strings = self
+            .str_cols
+            .iter()
+            .flat_map(|c| [&c.data, &c.offsets, &c.nulls]);
+        [
+            &self.id_data,
+            &self.id_nulls,
+            &self.id_str_data,
+            &self.id_str_offsets,
+            &self.title_data,
+            &self.title_offsets,
+            &self.title_nulls,
+            &self.overflow_offsets,
+            &self.overflow_data,
+        ]
+        .into_iter()
+        .chain(fixed)
+        .chain(strings)
+        .map(|region| region.offset.saturating_add(region.len))
+        .max()
+        .unwrap_or(0)
+    }
+
     /// Rebuild an MmapColumnStore from saved metadata + a shared mmap.
     pub fn to_mmap_store(
         &self,
-        mmap: Arc<memmap2::MmapMut>,
+        mmap: Arc<memmap2::Mmap>,
     ) -> crate::graph::storage::mapped::column_store::MmapColumnStore {
         use crate::graph::storage::mapped::column_store::{
             ColRef, FixedColumnMeta, MmapColumnStore, StrColumnMeta,
@@ -1254,8 +1281,11 @@ fn assemble_column_stores(
 
     let mmap = append_overflow_data(writers, mmap, mmap_path, verbose)?;
 
-    // Create shared mmap Arc for all MmapColumnStore instances
-    let mmap_arc = Arc::new(mmap);
+    // The build is done writing; the stores read the file through a read-only
+    // mapping, so nothing can write through them once the workspace file
+    // becomes part of a published generation.
+    mmap.flush()?;
+    let mmap_arc = Arc::new(mmap.make_read_only()?);
 
     // Metadata to serialize for post-Phase-3 reload
     let mut columns_meta: Vec<ColumnTypeMeta> = Vec::new();

@@ -327,3 +327,102 @@ fn a_copy_heap_scales_with_kept_rows() {
         "100x the rows took {large} heap bytes against {small}"
     );
 }
+
+/// A streaming disk-to-disk copy carries an integer title and a timestamp
+/// property across intact, from a source that is still heap-backed and from one
+/// that a save has already re-pointed at its mmap files. The writer takes its
+/// title kind from the source store, and an integer title has no borrowed-`&str`
+/// form, so a copy that reads it as a string loses every title (or refuses the
+/// copy).
+#[test]
+fn a_streaming_copy_carries_integer_titles_and_timestamps_from_either_kind_of_source() {
+    for save_first in [false, true] {
+        let source_dir = tempfile::tempdir().unwrap();
+        let mut source = new_dir_graph_in_mode(StorageMode::Disk, Some(source_dir.path())).unwrap();
+        let base = chrono::NaiveDate::from_ymd_opt(2010, 1, 1)
+            .unwrap()
+            .and_hms_micro_opt(0, 0, 1, 250_000)
+            .unwrap();
+        let rows = (1..=40i64)
+            .map(|i| {
+                vec![
+                    Value::Int64(i),
+                    Value::Int64(7_100_000_000_000 + i),
+                    Value::Timestamp(base + chrono::Duration::days(i)),
+                    Value::Int64(i * 2),
+                ]
+            })
+            .collect();
+        let frame = crate::datatypes::DataFrame::from_cypher_rows(
+            vec!["id".into(), "badge".into(), "issued".into(), "grade".into()],
+            rows,
+        )
+        .unwrap();
+        crate::graph::mutation::maintain::add_nodes(
+            &mut source,
+            frame,
+            "Badge".into(),
+            "id".into(),
+            Some("badge".into()),
+            None,
+        )
+        .unwrap();
+        if save_first {
+            source
+                .save_disk(source_dir.path().to_str().unwrap())
+                .unwrap();
+        }
+        let issued = InternedKey::from_str("issued");
+        let original = source.column_store("Badge").unwrap();
+        assert_eq!(original.has_mmap_base(), save_first);
+        assert_eq!(original.title_type_str(), Some("int64"));
+
+        let kept: Vec<u32> = source
+            .type_indices
+            .get("Badge")
+            .unwrap()
+            .iter()
+            .map(|n| n.index() as u32)
+            .collect();
+        let out_dir = tempfile::tempdir().unwrap();
+        let out = out_dir.path().join("copy");
+        let per_type = HashMap::from([("Badge".to_string(), kept)]);
+        crate::graph::mutation::subgraph_streaming::save_subset_streaming_disk(
+            &source, &per_type, None, &out, None,
+        )
+        .unwrap();
+
+        let copy = crate::graph::io::file::load_file(out.to_str().unwrap()).unwrap();
+        let copied = copy.column_store("Badge").unwrap();
+        assert_eq!(copied.row_count(), 40, "save_first={save_first}");
+        assert_eq!(
+            copied.title_type_str(),
+            Some("int64"),
+            "save_first={save_first}"
+        );
+        for row in 0..40u32 {
+            assert_eq!(
+                copied.get_title(row),
+                original.get_title(row),
+                "save_first={save_first} row {row} title"
+            );
+            // A mapped source's properties travel through the overflow bag, which
+            // stores a timestamp as whole seconds; only the heap source's copy is
+            // exact to the microsecond. The seconds are compared for both.
+            let (got, want) = (copied.get(row, issued), original.get(row, issued));
+            match (got, want) {
+                (Some(Value::Timestamp(got)), Some(Value::Timestamp(want))) => {
+                    assert_eq!(
+                        got.and_utc().timestamp(),
+                        want.and_utc().timestamp(),
+                        "row {row}"
+                    );
+                    if !save_first {
+                        assert_eq!(got, want, "row {row}: the heap source's copy is exact");
+                    }
+                }
+                other => panic!("save_first={save_first} row {row} issued: {other:?}"),
+            }
+        }
+    }
+}

@@ -1775,80 +1775,6 @@ fn load_disk_dir(dir: &std::path::Path) -> io::Result<Arc<DirGraph>> {
     Ok(Arc::new(graph))
 }
 
-/// Install a disk graph's column stores — the mmap-backed `columns.bin` +
-/// `columns_meta` pair when present, otherwise the per-type
-/// `columns/<type>/columns.zst` sidecars. Split out of `load_disk_dir` to keep
-/// it under the function-complexity ceiling; cold load-time path.
-fn load_disk_column_stores(dir: &std::path::Path, graph: &mut DirGraph) -> io::Result<()> {
-    use crate::graph::io::load_timing::{log_stage, stage_timer};
-
-    // Prefer the mmap-backed pair (columns.bin + columns_meta), checking
-    // `seg_000/` as well as the directory root: a later layout moved these
-    // files into `seg_000/`, and without both locations the load fell through
-    // to the per-type `columns/<type>/columns.zst` branch, which returned an
-    // empty `column_stores` map and broke `MATCH (n:Type)` queries after a
-    // disk-mode save + reload.
-    let mmap_path = {
-        let seg0 = dir.join("seg_000/columns.bin");
-        if seg0.exists() {
-            seg0
-        } else {
-            dir.join("columns.bin")
-        }
-    };
-    let meta_path = columns_meta::locate(dir).filter(|_| mmap_path.exists());
-    let t = stage_timer();
-    if let Some(meta_path) = meta_path {
-        use memmap2::MmapMut;
-
-        // Read the metadata before mapping anything, so a directory laid out by
-        // a newer build is refused by its declared format, not by what maps.
-        let type_metas = columns_meta::read(&meta_path)?;
-
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&mmap_path)
-            .map_err(|e| io_context("opening", &mmap_path, e))?;
-        // SAFETY: GraphDirectoryLock serializes disk-graph writers, which
-        // publish a new immutable generation instead of truncating the
-        // generation selected by this reader. This columns.bin inode remains
-        // stable for the mapping's lifetime.
-        let mmap = unsafe { MmapMut::map_mut(&file) }
-            .map_err(|e| io_context("memory-mapping", &mmap_path, e))?;
-        let mmap_arc = std::sync::Arc::new(mmap);
-
-        // `columns.bin` bytes are untrusted disk input, but the hot string
-        // readers use `from_utf8_unchecked` (see MmapColumnStore::read_str).
-        // Validate every string column once here — load-time, amortized —
-        // so the per-access unchecked conversion stays sound. Opt-out for
-        // very large trusted graphs (validation touches every string byte,
-        // forcing a full read of columns.bin): KGLITE_SKIP_UTF8_VALIDATION=1.
-        let skip_utf8 = std::env::var_os("KGLITE_SKIP_UTF8_VALIDATION").is_some();
-        for tm in type_metas {
-            let store = tm.to_mmap_store(std::sync::Arc::clone(&mmap_arc));
-            if !skip_utf8 {
-                store.validate_utf8(&tm.type_name)?;
-            }
-            let cs = crate::graph::storage::column_store::ColumnStore::from_mmap_store(
-                std::sync::Arc::new(store),
-            );
-            graph.install_column_store(&tm.type_name, Arc::new(cs));
-        }
-
-        // Additively load sidecars for types added post-`load_ntriples`
-        // via `add_nodes`. The sidecar writer in `DirGraph::save_disk`
-        // emits `columns/<type>/columns.zst` only for types NOT in
-        // `columns_meta`, so the two paths don't clash — but we still
-        // check before overwriting out of caution.
-        load_column_sidecars(dir, graph)?;
-    } else {
-        load_column_sidecars(dir, graph)?;
-    }
-    log_stage("column_stores_load", t);
-    Ok(())
-}
-
 /// Load a disk graph's embeddings / timeseries / secondary-label sidecars.
 /// Split out of `load_disk_dir` to keep it under the function-complexity
 /// ceiling; cold load-time path with one shared fail-loud-on-corruption policy.
@@ -2348,7 +2274,8 @@ fn load_portable_columnar(
 }
 
 mod columns;
-use columns::{attach_portable_column_stores, load_column_sidecars};
+pub(crate) use columns::remap_column_stores_to_generation;
+use columns::{attach_portable_column_stores, load_disk_column_stores};
 
 mod legacy_references;
 mod metadata_head;

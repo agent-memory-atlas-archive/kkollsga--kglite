@@ -1,6 +1,6 @@
 //! A reopened disk graph keeps its serving shape across saves: every type the
-//! first save put in the mmap-served `columns.bin` stays there after a write
-//! and after a no-op save, instead of moving to an all-`Mixed` heap sidecar.
+//! first save put in an mmap-served column file stays there after a write and
+//! after a no-op save, instead of moving to an all-`Mixed` heap sidecar.
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::mutation::maintain;
@@ -50,22 +50,34 @@ fn run(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
     result.result.rows
 }
 
-/// Every type is served from the mmap `columns.bin`, and the files agree.
+/// Every type is served from its own mmap column file, and the files agree.
 fn assert_mmap_served(graph: &DirGraph, path: &str, when: &str) {
     for node_type in ["Pand", "Other"] {
         let store = graph.column_store(node_type).expect("columnar type");
         assert!(
             store.has_mmap_base(),
-            "{when}: {node_type} is no longer served from columns.bin"
+            "{when}: {node_type} is no longer served from its column file"
         );
     }
     let current = std::fs::read_to_string(format!("{path}/CURRENT")).unwrap_or_default();
     let generation = std::path::Path::new(path)
         .join("generations")
         .join(current.trim());
+    let meta = crate::graph::io::columns_meta::read(&generation.join("seg_000/columns_meta.json"))
+        .unwrap_or_else(|e| panic!("{when}: the generation has no column metadata: {e}"));
+    for node_type in ["Pand", "Other"] {
+        let file = meta
+            .files
+            .get(node_type)
+            .unwrap_or_else(|| panic!("{when}: {node_type} has no column file"));
+        assert!(
+            generation.join("seg_000").join(file).is_file(),
+            "{when}: {node_type}'s column file {file} is missing"
+        );
+    }
     assert!(
-        generation.join("seg_000/columns.bin").exists(),
-        "{when}: the generation has no columns.bin"
+        !generation.join("seg_000/columns.bin").exists(),
+        "{when}: the generation still carries a shared columns.bin"
     );
     assert!(
         !generation.join("columns").exists(),
@@ -150,7 +162,7 @@ fn a_no_op_save_of_a_reopened_disk_graph_keeps_its_shape() {
 
 /// A store an earlier build already drifted — every column `Mixed`, the
 /// shape `write_packed_from_mmap` left behind — is re-typed on save and goes
-/// back into `columns.bin`.
+/// back into its column file.
 #[test]
 fn a_drifted_all_mixed_store_heals_on_save() {
     let dir = TempDir::new().unwrap();

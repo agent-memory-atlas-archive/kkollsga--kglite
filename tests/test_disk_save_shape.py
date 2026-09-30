@@ -1,7 +1,8 @@
 """A reopened disk graph keeps its serving shape across saves.
 
 Every re-save of a reopened disk graph — a write or none — used to move every
-type out of the mmap-served ``seg_000/columns.bin`` into per-type
+type out of its mmap-served column file (once a shared ``seg_000/columns.bin``,
+now one ``seg_000/type_columns/<key>.bin`` per type) into per-type
 ``columns/<type>/columns.zst`` sidecars whose every column was ``Mixed``. The
 next load decoded those onto the heap (55 → ~330 B/row) and every later save
 kept them there. Each cycle here reopens in a fresh process, writes, saves,
@@ -84,14 +85,19 @@ def _run(script, *args):
 
 
 @pytest.mark.parametrize("mode", ["set", "noop"])
-def test_reopened_disk_graph_stays_in_columns_bin_across_saves(tmp_path, mode):
+def test_reopened_disk_graph_stays_in_its_column_files_across_saves(tmp_path, mode):
     path = str(tmp_path / "g")
     _run(BUILD, path, ROWS)
     reloads = []
     for cycle in (1, 2, 3):
         result = json.loads(_run(CYCLE, path, cycle, mode))
         generation = _generation(path)
-        assert os.path.exists(os.path.join(generation, "seg_000", "columns.bin")), f"cycle {cycle}"
+        with open(os.path.join(generation, "seg_000", "columns_meta.json"), encoding="utf-8") as handle:
+            files = json.load(handle)["files"]
+        assert sorted(files) == ["Other", "Pand"], f"cycle {cycle}: every type has its own column file: {files}"
+        for name, relative in files.items():
+            assert os.path.isfile(os.path.join(generation, "seg_000", relative)), f"cycle {cycle}: {name} -> {relative}"
+        assert not os.path.exists(os.path.join(generation, "seg_000", "columns.bin")), f"cycle {cycle}"
         sidecars = [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(generation, "columns")) for f in fs]
         assert sidecars == [], f"cycle {cycle}: types moved to heap sidecars: {sidecars}"
         expected_rec = cycle if mode == "set" else 0

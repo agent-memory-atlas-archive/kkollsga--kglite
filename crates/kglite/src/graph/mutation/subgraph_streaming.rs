@@ -673,10 +673,9 @@ pub fn save_subset_streaming_disk(
             let id_borrowed = src_store
                 .id_borrowed(slot.row_id)
                 .unwrap_or(crate::datatypes::values::BorrowedValue::Null);
-            let title_borrowed = match src_store.title_borrowed(slot.row_id) {
-                Some(s) => crate::datatypes::values::BorrowedValue::String(s),
-                None => crate::datatypes::values::BorrowedValue::Null,
-            };
+            let title_borrowed = src_store
+                .title_scalar_borrowed(slot.row_id)
+                .unwrap_or(crate::datatypes::values::BorrowedValue::Null);
             if let Some(t) = t1 {
                 t_read_id_title += t.elapsed();
             }

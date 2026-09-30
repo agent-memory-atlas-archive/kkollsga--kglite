@@ -31,6 +31,11 @@ What it writes under `tests/fixtures/kgl_v6/`:
   still carries un-checkpointed frames.
 * `disk/` + `disk.expected.json` — the same content as `graph.kgl`, built with
   `storage="disk"` and saved twice, so the directory has generations.
+* `disk_int_title/` + `disk_int_title.expected.json` — a disk directory whose
+  only type has an integer title and no `Mixed` column, which 0.19.0 kept in a
+  per-type zstd sidecar (a non-string title forced one) and a later build moves
+  into its per-type column file. Regenerate only this one with
+  `python build_v6_compat_fixtures.py int-title`.
 """
 
 from __future__ import annotations
@@ -75,6 +80,14 @@ QUERIES = {
     ),
     "unit_by_id": "MATCH (u:Unit {id: 3300000000003}) RETURN u.title AS title, u.area AS area",
     "unit_edges": "MATCH (o:PandObj)-[:HAS_UNIT]->(u:Unit) RETURN o.id AS obj, u.id AS unit ORDER BY u.id",
+}
+
+INT_TITLE_QUERIES = {
+    "count": "MATCH (b:Badge) RETURN count(b) AS badges",
+    "all": "MATCH (b:Badge) RETURN b.id AS id, b.title AS title, b.grade AS grade, b.active AS active ORDER BY b.id",
+    "by_title": "MATCH (b:Badge) WHERE b.title = 7100000000003 RETURN b.id AS id",
+    "by_id": "MATCH (b:Badge {id: 3400000000002}) RETURN b.title AS title, b.grade AS grade",
+    "grade_sum": "MATCH (b:Badge) RETURN sum(b.grade) AS total",
 }
 
 DURABLE_QUERIES = {
@@ -253,6 +266,58 @@ def _write_disk_fixture() -> None:
     print(f"wrote {target}/ ({total} bytes, generations {generations})")
 
 
+def _write_int_title_disk_fixture() -> None:
+    import pandas as pd
+
+    import kglite
+
+    target = FIXTURE_DIR / "disk_int_title"
+    if target.exists():
+        shutil.rmtree(target)
+    graph = kglite.KnowledgeGraph(storage="disk", path=str(target))
+    badges = pd.DataFrame(
+        {
+            "id": [3400000000001 + i for i in range(5)],
+            "badge": [7100000000001 + i for i in range(5)],
+            "grade": [3, 7, -2, 11, 0],
+            "active": [True, True, False, True, False],
+        }
+    )
+    graph.add_nodes(badges, "Badge", "id", "badge")
+    graph.save()
+    graph.cypher("MATCH (b:Badge {id: 3400000000002}) SET b.grade = 8")
+    graph.save()
+    expected = _capture(graph, INT_TITLE_QUERIES)
+    del graph
+
+    if list(target.rglob("columns_meta.json")):
+        raise SystemExit("the int-title fixture has a columns_meta — 0.19.0 should have sidecar'd it")
+    sidecars = sorted(target.rglob("columns.zst"))
+    if not sidecars:
+        raise SystemExit("the int-title type is not in a per-type sidecar — not the 0.19.0 layout")
+    for meta in target.rglob("disk_graph_meta.json"):
+        if "disk_format" in json.loads(meta.read_text(encoding="utf-8")):
+            raise SystemExit(f"{meta} already carries disk_format — this is not a 0.19.0-written directory")
+
+    scratch = Path(tempfile.mkdtemp()) / "disk_int_title"
+    shutil.copytree(target, scratch)
+    reloaded = kglite.load(str(scratch))
+    if _capture(reloaded, INT_TITLE_QUERIES) != expected:
+        raise SystemExit("the reloaded int-title graph answers differently from the graph that wrote it")
+    del reloaded
+    # `_pending_edges.bin` is the 16 MiB sparse edge-buffer scratch a graph with no
+    # edges leaves at the root; the loader never reads it.
+    for stray in (
+        list(target.rglob("*.lock-owner")) + list(target.rglob("LOCK")) + list(target.rglob("_pending_edges.bin"))
+    ):
+        stray.unlink()
+    (FIXTURE_DIR / "disk_int_title.expected.json").write_text(
+        json.dumps(expected, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    total = sum(p.stat().st_size for p in target.rglob("*") if p.is_file())
+    print(f"wrote {target}/ ({total} bytes, sidecars {[str(p.relative_to(target)) for p in sidecars]})")
+
+
 #: Runs in a child that is killed with `os._exit`, so no Drop, no clean close,
 #: and whatever the log holds past the checkpoint stays there.
 DURABLE_CHILD = textwrap.dedent(
@@ -334,9 +399,13 @@ def main() -> None:
         raise SystemExit("the repo's own kglite package is shadowing the wheel; run from elsewhere")
 
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    if sys.argv[1:] == ["int-title"]:
+        _write_int_title_disk_fixture()
+        return
     _write_plain_fixture()
     _write_durable_fixture()
     _write_disk_fixture()
+    _write_int_title_disk_fixture()
 
 
 if __name__ == "__main__":

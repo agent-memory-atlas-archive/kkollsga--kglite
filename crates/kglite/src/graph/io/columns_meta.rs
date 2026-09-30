@@ -10,17 +10,29 @@
 //! error rather than a panic.
 //!
 //! ```text
-//! columns_meta.json          {"format": 2, "types": [ColumnTypeMeta, ...]}
-//! columns_meta.v2.bin.zst    zstd(postcard-framed {format: u32, types: [...]})
+//! columns_meta.json          {"format": 2, "types": [ColumnTypeMeta, ...],
+//!                             "files": {"<type name>": "type_columns/<hex>.bin", ...}}
+//! columns_meta.v2.bin.zst    zstd(postcard-framed {format, types, files})
 //! ```
+//!
+//! **Where a type's bytes live.** A generation written by a save keeps one
+//! immutable file per node type under `type_columns/`, named in `files` and
+//! addressed relative to the directory holding the sidecar; the regions in that
+//! type's [`ColumnTypeMeta`] are offsets into *its* file. A type with no `files`
+//! entry keeps its regions in the shared `columns.bin` beside the sidecar, which
+//! is how the RDF builder and every 0.19.0 directory are laid out. The names are
+//! derived from the interned type key, never the type name, so a user-chosen
+//! name cannot reach the filesystem, and they are recorded here rather than
+//! recomputed so a reader trusts the sidecar alone.
 //!
 //! The binary form moved to a new file name for the same reason the JSON form
 //! changed shape: a reader that prefers `columns_meta.bin.zst` when it exists
 //! would otherwise decode the new bytes as the old bare array. Readers here
 //! still accept both legacy spellings, so a directory 0.19.0 wrote opens.
 
+use std::collections::{BTreeMap, HashSet};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,10 +52,34 @@ const LEGACY_BIN: &str = "columns_meta.bin.zst";
 const CURRENT_BIN: &str = "columns_meta.v2.bin.zst";
 const JSON: &str = "columns_meta.json";
 
+/// Directory (relative to the sidecar's) that holds the per-type column files.
+pub(crate) const TYPE_FILES_DIR: &str = "type_columns";
+
+/// A parsed sidecar: every type's region layout, and where its bytes live.
+#[derive(Default)]
+pub(crate) struct ColumnsMeta {
+    pub(crate) types: Vec<ColumnTypeMeta>,
+    /// Type name -> file relative to the sidecar's directory. A type absent
+    /// here keeps its regions in the shared `columns.bin`.
+    pub(crate) files: BTreeMap<String, String>,
+}
+
+impl ColumnsMeta {
+    /// A sidecar whose every type lives in the shared `columns.bin`.
+    pub(crate) fn shared(types: Vec<ColumnTypeMeta>) -> Self {
+        Self {
+            types,
+            files: BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     format: u32,
     types: Vec<ColumnTypeMeta>,
+    #[serde(default)]
+    files: BTreeMap<String, String>,
 }
 
 /// Borrowing twin of [`Envelope`] so a writer does not clone every type's metadata.
@@ -51,6 +87,52 @@ struct Envelope {
 struct EnvelopeRef<'a> {
     format: u32,
     types: &'a [ColumnTypeMeta],
+    files: &'a BTreeMap<String, String>,
+}
+
+impl Envelope {
+    fn into_meta(self, what: &str) -> io::Result<ColumnsMeta> {
+        if self.format > COLUMNS_META_FORMAT {
+            return Err(newer_format_error(self.format, what));
+        }
+        Ok(ColumnsMeta {
+            types: self.types,
+            files: self.files,
+        })
+    }
+}
+
+/// The file name (relative to the sidecar's directory) a save gives `type_name`.
+///
+/// Derived from the interned type key so it is path-safe whatever the type is
+/// called and stable across generations; `used` makes it collision-free in the
+/// (astronomically unlikely) event that two names share a key.
+pub(crate) fn type_file_name(type_name: &str, used: &mut HashSet<String>) -> String {
+    let key = crate::graph::schema::InternedKey::from_str(type_name).as_u64();
+    let mut name = format!("{TYPE_FILES_DIR}/{key:016x}.bin");
+    let mut n = 1u32;
+    while !used.insert(name.clone()) {
+        name = format!("{TYPE_FILES_DIR}/{key:016x}-{n}.bin");
+        n += 1;
+    }
+    name
+}
+
+/// Resolve a `files` entry against the sidecar's directory, refusing anything
+/// that is not a plain relative path (an absolute path or a `..` component in a
+/// hostile or corrupt sidecar would otherwise escape the generation).
+pub(crate) fn resolve_type_file(dir: &Path, relative: &str) -> io::Result<PathBuf> {
+    let path = Path::new(relative);
+    let plain = !relative.is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
+    if !plain {
+        return Err(invalid_data(format!(
+            "column metadata names a file outside its directory: '{relative}'"
+        )));
+    }
+    Ok(dir.join(path))
 }
 
 fn invalid_data(message: String) -> io::Error {
@@ -64,11 +146,16 @@ fn newer_format_error(found: u32, what: &str) -> io::Error {
     ))
 }
 
-/// Serialise `types` as the JSON envelope.
-pub(crate) fn to_json(types: &[ColumnTypeMeta], pretty: bool) -> io::Result<String> {
+/// Serialise `types` and their `files` as the JSON envelope.
+pub(crate) fn to_json(
+    types: &[ColumnTypeMeta],
+    files: &BTreeMap<String, String>,
+    pretty: bool,
+) -> io::Result<String> {
     let envelope = EnvelopeRef {
         format: COLUMNS_META_FORMAT,
         types,
+        files,
     };
     let json = if pretty {
         serde_json::to_string_pretty(&envelope)
@@ -78,11 +165,15 @@ pub(crate) fn to_json(types: &[ColumnTypeMeta], pretty: bool) -> io::Result<Stri
     json.map_err(io::Error::other)
 }
 
-/// Serialise `types` as the framed, compressed binary envelope.
-pub(crate) fn to_bin(types: &[ColumnTypeMeta]) -> io::Result<Vec<u8>> {
+/// Serialise `types` and their `files` as the framed, compressed binary envelope.
+pub(crate) fn to_bin(
+    types: &[ColumnTypeMeta],
+    files: &BTreeMap<String, String>,
+) -> io::Result<Vec<u8>> {
     let bytes = encode_disk_serde(&EnvelopeRef {
         format: COLUMNS_META_FORMAT,
         types,
+        files,
     })?;
     zstd::encode_all(bytes.as_slice(), 3)
 }
@@ -91,29 +182,25 @@ pub(crate) fn to_bin(types: &[ColumnTypeMeta]) -> io::Result<Vec<u8>> {
 ///
 /// The first non-blank byte picks the shape, so neither reads the document
 /// twice — this file is hundreds of megabytes on a Wikidata-scale graph.
-pub(crate) fn parse_json(json: &str, what: &str) -> io::Result<Vec<ColumnTypeMeta>> {
+pub(crate) fn parse_json(json: &str, what: &str) -> io::Result<ColumnsMeta> {
     let bad = |e: serde_json::Error| invalid_data(format!("{what} is not valid JSON: {e}"));
     if json.trim_start().starts_with('[') {
-        return serde_json::from_str(json).map_err(bad);
+        return serde_json::from_str(json)
+            .map(ColumnsMeta::shared)
+            .map_err(bad);
     }
-    let envelope: Envelope = serde_json::from_str(json).map_err(bad)?;
-    if envelope.format > COLUMNS_META_FORMAT {
-        return Err(newer_format_error(envelope.format, what));
-    }
-    Ok(envelope.types)
+    serde_json::from_str::<Envelope>(json)
+        .map_err(bad)?
+        .into_meta(what)
 }
 
-fn parse_bin(compressed: &[u8], legacy: bool, what: &str) -> io::Result<Vec<ColumnTypeMeta>> {
+fn parse_bin(compressed: &[u8], legacy: bool, what: &str) -> io::Result<ColumnsMeta> {
     let bytes = zstd::decode_all(compressed)
         .map_err(|e| invalid_data(format!("{what} could not be decompressed: {e}")))?;
     if legacy {
-        return decode_disk_serde(&bytes, bytes.capacity() as u64);
+        return decode_disk_serde(&bytes, bytes.capacity() as u64).map(ColumnsMeta::shared);
     }
-    let envelope: Envelope = decode_disk_serde(&bytes, bytes.capacity() as u64)?;
-    if envelope.format > COLUMNS_META_FORMAT {
-        return Err(newer_format_error(envelope.format, what));
-    }
-    Ok(envelope.types)
+    decode_disk_serde::<Envelope>(&bytes, bytes.capacity() as u64)?.into_meta(what)
 }
 
 /// The sidecar a reader should use for the directory `dir`, if any.
@@ -129,7 +216,7 @@ pub(crate) fn locate(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Read the sidecar `locate` returned.
-pub(crate) fn read(path: &Path) -> io::Result<Vec<ColumnTypeMeta>> {
+pub(crate) fn read(path: &Path) -> io::Result<ColumnsMeta> {
     let what = format!("disk graph column metadata '{}'", path.display());
     let name = path.file_name().and_then(|n| n.to_str());
     if name == Some(JSON) {
@@ -140,23 +227,25 @@ pub(crate) fn read(path: &Path) -> io::Result<Vec<ColumnTypeMeta>> {
     parse_bin(&compressed, name == Some(LEGACY_BIN), &what)
 }
 
-/// Publish the sidecar into `data_dir` next to its `columns.bin`.
+/// Publish the sidecar of a shared-`columns.bin` layout (every type without a
+/// file) into `data_dir` next to its `columns.bin`.
 ///
 /// Writes both encodings: the JSON envelope is what makes an older reader stop
 /// (see the module header), and the binary form is what this build's loader
 /// prefers on a large graph.
 pub(crate) fn publish(data_dir: &Path, types: &[ColumnTypeMeta]) -> io::Result<PathBuf> {
+    let files = BTreeMap::new();
     let json_path = data_dir.join(JSON);
-    std::fs::write(&json_path, to_json(types, false)?)?;
-    std::fs::write(data_dir.join(CURRENT_BIN), to_bin(types)?)?;
+    std::fs::write(&json_path, to_json(types, &files, false)?)?;
+    std::fs::write(data_dir.join(CURRENT_BIN), to_bin(types, &files)?)?;
     Ok(json_path)
 }
 
 /// Write only the JSON envelope, durably, into `seg_000/`.
-pub(crate) fn publish_json_synced(seg0: &Path, types: &[ColumnTypeMeta]) -> io::Result<()> {
+pub(crate) fn publish_json_synced(seg0: &Path, meta: &ColumnsMeta) -> io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::File::create(seg0.join(JSON))?;
-    file.write_all(to_json(types, true)?.as_bytes())?;
+    file.write_all(to_json(&meta.types, &meta.files, true)?.as_bytes())?;
     file.sync_all()
 }
 
@@ -194,12 +283,20 @@ mod tests {
         }
     }
 
+    fn shared(types: Vec<ColumnTypeMeta>) -> ColumnsMeta {
+        ColumnsMeta::shared(types)
+    }
+
+    fn names(meta: ColumnsMeta) -> Vec<String> {
+        meta.types.into_iter().map(|m| m.type_name).collect()
+    }
+
     /// The forward guard itself: what an older reader does with the new file.
     /// 0.19.0 deserialises `Vec<ColumnTypeMeta>` from this text; if the writer
     /// ever went back to a bare array this would parse and the guard would be gone.
     #[test]
     fn the_json_an_older_reader_would_parse_as_an_array_is_not_an_array() {
-        let json = to_json(&[sample("Pand")], false).unwrap();
+        let json = to_json(&[sample("Pand")], &BTreeMap::new(), false).unwrap();
         assert!(
             serde_json::from_str::<Vec<ColumnTypeMeta>>(&json).is_err(),
             "an older reader must fail to deserialise the new sidecar: {json}"
@@ -211,16 +308,15 @@ mod tests {
 
     #[test]
     fn envelope_and_legacy_bare_array_both_parse() {
-        let types = [sample("A"), sample("B")];
-        let names = |metas: Vec<ColumnTypeMeta>| -> Vec<String> {
-            metas.into_iter().map(|m| m.type_name).collect()
-        };
-        let envelope = parse_json(&to_json(&types, true).unwrap(), "test").unwrap();
+        let types = vec![sample("A"), sample("B")];
+        let envelope =
+            parse_json(&to_json(&types, &BTreeMap::new(), true).unwrap(), "test").unwrap();
         assert_eq!(names(envelope), ["A", "B"]);
         let legacy = serde_json::to_string(&types).unwrap();
         assert_eq!(names(parse_json(&legacy, "test").unwrap()), ["A", "B"]);
         let padded = format!("\n  {legacy}");
         assert_eq!(names(parse_json(&padded, "test").unwrap()), ["A", "B"]);
+        assert!(parse_json(&legacy, "test").unwrap().files.is_empty());
     }
 
     #[test]
@@ -247,7 +343,7 @@ mod tests {
         std::fs::write(dir.path().join(LEGACY_BIN), legacy).unwrap();
         let found = locate(dir.path()).unwrap();
         assert!(found.ends_with(LEGACY_BIN));
-        assert_eq!(read(&found).unwrap()[0].type_name, "A");
+        assert_eq!(read(&found).unwrap().types[0].type_name, "A");
 
         // Publishing writes the envelope forms; the current bin outranks a
         // legacy one left beside it, and the JSON stays for older readers to trip on.
@@ -255,8 +351,8 @@ mod tests {
         assert!(json_path.ends_with(JSON));
         let found = locate(dir.path()).unwrap();
         assert!(found.ends_with(CURRENT_BIN), "{found:?}");
-        assert_eq!(read(&found).unwrap()[0].type_name, "A");
-        assert_eq!(read(&json_path).unwrap()[0].type_name, "A");
+        assert_eq!(read(&found).unwrap().types[0].type_name, "A");
+        assert_eq!(read(&json_path).unwrap().types[0].type_name, "A");
         assert!(serde_json::from_str::<Vec<ColumnTypeMeta>>(
             &std::fs::read_to_string(json_path).unwrap()
         )
@@ -282,5 +378,56 @@ mod tests {
         assert!(locate(dir.path())
             .unwrap()
             .starts_with(dir.path().join("seg_000")));
+    }
+
+    #[test]
+    fn the_file_map_survives_both_encodings() {
+        let mut meta = shared(vec![sample("A"), sample("B")]);
+        meta.files
+            .insert("A".into(), "type_columns/0000000000000001.bin".into());
+        let json = parse_json(&to_json(&meta.types, &meta.files, false).unwrap(), "test").unwrap();
+        assert_eq!(json.files, meta.files);
+        let bin = parse_bin(&to_bin(&meta.types, &meta.files).unwrap(), false, "test").unwrap();
+        assert_eq!(bin.files, meta.files);
+        assert_eq!(names(bin), ["A", "B"]);
+    }
+
+    #[test]
+    fn a_file_name_is_path_safe_stable_and_collision_free() {
+        let mut used = HashSet::new();
+        let hostile = "../../etc/passwd";
+        let first = type_file_name(hostile, &mut used);
+        assert!(
+            first.starts_with("type_columns/") && first.ends_with(".bin"),
+            "{first}"
+        );
+        assert!(!first.contains(".."), "{first}");
+        assert_eq!(
+            type_file_name(hostile, &mut HashSet::new()),
+            first,
+            "the name must not depend on what else was written"
+        );
+        // The same key asked for twice must not hand out the same file.
+        let second = type_file_name(hostile, &mut used);
+        assert_ne!(first, second);
+        assert!(resolve_type_file(Path::new("seg"), &first).is_ok());
+        assert!(resolve_type_file(Path::new("seg"), &second).is_ok());
+    }
+
+    #[test]
+    fn a_sidecar_naming_a_file_outside_its_directory_is_refused() {
+        for bad in [
+            "",
+            "/etc/passwd",
+            "../x.bin",
+            "type_columns/../../x.bin",
+            "./",
+        ] {
+            let error = resolve_type_file(Path::new("seg"), bad).err();
+            assert!(
+                error.is_some_and(|e| e.kind() == io::ErrorKind::InvalidData),
+                "{bad:?} must be refused"
+            );
+        }
     }
 }

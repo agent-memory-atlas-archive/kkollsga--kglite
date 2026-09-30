@@ -564,6 +564,83 @@ fn kgl_fresh_save_bytes_match_pinned_digest() {
     );
 }
 
+/// A graph whose only type has an integer title and a string property — the
+/// shape `KGL_FIXTURE_DIGEST`'s all-string-title fixture cannot pin. An integer
+/// title is stored as an `Int64` column (a `Mixed` column before the
+/// register-scale work), so a change to how it is held or written moves these
+/// bytes and nothing else's.
+fn kgl_int_title_fixture_bytes() -> Vec<u8> {
+    use crate::datatypes::DataFrame;
+    use crate::graph::dir_graph::DirGraph;
+    use std::sync::Arc;
+
+    let rows: Vec<Vec<Value>> = (0..4i64)
+        .map(|i| {
+            vec![
+                Value::Int64(3_100_000_000_000 + i),
+                Value::Int64(7_100_000_000_000 + i),
+                Value::String(format!("grade-{i}")),
+            ]
+        })
+        .collect();
+    let mut g = DirGraph::new();
+    let df = DataFrame::from_cypher_rows(
+        vec!["id".to_string(), "badge".to_string(), "grade".to_string()],
+        rows,
+    )
+    .unwrap();
+    crate::graph::mutation::maintain::add_nodes(
+        &mut g,
+        df,
+        "Badge".to_string(),
+        "id".to_string(),
+        Some("badge".to_string()),
+        None,
+    )
+    .unwrap();
+    let mut arc = Arc::new(g);
+    crate::graph::io::file::prepare_save(&mut arc);
+    Arc::make_mut(&mut arc).enable_columnar();
+    let mut buf = Vec::new();
+    crate::graph::io::file::write_kgl_to(&arc, &mut buf).unwrap();
+    buf
+}
+
+/// The `.kgl` bytes of an integer-title type, pinned, and the values they
+/// carry read back as integers.
+#[test]
+fn kgl_int_title_bytes_match_pinned_digest_and_reload_as_integers() {
+    use sha2::{Digest, Sha256};
+
+    let bytes = kgl_int_title_fixture_bytes();
+    let digest = hex(&Sha256::digest(mask_version_bytes(&bytes)));
+    if regen_requested() {
+        regen_report(
+            &[("KGL_INT_TITLE_DIGEST".to_string(), digest.clone())],
+            "KGL_INT_TITLE_DIGEST",
+        );
+    }
+    assert_eq!(
+        digest, KGL_INT_TITLE_DIGEST,
+        "the integer-title `.kgl` bytes moved; a genuine format change bumps the \
+         container magic and is documented in CHANGELOG.md."
+    );
+
+    let reloaded = crate::graph::io::file::load_kgl_bytes(&bytes).unwrap();
+    let store = reloaded.column_store("Badge").expect("Badge is columnar");
+    assert_eq!(
+        store.title_type_str(),
+        Some("int64"),
+        "the title column is typed"
+    );
+    for row in 0..4u32 {
+        assert_eq!(
+            store.get_title(row),
+            Some(Value::Int64(7_100_000_000_000 + i64::from(row)))
+        );
+    }
+}
+
 /// Control cell for the digest above: two independently built, equivalent
 /// graphs must serialize identically. Without this, a digest failure cannot be
 /// told apart from the fixture simply not being deterministic.
@@ -839,3 +916,8 @@ fn kgl_reload_preserves_column_slot_order() {
 /// sha256 of the `.kgl` bytes for [`kgl_fixture_bytes`]. Regenerate only via
 /// `KGLITE_REGEN_VALUE_BYTE_GOLDEN=1`, and only for a deliberate format change.
 const KGL_FIXTURE_DIGEST: &str = "837dacc48fd0e372b70e5d168e290541b5135c80893d6d139d9b9aa0878ba219";
+
+/// sha256 of the `.kgl` bytes for [`kgl_int_title_fixture_bytes`]; same
+/// regeneration rule as [`KGL_FIXTURE_DIGEST`].
+const KGL_INT_TITLE_DIGEST: &str =
+    "bbafe1092de0a69b86fe8a544205a48a3ccdce6d5988d5a34f8ad2fc841fd798";

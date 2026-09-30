@@ -1,9 +1,10 @@
 """A Pand-shaped register built in chunks into a disk graph, saved after every
 chunk and reopened: pins today's footprint, reload cost and answers.
 
-The footprint numbers are today's measurements (debug extension, macOS,
-2026-09-30) with 30 % headroom. They are ceilings on a shape that is known to
-be heavy, so later storage work tightens them. Only Darwin asserts them: the
+The footprint numbers are measurements (debug extension, macOS, 2026-09-30)
+with 30 % headroom. They are ceilings on a shape that is known to be heavy, so
+later storage work tightens them; they were last tightened when a save began
+re-pointing the live graph at the column files it wrote. Only Darwin asserts them: the
 Linux allocator has not been measured, so there the numbers are recorded in
 the failure message of a functional assertion instead of gating.
 """
@@ -11,6 +12,7 @@ the failure message of a functional assertion instead of gating.
 from __future__ import annotations
 
 import gc
+import os
 import sys
 import warnings
 
@@ -20,32 +22,62 @@ import pytest
 import kglite
 from tests.fixtures.register_scale import ANCHOR_TYPE, REL, TYPE, chunk
 
-psutil = pytest.importorskip("psutil")
+try:
+    import psutil
+except ImportError:  # only the footprint arms need it; the oracle arms below must always run
+    psutil = None
 
 CHUNKS = 4
 CHUNK_VERSIONS = 50_000
 TOTAL = CHUNKS * CHUNK_VERSIONS
 HEADROOM = 1.3
 
-# Metric: unique set size (psutil `memory_full_info().uss`) after `gc.collect()`
-# and `kglite.trim_memory()`, as a delta over the same reading taken once the
-# input frames exist and before the graph does. RSS is not used: it counts
-# resident pages of the memory-mapped generation files, which the operating
-# system reclaims at will. The figures are the worst seen across contexts (the
-# file alone, after other disk tests, after the temporal tests); a long-lived
-# process reads lower after saves because freed heap is reused, so these are
-# ceilings, not typical values. The build slope, ~350 B per version, is what
-# the storage work is meant to bring down.
-MEASURED_SAVE_MB = (28.0, 39.0, 69.0, 72.0)  # after the save of chunk 0..3
-MEASURED_RELOAD_MB = 99.0  # `kglite.load` of the saved directory, after dropping the writer (67 in the file alone)
+# Metrics. Both are a delta over the same reading taken once the input frames
+# exist and before the graph does, after `gc.collect()` + `kglite.trim_memory()`.
+#
+# * unique set size (psutil `memory_full_info().uss`): the process's private
+#   resident pages. It counts the clean pages of memory-mapped generation files
+#   that the process has touched, which the operating system reclaims at will,
+#   so it under-reads what moving columns onto files saves.
+# * `phys_footprint` (`proc_pid_rusage`, macOS only): what the OS charges the
+#   process, which excludes clean file-backed pages. It is the figure the
+#   register-scale promise is stated in, and it shows the storage work: on the
+#   pre-P4 build the same fixture read (26, 33, 46, 43) MB after the saves and
+#   71 MB after the reload; now (12, 22, 21, 29) and 31.
+#
+# The figures are the worst seen across contexts (the file alone, after other
+# disk tests, after the temporal tests); a long-lived process reads lower after
+# saves because freed heap is reused, so these are ceilings, not typical values.
+# What is left after a save is chiefly the id index, a heap map until it is
+# served from a file, and it is what the remaining storage work removes.
+MEASURED_SAVE_MB = (21.3, 39.0, 47.0, 63.7)  # USS after the save of chunk 0..3 (chunk 1 keeps its P1 pin)
+MEASURED_RELOAD_MB = 68.3  # USS: `kglite.load` of the saved directory, after dropping the writer
+MEASURED_PHYS_SAVE_MB = (13.4, 23.4, 21.6, 29.6)  # phys_footprint after the save of chunk 0..3
+MEASURED_PHYS_RELOAD_MB = 30.8  # phys_footprint: `kglite.load`
 ENFORCE_FOOTPRINT = sys.platform == "darwin"
 
 AS_OF = ("2005-06-30T12:34:56.789012", "2020-01-01T00:00:00", "a stored valid_to")
 
 
-def _uss_mb() -> float:
+def _phys_mb() -> float:
+    """`phys_footprint` in MB (macOS only; NaN elsewhere)."""
     gc.collect()
     kglite.trim_memory()
+    if sys.platform != "darwin":
+        return float("nan")
+    import ctypes
+
+    usage = (ctypes.c_uint64 * 40)()
+    ctypes.CDLL("/usr/lib/libproc.dylib").proc_pid_rusage(os.getpid(), 2, ctypes.byref(usage))
+    return usage[9] / 1e6  # ri_phys_footprint in `struct rusage_info_v2`
+
+
+def _uss_mb() -> float:
+    """Unique set size in MB, or NaN when psutil is not installed."""
+    gc.collect()
+    kglite.trim_memory()
+    if psutil is None:
+        return float("nan")
     return psutil.Process().memory_full_info().uss / 1e6
 
 
@@ -53,8 +85,9 @@ def _uss_mb() -> float:
 def built(tmp_path_factory):
     path = tmp_path_factory.mktemp("register") / "pand"
     chunks = [chunk(i, CHUNK_VERSIONS) for i in range(CHUNKS)]
-    base = _uss_mb()
+    base, phys_base = _uss_mb(), _phys_mb()
     after_save: list[float] = []
+    phys_after_save: list[float] = []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         graph = kglite.KnowledgeGraph(storage="disk", path=str(path))
@@ -66,31 +99,54 @@ def built(tmp_path_factory):
             graph.add_relationships(part.edges, REL, TYPE, "id", ANCHOR_TYPE, "ident")
             graph.save()
             after_save.append(_uss_mb() - base)
+            phys_after_save.append(_phys_mb() - phys_base)
         del graph
-        before_reload = _uss_mb()
+        before_reload, phys_before_reload = _uss_mb(), _phys_mb()
         reopened = kglite.load(str(path))
         reload_delta = _uss_mb() - before_reload
+        phys_reload_delta = _phys_mb() - phys_before_reload
     frame = pd.concat([part.versions for part in chunks], ignore_index=True)
-    return {"graph": reopened, "frame": frame, "after_save": after_save, "reload": reload_delta}
+    return {
+        "graph": reopened,
+        "frame": frame,
+        "after_save": after_save,
+        "reload": reload_delta,
+        "phys_after_save": phys_after_save,
+        "phys_reload": phys_reload_delta,
+    }
 
 
 def _report(built) -> str:
-    return f"after_save_mb={[round(x, 1) for x in built['after_save']]} reload_mb={built['reload']:.1f}"
+    return (
+        f"after_save_mb={[round(x, 1) for x in built['after_save']]} reload_mb={built['reload']:.1f} "
+        f"phys_after_save_mb={[round(x, 1) for x in built['phys_after_save']]} "
+        f"phys_reload_mb={built['phys_reload']:.1f}"
+    )
+
+
+def _require_footprint(built) -> None:
+    if psutil is None:
+        pytest.skip("psutil is not installed; the footprint arms need it (the answer arms do not)")
+    if not ENFORCE_FOOTPRINT:
+        pytest.skip(f"footprint ceilings are pinned on Darwin only; measured here: {_report(built)}")
 
 
 def test_footprint_after_each_save_is_bounded(built):
     limits = [round(m * HEADROOM, 1) for m in MEASURED_SAVE_MB]
-    if not ENFORCE_FOOTPRINT:
-        pytest.skip(f"footprint ceilings are pinned on Darwin only; measured here: {_report(built)}")
+    phys_limits = [round(m * HEADROOM, 1) for m in MEASURED_PHYS_SAVE_MB]
+    _require_footprint(built)
     assert all(a <= lim for a, lim in zip(built["after_save"], limits, strict=True)), (
         f"{_report(built)} vs limits {limits}"
+    )
+    assert all(a <= lim for a, lim in zip(built["phys_after_save"], phys_limits, strict=True)), (
+        f"{_report(built)} vs phys limits {phys_limits}"
     )
 
 
 def test_reload_delta_is_bounded(built):
-    if not ENFORCE_FOOTPRINT:
-        pytest.skip(f"footprint ceilings are pinned on Darwin only; measured here: {_report(built)}")
+    _require_footprint(built)
     assert built["reload"] <= MEASURED_RELOAD_MB * HEADROOM, _report(built)
+    assert built["phys_reload"] <= MEASURED_PHYS_RELOAD_MB * HEADROOM, _report(built)
 
 
 def test_reopened_graph_has_every_row(built):

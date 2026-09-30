@@ -943,7 +943,8 @@ def _current_generation(root: Path) -> Path:
 def _columnar_bytes(root: str) -> int:
     """Bytes the published generation spends on columnar payload.
 
-    The unified `seg_000/columns.bin` plus any per-type `columns/<T>/columns.zst`
+    Every per-type column file (`seg_000/type_columns/*.bin`), the shared
+    `columns.bin` an older layout used, and any per-type `columns/<T>/columns.zst`
     sidecar — i.e. exactly what a dead-row drop can shrink. Deliberately *not*
     the whole directory: node slots and the free-slot metadata are sized by node
     *capacity*, which only the parked slot-renumbering half of compaction would
@@ -955,8 +956,12 @@ def _columnar_bytes(root: str) -> int:
         candidate = gen / name
         if candidate.is_file():
             total += candidate.stat().st_size
+    for column_file in gen.glob("seg_000/type_columns/*.bin"):
+        total += column_file.stat().st_size
     for sidecar in gen.glob("columns/*/columns.zst"):
         total += sidecar.stat().st_size
+    # A layout this helper does not know would read as 0 == 0 and pass any size comparison.
+    assert total > 0, f"no columnar payload found under {gen}"
     return total
 
 

@@ -10,10 +10,10 @@
 use super::*;
 
 /// Load `columns/<type>/columns.zst` sidecars onto the storage backend.
-/// Skips entries whose type is already loaded (from `columns.bin`'s mmap
-/// fast path). Used by both the earlier per-type layout and the additive
-/// post-`columns.bin` path that covers types added post-build via
-/// `add_nodes`.
+/// Skips entries whose type is already loaded (from the mmap column files).
+/// Used by both the earlier per-type layout and the additive path that covers
+/// types the column files do not: those added post-build via `add_nodes`, and
+/// those holding a column the mmap layout cannot represent.
 pub(super) fn load_column_sidecars(
     dir: &std::path::Path,
     graph: &mut crate::graph::dir_graph::DirGraph,
@@ -45,7 +45,7 @@ pub(super) fn load_column_sidecars(
         }
         let type_name = entry.file_name().to_string_lossy().to_string();
         if graph.column_store(&type_name).is_some() {
-            // columns.bin mmap path already loaded this type.
+            // the mmap column files already loaded this type.
             continue;
         }
         let col_file = entry.path().join("columns.zst");
@@ -118,6 +118,142 @@ pub(super) fn load_column_sidecars(
                 .type_schemas_mut()
                 .insert(type_name.clone(), Arc::clone(store.schema()));
         }
+        graph.install_column_store(&type_name, Arc::new(store));
+    }
+    Ok(())
+}
+
+/// Map a column file read-only.
+///
+/// Every file of a published generation is mapped this way and never written
+/// through: a generation is immutable, and later saves may hard-link one file
+/// into several generations, so a writable mapping would let one stray write
+/// alter all of them.
+fn map_column_file(path: &std::path::Path) -> io::Result<Arc<memmap2::Mmap>> {
+    let file = std::fs::File::open(path).map_err(|e| io_context("opening", path, e))?;
+    // SAFETY: a published generation is immutable — writers stage and publish a
+    // new one, and `GraphDirectoryLock` serializes them — so this inode is never
+    // truncated or rewritten while the mapping is live.
+    let mmap =
+        unsafe { memmap2::Mmap::map(&file) }.map_err(|e| io_context("memory-mapping", path, e))?;
+    Ok(Arc::new(mmap))
+}
+
+/// Stores for every type a column sidecar describes, mapped from the files it
+/// names.
+///
+/// `dir` is the directory holding the sidecar; per-type files resolve against
+/// it, and types without a file read the shared `columns.bin` beside it (absent
+/// on a directory whose types all have files). A type whose regions run past its
+/// file is refused here rather than at the first read that indexes past the map.
+fn open_column_stores(
+    dir: &std::path::Path,
+    meta: columns_meta::ColumnsMeta,
+    validate_utf8: bool,
+) -> io::Result<Vec<(String, crate::graph::storage::column_store::ColumnStore)>> {
+    let shared_path = dir.join("columns.bin");
+    let mut shared: Option<Arc<memmap2::Mmap>> = None;
+    let mut stores = Vec::with_capacity(meta.types.len());
+    for type_meta in &meta.types {
+        let (mmap, path) = match meta.files.get(&type_meta.type_name) {
+            Some(relative) => {
+                let path = columns_meta::resolve_type_file(dir, relative)?;
+                (map_column_file(&path)?, path)
+            }
+            None if shared_path.exists() => {
+                if shared.is_none() {
+                    shared = Some(map_column_file(&shared_path)?);
+                }
+                (Arc::clone(shared.as_ref().unwrap()), shared_path.clone())
+            }
+            // A sidecar-only type of a directory that has no shared file.
+            None => continue,
+        };
+        if type_meta.extent() > mmap.len() {
+            return Err(invalid_data(format!(
+                "column file '{}' holds {} bytes but the metadata for type '{}' needs {}",
+                path.display(),
+                mmap.len(),
+                type_meta.type_name,
+                type_meta.extent()
+            )));
+        }
+        let store = type_meta.to_mmap_store(mmap);
+        if validate_utf8 {
+            store.validate_utf8(&type_meta.type_name)?;
+        }
+        stores.push((
+            type_meta.type_name.clone(),
+            crate::graph::storage::column_store::ColumnStore::from_mmap_store(Arc::new(store)),
+        ));
+    }
+    Ok(stores)
+}
+
+/// Install a disk graph's column stores — the mmap-backed column files named
+/// by `columns_meta` when present, then the per-type `columns/<type>/columns.zst`
+/// sidecars for whatever they do not cover. Cold load-time path.
+pub(super) fn load_disk_column_stores(
+    dir: &std::path::Path,
+    graph: &mut crate::graph::dir_graph::DirGraph,
+) -> io::Result<()> {
+    use crate::graph::io::load_timing::{log_stage, stage_timer};
+
+    let t = stage_timer();
+    // The sidecar is searched for in `seg_000/` as well as the directory root: a
+    // later layout moved these files into `seg_000/`, and without both locations
+    // the load fell through to the per-type sidecar branch, which returned an
+    // empty `column_stores` map and broke `MATCH (n:Type)` after a disk-mode
+    // save + reload.
+    if let Some(meta_path) = columns_meta::locate(dir) {
+        // Read the metadata before mapping anything, so a directory laid out by
+        // a newer build is refused by its declared format, not by what maps.
+        let meta = columns_meta::read(&meta_path)?;
+        let meta_dir = meta_path.parent().unwrap_or(dir);
+
+        // Column-file bytes are untrusted disk input, but the hot string
+        // readers use `from_utf8_unchecked` (see MmapColumnStore::read_str).
+        // Validate every string column once here — load-time, amortized —
+        // so the per-access unchecked conversion stays sound. Opt-out for
+        // very large trusted graphs (validation touches every string byte,
+        // forcing a full read of the files): KGLITE_SKIP_UTF8_VALIDATION=1.
+        let skip_utf8 = std::env::var_os("KGLITE_SKIP_UTF8_VALIDATION").is_some();
+        for (type_name, store) in open_column_stores(meta_dir, meta, !skip_utf8)? {
+            graph.install_column_store(&type_name, Arc::new(store));
+        }
+    }
+    // Additively load sidecars for types the column files do not cover: types
+    // added post-`load_ntriples` via `add_nodes`, and types whose columns the
+    // mmap layout cannot hold. The writer emits `columns/<type>/columns.zst`
+    // only for types NOT in `columns_meta`, and the loader skips a type that
+    // already has a store.
+    load_column_sidecars(dir, graph)?;
+    log_stage("column_stores_load", t);
+    Ok(())
+}
+
+/// After a generation publish, swap every live column store whose type landed in
+/// the published column files for an mmap-backed store over those files, so the
+/// heap (or workspace-spill) copies are released instead of staying resident
+/// until the process exits. Types written as sidecars keep their live store.
+///
+/// All-or-nothing: no store is installed unless every file mapped. The files
+/// were written by this process a moment ago, so load-time UTF-8 validation is
+/// skipped.
+pub(crate) fn remap_column_stores_to_generation(
+    dir: &std::path::Path,
+    graph: &mut crate::graph::dir_graph::DirGraph,
+) -> io::Result<()> {
+    #[cfg(test)]
+    if crate::graph::dir_graph::post_publish_failpoint("remap_column_stores") {
+        return Err(io::Error::other("injected column-store remap failure"));
+    }
+    let Some(meta_path) = columns_meta::locate(dir) else {
+        return Ok(());
+    };
+    let meta = columns_meta::read(&meta_path)?;
+    let stores = open_column_stores(meta_path.parent().unwrap_or(dir), meta, false)?;
+    for (type_name, store) in stores {
         graph.install_column_store(&type_name, Arc::new(store));
     }
     Ok(())

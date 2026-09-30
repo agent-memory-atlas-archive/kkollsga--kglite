@@ -311,20 +311,17 @@ fn finalize_disk_graph(
             let reload_start = Instant::now();
             let reload_result: Result<(), String> = (|| {
                 let columns_meta = crate::graph::io::columns_meta::read(&meta_path)
-                    .map_err(|e| format!("read columns_meta.json: {}", e))?;
+                    .map_err(|e| format!("read columns_meta.json: {}", e))?
+                    .types;
 
-                let file = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&mmap_path)
+                let file = std::fs::File::open(&mmap_path)
                     .map_err(|e| format!("open columns.bin: {}", e))?;
                 // SAFETY: this DiskGraph exclusively owns the active build
                 // workspace, and GraphDirectoryLock serializes external
                 // writers. No other writer can truncate or replace columns.bin
                 // while this mapping is live.
                 let mmap = unsafe {
-                    memmap2::MmapMut::map_mut(&file)
-                        .map_err(|e| format!("mmap columns.bin: {}", e))?
+                    memmap2::Mmap::map(&file).map_err(|e| format!("mmap columns.bin: {}", e))?
                 };
                 let mmap_arc = Arc::new(mmap);
 

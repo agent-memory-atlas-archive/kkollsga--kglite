@@ -43,14 +43,17 @@ before upgrading.
   engine, so a prebuilt one from 0.19.0 or earlier cannot read files this
   version writes and must be rebuilt.
 
-  The disk layout changes in three places, all recognised by this build's own
+  The disk layout changes in four places, all recognised by this build's own
   readers: `disk_graph_meta.json` carries a `disk_format` field (this build
   refuses a value newer than it knows, naming both numbers); `columns_meta.json`
-  is `{"format": 2, "types": [...]}` instead of a bare array, and its compact
-  binary twin moved to `columns_meta.v2.bin.zst` (older readers preferred the
-  old file name whenever it existed, so reusing it would have bypassed the
-  guard); and `id_indices.bin` is version 3, which is the version later changes
-  may add directory variants to. `graph_info()['format_version']` and the C
+  is `{"format": 2, "types": [...], "files": {...}}` instead of a bare array,
+  and its compact binary twin moved to `columns_meta.v2.bin.zst` (older readers
+  preferred the old file name whenever it existed, so reusing it would have
+  bypassed the guard); the column bytes are one immutable file per node type
+  under `seg_000/type_columns/`, named by a hash of the type name, instead of
+  one shared `columns.bin` (a directory 0.19.0 wrote keeps its `columns.bin`
+  until its next `save()` splits it per type); and `id_indices.bin` is version
+  3, which is the version later changes may add directory variants to. `graph_info()['format_version']` and the C
   ABI's `kglite_storage_format_version().kgl` report 7; no C symbol changed.
 
 - Datetime properties (`Value::Timestamp`) are stored in a typed column of
@@ -66,6 +69,22 @@ before upgrading.
   heterogeneous columns; its next `save()` types every column whose values are
   all exact timestamps. `.kgl` files this build writes carry the new column
   tag, which is inside the v7 container above.
+
+- An integer node title (a register's object numbers, say) is stored as a
+  typed 64-bit column instead of a heterogeneous one, in every storage mode:
+  9 bytes and no boxed value a row instead of 32. Titles, lookups and results
+  are unchanged; `.kgl` files this build writes carry the typed column for such
+  a type (inside the v7 container above), and older files with the
+  heterogeneous form load unchanged. In disk mode such a type is now served
+  from a memory-mapped column file rather than a compressed sidecar decoded onto
+  the heap at every open, and a disk graph's `save()` re-points the live graph
+  at the column files and type index it just published instead of leaving the
+  copies it built them from resident. On a 200,000-version register fixture
+  saved in four chunks (debug build, macOS, `phys_footprint`) the heap after
+  each save fell from 26 / 33 / 46 / 43 MB to 12 / 22 / 21 / 29 MB and the
+  reload cost from 71 MB to 31 MB; what remains is chiefly the id index. A
+  disk directory 0.19.0 wrote with an integer-title type moves that type into
+  its own column file on the next `save()`, with identical answers.
 
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
   data") use one org-chart example, with the declaration rules gathered in a

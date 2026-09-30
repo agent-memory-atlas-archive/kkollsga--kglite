@@ -22,6 +22,7 @@ mod typed_column;
 pub(crate) use exact_values::ExactValueColumns;
 
 pub use typed_column::TypedColumn;
+mod mapped_append;
 #[cfg(test)]
 pub(crate) use typed_column::{column_clones, reset_column_clones};
 pub(crate) use typed_column::{exact_micros, micros_to_timestamp};
@@ -354,11 +355,17 @@ impl ColumnStore {
         }
     }
 
-    /// Push a node title value into the title column. Creates a Str column if None.
+    /// Push a node title value into the title column. Creates the column if
+    /// None: `Int64` when the first value is an integer (9 bytes a row, mmap-able
+    /// and eligible for a disk column file; a `Mixed` column is 32 and neither), `Str`
+    /// otherwise. A later value of the other kind demotes the column to `Mixed`.
     pub fn push_title(&mut self, value: &Value) {
         self.spillable_growth = true;
         let col = TypedColumn::make_mut_for_append(
             self.title_column.get_or_insert_with(|| {
+                if matches!(value, Value::Int64(_)) {
+                    return Arc::new(TypedColumn::from_type_str("int64"));
+                }
                 Arc::new(TypedColumn::Str {
                     offsets: MmapOrVec::from_vec(vec![0u64]),
                     data: MmapBytes::new(),
@@ -487,6 +494,27 @@ impl ColumnStore {
         self.mmap_store.as_ref()?.title_borrowed(row_id)
     }
 
+    /// Borrowed view of the title as a scalar: a string borrows from the store,
+    /// an integer title comes by value. `None` for a null or a non-scalar title.
+    pub fn title_scalar_borrowed(
+        &self,
+        row_id: u32,
+    ) -> Option<crate::datatypes::values::BorrowedValue<'_>> {
+        use crate::datatypes::values::BorrowedValue;
+        if let Some(text) = self.title_borrowed(row_id) {
+            return Some(BorrowedValue::String(text));
+        }
+        match self.get_title(row_id)? {
+            Value::Int64(v) => Some(BorrowedValue::Int64(v)),
+            Value::UniqueId(v) => Some(BorrowedValue::UniqueId(v)),
+            Value::Float64(v) => Some(BorrowedValue::Float64(v)),
+            Value::Boolean(b) => Some(BorrowedValue::Boolean(b)),
+            Value::DateTime(d) => Some(BorrowedValue::DateTime(d)),
+            Value::Timestamp(t) => Some(BorrowedValue::Timestamp(t)),
+            _ => None,
+        }
+    }
+
     /// Allocation-free property visitor. Used by
     /// `save_subset_streaming_disk` to skip the per-row
     /// `Vec<(InternedKey, Value)>` and `Value::String` clones that
@@ -546,14 +574,17 @@ impl ColumnStore {
         self.id_column.as_ref().map(|c| c.type_tag())
     }
 
-    /// Type tag of the title column. `MmapColumnStore`'s title is
-    /// always a string column (per its data model); otherwise we
-    /// report the in-memory `title_column`'s tag, or `None`.
+    /// Type tag of the title column, read where [`Self::get_title`] reads it: the
+    /// in-memory `title_column` when present (it wins over an mmap base), else
+    /// the base's — `"int64"` for an integer title, `"string"` otherwise — or
+    /// `None` if there is no title column.
     pub fn title_type_str(&self) -> Option<&'static str> {
-        if self.mmap_store.is_some() {
-            return Some("string");
+        if let Some(column) = self.title_column.as_ref() {
+            return Some(column.type_tag());
         }
-        self.title_column.as_ref().map(|c| c.type_tag())
+        self.mmap_store
+            .as_ref()
+            .map(|ms| if ms.title_is_int() { "int64" } else { "string" })
     }
 
     /// Number of rows (including tombstoned).
@@ -566,6 +597,24 @@ impl ColumnStore {
     #[inline]
     pub(crate) fn has_mmap_base(&self) -> bool {
         self.mmap_store.is_some()
+    }
+
+    /// The mmap base when this store is *nothing but* that base — no heap
+    /// columns, id/title overrides, null overrides, tombstones or row growth —
+    /// so a save can re-emit its regions byte for byte instead of flattening
+    /// it onto the heap.
+    pub(crate) fn pure_mmap_store(
+        &self,
+    ) -> Option<&Arc<crate::graph::storage::mapped::column_store::MmapColumnStore>> {
+        let ms = self.mmap_store.as_ref()?;
+        let pure = self.columns.is_empty()
+            && self.id_column.is_none()
+            && self.title_column.is_none()
+            && self.null_overrides.is_none()
+            && self.overflow_offsets.is_none()
+            && !self.tombstones.iter().any(|t| *t)
+            && self.row_count == ms.row_count();
+        pure.then_some(ms)
     }
 
     /// Whether any row can resolve a property through the overflow bag.

@@ -195,7 +195,7 @@ impl BatchProcessor {
         // `dir_graph::node_write`), so there is one path.
         let mut deferred_columnar: DeferredColumnarRows = Vec::new();
         let mut owned_stores: OwnedColumnStores =
-            Self::detach_columnar_stores(&self.creates_interned, graph);
+            Self::detach_columnar_stores(&self.creates_interned, graph)?;
 
         // The store this chunk is currently appending to, held out of the map
         // for as long as consecutive rows share a type — which is every row of
@@ -339,7 +339,7 @@ impl BatchProcessor {
     fn detach_columnar_stores(
         creates: &[NodeCreationInterned],
         graph: &mut DirGraph,
-    ) -> OwnedColumnStores {
+    ) -> Result<OwnedColumnStores, String> {
         let mut owned_stores: OwnedColumnStores = HashMap::new();
         let affected_types: HashSet<String> = creates.iter().map(|c| c.node_type.clone()).collect();
         for node_type in &affected_types {
@@ -354,6 +354,30 @@ impl BatchProcessor {
                     .get(node_type)
                     .cloned()
                     .unwrap_or_default();
+                // On disk, a store that is a pure mmap base moves into
+                // workspace-file-backed columns instead of being flattened onto
+                // the heap. A failed move must not lose the store `take_column_store`
+                // just removed, so everything taken so far goes back first.
+                let spill_dir = graph
+                    .graph
+                    .as_disk()
+                    .and_then(|disk| disk.append_spill_dir());
+                if let Some(dir) = spill_dir {
+                    match store.mapped_owned_for_append(&dir) {
+                        Ok(Some(mapped)) => store = mapped,
+                        Ok(None) => {}
+                        Err(error) => {
+                            graph.install_column_store(node_type, Arc::new(store));
+                            for (taken_type, taken) in owned_stores {
+                                graph.install_column_store(&taken_type, Arc::new(taken));
+                            }
+                            return Err(format!(
+                                "could not move '{node_type}' into file-backed columns \
+                                 for the append: {error}"
+                            ));
+                        }
+                    }
+                }
                 store.materialize_for_append(&meta, &graph.interner);
                 // After the materialization, never across it: it re-derives the
                 // store's columns, so a pre-image taken on the far side names a
@@ -374,7 +398,7 @@ impl BatchProcessor {
                 );
             }
         }
-        owned_stores
+        Ok(owned_stores)
     }
 
     /// Journal the pre-image that reverses this chunk's appends to one type's

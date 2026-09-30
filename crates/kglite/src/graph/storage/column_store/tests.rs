@@ -1338,3 +1338,44 @@ fn test_clone_keeps_mapped_overflow_bag_mapped() {
         Some(Value::Int64(9))
     );
 }
+
+/// An integer title is stored as an `Int64` column (9 bytes a row, mmap-able),
+/// not a `Mixed` one; a title of the other kind demotes it, and a null first
+/// leaves the string default, so nothing that used to hold a value drops one.
+#[test]
+fn an_integer_title_is_an_int64_column_and_a_change_of_kind_demotes_it() {
+    let interner = StringInterner::new();
+    let new_store = || ColumnStore::new(Arc::new(TypeSchema::new()), &HashMap::new(), &interner);
+
+    let mut ints = new_store();
+    for i in 0..3 {
+        ints.push_title(&Value::Int64(7_100_000_000_000 + i));
+        ints.push_row(&[]);
+    }
+    assert_eq!(ints.title_type_str(), Some("int64"));
+    // Nine bytes a row for the column plus the store's one-byte tombstone flag.
+    assert_eq!(ints.heap_bytes(), 3 * (8 + 1 + 1), "no boxed values");
+    assert_eq!(ints.get_title(2), Some(Value::Int64(7_100_000_000_002)));
+
+    let mut mixed = new_store();
+    mixed.push_title(&Value::Int64(1));
+    mixed.push_row(&[]);
+    mixed.push_title(&Value::String("two".into()));
+    mixed.push_row(&[]);
+    assert_eq!(mixed.title_type_str(), Some("mixed"));
+    assert_eq!(mixed.get_title(0), Some(Value::Int64(1)));
+    assert_eq!(mixed.get_title(1), Some(Value::String("two".into())));
+
+    let mut strings = new_store();
+    strings.push_title(&Value::String("a".into()));
+    strings.push_row(&[]);
+    assert_eq!(strings.title_type_str(), Some("string"));
+    assert_eq!(
+        strings.title_scalar_borrowed(0).map(|v| v.to_value()),
+        Some(Value::String("a".into()))
+    );
+    assert_eq!(
+        ints.title_scalar_borrowed(1).map(|v| v.to_value()),
+        Some(Value::Int64(7_100_000_000_001))
+    );
+}

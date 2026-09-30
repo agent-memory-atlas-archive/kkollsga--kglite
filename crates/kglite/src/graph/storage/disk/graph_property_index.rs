@@ -99,6 +99,12 @@ impl DiskGraph {
                 col_store
                     .and_then(|cs| cs.get_str_by_slot(nslot.row_id, schema_slot.unwrap()))
                     .map(str::to_string)
+            } else if let Some(Value::String(s)) =
+                col_store.and_then(|cs| cs.get(nslot.row_id, prop_key))
+            {
+                // An mmap-backed store has an empty `schema()`, so the slot
+                // path above misses its real columns; the keyed read does not.
+                Some(s)
             } else if let Some(cs) = col_store {
                 // Not in schema — try title, then id. If both return a
                 // non-empty String, prefer title (which is what users

@@ -1,327 +1,424 @@
-//! Unified mega-file writer for `ColumnStore`s.
+//! Column-file writer for `ColumnStore`s.
 //!
-//! Produces `seg_000/columns.bin` + `seg_000/columns_meta.json` matching
-//! the layout the ntriples builder emits and the loader's mmap fast
-//! path expects (see [`crate::graph::io::ntriples::ColumnTypeMeta`]).
+//! Produces one immutable `seg_000/type_columns/<key>.bin` per node type and
+//! the `seg_000/columns_meta.json` envelope that lists them, matching the
+//! region layout the ntriples builder emits and the loader's mmap fast path
+//! expects (see [`crate::graph::io::ntriples::ColumnTypeMeta`]). A type is its
+//! own file so a later save can hard-link the ones that did not change into the
+//! next generation instead of rewriting them.
 //!
-//! Used by [`crate::graph::dir_graph::DirGraph::save_disk`] when no
-//! pre-existing `columns.bin` exists, so saved DirGraphs (carves,
-//! `save_subset`, mutation persists from a fresh in-memory build) load
-//! with mmap-fast-path semantics rather than per-type-sidecar
-//! decompression.
+//! Used by [`crate::graph::dir_graph::DirGraph::save_disk`], so saved DirGraphs
+//! (carves, `save_subset`, mutation persists from a fresh in-memory build) load
+//! with mmap-fast-path semantics rather than per-type-sidecar decompression.
 //!
-//! Layout strategy:
-//! 1. Plan: walk every (type, column, sub-array) once to compute
-//!    region offsets in the mega-file.
-//! 2. Allocate `seg_000/columns.bin` with the total size.
-//! 3. Write each sub-array's raw bytes (via [`MmapOrVec::as_raw_bytes`]
-//!    / [`MmapBytes::as_raw_bytes`]) at its planned offset.
-//! 4. Emit `seg_000/columns_meta.json` with the per-type
-//!    [`ColumnTypeMeta`].
+//! Layout strategy, per type:
+//! 1. Plan: walk every (column, sub-array) once to assign region offsets
+//!    within the type's file. A source is *borrowed* from the live store — a
+//!    heap vec, a spill mapping or the previous generation's file — and only a
+//!    `Str` column carrying a relocation overlay is packed into an owned
+//!    buffer, so a save never holds every column's bytes twice.
+//! 2. Write the sub-arrays' raw bytes in offset order into a new file
+//!    (`create_new`: a published file is never rewritten).
+//! 3. Emit `seg_000/columns_meta.json` with the per-type
+//!    [`ColumnTypeMeta`] and the file each type lives in.
 //!
-//! Mixed properties and identity types unsupported by the mmap layout
-//! are returned in
-//! `unhandled_types` so the caller falls back to the legacy zstd
-//! sidecar for those.
+//! Mixed properties and identity types unsupported by the mmap layout are
+//! returned in `unhandled` so the caller falls back to the legacy zstd sidecar
+//! for those.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io;
+use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use memmap2::MmapMut;
-
-use crate::graph::io::columns_meta;
+use crate::graph::io::columns_meta::{self, ColumnsMeta};
 use crate::graph::io::ntriples::{
     ColMapEntry, ColumnTypeMeta, FixedColMeta, RegionMeta, StrColMeta,
 };
 use crate::graph::schema::StringInterner;
 use crate::graph::storage::column_store::{ColumnStore, TypedColumn};
+use crate::graph::storage::mapped::column_store::{ColRef, MmapColumnStore, Region};
 use crate::graph::storage::mapped::mmap_vec::{MmapBytes, MmapOrVec};
 use rustc_hash::FxHashMap;
 
 /// Result of a unified-columns write.
 #[allow(dead_code)] // fields are part of the public API; consumed by save_disk in the future
 pub struct WriteResult {
-    /// Types successfully encoded into `seg_000/columns.bin`. The
-    /// caller should skip sidecar emission for these.
+    /// Types successfully encoded into a `type_columns/` file. The caller
+    /// should skip sidecar emission for these.
     pub written: HashSet<String>,
-    /// Types with columns unrepresentable in the mmap layout. Caller uses the
-    /// legacy zstd sidecar path for these.
+    /// Types with columns unrepresentable in the mmap layout, or with no bytes
+    /// to map. Caller uses the legacy zstd sidecar path for these.
     pub unhandled: HashSet<String>,
 }
 
-/// Write all column stores for the given dir, producing the mmap-
-/// friendly `seg_000/columns.bin` + `seg_000/columns_meta.json`.
+/// The bytes of one type's file, planned but not yet written.
+struct PlannedType<'a> {
+    type_name: String,
+    meta: ColumnTypeMeta,
+    /// Path relative to `seg_000/`, recorded in the sidecar.
+    file: String,
+    /// `(offset, bytes)` in ascending, gap-free offset order.
+    sources: Vec<(usize, Cow<'a, [u8]>)>,
+    /// Bytes the regions cover; a file with none is padded to one byte.
+    len: usize,
+}
+
+/// Assigns consecutive regions of one type's file to borrowed or owned bytes.
+#[derive(Default)]
+struct RegionPlanner<'a> {
+    cursor: usize,
+    sources: Vec<(usize, Cow<'a, [u8]>)>,
+}
+
+impl<'a> RegionPlanner<'a> {
+    fn push(&mut self, bytes: impl Into<Cow<'a, [u8]>>) -> RegionMeta {
+        let bytes = bytes.into();
+        let region = RegionMeta {
+            offset: self.cursor,
+            len: bytes.len(),
+        };
+        self.cursor += bytes.len();
+        self.sources.push((region.offset, bytes));
+        region
+    }
+
+    /// A region that is not present.
+    fn absent() -> RegionMeta {
+        RegionMeta { offset: 0, len: 0 }
+    }
+
+    fn finish(self, type_name: &str, meta: ColumnTypeMeta) -> PlannedType<'a> {
+        PlannedType {
+            type_name: type_name.to_string(),
+            meta,
+            file: String::new(),
+            sources: self.sources,
+            len: self.cursor,
+        }
+    }
+}
+
+/// Write every column store that fits the mmap layout into its own file under
+/// `dir/seg_000/type_columns/`, plus `seg_000/columns_meta.json`.
 ///
-/// Returns the set of types that landed in the mega-file (caller skips
-/// them during sidecar emission) plus the set that needs sidecar
-/// fallback (typed-incompatible).
-pub fn write_unified_columns(
+/// Returns the set of types that landed in a file (caller skips them during
+/// sidecar emission) plus the set that needs sidecar fallback.
+pub fn write_unified_columns<'s>(
     dir: &Path,
-    column_stores: &HashMap<String, Arc<ColumnStore>>,
+    column_stores: &'s HashMap<String, Arc<ColumnStore>>,
     _interner: &StringInterner,
 ) -> io::Result<WriteResult> {
     let seg0 = dir.join("seg_000");
     fs::create_dir_all(&seg0)?;
-    let bin_path = seg0.join("columns.bin");
-    let json_path = seg0.join("columns_meta.json");
 
-    // ── Pass 1: plan the layout ─────────────────────────────────────
-    //
-    // For every type whose ColumnStore is fully typed (no Mixed), walk
-    // every sub-array (id, title, per-property, overflow) and assign
-    // it a contiguous region in the mega-file. Skip types that contain
-    // any Mixed column — those need the sidecar fallback.
-
-    struct PlannedType {
-        type_name: String,
-        meta: ColumnTypeMeta,
-        // Source bytes per region, in the order they will be written.
-        // Each entry is (planned_offset_in_megafile, &[u8]).
-        sources: Vec<(usize, Vec<u8>)>,
-    }
-
-    let mut planned: Vec<PlannedType> = Vec::with_capacity(column_stores.len());
+    let mut planned: Vec<PlannedType<'s>> = Vec::with_capacity(column_stores.len());
     let mut unhandled: HashSet<String> = HashSet::new();
-    let mut cursor: usize = 0;
+    let mut used_files: HashSet<String> = HashSet::new();
 
-    // Stable iteration order for deterministic mega-file layout.
+    // Stable iteration order for deterministic file names and sidecar order.
     let mut type_names: Vec<&String> = column_stores.keys().collect();
     type_names.sort();
 
     for type_name in type_names {
-        let store = &column_stores[type_name];
-
-        // The unified identity layout supports string or fixed integer IDs
-        // and string titles. Other representations use lossless sidecars.
-        if store_needs_sidecar(store) {
-            unhandled.insert(type_name.clone());
-            continue;
-        }
-
-        let row_count = store.row_count();
-
-        // ── id column ─────────────────────────────────────────────
-        let (id_is_string, id_data_bytes, id_nulls_bytes, id_str_data_bytes, id_str_offsets_bytes) =
-            extract_id_column(store);
-        let mut sources: Vec<(usize, Vec<u8>)> = Vec::new();
-
-        let mut id_data = RegionMeta { offset: 0, len: 0 };
-        let mut id_nulls = RegionMeta { offset: 0, len: 0 };
-        let mut id_str_data = RegionMeta { offset: 0, len: 0 };
-        let mut id_str_offsets = RegionMeta { offset: 0, len: 0 };
-
-        if id_is_string {
-            (id_str_data, cursor) = plan_region(cursor, &id_str_data_bytes);
-            sources.push((id_str_data.offset, id_str_data_bytes));
-            (id_str_offsets, cursor) = plan_region(cursor, &id_str_offsets_bytes);
-            sources.push((id_str_offsets.offset, id_str_offsets_bytes));
-            (id_nulls, cursor) = plan_region(cursor, &id_nulls_bytes);
-            sources.push((id_nulls.offset, id_nulls_bytes));
-        } else if !id_data_bytes.is_empty() {
-            (id_data, cursor) = plan_region(cursor, &id_data_bytes);
-            sources.push((id_data.offset, id_data_bytes));
-            (id_nulls, cursor) = plan_region(cursor, &id_nulls_bytes);
-            sources.push((id_nulls.offset, id_nulls_bytes));
-        }
-
-        // ── title column ──────────────────────────────────────────
-        let (title_data_bytes, title_offsets_bytes, title_nulls_bytes) =
-            extract_title_column(store);
-
-        let (title_data, c) = plan_region(cursor, &title_data_bytes);
-        cursor = c;
-        sources.push((title_data.offset, title_data_bytes));
-        let (title_offsets, c) = plan_region(cursor, &title_offsets_bytes);
-        cursor = c;
-        sources.push((title_offsets.offset, title_offsets_bytes));
-        let (title_nulls, c) = plan_region(cursor, &title_nulls_bytes);
-        cursor = c;
-        sources.push((title_nulls.offset, title_nulls_bytes));
-
-        // ── per-schema-slot property columns ──────────────────────
-        let mut col_map: Vec<ColMapEntry> = Vec::new();
-        let mut fixed_cols: Vec<FixedColMeta> = Vec::new();
-        let mut str_cols: Vec<StrColMeta> = Vec::new();
-
-        for (slot, ik) in store.schema().iter() {
-            let s = slot as usize;
-            let col = match store.column(s) {
-                Some(c) => c,
-                None => continue,
-            };
-            match col {
-                TypedColumn::Mixed { .. } => {
-                    // Defensive — should have been caught by store_needs_sidecar.
-                    unreachable!("Mixed column slipped past store_needs_sidecar");
-                }
-                TypedColumn::Str {
-                    offsets,
-                    data,
-                    nulls,
-                    relocated,
-                } => {
-                    let (data_bytes, offsets_bytes, nulls_bytes) =
-                        pack_str_column(offsets, data, nulls, relocated);
-
-                    let (data_r, c) = plan_region(cursor, &data_bytes);
-                    cursor = c;
-                    sources.push((data_r.offset, data_bytes));
-                    let (offsets_r, c) = plan_region(cursor, &offsets_bytes);
-                    cursor = c;
-                    sources.push((offsets_r.offset, offsets_bytes));
-                    let (nulls_r, c) = plan_region(cursor, &nulls_bytes);
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls_bytes));
-                    let idx = str_cols.len();
-                    str_cols.push(StrColMeta {
-                        data: data_r,
-                        offsets: offsets_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: "string".into(),
-                        idx,
-                    });
-                }
-                fixed => {
-                    let (tag, data, nulls) = fixed_width_parts(fixed)
-                        .expect("Mixed and Str are handled above; the rest are fixed-width");
-                    let (data_r, c) = plan_region(cursor, data);
-                    cursor = c;
-                    sources.push((data_r.offset, data.to_vec()));
-                    let (nulls_r, c) = plan_region(cursor, nulls);
-                    cursor = c;
-                    sources.push((nulls_r.offset, nulls.to_vec()));
-                    let idx = fixed_cols.len();
-                    fixed_cols.push(FixedColMeta {
-                        col_type_str: tag.into(),
-                        data: data_r,
-                        nulls: nulls_r,
-                    });
-                    col_map.push(ColMapEntry {
-                        key_u64: ik.as_u64(),
-                        col_type_str: tag.into(),
-                        idx,
-                    });
-                }
+        match plan_type(type_name, &column_stores[type_name]) {
+            Some(mut plan) => {
+                plan.file = columns_meta::type_file_name(type_name, &mut used_files);
+                planned.push(plan);
+            }
+            None => {
+                unhandled.insert(type_name.clone());
             }
         }
-
-        // ── overflow bag ─────────────────────────────────────────
-        let (overflow_offsets, overflow_data, has_overflow) =
-            if let Some((off_bytes, data_bytes)) = store.effective_overflow_bytes() {
-                let (off_r, c) = plan_region(cursor, &off_bytes);
-                cursor = c;
-                sources.push((off_r.offset, off_bytes.into_owned()));
-                let (data_r, c) = plan_region(cursor, &data_bytes);
-                cursor = c;
-                sources.push((data_r.offset, data_bytes.into_owned()));
-                (off_r, data_r, true)
-            } else {
-                (
-                    RegionMeta { offset: 0, len: 0 },
-                    RegionMeta { offset: 0, len: 0 },
-                    false,
-                )
-            };
-
-        let meta = ColumnTypeMeta {
-            type_name: type_name.clone(),
-            row_count,
-            id_is_string,
-            id_data,
-            id_nulls,
-            id_str_data,
-            id_str_offsets,
-            title_data,
-            title_offsets,
-            title_nulls,
-            col_map,
-            fixed_cols,
-            str_cols,
-            overflow_offsets,
-            overflow_data,
-            has_overflow,
-        };
-        planned.push(PlannedType {
-            type_name: type_name.clone(),
-            meta,
-            sources,
-        });
     }
 
-    // ── Pass 2: allocate + write ──────────────────────────────────
-    let total_bytes = cursor;
-    if total_bytes == 0 {
-        // Nothing to write; clean up any stale mega-file artifacts.
-        // Note: the previous gate also required `unhandled.is_empty()`,
-        // but unhandled types only need sidecar fallback (not anything
-        // here in the mega-file), so the right gate is "no bytes
-        // planned". Skipping with non-empty unhandled used to fall
-        // through to `mmap::map_mut` of a 0-byte file, which returns
-        // EINVAL on every Unix and breaks disk-graph save_disk.
-        let _ = fs::remove_file(&bin_path);
-        let _ = fs::remove_file(&json_path);
+    if planned.is_empty() {
+        let _ = fs::remove_file(seg0.join("columns_meta.json"));
         return Ok(WriteResult {
             written: HashSet::new(),
             unhandled,
         });
     }
 
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&bin_path)?;
-    file.set_len(total_bytes as u64)?;
-    // SAFETY: `bin_path` was just create-truncated and `file` is the
-    // sole writer in this process for the duration of this function.
-    // memmap2::MmapMut requires the file not be modified externally
-    // while the map is alive; this writer holds the only handle and
-    // the temp path is unique-per-run, so the invariant holds.
-    let mut mmap = unsafe { MmapMut::map_mut(&file)? };
-
-    for pt in &planned {
-        for (off, bytes) in &pt.sources {
-            let dst = &mut mmap[*off..*off + bytes.len()];
-            dst.copy_from_slice(bytes);
-        }
+    for plan in &planned {
+        write_type_file(&seg0, plan)?;
     }
-    mmap.flush()?;
 
-    // ── Pass 3: emit metadata ─────────────────────────────────────
-    let metas: Vec<ColumnTypeMeta> = planned.iter().map(|pt| pt.meta.clone()).collect();
-    columns_meta::publish_json_synced(&seg0, &metas)?;
+    let meta = ColumnsMeta {
+        types: planned.iter().map(|plan| plan.meta.clone()).collect(),
+        files: planned
+            .iter()
+            .map(|plan| (plan.type_name.clone(), plan.file.clone()))
+            .collect(),
+    };
+    columns_meta::publish_json_synced(&seg0, &meta)?;
 
-    let written: HashSet<String> = planned.into_iter().map(|pt| pt.type_name).collect();
+    let written: HashSet<String> = planned.into_iter().map(|plan| plan.type_name).collect();
     Ok(WriteResult { written, unhandled })
 }
 
-#[inline]
-fn plan_region(cursor: usize, bytes: &[u8]) -> (RegionMeta, usize) {
-    let region = RegionMeta {
-        offset: cursor,
-        len: bytes.len(),
+/// Plan one type, or `None` when its store needs the sidecar.
+fn plan_type<'s>(type_name: &str, store: &'s ColumnStore) -> Option<PlannedType<'s>> {
+    // A store that is nothing but an mmap base re-emits its regions verbatim:
+    // no flatten onto the heap, no per-row decode.
+    if let Some(ms) = store.pure_mmap_store() {
+        return Some(plan_mmap_store(type_name, ms));
+    }
+    if store_needs_sidecar(store) {
+        return None;
+    }
+    let mut planner = RegionPlanner::default();
+    let identity = plan_identity(store, &mut planner);
+    let (col_map, fixed_cols, str_cols) = plan_properties(store, &mut planner);
+    let (overflow_offsets, overflow_data, has_overflow) = match store.effective_overflow_bytes() {
+        Some((offsets, data)) => (planner.push(offsets), planner.push(data), true),
+        None => (RegionPlanner::absent(), RegionPlanner::absent(), false),
     };
-    (region, cursor + bytes.len())
+    let meta = ColumnTypeMeta {
+        type_name: type_name.to_string(),
+        row_count: store.row_count(),
+        id_is_string: identity.id_is_string,
+        id_data: identity.id_data,
+        id_nulls: identity.id_nulls,
+        id_str_data: identity.id_str_data,
+        id_str_offsets: identity.id_str_offsets,
+        title_data: identity.title_data,
+        title_offsets: identity.title_offsets,
+        title_nulls: identity.title_nulls,
+        col_map,
+        fixed_cols,
+        str_cols,
+        overflow_offsets,
+        overflow_data,
+        has_overflow,
+    };
+    Some(planner.finish(type_name, meta))
 }
 
-/// Pack a `Str` column into the mega-file's `(data, offsets, nulls)` byte
-/// triple.
+/// Region layout of a store's id and title columns.
+struct IdentityRegions {
+    id_is_string: bool,
+    id_data: RegionMeta,
+    id_nulls: RegionMeta,
+    id_str_data: RegionMeta,
+    id_str_offsets: RegionMeta,
+    title_data: RegionMeta,
+    title_offsets: RegionMeta,
+    title_nulls: RegionMeta,
+}
+
+fn plan_identity<'a>(store: &'a ColumnStore, planner: &mut RegionPlanner<'a>) -> IdentityRegions {
+    let absent = RegionPlanner::absent;
+    let (id_is_string, id_data, id_nulls, id_str_data, id_str_offsets) = extract_id_column(store);
+    let mut regions = IdentityRegions {
+        id_is_string,
+        id_data: absent(),
+        id_nulls: absent(),
+        id_str_data: absent(),
+        id_str_offsets: absent(),
+        title_data: absent(),
+        title_offsets: absent(),
+        title_nulls: absent(),
+    };
+    if id_is_string {
+        regions.id_str_data = planner.push(id_str_data);
+        regions.id_str_offsets = planner.push(id_str_offsets);
+        regions.id_nulls = planner.push(id_nulls);
+    } else if !id_data.is_empty() {
+        regions.id_data = planner.push(id_data);
+        regions.id_nulls = planner.push(id_nulls);
+    }
+    let (title_data, title_offsets, title_nulls) = extract_title_column(store);
+    regions.title_data = planner.push(title_data);
+    regions.title_offsets = planner.push(title_offsets);
+    regions.title_nulls = planner.push(title_nulls);
+    regions
+}
+
+/// Region layout of a store's per-schema-slot property columns.
+fn plan_properties<'a>(
+    store: &'a ColumnStore,
+    planner: &mut RegionPlanner<'a>,
+) -> (Vec<ColMapEntry>, Vec<FixedColMeta>, Vec<StrColMeta>) {
+    let mut col_map: Vec<ColMapEntry> = Vec::new();
+    let mut fixed_cols: Vec<FixedColMeta> = Vec::new();
+    let mut str_cols: Vec<StrColMeta> = Vec::new();
+
+    for (slot, ik) in store.schema().iter() {
+        let Some(col) = store.column(slot as usize) else {
+            continue;
+        };
+        if let TypedColumn::Str {
+            offsets,
+            data,
+            nulls,
+            relocated,
+        } = col
+        {
+            let (data_bytes, offsets_bytes, nulls_bytes) =
+                pack_str_column(offsets, data, nulls, relocated);
+            let idx = str_cols.len();
+            str_cols.push(StrColMeta {
+                data: planner.push(data_bytes),
+                offsets: planner.push(offsets_bytes),
+                nulls: planner.push(nulls_bytes),
+            });
+            col_map.push(ColMapEntry {
+                key_u64: ik.as_u64(),
+                col_type_str: "string".into(),
+                idx,
+            });
+            continue;
+        }
+        let (tag, data, nulls) = fixed_width_parts(col)
+            .expect("Mixed is refused by store_needs_sidecar; Str is handled above");
+        let idx = fixed_cols.len();
+        fixed_cols.push(FixedColMeta {
+            col_type_str: tag.into(),
+            data: planner.push(Cow::Borrowed(data)),
+            nulls: planner.push(Cow::Borrowed(nulls)),
+        });
+        col_map.push(ColMapEntry {
+            key_u64: ik.as_u64(),
+            col_type_str: tag.into(),
+            idx,
+        });
+    }
+    (col_map, fixed_cols, str_cols)
+}
+
+/// Plan a pure mmap-backed store's regions as borrowed slices of its own
+/// mapping, re-based onto the new file.
+fn plan_mmap_store<'a>(type_name: &str, ms: &'a MmapColumnStore) -> PlannedType<'a> {
+    let mut planner = RegionPlanner::default();
+    let mut copy = |region: &Region| -> RegionMeta {
+        if region.len == 0 {
+            return RegionPlanner::absent();
+        }
+        planner.push(Cow::Borrowed(
+            &ms.mmap[region.offset..region.offset + region.len],
+        ))
+    };
+    let empty = Region::EMPTY;
+    let (id_data, id_nulls, id_str_data, id_str_offsets) = if ms.id_is_string {
+        let sc = ms.id_str.as_ref();
+        let data = copy(sc.map_or(&empty, |c| &c.data));
+        let offsets = copy(sc.map_or(&empty, |c| &c.offsets));
+        let nulls = copy(sc.map_or(&empty, |c| &c.nulls));
+        (RegionPlanner::absent(), nulls, data, offsets)
+    } else {
+        let fc = ms.id_fixed.as_ref();
+        let data = copy(fc.map_or(&empty, |c| &c.data));
+        let nulls = copy(fc.map_or(&empty, |c| &c.nulls));
+        (
+            data,
+            nulls,
+            RegionPlanner::absent(),
+            RegionPlanner::absent(),
+        )
+    };
+    let title_data = copy(&ms.title.data);
+    let title_offsets = copy(&ms.title.offsets);
+    let title_nulls = copy(&ms.title.nulls);
+    let fixed_cols: Vec<FixedColMeta> = ms
+        .fixed_cols
+        .iter()
+        .map(|fc| FixedColMeta {
+            col_type_str: fc.col_type.type_tag().into(),
+            data: copy(&fc.data),
+            nulls: copy(&fc.nulls),
+        })
+        .collect();
+    let str_cols: Vec<StrColMeta> = ms
+        .str_cols
+        .iter()
+        .map(|sc| StrColMeta {
+            data: copy(&sc.data),
+            offsets: copy(&sc.offsets),
+            nulls: copy(&sc.nulls),
+        })
+        .collect();
+    let overflow_offsets = copy(&ms.overflow_offsets);
+    let overflow_data = copy(&ms.overflow_data);
+    let mut col_map: Vec<ColMapEntry> = ms
+        .col_map
+        .iter()
+        .map(|(key, column)| match column {
+            ColRef::Fixed(idx) => ColMapEntry {
+                key_u64: key.as_u64(),
+                col_type_str: ms.fixed_cols[*idx].col_type.type_tag().into(),
+                idx: *idx,
+            },
+            ColRef::Str(idx) => ColMapEntry {
+                key_u64: key.as_u64(),
+                col_type_str: "string".into(),
+                idx: *idx,
+            },
+        })
+        .collect();
+    col_map.sort_by_key(|entry| entry.key_u64);
+    let meta = ColumnTypeMeta {
+        type_name: type_name.to_string(),
+        row_count: ms.row_count,
+        id_is_string: ms.id_is_string,
+        id_data,
+        id_nulls,
+        id_str_data,
+        id_str_offsets,
+        title_data,
+        title_offsets,
+        title_nulls,
+        col_map,
+        fixed_cols,
+        str_cols,
+        overflow_offsets,
+        overflow_data,
+        has_overflow: ms.has_overflow,
+    };
+    planner.finish(type_name, meta)
+}
+
+/// Write `plan`'s bytes into a new file under `seg0`.
+///
+/// `create_new`: a file of a generation is written once and never reopened for
+/// writing, so an existing one is an error rather than something to truncate.
+fn write_type_file(seg0: &Path, plan: &PlannedType<'_>) -> io::Result<()> {
+    let path = columns_meta::resolve_type_file(seg0, &plan.file)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    let mut out = BufWriter::with_capacity(1 << 20, file);
+    let mut position = 0usize;
+    for (offset, bytes) in &plan.sources {
+        debug_assert_eq!(*offset, position, "regions are planned gap-free");
+        out.write_all(bytes)?;
+        position += bytes.len();
+    }
+    debug_assert_eq!(position, plan.len);
+    if position == 0 {
+        // A type with no rows names no bytes, and a zero-length file cannot be
+        // mapped: one byte no region refers to gives it a mapping all the same.
+        out.write_all(&[0])?;
+    }
+    out.flush()
+}
+
+/// Pack a `Str` column into the file's `(data, offsets, nulls)` byte triple.
 ///
 /// Two conventions are reconciled here.
 ///
-/// *Offsets.* The mega-file stores `row_count` cumulative **end** offsets — row
+/// *Offsets.* The file stores `row_count` cumulative **end** offsets — row
 /// 0 starts at byte 0, row `i` starts at `offsets[i - 1]` (see
 /// [`crate::graph::storage::mapped::column_store`]). An in-memory
 /// `TypedColumn::Str` instead carries `row_count + 1` offsets with a leading
 /// zero, which `str_at` reads as `offsets[i]..offsets[i + 1]`, while the
-/// streaming carve's `TypeWriter` already emits the mega-file form. Both are
+/// streaming carve's `TypeWriter` already emits the file form. Both are
 /// accepted; the leading zero is stripped.
 ///
 /// *The write overlay.* `TypedColumn::set` cannot shift `offsets` for a
@@ -334,15 +431,17 @@ fn plan_region(cursor: usize, bytes: &[u8]) -> (RegionMeta, usize) {
 /// the `SET` itself was what created the column.
 /// [`TypedColumn::write_to`](crate::graph::storage::column_store::TypedColumn)
 /// folds the overlay back for the packed sidecars; this is that fold in the
-/// mega-file's layout.
-fn pack_str_column(
-    offsets: &MmapOrVec<u64>,
-    data: &MmapBytes,
-    nulls: &MmapOrVec<u8>,
+/// file's layout. Without an overlay every part is borrowed, not copied.
+type PackedStr<'a> = (Cow<'a, [u8]>, Cow<'a, [u8]>, Cow<'a, [u8]>);
+
+fn pack_str_column<'a>(
+    offsets: &'a MmapOrVec<u64>,
+    data: &'a MmapBytes,
+    nulls: &'a MmapOrVec<u8>,
     relocated: &FxHashMap<u32, String>,
-) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+) -> PackedStr<'a> {
     let row_count = nulls.len();
-    let nulls_bytes = nulls.as_raw_bytes().to_vec();
+    let nulls_bytes = Cow::Borrowed(nulls.as_raw_bytes());
     // `row_count + 1` offsets means the leading-zero form.
     let leading_zero = offsets.len() == row_count + 1;
 
@@ -354,8 +453,8 @@ fn pack_str_column(
             off_bytes
         };
         return (
-            data.as_raw_bytes().to_vec(),
-            off_slice.to_vec(),
+            Cow::Borrowed(data.as_raw_bytes()),
+            Cow::Borrowed(off_slice),
             nulls_bytes,
         );
     }
@@ -391,7 +490,7 @@ fn pack_str_column(
         }
         new_offsets.extend_from_slice(&(new_data.len() as u64).to_le_bytes());
     }
-    (new_data, new_offsets, nulls_bytes)
+    (Cow::Owned(new_data), Cow::Owned(new_offsets), nulls_bytes)
 }
 
 /// The type tag and raw `(data, nulls)` bytes of a fixed-width column; `None`
@@ -433,18 +532,27 @@ fn store_needs_sidecar(store: &ColumnStore) -> bool {
         }
     }
     if let Some(c) = store.title_column_ref() {
-        if !matches!(c, TypedColumn::Str { .. }) {
+        if !matches!(c, TypedColumn::Str { .. } | TypedColumn::Int64 { .. }) {
             return true;
         }
     }
     false
 }
 
+type IdRegionBytes<'a> = (
+    bool,
+    Cow<'a, [u8]>,
+    Cow<'a, [u8]>,
+    Cow<'a, [u8]>,
+    Cow<'a, [u8]>,
+);
+
 /// Extract the id column's raw bytes per the layout expected by the
 /// loader. Returns `(id_is_string, fixed_data_bytes, nulls_bytes,
 /// str_data_bytes, str_offsets_bytes)`. Empty slices are used for the
 /// unused branch (fixed vs string).
-fn extract_id_column(store: &ColumnStore) -> (bool, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+fn extract_id_column(store: &ColumnStore) -> IdRegionBytes<'_> {
+    let empty = || Cow::Borrowed(&[][..]);
     match store.id_column_ref() {
         Some(TypedColumn::Str {
             offsets,
@@ -454,29 +562,32 @@ fn extract_id_column(store: &ColumnStore) -> (bool, Vec<u8>, Vec<u8>, Vec<u8>, V
         }) => {
             let (data_bytes, offsets_bytes, nulls_bytes) =
                 pack_str_column(offsets, data, nulls, relocated);
-            (true, Vec::new(), nulls_bytes, data_bytes, offsets_bytes)
+            (true, empty(), nulls_bytes, data_bytes, offsets_bytes)
         }
         Some(TypedColumn::UniqueId { data, nulls }) => (
             false,
-            data.as_raw_bytes().to_vec(),
-            nulls.as_raw_bytes().to_vec(),
-            Vec::new(),
-            Vec::new(),
+            Cow::Borrowed(data.as_raw_bytes()),
+            Cow::Borrowed(nulls.as_raw_bytes()),
+            empty(),
+            empty(),
         ),
         Some(TypedColumn::Int64 { data, nulls }) => (
             false,
-            data.as_raw_bytes().to_vec(),
-            nulls.as_raw_bytes().to_vec(),
-            Vec::new(),
-            Vec::new(),
+            Cow::Borrowed(data.as_raw_bytes()),
+            Cow::Borrowed(nulls.as_raw_bytes()),
+            empty(),
+            empty(),
         ),
-        _ => (false, Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        _ => (false, empty(), empty(), empty(), empty()),
     }
 }
 
-/// Extract the title column's raw bytes (always Str). Returns
-/// `(data_bytes, offsets_bytes, nulls_bytes)`. Empty if no title.
-fn extract_title_column(store: &ColumnStore) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+/// Extract the title column's raw bytes. Returns `(data_bytes,
+/// offsets_bytes, nulls_bytes)`; an `Int64` title is its i64 data with an
+/// empty offsets region (see `MmapColumnStore::title_is_int`). Empty if no
+/// title.
+fn extract_title_column(store: &ColumnStore) -> PackedStr<'_> {
+    let empty = || Cow::Borrowed(&[][..]);
     match store.title_column_ref() {
         Some(TypedColumn::Str {
             offsets,
@@ -484,7 +595,12 @@ fn extract_title_column(store: &ColumnStore) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             nulls,
             relocated,
         }) => pack_str_column(offsets, data, nulls, relocated),
-        _ => (Vec::new(), Vec::new(), Vec::new()),
+        Some(TypedColumn::Int64 { data, nulls }) if !data.is_empty() => (
+            Cow::Borrowed(data.as_raw_bytes()),
+            empty(),
+            Cow::Borrowed(nulls.as_raw_bytes()),
+        ),
+        _ => (empty(), empty(), empty()),
     }
 }
 

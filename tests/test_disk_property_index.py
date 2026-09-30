@@ -38,6 +38,12 @@ def _build_disk_graph(path: str) -> KnowledgeGraph:
     return g
 
 
+def _segment_bytes(snapshot):
+    """Every file under a generation's `seg_000/` (column files included), by relative path."""
+    segment = snapshot / "seg_000"
+    return {str(path.relative_to(segment)): path.read_bytes() for path in segment.rglob("*") if path.is_file()}
+
+
 def _published_snapshot(path: str) -> Path:
     root = Path(path)
     generation = (root / "CURRENT").read_text(encoding="utf-8").strip()
@@ -103,7 +109,7 @@ class TestCollisionFreeIdentity:
         g.create_index("a", "b_c")
         g.save(disk_dir)
         first_snapshot = _published_snapshot(disk_dir)
-        first_files = {path.name: path.read_bytes() for path in (first_snapshot / "seg_000").iterdir()}
+        first_files = _segment_bytes(first_snapshot)
         del g
 
         writer = load(disk_dir)
@@ -111,7 +117,7 @@ class TestCollisionFreeIdentity:
         writer.save(disk_dir)
         second_snapshot = _published_snapshot(disk_dir)
         assert first_snapshot != second_snapshot
-        assert {path.name: path.read_bytes() for path in (first_snapshot / "seg_000").iterdir()} == first_files
+        assert _segment_bytes(first_snapshot) == first_files
         assert len(list((second_snapshot / "seg_000").glob("property_index_v2_*_meta.bin"))) == 1
         del writer
 

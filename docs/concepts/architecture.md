@@ -172,10 +172,15 @@ reader. Existing readers keep their old immutable generation alive.
 
 A directory carries its own layout revision: `disk_graph_meta.json` holds a
 `disk_format` number, `columns_meta.json` is an envelope
-(`{"format": 2, "types": [...]}`), and `id_indices.bin` has a version. This
-build reads directories written before the revision existed and refuses one
-newer than it knows, naming both numbers; kglite 0.19.0 and earlier cannot read
-a directory this build saves.
+(`{"format": 2, "types": [...], "files": {...}}`), and `id_indices.bin` has a
+version. Column data is one immutable file per node type under
+`seg_000/type_columns/`, named by a hash of the type name and listed in the
+envelope, and every reader maps those files read-only. A save re-points the
+live graph at the files it just published, so a saved graph holds no heap copy
+of the columns it wrote. This build reads directories written before the
+revision existed (their shared `columns.bin` is split per type on the next
+save) and refuses one newer than it knows, naming both numbers; kglite 0.19.0
+and earlier cannot read a directory this build saves.
 
 ## Code-graph ingestion
 
