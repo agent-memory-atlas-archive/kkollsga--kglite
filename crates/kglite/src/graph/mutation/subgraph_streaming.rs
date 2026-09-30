@@ -559,14 +559,9 @@ pub fn save_subset_streaming_disk(
     // 4500 types × ~5 files = ~22500 fds, and Linux defaults are as generous.
     let mut writers: HashMap<String, TypeWriter> = HashMap::new();
     for type_name in kept_per_type.keys() {
-        let schema = if let Some(src_store) = source.column_store(type_name) {
-            Arc::clone(src_store.schema())
-        } else if let Some(s) = source.type_schemas.get(type_name) {
-            Arc::clone(s)
-        } else {
+        let Some((schema, meta)) = writer_columns(source, type_name) else {
             continue; // type with no schema anywhere — nothing to push
         };
-        let meta = column_types(source, type_name, &schema);
         let writer_dir = scratch_root.join(sanitize_type_name(type_name));
 
         // Match the source's id/title column types: Wikidata mixes `string`
@@ -967,28 +962,43 @@ fn stream_subset_edges(
     Ok(rel_types)
 }
 
-/// The type each of `type_name`'s columns is opened with: its metadata type,
-/// or Mixed where the column is Mixed now. A column widens to Mixed without
-/// its metadata type changing (a Float64 column takes an integer it cannot
-/// hold exactly that way).
-fn column_types(
+/// The columns a copy of `type_name` writes, and the type each is opened with.
+///
+/// A type with a column store takes both from the store's own layout
+/// ([`ColumnStore::property_layout`]): a store served from an mmap base has an
+/// empty `schema()`, and a writer built on that would send every property of the
+/// type through the overflow bag instead of typed columns. A column's type is
+/// the store's, not the metadata's: a column widens to Mixed without its
+/// metadata type changing (a Float64 column takes an integer it cannot hold
+/// exactly that way), and a metadata type is only what the type was declared as.
+/// A type with no store keeps its declared schema and metadata.
+fn writer_columns(
     source: &DirGraph,
     type_name: &str,
-    schema: &crate::graph::schema::TypeSchema,
-) -> std::collections::HashMap<String, String> {
+) -> Option<(
+    std::sync::Arc<crate::graph::schema::TypeSchema>,
+    std::collections::HashMap<String, String>,
+)> {
     let mut meta = source
         .node_type_metadata
         .get(type_name)
         .cloned()
         .unwrap_or_default();
-    if let Some(store) = source.column_store(type_name) {
-        for (slot, key) in schema.iter() {
-            if store.column_type_str(slot as usize) == Some("mixed") {
-                meta.insert(source.interner.resolve(key).to_string(), "mixed".into());
-            }
-        }
+    let Some(store) = source.column_store(type_name) else {
+        return source
+            .type_schemas
+            .get(type_name)
+            .map(|schema| (std::sync::Arc::clone(schema), meta));
+    };
+    let layout = store.property_layout();
+    for (key, kind) in &layout {
+        meta.insert(source.interner.resolve(*key).to_string(), (*kind).into());
     }
-    meta
+    let keys: Vec<InternedKey> = layout.into_iter().map(|(key, _)| key).collect();
+    Some((
+        std::sync::Arc::new(crate::graph::schema::TypeSchema::from_keys(keys)),
+        meta,
+    ))
 }
 
 /// File-system-safe, **collision-free** slug for a node type name.

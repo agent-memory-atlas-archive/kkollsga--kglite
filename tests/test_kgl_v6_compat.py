@@ -280,9 +280,10 @@ def test_fresh_disk_build_writes_the_forward_guards(tmp_path):
 
 def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_version(tmp_path):
     """A type holding a ``Mixed`` column (here: an integer beside a string in one
-    property) is served from a per-type sidecar, so such a directory has no
-    ``columns_meta`` for the envelope to guard; the ``id_indices.bin`` version is
-    what stops an older reader there."""
+    property) is served from a per-type sidecar. Its directory carries an envelope
+    with no column types, only the ``sidecars`` map that names the sidecar's
+    directory; an older reader reads ``id_indices.bin`` before the envelope, so
+    the version there is what stops it first."""
     import pandas as pd
 
     directory = tmp_path / "sidecar_only"
@@ -293,9 +294,13 @@ def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_versi
     graph.cypher("MATCH (p:Pand {id: 3100000000002}) SET p.note = 'seven'")
     graph.save()
     del graph
-    assert not _sidecars(directory, "columns_meta.json") and not _sidecars(directory, "columns.bin"), (
+    assert not _sidecars(directory, "columns.bin") and not list(directory.rglob("type_columns")), (
         "this arm is only meaningful while the type is served from a sidecar"
     )
+    (envelope_path,) = _sidecars(directory, "columns_meta.json")
+    envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+    assert envelope["types"] == [] and list(envelope["sidecars"]) == ["Pand"]
+    assert envelope["sidecars"]["Pand"].startswith("columns/") and ".." not in envelope["sidecars"]["Pand"]
     (path,) = _sidecars(directory, "id_indices.bin")
     assert path.read_bytes()[8:12] == struct.pack("<I", 3)
     assert kglite.load(str(directory)).cypher("MATCH (p:Pand) RETURN count(p) AS c").to_list() == [{"c": 2}]

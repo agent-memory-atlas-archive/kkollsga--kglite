@@ -28,10 +28,15 @@
 //! | 4   | Boolean    | 1 byte                                   |
 //! | 5   | DateTime   | 4 bytes i32 LE (days since unix epoch)   |
 //! | 6   | String     | u32 LE length + UTF-8 bytes              |
-//! | 7   | Timestamp  | 8 bytes i64 LE (seconds since unix epoch)|
+//! | 7   | Timestamp  | 8 bytes i64 LE (whole seconds, read-only)|
 //! | 8   | Reserved   | u32 LE length + retired pre-0.14 payload |
 //! | 9   | List       | u32 LE length + Postcard(`Vec<Value>`)   |
 //! | 10  | Map        | u32 LE length + Postcard(`BTreeMap`)     |
+//! | 11  | Timestamp  | u32 LE length (12) + i64 LE seconds + u32 LE nanoseconds |
+//!
+//! Tag 7 truncated a timestamp to whole seconds. It is still decoded (a bag an
+//! earlier build wrote keeps its values) but never written: tag 11 carries the
+//! full `NaiveDateTime`, sub-microsecond digits and a leap second included.
 //!
 //! **Forward-compat rule:** any *future* tag MUST use a `u32 LE`
 //! length prefix + payload, so that older readers can skip an unknown
@@ -66,10 +71,13 @@ pub const TAG_TIMESTAMP: u8 = 7;
 pub const TAG_LIST: u8 = 8;
 pub const TAG_LIST_POSTCARD: u8 = 9;
 pub const TAG_MAP_POSTCARD: u8 = 10;
+/// A timestamp to the nanosecond; supersedes [`TAG_TIMESTAMP`], which is read
+/// but no longer written.
+pub const TAG_TIMESTAMP_EXACT: u8 = 11;
 
 /// Highest tag this build knows how to *decode*. Tags above this are
 /// skipped via the length-prefix forward-compat rule (module docs).
-pub const MAX_KNOWN_TAG: u8 = TAG_MAP_POSTCARD;
+pub const MAX_KNOWN_TAG: u8 = TAG_TIMESTAMP_EXACT;
 
 // ─── Encoders ────────────────────────────────────────────────────────────────
 
@@ -100,12 +108,7 @@ pub fn encode_value(buf: &mut Vec<u8>, key: InternedKey, value: &Value) {
             let days = (*d - UNIX_EPOCH_DATE).num_days() as i32;
             buf.extend_from_slice(&days.to_le_bytes());
         }
-        Value::Timestamp(dt) => {
-            buf.push(TAG_TIMESTAMP);
-            let epoch = UNIX_EPOCH_DATE.and_hms_opt(0, 0, 0).unwrap_or_default();
-            let secs = (*dt - epoch).num_seconds();
-            buf.extend_from_slice(&secs.to_le_bytes());
-        }
+        Value::Timestamp(dt) => encode_timestamp(buf, dt),
         Value::String(s) => encode_str(buf, s),
         // Point is serialized as its "lat,lon" string form (legacy
         // convention — kept for wire-format stability).
@@ -153,16 +156,33 @@ pub fn encode_value_borrowed(buf: &mut Vec<u8>, key: InternedKey, value: &Borrow
             let days = (*d - UNIX_EPOCH_DATE).num_days() as i32;
             buf.extend_from_slice(&days.to_le_bytes());
         }
-        BorrowedValue::Timestamp(dt) => {
-            buf.push(TAG_TIMESTAMP);
-            let epoch = UNIX_EPOCH_DATE.and_hms_opt(0, 0, 0).unwrap_or_default();
-            let secs = (*dt - epoch).num_seconds();
-            buf.extend_from_slice(&secs.to_le_bytes());
-        }
+        BorrowedValue::Timestamp(dt) => encode_timestamp(buf, dt),
         BorrowedValue::String(s) => encode_str(buf, s),
         BorrowedValue::List(items) => encode_list(buf, items),
         BorrowedValue::Map(entries) => encode_map(buf, entries),
     }
+}
+
+/// Length of a [`TAG_TIMESTAMP_EXACT`] payload: seconds (`i64`) + nanoseconds (`u32`).
+const TIMESTAMP_EXACT_LEN: usize = 12;
+
+fn encode_timestamp(buf: &mut Vec<u8>, dt: &chrono::NaiveDateTime) {
+    use chrono::Timelike;
+    buf.push(TAG_TIMESTAMP_EXACT);
+    buf.extend_from_slice(&(TIMESTAMP_EXACT_LEN as u32).to_le_bytes());
+    // `timestamp()` is the floor to the second, and `nanosecond()` the
+    // remainder (at most 1_999_999_999: a leap second is stored as itself).
+    buf.extend_from_slice(&dt.and_utc().timestamp().to_le_bytes());
+    buf.extend_from_slice(&dt.nanosecond().to_le_bytes());
+}
+
+fn decode_timestamp_exact(payload: &[u8]) -> Option<chrono::NaiveDateTime> {
+    if payload.len() != TIMESTAMP_EXACT_LEN {
+        return None;
+    }
+    let secs = i64::from_le_bytes(payload[..8].try_into().ok()?);
+    let nanos = u32::from_le_bytes(payload[8..].try_into().ok()?);
+    chrono::DateTime::from_timestamp(secs, nanos).map(|dt| dt.naive_utc())
 }
 
 #[inline]
@@ -274,6 +294,10 @@ pub fn read_value(blob: &[u8], pos: &mut usize, type_tag: u8) -> Option<Value> {
             *pos += 8;
             let epoch = UNIX_EPOCH_DATE.and_hms_opt(0, 0, 0)?;
             Some(Value::Timestamp(epoch + chrono::Duration::seconds(secs)))
+        }
+        TAG_TIMESTAMP_EXACT => {
+            let bytes = read_len_prefixed(blob, pos)?;
+            Some(Value::Timestamp(decode_timestamp_exact(bytes)?))
         }
         TAG_LIST_POSTCARD => {
             let bytes = read_len_prefixed(blob, pos)?;
@@ -488,6 +512,19 @@ where
                     return Some(Ok(()));
                 };
                 let ts = epoch + chrono::Duration::seconds(secs);
+                if let Err(e) = f(key, BorrowedValue::Timestamp(ts)) {
+                    return Some(Err(e));
+                }
+            }
+            TAG_TIMESTAMP_EXACT => {
+                let Some(bytes) = read_len_prefixed(blob, pos) else {
+                    return Some(Ok(()));
+                };
+                // A payload that is not a timestamp is corrupt: end the scan
+                // without fabricating a value, as a corrupt list or map does.
+                let Some(ts) = decode_timestamp_exact(bytes) else {
+                    return Some(Ok(()));
+                };
                 if let Err(e) = f(key, BorrowedValue::Timestamp(ts)) {
                     return Some(Err(e));
                 }
@@ -732,6 +769,109 @@ mod tests {
         })
         .unwrap();
         assert_eq!(seen, entries);
+    }
+
+    fn timestamps_under_test() -> Vec<chrono::NaiveDateTime> {
+        let day = NaiveDate::from_ymd_opt(2010, 1, 1).unwrap();
+        vec![
+            day.and_hms_micro_opt(0, 0, 1, 250_000).unwrap(),
+            day.and_hms_nano_opt(0, 0, 1, 250_000_123).unwrap(),
+            // A leap second is stored as itself, not folded into the next second.
+            NaiveDate::from_ymd_opt(2016, 12, 31)
+                .unwrap()
+                .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+                .unwrap(),
+            // Before the epoch, with a fraction: the seconds are a floor.
+            NaiveDate::from_ymd_opt(1969, 12, 31)
+                .unwrap()
+                .and_hms_micro_opt(23, 59, 59, 999_999)
+                .unwrap(),
+            NaiveDate::from_ymd_opt(1, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+            NaiveDate::from_ymd_opt(9999, 12, 31)
+                .unwrap()
+                .and_hms_nano_opt(23, 59, 59, 999_999_999)
+                .unwrap(),
+        ]
+    }
+
+    /// The bag used to store a timestamp as whole seconds, dropping every
+    /// microsecond of a value that a typed column would have kept.
+    #[test]
+    fn a_timestamp_keeps_its_fraction_through_every_decode_path() {
+        for ts in timestamps_under_test() {
+            let entries = vec![
+                (key(1), Value::Timestamp(ts)),
+                (key(2), Value::String("after".into())),
+            ];
+            let blob = blob_of(&entries);
+            assert_eq!(decode_blob(&blob), entries, "{ts}");
+            assert_eq!(scan_blob(&blob, key(1)), Some(Value::Timestamp(ts)), "{ts}");
+            let mut seen = Vec::new();
+            try_for_each_borrowed(&blob, |k, bv| -> Result<(), ()> {
+                seen.push((k, bv.to_value()));
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(seen, entries, "{ts}");
+            let mut borrowed = Vec::new();
+            encode_value_borrowed(&mut borrowed, key(1), &BorrowedValue::Timestamp(ts));
+            let mut owned = Vec::new();
+            encode_value(&mut owned, key(1), &Value::Timestamp(ts));
+            assert_eq!(borrowed, owned, "{ts}");
+            assert_eq!(owned[8], TAG_TIMESTAMP_EXACT, "no tag-7 write survives");
+        }
+    }
+
+    /// A bag an earlier build wrote holds tag 7 (whole seconds); it still reads,
+    /// and the entries after it are not lost.
+    #[test]
+    fn a_whole_second_timestamp_written_by_an_earlier_build_still_reads() {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&2u16.to_le_bytes());
+        blob.extend_from_slice(&key(1).as_u64().to_le_bytes());
+        blob.push(TAG_TIMESTAMP);
+        blob.extend_from_slice(&1_262_304_001i64.to_le_bytes());
+        encode_value(&mut blob, key(2), &Value::Int64(7));
+        let expected = NaiveDate::from_ymd_opt(2010, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 1)
+            .unwrap();
+        let want = vec![
+            (key(1), Value::Timestamp(expected)),
+            (key(2), Value::Int64(7)),
+        ];
+        assert_eq!(decode_blob(&blob), want);
+        assert_eq!(scan_blob(&blob, key(1)), Some(Value::Timestamp(expected)));
+        let mut seen = Vec::new();
+        try_for_each_borrowed(&blob, |k, bv| -> Result<(), ()> {
+            seen.push((k, bv.to_value()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn a_malformed_exact_timestamp_ends_the_scan_without_inventing_a_value() {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&2u16.to_le_bytes());
+        blob.extend_from_slice(&key(1).as_u64().to_le_bytes());
+        blob.push(TAG_TIMESTAMP_EXACT);
+        blob.extend_from_slice(&5u32.to_le_bytes());
+        blob.extend_from_slice(&[1, 2, 3, 4, 5]);
+        encode_value(&mut blob, key(2), &Value::Int64(7));
+        assert_eq!(decode_blob(&blob), Vec::new());
+        assert_eq!(scan_blob(&blob, key(1)), None);
+        let mut seen = 0;
+        try_for_each_borrowed(&blob, |_, _| -> Result<(), ()> {
+            seen += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, 0);
     }
 
     #[test]

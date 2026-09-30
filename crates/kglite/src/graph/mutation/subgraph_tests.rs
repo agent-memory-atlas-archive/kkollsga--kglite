@@ -350,11 +350,22 @@ fn a_streaming_copy_carries_integer_titles_and_timestamps_from_either_kind_of_so
                     Value::Int64(7_100_000_000_000 + i),
                     Value::Timestamp(base + chrono::Duration::days(i)),
                     Value::Int64(i * 2),
+                    Value::Float64(i as f64 * 0.25),
+                    Value::Boolean(i % 2 == 0),
+                    Value::String(format!("desk-{i}")),
+                    Value::DateTime(
+                        chrono::NaiveDate::from_ymd_opt(1990, 1, 1).unwrap()
+                            + chrono::Duration::days(i),
+                    ),
                 ]
             })
             .collect();
         let frame = crate::datatypes::DataFrame::from_cypher_rows(
-            vec!["id".into(), "badge".into(), "issued".into(), "grade".into()],
+            [
+                "id", "badge", "issued", "grade", "ratio", "active", "desk", "hired",
+            ]
+            .map(String::from)
+            .to_vec(),
             rows,
         )
         .unwrap();
@@ -372,7 +383,6 @@ fn a_streaming_copy_carries_integer_titles_and_timestamps_from_either_kind_of_so
                 .save_disk(source_dir.path().to_str().unwrap())
                 .unwrap();
         }
-        let issued = InternedKey::from_str("issued");
         let original = source.column_store("Badge").unwrap();
         assert_eq!(original.has_mmap_base(), save_first);
         assert_eq!(original.title_type_str(), Some("int64"));
@@ -400,28 +410,44 @@ fn a_streaming_copy_carries_integer_titles_and_timestamps_from_either_kind_of_so
             Some("int64"),
             "save_first={save_first}"
         );
+        // Every property of the copy is a typed column, whichever kind of store
+        // the source was: none rides in the overflow bag.
+        let layout: HashMap<_, _> = copied
+            .property_layout()
+            .into_iter()
+            .map(|(key, kind)| (copy.interner.resolve(key).to_string(), kind))
+            .collect();
+        for (name, kind) in [
+            ("issued", "timestamp"),
+            ("grade", "int64"),
+            ("ratio", "float64"),
+            ("active", "bool"),
+            ("desk", "string"),
+            ("hired", "date"),
+        ] {
+            assert_eq!(
+                layout.get(name),
+                Some(&kind),
+                "save_first={save_first} {name}"
+            );
+        }
+        assert!(
+            !copied.pure_mmap_store().unwrap().has_overflow,
+            "save_first={save_first}: a typed property was written to the overflow bag"
+        );
         for row in 0..40u32 {
             assert_eq!(
                 copied.get_title(row),
                 original.get_title(row),
                 "save_first={save_first} row {row} title"
             );
-            // A mapped source's properties travel through the overflow bag, which
-            // stores a timestamp as whole seconds; only the heap source's copy is
-            // exact to the microsecond. The seconds are compared for both.
-            let (got, want) = (copied.get(row, issued), original.get(row, issued));
-            match (got, want) {
-                (Some(Value::Timestamp(got)), Some(Value::Timestamp(want))) => {
-                    assert_eq!(
-                        got.and_utc().timestamp(),
-                        want.and_utc().timestamp(),
-                        "row {row}"
-                    );
-                    if !save_first {
-                        assert_eq!(got, want, "row {row}: the heap source's copy is exact");
-                    }
-                }
-                other => panic!("save_first={save_first} row {row} issued: {other:?}"),
+            for name in ["issued", "grade", "ratio", "active", "desk", "hired"] {
+                let key = InternedKey::from_str(name);
+                assert_eq!(
+                    copied.get(row, key),
+                    original.get(row, key),
+                    "save_first={save_first} row {row} {name}: exact, timestamps to the microsecond"
+                );
             }
         }
     }

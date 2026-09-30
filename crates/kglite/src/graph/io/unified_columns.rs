@@ -152,6 +152,7 @@ pub fn write_unified_columns<'s>(
             .iter()
             .map(|plan| (plan.type_name.clone(), plan.file.clone()))
             .collect(),
+        sidecars: Default::default(),
     };
     columns_meta::publish_json_synced(&seg0, &meta)?;
 

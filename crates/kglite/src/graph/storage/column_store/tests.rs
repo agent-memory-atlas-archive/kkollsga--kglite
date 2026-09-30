@@ -463,7 +463,7 @@ fn test_column_store_materialize_roundtrip() {
     ]);
 
     // Materialize to files
-    store.materialize_to_files(dir.path(), &interner).unwrap();
+    store.materialize_to_files(dir.path()).unwrap();
     assert!(store.is_mapped());
 
     // Verify data still accessible
@@ -788,7 +788,7 @@ fn mapped_column_set_writes_through_to_the_file() {
             (age_key, Value::Int64(i)),
         ]);
     }
-    store.materialize_to_files(dir.path(), &interner).unwrap();
+    store.materialize_to_files(dir.path()).unwrap();
     assert!(store.is_mapped(), "precondition: the fixture must spill");
     let mapped_heap = store.heap_bytes();
 
@@ -807,7 +807,13 @@ fn mapped_column_set_writes_through_to_the_file() {
 
     // The write is in the file, not only in a private overlay: read the raw
     // i64 image back off disk.
-    let bytes = std::fs::read(store.spill_subdir(dir.path()).join("age.i64")).unwrap();
+    let age_stem = spill_stem(store.schema().slot(age_key).unwrap() as usize);
+    let bytes = std::fs::read(
+        store
+            .spill_subdir(dir.path())
+            .join(format!("{age_stem}.i64")),
+    )
+    .unwrap();
     let cell = i64::from_le_bytes(bytes[7 * 8..8 * 8].try_into().unwrap());
     assert_eq!(cell, 4242, "the mapped write never reached the spill file");
 }
@@ -829,7 +835,7 @@ fn mapped_column_cell_restore_is_symmetric() {
             (age_key, Value::Int64(i)),
         ]);
     }
-    store.materialize_to_files(dir.path(), &interner).unwrap();
+    store.materialize_to_files(dir.path()).unwrap();
     let mapped_heap = store.heap_bytes();
     let prior = store.get(9, age_key);
 
@@ -855,7 +861,7 @@ fn mapped_str_column_set_keeps_its_mapping() {
     for i in 0..128i64 {
         store.push_row(&[(name_key, Value::String(format!("name-{i}")))]);
     }
-    store.materialize_to_files(dir.path(), &interner).unwrap();
+    store.materialize_to_files(dir.path()).unwrap();
     assert!(store.is_mapped());
     let mapped_heap = store.heap_bytes();
 
@@ -897,7 +903,7 @@ fn a_held_reader_is_isolated_from_a_mapped_write_through() {
     for i in 0..128i64 {
         store.push_row(&[(age_key, Value::Int64(i))]);
     }
-    store.materialize_to_files(dir.path(), &interner).unwrap();
+    store.materialize_to_files(dir.path()).unwrap();
 
     let mut master = Arc::new(store);
     let held = Arc::clone(&master);
@@ -1176,9 +1182,7 @@ fn a_typed_id_column_spills_to_a_file() {
         store.push_row(&[(InternedKey::from_str("age"), Value::Int64(i))]);
     }
     let before = store.heap_bytes();
-    store
-        .materialize_to_files(dir.path(), &interner)
-        .expect("materialize");
+    store.materialize_to_files(dir.path()).expect("materialize");
 
     assert!(
         store.spill_subdir(dir.path()).join("__id__.i64").exists(),
@@ -1217,12 +1221,10 @@ fn a_cloned_store_spills_to_its_own_files() {
     }
     let mut copy = original.clone();
 
-    original
-        .materialize_to_files(dir.path(), &interner)
-        .unwrap();
+    original.materialize_to_files(dir.path()).unwrap();
     // The copy diverges *after* the clone and spills to the same root.
     copy.set(7, age, &Value::Int64(4242), None);
-    copy.materialize_to_files(dir.path(), &interner).unwrap();
+    copy.materialize_to_files(dir.path()).unwrap();
 
     assert_ne!(
         original.spill_subdir(dir.path()),

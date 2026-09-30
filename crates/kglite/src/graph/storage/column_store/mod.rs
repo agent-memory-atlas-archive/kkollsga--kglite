@@ -15,6 +15,7 @@ mod gather;
 #[cfg(test)]
 mod null_overlay_tests;
 mod overlay;
+mod property_layout;
 mod timestamp_cells;
 #[cfg(test)]
 mod timestamp_column_tests;
@@ -43,6 +44,14 @@ use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// File stem of the column in `slot` when a store is spilled to a directory.
+/// A stem never derives from a property name, so it is always one safe path
+/// component; `__id__` and `__title__` are the reserved columns' stems and
+/// cannot collide with a slot stem.
+pub(crate) fn spill_stem(slot: usize) -> String {
+    format!("slot_{slot}")
+}
 
 /// Per-node-type columnar store. All columns have the same number of rows.
 #[derive(Debug)]
@@ -1339,21 +1348,19 @@ impl ColumnStore {
     }
 
     /// Materialize all columns to file-backed mmap in the given directory.
-    pub fn materialize_to_files(
-        &mut self,
-        dir: &Path,
-        interner: &StringInterner,
-    ) -> io::Result<()> {
+    ///
+    /// Files are named by slot ([`spill_stem`]), never by property name: a
+    /// property called `../../x` must not choose where its file is written.
+    pub fn materialize_to_files(&mut self, dir: &Path) -> io::Result<()> {
         // One directory per *store instance*, not per type: two stores of the
         // same type can be live at once (a graph and a copy of it), and they
         // must not write each other's column files. See `spill_token`.
         let dir = &self.spill_subdir(dir);
         std::fs::create_dir_all(dir)?;
         let schema = Arc::clone(&self.schema);
-        for (slot, ik) in schema.iter() {
-            let col_name = interner.resolve(ik);
+        for (slot, _) in schema.iter() {
             if let Some(col) = self.column_mut(slot as usize) {
-                col.materialize_to_file(dir, col_name)?;
+                col.materialize_to_file(dir, &spill_stem(slot as usize))?;
             }
         }
         if let Some(col) = self.id_column_mut() {

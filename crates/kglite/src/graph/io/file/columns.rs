@@ -9,21 +9,24 @@
 
 use super::*;
 
-/// Load `columns/<type>/columns.zst` sidecars onto the storage backend.
+/// Load the per-type zstd sidecars onto the storage backend.
 /// Skips entries whose type is already loaded (from the mmap column files).
 /// Used by both the earlier per-type layout and the additive path that covers
 /// types the column files do not: those added post-build via `add_nodes`, and
 /// those holding a column the mmap layout cannot represent.
+///
+/// A sidecar is found two ways. `sidecars` (from the column metadata) maps a
+/// type name to its `columns/<hex>` directory; the type comes from the map, never
+/// from the directory. A `columns/` subdirectory no entry names is a 0.19.0
+/// layout, written before the map existed, whose directory name *is* the type
+/// name — a directory entry name is a single path component, so it cannot lead
+/// anywhere else.
 pub(super) fn load_column_sidecars(
     dir: &std::path::Path,
+    sidecars: &std::collections::BTreeMap<String, String>,
     graph: &mut crate::graph::dir_graph::DirGraph,
 ) -> io::Result<()> {
     use rayon::prelude::*;
-
-    let columns_dir = dir.join("columns");
-    if !columns_dir.exists() {
-        return Ok(());
-    }
 
     // Collect job descriptors so the heavy work (read + zstd decode +
     // ColumnStore::load_packed) can run in a rayon thread pool. On a
@@ -37,18 +40,34 @@ pub(super) fn load_column_sidecars(
         type_meta: std::collections::HashMap<String, String>,
     }
 
-    let mut jobs: Vec<Job> = Vec::new();
-    for entry in std::fs::read_dir(&columns_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
+    let mut candidates: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let mut named: std::collections::HashSet<std::ffi::OsString> = std::collections::HashSet::new();
+    for (type_name, relative) in sidecars {
+        let type_dir = columns_meta::resolve_sidecar_dir(dir, relative)?;
+        if let Some(name) = type_dir.file_name() {
+            named.insert(name.to_os_string());
         }
-        let type_name = entry.file_name().to_string_lossy().to_string();
+        candidates.push((type_name.clone(), type_dir));
+    }
+    let columns_dir = dir.join(columns_meta::SIDECAR_DIR);
+    if columns_dir.exists() {
+        for entry in std::fs::read_dir(&columns_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() || named.contains(&entry.file_name()) {
+                continue;
+            }
+            let type_name = entry.file_name().to_string_lossy().to_string();
+            candidates.push((type_name, entry.path()));
+        }
+    }
+
+    let mut jobs: Vec<Job> = Vec::new();
+    for (type_name, type_dir) in candidates {
         if graph.column_store(&type_name).is_some() {
             // the mmap column files already loaded this type.
             continue;
         }
-        let col_file = entry.path().join("columns.zst");
+        let col_file = type_dir.join("columns.zst");
         if !col_file.exists() {
             continue;
         }
@@ -191,7 +210,7 @@ fn open_column_stores(
 }
 
 /// Install a disk graph's column stores — the mmap-backed column files named
-/// by `columns_meta` when present, then the per-type `columns/<type>/columns.zst`
+/// by `columns_meta` when present, then the per-type `columns/<dir>/columns.zst`
 /// sidecars for whatever they do not cover. Cold load-time path.
 pub(super) fn load_disk_column_stores(
     dir: &std::path::Path,
@@ -205,11 +224,13 @@ pub(super) fn load_disk_column_stores(
     // the load fell through to the per-type sidecar branch, which returned an
     // empty `column_stores` map and broke `MATCH (n:Type)` after a disk-mode
     // save + reload.
+    let mut sidecars = std::collections::BTreeMap::new();
     if let Some(meta_path) = columns_meta::locate(dir) {
         // Read the metadata before mapping anything, so a directory laid out by
         // a newer build is refused by its declared format, not by what maps.
         let meta = columns_meta::read(&meta_path)?;
         let meta_dir = meta_path.parent().unwrap_or(dir);
+        sidecars = meta.sidecars.clone();
 
         // Column-file bytes are untrusted disk input, but the hot string
         // readers use `from_utf8_unchecked` (see MmapColumnStore::read_str).
@@ -224,10 +245,10 @@ pub(super) fn load_disk_column_stores(
     }
     // Additively load sidecars for types the column files do not cover: types
     // added post-`load_ntriples` via `add_nodes`, and types whose columns the
-    // mmap layout cannot hold. The writer emits `columns/<type>/columns.zst`
+    // mmap layout cannot hold. The writer emits `columns/<hex>/columns.zst`
     // only for types NOT in `columns_meta`, and the loader skips a type that
     // already has a store.
-    load_column_sidecars(dir, graph)?;
+    load_column_sidecars(dir, &sidecars, graph)?;
     log_stage("column_stores_load", t);
     Ok(())
 }

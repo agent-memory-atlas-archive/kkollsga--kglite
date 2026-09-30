@@ -297,8 +297,8 @@
     {
       "path": "crates/kglite/src/graph/mutation/subgraph_streaming.rs",
       "qualified_name": "crate::save_subset_streaming_disk",
-      "lines": 373,
-      "branches": 37,
+      "lines": 368,
+      "branches": 35,
       "nesting": 3
     },
     {

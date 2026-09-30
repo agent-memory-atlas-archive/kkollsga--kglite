@@ -1955,22 +1955,23 @@ impl DirGraph {
             if remaining <= limit {
                 break;
             }
-            let type_dir = spill_dir.join(&type_name);
+            // Named by the type's interned key, not the type: a type called
+            // `../../x` must not choose where its columns are written.
+            let type_dir = spill_dir.join(format!(
+                "{:016x}",
+                InternedKey::from_str(&type_name).as_u64()
+            ));
             // The backend owns the store and nothing else holds a handle, so
             // `make_mut` mutates it in place: the spill actually reclaims the
             // heap it materialises to files. Back when every node also held a
             // strong `Arc` on the store, this forked and reclaimed nothing.
-            let interner = &self.interner;
             let Some(arc) = self
                 .graph
                 .column_store_mut(InternedKey::from_str(&type_name))
             else {
                 continue;
             };
-            if Arc::make_mut(arc)
-                .materialize_to_files(&type_dir, interner)
-                .is_ok()
-            {
+            if Arc::make_mut(arc).materialize_to_files(&type_dir).is_ok() {
                 remaining -= bytes;
             }
         }
@@ -2463,6 +2464,8 @@ mod disk_snapshot_tests;
 
 #[cfg(test)]
 mod disk_column_files_tests;
+#[cfg(test)]
+mod disk_hostile_names_tests;
 #[cfg(test)]
 mod edge_embedding_disk_tests;
 #[cfg(test)]

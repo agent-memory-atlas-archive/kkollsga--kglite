@@ -46,7 +46,7 @@ before upgrading.
   The disk layout changes in four places, all recognised by this build's own
   readers: `disk_graph_meta.json` carries a `disk_format` field (this build
   refuses a value newer than it knows, naming both numbers); `columns_meta.json`
-  is `{"format": 2, "types": [...], "files": {...}}` instead of a bare array,
+  is `{"format": 2, "types": [...], "files": {...}, "sidecars": {...}}` instead of a bare array,
   and its compact binary twin moved to `columns_meta.v2.bin.zst` (older readers
   preferred the old file name whenever it existed, so reusing it would have
   bypassed the guard); the column bytes are one immutable file per node type
@@ -100,6 +100,18 @@ before upgrading.
 
 ### Fixed
 
+- A copy made by the streaming disk subgraph writer (`save_subset_streaming_disk`)
+  from a reloaded disk graph — or, since the disk layout above, from a disk graph
+  just after `save()` — kept only the whole seconds of every timestamp property:
+  the source's columns live in a mapping, the writer took its column list from
+  the store's (empty) in-memory schema, and every property therefore went through
+  the overflow bag, which stored a timestamp as whole seconds. The copy now
+  takes its columns and their kinds from the store, so a property is written as
+  a typed column (about 35% smaller and 24% faster on a 1-million-row test
+  graph, with the copy's peak footprint 323 MB instead of 711 MB), and the
+  overflow bag itself stores a timestamp to the nanosecond, sub-microsecond
+  digits and a leap second included. Bags written before this still read, whole
+  seconds as written.
 - Cypher `SET r.p` on a relationship now records `p` in the relationship
   type's property metadata (as `SET n.p` does for a node type), and a `SET` on
   an `auto_timestamp` relationship type records the provenance keys it stamps.
@@ -137,6 +149,25 @@ before upgrading.
   written as a flow mapping (`{name: x, skills: false}`), and a line starting
   `skills:` inside a multi-line quoted string no longer counts as declaring
   the key.
+
+### Security
+
+- A node type or property named like a path no longer chooses where a disk
+  graph writes. A type called `../../pwn` (or an absolute path) that held a
+  column no mmap layout can store wrote its zstd sidecar to
+  `columns/<type name>/columns.zst`, outside the generation and, with enough
+  `../`, outside the graph directory, and a type name too long for a file name
+  failed the whole `save()`; a name containing `/` also lost the sidecar's
+  values on the next load. A mapped graph's column spill directories
+  (`<spill>/<type>/<store>/<property>.i64`) took the type and property names
+  the same way. Sidecar directories, spill directories and spill files are now
+  named from the interned key or the column slot, and each sidecar's directory is
+  recorded in `columns_meta.json` (`"sidecars": {"<type>": "columns/<hex>"}`) and
+  read back from it, never derived from a directory name. Directories written by
+  0.19.0 (sidecars named by the raw type name, no `sidecars` entry) still load;
+  a `sidecars` entry that is absolute, holds `..`, or does not stay under
+  `columns/` is refused. Graphs saved by 0.19.0 with such a type name are not
+  repaired: the escaped file is wherever it landed.
 
 ## [0.19.0] - 2026-09-28
 

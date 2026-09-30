@@ -164,10 +164,13 @@ impl TypeWriter {
         std::fs::create_dir_all(&out_dir)?;
 
         let mut columns = Vec::with_capacity(schema.len());
-        for (_slot, ik) in schema.iter() {
+        for (slot, ik) in schema.iter() {
             let col_name = interner.resolve(ik);
             let type_str = meta.get(col_name).map(|s| s.as_str()).unwrap_or("mixed");
-            columns.push(ColumnWriter::open(type_str, col_name, &out_dir)?);
+            // Files are named by slot: a property name is data and must not
+            // choose a path.
+            let stem = crate::graph::storage::column_store::spill_stem(slot as usize);
+            columns.push(ColumnWriter::open(type_str, &stem, &out_dir)?);
         }
 
         let id_col = ColumnWriter::open(id_type, "__id__", &out_dir)?;
@@ -1146,6 +1149,68 @@ mod tests {
                 Value::Float64(i as f64 * 1.5)
             );
         }
+    }
+
+    /// A property name is data, not a path: the writer's files are named by slot,
+    /// so a property called `../../escape` neither leaves `out_dir` nor collides
+    /// with another column's files.
+    #[test]
+    fn a_property_name_never_chooses_a_file_path() {
+        let mut interner = StringInterner::new();
+        let hostile = [
+            "../../escape",
+            "/abs/escape",
+            "a/b",
+            "x.null",
+            "x",
+            "__id__",
+        ];
+        let schema = make_schema(&mut interner, &hostile);
+        let meta: HashMap<String, String> = hostile
+            .iter()
+            .map(|name| (name.to_string(), "int64".to_string()))
+            .collect();
+        let root = TempDir::new().unwrap();
+        let out_dir = root.path().join("out");
+        let mut writer = TypeWriter::new(
+            Arc::clone(&schema),
+            meta,
+            out_dir.clone(),
+            &interner,
+            "string",
+            "string",
+        )
+        .unwrap();
+        let keys: Vec<InternedKey> = hostile.iter().map(|n| interner.get_or_intern(n)).collect();
+        for row in 0..4i64 {
+            let props: Vec<(InternedKey, Value)> = keys
+                .iter()
+                .enumerate()
+                .map(|(column, key)| (*key, Value::Int64(row * 10 + column as i64)))
+                .collect();
+            writer
+                .push_row(
+                    &Value::String(format!("id-{row}")),
+                    &Value::String(format!("Title {row}")),
+                    &props,
+                )
+                .unwrap();
+        }
+        let store = writer.finalize(&interner).unwrap();
+        for row in 0..4i64 {
+            for (column, key) in keys.iter().enumerate() {
+                assert_eq!(
+                    store.get(row as u32, *key),
+                    Some(Value::Int64(row * 10 + column as i64)),
+                    "row {row} column {column}"
+                );
+            }
+        }
+        let escaped: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(escaped, [std::ffi::OsString::from("out")]);
     }
 
     /// A `timestamp` column and an `int64` title stream into typed columns —

@@ -708,23 +708,27 @@ impl DirGraph {
     /// Types added post-build via `add_nodes` / `add_node` are absent from an
     /// ntriples-built `columns.bin` and were silently dropped on save before
     /// this existed. Covered types keep the fast mmap path.
+    ///
+    /// A sidecar's directory is named by the type's interned key and recorded in
+    /// the column metadata (`columns_meta::record_sidecars`); the type name is
+    /// data and never reaches the filesystem.
     fn write_column_sidecars(
         &self,
         dir: &std::path::Path,
         stores: &SaveStores,
     ) -> Result<(), String> {
         let types_in_columns_bin = Self::types_in_columns_bin(dir)?;
-        let columns_dir = dir.join("columns");
-        let mut sidecars_written = 0usize;
-        for (type_name, store) in stores {
-            if types_in_columns_bin.contains(type_name) {
-                continue; // covered by the fast mmap path on reload
-            }
-            if sidecars_written == 0 {
-                std::fs::create_dir_all(&columns_dir)
-                    .map_err(|e| format!("Failed to create columns dir: {}", e))?;
-            }
-            let type_dir = columns_dir.join(type_name);
+        let mut type_names: Vec<&String> = stores
+            .keys()
+            .filter(|name| !types_in_columns_bin.contains(*name))
+            .collect();
+        type_names.sort();
+        let mut used = std::collections::HashSet::new();
+        let mut recorded = std::collections::BTreeMap::new();
+        for type_name in type_names {
+            let store = &stores[type_name];
+            let relative = crate::graph::io::columns_meta::sidecar_dir_name(type_name, &mut used);
+            let type_dir = dir.join(&relative);
             std::fs::create_dir_all(&type_dir)
                 .map_err(|e| format!("Failed to create type dir: {}", e))?;
             let packed = store
@@ -759,9 +763,10 @@ impl DirGraph {
                 .map_err(|e| format!("Column compression failed: {}", e))?;
             std::fs::write(type_dir.join("columns.zst"), compressed)
                 .map_err(|e| format!("Failed to write columns: {}", e))?;
-            sidecars_written += 1;
+            recorded.insert(type_name.clone(), relative);
         }
-        Ok(())
+        crate::graph::io::columns_meta::record_sidecars(dir, recorded)
+            .map_err(|e| format!("Failed to record column sidecars: {}", e))
     }
 }
 
