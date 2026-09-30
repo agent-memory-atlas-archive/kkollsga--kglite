@@ -739,7 +739,7 @@ fn try_downcast_float_to_int(col_type: ColumnType, data: ColumnData) -> (ColumnT
 
 /// The stored type a declared unique-id column gets when nothing overrides it.
 ///
-/// Two coercions away from plain auto-detection, both there to stop a key
+/// Three coercions away from plain auto-detection, all there to stop a key
 /// silently disappearing:
 ///
 /// - a String/object column stays `String`, because `UniqueId` would drop every
@@ -754,6 +754,9 @@ fn try_downcast_float_to_int(col_type: ColumnType, data: ColumnData) -> (ColumnT
 ///   give up the compact representation, which is the right trade against
 ///   losing the row. Auto-minted ids stay `u32` and `DirGraph::observe_explicit_id`
 ///   ignores out-of-range values, so the two id spaces cannot collide.
+/// - a `float64` column (an integer key with a blank, as pandas stores it) is
+///   judged the same way by [`float_id_column_type`]; a non-integer float id is
+///   refused rather than dropped.
 fn unique_id_column_type(
     series: &Bound<'_, PyAny>,
     col_name: &str,
@@ -762,7 +765,50 @@ fn unique_id_column_type(
     match determine_column_type(series, col_name, on_invalid)? {
         ColumnType::String => Ok(ColumnType::String),
         ColumnType::Int64 if !int_series_fits_u32(series) => Ok(ColumnType::Int64),
+        ColumnType::Float64 => float_id_column_type(series, col_name),
         _ => Ok(ColumnType::UniqueId),
+    }
+}
+
+/// The key type a `float64` id column gets.
+///
+/// pandas stores an integer column with a missing value as `float64`, so a
+/// float id column is an integer key that happens to carry a blank. Every
+/// non-null value must be a whole number inside `i64`: one that fits `u32`
+/// keeps the compact key, any other whole number takes `Int64` (the same trade
+/// the integer columns make), and a value with no integer to keep (fractional,
+/// infinite, or beyond `i64`) is a caller error named here. The alternative was
+/// a row dropped as "null" with nothing but a summary warning. An all-null
+/// column has no value to lose and stays compact.
+fn float_id_column_type(series: &Bound<'_, PyAny>, col_name: &str) -> PyResult<ColumnType> {
+    let non_null = series.call_method0("dropna")?;
+    if non_null.len()? == 0 {
+        return Ok(ColumnType::UniqueId);
+    }
+    let not_whole = non_null
+        .call_method1("mod", (1,))?
+        .call_method1("ne", (0,))?;
+    let below_i64 = non_null.call_method1("lt", (i64::MIN as f64,))?;
+    let above_i64 = non_null.call_method1("ge", (-(i64::MIN as f64),))?;
+    let offenders = not_whole
+        .call_method1("__or__", (below_i64,))?
+        .call_method1("__or__", (above_i64,))?;
+    if offenders.call_method0("any")?.is_truthy()? {
+        let bad = non_null.get_item(&offenders)?;
+        let row = bad.getattr("index")?.get_item(0)?;
+        let value = bad.getattr("iloc")?.get_item(0)?.extract::<f64>()?;
+        return Err(crate::error_py::ArgumentError::new_err(format!(
+            "Id column '{col_name}' holds {} at row {}: a float id must be a whole number inside \
+             the 64-bit integer range to key a node or relationship endpoint. Fix the value, or \
+             load the ids as text with column_types={{'{col_name}': 'string'}}.",
+            value,
+            row.str()?,
+        )));
+    }
+    if int_series_fits_u32(series) {
+        Ok(ColumnType::UniqueId)
+    } else {
+        Ok(ColumnType::Int64)
     }
 }
 

@@ -168,6 +168,15 @@ before upgrading.
   written as a flow mapping (`{name: x, skills: false}`), and a line starting
   `skills:` inside a multi-line quoted string no longer counts as declaring
   the key.
+- `add_nodes`, `add_nodes_bulk`, `add_relationships` and the other relationship
+  loaders no longer drop rows whose id is a whole number held as a float outside
+  the 32-bit range. pandas stores an integer id column that has a blank as
+  `float64`, and every id from 2^32 up (or below zero) was skipped with only a
+  "null values in ID field" warning. Such a column is now keyed as a 64-bit
+  integer, like an integer id column always was; a float id column that fits
+  stays compact. A float id that is not a whole number (`2.5`, `inf`, or beyond
+  the 64-bit range) now raises `ArgumentError` naming the column, row and value
+  instead of being skipped.
 
 ### Security
 
