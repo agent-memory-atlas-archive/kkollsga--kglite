@@ -2153,7 +2153,11 @@ pub(crate) fn disk_clones_made() -> usize {
 thread_local! {
     /// A clone [`DiskGraph::park_clone`] made, held for the `Clone::clone` that
     /// `#[derive(Clone)]` on `DirGraph` is about to ask of the same graph.
-    static PARKED_CLONE: std::cell::RefCell<Option<(*const DiskGraph, DiskGraph)>> =
+    /// Boxed: a `DiskGraph` held inline would make this static thread-local
+    /// block hundreds of bytes, and a shared library whose static TLS outgrows
+    /// the loader's reserve fails to import ("cannot allocate memory in static
+    /// TLS block").
+    static PARKED_CLONE: std::cell::RefCell<Option<(*const DiskGraph, Box<DiskGraph>)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -2179,7 +2183,7 @@ impl Clone for DiskGraph {
             let mut slot = slot.borrow_mut();
             match slot.as_ref() {
                 Some((origin, _)) if std::ptr::eq(*origin, self) => {
-                    slot.take().map(|(_, clone)| clone)
+                    slot.take().map(|(_, clone)| *clone)
                 }
                 _ => None,
             }
@@ -2195,7 +2199,8 @@ impl DiskGraph {
     /// Hold `clone` (made by [`Self::try_clone`]) as the answer to the next
     /// `Clone::clone` of `self` on this thread, until the guard drops.
     pub(crate) fn park_clone(&self, clone: DiskGraph) -> ParkedClone {
-        PARKED_CLONE.with(|slot| *slot.borrow_mut() = Some((self as *const DiskGraph, clone)));
+        PARKED_CLONE
+            .with(|slot| *slot.borrow_mut() = Some((self as *const DiskGraph, Box::new(clone))));
         ParkedClone
     }
 
