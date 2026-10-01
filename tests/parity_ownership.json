@@ -811,5 +811,14 @@
   },
   "tests/test_timestamp_column_parity.py::test_top_k_over_timestamps_agrees_with_a_stable_sort[mapped_kgl]": {
     "owner": "storage-parity"
+  },
+  "tests/test_export_csv_lossless.py::test_round_trip_loses_nothing[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_csv_lossless.py::test_round_trip_loses_nothing[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_csv_lossless.py::test_round_trip_loses_nothing[disk]": {
+    "owner": "storage-parity"
   }
 }

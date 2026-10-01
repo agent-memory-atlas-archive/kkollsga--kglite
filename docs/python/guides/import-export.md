@@ -247,6 +247,22 @@ For a whole-graph dump without a DataFrame,
 connection type plus a `blueprint.json` for re-import, and SQLite (above)
 covers the "give me a real database" case.
 
+`export_csv` is lossless: the directory also holds a `manifest.json`
+(`kglite-export/1`), and `from_blueprint('dir/blueprint.json')` rebuilds the
+graph with its valid-time declarations, secondary labels, id and title kinds,
+and every property's type (timestamps, lists, maps, durations, points; the empty
+string stays distinct from null). A relationship leaving several source types
+gets one CSV per source (`WORKS_IN.Person.csv`), and one reaching several target
+types is routed by a `target_type` column. The rows stream through a bounded
+buffer (`KGLITE_EXPORT_BATCH_ROWS`, default 8192), so the export's memory does
+not grow with the graph. Limits: an edge attached to an earlier version of a
+node whose id repeats re-attaches to the latest version, a list element that is
+itself a list or map comes back as JSON text, a relationship property holding a
+point comes back as text, a secondary label carried by only some nodes of a type
+is not restored (it is listed in the manifest's `partial_labels`), and a column
+mixing value kinds is written as text. The older
+`export(path, format='csv')` nodes-and-edges pair is a lossy flat dump.
+
 ## Back up before upgrading
 
 The `.kgl` file (and `to_bytes()`) is a **versioned binary cache**, not a

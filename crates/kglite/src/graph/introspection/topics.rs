@@ -967,7 +967,7 @@ pub(super) fn write_fluent_overview(xml: &mut String, surface: DescribeSurface) 
 
     xml.push_str("  <group name=\"export\">\n");
     xml.push_str("    <method sig=\"export(path, format='graphml')\">Export as GraphML, GEXF, JSON (D3), or CSV.</method>\n");
-    xml.push_str("    <method sig=\"export_csv(path)\">CSV tree + blueprint.json (round-trips with from_blueprint).</method>\n");
+    xml.push_str("    <method sig=\"export_csv(path)\">CSV tree + blueprint.json + manifest.json (lossless round trip with from_blueprint).</method>\n");
     xml.push_str("    <method sig=\"save(path)\">Binary .kgl v7 file (columnar, supports larger-than-RAM loading).</method>\n");
     xml.push_str("    <method sig=\"kglite.load(path, storage=None, defer_index_rebuild=None)\">Restore from .kgl file. defer_index_rebuild=True records declared indexes instead of building them: much less memory, but the first write pays the build.</method>\n");
     xml.push_str("  </group>\n");
@@ -1373,7 +1373,7 @@ pub(super) fn write_fluent_topic_export(xml: &mut String) {
     xml.push_str(
         "      <m sig=\"export_string(format='json')\">Export to string (no file); 'csv' is file-only.</m>\n",
     );
-    xml.push_str("      <m sig=\"export_csv(path)\">CSV directory tree + blueprint.json (round-trips with from_blueprint).</m>\n");
+    xml.push_str("      <m sig=\"export_csv(path)\">CSV directory tree + blueprint.json + manifest.json (lossless round trip with from_blueprint).</m>\n");
     xml.push_str("      <m sig=\"save(path)\">Binary .kgl v7 file (columnar, supports larger-than-RAM loading).</m>\n");
     xml.push_str("      <m sig=\"kglite.load(path, storage=None, defer_index_rebuild=None)\">Restore from .kgl file. defer_index_rebuild=True records declared indexes instead of building them: much less memory, but the first write pays the build.</m>\n");
     xml.push_str("    </methods>\n");

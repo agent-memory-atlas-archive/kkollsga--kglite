@@ -80,9 +80,15 @@ Available types:
 | `"date"` / `"datetime"` | date | Accepts `YYYY-MM-DD`, timestamp text, `YYYYMMDD`, or epoch milliseconds (nine digits or more); stores the date. A cell that is none of these is stored as NULL and reported in one build warning per column |
 | `"list"` / `"array"` | list | Cell is a JSON array, e.g. `["a","b"]` — see below |
 | `"duration"` | duration | Cell is a `{"months", "days", "seconds"}` object (each field optional), e.g. `{"days": 1, "seconds": 7200}`; anything else is null |
+| `"text"` | text | Like `"string"`, but an empty cell is null and the empty string is written `\e` (a string starting with `\` doubles it): `\e` is `""`, `\\x` is `\x`. What the lossless CSV export writes |
+| `"timestamp"` | datetime | `YYYY-MM-DDTHH:MM:SS[.fraction]` (ISO 8601, no zone; a space may replace the `T`); anything else is null |
+| `"map"` | map | Cell is a JSON object; nested arrays and objects become lists and maps; anything else is null |
+| `"point"` | point | Node properties only: cell is `point(lat, lon)`, converted after the load. On a relationship column it stays text |
 | `"validFrom"` / `"validTo"` | date | Same as `"date"`; declares nothing on its own — see [Temporal Properties](#temporal-properties) |
 | `"geometry"` | WKT string | Uses existing WKT or converts `_geometry` GeoJSON in Rust |
 | `"location.lat"` / `"location.lon"` | float | Coordinates; may receive GeoJSON centroids |
+
+A blueprint's `settings.manifest` names an export manifest (`manifest.json`, format `kglite-export/1`, written beside the blueprint by `export_csv`); after the build, every valid-time declaration it lists is applied. Declarations a spec's `temporal` key already made are unchanged, so the manifest carries the ones no spec can say: a secondary label's, or a relationship's declaration that names no source type.
 
 Columns not listed in `properties` are still loaded — they just use auto-detection. You only need to specify types when auto-detection gets it wrong.
 

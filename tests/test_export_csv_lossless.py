@@ -44,8 +44,7 @@ FIXTURE = [
     "prefs: {k: 1, z: 'x', n: [1, 2]}, tenure: duration({days: 3}), "
     "home: point({latitude: 60.1, longitude: 5.2})})",
     "CREATE (:Person:Employee {id: 1, title: 'Ada v2', hired: date('2010-01-01')})",
-    "CREATE (:Person:Employee {id: 2, title: '', hired: date('2005-01-01'), "
-    "`left`: date('2005-12-31'), name: 'Bo'})",
+    "CREATE (:Person:Employee {id: 2, title: '', hired: date('2005-01-01'), `left`: date('2005-12-31'), name: 'Bo'})",
     # Department: string ids, one numeric-looking.
     "CREATE (:Department {id: 'D-1', title: 'Engineering'})",
     "CREATE (:Department {id: '007', title: 'Agents'})",
@@ -187,7 +186,9 @@ def test_round_trip_loses_nothing(storage, tmp_path):
 def test_null_and_empty_string_stay_distinct(tmp_path):
     source = build_source("memory", tmp_path)
     _, back, _, _ = reimport(tmp_path, source)
-    rows = back.cypher("MATCH (p:Person) WHERE p.name STARTS WITH 'multi' RETURN p.nick AS nick, p.back AS back").to_list()
+    rows = back.cypher(
+        "MATCH (p:Person) WHERE p.name STARTS WITH 'multi' RETURN p.nick AS nick, p.back AS back"
+    ).to_list()
     assert rows == [{"nick": "", "back": "\\e"}]
     row = back.cypher("MATCH (p:Person {id: 2}) RETURN p.nick AS nick").to_list()
     assert row == [{"nick": None}]

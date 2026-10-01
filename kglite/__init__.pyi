@@ -7036,9 +7036,25 @@ class KnowledgeGraph:
         than constructing filenames from type names; logical node and connection
         names remain unchanged in data and blueprint keys.
 
+        The export is lossless: ``manifest.json`` (format ``kglite-export/1``)
+        sits beside ``blueprint.json`` and the blueprint points at it, so
+        :func:`from_blueprint` restores the valid-time declarations, secondary
+        labels, id and title kinds and every property's type (timestamps,
+        lists, maps, durations, points), with the empty string distinct from
+        null. A relationship leaving several source types is written as one
+        ``<REL>.<Source>.csv`` per source; one reaching several target types is
+        routed by the ``target_type`` column. Rows stream through a bounded
+        buffer (``KGLITE_EXPORT_BATCH_ROWS``, default 8192). Not restored: an
+        edge attached to an earlier version of a node whose id repeats (it
+        re-attaches to the latest), a list or map nested inside a list (comes
+        back as JSON text), a point on a relationship property (text), a
+        secondary label carried by only some nodes of a type, and a column
+        mixing value kinds (text).
+
         Node CSVs have columns: ``id``, ``title``, then all properties.
         Connection CSVs: ``source_id``, ``source_type``, ``target_id``,
-        ``target_type``, then edge properties.
+        ``target_type``, then edge properties (all four standard names are
+        prefixed ``_kg_`` when an edge property is named like one).
 
         Only connections where **both** endpoints are in the selection
         are exported.
@@ -7051,7 +7067,8 @@ class KnowledgeGraph:
 
         Returns:
             Summary dict with keys ``output_dir``, ``nodes`` (type → count),
-            ``connections`` (type → count), ``files_written``.
+            ``connections`` (type → count), ``files_written`` (CSVs plus
+            ``blueprint.json`` and ``manifest.json``).
 
         Example::
 

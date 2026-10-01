@@ -11,6 +11,11 @@ before upgrading.
 
 ### Added
 
+- Blueprint column types `"text"` (empty cell is null, `\e` is the empty
+  string), `"timestamp"` (ISO 8601 date-time), `"map"` (JSON object) and
+  `"point"` (`point(lat, lon)`, node properties), a `settings.manifest` key that
+  applies an export manifest's valid-time declarations after the build, and the
+  `ExportManifest` type (`kglite-export/1`, JSON) in `kglite::api::io`.
 - `materialize_ontology()` returns a `warnings` list per label naming members
   stamped with an empty validity interval under the label's `half_open`
   declaration (they were stamped and counted in `empty_rows` with no report);
@@ -21,6 +26,13 @@ before upgrading.
 
 ### Changed
 
+- `export_csv` is lossless by default: it writes a `manifest.json` beside
+  `blueprint.json`, and `from_blueprint` restores valid-time declarations,
+  secondary labels, id and title kinds and every property's type; the empty
+  string stays distinct from null; rows stream through a bounded buffer
+  (`KGLITE_EXPORT_BATCH_ROWS`) instead of one string per type; and
+  `files_written` counts `manifest.json`. The older `export(format='csv')`
+  nodes-and-edges pair is unchanged and lossy.
 - **Breaking: the `.kgl` container is now v7 and a disk-graph directory has a
   new layout revision; files and directories this version saves cannot be read
   by kglite 0.19.0 or earlier.** This build reads v7, v6 and v5 containers and
@@ -330,6 +342,15 @@ before upgrading.
   of 8 ms at 2 million versions. A copy now types a column that holds no value
   as the saved file does, instead of `mixed`. Timings are release builds on a
   machine carrying other load, interleaved against the previous build.
+
+### Fixed
+
+- `export_csv` wrote a relationship that leaves several source types as one CSV
+  typed from its first edge, so `from_blueprint` attached the other sources'
+  edges to freshly created stub nodes (4 nodes exported, 7 re-imported). Each
+  source type now gets its own CSV, and a relationship reaching several target
+  types is routed by a `target_type` column; a column-routed union now reads an
+  integer-keyed target's ids as integers even when other targets' ids are text.
 
 ### Security
 
