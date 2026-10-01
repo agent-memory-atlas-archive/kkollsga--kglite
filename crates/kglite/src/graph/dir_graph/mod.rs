@@ -90,6 +90,18 @@ type PropertyNdvCache = Arc<RwLock<(u64, HashMap<(String, String), usize>)>>;
 
 /// Core graph storage: a directed graph (petgraph `StableDiGraph`) with fast
 /// type-based indexing and optional property/composite/range/spatial indexes.
+// Id indexes built by scanning a type, on this thread: a lookup that finds its
+// index in the file or the overlay never moves it.
+#[cfg(test)]
+thread_local! {
+    static ID_INDEX_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn id_index_scans() -> usize {
+    ID_INDEX_SCANS.with(|scans| scans.get())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DirGraph {
     pub graph: GraphBackend,
@@ -1110,6 +1122,8 @@ impl DirGraph {
     /// Disk graphs with a column store read ids straight from the mmap'd
     /// columns (no node materialization); everything else scans node weights.
     fn compute_id_index(&self, node_type: &str) -> TypeIdIndex {
+        #[cfg(test)]
+        ID_INDEX_SCANS.with(|scans| scans.set(scans.get() + 1));
         let node_indices = match self.type_indices.get(node_type) {
             Some(indices) => indices,
             None => return TypeIdIndex::General(FxHashMap::default()),

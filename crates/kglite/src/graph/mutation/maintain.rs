@@ -1748,8 +1748,9 @@ pub(crate) fn detach_delete_nodes(
     // reachable by id — which only a rebuild achieves. Duplicates are
     // detectable in O(1): the index was built with one entry per node of the
     // type, so a shorter index is exactly the signature of collapsed
-    // duplicates. Unequal (or unbuilt, or base-resident) falls back to the
-    // whole-type invalidation this path has always done.
+    // duplicates. Unequal (or unbuilt, or served from the file in a variant that
+    // would have to be copied onto the heap) falls back to the whole-type
+    // invalidation this path has always done.
     //
     // Note this differs from the create path, which may maintain the index
     // incrementally unconditionally: inserting a duplicate collapses it the
@@ -1757,7 +1758,7 @@ pub(crate) fn detach_delete_nodes(
     let evictable: HashSet<String> = affected_types
         .iter()
         .filter(|node_type| {
-            let indexed = graph.id_indices.overlay_len(node_type);
+            let indexed = graph.id_indices.editable_len(node_type);
             let live = graph.type_indices.get(node_type).map(|m| m.len());
             matches!((indexed, live), (Some(i), Some(l)) if i == l)
         })

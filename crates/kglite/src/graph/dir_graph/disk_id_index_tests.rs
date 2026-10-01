@@ -155,6 +155,67 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
     );
 }
 
+/// A delete on a reopened type served from the file tombstones the deleted ids
+/// in a delta over the mapping. Dropping the type's index instead made the next
+/// id lookup rebuild it by scanning every node of the type.
+#[test]
+fn a_delete_on_a_mapped_type_leaves_the_index_in_the_file() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("g");
+    let path = root.to_str().unwrap();
+    let mut graph = DirGraph::new();
+    graph.enable_disk_mode().unwrap();
+    add_versions(&mut graph, 0, 5_000);
+    graph.save_disk(path).unwrap();
+    drop(graph);
+
+    let mut graph = load_owned(path);
+    let built = full_maps_built();
+    let scans = super::id_index_scans();
+    rows(
+        &mut graph,
+        &format!(
+            "MATCH (n:Employment) WHERE n.id IN [{}, {}] DETACH DELETE n",
+            BIG + 3 * 7,
+            BIG + 4_000 * 7
+        ),
+    );
+    assert_eq!(seq_of(&mut graph, BIG + 3 * 7), Vec::<Vec<Value>>::new());
+    assert_eq!(
+        seq_of(&mut graph, BIG + 4_000 * 7),
+        Vec::<Vec<Value>>::new()
+    );
+    assert_eq!(
+        seq_of(&mut graph, BIG + 4_001 * 7),
+        vec![vec![Value::Int64(4_001)]]
+    );
+    assert_eq!(
+        graph.id_indices.overlay_len("Employment"),
+        Some(4_998),
+        "the index is a delta over the file, minus the deleted ids"
+    );
+    assert_eq!(
+        super::id_index_scans(),
+        scans,
+        "an id lookup after the delete scanned the type to rebuild its index"
+    );
+    assert_eq!(
+        full_maps_built(),
+        built,
+        "the delete copied the file's index onto the heap"
+    );
+
+    // The deletion survives a save and a reopen.
+    graph.save_disk(path).unwrap();
+    drop(graph);
+    let mut graph = load_owned(path);
+    assert_eq!(seq_of(&mut graph, BIG + 3 * 7), Vec::<Vec<Value>>::new());
+    assert_eq!(
+        rows(&mut graph, "MATCH (n:Employment) RETURN count(n)"),
+        vec![vec![Value::Int64(4_998)]]
+    );
+}
+
 /// The rebase is an optimisation after a durable publish: a failure keeps the
 /// live heap entry, which is right, and never turns the save into an error.
 #[test]

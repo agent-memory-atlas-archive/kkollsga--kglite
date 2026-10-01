@@ -210,6 +210,13 @@ impl IdIndexBase {
         Some(entry.num_entries as usize)
     }
 
+    /// Whether `name` is an Int64Sorted entry of this file.
+    pub(crate) fn is_int64(&self, name: &str) -> bool {
+        self.dir
+            .get(name)
+            .is_some_and(|entry| entry.variant == VARIANT_INT64)
+    }
+
     /// `(keys, node indices)` of an Int64Sorted entry — little-endian `i64`s and
     /// `u32`s, both sorted by key — or `None` for any other variant.
     pub(crate) fn int64_parts(&self, name: &str) -> Option<(&[u8], &[u8])> {
@@ -777,10 +784,10 @@ impl IdIndexStore {
             .insert(name, TypeEntry::from(idx));
     }
 
-    /// Number of ids indexed for `name` in the mutable overlay, or `None`
-    /// when the type is not overlay-resident. Deliberately does not consult
-    /// the mmap'd base: the only caller uses this to decide whether an
-    /// in-place edit is safe, and base entries are never edited in place.
+    /// Number of ids indexed for `name` in the mutable overlay, or `None` when
+    /// the type is not overlay-resident: what a test reads to see whether a save
+    /// or a load left a heap entry behind.
+    #[cfg(test)]
     pub fn overlay_len(&self, name: &str) -> Option<usize> {
         self.overlay
             .read()
@@ -789,7 +796,24 @@ impl IdIndexStore {
             .map(|entry| entry.len())
     }
 
-    /// Drop `entries` (`id → node`) from `name`'s index in place, instead of
+    /// Number of ids indexed for `name` where [`Self::evict_entries`] can edit
+    /// the index in place, or `None` where it cannot: the type's overlay entry,
+    /// or an Int64Sorted entry of the mapped file, which an edit layers a delta
+    /// over ([`Self::entry_or_default`]) and leaves in the mapping. Any other
+    /// base variant would be copied onto the heap to edit, which is no cheaper
+    /// than the rebuild an invalidation causes.
+    pub fn editable_len(&self, name: &str) -> Option<usize> {
+        if let Some(entry) = self.overlay.read().unwrap().get(name) {
+            return Some(entry.len());
+        }
+        if self.removed.contains(name) {
+            return None;
+        }
+        let base = self.base.as_deref()?;
+        base.is_int64(name).then(|| base.entry_len(name))?
+    }
+
+    /// Drop `entries` (`id -> node`) from `name`'s index in place, instead of
     /// invalidating the whole type.
     ///
     /// Deleting one node used to `remove()` the entire type index, so the next
@@ -798,22 +822,23 @@ impl IdIndexStore {
     /// index incrementally the same way (the `pk_id` match in the create
     /// executor).
     ///
-    /// Falls back to whole-type invalidation, and returns `false`, whenever the
-    /// type has no overlay entry — an unbuilt type has nothing to edit, and a
-    /// type served only from the file's mapping has no delta to edit yet (the
-    /// mapping itself is never written; a delta layered over it is made by
-    /// `entry_or_default`). Each entry is removed only if it still resolves to
-    /// the given node, so a re-pointed id is left intact.
+    /// Falls back to whole-type invalidation, and returns `false`, when
+    /// [`Self::editable_len`] has nothing to edit: an unbuilt type, or a type
+    /// served from the file in a variant that would have to be copied onto the
+    /// heap. An Int64Sorted entry served from the mapping is edited through a
+    /// delta over it, so the deleted ids become tombstones and nothing is
+    /// rebuilt. Each entry is removed only if it still resolves to the given
+    /// node, so a re-pointed id is left intact.
     ///
     /// The caller is responsible for the duplicate-id precondition: this edits
     /// exactly the ids it is given, whereas a rebuild re-derives the whole map
     /// and would surface a shadowed duplicate. See `detach_delete_nodes`.
     pub fn evict_entries(&mut self, name: &str, entries: &[(Value, NodeIndex)]) -> bool {
-        let overlay = self.overlay.get_mut().unwrap();
-        let Some(entry) = overlay.get_mut(name) else {
+        if self.editable_len(name).is_none() {
             self.remove(name);
             return false;
-        };
+        }
+        let entry = self.entry_or_default(name.to_string());
         for (id, idx) in entries {
             entry.remove_matching(id, *idx);
         }
