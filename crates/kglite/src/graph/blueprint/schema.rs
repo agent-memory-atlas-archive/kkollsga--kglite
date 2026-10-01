@@ -66,6 +66,13 @@ pub struct Settings {
     /// are kept so no edge is lost; opt in to discard dangling refs.
     #[serde(default)]
     pub auto_purge: bool,
+    /// Path, relative to the blueprint file, of an `ExportManifest` JSON
+    /// (`kglite-export/1`). After the build, every valid-time declaration it
+    /// lists is applied; those a spec's `temporal` key already declared are
+    /// no-ops, so it carries the ones no spec can say (a secondary label's,
+    /// an unkeyed relationship's).
+    #[serde(default)]
+    pub manifest: Option<String>,
     /// Keys under `settings` that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
@@ -108,6 +115,7 @@ pub const ACCEPTED_SETTINGS_KEYS: &[&str] = &[
     "output_file",
     "output",
     "auto_purge",
+    "manifest",
 ];
 
 /// Keys a node spec (and a `sub_nodes` entry) reads.

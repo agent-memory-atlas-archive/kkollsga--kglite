@@ -218,14 +218,34 @@ fn load_one_junction_edge(
                 subset = subset_rows(&chunk, &rows);
                 &subset
             };
-            let df = match typed_dataframe(source, &chunk_keep, &declared, &rename, &mut misparses)
-            {
-                Ok(df) => df,
-                Err(e) => {
-                    report.errors.push(format!("junction {}: {}", edge_type, e));
-                    continue;
-                }
+            // A column-routed union names each row's target type, so the
+            // group's id column is typed by that type, not by the column as a
+            // whole: a column mixing `"D-1"` and `1` is text overall, and the
+            // integer-keyed type's rows must still match as integers.
+            let routed;
+            let group_declared = if matches!(routing, TargetRouting::Column { .. }) {
+                routed = {
+                    let mut local = declared.clone();
+                    if endpoints.for_type(target_type).is_some() {
+                        local.insert(junc.target_fk.clone(), "string".to_string());
+                    } else if graph.has_node_type(target_type) {
+                        local.insert(junc.target_fk.clone(), "int".to_string());
+                    }
+                    local
+                };
+                &routed
+            } else {
+                &declared
             };
+            let df =
+                match typed_dataframe(source, &chunk_keep, group_declared, &rename, &mut misparses)
+                {
+                    Ok(df) => df,
+                    Err(e) => {
+                        report.errors.push(format!("junction {}: {}", edge_type, e));
+                        continue;
+                    }
+                };
             let count = connect(
                 graph,
                 df,

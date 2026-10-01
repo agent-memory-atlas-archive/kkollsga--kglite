@@ -311,12 +311,9 @@ impl ExportManifest {
                     if !scope.contains(idx) {
                         continue;
                     }
-                    if let Some(node) = graph.graph.node_view(idx) {
+                    if let Some(ty) = graph.graph.node_type_of(idx) {
                         *label_counts
-                            .entry((
-                                node.node_type_str(&graph.interner).to_string(),
-                                label.clone(),
-                            ))
+                            .entry((graph.interner.resolve(ty).to_string(), label.clone()))
                             .or_default() += 1;
                     }
                 }

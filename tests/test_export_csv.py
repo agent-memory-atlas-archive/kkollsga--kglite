@@ -249,7 +249,7 @@ class TestExportCsvEdgeCases:
         out = os.path.join(export_dir, "out")
         result = graph.export_csv(out)
 
-        assert result["files_written"] == 1  # just blueprint.json
+        assert result["files_written"] == 2  # blueprint.json + manifest.json
         assert len(result["nodes"]) == 0
         assert len(result["connections"]) == 0
 

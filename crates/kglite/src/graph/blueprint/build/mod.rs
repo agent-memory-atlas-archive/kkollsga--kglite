@@ -22,6 +22,7 @@ mod fk;
 mod junction;
 mod manual;
 mod nodes;
+mod points;
 mod prepass;
 mod specs;
 mod table_ops;
@@ -371,9 +372,22 @@ fn finish_build(
         eprintln!("  stamp_declared_labels: {} ms", t.elapsed().as_millis());
     }
 
+    points::convert_point_columns(graph, all_specs)?;
+
     // Phase 6c: validity intervals, declared over the rows the graph finally
     // holds — after the streamed paths and the purge, before the ontology gate.
     temporal::declare_blueprint_temporal(graph, all_specs, report)?;
+    if let Some(manifest) = &blueprint.settings.manifest {
+        let path = blueprint_dir.join(manifest);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("settings.manifest: cannot read {}: {e}", path.display()))?;
+        let parsed = crate::graph::io::export::ExportManifest::from_json(&text)
+            .map_err(|e| format!("settings.manifest: {e}"))?;
+        let warnings = parsed
+            .apply_declarations(graph)
+            .map_err(|e| format!("settings.manifest: {e}"))?;
+        report.warnings.extend(warnings);
+    }
 
     // Phase 7: ontology install + gate. Runs after every load phase and
     // before the caller can save, so an `enforcement: error` violation

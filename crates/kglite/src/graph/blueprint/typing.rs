@@ -86,7 +86,7 @@ pub fn append_typed_columns(
 /// spatial / temporal virtual types handled elsewhere.
 pub fn map_blueprint_type(ty: &str) -> Option<ColumnType> {
     match ty {
-        "string" | "str" | "text" => Some(ColumnType::String),
+        "string" | "str" | "text" | "point" => Some(ColumnType::String),
         "timestamp" => Some(ColumnType::Timestamp),
         "map" => Some(ColumnType::Map),
         "int" | "integer" => Some(ColumnType::Int64),
@@ -533,6 +533,7 @@ mod typing_tests {
             ("list", ColumnType::List),
             ("array", ColumnType::List),
             ("text", ColumnType::String),
+            ("point", ColumnType::String),
             ("timestamp", ColumnType::Timestamp),
             ("map", ColumnType::Map),
         ] {

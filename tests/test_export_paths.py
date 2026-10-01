@@ -73,7 +73,7 @@ def test_case_distinct_types_and_parent_folders_roundtrip(tmp_path):
         assert not path.is_absolute() and all(part not in {".", ".."} for part in path.parts)
         assert (output / path).is_file()
         assert (output / path).resolve().is_relative_to(output.resolve())
-    assert summary["files_written"] == 8
+    assert summary["files_written"] == 9  # 7 CSVs + blueprint.json + manifest.json
     loaded = from_blueprint(output / "blueprint.json", save=False)
     assert set(loaded.node_types) == set(types)
     assert loaded.cypher(node_query).to_list() == expected_nodes

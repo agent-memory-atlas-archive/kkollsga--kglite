@@ -1256,6 +1256,7 @@ mod accepted_key_tests {
                 ("output_file", json!("g.kgl")),
                 ("output", json!("g.kgl")),
                 ("auto_purge", json!(false)),
+                ("manifest", json!("manifest.json")),
             ],
             "node" => vec![
                 ("csv", json!("p.csv")),
