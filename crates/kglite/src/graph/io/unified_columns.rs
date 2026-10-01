@@ -232,9 +232,10 @@ fn plan_type<'s>(type_name: &str, store: &'s ColumnStore) -> Option<PlannedType<
     if let Some(ms) = store.pure_mmap_store() {
         return Some(plan_mmap_store(type_name, ms));
     }
-    // The base's regions followed by the tail's, in one file.
-    if let Some((ms, tail)) = store.base_and_tail() {
-        return tail_plan::plan_base_and_tail(type_name, ms, tail);
+    // The base's regions with the `SET` cells written over them, then the
+    // tail's, in one file.
+    if let Some(parts) = store.region_parts() {
+        return tail_plan::plan_regions(type_name, parts);
     }
     if store_needs_sidecar(store) {
         return None;

@@ -1,10 +1,13 @@
-//! Plan a type's column file from an mmap base plus a tail store: each region
-//! is the base's bytes followed by the tail's, so a save writes the base
-//! straight from its mapping and only the tail's rows are built.
+//! Plan a type's column file from an mmap base, the `SET` values layered over
+//! it and a tail store: each region is the base's bytes with the overlay's cells
+//! written over them, followed by the tail's, so a save writes every column the
+//! `SET` statements did not touch straight from its mapping and builds only the
+//! touched columns and the tail's rows.
 //!
-//! Precondition (`ColumnStore::base_and_tail`): the base is nothing but its
-//! mapping, and every column the tail carries has the base's kind for that
-//! key. A column one part lacks is written as nulls for that part's rows.
+//! Precondition (`ColumnStore::region_parts`): the base part is nothing but its
+//! mapping and same-kind overlay columns, and every column the tail carries has
+//! the base's kind for that key. A column one part lacks is written as nulls for
+//! that part's rows.
 
 use std::borrow::Cow;
 
@@ -13,6 +16,7 @@ use crate::graph::io::ntriples::{
     ColMapEntry, ColumnTypeMeta, FixedColMeta, RegionMeta, StrColMeta,
 };
 use crate::graph::schema::InternedKey;
+use crate::graph::storage::column_store::RegionParts;
 use crate::graph::storage::column_store::{ColumnStore, TypedColumn};
 use crate::graph::storage::mapped::column_store::{ColRef, MmapColumnStore, Region};
 use crate::graph::storage::type_build_meta::ColType;
@@ -83,8 +87,12 @@ struct StrParts<'a> {
     nulls: Vec<Part<'a>>,
 }
 
-/// A base string column's `(data, offsets, nulls)` regions, each possibly absent.
-type BaseStr<'a> = (Option<&'a [u8]>, Option<&'a [u8]>, Option<&'a [u8]>);
+/// A base string column's `(data, offsets, nulls)`, each possibly absent.
+type BaseStr<'a> = (
+    Option<Cow<'a, [u8]>>,
+    Option<Cow<'a, [u8]>>,
+    Option<Cow<'a, [u8]>>,
+);
 /// The tail's string column packed as `(data, offsets, nulls)` bytes.
 type TailStr<'a> = (Cow<'a, [u8]>, Cow<'a, [u8]>, Cow<'a, [u8]>);
 
@@ -95,7 +103,7 @@ fn str_parts<'a>(
     tail_rows: usize,
 ) -> Option<StrParts<'a>> {
     let (base_data, base_offsets, base_nulls) = base.unwrap_or((None, None, None));
-    let base_data_len = base_data.map_or(0, <[u8]>::len);
+    let base_data_len = base_data.as_ref().map_or(0, |bytes| bytes.len());
     // An absent offsets region stands for `base_rows` zero ends, which only
     // describes a base with no string bytes.
     if base_offsets.is_none() && base_data_len != 0 {
@@ -104,10 +112,10 @@ fn str_parts<'a>(
     let mut data = Vec::new();
     let mut offsets = Vec::new();
     if let Some(bytes) = base_data {
-        data.push(Part::Bytes(Cow::Borrowed(bytes)));
+        data.push(Part::Bytes(bytes));
     }
-    offsets.extend(sized(base_offsets.map(Cow::Borrowed), base_rows * 8, 0));
-    let mut nulls = null_parts(base_nulls.map(Cow::Borrowed), base_rows);
+    offsets.extend(sized(base_offsets, base_rows * 8, 0));
+    let mut nulls = null_parts(base_nulls, base_rows);
 
     let (tail_data, tail_offsets, tail_nulls) = match tail {
         Some((d, o, n)) => (Some(d), Some(o), Some(n)),
@@ -153,21 +161,25 @@ struct Identity {
     title_nulls: RegionMeta,
 }
 
-pub(super) fn plan_base_and_tail<'a>(
-    type_name: &str,
-    ms: &'a MmapColumnStore,
-    tail: &'a ColumnStore,
-) -> Option<PlannedType<'a>> {
+pub(super) fn plan_regions<'a>(type_name: &str, parts: RegionParts<'a>) -> Option<PlannedType<'a>> {
+    let RegionParts {
+        base: ms,
+        overlay,
+        tail,
+    } = parts;
     let base_rows = ms.row_count as usize;
-    let tail_rows = tail.row_count() as usize;
+    let tail_rows = tail.map_or(0, |tail| tail.row_count() as usize);
     let mut planner = RegionPlanner::default();
     let identity = plan_identity(&mut planner, ms, tail, base_rows, tail_rows)?;
 
-    // Every key either part holds, in key order.
+    // Every key any part holds, in key order.
     let mut keys: Vec<InternedKey> = ms.col_map.keys().copied().collect();
-    for (slot, key) in tail.schema().iter() {
-        if tail.column(slot as usize).is_some() && !ms.col_map.contains_key(&key) {
-            keys.push(key);
+    let mut known: std::collections::HashSet<InternedKey> = keys.iter().copied().collect();
+    for store in [Some(overlay), tail].into_iter().flatten() {
+        for (slot, key) in store.schema().iter() {
+            if store.column(slot as usize).is_some() && known.insert(key) {
+                keys.push(key);
+            }
         }
     }
     keys.sort_by_key(|key| key.as_u64());
@@ -175,12 +187,20 @@ pub(super) fn plan_base_and_tail<'a>(
     let mut fixed_cols = Vec::new();
     let mut str_cols = Vec::new();
     for key in keys {
-        let tail_column = tail.column_for_plan(key, ms.column_kind(key));
         let base_ref = ms.col_map.get(&key).copied();
-        let is_string = match base_ref {
-            Some(ColRef::Str(_)) => true,
-            Some(ColRef::Fixed(_)) => false,
-            None => matches!(tail_column, Some(TypedColumn::Str { .. })),
+        // What the base part's column of this key holds over its own rows.
+        let overlay_column = overlay.column_for_plan(key, ms.column_kind(key));
+        let kind = ms
+            .column_kind(key)
+            .or_else(|| overlay_column.map(TypedColumn::type_tag));
+        let tail_column = tail.and_then(|tail| tail.column_for_plan(key, kind));
+        let is_string = match (base_ref, overlay_column, tail_column) {
+            (Some(ColRef::Str(_)), ..) => true,
+            (Some(ColRef::Fixed(_)), ..) => false,
+            (None, Some(column), _) | (None, None, Some(column)) => {
+                matches!(column, TypedColumn::Str { .. })
+            }
+            (None, None, None) => false,
         };
         if is_string {
             let base = match base_ref {
@@ -193,6 +213,16 @@ pub(super) fn plan_base_and_tail<'a>(
                     ))
                 }
                 _ => None,
+            };
+            let base = match overlay_column {
+                Some(column) => Some(merged_str(base, column, base_rows)),
+                None => base.map(|(d, o, n)| {
+                    (
+                        d.map(Cow::Borrowed),
+                        o.map(Cow::Borrowed),
+                        n.map(Cow::Borrowed),
+                    )
+                }),
             };
             let tail_packed = match tail_column {
                 Some(TypedColumn::Str {
@@ -216,8 +246,8 @@ pub(super) fn plan_base_and_tail<'a>(
             });
         } else {
             let tail_parts = tail_column.and_then(fixed_width_parts);
-            let (tag, width, base_data, base_nulls) = match base_ref {
-                Some(ColRef::Fixed(i)) => {
+            let (tag, width, base_data, base_nulls) = match (base_ref, overlay_column) {
+                (Some(ColRef::Fixed(i)), _) => {
                     let column = &ms.fixed_cols[i];
                     (
                         column.col_type.type_tag(),
@@ -226,17 +256,24 @@ pub(super) fn plan_base_and_tail<'a>(
                         base_bytes(ms, &column.nulls),
                     )
                 }
+                (_, Some(column)) => {
+                    let (tag, ..) = fixed_width_parts(column)?;
+                    (tag, tag_width(tag)?, None, None)
+                }
                 _ => {
                     let (tag, ..) = tail_parts?;
                     (tag, tag_width(tag)?, None, None)
                 }
             };
-            let (mut data, mut nulls) = fixed_part(
-                base_data.map(Cow::Borrowed),
-                base_nulls.map(Cow::Borrowed),
-                base_rows,
-                width,
-            );
+            let (base_data, base_nulls) = match overlay_column {
+                Some(column) => {
+                    let (data, nulls) =
+                        merged_fixed(base_data, base_nulls, column, base_rows, width)?;
+                    (Some(Cow::Owned(data)), Some(Cow::Owned(nulls)))
+                }
+                None => (base_data.map(Cow::Borrowed), base_nulls.map(Cow::Borrowed)),
+            };
+            let (mut data, mut nulls) = fixed_part(base_data, base_nulls, base_rows, width);
             let (tail_data, tail_nulls) = fixed_part(
                 tail_parts.map(|(_, bytes, _)| Cow::Borrowed(bytes)),
                 tail_parts.map(|(_, _, bytes)| Cow::Borrowed(bytes)),
@@ -279,16 +316,93 @@ pub(super) fn plan_base_and_tail<'a>(
     Some(planner.finish(type_name, meta))
 }
 
+/// A fixed-width base column with every cell the overlay holds written over
+/// it: `(data, nulls)` for `rows` rows. A cell is the overlay's where the
+/// overlay column is non-null there, the base's otherwise; a column the base
+/// lacks starts all null.
+fn merged_fixed(
+    base_data: Option<&[u8]>,
+    base_nulls: Option<&[u8]>,
+    overlay: &TypedColumn,
+    rows: usize,
+    width: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (_, overlay_data, overlay_nulls) = fixed_width_parts(overlay)?;
+    let mut data = vec![0u8; rows * width];
+    if let Some(bytes) = base_data {
+        let len = bytes.len().min(data.len());
+        data[..len].copy_from_slice(&bytes[..len]);
+    }
+    let mut nulls = vec![1u8; rows];
+    if let Some(bytes) = base_nulls {
+        let len = bytes.len().min(rows);
+        nulls[..len].copy_from_slice(&bytes[..len]);
+    }
+    for (row, flag) in overlay_nulls.iter().enumerate().take(rows) {
+        let at = row * width;
+        if *flag == 0 && overlay_data.len() >= at + width {
+            data[at..at + width].copy_from_slice(&overlay_data[at..at + width]);
+            nulls[row] = 0;
+        }
+    }
+    Some((data, nulls))
+}
+
+/// A string base column with every cell the overlay holds written over it:
+/// `(data, offsets, nulls)` in the file's end-offset form for `rows` rows. The
+/// whole column is rebuilt (an overlaid string may differ in length from the
+/// one it replaces), which costs that column's bytes and nothing else.
+fn merged_str<'a>(
+    base: Option<(Option<&'a [u8]>, Option<&'a [u8]>, Option<&'a [u8]>)>,
+    overlay: &TypedColumn,
+    rows: usize,
+) -> BaseStr<'a> {
+    let (base_data, base_offsets, base_nulls) = base.unwrap_or((None, None, None));
+    let end_of = |row: usize| -> Option<usize> {
+        let bytes = base_offsets?.get(row * 8..row * 8 + 8)?;
+        Some(u64::from_le_bytes(bytes.try_into().ok()?) as usize)
+    };
+    let base_value = |row: usize| -> Option<&'a [u8]> {
+        if base_nulls?.get(row).copied() != Some(0) {
+            return None;
+        }
+        let start = if row == 0 { 0 } else { end_of(row - 1)? };
+        base_data?.get(start..end_of(row)?)
+    };
+    let mut data: Vec<u8> = Vec::new();
+    let mut offsets: Vec<u8> = Vec::with_capacity(rows * 8);
+    let mut nulls = vec![1u8; rows];
+    for row in 0..rows {
+        let value = if overlay.is_present(row as u32) {
+            overlay.get_str(row as u32).map(str::as_bytes)
+        } else {
+            base_value(row)
+        };
+        if let Some(bytes) = value {
+            data.extend_from_slice(bytes);
+            nulls[row] = 0;
+        }
+        offsets.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    }
+    (
+        Some(Cow::Owned(data)),
+        Some(Cow::Owned(offsets)),
+        Some(Cow::Owned(nulls)),
+    )
+}
+
 /// Regions of the id and title columns: the base's bytes, then the tail's.
 /// The tail has an identity column only where the base has one of the same
-/// kind (`ColumnStore::tail_is_region_compatible`).
+/// kind (`ColumnStore::region_parts`).
 fn plan_identity<'a>(
     planner: &mut RegionPlanner<'a>,
     ms: &'a MmapColumnStore,
-    tail: &'a ColumnStore,
+    tail: Option<&'a ColumnStore>,
     base_rows: usize,
     tail_rows: usize,
 ) -> Option<Identity> {
+    let tail_id = tail.and_then(ColumnStore::id_column_ref);
+    let tail_title = tail.and_then(ColumnStore::title_column_ref);
     let absent = RegionPlanner::absent;
     let mut identity = Identity {
         id_is_string: ms.id_is_string,
@@ -303,7 +417,7 @@ fn plan_identity<'a>(
     if ms.has_id_column() {
         if ms.id_is_string {
             let column = ms.id_str.as_ref()?;
-            let tail_packed = match tail.id_column_ref() {
+            let tail_packed = match tail_id {
                 Some(TypedColumn::Str {
                     offsets,
                     data,
@@ -314,9 +428,9 @@ fn plan_identity<'a>(
             };
             let parts = str_parts(
                 Some((
-                    base_bytes(ms, &column.data),
-                    base_bytes(ms, &column.offsets),
-                    base_bytes(ms, &column.nulls),
+                    base_bytes(ms, &column.data).map(Cow::Borrowed),
+                    base_bytes(ms, &column.offsets).map(Cow::Borrowed),
+                    base_bytes(ms, &column.nulls).map(Cow::Borrowed),
                 )),
                 tail_packed,
                 base_rows,
@@ -328,7 +442,7 @@ fn plan_identity<'a>(
         } else {
             let column = ms.id_fixed.as_ref()?;
             let width = width_of(column.col_type);
-            let tail_parts = tail.id_column_ref().and_then(fixed_width_parts);
+            let tail_parts = tail_id.and_then(fixed_width_parts);
             let (mut data, mut nulls) = fixed_part(
                 base_bytes(ms, &column.data).map(Cow::Borrowed),
                 base_bytes(ms, &column.nulls).map(Cow::Borrowed),
@@ -349,7 +463,7 @@ fn plan_identity<'a>(
     }
     if ms.has_title_column() {
         if ms.title_is_int() {
-            let tail_parts = tail.title_column_ref().and_then(fixed_width_parts);
+            let tail_parts = tail_title.and_then(fixed_width_parts);
             let (mut data, mut nulls) = fixed_part(
                 base_bytes(ms, &ms.title.data).map(Cow::Borrowed),
                 base_bytes(ms, &ms.title.nulls).map(Cow::Borrowed),
@@ -367,7 +481,7 @@ fn plan_identity<'a>(
             identity.title_data = planner.push_parts(data);
             identity.title_nulls = planner.push_parts(nulls);
         } else {
-            let tail_packed = match tail.title_column_ref() {
+            let tail_packed = match tail_title {
                 Some(TypedColumn::Str {
                     offsets,
                     data,
@@ -378,9 +492,9 @@ fn plan_identity<'a>(
             };
             let parts = str_parts(
                 Some((
-                    base_bytes(ms, &ms.title.data),
-                    base_bytes(ms, &ms.title.offsets),
-                    base_bytes(ms, &ms.title.nulls),
+                    base_bytes(ms, &ms.title.data).map(Cow::Borrowed),
+                    base_bytes(ms, &ms.title.offsets).map(Cow::Borrowed),
+                    base_bytes(ms, &ms.title.nulls).map(Cow::Borrowed),
                 )),
                 tail_packed,
                 base_rows,

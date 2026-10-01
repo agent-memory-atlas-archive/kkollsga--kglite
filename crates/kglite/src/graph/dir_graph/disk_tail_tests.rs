@@ -326,3 +326,134 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
         .count() as i64;
     assert_eq!(rows, vec![vec![Value::Int64(open)]]);
 }
+
+/// Closing a register's rows is a `SET` of a timestamp column over a mapped
+/// type, and a save after it must not bring the whole type onto the heap: the
+/// untouched columns are written from their mapping, the touched ones with the
+/// `SET` cells laid over them.
+#[test]
+fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
+    use chrono::NaiveDate;
+    let stamp = |i: i64| {
+        Value::Timestamp(
+            NaiveDate::from_ymd_opt(2001, 1, 1)
+                .unwrap()
+                .and_hms_micro_opt(1, 2, 3, (i % 1000) as u32)
+                .unwrap()
+                + chrono::Duration::days(i % 4000),
+        )
+    };
+    let rows = (0..20_000i64)
+        .map(|i| {
+            vec![
+                Value::Int64(3_200_000_000_000 + i),
+                Value::Int64(3_100_000_000_000 + i / 3),
+                stamp(i),
+                if i % 3 == 0 {
+                    stamp(i + 5000)
+                } else {
+                    Value::Null
+                },
+                Value::String(["in_use", "demolished"][(i % 2) as usize].into()),
+                Value::Int64(1900 + i % 100),
+            ]
+        })
+        .collect();
+    let frame = DataFrame::from_cypher_rows(
+        vec![
+            "id".into(),
+            "ident".into(),
+            "valid_from".into(),
+            "valid_to".into(),
+            "status".into(),
+            "bouwjaar".into(),
+        ],
+        rows,
+    )
+    .unwrap();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("register");
+    let path = path.to_str().unwrap();
+    let mut graph = DirGraph::new();
+    graph.enable_disk_mode().unwrap();
+    maintain::add_nodes(
+        &mut graph,
+        frame,
+        "Pand".into(),
+        "id".into(),
+        Some("ident".into()),
+        None,
+    )
+    .unwrap();
+    graph.save_disk(path).unwrap();
+    drop(graph);
+    let mut graph = match Arc::try_unwrap(load_file(path).unwrap()) {
+        Ok(graph) => graph,
+        Err(_) => panic!("fresh load unexpectedly shared"),
+    };
+
+    // Close the open versions built in 1951, and mark those built in 1950 as
+    // something else: a timestamp column and a string column, both overlaid.
+    run(
+        &mut graph,
+        "MATCH (p:Pand) WHERE p.bouwjaar = 1951 AND p.valid_to IS NULL \
+         SET p.valid_to = datetime('2031-01-01T00:00:00.000001')",
+    )
+    .unwrap();
+    run(
+        &mut graph,
+        "MATCH (p:Pand) WHERE p.bouwjaar = 1950 SET p.status = 'under_construction_and_permitted'",
+    )
+    .unwrap();
+    assert_eq!(
+        graph.column_store("Pand").unwrap().tail_rows(),
+        0,
+        "no row was appended: this is the overlay alone"
+    );
+
+    let flattened = flattens();
+    graph.save_disk(path).unwrap();
+    assert_eq!(
+        flattens(),
+        flattened,
+        "a SET-changed register-shaped type was flattened onto the heap by the save"
+    );
+    drop(graph);
+    let mut graph = match Arc::try_unwrap(load_file(path).unwrap()) {
+        Ok(graph) => graph,
+        Err(_) => panic!("fresh load unexpectedly shared"),
+    };
+    let open = (0..20_000i64)
+        .filter(|i| i % 3 != 0 && i % 100 != 51)
+        .count() as i64;
+    assert_eq!(
+        run(
+            &mut graph,
+            "MATCH (p:Pand) WHERE p.valid_to IS NULL RETURN count(p) AS c"
+        )
+        .unwrap(),
+        vec![vec![Value::Int64(open)]]
+    );
+    let renamed = (0..20_000i64).filter(|i| i % 100 == 50).count() as i64;
+    assert_eq!(
+        run(
+            &mut graph,
+            "MATCH (p:Pand) WHERE p.status = 'under_construction_and_permitted' RETURN count(p) AS c"
+        )
+        .unwrap(),
+        vec![vec![Value::Int64(renamed)]]
+    );
+    // Cells the statements did not touch are as they were.
+    assert_eq!(
+        run(
+            &mut graph,
+            "MATCH (p:Pand) WHERE p.bouwjaar = 1952 AND p.status = 'in_use' RETURN count(p) AS c"
+        )
+        .unwrap(),
+        vec![vec![Value::Int64(
+            (0..20_000i64)
+                .filter(|i| i % 100 == 52 && i % 2 == 0)
+                .count() as i64
+        )]]
+    );
+}

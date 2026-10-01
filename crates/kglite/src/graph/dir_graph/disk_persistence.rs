@@ -720,11 +720,12 @@ impl DirGraph {
                 let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
                 // A store that is nothing but an mmap base re-emits its regions
                 // directly (`write_unified_columns`), so it is not flattened;
-                // neither is one that is that base plus a tail of the same
-                // column kinds, whose regions follow the base's.
+                // neither is one that is that base with `SET` values over it
+                // and a tail, all of the same column kinds, whose regions are
+                // the base's with the overlay written over them.
                 let flatten = (store.has_mmap_base()
                     && store.pure_mmap_store().is_none()
-                    && store.base_and_tail().is_none())
+                    && store.region_parts().is_none())
                     || store.has_retypable_mixed_column(meta);
                 let store = if flatten {
                     Arc::new(store.flattened_owned(meta, &self.interner))

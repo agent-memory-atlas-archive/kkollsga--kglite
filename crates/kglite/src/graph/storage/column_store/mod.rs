@@ -18,6 +18,7 @@ mod overlay;
 mod packed_write;
 mod property_layout;
 mod tail;
+pub(crate) use tail::RegionParts;
 #[cfg(test)]
 mod tail_tests;
 mod timestamp_cells;

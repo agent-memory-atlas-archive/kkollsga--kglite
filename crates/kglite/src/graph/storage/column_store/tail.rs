@@ -107,57 +107,72 @@ impl ColumnStore {
             .find_map(|(s, key)| (s == slot).then_some(key))
     }
 
-    /// Whether a save can write the base regions and the tail regions of this
-    /// store into one column file without decoding either onto the heap.
-    ///
-    /// The base part must be nothing but its mapping (no overlay, clears,
-    /// tombstones or overflow bag) and each column the tail carries must be
-    /// the same fixed-width or string kind as the base's column of that key;
-    /// identity columns likewise. Anything else is flattened, which reads
-    /// through the routed per-row accessors and so sees the union.
-    pub(crate) fn tail_is_region_compatible(&self) -> bool {
-        let (Some(ms), Some(tail)) = (self.mmap_store.as_ref(), self.tail.as_ref()) else {
-            return false;
-        };
-        let base_untouched = self.columns.is_empty()
-            && self.id_column.is_none()
+    /// Whether the base part of this store is its mapping plus columns of
+    /// `SET` values: no id or title overlay, explicit clears, tombstones or
+    /// overflow bag, and every overlay column the same fixed-width or string
+    /// kind as the base's column of that key (a key the base lacks is a new
+    /// column).
+    fn base_part_is_region_compatible(
+        &self,
+        ms: &crate::graph::storage::mapped::column_store::MmapColumnStore,
+    ) -> bool {
+        self.id_column.is_none()
             && self.title_column.is_none()
             && self.null_overrides.is_none()
             && self.overflow_offsets.is_none()
             && !self.tombstones.iter().any(|t| *t)
             && self.row_count == ms.row_count()
-            && !ms.has_overflow;
-        if !base_untouched || tail.mmap_store.is_some() || tail.has_overflow() {
-            return false;
-        }
-        let kind_matches = |tail_column: &TypedColumn, base: Option<&'static str>| {
-            !matches!(tail_column, TypedColumn::Mixed { .. })
-                && base.is_none_or(|base| base == tail_column.type_tag())
+            && !ms.has_overflow
+            && self.columns_match_base_kinds(ms)
+    }
+
+    /// Whether each column of this store (overlay or tail) is a kind the
+    /// base's column of the same key can share a file region with.
+    fn columns_match_base_kinds(
+        &self,
+        ms: &crate::graph::storage::mapped::column_store::MmapColumnStore,
+    ) -> bool {
+        let kind_matches = |column: &TypedColumn, base: Option<&'static str>| {
+            !matches!(column, TypedColumn::Mixed { .. })
+                && base.is_none_or(|base| base == column.type_tag())
         };
-        for (slot, key) in tail.schema.iter() {
-            let Some(column) = tail.columns.get(slot as usize) else {
+        for (slot, key) in self.schema.iter() {
+            let Some(column) = self.columns.get(slot as usize) else {
                 continue;
             };
-            // A tail column with no value takes the base's kind whatever its
+            // A column with no value takes the base's kind whatever its
             // declared one was (`Self::column_for_plan`).
             let base = ms.column_kind(key);
             if !kind_matches(column, base)
-                && !(base.is_some() && tail.column_holds_no_value(column))
+                && !(base.is_some() && self.column_holds_no_value(column))
             {
                 return false;
             }
         }
-        if let Some(column) = tail.id_column.as_deref() {
-            if !ms.has_id_column() || !kind_matches(column, Some(ms.id_kind())) {
-                return false;
-            }
-        }
-        if let Some(column) = tail.title_column.as_deref() {
-            if !ms.has_title_column() || !kind_matches(column, Some(ms.title_kind())) {
-                return false;
-            }
-        }
         true
+    }
+
+    /// Whether the tail can be written beside the base part: a store of its own
+    /// whose columns, and identity columns where it has any, are the base's kinds.
+    fn tail_is_region_compatible(
+        &self,
+        ms: &crate::graph::storage::mapped::column_store::MmapColumnStore,
+        tail: &ColumnStore,
+    ) -> bool {
+        if tail.mmap_store.is_some() || tail.has_overflow() || !tail.columns_match_base_kinds(ms) {
+            return false;
+        }
+        let identity_matches = |column: Option<&TypedColumn>, has: bool, kind: &'static str| {
+            column.is_none_or(|column| {
+                has && !matches!(column, TypedColumn::Mixed { .. }) && column.type_tag() == kind
+            })
+        };
+        identity_matches(tail.id_column.as_deref(), ms.has_id_column(), ms.id_kind())
+            && identity_matches(
+                tail.title_column.as_deref(),
+                ms.has_title_column(),
+                ms.title_kind(),
+            )
     }
 
     /// Whether every cell of `column` (one of this store's) is null.
@@ -178,16 +193,36 @@ impl ColumnStore {
         (!(other_kind && self.column_holds_no_value(column))).then_some(&**column)
     }
 
-    /// The base mapping and the tail, when [`Self::tail_is_region_compatible`].
-    pub(crate) fn base_and_tail(
-        &self,
-    ) -> Option<(
-        &Arc<crate::graph::storage::mapped::column_store::MmapColumnStore>,
-        &ColumnStore,
-    )> {
-        if !self.tail_is_region_compatible() || !self.has_tail_rows() {
+    /// What a save writes this store's column file from, when it can do so
+    /// without flattening the store onto the heap: the base mapping, the
+    /// overlay columns of `SET` values over it, and the tail (see
+    /// [`RegionParts`]). `None` for a pure mapping (which a save re-emits
+    /// verbatim), for a store without a base, and for anything
+    /// the regions cannot hold: which is then flattened, reading through the
+    /// routed per-row accessors, and so seeing the union.
+    pub(crate) fn region_parts(&self) -> Option<RegionParts<'_>> {
+        let base = self.mmap_store.as_ref()?;
+        let tail = self.tail.as_deref().filter(|tail| tail.row_count() > 0);
+        if (self.columns.is_empty() && tail.is_none()) || !self.base_part_is_region_compatible(base)
+        {
             return None;
         }
-        Some((self.mmap_store.as_ref()?, self.tail.as_deref()?))
+        if tail.is_some_and(|tail| !self.tail_is_region_compatible(base, tail)) {
+            return None;
+        }
+        Some(RegionParts {
+            base,
+            overlay: self,
+            tail,
+        })
     }
+}
+
+/// The pieces of one mmap-backed store a save lays out as a single column file.
+pub(crate) struct RegionParts<'a> {
+    pub(crate) base: &'a Arc<crate::graph::storage::mapped::column_store::MmapColumnStore>,
+    /// The store itself: its `columns` hold `SET` values over the base rows, a
+    /// cell being the value only where the column is non-null there.
+    pub(crate) overlay: &'a ColumnStore,
+    pub(crate) tail: Option<&'a ColumnStore>,
 }

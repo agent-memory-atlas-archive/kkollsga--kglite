@@ -118,6 +118,7 @@ fn assert_same_rows(actual: &ColumnStore, expected: &ColumnStore) {
         key("hired"),
         key("bonus"),
         key("remote"),
+        key("nickname"),
         key("absent"),
     ];
     for row in 0..expected.row_count() {
@@ -224,7 +225,9 @@ fn assert_same_identity_kinds(actual: &ColumnStore, expected: &ColumnStore) {
 /// An interner that knows every property the fixture uses.
 fn interner() -> StringInterner {
     let mut interner = StringInterner::new();
-    for name in ["dept", "level", "hired", "bonus", "remote", "absent"] {
+    for name in [
+        "dept", "level", "hired", "bonus", "remote", "nickname", "absent",
+    ] {
         interner.get_or_intern(name);
     }
     interner
@@ -359,7 +362,7 @@ fn a_save_writes_the_base_and_tail_regions_into_one_file() {
     let mut fixture = mapped_store(0..BASE);
     appended(&mut fixture.store);
     assert!(
-        fixture.store.base_and_tail().is_some(),
+        fixture.store.region_parts().is_some(),
         "same-kind columns: the regions concatenate"
     );
     let reloaded = saved_and_reloaded(&fixture.store);
@@ -392,7 +395,7 @@ fn a_column_one_part_lacks_is_written_as_nulls_for_that_part() {
     expected.push_title(&title);
     expected.push_row(&properties);
 
-    assert!(store.base_and_tail().is_some());
+    assert!(store.region_parts().is_some());
     let reloaded = saved_and_reloaded(store);
     assert_same_rows(&reloaded.store, &expected);
     assert_eq!(
@@ -417,7 +420,7 @@ fn a_tail_column_of_another_kind_than_the_base_is_flattened_not_concatenated() {
     store.push_title(&title);
     store.push_row(&[(key("level"), Value::Float64(2.5))]);
     assert!(
-        store.base_and_tail().is_none(),
+        store.region_parts().is_none(),
         "mixed kinds take the flatten path, which reads through the routed accessors"
     );
     let flat = store.flattened_owned(&HashMap::new(), &interner());
@@ -445,7 +448,7 @@ fn a_tail_column_with_no_value_takes_the_base_kind_whatever_it_was_declared() {
     store.push_id(&id);
     store.push_title(&title);
     store.push_row(&[(key("dept"), Value::String("Sales".to_string()))]);
-    assert!(store.base_and_tail().is_some());
+    assert!(store.region_parts().is_some());
     let reloaded = saved_and_reloaded(store);
     assert_eq!(reloaded.store.get(BASE as u32, key("level")), None);
     assert_eq!(reloaded.store.get(9, key("level")), Some(Value::Int64(2)));
@@ -455,17 +458,158 @@ fn a_tail_column_with_no_value_takes_the_base_kind_whatever_it_was_declared() {
     );
 }
 
+/// `SET` cells of every shape a save can lay over a base column: an integer, a
+/// timestamp, strings longer and shorter than the ones they replace, a float on
+/// a row that had none, and two columns the base never had.
+fn overlay_changes(store: &mut ColumnStore) {
+    let mut set = |row: u32, name: &str, value: Value| {
+        assert!(store.set(row, key(name), &value, None), "{name} at {row}");
+    };
+    set(3, "level", Value::Int64(40));
+    set(5, "hired", hired(5000));
+    set(7, "dept", Value::String("Engineering Platform".to_string()));
+    set(8, "dept", Value::String("HR".to_string()));
+    set(10, "bonus", Value::Float64(99.5));
+    set(10, "remote", Value::Boolean(true));
+    set(11, "nickname", Value::String("Ace".to_string()));
+}
+
 #[test]
-fn an_overlaid_base_is_flattened_with_the_tail_rows() {
+fn a_set_over_a_mapped_base_is_written_from_regions_and_reloads_as_the_heap_store_does() {
+    let mut fixture = mapped_store(0..BASE);
+    overlay_changes(&mut fixture.store);
+    let mut expected = heap_store(0..BASE);
+    overlay_changes(&mut expected);
+
+    assert!(fixture.store.pure_mmap_store().is_none());
+    assert!(
+        fixture.store.region_parts().is_some(),
+        "same-kind overlay columns are laid over the base regions"
+    );
+    let reloaded = saved_and_reloaded(&fixture.store);
+    assert!(reloaded.store.pure_mmap_store().is_some());
+    assert_same_rows(&reloaded.store, &expected);
+    assert_eq!(
+        reloaded.store.get(7, key("dept")),
+        Some(Value::String("Engineering Platform".to_string()))
+    );
+    assert_eq!(
+        reloaded.store.get(8, key("dept")),
+        Some(Value::String("HR".to_string()))
+    );
+    assert_eq!(
+        reloaded.store.get(9, key("dept")),
+        Some(Value::String("Engineering".to_string())),
+        "a string the overlay left alone is the base's"
+    );
+
+    // A second cycle: change the reloaded store again and save again.
+    let mut again = reloaded;
+    assert!(again.store.set(3, key("level"), &Value::Int64(41), None));
+    assert!(again
+        .store
+        .set(3, key("nickname"), &Value::String("Zed".to_string()), None));
+    let mut expected_again = expected;
+    assert!(expected_again.set(3, key("level"), &Value::Int64(41), None));
+    assert!(expected_again.set(3, key("nickname"), &Value::String("Zed".to_string()), None));
+    let twice = saved_and_reloaded(&again.store);
+    assert_same_rows(&twice.store, &expected_again);
+}
+
+#[test]
+fn a_set_base_with_a_tail_is_written_from_regions_in_one_file() {
     let mut fixture = mapped_store(0..BASE);
     let store = &mut fixture.store;
+    overlay_changes(store);
     appended(store);
-    assert!(store.set(3, key("level"), &Value::Int64(40), None));
-    assert!(store.base_and_tail().is_none(), "the base has an overlay");
-    let flat = store.flattened_owned(&HashMap::new(), &interner());
+    // A SET on an appended row lands in the tail, not the overlay.
+    assert!(store.set(BASE as u32 + 2, key("level"), &Value::Int64(17), None));
     let mut expected = heap_store(0..BASE + APPENDED);
-    assert!(expected.set(3, key("level"), &Value::Int64(40), None));
-    assert_same_rows(&flat, &expected);
+    overlay_changes(&mut expected);
+    assert!(expected.set(BASE as u32 + 2, key("level"), &Value::Int64(17), None));
+
+    assert!(store
+        .region_parts()
+        .is_some_and(|parts| parts.tail.is_some()));
+    let reloaded = saved_and_reloaded(store);
+    assert_same_rows(&reloaded.store, &expected);
+}
+
+#[test]
+fn a_store_the_regions_cannot_hold_is_flattened_and_still_right() {
+    let cases: [(&str, fn(&mut ColumnStore)); 4] = [
+        ("a null written over a base cell", |store| {
+            assert!(store.set(3, key("level"), &Value::Null, None));
+        }),
+        ("a replaced title beside an overlaid column", |store| {
+            assert!(store.set(4, key("level"), &Value::Int64(9), None));
+            assert!(store.set_title(3, &Value::String("Renamed".to_string())));
+        }),
+        ("a value of another kind in an integer column", |store| {
+            assert!(store.set(3, key("level"), &Value::String("L3".to_string()), None));
+        }),
+        (
+            "an overlay and a column of another kind in the tail",
+            |store| {
+                assert!(store.set(4, key("level"), &Value::Int64(9), None));
+                let (id, title, _) = employee(BASE);
+                store.push_id(&id);
+                store.push_title(&title);
+                store.push_row(&[(key("level"), Value::Float64(2.5))]);
+            },
+        ),
+    ];
+    for (what, change) in cases {
+        let mut fixture = mapped_store(0..BASE);
+        change(&mut fixture.store);
+        let mut expected = heap_store(0..BASE);
+        if what.contains("another kind in the tail") {
+            assert!(expected.set(4, key("level"), &Value::Int64(9), None));
+            let (id, title, _) = employee(BASE);
+            expected.push_id(&id);
+            expected.push_title(&title);
+            expected.push_row(&[(key("level"), Value::Float64(2.5))]);
+        } else {
+            change(&mut expected);
+        }
+        assert!(
+            fixture.store.region_parts().is_none(),
+            "{what} cannot be laid over the base regions"
+        );
+        let flat = fixture.store.flattened_owned(&HashMap::new(), &interner());
+        assert_same_rows(&flat, &expected);
+    }
+}
+
+/// The validity filter and the endpoint-index build read a typed timestamp
+/// column directly. Over an mmap base the overlay column holds only the cells a
+/// `SET` wrote (null elsewhere), so answering from it alone would read every
+/// other row as unbounded. No query on a disk graph reaches this read today —
+/// disk residual guards, scans and the endpoint index all bypass it — which is
+/// why the guard is pinned here, at the store.
+#[test]
+fn an_mmap_backed_store_never_answers_a_timestamp_cell_from_its_overlay_alone() {
+    let mut fixture = mapped_store(0..BASE);
+    let store = &mut fixture.store;
+    assert!(store.timestamp_cells(key("hired")).is_none(), "pure base");
+    assert!(store.set(3, key("hired"), &hired(9000), None));
+    assert!(
+        store.timestamp_cells(key("hired")).is_none(),
+        "an overlaid base is read through the routed accessors, which see the base cells"
+    );
+    assert_eq!(store.timestamp_micros(7, key("hired")), None);
+    appended(store);
+    assert!(
+        store.timestamp_cells(key("hired")).is_none(),
+        "base and tail"
+    );
+    // The routed read answers for every row.
+    assert_eq!(store.get(3, key("hired")), Some(hired(9000)));
+    assert_eq!(store.get(7, key("hired")), Some(hired(7)));
+    assert_eq!(
+        store.get(BASE as u32 + 1, key("hired")),
+        Some(hired(BASE + 1))
+    );
 }
 
 #[test]
@@ -517,7 +661,7 @@ fn a_type_change_in_the_tail_is_logged_and_restored() {
     }
     assert_same_rows(store, &expected_before);
     assert!(
-        store.base_and_tail().is_some(),
+        store.region_parts().is_some(),
         "the tail's column is typed again"
     );
 }
