@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.disk_generation import current_generation
 
 RESERVED = ["updated_at", "git_sha", "modified_by"]
 FIXTURE = Path(__file__).parent / "fixtures" / "provenance_constraints_pre_refusal.kgl"
@@ -249,8 +250,7 @@ def test_a_disk_graph_holding_a_reserved_key_constraint_loads_without_it(tmp_pat
     g.cypher("CREATE CONSTRAINT task_name FOR (n:Task) REQUIRE n.name IS NOT NULL")
     g.save(str(path))
     del g
-    current = (path / "CURRENT").read_text(encoding="utf-8").strip()
-    meta_path = path / "generations" / current / "metadata.json"
+    meta_path = current_generation(path) / "metadata.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["ddl_not_null_constraints"].append(["Task", "updated_at"])
     meta["schema_definition"]["node_schemas"]["Task"]["required_fields"].append("updated_at")

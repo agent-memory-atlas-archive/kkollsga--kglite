@@ -28,47 +28,17 @@ being pinned, and even a plain load can leave a lock record beside the file.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import shutil
 
 import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.compat_helpers import V7_HEADER, copy_fixture, expected_answers, generator_queries
 
 FIXTURES = Path(__file__).parent / "fixtures" / "kgl_v5"
+GENERATOR = FIXTURES.parent / "build_v5_compat_fixtures.py"
 V5_HEADER = b"RGF\x05\x02"
-V7_HEADER = b"RGF\x07\x02"
-
-
-def _expected(name: str) -> dict:
-    return json.loads((FIXTURES / f"{name}.expected.json").read_text(encoding="utf-8"))
-
-
-def _queries(name: str) -> dict:
-    """The queries the expectation was captured with, recovered from its keys.
-
-    Kept in the generator rather than duplicated here; this reads them back so
-    the two files cannot drift into asserting different things.
-    """
-    import ast
-
-    source = (FIXTURES.parent / "build_v5_compat_fixtures.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and node.targets[0].id == name:  # type: ignore[attr-defined]
-            return ast.literal_eval(node.value)
-    raise AssertionError(f"{name} is gone from the fixture generator")
-
-
-def _copy(source: Path, tmp_path: Path) -> Path:
-    target = tmp_path / source.name
-    if source.is_dir():
-        shutil.copytree(source, target)
-    else:
-        shutil.copy2(source, target)
-    return target
 
 
 def _assert_matches(graph, queries: dict[str, str], expected: dict, label: str) -> None:
@@ -93,14 +63,6 @@ def test_fixtures_are_v5_containers():
         "it is supposed to carry the five post-checkpoint writes that make "
         "recovery non-trivial"
     )
-
-
-def test_this_build_writes_v7(tmp_path):
-    graph = kglite.KnowledgeGraph()
-    graph.cypher("CREATE (:Item {id: 1, name: 'x'})")
-    path = tmp_path / "written.kgl"
-    graph.save(str(path))
-    assert path.read_bytes()[:5] == V7_HEADER
 
 
 # ── v6 encodings ─────────────────────────────────────────────────────────────
@@ -191,9 +153,9 @@ def test_v6_picks_the_encoding_per_column(tmp_path):
 
 
 def test_v5_file_loads_with_full_content_equality(tmp_path):
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.load(str(path))
-    _assert_matches(graph, _queries("QUERIES"), _expected("graph"), "v5 load")
+    _assert_matches(graph, generator_queries(GENERATOR, "QUERIES"), expected_answers(FIXTURES, "graph"), "v5 load")
 
 
 def test_v5_file_loads_mapped(tmp_path):
@@ -202,18 +164,20 @@ def test_v5_file_loads_mapped(tmp_path):
     Mapped mode reads column data through a memory mapping rather than the heap,
     so it exercises a different path out of the same v5 sections.
     """
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.open(str(path), storage="mapped")
     assert graph.graph_info()["storage_mode"] == "mapped", (
         "the mapped arm has to actually land on the mapped backend, or it is the memory arm with a longer name"
     )
-    _assert_matches(graph, _queries("QUERIES"), _expected("graph"), "v5 mapped load")
+    _assert_matches(
+        graph, generator_queries(GENERATOR, "QUERIES"), expected_answers(FIXTURES, "graph"), "v5 mapped load"
+    )
 
 
 def test_v5_secondary_labels_survive_the_load(tmp_path):
     """The secondary-label section is written separately from the columns, and
     a v5 file is the only way to prove this reader still finds it there."""
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.load(str(path))
     seniors = graph.cypher("MATCH (p:Senior) RETURN p.id AS id ORDER BY p.id").to_list()
     assert seniors == [{"id": 2}, {"id": 4}]
@@ -223,12 +187,17 @@ def test_v5_secondary_labels_survive_the_load(tmp_path):
 
 def test_v5_resaves_as_v7(tmp_path):
     """Loading a v5 file and saving it writes v7 — the one-way migration."""
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.load(str(path))
     out = tmp_path / "migrated.kgl"
     graph.save(str(out))
     assert out.read_bytes()[:5] == V7_HEADER
-    _assert_matches(kglite.load(str(out)), _queries("QUERIES"), _expected("graph"), "v5→v7 resave")
+    _assert_matches(
+        kglite.load(str(out)),
+        generator_queries(GENERATOR, "QUERIES"),
+        expected_answers(FIXTURES, "graph"),
+        "v5→v7 resave",
+    )
 
 
 def test_v5_durable_directory_recovers(tmp_path):
@@ -238,7 +207,7 @@ def test_v5_durable_directory_recovers(tmp_path):
     says so: checkpoint written by 0.15.14, five frames logged after it, and no
     clean close.
     """
-    directory = _copy(FIXTURES / "durable", tmp_path)
+    directory = copy_fixture(FIXTURES / "durable", tmp_path)
     graph = kglite.open(str(directory / "app.kgl"), durable=True)
     logged = graph.cypher("MATCH (e:Event {kind: 'logged'}) RETURN count(e) AS c").to_list()
     assert logged == [{"c": 5}], (
@@ -246,7 +215,9 @@ def test_v5_durable_directory_recovers(tmp_path):
         f"replay produced {logged} — a checkpoint-only load would pass every "
         "other assertion here"
     )
-    _assert_matches(graph, _queries("DURABLE_QUERIES"), _expected("durable"), "v5 recovery")
+    _assert_matches(
+        graph, generator_queries(GENERATOR, "DURABLE_QUERIES"), expected_answers(FIXTURES, "durable"), "v5 recovery"
+    )
 
 
 # ── the other direction, recorded rather than fixed ──────────────────────────

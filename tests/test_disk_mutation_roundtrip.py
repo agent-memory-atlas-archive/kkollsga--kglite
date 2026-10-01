@@ -35,6 +35,7 @@ import pytest
 
 import kglite
 from kglite import KnowledgeGraph
+from tests.fixtures.disk_generation import current_generation
 
 STORAGE_MODES = ("memory", "mapped", "disk")
 
@@ -934,12 +935,6 @@ def test_vacuum_after_delete_then_create_still_saves_and_reloads(mode, tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def _current_generation(root: Path) -> Path:
-    """The generation directory the graph's `CURRENT` pointer selects."""
-    name = (root / "CURRENT").read_text(encoding="utf-8").strip()
-    return root / "generations" / name
-
-
 def _columnar_bytes(root: str) -> int:
     """Bytes the published generation spends on columnar payload.
 
@@ -950,7 +945,7 @@ def _columnar_bytes(root: str) -> int:
     *capacity*, which only the parked slot-renumbering half of compaction would
     reclaim.
     """
-    gen = _current_generation(Path(root))
+    gen = current_generation(Path(root))
     total = 0
     for name in ("seg_000/columns.bin", "columns.bin"):
         candidate = gen / name

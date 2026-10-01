@@ -8,7 +8,6 @@ Verifies that ``create_index`` on a ``storage='disk'`` graph:
   4. Survives a save/load roundtrip (lazy-loaded on first lookup).
 """
 
-from pathlib import Path
 import shutil
 import tempfile
 
@@ -16,6 +15,7 @@ import pandas as pd
 import pytest
 
 from kglite import KnowledgeGraph, load
+from tests.fixtures.disk_generation import current_generation
 
 
 @pytest.fixture
@@ -44,12 +44,6 @@ def _segment_bytes(snapshot):
     return {str(path.relative_to(segment)): path.read_bytes() for path in segment.rglob("*") if path.is_file()}
 
 
-def _published_snapshot(path: str) -> Path:
-    root = Path(path)
-    generation = (root / "CURRENT").read_text(encoding="utf-8").strip()
-    return root / "generations" / generation
-
-
 class TestPersistentIndexBuild:
     def test_create_index_reports_persistent_on_disk(self, disk_dir):
         g = _build_disk_graph(disk_dir)
@@ -64,7 +58,7 @@ class TestPersistentIndexBuild:
         g.save(disk_dir)
         # Mutation-time index files remain private until save atomically
         # publishes a complete immutable generation.
-        csr_dir = _published_snapshot(disk_dir) / "seg_000"
+        csr_dir = current_generation(disk_dir) / "seg_000"
         meta = next(csr_dir.glob("property_index_v2_*_meta.bin"))
         stem = meta.name.removesuffix("_meta.bin")
         assert (csr_dir / f"{stem}_keys.bin").exists()
@@ -80,7 +74,7 @@ class TestCollisionFreeIdentity:
         g.create_index("a_b", "c")
         g.create_index("a", "b_c")
         g.save(disk_dir)
-        first_snapshot = _published_snapshot(disk_dir)
+        first_snapshot = current_generation(disk_dir)
         meta_files = sorted((first_snapshot / "seg_000").glob("property_index_v2_*_meta.bin"))
         assert len(meta_files) == 2
         assert all(len(path.name) < 128 for path in meta_files)
@@ -94,7 +88,7 @@ class TestCollisionFreeIdentity:
         reloaded.save(disk_dir)
         import json
 
-        manifest = json.loads((_published_snapshot(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((current_generation(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
         pairs = {(entry[0], entry[1]) for entry in manifest["segments"][0]["indexed_prop_ranges"]}
         assert pairs == {
             (_fnv1a_64("a_b"), _fnv1a_64("c")),
@@ -108,14 +102,14 @@ class TestCollisionFreeIdentity:
         g.create_index("a_b", "c")
         g.create_index("a", "b_c")
         g.save(disk_dir)
-        first_snapshot = _published_snapshot(disk_dir)
+        first_snapshot = current_generation(disk_dir)
         first_files = _segment_bytes(first_snapshot)
         del g
 
         writer = load(disk_dir)
         assert writer.drop_index("a_b", "c") is True
         writer.save(disk_dir)
-        second_snapshot = _published_snapshot(disk_dir)
+        second_snapshot = current_generation(disk_dir)
         assert first_snapshot != second_snapshot
         assert _segment_bytes(first_snapshot) == first_files
         assert len(list((second_snapshot / "seg_000").glob("property_index_v2_*_meta.bin"))) == 1
@@ -355,7 +349,7 @@ class TestSegmentManifestRecordsIndexes:
         g.save(disk_dir)
         del g
 
-        manifest = json.loads((_published_snapshot(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((current_generation(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
         assert len(manifest["segments"]) == 1
         ranges = manifest["segments"][0]["indexed_prop_ranges"]
         # Expect exactly one entry for (Country, label) as StringBloomPlaceholder.
@@ -371,7 +365,7 @@ class TestSegmentManifestRecordsIndexes:
 
         g = _build_disk_graph(disk_dir)
         g.save(disk_dir)
-        manifest = json.loads((_published_snapshot(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((current_generation(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
         assert manifest["segments"][0]["indexed_prop_ranges"] == []
 
     def test_manifest_survives_reload_and_resave(self, disk_dir):
@@ -390,7 +384,7 @@ class TestSegmentManifestRecordsIndexes:
         reloaded = load(disk_dir)
         reloaded.save(disk_dir)
 
-        manifest = json.loads((_published_snapshot(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((current_generation(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
         ranges = manifest["segments"][0]["indexed_prop_ranges"]
         t_hash = _fnv1a_64("Country")
         p_hash = _fnv1a_64("label")
@@ -415,7 +409,7 @@ class TestSegmentManifestRecordsIndexes:
         g.create_global_index("label")
         g.save(disk_dir)
 
-        manifest = json.loads((_published_snapshot(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((current_generation(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
         # Only the global index was built — no per-type indexes.
         assert manifest["segments"][0]["indexed_prop_ranges"] == []
 

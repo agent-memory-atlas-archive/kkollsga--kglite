@@ -27,42 +27,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shutil
 import struct
 
 import pytest
 
 import kglite
+from tests.fixtures.compat_helpers import V7_HEADER, copy_fixture, expected_answers, generator_queries
+from tests.fixtures.disk_generation import current_generation
 
 FIXTURES = Path(__file__).parent / "fixtures" / "kgl_v6"
+GENERATOR = FIXTURES.parent / "build_v6_compat_fixtures.py"
 V6_HEADER = b"RGF\x06\x02"
-V7_HEADER = b"RGF\x07\x02"
 DISK_FORMAT = 2
-
-
-def _expected(name: str) -> dict:
-    return json.loads((FIXTURES / f"{name}.expected.json").read_text(encoding="utf-8"))
-
-
-def _queries(name: str) -> dict:
-    """The queries the expectation was captured with, read from the generator so
-    the two files cannot drift into asserting different things."""
-    import ast
-
-    source = (FIXTURES.parent / "build_v6_compat_fixtures.py").read_text(encoding="utf-8")
-    for node in ast.parse(source).body:
-        if isinstance(node, ast.Assign) and node.targets[0].id == name:  # type: ignore[attr-defined]
-            return ast.literal_eval(node.value)
-    raise AssertionError(f"{name} is gone from the fixture generator")
-
-
-def _copy(source: Path, tmp_path: Path, name: str | None = None) -> Path:
-    target = tmp_path / (name or source.name)
-    if source.is_dir():
-        shutil.copytree(source, target)
-    else:
-        shutil.copy2(source, target)
-    return target
 
 
 def _capture(graph, queries: dict[str, str]) -> dict:
@@ -80,12 +56,8 @@ def _assert_matches(graph, queries: dict[str, str], expected: dict, label: str) 
         )
 
 
-def _current_generation(directory: Path) -> Path:
-    return directory / "generations" / (directory / "CURRENT").read_text(encoding="utf-8").strip()
-
-
 def _sidecars(directory: Path, name: str) -> list[Path]:
-    return sorted(_current_generation(directory).rglob(name))
+    return sorted(current_generation(directory).rglob(name))
 
 
 # ── the fixtures are what they claim to be ───────────────────────────────────
@@ -129,46 +101,58 @@ def test_this_build_writes_v7(tmp_path):
 
 
 def test_v6_file_loads_with_pinned_answers(tmp_path):
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
-    _assert_matches(kglite.load(str(path)), _queries("QUERIES"), _expected("graph"), "v6 load")
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
+    _assert_matches(
+        kglite.load(str(path)), generator_queries(GENERATOR, "QUERIES"), expected_answers(FIXTURES, "graph"), "v6 load"
+    )
 
 
 def test_v6_file_loads_mapped(tmp_path):
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.open(str(path), storage="mapped")
     assert graph.graph_info()["storage_mode"] == "mapped"
-    _assert_matches(graph, _queries("QUERIES"), _expected("graph"), "v6 mapped load")
+    _assert_matches(
+        graph, generator_queries(GENERATOR, "QUERIES"), expected_answers(FIXTURES, "graph"), "v6 mapped load"
+    )
 
 
 def test_v6_resaves_as_v7_with_identical_answers(tmp_path):
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     graph = kglite.load(str(path))
     out = tmp_path / "migrated.kgl"
     graph.save(str(out))
     assert out.read_bytes()[:5] == V7_HEADER
-    _assert_matches(kglite.load(str(out)), _queries("QUERIES"), _expected("graph"), "v6->v7 resave")
+    _assert_matches(
+        kglite.load(str(out)),
+        generator_queries(GENERATOR, "QUERIES"),
+        expected_answers(FIXTURES, "graph"),
+        "v6->v7 resave",
+    )
 
 
 def test_v6_declared_validity_survives_the_migration(tmp_path):
     """The as-of answers depend on the declaration, which rides in the metadata."""
-    path = _copy(FIXTURES / "graph.kgl", tmp_path)
+    path = copy_fixture(FIXTURES / "graph.kgl", tmp_path)
     out = tmp_path / "migrated.kgl"
     kglite.load(str(path)).save(str(out))
     reloaded = kglite.load(str(out))
     counts = [
-        reloaded.cypher(_queries("QUERIES")[q]).to_list()[0]["c"] for q in ("as_of_2006", "as_of_micros", "as_of_2021")
+        reloaded.cypher(generator_queries(GENERATOR, "QUERIES")[q]).to_list()[0]["c"]
+        for q in ("as_of_2006", "as_of_micros", "as_of_2021")
     ]
     assert counts == [2, 1, 4]
 
 
 def test_v6_durable_directory_recovers_and_checkpoints_as_v7(tmp_path):
-    directory = _copy(FIXTURES / "durable", tmp_path)
+    directory = copy_fixture(FIXTURES / "durable", tmp_path)
     graph = kglite.open(str(directory / "app.kgl"), durable=True)
     logged = graph.cypher("MATCH (e:Event {kind: 'logged'}) RETURN count(e) AS c").to_list()
     assert logged == [{"c": 5}], (
         f"replay produced {logged}: the five post-checkpoint frames are the point of this fixture"
     )
-    _assert_matches(graph, _queries("DURABLE_QUERIES"), _expected("durable"), "v6 recovery")
+    _assert_matches(
+        graph, generator_queries(GENERATOR, "DURABLE_QUERIES"), expected_answers(FIXTURES, "durable"), "v6 recovery"
+    )
     graph.save(str(directory / "app.kgl"))
     assert (directory / "app.kgl").read_bytes()[:5] == V7_HEADER
 
@@ -177,20 +161,25 @@ def test_v6_durable_directory_recovers_and_checkpoints_as_v7(tmp_path):
 
 
 def test_disk_directory_from_0_19_0_opens_with_pinned_answers(tmp_path):
-    directory = _copy(FIXTURES / "disk", tmp_path)
-    _assert_matches(kglite.load(str(directory)), _queries("QUERIES"), _expected("disk"), "0.19.0 disk load")
+    directory = copy_fixture(FIXTURES / "disk", tmp_path)
+    _assert_matches(
+        kglite.load(str(directory)),
+        generator_queries(GENERATOR, "QUERIES"),
+        expected_answers(FIXTURES, "disk"),
+        "0.19.0 disk load",
+    )
 
 
 def test_disk_directory_from_0_19_0_resaves_into_format_2_and_reopens_identically(tmp_path):
-    directory = _copy(FIXTURES / "disk", tmp_path)
-    expected = _expected("disk")
-    queries = _queries("QUERIES")
+    directory = copy_fixture(FIXTURES / "disk", tmp_path)
+    expected = expected_answers(FIXTURES, "disk")
+    queries = generator_queries(GENERATOR, "QUERIES")
 
     graph = kglite.load(str(directory))
     graph.save()
     del graph
 
-    meta = json.loads((_current_generation(directory) / "disk_graph_meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((current_generation(directory) / "disk_graph_meta.json").read_text(encoding="utf-8"))
     assert meta["disk_format"] == DISK_FORMAT
 
     envelopes = _sidecars(directory, "columns_meta.json")
@@ -215,9 +204,12 @@ def test_disk_directory_from_0_19_0_resaves_into_format_2_and_reopens_identicall
 
 
 def test_int_title_directory_from_0_19_0_opens_with_pinned_answers(tmp_path):
-    directory = _copy(FIXTURES / "disk_int_title", tmp_path)
+    directory = copy_fixture(FIXTURES / "disk_int_title", tmp_path)
     _assert_matches(
-        kglite.load(str(directory)), _queries("INT_TITLE_QUERIES"), _expected("disk_int_title"), "0.19.0 int-title load"
+        kglite.load(str(directory)),
+        generator_queries(GENERATOR, "INT_TITLE_QUERIES"),
+        expected_answers(FIXTURES, "disk_int_title"),
+        "0.19.0 int-title load",
     )
 
 
@@ -225,9 +217,9 @@ def test_int_title_type_moves_from_its_sidecar_into_a_column_file_and_reopens_id
     """0.19.0 sent a type with an integer title to a per-type zstd sidecar (a
     non-string title forced one). The first save here gives it its own column
     file with a typed integer title, leaves no sidecar, and answers the same."""
-    directory = _copy(FIXTURES / "disk_int_title", tmp_path)
-    expected = _expected("disk_int_title")
-    queries = _queries("INT_TITLE_QUERIES")
+    directory = copy_fixture(FIXTURES / "disk_int_title", tmp_path)
+    expected = expected_answers(FIXTURES, "disk_int_title")
+    queries = generator_queries(GENERATOR, "INT_TITLE_QUERIES")
 
     graph = kglite.load(str(directory))
     graph.save()
@@ -240,7 +232,7 @@ def test_int_title_type_moves_from_its_sidecar_into_a_column_file_and_reopens_id
     assert entry["title_offsets"]["len"] == 0 and entry["title_data"]["len"] == 5 * 8, "the title is a bare i64 region"
     column_file = envelope.parent / body["files"]["Badge"]
     assert column_file.is_file() and column_file.stat().st_size >= 5 * 8
-    assert not (_current_generation(directory) / "columns").exists(), "the type is still on a sidecar"
+    assert not (current_generation(directory) / "columns").exists(), "the type is still on a sidecar"
 
     _assert_matches(kglite.load(str(directory)), queries, expected, "0.19.0 int-title -> resave -> reopen")
 
@@ -270,7 +262,7 @@ def test_fresh_disk_build_writes_the_forward_guards(tmp_path):
     graph.save()
     del graph
 
-    meta = json.loads((_current_generation(directory) / "disk_graph_meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((current_generation(directory) / "disk_graph_meta.json").read_text(encoding="utf-8"))
     assert meta["disk_format"] == DISK_FORMAT
     bodies = [json.loads(p.read_text(encoding="utf-8")) for p in _sidecars(directory, "columns_meta.json")]
     assert bodies and all(isinstance(b, dict) and b["format"] == DISK_FORMAT for b in bodies)
@@ -307,7 +299,7 @@ def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_versi
 
 
 def _resaved_directory(tmp_path: Path) -> Path:
-    directory = _copy(FIXTURES / "disk", tmp_path, "future")
+    directory = copy_fixture(FIXTURES / "disk", tmp_path, "future")
     graph = kglite.load(str(directory))
     graph.save()
     del graph
@@ -316,7 +308,7 @@ def _resaved_directory(tmp_path: Path) -> Path:
 
 def test_a_newer_disk_format_is_refused_by_name(tmp_path):
     directory = _resaved_directory(tmp_path)
-    meta_path = _current_generation(directory) / "disk_graph_meta.json"
+    meta_path = current_generation(directory) / "disk_graph_meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["disk_format"] = DISK_FORMAT + 1
     meta_path.write_text(json.dumps(meta), encoding="utf-8")

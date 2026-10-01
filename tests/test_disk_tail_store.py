@@ -28,6 +28,7 @@ import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.disk_generation import current_generation
 
 TYPE = "Employee"
 DEPARTMENTS = ["Sales", "Engineering", "Finance", "People", "Legal"]
@@ -364,8 +365,7 @@ def test_a_property_the_file_lacks_survives_a_save_when_set_and_append_type_it_d
 
 def _saved_columns(path: str) -> list[str]:
     """The property columns the published type file lists for ``TYPE``, by key."""
-    generation = (Path(path) / "CURRENT").read_text(encoding="utf-8").strip()
-    meta_path = Path(path) / "generations" / generation / "seg_000" / "columns_meta.json"
+    meta_path = current_generation(path) / "seg_000" / "columns_meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     (entry,) = [t for t in meta["types"] if t["type_name"] == TYPE]
     return sorted(str(column["key_u64"]) for column in entry["col_map"])

@@ -31,6 +31,7 @@ import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.disk_generation import current_generation
 
 EMPLOYEES = 60_000
 GENERATIONS = "generations"
@@ -64,10 +65,6 @@ def build(path: Path, employees: int = EMPLOYEES) -> None:
         del graph
 
 
-def current(path: Path) -> Path:
-    return path / GENERATIONS / (path / "CURRENT").read_text(encoding="utf-8").strip()
-
-
 def generation_names(path: Path) -> list[str]:
     return sorted(p.name for p in (path / GENERATIONS).iterdir() if p.name.startswith("gen_"))
 
@@ -98,14 +95,14 @@ def type_files(generation: Path) -> dict[str, Path]:
 def test_a_set_and_save_link_the_untouched_types_and_leave_the_previous_generation_byte_identical(tmp_path):
     path = tmp_path / "graph"
     build(path)
-    first = current(path)
+    first = current_generation(path)
     before = tree_hash(first)
     first_files = type_files(first)
 
     graph = kglite.load(str(path))
     set_grade(graph, 3, 70)
     graph.save()
-    second = current(path)
+    second = current_generation(path)
     assert second != first
 
     second_files = type_files(second)
@@ -135,15 +132,15 @@ def test_retention_keeps_the_current_generation_and_one_previous_and_every_answe
     path = tmp_path / "graph"
     build(path)
     graph = kglite.load(str(path))
-    shared_inodes = {name: os.stat(file).st_ino for name, file in type_files(current(path)).items()}
+    shared_inodes = {name: os.stat(file).st_ino for name, file in type_files(current_generation(path)).items()}
     for round_ in range(5):
         set_grade(graph, round_, 50 + round_)
         graph.save()
     names = generation_names(path)
     assert len(names) == 2, names
-    assert current(path).name == names[-1]
+    assert current_generation(path).name == names[-1]
 
-    latest = type_files(current(path))
+    latest = type_files(current_generation(path))
     # The untouched types are the files the first generation wrote, and the
     # unlink of every generation between them and now did not take them.
     for sibling in ("Department", "Office"):
@@ -184,7 +181,7 @@ def test_a_held_read_only_view_reads_correctly_across_saves_and_retention(tmp_pa
     path = tmp_path / "graph"
     build(path)
     reader = kglite.load(str(path))
-    reader_generation = current(path)
+    reader_generation = current_generation(path)
     expected = grade(reader, 10)
 
     writer = kglite.load(str(path))
@@ -240,7 +237,7 @@ def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_gene
     pristine = tmp_path / "pristine"
     build(pristine, employees=150_000)
     pointer_before = (pristine / "CURRENT").read_text(encoding="utf-8")
-    previous_hash = tree_hash(current(pristine))
+    previous_hash = tree_hash(current_generation(pristine))
 
     for attempt in range(4):
         path = tmp_path / f"attempt_{attempt}"
@@ -270,7 +267,7 @@ def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_gene
     assert (path / "CURRENT").read_text(encoding="utf-8") == pointer_before, (
         "CURRENT moved although the save never finished"
     )
-    assert tree_hash(current(path)) == previous_hash, "the crashed save altered the previous generation"
+    assert tree_hash(current_generation(path)) == previous_hash, "the crashed save altered the previous generation"
 
     reopened = kglite.load(str(path))
     assert grade(reopened, 3) == 3, "the unsaved SET is not in the reopened graph"
@@ -282,4 +279,6 @@ def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_gene
     reopened.save()
     assert not list((path / GENERATIONS).glob(".stage-*")), "a dead writer's stage survived the next save"
     assert grade(kglite.load(str(path)), 3) == 456
-    assert tree_hash(current(pristine)) == previous_hash, "the pristine copy the attempts were cloned from changed"
+    assert tree_hash(current_generation(pristine)) == previous_hash, (
+        "the pristine copy the attempts were cloned from changed"
+    )

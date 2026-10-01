@@ -18,6 +18,8 @@ import textwrap
 
 import pytest
 
+from tests.fixtures.disk_generation import current_generation
+
 ROWS = 100_000
 OTHER = ROWS // 4
 
@@ -74,11 +76,6 @@ CYCLE = textwrap.dedent(
 )
 
 
-def _generation(path):
-    with open(os.path.join(path, "CURRENT"), encoding="utf-8") as handle:
-        return os.path.join(path, "generations", handle.read().strip())
-
-
 def _run(script, *args):
     out = subprocess.run([sys.executable, "-c", script, *map(str, args)], check=True, capture_output=True, text=True)
     return out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
@@ -91,7 +88,7 @@ def test_reopened_disk_graph_stays_in_its_column_files_across_saves(tmp_path, mo
     reloads = []
     for cycle in (1, 2, 3):
         result = json.loads(_run(CYCLE, path, cycle, mode))
-        generation = _generation(path)
+        generation = current_generation(path)
         with open(os.path.join(generation, "seg_000", "columns_meta.json"), encoding="utf-8") as handle:
             files = json.load(handle)["files"]
         assert sorted(files) == ["Employment", "Other"], f"cycle {cycle}: every type has its own column file: {files}"

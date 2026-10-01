@@ -6,6 +6,7 @@ after a reopen layers a delta over it. These goldens run the register-shaped
 fixture through two such cycles, with deletions and an overwrite in the second,
 and compare every answer to a pandas oracle after each reopen: an id resolved
 from the mapping, from the delta, an id that was deleted, the title index, edge
+from tests.fixtures.disk_generation import current_generation
 endpoints resolved through the index, and a valid-time count.
 
 Run: pytest tests/test_disk_id_index_cycles.py
@@ -21,6 +22,7 @@ import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.disk_generation import current_generation
 from tests.fixtures.register_scale import ANCHOR_TYPE, REL, TYPE, chunk
 
 CHUNK = 20_000
@@ -35,8 +37,7 @@ def _add(graph, part) -> None:
 
 def _directory(path: Path) -> list[tuple[int, int, int]]:
     """``(variant, num_entries, payload_len)`` of the current generation's id index."""
-    current = (path / "CURRENT").read_text(encoding="utf-8").strip()
-    raw = (path / "generations" / current / "id_indices.bin").read_bytes()
+    raw = (current_generation(path) / "id_indices.bin").read_bytes()
     assert raw[:8] == b"KGLIIDXR" and struct.unpack("<I", raw[8:12])[0] == 3
     (count,) = struct.unpack("<I", raw[12:16])
     entries = []
@@ -143,15 +144,13 @@ def test_a_version_2_id_index_still_loads_and_is_rewritten_as_version_3(tmp_path
 
     directory = tmp_path / "disk"
     shutil.copytree(fixtures, directory)
-    current = (directory / "CURRENT").read_text(encoding="utf-8").strip()
-    before = (directory / "generations" / current / "id_indices.bin").read_bytes()
+    before = (current_generation(directory) / "id_indices.bin").read_bytes()
     assert struct.unpack("<I", before[8:12])[0] == 2, "the fixture is a 0.19.0 (version 2) index"
     graph = kglite.load(str(directory))
     count = graph.cypher("MATCH (n) RETURN count(n) AS c").to_list()
     graph.save()
     del graph
-    after_current = (directory / "CURRENT").read_text(encoding="utf-8").strip()
-    after = (directory / "generations" / after_current / "id_indices.bin").read_bytes()
+    after = (current_generation(directory) / "id_indices.bin").read_bytes()
     assert struct.unpack("<I", after[8:12])[0] == 3
     assert kglite.load(str(directory)).cypher("MATCH (n) RETURN count(n) AS c").to_list() == count
 
