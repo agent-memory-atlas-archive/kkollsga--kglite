@@ -111,6 +111,9 @@ mod tests {
         let iri = "http://e.org/node/Person/42";
         assert_eq!(node_id_segment(iri, "Person").as_deref(), Some("42"));
         assert_eq!(node_id_segment(iri, "Department"), None);
-        assert_eq!(node_id_segment("http://e.org/other/Person/42", "Person"), None);
+        assert_eq!(
+            node_id_segment("http://e.org/other/Person/42", "Person"),
+            None
+        );
     }
 }

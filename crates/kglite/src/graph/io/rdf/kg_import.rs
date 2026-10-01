@@ -91,7 +91,10 @@ pub(super) fn add_labels(
 
 /// After every row is loaded: parent types, then the valid-time declarations.
 /// Returns warnings for what could not be restored.
-pub(super) fn apply(graph: &mut DirGraph, manifest: &ExportManifest) -> Result<Vec<String>, String> {
+pub(super) fn apply(
+    graph: &mut DirGraph,
+    manifest: &ExportManifest,
+) -> Result<Vec<String>, String> {
     let mut warnings = Vec::new();
     for (name, entry) in &manifest.node_types {
         if let Some(parent) = &entry.parent {

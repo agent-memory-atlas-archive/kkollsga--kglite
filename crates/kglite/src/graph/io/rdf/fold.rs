@@ -74,8 +74,9 @@ fn xsd_to_value(value: &str, local: &str) -> Value {
 
         "dateTime" => parse_xsd_datetime(value),
 
-        "duration" | "dayTimeDuration" | "yearMonthDuration" => parse_xsd_duration(value)
-            .unwrap_or_else(|| Value::String(value.to_string())),
+        "duration" | "dayTimeDuration" | "yearMonthDuration" => {
+            parse_xsd_duration(value).unwrap_or_else(|| Value::String(value.to_string()))
+        }
 
         _ => Value::String(value.to_string()),
     }
@@ -385,5 +386,30 @@ mod tests {
             datatype_to_value("x", "http://example.org/custom"),
             Value::String("x".to_string())
         );
+    }
+
+    #[test]
+    fn xsd_duration_maps_to_months_days_seconds() {
+        let dur = |v: &str| datatype_to_value(v, &xsd("duration"));
+        assert_eq!(
+            dur("P1Y6M2DT3H"),
+            Value::Duration {
+                months: 18,
+                days: 2,
+                seconds: 10800
+            }
+        );
+        assert_eq!(
+            dur("-PT90S"),
+            Value::Duration {
+                months: 0,
+                days: 0,
+                seconds: -90
+            }
+        );
+        // Malformed or fractional forms keep their text.
+        for bad in ["P", "PT", "P1.5D", "1Y", "P1Y1Y"] {
+            assert_eq!(dur(bad), Value::String(bad.to_string()), "{bad}");
+        }
     }
 }

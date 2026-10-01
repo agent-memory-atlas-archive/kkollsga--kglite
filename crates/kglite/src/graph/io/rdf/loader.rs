@@ -608,10 +608,8 @@ fn materialize_edges(
     let mut created = 0;
 
     for plan in plans {
-        let (Some(src), Some(tgt)) = (
-            idx_of[plan.source as usize],
-            idx_of[plan.target as usize],
-        ) else {
+        let (Some(src), Some(tgt)) = (idx_of[plan.source as usize], idx_of[plan.target as usize])
+        else {
             continue;
         };
         let pred = &plan.predicate;

@@ -27,7 +27,8 @@ fn node_props(graph: &DirGraph, uri: &str) -> HashMap<String, Value> {
     panic!("no node {uri}");
 }
 
-const LABELS: &str = "<http://e.org/d1> <http://www.w3.org/2000/01/rdf-schema#label> \"Sales\"@en .\n\
+const LABELS: &str =
+    "<http://e.org/d1> <http://www.w3.org/2000/01/rdf-schema#label> \"Sales\"@en .\n\
 <http://e.org/d1> <http://www.w3.org/2000/01/rdf-schema#label> \"Salg\"@no .\n\
 <http://e.org/d1> <http://e.org/motto> \"Go\"@en .\n";
 
