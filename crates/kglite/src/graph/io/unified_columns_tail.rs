@@ -87,7 +87,9 @@ struct StrParts<'a> {
     nulls: Vec<Part<'a>>,
 }
 
-/// A base string column's `(data, offsets, nulls)`, each possibly absent.
+/// A base string column's `(data, offsets, nulls)` regions, each possibly absent.
+type BaseRegions<'a> = (Option<&'a [u8]>, Option<&'a [u8]>, Option<&'a [u8]>);
+/// The same, as bytes a part list can own or borrow.
 type BaseStr<'a> = (
     Option<Cow<'a, [u8]>>,
     Option<Cow<'a, [u8]>>,
@@ -353,7 +355,7 @@ fn merged_fixed(
 /// whole column is rebuilt (an overlaid string may differ in length from the
 /// one it replaces), which costs that column's bytes and nothing else.
 fn merged_str<'a>(
-    base: Option<(Option<&'a [u8]>, Option<&'a [u8]>, Option<&'a [u8]>)>,
+    base: Option<BaseRegions<'a>>,
     overlay: &TypedColumn,
     rows: usize,
 ) -> BaseStr<'a> {
@@ -372,7 +374,7 @@ fn merged_str<'a>(
     let mut data: Vec<u8> = Vec::new();
     let mut offsets: Vec<u8> = Vec::with_capacity(rows * 8);
     let mut nulls = vec![1u8; rows];
-    for row in 0..rows {
+    for (row, null) in nulls.iter_mut().enumerate() {
         let value = if overlay.is_present(row as u32) {
             overlay.get_str(row as u32).map(str::as_bytes)
         } else {
@@ -380,7 +382,7 @@ fn merged_str<'a>(
         };
         if let Some(bytes) = value {
             data.extend_from_slice(bytes);
-            nulls[row] = 0;
+            *null = 0;
         }
         offsets.extend_from_slice(&(data.len() as u64).to_le_bytes());
     }

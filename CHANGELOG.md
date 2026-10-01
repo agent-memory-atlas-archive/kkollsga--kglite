@@ -119,7 +119,25 @@ before upgrading.
   by the writer, so one that falls more than the kept window behind can lose
   files it opens lazily; use `all` when a long-lived reader shares a directory
   with a frequent writer. `KGLITE_LOAD_TIMING=1` now also logs a line for each
-  stage of a disk save.
+  stage of a disk save. Measured on a 24.7-million-version register (release,
+  macOS, load average 7-15 from other processes, one run each): a save that
+  changed only the small anchor type took 60 s instead of 110 s, a save that
+  changed nothing 72 s instead of 116 s; a save that changed the 3.6 GB version
+  type still rewrites it, and the rest of a save (the CSR, the node slots, the
+  indexes) is still written in full, so a save costs what the changed types and
+  the topology cost, not a fraction of the whole graph.
+- A save of a disk type served from its column file that a `SET` changed no
+  longer copies the whole type onto the heap first. Columns the statements did
+  not touch are written straight from the mapping and a touched column is
+  written as the file's cells with the `SET` cells laid over them, so the save's
+  memory follows the touched columns: on the 24.7-million-version register, one
+  `SET` of 1,000 rows' `status` followed by `save()` peaked at 1.7 GB of
+  footprint (1.3 GB above the start) where it peaked at 5.2 GB (4.9 GB above),
+  and took 121 s instead of 159 s. The first `SET` of a column of a file-served
+  type still copies that column onto the heap (0.3 to 0.5 s and 360 MB for the
+  `status` column at that size, 0.28 s and 393 MB for a timestamp column). A
+  null written over a cell, a replaced title, a value of another kind in a
+  column and a type with an overflow bag still take the previous path.
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
   data") use one org-chart example, with the declaration rules gathered in a
   closing section and the full bitemporal walk-through shipped as

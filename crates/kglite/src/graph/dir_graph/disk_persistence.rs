@@ -697,10 +697,11 @@ impl DirGraph {
     }
 
     /// The column stores a save writes, by type name: the live stores, except
-    /// that an mmap-backed store with local changes is flattened into an owned
-    /// typed store (one that is nothing but its base, or that base plus a
-    /// same-kind tail, is left alone and re-emitted from its mapping), and a heap store holding a `Mixed` column whose values
-    /// all have one kind is
+    /// that an mmap-backed store with local changes the column regions cannot
+    /// hold is flattened into an owned typed store (one that is nothing but its
+    /// base, or that base with same-kind `SET` columns and a same-kind tail, is
+    /// left alone and written from its mapping), and a heap store holding a
+    /// `Mixed` column whose values all have one kind is
     /// re-typed (a graph an earlier build saved through the all-`Mixed`
     /// sidecar writer heals on its next save). A column holding values of
     /// several kinds stays `Mixed`, and so in a sidecar: typing it would

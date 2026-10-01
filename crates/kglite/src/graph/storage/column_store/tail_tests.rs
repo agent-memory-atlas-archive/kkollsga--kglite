@@ -537,7 +537,8 @@ fn a_set_base_with_a_tail_is_written_from_regions_in_one_file() {
 
 #[test]
 fn a_store_the_regions_cannot_hold_is_flattened_and_still_right() {
-    let cases: [(&str, fn(&mut ColumnStore)); 4] = [
+    type Change = fn(&mut ColumnStore);
+    let cases: [(&str, Change); 4] = [
         ("a null written over a base cell", |store| {
             assert!(store.set(3, key("level"), &Value::Null, None));
         }),
