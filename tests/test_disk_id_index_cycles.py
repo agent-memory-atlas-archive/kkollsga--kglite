@@ -6,7 +6,6 @@ after a reopen layers a delta over it. These goldens run the register-shaped
 fixture through two such cycles, with deletions and an overwrite in the second,
 and compare every answer to a pandas oracle after each reopen: an id resolved
 from the mapping, from the delta, an id that was deleted, the title index, edge
-from tests.fixtures.disk_generation import current_generation
 endpoints resolved through the index, and a valid-time count.
 
 Run: pytest tests/test_disk_id_index_cycles.py
