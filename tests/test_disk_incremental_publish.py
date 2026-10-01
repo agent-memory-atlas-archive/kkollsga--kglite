@@ -115,6 +115,9 @@ def test_a_set_and_save_link_the_untouched_types_and_leave_the_previous_generati
         )
         assert os.stat(second_files[sibling]).st_nlink >= 2
     assert not os.path.samefile(first_files["Employee"], second_files["Employee"])
+    # The SET moved no id or type membership, so the index files are carried too.
+    for index_file in ("id_indices.bin", "type_indices.bin"):
+        assert os.path.samefile(first / index_file, second / index_file), f"{index_file} was rewritten"
 
     assert tree_hash(first) == before, "saving the next generation altered the previous one"
     # A second cycle: the linked files are now shared by three generations' worth of saves.
@@ -220,9 +223,9 @@ CHILD = textwrap.dedent(
 )
 
 
-def _stage_holds_a_linked_file(path: Path) -> bool:
+def _stage_holds_a_linked_file(path: Path, pattern: str) -> bool:
     for stage in (path / GENERATIONS).glob(".stage-*"):
-        for file in stage.glob("seg_000/type_columns/*.bin"):
+        for file in stage.glob(pattern):
             try:
                 if file.stat().st_nlink >= 2:
                     return True
@@ -232,7 +235,8 @@ def _stage_holds_a_linked_file(path: Path) -> bool:
 
 
 @posix_only
-def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_generation_selected(tmp_path):
+@pytest.mark.parametrize("linked", ["seg_000/type_columns/*.bin", "id_indices.bin", "type_indices.bin"])
+def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_generation_selected(tmp_path, linked):
     pristine = tmp_path / "pristine"
     build(pristine, employees=150_000)
     pointer_before = (pristine / "CURRENT").read_text(encoding="utf-8")
@@ -249,7 +253,7 @@ def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_gene
             deadline = time.monotonic() + 60
             killed_mid_save = False
             while time.monotonic() < deadline and child.poll() is None:
-                if _stage_holds_a_linked_file(path):
+                if _stage_holds_a_linked_file(path, linked):
                     killed_mid_save = (path / "CURRENT").read_text(encoding="utf-8") == pointer_before
                     child.send_signal(signal.SIGKILL)
                     break

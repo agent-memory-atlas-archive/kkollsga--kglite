@@ -556,3 +556,40 @@ fn rebasing_onto_the_published_file_drops_the_covered_entries_only() {
     assert!(divergent.rebase_onto(base).is_err());
     assert_eq!(divergent.overlay_len(NAME), Some(49));
 }
+
+/// A save links the file only while nothing is written over the mapping it
+/// serves: each way a store can differ from its file must say so.
+#[test]
+fn a_store_is_an_unchanged_view_of_its_file_only_until_something_writes_over_it() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        &store_of(general((0..50).map(|i| (id_of(i), i)))),
+        &members(50),
+    );
+    let fresh = || IdIndexStore::from_base(load(dir.path()));
+    let file = dir.path().join("id_indices.bin");
+
+    assert_eq!(fresh().unchanged_origin(), Some(file.as_path()));
+    assert_eq!(IdIndexStore::default().unchanged_origin(), None, "no file");
+
+    let mut inserted = fresh();
+    inserted.insert(NAME.to_string(), general([(id_of(99), 99)]));
+    assert_eq!(inserted.unchanged_origin(), None, "a replaced type");
+
+    let mut removed = fresh();
+    removed.remove(NAME);
+    assert_eq!(removed.unchanged_origin(), None, "a removed type");
+
+    let mut grown = fresh();
+    grown.entry_or_default(NAME.to_string());
+    assert_eq!(grown.unchanged_origin(), None, "a type opened for writing");
+
+    let cached = fresh();
+    cached.ensure("Other", || general([(1, 1)]));
+    assert_eq!(cached.unchanged_origin(), None, "a heap entry");
+
+    let mut cleared = fresh();
+    cleared.clear();
+    assert_eq!(cleared.unchanged_origin(), None, "a cleared store");
+}

@@ -431,18 +431,40 @@ impl DirGraph {
         // HashMap rebuild. The loader can still read the earlier flat-CSR
         // sidecars when the mmap files are absent; pre-0.14 bincode caches
         // are ignored and rebuilt.
-        crate::graph::storage::disk::type_index::write_type_indices_bin(
+        // An index nothing has written over is the previous generation's file
+        // as it stands, so the stage links it; `id_indices.bin` is derived from
+        // both stores (a type whose ids repeat is left out by comparing them),
+        // so it is carried only while both are unchanged.
+        let types_unchanged = self.type_indices.unchanged_origin();
+        let types_linked = crate::graph::io::column_link::carry_unchanged_index(
+            previous,
+            "type_indices.bin",
+            types_unchanged,
             dir,
-            &self.type_indices,
-            &self.interner,
-        )?;
+        );
+        if !types_linked {
+            crate::graph::storage::disk::type_index::write_type_indices_bin(
+                dir,
+                &self.type_indices,
+                &self.interner,
+            )?;
+        }
         clock.mark("save_type_indices");
-        crate::graph::storage::disk::id_index::write_id_indices_bin(
-            dir,
-            &self.id_indices,
-            &self.type_indices,
-            &self.interner,
-        )?;
+        let ids_linked = types_unchanged.is_some()
+            && crate::graph::io::column_link::carry_unchanged_index(
+                previous,
+                "id_indices.bin",
+                self.id_indices.unchanged_origin(),
+                dir,
+            );
+        if !ids_linked {
+            crate::graph::storage::disk::id_index::write_id_indices_bin(
+                dir,
+                &self.id_indices,
+                &self.type_indices,
+                &self.interner,
+            )?;
+        }
         clock.mark("save_id_indices");
 
         // BTreeMap view for byte-determinism — same rationale as write_kgl.

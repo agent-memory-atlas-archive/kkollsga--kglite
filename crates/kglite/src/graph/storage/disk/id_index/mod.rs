@@ -56,7 +56,7 @@ use memmap2::Mmap;
 use petgraph::graph::NodeIndex;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 const MAGIC: &[u8; 8] = b"KGLIIDXR";
@@ -139,6 +139,10 @@ fn le_u32_binary_search(bytes: &[u8], wanted: u32) -> Option<usize> {
 /// Mmap-backed read-only view of `id_indices.bin`.
 pub struct IdIndexBase {
     mmap: Arc<Mmap>,
+    /// The file the mapping is of.
+    origin: PathBuf,
+    /// The layout version the file declares.
+    version: u32,
     /// type_name -> directory entry. Built once at load (88k entries × ~50 bytes ≈ 4 MB).
     /// Strings owned to keep the API HashMap-compatible without lifetime gymnastics.
     dir: HashMap<String, BaseEntry>,
@@ -396,6 +400,8 @@ impl IdIndexBase {
 
         Ok(Some(Self {
             mmap: Arc::new(mmap),
+            origin: path,
+            version,
             dir: dir_map,
             general_cache: RwLock::new(general_cache_map),
             _pin: super::generation::GenerationPin::containing(dir),
@@ -608,6 +614,21 @@ impl IdIndexStore {
         self.removed.clear();
         self.base = Some(Arc::new(base));
         Ok(())
+    }
+
+    /// The file this store serves, when nothing has been written over it: no
+    /// heap entry (a mutated type, or a cache a read built for a type the file
+    /// lacks) and no removed type. Such a store would write a file with the
+    /// same content, so a save may link the file instead. A file in an older
+    /// layout is not offered: the next save is what rewrites it in the current
+    /// one.
+    pub(crate) fn unchanged_origin(&self) -> Option<&Path> {
+        let untouched = self.removed.is_empty() && self.overlay.read().unwrap().is_empty();
+        let base = self
+            .base
+            .as_deref()
+            .filter(|base| base.version == VERSION)?;
+        untouched.then_some(base.origin.as_path())
     }
 
     pub fn contains_key(&self, name: &str) -> bool {

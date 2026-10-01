@@ -14,8 +14,10 @@
 //! Nothing ever writes through a carried file. Published column files are
 //! mapped read-only, created with `create_new`, and never truncated, which is
 //! what lets two generations share an inode without either being able to alter
-//! the other. Only per-type column files are carried: the CSR, node slots,
-//! edge properties and indexes are still mapped writable by the loader and are
+//! the other. Besides the per-type column files, `id_indices.bin` and
+//! `type_indices.bin` are carried when the live index is an unchanged view of
+//! the previous generation's file ([`carry_unchanged_index`]); the CSR, node
+//! slots and edge properties are still mapped writable by the loader and are
 //! rewritten by every save.
 
 use std::collections::HashMap;
@@ -134,15 +136,40 @@ pub(crate) fn carry(source: &Path, stage_seg0: &Path, relative: &str) -> io::Res
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
+    link_or_copy(source, &destination)
+}
+
+fn link_or_copy(source: &Path, destination: &Path) -> io::Result<Carried> {
     #[cfg(test)]
     let refused = FORCE_COPY.with(|flag| flag.get());
     #[cfg(not(test))]
     let refused = false;
     // Windows copies: a link to a file another handle maps is not worth the
     // sharing rules it brings for a saving nobody measured there.
-    if !refused && cfg!(not(windows)) && fs::hard_link(source, &destination).is_ok() {
+    if !refused && cfg!(not(windows)) && fs::hard_link(source, destination).is_ok() {
         return Ok(Carried::Linked);
     }
-    fs::copy(source, &destination)?;
+    fs::copy(source, destination)?;
     Ok(Carried::Copied)
+}
+
+/// Give the stage the previous generation's `name` (`id_indices.bin` or
+/// `type_indices.bin`) when the live index is an unchanged view of exactly that
+/// file: `origin` is the file the index maps, or `None` when it has changed or
+/// maps nothing. `false` leaves the stage without the file, so the caller
+/// writes it.
+pub(crate) fn carry_unchanged_index(
+    previous: Option<&Path>,
+    name: &str,
+    origin: Option<&Path>,
+    stage: &Path,
+) -> bool {
+    let (Some(previous), Some(origin)) = (previous, origin) else {
+        return false;
+    };
+    let source = previous.join(name);
+    if !same_file(origin, &source) {
+        return false;
+    }
+    link_or_copy(&source, &stage.join(name)).is_ok()
 }

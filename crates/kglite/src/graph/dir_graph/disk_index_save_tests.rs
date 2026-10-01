@@ -304,3 +304,218 @@ fn a_bundle_the_generation_does_not_hold_is_built() {
     drop(graph);
     assert_eq!(title_hits(&load_owned(&path), "Employee-5"), Some(1));
 }
+
+/// `(id_indices.bin, type_indices.bin)` of the generation `path` is on.
+fn index_files(path: &str) -> [std::path::PathBuf; 2] {
+    let generation = current_generation(path);
+    [
+        generation.join("id_indices.bin"),
+        generation.join("type_indices.bin"),
+    ]
+}
+
+#[cfg(unix)]
+fn inodes(files: &[std::path::PathBuf; 2]) -> [u64; 2] {
+    use super::disk_link_tests::inode;
+    [inode(&files[0]), inode(&files[1])]
+}
+
+/// Apply `change` to a saved graph, save, and report whether each index file of
+/// the new generation is the previous generation's file: `[ids, types]`.
+#[cfg(unix)]
+fn linked_after(change: impl FnOnce(&mut DirGraph)) -> ([bool; 2], String, tempfile::TempDir) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let mut graph = saved_graph(&path);
+    drop(graph);
+    // A reopened graph is what serves its indexes from the files.
+    graph = load_owned(&path);
+    let before = inodes(&index_files(&path));
+    change(&mut graph);
+    graph.save_disk(&path).unwrap();
+    drop(graph);
+    let after = inodes(&index_files(&path));
+    ([before[0] == after[0], before[1] == after[1]], path, dir)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_save_with_no_change_links_both_index_files() {
+    let (linked, path, _dir) = linked_after(|_| {});
+    assert_eq!(linked, [true, true], "id_indices.bin, type_indices.bin");
+    let mut reloaded = load_owned(&path);
+    assert_eq!(
+        run(
+            &mut reloaded,
+            "MATCH (e:Employee {id: 777}) RETURN e.grade AS g"
+        ),
+        vec![vec![Value::Int64(777 * 3)]]
+    );
+    assert_eq!(
+        run(&mut reloaded, "MATCH (e:Employee) RETURN count(e) AS c"),
+        vec![vec![Value::Int64(20_000)]]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_set_of_a_property_no_index_holds_links_both_index_files() {
+    let (linked, _path, _dir) = linked_after(|graph| {
+        run(graph, "MATCH (e:Employee {id: 3}) SET e.grade = 1");
+    });
+    assert_eq!(linked, [true, true], "id_indices.bin, type_indices.bin");
+}
+
+/// Each change an index can carry, and the answers a reload must give.
+#[cfg(unix)]
+#[test]
+fn every_change_to_what_an_index_holds_rewrites_it() {
+    type Check = fn(&mut DirGraph);
+    // `[ids, types]`: which file the new generation still shares with the old.
+    let cases: &[(&str, [bool; 2], Check, Check)] = &[
+        (
+            "an appended row",
+            [false, false],
+            |g| add_employees(g, &[(20_000, "Appended")], None),
+            |g| {
+                assert_eq!(
+                    run(g, "MATCH (e:Employee {id: 20000}) RETURN e.name AS n"),
+                    vec![vec![Value::String("Appended".into())]]
+                );
+                assert_eq!(
+                    run(g, "MATCH (e:Employee) RETURN count(e) AS c"),
+                    vec![vec![Value::Int64(20_001)]]
+                );
+            },
+        ),
+        (
+            "a created node",
+            [false, false],
+            |g| {
+                run(g, "CREATE (:Employee {id: 90000, name: 'Created'})");
+            },
+            |g| {
+                assert_eq!(
+                    run(g, "MATCH (e:Employee {id: 90000}) RETURN e.name AS n"),
+                    vec![vec![Value::String("Created".into())]]
+                );
+            },
+        ),
+        (
+            "a created node of a new type",
+            [false, false],
+            |g| {
+                run(g, "CREATE (:Gadget {id: 5, name: 'Gizmo'})");
+            },
+            |g| {
+                assert_eq!(
+                    run(g, "MATCH (x:Gadget {id: 5}) RETURN x.name AS n"),
+                    vec![vec![Value::String("Gizmo".into())]]
+                );
+            },
+        ),
+        (
+            "a delete",
+            [false, false],
+            |g| {
+                run(g, "MATCH (e:Employee {id: 3}) DETACH DELETE e");
+            },
+            |g| {
+                assert_eq!(
+                    run(g, "MATCH (e:Employee {id: 3}) RETURN e.name AS n"),
+                    Vec::<Vec<Value>>::new()
+                );
+                assert_eq!(
+                    run(g, "MATCH (e:Employee) RETURN count(e) AS c"),
+                    vec![vec![Value::Int64(19_999)]]
+                );
+            },
+        ),
+        (
+            "a delete followed by a create into the freed slot",
+            [false, false],
+            |g| {
+                run(g, "MATCH (e:Employee {id: 3}) DETACH DELETE e");
+                run(g, "CREATE (:Employee {id: 91000, name: 'Reborn'})");
+            },
+            |g| {
+                assert_eq!(
+                    run(g, "MATCH (e:Employee {id: 91000}) RETURN e.name AS n"),
+                    vec![vec![Value::String("Reborn".into())]]
+                );
+                assert_eq!(
+                    run(g, "MATCH (e:Employee {id: 3}) RETURN e.name AS n"),
+                    Vec::<Vec<Value>>::new()
+                );
+            },
+        ),
+    ];
+    for (name, expect, change, check) in cases {
+        let (linked, path, _dir) = linked_after(*change);
+        assert_eq!(
+            linked, *expect,
+            "{name}: which index files were linked unchanged (id, type)"
+        );
+        let mut reloaded = load_owned(&path);
+        check(&mut reloaded);
+    }
+}
+
+/// A file in the previous layout is what the next save rewrites, so a link
+/// must not carry it forward.
+#[cfg(unix)]
+#[test]
+fn an_id_index_file_in_an_older_layout_is_rewritten_not_linked() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    drop(saved_graph(&path));
+    let [ids, _] = index_files(&path);
+    let mut bytes = std::fs::read(&ids).unwrap();
+    assert_eq!(&bytes[8..12], &3u32.to_le_bytes(), "the current layout");
+    bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+    std::fs::write(&ids, &bytes).unwrap();
+
+    let mut graph = load_owned(&path);
+    let before = inodes(&index_files(&path));
+    graph.save_disk(&path).unwrap();
+    drop(graph);
+
+    let after = index_files(&path);
+    assert_ne!(inodes(&after)[0], before[0], "the old layout was linked on");
+    assert_eq!(
+        &std::fs::read(&after[0]).unwrap()[8..12],
+        &3u32.to_le_bytes(),
+        "the next save writes the current layout"
+    );
+    assert_eq!(inodes(&after)[1], before[1], "the type index was unchanged");
+}
+
+/// Where hard links are refused the files are copied: same bytes, own inode.
+#[cfg(unix)]
+#[test]
+fn a_refused_link_copies_the_index_files() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    drop(saved_graph(&path));
+    let mut graph = load_owned(&path);
+    let before = index_files(&path);
+    let bytes: Vec<Vec<u8>> = before.iter().map(|f| std::fs::read(f).unwrap()).collect();
+    let before_inodes = inodes(&before);
+
+    crate::graph::io::column_link::with_linking_refused(|| graph.save_disk(&path).unwrap());
+    drop(graph);
+
+    let after = index_files(&path);
+    assert_ne!(inodes(&after), before_inodes);
+    for (file, original) in after.iter().zip(&bytes) {
+        assert_eq!(&std::fs::read(file).unwrap(), original);
+    }
+    let mut reloaded = load_owned(&path);
+    assert_eq!(
+        run(
+            &mut reloaded,
+            "MATCH (e:Employee {id: 5}) RETURN e.grade AS g"
+        ),
+        vec![vec![Value::Int64(15)]]
+    );
+}

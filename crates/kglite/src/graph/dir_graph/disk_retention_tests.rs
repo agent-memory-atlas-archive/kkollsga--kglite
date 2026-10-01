@@ -254,6 +254,19 @@ fn a_failed_rebase_pins_the_generation_it_leaves_mapped(stage: &'static str) {
             &format!("MATCH (d:Department) WHERE d.id = 1 SET d.grade = {round}"),
         );
         super::with_failing_stage(stage, || graph.save_disk(path).unwrap());
+        #[cfg(unix)]
+        if round == 0 {
+            // The index files of that save are the first generation's own, so
+            // what pins the generation is a mapping of a *shared* inode — the
+            // case a pruned generation must not be allowed to break.
+            for file in ["id_indices.bin", "type_indices.bin"] {
+                assert_eq!(
+                    super::disk_link_tests::inode(&current_generation(path).join(file)),
+                    super::disk_link_tests::inode(&generation_dir(path, first).join(file)),
+                    "{stage}: {file} was not linked"
+                );
+            }
+        }
     }
     assert!(
         generation_dir(path, first).exists(),

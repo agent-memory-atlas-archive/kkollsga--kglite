@@ -29,7 +29,7 @@
 use memmap2::Mmap;
 use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::type_index_layer::TypeBucket;
@@ -104,6 +104,8 @@ pub(crate) fn buckets_materialized() -> usize {
 #[derive(Debug)]
 pub struct TypeIndexBase {
     mmap: Arc<Mmap>,
+    /// The file the mapping is of.
+    origin: PathBuf,
     /// type_name -> (file-relative offset, num_entries). Built once at load.
     dir: HashMap<String, BaseEntry>,
     /// Keeps the generation this file lies in from being pruned while it is mapped.
@@ -224,6 +226,7 @@ impl TypeIndexBase {
 
         Ok(Some(Self {
             mmap: Arc::new(mmap),
+            origin: path,
             dir: dir_map,
             _pin: super::generation::GenerationPin::containing(dir),
         }))
@@ -577,6 +580,15 @@ impl TypeIndexStore {
             removed: std::collections::HashSet::new(),
             base: Some(Arc::new(base)),
         }
+    }
+
+    /// The file this store serves, when nothing has been written over it: no
+    /// overlay bucket, appended delta or removed type. Such a store would write
+    /// a file with the same content, so a save may link the file instead.
+    pub(crate) fn unchanged_origin(&self) -> Option<&Path> {
+        let untouched =
+            self.overlay.is_empty() && self.deltas.is_empty() && self.removed.is_empty();
+        untouched.then(|| self.base.as_deref().map(|base| base.origin.as_path()))?
     }
 
     /// Fold every bucket's level stack back into one, for the buckets this
