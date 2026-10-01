@@ -9,16 +9,17 @@
 //! per id the heap map already occupies) and a General index's encoded blob.
 
 use super::{
-    le_i64_binary_search, read_le_i64, read_le_u32, IdIndexBase, IdIndexStore, DIR_ENTRY_BYTES,
-    HEADER_BYTES, INT64_ENTRY_BYTES, MAGIC, MAX_GENERAL_INDEX_DECODE_BYTES, VARIANT_GENERAL,
-    VARIANT_INT64, VARIANT_INTEGER, VERSION,
+    IdIndexBase, IdIndexStore, DIR_ENTRY_BYTES, HEADER_BYTES, INT64_ENTRY_BYTES, MAGIC,
+    MAX_GENERAL_INDEX_DECODE_BYTES, VARIANT_GENERAL, VARIANT_INT64, VARIANT_INTEGER, VERSION,
 };
 use crate::datatypes::Value;
 use crate::graph::schema::{canonical_id, mixed_numeric_kinds, StringInterner, TypeIdIndex};
 use crate::graph::storage::disk::id_index_layer::TypeEntry;
+use crate::graph::storage::disk::le_bytes::{le_i64_binary_search, read_le_i64, read_le_u32};
 use crate::graph::storage::disk::type_index::TypeIndexStore;
 use crate::serde_codec;
 use petgraph::graph::NodeIndex;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -264,8 +265,9 @@ fn merged<'b>(
 }
 
 /// The type names to write: the overlay's, then the base's that nothing masks.
-fn live_names(store: &IdIndexStore) -> Vec<String> {
-    let overlay = store.overlay.read().unwrap();
+/// `overlay` is the store's overlay, already read-locked by the caller: a second
+/// `read` on the same lock may deadlock behind a queued writer.
+fn live_names(store: &IdIndexStore, overlay: &HashMap<String, TypeEntry>) -> Vec<String> {
     let mut names: Vec<String> = overlay.keys().cloned().collect();
     if let Some(base) = store.base.as_deref() {
         names.extend(
@@ -320,7 +322,7 @@ pub fn write_id_indices_bin(
 ) -> Result<(), String> {
     let overlay = store.overlay.read().unwrap();
     let mut plans: Vec<Plan<'_>> = Vec::new();
-    for name in live_names(store) {
+    for name in live_names(store, &overlay) {
         let members = type_indices.get(&name).map(|members| members.len());
         let entry = overlay.get(&name);
         let Some(key) = interner.try_resolve_to_key(&name) else {

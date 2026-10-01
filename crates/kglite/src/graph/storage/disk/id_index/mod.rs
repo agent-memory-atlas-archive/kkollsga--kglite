@@ -46,6 +46,7 @@
 //! instead of cloning it, and a save merges the sorted delta into the sorted
 //! base while streaming the new file.
 
+use super::le_bytes::{le_i64_binary_search, le_u32_binary_search, read_le_i64, read_le_u32};
 use crate::datatypes::Value;
 use crate::graph::schema::{
     heal_general_spellings, id_spellings, id_u32, InternedKey, StringInterner, TypeIdIndex,
@@ -82,34 +83,6 @@ fn invalid_index(message: &str) -> std::io::Error {
     )
 }
 
-fn read_le_u32(bytes: &[u8], index: usize) -> Option<u32> {
-    let start = index.checked_mul(4)?;
-    Some(u32::from_le_bytes(
-        bytes.get(start..start.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-
-fn read_le_i64(bytes: &[u8], index: usize) -> Option<i64> {
-    let start = index.checked_mul(8)?;
-    Some(i64::from_le_bytes(
-        bytes.get(start..start.checked_add(8)?)?.try_into().ok()?,
-    ))
-}
-
-fn le_i64_binary_search(bytes: &[u8], wanted: i64) -> Option<usize> {
-    let mut low = 0usize;
-    let mut high = bytes.len() / 8;
-    while low < high {
-        let mid = low + (high - low) / 2;
-        match read_le_i64(bytes, mid)?.cmp(&wanted) {
-            std::cmp::Ordering::Less => low = mid + 1,
-            std::cmp::Ordering::Greater => high = mid,
-            std::cmp::Ordering::Equal => return Some(mid),
-        }
-    }
-    None
-}
-
 // Test-only tally of full `id -> node` maps built from a mapped entry. A
 // per-row lookup must never move this.
 #[cfg(test)]
@@ -120,20 +93,6 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn full_maps_built() -> usize {
     FULL_MAPS_BUILT.with(|count| count.get())
-}
-
-fn le_u32_binary_search(bytes: &[u8], wanted: u32) -> Option<usize> {
-    let mut low = 0usize;
-    let mut high = bytes.len() / 4;
-    while low < high {
-        let mid = low + (high - low) / 2;
-        match read_le_u32(bytes, mid)?.cmp(&wanted) {
-            std::cmp::Ordering::Less => low = mid + 1,
-            std::cmp::Ordering::Greater => high = mid,
-            std::cmp::Ordering::Equal => return Some(mid),
-        }
-    }
-    None
 }
 
 /// Mmap-backed read-only view of `id_indices.bin`.
@@ -157,8 +116,9 @@ pub struct IdIndexBase {
     _pin: Option<Arc<super::generation::GenerationPin>>,
 }
 
-#[derive(Clone, Copy)]
-struct BaseEntry {
+/// One type's directory entry in `id_indices.bin`: where its payload lies.
+#[derive(Clone, Copy, Debug)]
+pub struct BaseEntry {
     variant: u8,
     num_entries: u32,
     payload_off: u64,
@@ -179,10 +139,7 @@ impl IdIndexBase {
     pub(crate) fn lookup_exact(&self, name: &str, id: &Value) -> Option<NodeIndex> {
         let entry = self.dir.get(name)?;
         if entry.variant == VARIANT_INT64 {
-            return match id {
-                Value::Int64(wanted) => self.search_int64(name, *wanted),
-                _ => None,
-            };
+            return self.lookup_int64_exact_at(entry, id);
         }
         if entry.variant == VARIANT_INTEGER {
             let Value::UniqueId(wanted) = id else {
@@ -217,13 +174,22 @@ impl IdIndexBase {
             .is_some_and(|entry| entry.variant == VARIANT_INT64)
     }
 
+    /// `name`'s directory entry when it is an Int64Sorted one: what a delta
+    /// layered over the mapping keeps, so a probe does not look the name up.
+    pub(crate) fn int64_entry(&self, name: &str) -> Option<BaseEntry> {
+        self.dir
+            .get(name)
+            .filter(|entry| entry.variant == VARIANT_INT64)
+            .copied()
+    }
+
     /// `(keys, node indices)` of an Int64Sorted entry — little-endian `i64`s and
     /// `u32`s, both sorted by key — or `None` for any other variant.
     pub(crate) fn int64_parts(&self, name: &str) -> Option<(&[u8], &[u8])> {
-        let entry = self.dir.get(name)?;
-        if entry.variant != VARIANT_INT64 {
-            return None;
-        }
+        self.int64_parts_of(&self.int64_entry(name)?)
+    }
+
+    fn int64_parts_of(&self, entry: &BaseEntry) -> Option<(&[u8], &[u8])> {
         let keys_len = (entry.num_entries as usize).checked_mul(8)?;
         let start = usize::try_from(entry.payload_off).ok()?;
         let end = start.checked_add(usize::try_from(entry.payload_len).ok()?)?;
@@ -231,10 +197,24 @@ impl IdIndexBase {
     }
 
     /// Binary search of an Int64Sorted entry, in the mapping.
-    fn search_int64(&self, name: &str, wanted: i64) -> Option<NodeIndex> {
-        let (keys, nodes) = self.int64_parts(name)?;
+    fn search_int64_at(&self, entry: &BaseEntry, wanted: i64) -> Option<NodeIndex> {
+        let (keys, nodes) = self.int64_parts_of(entry)?;
         let position = le_i64_binary_search(keys, wanted)?;
         Some(NodeIndex::new(read_le_u32(nodes, position)? as usize))
+    }
+
+    /// [`Self::lookup`] on an Int64Sorted `entry` already in hand: the integer
+    /// the id denotes (`UniqueId`, `Int64` and a whole `Float64` alike).
+    pub(crate) fn lookup_int64_at(&self, entry: &BaseEntry, id: &Value) -> Option<NodeIndex> {
+        self.search_int64_at(entry, crate::graph::schema::id_integer(id)?)
+    }
+
+    /// [`Self::lookup_exact`] on an Int64Sorted `entry` already in hand.
+    pub(crate) fn lookup_int64_exact_at(&self, entry: &BaseEntry, id: &Value) -> Option<NodeIndex> {
+        match id {
+            Value::Int64(wanted) => self.search_int64_at(entry, *wanted),
+            _ => None,
+        }
     }
 
     /// Load `id_indices.bin` from `dir`. Returns `Ok(None)` if absent, shorter
@@ -427,7 +407,7 @@ impl IdIndexBase {
             // An Int64-only General index answers a query through the integer
             // it denotes (`UniqueId`, `Int64` and a whole `Float64` alike) and
             // matches nothing else, so the same rule is one search here.
-            VARIANT_INT64 => self.search_int64(name, crate::graph::schema::id_integer(id)?),
+            VARIANT_INT64 => self.lookup_int64_at(entry, id),
             _ => None,
         }
     }
@@ -921,11 +901,8 @@ impl IdIndexStore {
         };
         if needs_promotion {
             if let Some(base) = self.base.as_ref() {
-                let promoted = if base.int64_parts(&name).is_some() {
-                    Some(TypeEntry::over_base(Arc::clone(base), &name))
-                } else {
-                    base.materialize(&name).map(TypeEntry::from)
-                };
+                let promoted = TypeEntry::over_base(Arc::clone(base), &name)
+                    .or_else(|| base.materialize(&name).map(TypeEntry::from));
                 if let Some(entry) = promoted {
                     self.overlay.get_mut().unwrap().insert(name.clone(), entry);
                 }

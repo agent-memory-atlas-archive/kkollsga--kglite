@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::le_bytes::{le_u32_binary_search, le_u32_iter, read_le_u32};
 use super::type_index_layer::TypeBucket;
 use crate::graph::schema::{InternedKey, StringInterner};
 
@@ -45,35 +46,6 @@ fn invalid_index(message: &str) -> std::io::Error {
         std::io::ErrorKind::InvalidData,
         format!("invalid type_indices.bin: {message}"),
     )
-}
-
-fn read_le_u32(bytes: &[u8], index: usize) -> Option<u32> {
-    let start = index.checked_mul(4)?;
-    Some(u32::from_le_bytes(
-        bytes.get(start..start.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-
-fn le_u32_iter(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|chunk| u32::from_le_bytes(*chunk))
-}
-
-fn le_u32_binary_search(bytes: &[u8], wanted: u32) -> bool {
-    let mut low = 0usize;
-    let mut high = bytes.len() / 4;
-    while low < high {
-        let mid = low + (high - low) / 2;
-        match read_le_u32(bytes, mid).unwrap().cmp(&wanted) {
-            std::cmp::Ordering::Less => low = mid + 1,
-            std::cmp::Ordering::Greater => high = mid,
-            std::cmp::Ordering::Equal => return true,
-        }
-    }
-    false
 }
 
 // Test-only tally of whole-bucket retains: a delete that can locate its members
@@ -300,17 +272,11 @@ impl<'a> TypeNodesRef<'a> {
         match self {
             TypeNodesRef::Overlay(s) => TypeNodesIter::Overlay(s.iter()),
             TypeNodesRef::Mmap(s) => TypeNodesIter::Mmap(s.as_chunks::<4>().0.iter()),
-            TypeNodesRef::Layered(levels) => TypeNodesIter::Layered {
-                levels,
-                level: 0,
-                pos: 0,
-            },
+            TypeNodesRef::Layered(levels) => TypeNodesIter::Layered(LevelWalk::new(levels)),
             TypeNodesRef::MmapLayered { base, appended } => {
                 TypeNodesIter::MmapLayered(Box::new(MmapLayeredIter {
                     base: base.as_chunks::<4>().0.iter(),
-                    levels: appended,
-                    level: 0,
-                    pos: 0,
+                    appended: LevelWalk::new(appended),
                 }))
             }
         }
@@ -423,7 +389,7 @@ impl<'a> TypeNodesRef<'a> {
             TypeNodesRef::Overlay(s) => s.binary_search(&idx).is_ok(),
             TypeNodesRef::Mmap(s) => {
                 let want = idx.index() as u32;
-                le_u32_binary_search(s, want)
+                le_u32_binary_search(s, want).is_some()
             }
             // Each level is a contiguous run of the sorted whole, so the
             // invariant this method documents holds per level; probe them all.
@@ -433,7 +399,7 @@ impl<'a> TypeNodesRef<'a> {
             // The mapped payload is sorted; each appended level is a
             // contiguous run of the whole, as for `Layered`.
             TypeNodesRef::MmapLayered { base, appended } => {
-                le_u32_binary_search(base, idx.index() as u32)
+                le_u32_binary_search(base, idx.index() as u32).is_some()
                     || appended
                         .iter()
                         .any(|level| level.binary_search(&idx).is_ok())
@@ -453,30 +419,32 @@ pub enum TypeNodesIter<'a> {
     /// wider than the two-pointer `Overlay`/`Mmap` arms. The label scan
     /// iterates this type in its hottest loop; growing it would tax every scan
     /// for a state only a forked graph can be in.
-    Layered {
-        levels: &'a [Arc<Vec<NodeIndex>>],
-        level: u32,
-        pos: u32,
-    },
+    Layered(LevelWalk<'a>),
     /// The mapped payload, then the appended levels. Boxed so this rarely
     /// reached arm does not widen the enum the label scan iterates.
     MmapLayered(Box<MmapLayeredIter<'a>>),
 }
 
-pub struct MmapLayeredIter<'a> {
-    base: std::slice::Iter<'a, [u8; 4]>,
+/// A cursor over a stack of shared levels, in merge order. Two `u32`s rather
+/// than two `usize`s, and the remaining count derived rather than carried, so
+/// the iterator stays as small as it was before the walk was shared.
+pub struct LevelWalk<'a> {
     levels: &'a [Arc<Vec<NodeIndex>>],
     level: u32,
     pos: u32,
 }
 
-impl Iterator for MmapLayeredIter<'_> {
-    type Item = NodeIndex;
+impl<'a> LevelWalk<'a> {
+    fn new(levels: &'a [Arc<Vec<NodeIndex>>]) -> Self {
+        Self {
+            levels,
+            level: 0,
+            pos: 0,
+        }
+    }
+
     #[inline]
     fn next(&mut self) -> Option<NodeIndex> {
-        if let Some(bytes) = self.base.next() {
-            return Some(NodeIndex::new(u32::from_le_bytes(*bytes) as usize));
-        }
         while (self.level as usize) < self.levels.len() {
             if let Some(idx) = self.levels[self.level as usize].get(self.pos as usize) {
                 self.pos += 1;
@@ -487,18 +455,37 @@ impl Iterator for MmapLayeredIter<'_> {
         }
         None
     }
+
+    fn remaining(&self) -> usize {
+        self.levels
+            .iter()
+            .skip(self.level as usize)
+            .map(|entries| entries.len())
+            .sum::<usize>()
+            .saturating_sub(self.pos as usize)
+    }
+}
+
+/// The mapped payload, then the appended levels.
+pub struct MmapLayeredIter<'a> {
+    base: std::slice::Iter<'a, [u8; 4]>,
+    appended: LevelWalk<'a>,
+}
+
+impl Iterator for MmapLayeredIter<'_> {
+    type Item = NodeIndex;
+    #[inline]
+    fn next(&mut self) -> Option<NodeIndex> {
+        match self.base.next() {
+            Some(bytes) => Some(NodeIndex::new(u32::from_le_bytes(*bytes) as usize)),
+            None => self.appended.next(),
+        }
+    }
 }
 
 impl MmapLayeredIter<'_> {
     fn remaining(&self) -> usize {
-        self.base.len()
-            + self
-                .levels
-                .iter()
-                .skip(self.level as usize)
-                .map(|entries| entries.len())
-                .sum::<usize>()
-                .saturating_sub(self.pos as usize)
+        self.base.len() + self.appended.remaining()
     }
 }
 
@@ -511,17 +498,7 @@ impl<'a> Iterator for TypeNodesIter<'a> {
             TypeNodesIter::Mmap(it) => it
                 .next()
                 .map(|bytes| NodeIndex::new(u32::from_le_bytes(*bytes) as usize)),
-            TypeNodesIter::Layered { levels, level, pos } => {
-                while (*level as usize) < levels.len() {
-                    if let Some(idx) = levels[*level as usize].get(*pos as usize) {
-                        *pos += 1;
-                        return Some(*idx);
-                    }
-                    *level += 1;
-                    *pos = 0;
-                }
-                None
-            }
+            TypeNodesIter::Layered(walk) => walk.next(),
             TypeNodesIter::MmapLayered(it) => it.next(),
         }
     }
@@ -537,12 +514,7 @@ impl ExactSizeIterator for TypeNodesIter<'_> {
         match self {
             TypeNodesIter::Overlay(it) => it.len(),
             TypeNodesIter::Mmap(it) => it.len(),
-            TypeNodesIter::Layered { levels, level, pos } => levels
-                .iter()
-                .skip(*level as usize)
-                .map(|entries| entries.len())
-                .sum::<usize>()
-                .saturating_sub(*pos as usize),
+            TypeNodesIter::Layered(walk) => walk.remaining(),
             TypeNodesIter::MmapLayered(it) => it.remaining(),
         }
     }

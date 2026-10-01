@@ -19,6 +19,7 @@ pub mod graph_property_index;
 pub mod id_index;
 pub mod id_index_layer;
 pub(crate) mod index_freshness;
+mod le_bytes;
 pub mod property_index;
 pub(crate) mod query_arena;
 pub mod segment_summary;

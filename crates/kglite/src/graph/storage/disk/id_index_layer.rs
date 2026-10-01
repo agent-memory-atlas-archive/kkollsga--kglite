@@ -43,11 +43,12 @@
 //! shared base and rebuilds from the restored graph, which is the same
 //! self-healing path as before — so this layer adds no rollback surface at all.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-use super::id_index::IdIndexBase;
+use super::id_index::{BaseEntry, IdIndexBase};
 use crate::datatypes::Value;
 use crate::graph::schema::TypeIdIndex;
 
@@ -75,6 +76,8 @@ pub enum TypeEntry {
         base: Arc<IdIndexBase>,
         /// The type's name in `base`'s directory.
         name: Arc<str>,
+        /// Its directory entry, so a probe does not look the name up again.
+        entry: BaseEntry,
         delta: TypeIdIndex,
     },
     /// A base shared with at least one other graph, plus this graph's delta.
@@ -166,13 +169,132 @@ impl From<TypeIdIndex> for TypeEntry {
     }
 }
 
+/// What a delta reads through to when its own map has no answer.
+enum Under<'a> {
+    /// An Int64Sorted entry of the mapped file, in hand.
+    Mapped {
+        base: &'a IdIndexBase,
+        name: &'a str,
+        entry: &'a BaseEntry,
+    },
+    /// A base shared with another graph.
+    Shared(&'a TypeEntry),
+}
+
+impl Under<'_> {
+    fn get(&self, id: &Value) -> Option<NodeIndex> {
+        match self {
+            Under::Mapped { base, entry, .. } => base.lookup_int64_at(entry, id),
+            Under::Shared(entry) => entry.get(id),
+        }
+    }
+
+    fn get_exact(&self, id: &Value) -> Option<NodeIndex> {
+        match self {
+            Under::Mapped { base, entry, .. } => base.lookup_int64_exact_at(entry, id),
+            Under::Shared(entry) => entry.get_exact(id),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Under::Mapped { base, name, .. } => base.entry_len(name).unwrap_or(0),
+            Under::Shared(entry) => entry.len(),
+        }
+    }
+
+    /// A full heap map of what is under the delta.
+    fn materialize(&self) -> TypeIdIndex {
+        match self {
+            Under::Mapped { base, name, .. } => base.materialize(name).unwrap_or_default(),
+            Under::Shared(entry) => entry.materialize(),
+        }
+    }
+}
+
+/// A map from id to node that a delta can be applied to.
+trait IdMap {
+    fn node_of(&self, id: &Value) -> Option<NodeIndex>;
+    fn put(&mut self, id: Value, node: NodeIndex);
+    fn drop_if(&mut self, id: &Value, node: NodeIndex) -> bool;
+}
+
+impl IdMap for TypeIdIndex {
+    fn node_of(&self, id: &Value) -> Option<NodeIndex> {
+        self.get(id)
+    }
+    fn put(&mut self, id: Value, node: NodeIndex) {
+        self.insert(id, node)
+    }
+    fn drop_if(&mut self, id: &Value, node: NodeIndex) -> bool {
+        self.remove_matching(id, node)
+    }
+}
+
+impl IdMap for TypeEntry {
+    fn node_of(&self, id: &Value) -> Option<NodeIndex> {
+        self.get(id)
+    }
+    fn put(&mut self, id: Value, node: NodeIndex) {
+        self.insert(id, node)
+    }
+    fn drop_if(&mut self, id: &Value, node: NodeIndex) -> bool {
+        self.remove_matching(id, node)
+    }
+}
+
+/// Write `delta` over `target`: a tombstone removes the id it names, anything
+/// else sets it.
+fn apply_delta(target: &mut impl IdMap, delta: &TypeIdIndex) {
+    for (id, idx) in delta.iter() {
+        if idx == tombstone() {
+            if let Some(current) = target.node_of(&id) {
+                target.drop_if(&id, current);
+            }
+        } else {
+            target.put(id, idx);
+        }
+    }
+}
+
 impl TypeEntry {
-    /// A delta over the Int64Sorted entry `name` of `base`.
-    pub(crate) fn over_base(base: Arc<IdIndexBase>, name: &str) -> Self {
-        TypeEntry::OverBase {
+    /// A delta over the Int64Sorted entry `name` of `base`, or `None` when the
+    /// file has no such entry.
+    pub(crate) fn over_base(base: Arc<IdIndexBase>, name: &str) -> Option<Self> {
+        let entry = base.int64_entry(name)?;
+        Some(TypeEntry::OverBase {
             base,
             name: Arc::from(name),
+            entry,
             delta: TypeIdIndex::default(),
+        })
+    }
+
+    /// The delta and what it reads through to, for an entry that has a delta.
+    fn layer(&self) -> Option<(Under<'_>, &TypeIdIndex)> {
+        match self {
+            TypeEntry::Owned(_) => None,
+            TypeEntry::OverBase {
+                base,
+                name,
+                entry,
+                delta,
+            } => Some((Under::Mapped { base, name, entry }, delta)),
+            TypeEntry::Layered { base, delta, .. } => Some((Under::Shared(base), delta)),
+        }
+    }
+
+    /// [`Self::layer`] with the delta writable.
+    fn layer_mut(&mut self) -> Option<(Under<'_>, &mut TypeIdIndex)> {
+        match self {
+            TypeEntry::Owned(_) => None,
+            TypeEntry::OverBase {
+                base,
+                name,
+                entry,
+                delta,
+            } => Some((Under::Mapped { base, name, entry }, delta)),
+            TypeEntry::Layered { base, delta, .. } => Some((Under::Shared(base), delta)),
         }
     }
 
@@ -180,34 +302,48 @@ impl TypeEntry {
     /// and every layer's changes folded into a single delta — or `None` when the
     /// bottom of the chain is an owned map. A save reads it this way to merge the
     /// changes into the next file without copying the mapping onto the heap, even
-    /// when a fork has wrapped the delta in a shared layer.
-    pub(crate) fn delta_over_mapping(&self) -> Option<(&Arc<IdIndexBase>, &str, TypeIdIndex)> {
+    /// when a fork has wrapped the delta in a shared layer. A delta that sits
+    /// directly on the mapping is borrowed; a folded one is a new map.
+    pub(crate) fn delta_over_mapping(
+        &self,
+    ) -> Option<(&Arc<IdIndexBase>, &str, Cow<'_, TypeIdIndex>)> {
         match self {
             TypeEntry::Owned(_) => None,
-            TypeEntry::OverBase { base, name, delta } => Some((base, name, delta.clone())),
+            TypeEntry::OverBase {
+                base, name, delta, ..
+            } => Some((base, name, Cow::Borrowed(delta))),
             TypeEntry::Layered { base, delta, .. } => {
-                let (mapping, name, mut folded) = base.delta_over_mapping()?;
+                let (mapping, name, below) = base.delta_over_mapping()?;
+                let mut folded = below.into_owned();
                 for (id, idx) in delta.iter() {
                     folded.insert(id, idx);
                 }
-                Some((mapping, name, folded))
+                Some((mapping, name, Cow::Owned(folded)))
             }
+        }
+    }
+
+    /// A delta's answer for an id, or what is under it when the delta has none.
+    /// A tombstone answers "deleted".
+    #[inline]
+    fn resolve(
+        in_delta: Option<NodeIndex>,
+        under: impl FnOnce() -> Option<NodeIndex>,
+    ) -> Option<NodeIndex> {
+        match in_delta {
+            Some(idx) if idx == tombstone() => None,
+            Some(idx) => Some(idx),
+            None => under(),
         }
     }
 
     pub(crate) fn get_exact(&self, id: &Value) -> Option<NodeIndex> {
         match self {
             TypeEntry::Owned(index) => index.get_exact(id),
-            TypeEntry::OverBase { base, name, delta } => match delta.get_exact(id) {
-                Some(idx) if idx == tombstone() => None,
-                Some(idx) => Some(idx),
-                None => base.lookup_exact(name, id),
-            },
-            TypeEntry::Layered { base, delta, .. } => match delta.get_exact(id) {
-                Some(idx) if idx == tombstone() => None,
-                Some(idx) => Some(idx),
-                None => base.get_exact(id),
-            },
+            _ => {
+                let (under, delta) = self.layer().expect("a layered entry has a layer");
+                Self::resolve(delta.get_exact(id), || under.get_exact(id))
+            }
         }
     }
 
@@ -215,16 +351,10 @@ impl TypeEntry {
     pub fn get(&self, id: &Value) -> Option<NodeIndex> {
         match self {
             TypeEntry::Owned(index) => index.get(id),
-            TypeEntry::OverBase { base, name, delta } => match delta.get(id) {
-                Some(idx) if idx == tombstone() => None,
-                Some(idx) => Some(idx),
-                None => base.lookup(name, id),
-            },
-            TypeEntry::Layered { base, delta, .. } => match delta.get(id) {
-                Some(idx) if idx == tombstone() => None,
-                Some(idx) => Some(idx),
-                None => base.get(id),
-            },
+            _ => {
+                let (under, delta) = self.layer().expect("a layered entry has a layer");
+                Self::resolve(delta.get(id), || under.get(id))
+            }
         }
     }
 
@@ -240,70 +370,46 @@ impl TypeEntry {
 
     /// Drop `id`, but only when it currently resolves to `idx` — same contract
     /// as [`TypeIdIndex::remove_matching`], so a re-pointed id is left intact.
+    /// Under a delta the id is tombstoned rather than removed: what is under it
+    /// may be the immutable mapping or a base another graph is reading.
     pub fn remove_matching(&mut self, id: &Value, idx: NodeIndex) -> bool {
-        match self {
-            TypeEntry::Owned(index) => index.remove_matching(id, idx),
-            TypeEntry::OverBase { base, name, delta } => {
-                if delta.get(id) == Some(tombstone()) {
-                    return false;
-                }
-                let resolved = delta.get(id).or_else(|| base.lookup(name, id));
-                if resolved != Some(idx) {
-                    return false;
-                }
-                // Tombstone rather than remove: the mapping is immutable.
-                delta.insert(id.clone(), tombstone());
-                true
-            }
-            TypeEntry::Layered { base, delta, .. } => {
-                if delta.get(id) == Some(tombstone()) {
-                    return false;
-                }
-                let resolved = delta.get(id).or_else(|| base.get(id));
-                if resolved != Some(idx) {
-                    return false;
-                }
-                // Tombstone rather than remove: the mapping may live in the
-                // shared base, which this graph must not touch.
-                delta.insert(id.clone(), tombstone());
-                true
-            }
+        let Some((under, delta)) = self.layer_mut() else {
+            let TypeEntry::Owned(index) = self else {
+                unreachable!("only an owned entry has no layer")
+            };
+            return index.remove_matching(id, idx);
+        };
+        if delta.get(id) == Some(tombstone()) {
+            return false;
         }
+        let resolved = delta.get(id).or_else(|| under.get(id));
+        if resolved != Some(idx) {
+            return false;
+        }
+        delta.insert(id.clone(), tombstone());
+        true
     }
 
     pub fn len(&self) -> usize {
-        match self {
-            TypeEntry::Owned(index) => index.len(),
-            TypeEntry::OverBase { base, name, delta } => {
-                // Only the changed ids can move the count off the mapped one.
-                let mut live = base.entry_len(name).unwrap_or(0) as i64;
-                for (id, idx) in delta.iter() {
-                    let in_base = base.lookup(name, &id).is_some();
-                    if idx == tombstone() {
-                        if in_base {
-                            live -= 1;
-                        }
-                    } else if !in_base {
-                        live += 1;
-                    }
+        let Some((under, delta)) = self.layer() else {
+            let TypeEntry::Owned(index) = self else {
+                unreachable!("only an owned entry has no layer")
+            };
+            return index.len();
+        };
+        // Only the changed ids can move the count off the one underneath.
+        let mut live = under.len() as i64;
+        for (id, idx) in delta.iter() {
+            let beneath = under.get(&id).is_some();
+            if idx == tombstone() {
+                if beneath {
+                    live -= 1;
                 }
-                live.max(0) as usize
-            }
-            TypeEntry::Layered { base, delta, .. } => {
-                let mut live = base.len() as i64;
-                for (id, idx) in delta.iter() {
-                    let in_base = base.get(&id).is_some();
-                    if idx == tombstone() {
-                        if in_base {
-                            live -= 1;
-                        }
-                    } else if !in_base {
-                        live += 1;
-                    }
-                }
-                live.max(0) as usize
+            } else if !beneath {
+                live += 1;
             }
         }
+        live.max(0) as usize
     }
 
     /// The merged view as one owned index: **a full heap map**, one entry per id
@@ -312,35 +418,15 @@ impl TypeEntry {
     /// streaming writer cannot merge in place. Never a per-row lookup: those go
     /// through [`Self::get`].
     pub fn materialize(&self) -> TypeIdIndex {
-        match self {
-            TypeEntry::Owned(index) => index.clone(),
-            TypeEntry::OverBase { base, name, delta } => {
-                let mut merged = base.materialize(name).unwrap_or_default();
-                for (id, idx) in delta.iter() {
-                    if idx == tombstone() {
-                        if let Some(current) = merged.get(&id) {
-                            merged.remove_matching(&id, current);
-                        }
-                    } else {
-                        merged.insert(id, idx);
-                    }
-                }
-                merged
-            }
-            TypeEntry::Layered { base, delta, .. } => {
-                let mut merged = base.materialize();
-                for (id, idx) in delta.iter() {
-                    if idx == tombstone() {
-                        if let Some(current) = merged.get(&id) {
-                            merged.remove_matching(&id, current);
-                        }
-                    } else {
-                        merged.insert(id, idx);
-                    }
-                }
-                merged
-            }
-        }
+        let Some((under, delta)) = self.layer() else {
+            let TypeEntry::Owned(index) = self else {
+                unreachable!("only an owned entry has no layer")
+            };
+            return index.clone();
+        };
+        let mut merged = under.materialize();
+        apply_delta(&mut merged, delta);
+        merged
     }
 
     /// Convert this entry into a shared base and return a handle to it, so a
@@ -432,15 +518,7 @@ impl TypeEntry {
             }
             level => level,
         };
-        for (id, idx) in delta.iter() {
-            if idx == tombstone() {
-                if let Some(current) = target.get(&id) {
-                    target.remove_matching(&id, current);
-                }
-            } else {
-                target.insert(id, idx);
-            }
-        }
+        apply_delta(&mut target, &delta);
         *self = target;
     }
 
