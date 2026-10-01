@@ -646,7 +646,7 @@ pub mod api {
             EmbeddingCopyReport, RelationshipCarryStats, RelationshipKeys,
         };
         pub use crate::graph::io::export::{
-            to_csv, to_csv_dir, to_d3_json, to_gexf, to_graphml, to_text,
+            to_csv, to_csv_dir, to_d3_json, to_gexf, to_graphml, to_text, ExportManifest,
         };
         /// Dependency-free relational exit: a deterministic SQLite-dialect SQL
         /// script (`sqlite3 out.db < dump.sql`). Node types become tables,

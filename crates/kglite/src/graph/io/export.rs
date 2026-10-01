@@ -7,8 +7,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 mod encoding;
+pub mod manifest;
 mod paths;
 use encoding::{escape_csv, escape_xml, json_string};
+pub use manifest::ExportManifest;
 use paths::ExportPaths;
 
 /// Export the graph (or selection) to GraphML format.
