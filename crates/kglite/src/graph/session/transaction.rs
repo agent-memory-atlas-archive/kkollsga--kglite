@@ -49,7 +49,7 @@ impl DirGraph {
     /// first mutation bumps `version` anyway, so every plan the old id could
     /// still have matched was already unreachable by version alone.
     pub(crate) fn fork_transaction(&self) -> Self {
-        self.into_fork(self.clone())
+        self.make_fork(self.clone())
     }
 
     /// `clone`, made once: a disk graph remaps its published arrays for the
@@ -71,12 +71,12 @@ impl DirGraph {
     /// [`Self::fork_transaction`], reporting a disk graph that cannot be
     /// cloned instead of panicking.
     pub(crate) fn try_fork_transaction(&self) -> std::io::Result<Self> {
-        Ok(self.into_fork(self.try_clone()?))
+        Ok(self.make_fork(self.try_clone()?))
     }
 
     /// Make `child`, a clone of `self`, the independently mutable lineage a
     /// transaction fork is.
-    fn into_fork(&self, mut child: Self) -> Self {
+    fn make_fork(&self, mut child: Self) -> Self {
         child.graph_id = crate::graph::dir_graph::next_graph_id();
         child.graph.adopt_shared_writer_lineage(&self.graph);
         child

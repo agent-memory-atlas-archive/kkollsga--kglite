@@ -140,10 +140,13 @@ fn str_parts<'a>(
     })
 }
 
+/// A base fixed-width column's `(data, nulls)` bytes, each possibly absent.
+type FixedBase<'a> = (Option<Cow<'a, [u8]>>, Option<Cow<'a, [u8]>>);
+
 /// A fixed-width column's base parts followed by its tail's: `(data, nulls)`.
 /// A tail with no column of its own is nulls.
 fn concat_fixed<'a>(
-    base: (Option<Cow<'a, [u8]>>, Option<Cow<'a, [u8]>>),
+    base: FixedBase<'a>,
     tail: Option<(&'a [u8], &'a [u8])>,
     base_rows: usize,
     tail_rows: usize,

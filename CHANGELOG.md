@@ -311,6 +311,26 @@ before upgrading.
   and `copy()` listed it. The rollback now removes the column too. Query results
   were never affected: a column with no value reads as no value.
 
+- **A disk `save()` writes its column metadata once, with a binary twin, and
+  holds one node type's column file in memory at a time; deleting rows no
+  longer makes the next id lookup rescan the type; `copy()` and a transaction
+  fork of a disk graph map its files once.** The save wrote the type list
+  several times in a slow pretty-printed form that every reload had to parse;
+  it now writes it once, compact, beside a `columns_meta.v2.bin.zst` that a
+  reload reads instead (an older reader still stops at the JSON envelope). A
+  save used to plan every changed type before writing any, so its peak memory
+  was the sum of the changed columns; it is now the largest one (six types of
+  800,000 rows each, one string and one integer column changed in every type:
+  1,190-1,204 MB over the starting footprint before, 277-312 MB after; 3,000
+  small types: 107 to 31-35 MB, reload 82 to 56 ms best of five). A `DELETE`
+  on a type whose integer id index is served from the file now tombstones the
+  deleted ids instead of dropping the index (the next `MATCH {id: ...}` rebuilt
+  it by scanning the type: 1.1-1.5 s at 8 million versions before, 2-5 ms
+  after), and `copy()` of a disk graph with unsaved changes costs 3 ms instead
+  of 8 ms at 2 million versions. A copy now types a column that holds no value
+  as the saved file does, instead of `mixed`. Timings are release builds on a
+  machine carrying other load, interleaved against the previous build.
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk
