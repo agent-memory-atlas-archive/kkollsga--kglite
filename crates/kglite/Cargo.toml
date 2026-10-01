@@ -95,7 +95,7 @@ fixedbitset = { version = "0.5.7", default-features = false }
 # confirm the floor is reachable. fastembed 6 replaced its `anyhow`-based
 # error type with a concrete `fastembed::Error`; the adapter stringifies
 # with Display, so the switch is source-compatible here.
-fastembed = { version = "6.0", optional = true, default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
+fastembed = { version = "7.1", optional = true, default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.150"
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
