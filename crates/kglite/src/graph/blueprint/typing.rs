@@ -2,10 +2,12 @@
 //!
 //! Pandas is entirely absent. Columns are parsed to typed vectors in one
 //! pass over the table. Declared blueprint types (`"string"`, `"int"`,
-//! `"float"`, `"bool"`, `"date"`, `"datetime"`) win over inference; any
+//! `"float"`, `"bool"`, `"date"`, `"datetime"`, and the exact-text grammars of
+//! [`exact`]: `"text"`, `"timestamp"`, `"map"`) win over inference; any
 //! column without an explicit type is inferred from its non-null cells.
 //! Inference stops once a value settles the column as string.
 
+pub(crate) mod exact;
 mod integer;
 pub mod scalar;
 use scalar::parse_date as parse_date_cell;
@@ -62,7 +64,12 @@ pub fn append_typed_columns(
         // `declared_types` (and `col_index`) stay keyed by the CSV name;
         // only the output column carries the renamed spelling.
         let col_type = resolve_column_type(raw, src_idx, declared_types.get(name));
-        let col_data = build_column_data(raw, src_idx, &col_type, name, misparses)?;
+        let col_data = match declared_types.get(name).map(String::as_str) {
+            Some("text") => exact::text_column(raw, src_idx),
+            Some("timestamp") => exact::timestamp_column(raw, src_idx),
+            Some("map") => exact::map_column(raw, src_idx),
+            _ => build_column_data(raw, src_idx, &col_type, name, misparses)?,
+        };
         let out_name = rename.get(name).cloned().unwrap_or_else(|| name.clone());
         columns.push((out_name, col_type));
         data.push(col_data);
@@ -79,7 +86,9 @@ pub fn append_typed_columns(
 /// spatial / temporal virtual types handled elsewhere.
 pub fn map_blueprint_type(ty: &str) -> Option<ColumnType> {
     match ty {
-        "string" | "str" => Some(ColumnType::String),
+        "string" | "str" | "text" => Some(ColumnType::String),
+        "timestamp" => Some(ColumnType::Timestamp),
+        "map" => Some(ColumnType::Map),
         "int" | "integer" => Some(ColumnType::Int64),
         "float" => Some(ColumnType::Float64),
         "bool" | "boolean" => Some(ColumnType::Boolean),
@@ -91,7 +100,9 @@ pub fn map_blueprint_type(ty: &str) -> Option<ColumnType> {
 }
 
 /// The blueprint keyword naming `ct`, or `None` where the vocabulary has no
-/// word for it (`UniqueId`, `Timestamp`, `Map`).
+/// word for it (`UniqueId`; `Timestamp` and `Map` have declaration keywords but
+/// are never overlaid from an input's known type, whose text form is not the
+/// `exact` grammar).
 ///
 /// The inverse of [`map_blueprint_type`], so a type an input already knows can
 /// be handed to the typing pass through the same `declared_types` map a
@@ -389,10 +400,10 @@ fn build_column_data(
             }
             Ok(ColumnData::List(out))
         }
-        // CSV never infers or declares Timestamp / Map (`map_blueprint_type`
-        // has no keyword for them, and `infer_type` never yields them), so
-        // these arms are unreachable in practice. Return an all-null column of
-        // the right shape to keep the match exhaustive without a panic.
+        // The `timestamp` and `map` keywords are read by `exact` before this
+        // function is reached, and `infer_type` never yields either, so these
+        // arms are unreachable in practice. Return an all-null column of the
+        // right shape to keep the match exhaustive without a panic.
         ColumnType::Timestamp => Ok(ColumnData::Timestamp(vec![None; n])),
         ColumnType::Map => Ok(ColumnData::Map(vec![None; n])),
         ColumnType::Duration => Ok(ColumnData::Duration(
@@ -521,12 +532,15 @@ mod typing_tests {
             ("validTo", ColumnType::DateTime),
             ("list", ColumnType::List),
             ("array", ColumnType::List),
+            ("text", ColumnType::String),
+            ("timestamp", ColumnType::Timestamp),
+            ("map", ColumnType::Map),
         ] {
             assert_eq!(map_blueprint_type(kw), Some(want), "keyword '{kw}'");
         }
         // Spatial / unknown keywords are not column types: the build filters
         // them out of `declared`, so they fall through to inference.
-        for kw in ["geometry", "location.lat", "location.lon", "map", "nope"] {
+        for kw in ["geometry", "location.lat", "location.lon", "nope"] {
             assert_eq!(map_blueprint_type(kw), None, "keyword '{kw}'");
         }
     }
@@ -986,8 +1000,8 @@ mod typing_tests {
 
     #[test]
     fn the_arms_no_declaration_can_reach_still_return_full_length_columns() {
-        // `map_blueprint_type` has no keyword for UniqueId / Timestamp / Map
-        // and `infer_type` never yields them, so these arms are unreachable
+        // `UniqueId` has no keyword, and `timestamp` / `map` are handled by
+        // `exact` ahead of `build_column_data`, so these arms are unreachable
         // through a blueprint. They must still be shape-correct.
         let r = raw(&["x"], &[&["7"], &[""], &["oops"]]);
         let mut tally = MisparseTally::default();
