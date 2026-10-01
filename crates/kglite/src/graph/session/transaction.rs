@@ -49,31 +49,37 @@ impl DirGraph {
     /// first mutation bumps `version` anyway, so every plan the old id could
     /// still have matched was already unreachable by version alone.
     pub(crate) fn fork_transaction(&self) -> Self {
-        let mut child = self.clone();
-        child.graph_id = crate::graph::dir_graph::next_graph_id();
-        child.graph.adopt_shared_writer_lineage(&self.graph);
-        child
+        self.into_fork(self.clone())
     }
 
-    /// Whether a clone of this graph can be made: a disk graph remaps its
-    /// published arrays for the clone, which fails when the process is out of
-    /// descriptors or address space.
-    ///
-    /// `Clone` has no way to say so and panics, so the paths that can return an
-    /// error ask first: the attempt is made on the disk backend alone and
-    /// dropped, and costs one mapping per array.
-    pub(crate) fn check_cloneable(&self) -> std::io::Result<()> {
+    /// `clone`, made once: a disk graph remaps its published arrays for the
+    /// clone, which fails when the process is out of descriptors or address
+    /// space, and `Clone` has no way to say so and panics. This attempts the
+    /// disk backend's clone first and has the derived `Clone` take that result,
+    /// so the failure is an error and the arrays are mapped once.
+    pub(crate) fn try_clone(&self) -> std::io::Result<Self> {
         match self.graph.as_disk() {
-            Some(disk) => disk.try_clone().map(drop),
-            None => Ok(()),
+            Some(disk) => {
+                let clone = disk.try_clone()?;
+                let _parked = disk.park_clone(clone);
+                Ok(self.clone())
+            }
+            None => Ok(self.clone()),
         }
     }
 
     /// [`Self::fork_transaction`], reporting a disk graph that cannot be
     /// cloned instead of panicking.
     pub(crate) fn try_fork_transaction(&self) -> std::io::Result<Self> {
-        self.check_cloneable()?;
-        Ok(self.fork_transaction())
+        Ok(self.into_fork(self.try_clone()?))
+    }
+
+    /// Make `child`, a clone of `self`, the independently mutable lineage a
+    /// transaction fork is.
+    fn into_fork(&self, mut child: Self) -> Self {
+        child.graph_id = crate::graph::dir_graph::next_graph_id();
+        child.graph.adopt_shared_writer_lineage(&self.graph);
+        child
     }
 }
 

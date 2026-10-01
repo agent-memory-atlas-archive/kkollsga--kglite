@@ -25,7 +25,18 @@ impl DirGraph {
     /// the core primitive for binding-level explicit copy operations; snapshots
     /// and transactions must continue to use `Clone` so they preserve lineage.
     pub fn independent_copy(&self) -> Self {
-        let mut copy = self.independent_data_copy();
+        self.independent_copy_of(self.clone())
+    }
+
+    /// [`Self::independent_copy`], reporting a disk graph that cannot be cloned
+    /// (see `try_clone`) instead of panicking.
+    pub fn try_independent_copy(&self) -> std::io::Result<Self> {
+        Ok(self.independent_copy_of(self.try_clone()?))
+    }
+
+    /// Finish `clone`, a clone of `self`, as an independent copy.
+    fn independent_copy_of(&self, clone: Self) -> Self {
+        let mut copy = self.independent_data_copy_of(clone);
         // A change stream is addressed by `(epoch, seq)`, so an independent
         // lineage needs an independent epoch: the copy's events describe
         // *its* writes, and a cursor from the original must be refused rather
@@ -44,16 +55,12 @@ impl DirGraph {
         copy
     }
 
-    /// [`Self::independent_copy`], reporting a disk graph that cannot be cloned
-    /// (see `check_cloneable`) instead of panicking.
-    pub fn try_independent_copy(&self) -> std::io::Result<Self> {
-        self.check_cloneable()?;
-        Ok(self.independent_copy())
-    }
-
     /// Separate data-derived identity and caches while retaining observation lineage.
     pub(super) fn independent_data_copy(&self) -> Self {
-        let mut copy = self.clone();
+        self.independent_data_copy_of(self.clone())
+    }
+
+    fn independent_data_copy_of(&self, mut copy: Self) -> Self {
         copy.graph_id = next_graph_id();
         copy.wkt_cache = copy_cache(&self.wkt_cache);
         // The two edge-derived caches need nothing here: they are

@@ -2138,19 +2138,67 @@ pub(crate) fn fail_snapshot_of(array: &'static str) -> SnapshotFailpoint {
     SnapshotFailpoint
 }
 
+// Disk-backend clones made on this thread, so a test can see that a copy or a
+// fork maps the published arrays once.
+#[cfg(test)]
+thread_local! {
+    static DISK_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn disk_clones_made() -> usize {
+    DISK_CLONES.with(|count| count.get())
+}
+
+thread_local! {
+    /// A clone [`DiskGraph::park_clone`] made, held for the `Clone::clone` that
+    /// `#[derive(Clone)]` on `DirGraph` is about to ask of the same graph.
+    static PARKED_CLONE: std::cell::RefCell<Option<(*const DiskGraph, DiskGraph)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Clears the parked clone when dropped, so one nobody asked for never answers
+/// a later, unrelated `clone`.
+pub(crate) struct ParkedClone;
+
+impl Drop for ParkedClone {
+    fn drop(&mut self) {
+        PARKED_CLONE.with(|slot| slot.borrow_mut().take());
+    }
+}
+
 impl Clone for DiskGraph {
     /// The infallible `Clone` that `#[derive(Clone)]` on `DirGraph` and
     /// `Arc::make_mut` require. A clone that cannot map an array has no value
     /// to return here, so this is the one place the failure is a panic; the
-    /// paths that own an error channel (`DirGraph::try_fork_transaction`,
-    /// `try_independent_copy`) ask [`DiskGraph::try_clone`] first and report it.
+    /// paths that own an error channel (`DirGraph::try_clone`) make the clone
+    /// with [`DiskGraph::try_clone`], park it, and let the derive's call land
+    /// on it, so the clone is made once and its failure is an error.
     fn clone(&self) -> Self {
-        self.try_clone()
-            .unwrap_or_else(|error| panic!("failed to clone the disk graph: {error}"))
+        let parked = PARKED_CLONE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            match slot.as_ref() {
+                Some((origin, _)) if std::ptr::eq(*origin, self) => {
+                    slot.take().map(|(_, clone)| clone)
+                }
+                _ => None,
+            }
+        });
+        parked.unwrap_or_else(|| {
+            self.try_clone()
+                .unwrap_or_else(|error| panic!("failed to clone the disk graph: {error}"))
+        })
     }
 }
 
 impl DiskGraph {
+    /// Hold `clone` (made by [`Self::try_clone`]) as the answer to the next
+    /// `Clone::clone` of `self` on this thread, until the guard drops.
+    pub(crate) fn park_clone(&self, clone: DiskGraph) -> ParkedClone {
+        PARKED_CLONE.with(|slot| *slot.borrow_mut() = Some((self as *const DiskGraph, clone)));
+        ParkedClone
+    }
+
     /// Clone for a transaction or a copy, reporting the array that could not be
     /// remapped instead of panicking.
     ///
@@ -2159,6 +2207,8 @@ impl DiskGraph {
     /// changed rows), not O(nodes + edges), and keeps reader snapshots on
     /// the prior generation. Heap-backed arrays still clone normally.
     pub(crate) fn try_clone(&self) -> std::io::Result<DiskGraph> {
+        #[cfg(test)]
+        DISK_CLONES.with(|count| count.set(count.get() + 1));
         fn snapshot<T: crate::graph::storage::mapped::mmap_vec::MmapPod>(
             name: &'static str,
             value: &MmapOrVec<T>,

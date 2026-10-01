@@ -2092,6 +2092,32 @@ fn a_copy_or_fork_of_a_disk_graph_that_cannot_be_cloned_is_an_error_and_leaves_t
     );
 }
 
+/// A copy or a transaction fork makes one disk clone, not a probe and then a
+/// second one, and a clone made for it never answers a later `clone`.
+#[test]
+fn a_fallible_copy_or_fork_clones_the_disk_backend_once() {
+    let root = TempDir::new().unwrap();
+    let graph = mapped_disk_graph(root.path());
+    let cost = |make: &dyn Fn()| {
+        let before = super::disk_clones_made();
+        make();
+        super::disk_clones_made() - before
+    };
+    assert_eq!(cost(&|| drop(graph.try_independent_copy().unwrap())), 1);
+    assert_eq!(cost(&|| drop(graph.try_fork_transaction().unwrap())), 1);
+    assert_eq!(
+        cost(&|| drop(graph.clone())),
+        1,
+        "a plain clone is made fresh"
+    );
+    drop(graph.try_clone().unwrap());
+    assert_eq!(
+        cost(&|| drop(graph.clone())),
+        1,
+        "the clone made for the attempt is not left parked for a later request"
+    );
+}
+
 #[test]
 fn a_transaction_whose_fork_fails_stays_open_on_its_snapshot() {
     use crate::error::KgError;
