@@ -483,10 +483,16 @@ impl DiskGraph {
     }
 
     /// A property of the node at `slot` was written; `None` for a caller that
-    /// did not resolve the node's type.
+    /// did not resolve the node's type, or the field it wrote.
     #[inline]
-    pub(crate) fn note_index_property_written(&self, slot: u32, node_type: Option<&str>) {
-        self.index_freshness.note_property_written(slot, node_type);
+    pub(crate) fn note_index_property_written(
+        &self,
+        slot: u32,
+        node_type: Option<&str>,
+        field: Option<&str>,
+    ) {
+        self.index_freshness
+            .note_property_written(slot, node_type, field);
     }
 
     /// The node at `slot` was removed.

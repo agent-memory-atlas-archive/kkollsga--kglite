@@ -493,12 +493,11 @@ pub(crate) mod write_hooks {
         note_work();
         crate::graph::text_indexes::note_property_written(graph, node, node_type, field);
         if let Some(disk) = disk_tracking(graph) {
-            // Field-blind on the disk side: a persistent bundle is keyed on the
-            // user's spelling of the property, and `field` is the
-            // alias-resolved one, so comparing them would need a per-row
-            // re-resolve to answer a question whose wrong answer is one
-            // redundant rebuild.
-            disk.note_index_property_written(node.index() as u32, Some(node_type));
+            // A typed bundle is keyed on the user's spelling of the property
+            // and `field` is the alias-resolved one, so only the global
+            // bundles, whose identity is known, read it; see
+            // `DiskIndexFreshness::note_property_written`.
+            disk.note_index_property_written(node.index() as u32, Some(node_type), field);
         }
     }
 

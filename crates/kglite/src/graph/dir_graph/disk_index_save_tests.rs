@@ -305,6 +305,121 @@ fn a_bundle_the_generation_does_not_hold_is_built() {
     assert_eq!(title_hits(&load_owned(&path), "Employee-5"), Some(1));
 }
 
+/// A type whose title field is `label`, beside an ordinary `name` and `code`.
+fn add_items(graph: &mut DirGraph) {
+    let frame = DataFrame::from_cypher_rows(
+        vec!["id".into(), "label".into(), "name".into(), "code".into()],
+        (0..50)
+            .map(|i| {
+                vec![
+                    Value::Int64(i),
+                    Value::String(format!("Item-{i}")),
+                    Value::String(format!("name-{i}")),
+                    Value::Int64(i),
+                ]
+            })
+            .collect(),
+    )
+    .unwrap();
+    maintain::add_nodes(
+        graph,
+        frame,
+        "Item".into(),
+        "id".into(),
+        Some("label".into()),
+        None,
+    )
+    .unwrap();
+}
+
+/// Rows whose title is `value`, counted by a scan: the function around the
+/// property keeps the predicate off every index.
+fn scanned_title_count(graph: &mut DirGraph, value: &str) -> i64 {
+    match run(
+        graph,
+        &format!("MATCH (n) WHERE toString(n.title) = '{value}' RETURN count(n) AS c"),
+    )[0][0]
+    {
+        Value::Int64(count) => count,
+        ref other => panic!("count was {other:?}"),
+    }
+}
+
+/// A write that no global bundle reads is carried over; one that any of them
+/// reads is not. The bundle is held to what a scan answers, so the test does
+/// not decide which spelling is the title: it asks the graph.
+#[test]
+fn a_save_carries_a_global_bundle_exactly_when_no_write_could_have_changed_it() {
+    // (statement, the global bundles that must have been rebuilt)
+    let writes: &[(&str, &[&str])] = &[
+        ("MATCH (e:Employee {id: 3}) SET e.grade = 99", &[]),
+        (
+            "MATCH (e:Employee {id: 3}) SET e.grade = 99, e.rank = 'x'",
+            &[],
+        ),
+        ("MATCH (i:Item {id: 4}) SET i.code = 99", &[]),
+        (
+            "MATCH (i:Item {id: 4}) SET i.label = 'Relabelled'",
+            &["nid", "title"],
+        ),
+        (
+            "MATCH (i:Item {id: 4}) SET i.name = 'Relabelled'",
+            &["nid", "title"],
+        ),
+        (
+            "MATCH (i:Item {id: 4}) SET i.title = 'Relabelled'",
+            &["nid", "title"],
+        ),
+        (
+            "MATCH (e:Employee {id: 3}) SET e.name = 'Relabelled'",
+            &["nid", "title"],
+        ),
+        (
+            "MATCH (e:Employee {id: 3}) SET e.nid = 'Relabelled'",
+            &["nid"],
+        ),
+    ];
+    for reopen_first in [false, true] {
+        for (statement, rebuilt) in writes {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().to_str().unwrap().to_string();
+            let mut graph = saved_graph(&path);
+            add_items(&mut graph);
+            graph.save_disk(&path).unwrap();
+            if reopen_first {
+                drop(graph);
+                graph = load_owned(&path);
+            }
+            take_global_builds();
+            run(&mut graph, statement);
+            graph.save_disk(&path).unwrap();
+            let mut builds = take_global_builds();
+            builds.sort();
+            assert_eq!(
+                builds,
+                rebuilt.to_vec(),
+                "{statement} (reopened: {reopen_first}): the global bundles rebuilt"
+            );
+            drop(graph);
+            let mut reloaded = load_owned(&path);
+            for title in [
+                "Relabelled",
+                "Employee-3",
+                "Employee-4",
+                "Item-4",
+                "Item-5",
+                "name-4",
+            ] {
+                assert_eq!(
+                    title_hits(&reloaded, title),
+                    Some(scanned_title_count(&mut reloaded, title) as usize),
+                    "{statement} (reopened: {reopen_first}): the bundle and a scan disagree on {title:?}"
+                );
+            }
+        }
+    }
+}
+
 /// `(id_indices.bin, type_indices.bin)` of the generation `path` is on.
 fn index_files(path: &str) -> [std::path::PathBuf; 2] {
     let generation = current_generation(path);

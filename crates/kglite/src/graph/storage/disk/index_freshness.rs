@@ -65,17 +65,42 @@ pub(crate) struct DiskIndexFreshness {
     tracked: AtomicU8,
 }
 
+/// The global bundles a disk save always carries.
+const SAVED_GLOBALS: [&str; 2] = ["title", "nid"];
+
+/// Whether a write to `field` can change what the global bundle on `property`
+/// holds for a node: the bundle's own column, and the identity fields it falls
+/// back to (`title`, its Cypher spelling `name`, `id`).
+///
+/// `field` is the alias-resolved spelling the write landed in (a declared title
+/// or id spelling arrives as `title` / `id`), so a write to any other property
+/// leaves the bundle exactly as it was.
+fn global_field_matters(property: &str, field: &str) -> bool {
+    field == property || matches!(field, "title" | "name" | "id")
+}
+
 const UNDECIDED: u8 = 0;
 const NO_BUNDLE: u8 = 1;
 const HAS_BUNDLE: u8 = 2;
 
 impl DiskIndexFreshness {
     /// Freshness for a graph whose bundles all cover slots below `node_bound`.
+    ///
+    /// The two global bundles every save carries are registered here rather
+    /// than discovered later: a lazily discovered bundle inherits the baseline,
+    /// which marks every write because it stands for bundles of unknown
+    /// identity, so it could never stay fresh across a write to an unrelated
+    /// property (see [`global_field_matters`]).
     pub(crate) fn covering(node_bound: u32) -> Self {
+        let baseline = Arc::new(IndexFreshness::covering(node_bound, None));
+        let global = SAVED_GLOBALS
+            .iter()
+            .map(|property| (property.to_string(), Arc::new((*baseline).clone())))
+            .collect();
         Self {
-            baseline: Arc::new(IndexFreshness::covering(node_bound, None)),
+            baseline,
             typed: RwLock::new(HashMap::new()),
-            global: RwLock::new(HashMap::new()),
+            global: RwLock::new(global),
             tracked: AtomicU8::new(UNDECIDED),
         }
     }
@@ -136,25 +161,31 @@ impl DiskIndexFreshness {
     /// A property of the node at `slot` was written. `node_type` is `None` from
     /// a caller that did not resolve it, which marks every typed bundle.
     ///
-    /// Field-blind: a typed bundle records `(node_type, property)`, and the
-    /// callers that *do* know the written field pass an alias-resolved
-    /// spelling that a bundle keyed on the user's spelling cannot be compared
-    /// against without re-resolving per row. Marking one extra bundle costs one
-    /// declined lookup until the next rebuild; missing one is a wrong answer.
-    pub(crate) fn note_property_written(&self, slot: u32, node_type: Option<&str>) {
+    /// `field` is the alias-resolved field the write landed in, or `None` from
+    /// a caller that wrote a set of fields it did not decompose. It is used for
+    /// the global bundles only, whose identity is known: one of them stays
+    /// fresh across a write to a field it does not read
+    /// ([`global_field_matters`]). A typed bundle records `(node_type,
+    /// property)` in the user's spelling, and the alias-resolved `field` cannot
+    /// be compared against it without re-resolving per row, so a typed bundle
+    /// is marked whatever the field: one extra bundle costs one declined lookup
+    /// until the next rebuild; missing one is a wrong answer.
+    pub(crate) fn note_property_written(
+        &self,
+        slot: u32,
+        node_type: Option<&str>,
+        field: Option<&str>,
+    ) {
         self.baseline.note_changed(slot);
         for (key, freshness) in self.typed.read().unwrap_or_else(|e| e.into_inner()).iter() {
             if node_type.is_none_or(|written| written == key.0) {
                 freshness.note_changed(slot);
             }
         }
-        for freshness in self
-            .global
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-        {
-            freshness.note_changed(slot);
+        for (property, freshness) in self.global.read().unwrap_or_else(|e| e.into_inner()).iter() {
+            if field.is_none_or(|field| global_field_matters(property, field)) {
+                freshness.note_changed(slot);
+            }
         }
     }
 
@@ -166,7 +197,7 @@ impl DiskIndexFreshness {
     /// answered from the stale bundle, and one of the matcher's index arms
     /// returns its hits unfiltered.
     pub(crate) fn note_removed(&self, slot: u32) {
-        self.note_property_written(slot, None);
+        self.note_property_written(slot, None, None);
     }
 
     /// Whether the typed bundle for `key` covers the graph up to `node_bound`.
@@ -285,7 +316,7 @@ mod tests {
         let state = DiskIndexFreshness::covering(4);
         // A write below the watermark lands only in the baseline — nothing is
         // registered yet.
-        state.note_property_written(1, Some("Doc"));
+        state.note_property_written(1, Some("Doc"), None);
 
         assert!(
             !state.typed_is_fresh(&key(), 4),
@@ -339,6 +370,47 @@ mod tests {
         assert!(!state.global_is_fresh("title", 4));
     }
 
+    /// The two bundles a save carries read the identity fields and their own
+    /// column; a write to any other property leaves them as they were, while a
+    /// bundle whose identity is unknown stays marked by every write.
+    #[test]
+    fn a_saved_global_bundle_is_marked_only_by_a_write_to_a_field_it_reads() {
+        for (property, matters) in [
+            ("title", ["title", "name", "id", "title"]),
+            ("nid", ["nid", "title", "name", "id"]),
+        ] {
+            for field in matters {
+                let state = DiskIndexFreshness::covering(4);
+                state.note_property_written(1, Some("Doc"), Some(field));
+                assert!(
+                    !state.global_is_fresh(property, 4),
+                    "{property} must go stale on a write to {field}"
+                );
+            }
+            let state = DiskIndexFreshness::covering(4);
+            state.note_property_written(1, Some("Doc"), Some("grade"));
+            assert!(
+                state.global_is_fresh(property, 4),
+                "{property} reads no `grade`"
+            );
+            state.note_property_written(1, Some("Doc"), None);
+            assert!(
+                !state.global_is_fresh(property, 4),
+                "a write of unknown fields marks it"
+            );
+        }
+        let state = DiskIndexFreshness::covering(4);
+        state.note_property_written(1, Some("Doc"), Some("grade"));
+        assert!(
+            !state.global_is_fresh("label", 4),
+            "a bundle of unknown identity inherits every write"
+        );
+        assert!(
+            !state.typed_is_fresh(&key(), 4),
+            "a typed bundle is marked whatever the field"
+        );
+    }
+
     #[test]
     fn a_build_after_the_first_question_still_opens_the_write_gate() {
         let state = DiskIndexFreshness::covering(4);
@@ -362,7 +434,7 @@ mod tests {
         assert!(state.typed_is_fresh(&key(), 4));
         let copy = state.clone();
 
-        copy.note_property_written(1, None);
+        copy.note_property_written(1, None, None);
 
         assert!(!copy.typed_is_fresh(&key(), 4));
         assert!(state.typed_is_fresh(&key(), 4), "the source must not move");
