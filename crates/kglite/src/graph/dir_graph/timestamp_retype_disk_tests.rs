@@ -22,14 +22,14 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-/// `Pand`'s column kind per property, as the store reports it.
-fn pand_kinds(graph: &DirGraph, properties: &[&str]) -> Vec<(String, Option<&'static str>)> {
+/// `Employment`'s column kind per property, as the store reports it.
+fn employment_kinds(graph: &DirGraph, properties: &[&str]) -> Vec<(String, Option<&'static str>)> {
     let store = graph
         .column_stores_by_name()
         .into_iter()
-        .find(|(name, _)| *name == "Pand")
+        .find(|(name, _)| *name == "Employment")
         .map(|(_, store)| Arc::clone(store))
-        .expect("the fixture has a Pand type");
+        .expect("the fixture has an Employment type");
     properties
         .iter()
         .map(|name| {
@@ -41,11 +41,11 @@ fn pand_kinds(graph: &DirGraph, properties: &[&str]) -> Vec<(String, Option<&'st
         .collect()
 }
 
-fn pand_values(graph: &DirGraph, property: &str) -> Vec<Option<Value>> {
+fn employment_values(graph: &DirGraph, property: &str) -> Vec<Option<Value>> {
     let store = graph
         .column_stores_by_name()
         .into_iter()
-        .find(|(name, _)| *name == "Pand")
+        .find(|(name, _)| *name == "Employment")
         .map(|(_, store)| Arc::clone(store))
         .unwrap();
     let key = InternedKey::from_str(property);
@@ -64,24 +64,27 @@ fn a_0_19_0_disk_directory_retypes_its_timestamp_columns_on_the_first_save() {
     let properties = ["vf", "vt", "seen", "rec", "status"];
 
     let mut graph = load_file(path).unwrap();
-    let before: Vec<Option<Value>> = pand_values(&graph, "seen");
+    let before: Vec<Option<Value>> = employment_values(&graph, "seen");
     assert!(
         before
             .iter()
             .any(|v| matches!(v, Some(Value::Timestamp(_)))),
         "the fixture's `seen` column holds timestamps"
     );
-    let kinds = pand_kinds(&graph, &properties);
+    let kinds = employment_kinds(&graph, &properties);
     for (name, kind) in &kinds[..4] {
         assert_eq!(*kind, Some("mixed"), "{name} is Mixed as 0.19.0 wrote it");
     }
-    let seen_before: Vec<_> = properties.iter().map(|p| pand_values(&graph, p)).collect();
+    let seen_before: Vec<_> = properties
+        .iter()
+        .map(|p| employment_values(&graph, p))
+        .collect();
 
     save_graph(&mut graph, path).unwrap();
     drop(graph);
     let graph = load_file(path).unwrap();
 
-    let kinds = pand_kinds(&graph, &properties);
+    let kinds = employment_kinds(&graph, &properties);
     let kind_of = |name: &str| kinds.iter().find(|(n, _)| n == name).unwrap().1;
     for name in ["vf", "vt", "seen"] {
         assert_eq!(kind_of(name), Some("timestamp"), "{name} is re-typed");
@@ -91,6 +94,9 @@ fn a_0_19_0_disk_directory_retypes_its_timestamp_columns_on_the_first_save() {
         Some("mixed"),
         "a column holding several kinds is never typed"
     );
-    let seen_after: Vec<_> = properties.iter().map(|p| pand_values(&graph, p)).collect();
+    let seen_after: Vec<_> = properties
+        .iter()
+        .map(|p| employment_values(&graph, p))
+        .collect();
     assert_eq!(seen_after, seen_before, "no value changed in the re-typing");
 }

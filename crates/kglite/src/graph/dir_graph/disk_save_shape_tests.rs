@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-const PAND: i64 = 2_000;
+const EMPLOYMENT: i64 = 2_000;
 const OTHER: i64 = 500;
 
 fn add(graph: &mut DirGraph, node_type: &str, rows: i64, extra: &str) {
@@ -52,7 +52,7 @@ fn run(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
 
 /// Every type is served from its own mmap column file, and the files agree.
 fn assert_mmap_served(graph: &DirGraph, path: &str, when: &str) {
-    for node_type in ["Pand", "Other"] {
+    for node_type in ["Employment", "Other"] {
         let store = graph.column_store(node_type).expect("columnar type");
         assert!(
             store.has_mmap_base(),
@@ -65,7 +65,7 @@ fn assert_mmap_served(graph: &DirGraph, path: &str, when: &str) {
         .join(current.trim());
     let meta = crate::graph::io::columns_meta::read(&generation.join("seg_000/columns_meta.json"))
         .unwrap_or_else(|e| panic!("{when}: the generation has no column metadata: {e}"));
-    for node_type in ["Pand", "Other"] {
+    for node_type in ["Employment", "Other"] {
         let file = meta
             .files
             .get(node_type)
@@ -87,7 +87,7 @@ fn assert_mmap_served(graph: &DirGraph, path: &str, when: &str) {
 
 fn saved(path: &str) {
     let mut graph = DirGraph::new();
-    add(&mut graph, "Pand", PAND, "rec_to");
+    add(&mut graph, "Employment", EMPLOYMENT, "rec_to");
     add(&mut graph, "Other", OTHER, "v");
     graph.enable_disk_mode().unwrap();
     graph.save_disk(path).unwrap();
@@ -104,7 +104,7 @@ fn a_reopened_disk_graph_stays_mmap_served_across_write_saves() {
         let mut graph = load_owned(path);
         run(
             &mut graph,
-            &format!("MATCH (n:Pand) WHERE n.id <= 100 SET n.rec_to = {cycle}"),
+            &format!("MATCH (n:Employment) WHERE n.id <= 100 SET n.rec_to = {cycle}"),
         );
         graph.save_disk(path).unwrap();
         drop(graph);
@@ -113,7 +113,7 @@ fn a_reopened_disk_graph_stays_mmap_served_across_write_saves() {
         assert_mmap_served(&graph, path, &format!("cycle {cycle}"));
         let rows = run(
             &mut graph,
-            "MATCH (n:Pand) WHERE n.id IN [1, 100, 101] \
+            "MATCH (n:Employment) WHERE n.id IN [1, 100, 101] \
              RETURN n.id AS id, n.rec_to AS r, n.title AS t ORDER BY id",
         );
         assert_eq!(
@@ -122,17 +122,17 @@ fn a_reopened_disk_graph_stays_mmap_served_across_write_saves() {
                 vec![
                     Value::Int64(1),
                     Value::Int64(cycle),
-                    Value::String("Pand-1".into())
+                    Value::String("Employment-1".into())
                 ],
                 vec![
                     Value::Int64(100),
                     Value::Int64(cycle),
-                    Value::String("Pand-100".into())
+                    Value::String("Employment-100".into())
                 ],
                 vec![
                     Value::Int64(101),
                     Value::Int64(1010),
-                    Value::String("Pand-101".into())
+                    Value::String("Employment-101".into())
                 ],
             ],
             "cycle {cycle}"
@@ -154,7 +154,10 @@ fn a_no_op_save_of_a_reopened_disk_graph_keeps_its_shape() {
         let mut graph = load_owned(path);
         assert_mmap_served(&graph, path, &format!("no-op cycle {cycle}"));
         assert_eq!(
-            run(&mut graph, "MATCH (n:Pand {id: 5}) RETURN n.rec_to AS r"),
+            run(
+                &mut graph,
+                "MATCH (n:Employment {id: 5}) RETURN n.rec_to AS r"
+            ),
             vec![vec![Value::Int64(50)]]
         );
     }
@@ -169,7 +172,7 @@ fn a_drifted_all_mixed_store_heals_on_save() {
     let path = dir.path().to_str().unwrap();
     saved(path);
     let mut graph = load_owned(path);
-    for node_type in ["Pand", "Other"] {
+    for node_type in ["Employment", "Other"] {
         let store = graph.column_store(node_type).unwrap();
         let meta = graph
             .node_type_metadata
@@ -191,8 +194,8 @@ fn a_drifted_all_mixed_store_heals_on_save() {
     assert_eq!(
         run(
             &mut graph,
-            "MATCH (n:Pand {id: 9}) RETURN n.rec_to AS r, n.title AS t"
+            "MATCH (n:Employment {id: 9}) RETURN n.rec_to AS r, n.title AS t"
         ),
-        vec![vec![Value::Int64(90), Value::String("Pand-9".into())]]
+        vec![vec![Value::Int64(90), Value::String("Employment-9".into())]]
     );
 }

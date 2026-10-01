@@ -289,9 +289,9 @@ def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_versi
     directory = tmp_path / "sidecar_only"
     graph = kglite.KnowledgeGraph(storage="disk", path=str(directory))
     frame = pd.DataFrame({"id": [3100000000001, 3100000000002], "ident": [3100000000001, 3100000000002], "v": [1, 2]})
-    graph.add_nodes(frame, "Pand", "id", "ident")
-    graph.cypher("MATCH (p:Pand {id: 3100000000001}) SET p.note = 7")
-    graph.cypher("MATCH (p:Pand {id: 3100000000002}) SET p.note = 'seven'")
+    graph.add_nodes(frame, "Employment", "id", "ident")
+    graph.cypher("MATCH (p:Employment {id: 3100000000001}) SET p.note = 7")
+    graph.cypher("MATCH (p:Employment {id: 3100000000002}) SET p.note = 'seven'")
     graph.save()
     del graph
     assert not _sidecars(directory, "columns.bin") and not list(directory.rglob("type_columns")), (
@@ -299,11 +299,11 @@ def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_versi
     )
     (envelope_path,) = _sidecars(directory, "columns_meta.json")
     envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
-    assert envelope["types"] == [] and list(envelope["sidecars"]) == ["Pand"]
-    assert envelope["sidecars"]["Pand"].startswith("columns/") and ".." not in envelope["sidecars"]["Pand"]
+    assert envelope["types"] == [] and list(envelope["sidecars"]) == ["Employment"]
+    assert envelope["sidecars"]["Employment"].startswith("columns/") and ".." not in envelope["sidecars"]["Employment"]
     (path,) = _sidecars(directory, "id_indices.bin")
     assert path.read_bytes()[8:12] == struct.pack("<I", 3)
-    assert kglite.load(str(directory)).cypher("MATCH (p:Pand) RETURN count(p) AS c").to_list() == [{"c": 2}]
+    assert kglite.load(str(directory)).cypher("MATCH (p:Employment) RETURN count(p) AS c").to_list() == [{"c": 2}]
 
 
 def _resaved_directory(tmp_path: Path) -> Path:

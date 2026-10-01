@@ -26,8 +26,8 @@ SLACK_MS = 250
 SLOW = "reduce(s = 0, j IN range(1, $w) | s + j)"
 
 STATEMENTS = {
-    "set_return": f"UNWIND range(1, $k) AS i MATCH (n:Pand {{id: i}}) SET n.acc = {SLOW} RETURN count(n) AS c",
-    "set_no_return": f"UNWIND range(1, $k) AS i MATCH (n:Pand {{id: i}}) SET n.acc = {SLOW}",
+    "set_return": f"UNWIND range(1, $k) AS i MATCH (n:Employment {{id: i}}) SET n.acc = {SLOW} RETURN count(n) AS c",
+    "set_no_return": f"UNWIND range(1, $k) AS i MATCH (n:Employment {{id: i}}) SET n.acc = {SLOW}",
     "create": f"UNWIND range(1, $k) AS i CREATE (:Tmp {{v: {SLOW}}})",
     "merge": f"UNWIND range(1, $k) AS i MERGE (t:Tmp {{k: i}}) ON CREATE SET t.acc = {SLOW}",
 }
@@ -38,13 +38,13 @@ def build(mode: str, tmp_path, name: str) -> kglite.KnowledgeGraph:
         g = kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / f"{name}.kgl"))
     else:
         g = kglite.KnowledgeGraph()
-    g.cypher(f"UNWIND range(1, {NODES}) AS i CREATE (:Pand {{id: i, title: toString(i)}})")
+    g.cypher(f"UNWIND range(1, {NODES}) AS i CREATE (:Employment {{id: i, title: toString(i)}})")
     return g
 
 
 def changed(g) -> tuple[int, int]:
-    """Nodes a statement above would have written: (Pand with acc, Tmp)."""
-    acc = g.cypher("MATCH (n:Pand) WHERE n.acc IS NOT NULL RETURN count(n) AS c").to_list()[0]["c"]
+    """Nodes a statement above would have written: (Employment with acc, Tmp)."""
+    acc = g.cypher("MATCH (n:Employment) WHERE n.acc IS NOT NULL RETURN count(n) AS c").to_list()[0]["c"]
     tmp = g.cypher("MATCH (t:Tmp) RETURN count(t) AS c").to_list()[0]["c"]
     return acc, tmp
 
@@ -121,7 +121,7 @@ def test_timeout_reports_the_configured_limit_despite_a_large_parameter():
     rows = [{"id": i % NODES + 1} for i in range(300_000)]
     with pytest.raises(kglite.CypherTimeoutError) as excinfo:
         g.cypher(
-            f"UNWIND $rows AS c MATCH (n:Pand {{id: c.id}}) SET n.acc = {SLOW}",
+            f"UNWIND $rows AS c MATCH (n:Employment {{id: c.id}}) SET n.acc = {SLOW}",
             params={"rows": rows, "w": 20000},
             timeout_ms=300,
         )

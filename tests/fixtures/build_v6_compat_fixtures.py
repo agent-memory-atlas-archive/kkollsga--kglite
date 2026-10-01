@@ -25,7 +25,7 @@ What it writes under `tests/fixtures/kgl_v6/`:
 * `graph.kgl` + `graph.expected.json` — a small register-shaped graph: a
   versioned type with int64 ids, an integer title, a declared valid-time
   interval, typed and Mixed timestamp columns and an Int32 column; an anchor
-  type, `VAN` edges carrying properties, and a string-keyed type.
+  type, `OF` edges carrying properties, and a string-keyed type.
 * `durable/` + `durable.expected.json` — a durable session that checkpointed
   and then took more writes, killed with `os._exit` so the write-ahead log
   still carries un-checkpointed frames.
@@ -34,8 +34,11 @@ What it writes under `tests/fixtures/kgl_v6/`:
 * `disk_int_title/` + `disk_int_title.expected.json` — a disk directory whose
   only type has an integer title and no `Mixed` column, which 0.19.0 kept in a
   per-type zstd sidecar (a non-string title forced one) and a later build moves
-  into its per-type column file. Regenerate only this one with
-  `python build_v6_compat_fixtures.py int-title`.
+  into its per-type column file.
+
+Name any of `graph`, `durable`, `disk`, `int-title` on the command line to
+regenerate only those (for example `python build_v6_compat_fixtures.py graph
+disk`); with none, all four are written.
 """
 
 from __future__ import annotations
@@ -55,31 +58,33 @@ V6_HEADER = b"RGF\x06\x02"
 #: Read back on both sides of every fixture. Ordered so the comparison is
 #: positional and a reordering counts as a difference.
 QUERIES = {
-    "counts": "MATCH (p:Pand) RETURN count(p) AS versions",
-    "anchors": "MATCH (o:PandObj) RETURN count(o) AS anchors",
+    "counts": "MATCH (p:Employment) RETURN count(p) AS versions",
+    "anchors": "MATCH (o:Employee) RETURN count(o) AS anchors",
     "typed": (
-        "MATCH (p:Pand) RETURN p.id AS id, p.title AS title, p.status AS status, "
-        "p.bouwjaar AS bouwjaar, p.vf AS vf, p.vt AS vt, p.seen AS seen ORDER BY p.id"
+        "MATCH (p:Employment) RETURN p.id AS id, p.title AS title, p.status AS status, "
+        "p.hire_year AS hire_year, p.vf AS vf, p.vt AS vt, p.seen AS seen ORDER BY p.id"
     ),
-    "mixed": "MATCH (p:Pand) RETURN p.id AS id, p.rec AS rec ORDER BY p.id",
-    "as_of_2006": "FOR VALID_TIME AS OF datetime('2006-06-15T00:00:00') MATCH (p:Pand) RETURN count(*) AS c",
-    "as_of_micros": "FOR VALID_TIME AS OF datetime('2001-01-01T00:00:00.123456') MATCH (p:Pand) RETURN count(*) AS c",
-    "as_of_2021": "FOR VALID_TIME AS OF datetime('2021-01-01T00:00:00') MATCH (p:Pand) RETURN count(*) AS c",
-    "id_lookup": "MATCH (p:Pand {id: 3200000000005}) RETURN p.id AS id, p.title AS title, p.status AS status",
-    "missing_id": "MATCH (p:Pand {id: 3200000009999}) RETURN count(p) AS c",
-    "title_lookup": "MATCH (p:Pand) WHERE p.title = 3100000000002 RETURN p.id AS id ORDER BY p.id",
+    "mixed": "MATCH (p:Employment) RETURN p.id AS id, p.rec AS rec ORDER BY p.id",
+    "as_of_2006": "FOR VALID_TIME AS OF datetime('2006-06-15T00:00:00') MATCH (p:Employment) RETURN count(*) AS c",
+    "as_of_micros": (
+        "FOR VALID_TIME AS OF datetime('2001-01-01T00:00:00.123456') MATCH (p:Employment) RETURN count(*) AS c"
+    ),
+    "as_of_2021": "FOR VALID_TIME AS OF datetime('2021-01-01T00:00:00') MATCH (p:Employment) RETURN count(*) AS c",
+    "id_lookup": "MATCH (p:Employment {id: 3200000000005}) RETURN p.id AS id, p.title AS title, p.status AS status",
+    "missing_id": "MATCH (p:Employment {id: 3200000009999}) RETURN count(p) AS c",
+    "title_lookup": "MATCH (p:Employment) WHERE p.title = 3100000000002 RETURN p.id AS id ORDER BY p.id",
     "edges": (
-        "MATCH (p:Pand)-[r:VAN]->(o:PandObj) RETURN p.id AS version, o.id AS obj, "
+        "MATCH (p:Employment)-[r:OF]->(o:Employee) RETURN p.id AS version, o.id AS obj, "
         "r.since AS since, r.role AS role ORDER BY p.id"
     ),
-    "edge_count": "MATCH (:Pand)-[r:VAN]->(:PandObj) RETURN count(r) AS c",
+    "edge_count": "MATCH (:Employment)-[r:OF]->(:Employee) RETURN count(r) AS c",
     "tags": "MATCH (t:Tag) RETURN t.id AS id, t.title AS title, t.weight AS weight ORDER BY t.id",
     "units": (
         "MATCH (u:Unit) RETURN u.id AS id, u.title AS title, u.area AS area, u.floor AS floor, "
         "u.use AS use, u.active AS active ORDER BY u.id"
     ),
     "unit_by_id": "MATCH (u:Unit {id: 3300000000003}) RETURN u.title AS title, u.area AS area",
-    "unit_edges": "MATCH (o:PandObj)-[:HAS_UNIT]->(u:Unit) RETURN o.id AS obj, u.id AS unit ORDER BY u.id",
+    "unit_edges": "MATCH (o:Employee)-[:HAS_UNIT]->(u:Unit) RETURN o.id AS obj, u.id AS unit ORDER BY u.id",
 }
 
 INT_TITLE_QUERIES = {
@@ -147,8 +152,8 @@ def _populate(graph, save) -> None:
             "vf": ts(starts),
             "vt": ts(ends),
             "seen": ts(seen),
-            "status": ["in_use", "in_use", "demolished", "in_use", "permit_issued", "in_use", "in_use", "demolished"],
-            "bouwjaar": pd.Series([1998, 2004, 1650, 2011, 2020, 1987, 1999, 2016], dtype="int32"),
+            "status": ["active", "active", "terminated", "active", "offer_made", "active", "active", "terminated"],
+            "hire_year": pd.Series([1998, 2004, 1650, 2011, 2020, 1987, 1999, 2016], dtype="int32"),
         }
     )
     anchors = pd.DataFrame({"id": sorted(set(ident))})
@@ -162,13 +167,13 @@ def _populate(graph, save) -> None:
     )
     tags = pd.DataFrame({"id": ["t-alpha", "t-beta"], "title": ["Alpha", "Beta"], "weight": [1.5, -0.25]})
 
-    graph.add_nodes(versions, "Pand", "id", "ident")
-    graph.set_temporal("Pand", "vf", "vt", convention="half_open")
-    graph.add_nodes(anchors, "PandObj", "id")
-    graph.add_relationships(edges, "VAN", "Pand", "id", "PandObj", "ident", columns=["since", "role"])
+    graph.add_nodes(versions, "Employment", "id", "ident")
+    graph.set_temporal("Employment", "vf", "vt", convention="half_open")
+    graph.add_nodes(anchors, "Employee", "id")
+    graph.add_relationships(edges, "OF", "Employment", "id", "Employee", "ident", columns=["since", "role"])
     graph.add_nodes(tags, "Tag", "id", "title")
     # No timestamp, Mixed column or integer title here: this is a type 0.19.0's
-    # disk layout keeps in its mmap `columns.bin` + `columns_meta` pair (`Pand`
+    # disk layout keeps in its mmap `columns.bin` + `columns_meta` pair (`Employment`
     # goes to a per-type sidecar for all three reasons).
     units = pd.DataFrame(
         {
@@ -184,20 +189,20 @@ def _populate(graph, save) -> None:
     graph.add_relationships(
         pd.DataFrame({"obj": sorted(set(ident))[: len(units)], "unit": units["id"]}),
         "HAS_UNIT",
-        "PandObj",
+        "Employee",
         "obj",
         "Unit",
         "unit",
     )
     # A Mixed column: timestamps beside a string in one property.
-    graph.cypher("MATCH (p:Pand {id: 3200000000001}) SET p.rec = datetime('2010-01-01T00:00:00.500000')")
-    graph.cypher("MATCH (p:Pand {id: 3200000000002}) SET p.rec = 'legacy'")
-    graph.cypher("MATCH (p:Pand {id: 3200000000003}) SET p.rec = datetime('2011-02-03T04:05:06')")
+    graph.cypher("MATCH (p:Employment {id: 3200000000001}) SET p.rec = datetime('2010-01-01T00:00:00.500000')")
+    graph.cypher("MATCH (p:Employment {id: 3200000000002}) SET p.rec = 'legacy'")
+    graph.cypher("MATCH (p:Employment {id: 3200000000003}) SET p.rec = datetime('2011-02-03T04:05:06')")
     save()
 
     # Second save: one more logical change, so a disk directory carries a
     # second generation and the first is retained beside it.
-    graph.cypher("MATCH (p:Pand {id: 3200000000004}) SET p.status = 'renovated'")
+    graph.cypher("MATCH (p:Employment {id: 3200000000004}) SET p.status = 'promoted'")
     graph.cypher("MATCH (t:Tag {id: 't-beta'}) SET t.weight = 2.75")
     save()
 
@@ -399,13 +404,18 @@ def main() -> None:
         raise SystemExit("the repo's own kglite package is shadowing the wheel; run from elsewhere")
 
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-    if sys.argv[1:] == ["int-title"]:
-        _write_int_title_disk_fixture()
-        return
-    _write_plain_fixture()
-    _write_durable_fixture()
-    _write_disk_fixture()
-    _write_int_title_disk_fixture()
+    parts = {
+        "graph": _write_plain_fixture,
+        "durable": _write_durable_fixture,
+        "disk": _write_disk_fixture,
+        "int-title": _write_int_title_disk_fixture,
+    }
+    chosen = sys.argv[1:] or list(parts)
+    unknown = [name for name in chosen if name not in parts]
+    if unknown:
+        raise SystemExit(f"unknown fixture {unknown}; choose from {sorted(parts)}")
+    for name in chosen:
+        parts[name]()
 
 
 if __name__ == "__main__":

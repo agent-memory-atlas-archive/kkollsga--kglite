@@ -90,7 +90,7 @@ def _check(graph, frame: pd.DataFrame, deleted: list[int]) -> None:
 
 
 def test_two_reopen_append_save_reopen_cycles_keep_every_answer(tmp_path):
-    path = tmp_path / "pand"
+    path = tmp_path / "employment"
     chunks = [chunk(i, CHUNK) for i in range(4)]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -117,9 +117,9 @@ def test_two_reopen_append_save_reopen_cycles_keep_every_answer(tmp_path):
         graph = kglite.load(str(path))
         _add(graph, chunks[3])
         touched = frame.iloc[:5].copy()
-        touched["status"] = "demolished"
+        touched["status"] = "terminated"
         graph.add_nodes(touched, TYPE, "id", "ident", conflict_handling="update")
-        frame.loc[frame.index[:5], "status"] = "demolished"
+        frame.loc[frame.index[:5], "status"] = "terminated"
         frame = pd.concat([frame, chunks[3].versions], ignore_index=True)
         deleted = [int(frame["id"].iloc[i]) for i in (7, CHUNK + 11, 2 * CHUNK + 13)]
         for gone in deleted:
@@ -132,11 +132,11 @@ def test_two_reopen_append_save_reopen_cycles_keep_every_answer(tmp_path):
         row = frame.iloc[2]
         assert reopened.cypher(
             f"MATCH (p:{TYPE} {{id: $i}}) RETURN p.status AS s", params={"i": int(row.id)}
-        ).to_list() == [{"s": "demolished"}]
+        ).to_list() == [{"s": "terminated"}]
 
 
 def test_a_version_2_id_index_still_loads_and_is_rewritten_as_version_3(tmp_path):
-    """The fixture 0.19.0 wrote (Pand ids past u32, a `General` map at version 2)
+    """The fixture 0.19.0 wrote (Employment ids past u32, a `General` map at version 2)
     opens; its next save writes the sorted layout."""
     fixtures = Path(__file__).parent / "fixtures" / "kgl_v6" / "disk"
     import shutil

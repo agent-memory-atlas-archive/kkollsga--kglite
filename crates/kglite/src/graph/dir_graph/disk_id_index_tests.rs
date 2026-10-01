@@ -23,7 +23,7 @@ fn add_versions(graph: &mut DirGraph, from: i64, to: i64) {
         .map(|i| vec![Value::Int64(BIG + i * 7), Value::Int64(i)])
         .collect();
     let frame = DataFrame::from_cypher_rows(vec!["id".into(), "seq".into()], rows).unwrap();
-    maintain::add_nodes(graph, frame, "Pand".into(), "id".into(), None, None).unwrap();
+    maintain::add_nodes(graph, frame, "Employment".into(), "id".into(), None, None).unwrap();
 }
 
 fn add_anchors(graph: &mut DirGraph, count: i64) {
@@ -31,7 +31,7 @@ fn add_anchors(graph: &mut DirGraph, count: i64) {
         .map(|i| vec![Value::Int64(9_000_000_000_000 + i)])
         .collect();
     let frame = DataFrame::from_cypher_rows(vec!["id".into()], rows).unwrap();
-    maintain::add_nodes(graph, frame, "PandObj".into(), "id".into(), None, None).unwrap();
+    maintain::add_nodes(graph, frame, "Employee".into(), "id".into(), None, None).unwrap();
 }
 
 fn rows(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
@@ -43,7 +43,10 @@ fn rows(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
 }
 
 fn seq_of(graph: &mut DirGraph, id: i64) -> Vec<Vec<Value>> {
-    rows(graph, &format!("MATCH (n:Pand {{id: {id}}}) RETURN n.seq"))
+    rows(
+        graph,
+        &format!("MATCH (n:Employment {{id: {id}}}) RETURN n.seq"),
+    )
 }
 
 fn load_owned(path: &str) -> DirGraph {
@@ -62,8 +65,8 @@ fn published_pairs(graph: &DirGraph, root: &Path) -> usize {
     let base = IdIndexBase::load_from(&generation(root), &graph.interner)
         .unwrap()
         .expect("id_indices.bin");
-    base.int64_parts("Pand")
-        .expect("Pand persists as Int64Sorted")
+    base.int64_parts("Employment")
+        .expect("Employment persists as Int64Sorted")
         .0
         .len()
         / 8
@@ -83,7 +86,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
     graph.save_disk(path).unwrap();
     assert_eq!(published_pairs(&graph, &root), 20_000);
     assert_eq!(
-        graph.id_indices.overlay_len("Pand"),
+        graph.id_indices.overlay_len("Employment"),
         None,
         "the heap map that built the index is gone after the save"
     );
@@ -94,7 +97,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
 
     let built = full_maps_built();
     add_versions(&mut graph, 20_000, 20_100);
-    assert_eq!(graph.id_indices.overlay_len("Pand"), Some(20_100));
+    assert_eq!(graph.id_indices.overlay_len("Employment"), Some(20_100));
     assert_eq!(
         seq_of(&mut graph, BIG + 12_345 * 7),
         vec![vec![Value::Int64(12_345)]]
@@ -110,7 +113,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
         "an append and a save built a full map"
     );
     assert_eq!(published_pairs(&graph, &root), 20_100);
-    assert_eq!(graph.id_indices.overlay_len("Pand"), None);
+    assert_eq!(graph.id_indices.overlay_len("Employment"), None);
     drop(graph);
 
     // Reopen -> append -> save -> reopen, twice: the reload never builds a map.
@@ -125,7 +128,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
         rows(
             &mut graph,
             &format!(
-                "MATCH (n:Pand {{id: {}}}) DETACH DELETE n",
+                "MATCH (n:Employment {{id: {}}}) DETACH DELETE n",
                 BIG + (cycle * 7 + 3) * 7
             ),
         );
@@ -147,7 +150,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
     );
     assert_eq!(seq_of(&mut graph, BIG + 4 * 7), vec![vec![Value::Int64(4)]]);
     assert_eq!(
-        rows(&mut graph, "MATCH (n:Pand) RETURN count(n)"),
+        rows(&mut graph, "MATCH (n:Employment) RETURN count(n)"),
         vec![vec![Value::Int64(20_198)]]
     );
 }
@@ -171,7 +174,7 @@ fn a_failed_id_index_rebase_does_not_fail_a_published_save() {
     );
     assert_ne!(std::fs::read_to_string(root.join("CURRENT")).ok(), before);
     assert_eq!(
-        graph.id_indices.overlay_len("Pand"),
+        graph.id_indices.overlay_len("Employment"),
         Some(3_000),
         "the live index stays the heap one"
     );
@@ -179,7 +182,7 @@ fn a_failed_id_index_rebase_does_not_fail_a_published_save() {
 
     // The next save rebases normally, and what was published is right.
     graph.save_disk(path).unwrap();
-    assert_eq!(graph.id_indices.overlay_len("Pand"), None);
+    assert_eq!(graph.id_indices.overlay_len("Employment"), None);
     drop(graph);
     let mut reloaded = load_owned(path);
     assert_eq!(
@@ -225,10 +228,10 @@ fn edge_endpoints_are_resolved_by_probing_the_mapped_index() {
     let report = maintain::add_connections(
         &mut graph,
         frame,
-        "VAN".into(),
-        "Pand".into(),
+        "OF".into(),
+        "Employment".into(),
         "version".into(),
-        "PandObj".into(),
+        "Employee".into(),
         "anchor".into(),
         None,
         None,
@@ -237,9 +240,9 @@ fn edge_endpoints_are_resolved_by_probing_the_mapped_index() {
     .unwrap();
     assert_eq!(report.connections_created, 3, "{report:?}");
     let spec = |source: i64, target: i64| EdgeSpec {
-        source_type: "Pand".into(),
+        source_type: "Employment".into(),
         source_id: Value::Int64(source),
-        target_type: "PandObj".into(),
+        target_type: "Employee".into(),
         target_id: Value::Int64(target),
         edge_type: "MENTIONS".into(),
         properties: HashMap::new(),
@@ -259,14 +262,14 @@ fn edge_endpoints_are_resolved_by_probing_the_mapped_index() {
     assert_eq!(
         rows(
             &mut graph,
-            "MATCH (:Pand)-[e:VAN]->(:PandObj) RETURN count(e)"
+            "MATCH (:Employment)-[e:OF]->(:Employee) RETURN count(e)"
         ),
         vec![vec![Value::Int64(3)]]
     );
     assert_eq!(
         rows(
             &mut graph,
-            "MATCH (p:Pand {id: 3100000000014})-[:VAN]->(o:PandObj) RETURN o.id"
+            "MATCH (p:Employment {id: 3100000000014})-[:OF]->(o:Employee) RETURN o.id"
         ),
         vec![vec![Value::Int64(9_000_000_000_002)]]
     );
@@ -280,6 +283,6 @@ fn edge_endpoints_are_resolved_by_probing_the_mapped_index() {
         scans,
         "endpoint resolution scanned the graph instead of probing the index"
     );
-    assert_eq!(graph.id_indices.overlay_len("Pand"), None);
-    assert_eq!(graph.id_indices.overlay_len("PandObj"), None);
+    assert_eq!(graph.id_indices.overlay_len("Employment"), None);
+    assert_eq!(graph.id_indices.overlay_len("Employee"), None);
 }

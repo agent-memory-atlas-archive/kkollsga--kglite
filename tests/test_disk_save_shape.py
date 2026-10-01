@@ -33,7 +33,7 @@ BUILD = textwrap.dedent(
         "id": ids, "name": ids.astype(str),
         "vk": rng.integers(1, 9, n).astype("int64"), "score": rng.random(n),
         "rec_to": np.zeros(n, dtype="int64"), "status": rng.choice(["a", "b", "c"], n),
-    }), "Pand", "id", "name")
+    }), "Employment", "id", "name")
     m = n // 4
     ids2 = np.arange(m, dtype="int64") + 10**8
     g.add_nodes(pd.DataFrame({"id": ids2, "name": ids2.astype(str), "v": ids2}), "Other", "id", "name")
@@ -61,13 +61,13 @@ CYCLE = textwrap.dedent(
     reload_bytes = footprint() - before
     ids = [10**6 + i for i in range(100)]
     if mode == "set":
-        g.cypher("UNWIND $ids AS i MATCH (n:Pand {id: i}) SET n.rec_to = $v",
+        g.cypher("UNWIND $ids AS i MATCH (n:Employment {id: i}) SET n.rec_to = $v",
                  params={"ids": ids, "v": cycle}).to_list()
     g.save()
-    rec = g.cypher("MATCH (n:Pand) WHERE n.id IN [$a, $b] RETURN n.rec_to AS r ORDER BY n.id",
+    rec = g.cypher("MATCH (n:Employment) WHERE n.id IN [$a, $b] RETURN n.rec_to AS r ORDER BY n.id",
                    params={"a": ids[0], "b": 10**6 + 500}).to_list()
     other = g.cypher("MATCH (n:Other {id: $i}) RETURN n.v AS v", params={"i": 10**8 + 7}).to_list()
-    title = g.cypher("MATCH (n:Pand {id: $i}) RETURN n.title AS t", params={"i": ids[5]}).to_list()
+    title = g.cypher("MATCH (n:Employment {id: $i}) RETURN n.title AS t", params={"i": ids[5]}).to_list()
     print(json.dumps({"reload": reload_bytes, "rec": [r["r"] for r in rec],
                       "other": other[0]["v"], "title": title[0]["t"]}))
     """
@@ -94,7 +94,7 @@ def test_reopened_disk_graph_stays_in_its_column_files_across_saves(tmp_path, mo
         generation = _generation(path)
         with open(os.path.join(generation, "seg_000", "columns_meta.json"), encoding="utf-8") as handle:
             files = json.load(handle)["files"]
-        assert sorted(files) == ["Other", "Pand"], f"cycle {cycle}: every type has its own column file: {files}"
+        assert sorted(files) == ["Employment", "Other"], f"cycle {cycle}: every type has its own column file: {files}"
         for name, relative in files.items():
             assert os.path.isfile(os.path.join(generation, "seg_000", relative)), f"cycle {cycle}: {name} -> {relative}"
         assert not os.path.exists(os.path.join(generation, "seg_000", "columns.bin")), f"cycle {cycle}"

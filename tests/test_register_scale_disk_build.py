@@ -1,4 +1,4 @@
-"""A Pand-shaped register built in chunks into a disk graph, saved after every
+"""A register of versioned records (employment history) built in chunks into a disk graph, saved after every
 chunk and reopened: pins today's footprint, reload cost and answers.
 
 The footprint numbers are measurements (debug extension, macOS, 2026-09-30)
@@ -88,7 +88,7 @@ def _uss_mb() -> float:
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
-    path = tmp_path_factory.mktemp("register") / "pand"
+    path = tmp_path_factory.mktemp("register") / "employment"
     chunks = [chunk(i, CHUNK_VERSIONS) for i in range(CHUNKS)]
     base, phys_base = _uss_mb(), _phys_mb()
     after_save: list[float] = []
@@ -181,10 +181,10 @@ def test_lookup_by_id_and_by_title(built):
     for position in (0, CHUNK_VERSIONS - 1, CHUNK_VERSIONS, 123_457, TOTAL - 1):
         row = frame.iloc[position]
         got = graph.cypher(
-            f"MATCH (p:{TYPE} {{id: $i}}) RETURN p.title AS t, p.status AS s, p.bouwjaar AS b",
+            f"MATCH (p:{TYPE} {{id: $i}}) RETURN p.title AS t, p.status AS s, p.hire_year AS b",
             params={"i": int(row.id)},
         ).to_list()
-        assert got == [{"t": int(row.ident), "s": row.status, "b": int(row.bouwjaar)}]
+        assert got == [{"t": int(row.ident), "s": row.status, "b": int(row.hire_year)}]
     versions = frame.groupby("ident")["id"].apply(sorted)
     several = versions[versions.map(len) >= 3]
     ident = several.index[len(several) // 2]
@@ -202,11 +202,11 @@ def test_generator_is_deterministic_and_pand_shaped():
     a, b = chunk(3, 20_000), chunk(3, 20_000)
     assert a.versions.equals(b.versions) and a.edges.equals(b.edges)
     v = a.versions
-    assert len(v) == 20_000 and v["id"].is_unique and v["id"].dtype == "int64" and v["bouwjaar"].dtype == "int32"
+    assert len(v) == 20_000 and v["id"].is_unique and v["id"].dtype == "int64" and v["hire_year"].dtype == "int32"
     assert 3.0e12 < v["ident"].min() and v["ident"].max() < 3.2e12 and 3.2e12 < v["id"].min()
     closed = v["valid_to"].notna()
     assert 0.35 < closed.mean() < 0.50
     assert (v.loc[closed, "valid_to"] > v.loc[closed, "valid_from"]).all()
-    assert set(v["status"]) <= {"in_use", "under_construction", "permit_issued", "demolished", "not_realised"}
+    assert set(v["status"]) <= {"active", "onboarding", "offer_made", "terminated", "withdrawn"}
     assert set(a.anchors["id"]) == set(v["ident"]) and len(a.edges) == len(v)
     assert chunk(4, 20_000).versions["ident"].min() > v["ident"].max()

@@ -9,7 +9,7 @@
   "connection_type_metadata": {},
   "id_field_aliases": {},
   "title_field_aliases": {
-    "Pand": "ident",
+    "Employment": "ident",
     "Unit": "name"
   },
   "auto_vacuum_threshold": 0.3,
@@ -22,7 +22,7 @@
   "temporal_declarations": [
     {
       "kind": "node",
-      "name": "Pand",
+      "name": "Employment",
       "from": "vf",
       "to": "vt",
       "convention": "half_open",

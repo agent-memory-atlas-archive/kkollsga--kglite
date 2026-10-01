@@ -373,14 +373,14 @@ mod tests {
     /// ever went back to a bare array this would parse and the guard would be gone.
     #[test]
     fn the_json_an_older_reader_would_parse_as_an_array_is_not_an_array() {
-        let json = to_json(&shared(vec![sample("Pand")]), false).unwrap();
+        let json = to_json(&shared(vec![sample("Employment")]), false).unwrap();
         assert!(
             serde_json::from_str::<Vec<ColumnTypeMeta>>(&json).is_err(),
             "an older reader must fail to deserialise the new sidecar: {json}"
         );
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["format"], COLUMNS_META_FORMAT);
-        assert_eq!(value["types"][0]["type_name"], "Pand");
+        assert_eq!(value["types"][0]["type_name"], "Employment");
     }
 
     #[test]

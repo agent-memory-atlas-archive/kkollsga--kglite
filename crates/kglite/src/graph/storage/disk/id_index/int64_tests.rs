@@ -5,7 +5,7 @@ use crate::graph::storage::disk::type_index::TypeIndexStore;
 use std::collections::BTreeMap;
 
 const BIG: i64 = 3_100_000_000_000;
-const NAME: &str = "Pand";
+const NAME: &str = "Employment";
 
 fn interner() -> StringInterner {
     let mut interner = StringInterner::new();

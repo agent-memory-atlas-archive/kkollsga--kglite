@@ -253,7 +253,7 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
                     } else {
                         Value::Null
                     },
-                    Value::String(["in_use", "demolished"][(i % 2) as usize].into()),
+                    Value::String(["active", "terminated"][(i % 2) as usize].into()),
                     Value::Int64(1900 + i % 100),
                 ]
             })
@@ -265,7 +265,7 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
                 "valid_from".into(),
                 "valid_to".into(),
                 "status".into(),
-                "bouwjaar".into(),
+                "hire_year".into(),
             ],
             rows,
         )
@@ -279,7 +279,7 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
     maintain::add_nodes(
         &mut graph,
         versions(0, 20_000, true),
-        "Pand".into(),
+        "Employment".into(),
         "id".into(),
         Some("ident".into()),
         None,
@@ -296,14 +296,14 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
         maintain::add_nodes(
             &mut graph,
             versions(from, from + 500, closed),
-            "Pand".into(),
+            "Employment".into(),
             "id".into(),
             Some("ident".into()),
             None,
         )
         .unwrap();
     }
-    assert_eq!(graph.column_store("Pand").unwrap().tail_rows(), 1_000);
+    assert_eq!(graph.column_store("Employment").unwrap().tail_rows(), 1_000);
     let flattened = flattens();
     graph.save_disk(path).unwrap();
     assert_eq!(
@@ -318,7 +318,7 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
     };
     let rows = run(
         &mut graph,
-        "MATCH (p:Pand) WHERE p.valid_to IS NULL RETURN count(p) AS c",
+        "MATCH (p:Employment) WHERE p.valid_to IS NULL RETURN count(p) AS c",
     )
     .unwrap();
     let open = (0..21_000i64)
@@ -354,7 +354,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
                 } else {
                     Value::Null
                 },
-                Value::String(["in_use", "demolished"][(i % 2) as usize].into()),
+                Value::String(["active", "terminated"][(i % 2) as usize].into()),
                 Value::Int64(1900 + i % 100),
             ]
         })
@@ -366,7 +366,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
             "valid_from".into(),
             "valid_to".into(),
             "status".into(),
-            "bouwjaar".into(),
+            "hire_year".into(),
         ],
         rows,
     )
@@ -379,7 +379,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     maintain::add_nodes(
         &mut graph,
         frame,
-        "Pand".into(),
+        "Employment".into(),
         "id".into(),
         Some("ident".into()),
         None,
@@ -396,17 +396,17 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     // something else: a timestamp column and a string column, both overlaid.
     run(
         &mut graph,
-        "MATCH (p:Pand) WHERE p.bouwjaar = 1951 AND p.valid_to IS NULL \
+        "MATCH (p:Employment) WHERE p.hire_year = 1951 AND p.valid_to IS NULL \
          SET p.valid_to = datetime('2031-01-01T00:00:00.000001')",
     )
     .unwrap();
     run(
         &mut graph,
-        "MATCH (p:Pand) WHERE p.bouwjaar = 1950 SET p.status = 'under_construction_and_permitted'",
+        "MATCH (p:Employment) WHERE p.hire_year = 1950 SET p.status = 'onboarding_approved'",
     )
     .unwrap();
     assert_eq!(
-        graph.column_store("Pand").unwrap().tail_rows(),
+        graph.column_store("Employment").unwrap().tail_rows(),
         0,
         "no row was appended: this is the overlay alone"
     );
@@ -429,7 +429,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     assert_eq!(
         run(
             &mut graph,
-            "MATCH (p:Pand) WHERE p.valid_to IS NULL RETURN count(p) AS c"
+            "MATCH (p:Employment) WHERE p.valid_to IS NULL RETURN count(p) AS c"
         )
         .unwrap(),
         vec![vec![Value::Int64(open)]]
@@ -438,7 +438,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     assert_eq!(
         run(
             &mut graph,
-            "MATCH (p:Pand) WHERE p.status = 'under_construction_and_permitted' RETURN count(p) AS c"
+            "MATCH (p:Employment) WHERE p.status = 'onboarding_approved' RETURN count(p) AS c"
         )
         .unwrap(),
         vec![vec![Value::Int64(renamed)]]
@@ -447,7 +447,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     assert_eq!(
         run(
             &mut graph,
-            "MATCH (p:Pand) WHERE p.bouwjaar = 1952 AND p.status = 'in_use' RETURN count(p) AS c"
+            "MATCH (p:Employment) WHERE p.hire_year = 1952 AND p.status = 'active' RETURN count(p) AS c"
         )
         .unwrap(),
         vec![vec![Value::Int64(

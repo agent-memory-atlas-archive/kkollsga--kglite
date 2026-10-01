@@ -1,13 +1,14 @@
-"""Deterministic generator for a Pand-shaped register: versioned objects with
-large int64 ids and int titles, a closed/open validity interval per version, a
-small status category, an Int32 attribute, and one anchor node per object.
+"""Deterministic generator for a register of versioned records (employment
+history): versions with large int64 ids and int titles, a closed/open validity
+interval per version, a small status category, an Int32 attribute, and one
+anchor node per employee.
 
-The shape mirrors the national building register the register-scale program
-targets (the constants below): 12-digit object numbers
-with a 4-digit prefix (~3.1e12), several versions per object, about 40 % of
-versions closed. Chunks are self-contained: chunk `c` owns the objects
-numbered from `c * OBJECTS_PER_CHUNK_STRIDE`, so any prefix of chunks is a
-valid register and `chunk(c)` is byte-identical on every call.
+The shape mirrors the registers the register-scale program targets (the
+constants below): 12-digit object numbers with a 4-digit prefix (~3.1e12),
+several versions per object, about 40 % of versions closed. Chunks are
+self-contained: chunk `c` owns the objects numbered from
+`c * OBJECTS_PER_CHUNK_STRIDE`, so any prefix of chunks is a valid register and
+`chunk(c)` is byte-identical on every call.
 """
 
 from __future__ import annotations
@@ -17,10 +18,10 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-TYPE = "Pand"
-ANCHOR_TYPE = "PandObj"
-REL = "VAN"
-STATUSES = ("in_use", "under_construction", "permit_issued", "demolished", "not_realised")
+TYPE = "Employment"
+ANCHOR_TYPE = "Employee"
+REL = "OF"
+STATUSES = ("active", "onboarding", "offer_made", "terminated", "withdrawn")
 
 _PREFIX = 3_100_000_000_000  # object numbers sit at ~3.1e12 (4-digit prefix x 1e12)
 _VERSION_PREFIX = 3_200_000_000_000  # version ids: a disjoint ~3.2e12 range
@@ -31,7 +32,7 @@ _MAX_VERSIONS = 5
 
 
 class Chunk(NamedTuple):
-    versions: pd.DataFrame  # id, ident, valid_from, valid_to, status, bouwjaar
+    versions: pd.DataFrame  # id, ident, valid_from, valid_to, status, hire_year
     anchors: pd.DataFrame  # id (= the object number)
     edges: pd.DataFrame  # id -> ident, one per version
 
@@ -79,7 +80,7 @@ def chunk(index: int, n_versions: int, seed: int = 20260930) -> Chunk:
             "valid_from": valid_from,
             "valid_to": valid_to.astype("datetime64[us]"),
             "status": np.array(STATUSES)[rng.choice(len(STATUSES), size=n_versions, p=[0.70, 0.05, 0.10, 0.10, 0.05])],
-            "bouwjaar": rng.integers(1600, 2027, n_versions).astype("int32"),
+            "hire_year": rng.integers(1600, 2027, n_versions).astype("int32"),
         }
     )
     return Chunk(

@@ -484,7 +484,7 @@ fn fixture_copy(name: &str, tmp: &TempDir) -> String {
 }
 
 /// A directory 0.19.0 wrote keeps `Unit` and `Tag` in its shared `columns.bin`;
-/// the first save gives each its own file. `Pand` still holds a `Mixed` column
+/// the first save gives each its own file. `Employment` still holds a `Mixed` column
 /// (timestamps beside a string), so it stays on a sidecar, unchanged.
 #[test]
 fn a_0_19_0_directory_moves_its_shared_columns_into_per_type_files_on_its_first_save() {
@@ -506,8 +506,8 @@ fn a_0_19_0_directory_moves_its_shared_columns_into_per_type_files_on_its_first_
         );
     }
     assert!(
-        !meta.files.contains_key("Pand"),
-        "Pand holds a Mixed column"
+        !meta.files.contains_key("Employment"),
+        "Employment holds a Mixed column"
     );
     assert!(!current_generation(&path)
         .join("seg_000/columns.bin")
