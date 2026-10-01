@@ -23,15 +23,22 @@ you rebuild. It is measured, not assumed:
 `tests/benchmarks/test_bench_write_scaling.py` runs the same statements at 1 k,
 100 k, and 1 M nodes, and a reading that grows with size is a regression.
 
-**One** case keeps the older whole-graph checkpoint, and there the write cost is
-still proportional to graph size: the **`disk`** backend. A disk graph has no
-petgraph slot identity for an inverse edit to name, so every mutating statement
-on it opens an O(V+E) checkpoint instead. `memory` and `mapped` both take the
-journal, and a durable graph over either of them does too — durability and
-rollback strategy are independent concerns. Within one disk statement the
-checkpoint is paid once: the first write to a property column copies that
-column, and every later row of the statement writes in place, so a statement's
-cost is one copy per column it writes plus a constant per row.
+**One** backend takes the journal only for the statements a register ingest
+runs: **`disk`**. A disk graph has no petgraph slot identity for an inverse edit
+to name, so the journal that undoes a memory or `mapped` statement does not cover
+it as a whole. A `MATCH … SET` of plain properties, a property `REMOVE`,
+`CREATE`, `MERGE` and `DELETE` journal the cells, titles and appended rows they
+write and are undone from that journal, at a cost that follows the rows they
+touch (closing 2,000 rows of a 2-million-row register costs 1.2 to 1.7 µs a row,
+whatever the table's size). A statement outside that set (`FOREACH`, `CALL`,
+`LOAD CSV`, a label change, `SET n += {…}`, a nested-path `SET`) opens a
+checkpoint instead: a copy of the disk graph's mapped arrays and overlays, not
+of its rows, with its column stores shared until written. Within such a
+statement the first write to a property column copies that column, and every
+later row of the statement writes in place, so its cost is one copy per column
+it writes plus a constant per row. `memory` and `mapped` take the journal for
+every statement, and a durable graph over either of them does too — durability
+and rollback strategy are independent concerns.
 
 Two other graph shapes also use the journal:
 

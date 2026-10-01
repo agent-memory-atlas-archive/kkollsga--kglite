@@ -372,10 +372,14 @@ model.
   nothing has touched since the previous generation is not written again: its
   column file is hard-linked from the previous generation (a copy where links
   are unavailable, and always on Windows), so those bytes exist once on disk and
-  cost no write time. The CSR, node slots, edge properties, indexes and the
-  files of any type you changed are still rewritten in full, so a checkpoint's
-  cost follows what you touched plus the size of the graph's topology, not the
-  size of the whole graph alone.
+  cost no write time; the id and type index files are linked the same way while
+  nothing has changed what they hold, and the `title`/`nid` lookup bundles are
+  carried instead of rebuilt until a title, an id or a new node has to be in
+  them. The CSR, node slots, edge properties and the files of any type you
+  changed are still rewritten in full, so a checkpoint's cost follows what you
+  touched plus the size of the graph's topology, not the size of the whole graph
+  alone. {doc}`large-registers` walks through a register of tens of millions of
+  versions saved this way.
 
   Older generations are pruned for you. A save keeps the generation it just
   published and one before it, and deletes the rest, except that a generation a

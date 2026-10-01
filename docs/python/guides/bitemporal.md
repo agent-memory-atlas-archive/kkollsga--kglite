@@ -536,8 +536,8 @@ half-open interval and a hand-written recording pair on every element, is
 published in {doc}`valid-time`,
 [section 8](valid-time.md#8-scale-what-one-process-holds-today), and kept
 there. In short: a million versions load in seconds and answer as-of joins in
-milliseconds in one process. Building costs about 0.9 KB per version in every
-storage mode, so a 64-million-version history does not fit one 16 GB process;
-a regional slice of it fits, and the whole needs a 64 GB machine in memory
-mode or shards. Each superseded image is a record of its own and takes its
-share of that budget.
+milliseconds in one process. In memory and mapped mode a 64-million-version
+history does not fit one 16 GB process (a regional slice of it does, and the
+whole needs a 64 GB machine or shards); disk mode built a 25-million-version
+register in one process on 16 GB, and {doc}`large-registers` describes how.
+Each superseded image is a record of its own and takes its share of that budget.

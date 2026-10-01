@@ -412,26 +412,30 @@ pair as in {doc}`bitemporal`:
   `.kgl`, and answer an as-of join in about 5 ms and a 127-instant series in
   about 17 ms (memory and mapped; disk mode pays roughly 60 ms per instant).
   A 10 000-version delivery applies in one transaction in 70–100 ms.
+- **A 25-million-version register on disk.** Disk storage builds a register of
+  24.7 million versions in one process on this
+  machine, loaded in chunks of 500,000 versions with a `save()` after each:
+  a chunk's load took 3 to 5 seconds whatever the size so far, and the footprint
+  peaked at about 3.5 GB during a save and settled below 1 GB after it. The
+  finished directory reopens in about 15 seconds and a few megabytes, an append
+  of 1,000 rows then takes 0.02 s, and an as-of count over the whole register
+  answers correctly. Disk mode has no write-ahead log (a write is durable at
+  the next `save()`), and a `save()` costs what the changed types and the
+  topology cost, not a fraction of the whole; {doc}`large-registers` walks the
+  steps and gives the save timings.
 - **A 64-million-version historical source** (64.5 million versions) does not
-  fit one 16 GB process: building costs about 0.9 KB per version in every
-  storage mode, so each mode stops between 11 and 14 million versions, and a
-  whole-type row-returning join retains about 0.9 KB per returned row. A
-  regional slice of it (up to about 8 million versions per process) runs
-  correctly with sub-second as-of queries and daily deliveries in seconds; the
-  whole source needs either a 64 GB machine in memory mode or regional shards.
-- Disk mode is a read substrate. A write statement copies each column it
-  writes into memory once (about 0.4 ms for a 2-million-row integer column)
-  and then costs about 1.2 µs per row whatever the type's size (a 2,000-row
-  close on a 2-million-node disk type applies in about 3 ms), but there is no
-  write-ahead log (a write is durable at the next `save()`), and appending
-  rows to a reopened type re-materialises that type in memory. Serve from
-  disk; ingest in memory or mapped mode.
+  fit one 16 GB process in memory or mapped mode: those modes cost about 0.9 KB
+  per version when this was measured (before datetime properties were typed
+  columns, which lowers it; not re-measured), so each stops between 11 and 14
+  million versions, and a whole-type row-returning join retains about 0.9 KB per
+  returned row. A regional slice of it (up to about 8 million versions per
+  process) runs correctly in those modes with sub-second as-of queries and daily
+  deliveries in seconds. The disk-mode build above is the route for a source of
+  that size; the 64-million-version source itself has not been built that way.
 
-The per-version cost is dominated by untyped timestamp columns, the id index
-and edge overflow maps, not by the interval filter itself; the storage work
-that would let a graph of that size build and serve on 16 GB is scoped in the
-project's backlog, and the numbers above are the honest envelope until it
-ships.
+In memory and mapped mode the per-version cost was dominated by untyped
+timestamp columns, the id index and edge overflow maps, not by the interval
+filter itself.
 
 ## 9. Rules the declaration enforces
 

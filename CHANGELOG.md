@@ -106,9 +106,14 @@ before upgrading.
   whose rows nothing touched (a hard link, a copy where links are unavailable
   and always on Windows), so those bytes exist once on disk and cost no write
   time; the files of a type with a `SET`, an appended row, a delete or any other
-  change, and the CSR, node slots, edge properties and indexes, are still written
-  in full. A save then deletes the generations older than the one before the
-  generation it just published: a generation a reader in the same process still
+  change, and the CSR, node slots and edge properties, are still written in
+  full. `id_indices.bin` and `type_indices.bin` are linked the same way while
+  nothing has changed what they hold, and the cross-type `title` / `nid` lookup
+  bundles are carried instead of rebuilt (they were rescanned from every node on
+  every save) unless a node was created or removed or a title or id was written
+  since they were built; a `SET` of any other property leaves them. A save then
+  deletes the generations older than the one before the generation it just
+  published: a generation a reader in the same process still
   has mapped (another handle, a transaction, a copy) waits until that reader is
   gone, and a platform that refuses to delete a mapped file defers the deletion
   to a later save without failing the save. Before this a directory kept every
@@ -120,12 +125,15 @@ before upgrading.
   files it opens lazily; use `all` when a long-lived reader shares a directory
   with a frequent writer. `KGLITE_LOAD_TIMING=1` now also logs a line for each
   stage of a disk save. Measured on a 24.7-million-version register (release,
-  macOS, load average 7-15 from other processes, one run each): a save that
-  changed only the small anchor type took 60 s instead of 110 s, a save that
-  changed nothing 72 s instead of 116 s; a save that changed the 3.6 GB version
-  type still rewrites it, and the rest of a save (the CSR, the node slots, the
-  indexes) is still written in full, so a save costs what the changed types and
-  the topology cost, not a fraction of the whole graph.
+  macOS, 16 GB, other processes loading the machine, best of two runs; save wall
+  time, and in parentheses the same save with the column files linked but the
+  index files and lookup bundles still rewritten): a save that changed nothing
+  took 29 s (49 s; 116 s before any linking), a save that changed only the
+  small anchor type 23 s (47 s; 110 s), a `SET` of 1,000 values on the 3.6 GB
+  version type 67 s (96 s), an append of 1,000 rows 122 s (137 s). A save that
+  changed the version type still rewrites its file, and the CSR and node slots
+  (22 to 34 s here) are written by every save, so a save costs what the changed
+  types and the topology cost, not a fraction of the whole graph.
 - A save of a disk type served from its column file that a `SET` changed no
   longer copies the whole type onto the heap first. Columns the statements did
   not touch are written straight from the mapping and a touched column is
@@ -140,6 +148,12 @@ before upgrading.
   timestamp column). A
   null written over a cell, a replaced title, a value of another kind in a
   column and a type with an overflow bag still take the previous path.
+- Docs: a new guide, "Large registers on disk", walks a history table of tens of
+  millions of versions through building in saved chunks, reopening, applying a
+  delivery, publishing with `save()` and generation retention, with the measured
+  numbers; the scale section of the valid-time guide and the disk-rollback text
+  in the core-concepts and primary-store guides now describe what disk mode
+  does.
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
   data") use one org-chart example, with the declaration rules gathered in a
   closing section and the full bitemporal walk-through shipped as

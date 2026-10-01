@@ -44,6 +44,7 @@ guides/spatial
 guides/timeseries
 guides/valid-time
 guides/bitemporal
+guides/large-registers
 guides/graph-algorithms
 guides/import-export
 guides/schema-migrations

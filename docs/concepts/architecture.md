@@ -170,9 +170,12 @@ write completion metadata, rename it into `generations/`, then atomically
 replace `CURRENT`. A failed or incomplete stage is never selected by a new
 reader. Existing readers keep their old immutable generation alive. A type
 whose column file did not change is hard-linked into the new generation rather
-than rewritten, and a save then deletes generations older than the previous one
-(`KGLITE_KEEP_GENERATIONS`), except any generation a live value in the process
-still maps.
+than rewritten, as are `id_indices.bin` and `type_indices.bin` while the live
+index is an unchanged view of the previous file, and the `title`/`nid` lookup
+bundles are carried instead of rebuilt while nothing that writes a title or an
+id has happened since they were built. A save then deletes generations older
+than the previous one (`KGLITE_KEEP_GENERATIONS`), except any generation a live
+value in the process still maps.
 
 A directory carries its own layout revision: `disk_graph_meta.json` holds a
 `disk_format` number, `columns_meta.json` is an envelope
@@ -183,6 +186,11 @@ envelope, and every reader maps those files read-only. A type whose columns
 the mmap layout cannot hold (a column mixing kinds) is a zstd sidecar under
 `columns/<hex>/`, and the envelope's `sidecars` map records which directory
 holds which type; a type or property name never becomes a path component.
+Rows appended to a type a reopened graph serves from its column file go into a
+tail store beside the mapped file, and the save writes the file's regions and
+the tail's into the next generation; a `SET` over a mapped column is written as
+the file's cells with the changed cells laid over them, without copying the type
+onto the heap.
 A type whose ids are all `Int64` has its id index stored as a sorted
 `(i64, node)` array, 12 bytes an id, searched in the mapping; a write after a
 reopen layers a small delta over it and the next save merges the delta into the

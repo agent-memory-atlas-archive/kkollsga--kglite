@@ -411,8 +411,9 @@ graph.cypher(
 One statement per batch is the right shape for any mutation —
 `UNWIND $rows AS r CREATE (:Item {id: r.id, …})` reads the same way.
 The [primary store guide](primary-store.md) covers what a write costs
-in memory, and the one backend (`disk`) whose statement cost still
-scales with graph size.
+in memory, and which statements a `disk` graph undoes from a journal and
+which it checkpoints. A register of tens of millions of versions on disk is the
+subject of {doc}`large-registers`.
 
 ## Operation Reports
 

@@ -102,7 +102,10 @@ and a crash loses every mutation made since the last `save()`. That is a real
 and bounded guarantee — the published generation always survives intact — but
 it is *your* `save()` calls, not the engine, that decide how much a crash can
 cost. Pick `disk` for its scale, not because a graph outgrew RAM; `mapped`
-covers that case with the guarantee intact. See {doc}`guides/durable-apps`.
+covers that case with the guarantee intact. See {doc}`guides/durable-apps`. A
+history table of tens of millions of versions that grows by deliveries is the
+other case disk mode is built for: {doc}`guides/large-registers` covers building
+it in chunks, reopening it, applying a delivery and publishing with `save()`.
 
 **A saved graph records its storage mode, and reopening honours it.** A `.kgl`
 written by a mapped graph comes back mapped; one written by a memory graph
@@ -184,17 +187,22 @@ form for throwaway conversions; use `path` for anything you intend to keep, or
 build with `KnowledgeGraph(storage="disk", path=...)` to write to the path you
 name from the first byte and never pay the in-memory peak.
 
-**Statement rollback is cheap in memory and mapped mode, expensive on disk.**
+**Statement rollback is O(changes) in memory and mapped mode, and for the
+register-shaped statements on disk.**
 One mutating Cypher statement is atomic: if it fails partway through, the graph
 is restored to its pre-statement state. Memory and mapped graphs do that with
 an undo journal costing O(changes) — mapped spills *properties* to mmap, but
 its node/edge graph is the same heap structure the memory backend uses, so the
-journal applies unchanged. Disk graphs cannot: they hold no such structure to
-record an inverse edit against, so a disk graph falls back to taking a
-**whole-graph O(V+E) checkpoint before every mutating statement**. That means
-per-statement write overhead grows with graph size on disk. If a disk graph's
-writes feel slow relative to its reads, this is why; batching more work into
-fewer statements is the lever that helps.
+journal applies unchanged. Disk graphs hold no such structure to record an
+inverse edit against; instead a `MATCH … SET` of plain properties, a property
+`REMOVE`, `CREATE`, `MERGE` and `DELETE` journal each cell, title and appended
+row they write and are undone from that journal, at a cost that follows the
+rows they touch. Any other statement on disk (`FOREACH`, `CALL`, `LOAD CSV`, a
+label change, `SET n += {…}`) opens a checkpoint of the disk graph before it
+runs: its mapped arrays are mapped again and its overlays copied, and each
+column the statement writes is copied once on its first write. If a disk graph's
+writes feel slow relative to its reads, check whether the statement is one of
+the latter; batching more work into fewer statements is the lever that helps.
 
 ## Return Types
 
