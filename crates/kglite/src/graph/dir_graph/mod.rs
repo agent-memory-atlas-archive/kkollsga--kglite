@@ -2469,6 +2469,8 @@ mod disk_hostile_names_tests;
 #[cfg(test)]
 mod disk_id_index_tests;
 #[cfg(test)]
+mod disk_index_save_tests;
+#[cfg(test)]
 mod disk_link_tests;
 #[cfg(test)]
 mod disk_retention_tests;

@@ -34,6 +34,20 @@ pub(crate) fn fail_property_index_build(stage: &'static str) -> PropertyIndexBui
     PropertyIndexBuildFailpoint
 }
 
+// Counts full global-bundle builds on this thread, so a test can tell a save
+// that rebuilt a bundle from one that carried it.
+#[cfg(test)]
+thread_local! {
+    static GLOBAL_BUILDS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The properties whose global bundle was built on this thread since the last
+/// call, in order.
+#[cfg(test)]
+pub(crate) fn take_global_builds() -> Vec<String> {
+    GLOBAL_BUILDS.with(|builds| std::mem::take(&mut *builds.borrow_mut()))
+}
+
 fn property_index_build_failpoint(stage: &'static str) -> std::io::Result<()> {
     #[cfg(test)]
     if BUILD_FAILPOINT.with(|point| point.get() == Some(stage)) {
@@ -294,6 +308,8 @@ impl DiskGraph {
     /// `search(text)` helper. Re-run whenever the graph is rebuilt.
     pub fn build_global_property_index(&mut self, property: &str) -> std::io::Result<usize> {
         self.prepare_mutation()?;
+        #[cfg(test)]
+        GLOBAL_BUILDS.with(|builds| builds.borrow_mut().push(property.to_string()));
         let prop_key = InternedKey::from_str(property);
         let node_bound = self.node_slot_len();
         let mut entries: Vec<(String, u32)> = Vec::with_capacity(node_bound / 2);
@@ -351,8 +367,8 @@ impl DiskGraph {
         let count = entries.len();
         // Same rebuild-over-a-live-mapping hazard as `build_property_index`:
         // release the cached bundle before `build_global` truncates the files
-        // it maps. `save_disk` rebuilds the `title` and `nid` global indexes on
-        // every save, so on Windows the second save of a graph would otherwise
+        // it maps. A save rebuilds any global bundle the graph has moved
+        // under, so on Windows a second save after a change would otherwise
         // fail here. A legacy-value mask remains authoritative until the
         // replacement is published.
         self.global_indexes.write().unwrap().remove(property);
@@ -370,6 +386,30 @@ impl DiskGraph {
             .mark_global_built(property, node_bound as u32);
         self.legacy_invalidated_global_indexes.remove(property);
         Ok(count)
+    }
+
+    /// Build the global bundle for `property` if the graph has none to carry.
+    ///
+    /// A bundle that exists is left alone — whether it still covers the graph
+    /// is [`Self::refresh_persistent_indexes`]'s question, answered by the
+    /// freshness every write funnel maintains. That skip is what keeps an
+    /// unchanged save from rescanning every node (11-14 s at 24.7 M nodes), and
+    /// it is sound only because no write goes unannounced: a missed one would
+    /// publish a stale bundle that the next process, whose freshness restarts
+    /// at "covers everything", answers from. Opening the bundle (not merely
+    /// finding its files) is part of "has one": a bundle that cannot be mapped
+    /// is rebuilt, as it always was.
+    pub(crate) fn build_global_property_index_if_absent(
+        &mut self,
+        property: &str,
+    ) -> std::io::Result<bool> {
+        if !self.legacy_invalidated_global_indexes.contains(property)
+            && self.cached_global_index(property).is_some()
+        {
+            return Ok(false);
+        }
+        self.build_global_property_index(property)?;
+        Ok(true)
     }
 
     /// The global bundle for `property`, cache first then filesystem.

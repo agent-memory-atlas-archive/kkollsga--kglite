@@ -513,13 +513,14 @@ impl DirGraph {
         }
         clock.mark("save_consolidate_drop_dead_rows");
         if let GraphBackend::Disk(ref mut dg) = self.graph {
-            // Auto-build the cross-type global title index so that
-            // `MATCH (n {title: 'X'})` and `g.search(text)` are O(log N)
-            // out of the box on every saved disk graph. Runs after
-            // CSR / overflow consolidation so it sees the final node
-            // set. Tied to `save_disk` rather than `build_csr_*` so
-            // node-only graphs (no edges) still get the index built.
-            dg.build_global_property_index("title")
+            // The cross-type global title index makes
+            // `MATCH (n {title: 'X'})` and `g.search(text)` O(log N) out of the
+            // box on every saved disk graph. Runs after CSR / overflow
+            // consolidation so it sees the final node set. Tied to `save_disk`
+            // rather than `build_csr_*` so node-only graphs (no edges) still
+            // get the index built. One that already exists is left for the
+            // refresh below to rebuild only if the graph has moved under it.
+            dg.build_global_property_index_if_absent("title")
                 .map_err(|e| format!("title index build failed: {e}"))?;
             clock.mark("save_consolidate_title_index");
             // Likewise index `nid` — the string id form for prefixed-id
@@ -527,15 +528,16 @@ impl DirGraph {
             // plain string-property lookup (not the integer id-index), so the
             // index keeps it O(log N) instead of a 124M-row scan. No-op when
             // no type has a `nid` column.
-            dg.build_global_property_index("nid")
+            dg.build_global_property_index_if_absent("nid")
                 .map_err(|e| format!("nid index build failed: {e}"))?;
             clock.mark("save_consolidate_nid_index");
-            // Every *other* bundle the next generation will carry, rebuilt if
-            // the graph has moved under it. `copy_persisted_indexes` copies
-            // bundles into the new generation verbatim, and a stale one that
-            // crosses a generation boundary re-arms the defect in the next
-            // process — where nothing remembers it was stale. Fresh bundles are
-            // skipped, so an unmutated save costs what it always did.
+            // Every bundle the next generation will carry — `title` and `nid`
+            // included — rebuilt if the graph has moved under it.
+            // `copy_persisted_indexes` copies bundles into the new generation
+            // verbatim, and a stale one that crosses a generation boundary
+            // re-arms the defect in the next process — where nothing remembers
+            // it was stale. Fresh bundles are skipped, so an unmutated save
+            // scans no node for any of them.
             dg.refresh_persistent_indexes(false)
                 .map_err(|e| format!("property index rebuild failed: {e}"))?;
             clock.mark("save_consolidate_refresh_indexes");
