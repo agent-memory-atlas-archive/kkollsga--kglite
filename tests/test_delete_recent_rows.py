@@ -26,6 +26,7 @@ TYPE = "Employee"
 SIZE = 8_000  # above 32 x the batch, so the delete takes the in-place index edit
 BATCH = 200
 BOOM = "duration({months: 2147483648})"
+BOOM_ERROR = "calendar months exceed"  # what BOOM raises: the failure this test means to provoke
 MODES = ["memory", "mapped", "disk", "disk_reopened"]
 
 
@@ -128,7 +129,7 @@ def test_a_failed_delete_of_recently_created_rows_restores_them(built):
         model[i] = (f"new {i}", 99)
     before_order = [r["id"] for r in _rows(graph, f"MATCH (e:{TYPE}) RETURN e.id AS id")]
 
-    with pytest.raises(Exception):
+    with pytest.raises(kglite.CypherExecutionError, match=BOOM_ERROR):
         graph.cypher(
             "UNWIND $rows AS c MATCH (e:Employee {id: c.id}) DELETE e WITH count(*) AS n "
             f"CREATE (:Probe {{v: {BOOM}}})",

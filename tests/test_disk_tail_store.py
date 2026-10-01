@@ -34,6 +34,7 @@ DEPARTMENTS = ["Sales", "Engineering", "Finance", "People", "Legal"]
 FIRST_ID = 3_100_000_000_000  # above u32: the id index is the compact int64 one
 EPOCH = pd.Timestamp("1995-03-01")
 BOOM = "duration({months: 2147483648})"
+BOOM_ERROR = "calendar months exceed"  # what BOOM raises: the failure these tests mean to provoke
 
 
 def staff(first: int, count: int) -> pd.DataFrame:
@@ -208,7 +209,7 @@ def cycle(pair: Pair, first: int, tag: str) -> None:
 
     # 3. A CREATE that fails after 250 rows leaves nothing behind.
     for g in (pair.disk, pair.memory):
-        with pytest.raises(Exception):
+        with pytest.raises(kglite.CypherExecutionError, match=BOOM_ERROR):
             g.cypher(failing_create(first + 400), timeout_ms=0)
     assert total(pair.disk) == base + 340
     compare(pair, f"{tag}: failed CREATE", sample)
@@ -233,7 +234,7 @@ def cycle(pair: Pair, first: int, tag: str) -> None:
 
     # 5. A SET that fails after writing 250 rows of both parts is undone.
     for g in (pair.disk, pair.memory):
-        with pytest.raises(Exception):
+        with pytest.raises(kglite.CypherExecutionError, match=BOOM_ERROR):
             g.cypher(
                 f"UNWIND range(0, 299) AS i MATCH (e:{TYPE} {{id: {FIRST_ID} + i + {first - 150}}}) "
                 f"SET e.level = 77, e.salary = CASE WHEN i = 250 THEN {BOOM} ELSE 2.5 END",
@@ -266,7 +267,7 @@ def test_two_cycles_of_append_fail_set_delete_save_answer_as_memory_does(pair):
 def test_a_failed_first_append_leaves_the_reopened_graph_as_it_was(pair):
     """The rollback of the very statement that starts the tail drops it again."""
     before = {name: rows(pair.disk, query, n="Employee 77") for name, query in PROBES.items()}
-    with pytest.raises(Exception):
+    with pytest.raises(kglite.CypherExecutionError, match=BOOM_ERROR):
         pair.disk.cypher(failing_create(9000), timeout_ms=0)
     after = {name: rows(pair.disk, query, n="Employee 77") for name, query in PROBES.items()}
     assert before == after
@@ -390,7 +391,7 @@ def test_a_failed_set_of_a_new_property_on_tail_rows_leaves_no_column_behind(tmp
             graph = kglite.load(path)
             graph.add_nodes(staff(40, 5), TYPE, "id", "name")
             if name == "rolled_back":
-                with pytest.raises(kglite.CypherExecutionError, match="calendar months exceed"):
+                with pytest.raises(kglite.CypherExecutionError, match=BOOM_ERROR):
                     graph.cypher(failing, timeout_ms=0)
             graph.save(path)
         saved[name] = _saved_columns(path)
