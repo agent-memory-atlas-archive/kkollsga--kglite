@@ -28,10 +28,11 @@
 // `Mixed` column and fail decoding it, so the container version is what stops
 // it: 0.15.14 refuses a v6 file by version number.
 //
-// v7 vs v6: identical layout, metadata and codec. The bump is a forward guard —
-// the 0.19.x readers refuse a v7 file by version number ("Please upgrade
-// kglite") instead of decoding whatever a later writer puts in these sections.
-// This writer emits v7 only; v5 and v6 are still read.
+// v7 vs v6: the section layout, metadata schema and codec are unchanged. What
+// v7 adds is content inside the packed column sections: a `"timestamp"` column
+// (microseconds) and an `Int64` title column where v6 wrote them as `Mixed`.
+// A v6 reader would misparse those, so it refuses a v7 file by version number
+// ("Please upgrade kglite"). This writer emits v7 only; v5 and v6 are still read.
 //
 // Pre-v5 magic values are retained only for explicit rejection and migration
 // guidance; their payloads are never decoded by the current reader.

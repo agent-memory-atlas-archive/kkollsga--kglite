@@ -5,8 +5,9 @@ component of a disk save (the per-type sidecar ``columns/<type>/columns.zst``)
 and of the column spill files (``<spill>/<type>/<token>/<property>.i64``), so a
 crafted name wrote outside the generation, and one more ``../`` outside the
 graph directory. Names now reach the filesystem only through interned-key hex
-stems, and the sidecar directory is recorded in the column metadata rather than
-recovered from the directory name.
+stems (sidecar directories) and numbers (a spill directory is a per-store
+token, a spill file is ``slot_<n>``), and the sidecar directory is recorded in
+the column metadata rather than recovered from the directory name.
 
 Every case walks the sandbox before and after and asserts that everything new is
 under the graph directory (or the spill directory it configured), and that the

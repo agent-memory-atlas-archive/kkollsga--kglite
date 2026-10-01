@@ -108,11 +108,11 @@ pub fn add_edges_from_specs(
     // judges the whole call up front, so a refusal in a later group leaves
     // nothing from an earlier one behind.
     let mut prepared: Vec<PreparedSpecGroup> = Vec::with_capacity(groups.len());
-    // The id→node lookup depends only on (source_type, target_type), not the
-    // edge type, and creating edges never invalidates it (no nodes added). So
-    // cache it per node-type pair instead of rebuilding the full type scan for
-    // every edge type over the same pair (e.g. Person KNOWS/FOLLOWS/BLOCKS
-    // Person was K identical materializations; now one).
+    // The endpoint resolver depends only on (source_type, target_type), not the
+    // edge type, and creating edges never invalidates it (no nodes added). One
+    // per node-type pair spares every further edge type over the pair its
+    // construction, which is one scan of both types when either has no id index
+    // (Person KNOWS/FOLLOWS/BLOCKS Person: one scan, not three).
     let mut lookup_cache: HashMap<(String, String), EndpointResolver<'_>> = HashMap::new();
     for ((source_type, target_type, edge_type), edges) in groups {
         let pair = (source_type.clone(), target_type.clone());

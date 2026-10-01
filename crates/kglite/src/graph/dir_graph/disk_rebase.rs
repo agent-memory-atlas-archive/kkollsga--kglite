@@ -65,7 +65,8 @@ impl DirGraph {
     /// that built an index (60-90 B per id for a `General` map) is dropped for
     /// every type the file covers, and a type the writer skipped keeps its
     /// overlay entry. Installed only when the file agrees with each covered
-    /// overlay entry on its id count, so the swap cannot change an answer.
+    /// overlay entry on its id count: a file that lost or gained ids is refused,
+    /// one that mapped an id to another node is not detected.
     fn rebase_id_indices(&mut self, published: &Path) -> std::io::Result<()> {
         #[cfg(test)]
         if post_publish_failpoint("rebase_id_indices") {
@@ -84,8 +85,9 @@ impl DirGraph {
     /// type touched since the last load, and stayed resident after a save.
     ///
     /// Installed only when the file agrees with the live index on every type name
-    /// and member count, so the swap cannot change an answer; the file's buckets
-    /// are ascending, which a bucket appended out of creation order need not be.
+    /// and member count (the members themselves are not compared); the file's
+    /// buckets are ascending, which a bucket appended out of creation order need
+    /// not be.
     fn rebase_type_indices(&mut self, published: &Path) -> std::io::Result<()> {
         #[cfg(test)]
         if post_publish_failpoint("rebase_type_indices") {

@@ -67,9 +67,9 @@ pub(super) fn write_packed_values<T: PackedElement>(
 // ─── Delta-varint Int64 columns (`.kgl` v6) ─────────────────────────────────
 
 /// Type tag of the delta-varint `Int64` column form. Written only into `.kgl`
-/// v6 containers ([`IntColumnEncoding::Auto`]); every other packed consumer
-/// keeps emitting the fixed-width `"int64"` form, so the disk-graph column
-/// sidecars stay byte-identical to what 0.15.14 wrote.
+/// v6 and later containers ([`IntColumnEncoding::Auto`]); every other packed
+/// consumer keeps emitting the fixed-width `"int64"` form, so the disk-graph
+/// column sidecars never carry this tag.
 pub(crate) const INT64_DELTA_TAG: &str = "int64d";
 
 /// Whether a packed-column writer may pick a non-fixed-width integer form.

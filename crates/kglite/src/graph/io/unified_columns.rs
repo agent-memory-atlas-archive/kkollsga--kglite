@@ -14,9 +14,10 @@
 //! Layout strategy, per type:
 //! 1. Plan: walk every (column, sub-array) once to assign region offsets
 //!    within the type's file. A source is *borrowed* from the live store — a
-//!    heap vec, a spill mapping or the previous generation's file — and only a
-//!    `Str` column carrying a relocation overlay is packed into an owned
-//!    buffer, so a save never holds every column's bytes twice.
+//!    heap vec, a spill mapping or the previous generation's file. Owned
+//!    buffers are built only where a column's bytes are not one contiguous
+//!    source: a `Str` column with a relocation overlay, an mmap base with `SET`
+//!    cells patched over it, and a base joined to its tail (`unified_columns_tail`).
 //! 2. Write the sub-arrays' raw bytes in offset order into a new file
 //!    (`create_new`: a published file is never rewritten).
 //! 3. Emit `seg_000/columns_meta.json` with the per-type
@@ -45,7 +46,7 @@ use crate::graph::storage::mapped::mmap_vec::{MmapBytes, MmapOrVec};
 use rustc_hash::FxHashMap;
 
 /// Result of a unified-columns write.
-#[allow(dead_code)] // fields are part of the public API; consumed by save_disk in the future
+#[allow(dead_code)] // the save discards the result; tests read these fields to see what a write did
 pub struct WriteResult {
     /// Types successfully encoded into a `type_columns/` file. The caller
     /// should skip sidecar emission for these.

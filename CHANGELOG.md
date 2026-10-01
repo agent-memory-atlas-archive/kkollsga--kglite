@@ -28,7 +28,9 @@ before upgrading.
   nothing you already have stops loading; the break is one-way and deliberate,
   and it lands before the register-scale storage changes that follow so an
   older binary is turned away by name now rather than misreading a later file.
-  The v7 container is v6 byte for byte apart from its magic. An older binary
+  The v7 container has v6's section layout, metadata schema and codec; what it
+  adds is the typed timestamp column and typed integer title described below,
+  which a v6 reader would misparse. An older binary
   handed the new files refuses them instead of misreading them — 0.19.0 raises
   `kglite.FileFormatError: File uses .kgl container version 7, but this library
   only supports up to version 6. Please upgrade kglite.` for a `.kgl` (through

@@ -597,8 +597,9 @@ impl IdIndexStore {
     /// skipped (its ids repeat, or it was an empty cache entry) keeps its
     /// overlay entry.
     ///
-    /// Installs nothing unless every overlay entry the file covers agrees with
-    /// it on its id count, so the swap cannot change an answer.
+    /// Installs nothing unless every overlay entry the file covers has the same
+    /// id count as the file's entry. That catches a file that lost or gained
+    /// ids; it does not compare the ids themselves.
     pub fn rebase_onto(&mut self, base: IdIndexBase) -> Result<(), String> {
         for (name, entry) in self.overlay.get_mut().unwrap().iter() {
             if base.contains(name) && base.entry_len(name) != Some(entry.len()) {
@@ -798,10 +799,11 @@ impl IdIndexStore {
     /// executor).
     ///
     /// Falls back to whole-type invalidation, and returns `false`, whenever the
-    /// index is not overlay-resident — an unbuilt type has nothing to edit, and
-    /// a base-resident type lives in an immutable mmap. Each entry is removed
-    /// only if it still resolves to the given node, so a re-pointed id is left
-    /// intact.
+    /// type has no overlay entry — an unbuilt type has nothing to edit, and a
+    /// type served only from the file's mapping has no delta to edit yet (the
+    /// mapping itself is never written; a delta layered over it is made by
+    /// `entry_or_default`). Each entry is removed only if it still resolves to
+    /// the given node, so a re-pointed id is left intact.
     ///
     /// The caller is responsible for the duplicate-id precondition: this edits
     /// exactly the ids it is given, whereas a rebuild re-derives the whole map

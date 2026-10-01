@@ -18,7 +18,9 @@ impl ColumnStore {
     /// Emits fixed-width integer columns only. The `.kgl` v6 writer calls
     /// [`Self::write_packed_with_codec`] with [`IntColumnEncoding::Auto`]
     /// instead; every other consumer of this layout (the disk-graph column
-    /// sidecars) must keep the bytes a 0.15.14 reader understands.
+    /// sidecars) keeps the fixed-width integer form. A sidecar can still hold a
+    /// `"timestamp"` column, which 0.19.0 and earlier do not know: the disk
+    /// layout's `disk_format` number is what turns such a reader away.
     pub fn write_packed(&self, interner: &StringInterner) -> io::Result<Vec<u8>> {
         self.write_packed_with_codec(
             interner,

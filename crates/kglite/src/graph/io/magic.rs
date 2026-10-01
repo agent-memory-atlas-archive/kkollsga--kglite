@@ -41,10 +41,11 @@ pub(crate) const V5_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x05];
 pub(crate) const V6_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x06];
 
 /// Magic bytes for the v7 columnar format — what this binary writes. The
-/// section layout, metadata schema and codec are v6's; v7 exists so that
-/// content a later change adds to those sections (which a v6 reader would
-/// misparse rather than refuse) is turned away by version number. All three
-/// containers are decoded by the same reader.
+/// section layout, metadata schema and codec are v6's. What v7 adds is content
+/// inside the packed column sections: a `"timestamp"` column (microseconds) and
+/// an `Int64` title column where v6 wrote them as `Mixed`. A v6 reader would
+/// misparse those rather than refuse, so the version number turns it away. All
+/// three containers are decoded by the same reader.
 pub(crate) const V7_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x07];
 
 /// The container version byte this build writes — the number
