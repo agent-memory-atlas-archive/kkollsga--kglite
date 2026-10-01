@@ -250,6 +250,15 @@ before upgrading.
   file copies its index bucket onto the heap once, at its first delete after a
   load or save.
 
+- A disk graph built in the current process (rows added before its first
+  `save()`, or a `create_index` call) never told its persistent index bundles
+  about the writes that followed, so a title or indexed property written after
+  that first save was invisible to `MATCH (n {title: 'X'})`, `search()` and
+  `WHERE n.prop = …` until the next `save()` rebuilt the bundle: the lookup
+  answered "no such node" from the bundle instead of falling back to a scan.
+  A graph opened from a saved directory that already held the bundles was not
+  affected.
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk

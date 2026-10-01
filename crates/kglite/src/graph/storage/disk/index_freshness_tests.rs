@@ -300,3 +300,37 @@ fn generation_carry_survives_a_second_save_and_load() {
         1
     );
 }
+
+/// A graph built in this process answers "no bundle yet" at its first write,
+/// so the first save's build has to open the write gate: without it a title
+/// `SET` after that save was served the pre-`SET` bundle as fresh and
+/// `MATCH (n {title: 'Renamed'})` found nothing.
+#[test]
+fn a_title_set_after_the_graphs_first_save_makes_the_global_bundle_decline() {
+    let dir = TempDir::new().unwrap();
+    // Disk mode first, rows second: the rows are written to a graph that has no
+    // generation yet, which is what latches the gate shut.
+    let mut graph = DirGraph::new();
+    graph.enable_disk_mode().unwrap();
+    add_docs(
+        &mut graph,
+        &[(1, "Employee-1", "c0"), (3, "Employee-3", "c1")],
+    );
+    graph.save_disk(dir.path().to_str().unwrap()).unwrap();
+
+    run(
+        &mut graph,
+        "MATCH (e:Doc) WHERE e.id = 3 SET e.title = 'Renamed'",
+    );
+
+    assert_ne!(
+        global_lookup(&graph, "title", "Renamed"),
+        Some(vec![]),
+        "the bundle predates the SET, so it must decline rather than say no"
+    );
+    assert_eq!(rows(&graph, "MATCH (n {title: 'Renamed'}) RETURN n.id"), 1);
+    assert_eq!(
+        rows(&graph, "MATCH (n {title: 'Employee-3'}) RETURN n.id"),
+        0
+    );
+}

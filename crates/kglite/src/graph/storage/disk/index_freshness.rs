@@ -29,16 +29,19 @@
 //! # The tracked gate
 //!
 //! Every write funnel asks [`DiskIndexFreshness::tracks_anything`] first. It is
-//! a `OnceLock` over "does this graph's published generation hold any bundle?"
-//! — self-initialising rather than set by each of `DiskGraph`'s constructors,
+//! a latch over "does this graph's published generation hold any bundle?" —
+//! self-initialising rather than set by each of `DiskGraph`'s constructors,
 //! because the answer has to be right *before* the first mutation and a
 //! constructor this module does not know about would silently answer `false`.
 //! A graph that has never been saved and has no index pays one relaxed load per
-//! written row and nothing else.
+//! written row and nothing else. The latch only ever moves towards "yes": a
+//! graph built in this process answers "no" at its first write (no generation
+//! yet), and the first build must still open the gate for every write after it.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::graph::index_freshness::IndexFreshness;
 
@@ -54,11 +57,17 @@ pub(crate) struct DiskIndexFreshness {
     baseline: Arc<IndexFreshness>,
     typed: RwLock<HashMap<(String, String), Arc<IndexFreshness>>>,
     global: RwLock<HashMap<String, Arc<IndexFreshness>>>,
-    /// `Some(true)` once any bundle is known to exist. Latched, never cleared:
-    /// a graph that has held a bundle keeps paying the (single-load) gate, and
-    /// clearing it would open the window a lazily-opened legacy bundle needs.
-    tracked: OnceLock<bool>,
+    /// Whether any bundle is known to exist: [`UNDECIDED`] until the first
+    /// question, then [`NO_BUNDLE`] or [`HAS_BUNDLE`]. Never moves back to
+    /// "no": a graph that has held a bundle keeps paying the (single-load)
+    /// gate, and clearing it would open the window a lazily-opened legacy
+    /// bundle needs.
+    tracked: AtomicU8,
 }
+
+const UNDECIDED: u8 = 0;
+const NO_BUNDLE: u8 = 1;
+const HAS_BUNDLE: u8 = 2;
 
 impl DiskIndexFreshness {
     /// Freshness for a graph whose bundles all cover slots below `node_bound`.
@@ -67,7 +76,7 @@ impl DiskIndexFreshness {
             baseline: Arc::new(IndexFreshness::covering(node_bound, None)),
             typed: RwLock::new(HashMap::new()),
             global: RwLock::new(HashMap::new()),
-            tracked: OnceLock::new(),
+            tracked: AtomicU8::new(UNDECIDED),
         }
     }
 
@@ -78,15 +87,32 @@ impl DiskIndexFreshness {
     /// bundle built later latches the answer through [`Self::mark_tracked`].
     #[inline]
     pub(crate) fn tracks_anything(&self, data_dir: &Path) -> bool {
-        *self
-            .tracked
-            .get_or_init(|| directory_holds_a_bundle(data_dir))
+        match self.tracked.load(Ordering::Relaxed) {
+            HAS_BUNDLE => true,
+            NO_BUNDLE => false,
+            _ => {
+                let held = directory_holds_a_bundle(data_dir);
+                // A builder may have latched "yes" while the scan ran; it wins.
+                let _ = self.tracked.compare_exchange(
+                    UNDECIDED,
+                    if held { HAS_BUNDLE } else { NO_BUNDLE },
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+                self.tracked.load(Ordering::Relaxed) == HAS_BUNDLE
+            }
+        }
     }
 
     /// Latch "this graph has a bundle" without a directory scan — used by the
     /// builders, which have just written one.
+    ///
+    /// Unconditional: a graph built in this process has already answered "no"
+    /// at its first write, and a latch that kept that answer left every write
+    /// after the first build unannounced, so a title `SET` after the graph's
+    /// first save was served the stale bundle as fresh.
     pub(crate) fn mark_tracked(&self) {
-        let _ = self.tracked.set(true);
+        self.tracked.store(HAS_BUNDLE, Ordering::Relaxed);
     }
 
     /// A node of `node_type` was created at `slot`.
@@ -224,15 +250,11 @@ impl Clone for DiskIndexFreshness {
                     .collect(),
             )
         }
-        let tracked = OnceLock::new();
-        if let Some(value) = self.tracked.get() {
-            let _ = tracked.set(*value);
-        }
         Self {
             baseline: Arc::new((*self.baseline).clone()),
             typed: deep(&self.typed),
             global: deep(&self.global),
-            tracked,
+            tracked: AtomicU8::new(self.tracked.load(Ordering::Relaxed)),
         }
     }
 }
@@ -315,6 +337,23 @@ mod tests {
 
         assert!(!state.typed_is_fresh(&key(), 4));
         assert!(!state.global_is_fresh("title", 4));
+    }
+
+    #[test]
+    fn a_build_after_the_first_question_still_opens_the_write_gate() {
+        let state = DiskIndexFreshness::covering(4);
+        let empty = std::env::temp_dir().join("kglite-no-such-generation-dir");
+        assert!(
+            !state.tracks_anything(&empty),
+            "a graph with no generation holds no bundle"
+        );
+
+        state.mark_global_built("title", 4);
+
+        assert!(
+            state.tracks_anything(&empty),
+            "the first build must be announced to every later write"
+        );
     }
 
     #[test]
