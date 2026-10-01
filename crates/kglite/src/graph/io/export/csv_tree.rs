@@ -265,6 +265,14 @@ fn write_node_csv(
     Ok(written)
 }
 
+/// Where the relationship CSVs go and how they are keyed.
+struct Layout<'a> {
+    keys: &'a BTreeMap<(String, String), String>,
+    paths: &'a ExportPaths,
+    output: &'a Path,
+    batch: usize,
+}
+
 /// One pass over a source type's nodes feeding every relationship CSV that
 /// leaves it.
 fn write_source_edges(
@@ -272,10 +280,7 @@ fn write_source_edges(
     scope: &Scope,
     manifest: &ExportManifest,
     source_type: &str,
-    keys: &BTreeMap<(String, String), String>,
-    paths: &ExportPaths,
-    output: &Path,
-    batch: usize,
+    layout: &Layout<'_>,
 ) -> Result<BTreeMap<String, usize>, String> {
     struct Sink {
         out: BufWriter<File>,
@@ -284,18 +289,18 @@ fn write_source_edges(
         written: usize,
     }
     let mut sinks: HashMap<String, Sink> = HashMap::new();
-    for ((rel, source), key) in keys {
+    for ((rel, source), key) in layout.keys {
         if source != source_type {
             continue;
         }
-        let relative = paths.connection(key).to_string();
+        let relative = layout.paths.connection(key).to_string();
         let info = &manifest.relationship_types[rel].sources[source];
         let columns: Vec<(String, ColumnKind)> = info
             .properties
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        let mut out = open(output, &relative)?;
+        let mut out = open(layout.output, &relative)?;
         let mut header = standard_columns(info.properties.keys()).join(",");
         for (name, _) in &columns {
             header.push(',');
@@ -313,7 +318,7 @@ fn write_source_edges(
             },
         );
     }
-    let mut guard = BatchGuard::new(graph, batch);
+    let mut guard = BatchGuard::new(graph, layout.batch);
     let mut line = String::new();
     if let Some(nodes) = graph.type_indices.get(source_type) {
         for idx in nodes.iter() {
@@ -529,16 +534,13 @@ pub fn to_csv_dir(
     let source_types: std::collections::BTreeSet<&String> =
         keys.keys().map(|(_, source)| source).collect();
     for source_type in source_types {
-        let counts = write_source_edges(
-            graph,
-            &scope,
-            &manifest,
-            source_type,
-            &keys,
-            &paths,
+        let layout = Layout {
+            keys: &keys,
+            paths: &paths,
             output,
             batch,
-        )?;
+        };
+        let counts = write_source_edges(graph, &scope, &manifest, source_type, &layout)?;
         for (rel, n) in counts {
             let key = &keys[&(rel.clone(), source_type.clone())];
             summary

@@ -128,21 +128,8 @@ fn load_one_junction_edge(
     };
 
     overlay_known_types(&mut declared, &source.known_column_types());
-    // An endpoint column referring to a string-keyed node type is read as
-    // text, whatever its cells look like: see `EndpointIdTypes`. A union
-    // target is fixed only when every one of its types agrees.
     let endpoints = super::fk::EndpointIdTypes::of(graph);
-    if endpoints.for_type(&spec.node_type).is_some() {
-        declared.insert(junc.source_fk.clone(), "string".to_string());
-    }
-    if !junc.target.is_empty()
-        && junc
-            .target
-            .iter()
-            .all(|target| endpoints.for_type(target).is_some())
-    {
-        declared.insert(junc.target_fk.clone(), "string".to_string());
-    }
+    declare_endpoint_types(&endpoints, &spec.node_type, junc, &mut declared);
 
     // A junction is always chunked, so a kept column the blueprint did not
     // type is resolved over the whole input first — including the two FK
@@ -218,25 +205,15 @@ fn load_one_junction_edge(
                 subset = subset_rows(&chunk, &rows);
                 &subset
             };
-            // A column-routed union names each row's target type, so the
-            // group's id column is typed by that type, not by the column as a
-            // whole: a column mixing `"D-1"` and `1` is text overall, and the
-            // integer-keyed type's rows must still match as integers.
-            let routed;
-            let group_declared = if matches!(routing, TargetRouting::Column { .. }) {
-                routed = {
-                    let mut local = declared.clone();
-                    if endpoints.for_type(target_type).is_some() {
-                        local.insert(junc.target_fk.clone(), "string".to_string());
-                    } else if graph.has_node_type(target_type) {
-                        local.insert(junc.target_fk.clone(), "int".to_string());
-                    }
-                    local
-                };
-                &routed
-            } else {
-                &declared
-            };
+            let routed = group_declared_types(
+                graph,
+                &routing,
+                &endpoints,
+                &declared,
+                &junc.target_fk,
+                target_type,
+            );
+            let group_declared = routed.as_ref().unwrap_or(&declared);
             let df =
                 match typed_dataframe(source, &chunk_keep, group_declared, &rename, &mut misparses)
                 {
@@ -276,6 +253,55 @@ fn load_one_junction_edge(
         ));
     }
     Ok(())
+}
+
+/// An endpoint column referring to a string-keyed node type is read as text,
+/// whatever its cells look like: see `EndpointIdTypes`. A union target is fixed
+/// only when every one of its types agrees.
+fn declare_endpoint_types(
+    endpoints: &super::fk::EndpointIdTypes,
+    source_type: &str,
+    junc: &super::super::schema::JunctionEdge,
+    declared: &mut HashMap<String, String>,
+) {
+    if endpoints.for_type(source_type).is_some() {
+        declared.insert(junc.source_fk.clone(), "string".to_string());
+    }
+    if !junc.target.is_empty()
+        && junc
+            .target
+            .iter()
+            .all(|target| endpoints.for_type(target).is_some())
+    {
+        declared.insert(junc.target_fk.clone(), "string".to_string());
+    }
+}
+
+/// A column-routed union names each row's target type, so the group's id
+/// column is typed by that type, not by the column as a whole: a column mixing
+/// `"D-1"` and `1` is text overall, and the integer-keyed type's rows must still
+/// match as integers. `None` when the group takes the shared types.
+fn group_declared_types(
+    graph: &DirGraph,
+    routing: &TargetRouting<'_>,
+    endpoints: &super::fk::EndpointIdTypes,
+    declared: &HashMap<String, String>,
+    target_fk: &str,
+    target_type: &str,
+) -> Option<HashMap<String, String>> {
+    if !matches!(routing, TargetRouting::Column { .. }) {
+        return None;
+    }
+    let keyword = if endpoints.for_type(target_type).is_some() {
+        "string"
+    } else if graph.has_node_type(target_type) {
+        "int"
+    } else {
+        return None;
+    };
+    let mut local = declared.clone();
+    local.insert(target_fk.to_string(), keyword.to_string());
+    Some(local)
 }
 
 /// How each row of a junction CSV picks its target node type.
