@@ -2114,34 +2114,82 @@ impl DiskGraph {
     }
 }
 
+// Makes `snapshot` in `DiskGraph::try_clone` fail for the named array, so a
+// test can reach the error path a real descriptor or address-space exhaustion
+// would.
+#[cfg(test)]
+thread_local! {
+    static SNAPSHOT_FAILPOINT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct SnapshotFailpoint;
+
+#[cfg(test)]
+impl Drop for SnapshotFailpoint {
+    fn drop(&mut self) {
+        SNAPSHOT_FAILPOINT.with(|point| point.set(None));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fail_snapshot_of(array: &'static str) -> SnapshotFailpoint {
+    SNAPSHOT_FAILPOINT.with(|point| point.set(Some(array)));
+    SnapshotFailpoint
+}
+
 impl Clone for DiskGraph {
+    /// The infallible `Clone` that `#[derive(Clone)]` on `DirGraph` and
+    /// `Arc::make_mut` require. A clone that cannot map an array has no value
+    /// to return here, so this is the one place the failure is a panic; the
+    /// paths that own an error channel (`DirGraph::try_fork_transaction`,
+    /// `try_independent_copy`) ask [`DiskGraph::try_clone`] first and report it.
     fn clone(&self) -> Self {
-        // Published disk arrays are immutable; a transaction remaps their
-        // files and copies only mutation-sized overlays. This is O(number of
-        // changed rows), not O(nodes + edges), and keeps reader snapshots on
-        // the prior generation. Heap-backed arrays still clone normally.
+        self.try_clone()
+            .unwrap_or_else(|error| panic!("failed to clone the disk graph: {error}"))
+    }
+}
+
+impl DiskGraph {
+    /// Clone for a transaction or a copy, reporting the array that could not be
+    /// remapped instead of panicking.
+    ///
+    /// Published disk arrays are immutable; a transaction remaps their
+    /// files and copies only mutation-sized overlays. This is O(number of
+    /// changed rows), not O(nodes + edges), and keeps reader snapshots on
+    /// the prior generation. Heap-backed arrays still clone normally.
+    pub(crate) fn try_clone(&self) -> std::io::Result<DiskGraph> {
         fn snapshot<T: crate::graph::storage::mapped::mmap_vec::MmapPod>(
-            name: &str,
+            name: &'static str,
             value: &MmapOrVec<T>,
-        ) -> MmapOrVec<T> {
-            value
-                .clone_snapshot()
-                .unwrap_or_else(|error| panic!("failed to clone disk {name} snapshot: {error}"))
+        ) -> std::io::Result<MmapOrVec<T>> {
+            #[cfg(test)]
+            if SNAPSHOT_FAILPOINT.with(|point| point.get() == Some(name)) {
+                return Err(std::io::Error::other(format!(
+                    "failed to clone disk {name} snapshot: injected failure"
+                )));
+            }
+            value.clone_snapshot().map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("failed to clone disk {name} snapshot: {error}"),
+                )
+            })
         }
 
-        DiskGraph {
-            node_slots: snapshot("node slots", &self.node_slots),
+        Ok(DiskGraph {
+            node_slots: snapshot("node slots", &self.node_slots)?,
             node_slot_updates: self.node_slot_updates.clone(),
             appended_node_slots: self.appended_node_slots.clone(),
             node_count: self.node_count,
             free_node_slots: self.free_node_slots.clone(),
             arenas: super::query_arena::QueryArenas::new(0),
             column_stores: self.column_stores.clone(),
-            out_offsets: snapshot("out offsets", &self.out_offsets),
-            out_edges: snapshot("out edges", &self.out_edges),
-            in_offsets: snapshot("in offsets", &self.in_offsets),
-            in_edges: snapshot("in edges", &self.in_edges),
-            edge_endpoints: snapshot("edge endpoints", &self.edge_endpoints),
+            out_offsets: snapshot("out offsets", &self.out_offsets)?,
+            out_edges: snapshot("out edges", &self.out_edges)?,
+            in_offsets: snapshot("in offsets", &self.in_offsets)?,
+            in_edges: snapshot("in edges", &self.in_edges)?,
+            edge_endpoints: snapshot("edge endpoints", &self.edge_endpoints)?,
             appended_edge_endpoints: self.appended_edge_endpoints.clone(),
             removed_edges: self.removed_edges.clone(),
             edge_count: self.edge_count,
@@ -2182,18 +2230,18 @@ impl Clone for DiskGraph {
             conn_type_index_types: snapshot(
                 "connection type index types",
                 &self.conn_type_index_types,
-            ),
+            )?,
             conn_type_index_offsets: snapshot(
                 "connection type index offsets",
                 &self.conn_type_index_offsets,
-            ),
+            )?,
             conn_type_index_sources: snapshot(
                 "connection type index sources",
                 &self.conn_type_index_sources,
-            ),
-            peer_count_types: snapshot("peer count types", &self.peer_count_types),
-            peer_count_offsets: snapshot("peer count offsets", &self.peer_count_offsets),
-            peer_count_entries: snapshot("peer count entries", &self.peer_count_entries),
+            )?,
+            peer_count_types: snapshot("peer count types", &self.peer_count_types)?,
+            peer_count_offsets: snapshot("peer count offsets", &self.peer_count_offsets)?,
+            peer_count_entries: snapshot("peer count entries", &self.peer_count_entries)?,
             global_indexes: std::sync::RwLock::new(HashMap::new()),
             // Deep, and deliberately not `covering(node_slot_len)`: the caches
             // above are emptied, so this copy re-discovers every bundle from
@@ -2206,7 +2254,7 @@ impl Clone for DiskGraph {
             legacy_invalidated_global_indexes: self.legacy_invalidated_global_indexes.clone(),
             segment_manifest: self.segment_manifest.clone(),
             sealed_nodes_bound: self.sealed_nodes_bound,
-        }
+        })
     }
 }
 

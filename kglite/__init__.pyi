@@ -4592,6 +4592,11 @@ class KnowledgeGraph:
         Returns a new ``KnowledgeGraph`` that shares no mutable state with
         the original.  Useful for running mutations without affecting the
         source graph.
+
+        Raises:
+            FileIoError: A disk graph whose files cannot be mapped again for
+                the copy (the process is out of file descriptors or address
+                space).
         """
         ...
 

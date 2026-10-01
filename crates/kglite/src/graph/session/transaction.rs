@@ -54,6 +54,27 @@ impl DirGraph {
         child.graph.adopt_shared_writer_lineage(&self.graph);
         child
     }
+
+    /// Whether a clone of this graph can be made: a disk graph remaps its
+    /// published arrays for the clone, which fails when the process is out of
+    /// descriptors or address space.
+    ///
+    /// `Clone` has no way to say so and panics, so the paths that can return an
+    /// error ask first: the attempt is made on the disk backend alone and
+    /// dropped, and costs one mapping per array.
+    pub(crate) fn check_cloneable(&self) -> std::io::Result<()> {
+        match self.graph.as_disk() {
+            Some(disk) => disk.try_clone().map(drop),
+            None => Ok(()),
+        }
+    }
+
+    /// [`Self::fork_transaction`], reporting a disk graph that cannot be
+    /// cloned instead of panicking.
+    pub(crate) fn try_fork_transaction(&self) -> std::io::Result<Self> {
+        self.check_cloneable()?;
+        Ok(self.fork_transaction())
+    }
 }
 
 /// Shared graph state. Sessions live in bindings' top-level state
@@ -441,7 +462,17 @@ impl Transaction {
             // Move an unusually unique snapshot directly; normal Session/KG
             // transactions retain an owner Arc and therefore use the
             // backend-specific transaction fork.
-            let working = Arc::try_unwrap(snap).unwrap_or_else(|arc| arc.fork_transaction());
+            let working = match Arc::try_unwrap(snap) {
+                Ok(working) => working,
+                Err(shared) => match shared.try_fork_transaction() {
+                    Ok(working) => working,
+                    Err(error) => {
+                        // The transaction is still open on its snapshot.
+                        self.snapshot = Some(shared);
+                        return Err(KgError::FileIo(error));
+                    }
+                },
+            };
             self.working = Some(working);
         }
         Ok(self

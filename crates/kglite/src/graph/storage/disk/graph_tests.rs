@@ -2039,3 +2039,78 @@ fn for_each_edge_of_conn_type_visits_csr_edges_without_a_conn_type_index() {
         "returning false must stop after the first match"
     );
 }
+
+/// A saved, reloaded disk graph: the state in which its arrays are mappings.
+fn mapped_disk_graph(root: &std::path::Path) -> DirGraph {
+    let mut graph = DirGraph::new();
+    add_docs(&mut graph, &[1, 2, 3]);
+    graph.enable_disk_mode().unwrap();
+    graph.save_disk(root.to_str().unwrap()).unwrap();
+    drop(graph);
+    match Arc::try_unwrap(crate::graph::io::file::load_file(root.to_str().unwrap()).unwrap()) {
+        Ok(graph) => graph,
+        Err(_) => panic!("a fresh load is not shared"),
+    }
+}
+
+/// Cloning remaps every published array; one that cannot be remapped (the
+/// process is out of descriptors or address space) is an error naming it, not
+/// a panic in a transaction begin or a `copy()`.
+#[test]
+fn a_disk_clone_that_cannot_remap_an_array_names_it() {
+    let root = TempDir::new().unwrap();
+    let graph = mapped_disk_graph(root.path());
+    let disk = graph.graph.as_disk().expect("disk backend");
+    assert!(disk.try_clone().is_ok(), "the unfailed clone works");
+
+    for array in ["node slots", "out edges", "peer count entries"] {
+        let _fail = super::fail_snapshot_of(array);
+        let error = disk.try_clone().map(drop).expect_err(array);
+        assert!(
+            error.to_string().contains(array),
+            "{array}: the error names what failed, got {error}"
+        );
+    }
+}
+
+#[test]
+fn a_copy_or_fork_of_a_disk_graph_that_cannot_be_cloned_is_an_error_and_leaves_the_graph_intact() {
+    let root = TempDir::new().unwrap();
+    let graph = mapped_disk_graph(root.path());
+    {
+        let _fail = super::fail_snapshot_of("in offsets");
+        let copy = graph.try_independent_copy();
+        assert!(copy.is_err(), "copy() must report, not panic");
+        let fork = graph.try_fork_transaction();
+        assert!(fork.is_err(), "a transaction fork must report, not panic");
+    }
+    assert_eq!(graph.graph.node_count(), 3, "the source is untouched");
+    assert_eq!(
+        graph.try_independent_copy().unwrap().graph.node_count(),
+        3,
+        "and copies once the failure is gone"
+    );
+}
+
+#[test]
+fn a_transaction_whose_fork_fails_stays_open_on_its_snapshot() {
+    use crate::error::KgError;
+    let root = TempDir::new().unwrap();
+    let session = crate::graph::session::Session::new(mapped_disk_graph(root.path()));
+    let mut tx = session.begin();
+
+    {
+        let _fail = super::fail_snapshot_of("edge endpoints");
+        match tx.working_mut() {
+            Err(KgError::FileIo(error)) => assert!(error.to_string().contains("edge endpoints")),
+            Err(other) => panic!("expected a file I/O error, got {other}"),
+            Ok(_) => panic!("the fork must have failed"),
+        }
+    }
+    assert!(!tx.has_writes());
+    assert_eq!(tx.current().expect("still open").graph.node_count(), 3);
+    assert!(
+        tx.working_mut().is_ok(),
+        "the transaction works once the failure is gone"
+    );
+}

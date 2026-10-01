@@ -259,6 +259,11 @@ before upgrading.
   A graph opened from a saved directory that already held the bundles was not
   affected.
 
+- `copy()` of a disk graph, and the first write of a transaction opened on one,
+  raise `FileIoError` naming the array that could not be mapped again when the
+  process is out of file descriptors or address space; they aborted the process
+  with a panic.
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk

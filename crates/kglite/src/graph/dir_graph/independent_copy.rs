@@ -44,6 +44,13 @@ impl DirGraph {
         copy
     }
 
+    /// [`Self::independent_copy`], reporting a disk graph that cannot be cloned
+    /// (see `check_cloneable`) instead of panicking.
+    pub fn try_independent_copy(&self) -> std::io::Result<Self> {
+        self.check_cloneable()?;
+        Ok(self.independent_copy())
+    }
+
     /// Separate data-derived identity and caches while retaining observation lineage.
     pub(super) fn independent_data_copy(&self) -> Self {
         let mut copy = self.clone();

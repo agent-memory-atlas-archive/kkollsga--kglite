@@ -1753,9 +1753,13 @@ impl KnowledgeGraph {
     /// Returns a new ``KnowledgeGraph`` that shares no mutable state with
     /// the original. Useful for running mutations without affecting the
     /// source graph.
-    fn copy(&self) -> Self {
-        self.derive_handle(
-            Arc::new(self.inner.independent_copy()),
+    fn copy(&self) -> PyResult<Self> {
+        let copy = self
+            .inner
+            .try_independent_copy()
+            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(e)))?;
+        Ok(self.derive_handle(
+            Arc::new(copy),
             // Deliberate: the as-of date carries to the copy, the rest does not.
             crate::graph::CursorState {
                 selection: CowSelection::new(),
@@ -1765,14 +1769,14 @@ impl KnowledgeGraph {
             },
             self.embedder.as_ref().map(Arc::clone),
             crate::graph::GraphLifecycle::detached(),
-        )
+        ))
     }
 
-    fn __copy__(&self) -> Self {
+    fn __copy__(&self) -> PyResult<Self> {
         self.copy()
     }
 
-    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.copy()
     }
 }
