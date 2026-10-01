@@ -4,6 +4,7 @@
 //! (`columns/<type>/columns.zst`) and of its column spill files, and a property
 //! named the same way chose a spill file, so a crafted name wrote outside the
 //! generation and, with one more `../`, outside the graph directory.
+use super::disk_test_support::{current_generation, run};
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::io::columns_meta;
@@ -40,12 +41,6 @@ fn strays(before: &BTreeSet<PathBuf>, after: &BTreeSet<PathBuf>, allowed: &[&str
         .collect()
 }
 
-fn run(graph: &mut DirGraph, query: &str) {
-    let params = HashMap::new();
-    execute_mut(graph, query, &ExecuteOptions::eager(&params))
-        .unwrap_or_else(|e| panic!("{query}: {e}"));
-}
-
 fn add_staff(graph: &mut DirGraph, node_type: &str, extra_property: &str) {
     let rows = (1..=3i64)
         .map(|i| {
@@ -78,11 +73,6 @@ fn add_mixed_staff(graph: &mut DirGraph, node_type: &str) {
     add_staff(graph, node_type, "grade");
     run(graph, "MATCH (n {id: 1}) SET n.badge = 7");
     run(graph, "MATCH (n {id: 2}) SET n.badge = 'B-2'");
-}
-
-fn current_generation(root: &Path) -> PathBuf {
-    let current = std::fs::read_to_string(root.join("CURRENT")).unwrap();
-    root.join("generations").join(current.trim())
 }
 
 fn badges(graph: &mut DirGraph) -> Vec<Vec<Value>> {

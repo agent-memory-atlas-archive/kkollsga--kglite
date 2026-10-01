@@ -2,16 +2,15 @@
 //! the new rows: the base is neither copied nor written, the type's index bucket
 //! and id index stay on the file, and a failed statement leaves the type as a
 //! pure file-backed store again.
+use super::disk_test_support::load_owned;
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
-use crate::graph::io::file::load_file;
 use crate::graph::mutation::maintain;
 use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 use crate::graph::storage::column_store::{column_clones, flattens, reset_column_clones};
 use crate::graph::storage::disk::id_index::full_maps_built;
 use crate::graph::storage::disk::type_index::{buckets_materialized, TypeNodesRef};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 const STAFF: i64 = 30_000;
@@ -54,10 +53,7 @@ fn reopened(dir: &TempDir) -> DirGraph {
     add_staff(&mut graph, 0, STAFF);
     graph.save_disk(path).unwrap();
     drop(graph);
-    match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    }
+    load_owned(path)
 }
 
 fn count(graph: &mut DirGraph) -> i64 {
@@ -203,10 +199,7 @@ fn an_append_survives_two_save_and_reopen_cycles_without_leaving_the_file() {
             "the save re-points the store at the file it published (cycle {cycle})"
         );
         drop(graph);
-        graph = match Arc::try_unwrap(load_file(path).unwrap()) {
-            Ok(graph) => graph,
-            Err(_) => panic!("fresh load unexpectedly shared"),
-        };
+        graph = load_owned(path);
         assert_eq!(count(&mut graph), expected);
         assert_eq!(
             run(
@@ -287,10 +280,7 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
     .unwrap();
     graph.save_disk(path).unwrap();
     drop(graph);
-    let mut graph = match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    };
+    let mut graph = load_owned(path);
     // One batch with closed versions, one with every `valid_to` null.
     for (from, closed) in [(20_000, true), (20_500, false)] {
         maintain::add_nodes(
@@ -312,10 +302,7 @@ fn a_register_shaped_append_saves_without_flattening_the_type() {
         "a register-shaped type was flattened onto the heap by the save"
     );
     drop(graph);
-    let mut graph = match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    };
+    let mut graph = load_owned(path);
     let rows = run(
         &mut graph,
         "MATCH (p:Employment) WHERE p.valid_to IS NULL RETURN count(p) AS c",
@@ -387,10 +374,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     .unwrap();
     graph.save_disk(path).unwrap();
     drop(graph);
-    let mut graph = match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    };
+    let mut graph = load_owned(path);
 
     // Close the open versions built in 1951, and mark those built in 1950 as
     // something else: a timestamp column and a string column, both overlaid.
@@ -419,10 +403,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
         "a SET-changed register-shaped type was flattened onto the heap by the save"
     );
     drop(graph);
-    let mut graph = match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    };
+    let mut graph = load_owned(path);
     let open = (0..20_000i64)
         .filter(|i| i % 3 != 0 && i % 100 != 51)
         .count() as i64;

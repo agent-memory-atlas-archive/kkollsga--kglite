@@ -8,7 +8,8 @@
 //! reload answers from it. The cases here therefore drive each way a graph can
 //! move and read the answer back through a *reloaded* graph, where a stale
 //! bundle cannot be told from a current one except by its content.
-use super::disk_link_tests::{current_generation, load_owned, run, saved_graph};
+use super::disk_link_tests::saved_graph;
+use super::disk_test_support::{current_generation, load_owned, run};
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::mutation::maintain;

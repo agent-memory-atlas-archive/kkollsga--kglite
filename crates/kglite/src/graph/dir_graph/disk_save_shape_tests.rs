@@ -1,12 +1,11 @@
 //! A reopened disk graph keeps its serving shape across saves: every type the
 //! first save put in an mmap-served column file stays there after a write and
 //! after a no-op save, instead of moving to an all-`Mixed` heap sidecar.
+use super::disk_test_support::{load_owned, run};
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::mutation::maintain;
-use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 use crate::graph::storage::column_store::TypedColumn;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -34,20 +33,6 @@ fn add(graph: &mut DirGraph, node_type: &str, rows: i64, extra: &str) {
         None,
     )
     .unwrap();
-}
-
-fn load_owned(path: &str) -> DirGraph {
-    match Arc::try_unwrap(crate::graph::io::file::load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    }
-}
-
-fn run(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
-    let params = HashMap::new();
-    let result = execute_mut(graph, query, &ExecuteOptions::eager(&params))
-        .unwrap_or_else(|e| panic!("{query}: {e}"));
-    result.result.rows
 }
 
 /// Every type is served from its own mmap column file, and the files agree.

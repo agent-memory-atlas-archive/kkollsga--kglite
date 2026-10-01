@@ -1,17 +1,15 @@
 //! A saved disk graph serves an all-`Int64` id index from the published file,
 //! layers a write delta over it instead of copying it, resolves edge endpoints
 //! by probing it, and keeps every answer across reopen, append and save cycles.
+use super::disk_test_support::{current_generation, load_owned, run};
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
-use crate::graph::io::file::load_file;
 use crate::graph::mutation::edge_specs::{add_edges_from_specs, EdgeSpec};
 use crate::graph::mutation::maintain;
-use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 use crate::graph::storage::disk::id_index::{full_maps_built, IdIndexBase};
 use crate::graph::storage::lookups::graph_scans;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 use tempfile::TempDir;
 
 /// Register-shaped ids: past `u32`, so the index cannot be the compact `Integer`
@@ -34,35 +32,15 @@ fn add_anchors(graph: &mut DirGraph, count: i64) {
     maintain::add_nodes(graph, frame, "Employee".into(), "id".into(), None, None).unwrap();
 }
 
-fn rows(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
-    let params = HashMap::new();
-    execute_mut(graph, query, &ExecuteOptions::eager(&params))
-        .unwrap_or_else(|e| panic!("{query}: {e}"))
-        .result
-        .rows
-}
-
 fn seq_of(graph: &mut DirGraph, id: i64) -> Vec<Vec<Value>> {
-    rows(
+    run(
         graph,
         &format!("MATCH (n:Employment {{id: {id}}}) RETURN n.seq"),
     )
 }
 
-fn load_owned(path: &str) -> DirGraph {
-    match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    }
-}
-
-fn generation(root: &Path) -> PathBuf {
-    let current = std::fs::read_to_string(root.join("CURRENT")).unwrap();
-    root.join("generations").join(current.trim())
-}
-
 fn published_pairs(graph: &DirGraph, root: &Path) -> usize {
-    let base = IdIndexBase::load_from(&generation(root), &graph.interner)
+    let base = IdIndexBase::load_from(&current_generation(root), &graph.interner)
         .unwrap()
         .expect("id_indices.bin");
     base.int64_parts("Employment")
@@ -125,7 +103,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
             vec![vec![Value::Int64(20_099)]]
         );
         add_versions(&mut graph, expected, expected + 50);
-        rows(
+        run(
             &mut graph,
             &format!(
                 "MATCH (n:Employment {{id: {}}}) DETACH DELETE n",
@@ -150,7 +128,7 @@ fn int64_ids_are_served_from_the_published_file_across_save_and_append() {
     );
     assert_eq!(seq_of(&mut graph, BIG + 4 * 7), vec![vec![Value::Int64(4)]]);
     assert_eq!(
-        rows(&mut graph, "MATCH (n:Employment) RETURN count(n)"),
+        run(&mut graph, "MATCH (n:Employment) RETURN count(n)"),
         vec![vec![Value::Int64(20_198)]]
     );
 }
@@ -172,7 +150,7 @@ fn a_delete_on_a_mapped_type_leaves_the_index_in_the_file() {
     let mut graph = load_owned(path);
     let built = full_maps_built();
     let scans = super::id_index_scans();
-    rows(
+    run(
         &mut graph,
         &format!(
             "MATCH (n:Employment) WHERE n.id IN [{}, {}] DETACH DELETE n",
@@ -211,7 +189,7 @@ fn a_delete_on_a_mapped_type_leaves_the_index_in_the_file() {
     let mut graph = load_owned(path);
     assert_eq!(seq_of(&mut graph, BIG + 3 * 7), Vec::<Vec<Value>>::new());
     assert_eq!(
-        rows(&mut graph, "MATCH (n:Employment) RETURN count(n)"),
+        run(&mut graph, "MATCH (n:Employment) RETURN count(n)"),
         vec![vec![Value::Int64(4_998)]]
     );
 }
@@ -321,14 +299,14 @@ fn edge_endpoints_are_resolved_by_probing_the_mapped_index() {
     assert_eq!(report.skipped_missing_endpoint, 1);
 
     assert_eq!(
-        rows(
+        run(
             &mut graph,
             "MATCH (:Employment)-[e:OF]->(:Employee) RETURN count(e)"
         ),
         vec![vec![Value::Int64(3)]]
     );
     assert_eq!(
-        rows(
+        run(
             &mut graph,
             "MATCH (p:Employment {id: 3100000000014})-[:OF]->(o:Employee) RETURN o.id"
         ),

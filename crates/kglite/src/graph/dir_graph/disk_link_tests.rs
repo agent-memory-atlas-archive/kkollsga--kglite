@@ -6,16 +6,13 @@
 //! untouched one only costs time. So each kind of change a type can carry is
 //! driven here against an untouched sibling, and the changed type's file must
 //! differ from the previous generation's while the sibling's is the same file.
+use super::disk_test_support::{column_meta, current_generation, load_owned, run};
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::io::column_link;
-use crate::graph::io::columns_meta::{self, ColumnsMeta};
-use crate::graph::io::file::load_file;
 use crate::graph::mutation::maintain;
-use crate::graph::session::execute::{execute_mut, ExecuteOptions};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Org-chart data: `Employee` is the type every change is applied to; the
@@ -41,30 +38,6 @@ fn add_type(graph: &mut DirGraph, node_type: &str, count: i64) {
         None,
     )
     .unwrap();
-}
-
-pub(super) fn run(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
-    let params = HashMap::new();
-    execute_mut(graph, query, &ExecuteOptions::eager(&params))
-        .unwrap_or_else(|e| panic!("{query}: {e}"))
-        .result
-        .rows
-}
-
-pub(super) fn load_owned(path: &str) -> DirGraph {
-    match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    }
-}
-
-pub(super) fn current_generation(root: &str) -> PathBuf {
-    let current = std::fs::read_to_string(format!("{root}/CURRENT")).unwrap();
-    Path::new(root).join("generations").join(current.trim())
-}
-
-fn column_meta(generation: &Path) -> ColumnsMeta {
-    columns_meta::read(&generation.join("seg_000/columns_meta.json")).unwrap()
 }
 
 /// Type name -> that type's column file in `generation`.

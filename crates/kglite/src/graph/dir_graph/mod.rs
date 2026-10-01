@@ -88,8 +88,6 @@ pub use node_remap::NodeRemap;
 /// — see the [`DirGraph::property_ndv_cache`] field.
 type PropertyNdvCache = Arc<RwLock<(u64, HashMap<(String, String), usize>)>>;
 
-/// Core graph storage: a directed graph (petgraph `StableDiGraph`) with fast
-/// type-based indexing and optional property/composite/range/spatial indexes.
 // Id indexes built by scanning a type, on this thread: a lookup that finds its
 // index in the file or the overlay never moves it.
 #[cfg(test)]
@@ -102,6 +100,8 @@ pub(crate) fn id_index_scans() -> usize {
     ID_INDEX_SCANS.with(|scans| scans.get())
 }
 
+/// Core graph storage: a directed graph (petgraph `StableDiGraph`) with fast
+/// type-based indexing and optional property/composite/range/spatial indexes.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DirGraph {
     pub graph: GraphBackend,
@@ -2490,6 +2490,8 @@ mod disk_link_tests;
 mod disk_retention_tests;
 #[cfg(test)]
 mod disk_tail_tests;
+#[cfg(test)]
+mod disk_test_support;
 #[cfg(test)]
 mod edge_embedding_disk_tests;
 #[cfg(test)]

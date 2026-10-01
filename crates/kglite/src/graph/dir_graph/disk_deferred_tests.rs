@@ -1,3 +1,4 @@
+use super::disk_test_support::load_owned;
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::mutation::maintain;
@@ -38,13 +39,6 @@ fn saved_graph(path: &str, indexed: bool) -> DirGraph {
     graph.enable_disk_mode().unwrap();
     graph.save_disk(path).unwrap();
     graph
-}
-
-fn load_owned(path: &str) -> DirGraph {
-    match Arc::try_unwrap(crate::graph::io::file::load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    }
 }
 
 #[test]

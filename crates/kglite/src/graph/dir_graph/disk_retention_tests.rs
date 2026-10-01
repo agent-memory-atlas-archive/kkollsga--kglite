@@ -1,7 +1,8 @@
 //! Generation retention: a save keeps the new generation and a window of
 //! older ones, deletes the rest, and never deletes one something in this
 //! process still maps.
-use super::disk_link_tests::{current_generation, load_owned, run, saved_graph};
+use super::disk_link_tests::saved_graph;
+use super::disk_test_support::{current_generation, load_owned, run};
 use super::DirGraph;
 use crate::datatypes::Value;
 use crate::graph::storage::disk::generation::{prune_generations, PruneReport};

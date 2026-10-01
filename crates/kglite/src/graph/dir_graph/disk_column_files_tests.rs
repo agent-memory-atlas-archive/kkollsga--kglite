@@ -1,16 +1,14 @@
 //! A disk save writes one immutable column file per node type, reads them back
 //! through read-only maps, and moves the live handle onto the published files
 //! without ever failing a save that already succeeded.
+use super::disk_test_support::{copy_tree, current_generation, load_owned, run};
 use super::DirGraph;
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::io::columns_meta::{self, ColumnsMeta};
 use crate::graph::io::file::{load_file, save_graph};
 use crate::graph::mutation::maintain;
-use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 use crate::graph::storage::disk::type_index::TypeNodesRef;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Org-chart data: `Employee` carries an integer badge number as its title.
@@ -54,28 +52,9 @@ fn add_departments(graph: &mut DirGraph, node_type: &str, count: i64) {
     .unwrap();
 }
 
-fn run(graph: &mut DirGraph, query: &str) -> Vec<Vec<Value>> {
-    let params = HashMap::new();
-    execute_mut(graph, query, &ExecuteOptions::eager(&params))
-        .unwrap_or_else(|e| panic!("{query}: {e}"))
-        .result
-        .rows
-}
-
-fn load_owned(path: &str) -> DirGraph {
-    match Arc::try_unwrap(load_file(path).unwrap()) {
-        Ok(graph) => graph,
-        Err(_) => panic!("fresh load unexpectedly shared"),
-    }
-}
-
-fn current_generation(root: &str) -> PathBuf {
-    let current = std::fs::read_to_string(format!("{root}/CURRENT")).unwrap();
-    Path::new(root).join("generations").join(current.trim())
-}
-
+/// The column metadata of the graph at `root`.
 fn column_meta(root: &str) -> ColumnsMeta {
-    columns_meta::read(&current_generation(root).join("seg_000/columns_meta.json")).unwrap()
+    super::disk_test_support::column_meta(&current_generation(root))
 }
 
 /// The two-type graph every test starts from, saved at `path`.
@@ -490,20 +469,6 @@ fn a_column_file_shorter_than_its_metadata_is_refused_not_mapped() {
     assert!(message.contains("needs"), "{message}");
 }
 
-fn copy_tree(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    for entry in std::fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), target).unwrap();
-        }
-    }
-}
-
-/// Every id and title of every type, by type name.
 fn snapshot(graph: &DirGraph) -> Vec<(String, Vec<Vec<Option<Value>>>)> {
     let mut out: Vec<_> = graph
         .column_stores_by_name()
