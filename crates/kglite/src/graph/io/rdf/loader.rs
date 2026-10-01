@@ -96,15 +96,19 @@ struct NodeAcc {
     props: HashMap<String, Value>,
     /// Language-tagged literals (`language_maps`): predicate → lang → value.
     /// Boxed so an untagged document pays one pointer per node.
-    langs: Option<Box<BTreeMap<String, BTreeMap<String, Value>>>>,
+    langs: Option<Box<LangMaps>>,
 }
+
+/// Predicate → language tag → value.
+#[derive(Default)]
+struct LangMaps(BTreeMap<String, BTreeMap<String, Value>>);
 
 impl NodeAcc {
     /// The node's property map: plain literals plus each language map. A
     /// predicate carrying both keeps the map as one more list element.
     fn into_properties(self) -> HashMap<String, Value> {
         let mut props = self.props;
-        for (key, by_lang) in self.langs.into_iter().flat_map(|m| *m) {
+        for (key, by_lang) in self.langs.into_iter().flat_map(|m| m.0) {
             let map = Value::Map(PropMap::from_pairs(by_lang.into_iter().collect()));
             insert_property(&mut props, key, map);
         }
@@ -408,7 +412,7 @@ fn absorb_kg(predicate: &str, object: &Term, state: &mut FoldState) -> Result<()
 /// Record a language-tagged literal; a repeat of the same predicate and tag
 /// becomes a list under that tag.
 fn insert_tagged(acc: &mut NodeAcc, key: String, lang: &str, text: &str) {
-    let by_lang = acc.langs.get_or_insert_default().entry(key).or_default();
+    let by_lang = acc.langs.get_or_insert_default().0.entry(key).or_default();
     let value = Value::String(text.to_string());
     match by_lang.get_mut(lang) {
         None => {

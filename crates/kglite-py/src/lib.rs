@@ -330,6 +330,8 @@ fn load(
 /// `{lang: value}` maps).
 #[pyfunction]
 #[pyo3(signature = (path, *, languages=None, label_predicates=None, keep_full_iris=false, default_type=None, max_triples=None, language_maps=false))]
+// One keyword argument per `RdfConfig` field, as the Python signature spells them.
+#[allow(clippy::too_many_arguments)]
 fn load_rdf(
     py: Python<'_>,
     path: String,
