@@ -183,8 +183,8 @@ pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 # it re-exports `oxrdf` term types (Triple / Quad / Term / Literal).
 # oxttl 0.2.3 resolves oxrdf 0.3.x — pin oxrdf to the version oxttl
 # pulls so they agree on the term types.
-oxttl = { version = "0.2", optional = true }
-oxrdf = { version = "0.3", optional = true }
+oxttl = { version = "0.2", optional = true, features = ["rdf-12"] }
+oxrdf = { version = "0.3", optional = true, features = ["rdf-12"] }
 
 # xlsx blueprint reader — gated behind the `xlsx` feature. `default-features
 # = false` is a no-op today (calamine's default feature set is empty) and is

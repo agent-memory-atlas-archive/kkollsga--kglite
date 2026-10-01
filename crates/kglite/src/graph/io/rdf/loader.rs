@@ -9,7 +9,7 @@
 //! `load_ntriples` for that).
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::BufReader;
 
@@ -24,6 +24,10 @@ use crate::graph::storage::{GraphRead, GraphWrite};
 use super::curie::Curiefier;
 use super::fold::datatype_to_value;
 use super::interner::IriInterner;
+use super::kg_import;
+use crate::datatypes::PropMap;
+use crate::graph::io::export::kg_vocab::{KG_MANIFEST, KG_NS, RDF_REIFIES};
+use crate::graph::io::export::ExportManifest;
 
 /// The `rdf:type` predicate IRI — the one predicate that sets a node's
 /// type instead of becoming a property or edge.
@@ -47,6 +51,10 @@ pub struct RdfConfig {
     pub default_type: String,
     /// Stop after this many triples. `None` = no limit.
     pub max_triples: Option<u64>,
+    /// Store a property whose literals carry language tags as a map
+    /// `{lang: value}` instead of dropping the tags (the `languages` filter
+    /// still applies first). Off keeps the untagged-value behaviour.
+    pub language_maps: bool,
 }
 
 impl Default for RdfConfig {
@@ -57,6 +65,7 @@ impl Default for RdfConfig {
             keep_full_iris: false,
             default_type: "Resource".to_string(),
             max_triples: None,
+            language_maps: false,
         }
     }
 }
@@ -67,6 +76,9 @@ pub struct RdfStats {
     pub nodes_created: usize,
     pub edges_created: usize,
     pub triples_processed: u64,
+    /// Declarations of a `kg:manifest` that could not be applied (for
+    /// example a validity interval on a type with no rows).
+    pub warnings: Vec<String>,
 }
 
 /// Per-subject accumulator built during the fold, then drained into a
@@ -82,6 +94,22 @@ struct NodeAcc {
     types: Vec<String>,
     /// Literal properties, keyed by compacted predicate.
     props: HashMap<String, Value>,
+    /// Language-tagged literals (`language_maps`): predicate → lang → value.
+    /// Boxed so an untagged document pays one pointer per node.
+    langs: Option<Box<BTreeMap<String, BTreeMap<String, Value>>>>,
+}
+
+impl NodeAcc {
+    /// The node's property map: plain literals plus each language map. A
+    /// predicate carrying both keeps the map as one more list element.
+    fn into_properties(self) -> HashMap<String, Value> {
+        let mut props = self.props;
+        for (key, by_lang) in self.langs.into_iter().flat_map(|m| *m) {
+            let map = Value::Map(PropMap::from_pairs(by_lang.into_iter().collect()));
+            insert_property(&mut props, key, map);
+        }
+        props
+    }
 }
 
 /// Mutable fold state threaded through the per-statement processor.
@@ -92,6 +120,12 @@ struct FoldState {
     accs: Vec<NodeAcc>,
     /// Buffered edges as (source id, target id, compacted predicate).
     edges: Vec<(u32, u32, String)>,
+    /// `(reifier id, source id, target id, predicate)` per
+    /// `r rdf:reifies <<( s p o )>>`, in document order. A reifier's own
+    /// literals (its accumulator) become the properties of the edge it reifies.
+    reifiers: Vec<(u32, u32, u32, String)>,
+    /// The `kg:manifest` of the document, once seen.
+    manifest: Option<ExportManifest>,
 }
 
 impl FoldState {
@@ -101,6 +135,8 @@ impl FoldState {
             curie: Curiefier::new(keep_full),
             accs: Vec::new(),
             edges: Vec::new(),
+            reifiers: Vec::new(),
+            manifest: None,
         }
     }
 
@@ -163,7 +199,7 @@ pub fn load_rdf(graph: &mut DirGraph, path: &str, config: &RdfConfig) -> Result<
                     &triple.object,
                     config,
                     &mut state,
-                );
+                )?;
                 if hit_limit(&mut processed, config) {
                     break;
                 }
@@ -179,7 +215,7 @@ pub fn load_rdf(graph: &mut DirGraph, path: &str, config: &RdfConfig) -> Result<
                     &triple.object,
                     config,
                     &mut state,
-                );
+                )?;
                 if hit_limit(&mut processed, config) {
                     break;
                 }
@@ -195,7 +231,7 @@ pub fn load_rdf(graph: &mut DirGraph, path: &str, config: &RdfConfig) -> Result<
                     &quad.object,
                     config,
                     &mut state,
-                );
+                )?;
                 if hit_limit(&mut processed, config) {
                     break;
                 }
@@ -212,7 +248,7 @@ pub fn load_rdf(graph: &mut DirGraph, path: &str, config: &RdfConfig) -> Result<
                     &quad.object,
                     config,
                     &mut state,
-                );
+                )?;
                 if hit_limit(&mut processed, config) {
                     break;
                 }
@@ -222,11 +258,12 @@ pub fn load_rdf(graph: &mut DirGraph, path: &str, config: &RdfConfig) -> Result<
         _ => unreachable!("extension validated before dispatch"),
     }
 
-    let (nodes_created, edges_created) = materialize(graph, &mut state, config);
+    let (nodes_created, edges_created, warnings) = materialize(graph, &mut state, config)?;
     Ok(RdfStats {
         nodes_created,
         edges_created,
         triples_processed: processed,
+        warnings,
     })
 }
 
@@ -257,15 +294,19 @@ fn resource_key(n: &NamedOrBlankNode) -> Cow<'_, str> {
 }
 
 /// Fold a single statement into the accumulator / edge state. Splits
-/// cleanly into the four statement kinds: type, label, literal property,
-/// resource edge.
+/// cleanly into the statement kinds: `kg:` vocabulary, type, reification,
+/// label, literal property, resource edge.
 fn process(
     subject: &NamedOrBlankNode,
     predicate: &str,
     object: &Term,
     config: &RdfConfig,
     state: &mut FoldState,
-) {
+) -> Result<(), String> {
+    // Vocabulary statements describe the export, never a node.
+    if predicate.starts_with(KG_NS) {
+        return absorb_kg(predicate, object, state);
+    }
     let subject_key = resource_key(subject);
     let s_id = state.ensure(subject_key.as_ref());
 
@@ -281,17 +322,21 @@ fn process(
                 acc.types.push(t);
             }
         }
-        return;
+        return Ok(());
+    }
+
+    if predicate == RDF_REIFIES {
+        fold_reifies(s_id, object, state);
+        return Ok(());
     }
 
     match object {
         Term::Literal(lit) => {
+            let lang = lit.language();
             // Drop language-tagged literals filtered out by config.
-            if let Some(lang) = lit.language() {
-                if let Some(keep) = &config.languages {
-                    if !keep.contains(lang) {
-                        return;
-                    }
+            if let (Some(lang), Some(keep)) = (lang, &config.languages) {
+                if !keep.contains(lang) {
+                    return Ok(());
                 }
             }
             if config.label_predicates.iter().any(|p| p == predicate) {
@@ -299,9 +344,17 @@ fn process(
                 if acc.title.is_none() {
                     acc.title = Some(lit.value().to_string());
                 }
-                return;
+                // The title keeps one string; with `language_maps` the tagged
+                // labels are also kept, as a map, so no tag is lost.
+                if lang.is_none() || !config.language_maps {
+                    return Ok(());
+                }
             }
             let key = state.curie.compact(predicate);
+            if let (true, Some(lang)) = (config.language_maps, lang) {
+                insert_tagged(&mut state.accs[s_id as usize], key, lang, lit.value());
+                return Ok(());
+            }
             let val = datatype_to_value(lit.value(), lit.datatype().as_str());
             insert_property(&mut state.accs[s_id as usize].props, key, val);
         }
@@ -313,10 +366,59 @@ fn process(
             let pred = state.curie.compact(predicate);
             state.edges.push((s_id, o_id, pred));
         }
-        // `Term::Triple` (RDF-star) is gated behind oxrdf's `rdf-12`
-        // feature, which we don't enable; this arm is unreachable.
-        #[allow(unreachable_patterns)]
-        _ => {}
+        // A triple term outside `rdf:reifies` is neither a property nor an edge.
+        Term::Triple(_) => {}
+    }
+    Ok(())
+}
+
+/// Record `r rdf:reifies <<( s p o )>>` for an edge-shaped triple term;
+/// a term whose object is a literal annotates no edge and is ignored.
+fn fold_reifies(reifier: u32, object: &Term, state: &mut FoldState) {
+    let Term::Triple(triple) = object else {
+        return;
+    };
+    if matches!(triple.object, Term::Literal(_) | Term::Triple(_)) {
+        return;
+    }
+    let source = resource_key(&triple.subject);
+    let source = state.ensure(source.as_ref());
+    let target = term_resource_key(&triple.object);
+    let target = state.ensure(target.as_ref());
+    let pred = state.curie.compact(triple.predicate.as_str());
+    state.reifiers.push((reifier, source, target, pred));
+}
+
+/// Take a `kg:` statement: `kg:manifest` is the export manifest; any other
+/// `kg:` term is reserved and skipped.
+fn absorb_kg(predicate: &str, object: &Term, state: &mut FoldState) -> Result<(), String> {
+    if predicate != KG_MANIFEST {
+        return Ok(());
+    }
+    let Term::Literal(lit) = object else {
+        return Err("kg:manifest must be a literal".to_string());
+    };
+    if state.manifest.is_some() {
+        return Err("the document carries more than one kg:manifest".to_string());
+    }
+    state.manifest = Some(ExportManifest::from_json(lit.value())?);
+    Ok(())
+}
+
+/// Record a language-tagged literal; a repeat of the same predicate and tag
+/// becomes a list under that tag.
+fn insert_tagged(acc: &mut NodeAcc, key: String, lang: &str, text: &str) {
+    let by_lang = acc.langs.get_or_insert_default().entry(key).or_default();
+    let value = Value::String(text.to_string());
+    match by_lang.get_mut(lang) {
+        None => {
+            by_lang.insert(lang.to_string(), value);
+        }
+        Some(Value::List(list)) => list.push(value),
+        Some(existing) => {
+            let old = std::mem::replace(existing, Value::Null);
+            *existing = Value::List(vec![old, value]);
+        }
     }
 }
 
@@ -357,32 +459,57 @@ fn insert_property(props: &mut HashMap<String, Value>, key: String, val: Value) 
 }
 
 /// Materialise the fold state into graph nodes + edges. Returns
-/// (nodes_created, edges_created).
-fn materialize(graph: &mut DirGraph, state: &mut FoldState, config: &RdfConfig) -> (usize, usize) {
+/// (nodes_created, edges_created, warnings). Reifier nodes are not
+/// materialised: their literals become edge properties.
+fn materialize(
+    graph: &mut DirGraph,
+    state: &mut FoldState,
+    config: &RdfConfig,
+) -> Result<(usize, usize, Vec<String>), String> {
     let n = state.iris.len();
-    let mut idx_of: Vec<petgraph::graph::NodeIndex> = Vec::with_capacity(n);
+    let mut idx_of: Vec<Option<petgraph::graph::NodeIndex>> = Vec::with_capacity(n);
+    let reifier_ids: HashSet<u32> = state.reifiers.iter().map(|r| r.0).collect();
+    let mut reifier_props: HashMap<u32, HashMap<String, Value>> = HashMap::new();
+    let manifest = state.manifest.as_ref();
+    let mut identities = kg_import::IdentityCheck::default();
+    let mut dense: u32 = 0;
 
     for id in 0..n as u32 {
-        let iri = state.iris.iri(id).to_string();
         let acc = std::mem::take(&mut state.accs[id as usize]);
+        if reifier_ids.contains(&id) {
+            reifier_props.insert(id, acc.into_properties());
+            idx_of.push(None);
+            continue;
+        }
+        let iri = state.iris.iri(id).to_string();
 
-        let node_type = acc.node_type.unwrap_or_else(|| config.default_type.clone());
-        let title = acc.title.unwrap_or_else(|| iri.clone());
+        let node_type = acc
+            .node_type
+            .clone()
+            .unwrap_or_else(|| config.default_type.clone());
+        let title = acc.title.clone().unwrap_or_else(|| iri.clone());
+        let types = if acc.types.len() > 1 {
+            Some(Value::List(
+                acc.types.iter().cloned().map(Value::String).collect(),
+            ))
+        } else {
+            None
+        };
 
-        let mut properties = acc.props;
+        let mut properties = acc.into_properties();
         properties.insert("uri".to_string(), Value::String(iri.clone()));
-        if acc.types.len() > 1 {
-            properties.insert(
-                "rdf_types".to_string(),
-                Value::List(acc.types.into_iter().map(Value::String).collect()),
-            );
+        if let Some(types) = types {
+            properties.insert("rdf_types".to_string(), types);
         }
 
-        // Dense integer id — `n.id` is an integer in every mode.
-        let id_value = Value::UniqueId(id);
+        // Dense integer id — `n.id` is an integer in every mode — unless the
+        // manifest says the type's ids were something else.
+        let (id_value, title_value) =
+            kg_import::node_identity(manifest, &node_type, &iri, title, dense, &mut identities)?;
+        dense += 1;
         let node_data = NodeData::new(
             id_value.clone(),
-            Value::String(title),
+            title_value,
             node_type.clone(),
             properties,
             &mut graph.interner,
@@ -392,33 +519,110 @@ fn materialize(graph: &mut DirGraph, state: &mut FoldState, config: &RdfConfig) 
             .type_indices
             .entry_or_default(node_type.clone())
             .push(node_idx);
+        kg_import::add_labels(graph, manifest, &node_type, node_idx);
         graph
             .id_indices
             .entry_or_default(node_type)
             .insert(id_value, node_idx);
-        idx_of.push(node_idx);
+        idx_of.push(Some(node_idx));
     }
 
-    let edges_created = materialize_edges(graph, &state.edges, &idx_of);
-    (n, edges_created)
+    let plans = plan_edges(state, &reifier_props);
+    let edges_created = materialize_edges(graph, &plans, &idx_of);
+    let warnings = match manifest {
+        Some(manifest) => kg_import::apply(graph, manifest)?,
+        None => Vec::new(),
+    };
+    Ok((dense as usize, edges_created, warnings))
 }
 
-/// Create the buffered edges and record connection-type metadata,
-/// mirroring `create_edges_strings`. All ids are dense + present, so no
-/// edge is ever skipped.
+/// One edge to create, with the properties its reifier carried.
+struct EdgePlan {
+    source: u32,
+    target: u32,
+    predicate: String,
+    props: HashMap<String, Value>,
+}
+
+/// Decide the edges: every plain `s p o` statement is one edge, and the
+/// reifiers of that triple supply properties in document order; reifiers
+/// beyond the plain statements are edges of their own, so a triple has
+/// `max(plain statements, reifiers)` parallel edges.
+fn plan_edges(
+    state: &FoldState,
+    reifier_props: &HashMap<u32, HashMap<String, Value>>,
+) -> Vec<EdgePlan> {
+    let mut pending: HashMap<(u32, u32, &str), VecDeque<u32>> = HashMap::new();
+    for (reifier, source, target, pred) in &state.reifiers {
+        pending
+            .entry((*source, *target, pred.as_str()))
+            .or_default()
+            .push_back(*reifier);
+    }
+    let props_of = |reifier: Option<u32>| {
+        reifier
+            .and_then(|r| reifier_props.get(&r))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut plans = Vec::with_capacity(state.edges.len());
+    for (source, target, pred) in &state.edges {
+        let reifier = pending
+            .get_mut(&(*source, *target, pred.as_str()))
+            .and_then(VecDeque::pop_front);
+        plans.push(EdgePlan {
+            source: *source,
+            target: *target,
+            predicate: pred.clone(),
+            props: props_of(reifier),
+        });
+    }
+    for (reifier, source, target, pred) in &state.reifiers {
+        let key = (*source, *target, pred.as_str());
+        let Some(queue) = pending.get_mut(&key) else {
+            continue;
+        };
+        if let Some(pos) = queue.iter().position(|r| r == reifier) {
+            queue.remove(pos);
+            plans.push(EdgePlan {
+                source: *source,
+                target: *target,
+                predicate: pred.clone(),
+                props: props_of(Some(*reifier)),
+            });
+        }
+    }
+    plans
+}
+
+/// Create the planned edges and record connection-type metadata,
+/// mirroring `create_edges_strings`. Every endpoint is a materialised node
+/// except a reifier, whose edges are dropped.
 fn materialize_edges(
     graph: &mut DirGraph,
-    edges: &[(u32, u32, String)],
-    idx_of: &[petgraph::graph::NodeIndex],
+    plans: &[EdgePlan],
+    idx_of: &[Option<petgraph::graph::NodeIndex>],
 ) -> usize {
     let mut conn_type_pairs: HashMap<String, (HashSet<String>, HashSet<String>)> = HashMap::new();
+    let mut prop_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut created = 0;
 
-    for (s_id, o_id, pred) in edges {
-        let src = idx_of[*s_id as usize];
-        let tgt = idx_of[*o_id as usize];
+    for plan in plans {
+        let (Some(src), Some(tgt)) = (
+            idx_of[plan.source as usize],
+            idx_of[plan.target as usize],
+        ) else {
+            continue;
+        };
+        let pred = &plan.predicate;
+        let types = prop_types.entry(pred.clone()).or_default();
+        for (key, value) in &plan.props {
+            types
+                .entry(key.clone())
+                .or_insert_with(|| value.type_name().to_string());
+        }
 
-        let edge_data = EdgeData::new(pred.clone(), HashMap::new(), &mut graph.interner);
+        let edge_data = EdgeData::new(pred.clone(), plan.props.clone(), &mut graph.interner);
 
         let src_type = GraphRead::node_weight(&graph.graph, src)
             .unwrap()
@@ -439,13 +643,14 @@ fn materialize_edges(
     }
 
     for (conn_type, (source_types, target_types)) in conn_type_pairs {
+        let types = prop_types.remove(&conn_type).unwrap_or_default();
         for src_type in &source_types {
             for tgt_type in &target_types {
                 graph.upsert_connection_type_metadata(
                     &conn_type,
                     src_type,
                     tgt_type,
-                    HashMap::new(),
+                    types.clone(),
                 );
             }
         }
@@ -723,3 +928,7 @@ ex:thing rdfs:label "Bonjour"@fr ;
         );
     }
 }
+
+#[cfg(all(test, feature = "rdf"))]
+#[path = "loader_tests.rs"]
+mod loader_tests;

@@ -491,6 +491,7 @@ pub unsafe extern "C" fn kglite_load_rdf(
                 } else {
                     Some(max_triples as u64)
                 },
+                language_maps: false,
             };
 
             let mut graph = DirGraph::new();

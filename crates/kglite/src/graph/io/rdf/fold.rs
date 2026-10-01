@@ -8,6 +8,7 @@
 //! coercion never disturbs the Wikidata-tuned path.
 
 use crate::datatypes::values::Value;
+use crate::graph::io::export::kg_vocab::KG_JSON;
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 
 // XSD namespace + the leaf datatypes we special-case.
@@ -23,6 +24,9 @@ pub(super) fn datatype_to_value(value: &str, datatype_iri: &str) -> Value {
     }
     if datatype_iri == GEO_WKT {
         return wkt_to_value(value);
+    }
+    if datatype_iri == KG_JSON {
+        return json_to_value(value);
     }
     // xsd:string, rdf:langString, and any unknown datatype → string.
     Value::String(value.to_string())
@@ -70,8 +74,86 @@ fn xsd_to_value(value: &str, local: &str) -> Value {
 
         "dateTime" => parse_xsd_datetime(value),
 
+        "duration" | "dayTimeDuration" | "yearMonthDuration" => parse_xsd_duration(value)
+            .unwrap_or_else(|| Value::String(value.to_string())),
+
         _ => Value::String(value.to_string()),
     }
+}
+
+/// A `kg:json` literal: a JSON array or object becomes a list or map; text
+/// that is not JSON stays a string.
+fn json_to_value(value: &str) -> Value {
+    match serde_json::from_str::<serde_json::Value>(value) {
+        Ok(json) => crate::param::json_value_to_kglite_value(&json),
+        Err(_) => Value::String(value.to_string()),
+    }
+}
+
+/// Parse an `xsd:duration` (`-P1Y2M3DT4H5M6S`) to a [`Value::Duration`] of
+/// months, days and whole seconds. `None` for a malformed form, a fractional
+/// number, or a field that overflows, so the caller keeps the string.
+fn parse_xsd_duration(value: &str) -> Option<Value> {
+    let (negative, rest) = match value.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, value),
+    };
+    let rest = rest.strip_prefix('P')?;
+    let (date_part, time_part) = match rest.split_once('T') {
+        Some((d, t)) => (d, Some(t)),
+        None => (rest, None),
+    };
+    if date_part.is_empty() && time_part.is_none_or(str::is_empty) {
+        return None;
+    }
+    // Sum `<digits><designator>` fields, each designator at most once.
+    fn fields(part: &str, allowed: &[char]) -> Option<Vec<(char, i64)>> {
+        let mut out: Vec<(char, i64)> = Vec::new();
+        let mut digits = String::new();
+        for ch in part.chars() {
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+            } else if allowed.contains(&ch) && !digits.is_empty() {
+                if out.iter().any(|(c, _)| *c == ch) {
+                    return None;
+                }
+                out.push((ch, digits.parse().ok()?));
+                digits.clear();
+            } else {
+                return None;
+            }
+        }
+        digits.is_empty().then_some(out)
+    }
+    let mut months: i64 = 0;
+    let mut days: i64 = 0;
+    let mut seconds: i64 = 0;
+    for (ch, n) in fields(date_part, &['Y', 'M', 'D'])? {
+        match ch {
+            'Y' => months = months.checked_add(n.checked_mul(12)?)?,
+            'M' => months = months.checked_add(n)?,
+            _ => days = n,
+        }
+    }
+    if let Some(time) = time_part {
+        if time.is_empty() {
+            return None;
+        }
+        for (ch, n) in fields(time, &['H', 'M', 'S'])? {
+            let unit = match ch {
+                'H' => 3600,
+                'M' => 60,
+                _ => 1,
+            };
+            seconds = seconds.checked_add(n.checked_mul(unit)?)?;
+        }
+    }
+    let sign = if negative { -1 } else { 1 };
+    Some(Value::Duration {
+        months: i32::try_from(months * sign).ok()?,
+        days: i32::try_from(days * sign).ok()?,
+        seconds: seconds * sign,
+    })
 }
 
 /// Parse an `xsd:date`, tolerating a trailing `Z` or timezone offset

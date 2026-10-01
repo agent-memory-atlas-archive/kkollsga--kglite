@@ -326,9 +326,10 @@ fn load(
 /// `label_predicates` (IRIs whose literal sets the node title; defaults to
 /// `rdfs:label`), `keep_full_iris` (skip CURIE compaction), `default_type`
 /// (node type for subjects without `rdf:type`; defaults to `"Resource"`),
-/// `max_triples` (stop after N).
+/// `max_triples` (stop after N), `language_maps` (keep language tags as
+/// `{lang: value}` maps).
 #[pyfunction]
-#[pyo3(signature = (path, *, languages=None, label_predicates=None, keep_full_iris=false, default_type=None, max_triples=None))]
+#[pyo3(signature = (path, *, languages=None, label_predicates=None, keep_full_iris=false, default_type=None, max_triples=None, language_maps=false))]
 fn load_rdf(
     py: Python<'_>,
     path: String,
@@ -337,6 +338,7 @@ fn load_rdf(
     keep_full_iris: bool,
     default_type: Option<String>,
     max_triples: Option<u64>,
+    language_maps: bool,
 ) -> PyResult<KnowledgeGraph> {
     use std::collections::HashSet;
 
@@ -347,10 +349,12 @@ fn load_rdf(
         keep_full_iris,
         default_type: default_type.unwrap_or_else(|| "Resource".to_string()),
         max_triples,
+        language_maps,
     };
 
     let mut graph = kglite_core::api::DirGraph::new();
-    py.detach(|| kglite_core::api::io::load_rdf(&mut graph, &path, &config))
+    let stats = py
+        .detach(|| kglite_core::api::io::load_rdf(&mut graph, &path, &config))
         .map_err(|e| {
             if e.starts_with("Cannot open") {
                 PyErr::new::<pyo3::exceptions::PyFileNotFoundError, _>(e)
@@ -358,6 +362,14 @@ fn load_rdf(
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(e)
             }
         })?;
+    for warning in &stats.warnings {
+        PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+            &std::ffi::CString::new(warning.replace('\0', " ")).unwrap_or_default(),
+            1,
+        )?;
+    }
     Ok(KnowledgeGraph::from_arc(std::sync::Arc::new(graph)))
 }
 

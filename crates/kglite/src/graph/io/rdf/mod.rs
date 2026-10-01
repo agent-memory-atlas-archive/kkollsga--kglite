@@ -13,12 +13,14 @@
 //! - [`interner`] — dense IRI → `u32` interning for the fold accumulator.
 //! - [`curie`] — namespace → prefix CURIE compaction.
 //! - [`fold`] — typed-literal → [`crate::datatypes::values::Value`] coercion.
+//! - [`kg_import`] — what a `kg:manifest` restores (ids, labels, declarations).
 //! - [`loader`] — `load_rdf` entry point + the triple-fold driver.
 
 mod admission;
 mod curie;
 mod fold;
 mod interner;
+mod kg_import;
 mod loader;
 
 pub use loader::{load_rdf, RdfConfig, RdfStats};
