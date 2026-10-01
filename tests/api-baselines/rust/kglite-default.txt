@@ -454,6 +454,7 @@ pub struct kglite::api::blueprint::Settings
 pub kglite::api::blueprint::Settings::auto_purge: bool
 pub kglite::api::blueprint::Settings::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::Settings::input_root: core::option::Option<alloc::string::String>
+pub kglite::api::blueprint::Settings::manifest: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::output_file: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::output_path: core::option::Option<alloc::string::String>
 impl kglite::api::blueprint::Settings
@@ -2120,6 +2121,28 @@ pub fn kglite::api::io::EmbeddingCopyReport::eq(&self, other: &kglite::api::io::
 impl core::fmt::Debug for kglite::api::io::EmbeddingCopyReport
 pub fn kglite::api::io::EmbeddingCopyReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::io::EmbeddingCopyReport
+pub struct kglite::api::io::ExportManifest
+pub kglite::api::io::ExportManifest::format: alloc::string::String
+pub kglite::api::io::ExportManifest::node_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::graph::io::export::manifest::NodeTypeManifest>
+pub kglite::api::io::ExportManifest::relationship_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::graph::io::export::manifest::RelTypeManifest>
+pub kglite::api::io::ExportManifest::temporal: alloc::vec::Vec<kglite::graph::io::export::manifest::DeclarationEntry>
+impl kglite::api::io::ExportManifest
+pub fn kglite::api::io::ExportManifest::apply_declarations(&self, graph: &mut kglite::api::DirGraph) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
+pub fn kglite::api::io::ExportManifest::build(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::io::ExportManifest::from_json(text: &str) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::io::ExportManifest::to_json(&self) -> alloc::string::String
+impl core::clone::Clone for kglite::api::io::ExportManifest
+pub fn kglite::api::io::ExportManifest::clone(&self) -> kglite::api::io::ExportManifest
+impl core::cmp::Eq for kglite::api::io::ExportManifest
+impl core::cmp::PartialEq for kglite::api::io::ExportManifest
+pub fn kglite::api::io::ExportManifest::eq(&self, other: &kglite::api::io::ExportManifest) -> bool
+impl core::fmt::Debug for kglite::api::io::ExportManifest
+pub fn kglite::api::io::ExportManifest::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::io::ExportManifest
+impl serde_core::ser::Serialize for kglite::api::io::ExportManifest
+pub fn kglite::api::io::ExportManifest::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::io::ExportManifest
+pub fn kglite::api::io::ExportManifest::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::io::ExportStats
 pub kglite::api::io::ExportStats::embeddings: usize
 pub kglite::api::io::ExportStats::relationship_embeddings: usize
@@ -2302,7 +2325,7 @@ pub fn kglite::api::io::save_graph_with(graph: &mut alloc::sync::Arc<kglite::api
 pub fn kglite::api::io::save_subset(source: &kglite::api::DirGraph, selection: &kglite::api::CowSelection, out_path: &std::path::Path, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::io::save_subset_streaming_disk(source: &kglite::api::DirGraph, kept_per_type: &std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<u32>>, edge_filter: core::option::Option<&[u64]>, out_path: &std::path::Path, valid_time: core::option::Option<&kglite::api::fluent::FluentFilter>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::io::to_csv(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<(alloc::string::String, alloc::string::String), alloc::string::String>
-pub fn kglite::api::io::to_csv_dir(graph: &kglite::api::DirGraph, output_dir: &str, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<kglite::graph::io::export::ExportSummary, alloc::string::String>
+pub fn kglite::api::io::to_csv_dir(graph: &kglite::api::DirGraph, output_dir: &str, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<kglite::graph::io::export::csv_tree::ExportSummary, alloc::string::String>
 pub fn kglite::api::io::to_d3_json(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn kglite::api::io::to_gexf(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn kglite::api::io::to_graphml(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
