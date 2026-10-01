@@ -19,10 +19,7 @@ thread_local! {
 /// Run `body` with publication failing at `stage` on this thread only.
 #[cfg(test)]
 pub(crate) fn with_publish_failpoint<T>(stage: &'static str, body: impl FnOnce() -> T) -> T {
-    PUBLISH_FAILPOINT.with(|point| point.set(Some(stage)));
-    let result = body();
-    PUBLISH_FAILPOINT.with(|point| point.set(None));
-    result
+    crate::graph::test_scope::scoped(&PUBLISH_FAILPOINT, Some(stage), None, body)
 }
 
 fn publish_failpoint(stage: &'static str) -> io::Result<()> {

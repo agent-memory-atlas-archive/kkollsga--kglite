@@ -30,10 +30,7 @@ pub(crate) fn post_publish_failpoint(stage: &str) -> bool {
 /// Run `body` with the named post-publish stage failing, on this thread only.
 #[cfg(test)]
 pub(crate) fn with_failing_stage<T>(stage: &'static str, body: impl FnOnce() -> T) -> T {
-    POST_PUBLISH_FAILPOINT.with(|point| point.set(Some(stage)));
-    let result = body();
-    POST_PUBLISH_FAILPOINT.with(|point| point.set(None));
-    result
+    crate::graph::test_scope::scoped(&POST_PUBLISH_FAILPOINT, Some(stage), None, body)
 }
 
 impl DirGraph {

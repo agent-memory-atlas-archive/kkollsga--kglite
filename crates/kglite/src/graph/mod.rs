@@ -41,6 +41,8 @@ pub mod session;
 pub mod skills;
 pub mod storage;
 pub mod tables;
+#[cfg(test)]
+mod test_scope;
 pub mod text_indexes;
 pub mod wal;
 

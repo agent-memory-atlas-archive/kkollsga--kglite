@@ -55,10 +55,7 @@ thread_local! {
 /// is what carries files.
 #[cfg(test)]
 pub(crate) fn with_linking_refused<T>(body: impl FnOnce() -> T) -> T {
-    FORCE_COPY.with(|flag| flag.set(true));
-    let result = body();
-    FORCE_COPY.with(|flag| flag.set(false));
-    result
+    crate::graph::test_scope::scoped(&FORCE_COPY, true, false, body)
 }
 
 impl PreviousColumns {
