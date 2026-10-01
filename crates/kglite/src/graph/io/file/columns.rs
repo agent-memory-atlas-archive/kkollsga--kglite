@@ -268,20 +268,28 @@ pub(super) fn load_disk_column_stores(
 ///
 /// All-or-nothing: no store is installed unless every file mapped. The files
 /// were written by this process a moment ago, so load-time UTF-8 validation is
-/// skipped.
+/// skipped. `written` is the metadata that save published in `seg_000/`; without
+/// it the published sidecar is located and read.
 pub(crate) fn remap_column_stores_to_generation(
     dir: &std::path::Path,
     graph: &mut crate::graph::dir_graph::DirGraph,
+    written: Option<columns_meta::ColumnsMeta>,
 ) -> io::Result<()> {
     #[cfg(test)]
     if crate::graph::dir_graph::post_publish_failpoint("remap_column_stores") {
         return Err(io::Error::other("injected column-store remap failure"));
     }
-    let Some(meta_path) = columns_meta::locate(dir) else {
-        return Ok(());
+    let (meta, meta_dir) = match written {
+        Some(meta) => (meta, dir.join("seg_000")),
+        None => {
+            let Some(meta_path) = columns_meta::locate(dir) else {
+                return Ok(());
+            };
+            let meta = columns_meta::read(&meta_path)?;
+            (meta, meta_path.parent().unwrap_or(dir).to_path_buf())
+        }
     };
-    let meta = columns_meta::read(&meta_path)?;
-    let stores = open_column_stores(meta_path.parent().unwrap_or(dir), meta, false)?;
+    let stores = open_column_stores(&meta_dir, meta, false)?;
     for (type_name, store) in stores {
         graph.install_column_store(&type_name, Arc::new(store));
     }

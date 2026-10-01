@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use super::DirGraph;
+use crate::graph::io::columns_meta::ColumnsMeta;
 use crate::graph::storage::disk::id_index::IdIndexBase;
 use crate::graph::storage::disk::type_index::{TypeIndexBase, TypeIndexStore};
 
@@ -38,9 +39,12 @@ pub(crate) fn with_failing_stage<T>(stage: &'static str, body: impl FnOnce() -> 
 impl DirGraph {
     /// Re-point the column stores, the type index and the id index at the
     /// generation `published`, best effort. See the module header for why it never fails.
-    pub(super) fn rebase_after_publish(&mut self, published: &Path) {
+    ///
+    /// `columns` is the column metadata the save just published, when it wrote it
+    /// in this process; without it the remap reads the published file.
+    pub(super) fn rebase_after_publish(&mut self, published: &Path, columns: Option<ColumnsMeta>) {
         if let Err(error) =
-            crate::graph::io::file::remap_column_stores_to_generation(published, self)
+            crate::graph::io::file::remap_column_stores_to_generation(published, self, columns)
         {
             eprintln!(
                 "warning: the save was published, but re-mapping the column stores onto it \

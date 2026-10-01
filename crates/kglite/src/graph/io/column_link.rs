@@ -46,13 +46,6 @@ pub(crate) struct Reusable {
     pub(crate) source: PathBuf,
 }
 
-/// How a file reached the stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Carried {
-    Linked,
-    Copied,
-}
-
 #[cfg(test)]
 thread_local! {
     static FORCE_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -131,7 +124,7 @@ fn same_file(mapped: &Path, candidate: &Path) -> bool {
 
 /// Give the stage `relative` (under `stage_seg0`) as the file at `source`: a
 /// hard link where the platform and filesystem allow one, else a copy.
-pub(crate) fn carry(source: &Path, stage_seg0: &Path, relative: &str) -> io::Result<Carried> {
+pub(crate) fn carry(source: &Path, stage_seg0: &Path, relative: &str) -> io::Result<()> {
     let destination = columns_meta::resolve_type_file(stage_seg0, relative)?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
@@ -139,7 +132,7 @@ pub(crate) fn carry(source: &Path, stage_seg0: &Path, relative: &str) -> io::Res
     link_or_copy(source, &destination)
 }
 
-fn link_or_copy(source: &Path, destination: &Path) -> io::Result<Carried> {
+fn link_or_copy(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(test)]
     let refused = FORCE_COPY.with(|flag| flag.get());
     #[cfg(not(test))]
@@ -147,10 +140,10 @@ fn link_or_copy(source: &Path, destination: &Path) -> io::Result<Carried> {
     // Windows copies: a link to a file another handle maps is not worth the
     // sharing rules it brings for a saving nobody measured there.
     if !refused && cfg!(not(windows)) && fs::hard_link(source, destination).is_ok() {
-        return Ok(Carried::Linked);
+        return Ok(());
     }
     fs::copy(source, destination)?;
-    Ok(Carried::Copied)
+    Ok(())
 }
 
 /// Give the stage the previous generation's `name` (`id_indices.bin` or

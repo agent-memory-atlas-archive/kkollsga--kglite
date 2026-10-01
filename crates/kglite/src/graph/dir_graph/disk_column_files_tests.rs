@@ -128,6 +128,51 @@ fn int_titles_land_typed_in_their_own_file_and_the_live_store_stays_mapped() {
     );
 }
 
+/// A save writes the column metadata once, in both encodings: the compact JSON
+/// envelope an older reader stops at, and the binary twin this build's reload
+/// takes.
+#[test]
+fn a_save_publishes_its_column_metadata_compact_with_a_binary_twin() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap();
+    let graph = saved_graph(path);
+    drop(graph);
+
+    let seg0 = current_generation(path).join("seg_000");
+    let json = std::fs::read_to_string(seg0.join("columns_meta.json")).unwrap();
+    assert!(
+        !json.contains("\n"),
+        "the JSON envelope is compact, not pretty-printed"
+    );
+    let located = columns_meta::locate(&current_generation(path)).unwrap();
+    assert_eq!(
+        located.file_name().unwrap(),
+        "columns_meta.v2.bin.zst",
+        "a reload reads the binary form"
+    );
+    let binary = columns_meta::read(&located).unwrap();
+    let text = columns_meta::parse_json(&json, "the envelope").unwrap();
+    let names = |meta: &ColumnsMeta| {
+        let mut named: Vec<_> = meta
+            .types
+            .iter()
+            .map(|t| (t.type_name.clone(), t.row_count))
+            .collect();
+        named.sort();
+        named
+    };
+    assert_eq!(names(&binary), names(&text));
+    assert_eq!(binary.files, text.files);
+    assert_eq!(binary.sidecars, text.sidecars);
+    assert_eq!(binary.files.len(), 2);
+
+    let mut reloaded = load_owned(path);
+    assert_eq!(
+        run(&mut reloaded, "MATCH (e:Employee) RETURN count(e)"),
+        vec![vec![Value::Int64(50_000)]]
+    );
+}
+
 #[test]
 fn a_save_re_emits_a_mapped_store_from_its_mapping_instead_of_flattening_it() {
     let dir = TempDir::new().unwrap();

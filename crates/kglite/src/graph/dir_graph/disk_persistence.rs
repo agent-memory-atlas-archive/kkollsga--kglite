@@ -1,6 +1,7 @@
 //! Disk-mode lifecycle and persistence orchestration.
 
 use super::*;
+use crate::graph::io::columns_meta::ColumnsMeta;
 use crate::graph::storage::packed_codec::IntColumnEncoding;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -8,6 +9,71 @@ static DISK_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Column stores by type name, as one save writes them.
 type SaveStores = HashMap<String, Arc<ColumnStore>>;
+
+/// The column metadata of the stage a save is assembling: read from a stage an
+/// ntriples build left, or returned by the column-file writer, then given its
+/// `sidecars` and published once.
+struct StageColumns {
+    meta: ColumnsMeta,
+    /// Where the metadata is published; its `files` resolve against it.
+    seg0: std::path::PathBuf,
+    /// Whether `publish` has anything to write.
+    dirty: bool,
+    /// Whether this save wrote the column files the metadata names, which is
+    /// what lets the post-publish remap use it instead of reading it back.
+    fresh: bool,
+}
+
+impl StageColumns {
+    fn written(meta: ColumnsMeta, seg0: std::path::PathBuf) -> Self {
+        let dirty = !meta.types.is_empty();
+        Self {
+            meta,
+            seg0,
+            dirty,
+            fresh: true,
+        }
+    }
+
+    fn existing(meta: ColumnsMeta, seg0: &std::path::Path) -> Self {
+        Self {
+            meta,
+            seg0: seg0.to_path_buf(),
+            dirty: false,
+            fresh: false,
+        }
+    }
+
+    /// The node types whose bytes already live in the stage's column files.
+    fn covered_types(&self) -> std::collections::HashSet<String> {
+        self.meta
+            .types
+            .iter()
+            .map(|ty| ty.type_name.clone())
+            .collect()
+    }
+
+    /// Record which zstd sidecar directory holds each type the column files do
+    /// not, so a reader learns a sidecar's type from the metadata and never from
+    /// a directory name.
+    fn record_sidecars(&mut self, sidecars: std::collections::BTreeMap<String, String>) {
+        if !sidecars.is_empty() {
+            self.meta.sidecars = sidecars;
+            self.dirty = true;
+        }
+    }
+
+    /// Write the metadata (both encodings) if the save produced or changed it,
+    /// and hand it back when the post-publish remap can use it.
+    fn publish(self) -> Result<Option<ColumnsMeta>, String> {
+        if self.dirty {
+            std::fs::create_dir_all(&self.seg0)
+                .and_then(|()| crate::graph::io::columns_meta::publish(&self.seg0, &self.meta))
+                .map_err(|e| format!("Failed to write column metadata: {}", e))?;
+        }
+        Ok((self.fresh && !self.meta.types.is_empty()).then_some(self.meta))
+    }
+}
 
 /// A unique scratch-directory name for a disk conversion: `prefix` + pid +
 /// wall-clock nanos + a process-local sequence, so two conversions in the same
@@ -312,7 +378,8 @@ impl DirGraph {
         let generation = crate::graph::storage::disk::generation::GenerationTxn::begin(&root)
             .map_err(|e| format!("Failed to begin disk generation: {e}"))?;
         clock.mark("save_begin");
-        self.write_disk_snapshot(generation.stage_dir(), generation.previous_snapshot())?;
+        let columns =
+            self.write_disk_snapshot(generation.stage_dir(), generation.previous_snapshot())?;
         clock.mark("save_snapshot_total");
         let published = generation
             .publish()
@@ -323,7 +390,7 @@ impl DirGraph {
         // `finish_generation` clears the mutation workspace: an append parks
         // file-backed columns there, and a store still mapping them would keep
         // the directory alive on platforms that refuse to remove mapped files.
-        self.rebase_after_publish(&published);
+        self.rebase_after_publish(&published, columns);
         clock.mark("save_rebase");
         if let GraphBackend::Disk(disk) = &mut self.graph {
             disk.finish_generation(root.clone(), published)
@@ -356,11 +423,14 @@ impl DirGraph {
     /// `previous` is the published generation this one replaces; a node type
     /// whose column file nothing has changed is linked from it rather than
     /// rewritten (see `io::column_link`).
+    ///
+    /// Returns the column metadata the stage's `seg_000/` now holds when this
+    /// call wrote it, so the post-publish remap need not read it back.
     pub(crate) fn write_disk_snapshot(
         &mut self,
         dir: &std::path::Path,
         previous: Option<&std::path::Path>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<ColumnsMeta>, String> {
         let mut clock = crate::graph::io::load_timing::StageClock::start();
         self.consolidate_disk_for_save(dir)?;
         clock.mark("save_consolidate");
@@ -419,10 +489,11 @@ impl DirGraph {
 
         let stores = self.column_stores_for_save();
         clock.mark("save_columns_prepare");
-        self.write_unified_column_file(dir, &stores, previous)?;
+        let mut columns = self.write_unified_column_file(dir, &stores, previous)?;
         clock.mark("save_columns_files");
-        self.write_column_sidecars(dir, &stores)?;
+        self.write_column_sidecars(dir, &stores, &mut columns)?;
         drop(stores);
+        let columns = columns.publish()?;
         clock.mark("save_column_sidecars");
 
         // 0.8.13: type_indices uses a flat CSR binary keyed by interner
@@ -493,7 +564,7 @@ impl DirGraph {
         std::fs::write(dir.join("metadata.json"), meta_json)
             .map_err(|e| format!("Failed to publish metadata: {}", e))?;
 
-        Ok(())
+        Ok(columns)
     }
 
     /// Bring a disk graph's CSR, overflow edges and global indexes to their
@@ -685,8 +756,8 @@ impl DirGraph {
         dropped
     }
 
-    /// Write one column file per node type, plus their `columns_meta.json`, for
-    /// a graph whose stage has none.
+    /// Write one column file per node type for a graph whose stage has none, and
+    /// return the stage's column metadata, not yet published.
     ///
     /// Since 0.9.15 a fresh save — streaming carve, `save_subset`, or the
     /// mutation persist of an in-memory build — emits the region layout the
@@ -696,28 +767,38 @@ impl DirGraph {
     /// ~150 ms for the full graph.
     ///
     /// A stage that already holds column metadata (or a legacy `columns.bin`)
-    /// means the ntriples builder wrote one; [`Self::write_column_sidecars`]
-    /// covers the types added since.
+    /// means the ntriples builder wrote one; that metadata is read, and
+    /// [`Self::write_column_sidecars`] covers the types added since.
     fn write_unified_column_file(
         &self,
         dir: &std::path::Path,
         stores: &SaveStores,
         previous: Option<&std::path::Path>,
-    ) -> Result<(), String> {
-        let preexisting_columns_bin = dir.join("seg_000/columns.bin").exists()
-            || dir.join("columns.bin").exists()
-            || crate::graph::io::columns_meta::locate(dir).is_some();
-        if !preexisting_columns_bin && !stores.is_empty() {
-            let previous = previous.and_then(crate::graph::io::column_link::PreviousColumns::open);
-            crate::graph::io::unified_columns::write_unified_columns(
-                dir,
-                stores,
-                &self.interner,
-                previous.as_ref(),
-            )
-            .map_err(|e| format!("unified columns write failed: {}", e))?;
+    ) -> Result<StageColumns, String> {
+        let located = crate::graph::io::columns_meta::locate(dir);
+        let has_shared_file =
+            dir.join("seg_000/columns.bin").exists() || dir.join("columns.bin").exists();
+        if located.is_some() || has_shared_file || stores.is_empty() {
+            return match located {
+                Some(path) => {
+                    let meta = crate::graph::io::columns_meta::read(&path)
+                        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+                    Ok(StageColumns::existing(meta, path.parent().unwrap_or(dir)))
+                }
+                None => Ok(StageColumns::existing(
+                    ColumnsMeta::default(),
+                    &dir.join("seg_000"),
+                )),
+            };
         }
-        Ok(())
+        let previous = previous.and_then(crate::graph::io::column_link::PreviousColumns::open);
+        let meta = crate::graph::io::unified_columns::write_unified_columns(
+            dir,
+            stores,
+            previous.as_ref(),
+        )
+        .map_err(|e| format!("unified columns write failed: {}", e))?;
+        Ok(StageColumns::written(meta, dir.join("seg_000")))
     }
 
     /// The column stores a save writes, by type name: the live stores, except
@@ -762,22 +843,6 @@ impl DirGraph {
             .collect()
     }
 
-    /// Which node types the stage's column files already cover.
-    ///
-    /// Read from whichever `columns_meta` sidecar exists — the binary form and
-    /// the older JSON one, at the segmented (`seg_000/`) or the legacy flat
-    /// root. An absent sidecar means no type is covered.
-    fn types_in_columns_bin(
-        dir: &std::path::Path,
-    ) -> Result<std::collections::HashSet<String>, String> {
-        let Some(meta_path) = crate::graph::io::columns_meta::locate(dir) else {
-            return Ok(std::collections::HashSet::new());
-        };
-        let meta = crate::graph::io::columns_meta::read(&meta_path)
-            .map_err(|e| format!("read {}: {}", meta_path.display(), e))?;
-        Ok(meta.types.into_iter().map(|tm| tm.type_name).collect())
-    }
-
     /// Write a per-type `columns.zst` sidecar for every type the unified
     /// column files do not cover.
     ///
@@ -786,17 +851,18 @@ impl DirGraph {
     /// this existed. Covered types keep the fast mmap path.
     ///
     /// A sidecar's directory is named by the type's interned key and recorded in
-    /// the column metadata (`columns_meta::record_sidecars`); the type name is
-    /// data and never reaches the filesystem.
+    /// the stage's column metadata (`sidecars`); the type name is data and never
+    /// reaches the filesystem.
     fn write_column_sidecars(
         &self,
         dir: &std::path::Path,
         stores: &SaveStores,
+        columns: &mut StageColumns,
     ) -> Result<(), String> {
-        let types_in_columns_bin = Self::types_in_columns_bin(dir)?;
+        let covered = columns.covered_types();
         let mut type_names: Vec<&String> = stores
             .keys()
-            .filter(|name| !types_in_columns_bin.contains(*name))
+            .filter(|name| !covered.contains(name.as_str()))
             .collect();
         type_names.sort();
         let mut used = std::collections::HashSet::new();
@@ -841,8 +907,8 @@ impl DirGraph {
                 .map_err(|e| format!("Failed to write columns: {}", e))?;
             recorded.insert(type_name.clone(), relative);
         }
-        crate::graph::io::columns_meta::record_sidecars(dir, recorded)
-            .map_err(|e| format!("Failed to record column sidecars: {}", e))
+        columns.record_sidecars(recorded);
+        Ok(())
     }
 }
 

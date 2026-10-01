@@ -1,6 +1,6 @@
 //! Exact merged-value and persistence oracles for immutable-base overrides.
 use super::*;
-use crate::graph::io::unified_columns::write_unified_columns;
+use crate::graph::io::unified_columns::write_unified_columns_published;
 use memmap2::MmapOptions;
 
 struct Fixture {
@@ -60,8 +60,8 @@ fn fixture(mapped: bool, pure_overflow: bool) -> Fixture {
 fn map_fixture(store: ColumnStore, interner: StringInterner) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
-    let written = write_unified_columns(directory.path(), &stores, &interner, None).unwrap();
-    assert!(written.written.contains("T"));
+    let written = write_unified_columns_published(directory.path(), &stores, None).unwrap();
+    assert!(written.files.contains_key("T"));
     let seg0 = directory.path().join("seg_000");
     let mut columns =
         crate::graph::io::columns_meta::read(&seg0.join("columns_meta.json")).unwrap();

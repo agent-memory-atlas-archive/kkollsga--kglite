@@ -232,7 +232,7 @@ fn a_0_19_0_sidecar_directory_named_by_its_type_is_still_read() {
     let mut meta = columns_meta::read(&meta_path).unwrap();
     let keyed = meta.sidecars.remove("Employee").expect("Employee sidecar");
     std::fs::rename(generation.join(keyed), generation.join("columns/Employee")).unwrap();
-    columns_meta::publish_json_synced(meta_path.parent().unwrap(), &meta).unwrap();
+    columns_meta::publish(meta_path.parent().unwrap(), &meta).unwrap();
     assert!(meta.sidecars.is_empty());
 
     let mut reloaded = match Arc::try_unwrap(load_file(root.to_str().unwrap()).unwrap()) {
@@ -267,7 +267,7 @@ fn a_sidecar_entry_that_leaves_the_columns_directory_is_refused() {
     ] {
         let mut meta = columns_meta::read(&meta_path).unwrap();
         meta.sidecars.insert("Employee".into(), bad.into());
-        columns_meta::publish_json_synced(meta_path.parent().unwrap(), &meta).unwrap();
+        columns_meta::publish(meta_path.parent().unwrap(), &meta).unwrap();
         let error = load_file(root.to_str().unwrap())
             .err()
             .unwrap_or_else(|| panic!("{bad:?} must not load"));
@@ -277,6 +277,6 @@ fn a_sidecar_entry_that_leaves_the_columns_directory_is_refused() {
             "{bad:?}: {error}"
         );
     }
-    columns_meta::publish_json_synced(meta_path.parent().unwrap(), &original).unwrap();
+    columns_meta::publish(meta_path.parent().unwrap(), &original).unwrap();
     assert!(load_file(root.to_str().unwrap()).is_ok());
 }

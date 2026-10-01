@@ -4,7 +4,7 @@
 //! one file whose reload agrees with that heap store again.
 
 use super::*;
-use crate::graph::io::unified_columns::write_unified_columns;
+use crate::graph::io::unified_columns::write_unified_columns_published;
 use crate::graph::schema::TypeSchema;
 use chrono::NaiveDate;
 use memmap2::MmapOptions;
@@ -78,9 +78,8 @@ struct Mapped {
 fn mapped_store(rows: std::ops::Range<i64>) -> Mapped {
     let directory = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Employee".to_string(), Arc::new(heap_store(rows)))]);
-    let result =
-        write_unified_columns(directory.path(), &stores, &StringInterner::new(), None).unwrap();
-    assert!(result.written.contains("Employee"));
+    let result = write_unified_columns_published(directory.path(), &stores, None).unwrap();
+    assert!(result.files.contains_key("Employee"));
     Mapped {
         store: open_type_file(directory.path()),
         _directory: directory,
@@ -344,12 +343,10 @@ fn a_rolled_back_first_append_leaves_a_pure_mapped_store() {
 fn saved_and_reloaded(store: &ColumnStore) -> Mapped {
     let directory = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Employee".to_string(), Arc::new(store.clone()))]);
-    let result =
-        write_unified_columns(directory.path(), &stores, &StringInterner::new(), None).unwrap();
+    let result = write_unified_columns_published(directory.path(), &stores, None).unwrap();
     assert!(
-        result.written.contains("Employee"),
-        "the store was written as column regions, not a sidecar: {:?}",
-        result.unhandled
+        result.files.contains_key("Employee"),
+        "the store was written as column regions, not a sidecar"
     );
     Mapped {
         store: open_type_file(directory.path()),

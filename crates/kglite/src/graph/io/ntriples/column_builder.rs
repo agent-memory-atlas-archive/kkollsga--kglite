@@ -415,7 +415,7 @@ fn publish_column_metadata(
     // earlier column writes are intentionally not transactionally rolled back.
     let json_path = data_dir.join("columns_meta.json");
     if !columns.is_empty() {
-        crate::graph::io::columns_meta::publish(data_dir, columns)?;
+        crate::graph::io::columns_meta::publish_shared(data_dir, columns)?;
     }
     if verbose {
         eplog!(

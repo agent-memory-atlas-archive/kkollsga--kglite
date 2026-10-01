@@ -1,5 +1,6 @@
 use super::*;
 use crate::datatypes::values::{BorrowedValue, Value};
+use crate::graph::schema::StringInterner;
 use crate::graph::schema::TypeSchema;
 use memmap2::{MmapMut, MmapOptions};
 use std::fs::File;
@@ -28,8 +29,8 @@ fn mapped(store: ColumnStore) -> (ColumnTypeMeta, MmapMut) {
             Arc::new(self::store(&[Value::UniqueId(7)])),
         ),
     ]);
-    let result = write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
-    assert!(result.written.contains("Subject"));
+    let result = write_unified_columns_published(dir.path(), &stores, None).unwrap();
+    assert!(result.files.contains_key("Subject"));
     type_file(dir.path(), "Subject")
 }
 
@@ -139,10 +140,8 @@ fn unsupported_identity_columns_require_lossless_sidecars() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let stores = HashMap::from([("Subject".into(), Arc::new(store(&[value])))]);
-        let result =
-            write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
-        assert!(result.unhandled.contains("Subject"));
-        assert!(result.written.is_empty());
+        let result = write_unified_columns_published(dir.path(), &stores, None).unwrap();
+        assert!(result.files.is_empty(), "no type landed in a file");
         assert!(!dir.path().join("seg_000/type_columns").exists());
     }
 }
@@ -192,9 +191,9 @@ fn timestamp_column_round_trips_through_packed_and_unified_layouts() {
     // per-type file (mmap) layout
     let dir = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("T".to_string(), Arc::new(store))]);
-    let result = write_unified_columns(dir.path(), &stores, &interner, None).unwrap();
+    let result = write_unified_columns_published(dir.path(), &stores, None).unwrap();
     assert!(
-        result.written.contains("T"),
+        result.files.contains_key("T"),
         "a Timestamp column must not force a sidecar"
     );
     let (type_meta, mmap) = type_file(dir.path(), "T");
@@ -220,7 +219,7 @@ fn timestamp_column_round_trips_through_packed_and_unified_layouts() {
 fn a_type_file_is_never_overwritten() {
     let dir = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Subject".to_string(), Arc::new(store(&[Value::Int64(1)])))]);
-    write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
+    write_unified_columns_published(dir.path(), &stores, None).unwrap();
     let relative =
         crate::graph::io::columns_meta::read(&dir.path().join("seg_000/columns_meta.json"))
             .unwrap()
@@ -228,7 +227,7 @@ fn a_type_file_is_never_overwritten() {
             .clone();
     let file = dir.path().join("seg_000").join(&relative);
     let before = std::fs::read(&file).unwrap();
-    let error = write_unified_columns(dir.path(), &stores, &StringInterner::new(), None)
+    let error = write_unified_columns_published(dir.path(), &stores, None)
         .err()
         .expect("the second write must not replace the published file");
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
@@ -243,10 +242,29 @@ fn an_empty_type_gets_a_mappable_file() {
     empty.truncate_rows(0);
     let dir = tempfile::tempdir().unwrap();
     let stores = HashMap::from([("Empty".to_string(), Arc::new(empty))]);
-    let result = write_unified_columns(dir.path(), &stores, &StringInterner::new(), None).unwrap();
-    assert!(result.written.contains("Empty") && result.unhandled.is_empty());
+    let result = write_unified_columns_published(dir.path(), &stores, None).unwrap();
+    assert!(result.files.contains_key("Empty"));
     let (meta, mmap) = type_file(dir.path(), "Empty");
     assert_eq!(mmap.len(), 1);
     let loaded = ColumnStore::from_mmap_store(Arc::new(meta.to_mmap_store(read_only(mmap))));
     assert_eq!(loaded.row_count(), 0);
+}
+
+/// A save holds one type's plan, and so one type's owned buffers, at a time: its
+/// peak heap is the largest touched type's, not the sum of them.
+#[test]
+fn a_write_holds_one_types_plan_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores: HashMap<String, Arc<ColumnStore>> = ["A", "B", "C", "D"]
+        .into_iter()
+        .map(|name| (name.to_string(), Arc::new(store(&[Value::Int64(1)]))))
+        .collect();
+    reset_live_plans();
+    let meta = write_unified_columns(dir.path(), &stores, None).unwrap();
+    assert_eq!(meta.files.len(), 4, "every type landed in a file");
+    assert_eq!(
+        peak_live_plans(),
+        1,
+        "each plan must be dropped before the next type is planned"
+    );
 }

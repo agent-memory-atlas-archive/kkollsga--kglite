@@ -274,56 +274,26 @@ pub(crate) fn read(path: &Path) -> io::Result<ColumnsMeta> {
     parse_bin(&compressed, name == Some(LEGACY_BIN), &what)
 }
 
-/// Publish the sidecar of a shared-`columns.bin` layout (every type without a
-/// file) into `data_dir` next to its `columns.bin`.
+/// Publish `meta` into `dir`, the directory its regions are addressed from:
+/// the compact JSON envelope and its binary twin, once each.
 ///
-/// Writes both encodings: the JSON envelope is what makes an older reader stop
-/// (see the module header), and the binary form is what this build's loader
-/// prefers on a large graph.
-pub(crate) fn publish(data_dir: &Path, types: &[ColumnTypeMeta]) -> io::Result<PathBuf> {
-    let meta = ColumnsMeta::shared(types.to_vec());
-    let json_path = data_dir.join(JSON);
-    std::fs::write(&json_path, to_json(&meta, false)?)?;
-    std::fs::write(data_dir.join(CURRENT_BIN), to_bin(&meta)?)?;
+/// Both encodings are written because they do different jobs. The JSON envelope
+/// is what makes an older reader stop (see the module header); the binary form
+/// is what this build's loader prefers, and it parses in a fraction of the time
+/// on a graph with many types. Not synced here: a generation's stage is synced
+/// as a tree before it is published, and a shared-`columns.bin` layout is not
+/// published atomically at all.
+pub(crate) fn publish(dir: &Path, meta: &ColumnsMeta) -> io::Result<PathBuf> {
+    let json_path = dir.join(JSON);
+    std::fs::write(&json_path, to_json(meta, false)?)?;
+    std::fs::write(dir.join(CURRENT_BIN), to_bin(meta)?)?;
     Ok(json_path)
 }
 
-/// Write only the JSON envelope, durably, into `seg0`.
-pub(crate) fn publish_json_synced(seg0: &Path, meta: &ColumnsMeta) -> io::Result<()> {
-    use std::io::Write;
-    let mut file = std::fs::File::create(seg0.join(JSON))?;
-    file.write_all(to_json(meta, true)?.as_bytes())?;
-    file.sync_all()
-}
-
-/// Record which zstd sidecar directory holds each type the column files do not.
-///
-/// Rewrites the envelope a save just wrote in `dir` (adding the `sidecars`
-/// entries), or writes a types-less one when the stage has no column files at
-/// all, so a reader always learns a sidecar's type from the sidecar and never
-/// from a directory name. Both encodings are kept in step: the binary form wins
-/// at load when it exists.
-pub(crate) fn record_sidecars(dir: &Path, sidecars: BTreeMap<String, String>) -> io::Result<()> {
-    if sidecars.is_empty() {
-        return Ok(());
-    }
-    let (mut meta, seg0) = match locate(dir) {
-        Some(path) => {
-            let seg0 = path.parent().unwrap_or(dir).to_path_buf();
-            (read(&path)?, seg0)
-        }
-        None => {
-            let seg0 = dir.join("seg_000");
-            std::fs::create_dir_all(&seg0)?;
-            (ColumnsMeta::default(), seg0)
-        }
-    };
-    meta.sidecars = sidecars;
-    publish_json_synced(&seg0, &meta)?;
-    if seg0.join(CURRENT_BIN).exists() {
-        std::fs::write(seg0.join(CURRENT_BIN), to_bin(&meta)?)?;
-    }
-    Ok(())
+/// Publish the sidecar of a shared-`columns.bin` layout (every type without a
+/// file) into `data_dir` next to its `columns.bin`.
+pub(crate) fn publish_shared(data_dir: &Path, types: &[ColumnTypeMeta]) -> io::Result<PathBuf> {
+    publish(data_dir, &ColumnsMeta::shared(types.to_vec()))
 }
 
 #[cfg(test)]
@@ -423,7 +393,7 @@ mod tests {
 
         // Publishing writes the envelope forms; the current bin outranks a
         // legacy one left beside it, and the JSON stays for older readers to trip on.
-        let json_path = publish(dir.path(), &types).unwrap();
+        let json_path = publish_shared(dir.path(), &types).unwrap();
         assert!(json_path.ends_with(JSON));
         let found = locate(dir.path()).unwrap();
         assert!(found.ends_with(CURRENT_BIN), "{found:?}");
@@ -440,7 +410,7 @@ mod tests {
     #[test]
     fn the_current_binary_sidecar_does_not_reuse_the_legacy_file_name() {
         let dir = tempfile::tempdir().unwrap();
-        publish(dir.path(), &[sample("A")]).unwrap();
+        publish_shared(dir.path(), &[sample("A")]).unwrap();
         assert!(!dir.path().join(LEGACY_BIN).exists());
         assert!(dir.path().join(CURRENT_BIN).exists());
     }

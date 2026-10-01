@@ -315,7 +315,7 @@ pub(super) fn plan_regions<'a>(type_name: &str, parts: RegionParts<'a>) -> Optio
         overflow_data: RegionPlanner::absent(),
         has_overflow: false,
     };
-    Some(planner.finish(type_name, meta))
+    Some(planner.finish(meta))
 }
 
 /// A fixed-width base column with every cell the overlay holds written over
