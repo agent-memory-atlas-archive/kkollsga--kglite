@@ -6,13 +6,11 @@
 
 use crate::datatypes::values::Value;
 use crate::graph::property_types::value_type_name;
+use crate::graph::storage::column_store::{DAY_US, EPOCH_DAYS_FROM_CE};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
-
-/// `NaiveDate::num_days_from_ce` of 1970-01-01.
-const EPOCH_DAYS_FROM_CE: i64 = 719_163;
 
 /// A point on the time line, at the grain it was written in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -286,9 +284,6 @@ pub(crate) fn end_admits(end: Instant, t: Instant, convention: IntervalConventio
         (IntervalConvention::HalfOpen, _, _) => end.chrono_cmp(t) == Ordering::Greater,
     }
 }
-
-/// Microseconds in a day.
-pub(crate) const DAY_US: i64 = 86_400_000_000;
 
 /// A query instant read against timestamp bounds held as epoch microseconds.
 #[derive(Clone, Copy, Debug)]

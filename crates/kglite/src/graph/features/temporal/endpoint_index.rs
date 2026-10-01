@@ -83,7 +83,7 @@ use crate::graph::algorithms::text_index::bm25::MaskedStats;
 use crate::graph::core::graph_filter::{GuardBounds, GuardTemplate, ValidTimeSelector};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::{InternedKey, TemporalConfig};
-use crate::graph::storage::column_store::exact_micros;
+use crate::graph::storage::column_store::{exact_micros, DAY_US, EPOCH_DAYS_FROM_CE};
 use crate::graph::storage::GraphRead;
 
 /// The bytes one graph's endpoint arrays and cached masks may hold together.
@@ -95,9 +95,6 @@ pub(crate) const ENDPOINT_INDEX_BYTE_CAP: usize = 128 << 20;
 /// count), read at each build.
 pub(crate) const BYTE_CAP_ENV: &str = "KGLITE_TEMPORAL_INDEX_MAX_BYTES";
 
-const DAY_US: i64 = 86_400_000_000;
-/// `NaiveDate::num_days_from_ce` of 1970-01-01.
-const EPOCH_DAYS_FROM_CE: i64 = 719_163;
 /// The most the build holds per reserved row slot: the `from` and `to`
 /// `(key, slot)` pair buffers (16 bytes each), plus at most one more buffer
 /// of that size alive at once — the old one while a pair buffer grows (both
@@ -438,16 +435,27 @@ fn scan(
                 && ![config.valid_from.as_str(), config.valid_to.as_str()]
                     .iter()
                     .any(|field| matches!(*field, "id" | "title"));
+            // The two bound columns, resolved once per store: every row of a
+            // type shares one, so a row only compares pointers.
+            let mut resolved = None;
             for_each_node_row(graph, label, |idx| {
                 let micros = cells
                     .then(|| graph.graph.node_view(idx))
                     .flatten()
                     .and_then(|view| {
                         let (store, row) = view.column_row()?;
-                        Some((
-                            store.timestamp_cells(from_key)?.micros(row),
-                            store.timestamp_cells(to_key)?.micros(row),
-                        ))
+                        if !resolved
+                            .as_ref()
+                            .is_some_and(|(seen, _, _)| std::ptr::eq(*seen, store))
+                        {
+                            resolved = Some((
+                                store as *const _,
+                                store.timestamp_cells(from_key)?,
+                                store.timestamp_cells(to_key)?,
+                            ));
+                        }
+                        let (_, from, to) = resolved.as_ref()?;
+                        Some((from.value(row), to.value(row)))
                     });
                 if let Some((from, to)) = micros {
                     scan.visit_micros(idx.index(), from, to);

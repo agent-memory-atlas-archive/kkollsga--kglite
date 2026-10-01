@@ -578,11 +578,11 @@ impl ElementFilter {
             ValidTimeSelector::AsOf(t) => (day(t), day(t)),
             ValidTimeSelector::Overlap(a, b) => (day(a), day(b)),
         };
-        let from = from.epoch_days(row);
+        let from = from.value(row);
         if from.is_some_and(|from| i64::from(from) > end) {
             return Some(false);
         }
-        let to = to.epoch_days(row).map(i64::from);
+        let to = to.value(row).map(i64::from);
         let admits = |to: i64, day: i64| match bounds.convention {
             IntervalConvention::Closed => to >= day,
             IntervalConvention::HalfOpen => to > day,
@@ -614,8 +614,8 @@ impl ElementFilter {
             ValidTimeSelector::Overlap(a, b) => (MicrosProbe::of(a)?, MicrosProbe::of(b)?),
         };
         Some(eval::micros_interval_overlaps(
-            from.micros(row),
-            to.micros(row),
+            from.value(row),
+            to.value(row),
             start,
             end,
             bounds.convention,

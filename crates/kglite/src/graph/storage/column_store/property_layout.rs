@@ -1,50 +1,85 @@
 //! The property columns of a store as `(key, kind)`, wherever they live.
 
 use super::*;
-use crate::graph::storage::mapped::column_store::ColRef;
+
+/// One key's column kind in a layout, and whether the column holds no value.
+struct LayoutEntry {
+    key: InternedKey,
+    kind: &'static str,
+    empty: bool,
+}
+
+impl LayoutEntry {
+    /// Fold in the same key's column of another part. The same kind stays; a
+    /// column with no value takes the kind it meets, as it does when a save
+    /// writes it beside the base's (`ColumnStore::column_for_plan`); any other
+    /// pair is `mixed`, the one kind that holds a value of either.
+    fn merge(&mut self, kind: &'static str, empty: bool) {
+        if self.kind == kind {
+            self.empty &= empty;
+        } else if self.empty {
+            self.kind = kind;
+            self.empty = empty;
+        } else if !empty {
+            self.kind = "mixed";
+        }
+    }
+}
 
 impl ColumnStore {
     /// Every property column of this store with the kind a copy must give it:
     /// the heap columns in slot order, then the mmap base's columns that the
-    /// heap does not shadow, in key order.
+    /// heap does not shadow, in key order, then the tail's.
     ///
     /// [`Self::schema`] alone is not this: a store served from an mmap base
     /// keeps its columns in the mapping and reports an empty schema, so a
     /// writer that took its columns from the schema would send every property
-    /// of such a store down the overflow bag. When a heap column and the base
-    /// hold the same key with different kinds the copy's column is `mixed`, the
-    /// one kind that holds a value of either.
+    /// of such a store down the overflow bag. When parts hold the same key with
+    /// different kinds the copy's column is `mixed`, unless one of them holds no
+    /// value (see [`LayoutEntry::merge`]).
     pub fn property_layout(&self) -> Vec<(InternedKey, &'static str)> {
-        let mut layout: Vec<(InternedKey, &'static str)> = self
+        self.layout_entries()
+            .into_iter()
+            .map(|entry| (entry.key, entry.kind))
+            .collect()
+    }
+
+    fn layout_entries(&self) -> Vec<LayoutEntry> {
+        let mut layout: Vec<LayoutEntry> = self
             .schema
             .iter()
-            .filter_map(|(slot, key)| Some((key, self.columns.get(slot as usize)?.type_tag())))
+            .filter_map(|(slot, key)| {
+                let column = self.columns.get(slot as usize)?;
+                Some(LayoutEntry {
+                    key,
+                    kind: column.type_tag(),
+                    empty: column.holds_no_value(),
+                })
+            })
             .collect();
         let Some(base) = self.mmap_store.as_ref() else {
             return layout;
         };
-        let tail_layout = self.tail.as_ref().map(|tail| tail.property_layout());
         let heap_len = layout.len();
         let mut keys: Vec<InternedKey> = base.col_map.keys().copied().collect();
         keys.sort_by_key(|key| key.as_u64());
         for key in keys {
-            let kind = match base.col_map[&key] {
-                ColRef::Fixed(index) => base.fixed_cols[index].col_type.type_tag(),
-                ColRef::Str(_) => "string",
+            let Some(kind) = base.column_kind(key) else {
+                continue;
             };
-            match layout[..heap_len].iter_mut().find(|(k, _)| *k == key) {
-                Some((_, heap_kind)) if *heap_kind != kind => *heap_kind = "mixed",
-                Some(_) => {}
-                None => layout.push((key, kind)),
+            match layout[..heap_len].iter_mut().find(|entry| entry.key == key) {
+                Some(entry) => entry.merge(kind, false),
+                None => layout.push(LayoutEntry {
+                    key,
+                    kind,
+                    empty: false,
+                }),
             }
         }
-        // Tail columns join the layout; a key both parts hold with different
-        // kinds is `mixed`, as for a heap column over the base.
-        for (key, kind) in tail_layout.into_iter().flatten() {
-            match layout.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, known)) if *known != kind => *known = "mixed",
-                Some(_) => {}
-                None => layout.push((key, kind)),
+        for tail_entry in self.tail.iter().flat_map(|tail| tail.layout_entries()) {
+            match layout.iter_mut().find(|entry| entry.key == tail_entry.key) {
+                Some(entry) => entry.merge(tail_entry.kind, tail_entry.empty),
+                None => layout.push(tail_entry),
             }
         }
         layout

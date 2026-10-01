@@ -160,9 +160,7 @@ impl ColumnStore {
     /// The key of the base part's schema slot, for a slot-addressed call that
     /// lands on a tail row (the tail's schema is its own).
     pub(super) fn base_key_at(&self, slot: u16) -> Option<InternedKey> {
-        self.schema
-            .iter()
-            .find_map(|(s, key)| (s == slot).then_some(key))
+        self.schema.slots.get(slot as usize).copied()
     }
 
     /// Whether the base part of this store is its mapping plus columns of
@@ -174,14 +172,7 @@ impl ColumnStore {
         &self,
         ms: &crate::graph::storage::mapped::column_store::MmapColumnStore,
     ) -> bool {
-        self.id_column.is_none()
-            && self.title_column.is_none()
-            && self.null_overrides.is_none()
-            && self.overflow_offsets.is_none()
-            && !self.tombstones.iter().any(|t| *t)
-            && self.row_count == ms.row_count()
-            && !ms.has_overflow
-            && self.columns_match_base_kinds(ms)
+        self.base_part_untouched(ms) && !ms.has_overflow && self.columns_match_base_kinds(ms)
     }
 
     /// Whether each column of this store (overlay or tail) is a kind the
@@ -201,9 +192,7 @@ impl ColumnStore {
             // A column with no value takes the base's kind whatever its
             // declared one was (`Self::column_for_plan`).
             let base = ms.column_kind(key);
-            if !kind_matches(column, base)
-                && !(base.is_some() && self.column_holds_no_value(column))
-            {
+            if !kind_matches(column, base) && !(base.is_some() && column.holds_no_value()) {
                 return false;
             }
         }
@@ -259,11 +248,6 @@ impl ColumnStore {
         })
     }
 
-    /// Whether every cell of `column` (one of this store's) is null.
-    fn column_holds_no_value(&self, column: &TypedColumn) -> bool {
-        !(0..column.len() as u32).any(|row| column.is_present(row))
-    }
-
     /// The tail's column for `key`, as a save writes it beside a base column
     /// of kind `base`: `None` when the column has no value and is another kind
     /// than the base's, which the file then records as nulls of the base's kind.
@@ -274,7 +258,7 @@ impl ColumnStore {
     ) -> Option<&TypedColumn> {
         let column = self.columns.get(self.schema.slot(key)? as usize)?;
         let other_kind = base.is_some_and(|kind| kind != column.type_tag());
-        (!(other_kind && self.column_holds_no_value(column))).then_some(&**column)
+        (!(other_kind && column.holds_no_value())).then_some(&**column)
     }
 
     /// What a save writes this store's column file from, when it can do so

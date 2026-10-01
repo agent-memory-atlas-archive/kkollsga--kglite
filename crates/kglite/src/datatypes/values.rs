@@ -349,6 +349,21 @@ impl<'a> BorrowedValue<'a> {
         })
     }
 
+    /// The borrowed form of an owned non-null scalar that carries no data of the
+    /// store's own: a number, boolean or date. `None` for null, a string, a list
+    /// or anything else, which a caller reads through its borrowing accessor.
+    pub(crate) fn of_scalar(value: Value) -> Option<Self> {
+        Some(match value {
+            Value::Boolean(b) => BorrowedValue::Boolean(b),
+            Value::Int64(v) => BorrowedValue::Int64(v),
+            Value::Float64(v) => BorrowedValue::Float64(v),
+            Value::UniqueId(v) => BorrowedValue::UniqueId(v),
+            Value::DateTime(d) => BorrowedValue::DateTime(d),
+            Value::Timestamp(t) => BorrowedValue::Timestamp(t),
+            _ => return None,
+        })
+    }
+
     /// Materialize into an owned [`Value`]. Allocates for `String` and
     /// `List`; `Map` is a refcount bump. Takes `self` by value since
     /// `BorrowedValue` is `Copy`.

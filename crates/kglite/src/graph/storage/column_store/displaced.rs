@@ -19,41 +19,30 @@ use std::sync::Arc;
 
 use super::{ColumnStore, TypedColumn};
 
-/// Which column of a store a type change replaced.
+/// A column of one store: a property by schema slot, or a reserved column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ColumnRole {
+pub(crate) enum ColumnSlot {
     /// The property column at this schema slot.
     Property(u16),
     /// The reserved id column.
     Id,
     /// The reserved title column.
     Title,
-    /// The property column at this slot of the store's tail.
-    TailProperty(u16),
-    /// The tail's id column.
-    TailId,
-    /// The tail's title column.
-    TailTitle,
+}
+
+/// Which column of a store a type change replaced: one of the store's own, or
+/// one of its tail's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColumnRole {
+    pub(crate) in_tail: bool,
+    pub(crate) column: ColumnSlot,
 }
 
 impl ColumnRole {
-    /// The same column, named as a column of the tail store.
-    fn in_tail(self) -> Self {
-        match self {
-            ColumnRole::Property(slot) => ColumnRole::TailProperty(slot),
-            ColumnRole::Id => ColumnRole::TailId,
-            ColumnRole::Title => ColumnRole::TailTitle,
-            tail => tail,
-        }
-    }
-
-    /// The column's role inside the tail store, for a tail role.
-    fn in_tail_store(self) -> Option<Self> {
-        match self {
-            ColumnRole::TailProperty(slot) => Some(ColumnRole::Property(slot)),
-            ColumnRole::TailId => Some(ColumnRole::Id),
-            ColumnRole::TailTitle => Some(ColumnRole::Title),
-            _ => None,
+    fn own(column: ColumnSlot) -> Self {
+        Self {
+            in_tail: false,
+            column,
         }
     }
 }
@@ -105,7 +94,10 @@ impl ColumnStore {
                         .take_displaced()
                         .into_iter()
                         .map(|displaced| DisplacedColumn {
-                            role: displaced.role.in_tail(),
+                            role: ColumnRole {
+                                in_tail: true,
+                                ..displaced.role
+                            },
                             prior: displaced.prior,
                         }),
                 );
@@ -117,25 +109,24 @@ impl ColumnStore {
     /// Put a replaced column back. The inverse of the replacement, for the
     /// rollback of the write that caused it.
     pub(crate) fn restore_displaced(&mut self, displaced: DisplacedColumn) {
-        if let Some(role) = displaced.role.in_tail_store() {
+        if displaced.role.in_tail {
             if let Some(tail) = self.tail.as_mut() {
                 Arc::make_mut(tail).restore_displaced(DisplacedColumn {
-                    role,
+                    role: ColumnRole::own(displaced.role.column),
                     prior: displaced.prior,
                 });
             }
             return;
         }
-        match (displaced.role, displaced.prior) {
-            (ColumnRole::Property(slot), Some(prior)) => {
+        match (displaced.role.column, displaced.prior) {
+            (ColumnSlot::Property(slot), Some(prior)) => {
                 if let Some(handle) = self.columns.get_mut(slot as usize) {
                     *handle = prior;
                 }
             }
-            (ColumnRole::Id, prior) => self.id_column = prior,
-            (ColumnRole::Title, prior) => self.title_column = prior,
-            (ColumnRole::Property(_), None) => {}
-            (ColumnRole::TailProperty(_) | ColumnRole::TailId | ColumnRole::TailTitle, _) => {}
+            (ColumnSlot::Id, prior) => self.id_column = prior,
+            (ColumnSlot::Title, prior) => self.title_column = prior,
+            (ColumnSlot::Property(_), None) => {}
         }
     }
 
@@ -144,7 +135,7 @@ impl ColumnStore {
         let old = std::mem::replace(&mut self.columns[slot], column);
         if let Some(log) = self.displaced.as_mut() {
             log.push(DisplacedColumn {
-                role: ColumnRole::Property(slot as u16),
+                role: ColumnRole::own(ColumnSlot::Property(slot as u16)),
                 prior: Some(old),
             });
         }
@@ -155,7 +146,7 @@ impl ColumnStore {
         let old = std::mem::replace(&mut self.id_column, column);
         if let Some(log) = self.displaced.as_mut() {
             log.push(DisplacedColumn {
-                role: ColumnRole::Id,
+                role: ColumnRole::own(ColumnSlot::Id),
                 prior: old,
             });
         }
@@ -166,7 +157,7 @@ impl ColumnStore {
         let old = std::mem::replace(&mut self.title_column, column);
         if let Some(log) = self.displaced.as_mut() {
             log.push(DisplacedColumn {
-                role: ColumnRole::Title,
+                role: ColumnRole::own(ColumnSlot::Title),
                 prior: old,
             });
         }

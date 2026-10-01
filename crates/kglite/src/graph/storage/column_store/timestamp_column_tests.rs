@@ -313,10 +313,10 @@ fn timestamp_cells_read_the_column_as_epoch_micros() {
     push(&mut store, key, Value::Timestamp(ts(0, 0, 1, 0)));
     store.tombstone(2);
     let cells = store.timestamp_cells(key).unwrap();
-    assert_eq!(cells.micros(0), exact_micros(ts(0, 0, 0, 5)));
-    assert_eq!(cells.micros(1), None, "NULL");
-    assert_eq!(cells.micros(2), None, "tombstoned");
-    assert_eq!(cells.micros(3), None, "past the end");
+    assert_eq!(cells.value(0), exact_micros(ts(0, 0, 0, 5)));
+    assert_eq!(cells.value(1), None, "NULL");
+    assert_eq!(cells.value(2), None, "tombstoned");
+    assert_eq!(cells.value(3), None, "past the end");
     // Another column kind answers for the key: no cells.
     let (mut other, k, _) = store_for(&[("t", "int64")]);
     push(&mut other, k, Value::Int64(1));

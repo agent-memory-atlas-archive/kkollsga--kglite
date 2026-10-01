@@ -369,6 +369,12 @@ const UNIX_EPOCH_DATE: NaiveDate = match NaiveDate::from_ymd_opt(1970, 1, 1) {
     None => unreachable!(),
 };
 
+/// Microseconds in a day.
+pub(crate) const DAY_US: i64 = 86_400_000_000;
+
+/// `NaiveDate::num_days_from_ce` of 1970-01-01.
+pub(crate) const EPOCH_DAYS_FROM_CE: i64 = 719_163;
+
 /// Microseconds since the Unix epoch, or `None` when `t` is not exactly a
 /// whole number of microseconds: a sub-microsecond part cannot be held, and a
 /// leap second (`nanosecond() >= 1e9`) would encode as the next second's
@@ -385,9 +391,6 @@ pub(crate) fn exact_micros(t: chrono::NaiveDateTime) -> Option<i64> {
 
 #[inline]
 pub(crate) fn micros_to_timestamp(micros: i64) -> Option<chrono::NaiveDateTime> {
-    const DAY_US: i64 = 86_400_000_000;
-    /// `NaiveDate::num_days_from_ce` of 1970-01-01.
-    const EPOCH_DAYS_FROM_CE: i64 = 719_163;
     let days = micros.div_euclid(DAY_US);
     let of_day = micros.rem_euclid(DAY_US);
     let date =
@@ -724,6 +727,11 @@ impl TypedColumn {
             } => str_at(offsets, data, nulls, relocated, row),
             _ => None,
         }
+    }
+
+    /// Whether every cell of the column is null.
+    pub(crate) fn holds_no_value(&self) -> bool {
+        !(0..self.len() as u32).any(|row| self.is_present(row))
     }
 
     /// Whether this row holds a non-null value, without materialising it.

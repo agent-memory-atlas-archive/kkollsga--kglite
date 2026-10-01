@@ -9,8 +9,8 @@
 //! The column *element* (layout, push, spill, materialise) is in
 //! [`typed_column`]; the store around it is here.
 
-mod date_cells;
 mod exact_values;
+mod fixed_cells;
 mod gather;
 #[cfg(test)]
 mod null_overlay_tests;
@@ -21,7 +21,6 @@ mod tail;
 pub(crate) use tail::RegionParts;
 #[cfg(test)]
 mod tail_tests;
-mod timestamp_cells;
 #[cfg(test)]
 mod timestamp_column_tests;
 mod typed_column;
@@ -34,7 +33,7 @@ mod displaced;
 pub(crate) use overlay::flattens;
 #[cfg(test)]
 pub(crate) use typed_column::{column_clones, reset_column_clones};
-pub(crate) use typed_column::{exact_micros, micros_to_timestamp};
+pub(crate) use typed_column::{exact_micros, micros_to_timestamp, DAY_US, EPOCH_DAYS_FROM_CE};
 use typed_column::{MMAP_THRESHOLD, NEXT_TEMP_COLUMN_FILE};
 
 use crate::datatypes::values::Value;
@@ -526,15 +525,7 @@ impl ColumnStore {
         if let Some(value) = column.get_ref(row_id) {
             return BorrowedValue::of(value);
         }
-        match column.get(row_id)? {
-            Value::Int64(v) => Some(BorrowedValue::Int64(v)),
-            Value::Float64(v) => Some(BorrowedValue::Float64(v)),
-            Value::UniqueId(v) => Some(BorrowedValue::UniqueId(v)),
-            Value::Boolean(b) => Some(BorrowedValue::Boolean(b)),
-            Value::DateTime(d) => Some(BorrowedValue::DateTime(d)),
-            Value::Timestamp(t) => Some(BorrowedValue::Timestamp(t)),
-            _ => None,
-        }
+        BorrowedValue::of_scalar(column.get(row_id)?)
     }
 
     /// Borrowed view of the title column. See [`Self::id_borrowed`].
@@ -564,15 +555,7 @@ impl ColumnStore {
         if let Some(text) = self.title_borrowed(row_id) {
             return Some(BorrowedValue::String(text));
         }
-        match self.get_title(row_id)? {
-            Value::Int64(v) => Some(BorrowedValue::Int64(v)),
-            Value::UniqueId(v) => Some(BorrowedValue::UniqueId(v)),
-            Value::Float64(v) => Some(BorrowedValue::Float64(v)),
-            Value::Boolean(b) => Some(BorrowedValue::Boolean(b)),
-            Value::DateTime(d) => Some(BorrowedValue::DateTime(d)),
-            Value::Timestamp(t) => Some(BorrowedValue::Timestamp(t)),
-            _ => None,
-        }
+        BorrowedValue::of_scalar(self.get_title(row_id)?)
     }
 
     /// Allocation-free property visitor. Used by
@@ -668,15 +651,24 @@ impl ColumnStore {
         &self,
     ) -> Option<&Arc<crate::graph::storage::mapped::column_store::MmapColumnStore>> {
         let ms = self.mmap_store.as_ref()?;
-        let pure = self.columns.is_empty()
-            && self.id_column.is_none()
+        let pure = self.columns.is_empty() && !self.has_tail_rows() && self.base_part_untouched(ms);
+        pure.then_some(ms)
+    }
+
+    /// Whether the base part of this store has no id or title replacement, no
+    /// explicit clears, no overflow bag, no tombstone and exactly the mapping's
+    /// rows: what both a verbatim re-emit and a region-patched write require
+    /// before they look at the overlay's columns.
+    fn base_part_untouched(
+        &self,
+        ms: &crate::graph::storage::mapped::column_store::MmapColumnStore,
+    ) -> bool {
+        self.id_column.is_none()
             && self.title_column.is_none()
             && self.null_overrides.is_none()
             && self.overflow_offsets.is_none()
             && !self.tombstones.iter().any(|t| *t)
-            && !self.has_tail_rows()
-            && self.row_count == ms.row_count();
-        pure.then_some(ms)
+            && self.row_count == ms.row_count()
     }
 
     /// Whether any row can resolve a property through the overflow bag.
@@ -1075,18 +1067,19 @@ impl ColumnStore {
     #[inline]
     #[allow(dead_code)] // Test-only.
     pub fn get_by_slot(&self, row_id: u32, slot: u16) -> Option<Value> {
-        if let Some((tail, row)) = self.tail_for(row_id) {
-            return tail.get(row, self.base_key_at(slot)?);
-        }
+        debug_assert!(
+            self.tail_for(row_id).is_none(),
+            "a slot names a column of the base part; a tail row is read by key"
+        );
         self.columns.get(slot as usize)?.get(row_id)
     }
 
     #[inline]
     pub fn get_str_by_slot(&self, row_id: u32, slot: u16) -> Option<&str> {
-        if let Some((tail, row)) = self.tail_for(row_id) {
-            let tail_slot = tail.slot(self.base_key_at(slot)?)?;
-            return tail.get_str_by_slot(row, tail_slot);
-        }
+        debug_assert!(
+            self.tail_for(row_id).is_none(),
+            "a slot names a column of the base part; a tail row is read by key"
+        );
         self.columns.get(slot as usize)?.get_str(row_id)
     }
 
@@ -1450,7 +1443,7 @@ impl ColumnStore {
         let column = &self.columns[slot];
         let kind = TypedColumn::type_str_for_value(value);
         let rows = column.len() as u32;
-        if kind != "mixed" && !(0..rows).any(|row| column.is_present(row)) {
+        if kind != "mixed" && column.holds_no_value() {
             self.spillable_growth = true;
             let mut typed = TypedColumn::from_type_str(kind);
             for _ in 0..rows {

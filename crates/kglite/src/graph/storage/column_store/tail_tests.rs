@@ -291,7 +291,7 @@ fn writes_tombstones_and_truncation_route_to_the_part_that_owns_the_row() {
     expected.untombstone(BASE as u32 + 5);
     assert_same_rows(store, &expected);
 
-    // A slot-addressed write and read on a tail row carry the key across.
+    // A slot-addressed write on a tail row carries the key across.
     let level = store
         .slot(key("level"))
         .expect("a SET made the base overlay column");
@@ -302,7 +302,7 @@ fn writes_tombstones_and_truncation_route_to_the_part_that_owns_the_row() {
         &Value::Int64(17)
     ));
     assert_eq!(
-        store.get_by_slot(BASE as u32 + 6, level),
+        store.get(BASE as u32 + 6, key("level")),
         Some(Value::Int64(17))
     );
 
@@ -482,6 +482,47 @@ fn a_tail_column_with_no_value_takes_the_base_kind_whatever_it_was_declared() {
         reloaded.store.get(BASE as u32, key("dept")),
         Some(Value::String("Sales".to_string()))
     );
+}
+
+/// A copy lays a store's columns out from `property_layout`, and a save writes
+/// them through `column_for_plan`: both give a column that holds no value the
+/// kind of the base's column, so a copy never types as `mixed` what the save
+/// keeps as the base's kind.
+#[test]
+fn the_layout_a_copy_uses_agrees_with_the_save_on_a_column_with_no_value() {
+    let mut fixture = mapped_store(0..BASE);
+    let store = &mut fixture.store;
+    let schema = Arc::new(TypeSchema::from_keys([key("level"), key("dept")]));
+    let meta = HashMap::from([
+        ("level".to_string(), "Date".to_string()),
+        ("dept".to_string(), "String".to_string()),
+    ]);
+    store.prepare_append(schema, &meta, &interner());
+    let (id, title, _) = employee(BASE);
+    store.push_id(&id);
+    store.push_title(&title);
+    store.push_row(&[(key("dept"), Value::String("Sales".to_string()))]);
+    assert!(
+        store.region_parts().is_some(),
+        "the save keeps the base kind"
+    );
+
+    let kind_of = |store: &ColumnStore, name: &str| {
+        store
+            .property_layout()
+            .into_iter()
+            .find_map(|(k, kind)| (k == key(name)).then_some(kind))
+    };
+    assert_eq!(kind_of(store, "level"), Some("int64"));
+    let reloaded = saved_and_reloaded(store);
+    assert_eq!(kind_of(&reloaded.store, "level"), Some("int64"));
+    for name in ["level", "dept", "hired", "bonus"] {
+        assert_eq!(
+            kind_of(store, name),
+            kind_of(&reloaded.store, name),
+            "{name}: the copy's layout and the saved file's disagree"
+        );
+    }
 }
 
 /// `SET` cells of every shape a save can lay over a base column: an integer, a
