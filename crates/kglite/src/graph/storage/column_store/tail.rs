@@ -79,6 +79,21 @@ impl ColumnStore {
         }
     }
 
+    /// Whether `key` is a property column of this store, wherever it lives: the
+    /// schema, the mmap base, or the tail. A key that is none of these is read,
+    /// where it is read at all, as a title or id alias.
+    pub(crate) fn has_property_column(&self, key: InternedKey) -> bool {
+        self.schema.slot(key).is_some()
+            || self
+                .mmap_store
+                .as_ref()
+                .is_some_and(|base| base.column_kind(key).is_some())
+            || self
+                .tail
+                .as_deref()
+                .is_some_and(|tail| tail.has_property_column(key))
+    }
+
     /// Rows in the tail.
     #[inline]
     pub(crate) fn tail_rows(&self) -> u32 {

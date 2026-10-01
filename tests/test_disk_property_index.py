@@ -418,3 +418,56 @@ class TestSegmentManifestRecordsIndexes:
         manifest = json.loads((_published_snapshot(disk_dir) / "seg_manifest.json").read_text(encoding="utf-8"))
         # Only the global index was built — no per-type indexes.
         assert manifest["segments"][0]["indexed_prop_ranges"] == []
+
+
+class TestIndexOnAPropertySomeRowsLack:
+    """A node without the property is not in its index, and a node's title is not
+    indexed under another property's name, on a graph reopened from disk as in memory."""
+
+    @staticmethod
+    def _graph(mode, path):
+        g = KnowledgeGraph(storage="disk", path=path) if mode == "disk" else KnowledgeGraph()
+        docs = pd.DataFrame(
+            {
+                "id": list(range(1, 9)),
+                "name": [f"Doc {i}" for i in range(1, 9)],
+                "code": [f"C{i}" if i % 2 else None for i in range(1, 9)],
+            }
+        )
+        g.add_nodes(docs, "Doc", "id", "name")
+        if mode == "disk":
+            g.save(path)
+            g = load(path)
+        return g
+
+    @pytest.mark.parametrize("mode", ["memory", "disk"])
+    @pytest.mark.parametrize("typed", [True, False])
+    def test_a_code_less_nodes_title_is_not_found_under_code(self, disk_dir, mode, typed):
+        g = self._graph(mode, disk_dir)
+        if typed:
+            g.create_index("Doc", "code")
+        else:
+            g.create_global_index("code")
+        label = ":Doc" if typed else ""
+
+        def ids(value):
+            # A literal, not a parameter: only a literal reaches the global index.
+            result = g.cypher(f"MATCH (n{label} {{code: '{value}'}}) RETURN n.id AS id", timeout_ms=0)
+            return [row["id"] for row in result.to_list()]
+
+        # Premise: the nodes without a code are the even ones, whose titles are `Doc 2`, `Doc 4`, ...
+        assert ids("Doc 2") == []
+        assert ids("Doc 4") == []
+        assert [ids(f"C{i}") for i in (1, 3, 5, 7)] == [[1], [3], [5], [7]]
+
+    @pytest.mark.parametrize("mode", ["memory", "disk"])
+    @pytest.mark.parametrize("typed", [True, False])
+    def test_an_index_on_the_title_alias_still_finds_every_title(self, disk_dir, mode, typed):
+        g = self._graph(mode, disk_dir)
+        if typed:
+            g.create_index("Doc", "name")
+        else:
+            g.create_global_index("name")
+        label = ":Doc" if typed else ""
+        result = g.cypher(f"MATCH (n{label} {{name: 'Doc 4'}}) RETURN n.id AS id", timeout_ms=0)
+        assert [row["id"] for row in result.to_list()] == [4]

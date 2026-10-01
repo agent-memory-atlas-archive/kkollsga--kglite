@@ -293,6 +293,16 @@ before upgrading.
   the appended rows' values as nulls on `save()`; the type is now saved in full
   and every value reads back.
 
+- `create_index` and `create_global_index` on a graph reopened from a disk
+  directory no longer index a node's title under a property it lacks. A type
+  whose property `code` was set on some rows only was indexed with the title of
+  each code-less node as its `code`, so `MATCH (n:Doc {code: 'Doc 2'})` returned
+  that node (an in-memory graph returned nothing), and the global index held
+  titles in place of the real `code` values, so `MATCH (n {code: 'C3'})` found
+  nothing. A property that is a column of the type is read from that column
+  only; the title and id are read only for a property the type has no column for
+  (an alias of its title or id).
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk

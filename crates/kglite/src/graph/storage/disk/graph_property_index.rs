@@ -48,6 +48,58 @@ pub(crate) fn take_global_builds() -> Vec<String> {
     GLOBAL_BUILDS.with(|builds| std::mem::take(&mut *builds.borrow_mut()))
 }
 
+/// How one type's column store answers "the string `property` holds at a row",
+/// for an index build: resolved once per type, then read per row.
+struct IndexedColumn<'a> {
+    store: &'a crate::graph::storage::column_store::ColumnStore,
+    key: InternedKey,
+    /// The property's schema slot, for a heap store: a slot read sees every row.
+    /// An mmap-backed store keeps only its local overlay in `schema()` (a `SET`
+    /// adds a column, an appended row lands in the tail), so a slot read would
+    /// miss the rows the overlay does not cover and it has none.
+    slot: Option<u16>,
+    /// Whether the property is a column of the store, in the schema, the file
+    /// or the tail. When it is, a row without a value has none: the title and
+    /// id are another property's values and are not read in its place.
+    is_column: bool,
+}
+
+impl<'a> IndexedColumn<'a> {
+    fn new(store: &'a crate::graph::storage::column_store::ColumnStore, key: InternedKey) -> Self {
+        let slot = if store.has_mmap_base() {
+            None
+        } else {
+            store.schema().slot(key)
+        };
+        Self {
+            store,
+            key,
+            slot,
+            is_column: store.has_property_column(key),
+        }
+    }
+
+    /// The string at `row`: the column's own value, or, for a property the type
+    /// has no column for (a `label` / `name` / `nid` alias of its title or id),
+    /// the non-empty title and then the non-empty id.
+    fn string_at(&self, row: u32) -> Option<String> {
+        if let Some(slot) = self.slot {
+            return self.store.get_str_by_slot(row, slot).map(str::to_string);
+        }
+        if let Some(Value::String(s)) = self.store.get(row, self.key) {
+            return Some(s);
+        }
+        if self.is_column {
+            return None;
+        }
+        let non_empty = |value: Option<Value>| match value {
+            Some(Value::String(s)) if !s.is_empty() => Some(s),
+            _ => None,
+        };
+        non_empty(self.store.get_title(row)).or_else(|| non_empty(self.store.get_id(row)))
+    }
+}
+
 fn property_index_build_failpoint(stage: &'static str) -> std::io::Result<()> {
     #[cfg(test)]
     if BUILD_FAILPOINT.with(|point| point.get() == Some(stage)) {
@@ -81,26 +133,11 @@ impl DiskGraph {
         let type_u64 = type_key.as_u64();
         let prop_key = InternedKey::from_str(property);
 
-        // Three ways to resolve a property to a string value per node:
-        //   1. Title/id alias columns (checked via helpers below) — covers
-        //      `label`, `nid`, and any user-chosen title/id field names.
-        //   2. Regular schema column via `get_str_by_slot`.
-        //   3. Fall back to NodeData::get_property, which is the arena
-        //      path used by the pattern matcher — slower but correct for
-        //      exotic cases (non-columnar properties, map storage).
+        // A property resolves to a string per node through `indexed_string`:
+        // the schema column of a heap store, the keyed read of an mmap-backed
+        // one, or the title / id of a type that has no such column (an alias).
         let col_store = self.column_stores.get(&type_key);
-        // An mmap-backed store keeps only its local overlay in `schema()` (a
-        // SET adds a column, an appended row lands in the tail), so a slot read
-        // would miss every row the overlay does not cover: those stores take
-        // the keyed read below.
-        let schema_slot = col_store
-            .filter(|cs| !cs.has_mmap_base())
-            .and_then(|cs| cs.schema().slot(prop_key));
-        // Heuristic: "title" or "id" literals, and anything stored outside
-        // the regular schema, goes through the NodeData materialisation
-        // path so title/id aliases and mapped-mode stores resolve
-        // correctly. Everything else reads directly from the column.
-        let use_slot_path = schema_slot.is_some();
+        let reads = col_store.map(|cs| IndexedColumn::new(cs, prop_key));
 
         let node_bound = self.node_slot_len();
         let mut entries: Vec<(String, u32)> = Vec::with_capacity(node_bound);
@@ -109,42 +146,7 @@ impl DiskGraph {
             if !nslot.is_alive() || nslot.node_type != type_u64 {
                 continue;
             }
-            // Try paths in order of specificity:
-            //   1. Regular schema column (`get_str_by_slot`) — fast path.
-            //   2. Title column (`get_title`) — covers `label`/`name`/
-            //      any user-chosen title alias.
-            //   3. Id column (`get_id`) — covers `nid` and other id
-            //      aliases when the user explicitly indexes the id.
-            let maybe_str: Option<String> = if use_slot_path {
-                col_store
-                    .and_then(|cs| cs.get_str_by_slot(nslot.row_id, schema_slot.unwrap()))
-                    .map(str::to_string)
-            } else if let Some(Value::String(s)) =
-                col_store.and_then(|cs| cs.get(nslot.row_id, prop_key))
-            {
-                // An mmap-backed store has an empty `schema()`, so the slot
-                // path above misses its real columns; the keyed read does not.
-                Some(s)
-            } else if let Some(cs) = col_store {
-                // Not in schema — try title, then id. If both return a
-                // non-empty String, prefer title (which is what users
-                // typically mean when aliasing `label` / `name` / ...).
-                let from_title = cs.get_title(nslot.row_id).and_then(|v| match v {
-                    Value::String(s) if !s.is_empty() => Some(s),
-                    _ => None,
-                });
-                if from_title.is_some() {
-                    from_title
-                } else {
-                    cs.get_id(nslot.row_id).and_then(|v| match v {
-                        Value::String(s) if !s.is_empty() => Some(s),
-                        _ => None,
-                    })
-                }
-            } else {
-                None
-            };
-            if let Some(s) = maybe_str {
+            if let Some(s) = reads.as_ref().and_then(|r| r.string_at(nslot.row_id)) {
                 entries.push((s, i as u32));
             }
         }
@@ -314,50 +316,25 @@ impl DiskGraph {
         let node_bound = self.node_slot_len();
         let mut entries: Vec<(String, u32)> = Vec::with_capacity(node_bound / 2);
 
-        // Cache per-type (column_store, schema_slot) lookups so every
-        // node in the same type reuses the slot resolution.
-        type ColStore = Arc<crate::graph::storage::column_store::ColumnStore>;
-        type TypeCacheEntry = Option<(ColStore, Option<u16>)>;
-        let mut type_cache: HashMap<u64, TypeCacheEntry> = HashMap::new();
+        // One `IndexedColumn` per type, so every node of a type reuses the
+        // resolution of how its column answers.
+        let mut type_cache: HashMap<u64, Option<IndexedColumn<'_>>> = HashMap::new();
 
         for i in 0..node_bound {
             let nslot = self.node_slot(i);
             if !nslot.is_alive() {
                 continue;
             }
-            let cached = type_cache.entry(nslot.node_type).or_insert_with(|| {
+            let reads = type_cache.entry(nslot.node_type).or_insert_with(|| {
                 let tk = InternedKey::from_u64(nslot.node_type);
-                self.column_stores.get(&tk).cloned().map(|cs| {
-                    // As in `build_property_index`: an mmap-backed store's
-                    // schema names its overlay only, so it has no slot here.
-                    let slot = if cs.has_mmap_base() {
-                        None
-                    } else {
-                        cs.schema().slot(prop_key)
-                    };
-                    (cs, slot)
-                })
+                self.column_stores
+                    .get(&tk)
+                    .map(|cs| IndexedColumn::new(cs, prop_key))
             });
-            let Some((col_store, schema_slot)) = cached else {
+            let Some(reads) = reads else {
                 continue;
             };
-            let maybe_str: Option<String> = if let Some(slot) = schema_slot {
-                col_store
-                    .get_str_by_slot(nslot.row_id, *slot)
-                    .map(str::to_string)
-            } else {
-                let from_title = col_store.get_title(nslot.row_id).and_then(|v| match v {
-                    Value::String(s) if !s.is_empty() => Some(s),
-                    _ => None,
-                });
-                from_title.or_else(|| {
-                    col_store.get_id(nslot.row_id).and_then(|v| match v {
-                        Value::String(s) if !s.is_empty() => Some(s),
-                        _ => None,
-                    })
-                })
-            };
-            if let Some(s) = maybe_str {
+            if let Some(s) = reads.string_at(nslot.row_id) {
                 if !s.is_empty() {
                     entries.push((s, i as u32));
                 }
