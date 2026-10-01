@@ -131,11 +131,13 @@ before upgrading.
   not touch are written straight from the mapping and a touched column is
   written as the file's cells with the `SET` cells laid over them, so the save's
   memory follows the touched columns: on the 24.7-million-version register, one
-  `SET` of 1,000 rows' `status` followed by `save()` peaked at 1.7 GB of
-  footprint (1.3 GB above the start) where it peaked at 5.2 GB (4.9 GB above),
-  and took 121 s instead of 159 s. The first `SET` of a column of a file-served
-  type still copies that column onto the heap (0.3 to 0.5 s and 360 MB for the
-  `status` column at that size, 0.28 s and 393 MB for a timestamp column). A
+  `SET` of 1,000 rows' `status` followed by `save()` peaked at 1.4 GB of
+  footprint (0.95 GB above the start) where it peaked at 5.2 GB (4.9 GB above),
+  and took 91 s instead of 159 s (8 million versions: 7.8 s instead of 9.9 s,
+  200 MB above the start instead of 590 MB). The first `SET` of a column of a
+  file-served type still copies that column onto the heap (0.3 to 0.5 s and
+  360 MB for the `status` column at 24.7 million rows, 0.28 s and 393 MB for a
+  timestamp column). A
   null written over a cell, a replaced title, a value of another kind in a
   column and a type with an overflow bag still take the previous path.
 - Docs: the valid-time guide and the bitemporal guide (now titled "Bitemporal
