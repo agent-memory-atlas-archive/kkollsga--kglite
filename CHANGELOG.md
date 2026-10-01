@@ -286,6 +286,13 @@ before upgrading.
   a whole float past `i64` (`1e30`) matched `i64::MAX`. Such an id now matches
   only the node that holds it, or counts as a missing endpoint.
 
+- A saved disk graph no longer loses a property value that two parts of a type
+  typed differently. On a reopened type, a `SET` that added a new property to a
+  row from the saved file and an append whose rows carried the same property as
+  another kind (`SET n.badge = 5`, then `add_nodes` rows with `badge = 'x'`) wrote
+  the appended rows' values as nulls on `save()`; the type is now saved in full
+  and every value reads back.
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk

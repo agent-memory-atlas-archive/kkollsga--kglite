@@ -327,3 +327,34 @@ def test_a_property_index_built_after_a_set_covers_the_rows_the_set_did_not_touc
     expected["Ops"] = 1
     expected[DEPARTMENTS[3 % 5]] -= 1  # employee 3 moved to Ops
     assert by_dept == {d: expected.get(d, 0) for d in by_dept}
+
+
+@pytest.mark.parametrize(
+    ("set_value", "appended"),
+    [("5", ["x", "y"]), ("'x'", [5, 6])],
+    ids=["integer_set_string_append", "string_set_integer_append"],
+)
+def test_a_property_the_file_lacks_survives_a_save_when_set_and_append_type_it_differently(
+    tmp_path, set_value, appended
+):
+    """A ``SET`` adds a property to a base row, then appended rows carry the same
+    property as another kind: the file column holds one kind, so the save has to
+    keep both parts' cells rather than write the tail's as nulls."""
+    path = str(tmp_path / "staff")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        graph = kglite.KnowledgeGraph(storage="disk", path=path)
+        graph.add_nodes(staff(0, 40), TYPE, "id", "name")
+        graph.save(path)
+        del graph
+        graph = kglite.load(path)
+        graph.cypher(f"MATCH (e:{TYPE} {{id: {FIRST_ID}}}) SET e.badge = {set_value}", timeout_ms=0)
+        tail = pd.DataFrame({"id": [FIRST_ID + 100, FIRST_ID + 101], "name": ["N1", "N2"], "badge": appended})
+        graph.add_nodes(tail, TYPE, "id", "name")
+        query = f"MATCH (e:{TYPE}) WHERE e.badge IS NOT NULL RETURN e.id - {FIRST_ID} AS i, e.badge AS badge ORDER BY i"
+        expected = rows(graph, query)
+        assert len(expected) == 3, expected  # premise: the SET row and both appended rows hold a value
+        graph.save(path)
+        del graph
+        reloaded = kglite.load(path)
+    assert rows(reloaded, query) == expected

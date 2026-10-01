@@ -226,7 +226,7 @@ fn assert_same_identity_kinds(actual: &ColumnStore, expected: &ColumnStore) {
 fn interner() -> StringInterner {
     let mut interner = StringInterner::new();
     for name in [
-        "dept", "level", "hired", "bonus", "remote", "nickname", "absent",
+        "dept", "level", "hired", "bonus", "remote", "nickname", "absent", "extra",
     ] {
         interner.get_or_intern(name);
     }
@@ -431,6 +431,35 @@ fn a_tail_column_of_another_kind_than_the_base_is_flattened_not_concatenated() {
     );
     assert_eq!(flat.get(4, key("level")), Some(Value::Int64(4)));
     assert_eq!(flat.get_title(BASE as u32), Some(title));
+}
+
+#[test]
+fn a_key_the_base_lacks_typed_differently_by_overlay_and_tail_is_flattened() {
+    for (overlay_value, tail_value) in [
+        (Value::Int64(5), Value::String("x".to_string())),
+        (Value::String("x".to_string()), Value::Int64(5)),
+    ] {
+        let mut fixture = mapped_store(0..BASE);
+        let store = &mut fixture.store;
+        assert!(store.set(0, key("extra"), &overlay_value, None));
+        let (id, title, _) = employee(BASE);
+        store.push_id(&id);
+        store.push_title(&title);
+        store.push_row(&[(key("extra"), tail_value.clone())]);
+        assert_eq!(store.get(0, key("extra")), Some(overlay_value.clone()));
+        assert_eq!(
+            store.get(BASE as u32, key("extra")),
+            Some(tail_value.clone())
+        );
+        assert!(
+            store.region_parts().is_none(),
+            "one file column cannot hold {overlay_value:?} over the base rows and \
+             {tail_value:?} in the tail: the save flattens, which reads the union"
+        );
+        let flat = store.flattened_owned(&HashMap::new(), &interner());
+        assert_eq!(flat.get(0, key("extra")), Some(overlay_value));
+        assert_eq!(flat.get(BASE as u32, key("extra")), Some(tail_value));
+    }
 }
 
 #[test]

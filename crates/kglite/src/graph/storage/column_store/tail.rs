@@ -175,6 +175,32 @@ impl ColumnStore {
             )
     }
 
+    /// Whether the overlay and the tail give every key the base lacks the same
+    /// kind. [`Self::columns_match_base_kinds`] compares each part with the
+    /// base only, which a key the base lacks passes whatever the kind, and a
+    /// file column has one kind: the plan would take the overlay's and write the
+    /// tail's cells as nulls.
+    fn agrees_with_tail_on_keys_the_base_lacks(
+        &self,
+        ms: &crate::graph::storage::mapped::column_store::MmapColumnStore,
+        tail: &ColumnStore,
+    ) -> bool {
+        self.schema.iter().all(|(slot, key)| {
+            if ms.column_kind(key).is_some() {
+                return true;
+            }
+            let Some(overlay_kind) = self
+                .columns
+                .get(slot as usize)
+                .map(|column| column.type_tag())
+            else {
+                return true;
+            };
+            tail.column_for_plan(key, Some(overlay_kind))
+                .is_none_or(|column| column.type_tag() == overlay_kind)
+        })
+    }
+
     /// Whether every cell of `column` (one of this store's) is null.
     fn column_holds_no_value(&self, column: &TypedColumn) -> bool {
         !(0..column.len() as u32).any(|row| column.is_present(row))
@@ -207,7 +233,10 @@ impl ColumnStore {
         {
             return None;
         }
-        if tail.is_some_and(|tail| !self.tail_is_region_compatible(base, tail)) {
+        if tail.is_some_and(|tail| {
+            !self.tail_is_region_compatible(base, tail)
+                || !self.agrees_with_tail_on_keys_the_base_lacks(base, tail)
+        }) {
             return None;
         }
         Some(RegionParts {
