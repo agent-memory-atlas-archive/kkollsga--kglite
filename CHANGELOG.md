@@ -11,6 +11,16 @@ before upgrading.
 
 ### Added
 
+- `load_rdf` reads RDF 1.2 reifiers: `r rdf:reifies <<( s p o )>>` plus
+  `r <prop> value` statements become properties of the `s p o` edge (parallel
+  edges for several reifiers; reifiers are not nodes). New `language_maps`
+  option stores language-tagged literals as `{lang: value}` maps (default off,
+  tags are dropped as before). A `kg:manifest` statement from an RDF export
+  restores valid-time declarations, secondary labels, parent types and node
+  ids/titles; `xsd:duration` literals now load as durations (previously
+  strings) and `kg:json` literals as lists/maps. `RdfStats` gains `warnings`;
+  the vocabulary IRIs live in `kglite::api::io::export::kg_vocab`.
+
 - Blueprint column types `"text"` (empty cell is null, `\e` is the empty
   string), `"timestamp"` (ISO 8601 date-time), `"map"` (JSON object) and
   `"point"` (`point(lat, lon)`, node properties), a `settings.manifest` key that

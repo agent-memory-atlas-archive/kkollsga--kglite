@@ -861,6 +861,7 @@ def load_rdf(
     keep_full_iris: bool = False,
     default_type: str | None = None,
     max_triples: int | None = None,
+    language_maps: bool = False,
 ) -> KnowledgeGraph:
     """Load an RDF file into a fresh in-memory graph.
 
@@ -890,13 +891,33 @@ def load_rdf(
         default_type: Node type for subjects without an ``rdf:type``.
             Defaults to ``"Resource"``.
         max_triples: Stop after this many triples.
+        language_maps: Store a property whose literals carry language tags as
+            a map ``{lang: value}`` (``n.motto == {"en": "Go", "no": "Gå"}``)
+            instead of dropping the tags. Default ``False`` keeps the plain
+            values; the ``languages`` filter applies first. The node title
+            stays a single string; its tagged labels are also kept as a map
+            under the compacted label predicate (``rdfs__label``).
+
+    RDF 1.2 reifiers (``.nq`` / ``.trig`` / ``.ttl``): ``r rdf:reifies <<( s p
+    o )>>`` plus ``r <prop> value`` statements become properties of the
+    ``s -[p]-> o`` edge, and the reifier is not a node. A triple with several
+    reifiers gets one parallel edge per reifier (at least one per plain
+    ``s p o`` statement).
+
+    A ``kg:manifest`` statement (the manifest an RDF export writes into its
+    ``<base>meta`` graph) is applied instead of becoming a node: valid-time
+    declarations, secondary labels, parent types, and node ids and titles of
+    the declared kind are restored. ``xsd:duration`` maps to a duration and a
+    ``kg:json`` literal to a list or map. Declarations that cannot be applied
+    are reported as ``UserWarning``.
 
     Returns:
         A new in-memory KnowledgeGraph.
 
     Raises:
         FileNotFoundError: The file does not exist.
-        ValueError: Unsupported extension or a parse error.
+        ValueError: Unsupported extension, a parse error, or a malformed
+            ``kg:manifest``.
 
     Note:
         Builds an in-memory graph; mapped/disk backends are not supported.
