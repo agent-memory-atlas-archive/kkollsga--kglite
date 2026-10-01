@@ -278,6 +278,14 @@ before upgrading.
   process is out of file descriptors or address space; they aborted the process
   with a panic.
 
+- An edge whose endpoint id lies past 2^53 no longer links to a different node.
+  The loaders that resolve ids one at a time (`add_connections`, `create_edges`
+  through the C ABI and Java binding, and `from_records`) tried an `Int64` id
+  through its float spelling, which rounds onto a neighbouring integer: an edge
+  naming a missing `9007199254740993` linked to the node `9007199254740992`, and
+  a whole float past `i64` (`1e30`) matched `i64::MAX`. Such an id now matches
+  only the node that holds it, or counts as a missing endpoint.
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk

@@ -798,6 +798,53 @@ fn create_edges_batch_enforces_relationship_constraints() {
     unsafe { kglite_session_free(session) };
 }
 
+/// An endpoint id past 2^53 resolves to its own node or to none: it is never
+/// looked up through a float that rounds it onto a neighbouring id, and a
+/// whole float past `i64` never saturates onto `i64::MAX`.
+#[test]
+fn create_edges_batch_never_links_a_neighbouring_id_past_two_pow_53() {
+    let session = seed_notes(
+        "CREATE (:P {id: 1}), (:P {id: 9007199254740992}), (:P {id: 9223372036854775807})",
+    );
+    let created = |report: &str| -> (i64, i64) {
+        let report: serde_json::Value = serde_json::from_str(report).unwrap();
+        (
+            report["connections_created"].as_i64().unwrap(),
+            report["skipped_missing_endpoint"].as_i64().unwrap(),
+        )
+    };
+
+    // 2^53 + 1 is no node's id; its float spelling is 2^53's.
+    let (rc, report) = create_edges(
+        session,
+        r#"[{"src_id":1,"src_type":"P","dst_id":9007199254740993,"dst_type":"P","type":"R"}]"#,
+    );
+    assert_eq!(rc, KgliteStatusCode::Ok, "{report}");
+    assert_eq!(created(&report), (0, 1), "{report}");
+
+    // 1e30 saturates onto i64::MAX, which the type holds.
+    let (rc, report) = create_edges(
+        session,
+        r#"[{"src_id":1,"src_type":"P","dst_id":1e30,"dst_type":"P","type":"R"}]"#,
+    );
+    assert_eq!(rc, KgliteStatusCode::Ok, "{report}");
+    assert_eq!(created(&report), (0, 1), "{report}");
+
+    // The ids that exist still link.
+    let (rc, report) = create_edges(
+        session,
+        r#"[{"src_id":1,"src_type":"P","dst_id":9007199254740992,"dst_type":"P","type":"R"},
+            {"src_id":1,"src_type":"P","dst_id":9223372036854775807,"dst_type":"P","type":"R"}]"#,
+    );
+    assert_eq!(rc, KgliteStatusCode::Ok, "{report}");
+    assert_eq!(created(&report), (2, 0), "{report}");
+    assert_eq!(
+        query_rows(session, "MATCH ()-[r:R]->() RETURN count(r) AS c", "{}"),
+        serde_json::json!([{"c": 2}])
+    );
+    unsafe { kglite_session_free(session) };
+}
+
 /// A relationship type loaded from a second source node type: that source's
 /// first batch writes one edge per spec, repeated pairs included, while a
 /// re-load from a source type the relationship type has seen merges.

@@ -146,50 +146,20 @@ impl CombinedTypeLookup {
     }
 }
 
-/// Resolve `uid` through `get`, then through the numeric spellings the id may
+/// Resolve `uid` through `get`, then through the other keys a numeric id may
 /// have been stored under.
 ///
 /// IDs in CSV sources sometimes arrive as floats (e.g. 260.0 instead of 260)
-/// due to pandas nullable-int promotion. This tries all plausible numeric
-/// representations so that a `Float64(260.0)` matches an `Int64(260)` node: a
-/// whole `Float64` as `Int64` then `UniqueId`, an `Int64` as `UniqueId` then
-/// `Float64`, a `UniqueId` as `Int64` then `Float64`.
+/// due to pandas nullable-int promotion, so a `Float64(260.0)` must match an
+/// `Int64(260)` node. The spellings come from `id_spellings`, which offers a
+/// float only where it is exactly the integer: past 2^53 an `Int64` rounds
+/// onto a neighbour's float, and a whole float past `i64` saturates onto
+/// `i64::MAX`, so neither is ever probed as another id.
 pub(crate) fn lookup_coerced(
     get: impl Fn(&Value) -> Option<NodeIndex>,
     uid: &Value,
 ) -> Option<NodeIndex> {
-    if let Some(idx) = get(uid) {
-        return Some(idx);
-    }
-    match uid {
-        Value::Float64(f) => {
-            // Float that is a whole number → try Int64 and UniqueId
-            if f.is_finite() && f.fract() == 0.0 {
-                let i = *f as i64;
-                if let Some(idx) = get(&Value::Int64(i)) {
-                    return Some(idx);
-                }
-                if i >= 0 && i <= u32::MAX as i64 {
-                    return get(&Value::UniqueId(i as u32));
-                }
-            }
-            None
-        }
-        Value::Int64(i) => {
-            // Try UniqueId, then Float64
-            if *i >= 0 && *i <= u32::MAX as i64 {
-                if let Some(idx) = get(&Value::UniqueId(*i as u32)) {
-                    return Some(idx);
-                }
-            }
-            get(&Value::Float64(*i as f64))
-        }
-        // Try Int64, then Float64
-        Value::UniqueId(u) => {
-            get(&Value::Int64(*u as i64)).or_else(|| get(&Value::Float64(*u as f64)))
-        }
-        _ => None,
-    }
+    get(uid).or_else(|| crate::graph::schema::id_spellings(uid).find_map(|key| get(&key)))
 }
 
 /// Resolves the endpoint ids of one `(source_type, target_type)` pair to nodes.
@@ -233,7 +203,7 @@ impl<'a> EndpointResolver<'a> {
         match self {
             Self::Indexed {
                 ids, source_type, ..
-            } => lookup_coerced(|v| ids.lookup(source_type, v), uid),
+            } => ids.lookup(source_type, uid),
             Self::Scanned(lookup) => lookup.check_source(uid),
         }
     }
@@ -242,7 +212,7 @@ impl<'a> EndpointResolver<'a> {
         match self {
             Self::Indexed {
                 ids, target_type, ..
-            } => lookup_coerced(|v| ids.lookup(target_type, v), uid),
+            } => ids.lookup(target_type, uid),
             Self::Scanned(lookup) => lookup.check_target(uid),
         }
     }

@@ -407,3 +407,100 @@ fn edge_specs_every_target_group_of_an_owned_source_keeps_its_rows() {
         );
     }
 }
+
+// ── ids past 2^53 ────────────────────────────────────────────────────
+//
+// `i64 -> f64` rounds past 2^53, so an id probed through its float spelling
+// can land on a different node's id.
+
+const TWO_POW_53: i64 = 9_007_199_254_740_992;
+
+fn big_id_spec(source_id: Value, target_id: Value) -> EdgeSpec {
+    EdgeSpec {
+        source_type: "Doc".to_string(),
+        source_id,
+        target_type: "Doc".to_string(),
+        target_id,
+        edge_type: "LINKS".to_string(),
+        properties: HashMap::new(),
+    }
+}
+
+fn big_id_graph(mode: StorageMode, dir: &std::path::Path) -> DirGraph {
+    let path = (mode == StorageMode::Disk).then_some(dir);
+    let mut graph = new_dir_graph_in_mode(mode, path).unwrap();
+    let rows = DataFrame::from_cypher_rows(
+        vec!["id".to_string()],
+        [1, TWO_POW_53, i64::MAX]
+            .into_iter()
+            .map(|id| vec![Value::Int64(id)])
+            .collect(),
+    )
+    .unwrap();
+    add_nodes(
+        &mut graph,
+        rows,
+        "Doc".to_string(),
+        "id".to_string(),
+        Some("id".to_string()),
+        None,
+    )
+    .unwrap();
+    graph
+}
+
+#[test]
+fn an_id_past_two_pow_53_never_resolves_to_a_neighbouring_id() {
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let tmp = TempDir::new().unwrap();
+        let mut graph = big_id_graph(mode, tmp.path());
+
+        // 2^53 + 1 is not an id of the type: its float spelling rounds to 2^53.
+        let report = add_edges_from_specs(
+            &mut graph,
+            vec![big_id_spec(Value::Int64(1), Value::Int64(TWO_POW_53 + 1))],
+        )
+        .unwrap();
+        assert_eq!(report.connections_created, 0, "mode={mode:?}");
+        assert_eq!(report.skipped_missing_endpoint, 1, "mode={mode:?}");
+        assert_eq!(graph.graph.edge_count(), 0, "mode={mode:?}");
+
+        // 1e30 saturates `as i64` onto i64::MAX, which the type holds.
+        let report = add_edges_from_specs(
+            &mut graph,
+            vec![big_id_spec(Value::Float64(1e30), Value::Int64(1))],
+        )
+        .unwrap();
+        assert_eq!(report.connections_created, 0, "mode={mode:?}");
+        assert_eq!(report.skipped_missing_endpoint, 1, "mode={mode:?}");
+
+        // The exact spellings still resolve.
+        let report = add_edges_from_specs(
+            &mut graph,
+            vec![big_id_spec(
+                Value::Float64(TWO_POW_53 as f64),
+                Value::Int64(i64::MAX),
+            )],
+        )
+        .unwrap();
+        assert_eq!(report.connections_created, 1, "mode={mode:?}");
+    }
+}
+
+#[test]
+fn a_scanned_lookup_probes_only_the_exact_spellings_of_an_id() {
+    use crate::graph::storage::lookups::lookup_coerced;
+    let held = [Value::Int64(TWO_POW_53), Value::Int64(i64::MAX)];
+    let get = |v: &Value| {
+        held.iter()
+            .position(|h| h == v)
+            .map(petgraph::graph::NodeIndex::new)
+    };
+    assert_eq!(
+        lookup_coerced(get, &Value::Int64(TWO_POW_53 + 1)),
+        None,
+        "2^53 + 1 is not 2^53"
+    );
+    assert_eq!(lookup_coerced(get, &Value::Float64(1e30)), None);
+    assert!(lookup_coerced(get, &Value::Float64(TWO_POW_53 as f64)).is_some());
+}
