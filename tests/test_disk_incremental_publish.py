@@ -65,7 +65,7 @@ def build(path: Path, employees: int = EMPLOYEES) -> None:
 
 
 def current(path: Path) -> Path:
-    return path / GENERATIONS / (path / "CURRENT").read_text().strip()
+    return path / GENERATIONS / (path / "CURRENT").read_text(encoding="utf-8").strip()
 
 
 def generation_names(path: Path) -> list[str]:
@@ -91,7 +91,7 @@ def set_grade(graph, employee: int, value: int) -> None:
 def type_files(generation: Path) -> dict[str, Path]:
     import json
 
-    meta = json.loads((generation / "seg_000" / "columns_meta.json").read_text())
+    meta = json.loads((generation / "seg_000" / "columns_meta.json").read_text(encoding="utf-8"))
     return {name: generation / "seg_000" / rel for name, rel in meta["files"].items()}
 
 
@@ -235,7 +235,7 @@ def _stage_holds_a_linked_file(path: Path) -> bool:
 def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_generation_selected(tmp_path):
     pristine = tmp_path / "pristine"
     build(pristine, employees=150_000)
-    pointer_before = (pristine / "CURRENT").read_text()
+    pointer_before = (pristine / "CURRENT").read_text(encoding="utf-8")
     previous_hash = tree_hash(current(pristine))
 
     for attempt in range(4):
@@ -250,7 +250,7 @@ def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_gene
             killed_mid_save = False
             while time.monotonic() < deadline and child.poll() is None:
                 if _stage_holds_a_linked_file(path):
-                    killed_mid_save = (path / "CURRENT").read_text() == pointer_before
+                    killed_mid_save = (path / "CURRENT").read_text(encoding="utf-8") == pointer_before
                     child.send_signal(signal.SIGKILL)
                     break
             child.wait(timeout=30)
@@ -263,7 +263,9 @@ def test_a_sigkill_between_linking_and_the_pointer_swap_leaves_the_previous_gene
         pytest.fail("the save finished before it could be killed after linking, four times")
 
     assert child.returncode == -signal.SIGKILL
-    assert (path / "CURRENT").read_text() == pointer_before, "CURRENT moved although the save never finished"
+    assert (path / "CURRENT").read_text(encoding="utf-8") == pointer_before, (
+        "CURRENT moved although the save never finished"
+    )
     assert tree_hash(current(path)) == previous_hash, "the crashed save altered the previous generation"
 
     reopened = kglite.load(str(path))
