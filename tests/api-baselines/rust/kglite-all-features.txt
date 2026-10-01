@@ -2263,6 +2263,7 @@ pub struct kglite::api::io::RdfConfig
 pub kglite::api::io::RdfConfig::default_type: alloc::string::String
 pub kglite::api::io::RdfConfig::keep_full_iris: bool
 pub kglite::api::io::RdfConfig::label_predicates: alloc::vec::Vec<alloc::string::String>
+pub kglite::api::io::RdfConfig::language_maps: bool
 pub kglite::api::io::RdfConfig::languages: core::option::Option<std::collections::hash::set::HashSet<alloc::string::String>>
 pub kglite::api::io::RdfConfig::max_triples: core::option::Option<u64>
 impl core::default::Default for kglite::api::io::RdfConfig
@@ -2271,6 +2272,7 @@ pub struct kglite::api::io::RdfStats
 pub kglite::api::io::RdfStats::edges_created: usize
 pub kglite::api::io::RdfStats::nodes_created: usize
 pub kglite::api::io::RdfStats::triples_processed: u64
+pub kglite::api::io::RdfStats::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::fmt::Debug for kglite::api::io::RdfStats
 pub fn kglite::api::io::RdfStats::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct kglite::api::io::RelationshipCarryStats

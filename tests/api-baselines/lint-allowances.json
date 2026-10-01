@@ -437,10 +437,6 @@
       "classification": "test"
     },
     {
-      "identity": "crates/kglite/src/graph/io/rdf/loader.rs::statement:_ => {}::unreachable_patterns",
-      "classification": "test"
-    },
-    {
       "identity": "crates/kglite/src/graph/languages/cypher/dynamic_labels.rs::module::clippy::result_large_err",
       "classification": "api-shape"
     },
@@ -676,6 +672,26 @@
     },
     {
       "identity": "crates/kglite/src/graph/core/pattern_matching/pattern.rs::enum:RelEdgePredicate::dead_code",
+      "classification": "dead-code"
+    },
+    {
+      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:META_GRAPH::dead_code",
+      "classification": "dead-code"
+    },
+    {
+      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:PROP_PATH::dead_code",
+      "classification": "dead-code"
+    },
+    {
+      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:REL_PATH::dead_code",
+      "classification": "dead-code"
+    },
+    {
+      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:TYPE_PATH::dead_code",
+      "classification": "dead-code"
+    },
+    {
+      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::statement:/// segment never contains the `/` the layout splits on.::dead_code",
       "classification": "dead-code"
     },
     {
