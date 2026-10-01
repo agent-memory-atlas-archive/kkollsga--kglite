@@ -363,7 +363,7 @@ fn lifecycle_rollback_keeps_events_published_on_the_original_shared_handle() {
     let original = tx_a.cdc_log().expect("enabled").clone();
     let mut tx_b = tx_a.clone();
 
-    let checkpoint = StatementCheckpoint::open_with_cdc(&mut tx_a, true);
+    let checkpoint = StatementCheckpoint::open_for_statement(&mut tx_a, true, false);
     let isolated = tx_a.cdc_log().expect("working log").clone();
     assert!(!Arc::ptr_eq(&original, &isolated));
     cdc::enable(&mut tx_a, Some(1), CdcEnrichment::Full).expect("tentative reconfigure");
@@ -390,7 +390,7 @@ fn lifecycle_rollback_restores_capture_wrapper_presence_and_mode() {
     use crate::graph::dir_graph::rollback::StatementCheckpoint;
 
     let mut initially_off = DirGraph::new();
-    let checkpoint = StatementCheckpoint::open_with_cdc(&mut initially_off, true);
+    let checkpoint = StatementCheckpoint::open_for_statement(&mut initially_off, true, false);
     cdc::enable(&mut initially_off, Some(8), CdcEnrichment::Full).expect("tentative enable");
     checkpoint.rollback(&mut initially_off);
     assert!(initially_off.cdc_log().is_none());
@@ -398,7 +398,7 @@ fn lifecycle_rollback_restores_capture_wrapper_presence_and_mode() {
 
     let mut initially_on = seeded();
     assert!(!initially_on.graph.captures_before_images());
-    let checkpoint = StatementCheckpoint::open_with_cdc(&mut initially_on, true);
+    let checkpoint = StatementCheckpoint::open_for_statement(&mut initially_on, true, false);
     assert!(cdc::disable(&mut initially_on));
     checkpoint.rollback(&mut initially_on);
     assert!(initially_on.cdc_log().is_some());

@@ -235,29 +235,11 @@ fn plan_type<'s>(type_name: &str, store: &'s ColumnStore) -> Option<PlannedType<
     }
     let mut planner = RegionPlanner::default();
     let identity = plan_identity(store, &mut planner);
-    let (col_map, fixed_cols, str_cols) = plan_properties(store, &mut planner);
-    let (overflow_offsets, overflow_data, has_overflow) = match store.effective_overflow_bytes() {
-        Some((offsets, data)) => (planner.push(offsets), planner.push(data), true),
-        None => (RegionPlanner::absent(), RegionPlanner::absent(), false),
-    };
-    let meta = ColumnTypeMeta {
-        type_name: type_name.to_string(),
-        row_count: store.row_count(),
-        id_is_string: identity.id_is_string,
-        id_data: identity.id_data,
-        id_nulls: identity.id_nulls,
-        id_str_data: identity.id_str_data,
-        id_str_offsets: identity.id_str_offsets,
-        title_data: identity.title_data,
-        title_offsets: identity.title_offsets,
-        title_nulls: identity.title_nulls,
-        col_map,
-        fixed_cols,
-        str_cols,
-        overflow_offsets,
-        overflow_data,
-        has_overflow,
-    };
+    let columns = plan_properties(store, &mut planner);
+    let overflow = store
+        .effective_overflow_bytes()
+        .map(|(offsets, data)| (planner.push(offsets), planner.push(data)));
+    let meta = identity.into_meta(type_name, store.row_count(), columns, overflow);
     Some(planner.finish(meta))
 }
 
@@ -273,19 +255,67 @@ struct IdentityRegions {
     title_nulls: RegionMeta,
 }
 
+/// The per-property region layout of a type: the key map and the fixed-width
+/// and string columns it points into.
+#[derive(Default)]
+struct PropertyRegions {
+    col_map: Vec<ColMapEntry>,
+    fixed_cols: Vec<FixedColMeta>,
+    str_cols: Vec<StrColMeta>,
+}
+
+impl IdentityRegions {
+    /// Regions with no bytes behind any of them.
+    fn absent(id_is_string: bool) -> Self {
+        let absent = RegionPlanner::absent;
+        Self {
+            id_is_string,
+            id_data: absent(),
+            id_nulls: absent(),
+            id_str_data: absent(),
+            id_str_offsets: absent(),
+            title_data: absent(),
+            title_offsets: absent(),
+            title_nulls: absent(),
+        }
+    }
+
+    /// The type's metadata: these regions, its properties, and its overflow bag
+    /// (`(offsets, data)`, or none).
+    fn into_meta(
+        self,
+        type_name: &str,
+        row_count: u32,
+        columns: PropertyRegions,
+        overflow: Option<(RegionMeta, RegionMeta)>,
+    ) -> ColumnTypeMeta {
+        let has_overflow = overflow.is_some();
+        let (overflow_offsets, overflow_data) =
+            overflow.unwrap_or_else(|| (RegionPlanner::absent(), RegionPlanner::absent()));
+        ColumnTypeMeta {
+            type_name: type_name.to_string(),
+            row_count,
+            id_is_string: self.id_is_string,
+            id_data: self.id_data,
+            id_nulls: self.id_nulls,
+            id_str_data: self.id_str_data,
+            id_str_offsets: self.id_str_offsets,
+            title_data: self.title_data,
+            title_offsets: self.title_offsets,
+            title_nulls: self.title_nulls,
+            col_map: columns.col_map,
+            fixed_cols: columns.fixed_cols,
+            str_cols: columns.str_cols,
+            overflow_offsets,
+            overflow_data,
+            has_overflow,
+        }
+    }
+}
+
 fn plan_identity<'a>(store: &'a ColumnStore, planner: &mut RegionPlanner<'a>) -> IdentityRegions {
-    let absent = RegionPlanner::absent;
     let (id_is_string, id_data, id_nulls, id_str_data, id_str_offsets) = extract_id_column(store);
-    let mut regions = IdentityRegions {
-        id_is_string,
-        id_data: absent(),
-        id_nulls: absent(),
-        id_str_data: absent(),
-        id_str_offsets: absent(),
-        title_data: absent(),
-        title_offsets: absent(),
-        title_nulls: absent(),
-    };
+    let mut regions = IdentityRegions::absent(id_is_string);
     if id_is_string {
         regions.id_str_data = planner.push(id_str_data);
         regions.id_str_offsets = planner.push(id_str_offsets);
@@ -302,13 +332,13 @@ fn plan_identity<'a>(store: &'a ColumnStore, planner: &mut RegionPlanner<'a>) ->
 }
 
 /// Region layout of a store's per-schema-slot property columns.
-fn plan_properties<'a>(
-    store: &'a ColumnStore,
-    planner: &mut RegionPlanner<'a>,
-) -> (Vec<ColMapEntry>, Vec<FixedColMeta>, Vec<StrColMeta>) {
-    let mut col_map: Vec<ColMapEntry> = Vec::new();
-    let mut fixed_cols: Vec<FixedColMeta> = Vec::new();
-    let mut str_cols: Vec<StrColMeta> = Vec::new();
+fn plan_properties<'a>(store: &'a ColumnStore, planner: &mut RegionPlanner<'a>) -> PropertyRegions {
+    let mut columns = PropertyRegions::default();
+    let PropertyRegions {
+        col_map,
+        fixed_cols,
+        str_cols,
+    } = &mut columns;
 
     for (slot, ik) in store.schema().iter() {
         let Some(col) = store.column(slot as usize) else {
@@ -350,7 +380,7 @@ fn plan_properties<'a>(
             idx,
         });
     }
-    (col_map, fixed_cols, str_cols)
+    columns
 }
 
 /// Plan a pure mmap-backed store's regions as borrowed slices of its own
@@ -366,26 +396,20 @@ fn plan_mmap_store<'a>(type_name: &str, ms: &'a MmapColumnStore) -> PlannedType<
         ))
     };
     let empty = Region::EMPTY;
-    let (id_data, id_nulls, id_str_data, id_str_offsets) = if ms.id_is_string {
+    let mut identity = IdentityRegions::absent(ms.id_is_string);
+    if ms.id_is_string {
         let sc = ms.id_str.as_ref();
-        let data = copy(sc.map_or(&empty, |c| &c.data));
-        let offsets = copy(sc.map_or(&empty, |c| &c.offsets));
-        let nulls = copy(sc.map_or(&empty, |c| &c.nulls));
-        (RegionPlanner::absent(), nulls, data, offsets)
+        identity.id_str_data = copy(sc.map_or(&empty, |c| &c.data));
+        identity.id_str_offsets = copy(sc.map_or(&empty, |c| &c.offsets));
+        identity.id_nulls = copy(sc.map_or(&empty, |c| &c.nulls));
     } else {
         let fc = ms.id_fixed.as_ref();
-        let data = copy(fc.map_or(&empty, |c| &c.data));
-        let nulls = copy(fc.map_or(&empty, |c| &c.nulls));
-        (
-            data,
-            nulls,
-            RegionPlanner::absent(),
-            RegionPlanner::absent(),
-        )
-    };
-    let title_data = copy(&ms.title.data);
-    let title_offsets = copy(&ms.title.offsets);
-    let title_nulls = copy(&ms.title.nulls);
+        identity.id_data = copy(fc.map_or(&empty, |c| &c.data));
+        identity.id_nulls = copy(fc.map_or(&empty, |c| &c.nulls));
+    }
+    identity.title_data = copy(&ms.title.data);
+    identity.title_offsets = copy(&ms.title.offsets);
+    identity.title_nulls = copy(&ms.title.nulls);
     let fixed_cols: Vec<FixedColMeta> = ms
         .fixed_cols
         .iter()
@@ -404,8 +428,9 @@ fn plan_mmap_store<'a>(type_name: &str, ms: &'a MmapColumnStore) -> PlannedType<
             nulls: copy(&sc.nulls),
         })
         .collect();
-    let overflow_offsets = copy(&ms.overflow_offsets);
-    let overflow_data = copy(&ms.overflow_data);
+    let overflow = ms
+        .has_overflow
+        .then(|| (copy(&ms.overflow_offsets), copy(&ms.overflow_data)));
     let mut col_map: Vec<ColMapEntry> = ms
         .col_map
         .iter()
@@ -423,24 +448,12 @@ fn plan_mmap_store<'a>(type_name: &str, ms: &'a MmapColumnStore) -> PlannedType<
         })
         .collect();
     col_map.sort_by_key(|entry| entry.key_u64);
-    let meta = ColumnTypeMeta {
-        type_name: type_name.to_string(),
-        row_count: ms.row_count,
-        id_is_string: ms.id_is_string,
-        id_data,
-        id_nulls,
-        id_str_data,
-        id_str_offsets,
-        title_data,
-        title_offsets,
-        title_nulls,
+    let columns = PropertyRegions {
         col_map,
         fixed_cols,
         str_cols,
-        overflow_offsets,
-        overflow_data,
-        has_overflow: ms.has_overflow,
     };
+    let meta = identity.into_meta(type_name, ms.row_count, columns, overflow);
     planner.finish(meta)
 }
 

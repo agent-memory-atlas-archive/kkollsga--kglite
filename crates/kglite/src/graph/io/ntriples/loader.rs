@@ -306,12 +306,12 @@ fn finalize_disk_graph(
             std::path::PathBuf::new()
         };
         let mmap_path = data_dir.join("columns.bin");
-        let meta_path = data_dir.join("columns_meta.json");
-        if mmap_path.exists() && meta_path.exists() {
+        let meta_path = crate::graph::io::columns_meta::locate(&data_dir);
+        if let (true, Some(meta_path)) = (mmap_path.exists(), meta_path) {
             let reload_start = Instant::now();
             let reload_result: Result<(), String> = (|| {
                 let columns_meta = crate::graph::io::columns_meta::read(&meta_path)
-                    .map_err(|e| format!("read columns_meta.json: {}", e))?
+                    .map_err(|e| format!("read {}: {}", meta_path.display(), e))?
                     .types;
 
                 let file = std::fs::File::open(&mmap_path)

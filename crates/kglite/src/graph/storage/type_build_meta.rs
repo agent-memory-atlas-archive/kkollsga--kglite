@@ -45,6 +45,20 @@ impl ColType {
         }
     }
 
+    /// The column type a [`Self::type_tag`] names.
+    pub fn from_type_tag(tag: &str) -> Option<Self> {
+        Some(match tag {
+            "int64" => ColType::Int64,
+            "float64" => ColType::Float64,
+            "uniqueid" => ColType::UniqueId,
+            "bool" => ColType::Bool,
+            "date" => ColType::Date,
+            "timestamp" => ColType::Timestamp,
+            "string" => ColType::Str,
+            _ => return None,
+        })
+    }
+
     /// Type tag string for TypedColumn compatibility.
     pub fn type_tag(&self) -> &'static str {
         match self {

@@ -385,19 +385,13 @@ impl StatementCheckpoint {
     /// Open a checkpoint for a statement that may fail after its first write.
     #[cfg(test)]
     pub(crate) fn open(graph: &mut DirGraph) -> Self {
-        Self::open_with_cdc(graph, false)
+        Self::open_for_statement(graph, false, false)
     }
 
-    /// Open a checkpoint, additionally snapshotting the CDC ring when this
-    /// statement can reconfigure or disable it.
-    #[cfg(test)]
-    pub(crate) fn open_with_cdc(graph: &mut DirGraph, capture_cdc: bool) -> Self {
-        Self::open_for_statement(graph, capture_cdc, false)
-    }
-
-    /// [`Self::open_with_cdc`], taking the disk cell-journal route when the
-    /// caller proved the statement writes column stores only through the
-    /// journaled channels.
+    /// Open a checkpoint for a statement, additionally snapshotting the CDC
+    /// ring when it can reconfigure or disable it (`capture_cdc`), and taking
+    /// the disk cell-journal route when the caller proved the statement writes
+    /// column stores only through the journaled channels.
     pub(crate) fn open_for_statement(
         graph: &mut DirGraph,
         capture_cdc: bool,
