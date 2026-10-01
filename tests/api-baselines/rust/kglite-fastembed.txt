@@ -4166,6 +4166,7 @@ pub fn kglite::api::DirGraph::has_type_connectivity_cache(&self) -> bool
 pub fn kglite::api::DirGraph::property_ndv(&self, node_type: &str, property: &str) -> core::option::Option<usize>
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::independent_copy(&self) -> Self
+pub fn kglite::api::DirGraph::try_independent_copy(&self) -> core::io::error::Result<Self>
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::indexes_deferred(&self) -> bool
 pub fn kglite::api::DirGraph::materialize_indexes(&mut self) -> bool
