@@ -19,6 +19,9 @@ KG = "https://kglite.readthedocs.io/ns/kg#"
 XSD = "http://www.w3.org/2001/XMLSchema#"
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
+WKT = "http://www.opengis.net/ont/geosparql#wktLiteral"
+SKILLS = json.dumps(["sql", "rust"])
+PROFILE = json.dumps({"level": 3})
 
 DECLARATIONS = (
     "CALL db.temporal.declarations() "
@@ -154,9 +157,9 @@ def kg_lines():
         f"{iri('node/Person/7')} <{LABEL}> {lit('Ada')} .",
         f"{iri('node/Person/7')} {iri('prop/hired')} {lit('2019-03-01', XSD + 'date')} .",
         f"{iri('node/Person/7')} {iri('prop/left')} {lit('2023-01-01', XSD + 'date')} .",
-        f"{iri('node/Person/7')} {iri('prop/skills')} {lit('["sql", "rust"]', KG + 'json')} .",
-        f"{iri('node/Person/7')} {iri('prop/profile')} {lit('{"level": 3}', KG + 'json')} .",
-        f"{iri('node/Person/7')} {iri('prop/office')} {lit('POINT(10.7 59.9)', 'http://www.opengis.net/ont/geosparql#wktLiteral')} .",
+        f"{iri('node/Person/7')} {iri('prop/skills')} {lit(SKILLS, KG + 'json')} .",
+        f"{iri('node/Person/7')} {iri('prop/profile')} {lit(PROFILE, KG + 'json')} .",
+        f"{iri('node/Person/7')} {iri('prop/office')} {lit('POINT(10.7 59.9)', WKT)} .",
         f"{iri('node/Person/7')} {iri('prop/tenure')} {lit('P1Y6M2DT3H', XSD + 'duration')} .",
         f"{iri('node/Person/7')} {iri('prop/seen')} {lit('2024-05-06T07:08:09', XSD + 'dateTime')} .",
         f"{iri('node/Person/8')} <{RDF}type> {iri('type/Person')} .",
