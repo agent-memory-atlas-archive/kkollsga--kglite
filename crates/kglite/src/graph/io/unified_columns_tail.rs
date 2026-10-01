@@ -354,12 +354,93 @@ fn merged_fixed(
 /// `(data, offsets, nulls)` in the file's end-offset form for `rows` rows. The
 /// whole column is rebuilt (an overlaid string may differ in length from the
 /// one it replaces), which costs that column's bytes and nothing else.
+///
+/// Rows the overlay leaves alone are copied a run at a time (one copy of the
+/// base's bytes, its end offsets shifted by what the replacements before them
+/// added), so a statement that changed a few rows costs a few row-sized
+/// operations plus a pass over the offsets, not a per-row decode. A base whose
+/// offsets are not what the file layout guarantees takes [`merged_str_rows`].
 fn merged_str<'a>(
     base: Option<BaseRegions<'a>>,
     overlay: &TypedColumn,
     rows: usize,
 ) -> BaseStr<'a> {
     let (base_data, base_offsets, base_nulls) = base.unwrap_or((None, None, None));
+    let data_len = base_data.map_or(0, <[u8]>::len);
+    let ends: &[u8] = base_offsets.unwrap_or(&[]);
+    let well_formed = base_offsets.is_none_or(|bytes| bytes.len() == rows * 8)
+        && base_nulls.is_none_or(|bytes| bytes.len() == rows)
+        && (base_offsets.is_some() || data_len == 0)
+        && ends
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .try_fold(0u64, |last, chunk| {
+                let end = u64::from_le_bytes(*chunk);
+                (end >= last && end as usize <= data_len).then_some(end)
+            })
+            .is_some();
+    if !well_formed {
+        return merged_str_rows(base_data, base_offsets, base_nulls, overlay, rows);
+    }
+    let end_of = |row: usize| -> u64 {
+        ends.get(row * 8..row * 8 + 8).map_or(0, |bytes| {
+            u64::from_le_bytes(bytes.try_into().expect("8 bytes"))
+        })
+    };
+    let mut data: Vec<u8> = Vec::with_capacity(data_len);
+    let mut offsets: Vec<u8> = Vec::with_capacity(rows * 8);
+    let mut nulls = vec![1u8; rows];
+    if let Some(bytes) = base_nulls {
+        nulls.copy_from_slice(bytes);
+    }
+    let mut row = 0;
+    while row < rows {
+        let overlaid = (row..rows).find(|&r| overlay.is_present(r as u32));
+        let run_end = overlaid.unwrap_or(rows);
+        if run_end > row {
+            // Rows `row..run_end` are the base's: its bytes in one copy, its end
+            // offsets moved by the difference between where the run now starts
+            // in `data` and where it started in the base.
+            let from = if row == 0 { 0 } else { end_of(row - 1) } as usize;
+            let to = end_of(run_end - 1) as usize;
+            if let Some(bytes) = base_data {
+                data.extend_from_slice(&bytes[from..to]);
+            }
+            let start_now = data.len() - (to - from);
+            for r in row..run_end {
+                let moved = end_of(r) as usize - from + start_now;
+                offsets.extend_from_slice(&(moved as u64).to_le_bytes());
+            }
+        }
+        if let Some(at) = overlaid {
+            match overlay.get_str(at as u32) {
+                Some(value) => {
+                    data.extend_from_slice(value.as_bytes());
+                    nulls[at] = 0;
+                }
+                None => nulls[at] = 1,
+            }
+            offsets.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        }
+        row = overlaid.map_or(rows, |at| at + 1);
+    }
+    (
+        Some(Cow::Owned(data)),
+        Some(Cow::Owned(offsets)),
+        Some(Cow::Owned(nulls)),
+    )
+}
+
+/// [`merged_str`] one row at a time, bounds-checked throughout: a malformed
+/// base reads as empty rows rather than a panic, as every string read does.
+fn merged_str_rows<'a>(
+    base_data: Option<&'a [u8]>,
+    base_offsets: Option<&'a [u8]>,
+    base_nulls: Option<&'a [u8]>,
+    overlay: &TypedColumn,
+    rows: usize,
+) -> BaseStr<'a> {
     let end_of = |row: usize| -> Option<usize> {
         let bytes = base_offsets?.get(row * 8..row * 8 + 8)?;
         Some(u64::from_le_bytes(bytes.try_into().ok()?) as usize)
@@ -508,4 +589,106 @@ fn plan_identity<'a>(
         }
     }
     Some(identity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::datatypes::values::Value;
+
+    /// A base string column in the file's layout: `row_count` cumulative end
+    /// offsets, null flags (0 = present) and the concatenated bytes. Rows with
+    /// `i % 7 == 0` are null; the rest are `"base-<i>"` padded to varying length.
+    fn base_column(rows: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let (mut data, mut offsets, mut nulls) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..rows {
+            if i % 7 == 0 {
+                nulls.push(1);
+            } else {
+                nulls.push(0);
+                data.extend_from_slice(format!("base-{i}{}", "x".repeat(i % 5)).as_bytes());
+            }
+            offsets.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        }
+        (data, offsets, nulls)
+    }
+
+    /// An overlay string column: `Some(text)` where a `SET` wrote, null elsewhere.
+    fn overlay_column(cells: &[Option<&str>]) -> TypedColumn {
+        let mut column = TypedColumn::from_type_str("string");
+        for cell in cells {
+            match cell {
+                Some(text) => column.push(&Value::String((*text).to_string())).unwrap(),
+                None => column.push_null(),
+            }
+        }
+        column
+    }
+
+    fn bytes(parts: BaseStr<'_>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let take = |part: Option<Cow<'_, [u8]>>| part.map(Cow::into_owned).unwrap_or_default();
+        (take(parts.0), take(parts.1), take(parts.2))
+    }
+
+    /// The run-at-a-time rebuild and the per-row one agree for overlays that
+    /// replace nothing, a few rows, the first and last rows, and every row, with
+    /// longer, shorter and empty cells, and a cell over a null base row.
+    #[test]
+    fn a_merged_string_column_is_the_same_whether_rebuilt_by_runs_or_by_rows() {
+        let rows = 300;
+        let (data, offsets, nulls) = base_column(rows);
+        let regions = || (Some(&data[..]), Some(&offsets[..]), Some(&nulls[..]));
+        let overlays: Vec<Vec<Option<&str>>> = {
+            let nothing = vec![None; rows];
+            let mut few = nothing.clone();
+            few[3] = Some("replacement much longer than the base cell");
+            few[14] = Some("");
+            few[100] = Some("s");
+            few[7] = Some("over a null base row");
+            let mut edges = nothing.clone();
+            edges[0] = Some("first");
+            edges[rows - 1] = Some("last");
+            let all: Vec<Option<&str>> = (0..rows).map(|_| Some("everything")).collect();
+            vec![nothing, few, edges, all]
+        };
+        for cells in &overlays {
+            let overlay = overlay_column(cells);
+            let by_runs = bytes(merged_str(Some(regions()), &overlay, rows));
+            let by_rows = bytes(merged_str_rows(
+                Some(&data),
+                Some(&offsets),
+                Some(&nulls),
+                &overlay,
+                rows,
+            ));
+            assert_eq!(by_runs.0, by_rows.0, "data");
+            assert_eq!(by_runs.1, by_rows.1, "offsets");
+            assert_eq!(by_runs.2, by_rows.2, "nulls");
+        }
+        // No base at all: a column the overlay creates.
+        let overlay = overlay_column(&[None, Some("a"), None, Some("bc")]);
+        let created = bytes(merged_str(None, &overlay, 4));
+        assert_eq!(created.0, b"abc");
+        assert_eq!(created.2, vec![1, 0, 1, 0]);
+        let expected_ends: Vec<u8> = [0u64, 1, 1, 3]
+            .iter()
+            .flat_map(|end| end.to_le_bytes())
+            .collect();
+        assert_eq!(created.1, expected_ends);
+    }
+
+    #[test]
+    fn a_base_whose_offsets_are_not_the_layouts_takes_the_bounds_checked_path() {
+        let rows = 10;
+        let (data, mut offsets, nulls) = base_column(rows);
+        // An end offset past the bytes the base holds.
+        offsets[8..16].copy_from_slice(&(data.len() as u64 + 99).to_le_bytes());
+        let overlay = overlay_column(&vec![None; rows]);
+        let merged = bytes(merged_str(
+            Some((Some(&data), Some(&offsets), Some(&nulls))),
+            &overlay,
+            rows,
+        ));
+        assert_eq!(merged.1.len(), rows * 8, "one end offset per row, no panic");
+    }
 }
