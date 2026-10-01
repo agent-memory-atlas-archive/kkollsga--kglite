@@ -303,6 +303,12 @@ before upgrading.
   only; the title and id are read only for a property the type has no column for
   (an alias of its title or id).
 
+- A statement that failed after a `SET` introduced a new property to rows
+  appended to a reopened disk type rolled the values back but kept the property's
+  column, so the next `save()` wrote an empty column for it into the type's file
+  and `copy()` listed it. The rollback now removes the column too. Query results
+  were never affected: a column with no value reads as no value.
+
 ### Security
 
 - A node type or property named like a path no longer chooses where a disk

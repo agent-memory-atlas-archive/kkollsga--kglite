@@ -94,6 +94,49 @@ impl ColumnStore {
                 .is_some_and(|tail| tail.has_property_column(key))
     }
 
+    /// The schema slot of `key` in the part that holds `row_id`: the tail's own
+    /// schema for a row past the base, the store's for any other. A write to a
+    /// tail row grows the tail's schema, whatever the base part's schema holds.
+    #[inline]
+    pub(crate) fn slot_for_row(&self, row_id: u32, key: InternedKey) -> Option<u16> {
+        match self.tail_for(row_id) {
+            Some((tail, _)) => tail.schema.slot(key),
+            None => self.schema.slot(key),
+        }
+    }
+
+    /// The pre-growth schema of the part that holds `row_id` — the tail's for a
+    /// row past the base — with its column count and whether it is the tail's:
+    /// what [`Self::restore_schema_of`] needs to undo a growth of that part.
+    pub(crate) fn schema_pre_image_for_row(&self, row_id: u32) -> (Arc<TypeSchema>, usize, bool) {
+        match self.tail_for(row_id) {
+            Some((tail, _)) => (tail.schema_arc(), tail.column_count(), true),
+            None => (self.schema_arc(), self.column_count(), false),
+        }
+    }
+
+    /// The tail's schema and column count, when the store has a tail.
+    pub(crate) fn tail_schema_pre_image(&self) -> Option<(Arc<TypeSchema>, usize)> {
+        let tail = self.tail.as_deref()?;
+        Some((tail.schema_arc(), tail.column_count()))
+    }
+
+    /// [`Self::restore_schema`] on the tail (`in_tail`) or on the store's own
+    /// part. A no-op for a tail that is gone, which a rollback that removed its
+    /// only rows has already dropped.
+    pub(crate) fn restore_schema_of(
+        &mut self,
+        in_tail: bool,
+        schema: Arc<TypeSchema>,
+        column_count: usize,
+    ) {
+        if !in_tail {
+            self.restore_schema(schema, column_count);
+        } else if let Some(tail) = self.tail.as_mut() {
+            Arc::make_mut(tail).restore_schema(schema, column_count);
+        }
+    }
+
     /// Rows in the tail.
     #[inline]
     pub(crate) fn tail_rows(&self) -> u32 {

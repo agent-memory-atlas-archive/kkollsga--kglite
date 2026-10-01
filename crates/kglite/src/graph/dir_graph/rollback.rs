@@ -773,13 +773,14 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             node_type,
             prior_schema,
             prior_column_count,
+            in_tail,
         } => {
             // Replayed *after* the cell entries of the same write (captured
             // later, so reverse replay runs them first): each new column is
             // restored to its pre-statement content and only then dropped,
             // which keeps the two entries independent.
             edit_column_master(graph, node_type, fallout, |store| {
-                store.restore_schema(prior_schema, prior_column_count);
+                store.restore_schema_of(in_tail, prior_schema, prior_column_count);
             });
         }
         UndoEntry::ColumnarRowsAppended {
@@ -787,13 +788,14 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             prior_row_count,
             prior_schema,
             prior_column_count,
+            prior_tail,
             store_was_new,
         } => undo_columnar_rows_appended(
             graph,
             node_type,
             prior_row_count,
-            prior_schema,
-            prior_column_count,
+            (prior_schema, prior_column_count),
+            prior_tail,
             store_was_new,
             fallout,
         ),
@@ -1028,8 +1030,8 @@ fn undo_columnar_rows_appended(
     graph: &mut DirGraph,
     node_type: InternedKey,
     prior_row_count: u32,
-    prior_schema: std::sync::Arc<crate::graph::schema::TypeSchema>,
-    prior_column_count: usize,
+    prior: (std::sync::Arc<crate::graph::schema::TypeSchema>, usize),
+    prior_tail: Option<(std::sync::Arc<crate::graph::schema::TypeSchema>, usize)>,
     store_was_new: bool,
     fallout: &mut ReplayFallout,
 ) {
@@ -1041,7 +1043,12 @@ fn undo_columnar_rows_appended(
     } else if let Some(store) = GraphWrite::column_store_mut(&mut graph.graph, node_type) {
         let store = std::sync::Arc::make_mut(store);
         store.truncate_rows(prior_row_count);
-        store.restore_schema(prior_schema, prior_column_count);
+        store.restore_schema(prior.0, prior.1);
+        // The rows an mmap-backed store appended were the tail's, and their
+        // unseen keys grew its schema; a tail the truncation emptied is gone.
+        if let Some((schema, column_count)) = prior_tail {
+            store.restore_schema_of(true, schema, column_count);
+        }
     }
     columnar_type_touched(fallout, type_name);
 }

@@ -406,6 +406,9 @@ pub enum UndoEntry {
         node_type: InternedKey,
         prior_schema: Arc<TypeSchema>,
         prior_column_count: usize,
+        /// The schema is the tail's: the written row is one appended to an
+        /// mmap-backed store, and the growth was the tail's own.
+        in_tail: bool,
     },
     /// A statement appended rows to a type's master store — one per node it
     /// created, now that construction is columnar. Undo truncates the store
@@ -428,6 +431,9 @@ pub enum UndoEntry {
         prior_row_count: u32,
         prior_schema: Arc<TypeSchema>,
         prior_column_count: usize,
+        /// The tail's schema and column count when the store had a tail, which
+        /// the appended rows may have grown beside truncating it.
+        prior_tail: Option<(Arc<TypeSchema>, usize)>,
         /// The statement introduced the type's store itself. Undo drops it
         /// rather than leaving an empty one behind — the same distinction
         /// [`BucketAppended`](Self::BucketAppended) draws with
@@ -498,7 +504,7 @@ pub(crate) struct ColumnarPreImages {
     /// introduces at least one property the schema does not have yet. One entry
     /// covers any number of new keys in the same write: replay truncates back
     /// to `column_count` in a single step.
-    grown: Option<(Arc<TypeSchema>, usize)>,
+    grown: Option<(Arc<TypeSchema>, usize, bool)>,
 }
 
 impl ColumnarPreImages {
@@ -507,7 +513,7 @@ impl ColumnarPreImages {
         let mut grows = false;
         match write {
             ColumnarWrite::Cell(key) => {
-                grows = store.slot(key).is_none();
+                grows = store.slot_for_row(row_id, key).is_none();
                 cells.push((key, store.get(row_id, key)));
             }
             ColumnarWrite::ReplaceRow(keys) => {
@@ -517,25 +523,26 @@ impl ColumnarPreImages {
                     cells.push((key, Some(value)));
                 }
                 for &key in keys {
-                    grows |= store.slot(key).is_none();
+                    grows |= store.slot_for_row(row_id, key).is_none();
                     cells.push((key, store.get(row_id, key)));
                 }
             }
         }
         Self {
             cells,
-            grown: grows.then(|| (store.schema_arc(), store.column_count())),
+            grown: grows.then(|| store.schema_pre_image_for_row(row_id)),
         }
     }
 
     /// Push the captured pre-images, schema entry first so reverse replay runs
     /// it last.
     pub(crate) fn record(self, journal: &mut UndoJournal, node_type: InternedKey, row_id: u32) {
-        if let Some((prior_schema, prior_column_count)) = self.grown {
+        if let Some((prior_schema, prior_column_count, in_tail)) = self.grown {
             journal.entries.push(UndoEntry::ColumnarSchemaGrown {
                 node_type,
                 prior_schema,
                 prior_column_count,
+                in_tail,
             });
         }
         for (key, prior) in self.cells {
@@ -560,6 +567,7 @@ pub(crate) struct ColumnarAppendPreImage {
     row_count: u32,
     schema: Arc<TypeSchema>,
     column_count: usize,
+    tail: Option<(Arc<TypeSchema>, usize)>,
 }
 
 impl ColumnarAppendPreImage {
@@ -569,6 +577,7 @@ impl ColumnarAppendPreImage {
             row_count: store.row_count(),
             schema: store.schema_arc(),
             column_count: store.column_count(),
+            tail: store.tail_schema_pre_image(),
         }
     }
 
@@ -589,6 +598,7 @@ impl ColumnarAppendPreImage {
             prior_row_count: self.row_count,
             prior_schema: self.schema,
             prior_column_count: self.column_count,
+            prior_tail: self.tail,
             store_was_new,
         });
     }
@@ -790,11 +800,14 @@ impl UndoJournal {
         row_id: u32,
         key: InternedKey,
     ) {
-        if store.slot(key).is_none() {
+        if store.slot_for_row(row_id, key).is_none() {
+            let (prior_schema, prior_column_count, in_tail) =
+                store.schema_pre_image_for_row(row_id);
             self.entries.push(UndoEntry::ColumnarSchemaGrown {
                 node_type,
-                prior_schema: store.schema_arc(),
-                prior_column_count: store.column_count(),
+                prior_schema,
+                prior_column_count,
+                in_tail,
             });
         }
         #[cfg(test)]

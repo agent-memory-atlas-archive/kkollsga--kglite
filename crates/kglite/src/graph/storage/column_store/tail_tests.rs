@@ -695,3 +695,104 @@ fn a_type_change_in_the_tail_is_logged_and_restored() {
         "the tail's column is typed again"
     );
 }
+
+/// What the replay of `journal` does to `store`, for the entries a columnar
+/// write and a columnar append produce.
+fn replay(journal: crate::graph::storage::undo::UndoJournal, store: &mut ColumnStore) {
+    use crate::graph::storage::undo::UndoEntry;
+    for entry in journal.into_replay_order() {
+        match entry {
+            UndoEntry::ColumnarCell {
+                row_id, key, prior, ..
+            } => {
+                store.set(row_id, key, &prior.unwrap_or(Value::Null), None);
+            }
+            UndoEntry::ColumnarSchemaGrown {
+                prior_schema,
+                prior_column_count,
+                in_tail,
+                ..
+            } => store.restore_schema_of(in_tail, prior_schema, prior_column_count),
+            UndoEntry::ColumnarRowsAppended {
+                prior_row_count,
+                prior_schema,
+                prior_column_count,
+                prior_tail,
+                ..
+            } => {
+                store.truncate_rows(prior_row_count);
+                store.restore_schema(prior_schema, prior_column_count);
+                if let Some((schema, count)) = prior_tail {
+                    store.restore_schema_of(true, schema, count);
+                }
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn undoing_a_write_that_grew_the_tail_schema_drops_the_tail_column() {
+    use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
+    let mut fixture = mapped_store(0..BASE);
+    let store = &mut fixture.store;
+    appended(store);
+    let brand_new = key("brand_new");
+    let node_type = key("Employee");
+    let tail_row = BASE as u32 + 3;
+
+    // A key the overlay already holds is still new to the tail's own schema.
+    let mut journal = UndoJournal::new();
+    for new_key in [brand_new, key("dept_overlay")] {
+        if new_key != brand_new {
+            assert!(store.set(0, new_key, &Value::Int64(1), None));
+        }
+        ColumnarPreImages::capture(store, tail_row, ColumnarWrite::Cell(new_key)).record(
+            &mut journal,
+            node_type,
+            tail_row,
+        );
+        assert!(store.set(tail_row, new_key, &Value::Int64(7), None));
+        assert!(store.has_property_column(new_key));
+    }
+    replay(journal, store);
+
+    for new_key in [brand_new, key("dept_overlay")] {
+        assert_eq!(store.get(tail_row, new_key), None);
+        assert!(
+            !store.tail.as_deref().unwrap().has_property_column(new_key),
+            "the tail's schema is back to what it was before the statement"
+        );
+    }
+    // The tail's own columns are untouched.
+    assert_eq!(
+        store.get(tail_row, key("level")),
+        employee(tail_row.into())
+            .2
+            .into_iter()
+            .find_map(|(k, v)| (k == key("level")).then_some(v))
+    );
+}
+
+#[test]
+fn undoing_an_append_that_grew_the_tail_schema_drops_the_tail_column() {
+    use crate::graph::storage::undo::{ColumnarAppendPreImage, UndoJournal};
+    let mut fixture = mapped_store(0..BASE);
+    let store = &mut fixture.store;
+    appended(store);
+    let mut journal = UndoJournal::new();
+    ColumnarAppendPreImage::capture(store).record(&mut journal, key("Employee"), false);
+    let (id, title, _) = employee(BASE + APPENDED);
+    store.push_id(&id);
+    store.push_title(&title);
+    store.push_row(&[(key("brand_new"), Value::Int64(1))]);
+    assert!(store.has_property_column(key("brand_new")));
+
+    replay(journal, store);
+
+    assert_eq!(store.row_count(), (BASE + APPENDED) as u32);
+    assert!(
+        !store.has_property_column(key("brand_new")),
+        "the rows are gone and so is the column they introduced"
+    );
+}

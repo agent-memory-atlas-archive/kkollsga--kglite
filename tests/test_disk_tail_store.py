@@ -19,6 +19,7 @@ Run: pytest tests/test_disk_tail_store.py
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import warnings
 
@@ -358,3 +359,40 @@ def test_a_property_the_file_lacks_survives_a_save_when_set_and_append_type_it_d
         del graph
         reloaded = kglite.load(path)
     assert rows(reloaded, query) == expected
+
+
+def _saved_columns(path: str) -> list[str]:
+    """The property columns the published type file lists for ``TYPE``, by key."""
+    generation = (Path(path) / "CURRENT").read_text(encoding="utf-8").strip()
+    meta_path = Path(path) / "generations" / generation / "seg_000" / "columns_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    (entry,) = [t for t in meta["types"] if t["type_name"] == TYPE]
+    return sorted(str(column["key_u64"]) for column in entry["col_map"])
+
+
+def test_a_failed_set_of_a_new_property_on_tail_rows_leaves_no_column_behind(tmp_path):
+    """The rollback of a ``SET`` that introduced a property to rows of the tail
+    removes the tail's column too: reads cannot tell (a null column reads as no
+    value), but the next save would list the column in the type file."""
+    failing = (
+        f"UNWIND range(0, 4) AS i MATCH (e:{TYPE} {{id: {FIRST_ID} + 40 + i}}) "
+        f"SET e.brand_new = 1, e.salary = CASE WHEN i = 3 THEN {BOOM} ELSE 2.5 END"
+    )
+    saved = {}
+    for name in ("control", "rolled_back"):
+        path = str(tmp_path / name)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            graph = kglite.KnowledgeGraph(storage="disk", path=path)
+            graph.add_nodes(staff(0, 40), TYPE, "id", "name")
+            graph.save(path)
+            del graph
+            graph = kglite.load(path)
+            graph.add_nodes(staff(40, 5), TYPE, "id", "name")
+            if name == "rolled_back":
+                with pytest.raises(kglite.CypherExecutionError, match="calendar months exceed"):
+                    graph.cypher(failing, timeout_ms=0)
+            graph.save(path)
+        saved[name] = _saved_columns(path)
+    assert saved["control"], "premise: the type file lists its property columns"
+    assert saved["rolled_back"] == saved["control"]
