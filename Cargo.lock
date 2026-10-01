@@ -2056,7 +2056,7 @@ dependencies = [
  "clap",
  "csv",
  "ctrlc",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "kglite",
  "mcp-methods",
  "rustyline",
