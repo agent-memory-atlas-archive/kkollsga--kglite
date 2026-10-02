@@ -195,7 +195,7 @@ def gen_op(m: Model):
         "merge_new", "create_edge", "delete_edge", "add_nodes", "tx_rollback", "tx_commit",
         "set_title", "set_vt", "unwind_set",
     ]
-    weights = [6, 3, 4, 3, 3, 4, 2, 2, 2, 3, 1, 3, 1, 3, 3, 2, 4, 2, 3, 3, 2, 2, 2, 2]
+    weights = [6, 3, 6, 6, 3, 4, 4, 2, 2, 4, 1, 4, 1, 4, 3, 2, 4, 2, 3, 3, 2, 2, 2, 2]
     kind = rng.choices(choices, weights)[0]
     t = rng.choice(types) if types else "Person"
     i = m.pick(t)
@@ -418,9 +418,9 @@ def generate(seed, steps):
     m.saved_once = True
     while len(ops) < steps:
         r = rng.random()
-        if r < 0.07:
+        if r < 0.12:
             ops.append({"k": "reopen"})
-        elif r < 0.10:
+        elif r < 0.20:
             ops.append({"k": "save"})
             if rng.random() < 0.5:
                 ops.append({"k": "save"})
@@ -432,7 +432,7 @@ def generate(seed, steps):
 
 
 @pytest.mark.parity
-@pytest.mark.parametrize("seed", [1, 2])
+@pytest.mark.parametrize("seed", [2, 3, 12])
 def test_disk_graph_tracks_memory_across_save_and_reopen(tmp_path, seed):
     ops = generate(seed, 100)
     index, detail = run_ops(ops, str(tmp_path))
