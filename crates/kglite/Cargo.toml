@@ -89,12 +89,10 @@ petgraph = { version = "0.8.3", features = ["serde-1"] }
 # through petgraph (which does not re-export it); default features off to
 # match petgraph's own requirement, so feature unification does not move.
 fixedbitset = { version = "0.5.7", default-features = false }
-# 6.0 carries both features selected below; the 5.x-era hazard that made
-# the floor `5.9` (5.0.x lacks `ort-download-binaries-native-tls`) does not
-# recur inside 6.0.x, and 6.0.0 was compiled against this adapter to
-# confirm the floor is reachable. fastembed 6 replaced its `anyhow`-based
-# error type with a concrete `fastembed::Error`; the adapter stringifies
-# with Display, so the switch is source-compatible here.
+# 7.1 carries both features selected below. fastembed 6 replaced its
+# `anyhow`-based error type with a concrete `fastembed::Error`; the adapter
+# stringifies with Display, so that switch is source-compatible. 7 renames
+# `InitOptions` to `TextInitOptions`, which the adapter uses.
 fastembed = { version = "7.1", optional = true, default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 # `float_roundtrip`: list/map cells of the lossless exports hold floats as JSON
