@@ -372,6 +372,12 @@ before upgrading.
   source type now gets its own CSV, and a relationship reaching several target
   types is routed by a `target_type` column; a column-routed union now reads an
   integer-keyed target's ids as integers even when other targets' ids are text.
+- An RDF round trip through `export_rdf` / `load_rdf` is now lossless for three
+  cases it used to degrade: a node property named `uri` (the importer
+  overwrote it with the node IRI; it now adds `uri` only to RDF without a
+  `kg:manifest`), ids of a type that mixes ints and strings (they came back as
+  dense ids), and a duration whose months, days and seconds disagree in sign
+  (it came back as a map; it is now written as a `kg:duration` literal).
 
 ### Security
 

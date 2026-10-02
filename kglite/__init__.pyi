@@ -7055,16 +7055,17 @@ class KnowledgeGraph:
         written statement by statement, so memory is bounded by the batch
         (``KGLITE_EXPORT_BATCH_ROWS``, default 8192).
 
-        Not restored: a duration whose months, days and seconds disagree in sign
-        (written as ``kg:json``, reads back as a map), a language-map property
-        (an ordinary map: written as ``kg:json``), a list or map nested in a
-        list (JSON text), a secondary label carried by only some nodes of a
-        type, an id of a kind other than int or string (the node gets a dense
-        id), a column mixing value kinds, and a property named ``uri`` (the
-        loader overwrites it with the node IRI). Parallel edges without
-        properties are written as repeated identical statements, which a
-        set-semantics RDF consumer collapses. ``load_rdf`` builds an in-memory
-        graph whatever storage the source used.
+        Not restored: a language-map property (an ordinary map: written as
+        ``kg:json``), a list or map nested in a list (JSON text), a secondary
+        label carried by only some nodes of a type, an id of a kind other than
+        int or string (the node gets a dense id), and a property column
+        mixing value kinds. A duration whose months, days and seconds disagree
+        in sign is written as ``kg:duration`` (``months,days,seconds``) and
+        reads back as a duration; the importer adds the ``uri`` property only
+        to RDF without a ``kg:manifest``. Parallel edges without properties
+        are written as repeated identical statements, which a set-semantics
+        RDF consumer collapses. ``load_rdf`` builds an in-memory graph
+        whatever storage the source used.
 
         Args:
             path: Output file.

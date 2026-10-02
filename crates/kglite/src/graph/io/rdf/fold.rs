@@ -8,7 +8,7 @@
 //! coercion never disturbs the Wikidata-tuned path.
 
 use crate::datatypes::values::Value;
-use crate::graph::io::export::kg_vocab::KG_JSON;
+use crate::graph::io::export::kg_vocab::{KG_DURATION, KG_JSON};
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 
 // XSD namespace + the leaf datatypes we special-case.
@@ -27,6 +27,9 @@ pub(super) fn datatype_to_value(value: &str, datatype_iri: &str) -> Value {
     }
     if datatype_iri == KG_JSON {
         return json_to_value(value);
+    }
+    if datatype_iri == KG_DURATION {
+        return kg_duration_to_value(value);
     }
     // xsd:string, rdf:langString, and any unknown datatype → string.
     Value::String(value.to_string())
@@ -89,6 +92,22 @@ fn json_to_value(value: &str) -> Value {
         Ok(json) => crate::param::json_value_to_kglite_value(&json),
         Err(_) => Value::String(value.to_string()),
     }
+}
+
+/// A `kg:duration` literal, `months,days,seconds`; malformed text stays a string.
+fn kg_duration_to_value(value: &str) -> Value {
+    let mut parts = value.split(',');
+    let parsed = (|| {
+        let months = parts.next()?.trim().parse().ok()?;
+        let days = parts.next()?.trim().parse().ok()?;
+        let seconds = parts.next()?.trim().parse().ok()?;
+        parts.next().is_none().then_some(Value::Duration {
+            months,
+            days,
+            seconds,
+        })
+    })();
+    parsed.unwrap_or_else(|| Value::String(value.to_string()))
 }
 
 /// Parse an `xsd:duration` (`-P1Y2M3DT4H5M6S`) to a [`Value::Duration`] of

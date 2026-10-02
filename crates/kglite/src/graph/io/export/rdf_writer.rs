@@ -13,7 +13,7 @@
 //! `xsd:dateTime` (no zone), points `geo:wktLiteral` (`POINT(lon lat)`),
 //! durations `xsd:duration`, lists and maps `kg:json` (plain JSON). A duration
 //! whose months, days and seconds disagree in sign has no `xsd:duration`
-//! spelling and is written as `kg:json`, so it reads back as a map. A
+//! spelling and is written as `kg:duration` (`months,days,seconds`). A
 //! language-map property is an ordinary map and is written as `kg:json`.
 //!
 //! No prefixes are declared: the importer recovers names from the IRI
@@ -37,8 +37,8 @@ use petgraph::graph::NodeIndex;
 
 use super::csv_tree::{batch_rows, plain_json, BatchGuard};
 use super::kg_vocab::{
-    encode_segment, DUPLICATE_MARK, KG_JSON, KG_MANIFEST, META_GRAPH, NODE_PATH, PROP_PATH,
-    REL_PATH, TYPE_PATH,
+    encode_segment, DUPLICATE_MARK, KG_DURATION, KG_JSON, KG_MANIFEST, META_GRAPH, NODE_PATH,
+    PROP_PATH, REL_PATH, TYPE_PATH,
 };
 use super::manifest::{ColumnKind, ExportManifest, Scope};
 use crate::datatypes::values::{raw_string, Value};
@@ -148,6 +148,7 @@ struct Emitter<'a> {
     xsd_duration: NamedNode,
     geo_wkt: NamedNode,
     kg_json: NamedNode,
+    kg_duration: NamedNode,
 }
 
 fn iri(text: String) -> NamedNode {
@@ -171,6 +172,7 @@ impl<'a> Emitter<'a> {
             xsd_duration: named(xsd::DURATION),
             geo_wkt: iri(GEO_WKT.to_string()),
             kg_json: iri(KG_JSON.to_string()),
+            kg_duration: iri(KG_DURATION.to_string()),
         }
     }
 
@@ -271,7 +273,7 @@ impl<'a> Emitter<'a> {
                 seconds,
             } => match duration_lexical(*months, *days, *seconds) {
                 Some(text) => typed(text, &self.xsd_duration),
-                None => typed(plain_json(value).to_string(), &self.kg_json),
+                None => typed(format!("{months},{days},{seconds}"), &self.kg_duration),
             },
             Value::List(_) | Value::Map(_) => typed(plain_json(value).to_string(), &self.kg_json),
             other => Literal::new_simple_literal(raw_string(other)),

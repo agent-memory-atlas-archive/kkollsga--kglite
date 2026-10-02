@@ -50,6 +50,12 @@ pub(super) fn node_identity(
         ColumnKind::Int64 => segment.parse().ok().map(Value::Int64),
         ColumnKind::UniqueId => segment.parse().ok().map(Value::UniqueId),
         ColumnKind::String => Some(Value::String(segment)),
+        // The exporter tags a mixed-kind type's ids `i-` / `s-`.
+        ColumnKind::Mixed => match segment.split_at_checked(2) {
+            Some(("i-", number)) => number.parse().ok().map(Value::Int64),
+            Some(("s-", text)) => Some(Value::String(text.to_string())),
+            _ => None,
+        },
         _ => None,
     });
     let id = restored.unwrap_or(Value::UniqueId(dense));

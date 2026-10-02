@@ -207,3 +207,43 @@ def test_integers_and_negative_durations(tmp_path):
     assert "XMLSchema#integer" in path.read_text(encoding="utf-8")
     query = "MATCH (r:Role) RETURN r.level AS level, r.delta AS delta, r.neg AS neg"
     assert back.cypher(query).to_list() == g.cypher(query).to_list()
+
+
+def test_a_property_named_uri_survives_the_round_trip(tmp_path):
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Person {id: 1, title: 'Ada', uri: 'https://hr.example/people/ada'})")
+    g.cypher("CREATE (:Person {id: 2, title: 'Bo'})")
+    _, back, _ = export_and_load(g, tmp_path)
+    rows = back.cypher("MATCH (p:Person) RETURN p.id AS id, properties(p) AS p ORDER BY id").to_list()
+    assert rows[0]["p"]["uri"] == "https://hr.example/people/ada"
+    assert "uri" not in rows[1]["p"]
+
+
+def test_plain_rdf_still_gets_its_uri_property(tmp_path):
+    path = tmp_path / "plain.nt"
+    path.write_text(
+        '<http://ex.org/a> <http://www.w3.org/2000/01/rdf-schema#label> "A" .\n',
+        encoding="utf-8",
+    )
+    back = kglite.load_rdf(str(path))
+    assert back.cypher("MATCH (n) RETURN n.uri AS u").to_list() == [{"u": "http://ex.org/a"}]
+
+
+def test_mixed_id_kinds_keep_their_ids(tmp_path):
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Badge {id: 1, title: 'int one'})")
+    g.cypher("CREATE (:Badge {id: '1', title: 'string one'})")
+    _, back, _ = export_and_load(g, tmp_path)
+    query = "MATCH (b:Badge) RETURN b.id AS id, b.title AS t ORDER BY t"
+    assert back.cypher(query).to_list() == g.cypher(query).to_list()
+
+
+def test_mixed_sign_durations_stay_durations(tmp_path):
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Role {id: 1, title: 'r', span: duration({months: 1, days: -2})})")
+    _, back, _ = export_and_load(g, tmp_path)
+    # Cypher shows a duration as a map, so compare its string form: a map
+    # (the old kg:json spelling) would print differently.
+    query = "MATCH (r:Role) RETURN r.span AS span, toString(r.span) AS text"
+    assert back.cypher(query).to_list() == g.cypher(query).to_list()
+    assert back.cypher(query).to_list()[0]["text"].startswith("duration(")

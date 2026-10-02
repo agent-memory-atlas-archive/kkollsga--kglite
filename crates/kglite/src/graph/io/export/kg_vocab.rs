@@ -28,6 +28,10 @@ pub const KG_MANIFEST: &str = "https://kglite.readthedocs.io/ns/kg#manifest";
 /// Datatype of a literal holding JSON: a `List` or `Map` value, or the manifest.
 pub const KG_JSON: &str = "https://kglite.readthedocs.io/ns/kg#json";
 
+/// Datatype of a duration whose months, days and seconds disagree in sign
+/// (no `xsd:duration` spelling): the lexical form is `months,days,seconds`.
+pub const KG_DURATION: &str = "https://kglite.readthedocs.io/ns/kg#duration";
+
 /// Path segment, after `<base>`, of the named graph holding the manifest.
 pub const META_GRAPH: &str = "meta";
 

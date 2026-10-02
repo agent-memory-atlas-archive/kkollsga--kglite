@@ -501,7 +501,11 @@ fn materialize(
         };
 
         let mut properties = acc.into_properties();
-        properties.insert("uri".to_string(), Value::String(iri.clone()));
+        // A kglite export carries every property itself, `uri` included, so
+        // the node IRI becomes a property only for third-party RDF.
+        if manifest.is_none() {
+            properties.insert("uri".to_string(), Value::String(iri.clone()));
+        }
         if let Some(types) = types {
             properties.insert("rdf_types".to_string(), types);
         }
