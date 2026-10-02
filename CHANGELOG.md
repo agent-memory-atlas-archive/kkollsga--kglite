@@ -57,6 +57,9 @@ before upgrading.
 
 ### Changed
 
+- The optional `fastembed` Rust backend is built against fastembed 7.1 (was 6.0).
+  Rust consumers declare `anyhow` 1.0.72 and `indexmap` 2.7 as minimum
+  versions (were 1.0.47 and 2.6).
 - `export_csv` is lossless by default: it writes a `manifest.json` beside
   `blueprint.json`, and `from_blueprint` restores valid-time declarations,
   secondary labels, id and title kinds and every property's type; the empty
