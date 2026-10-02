@@ -9,7 +9,7 @@
 
 use crate::datatypes::values::Value;
 use crate::graph::io::export::kg_vocab::{KG_DURATION, KG_JSON};
-use chrono::{DateTime, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime};
 
 // XSD namespace + the leaf datatypes we special-case.
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -182,14 +182,21 @@ fn parse_xsd_duration(value: &str) -> Option<Value> {
 fn parse_xsd_date(value: &str) -> Option<NaiveDate> {
     let base = strip_tz_suffix(value);
     if let Ok(d) = NaiveDate::parse_from_str(base, "%Y-%m-%d") {
-        return Some(d);
+        return representable(d.year()).then_some(d);
     }
     if value.len() >= 10 {
         if let Ok(d) = NaiveDate::parse_from_str(&value[..10], "%Y-%m-%d") {
-            return Some(d);
+            return representable(d.year()).then_some(d);
         }
     }
     None
+}
+
+/// Whether a year is one every reader of the graph can render: Python's
+/// `date` and `datetime` stop at 1..=9999, so a value outside it would load
+/// and then raise when a node's properties are read. Such a literal stays text.
+fn representable(year: i32) -> bool {
+    (1..=9999).contains(&year)
 }
 
 /// Parse an `xsd:dateTime` to a [`Value::Timestamp`]. Tries RFC 3339
@@ -200,11 +207,17 @@ fn parse_xsd_date(value: &str) -> Option<NaiveDate> {
 fn parse_xsd_datetime(value: &str) -> Value {
     // RFC 3339 covers `2020-01-01T12:30:00Z` and offset forms.
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
-        return Value::Timestamp(dt.naive_utc());
+        let utc = dt.naive_utc();
+        // The offset can carry a year-1 or year-9999 instant out of range.
+        if representable(utc.year()) {
+            return Value::Timestamp(utc);
+        }
     }
     let base = strip_tz_suffix(value);
     if let Ok(dt) = NaiveDateTime::parse_from_str(base, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Value::Timestamp(dt);
+        if representable(dt.year()) {
+            return Value::Timestamp(dt);
+        }
     }
     // Degrade to a date if that's all we have.
     if let Some(d) = parse_xsd_date(value) {

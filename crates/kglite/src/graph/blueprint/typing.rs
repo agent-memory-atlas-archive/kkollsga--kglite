@@ -66,7 +66,7 @@ pub fn append_typed_columns(
         let col_type = resolve_column_type(raw, src_idx, declared_types.get(name));
         let col_data = match declared_types.get(name).map(String::as_str) {
             Some("text") => exact::text_column(raw, src_idx),
-            Some("timestamp") => exact::timestamp_column(raw, src_idx),
+            Some("timestamp") => exact::timestamp_column(raw, src_idx, name, misparses),
             Some("map") => exact::map_column(raw, src_idx),
             _ => build_column_data(raw, src_idx, &col_type, name, misparses)?,
         };

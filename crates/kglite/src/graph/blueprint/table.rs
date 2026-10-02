@@ -105,6 +105,7 @@ pub struct MisparseTally {
 enum MisparseKind {
     List,
     Date,
+    Timestamp,
 }
 
 struct MisparseHit {
@@ -122,6 +123,10 @@ impl MisparseTally {
 
     pub(super) fn record_date(&mut self, column: &str, row_id: usize, cell: &str) {
         self.note(MisparseKind::Date, column, row_id, cell);
+    }
+
+    pub(super) fn record_timestamp(&mut self, column: &str, row_id: usize, cell: &str) {
+        self.note(MisparseKind::Timestamp, column, row_id, cell);
     }
 
     fn note(&mut self, kind: MisparseKind, column: &str, row_id: usize, cell: &str) {
@@ -174,6 +179,12 @@ impl MisparseTally {
                          cell is 'YYYY-MM-DD' (a time after it is dropped), 'YYYYMMDD', or epoch \
                          milliseconds (nine digits or more); declare the column 'string' to keep \
                          the text as written."
+                    ),
+                    MisparseKind::Timestamp => format!(
+                        "{where_}: column '{column}' is declared timestamp but {count} cell(s) are \
+                         not a timestamp in years 1..9999 and were stored as NULL. First at row \
+                         {row_id}: '{cell}'. A timestamp cell is 'YYYY-MM-DDTHH:MM:SS[.fraction]'; \
+                         declare the column 'string' to keep the text as written."
                     ),
                 }
             })

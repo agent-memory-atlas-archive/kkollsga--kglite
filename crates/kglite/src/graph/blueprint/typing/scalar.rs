@@ -1,6 +1,6 @@
 //! Shared declared scalar text grammar. Invalid cells return None; the loader
 //! decides how input-specific missing markers are represented.
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 pub use super::integer::parse_exact_i64 as parse_integer;
 
@@ -22,6 +22,17 @@ pub fn parse_boolean(text: &str) -> Option<bool> {
 /// as ISO 8601 basic `YYYYMMDD`, or epoch milliseconds (see
 /// [`date_from_integer`] for how a number is read).
 pub fn parse_date(text: &str) -> Option<NaiveDate> {
+    parse_date_any_year(text).filter(|d| year_is_supported(d.year()))
+}
+
+/// Whether a year is one every reader of the graph can render: Python's
+/// `date` and `datetime` stop at 1..=9999, so a value outside it would load
+/// and then raise when a node's properties are read. Such a cell is not a date.
+pub fn year_is_supported(year: i32) -> bool {
+    (1..=9999).contains(&year)
+}
+
+fn parse_date_any_year(text: &str) -> Option<NaiveDate> {
     let s = text.trim();
     if s.is_empty() {
         return None;

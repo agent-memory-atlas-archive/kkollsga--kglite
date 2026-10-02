@@ -4,6 +4,9 @@ Naming is HR/org-chart only. Every round trip goes through the real exporter
 and the real importer.
 """
 
+import json
+import warnings
+
 import pandas as pd
 import pytest
 
@@ -75,3 +78,59 @@ def test_a_property_named_type_survives_rdf(tmp_path, fmt):
     g.export_rdf(path, format=fmt)
     back = kglite.load_rdf(path)
     assert _type_values(back) == _type_values(g)
+
+
+def _years_blueprint(tmp_path):
+    (tmp_path / "n.csv").write_text(
+        "id,ts,dt\n"
+        "1,10000-01-01T00:00:00,10000-01-01\n"
+        "2,2020-01-01T00:00:00,2020-01-01\n"
+        "3,0000-01-01T00:00:00,0000-01-01\n",
+        encoding="utf-8",
+    )
+    spec = {
+        "settings": {"root": "."},
+        "nodes": {
+            "T": {
+                "csv": "n.csv",
+                "pk": "id",
+                "title": "id",
+                "properties": {"id": "int", "ts": "timestamp", "dt": "date"},
+            }
+        },
+    }
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    return str(path)
+
+
+def test_csv_temporal_cells_outside_years_1_to_9999_are_null_with_a_warning(tmp_path):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        g = kglite.from_blueprint(_years_blueprint(tmp_path), save=False)
+    rows = g.cypher("MATCH (n:T) RETURN n.id AS id, n.ts AS ts, n.dt AS dt ORDER BY id").to_list()
+    assert rows[0]["ts"] is None and rows[0]["dt"] is None
+    assert rows[1]["ts"] is not None and rows[1]["dt"] is not None
+    assert rows[2]["ts"] is None and rows[2]["dt"] is None
+    text = " ".join(str(w.message) for w in caught)
+    assert "declared timestamp" in text and "declared date" in text
+
+
+def test_rdf_datetimes_outside_years_1_to_9999_stay_text_with_a_warning(tmp_path):
+    xsd = "http://www.w3.org/2001/XMLSchema#"
+    lines = []
+    for n, (dt, kind) in enumerate(
+        [("10000-01-01T00:00:00", "dateTime"), ("2020-01-01T00:00:00", "dateTime"), ("10000-01-01", "date")]
+    ):
+        lines.append(f'<http://e.org/n{n}> <http://e.org/at> "{dt}"^^<{xsd}{kind}> .')
+    path = tmp_path / "y.nt"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.warns(UserWarning, match="kept as text"):
+        g = kglite.load_rdf(str(path))
+    values = sorted(
+        (r["uri"], r["at"])
+        for r in g.cypher("MATCH (n) RETURN n.uri AS uri, n.at AS at").to_list()
+    )
+    assert values[0][1] == "10000-01-01T00:00:00"
+    assert values[2][1] == "10000-01-01"
+    assert not isinstance(values[1][1], str)

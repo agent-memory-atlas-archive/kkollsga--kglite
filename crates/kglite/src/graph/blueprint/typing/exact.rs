@@ -11,9 +11,9 @@
 
 use crate::datatypes::prop_map::PropMap;
 use crate::datatypes::values::{ColumnData, Value};
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDateTime};
 
-use super::super::table::RawCsv;
+use super::super::table::{MisparseTally, RawCsv};
 
 /// The text a `text` cell stands for, when it is not null.
 pub fn decode_text(cell: &str) -> String {
@@ -42,6 +42,7 @@ pub fn parse_timestamp(cell: &str) -> Option<NaiveDateTime> {
     ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
         .iter()
         .find_map(|fmt| NaiveDateTime::parse_from_str(s, fmt).ok())
+        .filter(|t| super::scalar::year_is_supported(t.year()))
 }
 
 /// A JSON value as a graph value: arrays become lists, objects maps.
@@ -74,15 +75,25 @@ pub fn text_column(raw: &RawCsv, src_idx: usize) -> ColumnData {
     )
 }
 
-pub fn timestamp_column(raw: &RawCsv, src_idx: usize) -> ColumnData {
+pub fn timestamp_column(
+    raw: &RawCsv,
+    src_idx: usize,
+    column: &str,
+    misparses: &mut MisparseTally,
+) -> ColumnData {
     ColumnData::Timestamp(
         raw.rows
             .iter()
             .enumerate()
             .map(|(r, row)| {
-                (!raw.nulls[r][src_idx])
-                    .then(|| parse_timestamp(&row[src_idx]))
-                    .flatten()
+                if raw.nulls[r][src_idx] {
+                    return None;
+                }
+                let parsed = parse_timestamp(&row[src_idx]);
+                if parsed.is_none() {
+                    misparses.record_timestamp(column, raw.row_id(r), &row[src_idx]);
+                }
+                parsed
             })
             .collect(),
     )

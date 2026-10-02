@@ -130,6 +130,9 @@ struct FoldState {
     reifiers: Vec<(u32, u32, u32, String)>,
     /// The `kg:manifest` of the document, once seen.
     manifest: Option<ExportManifest>,
+    /// `xsd:date` / `xsd:dateTime` literals kept as text: malformed, or a
+    /// year outside 1..=9999.
+    untyped_temporal: usize,
 }
 
 impl FoldState {
@@ -141,6 +144,7 @@ impl FoldState {
             edges: Vec::new(),
             reifiers: Vec::new(),
             manifest: None,
+            untyped_temporal: 0,
         }
     }
 
@@ -360,6 +364,15 @@ fn process(
                 return Ok(());
             }
             let val = datatype_to_value(lit.value(), lit.datatype().as_str());
+            if matches!(val, Value::String(_))
+                && matches!(
+                    lit.datatype().as_str(),
+                    "http://www.w3.org/2001/XMLSchema#date"
+                        | "http://www.w3.org/2001/XMLSchema#dateTime"
+                )
+            {
+                state.untyped_temporal += 1;
+            }
             insert_property(&mut state.accs[s_id as usize].props, key, val);
         }
         // Resource object → edge. Materialise the target's slot too so a
@@ -539,10 +552,16 @@ fn materialize(
 
     let plans = plan_edges(state, &reifier_props);
     let edges_created = materialize_edges(graph, &plans, &idx_of);
-    let warnings = match manifest {
+    let mut warnings = match manifest {
         Some(manifest) => kg_import::apply(graph, manifest)?,
         None => Vec::new(),
     };
+    if state.untyped_temporal > 0 {
+        warnings.push(format!(
+            "{} xsd:date / xsd:dateTime literals are not valid dates in years 1..9999 and were kept as text",
+            state.untyped_temporal
+        ));
+    }
     Ok((dense as usize, edges_created, warnings))
 }
 
