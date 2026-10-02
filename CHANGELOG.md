@@ -50,6 +50,10 @@ before upgrading.
   `kglite_load_rdf_with_options`, which is `kglite_load_rdf` plus the
   `language_maps` flag. Each export writes the whole graph and returns its
   summary as JSON. `kglite_load_rdf` is unchanged.
+- `kglite export <graph.kgl> <output>` writes a lossless CSV tree
+  (`--format csv`, output is a directory) or RDF 1.2 (`nq` / `trig`, inferred
+  from the extension; `--base`, `--schema-org`). The CLI now builds the engine
+  with its `rdf` feature.
 
 ### Changed
 

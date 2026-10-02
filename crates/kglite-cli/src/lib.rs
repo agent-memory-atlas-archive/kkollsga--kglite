@@ -9,6 +9,7 @@
 
 mod agent_response;
 mod exec;
+mod export;
 mod format;
 mod helper;
 mod migrate;
@@ -306,6 +307,26 @@ enum Command {
         /// Where to write the SQL script. Omit to write to stdout.
         output: Option<PathBuf>,
     },
+    /// Export a `.kgl` to an open format: a lossless CSV tree with a re-import
+    /// blueprint (`--format csv`, output is a directory; read back with
+    /// `from_blueprint`), or RDF 1.2 (`nq` / `trig`; read back with
+    /// `load_rdf`). The format is inferred from a `.nq` / `.trig` output path.
+    Export {
+        /// Path to the `.kgl` file.
+        graph: PathBuf,
+        /// Output directory (csv) or file (nq, trig).
+        output: PathBuf,
+        /// Output format. Default: from the output extension.
+        #[arg(long, value_enum)]
+        format: Option<export::ExportFormat>,
+        /// IRI prefix of every generated IRI, ending in `/` or `#` (RDF only).
+        #[arg(long)]
+        base: Option<String>,
+        /// Also write schema.org validFrom/validThrough for declared valid-time
+        /// bounds (RDF only).
+        #[arg(long)]
+        schema_org: bool,
+    },
     /// Apply pending Cypher migrations and advance the graph's user-schema
     /// version. Migrations are `<version>_<name>.cypher` files in one
     /// directory, applied in ascending version order; a re-run is a no-op.
@@ -571,6 +592,13 @@ fn dispatch(command: &Command) -> Result<()> {
         }
         Command::Diff { a, b } => run_diff(a, b),
         Command::ExportSqlite { graph, output } => run_export_sqlite(graph, output.as_deref()),
+        Command::Export {
+            graph,
+            output,
+            format,
+            base,
+            schema_org,
+        } => export::run(graph, output, *format, base.as_deref(), *schema_org),
         Command::Migrate {
             graph,
             directory,

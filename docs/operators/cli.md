@@ -360,6 +360,20 @@ dependency-free — no SQLite library is linked into KGLite. The full
 mapping and its trade-offs are in the
 [import/export guide](../python/guides/import-export.md).
 
+`export` writes the open formats: a lossless CSV tree with a re-import
+blueprint, or RDF 1.2. The format is inferred from a `.nq` / `.trig` output
+path, or named with `--format csv|nq|trig`; `--base` and `--schema-org` apply
+to the RDF formats:
+
+```bash
+kglite export org.kgl org.nq
+kglite export org.kgl org.trig --base https://hr.example.org/
+kglite export org.kgl org-csv --format csv    # a directory
+```
+
+The formats, the `kg:` vocabulary and the limits are in the
+[open exports guide](../python/guides/open-exports.md).
+
 `schema-version` reads, and with `--set` writes, the graph's
 **user-schema version** — your own data-model revision, distinct from the
 `.kgl` format version, which the engine stores but never interprets:
