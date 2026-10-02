@@ -2036,6 +2036,19 @@ impl ColumnStore {
             store.schema = Arc::new(grown);
         }
 
+        // A schema key the payload carries no column for (an all-null column a
+        // writer left out) was created empty by `new`. Every column must span
+        // the store: `set` has no cell to write into a shorter one, and a
+        // later `push_row` would land its value on an earlier row.
+        for handle in &mut store.columns {
+            if handle.len() < row_count as usize {
+                let col = Arc::make_mut(handle);
+                while col.len() < row_count as usize {
+                    col.push_null();
+                }
+            }
+        }
+
         Ok(store)
     }
 

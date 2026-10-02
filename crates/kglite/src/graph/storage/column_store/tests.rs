@@ -1381,3 +1381,33 @@ fn an_integer_title_is_an_int64_column_and_a_change_of_kind_demotes_it() {
         Some(Value::Int64(7_100_000_000_001))
     );
 }
+
+/// A schema key the packed payload carries no column for must still load as a
+/// column of `row_count` cells: `set` on a column shorter than the store has
+/// no cell to write and used to drop the value.
+#[test]
+fn load_packed_pads_a_schema_column_the_payload_lacks() {
+    let mut interner = StringInterner::new();
+    let name = interner.get_or_intern("name");
+    let extra = interner.get_or_intern("extra");
+    let written_schema = Arc::new(TypeSchema::from_keys(vec![name]));
+    let mut meta = HashMap::new();
+    meta.insert("name".to_string(), "string".to_string());
+    meta.insert("extra".to_string(), "int64".to_string());
+    let mut store = ColumnStore::new(written_schema, &meta, &interner);
+    store.push_row(&[(name, Value::String("a".into()))]);
+    store.push_row(&[(name, Value::String("b".into()))]);
+    let packed = store.write_packed(&interner).unwrap();
+
+    let reading_schema = Arc::new(TypeSchema::from_keys(vec![extra, name]));
+    let mut loaded =
+        ColumnStore::load_packed(reading_schema, &meta, &interner, &packed, 2, None).unwrap();
+    assert!(loaded.set(1, extra, &Value::Int64(9), None));
+    assert_eq!(loaded.get(1, extra), Some(Value::Int64(9)));
+    assert_eq!(loaded.get(0, extra), None);
+    assert_eq!(loaded.get(0, name), Some(Value::String("a".into())));
+    // A row pushed after the load lands on its own row, not an earlier cell.
+    let row = loaded.push_row(&[(extra, Value::Int64(5)), (name, Value::String("c".into()))]);
+    assert_eq!(loaded.get(row, extra), Some(Value::Int64(5)));
+    assert_eq!(loaded.get(1, extra), Some(Value::Int64(9)));
+}
