@@ -3,8 +3,9 @@ by the batch, not by the size of the output.
 
 The export runs in a child process whose resident size the parent samples, so
 the measurement does not depend on the export releasing the GIL. The N-Quads
-written exceed 150 MB; a writer that held the statements (or a type's text) would add at least that much, while the batch-bounded
-writer adds a few MB. Only Darwin asserts the ceiling (the child's RSS on other
+written exceed 150 MB; a writer that held the statements (or a type's text)
+would add at least that much, while the batch-bounded writer adds a few MB.
+Only Darwin asserts the ceiling (the child's RSS on other
 platforms includes allocator behaviour this test has not been calibrated on).
 """
 
