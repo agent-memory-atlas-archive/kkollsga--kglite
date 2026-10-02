@@ -29,17 +29,19 @@ pub(super) struct IdentityCheck {
 
 /// The id and title value of a node. A node of a manifest type whose IRI is
 /// `<base>node/<Type>/<id>` gets back its original id; every other node
-/// keeps the dense id. The flag is true for a duplicate-marked IRI, which
+/// keeps the dense id; a missing title is the IRI for third-party RDF and null
+/// for a manifest type. The flag is true for a duplicate-marked IRI, which
 /// must not displace the id index's entry for the plain one.
 pub(super) fn node_identity(
     manifest: Option<&ExportManifest>,
     node_type: &str,
     iri: &str,
-    title: String,
+    title: Option<String>,
     dense: u32,
     check: &mut IdentityCheck,
 ) -> Result<(Value, Value, bool), String> {
     let Some(entry) = manifest.and_then(|m| m.node_types.get(node_type)) else {
+        let title = title.unwrap_or_else(|| iri.to_string());
         return Ok((Value::UniqueId(dense), Value::String(title), false));
     };
     let (segment, duplicate) = match node_id_segment(iri, node_type) {
@@ -65,9 +67,13 @@ pub(super) fn node_identity(
             "kg:manifest import: two {node_type} nodes resolve to id {id:?} ({iri})"
         ));
     }
-    let title = match title_datatype(entry.title_kind) {
-        Some(datatype) => datatype_to_value(&title, &format!("{XSD}{datatype}")),
-        None => Value::String(title),
+    // A node of a manifest type with no `rdfs:label` had a null title.
+    let title = match (title, title_datatype(entry.title_kind)) {
+        (None, _) => Value::Null,
+        (Some(title), Some(datatype)) => {
+            datatype_to_value(&title, &format!("{XSD}{datatype}"))
+        }
+        (Some(title), None) => Value::String(title),
     };
     Ok((id, title, duplicate))
 }

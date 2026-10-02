@@ -491,7 +491,7 @@ fn materialize(
             .node_type
             .clone()
             .unwrap_or_else(|| config.default_type.clone());
-        let title = acc.title.clone().unwrap_or_else(|| iri.clone());
+        let title = acc.title.clone();
         let types = if acc.types.len() > 1 {
             Some(Value::List(
                 acc.types.iter().cloned().map(Value::String).collect(),
