@@ -91,7 +91,10 @@ impl<'a> IndexedColumn<'a> {
             if let Some(s) = self.store.get_str_by_slot(row, slot) {
                 return Some(s.to_string());
             }
-        } else if let Some(Value::String(s)) = self.store.get(row, self.key) {
+        }
+        // A `Mixed` column (a `SET` of another kind demoted it) holds its
+        // strings as values, which `get_str_by_slot` does not read.
+        if let Some(Value::String(s)) = self.store.get(row, self.key) {
             return Some(s);
         }
         if self.is_column {
