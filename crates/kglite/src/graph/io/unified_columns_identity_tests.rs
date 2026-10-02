@@ -199,9 +199,8 @@ fn timestamp_column_round_trips_through_packed_and_unified_layouts() {
         "a Timestamp column must not force a sidecar"
     );
     let (type_meta, mmap) = type_file(dir.path(), "T");
-    let mapped = ColumnStore::from_mmap_store(Arc::new(
-        type_meta.to_mmap_store(read_only(mmap)).unwrap(),
-    ));
+    let mapped =
+        ColumnStore::from_mmap_store(Arc::new(type_meta.to_mmap_store(read_only(mmap)).unwrap()));
     assert_eq!(mapped.get(0, ts_key), Some(Value::Timestamp(t1)));
     assert_eq!(mapped.get(1, ts_key), None);
     assert_eq!(mapped.get(2, ts_key), Some(Value::Timestamp(t0)));
