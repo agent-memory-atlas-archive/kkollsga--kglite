@@ -487,6 +487,9 @@ pub fn to_csv_dir(
     selection: Option<&CurrentSelection>,
     parent_types: &HashMap<String, String>,
 ) -> Result<ExportSummary, String> {
+    if output_dir.trim().is_empty() {
+        return Err("export_csv: output_dir must not be empty".to_string());
+    }
     let output = Path::new(output_dir);
     let batch = batch_rows();
     let scope = Scope::new(graph, selection);

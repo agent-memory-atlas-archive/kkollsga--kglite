@@ -35,3 +35,13 @@ def test_rdf_round_trip_keeps_a_null_title_null(tmp_path):
     for label in ("Badge", "Person"):
         assert _titles(back, label) == _titles(g, label), label
         assert back.cypher(f"MATCH (n:{label}) WHERE n.title IS NULL RETURN n.id AS id").to_list() == [{"id": 2}]
+
+
+def test_empty_export_destinations_are_refused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    g = _null_title_graph()
+    with pytest.raises(OSError, match="must not be empty"):
+        g.export_csv("")
+    with pytest.raises((OSError, ValueError), match="must not be empty"):
+        g.export_rdf("")
+    assert list(tmp_path.iterdir()) == []

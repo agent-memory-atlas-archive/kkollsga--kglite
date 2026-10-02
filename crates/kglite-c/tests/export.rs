@@ -109,6 +109,23 @@ fn export_csv_writes_the_lossless_tree() {
 }
 
 #[test]
+fn export_csv_refuses_an_empty_output_dir_and_writes_nothing() {
+    let dir = scratch("csv_empty");
+    let graph = hr_graph(&dir);
+    let out_c = c("");
+    let mut error: *const c_char = std::ptr::null();
+    let rc = unsafe { kglite_export_csv(graph, out_c.as_ptr(), std::ptr::null_mut(), &mut error) };
+    assert_ne!(rc, KgliteStatusCode::Ok);
+    assert!(!error.is_null());
+    let message = unsafe { CStr::from_ptr(error) }.to_str().unwrap().to_string();
+    unsafe { kglite_free_string(error) };
+    assert!(message.contains("must not be empty"), "{message}");
+    // An empty path used to resolve to the working directory.
+    assert!(!Path::new("blueprint.json").exists());
+    unsafe { kglite_graph_free(graph) };
+}
+
+#[test]
 fn export_csv_rejects_null_arguments() {
     let mut error: *const c_char = std::ptr::null();
     let rc = unsafe {

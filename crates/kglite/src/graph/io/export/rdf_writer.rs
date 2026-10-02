@@ -437,6 +437,9 @@ pub fn to_rdf(
     parent_types: &HashMap<String, String>,
     options: &RdfExportOptions,
 ) -> Result<RdfExportSummary, String> {
+    if path.trim().is_empty() {
+        return Err("export_rdf: path must not be empty".to_string());
+    }
     validate_base(&options.base)?;
     let scope = Scope::new(graph, selection);
     let manifest = ExportManifest::build_in(graph, &scope, parent_types)?;
