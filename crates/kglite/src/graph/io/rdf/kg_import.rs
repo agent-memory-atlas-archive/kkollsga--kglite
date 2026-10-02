@@ -34,10 +34,8 @@ pub(super) struct IdentityCheck {
 /// must not displace the id index's entry for the plain one.
 pub(super) fn node_identity(
     manifest: Option<&ExportManifest>,
-    node_type: &str,
-    iri: &str,
-    title: Option<String>,
-    dense: u32,
+    (node_type, iri, dense): (&str, &str, u32),
+    (title, label_datatype): (Option<String>, Option<&str>),
     check: &mut IdentityCheck,
 ) -> Result<(Value, Value, bool), String> {
     let Some(entry) = manifest.and_then(|m| m.node_types.get(node_type)) else {
@@ -72,6 +70,10 @@ pub(super) fn node_identity(
         (None, _) => Value::Null,
         (Some(title), Some(datatype)) => {
             datatype_to_value(&title, &format!("{XSD}{datatype}"))
+        }
+        // A mixed-kind title kept each value's own datatype on its label.
+        (Some(title), None) if entry.title_kind == ColumnKind::Mixed => {
+            datatype_to_value(&title, label_datatype.unwrap_or(""))
         }
         (Some(title), None) => Value::String(title),
     };

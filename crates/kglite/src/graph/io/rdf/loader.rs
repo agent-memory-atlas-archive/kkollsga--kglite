@@ -87,6 +87,8 @@ pub struct RdfStats {
 struct NodeAcc {
     /// First `label_predicate` literal seen (first wins).
     title: Option<String>,
+    /// Datatype IRI of the literal `title` came from.
+    title_datatype: Option<String>,
     /// First `rdf:type` value seen (compacted) — becomes the node type.
     node_type: Option<String>,
     /// All `rdf:type` values (compacted, deduped) — surfaced as
@@ -351,6 +353,7 @@ fn process(
                 let acc = &mut state.accs[s_id as usize];
                 if acc.title.is_none() {
                     acc.title = Some(lit.value().to_string());
+                    acc.title_datatype = Some(lit.datatype().as_str().to_string());
                 }
                 // The title keeps one string; with `language_maps` the tagged
                 // labels are also kept, as a map, so no tag is lost.
@@ -505,6 +508,7 @@ fn materialize(
             .clone()
             .unwrap_or_else(|| config.default_type.clone());
         let title = acc.title.clone();
+        let title_datatype = acc.title_datatype.clone();
         let types = if acc.types.len() > 1 {
             Some(Value::List(
                 acc.types.iter().cloned().map(Value::String).collect(),
@@ -526,7 +530,12 @@ fn materialize(
         // Dense integer id — `n.id` is an integer in every mode — unless the
         // manifest says the type's ids were something else.
         let (id_value, title_value, duplicate) =
-            kg_import::node_identity(manifest, &node_type, &iri, title, dense, &mut identities)?;
+            kg_import::node_identity(
+                manifest,
+                (&node_type, &iri, dense),
+                (title, title_datatype.as_deref()),
+                &mut identities,
+            )?;
         dense += 1;
         let node_data = NodeData::new(
             id_value.clone(),

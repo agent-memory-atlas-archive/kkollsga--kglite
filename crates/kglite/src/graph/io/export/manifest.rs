@@ -56,7 +56,7 @@ use crate::graph::features::temporal::{
     declare_loaded, declared, IntervalConvention, TemporalTarget,
 };
 use crate::graph::schema::CurrentSelection;
-use crate::graph::storage::GraphRead;
+use crate::graph::storage::{GraphRead, GraphWrite};
 
 /// The `format` value of this manifest version.
 pub const MANIFEST_FORMAT: &str = "kglite-export/1";
@@ -461,6 +461,41 @@ impl ExportManifest {
             ));
         }
         Ok(manifest)
+    }
+
+    /// Give the nodes of every type whose titles mix kinds their own typed
+    /// title back: the CSV export writes such a title as its JSON spelling and
+    /// the blueprint reads the column as text. Returns the titles restored.
+    pub fn restore_mixed_titles(&self, graph: &mut DirGraph) -> usize {
+        let mut restored = 0;
+        for (name, info) in &self.node_types {
+            if info.title_kind != ColumnKind::Mixed {
+                continue;
+            }
+            let Some(nodes) = graph.type_indices.get(name) else {
+                continue;
+            };
+            let indices: Vec<NodeIndex> = nodes.iter().collect();
+            let mut decoded: Vec<(NodeIndex, Value)> = Vec::new();
+            {
+                let _guard = graph.graph.begin_query();
+                for idx in indices {
+                    let Some(node) = graph.graph.node_view(idx) else {
+                        continue;
+                    };
+                    if let Value::String(text) = &*node.title() {
+                        if let Ok(json) = serde_json::from_str(text) {
+                            decoded.push((idx, super::typed_json::from_json(&json)));
+                        }
+                    }
+                }
+            }
+            restored += decoded.len();
+            for (idx, title) in decoded {
+                graph.graph.set_node_title(idx, title);
+            }
+        }
+        restored
     }
 
     /// Declare every valid-time declaration on a graph whose rows are loaded.

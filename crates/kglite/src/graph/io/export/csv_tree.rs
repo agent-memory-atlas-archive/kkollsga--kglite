@@ -147,6 +147,16 @@ fn encode_cell(value: &Value, kind: ColumnKind) -> Option<String> {
     })
 }
 
+/// A title cell. A type whose titles mix kinds writes each as its JSON
+/// spelling, which [`ExportManifest::restore_mixed_titles`] reads back; every
+/// other type writes the plain cell.
+fn encode_title(value: &Value, kind: ColumnKind) -> Option<String> {
+    if kind == ColumnKind::Mixed && !matches!(value, Value::Null | Value::NodeRef(_)) {
+        return Some(to_json(value).to_string());
+    }
+    encode_cell(value, kind)
+}
+
 /// An id cell: ids are written as their text, never escaped.
 fn encode_id(value: &Value) -> String {
     raw_string(value)
@@ -226,7 +236,7 @@ fn write_node_csv(
             line.clear();
             push_cell(&mut line, &encode_id(&node.id()));
             line.push(',');
-            if let Some(cell) = encode_cell(&node.title(), info.title_kind) {
+            if let Some(cell) = encode_title(&node.title(), info.title_kind) {
                 push_cell(&mut line, &cell);
             }
             for (name, kind) in &props {
@@ -477,6 +487,19 @@ pub fn to_csv_dir(
     let batch = batch_rows();
     let scope = Scope::new(graph, selection);
     let manifest = ExportManifest::build_in(graph, &scope, parent_types)?;
+    // A CSV id column holds one kind: `{id: 1}` and `{id: '1'}` would both
+    // read back as the text `1` and become one node.
+    if let Some((name, _)) = manifest
+        .node_types
+        .iter()
+        .find(|(_, info)| info.id_kind == ColumnKind::Mixed)
+    {
+        return Err(format!(
+            "export_csv: the ids of node type '{name}' mix kinds (for example 1 and '1'), \
+             which a CSV id column cannot keep apart. Export as RDF (export_rdf) or save a \
+             .kgl file instead, or give the type ids of one kind."
+        ));
+    }
 
     let mut keys: BTreeMap<(String, String), String> = BTreeMap::new();
     for (rel, info) in &manifest.relationship_types {

@@ -383,6 +383,7 @@ fn finish_build(
             .map_err(|e| format!("settings.manifest: cannot read {}: {e}", path.display()))?;
         let parsed = crate::graph::io::export::ExportManifest::from_json(&text)
             .map_err(|e| format!("settings.manifest: {e}"))?;
+        parsed.restore_mixed_titles(graph);
         let warnings = parsed
             .apply_declarations(graph)
             .map_err(|e| format!("settings.manifest: {e}"))?;

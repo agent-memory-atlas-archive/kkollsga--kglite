@@ -180,3 +180,40 @@ def test_typed_values_inside_lists_and_maps_keep_their_type(tmp_path, fmt):
     got, want = _props(back, "Person"), _props(g, "Person")
     assert got == want
     assert isinstance(want[0]["p"]["days"][0], __import__("datetime").date)
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_mixed_kind_titles_keep_their_kind(tmp_path, fmt):
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Badge {id: 1, title: 5}), (:Badge {id: 2, title: 'five'}), (:Badge {id: 3, title: 2.5})")
+    g.cypher("CREATE (:Badge {id: 4, title: date('2020-01-01')}), (:Badge {id: 5})")
+    back = _round_trip(g, fmt, tmp_path)
+    assert _titles(back, "Badge") == _titles(g, "Badge")
+    assert [type(r["title"]).__name__ for r in _titles(back, "Badge")] == [
+        type(r["title"]).__name__ for r in _titles(g, "Badge")
+    ]
+
+
+def _mixed_id_graph():
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Person {id: 1, title: 'Ada'}), (:Person {id: '1', title: 'Bo'}), (:Person {id: 'x', title: 'Cy'})")
+    g.cypher("MATCH (a:Person {id: 1}), (b:Person {id: '1'}) CREATE (a)-[:REPORTS_TO]->(b)")
+    return g
+
+
+def test_csv_refuses_a_type_whose_ids_mix_kinds(tmp_path):
+    g = _mixed_id_graph()
+    with pytest.raises(OSError, match="mix kinds"):
+        g.export_csv(str(tmp_path / "csv"))
+
+
+@pytest.mark.parametrize("fmt", ["nq", "trig"])
+def test_rdf_keeps_mixed_kind_ids_apart(tmp_path, fmt):
+    g = _mixed_id_graph()
+    back = _round_trip(g, fmt, tmp_path)
+    ids = lambda graph: sorted(  # noqa: E731
+        (type(r["id"]).__name__, r["id"], r["title"])
+        for r in graph.cypher("MATCH (n:Person) RETURN n.id AS id, n.title AS title").to_list()
+    )
+    assert ids(back) == ids(g)
+    assert len(ids(back)) == 3
