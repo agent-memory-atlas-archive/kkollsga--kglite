@@ -255,6 +255,7 @@ pub fn kglite::api::blueprint::scalar::parse_boolean(text: &str) -> core::option
 pub fn kglite::api::blueprint::scalar::parse_date(text: &str) -> core::option::Option<chrono::naive::date::NaiveDate>
 pub fn kglite::api::blueprint::scalar::parse_float(text: &str) -> core::option::Option<f64>
 pub fn kglite::api::blueprint::scalar::parse_integer(text: &str) -> core::option::Option<i64>
+pub fn kglite::api::blueprint::scalar::year_is_supported(year: i32) -> bool
 pub enum kglite::api::blueprint::ComputeOp
 pub kglite::api::blueprint::ComputeOp::Aggregate
 pub kglite::api::blueprint::ComputeOp::Aggregate::agg: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
@@ -2134,6 +2135,7 @@ impl kglite::api::io::ExportManifest
 pub fn kglite::api::io::ExportManifest::apply_declarations(&self, graph: &mut kglite::api::DirGraph) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
 pub fn kglite::api::io::ExportManifest::build(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<Self, alloc::string::String>
 pub fn kglite::api::io::ExportManifest::from_json(text: &str) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::io::ExportManifest::restore_mixed_titles(&self, graph: &mut kglite::api::DirGraph) -> usize
 pub fn kglite::api::io::ExportManifest::to_json(&self) -> alloc::string::String
 impl core::clone::Clone for kglite::api::io::ExportManifest
 pub fn kglite::api::io::ExportManifest::clone(&self) -> kglite::api::io::ExportManifest
