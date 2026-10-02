@@ -47,6 +47,7 @@ guides/bitemporal
 guides/large-registers
 guides/graph-algorithms
 guides/import-export
+guides/open-exports
 guides/schema-migrations
 guides/ai-agents
 guides/okf

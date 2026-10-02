@@ -108,6 +108,9 @@ The format is inferred from the extension when you omit it, so
 read, so it defaults to `'json'` instead — and it cannot produce `'csv'`, which
 writes two files.
 
+For a lossless CSV tree or RDF 1.2 (N-Quads / TriG) that reads back with its
+valid-time declarations and kinds intact, see {doc}`open-exports`.
+
 ## Export to SQLite — the no-lock-in exit
 
 Your data should never be trapped in KGLite. `format='sqlite'` writes a
