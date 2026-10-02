@@ -2102,6 +2102,14 @@ def run_notify(
 #: Add an entry when a release removes or changes a public symbol; never edit
 #: an existing release's set to mean "the current release".
 BREAKING_SYMBOLS_BY_VERSION: dict[str, list[str]] = {
+    # 0.19.1 — register-scale disk build + open exports: four structs gained a
+    # field and `save_disk` returns `SaveError` instead of `String`.
+    "0.19.1": [
+        "RdfConfig",
+        "RdfStats",
+        "MaterializedLabel",
+        "save_disk",
+    ],
     # 0.19.0 — the valid-time programs (semver-major set, shipped in a minor
     # per project policy): the fluent temporal helpers were removed in favour
     # of the core FluentFilter, six fluent api fns and two io fns gained a

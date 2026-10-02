@@ -32,12 +32,12 @@ release named there onward.
 <dependency>
   <groupId>io.github.kkollsga</groupId>
   <artifactId>kglite</artifactId>
-  <version>0.19.0</version>
+  <version>0.19.1</version>
 </dependency>
 ```
 
 ```kotlin
-implementation("io.github.kkollsga:kglite:0.19.0")
+implementation("io.github.kkollsga:kglite:0.19.1")
 ```
 
 The jar carries its own native library — nothing to install, no

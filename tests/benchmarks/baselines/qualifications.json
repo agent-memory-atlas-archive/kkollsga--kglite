@@ -144,6 +144,12 @@
       "sha256": "4ae58fb2d36253958c564d0f7197897f007b6f59db4f2a100beaf3039e006470",
       "status": "accepted"
     },
+    "0_19_1.json": {
+      "evidence": "Release capture 2026-10-02 on Mac16,10 (M4, 16 GiB) taken hot: load average 10-13 from external Blender renders (3-4 processes, ~450% CPU). Five cells read >20% over 0_19_0 and four >30% over 0_18_0 (return_node_10k, return_id_10k, two_edge_relationship_text_filter x2, var_length_1_8). Same-session interleaved A/B on the same interpreter (Python 3.14.3) against the published wheels, min statistic, controls cypher_match/traversal within +-1-8%: vs 0.19.0 those cells -16%..+19% (var_length_1_8 five runs -9..+19, mean ~+8%), vs 0.18.0 -9%..+18%. Not a regression; the capture is not a valid longitudinal baseline. Reference stays 0_19_0_del_cell.json.",
+      "platform": "Darwin/arm64",
+      "sha256": "3650adcc1116baba9cd61d50dda14e7868bf15215fc450a914c938b95f975487",
+      "status": "rejected"
+    },
     "current.json": {
       "evidence": "0_19_0_ts_cells.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and the exact-set CI legs need every harness cell in the reference. 2026-09-30 on Mac16,10 (M4, 16 GiB), two agreeing release runs of the fixed build (min 0.663/0.649 ms) against 0.13.2 at 35.4/34.9 ms and 0.19.0 at 4.87/5.06 ms on the same interpreter, machine load 2.7-5.3 from external processes; every other row is byte-identical to 0_19_0_ts_cells.json.",
       "platform": "Darwin/arm64",

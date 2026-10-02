@@ -98,7 +98,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: (run on each platform; the script writes whichever entry matches the
 #: current host).
 BINARY_SIZE_BASELINES = {
-    "darwin": 27_165_040,  # 0.19.0 darwin baseline
+    "darwin": 27_793_568,  # 0.19.1 darwin baseline
     # Published 0.17.12 manylinux2014 x86_64 wheel member
     # `kglite/kglite.abi3.so`; artifact identity is recorded in the history below.
     "linux": 31_188_600,
@@ -589,6 +589,13 @@ def test_binary_size_regression():
         per-statement temporal diagnostics, the bulk subgraph gather, and
         the disk overlay flush with typed column flattening.
 
+
+      - 0.19.1:       27,793,568 bytes (≈26.5 MB). +628,528 bytes: the
+        register-scale disk build (typed timestamp column, column tail
+        store, disk cells journal, hard-linked incremental publish, carried
+        title/id bundles, stale-save refusal), the export manifest, lossless
+        CSV export, and the RDF 1.2 importer and N-Quads/TriG exporter.
+
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
     drilldown, run `cargo bloat --release --crates --filter kglite`.
@@ -620,7 +627,7 @@ def test_binary_size_regression():
     gate = int(baseline * 1.10)
     assert size <= gate, (
         f"{bin_path.name} = {size:,} bytes > gate {gate:,} "
-        f"(+10% over 0.19.0 {platform_key} baseline {baseline:,}). "
+        f"(+10% over 0.19.1 {platform_key} baseline {baseline:,}). "
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )

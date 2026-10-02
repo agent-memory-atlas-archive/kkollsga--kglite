@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-02
+
 ### Added
 
 - `export_rdf(path, format=None, base=None, schema_org=False)` (and
@@ -57,6 +59,18 @@ before upgrading.
 
 ### Changed
 
+- Rust API: four public structs gained a field, so code that builds them with
+  a struct literal must add it — `blueprint::Settings::manifest`,
+  `MaterializedLabel::warnings`, `RdfStats::warnings` and
+  `RdfConfig::language_maps`. `Settings` and `RdfConfig` implement `Default`,
+  so struct-update syntax (`..Default::default()`) keeps compiling;
+  `MaterializedLabel` and `RdfStats` are results the engine returns, so only
+  code that constructs them itself (e.g. in tests) is affected. Rust API:
+  `DirGraph::save_disk` returns `Result<(), kglite::api::io::SaveError>`
+  (was `Result<(), String>`), the error type `save_graph` already uses; it
+  displays the same message, and a save that another writer has overtaken
+  is its `Refused` case.
+  Python, C ABI and CLI callers are unaffected.
 - The optional `fastembed` Rust backend is built against fastembed 7.1 (was 6.0).
   Rust consumers declare `anyhow` 1.0.72 and `indexmap` 2.7 as minimum
   versions (were 1.0.47 and 2.6).
