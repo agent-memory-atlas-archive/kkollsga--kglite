@@ -571,6 +571,7 @@ tracks by audience, each with its own index:
   [inline records](https://kglite.readthedocs.io/en/latest/python/guides/inline-records.html) ·
   [blueprints](https://kglite.readthedocs.io/en/latest/python/guides/blueprints.html) ·
   [import/export](https://kglite.readthedocs.io/en/latest/python/guides/import-export.html) ·
+  [open exports](https://kglite.readthedocs.io/en/latest/python/guides/open-exports.html) ·
   [structured data](https://kglite.readthedocs.io/en/latest/python/guides/structured-data.html) ·
   [schema migrations](https://kglite.readthedocs.io/en/latest/python/guides/schema-migrations.html).
   *Query*: [Cypher](https://kglite.readthedocs.io/en/latest/python/guides/cypher.html) ·
