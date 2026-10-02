@@ -82,3 +82,25 @@ def test_known_tags_in_the_envelope_still_load(tmp_path):
         {"a": 42},
         {"a": 53},
     ]
+
+
+def test_unknown_tag_in_a_real_0_19_bare_array_is_refused(tmp_path):
+    """The same refusal against metadata the published 0.19.0 wheel wrote."""
+    from tests.fixtures.compat_helpers import copy_fixture
+
+    fixtures = Path(__file__).parent / "fixtures" / "kgl_v6"
+    directory = copy_fixture(fixtures / "ntriples_disk", tmp_path)
+    seg = directory / "seg_000"
+    body = json.loads((seg / "columns_meta.json").read_text())
+    assert isinstance(body, list)
+    changed = 0
+    for entry in body:
+        for column in entry["col_map"] + entry["fixed_cols"]:
+            if column["col_type_str"] in ("int64", "float64", "uniqueid", "date", "bool", "timestamp"):
+                column["col_type_str"] = "future_tag"
+                changed += 1
+    assert changed
+    (seg / "columns_meta.json").write_text(json.dumps(body))
+    (seg / "columns_meta.bin.zst").unlink()
+    with pytest.raises(kglite.FileFormatError, match="column type tag"):
+        kglite.load(str(directory))
