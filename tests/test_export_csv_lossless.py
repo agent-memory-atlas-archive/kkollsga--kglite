@@ -197,12 +197,12 @@ def test_null_and_empty_string_stay_distinct(tmp_path):
 def test_a_relationship_from_two_sources_gets_a_csv_per_source(tmp_path):
     source = build_source("memory", tmp_path)
     _, _, _, out = reimport(tmp_path, source)
-    blueprint = json.loads((out / "blueprint.json").read_text())
+    blueprint = json.loads((out / "blueprint.json").read_text(encoding="utf-8"))
     csvs = sorted(p.name for p in (out / "connections").iterdir())
     assert csvs == ["MANAGES.csv", "WORKS_IN.Person.csv", "WORKS_IN.Team.csv"]
     manages = blueprint["nodes"]["Person"]["connections"]["junction_edges"]["MANAGES"]
     assert manages["target"] == ["Department", "Person"]
     assert manages["target_type_column"] == "_kg_target_type"  # `source_id` is a property name
-    manifest = json.loads((out / "manifest.json").read_text())
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["format"] == "kglite-export/1"
     assert blueprint["settings"]["manifest"] == "manifest.json"
