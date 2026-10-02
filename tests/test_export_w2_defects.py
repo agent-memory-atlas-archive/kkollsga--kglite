@@ -120,7 +120,12 @@ def test_rdf_datetimes_outside_years_1_to_9999_stay_text_with_a_warning(tmp_path
     xsd = "http://www.w3.org/2001/XMLSchema#"
     lines = []
     for n, (dt, kind) in enumerate(
-        [("10000-01-01T00:00:00", "dateTime"), ("2020-01-01T00:00:00", "dateTime"), ("10000-01-01", "date")]
+        [
+            ("10000-01-01T00:00:00", "dateTime"),
+            ("2020-01-01T00:00:00", "dateTime"),
+            ("10000-01-01", "date"),
+            ("0000-01-01T00:00:00", "dateTime"),
+        ]
     ):
         lines.append(f'<http://e.org/n{n}> <http://e.org/at> "{dt}"^^<{xsd}{kind}> .')
     path = tmp_path / "y.nt"
@@ -133,4 +138,7 @@ def test_rdf_datetimes_outside_years_1_to_9999_stay_text_with_a_warning(tmp_path
     )
     assert values[0][1] == "10000-01-01T00:00:00"
     assert values[2][1] == "10000-01-01"
+    assert values[3][1] == "0000-01-01T00:00:00"
+    # every typed value must read back through properties()
+    g.cypher("MATCH (n) RETURN properties(n) AS p").to_list()
     assert not isinstance(values[1][1], str)
