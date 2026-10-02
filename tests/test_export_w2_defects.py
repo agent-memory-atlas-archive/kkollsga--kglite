@@ -217,3 +217,41 @@ def test_rdf_keeps_mixed_kind_ids_apart(tmp_path, fmt):
     )
     assert ids(back) == ids(g)
     assert len(ids(back)) == 3
+
+
+def _disk_graph(tmp_path):
+    g = KnowledgeGraph(storage="disk", path=str(tmp_path / "disk"))
+    for n in range(7):
+        g.cypher(f"CREATE (:Person {{id: {n}, title: 'p{n}', age: {20 + n}, hired: date('2020-01-0{n + 1}')}})")
+    g.cypher("CREATE (:Department {id: 'eng', title: 'Engineering'})")
+    g.cypher("MATCH (p:Person), (d:Department) CREATE (p)-[:WORKS_IN {since: date('2021-01-01')}]->(d)")
+    return g
+
+
+def _tree(root):
+    import pathlib
+
+    return {
+        str(p.relative_to(root)): p.read_bytes() for p in sorted(pathlib.Path(root).rglob("*")) if p.is_file()
+    }
+
+
+def test_csv_export_of_a_disk_graph_is_batch_size_independent(tmp_path, monkeypatch):
+    g = _disk_graph(tmp_path)
+    g.export_csv(str(tmp_path / "default"))
+    monkeypatch.setenv("KGLITE_EXPORT_BATCH_ROWS", "1")
+    g.export_csv(str(tmp_path / "one"))
+    assert _tree(tmp_path / "one") == _tree(tmp_path / "default")
+    assert len(_tree(tmp_path / "one")) > 3
+
+
+@pytest.mark.parametrize("fmt", ["nq", "trig"])
+def test_rdf_export_of_a_disk_graph_is_batch_size_independent(tmp_path, monkeypatch, fmt):
+    g = _disk_graph(tmp_path)
+    g.export_rdf(str(tmp_path / f"default.{fmt}"), format=fmt)
+    monkeypatch.setenv("KGLITE_EXPORT_BATCH_ROWS", "1")
+    g.export_rdf(str(tmp_path / f"one.{fmt}"), format=fmt)
+    default = (tmp_path / f"default.{fmt}").read_text(encoding="utf-8")
+    one = (tmp_path / f"one.{fmt}").read_text(encoding="utf-8")
+    assert one == default
+    assert default.count("WORKS_IN") >= 7
