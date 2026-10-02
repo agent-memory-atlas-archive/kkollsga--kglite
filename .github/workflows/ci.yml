@@ -958,7 +958,8 @@ jobs:
             tests/test_temporal_persistence.py tests/test_valid_time_oracle.py \
             tests/test_temporal_empty_intervals.py \
             tests/test_export_csv_lossless.py \
-            tests/test_export_rdf_lossless.py
+            tests/test_export_rdf_lossless.py \
+            tests/test_disk_differential_reopen.py
 
   disk-concurrency:
     needs: [dedup]

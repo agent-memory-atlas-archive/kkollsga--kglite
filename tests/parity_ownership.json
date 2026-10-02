@@ -838,5 +838,14 @@
   },
   "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[disk-trig]": {
     "owner": "storage-parity"
+  },
+  "tests/test_disk_differential_reopen.py::test_disk_graph_tracks_memory_across_save_and_reopen[2]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_disk_differential_reopen.py::test_disk_graph_tracks_memory_across_save_and_reopen[3]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_disk_differential_reopen.py::test_disk_graph_tracks_memory_across_save_and_reopen[12]": {
+    "owner": "storage-parity"
   }
 }
