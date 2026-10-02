@@ -420,6 +420,9 @@ prune-dev: prune-target
 	# `make bundle-bin` stages a release server binary here for a wheel build;
 	# no test reads it, and a stale copy outlives every format bump.
 	rm -rf kglite/_bin
+	# A cargo command run inside the packaged-consumer fixture builds the whole
+	# engine into its own target/ (2.7 GB seen 2026-10-02); nothing reads it.
+	rm -rf tests/fixtures/rust-embed-consumer/target
 	find . \( -path ./target -o -path ./.venv \) -prune -o -name ".DS_Store" -type f -print0 | xargs -0 rm -f
 
 PRUNE_TARGET_GB := 40
