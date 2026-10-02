@@ -67,9 +67,11 @@ pub struct ColMapEntry {
     pub idx: usize,
 }
 
-/// Parse a ColType from its tag string.
-fn col_type_from_str(s: &str) -> ColType {
-    match s {
+/// Parse a ColType from its tag string. A tag this version does not know is an
+/// error: reading its bytes as another kind of column returns that column's
+/// strings under the wrong name.
+fn col_type_from_str(s: &str) -> Result<ColType, String> {
+    Ok(match s {
         "int64" => ColType::Int64,
         "float64" => ColType::Float64,
         "uniqueid" => ColType::UniqueId,
@@ -77,8 +79,12 @@ fn col_type_from_str(s: &str) -> ColType {
         "date" => ColType::Date,
         "timestamp" => ColType::Timestamp,
         "string" => ColType::Str,
-        _ => ColType::Str,
-    }
+        other => {
+            return Err(format!(
+                "column type tag '{other}' is not one this version of kglite knows"
+            ))
+        }
+    })
 }
 
 /// Per-type metadata saved to columns_meta.json for post-Phase-3 mmap reload.
@@ -150,12 +156,37 @@ impl ColumnTypeMeta {
     pub fn to_mmap_store(
         &self,
         mmap: Arc<memmap2::Mmap>,
-    ) -> crate::graph::storage::mapped::column_store::MmapColumnStore {
+    ) -> Result<crate::graph::storage::mapped::column_store::MmapColumnStore, String> {
         use crate::graph::storage::mapped::column_store::{
             ColRef, FixedColumnMeta, MmapColumnStore, StrColumnMeta,
         };
 
-        MmapColumnStore {
+        let col_map = self
+            .col_map
+            .iter()
+            .map(|e| {
+                let key = InternedKey::from_u64(e.key_u64);
+                let ct = col_type_from_str(&e.col_type_str)?;
+                let cr = if matches!(ct, ColType::Str) {
+                    ColRef::Str(e.idx)
+                } else {
+                    ColRef::Fixed(e.idx)
+                };
+                Ok((key, cr))
+            })
+            .collect::<Result<_, String>>()?;
+        let fixed_cols = self
+            .fixed_cols
+            .iter()
+            .map(|fc| {
+                Ok(FixedColumnMeta {
+                    col_type: col_type_from_str(&fc.col_type_str)?,
+                    data: fc.data.to_region(),
+                    nulls: fc.nulls.to_region(),
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(MmapColumnStore {
             mmap,
             row_count: self.row_count,
             id_is_string: self.id_is_string,
@@ -191,29 +222,8 @@ impl ColumnTypeMeta {
                 offsets: self.title_offsets.to_region(),
                 nulls: self.title_nulls.to_region(),
             },
-            col_map: self
-                .col_map
-                .iter()
-                .map(|e| {
-                    let key = InternedKey::from_u64(e.key_u64);
-                    let ct = col_type_from_str(&e.col_type_str);
-                    let cr = if matches!(ct, ColType::Str) {
-                        ColRef::Str(e.idx)
-                    } else {
-                        ColRef::Fixed(e.idx)
-                    };
-                    (key, cr)
-                })
-                .collect(),
-            fixed_cols: self
-                .fixed_cols
-                .iter()
-                .map(|fc| FixedColumnMeta {
-                    col_type: col_type_from_str(&fc.col_type_str),
-                    data: fc.data.to_region(),
-                    nulls: fc.nulls.to_region(),
-                })
-                .collect(),
+            col_map,
+            fixed_cols,
             str_cols: self
                 .str_cols
                 .iter()
@@ -227,7 +237,7 @@ impl ColumnTypeMeta {
             overflow_data: self.overflow_data.to_region(),
             has_overflow: self.has_overflow,
             origin: None,
-        }
+        })
     }
 }
 

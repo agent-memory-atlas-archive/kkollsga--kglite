@@ -199,7 +199,12 @@ fn open_column_stores(
                 type_meta.extent()
             )));
         }
-        let mut store = type_meta.to_mmap_store(mmap);
+        let mut store = type_meta.to_mmap_store(mmap).map_err(|reason| {
+            invalid_data(format!(
+                "disk graph column metadata for type '{}' is unreadable: {reason}",
+                type_meta.type_name
+            ))
+        })?;
         if meta.files.contains_key(&type_meta.type_name) {
             store.origin = Some(Arc::new(ColumnFileOrigin {
                 path: path.clone(),

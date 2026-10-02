@@ -76,7 +76,8 @@ fn map_fixture(store: ColumnStore, interner: StringInterner) -> Fixture {
         .unwrap();
     Fixture {
         store: ColumnStore::from_mmap_store(Arc::new(
-            meta.to_mmap_store(Arc::new(map.make_read_only().unwrap())),
+            meta.to_mmap_store(Arc::new(map.make_read_only().unwrap()))
+                .unwrap(),
         )),
         interner,
         _directory: Some(directory),

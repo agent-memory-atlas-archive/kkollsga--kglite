@@ -399,6 +399,10 @@ before upgrading.
   X, now Y); reload and reapply". Nothing is written; reload with
   `kglite.load()` and reapply your changes. This also applies to 0.19.0 and
   earlier, which accepted such a save.
+- A disk directory whose column metadata names a column type tag this version
+  does not know (a newer writer's, or a corrupted file) is refused with a
+  `FileFormatError` naming the tag. It was read as a string column, so the
+  column returned another column's bytes as text.
 
 ### Security
 

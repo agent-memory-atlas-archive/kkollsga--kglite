@@ -100,7 +100,8 @@ fn open_type_file(dir: &std::path::Path) -> ColumnStore {
         .find(|meta| meta.type_name == "Employee")
         .unwrap();
     ColumnStore::from_mmap_store(Arc::new(
-        meta.to_mmap_store(Arc::new(map.make_read_only().unwrap())),
+        meta.to_mmap_store(Arc::new(map.make_read_only().unwrap()))
+            .unwrap(),
     ))
 }
 

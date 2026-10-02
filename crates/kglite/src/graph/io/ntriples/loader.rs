@@ -326,7 +326,7 @@ fn finalize_disk_graph(
                 let mmap_arc = Arc::new(mmap);
 
                 for type_meta in &columns_meta {
-                    let mmap_store = type_meta.to_mmap_store(Arc::clone(&mmap_arc));
+                    let mmap_store = type_meta.to_mmap_store(Arc::clone(&mmap_arc))?;
                     let store = crate::graph::storage::column_store::ColumnStore::from_mmap_store(
                         Arc::new(mmap_store),
                     );
