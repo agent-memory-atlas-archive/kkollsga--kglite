@@ -60,7 +60,11 @@ struct IndexedColumn<'a> {
     slot: Option<u16>,
     /// Whether the property is a column of the store, in the schema, the file
     /// or the tail. When it is, a row without a value has none: the title and
-    /// id are another property's values and are not read in its place.
+    /// id are another property's values and are not read in its place. Never
+    /// true for `title` itself: it names the title column, so a row without a
+    /// `title` property value reads its title column (as `get_node_property`
+    /// does), whether or not some rows also carry a property column of that
+    /// name.
     is_column: bool,
 }
 
@@ -75,7 +79,7 @@ impl<'a> IndexedColumn<'a> {
             store,
             key,
             slot,
-            is_column: store.has_property_column(key),
+            is_column: store.has_property_column(key) && key != InternedKey::from_str("title"),
         }
     }
 
@@ -84,9 +88,10 @@ impl<'a> IndexedColumn<'a> {
     /// the non-empty title and then the non-empty id.
     fn string_at(&self, row: u32) -> Option<String> {
         if let Some(slot) = self.slot {
-            return self.store.get_str_by_slot(row, slot).map(str::to_string);
-        }
-        if let Some(Value::String(s)) = self.store.get(row, self.key) {
+            if let Some(s) = self.store.get_str_by_slot(row, slot) {
+                return Some(s.to_string());
+            }
+        } else if let Some(Value::String(s)) = self.store.get(row, self.key) {
             return Some(s);
         }
         if self.is_column {
