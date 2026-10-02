@@ -360,7 +360,8 @@ pub(crate) fn classify_io_error(err: &std::io::Error) -> (KgliteStatusCode, Stri
 /// node label (first wins; extras kept in an `rdf_types` property).
 /// Predicate / type IRIs are CURIE-compacted with a `__` separator
 /// (so `[:foaf__knows]` matches in Cypher); each node keeps its full
-/// subject IRI in a `uri` property. In-memory backend only.
+/// subject IRI in a `uri` property (unless the file carries a
+/// `kg:manifest`, i.e. came from `kglite_export_rdf`). In-memory backend only.
 ///
 /// # Arguments
 ///
@@ -406,6 +407,49 @@ pub unsafe extern "C" fn kglite_load_rdf(
     keep_full_iris: u8,
     default_type: *const c_char,
     max_triples: i64,
+    out_graph: *mut *mut KgliteGraph,
+    out_stats_json: *mut *const c_char,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    unsafe {
+        kglite_load_rdf_with_options(
+            path,
+            languages_json,
+            label_predicates_json,
+            keep_full_iris,
+            default_type,
+            max_triples,
+            0,
+            out_graph,
+            out_stats_json,
+            out_error_msg,
+        )
+    }
+}
+
+/// [`kglite_load_rdf`] with the `language_maps` option.
+///
+/// Identical to `kglite_load_rdf` (same arguments, outputs, errors and
+/// safety contract) plus one argument: `language_maps` (in), non-zero stores
+/// language-tagged literals as `{lang: value}` map properties instead of
+/// dropping the tags (with `languages_json` still filtering which tags are
+/// kept). A `kg:manifest` statement from `kglite_export_rdf` is honoured
+/// either way: it restores valid-time declarations, secondary labels, parent
+/// types and node ids/titles, and the `uri` property is then not synthesised.
+///
+/// # Safety
+///
+/// As [`kglite_load_rdf`].
+#[cfg(feature = "rdf")]
+#[no_mangle]
+pub unsafe extern "C" fn kglite_load_rdf_with_options(
+    path: *const c_char,
+    languages_json: *const c_char,
+    label_predicates_json: *const c_char,
+    keep_full_iris: u8,
+    default_type: *const c_char,
+    max_triples: i64,
+    language_maps: u8,
     out_graph: *mut *mut KgliteGraph,
     out_stats_json: *mut *const c_char,
     out_error_msg: *mut *const c_char,
@@ -491,7 +535,7 @@ pub unsafe extern "C" fn kglite_load_rdf(
                 } else {
                     Some(max_triples as u64)
                 },
-                language_maps: false,
+                language_maps: language_maps != 0,
             };
 
             let mut graph = DirGraph::new();

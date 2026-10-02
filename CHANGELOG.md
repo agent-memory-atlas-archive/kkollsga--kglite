@@ -45,6 +45,12 @@ before upgrading.
   array (empty when there are none), such as the empty-interval advisory the
   engine already produced for the batch.
 
+- C ABI (additive): `kglite_export_csv` (lossless CSV tree + blueprint +
+  manifest), `kglite_export_rdf` (N-Quads / TriG; `rdf` feature) and
+  `kglite_load_rdf_with_options`, which is `kglite_load_rdf` plus the
+  `language_maps` flag. Each export writes the whole graph and returns its
+  summary as JSON. `kglite_load_rdf` is unchanged.
+
 ### Changed
 
 - `export_csv` is lossless by default: it writes a `manifest.json` beside

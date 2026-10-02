@@ -534,6 +534,91 @@ KgliteStatusCode kglite_session_list_embeddings(const struct KgliteSession *sess
                                                 const char **out_error_msg);
 
 /**
+ * Export the graph to a lossless CSV directory tree with a re-import
+ * blueprint and manifest — the C-side handle on the wheel's `export_csv`.
+ *
+ * Writes `nodes/` and `connections/` CSVs, `blueprint.json` and
+ * `manifest.json` under `output_dir`; `kglite_from_blueprint` rebuilds the
+ * graph from them, restoring valid-time declarations, secondary labels and
+ * every property's type. Rows stream in bounded batches.
+ *
+ * # Arguments
+ *
+ * - `graph` (in, borrowed): a graph handle; not consumed.
+ * - `output_dir` (in, borrowed): UTF-8 directory path, created if missing.
+ * - `out_summary_json` (out, owned): on success
+ *   `{"output_dir":…,"nodes":{type:count},"connections":{type:count},"files_written":N}`
+ *   — free via [`kglite_free_string`](crate::kglite_free_string). May be null.
+ * - `out_error_msg` (out, owned): error message on failure; null on success.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `graph` or `output_dir` is null
+ * - `KGLITE_STATUS_CODE_INVALID_UTF8` — `output_dir` isn't valid UTF-8
+ * - `KGLITE_STATUS_CODE_FILE_IO` — the tree could not be written
+ *
+ * # Safety
+ *
+ * `graph` must be a live handle from a `kglite_*` constructor; `output_dir` a
+ * null-terminated UTF-8 string; the out-pointers null or valid writable slots.
+ */
+
+KgliteStatusCode kglite_export_csv(struct KgliteGraph *graph,
+                                   const char *output_dir,
+                                   const char **out_summary_json,
+                                   const char **out_error_msg);
+
+#if defined(KGLITE_FEATURE_RDF)
+/**
+ * Export the graph to RDF 1.2 (N-Quads or TriG) that `kglite_load_rdf` reads
+ * back — the C-side handle on the wheel's `export_rdf`.
+ *
+ * Typed literals, edge properties on `rdf:reifies` reifiers and the export
+ * manifest (one `kg:manifest` statement) are written, so valid-time
+ * declarations, secondary labels, parent types and id/title kinds survive the
+ * round trip. Streams in bounded batches. Requires the `rdf` feature.
+ *
+ * # Arguments
+ *
+ * - `graph` (in, borrowed): a graph handle; not consumed.
+ * - `path` (in, borrowed): UTF-8 output file path.
+ * - `format` (in, borrowed): `"nq"` or `"trig"`, or null to infer from the
+ *   path (`.trig` → TriG, otherwise N-Quads).
+ * - `base` (in, borrowed): IRI prefix of every generated IRI; must end with
+ *   `/` or `#` and lie outside well-known namespaces. Null for
+ *   `"https://kglite.example/"`.
+ * - `schema_org` (in): non-zero also writes `schema:validFrom` /
+ *   `schema:validThrough` for declared valid-time bounds.
+ * - `out_summary_json` (out, owned): on success
+ *   `{"output_path":…,"nodes":{type:count},"connections":{type:count},"statements":N}`
+ *   — free via [`kglite_free_string`](crate::kglite_free_string). May be null.
+ * - `out_error_msg` (out, owned): error message on failure; null on success.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `graph` or `path` is null
+ * - `KGLITE_STATUS_CODE_INVALID_UTF8` — a string argument isn't valid UTF-8
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — unknown `format`, or a `base`
+ *   that is malformed or inside a well-known namespace
+ * - `KGLITE_STATUS_CODE_FILE_IO` — the file could not be written
+ *
+ * # Safety
+ *
+ * `graph` must be a live handle from a `kglite_*` constructor; string
+ * arguments null-terminated UTF-8 or null where allowed; the out-pointers
+ * null or valid writable slots.
+ */
+
+KgliteStatusCode kglite_export_rdf(struct KgliteGraph *graph,
+                                   const char *path,
+                                   const char *format,
+                                   const char *base,
+                                   uint8_t schema_org,
+                                   const char **out_summary_json,
+                                   const char **out_error_msg);
+#endif
+
+/**
  * Create a new, empty in-memory knowledge graph.
  *
  * The returned handle owns a fresh, empty `DirGraph` — the C-side
@@ -692,7 +777,8 @@ KgliteStatusCode kglite_load_file(const char *path,
  * node label (first wins; extras kept in an `rdf_types` property).
  * Predicate / type IRIs are CURIE-compacted with a `__` separator
  * (so `[:foaf__knows]` matches in Cypher); each node keeps its full
- * subject IRI in a `uri` property. In-memory backend only.
+ * subject IRI in a `uri` property (unless the file carries a
+ * `kg:manifest`, i.e. came from `kglite_export_rdf`). In-memory backend only.
  *
  * # Arguments
  *
@@ -740,6 +826,35 @@ KgliteStatusCode kglite_load_rdf(const char *path,
                                  struct KgliteGraph **out_graph,
                                  const char **out_stats_json,
                                  const char **out_error_msg);
+#endif
+
+#if defined(KGLITE_FEATURE_RDF)
+/**
+ * [`kglite_load_rdf`] with the `language_maps` option.
+ *
+ * Identical to `kglite_load_rdf` (same arguments, outputs, errors and
+ * safety contract) plus one argument: `language_maps` (in), non-zero stores
+ * language-tagged literals as `{lang: value}` map properties instead of
+ * dropping the tags (with `languages_json` still filtering which tags are
+ * kept). A `kg:manifest` statement from `kglite_export_rdf` is honoured
+ * either way: it restores valid-time declarations, secondary labels, parent
+ * types and node ids/titles, and the `uri` property is then not synthesised.
+ *
+ * # Safety
+ *
+ * As [`kglite_load_rdf`].
+ */
+
+KgliteStatusCode kglite_load_rdf_with_options(const char *path,
+                                              const char *languages_json,
+                                              const char *label_predicates_json,
+                                              uint8_t keep_full_iris,
+                                              const char *default_type,
+                                              int64_t max_triples,
+                                              uint8_t language_maps,
+                                              struct KgliteGraph **out_graph,
+                                              const char **out_stats_json,
+                                              const char **out_error_msg);
 #endif
 
 /**
