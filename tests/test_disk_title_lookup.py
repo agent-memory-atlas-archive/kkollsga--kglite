@@ -74,3 +74,24 @@ def test_title_lookup_forms_agree_after_save_and_reopen(tmp_path, field, shape):
     g.save(path)
     del g
     _assert_lookups_agree(kglite.load(path), expect)
+
+
+def test_title_set_on_a_created_node_is_what_the_index_answers(tmp_path):
+    """`CREATE` leaves a `title` property column that `SET n.title` does not touch."""
+    path = str(tmp_path / "g")
+    g = kglite.KnowledgeGraph(storage="disk", path=path)
+    g.cypher("CREATE (n:Person {id: 16, title: 'Person-16'})")
+    g.cypher("CREATE (n:Person {id: 17, title: 'Person-17'})")
+    g.cypher("MATCH (n:Person {id: 16}) SET n.title = 'renamed'")
+    expect = {"renamed": [16], "Person-16": [], "Person-17": [17]}
+    g.save(path)
+    _assert_lookups_agree(g, expect)
+    del g
+    g = kglite.load(path)
+    _assert_lookups_agree(g, expect)
+    g.cypher("MATCH (n:Person {id: 17}) SET n.title = 'again'")
+    expect.update({"again": [17], "Person-17": []})
+    g.save(path)
+    _assert_lookups_agree(g, expect)
+    del g
+    _assert_lookups_agree(kglite.load(path), expect)

@@ -60,12 +60,14 @@ struct IndexedColumn<'a> {
     slot: Option<u16>,
     /// Whether the property is a column of the store, in the schema, the file
     /// or the tail. When it is, a row without a value has none: the title and
-    /// id are another property's values and are not read in its place. Never
-    /// true for `title` itself: it names the title column, so a row without a
-    /// `title` property value reads its title column (as `get_node_property`
-    /// does), whether or not some rows also carry a property column of that
-    /// name.
+    /// id are another property's values and are not read in its place.
     is_column: bool,
+    /// The property is `title`: the value is the row's title column. A type
+    /// can also hold a `title` property column (a `CREATE` writes one, an
+    /// appended tail's schema names one), but `SET n.title` writes only the
+    /// title column and `n.title` reads it, so the property column goes stale
+    /// and must not be indexed.
+    is_title: bool,
 }
 
 impl<'a> IndexedColumn<'a> {
@@ -79,7 +81,8 @@ impl<'a> IndexedColumn<'a> {
             store,
             key,
             slot,
-            is_column: store.has_property_column(key) && key != InternedKey::from_str("title"),
+            is_column: store.has_property_column(key),
+            is_title: key == InternedKey::from_str("title"),
         }
     }
 
@@ -87,6 +90,9 @@ impl<'a> IndexedColumn<'a> {
     /// has no column for (a `label` / `name` / `nid` alias of its title or id),
     /// the non-empty title and then the non-empty id.
     fn string_at(&self, row: u32) -> Option<String> {
+        if self.is_title {
+            return self.title_or_id(row);
+        }
         if let Some(slot) = self.slot {
             if let Some(s) = self.store.get_str_by_slot(row, slot) {
                 return Some(s.to_string());
@@ -100,6 +106,10 @@ impl<'a> IndexedColumn<'a> {
         if self.is_column {
             return None;
         }
+        self.title_or_id(row)
+    }
+
+    fn title_or_id(&self, row: u32) -> Option<String> {
         let non_empty = |value: Option<Value>| match value {
             Some(Value::String(s)) if !s.is_empty() => Some(s),
             _ => None,
