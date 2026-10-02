@@ -71,9 +71,10 @@ struct DiskGraphMeta {
     /// The on-disk layout revision of the directory as a whole. Absent (0) in
     /// everything written by 0.19.0 and earlier; a reader refuses a value above
     /// [`CURRENT_DISK_FORMAT`] by name before it maps anything. Readers that
-    /// predate the field ignore it, which is why format 2 also changes the
-    /// shape of `columns_meta.json` — that is what stops them (see
-    /// `io::columns_meta`).
+    /// predate the field ignore it. Measured against 0.19.0: what stops it is
+    /// `id_indices.bin` version 3 (`unsupported raw index version`), which it
+    /// reads before the column metadata; the `columns_meta.json` envelope would
+    /// refuse it second (see `io::columns_meta`).
     #[serde(default)]
     disk_format: u8,
 }

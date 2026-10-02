@@ -77,14 +77,15 @@ before upgrading.
   handed the new files refuses them instead of misreading them — 0.19.0 raises
   `kglite.FileFormatError: File uses .kgl container version 7, but this library
   only supports up to version 6. Please upgrade kglite.` for a `.kgl` (through
-  `load()`, `open()` and `from_bytes()` alike), and `kglite.FileFormatError: disk
-  graph column metadata '<dir>/generations/<gen>/seg_000/columns_meta.json' is
-  not valid JSON: invalid type: map, expected a sequence at line 1 column 0` for
-  a disk directory whose columns are mmap-served (a directory whose types are
-  all served from per-type sidecars is refused by `invalid id_indices.bin:
-  unsupported raw index version` instead). Both are ordinary exceptions; before
-  this, 0.19.0 mapped a column type it did not know as a string column and
-  panicked in a fixed-width read. Bundled MCP, Bolt and CLI binaries link the
+  `load()`, `open()` and `from_bytes()` alike), and `invalid id_indices.bin:
+  unsupported raw index version` for a disk directory, whether its columns are
+  mmap-served or all in per-type sidecars (0.19.0 reads `id_indices.bin` before
+  the column metadata, so that check is the refusal users see; a sidecar
+  `Timestamp` column read past it would fail as `invalid packed column store:
+  codec error ... trailing bytes`, which is a corruption-shaped message, not a
+  version one). Both refusals are ordinary exceptions; before the guard, 0.19.0
+  mapped a column type it did not know as a string column and panicked in a
+  fixed-width read. Bundled MCP, Bolt and CLI binaries link the
   engine, so a prebuilt one from 0.19.0 or earlier cannot read files this
   version writes and must be rebuilt.
 
