@@ -6993,8 +6993,10 @@ class KnowledgeGraph:
         """Export the graph to a file.
 
         Supported formats: ``graphml``, ``gexf``, ``d3``/``json``, ``csv``,
-        ``sqlite``. Format is inferred from the file extension if not
-        specified (``.sql`` → ``sqlite``).
+        ``sqlite``, ``nq``, ``trig``. Format is inferred from the file extension
+        if not specified (``.sql`` → ``sqlite``, ``.nq`` → ``nq``, ``.trig`` →
+        ``trig``). ``nq`` / ``trig`` write RDF with default options; see
+        :meth:`export_rdf` for the options.
 
         D3/JSON field precedence and XML text handling follow the same rules
         as :meth:`export_string`.
@@ -7022,6 +7024,77 @@ class KnowledgeGraph:
                 :meth:`export_string` has no path to infer from and defaults to
                 ``'json'`` instead.
             selection_only: Export only selected nodes. Default: ``True`` if selection exists.
+        """
+        ...
+
+    def export_rdf(
+        self,
+        path: str,
+        format: Optional[str] = None,
+        base: Optional[str] = None,
+        schema_org: bool = False,
+        selection_only: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        """Export to RDF 1.2 (N-Quads or TriG) that :func:`load_rdf` reads back.
+
+        Mapping: a node is ``<base>node/<Type>/<id>`` with ``rdf:type
+        <base>type/<Type>``, its title as ``rdfs:label`` and each property as
+        ``<base>prop/<name>``; an edge is the statement ``s <base>rel/<TYPE> o``
+        written once per edge, and an edge with properties also gets a reifier
+        ``_:eN rdf:reifies <<( s p o )>>`` carrying ``_:eN <base>prop/<name>
+        value`` (parallel edges get distinct reifiers). Property values are
+        typed literals: ``xsd:integer``, ``xsd:double``, ``xsd:boolean``,
+        ``xsd:date``, ``xsd:dateTime`` (no zone), ``geo:wktLiteral``
+        (``POINT(lon lat)``), ``xsd:duration`` and ``kg:json`` (plain JSON) for
+        lists and maps. The export manifest (``kglite-export/1``) is one
+        ``kg:manifest`` statement in the named graph ``<base>meta``;
+        :func:`load_rdf` uses it to restore valid-time declarations, secondary
+        labels, parent types, and the id and title kinds. Nodes sharing an id
+        (valid-time versions) get a ``;<node index>`` IRI suffix on all but the
+        one the id index answers for. No prefixes are declared. The file is
+        written statement by statement, so memory is bounded by the batch
+        (``KGLITE_EXPORT_BATCH_ROWS``, default 8192).
+
+        Not restored: a duration whose months, days and seconds disagree in sign
+        (written as ``kg:json``, reads back as a map), a language-map property
+        (an ordinary map: written as ``kg:json``), a list or map nested in a
+        list (JSON text), a secondary label carried by only some nodes of a
+        type, an id of a kind other than int or string (the node gets a dense
+        id), a column mixing value kinds, and a property named ``uri`` (the
+        loader overwrites it with the node IRI). Parallel edges without
+        properties are written as repeated identical statements, which a
+        set-semantics RDF consumer collapses. ``load_rdf`` builds an in-memory
+        graph whatever storage the source used.
+
+        Args:
+            path: Output file.
+            format: ``"nq"`` (N-Quads) or ``"trig"``. Default: from the path
+                extension (``.trig`` → TriG, otherwise N-Quads).
+            base: IRI prefix of every generated IRI; must end with ``/`` or
+                ``#`` and must not lie inside a well-known namespace
+                (schema.org, FOAF, RDF, ...). Default
+                ``"https://kglite.example/"``.
+            schema_org: Also write ``schema:validFrom`` / ``schema:validThrough``
+                for the bounds of declared valid-time intervals. Off by default;
+                the ``kg:`` manifest stays the source of truth (it carries the
+                closed / half-open convention schema.org cannot). The aliases
+                re-import as ``schema__validFrom`` / ``schema__validThrough``
+                properties.
+            selection_only: Export only selected nodes. Default: ``True`` if a
+                selection exists, ``False`` otherwise.
+
+        Returns:
+            Summary dict with keys ``output_path``, ``nodes`` (type → count),
+            ``connections`` (type → count) and ``statements`` (statements
+            written, the manifest included).
+
+        Raises:
+            ValueError: Unknown format, or an invalid ``base``.
+
+        Example::
+
+            graph.export_rdf('org.nq')
+            back = kglite.load_rdf('org.nq')
         """
         ...
 

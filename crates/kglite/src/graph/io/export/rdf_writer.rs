@@ -544,3 +544,7 @@ pub fn to_rdf(
     emit.sink.finish()?;
     Ok(summary)
 }
+
+#[cfg(test)]
+#[path = "rdf_writer_tests.rs"]
+mod rdf_writer_tests;

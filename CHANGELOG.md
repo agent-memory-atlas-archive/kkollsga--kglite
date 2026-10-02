@@ -11,6 +11,17 @@ before upgrading.
 
 ### Added
 
+- `export_rdf(path, format=None, base=None, schema_org=False)` (and
+  `export(path)` for `.nq` / `.trig`) writes RDF 1.2 that `load_rdf` reads
+  back: typed literals, edge properties on `rdf:reifies` reifiers, and the
+  export manifest as one `kg:manifest` statement, so valid-time declarations,
+  secondary labels, parent types and id/title kinds survive. Streams in bounded
+  batches. `schema_org=True` additionally writes `schema:validFrom` /
+  `schema:validThrough`. Rust: `kglite::api::io::to_rdf` (`rdf` feature).
+  `load_rdf` now percent-decodes the type, property and relationship names of
+  the `<base>type/`, `<base>prop/` and `<base>rel/` layout and accepts
+  `;<n>`-suffixed node IRIs for nodes that share an id.
+
 - `load_rdf` reads RDF 1.2 reifiers: `r rdf:reifies <<( s p o )>>` plus
   `r <prop> value` statements become properties of the `s p o` edge (parallel
   edges for several reifiers; reifiers are not nodes). New `language_maps`

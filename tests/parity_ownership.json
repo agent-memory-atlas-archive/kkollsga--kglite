@@ -820,5 +820,23 @@
   },
   "tests/test_export_csv_lossless.py::test_round_trip_loses_nothing[disk]": {
     "owner": "storage-parity"
+  },
+  "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[memory-nq]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[memory-trig]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[mapped-nq]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[mapped-trig]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[disk-nq]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_export_rdf_lossless.py::test_round_trip_loses_nothing[disk-trig]": {
+    "owner": "storage-parity"
   }
 }

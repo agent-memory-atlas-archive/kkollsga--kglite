@@ -796,6 +796,10 @@
           "kind": "method",
           "signature": "(self, /, path, node_types=None, *, relationship_keys=None)"
         },
+        "export_rdf": {
+          "kind": "method",
+          "signature": "(self, /, path, format=None, base=None, schema_org=False, selection_only=None)"
+        },
         "export_recipes": {
           "kind": "method",
           "signature": "(self, /, path)"
@@ -1809,7 +1813,7 @@
     },
     "load_rdf": {
       "kind": "function",
-      "signature": "(path, *, languages=None, label_predicates=None, keep_full_iris=False, default_type=None, max_triples=None)"
+      "signature": "(path, *, languages=None, label_predicates=None, keep_full_iris=False, default_type=None, max_triples=None, language_maps=False)"
     },
     "open": {
       "kind": "function",
