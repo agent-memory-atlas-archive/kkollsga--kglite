@@ -15,8 +15,9 @@
 //! the empty cell; strings are `text` (empty string `\e`, a leading `\`
 //! doubled); ints/floats/bools/dates as their text; timestamps ISO 8601
 //! without a zone; durations `{"months","days","seconds"}`; lists and maps
-//! JSON; points `point(lat, lon)`. List elements are JSON scalars: a nested
-//! array or object inside a list comes back as its JSON text.
+//! JSON; points `point(lat, lon)`. A date, timestamp, duration, point or
+//! non-finite float *inside* a list or map is a tagged JSON object (see
+//! [`super::typed_json`]), so nested values keep their type.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -29,6 +30,7 @@ use serde_json::{json, Map, Value as Json};
 use super::encoding::escape_csv;
 use super::manifest::{ColumnKind, ExportManifest, Scope};
 use super::paths::ExportPaths;
+use super::typed_json::to_json;
 use crate::datatypes::values::{raw_string, Value};
 use crate::graph::blueprint::typing::exact::encode_text;
 use crate::graph::dir_graph::DirGraph;
@@ -114,32 +116,6 @@ fn id_keyword(kind: ColumnKind) -> &'static str {
     }
 }
 
-pub(super) fn plain_json(value: &Value) -> Json {
-    match value {
-        Value::Null | Value::NodeRef(_) => Json::Null,
-        Value::String(s) => json!(s),
-        Value::Int64(n) => json!(n),
-        Value::UniqueId(n) => json!(n),
-        Value::Float64(f) => serde_json::Number::from_f64(*f).map_or(Json::Null, Json::Number),
-        Value::Boolean(b) => json!(b),
-        Value::DateTime(d) => json!(d.to_string()),
-        Value::Timestamp(t) => json!(t.format("%Y-%m-%dT%H:%M:%S%.f").to_string()),
-        Value::Point { lat, lon } => json!({"lat": lat, "lon": lon}),
-        Value::Duration {
-            months,
-            days,
-            seconds,
-        } => json!({"months": months, "days": days, "seconds": seconds}),
-        Value::List(items) => Json::Array(items.iter().map(plain_json).collect()),
-        Value::Map(map) => Json::Object(
-            map.iter()
-                .map(|(k, v)| (k.to_string(), plain_json(v)))
-                .collect::<Map<_, _>>(),
-        ),
-        other => json!(raw_string(other)),
-    }
-}
-
 /// One cell: `None` is null (the empty cell).
 fn encode_cell(value: &Value, kind: ColumnKind) -> Option<String> {
     if matches!(value, Value::Null | Value::NodeRef(_)) {
@@ -154,10 +130,17 @@ fn encode_cell(value: &Value, kind: ColumnKind) -> Option<String> {
         (ColumnKind::Timestamp, Value::Timestamp(t)) => {
             t.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
         }
-        (ColumnKind::Duration, v @ Value::Duration { .. }) => plain_json(v).to_string(),
+        (
+            ColumnKind::Duration,
+            Value::Duration {
+                months,
+                days,
+                seconds,
+            },
+        ) => json!({"months": months, "days": days, "seconds": seconds}).to_string(),
         (ColumnKind::Point, Value::Point { lat, lon }) => format!("point({lat}, {lon})"),
         (ColumnKind::List | ColumnKind::Map, v @ (Value::List(_) | Value::Map(_))) => {
-            plain_json(v).to_string()
+            to_json(v).to_string()
         }
         (_, Value::String(s)) => encode_text(s),
         (_, v) => encode_text(&raw_string(v)),

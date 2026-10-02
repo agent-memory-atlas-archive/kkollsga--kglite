@@ -142,3 +142,41 @@ def test_rdf_datetimes_outside_years_1_to_9999_stay_text_with_a_warning(tmp_path
     # every typed value must read back through properties()
     g.cypher("MATCH (n) RETURN properties(n) AS p").to_list()
     assert not isinstance(values[1][1], str)
+
+
+def _round_trip(g, fmt, tmp_path):
+    if fmt == "csv":
+        out = str(tmp_path / "csv")
+        g.export_csv(out)
+        return kglite.from_blueprint(out + "/blueprint.json", save=False)
+    path = str(tmp_path / f"g.{fmt}")
+    g.export_rdf(path, format=fmt)
+    return kglite.load_rdf(path)
+
+
+FORMATS = ["csv", "nq", "trig"]
+
+
+def _props(g, label):
+    return g.cypher(f"MATCH (n:{label}) RETURN n.id AS id, properties(n) AS p ORDER BY id").to_list()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_typed_values_inside_lists_and_maps_keep_their_type(tmp_path, fmt):
+    g = KnowledgeGraph()
+    g.cypher(
+        "CREATE (:Person {id: 1, title: 'Ada', "
+        "days: [date('2020-01-01'), date('2021-02-03')], "
+        "seen: [datetime('2020-01-02T03:04:05.250')], "
+        "gaps: [duration({days: 3})], "
+        "spots: [point({latitude: 60.1, longitude: 5.2})], "
+        "nested: [[1, 2], [date('2020-01-01')]], "
+        "info: {hired: date('2020-01-01'), at: datetime('2020-01-02T03:04:05'), "
+        "gap: duration({days: 1}), spot: point({latitude: 1.5, longitude: 2.5}), "
+        "inner: {d: date('1999-12-31'), l: [duration({days: 2})]}}, "
+        "tricky: {`$date`: '2020-01-01'}})"
+    )
+    back = _round_trip(g, fmt, tmp_path)
+    got, want = _props(back, "Person"), _props(g, "Person")
+    assert got == want
+    assert isinstance(want[0]["p"]["days"][0], __import__("datetime").date)

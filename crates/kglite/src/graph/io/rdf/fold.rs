@@ -89,7 +89,7 @@ fn xsd_to_value(value: &str, local: &str) -> Value {
 /// that is not JSON stays a string.
 fn json_to_value(value: &str) -> Value {
     match serde_json::from_str::<serde_json::Value>(value) {
-        Ok(json) => crate::param::json_value_to_kglite_value(&json),
+        Ok(json) => crate::graph::io::export::typed_json::from_json(&json),
         Err(_) => Value::String(value.to_string()),
     }
 }

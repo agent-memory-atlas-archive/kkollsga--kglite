@@ -10,6 +10,7 @@ mod encoding;
 #[cfg(feature = "rdf")]
 pub mod kg_vocab;
 pub mod manifest;
+pub(crate) mod typed_json;
 pub use csv_tree::to_csv_dir;
 #[cfg(feature = "rdf")]
 mod rdf_writer;

@@ -9,8 +9,8 @@
 //!   (a space may stand for the `T`).
 //! - `map` is a JSON object; nested arrays and objects become lists and maps.
 
-use crate::datatypes::prop_map::PropMap;
 use crate::datatypes::values::{ColumnData, Value};
+use crate::graph::io::export::typed_json;
 use chrono::{Datelike, NaiveDateTime};
 
 use super::super::table::{MisparseTally, RawCsv};
@@ -43,26 +43,6 @@ pub fn parse_timestamp(cell: &str) -> Option<NaiveDateTime> {
         .iter()
         .find_map(|fmt| NaiveDateTime::parse_from_str(s, fmt).ok())
         .filter(|t| super::scalar::year_is_supported(t.year()))
-}
-
-/// A JSON value as a graph value: arrays become lists, objects maps.
-pub fn json_to_value(json: &serde_json::Value) -> Value {
-    match json {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Boolean(*b),
-        serde_json::Value::Number(n) => n
-            .as_i64()
-            .map(Value::Int64)
-            .or_else(|| n.as_f64().map(Value::Float64))
-            .unwrap_or(Value::Null),
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
-        serde_json::Value::Object(map) => Value::Map(PropMap::from_pairs(
-            map.iter()
-                .map(|(k, v)| (k.clone(), json_to_value(v)))
-                .collect(),
-        )),
-    }
 }
 
 pub fn text_column(raw: &RawCsv, src_idx: usize) -> ColumnData {
@@ -109,11 +89,12 @@ pub fn map_column(raw: &RawCsv, src_idx: usize) -> ColumnData {
                     return None;
                 }
                 match serde_json::from_str::<serde_json::Value>(&row[src_idx]) {
-                    Ok(serde_json::Value::Object(obj)) => Some(PropMap::from_pairs(
-                        obj.iter()
-                            .map(|(k, v)| (k.clone(), json_to_value(v)))
-                            .collect(),
-                    )),
+                    Ok(serde_json::Value::Object(obj)) => {
+                        match typed_json::from_json(&serde_json::Value::Object(obj)) {
+                            Value::Map(map) => Some(map),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 }
             })

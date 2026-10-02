@@ -11,7 +11,8 @@
 //! Property values are typed literals: ints `xsd:integer`, floats
 //! `xsd:double`, booleans `xsd:boolean`, dates `xsd:date`, timestamps
 //! `xsd:dateTime` (no zone), points `geo:wktLiteral` (`POINT(lon lat)`),
-//! durations `xsd:duration`, lists and maps `kg:json` (plain JSON). A duration
+//! durations `xsd:duration`, lists and maps `kg:json` (JSON; a typed value
+//! inside one is a tagged object, see [`super::typed_json`]). A duration
 //! whose months, days and seconds disagree in sign has no `xsd:duration`
 //! spelling and is written as `kg:duration` (`months,days,seconds`). A
 //! language-map property is an ordinary map and is written as `kg:json`.
@@ -35,7 +36,8 @@ use oxrdf::{
 use oxttl::{NQuadsSerializer, TriGSerializer};
 use petgraph::graph::NodeIndex;
 
-use super::csv_tree::{batch_rows, plain_json, BatchGuard};
+use super::csv_tree::{batch_rows, BatchGuard};
+use super::typed_json::to_json;
 use super::kg_vocab::{
     encode_segment, DUPLICATE_MARK, KG_DURATION, KG_JSON, KG_MANIFEST, META_GRAPH, NODE_PATH,
     PROP_PATH, REL_PATH, TYPE_PATH,
@@ -275,7 +277,7 @@ impl<'a> Emitter<'a> {
                 Some(text) => typed(text, &self.xsd_duration),
                 None => typed(format!("{months},{days},{seconds}"), &self.kg_duration),
             },
-            Value::List(_) | Value::Map(_) => typed(plain_json(value).to_string(), &self.kg_json),
+            Value::List(_) | Value::Map(_) => typed(to_json(value).to_string(), &self.kg_json),
             other => Literal::new_simple_literal(raw_string(other)),
         })
     }

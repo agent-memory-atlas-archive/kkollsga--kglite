@@ -432,29 +432,16 @@ fn parse_duration_cell(text: &str, is_null: bool) -> Option<(i32, i32, i64)> {
     }
 }
 
-/// Parse a CSV cell declared as a list. A JSON array maps element-wise; any
-/// other value is wrapped as a single-element list so it isn't dropped.
+/// Parse a CSV cell declared as a list. A JSON array maps element-wise (nested
+/// arrays and objects become lists and maps, tagged typed values their typed
+/// value); any other value is wrapped as a single-element list so it isn't
+/// dropped.
 fn parse_list_cell(s: &str) -> Vec<Value> {
+    use crate::graph::io::export::typed_json::from_json;
     match serde_json::from_str::<serde_json::Value>(s) {
-        Ok(serde_json::Value::Array(items)) => items.iter().map(json_scalar_to_value).collect(),
-        Ok(other) => vec![json_scalar_to_value(&other)],
+        Ok(serde_json::Value::Array(items)) => items.iter().map(from_json).collect(),
+        Ok(other) => vec![from_json(&other)],
         Err(_) => vec![Value::String(s.to_string())],
-    }
-}
-
-/// Minimal JSON-scalar → `Value` mapping for list elements. Nested
-/// arrays/objects are stringified — list cells are expected to hold scalars.
-fn json_scalar_to_value(j: &serde_json::Value) -> Value {
-    match j {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Boolean(*b),
-        serde_json::Value::Number(num) => num
-            .as_i64()
-            .map(Value::Int64)
-            .or_else(|| num.as_f64().map(Value::Float64))
-            .unwrap_or(Value::Null),
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        other => Value::String(other.to_string()),
     }
 }
 
@@ -844,12 +831,16 @@ mod typing_tests {
                 Value::Null,
             ]))
         );
-        // Nested arrays/objects are stringified, not kept as structure.
+        // Nested arrays/objects keep their structure (the lossless export
+        // writes a list of lists this way).
         assert_eq!(
             df.get_value(2, "l"),
             Some(Value::List(vec![
-                Value::String("[1,2]".into()),
-                Value::String("{\"k\":1}".into()),
+                Value::List(vec![Value::Int64(1), Value::Int64(2)]),
+                Value::Map(crate::datatypes::prop_map::PropMap::from_pairs(vec![(
+                    "k".to_string(),
+                    Value::Int64(1)
+                )])),
             ]))
         );
         // A bare scalar is a one-element list, and so is a JSON string.
