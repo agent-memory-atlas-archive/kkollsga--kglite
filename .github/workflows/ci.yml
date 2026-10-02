@@ -152,7 +152,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install pinned cargo-llvm-cov
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2.87.1
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-llvm-cov@0.8.7
 
@@ -411,7 +411,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_STABLE }}
       - name: Install pinned cargo-audit
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2.87.1
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-audit@0.22.2
       - name: Deny unreviewed RustSec findings
@@ -1249,7 +1249,7 @@ jobs:
           java-version: '26'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           # Pinned, and no wrapper in the repo — CI is the only place the
           # build's Gradle version is written down. Matches publish_java.yml.

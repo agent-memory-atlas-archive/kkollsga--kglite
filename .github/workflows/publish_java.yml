@@ -103,7 +103,7 @@ jobs:
           distribution: temurin
           java-version: '26'
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           gradle-version: '9.7.0'
       - name: Compile the Java wrapper
@@ -178,7 +178,7 @@ jobs:
           distribution: temurin
           java-version: '26'
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           # Pinned, and no wrapper in the repo: kglite-java is built by whatever
           # Gradle the developer has, so CI naming a version is the only place
