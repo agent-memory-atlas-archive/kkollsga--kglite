@@ -43,6 +43,18 @@ impl std::fmt::Display for SaveError {
 
 impl std::error::Error for SaveError {}
 
+impl From<String> for SaveError {
+    fn from(message: String) -> Self {
+        Self::Io(message)
+    }
+}
+
+impl From<SaveError> for String {
+    fn from(error: SaveError) -> Self {
+        error.to_string()
+    }
+}
+
 impl From<DurableOpenError> for SaveError {
     fn from(error: DurableOpenError) -> Self {
         match error {

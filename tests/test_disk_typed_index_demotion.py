@@ -7,8 +7,6 @@ every lookup form, on the same handle, after a save and after a reopen.
 
 from __future__ import annotations
 
-import datetime as dt
-
 import pandas as pd
 import pytest
 

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::graph::io::columns_meta::ColumnsMeta;
+use crate::graph::io::file::SaveError;
 use crate::graph::storage::packed_codec::IntColumnEncoding;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -344,7 +345,12 @@ impl DirGraph {
 
     /// Save a disk-mode graph to a directory. The directory IS the graph.
     /// Persists CSR files, node data, edge properties, column stores, and metadata.
-    pub fn save_disk(&mut self, path: &str) -> Result<(), String> {
+    ///
+    /// Refused with [`SaveError::Refused`] when another writer published a
+    /// generation since this handle loaded or last published one: the save
+    /// would build the new generation from this handle's older state and
+    /// silently drop the other writer's work. Nothing is written.
+    pub fn save_disk(&mut self, path: &str) -> Result<(), SaveError> {
         let root = std::path::PathBuf::from(path);
         if let Some(disk) = self.graph.as_disk_mut() {
             disk.detach_ended_lineage();
@@ -364,7 +370,7 @@ impl DirGraph {
             GraphBackend::Disk(disk) => disk
                 .take_lease(&root)
                 .map_err(|e| format!("Failed to acquire disk writer lock: {e}"))?,
-            _ => return Err("save_disk requires disk mode".to_string()),
+            _ => return Err("save_disk requires disk mode".to_string().into()),
         };
         if let GraphBackend::Disk(disk) = &mut self.graph {
             disk.writer_lock = Some(writer_lock.clone());
@@ -374,6 +380,9 @@ impl DirGraph {
         let publication = writer_lock
             .publication_permit()
             .map_err(|e| format!("Failed to retain disk publication authority: {e}"))?;
+        if let GraphBackend::Disk(disk) = &self.graph {
+            disk.ensure_current_generation_unchanged(&root)?;
+        }
         let mut clock = crate::graph::io::load_timing::StageClock::start();
         let generation = crate::graph::storage::disk::generation::GenerationTxn::begin(&root)
             .map_err(|e| format!("Failed to begin disk generation: {e}"))?;

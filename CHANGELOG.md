@@ -391,6 +391,14 @@ before upgrading.
 - `export_rdf` merged the versions of a repeated node id into one node on
   re-import when no query had yet touched that type's id index (both versions
   shared one IRI). The exporter now builds the index first.
+- `save()` on a disk graph now refuses when another process (or another handle)
+  has published a generation since this handle loaded the directory or last
+  saved it, instead of publishing a generation built from the older state and
+  silently dropping the other writer's work. It raises `ValueError`: "the graph
+  on disk was saved by another process since this handle loaded it (generation
+  X, now Y); reload and reapply". Nothing is written; reload with
+  `kglite.load()` and reapply your changes. This also applies to 0.19.0 and
+  earlier, which accepted such a save.
 
 ### Security
 

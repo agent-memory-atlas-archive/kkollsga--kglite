@@ -1066,6 +1066,7 @@ impl DiskGraph {
             overflow_in,
             free_edge_slots: meta.free_edge_slots,
             generation_pin: super::generation::GenerationPin::containing(&csr_dir),
+            expected_generation: Some(super::generation::generation_id_containing(&csr_dir)),
             data_dir: csr_dir.clone(),
             logical_root: dir.to_path_buf(),
             writer_lock: None,

@@ -496,7 +496,7 @@ fn build_type_connectivity_cache(graph: &mut DirGraph) {
 
 /// Publish a build that ran in the graph's own directory: write the
 /// `DirGraph`-level sidecars at the root and hand the directory over.
-fn publish_build_in_place(graph: &DirGraph) -> Result<(), String> {
+fn publish_build_in_place(graph: &mut DirGraph) -> Result<(), String> {
     let crate::graph::schema::GraphBackend::Disk(ref dg) = graph.graph else {
         return Ok(());
     };
@@ -585,6 +585,11 @@ fn publish_build_in_place(graph: &DirGraph) -> Result<(), String> {
     }
 
     publish_flat_root(&root_dir, &json)?;
+    // The flat publish retired the creation generation's pointer, so the handle
+    // is now based on a directory with no `CURRENT`.
+    if let Some(disk) = graph.graph.as_disk_mut() {
+        disk.expected_generation = Some(None);
+    }
     Ok(())
 }
 

@@ -71,6 +71,36 @@ impl DiskGraph {
         Ok(lease)
     }
 
+    /// Refuse a save over `root` when `CURRENT` no longer selects the generation
+    /// this handle is built from. Run under the writer lease, so no other
+    /// process can publish between this check and the publish that follows.
+    pub(crate) fn ensure_current_generation_unchanged(
+        &self,
+        root: &Path,
+    ) -> Result<(), crate::graph::io::file::SaveError> {
+        let Some(expected) = self.expected_generation else {
+            return Ok(());
+        };
+        if root != self.logical_root {
+            return Ok(());
+        }
+        let current = super::generation::resolve_snapshot(root)
+            .map_err(|e| format!("Failed to read the current generation: {e}"))?
+            .generation;
+        if current == expected {
+            return Ok(());
+        }
+        let name = |generation: Option<u64>| {
+            generation.map_or_else(|| "none".to_string(), |id| id.to_string())
+        };
+        Err(crate::graph::io::file::SaveError::Refused(format!(
+            "the graph on disk was saved by another process since this handle loaded it \
+             (generation {}, now {}); reload and reapply",
+            name(expected),
+            name(current)
+        )))
+    }
+
     /// Paths of every memory-mapped array this graph currently holds.
     ///
     /// Exists so the "a published graph maps only its own generation"
@@ -120,6 +150,7 @@ impl DiskGraph {
         self.logical_root = logical_root;
         self.data_dir = snapshot_dir.join(segment_subdir(0));
         self.generation_pin = super::generation::GenerationPin::containing(&self.data_dir);
+        self.expected_generation = Some(super::generation::generation_id_containing(&self.data_dir));
 
         // Re-map the CSR arrays onto the generation just published.
         //
@@ -248,6 +279,7 @@ impl DiskGraph {
             free_edge_slots: Vec::new(),
             data_dir: data_dir.to_path_buf(),
             generation_pin: None,
+            expected_generation: None,
             logical_root: root_dir.to_path_buf(),
             writer_lock: None,
             lease_cell: super::graph::new_lease_cell(),
@@ -449,6 +481,7 @@ impl DiskGraph {
             free_edge_slots: Vec::new(),
             data_dir: data_dir.to_path_buf(),
             generation_pin: None,
+            expected_generation: None,
             logical_root: root_dir.to_path_buf(),
             writer_lock: None,
             lease_cell: super::graph::new_lease_cell(),

@@ -1229,7 +1229,7 @@ pub fn save_graph_with(
     save_guard::ensure_target_recovered(graph, path)?;
     if graph.graph.is_disk() {
         let dir = crate::graph::handle::make_dir_graph_mut_preserving_lineage(graph);
-        return dir.save_disk(path).map_err(SaveError::Io);
+        return dir.save_disk(path);
     }
     save_inmemory_with(graph, path, fsync).map_err(|e| SaveError::Io(e.to_string()))
 }

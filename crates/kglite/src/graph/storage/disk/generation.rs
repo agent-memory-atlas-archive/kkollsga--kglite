@@ -293,20 +293,35 @@ pub(crate) struct GenerationPin {
     key: PathBuf,
 }
 
+/// The id of the generation `path` lies in (a generation directory, or any file
+/// or directory beneath one); `None` outside `generations/`, as for
+/// [`GenerationPin::containing`].
+pub(crate) fn generation_id_containing(path: &Path) -> Option<u64> {
+    generation_dir_containing(path).and_then(|dir| {
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| parse_generation_name(n).ok())
+    })
+}
+
+fn generation_dir_containing(path: &Path) -> Option<&Path> {
+    path.ancestors().find(|ancestor| {
+        ancestor.parent().and_then(|parent| parent.file_name())
+            == Some(std::ffi::OsStr::new(GENERATIONS_DIR))
+            && ancestor
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| parse_generation_name(name).is_ok())
+    })
+}
+
 impl GenerationPin {
     /// A pin on the generation `path` lies in (a generation directory, or any
     /// file or directory beneath one); `None` for a path outside `generations/`
     /// — a legacy flat directory, a workspace, a scratch root — which retention
     /// never touches.
     pub(crate) fn containing(path: &Path) -> Option<std::sync::Arc<Self>> {
-        let generation = path.ancestors().find(|ancestor| {
-            ancestor.parent().and_then(|parent| parent.file_name())
-                == Some(std::ffi::OsStr::new(GENERATIONS_DIR))
-                && ancestor
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| parse_generation_name(name).is_ok())
-        })?;
+        let generation = generation_dir_containing(path)?;
         let key = pin_key(generation);
         *pinned_map().entry(key.clone()).or_insert(0) += 1;
         Some(std::sync::Arc::new(Self { key }))

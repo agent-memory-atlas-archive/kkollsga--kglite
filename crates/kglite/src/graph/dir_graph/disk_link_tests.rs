@@ -329,6 +329,14 @@ fn a_type_mapped_from_another_generation_is_not_carried_from_this_one() {
         inode(&generation_one["Employee"])
     );
 
+    // A save over a newer generation is refused outright; clearing the
+    // expectation reaches the link step this test pins, which must hold on its
+    // own for any handle whose mapped generation is not the one it replaces.
+    assert!(matches!(
+        stale.save_disk(path),
+        Err(crate::graph::io::file::SaveError::Refused(_))
+    ));
+    stale.graph.as_disk_mut().unwrap().expected_generation = None;
     stale.save_disk(path).unwrap();
     let generation_three = type_files(&current_generation(path));
     for name in ["Employee", "Department", "Office"] {

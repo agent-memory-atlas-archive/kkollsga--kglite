@@ -144,6 +144,13 @@ pub struct DiskGraph {
     /// Keeps the generation `data_dir` lies in from being pruned while this
     /// handle, or any clone of it, can still read its files.
     pub(super) generation_pin: Option<Arc<super::generation::GenerationPin>>,
+    /// The generation `CURRENT` must still select for this handle to publish
+    /// over it: `Some(g)` once the handle loaded, created or last published
+    /// generation `g` (`Some(None)` for a legacy flat directory). `None` — a
+    /// scratch graph, or one created over an existing directory — is not
+    /// checked. A save refuses when `CURRENT` has moved, since the generation
+    /// it would publish is built from state that predates another writer's.
+    pub(crate) expected_generation: Option<Option<u64>>,
     /// User-visible graph root; also the directory the writer lease locks.
     pub(crate) logical_root: PathBuf,
     /// Cross-process writer lease, held for the dirty window only: taken by
@@ -2263,6 +2270,7 @@ impl DiskGraph {
             free_edge_slots: self.free_edge_slots.clone(),
             data_dir: self.data_dir.clone(),
             generation_pin: self.generation_pin.clone(),
+            expected_generation: self.expected_generation,
             logical_root: self.logical_root.clone(),
             writer_lock: None,
             // A fresh slot, deliberately not the parent's: a generic clone has

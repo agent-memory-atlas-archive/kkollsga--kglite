@@ -82,6 +82,13 @@ pub fn new_dir_graph_in_mode(mode: StorageMode, path: Option<&Path>) -> Result<D
             graph.graph = GraphBackend::Disk(Box::new(dg));
             if !displaces_existing {
                 publish_initial_generation(dir)?;
+                if let Some(disk) = graph.graph.as_disk_mut() {
+                    disk.expected_generation = Some(
+                        crate::graph::storage::disk::generation::resolve_snapshot(dir)
+                            .map_err(|e| format!("Failed to read the initial generation: {e}"))?
+                            .generation,
+                    );
+                }
             }
         }
     }

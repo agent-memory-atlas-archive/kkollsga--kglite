@@ -871,7 +871,9 @@ fn failed_graph_save_withholds_root_metadata_and_stays_retryable() {
     let error = graph
         .save_disk(target.path().to_str().unwrap())
         .expect_err("a blocked generations directory must fail the save");
-    assert!(error.contains("Failed to begin disk generation"));
+    assert!(error
+        .to_string()
+        .contains("Failed to begin disk generation"));
     assert!(!target.path().join("CURRENT").exists());
     assert!(
         matches!(&graph.graph, GraphBackend::Disk(_)),

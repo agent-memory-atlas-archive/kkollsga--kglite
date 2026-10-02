@@ -820,7 +820,7 @@ pub fn save_subset_streaming_disk(
     drop(dest);
     let _ = std::fs::remove_dir_all(&scratch_root);
 
-    save_result
+    save_result.map_err(String::from)
 }
 
 /// Step 6 of [`save_subset_streaming_disk`]: append to `dest`'s pending
