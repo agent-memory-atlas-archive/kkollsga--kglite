@@ -19,7 +19,7 @@
 
 use std::sync::Mutex;
 
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 
 use super::Embedder;
 
@@ -54,7 +54,7 @@ impl FastEmbedAdapter {
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))?;
         if guard.is_none() {
-            let opts = InitOptions::new(self.model.clone()).with_show_download_progress(false);
+            let opts = TextInitOptions::new(self.model.clone()).with_show_download_progress(false);
             let te = TextEmbedding::try_new(opts)
                 .map_err(|e| format!("fastembed init failed for {:?}: {e}", self.model))?;
             *guard = Some(te);
