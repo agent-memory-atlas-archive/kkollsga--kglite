@@ -1966,9 +1966,14 @@ class KnowledgeGraph:
             structural rather than a defaulting inconsistency, but it is easy
             to trip over when comparing the two.
 
-            Note also that mutating statements on a ``"mapped"`` or ``"disk"``
-            graph do **not** use the cheap statement-rollback journal — see
-            :func:`kglite.open` and the storage-mode guide.
+            Note also that statement rollback differs by mode. ``"mapped"``
+            graphs use the same O(changes) undo journal as memory graphs.
+            On ``"disk"`` graphs a plain ``MATCH ... SET``, property
+            ``REMOVE``, ``CREATE``, ``MERGE`` or ``DELETE`` journals the
+            cells it writes and is undone from that journal; any other
+            mutating statement (``FOREACH``, ``CALL``, ``LOAD CSV``, a label
+            change, ``SET n += {...}``) checkpoints the disk graph first,
+            which costs more — see the storage-mode guide.
         """
         ...
 
