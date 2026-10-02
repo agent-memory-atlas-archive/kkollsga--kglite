@@ -180,7 +180,7 @@ ECOSYSTEM_PACKAGES: dict[str, tuple[str, ...]] = {
 #: the value is the version at which the *feature we actually use* appeared, or
 #: None to just compare against the lockfile.
 WATCHED_THIRD_PARTY: dict[str, str | None] = {
-    "fastembed": "6.0.0",  # this ecosystem's fastembed integration is on the 6.x line
+    "fastembed": "7.1.0",  # the adapter uses TextInitOptions (7.x) and the features 7.1 carries
     "mimalloc": "0.1.49",  # the `v2` feature landed in 0.1.49
     "rmcp": None,
     "rmcp-macros": None,

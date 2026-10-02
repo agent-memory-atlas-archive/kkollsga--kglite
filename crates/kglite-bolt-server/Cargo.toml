@@ -57,7 +57,7 @@ boltr = { version = "0.2", features = ["tls"] }
 # battle-tested option; `aws-lc-rs` is the alternative.
 # 0.23.22 is the tight floor for the workspace-unified tree, not this
 # server's own need: ureq 3 (reached via kglite's `fastembed` feature ->
-# fastembed 6 -> hf-hub 0.5) requires rustls ^0.23.22, and cargo unifies
+# fastembed 7 -> hf-hub 0.5) requires rustls ^0.23.22, and cargo unifies
 # rustls across all members.
 rustls = { version = "0.23.22", default-features = false, features = ["ring", "std"] }
 
