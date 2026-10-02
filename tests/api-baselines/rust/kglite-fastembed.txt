@@ -2079,8 +2079,12 @@ pub kglite::api::io::ProgressValue::U64(u64)
 pub enum kglite::api::io::SaveError
 pub kglite::api::io::SaveError::Io(alloc::string::String)
 pub kglite::api::io::SaveError::Refused(alloc::string::String)
+impl core::convert::From<alloc::string::String> for kglite::api::io::SaveError
+pub fn kglite::api::io::SaveError::from(message: alloc::string::String) -> Self
 impl core::convert::From<kglite::api::durable::DurableOpenError> for kglite::api::io::SaveError
 pub fn kglite::api::io::SaveError::from(error: kglite::api::durable::DurableOpenError) -> Self
+impl core::convert::From<kglite::api::io::SaveError> for alloc::string::String
+pub fn alloc::string::String::from(error: kglite::api::io::SaveError) -> Self
 impl core::error::Error for kglite::api::io::SaveError
 impl core::fmt::Debug for kglite::api::io::SaveError
 pub fn kglite::api::io::SaveError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -4122,7 +4126,7 @@ impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::compact_disk(&mut self) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::DirGraph::enable_disk_mode(&mut self) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::DirGraph::ensure_disk_edges_built(&mut self) -> core::result::Result<(), alloc::string::String>
-pub fn kglite::api::DirGraph::save_disk(&mut self, path: &str) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::DirGraph::save_disk(&mut self, path: &str) -> core::result::Result<(), kglite::api::io::SaveError>
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::connection_type_metadata_mut(&mut self) -> &mut std::collections::hash::map::HashMap<alloc::string::String, kglite::graph::schema::ConnectionTypeInfo>
 pub fn kglite::api::DirGraph::id_field_aliases_mut(&mut self) -> &mut rustc_hash::FxHashMap<alloc::string::String, alloc::string::String>
