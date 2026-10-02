@@ -679,26 +679,6 @@
       "classification": "dead-code"
     },
     {
-      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:META_GRAPH::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:PROP_PATH::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:REL_PATH::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::const:TYPE_PATH::dead_code",
-      "classification": "dead-code"
-    },
-    {
-      "identity": "crates/kglite/src/graph/io/export/kg_vocab.rs::statement:/// segment never contains the `/` the layout splits on.::dead_code",
-      "classification": "dead-code"
-    },
-    {
       "identity": "crates/kglite/src/graph/storage/column_store/mod.rs::fn:column_values_mixed:pub fn column_values_mixed(&self, slot: usize) -> Option<&Vec<Value>>::dead_code",
       "classification": "dead-code"
     },

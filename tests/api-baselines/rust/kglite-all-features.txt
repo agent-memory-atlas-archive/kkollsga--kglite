@@ -2076,6 +2076,21 @@ pub kglite::api::io::ProgressEvent::Update::fields: &'a [(&'a str, kglite::api::
 pub kglite::api::io::ProgressEvent::Update::phase: &'a str
 pub enum kglite::api::io::ProgressValue
 pub kglite::api::io::ProgressValue::U64(u64)
+pub enum kglite::api::io::RdfFormat
+pub kglite::api::io::RdfFormat::NQuads
+pub kglite::api::io::RdfFormat::TriG
+impl kglite::api::io::RdfFormat
+pub fn kglite::api::io::RdfFormat::from_path(path: &str) -> core::option::Option<Self>
+pub fn kglite::api::io::RdfFormat::parse(name: &str) -> core::option::Option<Self>
+impl core::clone::Clone for kglite::api::io::RdfFormat
+pub fn kglite::api::io::RdfFormat::clone(&self) -> kglite::api::io::RdfFormat
+impl core::cmp::Eq for kglite::api::io::RdfFormat
+impl core::cmp::PartialEq for kglite::api::io::RdfFormat
+pub fn kglite::api::io::RdfFormat::eq(&self, other: &kglite::api::io::RdfFormat) -> bool
+impl core::fmt::Debug for kglite::api::io::RdfFormat
+pub fn kglite::api::io::RdfFormat::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::io::RdfFormat
+impl core::marker::StructuralPartialEq for kglite::api::io::RdfFormat
 pub enum kglite::api::io::SaveError
 pub kglite::api::io::SaveError::Io(alloc::string::String)
 pub kglite::api::io::SaveError::Refused(alloc::string::String)
@@ -2268,6 +2283,21 @@ pub kglite::api::io::RdfConfig::languages: core::option::Option<std::collections
 pub kglite::api::io::RdfConfig::max_triples: core::option::Option<u64>
 impl core::default::Default for kglite::api::io::RdfConfig
 pub fn kglite::api::io::RdfConfig::default() -> Self
+pub struct kglite::api::io::RdfExportOptions
+pub kglite::api::io::RdfExportOptions::base: alloc::string::String
+pub kglite::api::io::RdfExportOptions::format: kglite::api::io::RdfFormat
+pub kglite::api::io::RdfExportOptions::schema_org: bool
+impl core::clone::Clone for kglite::api::io::RdfExportOptions
+pub fn kglite::api::io::RdfExportOptions::clone(&self) -> kglite::api::io::RdfExportOptions
+impl core::default::Default for kglite::api::io::RdfExportOptions
+pub fn kglite::api::io::RdfExportOptions::default() -> Self
+impl core::fmt::Debug for kglite::api::io::RdfExportOptions
+pub fn kglite::api::io::RdfExportOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::io::RdfExportSummary
+pub kglite::api::io::RdfExportSummary::connections: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+pub kglite::api::io::RdfExportSummary::nodes: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
+pub kglite::api::io::RdfExportSummary::output_path: alloc::string::String
+pub kglite::api::io::RdfExportSummary::statements: u64
 pub struct kglite::api::io::RdfStats
 pub kglite::api::io::RdfStats::edges_created: usize
 pub kglite::api::io::RdfStats::nodes_created: usize
@@ -2346,6 +2376,7 @@ pub fn kglite::api::io::to_csv_dir(graph: &kglite::api::DirGraph, output_dir: &s
 pub fn kglite::api::io::to_d3_json(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn kglite::api::io::to_gexf(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn kglite::api::io::to_graphml(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn kglite::api::io::to_rdf(graph: &kglite::api::DirGraph, path: &str, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, options: &kglite::api::io::RdfExportOptions) -> core::result::Result<kglite::api::io::RdfExportSummary, alloc::string::String>
 pub fn kglite::api::io::to_sqlite_dump(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn kglite::api::io::to_text(graph: &kglite::api::DirGraph) -> alloc::string::String
 pub fn kglite::api::io::write_kgl(graph: &kglite::api::DirGraph, path: &str) -> core::io::error::Result<()>
