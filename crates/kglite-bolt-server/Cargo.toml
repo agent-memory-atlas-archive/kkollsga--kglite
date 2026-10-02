@@ -87,7 +87,10 @@ tracing-subscriber = { version = "0.3.8", features = ["env-filter"] }
 # prints "failed: {e}", 1.0.47 prints "failed: BOOM" (1.0.46 is yanked).
 # 1.0.20 also matters (anyhow::Error::msg, used by mcp-methods) and
 # 1.0.5 (Context for Option, used by kglite-cli); 1.0.47 covers all.
-anyhow = "1.0.47"
+# The declared floor is 1.0.72 because getrandom 0.4 -> wasip3 ->
+# wit-bindgen-rust-macro requires anyhow ^1.0.72, and a minimal-versions
+# resolve cannot select a lower anyhow beside it.
+anyhow = "1.0.72"
 sha2 = "0.11"
 # 2.5.0, not "2": rustls 0.23 (above) requires subtle ^2.5.0, and cargo
 # unifies the version across the workspace, so "2" let

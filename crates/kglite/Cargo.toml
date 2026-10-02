@@ -162,8 +162,9 @@ geojson = "1.0"
 # 2.5.0's hashbrown ^0.14.1 is unsatisfiable alongside the ureq 3 subtree
 # that fastembed 6 -> hf-hub 0.5 introduces. Established by resolving each
 # candidate under direct-minimal-versions, not inferred: 2.5.0 fails, 2.6.0
-# resolves.
-indexmap = { version = "2.6.0", features = ["serde"] }
+# resolved until getrandom 0.4 -> wasip3 -> wit-parser 0.244 required
+# indexmap ^2.7.0.
+indexmap = { version = "2.7.0", features = ["serde"] }
 
 # OKF loader YAML frontmatter parser — gated behind the `okf` feature.
 # `yaml-rust2` is a pure-Rust, actively-maintained YAML 1.2 parser (no

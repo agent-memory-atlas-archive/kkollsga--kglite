@@ -60,7 +60,10 @@ clap = { version = "4.3", features = ["derive"] }
 # prints "failed: {e}", 1.0.47 prints "failed: BOOM" (1.0.46 is yanked).
 # 1.0.20 also matters (anyhow::Error::msg, used by mcp-methods) and
 # 1.0.5 (Context for Option, used by kglite-cli); 1.0.47 covers all.
-anyhow = "1.0.47"
+# The declared floor is 1.0.72 because getrandom 0.4 -> wasip3 ->
+# wit-bindgen-rust-macro requires anyhow ^1.0.72, and a minimal-versions
+# resolve cannot select a lower anyhow beside it.
+anyhow = "1.0.72"
 
 # Agent result envelopes use mcp-methods' renderer only. Keep server features
 # disabled so the standalone CLI does not acquire an async/MCP runtime.
