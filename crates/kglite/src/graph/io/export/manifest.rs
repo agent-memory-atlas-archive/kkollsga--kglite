@@ -292,7 +292,10 @@ impl ExportManifest {
             acc.id.observe(&node.id());
             acc.title.observe(&node.title());
             for key in node.property_keys(&graph.interner) {
-                if crate::graph::handle::is_canonical_node_column(key) {
+                // `id` and `title` are the node's own header columns; neither
+                // export has a structural `type` column on a node row, so a
+                // property named `type` is ordinary user data.
+                if key == "id" || key == "title" {
                     continue;
                 }
                 let tally = acc.props.entry(key.to_string()).or_default();
