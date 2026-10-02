@@ -131,7 +131,7 @@ crc32fast = "1.5"
 # unifies flate2 across the tree, so a lower floor makes the whole
 # workspace unresolvable under direct-minimal-versions.
 flate2 = "1.1"
-zstd = "0.13"
+zstd = "0.14"
 memmap2 = "0.9"
 # 0.2.182 is the tight floor for the workspace-unified tree, not a
 # guess: rustyline 18 (via kglite-cli) requires ^0.2.182 and nix 0.31
