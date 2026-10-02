@@ -3,5 +3,5 @@
 # reads markdown, and HTML is a declared non-goal (VAULT.md, decision K4).
 # `tests/test_html_to_vault_example.py` skips when they are absent, so install
 # these to actually run it.
-beautifulsoup4>=4.12
-markdownify>=0.13
+beautifulsoup4>=4.15.0
+markdownify>=1.2.3
