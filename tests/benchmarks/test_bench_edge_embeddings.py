@@ -278,12 +278,14 @@ def cross_type_graph(query_twins):
     return graph
 
 
-def _cross_type_query(graph: kglite.KnowledgeGraph, query: list[float], *, exact: bool) -> list[int]:
+def _cross_type_query(
+    graph: kglite.KnowledgeGraph, query: list[float], *, exact: bool, types: tuple[str, ...] = CROSS_TYPES
+) -> list[int]:
     rows = graph.cypher(
         "CALL db.relationship_embeddings.query({types:$types, text_column:'summary', vector:$q, top_k:$k, "
         "exact:$exact}) "
         "YIELD relationship, search_method RETURN endNode(relationship).id AS end, search_method",
-        params={"types": list(CROSS_TYPES), "q": query, "k": TOP_K, "exact": exact},
+        params={"types": list(types), "q": query, "k": TOP_K, "exact": exact},
     ).to_list()
     assert {row["search_method"] for row in rows} == {"exact" if exact else "hnsw"}
     return [int(row["end"]) for row in rows]
@@ -312,12 +314,27 @@ def test_bench_edge_cross_type_query_3x_10k_128(benchmark, query_twins, cross_ty
     merged_min = min(benchmark.stats.stats.data)
     benchmark.extra_info.update({"single_store_min_s": single_min, "merged_over_single": merged_min / single_min})
     # Exact ranks the same 10k vectors either way, so the merge must be free.
-    # An HNSW search costs its ef-bound walk, not its store size, so three
-    # stores cost three searches (release: 1.72x); the bound is one search per
-    # store — a merge that re-ranks every candidate, or an unindexed store
-    # (search_method already pins hnsw per row), is what it catches.
-    limit = MAX_RATIO if exact else float(len(CROSS_TYPES))
-    assert merged_min <= limit * single_min, f"cross-type query {merged_min / single_min:.2f}x the single store"
+    if exact:
+        assert merged_min <= MAX_RATIO * single_min, f"cross-type query {merged_min / single_min:.2f}x the single store"
+        return
+    # An HNSW search costs its ef-bound walk, not its store size, so the merged
+    # query's honest cost is one search per store. Measure those searches
+    # through the same CALL path instead of assuming each equals the single
+    # store's: the old `3 x single store` bound left no margin, and a shared CI
+    # runner crossed it (3.13x, 3.37x) on code that never touched this path.
+    # A merge that re-ranks every candidate is what this bound catches.
+    per_store_min = sum(
+        _min_seconds(
+            lambda t=rel_type: _cross_type_query(cross_type_graph, query, exact=False, types=(t,)),
+            SEARCH_ROUNDS,
+            warmup=SEARCH_WARMUP_ROUNDS,
+        )
+        for rel_type in CROSS_TYPES
+    )
+    benchmark.extra_info["per_store_sum_min_s"] = per_store_min
+    assert merged_min <= MAX_RATIO * per_store_min, (
+        f"cross-type query {merged_min / per_store_min:.2f}x the sum of its per-store searches"
+    )
 
 
 class _MatrixEmbedder:
