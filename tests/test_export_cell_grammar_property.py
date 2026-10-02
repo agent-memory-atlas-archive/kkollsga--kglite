@@ -25,7 +25,9 @@ from kglite import KnowledgeGraph
 TEXT = st.text(
     alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
     max_size=12,
-) | st.sampled_from(["", "\\", "\\e", "\\\\e", "a,b", '"q"', "line\nbreak", "cr\r\nlf", " x ", "\t", "\x1b[0m", "$date"])
+) | st.sampled_from(
+    ["", "\\", "\\e", "\\\\e", "a,b", '"q"', "line\nbreak", "cr\r\nlf", " x ", "\t", "\x1b[0m", "$date"]
+)
 
 DATES = st.dates(min_value=dt.date(1, 1, 1), max_value=dt.date(9999, 12, 31))
 TIMESTAMPS = st.datetimes(min_value=dt.datetime(1, 1, 1), max_value=dt.datetime(9999, 12, 31, 23, 59, 59, 999999))
@@ -70,7 +72,9 @@ def _norm(value):
 
 
 def _dump(g):
-    return [_norm(r["p"]) for r in g.cypher("MATCH (n:Person) RETURN n.id AS id, properties(n) AS p ORDER BY id").to_list()]
+    return [
+        _norm(r["p"]) for r in g.cypher("MATCH (n:Person) RETURN n.id AS id, properties(n) AS p ORDER BY id").to_list()
+    ]
 
 
 def _graph(rows):

@@ -377,6 +377,22 @@ before upgrading.
 
 ### Fixed
 
+- A date or timestamp in a blueprint CSV cell, or an `xsd:date` /
+  `xsd:dateTime` literal in `load_rdf`, with a year outside 1..9999 no longer
+  loads as a value that later fails with `year must be in 1..9999` when a node's
+  properties are read: the CSV cell loads as null (a declared `timestamp` column
+  now warns, as a `date` column already did) and the RDF literal stays text, each
+  with a warning.
+
+- `export_csv` and `export_rdf` refuse an empty destination instead of writing
+  into the working directory, and export a node property named `type`. The
+  lossless exports now keep a date, timestamp, duration, point or non-finite float
+  inside a list or map (tagged JSON), keep a null title null and mixed-kind titles
+  typed through `load_rdf`, and `export_csv` refuses a node type whose ids mix
+  kinds (they used to collapse to text and could merge nodes). A list cell in a
+  blueprint now keeps a nested array or object as a list or map instead of JSON
+  text.
+
 - `export_csv` wrote a relationship that leaves several source types as one CSV
   typed from its first edge, so `from_blueprint` attached the other sources'
   edges to freshly created stub nodes (4 nodes exported, 7 re-imported). Each

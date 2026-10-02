@@ -37,12 +37,12 @@ use oxttl::{NQuadsSerializer, TriGSerializer};
 use petgraph::graph::NodeIndex;
 
 use super::csv_tree::{batch_rows, BatchGuard};
-use super::typed_json::to_json;
 use super::kg_vocab::{
     encode_segment, DUPLICATE_MARK, KG_DURATION, KG_JSON, KG_MANIFEST, META_GRAPH, NODE_PATH,
     PROP_PATH, REL_PATH, TYPE_PATH,
 };
 use super::manifest::{ColumnKind, ExportManifest, Scope};
+use super::typed_json::to_json;
 use crate::datatypes::values::{raw_string, Value};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::io::rdf::well_known_namespace;

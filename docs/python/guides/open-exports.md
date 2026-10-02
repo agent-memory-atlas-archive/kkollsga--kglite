@@ -91,7 +91,8 @@ percent-encoded:
 | Manifest | the statement `<base>meta kg:manifest "<JSON>"^^kg:json` in the named graph `<base>meta` |
 
 The `kg:` namespace is `https://kglite.readthedocs.io/ns/kg#`, with the predicate
-`kg:manifest` and the datatypes `kg:json` (a list or map, as plain JSON) and
+`kg:manifest` and the datatypes `kg:json` (a list or map as JSON, in which a date, timestamp, duration, point or
+non-finite float is a one-key tagged object such as `{"$date": "2020-01-01"}`) and
 `kg:duration` (a duration whose months, days and seconds disagree in sign,
 spelled `months,days,seconds`). Nodes that share an id, such as the two versions of
 Ada above, are told apart by a `;<node index>` suffix on all but one of them. No
@@ -146,15 +147,23 @@ argument of the C ABI's `kglite_load_rdf_with_options`.
 ## Limits
 
 - **Not restored** by `export_csv`: an edge attached to an earlier version of a
-  node whose id repeats (it re-attaches to the latest), a list or map nested inside
-  a list (comes back as JSON text), a point on a relationship property (text), a
-  secondary label carried by only some nodes of a type, and a column mixing value
-  kinds (text).
+  node whose id repeats (it re-attaches to the latest), a point on a relationship
+  property (text), a secondary label carried by only some nodes of a type, and a
+  property column mixing value kinds (text). A node type whose **ids** mix kinds
+  (`1` and `'1'`) is refused with an error, since a CSV id column cannot keep them
+  apart; export it as RDF or save a `.kgl`. A type whose **titles** mix kinds keeps
+  each title's kind.
 - **Not restored** by `export_rdf` / `load_rdf`: a language-map property (an
-  ordinary map, written as `kg:json`), a list or map nested in a list (JSON text), a
-  secondary label carried by only some nodes of a type, an id of a kind other than
-  int or string (the node gets a dense id), and a property column mixing value
-  kinds.
+  ordinary map, written as `kg:json`), a secondary label carried by only some nodes
+  of a type, an id of a kind other than int or string (the node gets a dense id),
+  and a property column mixing value kinds. Mixed int and string ids are kept
+  apart, and a null title stays null.
+- **Nested typed values** in a list or map (a date, timestamp, duration, point or
+  non-finite float, at any depth) keep their type in both formats; see the tagged
+  JSON note above.
+- A date or timestamp in a CSV cell or an `xsd:date` / `xsd:dateTime` literal
+  whose year lies outside 1..9999 is not a date: the CSV cell loads as null with a
+  warning, the RDF literal stays text with a warning.
 - Parallel edges *without* properties are written as repeated identical
   statements, which a set-semantics RDF consumer collapses.
 - `load_rdf` builds an in-memory graph whatever storage the source used.

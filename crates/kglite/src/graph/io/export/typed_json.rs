@@ -24,7 +24,14 @@ use serde_json::{json, Map, Value as Json};
 use crate::datatypes::prop_map::PropMap;
 use crate::datatypes::values::{raw_string, Value};
 
-const TAGS: [&str; 6] = ["$date", "$datetime", "$duration", "$point", "$float", "$map"];
+const TAGS: [&str; 6] = [
+    "$date",
+    "$datetime",
+    "$duration",
+    "$point",
+    "$float",
+    "$map",
+];
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.f";
 
 fn tagged(tag: &str, payload: Json) -> Json {
@@ -67,8 +74,10 @@ pub(crate) fn to_json(value: &Value) -> Json {
         ),
         Value::List(items) => Json::Array(items.iter().map(to_json).collect()),
         Value::Map(map) => {
-            let object: Map<String, Json> =
-                map.iter().map(|(k, v)| (k.to_string(), to_json(v))).collect();
+            let object: Map<String, Json> = map
+                .iter()
+                .map(|(k, v)| (k.to_string(), to_json(v)))
+                .collect();
             if object.len() == 1 && TAGS.contains(&object.keys().next().unwrap().as_str()) {
                 tagged("$map", Json::Object(object))
             } else {
@@ -122,7 +131,10 @@ fn decode_tagged(object: &Map<String, Json>) -> Option<Value> {
 
 fn plain_map(object: &Map<String, Json>) -> Value {
     Value::Map(PropMap::from_pairs(
-        object.iter().map(|(k, v)| (k.clone(), from_json(v))).collect(),
+        object
+            .iter()
+            .map(|(k, v)| (k.clone(), from_json(v)))
+            .collect(),
     ))
 }
 
@@ -197,7 +209,11 @@ mod tests {
     #[test]
     fn plain_json_stays_plain_and_a_bad_payload_is_a_map() {
         assert_eq!(
-            to_json(&Value::List(vec![Value::Int64(1), Value::String("a".into())])).to_string(),
+            to_json(&Value::List(vec![
+                Value::Int64(1),
+                Value::String("a".into())
+            ]))
+            .to_string(),
             "[1,\"a\"]"
         );
         let bad: Json = serde_json::from_str(r#"{"$date": "nope"}"#).unwrap();

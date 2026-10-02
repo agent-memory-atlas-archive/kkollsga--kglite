@@ -68,9 +68,7 @@ pub(super) fn node_identity(
     // A node of a manifest type with no `rdfs:label` had a null title.
     let title = match (title, title_datatype(entry.title_kind)) {
         (None, _) => Value::Null,
-        (Some(title), Some(datatype)) => {
-            datatype_to_value(&title, &format!("{XSD}{datatype}"))
-        }
+        (Some(title), Some(datatype)) => datatype_to_value(&title, &format!("{XSD}{datatype}")),
         // A mixed-kind title kept each value's own datatype on its label.
         (Some(title), None) if entry.title_kind == ColumnKind::Mixed => {
             datatype_to_value(&title, label_datatype.unwrap_or(""))

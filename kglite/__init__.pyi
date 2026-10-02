@@ -7050,8 +7050,10 @@ class KnowledgeGraph:
         value`` (parallel edges get distinct reifiers). Property values are
         typed literals: ``xsd:integer``, ``xsd:double``, ``xsd:boolean``,
         ``xsd:date``, ``xsd:dateTime`` (no zone), ``geo:wktLiteral``
-        (``POINT(lon lat)``), ``xsd:duration`` and ``kg:json`` (plain JSON) for
-        lists and maps. The export manifest (``kglite-export/1``) is one
+        (``POINT(lon lat)``), ``xsd:duration`` and ``kg:json`` (JSON) for lists
+        and maps, in which a date, timestamp, duration, point or non-finite
+        float is a one-key tagged object such as ``{"$date": "2020-01-01"}``
+        so nested values keep their type. The export manifest (``kglite-export/1``) is one
         ``kg:manifest`` statement in the named graph ``<base>meta``;
         :func:`load_rdf` uses it to restore valid-time declarations, secondary
         labels, parent types, and the id and title kinds. Nodes sharing an id
@@ -7061,10 +7063,12 @@ class KnowledgeGraph:
         (``KGLITE_EXPORT_BATCH_ROWS``, default 8192).
 
         Not restored: a language-map property (an ordinary map: written as
-        ``kg:json``), a list or map nested in a list (JSON text), a secondary
-        label carried by only some nodes of a type, an id of a kind other than
-        int or string (the node gets a dense id), and a property column
-        mixing value kinds. A duration whose months, days and seconds disagree
+        ``kg:json``), a secondary label carried by only some nodes of a type,
+        an id of a kind other than int or string (the node gets a dense id),
+        and a property column mixing value kinds. A node type whose ids mix
+        int and string keeps them apart, and a null title stays null. A
+        ``xsd:date`` / ``xsd:dateTime`` literal with a year outside 1..9999
+        stays text, with a warning. Raises on an empty ``path``. A duration whose months, days and seconds disagree
         in sign is written as ``kg:duration`` (``months,days,seconds``) and
         reads back as a duration; the importer adds the ``uri`` property only
         to RDF without a ``kg:manifest``. Parallel edges without properties
@@ -7146,10 +7150,14 @@ class KnowledgeGraph:
         routed by the ``target_type`` column. Rows stream through a bounded
         buffer (``KGLITE_EXPORT_BATCH_ROWS``, default 8192). Not restored: an
         edge attached to an earlier version of a node whose id repeats (it
-        re-attaches to the latest), a list or map nested inside a list (comes
-        back as JSON text), a point on a relationship property (text), a
-        secondary label carried by only some nodes of a type, and a column
-        mixing value kinds (text).
+        re-attaches to the latest), a point on a relationship property (text), a
+        secondary label carried by only some nodes of a type, and a property
+        column mixing value kinds (text). Typed values nested in a list or map
+        keep their type (tagged JSON). A node type whose ids mix kinds (``1``
+        and ``'1'``) is refused with an error, since one CSV column cannot keep
+        them apart; a type whose titles mix kinds keeps each title's kind. An
+        empty ``path`` is refused. A date or timestamp cell with a year outside
+        1..9999 loads as null with a warning.
 
         Node CSVs have columns: ``id``, ``title``, then all properties.
         Connection CSVs: ``source_id``, ``source_type``, ``target_id``,

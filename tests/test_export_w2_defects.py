@@ -132,10 +132,7 @@ def test_rdf_datetimes_outside_years_1_to_9999_stay_text_with_a_warning(tmp_path
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     with pytest.warns(UserWarning, match="kept as text"):
         g = kglite.load_rdf(str(path))
-    values = sorted(
-        (r["uri"], r["at"])
-        for r in g.cypher("MATCH (n) RETURN n.uri AS uri, n.at AS at").to_list()
-    )
+    values = sorted((r["uri"], r["at"]) for r in g.cypher("MATCH (n) RETURN n.uri AS uri, n.at AS at").to_list())
     assert values[0][1] == "10000-01-01T00:00:00"
     assert values[2][1] == "10000-01-01"
     assert values[3][1] == "0000-01-01T00:00:00"
@@ -196,7 +193,9 @@ def test_mixed_kind_titles_keep_their_kind(tmp_path, fmt):
 
 def _mixed_id_graph():
     g = KnowledgeGraph()
-    g.cypher("CREATE (:Person {id: 1, title: 'Ada'}), (:Person {id: '1', title: 'Bo'}), (:Person {id: 'x', title: 'Cy'})")
+    g.cypher(
+        "CREATE (:Person {id: 1, title: 'Ada'}), (:Person {id: '1', title: 'Bo'}), (:Person {id: 'x', title: 'Cy'})"
+    )
     g.cypher("MATCH (a:Person {id: 1}), (b:Person {id: '1'}) CREATE (a)-[:REPORTS_TO]->(b)")
     return g
 
@@ -231,9 +230,7 @@ def _disk_graph(tmp_path):
 def _tree(root):
     import pathlib
 
-    return {
-        str(p.relative_to(root)): p.read_bytes() for p in sorted(pathlib.Path(root).rglob("*")) if p.is_file()
-    }
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(pathlib.Path(root).rglob("*")) if p.is_file()}
 
 
 def test_csv_export_of_a_disk_graph_is_batch_size_independent(tmp_path, monkeypatch):

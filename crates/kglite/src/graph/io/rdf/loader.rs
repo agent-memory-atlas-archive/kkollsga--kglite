@@ -529,13 +529,12 @@ fn materialize(
 
         // Dense integer id — `n.id` is an integer in every mode — unless the
         // manifest says the type's ids were something else.
-        let (id_value, title_value, duplicate) =
-            kg_import::node_identity(
-                manifest,
-                (&node_type, &iri, dense),
-                (title, title_datatype.as_deref()),
-                &mut identities,
-            )?;
+        let (id_value, title_value, duplicate) = kg_import::node_identity(
+            manifest,
+            (&node_type, &iri, dense),
+            (title, title_datatype.as_deref()),
+            &mut identities,
+        )?;
         dense += 1;
         let node_data = NodeData::new(
             id_value.clone(),

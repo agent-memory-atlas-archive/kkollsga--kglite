@@ -117,7 +117,10 @@ fn export_csv_refuses_an_empty_output_dir_and_writes_nothing() {
     let rc = unsafe { kglite_export_csv(graph, out_c.as_ptr(), std::ptr::null_mut(), &mut error) };
     assert_ne!(rc, KgliteStatusCode::Ok);
     assert!(!error.is_null());
-    let message = unsafe { CStr::from_ptr(error) }.to_str().unwrap().to_string();
+    let message = unsafe { CStr::from_ptr(error) }
+        .to_str()
+        .unwrap()
+        .to_string();
     unsafe { kglite_free_string(error) };
     assert!(message.contains("must not be empty"), "{message}");
     // An empty path used to resolve to the working directory.
