@@ -274,8 +274,13 @@ def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_versi
     """A type holding a ``Mixed`` column (here: an integer beside a string in one
     property) is served from a per-type sidecar. Its directory carries an envelope
     with no column types, only the ``sidecars`` map that names the sidecar's
-    directory; an older reader reads ``id_indices.bin`` before the envelope, so
-    the version there is what stops it first."""
+    directory. Measured against the published 0.19.0
+    wheel: it reads ``id_indices.bin`` first and refuses this directory (and a
+    mmap-columns directory alike) with ``invalid id_indices.bin: unsupported
+    raw index version``. A sidecar holding a ``Timestamp`` column that was read
+    past that check would instead fail inside the sidecar as ``invalid packed
+    column store: codec error ... trailing bytes``; the index-version check is
+    the refusal that reaches users."""
     import pandas as pd
 
     directory = tmp_path / "sidecar_only"
@@ -296,6 +301,18 @@ def test_a_directory_with_no_mmap_columns_is_still_stopped_by_the_id_index_versi
     (path,) = _sidecars(directory, "id_indices.bin")
     assert path.read_bytes()[8:12] == struct.pack("<I", 3)
     assert kglite.load(str(directory)).cypher("MATCH (p:Employment) RETURN count(p) AS c").to_list() == [{"c": 2}]
+
+
+def test_a_branch_saved_generation_has_no_shared_columns_file(tmp_path):
+    """The forward-guard shape: only per-type column files, never ``columns.bin``.
+
+    A directory 0.19.0 wrote keeps its ``columns.bin`` until its next save
+    splits it per type; after that save no generation carries one, which keeps
+    an older reader's column loader from mapping new bytes.
+    """
+    directory = _resaved_directory(tmp_path)
+    assert not _sidecars(directory, "columns.bin")
+    assert list(current_generation(directory).rglob("type_columns"))
 
 
 def _resaved_directory(tmp_path: Path) -> Path:
