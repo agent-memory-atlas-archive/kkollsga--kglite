@@ -1,0 +1,66 @@
+{
+ "by_title": [
+  {
+   "id": 2
+  }
+ ],
+ "edges": [
+  {
+   "a": 1,
+   "b": 3,
+   "t": "BORN_IN"
+  },
+  {
+   "a": 1,
+   "b": 2,
+   "t": "SPOUSE"
+  }
+ ],
+ "nodes": [
+  {
+   "born": "1950-01-01T00:00:00Z",
+   "id": 1,
+   "l": [
+    "Person"
+   ],
+   "pop": 42,
+   "title": "One"
+  },
+  {
+   "born": null,
+   "id": 1,
+   "l": [
+    "Entity"
+   ],
+   "pop": null,
+   "title": "Q1"
+  },
+  {
+   "born": null,
+   "id": 1,
+   "l": [
+    "Entity"
+   ],
+   "pop": null,
+   "title": "Q1"
+  },
+  {
+   "born": "1960-06-15T00:00:00Z",
+   "id": 2,
+   "l": [
+    "Person"
+   ],
+   "pop": null,
+   "title": "Two"
+  },
+  {
+   "born": null,
+   "id": 3,
+   "l": [
+    "City"
+   ],
+   "pop": null,
+   "title": "Oslo"
+  }
+ ]
+}
