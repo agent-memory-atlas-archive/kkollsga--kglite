@@ -440,6 +440,11 @@ pub fn to_rdf(
     validate_base(&options.base)?;
     let scope = Scope::new(graph, selection);
     let manifest = ExportManifest::build_in(graph, &scope, parent_types)?;
+    // The id index is built lazily: until a lookup has run it answers `None`,
+    // which would leave every version of a repeated id on one IRI.
+    for node_type in manifest.node_types.keys() {
+        graph.ensure_id_index(node_type);
+    }
     let file = File::create(path).map_err(|e| format!("Failed to create {path}: {e}"))?;
     let out = BufWriter::new(file);
     let sink = match options.format {

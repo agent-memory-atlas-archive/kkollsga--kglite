@@ -388,6 +388,9 @@ before upgrading.
   `kg:manifest`), ids of a type that mixes ints and strings (they came back as
   dense ids), and a duration whose months, days and seconds disagree in sign
   (it came back as a map; it is now written as a `kg:duration` literal).
+- `export_rdf` merged the versions of a repeated node id into one node on
+  re-import when no query had yet touched that type's id index (both versions
+  shared one IRI). The exporter now builds the index first.
 
 ### Security
 

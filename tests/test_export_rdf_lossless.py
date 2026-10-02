@@ -247,3 +247,13 @@ def test_mixed_sign_durations_stay_durations(tmp_path):
     query = "MATCH (r:Role) RETURN r.span AS span, toString(r.span) AS text"
     assert back.cypher(query).to_list() == g.cypher(query).to_list()
     assert back.cypher(query).to_list()[0]["text"].startswith("duration(")
+
+
+def test_duplicate_id_versions_stay_two_nodes_without_a_prior_lookup(tmp_path):
+    # No query has touched the id index, so the exporter must build it itself
+    # to tell the versions apart; otherwise both share one IRI and merge.
+    g = KnowledgeGraph()
+    g.cypher("CREATE (:Person {id: 1, title: 'Ada', level: 7}), (:Person {id: 1, title: 'Ada', level: 8})")
+    _, back, _ = export_and_load(g, tmp_path)
+    query = "MATCH (p:Person) RETURN p.level AS level ORDER BY level"
+    assert back.cypher(query).to_list() == [{"level": 7}, {"level": 8}]
