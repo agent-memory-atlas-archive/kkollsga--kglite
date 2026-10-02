@@ -508,7 +508,7 @@ fn materialize(
 
         // Dense integer id — `n.id` is an integer in every mode — unless the
         // manifest says the type's ids were something else.
-        let (id_value, title_value) =
+        let (id_value, title_value, duplicate) =
             kg_import::node_identity(manifest, &node_type, &iri, title, dense, &mut identities)?;
         dense += 1;
         let node_data = NodeData::new(
@@ -524,10 +524,12 @@ fn materialize(
             .entry_or_default(node_type.clone())
             .push(node_idx);
         kg_import::add_labels(graph, manifest, &node_type, node_idx);
-        graph
-            .id_indices
-            .entry_or_default(node_type)
-            .insert(id_value, node_idx);
+        if !duplicate || graph.id_indices.lookup(&node_type, &id_value).is_none() {
+            graph
+                .id_indices
+                .entry_or_default(node_type)
+                .insert(id_value, node_idx);
+        }
         idx_of.push(Some(node_idx));
     }
 

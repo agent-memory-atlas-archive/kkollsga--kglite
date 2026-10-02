@@ -29,7 +29,8 @@ pub(super) struct IdentityCheck {
 
 /// The id and title value of a node. A node of a manifest type whose IRI is
 /// `<base>node/<Type>/<id>` gets back its original id; every other node
-/// keeps the dense id.
+/// keeps the dense id. The flag is true for a duplicate-marked IRI, which
+/// must not displace the id index's entry for the plain one.
 pub(super) fn node_identity(
     manifest: Option<&ExportManifest>,
     node_type: &str,
@@ -37,18 +38,23 @@ pub(super) fn node_identity(
     title: String,
     dense: u32,
     check: &mut IdentityCheck,
-) -> Result<(Value, Value), String> {
+) -> Result<(Value, Value, bool), String> {
     let Some(entry) = manifest.and_then(|m| m.node_types.get(node_type)) else {
-        return Ok((Value::UniqueId(dense), Value::String(title)));
+        return Ok((Value::UniqueId(dense), Value::String(title), false));
     };
-    let restored = node_id_segment(iri, node_type).and_then(|segment| match entry.id_kind {
+    let (segment, duplicate) = match node_id_segment(iri, node_type) {
+        Some((segment, duplicate)) => (Some(segment), duplicate),
+        None => (None, false),
+    };
+    let restored = segment.and_then(|segment| match entry.id_kind {
         ColumnKind::Int64 => segment.parse().ok().map(Value::Int64),
         ColumnKind::UniqueId => segment.parse().ok().map(Value::UniqueId),
         ColumnKind::String => Some(Value::String(segment)),
         _ => None,
     });
     let id = restored.unwrap_or(Value::UniqueId(dense));
-    if !check.seen.insert((node_type.to_string(), id.clone())) {
+    // A duplicate-marked node repeats an id on purpose (valid-time versions).
+    if !duplicate && !check.seen.insert((node_type.to_string(), id.clone())) {
         return Err(format!(
             "kg:manifest import: two {node_type} nodes resolve to id {id:?} ({iri})"
         ));
@@ -57,7 +63,7 @@ pub(super) fn node_identity(
         Some(datatype) => datatype_to_value(&title, &format!("{XSD}{datatype}")),
         None => Value::String(title),
     };
-    Ok((id, title))
+    Ok((id, title, duplicate))
 }
 
 /// The XSD datatype that reads a title of this kind back; `None` for text.

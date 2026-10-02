@@ -14,6 +14,17 @@
 //! the LONGEST namespace wins, so `schema.org/` doesn't shadow a more
 //! specific vocabulary sharing its stem.
 
+use crate::graph::io::export::kg_vocab::{decode_segment, is_layout_name_iri};
+
+/// The well-known namespace `iri` falls under, if any: an export base inside
+/// one would have its layout names compacted to `prefix__name`.
+pub(crate) fn well_known_namespace(iri: &str) -> Option<&'static str> {
+    WELL_KNOWN
+        .iter()
+        .map(|(_, ns)| *ns)
+        .find(|ns| iri.starts_with(ns))
+}
+
 /// The seed prefixes every RDF document is likely to use. Kept inline
 /// rather than read from disk so the loader has zero config burden.
 const WELL_KNOWN: &[(&str, &str)] = &[
@@ -96,6 +107,13 @@ impl Curiefier {
         if let Some(pos) = iri.rfind(['#', '/']) {
             let local = &iri[pos + 1..];
             if !local.is_empty() {
+                // An export's own type / property / relationship names are
+                // percent-encoded; decode them back.
+                if is_layout_name_iri(iri) {
+                    if let Some(name) = decode_segment(local) {
+                        return name;
+                    }
+                }
                 return local.to_string();
             }
         }

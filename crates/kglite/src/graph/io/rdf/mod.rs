@@ -23,6 +23,7 @@ mod interner;
 mod kg_import;
 mod loader;
 
+pub(crate) use curie::well_known_namespace;
 pub use loader::{load_rdf, RdfConfig, RdfStats};
 
 #[cfg(test)]

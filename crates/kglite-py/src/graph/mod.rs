@@ -1445,3 +1445,38 @@ pub(crate) fn compare_inner(
     );
     Ok(actual)
 }
+
+impl KnowledgeGraph {
+    /// Shared body of `export_rdf` and `export(format="nq"|"trig")`.
+    pub(crate) fn write_rdf(
+        &self,
+        path: &str,
+        format: &str,
+        base: Option<&str>,
+        schema_org: bool,
+        selection: Option<&kglite_core::api::CurrentSelection>,
+    ) -> PyResult<kglite_core::api::io::RdfExportSummary> {
+        use kglite_core::api::io::{RdfExportOptions, RdfFormat};
+        let format = RdfFormat::parse(format).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unknown RDF format: '{format}'. Supported: nq, trig"
+            ))
+        })?;
+        let mut options = RdfExportOptions {
+            format,
+            schema_org,
+            ..RdfExportOptions::default()
+        };
+        if let Some(base) = base {
+            options.base = base.to_string();
+        }
+        kglite_core::api::io::to_rdf(
+            &self.inner,
+            path,
+            selection,
+            &self.inner.parent_types,
+            &options,
+        )
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+}

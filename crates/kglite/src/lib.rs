@@ -648,6 +648,10 @@ pub mod api {
         pub use crate::graph::io::export::{
             to_csv, to_csv_dir, to_d3_json, to_gexf, to_graphml, to_text, ExportManifest,
         };
+        /// RDF 1.2 exporter (N-Quads / TriG) that `load_rdf` reads back
+        /// losslessly. Gated behind the `rdf` Cargo feature.
+        #[cfg(feature = "rdf")]
+        pub use crate::graph::io::export::{to_rdf, RdfExportOptions, RdfExportSummary, RdfFormat};
         /// Dependency-free relational exit: a deterministic SQLite-dialect SQL
         /// script (`sqlite3 out.db < dump.sql`). Node types become tables,
         /// connection types become link tables.

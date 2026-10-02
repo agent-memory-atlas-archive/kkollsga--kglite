@@ -32,6 +32,10 @@ impl KnowledgeGraph {
                 "csv"
             } else if path.ends_with(".sql") {
                 "sqlite"
+            } else if path.ends_with(".nq") {
+                "nq"
+            } else if path.ends_with(".trig") {
+                "trig"
             } else {
                 "graphml" // Default
             }
@@ -71,6 +75,9 @@ impl KnowledgeGraph {
                 std::fs::write(&edges_path, edges_csv)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
+            "nq" | "trig" => {
+                self.write_rdf(path, fmt, None, false, selection)?;
+            }
             "sqlite" => {
                 let content = kglite_core::api::io::to_sqlite_dump(&self.inner, selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
@@ -79,13 +86,41 @@ impl KnowledgeGraph {
             }
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Unknown export format: '{}'. Supported: graphml, gexf, d3, json, csv, sqlite",
+                    "Unknown export format: '{}'. Supported: graphml, gexf, d3, json, csv, sqlite, nq, trig",
                     fmt
                 )));
             }
         }
 
         Ok(())
+    }
+
+    /// Export the graph to RDF 1.2 (N-Quads or TriG) that `load_rdf` reads back.
+    #[pyo3(signature = (path, format=None, base=None, schema_org=false, selection_only=None))]
+    fn export_rdf(
+        &self,
+        path: &str,
+        format: Option<&str>,
+        base: Option<&str>,
+        schema_org: bool,
+        selection_only: Option<bool>,
+    ) -> PyResult<Py<PyAny>> {
+        let selection: Option<&CurrentSelection> =
+            crate::graph::resolve_export_selection(self, selection_only);
+        let fmt = format.unwrap_or(if path.ends_with(".trig") {
+            "trig"
+        } else {
+            "nq"
+        });
+        let summary = self.write_rdf(path, fmt, base, schema_org, selection)?;
+        Python::attach(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("output_path", &summary.output_path)?;
+            dict.set_item("nodes", &summary.nodes)?;
+            dict.set_item("connections", &summary.connections)?;
+            dict.set_item("statements", summary.statements)?;
+            Ok(dict.into())
+        })
     }
 
     /// Export graph data to a CSV directory tree with a re-import blueprint.

@@ -52,7 +52,7 @@ pub struct ExportSummary {
 
 const STANDARD_EDGE_COLUMNS: [&str; 4] = ["source_id", "source_type", "target_id", "target_type"];
 
-fn batch_rows() -> usize {
+pub(super) fn batch_rows() -> usize {
     std::env::var("KGLITE_EXPORT_BATCH_ROWS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -61,7 +61,7 @@ fn batch_rows() -> usize {
 }
 
 /// Holds the arena guard of a disk-backed read and renews it every batch.
-struct BatchGuard<'g> {
+pub(super) struct BatchGuard<'g> {
     graph: &'g DirGraph,
     rows: usize,
     batch: usize,
@@ -69,7 +69,7 @@ struct BatchGuard<'g> {
 }
 
 impl<'g> BatchGuard<'g> {
-    fn new(graph: &'g DirGraph, batch: usize) -> Self {
+    pub(super) fn new(graph: &'g DirGraph, batch: usize) -> Self {
         Self {
             graph,
             rows: 0,
@@ -78,7 +78,7 @@ impl<'g> BatchGuard<'g> {
         }
     }
 
-    fn tick(&mut self) {
+    pub(super) fn tick(&mut self) {
         self.rows += 1;
         if self.rows.is_multiple_of(self.batch) {
             // Drop the old guard before taking the new one: the arena resets
@@ -114,7 +114,7 @@ fn id_keyword(kind: ColumnKind) -> &'static str {
     }
 }
 
-fn plain_json(value: &Value) -> Json {
+pub(super) fn plain_json(value: &Value) -> Json {
     match value {
         Value::Null | Value::NodeRef(_) => Json::Null,
         Value::String(s) => json!(s),

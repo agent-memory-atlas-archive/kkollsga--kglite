@@ -11,6 +11,10 @@ mod encoding;
 pub mod kg_vocab;
 pub mod manifest;
 pub use csv_tree::to_csv_dir;
+#[cfg(feature = "rdf")]
+mod rdf_writer;
+#[cfg(feature = "rdf")]
+pub use rdf_writer::{to_rdf, RdfExportOptions, RdfExportSummary, RdfFormat};
 mod paths;
 use encoding::{escape_csv, escape_xml, json_string};
 pub use manifest::ExportManifest;
