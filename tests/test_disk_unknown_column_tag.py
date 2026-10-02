@@ -30,12 +30,12 @@ def _build(path: str) -> Path:
     g.save(path)
     del g
     root = Path(path)
-    return root / "generations" / (root / "CURRENT").read_text().strip()
+    return root / "generations" / (root / "CURRENT").read_text(encoding="utf-8").strip()
 
 
 def _rewrite(generation: Path, shape: str, tag: str) -> None:
     meta = generation / "seg_000" / "columns_meta.json"
-    body = json.loads(meta.read_text())
+    body = json.loads(meta.read_text(encoding="utf-8"))
     types = body["types"] if isinstance(body, dict) else body
     changed = 0
     for entry in types:
@@ -56,9 +56,9 @@ def _rewrite(generation: Path, shape: str, tag: str) -> None:
         (generation / "seg_000" / "columns.bin").write_bytes(
             next((generation / "seg_000" / "type_columns").iterdir()).read_bytes()
         )
-        meta.write_text(json.dumps(types))
+        meta.write_text(json.dumps(types), encoding="utf-8")
     else:
-        meta.write_text(json.dumps({**body, "types": types}))
+        meta.write_text(json.dumps({**body, "types": types}), encoding="utf-8")
 
 
 @pytest.mark.parametrize("shape", ["bare_array", "envelope"])
@@ -91,7 +91,7 @@ def test_unknown_tag_in_a_real_0_19_bare_array_is_refused(tmp_path):
     fixtures = Path(__file__).parent / "fixtures" / "kgl_v6"
     directory = copy_fixture(fixtures / "ntriples_disk", tmp_path)
     seg = directory / "seg_000"
-    body = json.loads((seg / "columns_meta.json").read_text())
+    body = json.loads((seg / "columns_meta.json").read_text(encoding="utf-8"))
     assert isinstance(body, list)
     changed = 0
     for entry in body:
@@ -100,7 +100,7 @@ def test_unknown_tag_in_a_real_0_19_bare_array_is_refused(tmp_path):
                 column["col_type_str"] = "future_tag"
                 changed += 1
     assert changed
-    (seg / "columns_meta.json").write_text(json.dumps(body))
+    (seg / "columns_meta.json").write_text(json.dumps(body), encoding="utf-8")
     (seg / "columns_meta.bin.zst").unlink()
     with pytest.raises(kglite.FileFormatError, match="column type tag"):
         kglite.load(str(directory))

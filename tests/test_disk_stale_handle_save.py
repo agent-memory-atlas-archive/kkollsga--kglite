@@ -43,13 +43,13 @@ def test_stale_handle_save_is_refused_and_writes_nothing(tmp_path):
     other = kglite.load(str(path))
     other.cypher("MATCH (n:Person {id: 1}) SET n.name = 'other'")
     other.save()
-    before = (path / "CURRENT").read_text(), _generations(path)
+    before = (path / "CURRENT").read_text(encoding="utf-8"), _generations(path)
 
     stale.cypher("MATCH (n:Person {id: 2}) SET n.name = 'stale'")
     with pytest.raises(ValueError, match=STALE) as raised:
         stale.save()
     assert "reload and reapply" in str(raised.value)
-    assert ((path / "CURRENT").read_text(), _generations(path)) == before
+    assert ((path / "CURRENT").read_text(encoding="utf-8"), _generations(path)) == before
 
     fresh = kglite.load(str(path))
     assert _name(fresh, 1) == "other"

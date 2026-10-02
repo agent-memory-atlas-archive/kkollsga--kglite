@@ -96,7 +96,9 @@ def main() -> None:
         target = OUT / "ntriples_disk"
         shutil.rmtree(target, ignore_errors=True)
         shutil.copytree(disk, target)
-        (OUT / "ntriples_disk.expected.json").write_text(json.dumps(expected, indent=1, sort_keys=True) + "\n")
+        (OUT / "ntriples_disk.expected.json").write_text(
+            json.dumps(expected, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
         durable = work / "durable_kinds"
         durable.mkdir()
@@ -112,7 +114,9 @@ def main() -> None:
         graph = kglite.open(str(scratch / "app.kgl"), durable=True)
         recovered = _capture(graph, DURABLE_QUERIES)
         del graph
-        (OUT / "durable_kinds.expected.json").write_text(json.dumps(recovered, indent=1, sort_keys=True) + "\n")
+        (OUT / "durable_kinds.expected.json").write_text(
+            json.dumps(recovered, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        )
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

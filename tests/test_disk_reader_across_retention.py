@@ -68,7 +68,7 @@ def test_reader_answers_survive_retention_and_its_save_is_refused(tmp_path):
     del g
 
     reader = kglite.load(str(root))
-    reader_generation = (root / "CURRENT").read_text().strip()
+    reader_generation = (root / "CURRENT").read_text(encoding="utf-8").strip()
     _answers(reader)["count"]
 
     subprocess.run([sys.executable, "-c", WRITER, str(root)], check=True, timeout=120)
