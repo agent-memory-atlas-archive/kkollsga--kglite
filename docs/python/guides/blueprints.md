@@ -495,6 +495,8 @@ Suppose each employee has performance reviews in `reviews.csv`:
 
 This creates `Review` nodes linked to their parent `Employee` via an `OF_EMPLOYEE` edge (auto-generated from the parent type name). The `parent_fk` column must match the parent's `pk` values.
 
+A `fk_edges` entry on the sub-node with the same name (`OF_EMPLOYEE` here) replaces the generated edge instead of adding a second one. There is no switch to turn the generated edge off: leave `parent_fk` out of the spec (and list the column under `skipped`) to load the sub-node with only the edges you declare.
+
 > Use `"pk": "auto"` if your sub-node CSV doesn't have a natural primary key — the loader generates sequential IDs (1, 2, 3, ...).
 
 Sub-nodes can also have their own `connections` (FK edges and junction edges), using the same syntax as core nodes.

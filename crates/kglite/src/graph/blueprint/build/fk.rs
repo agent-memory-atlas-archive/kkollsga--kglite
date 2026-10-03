@@ -34,6 +34,18 @@ struct PreppedFkEdges {
     warnings: Vec<String>,
 }
 
+/// The implicit `OF_<PARENT>` edge a spec with `parent_fk` gets. The parent is
+/// the spec's own `parent` key, else the enclosing type of a sub-node. A
+/// same-named `fk_edges` entry wins (callers use `entry().or_insert`).
+fn implicit_parent_edge(spec: &FlatSpec) -> Option<(String, super::super::schema::FkEdge)> {
+    let parent_fk = spec.spec.parent_fk.as_ref()?;
+    let parent_type = spec.spec.parent.as_ref().or(spec.parent.as_ref())?;
+    Some((
+        format!("OF_{}", parent_type.to_uppercase()),
+        super::super::schema::FkEdge::plain(parent_type.clone(), parent_fk.clone()),
+    ))
+}
+
 struct PreppedFkEdge {
     edge_type: String,
     target_type: String,
@@ -56,11 +68,8 @@ fn prep_fk_edges(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    if let (Some(parent_type), Some(parent_fk)) = (&spec.spec.parent, &spec.spec.parent_fk) {
-        let edge_type = format!("OF_{}", parent_type.to_uppercase());
-        fk_edges.entry(edge_type).or_insert_with(|| {
-            super::super::schema::FkEdge::plain(parent_type.clone(), parent_fk.clone())
-        });
+    if let Some((edge_type, edge)) = implicit_parent_edge(spec) {
+        fk_edges.entry(edge_type).or_insert(edge);
     }
     if fk_edges.is_empty() {
         return None;
@@ -592,7 +601,7 @@ fn load_streamed_fk_edges(
     };
 
     // Declared edges plus the implicit `OF_{PARENT}` edge for any spec
-    // that declares both `parent` and `parent_fk`.
+    // that declares `parent_fk` (see `implicit_parent_edge`).
     let mut fk_edges: IndexMap<String, super::super::schema::FkEdge> = spec
         .spec
         .connections
@@ -600,11 +609,8 @@ fn load_streamed_fk_edges(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    if let (Some(parent_type), Some(parent_fk)) = (&spec.spec.parent, &spec.spec.parent_fk) {
-        let edge_type = format!("OF_{}", parent_type.to_uppercase());
-        fk_edges.entry(edge_type).or_insert_with(|| {
-            super::super::schema::FkEdge::plain(parent_type.clone(), parent_fk.clone())
-        });
+    if let Some((edge_type, edge)) = implicit_parent_edge(spec) {
+        fk_edges.entry(edge_type).or_insert(edge);
     }
     if fk_edges.is_empty() {
         return Ok(());

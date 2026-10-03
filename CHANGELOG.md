@@ -11,6 +11,13 @@ before upgrading.
 
 ### Changed
 
+- A blueprint sub-node that declares `parent_fk` now gets an implicit
+  `OF_<PARENT>` edge (parent type upper-cased, e.g. `OF_EMPLOYEE`) to its
+  enclosing node, as the blueprint guide always described; before, only a spec
+  with a raw `parent` key got one. A `fk_edges` entry of the same name replaces
+  it. A sub-node that also declares a differently named edge to its parent now
+  has both edge types. There is no opt-out key: omit `parent_fk` (keeping the
+  column under `skipped`) to load without the generated edge.
 - A blueprint timeseries spec that drops aggregate rows (a time component
   below `year` equal to zero, e.g. `month = 0`) now warns once per node type
   with the count, the zero columns and any channel whose only values were on

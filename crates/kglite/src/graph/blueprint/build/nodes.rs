@@ -509,7 +509,7 @@ pub(super) fn node_chunk_size() -> usize {
 }
 
 /// The id columns the FK phase will type for this spec: its pk plus every
-/// declared FK column, including the implicit `parent` one.
+/// declared FK column, including the implicit parent one (`parent` key or enclosing type).
 pub(super) fn fk_id_columns(spec: &FlatSpec, pk: &str) -> Vec<String> {
     let mut columns = vec![pk.to_string()];
     let declared_fks = spec
@@ -522,7 +522,7 @@ pub(super) fn fk_id_columns(spec: &FlatSpec, pk: &str) -> Vec<String> {
             spec.spec
                 .parent_fk
                 .clone()
-                .filter(|_| spec.spec.parent.is_some()),
+                .filter(|_| spec.spec.parent.is_some() || spec.parent.is_some()),
         );
     for fk in declared_fks {
         if !columns.contains(&fk) {
