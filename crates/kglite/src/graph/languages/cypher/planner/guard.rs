@@ -125,6 +125,13 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
          admitted corpus's statistics (retrieval_mask.rs)",
     ),
     (
+        "push_limit_into_match",
+        "it only stamps a row cap on the MATCH, and every cap site counts rows the guard \
+         has already admitted: candidates are guarded before truncation, index seeds \
+         through guard_seeds with the capped-pass retry, and a hop is tested before it \
+         is pushed (matcher_guard.rs, matcher_expansion.rs)",
+    ),
+    (
         "fuse_anchored_edge_count",
         "the plan holds the id literal, not a node or an instant; the executor resolves \
          the anchors visible at the statement's instant and counts only relationships \
@@ -145,10 +152,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
     (
         "fuse_spatial_join",
         "an R-tree join over the type index, outside the matcher",
-    ),
-    (
-        "push_limit_into_match",
-        "an early stop that may count rows before the guard rejects them",
     ),
     (
         "fuse_optional_match_aggregate",
