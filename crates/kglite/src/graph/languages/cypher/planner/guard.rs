@@ -132,6 +132,13 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
          is pushed (matcher_guard.rs, matcher_expansion.rs)",
     ),
     (
+        "fuse_optional_match_aggregate",
+        "its driving rows come from the guarded MATCH, each row's count is the guarded \
+         per-node counter (the bound node, every relationship and the peer are tested), \
+         and a pattern the counter cannot take runs the filtered matcher \
+         (fused_match.rs, guarded_ops.rs)",
+    ),
+    (
         "fuse_anchored_edge_count",
         "the plan holds the id literal, not a node or an instant; the executor resolves \
          the anchors visible at the statement's instant and counts only relationships \
@@ -152,10 +159,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
     (
         "fuse_spatial_join",
         "an R-tree join over the type index, outside the matcher",
-    ),
-    (
-        "fuse_optional_match_aggregate",
-        "a fused per-row count outside the matcher",
     ),
     (
         "mark_skip_target_type_check",

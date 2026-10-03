@@ -144,14 +144,20 @@ before upgrading.
   ORDER BY n DESC LIMIT k`, the two-`MATCH` variant and the top-k absorption)
   keeps its fused plan under a context as well: on the same graph the
   wellbores-per-field `WITH` top-10 went from 45-68 ms to 0.15-0.16 ms
-  (0.13 ms undated). Two-hop (5-element) patterns and optional matches
-  still run unfused under a context.
+  (0.13 ms undated). Two-hop (5-element) patterns still run unfused under a
+  context.
 - Performance: a single `MATCH ... RETURN ... LIMIT n` stops early under a
   valid-time context as it does undated, including the as-of-today default.
   Every site that counts toward the cap already counts only rows the context
   admits (candidates, index seeds and relationships are tested before they are
   counted, and a capped seed pass that comes back short re-runs uncapped), so
   the early stop returns the same rows the full scan would.
+- Performance: `OPTIONAL MATCH ... count()` keeps its fused plan under a
+  valid-time context, including the as-of-today default. Each driving row is
+  counted through the per-node counter that tests the bound node, every
+  relationship and the peer, so rows with no visible match still yield 0 and a
+  hidden peer behind a visible relationship is not counted; a pattern that
+  counter cannot take runs the filtered matcher.
 
 ### Fixed
 

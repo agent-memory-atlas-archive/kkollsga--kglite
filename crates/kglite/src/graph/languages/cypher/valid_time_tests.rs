@@ -205,38 +205,16 @@ fn lowering_refusals() {
     assert!(refusal(&none).unwrap().contains("has none"));
 }
 
-fn has_fused(clauses: &[Clause]) -> bool {
-    clauses.iter().any(|c| {
-        matches!(
-            c,
-            Clause::FusedCountTypedNode { .. }
-                | Clause::FusedCountAll { .. }
-                | Clause::FusedMatchReturnAggregate { .. }
-                | Clause::FusedMatchWithAggregate { .. }
-                | Clause::FusedOptionalMatchAggregate { .. }
-                | Clause::FusedNodeScanAggregate { .. }
-                | Clause::FusedNodeScanTopK { .. }
-                | Clause::FusedOrderByTopK { .. }
-        )
-    })
-}
-
-/// Default-deny: a denied pass does not run on a guarded scope, and the
-/// allow-listed ones — the re-admitted fusions included — still do.
+/// Default-deny: every pass that ran on a guarded scope is allow-listed, and
+/// the re-admitted fusions still fire.
 #[test]
 fn a_guarded_scope_runs_only_allow_listed_passes() {
     let graph = graph();
-    let body =
-        "MATCH (w:Well) OPTIONAL MATCH (w)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c";
-    let plain = lowered(&graph, &format!("EXPLAIN FOR VALID_TIME ALL {body}"), &[]);
-    assert!(has_fused(&plain.clauses), "{body} should fuse unguarded");
-    let guarded = lowered(&graph, &format!("EXPLAIN {AS_OF}{body}"), &[]);
-    assert!(
-        !has_fused(&guarded.clauses),
-        "{body}: {:?}",
-        guarded.clauses
-    );
     for (body, pass) in [
+        (
+            "MATCH (w:Well) OPTIONAL MATCH (w)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
+            "fuse_optional_match_aggregate",
+        ),
         (
             "MATCH (w:Well)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
             "fuse_match_return_aggregate",
@@ -270,6 +248,7 @@ fn a_guarded_scope_runs_only_allow_listed_passes() {
         );
     }
     for body in [
+        "MATCH (w:Well) OPTIONAL MATCH (w)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
         "MATCH (w:Well)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
         "MATCH (w:Well) RETURN count(w) AS c",
     ] {
