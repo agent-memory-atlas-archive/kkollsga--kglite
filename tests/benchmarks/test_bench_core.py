@@ -371,6 +371,73 @@ def test_bench_cypher_where(benchmark, bench_graph):
     benchmark(bench_graph.cypher, "MATCH (n:Item) WHERE n.value > 500 RETURN n.title, n.value")
 
 
+@pytest.fixture
+def two_site_valid_at_graph():
+    """10 000 Store nodes in 150 Regions, both typed with validFrom/validTo bounds."""
+    graph = KnowledgeGraph()
+    regions, stores = 150, 10_000
+    bounds = {"existsFrom": "validFrom", "existsTo": "validTo"}
+    graph.add_nodes(
+        pd.DataFrame(
+            {
+                "id": range(regions),
+                "name": [f"R{i}" for i in range(regions)],
+                "existsFrom": "1970-01-01",
+                "existsTo": None,
+            }
+        ),
+        "Region",
+        "id",
+        "name",
+        column_types=bounds,
+    )
+    graph.add_nodes(
+        pd.DataFrame(
+            {
+                "id": range(stores),
+                "name": [f"S{i}" for i in range(stores)],
+                "region": [i % regions for i in range(stores)],
+                "existsFrom": [f"{1970 + i % 55}-06-01" for i in range(stores)],
+                "existsTo": None,
+            }
+        ),
+        "Store",
+        "id",
+        "name",
+        column_types=bounds,
+    )
+    graph.add_connections(
+        pd.DataFrame({"id": range(stores), "region": [i % regions for i in range(stores)]}),
+        "IN_REGION",
+        "Store",
+        "id",
+        "Region",
+        "region",
+    )
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_valid_at_four_arg_two_sites(benchmark, two_site_valid_at_graph):
+    """Two four-argument valid_at() call sites over different node types, per joined row."""
+    query = (
+        "MATCH (s:Store)-[:IN_REGION]->(r:Region) "
+        "WHERE valid_at(s, date('2000-01-01'), 'existsFrom', 'existsTo') "
+        "AND valid_at(r, date('2000-01-01'), 'existsFrom', 'existsTo') "
+        "RETURN r.title AS region, count(s) AS n ORDER BY n DESC LIMIT 10"
+    )
+    total = (
+        "MATCH (s:Store)-[:IN_REGION]->(r:Region) "
+        "WHERE valid_at(s, date('2000-01-01'), 'existsFrom', 'existsTo') "
+        "AND valid_at(r, date('2000-01-01'), 'existsFrom', 'existsTo') RETURN count(s) AS n"
+    )
+    # A store opened in 1970 + i % 55; it is open on 2000-01-01 only if that is <= 1999 (June opening).
+    expected = sum(1 for i in range(10_000) if i % 55 <= 29)
+    assert two_site_valid_at_graph.cypher(total).to_list()[0]["n"] == expected
+    assert len(two_site_valid_at_graph.cypher(query).to_list()) == 10
+    benchmark(lambda: two_site_valid_at_graph.cypher(query).to_list())
+
+
 @pytest.mark.benchmark
 def test_bench_grouped_count_top_k_target_property(benchmark, grouped_count_graph):
     """User shape: count incoming rows, group on target property, order + limit."""

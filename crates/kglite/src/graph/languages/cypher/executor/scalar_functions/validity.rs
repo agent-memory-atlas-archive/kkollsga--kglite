@@ -25,22 +25,76 @@ use crate::graph::features::temporal::eval::{
 use crate::graph::property_types::value_type_name;
 use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::GraphRead;
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
 
 /// The element type one validity call reads, and the bound names it asked
 /// for (`None` for the two-argument form): what its resolved bounds depend on.
 #[derive(Clone, PartialEq, Eq)]
-pub(in crate::graph::languages::cypher::executor) struct ValidityKey {
+struct ValidityKey {
     /// A node's primary type, or a relationship's type and its source's type.
     element: (InternedKey, Option<InternedKey>),
     named: Option<(String, String)>,
 }
 
-/// The first validity call site's resolution, reused by every row of the same
-/// element type — one declaration lookup per site, not per row. A row of
-/// another type resolves uncached.
-pub(in crate::graph::languages::cypher::executor) struct ValidityCache {
+/// One call site's resolution, reused by every row of the same element type
+/// and bound names: one declaration lookup per site, not per row.
+struct ValidityCache {
     key: ValidityKey,
+    /// `None` only for the two-argument form on a type nothing declared.
     resolved: Option<ResolvedBounds>,
+    /// Whether the element type itself records the from / to property
+    /// ([`KNOWN_UNSET`] until first asked) — the answer `require_known_bounds`
+    /// would recompute on every row whose bound is null.
+    known: [AtomicU8; 2],
+}
+
+const KNOWN_UNSET: u8 = 0;
+const KNOWN_YES: u8 = 1;
+const KNOWN_NO: u8 = 2;
+
+const VALIDITY_CACHE_SLOTS: usize = 8;
+
+/// Resolution caches for a statement's `valid_at()` / `valid_during()` call
+/// sites, one slot per distinct (element type, bound names) pair. A pair that
+/// finds every slot taken resolves uncached on each row.
+#[derive(Default)]
+pub(in crate::graph::languages::cypher::executor) struct ValidityCaches {
+    slots: [OnceLock<ValidityCache>; VALIDITY_CACHE_SLOTS],
+}
+
+impl ValidityCaches {
+    fn get(
+        &self,
+        element: (InternedKey, Option<InternedKey>),
+        named: Option<(&str, &str)>,
+    ) -> Option<&ValidityCache> {
+        self.slots
+            .iter()
+            .filter_map(OnceLock::get)
+            .find(|c| c.key.element == element && key_names_match(&c.key.named, named))
+    }
+
+    /// Park `entry` in the first free slot, or hand it back when none is free.
+    fn park(&self, entry: ValidityCache) -> Result<&ValidityCache, ValidityCache> {
+        let mut entry = entry;
+        for slot in &self.slots {
+            match slot.set(entry) {
+                Ok(()) => return Ok(slot.get().expect("this thread just filled the slot")),
+                Err(returned) => entry = returned,
+            }
+        }
+        Err(entry)
+    }
+}
+
+fn key_names_match(key: &Option<(String, String)>, named: Option<(&str, &str)>) -> bool {
+    match (key, named) {
+        (None, None) => true,
+        (Some((kf, kt)), Some((f, t))) => kf == f && kt == t,
+        _ => false,
+    }
 }
 
 /// The two bound properties and the convention a call evaluates under.
@@ -51,14 +105,39 @@ struct ResolvedBounds {
     convention: IntervalConvention,
 }
 
+/// A row's resolved bounds: borrowed from a parked cache entry, or owned when
+/// the row resolved uncached.
+struct Resolved<'a> {
+    bounds: Cow<'a, ResolvedBounds>,
+    known: Option<&'a [AtomicU8; 2]>,
+}
+
+impl Resolved<'_> {
+    fn owned(bounds: ResolvedBounds) -> Resolved<'static> {
+        Resolved {
+            bounds: Cow::Owned(bounds),
+            known: None,
+        }
+    }
+}
+
 /// The element a validity call's variable is bound to.
-struct Element {
+struct Element<'s> {
     key: (InternedKey, Option<InternedKey>),
-    /// `node type 'M'` / `relationship type 'R'`, for messages.
-    describe: String,
     /// The node label or relationship type a declaration would name.
-    target: String,
+    target: &'s str,
     kind: ElementKind,
+}
+
+impl Element<'_> {
+    /// `node type 'M'` / `relationship type 'R'`, for messages.
+    fn describe(&self) -> String {
+        let kind = match self.kind {
+            ElementKind::Node(_) => "node type",
+            ElementKind::Edge { .. } => "relationship type",
+        };
+        format!("{kind} '{}'", self.target)
+    }
 }
 
 enum ElementKind {
@@ -71,8 +150,8 @@ enum ElementKind {
 }
 
 /// What a validity call's first argument holds on one row.
-enum Subject {
-    Element(Element),
+enum Subject<'s> {
+    Element(Element<'s>),
     /// Null — an unmatched `OPTIONAL MATCH`, a null list item: the call is null.
     Null,
     /// Some other value (a map, a path): only the named form reads it.
@@ -110,7 +189,7 @@ impl CypherExecutor<'_> {
             &bounds.from_val,
             &bounds.to_val,
             instant,
-            resolved.convention,
+            resolved.bounds.convention,
         )
         .map(Value::Boolean)
         .map_err(|e| self.validity_bound_error(&bounds, &subject, e))
@@ -151,7 +230,7 @@ impl CypherExecutor<'_> {
             &bounds.to_val,
             start,
             end,
-            resolved.convention,
+            resolved.bounds.convention,
         )
         .map(Value::Boolean)
         .map_err(|e| self.validity_bound_error(&bounds, &subject, e))
@@ -163,14 +242,14 @@ impl CypherExecutor<'_> {
     /// `Ok(None)` — the row is valid — only for a relationship whose type has
     /// several unkeyed declarations of which it carries none, which the fluent
     /// `traverse()` filter also treats as not temporal.
-    fn resolve_validity(
-        &self,
+    fn resolve_validity<'s>(
+        &'s self,
         function: &'static str,
         var_name: &str,
-        subject: &Subject,
-        named: &[Expression],
+        subject: &Subject<'_>,
+        named: &'s [Expression],
         row: &ResultRow,
-    ) -> Result<Option<ResolvedBounds>, String> {
+    ) -> Result<Option<Resolved<'s>>, String> {
         let named = match named {
             [] => None,
             [from, to] => Some((
@@ -183,60 +262,70 @@ impl CypherExecutor<'_> {
             // A value that is not a node or relationship (a map): the named
             // form reads its two keys, closed; the declared form has no type.
             return match named {
-                Some((from, to)) => Ok(Some(ResolvedBounds {
-                    from,
-                    to,
+                Some((from, to)) => Ok(Some(Resolved::owned(ResolvedBounds {
+                    from: from.into_owned(),
+                    to: to.into_owned(),
                     convention: IntervalConvention::Closed,
-                })),
+                }))),
                 None => Err(format!(
                     "{function}(): first argument must be a node or relationship; \
                      {var_name} is neither"
                 )),
             };
         };
-        let key = ValidityKey {
-            element: element.key,
-            named: named.clone(),
-        };
-        if let Some(cache) = self.validity_cache.get() {
-            if cache.key == key {
-                return match (&cache.resolved, named) {
-                    (Some(resolved), _) => Ok(Some(resolved.clone())),
-                    (None, Some((from, to))) => Ok(Some(ResolvedBounds {
-                        from,
-                        to,
-                        convention: IntervalConvention::Closed,
-                    })),
-                    (None, None) => Err(undeclared_error(function, var_name, element)),
-                };
-            }
+        let names = named.as_ref().map(|(f, t)| (f.as_ref(), t.as_ref()));
+        if let Some(cache) = self.validity_caches.get(element.key, names) {
+            return match &cache.resolved {
+                Some(resolved) => Ok(Some(Resolved {
+                    bounds: Cow::Borrowed(resolved),
+                    known: Some(&cache.known),
+                })),
+                None => Err(undeclared_error(function, var_name, element)),
+            };
         }
         let candidates = self.declared_configs(element);
-        let (resolved, cacheable) = match &named {
+        let (resolved, cacheable) = match &names {
             Some((from, to)) => (
-                candidates
-                    .iter()
-                    .find(|c| &c.valid_from == from && &c.valid_to == to)
-                    .map(|c| resolved_from(c)),
+                Some(
+                    candidates
+                        .iter()
+                        .find(|c| c.valid_from == *from && c.valid_to == *to)
+                        .map_or_else(
+                            || ResolvedBounds {
+                                from: (*from).to_string(),
+                                to: (*to).to_string(),
+                                convention: IntervalConvention::Closed,
+                            },
+                            |c| resolved_from(c),
+                        ),
+                ),
                 true,
             ),
             None => self.declared_choice(var_name, element, &candidates, row),
         };
-        if cacheable {
-            let _ = self.validity_cache.set(ValidityCache {
-                key,
-                resolved: resolved.clone(),
-            });
+        if !cacheable {
+            return Ok(resolved.map(Resolved::owned));
         }
-        match (resolved, named) {
-            (Some(resolved), _) => Ok(Some(resolved)),
-            (None, Some((from, to))) => Ok(Some(ResolvedBounds {
-                from,
-                to,
-                convention: IntervalConvention::Closed,
-            })),
-            (None, None) if !cacheable => Ok(None),
-            (None, None) => Err(undeclared_error(function, var_name, element)),
+        let entry = ValidityCache {
+            key: ValidityKey {
+                element: element.key,
+                named: names.map(|(f, t)| (f.to_string(), t.to_string())),
+            },
+            resolved,
+            known: [AtomicU8::new(KNOWN_UNSET), AtomicU8::new(KNOWN_UNSET)],
+        };
+        match self.validity_caches.park(entry) {
+            Ok(cache) => match &cache.resolved {
+                Some(resolved) => Ok(Some(Resolved {
+                    bounds: Cow::Borrowed(resolved),
+                    known: Some(&cache.known),
+                })),
+                None => Err(undeclared_error(function, var_name, element)),
+            },
+            Err(entry) => match entry.resolved {
+                Some(resolved) => Ok(Some(Resolved::owned(resolved))),
+                None => Err(undeclared_error(function, var_name, element)),
+            },
         }
     }
 
@@ -249,7 +338,7 @@ impl CypherExecutor<'_> {
     fn declared_choice(
         &self,
         var_name: &str,
-        element: &Element,
+        element: &Element<'_>,
         candidates: &[&TemporalConfig],
         row: &ResultRow,
     ) -> (Option<ResolvedBounds>, bool) {
@@ -274,13 +363,13 @@ impl CypherExecutor<'_> {
     }
 
     /// Every declaration that could apply to `element`, in lookup order.
-    fn declared_configs(&self, element: &Element) -> Vec<&TemporalConfig> {
+    fn declared_configs(&self, element: &Element<'_>) -> Vec<&TemporalConfig> {
         use crate::graph::features::temporal::{edge_configs, node_config};
         let graph = self.graph;
         match element.kind {
             ElementKind::Node(idx) => {
                 let mut out: Vec<&TemporalConfig> =
-                    node_config(graph, &element.target).into_iter().collect();
+                    node_config(graph, element.target).into_iter().collect();
                 let mut secondary: Vec<&str> = graph
                     .secondary_labels(idx)
                     .into_iter()
@@ -295,7 +384,7 @@ impl CypherExecutor<'_> {
                 out
             }
             ElementKind::Edge { .. } => {
-                let configs = edge_configs(graph, &element.target);
+                let configs = edge_configs(graph, element.target);
                 let source = element.key.1.map(|key| graph.interner.resolve(key));
                 let keyed = configs
                     .iter()
@@ -311,7 +400,7 @@ impl CypherExecutor<'_> {
     /// are: a matched binding, else a projected node or relationship value — an
     /// item of `collect()`, `UNWIND`, `nodes(p)`, `relationships(p)` or a
     /// variable-length list carries its type as the bound variable does.
-    fn validity_subject(&self, var_name: &str, row: &ResultRow) -> Subject {
+    fn validity_subject<'s>(&'s self, var_name: &str, row: &'s ResultRow) -> Subject<'s> {
         if let Some(&idx) = row.node_bindings.get(var_name) {
             return self.node_subject(idx, None);
         }
@@ -319,7 +408,7 @@ impl CypherExecutor<'_> {
             let Some(weight) = self.graph.graph.edge_weight(edge.edge_index) else {
                 return Subject::Null;
             };
-            let rel_type = weight.connection_type_str(&self.graph.interner).to_string();
+            let rel_type = weight.connection_type_str(&self.graph.interner);
             let (source, target) = self
                 .graph
                 .graph
@@ -340,7 +429,7 @@ impl CypherExecutor<'_> {
                 node.labels.first().map(String::as_str),
             ),
             Some(Value::Relationship(rel)) => self.edge_subject(
-                rel.rel_type.clone(),
+                &rel.rel_type,
                 petgraph::graph::NodeIndex::new(rel.start_id as usize),
                 petgraph::graph::NodeIndex::new(rel.end_id as usize),
             ),
@@ -350,7 +439,11 @@ impl CypherExecutor<'_> {
 
     /// A node, typed from the graph — or from the value's own primary label
     /// when the graph no longer holds it.
-    fn node_subject(&self, idx: petgraph::graph::NodeIndex, label: Option<&str>) -> Subject {
+    fn node_subject<'s>(
+        &'s self,
+        idx: petgraph::graph::NodeIndex,
+        label: Option<&'s str>,
+    ) -> Subject<'s> {
         let graph = self.graph;
         let node_type = match (graph.graph.node_type_of(idx), label) {
             (Some(key), _) => key,
@@ -361,42 +454,43 @@ impl CypherExecutor<'_> {
             .interner
             .try_resolve(node_type)
             .or(label)
-            .unwrap_or("?")
-            .to_string();
+            .unwrap_or("?");
         Subject::Element(Element {
             key: (node_type, None),
-            describe: format!("node type '{target}'"),
             target,
             kind: ElementKind::Node(idx),
         })
     }
 
-    fn edge_subject(
-        &self,
-        rel_type: String,
+    fn edge_subject<'s>(
+        &'s self,
+        rel_type: &'s str,
         source: petgraph::graph::NodeIndex,
         target: petgraph::graph::NodeIndex,
-    ) -> Subject {
+    ) -> Subject<'s> {
         Subject::Element(Element {
             key: (
-                InternedKey::from_str(&rel_type),
+                InternedKey::from_str(rel_type),
                 self.graph.graph.node_type_of(source),
             ),
-            describe: format!("relationship type '{rel_type}'"),
             target: rel_type,
             kind: ElementKind::Edge { source, target },
         })
     }
 
-    fn bound_name(
+    /// A bound-name argument; a string literal is borrowed, not copied per row.
+    fn bound_name<'e>(
         &self,
         function: &str,
         argument: &str,
-        expr: &Expression,
+        expr: &'e Expression,
         row: &ResultRow,
-    ) -> Result<String, String> {
+    ) -> Result<Cow<'e, str>, String> {
+        if let Expression::Literal(Value::String(s)) = expr {
+            return Ok(Cow::Borrowed(s));
+        }
         match self.evaluate_expression(expr, row)? {
-            Value::String(s) => Ok(s),
+            Value::String(s) => Ok(Cow::Owned(s)),
             _ => Err(format!("{function}(): {argument} must be a string")),
         }
     }
@@ -407,20 +501,20 @@ impl CypherExecutor<'_> {
         &self,
         function: &'static str,
         var_name: &'n str,
-        subject: &Subject,
-        resolved: &'n ResolvedBounds,
+        subject: &Subject<'_>,
+        resolved: &'n Resolved<'_>,
         row: &ResultRow,
     ) -> Result<ValidityBounds<'n>, String> {
         let bounds = ValidityBounds {
             function,
             var_name,
-            from_field: &resolved.from,
-            from_val: self.resolve_property(var_name, &resolved.from, row)?,
-            to_field: &resolved.to,
-            to_val: self.resolve_property(var_name, &resolved.to, row)?,
+            from_field: &resolved.bounds.from,
+            from_val: self.resolve_property(var_name, &resolved.bounds.from, row)?,
+            to_field: &resolved.bounds.to,
+            to_val: self.resolve_property(var_name, &resolved.bounds.to, row)?,
         };
         if let Subject::Element(element) = subject {
-            self.require_known_bounds(&bounds, element)?;
+            self.require_known_bounds(&bounds, element, resolved.known)?;
         }
         Ok(bounds)
     }
@@ -433,13 +527,19 @@ impl CypherExecutor<'_> {
     fn require_known_bounds(
         &self,
         bounds: &ValidityBounds<'_>,
-        element: &Element,
+        element: &Element<'_>,
+        known: Option<&[AtomicU8; 2]>,
     ) -> Result<(), String> {
-        for (field, value) in [
+        for (side, (field, value)) in [
             (bounds.from_field, &bounds.from_val),
             (bounds.to_field, &bounds.to_val),
-        ] {
-            if !matches!(value, Value::Null) || self.element_has_property(element, field) {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !matches!(value, Value::Null)
+                || self.element_has_property(element, field, known.map(|k| &k[side]))
+            {
                 continue;
             }
             let kind = match element.kind {
@@ -449,33 +549,56 @@ impl CypherExecutor<'_> {
             return Err(crate::graph::features::temporal::unknown_bound_message(
                 bounds.function,
                 kind,
-                &element.target,
+                element.target,
                 field,
             ));
         }
         Ok(())
     }
 
-    fn element_has_property(&self, element: &Element, field: &str) -> bool {
+    /// Whether the element's type records `field`. The type-level answer is
+    /// memoised in `memo` (the cache entry's slot for this bound); the
+    /// per-element secondary-label check is not.
+    fn element_has_property(
+        &self,
+        element: &Element<'_>,
+        field: &str,
+        memo: Option<&AtomicU8>,
+    ) -> bool {
         use crate::graph::features::temporal::{
             node_type_has_property, relationship_type_has_property,
         };
-        match element.kind {
-            // A declaration on a secondary label governs the node too, so a
-            // bound that label records is known here.
-            ElementKind::Node(idx) => {
-                node_type_has_property(self.graph, &element.target, field)
-                    || (self.graph.has_secondary_labels
+        let type_has = || match element.kind {
+            ElementKind::Node(_) => node_type_has_property(self.graph, element.target, field),
+            ElementKind::Edge { .. } => {
+                relationship_type_has_property(self.graph, element.target, field)
+            }
+        };
+        let primary = match memo.map(|m| m.load(Ordering::Relaxed)) {
+            Some(KNOWN_YES) => true,
+            Some(KNOWN_NO) => false,
+            _ => {
+                let answer = type_has();
+                if let Some(m) = memo {
+                    m.store(if answer { KNOWN_YES } else { KNOWN_NO }, Ordering::Relaxed);
+                }
+                answer
+            }
+        };
+        // A declaration on a secondary label governs the node too, so a
+        // bound that label records is known here.
+        primary
+            || match element.kind {
+                ElementKind::Node(idx) => {
+                    self.graph.has_secondary_labels
                         && self
                             .graph
                             .secondary_label_names(idx)
                             .iter()
-                            .any(|label| node_type_has_property(self.graph, label, field)))
+                            .any(|label| node_type_has_property(self.graph, label, field))
+                }
+                ElementKind::Edge { .. } => false,
             }
-            ElementKind::Edge { .. } => {
-                relationship_type_has_property(self.graph, &element.target, field)
-            }
-        }
     }
 
     /// The error for a stored bound the evaluator cannot read, naming the
@@ -483,7 +606,7 @@ impl CypherExecutor<'_> {
     fn validity_bound_error(
         &self,
         bounds: &ValidityBounds<'_>,
-        subject: &Subject,
+        subject: &Subject<'_>,
         err: TemporalError,
     ) -> String {
         let field = match &err {
@@ -536,7 +659,7 @@ fn validity_variable<'e>(function: &str, arg: &'e Expression) -> Result<&'e str,
 }
 
 /// The two-argument form on a type nothing declared.
-fn undeclared_error(function: &str, var_name: &str, element: &Element) -> String {
+fn undeclared_error(function: &str, var_name: &str, element: &Element<'_>) -> String {
     let key = match element.kind {
         ElementKind::Node(_) => "node",
         ElementKind::Edge { .. } => "relationship",
@@ -551,7 +674,8 @@ fn undeclared_error(function: &str, var_name: &str, element: &Element) -> String
          bounds to read. Declare one — CALL db.temporal.declare({{{key}: '{}', from: \
          'valid_from', to: 'valid_to', convention: 'half_open'}}) — or name the bounds: \
          {function}({var_name}, {rest}, 'valid_from', 'valid_to')",
-        element.describe, element.target
+        element.describe(),
+        element.target
     )
 }
 

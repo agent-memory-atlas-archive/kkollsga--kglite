@@ -31,6 +31,16 @@ before upgrading.
 
 ### Fixed
 
+- Performance: the four-argument `valid_at(x, d, 'from', 'to')` and
+  `valid_during(...)` cost less per row. Each statement now keeps one
+  resolution per (element type, bound-name pair), so a second call site or type
+  no longer re-resolves the declaration on every row, and a row no longer copies
+  the bounds, builds the type description or re-checks that the bound exists.
+  On a two-call-site query over 10 000 joined rows (release builds, same
+  interpreter, interleaved, min of 40, load average ~3.5) the cost relative to
+  0.18.1 falls from +26-31% to +1.6-2.5% (4.85 to 4.93-4.97 ms); an undated
+  control and a property-compare control did not move. Error messages and
+  null-bound handling are unchanged.
 - The static schema lint no longer reports a timeseries channel passed to a
   `ts_*()` function (`ts_series(p.oil, ...)`, `ts_at`, `ts_sum`, ...) or a
   configured spatial property (`p.location`, `p.geometry`, named points and
