@@ -124,9 +124,20 @@ fn prep_fk_edges(
             }
         };
 
+        // A timeseries spec has one CSV row per time step but one node per
+        // pk, so the FK repeats on every row; the edge is declared once per
+        // distinct (pk, fk, property values). A changing FK keeps both targets.
+        let distinct;
+        let edge_raw: &RawCsv = if spec.spec.timeseries.is_some() {
+            distinct = distinct_edge_rows(&raw, pk_idx, fk_idx, &props.columns);
+            &distinct
+        } else {
+            &raw
+        };
+
         let mut misparses = MisparseTally::default();
         let frame = match fk_edge_frame(
-            &raw,
+            edge_raw,
             &pk,
             edge,
             IdColumnIdx {
@@ -169,6 +180,24 @@ fn prep_fk_edges(
         errors,
         warnings,
     })
+}
+
+/// `raw` reduced to its first row per distinct (pk, fk, declared property
+/// values) combination, in source order. Properties absent from the CSV are
+/// ignored here; `fk_edge_frame` reports them.
+fn distinct_edge_rows(raw: &RawCsv, pk_idx: usize, fk_idx: usize, props: &[String]) -> RawCsv {
+    let key_cols: Vec<usize> = [pk_idx, fk_idx]
+        .into_iter()
+        .chain(props.iter().filter_map(|c| raw.col_index(c)))
+        .collect();
+    let mut seen: HashSet<Vec<&str>> = HashSet::new();
+    let keep: Vec<usize> = (0..raw.row_count())
+        .filter(|&r| {
+            let key = key_cols.iter().map(|&c| raw.rows[r][c].as_str()).collect();
+            seen.insert(key)
+        })
+        .collect();
+    subset_rows(raw, &keep)
 }
 
 fn missing_fk_property_error(node_type: &str, edge_type: &str, column: &str) -> String {

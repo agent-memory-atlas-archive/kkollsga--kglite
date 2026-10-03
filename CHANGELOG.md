@@ -9,6 +9,16 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- A blueprint timeseries sub-node (or a top-level timeseries spec with `parent`
+  + `parent_fk`) wrote its parent FK edge once per CSV row instead of once per
+  node, so joins through it multiplied every aggregate by the series length
+  (`count(r)` and `sum(ts_sum(...))` over the parent edge were inflated). The
+  edge is now written once per distinct (source, target, edge-property values);
+  an FK that changes over the series keeps both targets. Graphs built from a
+  blueprint with a timeseries sub-node on 0.19.0 or 0.19.1 should be rebuilt.
+
 ## [0.19.1] - 2026-10-02
 
 ### Added
