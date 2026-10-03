@@ -577,6 +577,22 @@ counting such rows and naming the first (a `UserWarning` from a load,
 `result.warnings` from Cypher), and `db.temporal.declarations()` counts them
 in `empty_rows`. No as-of question returns such a row.
 
+**A closed register's empty row.** A source that writes `closed` periods can
+still deliver a version superseded the day it was registered: its `to` is the
+day before its `from` (`valid_from = 2011-06-10`, `valid_to = 2011-06-09`).
+`closed` refuses that row as inverted. Declare `empty_when='to_before_from'`
+beside `convention='closed'` (`set_temporal` and the loaders' keyword,
+`empty_when: 'to_before_from'` in `db.temporal.declare`, and the same key in a
+blueprint's `temporal`) and the row is kept as an empty interval: valid on no
+day, counted in `empty_rows`, and reported in the same one warning, worded
+`… have an empty interval under convention 'closed' with empty_when
+'to_before_from' …`. Only a date `to` exactly one day before a date `from`
+qualifies; a timestamp bound or a wider inversion is still refused, and
+`half_open` with the option raises, since it already holds `from == to` as
+empty. `db.temporal.declarations()` reports the option in its `empty_when`
+column. The saved file adds one optional key to the declaration; an older
+build ignores it and evaluates the row as valid on no day, as this one does.
+
 **How a `SET` is judged.** A `SET` is judged once its clause has applied every
 item, so `SET t.valid_from = …, t.valid_to = …` moves an interval in one step.
 Every writer that gives a node a declared label (`add_nodes(labels=[…])`,

@@ -240,7 +240,8 @@ pub struct NodeSpec {
 /// period and whether the `to` day belongs to it (`closed`) or is the first
 /// day after it (`half_open`). `from` and `to` name the *stored* property —
 /// on an edge, the name after `rename`. Without `convention` nothing is
-/// declared and the build warns.
+/// declared and the build warns. `empty_when: "to_before_from"` lets a
+/// `closed` interval hold a row whose `to` is the day before its `from`.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct TemporalSpec {
@@ -248,6 +249,8 @@ pub struct TemporalSpec {
     pub to: String,
     #[serde(default)]
     pub convention: Option<String>,
+    #[serde(default)]
+    pub empty_when: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

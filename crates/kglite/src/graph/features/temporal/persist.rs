@@ -12,7 +12,9 @@
 //! out: an older build reads every config as closed, so a half-open one would
 //! keep each interval's end day, and it knows no source types, so a keyed one
 //! would reach other sources' edges. A type it sees as undeclared is filtered
-//! by nothing instead.
+//! by nothing instead. A closed config with `empty_when` is mirrored as the
+//! plain closed config: the option only lets a write keep a `to` before its
+//! `from`, and every reader already evaluates such a row as valid on no day.
 //!
 //! A file without the new key (written before it existed) is read from the
 //! legacy keys. That is read-compatibility for persisted data, kept as long
@@ -30,7 +32,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::declarations::{TemporalDeclarations, TemporalTarget};
-use super::eval::IntervalConvention;
+use super::eval::{EmptyWhen, IntervalConvention};
 use crate::graph::schema::TemporalConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +44,7 @@ enum Kind {
 
 /// One entry of the `temporal_declarations` key:
 /// `{"kind", "name", "source_type"?, "from", "to", "convention",
-/// "abutting_rows"?}`. A field added later must be optional with a default,
+/// "empty_when"?, "abutting_rows"?}`. A field added later must be optional with a default,
 /// so a file stays readable in both directions without a format change.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PersistedDeclaration {
@@ -53,6 +55,10 @@ pub(crate) struct PersistedDeclaration {
     from: String,
     to: String,
     convention: IntervalConvention,
+    /// Added after the first format: an older build ignores the key and
+    /// reads the entry as the closed declaration it otherwise is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    empty_when: Option<EmptyWhen>,
     /// The declare-time count, so a loaded graph reports what the
     /// declaration reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +95,7 @@ fn legacy_config(from: &str, to: &str) -> TemporalConfig {
         valid_to: to.to_string(),
         convention: IntervalConvention::Closed,
         source_type: None,
+        empty_when: None,
     }
 }
 
@@ -113,6 +120,7 @@ impl TemporalDeclarations {
                     from: info.config.valid_from,
                     to: info.config.valid_to,
                     convention: info.config.convention,
+                    empty_when: info.config.empty_when,
                     abutting_rows: info.abutting_rows,
                 }
             })
@@ -168,6 +176,7 @@ impl TemporalDeclarations {
                     Kind::Node => None,
                     Kind::Relationship => entry.source_type,
                 },
+                empty_when: entry.empty_when,
             };
             let target = match entry.kind {
                 Kind::Node => TemporalTarget::Node(entry.name.clone()),
@@ -219,7 +228,7 @@ impl TemporalDeclarations {
 
 /// One declaration change as the write-ahead log carries it:
 /// `{"kind", "name", "source_type"?, "config": {"from", "to", "convention",
-/// "abutting_rows"?} | null}`, a `null` config withdrawing the key. It holds
+/// "empty_when"?, "abutting_rows"?} | null}`, a `null` config withdrawing the key. It holds
 /// the key's whole state, so replay keeps the last one per key; a field added
 /// later must be optional with a default, like a file entry's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -236,6 +245,8 @@ struct JournaledConfig {
     from: String,
     to: String,
     convention: IntervalConvention,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    empty_when: Option<EmptyWhen>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     abutting_rows: Option<usize>,
 }
@@ -262,6 +273,7 @@ impl JournaledDeclaration {
                 from: config.valid_from.clone(),
                 to: config.valid_to.clone(),
                 convention: config.convention,
+                empty_when: config.empty_when,
                 abutting_rows,
             }),
         }
@@ -297,6 +309,7 @@ impl TemporalDeclarations {
                     TemporalTarget::Node(_) => None,
                     TemporalTarget::Relationship { source_type, .. } => source_type.clone(),
                 },
+                empty_when: journaled.empty_when,
             };
             self.insert(&target, config, journaled.abutting_rows);
         }

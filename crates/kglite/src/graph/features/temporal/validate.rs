@@ -3,7 +3,8 @@
 //! inverted interval, and two kinds of row are counted: those whose `to`
 //! bound is another row's `from` bound within one entity (one source node's
 //! relationships, or the nodes of a label sharing an `id`), and those whose
-//! interval is empty under `half_open` (valid at no instant, and kept).
+//! interval is empty (valid at no instant, and kept): under `half_open`, or
+//! under `closed` with `empty_when: to_before_from`.
 //!
 //! The pass streams: nodes are read one property at a time and relationships
 //! through [`GraphRead::get_edge_property`], so disk mode materialises no
@@ -19,7 +20,7 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::Direction;
 
 use super::declarations::{EntityGrouping, TemporalTarget, DISK_NODE_ABUTMENT_CAP};
-use super::eval::{self, BoundSide, Instant, TemporalError};
+use super::eval::{self, BoundSide, EmptyWhen, Instant, TemporalError};
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::core::value_operations::format_value_compact;
 use crate::graph::dir_graph::DirGraph;
@@ -40,26 +41,73 @@ pub(super) struct Walk {
     pub(super) open_ended: Option<String>,
 }
 
+/// How a row's interval is empty, which words its warning: the shape
+/// differs by convention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmptyForm {
+    /// `half_open`: `from == to`, or a date `from` ending at its midnight.
+    FromEqualsTo,
+    /// `closed` with `empty_when: to_before_from`: `to` is the day before
+    /// `from`.
+    ToBeforeFrom,
+}
+
+/// Whether a row is empty, and in which form. Combines across the
+/// configs a write checks a row against ([`std::ops::BitOrAssign`]): the
+/// first form found stays.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Emptiness(Option<EmptyForm>);
+
+impl Emptiness {
+    /// The emptiness of `bounds` under `config`.
+    pub(super) fn of(bounds: Bounds, config: &TemporalConfig) -> Self {
+        if !is_empty(bounds, config) {
+            return Emptiness(None);
+        }
+        Emptiness(Some(match config.empty_when {
+            Some(EmptyWhen::ToBeforeFrom) if config.convention.is_closed() => {
+                EmptyForm::ToBeforeFrom
+            }
+            _ => EmptyForm::FromEqualsTo,
+        }))
+    }
+}
+
+impl From<bool> for Emptiness {
+    /// A bare flag carries no form; it reads as the `half_open` one.
+    fn from(empty: bool) -> Self {
+        Emptiness(empty.then_some(EmptyForm::FromEqualsTo))
+    }
+}
+
+impl std::ops::BitOrAssign for Emptiness {
+    fn bitor_assign(&mut self, other: Self) {
+        self.0 = self.0.or(other.0);
+    }
+}
+
 /// The rows of one walk, load or statement whose interval is empty — not
-/// inverted, yet admitting no instant, which only `half_open` allows — and
-/// the first of them by name. Such a row is written and counted, never
-/// refused: a register delivers a version registered and superseded on the
-/// same day.
+/// inverted, yet admitting no instant, which `half_open` allows, and `closed`
+/// with `empty_when` too — and the first of them by name. Such a row is
+/// written and counted, never refused: a register delivers a version
+/// registered and superseded on the same day.
 #[derive(Debug, Default)]
 pub(crate) struct EmptyIntervals {
     rows: usize,
     empty: usize,
     first: Option<String>,
+    form: Option<EmptyForm>,
 }
 
 impl EmptyIntervals {
     /// Count one row, naming it when it is the first empty one.
-    pub(crate) fn note(&mut self, empty: bool, name: impl FnOnce() -> String) {
+    pub(crate) fn note(&mut self, empty: impl Into<Emptiness>, name: impl FnOnce() -> String) {
         self.rows += 1;
-        if empty {
+        if let Emptiness(Some(form)) = empty.into() {
             self.empty += 1;
             if self.first.is_none() {
                 self.first = Some(name());
+                self.form = Some(form);
             }
         }
     }
@@ -70,6 +118,7 @@ impl EmptyIntervals {
         self.empty += other.empty;
         if self.first.is_none() {
             self.first = other.first;
+            self.form = other.form;
         }
     }
 
@@ -85,10 +134,19 @@ impl EmptyIntervals {
 
     fn worded(&self, scope: &str) -> Option<String> {
         let first = self.first.as_deref()?;
+        let shape = match self.form.unwrap_or(EmptyForm::FromEqualsTo) {
+            EmptyForm::FromEqualsTo => {
+                "under convention 'half_open' (the from bound equals the to bound)"
+            }
+            EmptyForm::ToBeforeFrom => {
+                "under convention 'closed' with empty_when 'to_before_from' (the to bound is \
+                 the day before the from bound)"
+            }
+        };
         Some(format!(
-            "{} of {} rows {scope} have an empty interval under convention 'half_open' (the \
-             from bound equals the to bound) and are valid at no instant; the first is {first}. \
-             They are stored and counted in db.temporal.declarations() as empty_rows.",
+            "{} of {} rows {scope} have an empty interval {shape} and are valid at no instant; \
+             the first is {first}. They are stored and counted in db.temporal.declarations() \
+             as empty_rows.",
             self.empty, self.rows
         ))
     }
@@ -367,7 +425,7 @@ fn walk_nodes(
         }
         let bounds = check_row(&from, &to, config)
             .map_err(|reason| format!("node '{}', {reason}", node_name(graph, idx)))?;
-        empty.note(is_empty(bounds, config), || {
+        empty.note(Emptiness::of(bounds, config), || {
             format!("node '{}'", node_name(graph, idx))
         });
         if counting {
@@ -427,7 +485,7 @@ fn walk_edges(
         };
         let bounds =
             check_row(&from, &to, config).map_err(|reason| format!("{}, {reason}", name()))?;
-        empty.note(is_empty(bounds, config), name);
+        empty.note(Emptiness::of(bounds, config), name);
         group.push(bounds);
         Ok(())
     })?;
@@ -552,11 +610,11 @@ pub(super) fn check_frame(
             .unwrap_or(Value::Null)
     };
     for row in 0..frame.row_count() {
-        let mut row_empty = false;
+        let mut row_empty = Emptiness::default();
         for &(config, from, to) in &columns {
             let bounds = check_row(&cell(row, from), &cell(row, to), config)
                 .map_err(|reason| format!("row {row} (0-based) of the load, {reason}"))?;
-            row_empty |= is_empty(bounds, config);
+            row_empty |= Emptiness::of(bounds, config);
         }
         empty.note(row_empty, || format!("row {row} (0-based) of the load"));
     }
@@ -564,9 +622,9 @@ pub(super) fn check_frame(
 }
 
 /// Whether a row's interval, read and not inverted, admits no instant: the
-/// evaluator's end test refuses the interval's own start. Only `half_open`
-/// has such rows — `from == to`, or a date `from` ending at that day's
-/// midnight.
+/// evaluator's end test refuses the interval's own start. `half_open` has
+/// such rows — `from == to`, or a date `from` ending at that day's midnight —
+/// and so does `closed` with `empty_when` ([`check_row`] lets one through).
 pub(super) fn is_empty((from, to): Bounds, config: &TemporalConfig) -> bool {
     matches!((from, to), (Some(f), Some(t)) if !eval::end_admits(t, f, config.convention))
 }
@@ -593,7 +651,7 @@ pub(super) fn check_row(
     // day, so a timestamp `from` later on a date `to`'s day is not inverted
     // (under `half_open` it is empty).
     if let (Some(f), Some(t)) = (from_at, to_at) {
-        if f.chrono_cmp(t) == Ordering::Greater {
+        if f.chrono_cmp(t) == Ordering::Greater && !is_declared_empty(f, t, config) {
             return Err(format!(
                 "the from bound {} ('{}') is after the to bound {} ('{}'), an inverted interval \
                  under convention '{}'",
@@ -602,10 +660,29 @@ pub(super) fn check_row(
                 eval::shown(to),
                 config.valid_to,
                 config.convention.as_str()
-            ));
+            ) + match config.empty_when {
+                Some(EmptyWhen::ToBeforeFrom) => {
+                    "; empty_when 'to_before_from' accepts only a date to bound exactly one \
+                     day before a date from bound"
+                }
+                None => "",
+            });
         }
     }
     Ok((from_at, to_at))
+}
+
+/// Whether the inverted interval `from > to` is the empty one `config`'s
+/// `empty_when` declares: `to_before_from` is a date `to` exactly the day
+/// before a date `from`, under `closed`. A timestamp bound or a wider
+/// inversion stays refused.
+fn is_declared_empty(from: Instant, to: Instant, config: &TemporalConfig) -> bool {
+    match (config.empty_when, from, to) {
+        (Some(EmptyWhen::ToBeforeFrom), Instant::Date(f), Instant::Date(t)) => {
+            config.convention.is_closed() && f.pred_opt() == Some(t)
+        }
+        _ => false,
+    }
 }
 
 fn count_equal<T: Ord>(sorted: &[T], value: &T) -> usize {
@@ -775,6 +852,7 @@ mod tests {
             valid_to: "vt".into(),
             convention,
             source_type: None,
+            empty_when: None,
         }
     }
 

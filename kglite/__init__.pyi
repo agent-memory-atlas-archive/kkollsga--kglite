@@ -2108,6 +2108,7 @@ class KnowledgeGraph:
         modified_by: Optional[str] = None,
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
+        empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
         """Add nodes from a DataFrame.
 
@@ -2304,6 +2305,16 @@ class KnowledgeGraph:
                 declaration the type already has for the same properties, and
                 is ``'closed'`` otherwise. Requires ``validFrom``/``validTo``
                 in ``column_types``; raises ``ValueError`` without them.
+            empty_when: ``'to_before_from'`` lets a ``'closed'`` interval hold
+                a row whose date ``validTo`` is exactly the day before its
+                date ``validFrom``, as an empty interval (valid on no day,
+                counted in ``empty_rows``, with one ``UserWarning`` per load)
+                instead of refusing it; a timestamp bound or a wider
+                inversion is still refused. Refused with ``'half_open'``,
+                which already holds ``from == to`` as empty. ``None`` keeps
+                the option of a declaration the type already has when
+                *convention* is also ``None``. Same requirement as
+                *convention*.
 
         Returns:
             Operation report dict with keys ``nodes_created``,
@@ -2350,6 +2361,7 @@ class KnowledgeGraph:
         modified_by: Optional[str] = None,
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
+        empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
         """Add relationships (edges) between existing nodes.
 
@@ -2434,6 +2446,8 @@ class KnowledgeGraph:
                 stub node, not skipped, and is unaffected by this setting.
             convention: ``'closed'`` or ``'half_open'`` for the validity
                 interval ``column_types`` declares; see :meth:`add_nodes`.
+            empty_when: ``'to_before_from'`` for a ``'closed'`` interval's
+                empty rows; see :meth:`add_nodes`.
 
         Returns:
             Operation report dict with ``connections_created``,
@@ -2487,6 +2501,7 @@ class KnowledgeGraph:
         modified_by: Optional[str] = None,
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
+        empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
         """Pointer to :meth:`add_relationships`, the primary spelling; a connection is a relationship."""
         ...
@@ -2511,6 +2526,7 @@ class KnowledgeGraph:
         modified_by: Optional[str] = None,
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
+        empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
         """Replace a node's outgoing edges of a given type, then add new ones — an atomic edge upsert.
 
@@ -2568,6 +2584,8 @@ class KnowledgeGraph:
 
             convention: ``'closed'`` or ``'half_open'`` for the validity
                 interval ``column_types`` declares; see :meth:`add_nodes`.
+            empty_when: ``'to_before_from'`` for a ``'closed'`` interval's
+                empty rows; see :meth:`add_nodes`.
 
         Returns:
             Operation report dict with ``connections_created``,
@@ -2597,6 +2615,7 @@ class KnowledgeGraph:
         modified_by: Optional[str] = None,
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
+        empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
         """Pointer to :meth:`replace_relationships`, the primary spelling; a connection is a relationship."""
         ...
@@ -8009,6 +8028,7 @@ class KnowledgeGraph:
         valid_to: str,
         convention: Optional[Literal["closed", "half_open"]] = None,
         source_type: Optional[str] = None,
+        empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> None:
         """Declare which two properties bound a node type's or relationship type's validity interval.
 
@@ -8024,7 +8044,8 @@ class KnowledgeGraph:
         is accepted with a warning, unless it is a near miss of a property
         the type has), every stored bound must read as a date, a
         datetime or an ISO date string, and no row's interval may be inverted
-        (``from`` after ``to``). A row whose interval is empty under
+        (``from`` after ``to``), except the one empty shape ``empty_when``
+        names. A row whose interval is empty under
         ``'half_open'`` (``from`` equal to ``to``) is valid at no instant: it
         is accepted with a ``UserWarning`` counting such rows and naming the
         first, counted in ``empty_rows``, and never returned as of an
@@ -8059,6 +8080,16 @@ class KnowledgeGraph:
             source_type: For a relationship type, declare the interval only
                 for relationships leaving nodes of this type, for types whose
                 sources store their bounds under different properties.
+            empty_when: ``'to_before_from'``, under ``'closed'``, accepts a
+                row whose date ``valid_to`` is exactly the day before its date
+                ``valid_from`` as an empty interval — valid on no day,
+                counted in ``empty_rows`` and warned about like a half-open
+                empty row — where ``'closed'`` otherwise refuses it as
+                inverted. A timestamp bound or a wider inversion is still
+                refused; ``'half_open'`` with this option raises. With
+                *convention* also ``None``, a declaration the type already
+                has keeps its option. Written to the saved file as an extra
+                key an older build ignores, which answers every query the same.
 
         Raises:
             ArgumentError: If *type_name* is not a known node or relationship

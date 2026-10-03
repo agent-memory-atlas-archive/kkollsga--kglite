@@ -1,5 +1,5 @@
 //! Validity intervals a blueprint declares through a spec's `temporal` key:
-//! `{from, to, convention}` on a node spec, an `fk_edges` entry or a
+//! `{from, to, convention, empty_when?}` on a node spec, an `fk_edges` entry or a
 //! `junction_edges` entry.
 //!
 //! [`check_temporal_specs`] reads the author's blueprint before anything loads:
@@ -21,8 +21,9 @@ use super::BuildReport;
 use crate::graph::blueprint::schema::{Blueprint, NodeSpec, TemporalSpec};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::features::temporal::{
-    declare_loaded_grouped, EntityGrouping, IntervalConvention, TemporalTarget,
+    declare_loaded_grouped, EmptyWhen, EntityGrouping, IntervalConvention, TemporalTarget,
 };
+use crate::graph::schema::TemporalConfig;
 
 /// One `temporal` key (or the lack of one) on one spec, with the names the
 /// spec stores its columns under.
@@ -107,6 +108,32 @@ fn convention_of(
     })
 }
 
+/// The `empty_when` a `temporal` key names: `None` when it names none, an
+/// error for an unknown spelling or for use under `half_open`, which needs no
+/// such option.
+fn empty_when_of(
+    place: &str,
+    temporal: &TemporalSpec,
+    convention: Option<IntervalConvention>,
+) -> Result<Option<EmptyWhen>, String> {
+    let Some(text) = temporal.empty_when.as_deref() else {
+        return Ok(None);
+    };
+    let empty_when = EmptyWhen::parse(text).ok_or_else(|| {
+        format!(
+            "{place}: temporal empty_when '{text}' is not 'to_before_from' (under `closed`, a \
+             `to` the day before the `from` is an empty interval instead of a refusal)"
+        )
+    })?;
+    if convention == Some(IntervalConvention::HalfOpen) {
+        return Err(format!(
+            "{place}: temporal empty_when '{text}' applies to convention 'closed'; 'half_open' \
+             already holds an empty interval (from equal to to) and needs no option"
+        ));
+    }
+    Ok(Some(empty_when))
+}
+
 /// An edge's `from`/`to` must name one of the properties the edge stores —
 /// after `rename`, since that is the name the bound is read under.
 fn check_edge_bound(
@@ -187,7 +214,9 @@ pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<String>,
                 check_edge_bound(place, &temporal.from, "from", stored)?;
                 check_edge_bound(place, &temporal.to, "to", stored)?;
             }
-            if convention_of(place, temporal)?.is_none() {
+            let convention = convention_of(place, temporal)?;
+            empty_when_of(place, temporal, convention)?;
+            if convention.is_none() {
                 warnings.push(missing_convention_warning(place, temporal));
             }
         }
@@ -206,8 +235,8 @@ pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<String>,
 /// Declare every interval the specs name a convention for, over the rows the
 /// build wrote. A declaration the rows refuse — an unreadable bound, or an
 /// inverted interval — fails the build, naming the row; rows with an empty
-/// interval under `half_open` are kept and reported in the build's warnings.
-/// A spec that wrote no rows of its target declares nothing and says so.
+/// interval (`half_open`, or `closed` with `empty_when`) are kept and reported
+/// in the build's warnings. A spec that wrote no rows of its target declares nothing and says so.
 pub(super) fn declare_blueprint_temporal(
     graph: &mut DirGraph,
     all_specs: &[&FlatSpec],
@@ -256,9 +285,10 @@ pub(super) fn declare_blueprint_temporal(
             let Some(convention) = convention_of(&place, temporal)? else {
                 continue;
             };
+            let empty_when = empty_when_of(&place, temporal, Some(convention))?;
             declare_one(
                 graph,
-                (&place, &target, temporal, convention),
+                (&place, &target, temporal, (convention, empty_when)),
                 parent_edge.as_deref(),
                 report,
             )?;
@@ -269,11 +299,11 @@ pub(super) fn declare_blueprint_temporal(
 
 fn declare_one(
     graph: &mut DirGraph,
-    (place, target, temporal, convention): (
+    (place, target, temporal, (convention, empty_when)): (
         &str,
         &TemporalTarget,
         &TemporalSpec,
-        IntervalConvention,
+        (IntervalConvention, Option<EmptyWhen>),
     ),
     parent_edge: Option<&str>,
     report: &mut BuildReport,
@@ -308,7 +338,13 @@ fn declare_one(
     let declared = declare_loaded_grouped(
         graph,
         target,
-        (&temporal.from, &temporal.to, convention),
+        TemporalConfig {
+            valid_from: temporal.from.clone(),
+            valid_to: temporal.to.clone(),
+            convention,
+            source_type: None,
+            empty_when,
+        },
         &written,
         grouping,
     )

@@ -28,7 +28,9 @@ fn fluent_arg_err(e: String) -> PyErr {
 #[pymethods]
 impl KnowledgeGraph {
     /// Declare which two properties bound a node type's or relationship type's validity interval.
-    #[pyo3(signature = (type_name, valid_from, valid_to, convention=None, source_type=None))]
+    #[pyo3(signature = (type_name, valid_from, valid_to, convention=None, source_type=None, empty_when=None))]
+    // The declaration's bounds, convention, source type and empty-row option are separate keyword arguments.
+    #[allow(clippy::too_many_arguments)]
     fn set_temporal(
         &mut self,
         py: Python<'_>,
@@ -37,9 +39,11 @@ impl KnowledgeGraph {
         valid_to: String,
         convention: Option<&str>,
         source_type: Option<String>,
+        empty_when: Option<&str>,
     ) -> PyResult<()> {
         use kglite_core::api::temporal::{self, TemporalTarget};
-        let convention = crate::graph::parse_interval_convention(convention)?;
+        let (convention, empty_when) =
+            crate::graph::parse_interval_options(convention, empty_when)?;
         let argument = |message: String| {
             crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
         };
@@ -70,9 +74,14 @@ impl KnowledgeGraph {
                 )))
             }
         };
-        let report =
-            temporal::declare_defaulted(graph, &target, &valid_from, &valid_to, convention)
-                .map_err(argument)?;
+        let report = temporal::declare_defaulted(
+            graph,
+            &target,
+            &valid_from,
+            &valid_to,
+            (convention, empty_when),
+        )
+        .map_err(argument)?;
         self.commit_wal()?;
         crate::graph::warn_declaration(py, &report)
     }

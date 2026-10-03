@@ -6,28 +6,52 @@
 use super::declarations::{
     self, record_insert, record_remove, Change, DeclarationInfo, DeclareReport, TemporalTarget,
 };
-use super::eval::IntervalConvention;
+use super::eval::{EmptyWhen, IntervalConvention};
 use super::validate;
 use crate::datatypes::values::DataFrame;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::TemporalConfig;
 
-/// [`declarations::declare`] with an optional convention. Without one, a
-/// declaration of the same key already naming the same properties keeps its
-/// convention (so the call is a no-op), and a new declaration is closed.
+/// [`declarations::declare_loaded_with`] with an optional convention. With
+/// neither a convention nor `empty_when`, a declaration of the same key
+/// already naming the same properties keeps its form (so the call is a
+/// no-op), and a new declaration is closed.
 pub fn declare_defaulted(
     graph: &mut DirGraph,
     target: &TemporalTarget,
     valid_from: &str,
     valid_to: &str,
-    convention: Option<IntervalConvention>,
+    (convention, empty_when): (Option<IntervalConvention>, Option<EmptyWhen>),
 ) -> Result<DeclareReport, String> {
-    let convention = convention.unwrap_or_else(|| {
-        graph
-            .temporal
-            .default_convention(target, valid_from, valid_to)
-    });
-    declarations::declare(graph, target, valid_from, valid_to, convention)
+    let (convention, empty_when) =
+        resolve_form(graph, target, valid_from, valid_to, convention, empty_when);
+    declarations::declare_loaded_with(
+        graph,
+        target,
+        (valid_from, valid_to, convention, empty_when),
+        &[],
+    )
+}
+
+/// The convention and `empty_when` a declaration takes: what the caller
+/// named, else those of a declaration of the same key naming the same
+/// properties. Naming a convention without `empty_when` leaves it unset, so
+/// a changed convention is a change, not a silent carry-over.
+fn resolve_form(
+    graph: &DirGraph,
+    target: &TemporalTarget,
+    valid_from: &str,
+    valid_to: &str,
+    convention: Option<IntervalConvention>,
+    empty_when: Option<EmptyWhen>,
+) -> (IntervalConvention, Option<EmptyWhen>) {
+    let (existing, existing_empty) = graph.temporal.default_form(target, valid_from, valid_to);
+    let carried = if convention.is_none() && empty_when.is_none() {
+        existing_empty
+    } else {
+        None
+    };
+    (convention.unwrap_or(existing), empty_when.or(carried))
 }
 
 /// A bulk load's declaration, between [`declare_from_column_types`] (before
@@ -50,7 +74,7 @@ enum Stage {
 }
 
 /// Start the declaration a load's `validFrom`/`validTo` column types ask for,
-/// before the load writes `frame`. `convention` defaults as in
+/// before the load writes `frame`. The convention and `empty_when` default as in
 /// [`declare_defaulted`].
 ///
 /// An identical declaration makes the whole thing a no-op here; the load
@@ -74,15 +98,12 @@ pub fn declare_from_column_types(
     target: TemporalTarget,
     valid_from: &str,
     valid_to: &str,
-    convention: Option<IntervalConvention>,
+    (convention, empty_when): (Option<IntervalConvention>, Option<EmptyWhen>),
     frame: &DataFrame,
 ) -> Result<LoadDeclaration, String> {
     let target = graph.temporal.load_target(target, valid_from, valid_to);
-    let convention = convention.unwrap_or_else(|| {
-        graph
-            .temporal
-            .default_convention(&target, valid_from, valid_to)
-    });
+    let (convention, empty_when) =
+        resolve_form(graph, &target, valid_from, valid_to, convention, empty_when);
     let config = TemporalConfig {
         valid_from: valid_from.to_string(),
         valid_to: valid_to.to_string(),
@@ -91,7 +112,9 @@ pub fn declare_from_column_types(
             TemporalTarget::Node(_) => None,
             TemporalTarget::Relationship { source_type, .. } => source_type.clone(),
         },
+        empty_when,
     };
+    declarations::check_options(&config)?;
     let written = [valid_from, valid_to]
         .into_iter()
         .filter(|name| frame.verify_column(name))
@@ -132,11 +155,7 @@ impl LoadDeclaration {
         declarations::declare_walked(
             graph,
             &self.target,
-            (
-                &self.config.valid_from,
-                &self.config.valid_to,
-                self.config.convention,
-            ),
+            self.config.clone(),
             &written,
             (warn_empty, declarations::EntityGrouping::OwnId),
         )
@@ -220,12 +239,15 @@ pub(crate) fn settle_adopted(
         record_remove(graph, &info.target);
         let config = &info.config;
         let written = [config.valid_from.as_str(), config.valid_to.as_str()];
-        if let Err(reason) = declarations::declare_loaded(
+        if let Err(reason) = declarations::declare_loaded_with(
             graph,
             &info.target,
-            &config.valid_from,
-            &config.valid_to,
-            config.convention,
+            (
+                &config.valid_from,
+                &config.valid_to,
+                config.convention,
+                config.empty_when,
+            ),
             &written,
         ) {
             errors.push(format!(

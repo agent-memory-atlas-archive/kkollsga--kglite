@@ -354,6 +354,13 @@ pub struct TemporalConfig {
     /// every source. Always `None` for a node config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_type: Option<String>,
+    /// An interval the `closed` convention accepts as empty (valid on no
+    /// day) instead of refusing. Omitted from the serialized form when
+    /// unset, so a file without it is byte-identical to one written before
+    /// the field existed and an older build, which ignores unknown keys,
+    /// answers every query the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_when: Option<crate::graph::features::temporal::EmptyWhen>,
 }
 
 /// Result of temporal column-type parsing: optional config + cleaned pairs.

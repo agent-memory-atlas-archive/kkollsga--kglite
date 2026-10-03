@@ -4,7 +4,9 @@
 //! A config that is closed, unkeyed and was written without a declare-time
 //! count prints exactly `temporal_from=".." temporal_to=".."`, the form every
 //! earlier release printed. A declaration adds what distinguishes it:
-//! `temporal_convention`, `temporal_source` and `temporal_abutting` (rows
+//! `temporal_convention`, `temporal_empty_when` (a closed declaration that
+//! keeps a `to` the day before its `from`), `temporal_source` and
+//! `temporal_abutting` (rows
 //! whose end met another row's start when it was declared), and — only when
 //! the type holds any — `temporal_empty` / `temporal_unreadable` (rows valid
 //! at no instant, and rows with a bound no query can read, counted at the
@@ -48,6 +50,9 @@ fn attributes(config: &TemporalConfig, counted: &Counted) -> String {
             config.convention.as_str()
         ));
     }
+    if let Some(empty_when) = config.empty_when {
+        out.push_str(&format!(" temporal_empty_when=\"{}\"", empty_when.as_str()));
+    }
     if let Some(source) = &config.source_type {
         out.push_str(&format!(" temporal_source=\"{}\"", xml_escape(source)));
     }
@@ -64,7 +69,7 @@ fn attributes(config: &TemporalConfig, counted: &Counted) -> String {
     out
 }
 
-/// `source: from..to[ half_open][ abutting=N][ empty=N][ unreadable=N]` —
+/// `source: from..to[ half_open][ empty_when=to_before_from][ abutting=N][ empty=N][ unreadable=N]` —
 /// one declaration inside the combined `temporal` attribute.
 fn compact(config: &TemporalConfig, counted: &Counted) -> String {
     let mut out = match &config.source_type {
@@ -74,6 +79,9 @@ fn compact(config: &TemporalConfig, counted: &Counted) -> String {
     out.push_str(&format!("{}..{}", config.valid_from, config.valid_to));
     if !config.convention.is_closed() {
         out.push_str(&format!(" {}", config.convention.as_str()));
+    }
+    if let Some(empty_when) = config.empty_when {
+        out.push_str(&format!(" empty_when={}", empty_when.as_str()));
     }
     if let Some(count) = counted.abutting {
         out.push_str(&format!(" abutting={count}"));

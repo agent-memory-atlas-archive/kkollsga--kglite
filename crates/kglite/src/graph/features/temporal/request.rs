@@ -124,6 +124,7 @@ pub fn node_request_config(
         valid_to: to,
         convention,
         source_type: None,
+        empty_when: None,
     })
 }
 

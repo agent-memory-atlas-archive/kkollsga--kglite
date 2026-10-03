@@ -5,6 +5,8 @@
 //! CALL db.temporal.declare({node: 'Field', from: 'vf', to: 'vt', convention: 'closed'})
 //! CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field',
 //!                           from: 'vf', to: 'vt', convention: 'half_open'})
+//! CALL db.temporal.declare({node: 'Licence', from: 'vf', to: 'vt', convention: 'closed',
+//!                           empty_when: 'to_before_from'})
 //! CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'})
 //! CALL db.temporal.declarations()
 //! ```
@@ -13,8 +15,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::datatypes::values::Value;
-use crate::graph::features::temporal::declarations::{declare, list, undeclare};
-use crate::graph::features::temporal::{IntervalConvention, TemporalTarget};
+use crate::graph::features::temporal::declarations::{list, undeclare};
+use crate::graph::features::temporal::{
+    declare_loaded_with, EmptyWhen, IntervalConvention, TemporalTarget,
+};
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::{QueryDiagnostics, ResultRow};
 use crate::graph::schema::DirGraph;
@@ -42,8 +46,10 @@ pub(super) fn execute(
             let from = require_string(params, "from", proc_name)?;
             let to = require_string(params, "to", proc_name)?;
             let convention = convention(params, proc_name)?;
-            let report = declare(graph, &target, &from, &to, convention)
-                .map_err(|error| format!("CALL {proc_name}: {error}"))?;
+            let empty_when = empty_when(params, proc_name)?;
+            let report =
+                declare_loaded_with(graph, &target, (&from, &to, convention, empty_when), &[])
+                    .map_err(|error| format!("CALL {proc_name}: {error}"))?;
             if let Some(warning) = report.warning {
                 let mut sink = diagnostics.lock().unwrap_or_else(|e| e.into_inner());
                 super::retrieval_diagnostics::record_warning(&mut sink.warnings, warning);
@@ -109,6 +115,24 @@ fn convention(
     })
 }
 
+/// The optional `empty_when`: `'to_before_from'` or absent (null reads as
+/// absent).
+fn empty_when(
+    params: &HashMap<String, Value>,
+    proc_name: &str,
+) -> Result<Option<EmptyWhen>, String> {
+    let Some(text) = optional_string(params, "empty_when", proc_name)? else {
+        return Ok(None);
+    };
+    EmptyWhen::parse(&text).map(Some).ok_or_else(|| {
+        format!(
+            "CALL {proc_name}: empty_when '{text}' is not 'to_before_from' (under 'closed', a \
+             to day exactly one day before the from day is an empty interval instead of a \
+             refusal)"
+        )
+    })
+}
+
 /// `db.temporal.declarations()` — one row per declaration.
 pub(super) fn declarations(
     graph: &DirGraph,
@@ -145,6 +169,12 @@ pub(super) fn declarations(
                         "convention",
                         Value::String(info.config.convention.as_str().into()),
                     ),
+                    (
+                        "empty_when",
+                        info.config
+                            .empty_when
+                            .map_or(Value::Null, |e| Value::String(e.as_str().into())),
+                    ),
                     ("abutting_rows", count(info.abutting_rows)),
                     ("ambiguous", Value::Boolean(info.ambiguous)),
                     ("empty_rows", count(info.empty_rows)),
@@ -167,6 +197,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
             "from",
             "to",
             "convention",
+            "empty_when",
         ],
         "db.temporal.undeclare" => &["node", "relationship", "source_type"],
         "db.temporal.declarations" => &[],

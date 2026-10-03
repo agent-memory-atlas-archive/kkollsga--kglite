@@ -11,6 +11,24 @@ before upgrading.
 
 ### Added
 
+- `empty_when: 'to_before_from'` keeps a version superseded the day it was
+  registered under the `closed` convention. A date `to` exactly one day before
+  a date `from` is accepted as an empty interval (valid on no day, counted in
+  `empty_rows`, one warning worded for the option) instead of refused as
+  inverted; a timestamp bound or a wider inversion is still refused, and
+  `half_open` with the option is an error. It is the `empty_when` key of
+  `db.temporal.declare`, the `empty_when=` argument of `set_temporal`,
+  `add_nodes`, `add_relationships`, `replace_relationships` and the
+  `*_connections` spellings, and the `empty_when` key of a blueprint
+  `temporal` entry; `db.temporal.declarations()` gains an `empty_when` column
+  (so `YIELD *` yields one more), `describe()` prints `temporal_empty_when`.
+  The saved file adds one optional key to the declaration, which an older
+  build ignores while answering every query the same. Rust API: `EmptyWhen`,
+  `TemporalConfig.empty_when` and `TemporalSpec.empty_when` (new fields on
+  constructible structs),
+  `declare_loaded_with`, and `declare_defaulted` / `declare_from_column_types`
+  take `(Option<IntervalConvention>, Option<EmptyWhen>)` in place of the
+  convention.
 - `CALL procedure() YIELD *` yields every column the procedure declares, in
   declared order, so `CALL db.temporal.declarations() YIELD * RETURN *` works.
   It stands alone: `YIELD *, kind` and `YIELD * AS x` are errors, and an

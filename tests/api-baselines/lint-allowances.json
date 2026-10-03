@@ -157,6 +157,10 @@
       "classification": "transitional"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_fluent.rs::fn:set_temporal:fn set_temporal( &mut self, py: Python<'_>, type_name: String, valid_from: String, valid_to: String, convention: Option<&str>, source_type: Option<String>, empty_when: Option<&str>, ) -> PyResult<()>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:collect_children:fn collect_children( &mut self, py: Python<'_>, property: Option<&str>, r#where: Option<&Bound<'_, PyDict>>, sort: Option<&Bound<'_, PyAny>>, limit: Option<usize>, store_as: Option<&str>, max_length: Option<usize>, keep_selection: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },

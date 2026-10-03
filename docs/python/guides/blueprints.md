@@ -618,6 +618,12 @@ entry, and it must name the convention:
   (`[from, to)`), the usual shape when one period's end is the next one's
   start.
 
+An optional `"empty_when": "to_before_from"` beside `"convention": "closed"`
+keeps a row whose date `to` is exactly the day before its date `from` as an
+empty interval (valid on no day, counted in `empty_rows`, one build warning)
+instead of failing the build; it is refused with `"half_open"` and for any
+other spelling.
+
 An empty `to` is an open period, valid from `from` onwards. Once the rows are
 loaded, the build checks every bound; an unreadable bound or an inverted
 interval fails the build and names the row.

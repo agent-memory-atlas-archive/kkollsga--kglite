@@ -99,6 +99,7 @@ fn a_view_refuses_an_ambiguous_relationship_declaration() {
         valid_to: "d".to_string(),
         convention: closed,
         source_type: None,
+        empty_when: None,
     };
     g.temporal.insert(&rel, second, None);
     assert!(g.temporal.is_ambiguous("R"));

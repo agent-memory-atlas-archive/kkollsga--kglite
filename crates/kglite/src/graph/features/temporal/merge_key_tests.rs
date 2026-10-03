@@ -183,6 +183,7 @@ fn declare_before_any_load(graph: &mut DirGraph) {
         valid_to: "vt".to_string(),
         convention: Closed,
         source_type: None,
+        empty_when: None,
     };
     graph.temporal.insert(&in_type(None), config, None);
 }
@@ -627,6 +628,7 @@ fn an_ambiguous_type_keys_each_row_on_the_declaration_it_carries() {
         valid_to: "st".to_string(),
         convention: Closed,
         source_type: None,
+        empty_when: None,
     };
     graph.temporal.insert(&in_type(None), second, None);
     assert!(graph.temporal.is_ambiguous("IN"));

@@ -340,10 +340,11 @@ fn write_connections(
     modified_by: Option<String>,
     on_invalid: &str,
     convention: Option<&str>,
+    empty_when: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     kg.check_durable_owner()?;
     let on_invalid = OnInvalid::parse(on_invalid)?;
-    let convention = crate::graph::parse_interval_convention(convention)?;
+    let (convention, empty_when) = crate::graph::parse_interval_options(convention, empty_when)?;
     let has_data = data.as_ref().map(|d| !d.is_none()).unwrap_or(false);
     validate_connection_input_mode(
         has_data,
@@ -356,7 +357,7 @@ fn write_connections(
 
     // ── Query path: run Cypher, convert to internal DataFrame ──
     if let Some(query_str) = query {
-        refuse_convention_without_interval(convention, None)?;
+        refuse_convention_without_interval((convention, empty_when), None)?;
         // Execute read-only against a cloned Arc, so no mutable borrow is held
         // while the query runs.
         let inner_clone = kg.inner.clone();
@@ -386,35 +387,19 @@ fn write_connections(
         let graph = get_graph_mut(&mut kg.inner);
 
         // Everything past this point is pure Rust — run off-GIL.
+        let batch = ConnectionBatch {
+            connection_type: connection_type.clone(),
+            source_type,
+            source_id_field,
+            target_type,
+            target_id_field,
+            source_title_field,
+            target_title_field,
+            conflict_handling,
+        };
         let result = detach_bulk_write(py, graph, |graph| {
             graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
-                if replace {
-                    kglite_core::api::mutation::replace_connections(
-                        graph,
-                        df_result,
-                        connection_type.clone(),
-                        source_type,
-                        source_id_field,
-                        target_type,
-                        target_id_field,
-                        source_title_field,
-                        target_title_field,
-                        conflict_handling,
-                    )
-                } else {
-                    kglite_core::api::mutation::add_connections(
-                        graph,
-                        df_result,
-                        connection_type.clone(),
-                        source_type,
-                        source_id_field,
-                        target_type,
-                        target_id_field,
-                        source_title_field,
-                        target_title_field,
-                        conflict_handling,
-                    )
-                }
+                batch.apply(graph, replace, df_result)
             })
         })?;
 
@@ -453,7 +438,7 @@ fn write_connections(
     names.extend(frame_names.iter().map(String::as_str));
     validate_interner_names(&kg.inner, names)?;
 
-    refuse_convention_without_interval(convention, temporal_cfg.as_ref())?;
+    refuse_convention_without_interval((convention, empty_when), temporal_cfg.as_ref())?;
     let graph = get_graph_mut(&mut kg.inner);
     let declaration = temporal_cfg
         .map(|cfg| {
@@ -466,7 +451,7 @@ fn write_connections(
                 target,
                 &cfg.valid_from,
                 &cfg.valid_to,
-                convention,
+                (convention, empty_when),
                 &df_result,
             )
         })
@@ -474,35 +459,19 @@ fn write_connections(
         .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
 
     // The converted frame is pure Rust — apply the batch off-GIL.
+    let batch = ConnectionBatch {
+        connection_type: connection_type.clone(),
+        source_type,
+        source_id_field,
+        target_type,
+        target_id_field,
+        source_title_field,
+        target_title_field,
+        conflict_handling,
+    };
     let result = detach_bulk_write(py, graph, |graph| {
         graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
-            if replace {
-                kglite_core::api::mutation::replace_connections(
-                    graph,
-                    df_result,
-                    connection_type.clone(),
-                    source_type,
-                    source_id_field,
-                    target_type,
-                    target_id_field,
-                    source_title_field,
-                    target_title_field,
-                    conflict_handling,
-                )
-            } else {
-                kglite_core::api::mutation::add_connections(
-                    graph,
-                    df_result,
-                    connection_type.clone(),
-                    source_type,
-                    source_id_field,
-                    target_type,
-                    target_id_field,
-                    source_title_field,
-                    target_title_field,
-                    conflict_handling,
-                )
-            }
+            batch.apply(graph, replace, df_result)
         })
     });
     let (result, declared) = finish_declaration(py, graph, declaration, result)?;
@@ -517,6 +486,47 @@ fn write_connections(
 
     let report = finish_connection_write(kg, &result, &connection_type, on_invalid)?;
     declared.map(|()| report)
+}
+
+/// The arguments of one connection load, owned so the batch can move into the
+/// GIL-free write.
+struct ConnectionBatch {
+    connection_type: String,
+    source_type: String,
+    source_id_field: String,
+    target_type: String,
+    target_id_field: String,
+    source_title_field: Option<String>,
+    target_title_field: Option<String>,
+    conflict_handling: Option<String>,
+}
+
+impl ConnectionBatch {
+    /// `add_connections`, or `replace_connections` when `replace`.
+    fn apply(
+        self,
+        graph: &mut DirGraph,
+        replace: bool,
+        frame: DataFrame,
+    ) -> Result<kglite_core::api::mutation::ConnectionOperationReport, String> {
+        let write = if replace {
+            kglite_core::api::mutation::replace_connections
+        } else {
+            kglite_core::api::mutation::add_connections
+        };
+        write(
+            graph,
+            frame,
+            self.connection_type,
+            self.source_type,
+            self.source_id_field,
+            self.target_type,
+            self.target_id_field,
+            self.source_title_field,
+            self.target_title_field,
+            self.conflict_handling,
+        )
+    }
 }
 
 /// Shared tail of both `write_connections` paths: make the edges durable, file
@@ -535,16 +545,20 @@ fn finish_connection_write(
     KnowledgeGraph::connection_report_to_py(result, connection_type, on_invalid)
 }
 
-/// `convention=` qualifies the validity interval `validFrom`/`validTo` column
-/// types declare; a call that declares none has nothing for it to apply to.
+/// `convention=` and `empty_when=` qualify the validity interval
+/// `validFrom`/`validTo` column types declare; a call that declares none has
+/// nothing for them to apply to.
 fn refuse_convention_without_interval(
-    convention: Option<kglite_core::api::temporal::IntervalConvention>,
+    (convention, empty_when): (
+        Option<kglite_core::api::temporal::IntervalConvention>,
+        Option<kglite_core::api::temporal::EmptyWhen>,
+    ),
     interval: Option<&kglite_core::api::TemporalConfig>,
 ) -> PyResult<()> {
-    if convention.is_some() && interval.is_none() {
+    if (convention.is_some() || empty_when.is_some()) && interval.is_none() {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "convention applies to the validity interval that validFrom/validTo column_types \
-             declare, and this call's column_types name none.",
+            "convention and empty_when apply to the validity interval that validFrom/validTo \
+             column_types declare, and this call's column_types name none.",
         ));
     }
     Ok(())
@@ -1255,7 +1269,7 @@ impl KnowledgeGraph {
 #[pymethods]
 impl KnowledgeGraph {
     /// Add nodes from a pandas DataFrame.
-    #[pyo3(signature = (data, node_type, unique_id_field, node_title_field=None, columns=None, conflict_handling=None, skip_columns=None, column_types=None, timeseries=None, nullable_int_downcast=false, labels=None, managed_reload=false, git_sha=None, modified_by=None, on_invalid="warn", convention=None))]
+    #[pyo3(signature = (data, node_type, unique_id_field, node_title_field=None, columns=None, conflict_handling=None, skip_columns=None, column_types=None, timeseries=None, nullable_int_downcast=false, labels=None, managed_reload=false, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
     // The public Python loader exposes independently optional ingestion controls.
     #[allow(clippy::too_many_arguments)]
     fn add_nodes(
@@ -1276,11 +1290,13 @@ impl KnowledgeGraph {
         modified_by: Option<String>,
         on_invalid: &str,
         convention: Option<&str>,
+        empty_when: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let py = data.py();
         let on_invalid = OnInvalid::parse(on_invalid)?;
-        let convention = crate::graph::parse_interval_convention(convention)?;
+        let (convention, empty_when) =
+            crate::graph::parse_interval_options(convention, empty_when)?;
         // Managed-reload guard: a managed reload (research rebuilding from
         // source) must never write a `runtime`-layer type (agent-owned). Skip
         // it as a no-op + report, so disjoint ownership is enforced, not
@@ -1317,7 +1333,10 @@ impl KnowledgeGraph {
         validate_interner_names(&self.inner, names)?;
 
         let graph = get_graph_mut(&mut self.inner);
-        refuse_convention_without_interval(convention, converted.temporal_cfg.as_ref())?;
+        refuse_convention_without_interval(
+            (convention, empty_when),
+            converted.temporal_cfg.as_ref(),
+        )?;
         // Every refusal comes before the declaration: once declared, only
         // `finish_declaration` may end the call. Everything after the write is
         // infallible, or a raise would leave the rows in memory but out of the
@@ -1356,7 +1375,7 @@ impl KnowledgeGraph {
                     kglite_core::api::temporal::TemporalTarget::Node(node_type.clone()),
                     &cfg.valid_from,
                     &cfg.valid_to,
-                    convention,
+                    (convention, empty_when),
                     &converted.df,
                 )
             })
@@ -1449,7 +1468,7 @@ impl KnowledgeGraph {
     }
 
     /// Add relationships from a DataFrame or read-only Cypher query.
-    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None))]
+    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
     // The public Python loader supports DataFrame and query modes with optional controls.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn add_relationships(
@@ -1473,6 +1492,7 @@ impl KnowledgeGraph {
         modified_by: Option<String>,
         on_invalid: &str,
         convention: Option<&str>,
+        empty_when: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         write_connections(
             py,
@@ -1496,11 +1516,12 @@ impl KnowledgeGraph {
             modified_by,
             on_invalid,
             convention,
+            empty_when,
         )
     }
 
     /// Replace each input source node's relationships of a type with the input's — an atomic edge upsert.
-    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None))]
+    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
     // The same loader arguments add_relationships takes.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn replace_relationships(
@@ -1524,6 +1545,7 @@ impl KnowledgeGraph {
         modified_by: Option<String>,
         on_invalid: &str,
         convention: Option<&str>,
+        empty_when: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         write_connections(
             py,
@@ -1547,6 +1569,7 @@ impl KnowledgeGraph {
             modified_by,
             on_invalid,
             convention,
+            empty_when,
         )
     }
 

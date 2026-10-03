@@ -12,6 +12,7 @@ fn config(from: &str, to: &str, source_type: Option<&str>) -> TemporalConfig {
         valid_to: to.into(),
         convention: IntervalConvention::HalfOpen,
         source_type: source_type.map(str::to_string),
+        empty_when: None,
     }
 }
 

@@ -172,6 +172,7 @@ fn an_unreached_ambiguous_relationship_type_does_not_refuse_node_retrieval() {
                 valid_to: format!("{from}_to"),
                 convention: IntervalConvention::Closed,
                 source_type: None,
+                empty_when: None,
             };
             let unreached = TemporalTarget::Relationship {
                 rel_type: "LEGACY".into(),

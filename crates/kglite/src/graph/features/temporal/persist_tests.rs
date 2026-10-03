@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::declarations::{declare, list, TemporalTarget};
-use super::eval::IntervalConvention::{Closed, HalfOpen};
+use super::eval::IntervalConvention::{self, Closed, HalfOpen};
 use super::persist::PersistedDeclaration;
 use crate::datatypes::Value;
 use crate::graph::dir_graph::DirGraph;
@@ -314,4 +314,102 @@ fn an_entry_this_build_cannot_read_is_dropped_and_an_unknown_field_ignored() {
     let store = TemporalDeclarations::from_file(holder.entries, Default::default());
     assert!(store.node("A").is_none());
     assert_eq!(store.node("B"), Some(&config("f", "t")));
+}
+
+/// An entry as the build before `empty_when` reads it: no field of that name,
+/// and unknown keys ignored, as the shipped struct has no `deny_unknown_fields`.
+#[derive(Debug, PartialEq, Deserialize)]
+struct EntryBeforeEmptyWhen {
+    kind: String,
+    name: String,
+    from: String,
+    to: String,
+    convention: IntervalConvention,
+    abutting_rows: Option<usize>,
+}
+
+fn closed_with_empty_when() -> DirGraph {
+    let mut g = graph(&[
+        "CREATE (:Span {id: 1, vf: '2010-01-01', vt: '2010-01-01'}), \
+                         (:Span {id: 2, vf: '2011-06-10', vt: '2011-06-09'})",
+    ]);
+    super::declare_loaded_with(
+        &mut g,
+        &TemporalTarget::Node("Span".into()),
+        (
+            "vf",
+            "vt",
+            IntervalConvention::Closed,
+            Some(super::EmptyWhen::ToBeforeFrom),
+        ),
+        &[],
+    )
+    .unwrap();
+    g
+}
+
+#[test]
+fn empty_when_survives_a_save_and_load() {
+    let before = closed_with_empty_when();
+    let expected = list(&before);
+    assert_eq!(
+        expected[0].config.empty_when,
+        Some(super::EmptyWhen::ToBeforeFrom)
+    );
+    let loaded = load_kgl_bytes(&encode(before)).unwrap();
+    assert_eq!(list(&loaded), expected);
+    assert_eq!(list(&loaded)[0].empty_rows, Some(1));
+}
+
+#[test]
+fn empty_when_only_adds_a_key_an_older_reader_ignores() {
+    let json = metadata(&encode(closed_with_empty_when()));
+    let entries = key(&json, "temporal_declarations").unwrap();
+    assert_eq!(
+        entries,
+        concat!(
+            "[",
+            r#"{"abutting_rows":0,"convention":"closed","empty_when":"to_before_from","#,
+            r#""from":"vf","kind":"node","name":"Span","to":"vt"}"#,
+            "]"
+        )
+    );
+    // The same bytes read by the pre-`empty_when` shape: one closed entry
+    // with every other field intact, so the older build answers identically.
+    let old: Vec<EntryBeforeEmptyWhen> = serde_json::from_str(entries).unwrap();
+    assert_eq!(
+        old,
+        vec![EntryBeforeEmptyWhen {
+            kind: "node".into(),
+            name: "Span".into(),
+            from: "vf".into(),
+            to: "vt".into(),
+            convention: Closed,
+            abutting_rows: Some(0),
+        }]
+    );
+    // The legacy mirror an older build reads carries no new field either.
+    assert_eq!(
+        key(&json, "temporal_node_configs").unwrap(),
+        r#"{"Span":{"valid_from":"vf","valid_to":"vt"}}"#
+    );
+}
+
+#[test]
+fn a_journaled_declaration_carries_empty_when_and_omits_it_when_unset() {
+    use super::persist::JournaledDeclaration;
+    let target = TemporalTarget::Node("Span".into());
+    let mut with = config("vf", "vt");
+    with.empty_when = Some(super::EmptyWhen::ToBeforeFrom);
+    let json =
+        serde_json::to_string(&JournaledDeclaration::new(&target, Some((&with, None)))).unwrap();
+    assert!(json.contains(r#""empty_when":"to_before_from""#), "{json}");
+    let mut store = TemporalDeclarations::default();
+    store.apply_journaled(serde_json::from_str(&json).unwrap());
+    assert_eq!(store.node("Span"), Some(&with));
+
+    let plain = config("vf", "vt");
+    let json =
+        serde_json::to_string(&JournaledDeclaration::new(&target, Some((&plain, None)))).unwrap();
+    assert!(!json.contains("empty_when"), "{json}");
 }

@@ -75,6 +75,33 @@ impl IntervalConvention {
     }
 }
 
+/// An opt-in way to write an interval that holds no day under `closed`, whose
+/// bounds otherwise cannot meet or cross.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmptyWhen {
+    /// `to` is the day before `from`: a version superseded the day it was
+    /// registered, as a closed register delivers it.
+    ToBeforeFrom,
+}
+
+impl EmptyWhen {
+    /// The spelling a declaration takes and reports: `to_before_from`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EmptyWhen::ToBeforeFrom => "to_before_from",
+        }
+    }
+
+    /// Read [`Self::as_str`]'s spelling back; `None` for anything else.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "to_before_from" => Some(EmptyWhen::ToBeforeFrom),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BoundSide {
     From,

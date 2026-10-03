@@ -2,7 +2,7 @@
 //! validates its stored rows by ([`validate::check_row`]) — every bound NULL,
 //! a date, a datetime or an ISO string, and no interval inverted — applied to
 //! the rows a load or a Cypher write leaves, and worded as the declaration
-//! words it. A row whose interval is empty under `half_open` is written, and
+//! words it. A row whose interval is empty (`half_open`, or `closed` with `empty_when`) is written, and
 //! counted into the one warning ([`EmptyIntervals`]) its load or statement
 //! reports. A type with no declaration costs one map lookup.
 //!
@@ -14,7 +14,7 @@
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
-use super::validate::{self, check_row, is_empty, EmptyIntervals};
+use super::validate::{self, check_row, Emptiness, EmptyIntervals};
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::core::value_operations::format_value_compact;
 use crate::graph::dir_graph::DirGraph;
@@ -29,12 +29,12 @@ fn judge(
     to: &Value,
     config: &TemporalConfig,
     name: impl FnOnce() -> String,
-) -> Result<bool, String> {
+) -> Result<Emptiness, String> {
     if suspended() {
-        return Ok(false);
+        return Ok(Emptiness::default());
     }
     check_row(from, to, config)
-        .map(|bounds| is_empty(bounds, config))
+        .map(|bounds| Emptiness::of(bounds, config))
         .map_err(|reason| format!("{}, {reason}", name()))
 }
 
@@ -145,7 +145,7 @@ pub(crate) fn check_stored_node(
     empty: &mut EmptyIntervals,
 ) -> Result<(), String> {
     let name = || format!("node '{}'", node_name(graph, idx));
-    let mut row_empty = false;
+    let mut row_empty = Emptiness::default();
     for config in node_configs(graph, idx) {
         let from = validate::node_bound(graph, idx, &config.valid_from);
         let to = validate::node_bound(graph, idx, &config.valid_to);
@@ -176,7 +176,7 @@ pub(crate) fn check_stored_edge(
         return Ok(());
     };
     let name = || edge_name(graph, rel_type, source, target);
-    let mut row_empty = false;
+    let mut row_empty = Emptiness::default();
     let source_type = graph
         .graph
         .node_type_of(source)
@@ -208,7 +208,7 @@ pub(crate) fn check_new_node<'l>(
     }
     let name = || format!("node '{}'", format_value_compact(id));
     let mut declared = false;
-    let mut row_empty = false;
+    let mut row_empty = Emptiness::default();
     for config in labels.into_iter().filter_map(|l| graph.temporal.node(l)) {
         declared = true;
         let from = read(&config.valid_from).unwrap_or(Value::Null);
@@ -243,7 +243,7 @@ pub(crate) fn check_new_edge(
     if configs.is_empty() {
         return Ok(());
     }
-    let mut row_empty = false;
+    let mut row_empty = Emptiness::default();
     for config in configs {
         let from = read(&config.valid_from).unwrap_or(Value::Null);
         let to = read(&config.valid_to).unwrap_or(Value::Null);
@@ -380,7 +380,7 @@ pub(crate) fn check_node_load(
             Some(id) => id,
         };
         let row_name = || format!("row {row} (0-based) of the load");
-        let mut row_empty = false;
+        let mut row_empty = Emptiness::default();
         // Looked up only when a stored bound can show through, so the
         // common row — both bounds present, a mode that writes them — costs
         // no id lookup.
@@ -439,14 +439,14 @@ fn check_secondary_labels(
     (idx, mode): (NodeIndex, ConflictHandling),
     frame: &DataFrame,
     row: usize,
-) -> Result<bool, String> {
+) -> Result<Emptiness, String> {
     let cell = |column: Option<usize>| {
         column
             .and_then(|column| frame.get_value_by_index(row, column))
             .unwrap_or(Value::Null)
     };
     let row_name = || format!("row {row} (0-based) of the load");
-    let mut row_empty = false;
+    let mut row_empty = Emptiness::default();
     for config in node_configs(graph, idx) {
         if configs.iter().any(|c| std::ptr::eq(c.config, config)) {
             continue;
@@ -539,7 +539,7 @@ pub(crate) fn check_labelled_node(
     }
     let name = || format!("node '{}'", format_value_compact(id));
     let mut judged = false;
-    let mut row_empty = false;
+    let mut row_empty = Emptiness::default();
     let existing = graph.lookup_by_id_normalized(node_type, id);
     for label in labels {
         let Some(config) = graph.temporal.node(label) else {

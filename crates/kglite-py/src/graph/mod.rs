@@ -1000,19 +1000,34 @@ pub(crate) fn parse_temporal_column_types(
     Ok((config, cleaned.unbind()))
 }
 
-/// Read the `convention=` argument of `set_temporal` and the loaders.
-pub(crate) fn parse_interval_convention(
+/// Read the `convention=` and `empty_when=` arguments of `set_temporal` and
+/// the loaders.
+pub(crate) fn parse_interval_options(
     convention: Option<&str>,
-) -> PyResult<Option<kglite_core::api::temporal::IntervalConvention>> {
-    convention
+    empty_when: Option<&str>,
+) -> PyResult<(
+    Option<kglite_core::api::temporal::IntervalConvention>,
+    Option<kglite_core::api::temporal::EmptyWhen>,
+)> {
+    let argument =
+        |message: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message));
+    let convention = convention
         .map(|text| {
             kglite_core::api::temporal::IntervalConvention::parse(text).ok_or_else(|| {
-                crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
+                argument(format!(
                     "convention must be 'closed' or 'half_open', got '{text}'"
-                )))
+                ))
             })
         })
-        .transpose()
+        .transpose()?;
+    let empty_when = empty_when
+        .map(|text| {
+            kglite_core::api::temporal::EmptyWhen::parse(text).ok_or_else(|| {
+                argument(format!("empty_when must be 'to_before_from', got '{text}'"))
+            })
+        })
+        .transpose()?;
+    Ok((convention, empty_when))
 }
 
 /// Raise the advisory a closed declaration with abutting rows earns as a

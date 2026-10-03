@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::endpoint_index::{self, IndexCache};
-use super::eval::IntervalConvention;
+use super::eval::{EmptyWhen, IntervalConvention};
 use super::merge_key::StartKey;
 use super::validate::{self, Walk};
 use crate::graph::dir_graph::caches::ForkPrivateCache;
@@ -158,7 +158,7 @@ fn same_properties(a: &TemporalConfig, b: &TemporalConfig) -> bool {
 }
 
 fn same_interval(a: &TemporalConfig, b: &TemporalConfig) -> bool {
-    same_properties(a, b) && a.convention == b.convention
+    same_properties(a, b) && a.convention == b.convention && a.empty_when == b.empty_when
 }
 
 impl TemporalDeclarations {
@@ -242,15 +242,16 @@ impl TemporalDeclarations {
         }
     }
 
-    /// The convention a declaration of `valid_from`/`valid_to` for `target`
-    /// takes when its caller names none: that of a declaration of the same
-    /// key already naming the same properties, else closed.
-    pub(super) fn default_convention(
+    /// The convention and `empty_when` a declaration of `valid_from`/`valid_to`
+    /// for `target` takes when its caller names neither: those of a
+    /// declaration of the same key already naming the same properties, else
+    /// closed and unset.
+    pub(super) fn default_form(
         &self,
         target: &TemporalTarget,
         valid_from: &str,
         valid_to: &str,
-    ) -> IntervalConvention {
+    ) -> (IntervalConvention, Option<EmptyWhen>) {
         let same = |c: &&TemporalConfig| c.valid_from == valid_from && c.valid_to == valid_to;
         let existing = match target {
             TemporalTarget::Node(label) => self.nodes.get(label).filter(same),
@@ -263,7 +264,9 @@ impl TemporalDeclarations {
                 .filter(|c| c.source_type == *source_type)
                 .find(same),
         };
-        existing.map_or(IntervalConvention::Closed, |c| c.convention)
+        existing.map_or((IntervalConvention::Closed, None), |c| {
+            (c.convention, c.empty_when)
+        })
     }
 
     /// Decide what declaring `config` for `target` does: nothing (an identical
@@ -293,12 +296,15 @@ impl TemporalDeclarations {
             None => Ok(Change::Insert),
             Some(_) if same_key.iter().any(|c| same_interval(c, config)) => Ok(Change::Unchanged),
             Some(existing) => Err(format!(
-                "{} is already declared with from '{}', to '{}', convention '{}'. \
+                "{} is already declared with from '{}', to '{}', convention '{}'{}. \
                  Undeclare it first to change it.",
                 target.describe(),
                 existing.valid_from,
                 existing.valid_to,
-                existing.convention.as_str()
+                existing.convention.as_str(),
+                existing
+                    .empty_when
+                    .map_or(String::new(), |e| format!(", empty_when '{}'", e.as_str()))
             )),
         }
     }
@@ -410,9 +416,10 @@ impl TemporalDeclarations {
 /// stored bound is read under
 /// the rule `valid_at` uses; the first one that is not NULL, a date, a
 /// datetime or an ISO date string is refused, naming its element, and so is a
-/// row whose interval is inverted (`from > to`). A row whose interval is
-/// empty under half-open (`from == to`) is accepted, counted and warned
-/// about. Re-declaring an identical interval is a no-op; a different one for
+/// row whose interval is inverted (`from > to`), except the one empty shape
+/// a closed declaration's `empty_when` names ([`declare_loaded_with`]). A row
+/// whose interval is empty under half-open (`from == to`) is accepted,
+/// counted and warned about. Re-declaring an identical interval is a no-op; a different one for
 /// the same target is refused. A real change bumps the graph version.
 pub fn declare(
     graph: &mut DirGraph,
@@ -437,13 +444,67 @@ pub fn declare_loaded(
     convention: IntervalConvention,
     written: &[&str],
 ) -> Result<DeclareReport, String> {
+    declare_loaded_with(
+        graph,
+        target,
+        (valid_from, valid_to, convention, None),
+        written,
+    )
+}
+
+/// [`declare_loaded`] with `empty_when`: under `closed`, the empty interval
+/// it names is accepted instead of refused (and refused outright under
+/// `half_open`, which needs no such option).
+pub fn declare_loaded_with(
+    graph: &mut DirGraph,
+    target: &TemporalTarget,
+    (valid_from, valid_to, convention, empty_when): (
+        &str,
+        &str,
+        IntervalConvention,
+        Option<EmptyWhen>,
+    ),
+    written: &[&str],
+) -> Result<DeclareReport, String> {
     declare_walked(
         graph,
         target,
-        (valid_from, valid_to, convention),
+        interval_config(valid_from, valid_to, convention, empty_when),
         written,
         (true, EntityGrouping::OwnId),
     )
+}
+
+/// A config with no source type, which [`declare_walked`] takes from the
+/// target.
+pub(super) fn interval_config(
+    valid_from: &str,
+    valid_to: &str,
+    convention: IntervalConvention,
+    empty_when: Option<EmptyWhen>,
+) -> TemporalConfig {
+    TemporalConfig {
+        valid_from: valid_from.to_string(),
+        valid_to: valid_to.to_string(),
+        convention,
+        source_type: None,
+        empty_when,
+    }
+}
+
+/// Refuse `empty_when` under `half_open`: a half-open interval already holds
+/// `from == to` as empty, so the option names a shape that convention has no
+/// use for.
+pub(super) fn check_options(config: &TemporalConfig) -> Result<(), String> {
+    match (config.empty_when, config.convention) {
+        (Some(empty_when), IntervalConvention::HalfOpen) => Err(format!(
+            "empty_when '{}' applies to convention 'closed', where a to bound before the from \
+             bound is otherwise refused; convention 'half_open' already holds an empty interval \
+             (from equal to to) and needs no option",
+            empty_when.as_str()
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Which node rows are versions of one entity when a declaration counts
@@ -465,17 +526,11 @@ pub(crate) enum EntityGrouping<'a> {
 pub(crate) fn declare_loaded_grouped(
     graph: &mut DirGraph,
     target: &TemporalTarget,
-    (valid_from, valid_to, convention): (&str, &str, IntervalConvention),
+    bounds: TemporalConfig,
     written: &[&str],
     grouping: EntityGrouping<'_>,
 ) -> Result<DeclareReport, String> {
-    declare_walked(
-        graph,
-        target,
-        (valid_from, valid_to, convention),
-        written,
-        (true, grouping),
-    )
+    declare_walked(graph, target, bounds, written, (true, grouping))
 }
 
 /// [`declare_loaded`]; `warn_empty` false leaves the empty-row warning to a
@@ -483,16 +538,15 @@ pub(crate) fn declare_loaded_grouped(
 pub(super) fn declare_walked(
     graph: &mut DirGraph,
     target: &TemporalTarget,
-    (valid_from, valid_to, convention): (&str, &str, IntervalConvention),
+    bounds: TemporalConfig,
     written: &[&str],
     (warn_empty, grouping): (bool, EntityGrouping<'_>),
 ) -> Result<DeclareReport, String> {
     let config = TemporalConfig {
-        valid_from: valid_from.to_string(),
-        valid_to: valid_to.to_string(),
-        convention,
         source_type: target.source_type().map(str::to_string),
+        ..bounds
     };
+    check_options(&config)?;
     validate::check_target(graph, target)?;
     let change = graph.temporal.change_for(target, &config)?;
     if matches!(change, Change::Unchanged) {
@@ -510,13 +564,14 @@ pub(super) fn declare_walked(
         empty,
         open_ended,
     } = validate::walk(graph, target, &config, written, grouping)?;
-    // Empty rows exist only under half-open and abutment warns only under
-    // closed; an open-ended `to` leaves no row with two bounds.
+    // Empty rows exist under half-open and under closed with `empty_when`;
+    // abutment warns only under closed; an open-ended `to` leaves no row
+    // with two bounds.
     let empty_warning = warn_empty
         .then(|| empty.declaration_warning(target))
         .flatten();
     let abutment = match abutting {
-        Some(same) if convention == IntervalConvention::Closed => {
+        Some(same) if config.convention == IntervalConvention::Closed => {
             validate::abutment_warning(target, grouping, (same, abutting_other), rows)
         }
         _ => None,

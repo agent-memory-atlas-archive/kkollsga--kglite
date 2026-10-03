@@ -1491,10 +1491,12 @@ CALL db.temporal.declare({node: 'FieldStatus', from: 'date_from', to: 'date_to',
 CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field',
                           from: 'licensee_from', to: 'licensee_to', convention: 'half_open'})
   YIELD declared, rows, abutting_rows
+CALL db.temporal.declare({node: 'Licence', from: 'granted', to: 'ended', convention: 'closed',
+                          empty_when: 'to_before_from'})
 CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'}) YIELD undeclared
 CALL db.temporal.declarations()
-  YIELD kind, name, source_type, from, to, convention, abutting_rows, ambiguous,
-        empty_rows, unreadable_rows
+  YIELD kind, name, source_type, from, to, convention, empty_when, abutting_rows,
+        ambiguous, empty_rows, unreadable_rows
 ```
 
 - **Target.** Exactly one of `node` (a primary type or a secondary label) or
@@ -1512,6 +1514,17 @@ CALL db.temporal.declarations()
   `half_open` it is an **empty interval**, valid at no instant, which is
   accepted: the declaration warns once, counting such rows and naming the
   first, and counts them in `empty_rows`.
+- **`empty_when: 'to_before_from'` (optional, `closed` only).** Under `closed` a
+  `to` before the `from` is refused as inverted. With this option a date `to`
+  exactly one day before a date `from` — a version superseded the day it was
+  registered — is instead an empty interval, treated like the `half_open` one:
+  accepted, valid on no day, counted in `empty_rows`, and warned once ("N of M
+  rows … have an empty interval under convention 'closed' with empty_when
+  'to_before_from' …"). A timestamp bound or a wider inversion is still
+  refused; `half_open` with the option is an error (it already holds `from ==
+  to` as empty). `db.temporal.declarations()` reports it in the `empty_when`
+  column (null when unset). The saved file gains one optional key that an
+  older build ignores, answering every query the same.
 - **Later writes answer to the same rule.** A `CREATE`, `MERGE` or `SET` —
   including `SET n:Label` onto a declared label — and an `add_nodes` /
   `add_relationships` / blueprint load onto a declared type refuse a row the

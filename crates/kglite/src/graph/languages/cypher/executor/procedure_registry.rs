@@ -303,7 +303,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "db.temporal.declare",
         aliases: &[],
-        description: "Declare which two properties (from, to) bound a node label's or relationship type's validity interval, and whether the to day belongs to it (convention 'closed') or ends it ('half_open'); validates every stored bound and counts rows whose end meets another row's start. A relationship uses its source's source_type declaration first, the unkeyed one otherwise",
+        description: "Declare which two properties (from, to) bound a node label's or relationship type's validity interval, and whether the to day belongs to it (convention 'closed') or ends it ('half_open'), with an optional empty_when: 'to_before_from' under 'closed' that keeps a row whose to is the day before its from as an empty interval; validates every stored bound and counts rows whose end meets another row's start. A relationship uses its source's source_type declaration first, the unkeyed one otherwise",
         columns: &["declared", "rows", "abutting_rows"],
     },
     ProcedureSpec {
@@ -315,7 +315,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "db.temporal.declarations",
         aliases: &[],
-        description: "List validity-interval declarations: kind, name, source type, bound properties, convention, abutting rows counted at declare time, whether the relationship type is ambiguous (several unkeyed declarations from an older graph; re-declare them per source_type), and the rows a write since left with an empty interval (valid at no instant) or an unreadable bound, counted now",
+        description: "List validity-interval declarations: kind, name, source type, bound properties, convention, empty_when, abutting rows counted at declare time, whether the relationship type is ambiguous (several unkeyed declarations from an older graph; re-declare them per source_type), and the rows a write since left with an empty interval (valid at no instant) or an unreadable bound, counted now",
         columns: &[
             "kind",
             "name",
@@ -323,6 +323,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
             "from",
             "to",
             "convention",
+            "empty_when",
             "abutting_rows",
             "ambiguous",
             "empty_rows",

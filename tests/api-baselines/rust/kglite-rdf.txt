@@ -468,6 +468,7 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::Settings
 pub fn kglite::api::blueprint::Settings::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::blueprint::TemporalSpec
 pub kglite::api::blueprint::TemporalSpec::convention: core::option::Option<alloc::string::String>
+pub kglite::api::blueprint::TemporalSpec::empty_when: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::TemporalSpec::from: alloc::string::String
 pub kglite::api::blueprint::TemporalSpec::to: alloc::string::String
 impl core::clone::Clone for kglite::api::blueprint::TemporalSpec
@@ -3371,6 +3372,26 @@ pub fn kglite::api::storage::convert_dir_graph_to_mode(graph: &mut kglite::api::
 pub fn kglite::api::storage::live_storage_mode(graph: &kglite::api::DirGraph) -> kglite::api::storage::StorageMode
 pub fn kglite::api::storage::new_dir_graph_in_mode(mode: kglite::api::storage::StorageMode, path: core::option::Option<&std::path::Path>) -> core::result::Result<kglite::api::DirGraph, alloc::string::String>
 pub mod kglite::api::temporal
+pub enum kglite::api::temporal::EmptyWhen
+pub kglite::api::temporal::EmptyWhen::ToBeforeFrom
+impl kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::as_str(self) -> &'static str
+pub fn kglite::api::temporal::EmptyWhen::parse(text: &str) -> core::option::Option<Self>
+impl core::clone::Clone for kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::clone(&self) -> kglite::api::temporal::EmptyWhen
+impl core::cmp::Eq for kglite::api::temporal::EmptyWhen
+impl core::cmp::PartialEq for kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::eq(&self, other: &kglite::api::temporal::EmptyWhen) -> bool
+impl core::fmt::Debug for kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for kglite::api::temporal::EmptyWhen
+impl core::marker::StructuralPartialEq for kglite::api::temporal::EmptyWhen
+impl serde_core::ser::Serialize for kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::temporal::EmptyWhen
+pub fn kglite::api::temporal::EmptyWhen::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum kglite::api::temporal::IntervalConvention
 pub kglite::api::temporal::IntervalConvention::Closed
 pub kglite::api::temporal::IntervalConvention::HalfOpen
@@ -3485,9 +3506,10 @@ pub const kglite::api::temporal::SLICE_BYTE_CAP: usize
 pub fn kglite::api::temporal::check_label_stamp(graph: &kglite::api::DirGraph, nodes: &[petgraph::graph_impl::NodeIndex], label: &str) -> core::result::Result<core::option::Option<alloc::string::String>, alloc::string::String>
 pub fn kglite::api::temporal::check_labelled_load(graph: &mut kglite::api::DirGraph, frame: &kglite::datatypes::values::DataFrame, (node_type, unique_id_field): (&str, &str), conflict_handling: core::option::Option<&str>, labels: &[&str]) -> core::result::Result<core::option::Option<alloc::string::String>, alloc::string::String>
 pub fn kglite::api::temporal::declare(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: kglite::api::temporal::IntervalConvention) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
-pub fn kglite::api::temporal::declare_defaulted(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
-pub fn kglite::api::temporal::declare_from_column_types(graph: &mut kglite::api::DirGraph, target: kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: core::option::Option<kglite::api::temporal::IntervalConvention>, frame: &kglite::datatypes::values::DataFrame) -> core::result::Result<kglite::api::temporal::LoadDeclaration, alloc::string::String>
+pub fn kglite::api::temporal::declare_defaulted(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, (convention, empty_when): (core::option::Option<kglite::api::temporal::IntervalConvention>, core::option::Option<kglite::api::temporal::EmptyWhen>)) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
+pub fn kglite::api::temporal::declare_from_column_types(graph: &mut kglite::api::DirGraph, target: kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, (convention, empty_when): (core::option::Option<kglite::api::temporal::IntervalConvention>, core::option::Option<kglite::api::temporal::EmptyWhen>), frame: &kglite::datatypes::values::DataFrame) -> core::result::Result<kglite::api::temporal::LoadDeclaration, alloc::string::String>
 pub fn kglite::api::temporal::declare_loaded(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, valid_from: &str, valid_to: &str, convention: kglite::api::temporal::IntervalConvention, written: &[&str]) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
+pub fn kglite::api::temporal::declare_loaded_with(graph: &mut kglite::api::DirGraph, target: &kglite::api::temporal::TemporalTarget, (valid_from, valid_to, convention, empty_when): (&str, &str, kglite::api::temporal::IntervalConvention, core::option::Option<kglite::api::temporal::EmptyWhen>), written: &[&str]) -> core::result::Result<kglite::api::temporal::DeclareReport, alloc::string::String>
 pub fn kglite::api::temporal::edge_configs<'g>(graph: &'g kglite::api::DirGraph, rel_type: &str) -> &'g [kglite::api::TemporalConfig]
 pub fn kglite::api::temporal::list(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::temporal::DeclarationInfo>
 pub fn kglite::api::temporal::node_config<'g>(graph: &'g kglite::api::DirGraph, label: &str) -> core::option::Option<&'g kglite::api::TemporalConfig>
@@ -4844,6 +4866,7 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::api::TablePropertyMeta
 pub fn kglite::api::TablePropertyMeta::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::TemporalConfig
 pub kglite::api::TemporalConfig::convention: kglite::api::temporal::IntervalConvention
+pub kglite::api::TemporalConfig::empty_when: core::option::Option<kglite::api::temporal::EmptyWhen>
 pub kglite::api::TemporalConfig::source_type: core::option::Option<alloc::string::String>
 pub kglite::api::TemporalConfig::valid_from: alloc::string::String
 pub kglite::api::TemporalConfig::valid_to: alloc::string::String

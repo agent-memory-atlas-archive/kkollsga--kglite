@@ -47,7 +47,7 @@ fn a_repeated_load_leaves_one_declaration_and_validates_nothing() {
     let mut graph = DirGraph::new();
     let first = status_frame(&[(1, day("2000-01-01"), day("2005-01-01"))]);
     let pending =
-        declare_from_column_types(&mut graph, status(), "vf", "vt", None, &first).unwrap();
+        declare_from_column_types(&mut graph, status(), "vf", "vt", (None, None), &first).unwrap();
     load_statuses(&mut graph, first);
     let report = pending.finish(&mut graph).unwrap();
     assert!(report.changed);
@@ -56,7 +56,7 @@ fn a_repeated_load_leaves_one_declaration_and_validates_nothing() {
     let version = graph.version();
     let second = status_frame(&[(2, day("2006-01-01"), Value::Null)]);
     let pending =
-        declare_from_column_types(&mut graph, status(), "vf", "vt", None, &second).unwrap();
+        declare_from_column_types(&mut graph, status(), "vf", "vt", (None, None), &second).unwrap();
     load_statuses(&mut graph, second);
     let report = pending.finish(&mut graph).unwrap();
     assert!(!report.changed);
@@ -75,13 +75,20 @@ fn a_conflicting_load_is_refused_before_it_writes() {
     );
     declare(&mut graph, &status(), "vf", "vt", HalfOpen).unwrap();
     let frame = status_frame(&[(2, day("2006-01-01"), Value::Null)]);
-    let err = declare_from_column_types(&mut graph, status(), "vf", "vt", Some(Closed), &frame)
-        .err()
-        .expect("a different convention is a conflict");
+    let err = declare_from_column_types(
+        &mut graph,
+        status(),
+        "vf",
+        "vt",
+        (Some(Closed), None),
+        &frame,
+    )
+    .err()
+    .expect("a different convention is a conflict");
     assert!(err.contains("already declared"), "{err}");
     // Without a convention the half-open declaration is kept.
     let pending =
-        declare_from_column_types(&mut graph, status(), "vf", "vt", None, &frame).unwrap();
+        declare_from_column_types(&mut graph, status(), "vf", "vt", (None, None), &frame).unwrap();
     assert!(!pending.finish(&mut graph).unwrap().changed);
     assert_eq!(conventions(&graph), vec![(status(), HalfOpen)]);
 }
@@ -93,7 +100,7 @@ fn an_inverted_row_of_the_load_is_refused_by_position() {
         (1, day("2000-01-01"), day("2005-01-01")),
         (2, day("2010-01-01"), day("2009-01-01")),
     ]);
-    let err = declare_from_column_types(&mut graph, status(), "vf", "vt", None, &frame)
+    let err = declare_from_column_types(&mut graph, status(), "vf", "vt", (None, None), &frame)
         .err()
         .expect("inverted row");
     assert!(err.starts_with("row 1 (0-based) of the load, "), "{err}");
@@ -112,7 +119,7 @@ fn a_stored_dirty_bound_refuses_the_load_before_it_writes() {
     )
     .unwrap();
     let frame = status_frame(&[(1, day("2000-01-01"), Value::Null)]);
-    let err = declare_from_column_types(&mut graph, status(), "vf", "vt", None, &frame)
+    let err = declare_from_column_types(&mut graph, status(), "vf", "vt", (None, None), &frame)
         .err()
         .expect("dirty stored bound");
     assert!(err.contains("node '9'") && err.contains("someday"), "{err}");
@@ -136,7 +143,7 @@ fn a_first_load_with_every_period_open_declares_its_relationship_type() {
         next(Some("Status")),
         "vf",
         "vt",
-        Some(HalfOpen),
+        (Some(HalfOpen), None),
         &frame,
     )
     .unwrap();
@@ -167,7 +174,7 @@ fn abandoning_withdraws_a_declaration_made_before_the_load() {
     );
     let frame = status_frame(&[(2, day("2006-01-01"), Value::Null)]);
     let pending =
-        declare_from_column_types(&mut graph, status(), "vf", "vt", None, &frame).unwrap();
+        declare_from_column_types(&mut graph, status(), "vf", "vt", (None, None), &frame).unwrap();
     assert_eq!(list(&graph).len(), 1);
     pending.abandon(&mut graph);
     assert!(list(&graph).is_empty());
@@ -181,10 +188,11 @@ fn declare_defaulted_keeps_a_declaration_naming_the_same_properties() {
         status_frame(&[(1, day("2000-01-01"), day("2005-01-01"))]),
     );
     declare(&mut graph, &status(), "vf", "vt", HalfOpen).unwrap();
-    let report = declare_defaulted(&mut graph, &status(), "vf", "vt", None).unwrap();
+    let report = declare_defaulted(&mut graph, &status(), "vf", "vt", (None, None)).unwrap();
     assert!(!report.changed);
     assert_eq!(conventions(&graph), vec![(status(), HalfOpen)]);
-    let err = declare_defaulted(&mut graph, &status(), "vf", "vt", Some(Closed)).unwrap_err();
+    let err =
+        declare_defaulted(&mut graph, &status(), "vf", "vt", (Some(Closed), None)).unwrap_err();
     assert!(err.contains("already declared"), "{err}");
 }
 
@@ -221,9 +229,15 @@ fn a_new_sources_first_load_onto_an_existing_type_merges_under_the_key() {
     ];
     let columns = ["src", "tgt", "vf", "vt"].map(str::to_string).to_vec();
     let frame = DataFrame::from_cypher_rows(columns, rows).unwrap();
-    let pending =
-        declare_from_column_types(&mut graph, next(Some("Status")), "vf", "vt", None, &frame)
-            .unwrap();
+    let pending = declare_from_column_types(
+        &mut graph,
+        next(Some("Status")),
+        "vf",
+        "vt",
+        (None, None),
+        &frame,
+    )
+    .unwrap();
     let report = add_connections(
         &mut graph,
         frame,
@@ -265,7 +279,7 @@ fn a_relationship_load_declares_for_its_source_only_when_it_must() {
     .unwrap();
     let empty = DataFrame::from_cypher_rows(vec![], vec![]).unwrap();
     let declared = |graph: &mut DirGraph, source: &str, from: &str| {
-        declare_from_column_types(graph, next(Some(source)), from, "t", None, &empty)
+        declare_from_column_types(graph, next(Some(source)), from, "t", (None, None), &empty)
             .and_then(|pending| pending.finish(graph))
             .unwrap_or_else(|e| panic!("{source} {from}: {e}"));
     };

@@ -11,6 +11,8 @@ pub(crate) mod declarations;
 mod declarations_tests;
 mod default_instant;
 pub(crate) mod duplicate_ids;
+#[cfg(test)]
+mod empty_when_tests;
 pub(crate) mod endpoint_index;
 pub(crate) mod eval;
 pub(crate) mod instant;
@@ -35,12 +37,12 @@ mod write_check_tests;
 pub(crate) use declarations::declared;
 pub(crate) use declarations::merge_start_key;
 pub use declarations::{
-    declare, declare_loaded, edge_configs, list, node_config, undeclare, DeclarationInfo,
-    DeclareReport, TemporalTarget, DISK_NODE_ABUTMENT_CAP,
+    declare, declare_loaded, declare_loaded_with, edge_configs, list, node_config, undeclare,
+    DeclarationInfo, DeclareReport, TemporalTarget, DISK_NODE_ABUTMENT_CAP,
 };
 pub(crate) use declarations::{declare_loaded_grouped, EntityGrouping};
 pub use default_instant::ValidTimeDefault;
-pub use eval::IntervalConvention;
+pub use eval::{EmptyWhen, IntervalConvention};
 pub(crate) use loader::{adopt_declarations, settle_adopted, withdraw_adopted};
 pub use loader::{declare_defaulted, declare_from_column_types, LoadDeclaration};
 pub(crate) use merge_key::{Image, Start, StartKey};
