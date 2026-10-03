@@ -4345,7 +4345,7 @@ Query time-indexed numeric data attached to nodes. All date arguments are string
 
 | Function | Arguments | Returns | Description |
 |----------|-----------|---------|-------------|
-| `ts_sum(n.channel)` | 1 | Float | Sum of all values |
+| `ts_sum(n.channel)` | 1 | Float | Sum of all values; `0.0` when the window holds none (an empty window or an all-missing channel), where `ts_avg` / `ts_min` / `ts_max` give `null` and `ts_count` gives `0` |
 | `ts_sum(n.channel, 'start')` | 2 | Float | Sum within prefix range |
 | `ts_sum(n.channel, 'start', 'end')` | 3 | Float | Sum in range [start, end] inclusive |
 | `ts_avg(n.channel [, 'start'] [, 'end'])` | 1-3 | Float | Average (same range rules as ts_sum) |

@@ -188,9 +188,14 @@ pub fn find_range(
 
 // ─── Aggregation helpers (operate on slices, skip NaN) ───────────────────────
 
-/// Sum of non-NaN values in the slice.
+/// Sum of non-NaN values in the slice: `+0.0` when there are none. The fold
+/// starts at `+0.0` because `Iterator::sum` over floats starts at `-0.0`,
+/// which an empty or all-missing window would otherwise return and print.
 pub fn ts_sum(values: &[f64]) -> f64 {
-    values.iter().filter(|v| v.is_finite()).sum()
+    values
+        .iter()
+        .filter(|v| v.is_finite())
+        .fold(0.0, |total, v| total + v)
 }
 
 /// Average of non-NaN values in the slice. Returns NaN if no finite values.
@@ -552,6 +557,8 @@ mod tests {
     fn test_ts_empty() {
         let empty: Vec<f64> = vec![];
         assert_eq!(ts_sum(&empty), 0.0);
+        assert!(ts_sum(&empty).is_sign_positive(), "an empty sum is +0.0");
+        assert!(ts_sum(&[f64::NAN, f64::NAN]).is_sign_positive());
         assert!(ts_avg(&empty).is_nan());
         assert_eq!(ts_count(&empty), 0);
     }

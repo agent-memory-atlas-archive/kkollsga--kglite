@@ -149,6 +149,9 @@ before upgrading.
 
 ### Fixed
 
+- `ts_sum` over a window that holds no finite value (an all-missing channel, or
+  a range outside the series) returns `0.0` instead of `-0.0`. The empty sum is
+  `0.0`, matching `ts_count`; `ts_avg`, `ts_min` and `ts_max` stay `null`.
 - Performance: the four-argument `valid_at(x, d, 'from', 'to')` and
   `valid_during(...)` cost less per row. Each statement now keeps one
   resolution per (element type, bound-name pair), so a second call site or type
