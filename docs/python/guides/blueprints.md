@@ -540,7 +540,24 @@ Key points:
 - **`channels`** — maps channel names (what you want to call them) to CSV column names (what they're called in the file). Format: `{"channel_name": "csv_column_name"}`.
 - **`units`** — optional per-channel units.
 
-Aggregate rows where time components are zero (e.g., `month=0` for annual totals) are automatically dropped.
+Rows where a time component below `year` is zero (e.g., `month=0` for annual totals) are aggregate rows and are dropped. The build warns once per node type with the count, and names any channel whose only values sat on those rows (it loads empty). Time components may be written as floats (`2020.0`, `1.0` — pandas does this when a column holds a NaN); whole values are read as integers.
+
+To keep the aggregates, load them as a yearly series with a sibling sub-node that selects them and uses a year-only `time_key`:
+
+```json
+"sub_nodes": {
+  "EmployeeAnnual": {
+    "csv": "monthly_sales.csv",
+    "pk": "employee_id",
+    "parent": "Employee",
+    "parent_fk": "employee_id",
+    "filter": {"mo": 0},
+    "timeseries": {"time_key": {"year": "yr"}, "channels": {"revenue": "revenue"}}
+  }
+}
+```
+
+Keys inside `timeseries` other than `time_key`, `channels`, `resolution` and `units` produce an unknown-key warning.
 
 After loading, query timeseries with Cypher `ts_*()` functions — see the [Timeseries guide](timeseries.md) for details.
 
@@ -1108,7 +1125,11 @@ Filters compare values exactly — `{"status": "Active"}` won't match `"active"`
 
 ### Timeseries aggregate rows
 
-If your CSV has aggregate rows (e.g., `month=0` for annual totals), they are automatically dropped. Only rows with non-zero time components are loaded.
+If your CSV has aggregate rows (e.g., `month=0` for annual totals), they are dropped and the build warns with the count and any channel left empty. Only rows with non-zero time components are loaded into the node's series; see [Timeseries](#timeseries) for loading the aggregates as a yearly series.
+
+### Repeated primary keys
+
+A repeated `pk` in a non-timeseries node or sub-node creates one node per row. The build writes a duplicate-id warning (`N duplicate id(s) on type 'T'`) to stderr; a timeseries spec repeats its pk by design and does not warn. Dedupe the input, or use a timeseries block if the repeats are time points.
 
 ### Geometry inputs
 

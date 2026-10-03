@@ -76,7 +76,8 @@ fn prep_fk_edges(
         apply_filter(&mut raw, &spec.spec.filter);
     }
     if let Some(tspec) = &spec.spec.timeseries {
-        ts::drop_zero_time_components(&mut raw, tspec);
+        // The node phase already reported the drop; this pass sees the same rows.
+        let _ = ts::drop_zero_time_components(&mut raw, tspec);
     }
     let raw_pk = spec.spec.pk.clone().unwrap_or_else(|| "id".to_string());
     let pk = if raw_pk == "auto" {

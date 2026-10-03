@@ -9,7 +9,22 @@ before upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- A blueprint timeseries spec that drops aggregate rows (a time component
+  below `year` equal to zero, e.g. `month = 0`) now warns once per node type
+  with the count, the zero columns and any channel whose only values were on
+  those rows (it loaded empty), and names the sibling sub-node
+  (`"filter": {"<col>": 0}` plus a year-only `time_key`) that loads them as a
+  yearly series. Unknown keys inside a `timeseries` block (e.g. `aggregates`)
+  now warn like unknown keys elsewhere in a blueprint.
+
 ### Fixed
+
+- Blueprint timeseries time components written as whole floats (`2020.0`,
+  `1.0`..`12.0`, `0.0`, as pandas writes them for a column holding a NaN) were
+  read as year 0 / January, and `0.0` aggregate rows were folded into January
+  instead of dropped. They are now read as integers, like whole-float ids.
 
 - A blueprint timeseries sub-node (or a top-level timeseries spec with `parent`
   + `parent_fk`) wrote its parent FK edge once per CSV row instead of once per
