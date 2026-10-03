@@ -236,6 +236,66 @@ fn abutting_rows_are_counted_and_warned_about_only_when_closed() {
     assert_eq!(report.warning, None);
 }
 
+/// Two entities of one label share a boundary day: nothing is counted in
+/// `abutting_rows`, and under `closed` the advisory says the rows may be
+/// unrelated instead of claiming a same-entity abutment.
+#[test]
+fn different_entities_sharing_a_boundary_day_do_not_abut() {
+    let rows = [
+        "CREATE (:Project {id: 1, vf: '2000-01-01', vt: '2005-01-01'})",
+        "CREATE (:Project {id: 2, vf: '2005-01-01', vt: '2009-01-01'})",
+        "CREATE (:Project {id: 3, vf: '2009-01-01', vt: null})",
+    ];
+    let mut g = graph(&rows);
+    let report = declare(&mut g, &node("Project"), "vf", "vt", Closed).unwrap();
+    assert_eq!(report.rows, 3);
+    assert_eq!(report.abutting_rows, Some(0));
+    assert_eq!(list(&g)[0].abutting_rows, Some(0));
+    let warning = report.warning.expect("the remainder is still reported");
+    assert!(
+        warning.starts_with("2 of 3 rows of node label 'Project' end on the day another row with a different node id begins; they belong to different entities and may be unrelated"),
+        "{warning}"
+    );
+    assert!(!warning.contains("the same node id"), "{warning}");
+
+    let mut g = graph(&rows);
+    let report = declare(&mut g, &node("Project"), "vf", "vt", HalfOpen).unwrap();
+    assert_eq!(report.abutting_rows, Some(0));
+    assert_eq!(report.warning, None);
+}
+
+/// Versions sharing an id are one entity: a version ending the day the next
+/// begins is counted, and warned about only under `closed`. A row of another
+/// entity ending on that day is reported apart, as possibly unrelated.
+#[test]
+fn versions_of_one_node_id_abut_within_that_id_only() {
+    let rows = [
+        "CREATE (:Project {id: 1, vf: '2000-01-01', vt: '2005-01-01'})",
+        "CREATE (:Project {id: 1, vf: '2005-01-01', vt: null})",
+        "CREATE (:Project {id: 2, vf: '2003-01-01', vt: '2005-01-01'})",
+    ];
+    let mut g = graph(&rows);
+    let report = declare(&mut g, &node("Project"), "vf", "vt", Closed).unwrap();
+    assert_eq!(report.abutting_rows, Some(1));
+    let warning = report.warning.expect("a closed same-id abutment warns");
+    assert!(
+        warning.starts_with("1 of 3 rows of node label 'Project' end on the day another row with the same node id begins"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains(
+            "A further 1 end on the day a row with a different node id begins and may be unrelated"
+        ),
+        "{warning}"
+    );
+    assert_eq!(list(&g)[0].abutting_rows, Some(1));
+
+    let mut g = graph(&rows);
+    let report = declare(&mut g, &node("Project"), "vf", "vt", HalfOpen).unwrap();
+    assert_eq!(report.abutting_rows, Some(1));
+    assert_eq!(report.warning, None);
+}
+
 #[test]
 fn source_keyed_declarations_coexist_and_list_in_lookup_order() {
     let mut g = graph(LICENSEES);
@@ -370,7 +430,8 @@ fn a_secondary_label_is_a_node_target() {
     ]);
     let report = declare(&mut g, &node("Tracked"), "vf", "vt", Closed).unwrap();
     assert_eq!(report.rows, 2);
-    assert_eq!(report.abutting_rows, Some(1));
+    // Ids 1 and 2 are different nodes, so their shared day is not an abutment.
+    assert_eq!(report.abutting_rows, Some(0));
     assert_eq!(list(&g)[0].target, node("Tracked"));
 }
 

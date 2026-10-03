@@ -37,7 +37,9 @@ struct PreppedFkEdges {
 /// The implicit `OF_<PARENT>` edge a spec with `parent_fk` gets. The parent is
 /// the spec's own `parent` key, else the enclosing type of a sub-node. A
 /// same-named `fk_edges` entry wins (callers use `entry().or_insert`).
-fn implicit_parent_edge(spec: &FlatSpec) -> Option<(String, super::super::schema::FkEdge)> {
+pub(super) fn implicit_parent_edge(
+    spec: &FlatSpec,
+) -> Option<(String, super::super::schema::FkEdge)> {
     let parent_fk = spec.spec.parent_fk.as_ref()?;
     let parent_type = spec.spec.parent.as_ref().or(spec.parent.as_ref())?;
     Some((

@@ -138,7 +138,7 @@ impl LoadDeclaration {
                 self.config.convention,
             ),
             &written,
-            warn_empty,
+            (warn_empty, declarations::EntityGrouping::OwnId),
         )
     }
 

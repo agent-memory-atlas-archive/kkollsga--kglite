@@ -20,7 +20,9 @@ use super::specs::FlatSpec;
 use super::BuildReport;
 use crate::graph::blueprint::schema::{Blueprint, NodeSpec, TemporalSpec};
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::features::temporal::{declare_loaded, IntervalConvention, TemporalTarget};
+use crate::graph::features::temporal::{
+    declare_loaded_grouped, EntityGrouping, IntervalConvention, TemporalTarget,
+};
 
 /// One `temporal` key (or the lack of one) on one spec, with the names the
 /// spec stores its columns under.
@@ -225,6 +227,9 @@ pub(super) fn declare_blueprint_temporal(
                     .iter()
                     .map(|(rel, j)| (rel, j.temporal.as_ref(), "junction")),
             );
+        // A sub-node's parent column is not a stored property, so its
+        // versions are grouped by the parent edge the build wrote from it.
+        let parent_edge = super::fk::implicit_parent_edge(flat).map(|(edge_type, _)| edge_type);
         let mut requests: Vec<(String, TemporalTarget, &TemporalSpec)> = Vec::new();
         if let Some(temporal) = &spec.temporal {
             requests.push((
@@ -251,7 +256,12 @@ pub(super) fn declare_blueprint_temporal(
             let Some(convention) = convention_of(&place, temporal)? else {
                 continue;
             };
-            declare_one(graph, &place, &target, temporal, convention, report)?;
+            declare_one(
+                graph,
+                (&place, &target, temporal, convention),
+                parent_edge.as_deref(),
+                report,
+            )?;
         }
     }
     Ok(())
@@ -259,10 +269,13 @@ pub(super) fn declare_blueprint_temporal(
 
 fn declare_one(
     graph: &mut DirGraph,
-    place: &str,
-    target: &TemporalTarget,
-    temporal: &TemporalSpec,
-    convention: IntervalConvention,
+    (place, target, temporal, convention): (
+        &str,
+        &TemporalTarget,
+        &TemporalSpec,
+        IntervalConvention,
+    ),
+    parent_edge: Option<&str>,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     let (present, written): (bool, Vec<&str>) = match target {
@@ -291,13 +304,13 @@ fn declare_one(
         ));
         return Ok(());
     }
-    let declared = declare_loaded(
+    let grouping = parent_edge.map_or(EntityGrouping::OwnId, EntityGrouping::ParentEdge);
+    let declared = declare_loaded_grouped(
         graph,
         target,
-        &temporal.from,
-        &temporal.to,
-        convention,
+        (&temporal.from, &temporal.to, convention),
         &written,
+        grouping,
     )
     .map_err(|reason| format!("{place}: the temporal declaration is refused: {reason}"))?;
     report.warnings.extend(declared.warning);

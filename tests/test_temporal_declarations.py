@@ -66,7 +66,8 @@ def statuses():
 class TestDeclareAndList:
     def test_node_round_trip(self, statuses):
         rows = _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt', convention: 'half_open'}").to_list()
-        assert rows == [{"declared": True, "rows": 2, "abutting_rows": 1}]
+        # The two statuses have different ids, so the shared day is not an abutment.
+        assert rows == [{"declared": True, "rows": 2, "abutting_rows": 0}]
         assert _declarations(statuses) == [
             {
                 "kind": "node",
@@ -75,7 +76,7 @@ class TestDeclareAndList:
                 "from": "vf",
                 "to": "vt",
                 "convention": "half_open",
-                "abutting_rows": 1,
+                "abutting_rows": 0,
             }
         ]
         undeclared = statuses.cypher("CALL db.temporal.undeclare({node: 'Status'}) YIELD undeclared RETURN undeclared")
@@ -314,9 +315,10 @@ class TestAbutmentWarning:
     def test_closed_declaration_warns_in_result_warnings(self, statuses):
         result = _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt', convention: 'closed'}")
         assert result.warnings == [
-            "1 of 2 rows of node label 'Status' end on the day another row of the same label begins; "
-            "under convention 'closed' both rows are valid on that day. If an end bound is its "
-            "successor's start, declare the interval with convention: 'half_open'."
+            "1 of 2 rows of node label 'Status' end on the day another row with a different node id begins; "
+            "they belong to different entities and may be unrelated, but under convention 'closed' both rows "
+            "are valid on that day. If an end bound is its successor's start, declare the interval with "
+            "convention: 'half_open'."
         ]
 
     def test_half_open_declaration_does_not_warn(self, statuses):
@@ -453,7 +455,7 @@ class TestDescribe:
     def test_node_declaration_attributes(self, statuses):
         _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt', convention: 'half_open'}")
         assert (
-            'temporal_from="vf" temporal_to="vt" temporal_convention="half_open" temporal_abutting="1"'
+            'temporal_from="vf" temporal_to="vt" temporal_convention="half_open" temporal_abutting="0"'
             in statuses.describe()
         )
 

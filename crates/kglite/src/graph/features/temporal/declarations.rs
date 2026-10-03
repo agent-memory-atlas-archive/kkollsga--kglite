@@ -70,8 +70,10 @@ pub struct DeclareReport {
     /// Rows validated. 0 for a no-op, which validates nothing.
     pub rows: usize,
     /// Rows whose `to` bound equals another row's `from` bound within the same
-    /// label (nodes) or the same source node (relationships), counted at
-    /// declare time. `None` when not counted: a no-op, or a disk-mode label
+    /// entity — the node rows sharing an `id`, or one source node's
+    /// relationships of the type — counted at declare time. Rows of different
+    /// entities that share a boundary day are not counted: no reader sees an
+    /// entity twice because of them. `None` when not counted: a no-op, or a disk-mode label
     /// above [`DISK_NODE_ABUTMENT_CAP`] rows.
     pub abutting_rows: Option<usize>,
     /// The advisory a declaration earns, at most one applying: a half-open
@@ -440,7 +442,39 @@ pub fn declare_loaded(
         target,
         (valid_from, valid_to, convention),
         written,
-        true,
+        (true, EntityGrouping::OwnId),
+    )
+}
+
+/// Which node rows are versions of one entity when a declaration counts
+/// abutting rows: only versions of one entity can be valid twice on a shared
+/// boundary day. Relationship targets always group by source node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum EntityGrouping<'a> {
+    /// Rows sharing a node `id`.
+    #[default]
+    OwnId,
+    /// Rows with the same target over this outgoing relationship type — a
+    /// blueprint sub-node's parent edge, whose parent column is not a stored
+    /// property. A row without such an edge groups by its own `id`.
+    ParentEdge(&'a str),
+}
+
+/// [`declare_loaded`] with the node rows grouped by `grouping` when abutting
+/// rows are counted (`grouping` is ignored for a relationship target).
+pub(crate) fn declare_loaded_grouped(
+    graph: &mut DirGraph,
+    target: &TemporalTarget,
+    (valid_from, valid_to, convention): (&str, &str, IntervalConvention),
+    written: &[&str],
+    grouping: EntityGrouping<'_>,
+) -> Result<DeclareReport, String> {
+    declare_walked(
+        graph,
+        target,
+        (valid_from, valid_to, convention),
+        written,
+        (true, grouping),
     )
 }
 
@@ -451,7 +485,7 @@ pub(super) fn declare_walked(
     target: &TemporalTarget,
     (valid_from, valid_to, convention): (&str, &str, IntervalConvention),
     written: &[&str],
-    warn_empty: bool,
+    (warn_empty, grouping): (bool, EntityGrouping<'_>),
 ) -> Result<DeclareReport, String> {
     let config = TemporalConfig {
         valid_from: valid_from.to_string(),
@@ -472,20 +506,22 @@ pub(super) fn declare_walked(
     let Walk {
         rows,
         abutting,
+        abutting_other,
         empty,
         open_ended,
-    } = validate::walk(graph, target, &config, written)?;
+    } = validate::walk(graph, target, &config, written, grouping)?;
     // Empty rows exist only under half-open and abutment warns only under
     // closed; an open-ended `to` leaves no row with two bounds.
     let empty_warning = warn_empty
         .then(|| empty.declaration_warning(target))
         .flatten();
-    let warning = match abutting {
-        Some(count) if count > 0 && convention == IntervalConvention::Closed => {
-            Some(validate::abutment_warning(target, count, rows))
+    let abutment = match abutting {
+        Some(same) if convention == IntervalConvention::Closed => {
+            validate::abutment_warning(target, grouping, (same, abutting_other), rows)
         }
-        _ => empty_warning.or(open_ended),
+        _ => None,
     };
+    let warning = abutment.or(empty_warning).or(open_ended);
     record_insert(graph, target, config, abutting);
     graph.bump_version();
     Ok(DeclareReport {

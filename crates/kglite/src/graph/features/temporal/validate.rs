@@ -1,13 +1,15 @@
 //! The full-column pass a temporal declaration runs before it is stored:
 //! every bound must read under the rule `valid_at` uses, no row may hold an
 //! inverted interval, and two kinds of row are counted: those whose `to`
-//! bound is another row's `from` bound, and those whose interval is empty
-//! under `half_open` (valid at no instant, and kept).
+//! bound is another row's `from` bound within one entity (one source node's
+//! relationships, or the nodes of a label sharing an `id`), and those whose
+//! interval is empty under `half_open` (valid at no instant, and kept).
 //!
 //! The pass streams: nodes are read one property at a time and relationships
 //! through [`GraphRead::get_edge_property`], so disk mode materialises no
 //! records. The only buffers are the bounds of one abutment group — one source
-//! node's relationships of the type, or one node label (capped on disk).
+//! node's relationships of the type, or one node label's rows tagged with an
+//! entity hash (capped on disk).
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -16,7 +18,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::Direction;
 
-use super::declarations::{TemporalTarget, DISK_NODE_ABUTMENT_CAP};
+use super::declarations::{EntityGrouping, TemporalTarget, DISK_NODE_ABUTMENT_CAP};
 use super::eval::{self, BoundSide, Instant, TemporalError};
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::core::value_operations::format_value_compact;
@@ -26,7 +28,13 @@ use crate::graph::storage::{GraphRead, NodeView};
 
 pub(super) struct Walk {
     pub(super) rows: usize,
+    /// Rows abutting another version of the same entity (see
+    /// [`count_abutting_by_entity`]); `None` where not counted.
     pub(super) abutting: Option<usize>,
+    /// Further rows that abut only a row of a different entity of the same
+    /// label: reported in the warning, never in `abutting_rows`. 0 for a
+    /// relationship target and where not counted.
+    pub(super) abutting_other: usize,
     pub(super) empty: EmptyIntervals,
     /// Set when no row carries the `to` property yet (every period is open).
     pub(super) open_ended: Option<String>,
@@ -149,9 +157,10 @@ pub(super) fn walk(
     target: &TemporalTarget,
     config: &TemporalConfig,
     written: &[&str],
+    grouping: EntityGrouping<'_>,
 ) -> Result<Walk, String> {
     let (mut walk, seen) = match target {
-        TemporalTarget::Node(label) => walk_nodes(graph, label, config)?,
+        TemporalTarget::Node(label) => walk_nodes(graph, label, config, grouping)?,
         TemporalTarget::Relationship {
             rel_type,
             source_type,
@@ -288,14 +297,63 @@ fn node_name(graph: &DirGraph, idx: NodeIndex) -> String {
         .map_or_else(|| "?".to_string(), |id| format_value_compact(&id))
 }
 
+/// A hash identifying the entity `idx` is a version of: by default its `id`,
+/// or its parent over a [`EntityGrouping::ParentEdge`]. Hashing keeps the
+/// abutment buffer at one word per row beside the bounds, with no allocation.
+/// A collision can only merge two entities' groups, which at 64 bits is a
+/// negligible chance of one spurious count.
+fn entity_key(graph: &DirGraph, idx: NodeIndex, grouping: EntityGrouping<'_>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let parent = match grouping {
+        EntityGrouping::OwnId => None,
+        EntityGrouping::ParentEdge(rel_type) => {
+            let rel_key = InternedKey::from_str(rel_type);
+            graph
+                .graph
+                .edges_directed_filtered(idx, Direction::Outgoing, Some(rel_key))
+                .find(|edge| edge.connection_type() == rel_key)
+                .map(|edge| edge.target())
+        }
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match parent {
+        Some(parent) => (1u8, parent).hash(&mut hasher),
+        None => (0u8, node_bound(graph, idx, "id")).hash(&mut hasher),
+    }
+    hasher.finish()
+}
+
+/// [`count_abutting`] within each entity of a label — rows grouped by their
+/// [`entity_key`], so a row abuts only another version of the same node — and,
+/// separately, the rows that abut only a row of a different entity.
+pub(super) fn count_abutting_by_entity(mut rows: Vec<(u64, Bounds)>) -> (usize, usize) {
+    let label_wide = {
+        let all: Vec<Bounds> = rows.iter().map(|(_, bounds)| *bounds).collect();
+        count_abutting(&all)
+    };
+    rows.sort_unstable_by_key(|(key, _)| *key);
+    let same_entity: usize = rows
+        .chunk_by(|a, b| a.0 == b.0)
+        .map(|entity| {
+            if entity.len() < 2 {
+                return 0;
+            }
+            let bounds: Vec<Bounds> = entity.iter().map(|(_, bounds)| *bounds).collect();
+            count_abutting(&bounds)
+        })
+        .sum();
+    (same_entity, label_wide - same_entity)
+}
+
 fn walk_nodes(
     graph: &DirGraph,
     label: &str,
     config: &TemporalConfig,
+    grouping: EntityGrouping<'_>,
 ) -> Result<(Walk, Seen), String> {
     let counting =
         !graph.graph.is_disk() || graph.label_cardinality(label) <= DISK_NODE_ABUTMENT_CAP;
-    let mut group: Vec<Bounds> = Vec::new();
+    let mut group: Vec<(u64, Bounds)> = Vec::new();
     let mut seen = Seen::default();
     let mut empty = EmptyIntervals::default();
     let mut visit = |idx: NodeIndex| -> Result<(), String> {
@@ -313,14 +371,19 @@ fn walk_nodes(
             format!("node '{}'", node_name(graph, idx))
         });
         if counting {
-            group.push(bounds);
+            group.push((entity_key(graph, idx, grouping), bounds));
         }
         Ok(())
     };
     for_each_node_row(graph, label, &mut visit)?;
+    let (abutting, abutting_other) = match counting.then(|| count_abutting_by_entity(group)) {
+        Some((same_entity, other)) => (Some(same_entity), other),
+        None => (None, 0),
+    };
     let walk = Walk {
         rows: empty.rows,
-        abutting: counting.then(|| count_abutting(&group)),
+        abutting,
+        abutting_other,
         empty,
         open_ended: None,
     };
@@ -371,6 +434,7 @@ fn walk_edges(
     let walk = Walk {
         rows: empty.rows,
         abutting: Some(abutting),
+        abutting_other: 0,
         empty,
         open_ended: None,
     };
@@ -583,17 +647,49 @@ pub(super) fn count_abutting(group: &[Bounds]) -> usize {
         .count()
 }
 
-pub(super) fn abutment_warning(target: &TemporalTarget, count: usize, rows: usize) -> String {
-    let within = match target {
-        TemporalTarget::Node(_) => "of the same label",
-        TemporalTarget::Relationship { .. } => "from the same source node",
+/// The advisory for a `closed` declaration with abutting rows, or `None`.
+///
+/// `same` rows abut another version of their own entity (a node id, a parent,
+/// a source node): both are valid on that day. `other` rows abut only a row of
+/// a different entity of the label, which the engine cannot tell from
+/// coincidence, so they are worded as possibly unrelated and never counted as
+/// `abutting_rows`.
+pub(super) fn abutment_warning(
+    target: &TemporalTarget,
+    grouping: EntityGrouping<'_>,
+    (same, other): (usize, usize),
+    rows: usize,
+) -> Option<String> {
+    let (within, different) = match (target, grouping) {
+        (TemporalTarget::Node(_), EntityGrouping::OwnId) => {
+            ("row with the same node id", "row with a different node id")
+        }
+        (TemporalTarget::Node(_), EntityGrouping::ParentEdge(_)) => (
+            "row of the same parent node",
+            "row of a different parent node",
+        ),
+        (TemporalTarget::Relationship { .. }, _) => ("row from the same source node", ""),
     };
-    format!(
-        "{count} of {rows} rows of {} end on the day another row {within} begins; under \
-         convention 'closed' both rows are valid on that day. If an end bound is its \
-         successor's start, declare the interval with convention: 'half_open'.",
-        target.describe()
-    )
+    let describe = target.describe();
+    let advice = "If an end bound is its successor's start, declare the interval with \
+                  convention: 'half_open'.";
+    match (same, other) {
+        (0, 0) => None,
+        (0, other) => Some(format!(
+            "{other} of {rows} rows of {describe} end on the day another {different} begins; \
+             they belong to different entities and may be unrelated, but under convention \
+             'closed' both rows are valid on that day. {advice}"
+        )),
+        (same, 0) => Some(format!(
+            "{same} of {rows} rows of {describe} end on the day another {within} begins; \
+             under convention 'closed' both rows are valid on that day. {advice}"
+        )),
+        (same, other) => Some(format!(
+            "{same} of {rows} rows of {describe} end on the day another {within} begins; \
+             under convention 'closed' both rows are valid on that day. A further {other} \
+             end on the day a {different} begins and may be unrelated. {advice}"
+        )),
+    }
 }
 
 #[cfg(test)]

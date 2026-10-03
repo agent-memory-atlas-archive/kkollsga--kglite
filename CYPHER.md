@@ -1553,9 +1553,12 @@ CALL db.temporal.declarations()
 - **Re-declaring** the same target with the same properties and convention is
   a no-op (`declared: false`); different ones are refused until the target is
   undeclared.
-- **`abutting_rows`** counts rows whose `to` equals another row's `from` in
-  the same label, or among the relationships of one source node, at declare
-  time. Under `closed` both such rows are valid on that day, so a non-zero
+- **`abutting_rows`** counts rows whose `to` equals another row's `from`
+  within one entity at declare time: among the relationships of one source
+  node, or among the node rows of a label that share an `id` (a blueprint
+  sub-node with `parent_fk` counts within one parent). Rows of different
+  entities that share a date are not counted; under `closed` the warning
+  mentions them separately as possibly unrelated. Under `closed` both such rows are valid on that day, so a non-zero
   count adds a query warning suggesting `half_open`. On a disk-mode graph the
   count is skipped (NULL) for a node label above 250,000 rows.
 - **Saved with the graph.** Declarations, conventions and declare-time

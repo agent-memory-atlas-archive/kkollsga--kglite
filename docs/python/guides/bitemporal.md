@@ -180,7 +180,8 @@ redelivered = graph.add_relationships(part_of, "PART_OF", "Team", "team", "Depar
 Close or correct a stored relationship period with Cypher `SET` when that is
 what you mean. `db.temporal.declarations()` lists what is declared. Its
 `abutting_rows` counts the rows whose `valid_to` is another row's
-`valid_from`, which is the transfer chain showing through, and its
+`valid_from` within one entity, which is a transfer chain showing through (here
+only a relationship's, since every `Assignment` has its own id), and its
 `empty_rows` counts the rows valid at no instant, here the zero-length
 assignment:
 
@@ -189,7 +190,7 @@ graph.cypher("""
     CALL db.temporal.declarations() YIELD kind, name, convention, abutting_rows, empty_rows
     RETURN kind, name, convention, abutting_rows, empty_rows
 """).to_list()
-# [{'kind': 'node', 'name': 'Assignment', 'convention': 'half_open', 'abutting_rows': 1, 'empty_rows': 1},
+# [{'kind': 'node', 'name': 'Assignment', 'convention': 'half_open', 'abutting_rows': 0, 'empty_rows': 1},
 #  {'kind': 'relationship', 'name': 'PART_OF', 'convention': 'half_open', 'abutting_rows': 0, 'empty_rows': 0}]
 ```
 

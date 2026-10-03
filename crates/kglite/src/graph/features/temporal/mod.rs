@@ -38,6 +38,7 @@ pub use declarations::{
     declare, declare_loaded, edge_configs, list, node_config, undeclare, DeclarationInfo,
     DeclareReport, TemporalTarget, DISK_NODE_ABUTMENT_CAP,
 };
+pub(crate) use declarations::{declare_loaded_grouped, EntityGrouping};
 pub use default_instant::ValidTimeDefault;
 pub use eval::IntervalConvention;
 pub(crate) use loader::{adopt_declarations, settle_adopted, withdraw_adopted};

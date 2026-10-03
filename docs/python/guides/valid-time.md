@@ -116,6 +116,25 @@ graph.cypher(ADA_TEAMS, valid_at="2024-06-01").to_list()
 ```
 
 Every headcount or total taken on a boundary day double-counts the same way.
+
+**What counts as abutting.** Only versions of one entity can be valid twice on
+a boundary day, so the count compares rows within one entity. A relationship
+type compares the relationships of one source node. A node label compares rows
+that share an `id`: two `Team` nodes with different ids that share a date are
+different teams and are not counted, however many dates they share. A
+blueprint sub-node with `parent_fk` compares the sub-nodes of one parent, which
+is the entity its versions hang from. `abutting_rows`, the warning and the
+`describe()` annotation all use this count; a node label whose versions carry
+distinct ids and no parent edge reports 0, because the engine has no way to
+tell which rows belong together.
+
+Under `closed`, rows that end on the day a row of a *different* entity begins
+are not counted, but a declaration that finds them says so once, worded as
+possibly unrelated ("2 of 3 rows of node label 'Project' end on the day another
+row with a different node id begins; they belong to different entities and may
+be unrelated, but under convention 'closed' both rows are valid on that
+day"). If those rows are successive versions of one thing, give them a shared
+id, or declare `half_open`; if they are unrelated, the note can be ignored.
 Section 9 lists what a declaration accepts and refuses.
 
 ## 2. Ask as of an instant
@@ -568,8 +587,9 @@ stored relationships as a new version rather than updating one;
 {doc}`bitemporal` shows this on a change feed.
 
 **What `CALL db.temporal.declarations()` reports.** Every declaration with its
-convention, the rows that abut at declare time (here 1 `Team`, 2 `MEMBER_OF`,
-1 `PART_OF` and 1 `REPORTS_TO` row) and, counted at the graph's current state,
+convention, the rows that abut at declare time (here 2 `MEMBER_OF`, 1
+`PART_OF` and 1 `REPORTS_TO` row, and none for `Team`) and, counted at the
+graph's current state,
 the rows the declaration would refuse, which only a writer the check does not
 judge leaves: a fluent `update()`, an undeclare that hands a source type's
 relationships to the unkeyed declaration, or a graph saved by an earlier

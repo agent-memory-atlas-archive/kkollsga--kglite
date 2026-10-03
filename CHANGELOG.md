@@ -51,6 +51,15 @@ before upgrading.
 
 ### Changed
 
+- The validity declaration's abutment count and warning compare versions of one
+  entity. A node label counts rows that share an `id`, so two projects whose
+  phases share a boundary date are no longer counted or warned about as one
+  entity's succession (a `closed` declaration still mentions them once, worded
+  as possibly unrelated); a blueprint sub-node with `parent_fk` counts within
+  one parent. `abutting_rows` (the declare report, `db.temporal.declarations()`,
+  `describe()`) therefore reports 0 for a label whose versions carry distinct
+  ids and no parent edge. A relationship type still compares one source node's
+  relationships.
 - **Breaking: on a graph that declares validity, a statement with no context
   now runs as of today (UTC).** A graph with a validity declaration answers
   every read statement that writes no `FOR VALID_TIME` prefix as
