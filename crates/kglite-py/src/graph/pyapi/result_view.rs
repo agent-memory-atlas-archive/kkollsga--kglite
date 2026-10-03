@@ -945,6 +945,8 @@ fn temporal_dict(
     dict.set_item("axis", &echo.axis)?;
     dict.set_item("instant", &echo.instant)?;
     dict.set_item("targets", echo.targets.clone())?;
+    dict.set_item("hidden", echo.hidden.clone())?;
+    dict.set_item("endpoint_invalid", echo.endpoint_invalid)?;
     dict.set_item("route", &echo.route)?;
     dict.set_item("retrieval", &echo.retrieval)?;
     dict.set_item("slice", echo.slice)?;

@@ -177,9 +177,20 @@ as_of_2016 = graph.freeze(valid_at="2016-06-30")
 as_of_2016.cypher("MATCH (t:Team) RETURN t.title AS team").to_list()
 # [{'team': 'Ops'}]
 graph.cypher("MATCH (t:Team) RETURN count(*) AS n", valid_at="2016-06-30").diagnostics["temporal"]
-# {'axis': 'VALID_TIME', 'instant': '2016-06-30', 'targets': ['(:Team)'], 'route': 'guarded',
-#  'retrieval': None, 'slice': False, 'session_version': 22}
+# {'axis': 'VALID_TIME', 'instant': '2016-06-30', 'targets': ['(:Team)'], 'hidden': {'(:Team)': 3},
+#  'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 22}
 ```
+
+`hidden` says how much the context removed: per target, the rows it governs
+that are not valid at the instant (`'(:Team)': 3`; a relationship target reads
+`'[:MEMBER_OF]'`, or `'[:MEMBER_OF from :Employee]'` when declared per
+source type). `endpoint_invalid` counts the relationships that are valid by their own dates but hidden because an endpoint is not valid then.
+They are in no `hidden` entry, and they are the ones that vanish silently: a
+membership that starts four days before its team does is gone from every
+as-of answer until the team starts. A target answered by property guards, as
+on a Disk graph, has no `hidden` entry and `endpoint_invalid` is `None`. Both
+are read from the endpoint indexes and cached per instant, so they are always
+on.
 
 **No context means every version.** A statement without the prefix sees the
 whole history, as the undated manager chain shows, and so does a Neo4j-style

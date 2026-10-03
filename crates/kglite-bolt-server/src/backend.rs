@@ -1341,6 +1341,20 @@ fn temporal_metadata(echo: &kglite::api::cypher::TemporalDiagnostics) -> BoltVal
             "targets".into(),
             BoltValue::List(echo.targets.iter().map(|t| text(t)).collect()),
         ),
+        (
+            "hidden".into(),
+            BoltValue::Dict(
+                echo.hidden
+                    .iter()
+                    .map(|(target, count)| (target.clone(), BoltValue::Integer(*count as i64)))
+                    .collect(),
+            ),
+        ),
+        (
+            "endpoint_invalid".into(),
+            echo.endpoint_invalid
+                .map_or(BoltValue::Null, |n| BoltValue::Integer(n as i64)),
+        ),
         ("route".into(), text(&echo.route)),
         (
             "retrieval".into(),

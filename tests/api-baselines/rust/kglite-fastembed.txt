@@ -1060,6 +1060,8 @@ impl core::fmt::Debug for kglite::api::cypher::ReturnItem
 pub fn kglite::api::cypher::ReturnItem::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::cypher::TemporalDiagnostics
 pub kglite::api::cypher::TemporalDiagnostics::axis: alloc::string::String
+pub kglite::api::cypher::TemporalDiagnostics::endpoint_invalid: core::option::Option<usize>
+pub kglite::api::cypher::TemporalDiagnostics::hidden: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
 pub kglite::api::cypher::TemporalDiagnostics::instant: alloc::string::String
 pub kglite::api::cypher::TemporalDiagnostics::retrieval: core::option::Option<alloc::string::String>
 pub kglite::api::cypher::TemporalDiagnostics::route: alloc::string::String

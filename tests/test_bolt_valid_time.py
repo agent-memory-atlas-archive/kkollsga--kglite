@@ -37,6 +37,9 @@ def test_the_summary_carries_the_valid_time_echo(served):
     assert echo["axis"] == "VALID_TIME"
     assert echo["instant"] == "2008-01-01"
     assert echo["targets"] == ["(:Stop)"]
+    # Stop 2 has closed; the statement names no relationship, so no edge is judged.
+    assert echo["hidden"] == {"(:Stop)": 1}
+    assert echo["endpoint_invalid"] == 0
     assert echo["route"] == "guarded"
     assert echo["retrieval"] is None
     assert echo["slice"] is False
@@ -44,6 +47,13 @@ def test_the_summary_carries_the_valid_time_echo(served):
 
     plain = served.run("MATCH (s:Stop) RETURN s.id AS id").consume()
     assert "kglite.temporal" not in plain.metadata
+
+    # The hop judges the relationship target: the two 2000-2005 links are hidden
+    # by their own bounds, and the two links touching the closed stop 2 by it.
+    hop = served.run(AT + "MATCH (a:Stop)-[:LINK]->(b:Stop) RETURN count(*) AS n")
+    echo = hop.consume().metadata["kglite.temporal"]
+    assert echo["hidden"] == {"(:Stop)": 1, "[:LINK]": 2}
+    assert echo["endpoint_invalid"] == 2
 
 
 @pytest.mark.parametrize("shape", STREAMING_SHAPES)

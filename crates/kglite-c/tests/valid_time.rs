@@ -81,6 +81,9 @@ fn the_diagnostics_json_carries_the_valid_time_echo() {
     assert_eq!(echo["axis"], "VALID_TIME");
     assert_eq!(echo["instant"], "2003-06-30");
     assert_eq!(echo["targets"], serde_json::json!(["(:Well)"]));
+    // Well 2 has not started at the instant.
+    assert_eq!(echo["hidden"], serde_json::json!({"(:Well)": 1}));
+    assert_eq!(echo["endpoint_invalid"], 0);
     assert_eq!(echo["route"], "guarded");
     assert_eq!(echo["retrieval"], serde_json::Value::Null);
     assert_eq!(echo["slice"], false);

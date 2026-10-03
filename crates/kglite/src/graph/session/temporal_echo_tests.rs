@@ -59,6 +59,8 @@ fn a_filtering_context_echoes_its_instant_targets_and_the_guarded_route() {
             axis: "VALID_TIME".into(),
             instant: "2003-06-30".into(),
             targets: vec!["(:Well)".into()],
+            hidden: [("(:Well)".to_string(), 1)].into(),
+            endpoint_invalid: Some(0),
             route: "guarded".into(),
             retrieval: None,
             slice: false,
@@ -165,6 +167,8 @@ fn a_view_echoes_the_view_route_and_serializes_the_echo() {
             "axis": "VALID_TIME",
             "instant": "2003-06-30",
             "targets": ["(:Well)"],
+            "hidden": {"(:Well)": 1},
+            "endpoint_invalid": 0,
             "route": "view",
             "retrieval": null,
             "slice": false,
@@ -182,4 +186,143 @@ fn a_view_echoes_the_view_route_and_serializes_the_echo() {
         err.to_string().contains("already as of date('2003-06-30')"),
         "{err}"
     );
+}
+
+/// An org chart where each declaration is `convention`: departments `d1`
+/// (to 2010-12-31), `d2` (from 2011-01-01), `d3` (from 2020-01-01);
+/// employees `e1` (from 2005-01-01), `e2` (from 2013-01-01), `e3` (2012-01-01
+/// to 2012-06-30); six `ASSIGNED` edges, each declared per source type.
+fn org_chart(convention: &str) -> DirGraph {
+    let mut graph = DirGraph::new();
+    let edge = |name: &str, e: &str, d: &str, from: &str, to: Option<&str>| {
+        let to = to.map_or(String::new(), |to| format!(", to: date('{to}')"));
+        format!(
+            "MATCH (e:Employee {{id: '{e}'}}), (d:Department {{id: '{d}'}}) \
+             CREATE (e)-[:ASSIGNED {{name: '{name}', from: date('{from}'){to}}}]->(d)"
+        )
+    };
+    let mut statements = vec![
+        "CREATE (:Department {id: 'd1', f: date('2000-01-01'), t: date('2010-12-31')}), \
+         (:Department {id: 'd2', f: date('2011-01-01')}), \
+         (:Department {id: 'd3', f: date('2020-01-01')}), \
+         (:Employee {id: 'e1', f: date('2005-01-01')}), \
+         (:Employee {id: 'e2', f: date('2013-01-01')}), \
+         (:Employee {id: 'e3', f: date('2012-01-01'), t: date('2012-06-30')})"
+            .to_string(),
+        // Valid, valid endpoints.
+        edge("a1", "e1", "d2", "2011-01-01", None),
+        // Valid, but the department has ended.
+        edge("a2", "e1", "d1", "2005-01-01", None),
+        edge("a3", "e3", "d2", "2012-01-01", Some("2012-12-31")),
+        // Not yet started.
+        edge("a4", "e1", "d2", "2015-01-01", None),
+        // Valid, but the employee has not started.
+        edge("a5", "e2", "d2", "2012-01-01", None),
+        // Valid, with neither endpoint valid.
+        edge("a6", "e2", "d3", "2012-01-01", None),
+    ];
+    for (label, bounds) in [("Department", "f"), ("Employee", "f")] {
+        statements.push(format!(
+            "CALL db.temporal.declare({{node: '{label}', from: '{bounds}', to: 't', \
+             convention: '{convention}'}}) YIELD declared RETURN declared"
+        ));
+    }
+    statements.push(format!(
+        "CALL db.temporal.declare({{relationship: 'ASSIGNED', source_type: 'Employee', \
+         from: 'from', to: 'to', convention: '{convention}'}}) YIELD declared RETURN declared"
+    ));
+    for statement in &statements {
+        run(&mut graph, statement);
+    }
+    graph
+}
+
+const ASSIGNED_QUERY: &str = "MATCH (e:Employee)-[:ASSIGNED]->(d:Department) RETURN e.id";
+
+fn counts_at(graph: &DirGraph, instant: &str) -> TemporalDiagnostics {
+    echo(
+        graph,
+        &format!("FOR VALID_TIME AS OF date('{instant}') {ASSIGNED_QUERY}"),
+    )
+    .expect("a context echoes")
+}
+
+#[test]
+fn the_echo_counts_hidden_rows_per_target_and_endpoint_invalid_edges() {
+    let graph = org_chart("closed");
+    let echo = counts_at(&graph, "2012-06-15");
+    let hidden: Vec<_> = echo.hidden.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        hidden,
+        [
+            ("(:Department)", 2),
+            ("(:Employee)", 1),
+            ("[:ASSIGNED from :Employee]", 1),
+        ]
+    );
+    // a2 (department ended), a5 (employee not started), a6 (both): one each.
+    assert_eq!(echo.endpoint_invalid, Some(3));
+    // The visible rows are what is left: a1 and a3.
+    let params = HashMap::new();
+    let rows = execute_read(
+        &graph,
+        &format!("FOR VALID_TIME AS OF date('2012-06-15') {ASSIGNED_QUERY}"),
+        &ExecuteOptions::eager(&params),
+    )
+    .unwrap()
+    .result
+    .rows;
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn the_counts_follow_the_convention_on_the_boundary_day() {
+    // 2010-12-31 is the last day `d1` is valid under `closed` and its first
+    // day gone under `half_open`.
+    let closed = counts_at(&org_chart("closed"), "2010-12-31");
+    assert_eq!(closed.hidden["(:Department)"], 2);
+    assert_eq!(closed.hidden["[:ASSIGNED from :Employee]"], 5);
+    assert_eq!(closed.endpoint_invalid, Some(0));
+    let half_open = counts_at(&org_chart("half_open"), "2010-12-31");
+    assert_eq!(half_open.hidden["(:Department)"], 3);
+    assert_eq!(half_open.hidden["[:ASSIGNED from :Employee]"], 5);
+    assert_eq!(half_open.endpoint_invalid, Some(1));
+}
+
+#[test]
+fn a_timeless_instant_reports_zero_hidden_and_no_endpoint_invalid() {
+    let graph = wells();
+    let echo = echo(
+        &graph,
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH (w:Well) RETURN w.id",
+    )
+    .unwrap();
+    assert_eq!(echo.route, "plain");
+    assert_eq!(echo.hidden["(:Well)"], 0);
+    assert_eq!(echo.endpoint_invalid, Some(0));
+}
+
+#[test]
+fn a_statement_naming_no_declared_label_has_no_counts() {
+    let graph = wells();
+    let echo = echo(
+        &graph,
+        "FOR VALID_TIME AS OF date('2003-06-30') MATCH (f:Field) RETURN f.id",
+    )
+    .unwrap();
+    assert!(echo.targets.is_empty());
+    assert!(echo.hidden.is_empty());
+    assert_eq!(echo.endpoint_invalid, Some(0));
+}
+
+#[test]
+fn the_counts_refresh_when_the_graph_changes() {
+    let mut graph = org_chart("closed");
+    assert_eq!(counts_at(&graph, "2012-06-15").endpoint_invalid, Some(3));
+    run(
+        &mut graph,
+        "MATCH (d:Department {id: 'd1'}) SET d.t = date('2030-01-01')",
+    );
+    // d1 now covers 2012: a2 is visible.
+    assert_eq!(counts_at(&graph, "2012-06-15").endpoint_invalid, Some(2));
 }

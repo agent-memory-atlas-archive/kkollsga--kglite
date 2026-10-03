@@ -9,6 +9,22 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- The valid-time echo (`diagnostics["temporal"]`, the MCP `temporal:` line,
+  Bolt's `kglite.temporal` key, the C / Java diagnostics JSON) now says how
+  much the context removed. `hidden` maps each target to the rows it governs
+  that are not valid at the instant (`{"(:Licence)": 1212,
+  "[:HAS_LICENSEE from :Licence]": 30411}`), and `endpoint_invalid` counts the
+  relationships that are valid by their own bounds but hidden because an
+  endpoint node is not valid, the case where a membership starting before its
+  entity silently disappears from an as-of answer. Both are read from the
+  endpoint indexes and cached per instant; a target answered by property
+  guards (Disk mode, an unreadable bound) has no `hidden` entry and
+  `endpoint_invalid` is `None` / null. Rust API: `TemporalDiagnostics` gains
+  the public fields `hidden` and `endpoint_invalid`, so a struct literal of it
+  no longer compiles.
+
 ### Changed
 
 - A blueprint sub-node that declares `parent_fk` now gets an implicit

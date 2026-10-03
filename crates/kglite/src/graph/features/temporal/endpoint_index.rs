@@ -72,6 +72,7 @@ use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard, Weak};
 
 use chrono::{Datelike, NaiveDate};
 use fixedbitset::FixedBitSet;
+use petgraph::graph::EdgeIndex;
 
 use super::declarations::TemporalTarget;
 use super::duplicate_ids::DuplicateIds;
@@ -109,6 +110,8 @@ const PEAK_BYTES_PER_EMPTY: usize = 2 * size_of::<u32>();
 const MIN_RESERVE: usize = 16;
 /// The most masks cached at once; the byte cap may hold fewer.
 const MAX_CACHED_MASKS: usize = 8;
+/// The most endpoint-invalid counts cached at once.
+const MAX_CACHED_INVALID: usize = 8;
 
 fn day_start(date: NaiveDate) -> i64 {
     (i64::from(date.num_days_from_ce()) - EPOCH_DAYS_FROM_CE) * DAY_US
@@ -202,6 +205,12 @@ impl EndpointIndex {
         for &slot in not_started.iter().chain(ended).chain(&self.empty_slots) {
             mask.set(slot as usize, false);
         }
+    }
+
+    /// Slots of every governed row that is not empty: the ones with a
+    /// `from` key, whatever their validity.
+    fn nonempty_slots(&self) -> &[u32] {
+        &self.from_slots
     }
 
     fn bytes(&self) -> usize {
@@ -532,6 +541,9 @@ pub(crate) struct IndexCache {
     /// keeps a mask alive after the LRU drops it; the weak entry lets a query
     /// whose key the view's covers reuse it ([`is_covered_by`]).
     pinned: Vec<(SegmentKey, Weak<ElementMasks>)>,
+    /// [`FilteredCounts::endpoint_invalid`] per segment key, oldest first;
+    /// a few `usize`s, so outside the byte cap.
+    endpoint_invalid: VecDeque<(SegmentKey, usize)>,
     /// Materialised valid slices, oldest first, under their own byte cap
     /// (see [`super::slice`]).
     slices: VecDeque<(SliceKey, Arc<ValidSlice>)>,
@@ -562,6 +574,7 @@ impl IndexCache {
     fn clear(&mut self) {
         self.targets.clear();
         self.masks.clear();
+        self.endpoint_invalid.clear();
         self.pinned.clear();
         self.slices.clear();
         self.duplicates.clear();
@@ -858,6 +871,106 @@ pub(crate) fn resolve(
         guarded,
         timeless,
     }
+}
+
+/// What a valid-time filter at one instant removes, for the echo
+/// ([`crate::graph::languages::cypher::result::TemporalDiagnostics`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct FilteredCounts {
+    /// Per indexed target, the rows it governs that are not valid at the
+    /// instant, judged by the target's own bounds alone. A target kept on
+    /// property guards (Disk mode, an unreadable bound, the byte cap) has no
+    /// entry.
+    pub(crate) hidden: Vec<(TemporalTarget, usize)>,
+    /// Relationships valid by their own bounds whose source or target node is
+    /// not valid, so the filter hides them too. `None` when a target of the
+    /// template is not indexed, so the nodes' validity cannot be read from
+    /// masks.
+    pub(crate) endpoint_invalid: Option<usize>,
+}
+
+/// The rows `template`'s targets hide at `t`: per target from two binary
+/// searches, and the relationships hidden only through an endpoint from one
+/// pass over the declared relationships' rows, cached per segment key.
+pub(crate) fn filtered_counts(
+    graph: &DirGraph,
+    template: &GuardTemplate,
+    t: Instant,
+) -> FilteredCounts {
+    let mut counts = FilteredCounts::default();
+    let mut key = SegmentKey::new();
+    let mut parts = Vec::new();
+    let mut complete = true;
+    for (target, config) in template_targets(graph, template) {
+        let indexed = config.and_then(|config| {
+            let index = index(graph, &target, config).ok()?;
+            let segment = index.segment_of(t)?;
+            Some((index, segment))
+        });
+        let Some((index, segment)) = indexed else {
+            complete = false;
+            continue;
+        };
+        counts
+            .hidden
+            .push((target.clone(), index.rows() - index.count(segment)));
+        let edge = matches!(target, TemporalTarget::Relationship { .. });
+        key.push((target, segment));
+        parts.push((index, segment, edge));
+    }
+    if complete {
+        counts.endpoint_invalid = Some(endpoint_invalid(graph, &key, &parts));
+    }
+    counts
+}
+
+/// Relationships of `parts`' edge targets valid by their own bounds with an
+/// endpoint the node targets of `parts` hide.
+fn endpoint_invalid(
+    graph: &DirGraph,
+    key: &SegmentKey,
+    parts: &[(Arc<EndpointIndex>, Segment, bool)],
+) -> usize {
+    let hides_nodes = parts
+        .iter()
+        .any(|(index, segment, edge)| !edge && index.count(*segment) != index.rows());
+    if !hides_nodes || !parts.iter().any(|(_, _, edge)| *edge) {
+        return 0;
+    }
+    if let Some(hit) = write_cache(graph)
+        .get_or_insert_with(IndexCache::default)
+        .at(graph.version())
+        .endpoint_invalid
+        .iter()
+        .find_map(|(k, n)| (k == key).then_some(*n))
+    {
+        return hit;
+    }
+    let masks = build_masks(graph, parts);
+    let mut invalid = 0;
+    for (index, _, _) in parts.iter().filter(|(_, _, edge)| *edge) {
+        for &slot in index.nonempty_slots() {
+            if !masks.edges.contains(slot as usize) {
+                continue;
+            }
+            let Some((source, target)) = graph.graph.edge_endpoints(EdgeIndex::new(slot as usize))
+            else {
+                continue;
+            };
+            if !masks.nodes.contains(source.index()) || !masks.nodes.contains(target.index()) {
+                invalid += 1;
+            }
+        }
+    }
+    let mut write = write_cache(graph);
+    let cache = write
+        .get_or_insert_with(IndexCache::default)
+        .at(graph.version());
+    if cache.endpoint_invalid.len() >= MAX_CACHED_INVALID {
+        cache.endpoint_invalid.pop_front();
+    }
+    cache.endpoint_invalid.push_back((key.clone(), invalid));
+    invalid
 }
 
 /// The masks for `key`, from the cache — an entry or a view's pin whose key

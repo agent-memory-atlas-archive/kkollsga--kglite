@@ -32,6 +32,7 @@ use crate::graph::core::graph_filter::{
     EdgeGuard, ElementFilter, GraphFilter, GuardTemplate, TemplateScope, ValidTimeSelector,
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
+use crate::graph::features::temporal::declarations::TemporalTarget;
 use crate::graph::features::temporal::{self, eval};
 use crate::graph::schema::DirGraph;
 
@@ -302,6 +303,15 @@ fn resolve_instant(
     eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))
 }
 
+/// A relationship target as the echo names it: `[:LICENSEE]` or
+/// `[:LICENSEE from :Field]`.
+fn target_name(rel_type: &str, source_type: Option<&str>) -> String {
+    match source_type {
+        Some(source) => format!("[:{rel_type} from :{source}]"),
+        None => format!("[:{rel_type}]"),
+    }
+}
+
 /// The valid-time echo for `query` on this execution — the instant it
 /// resolves to and the declared targets its scopes reach — answered by
 /// `route`. `None` without a context, and when the instant does not resolve
@@ -317,10 +327,25 @@ pub(crate) fn temporal_echo(
     let mut template = GuardTemplate::default();
     merge_scope_templates(query, &mut template);
     let nodes = template.nodes.iter().map(|n| format!("(:{})", n.label));
-    let edges = template.edges.iter().map(|e| match &e.source_type {
-        Some(source) => format!("[:{} from :{source}]", e.rel_type),
-        None => format!("[:{}]", e.rel_type),
-    });
+    let edges = template
+        .edges
+        .iter()
+        .map(|e| target_name(&e.rel_type, e.source_type.as_deref()));
+    let counts = temporal::endpoint_index::filtered_counts(graph, &template, instant);
+    let hidden = counts
+        .hidden
+        .into_iter()
+        .map(|(target, count)| {
+            let name = match target {
+                TemporalTarget::Node(label) => format!("(:{label})"),
+                TemporalTarget::Relationship {
+                    rel_type,
+                    source_type,
+                } => target_name(&rel_type, source_type.as_deref()),
+            };
+            (name, count)
+        })
+        .collect();
     Some(TemporalDiagnostics {
         axis: context.axis.to_ascii_uppercase(),
         instant: match instant {
@@ -328,6 +353,8 @@ pub(crate) fn temporal_echo(
             eval::Instant::Timestamp(ts) => ts.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
         },
         targets: nodes.chain(edges).collect(),
+        hidden,
+        endpoint_invalid: counts.endpoint_invalid,
         route: route.to_string(),
         retrieval: None,
         slice: false,

@@ -586,7 +586,16 @@ class ResultView:
           scope, including labels widened in through secondary labels — a
           ``(:A)`` pattern lists ``(:B)`` too when the nodes it may reach can
           carry a declared ``B`` — without bounds: ``'(:Well)'``,
-          ``'[:LICENSEE from :Field]'``); ``route``
+          ``'[:LICENSEE from :Field]'``); ``hidden`` (per target in ``targets``,
+          how many of the rows it governs are not valid at the instant, by
+          that target's own bounds — ``{'(:Licence)': 1212,
+          '[:HAS_LICENSEE from :Licence]': 30411}``; a target answered by
+          property guards, as on Disk graphs, has no entry);
+          ``endpoint_invalid`` (relationships valid by their own bounds that
+          the context hides because an endpoint node is not valid, counted
+          in no ``hidden`` entry — a licensee period that starts before its
+          licence is granted; ``None`` when a target is answered by property
+          guards); ``route``
           (``'guarded'`` — filtered, the plan ``EXPLAIN`` shows; ``'plain'``
           — every declared target was valid in full at the instant, so the
           unfiltered plan ran; ``'view'`` — through a

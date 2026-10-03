@@ -883,7 +883,8 @@ fn valid_at_prepends_the_context_prefix() {
     let rows_of = |text: &str| text.split("\n\n").next().unwrap().to_string();
     assert_eq!(rows_of(&during.text), rows_of(&plain.text));
     assert!(
-        during.text.contains("\"route\":\"plain\""),
+        during.text.contains("\"route\":\"plain\"")
+            && during.text.contains("\"hidden\":{\"(:Vessel)\":0}"),
         "{}",
         during.text
     );
@@ -900,6 +901,8 @@ fn valid_at_prepends_the_context_prefix() {
     assert!(
         output.text.contains("temporal: {")
             && output.text.contains("\"instant\":\"1990-06-30\"")
+            && output.text.contains("\"hidden\":{\"(:Vessel)\":1}")
+            && output.text.contains("\"endpoint_invalid\":0")
             && output.text.contains("\"route\":\"guarded\""),
         "{}",
         output.text

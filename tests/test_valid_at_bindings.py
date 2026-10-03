@@ -87,6 +87,8 @@ def test_the_echo_names_the_instant_the_targets_and_the_route(wells, name):
     assert echo["axis"] == "VALID_TIME"
     assert echo["instant"] == T
     assert echo["targets"] == ["(:Well)"]
+    assert echo["hidden"] == {"(:Well)": 1}
+    assert echo["endpoint_invalid"] == 0
     assert echo["route"] == "guarded"
     assert echo["retrieval"] is None
     assert echo["slice"] is False

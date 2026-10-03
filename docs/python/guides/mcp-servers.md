@@ -75,7 +75,7 @@ The server speaks MCP over stdio and exposes three tools out of the box:
 - `cypher_query(query)` — runs any Cypher query; inline result up to
   15 rows, append `FORMAT CSV` for a localhost-served file export. An
   optional `valid_at` (an ISO date or datetime) runs it as of that instant
-  behind the `FOR VALID_TIME AS OF` prefix; the `temporal:` line echoes it.
+  behind the `FOR VALID_TIME AS OF` prefix; the `temporal:` line echoes it, with the rows each declared target hid (`hidden`) and the relationships hidden only through an invalid endpoint (`endpoint_invalid`).
 - `ping(message?)` — liveness probe; echoes the message or returns `pong`.
 
 Want semantic search (`text_score()` inside Cypher) or source-file

@@ -512,13 +512,13 @@ reading it covers no day at all.
 ### The echo, and the other bindings
 
 Each result echoes its valid-time context in `diagnostics["temporal"]`: the
-instant, the declared targets the filter judged and the route it took. The
+instant, the declared targets the filter judged, how many rows each hid and the route it took. The
 recording test is ordinary `WHERE` text and does not appear there:
 
 ```python
 graph.cypher(AS_KNOWN, params={"tt": "2024-06-15"}, valid_at="2024-07-01").diagnostics["temporal"]
-# {'axis': 'VALID_TIME', 'instant': '2024-07-01', 'targets': ['(:Assignment)'], 'route': 'guarded',
-#  'retrieval': None, 'slice': False, 'session_version': 24}
+# {'axis': 'VALID_TIME', 'instant': '2024-07-01', 'targets': ['(:Assignment)'], 'hidden': {'(:Assignment)': 2},
+#  'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 24}
 ```
 
 The other bindings follow the same rule. Java passes a `ValidAt` to `query`,
