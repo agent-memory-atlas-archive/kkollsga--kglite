@@ -41,7 +41,11 @@ before upgrading.
   1.3 ms. On the temporal benchmark's agent cells the cost of the context
   relative to a graph holding only the as-of slice fell from 7.1x to 2.3x
   (`count(*)` per field) and from 6.1x to 1.9x (`count(r)` per company).
-  Two-hop (5-element) patterns, the `WITH` form, optional matches and the
+  The `WITH` form (`MATCH (w:T)-[:R]->(f:U) WITH f, count(w) AS n RETURN ...
+  ORDER BY n DESC LIMIT k`, the two-`MATCH` variant and the top-k absorption)
+  keeps its fused plan under a context as well: on the same graph the
+  wellbores-per-field `WITH` top-10 went from 45-68 ms to 0.15-0.16 ms
+  (0.13 ms undated). Two-hop (5-element) patterns, optional matches and the
   anchored edge count still run unfused under a context.
 
 ### Fixed
