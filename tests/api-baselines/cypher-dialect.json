@@ -196,10 +196,11 @@
       "case_ids": [
         "call.standalone_bare",
         "call.standalone_yield_alias",
+        "call.yield_star",
         "call.procedure_per_row",
         "call.procedure_empty_input"
       ],
-      "note": "Procedure invocation. A standalone CALL without YIELD returns every declared column in declared order and must be the entire statement; combined with any other clause, YIELD is required. Ordinary procedures evaluate parameters once per incoming row and inner-join yielded columns with that row; multiple results multiply it, zero results drop it, and an empty input stays empty. Result columns follow YIELD order (alias-or-name), may not overwrite an outer binding, and a leading zero-row call still reports its declared columns. cluster() is the KGLite set-input exception: it consumes the complete preceding row cohort."
+      "note": "Procedure invocation. A standalone CALL without YIELD returns every declared column in declared order and must be the entire statement; combined with any other clause, YIELD is required. YIELD * yields every declared column of the procedure (it may not be mixed with named columns or an alias). Ordinary procedures evaluate parameters once per incoming row and inner-join yielded columns with that row; multiple results multiply it, zero results drop it, and an empty input stays empty. Result columns follow YIELD order (alias-or-name), may not overwrite an outer binding, and a leading zero-row call still reports its declared columns. cluster() is the KGLite set-input exception: it consumes the complete preceding row cohort."
     },
     {
       "id": "clause.call_subquery",

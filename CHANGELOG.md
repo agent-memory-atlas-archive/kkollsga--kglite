@@ -11,6 +11,10 @@ before upgrading.
 
 ### Added
 
+- `CALL procedure() YIELD *` yields every column the procedure declares, in
+  declared order, so `CALL db.temporal.declarations() YIELD * RETURN *` works.
+  It stands alone: `YIELD *, kind` and `YIELD * AS x` are errors, and an
+  unknown procedure keeps its usual error.
 - `valid_at='all'` opts one call out of the valid-time default: it is the entry
   point spelling of `FOR VALID_TIME ALL` on `cypher()`, `Session`,
   `Transaction`, `FrozenGraph`, the MCP `cypher_query` / `run_recipe_query` /

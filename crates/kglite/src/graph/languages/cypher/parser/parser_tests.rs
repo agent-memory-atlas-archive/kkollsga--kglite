@@ -836,6 +836,60 @@ mod tests {
         }
     }
 
+    fn yield_names(q: &str) -> Vec<String> {
+        let query = parse_cypher(q).unwrap();
+        match &query.clauses[0] {
+            Clause::Call(c) => c
+                .yield_items
+                .iter()
+                .map(|i| {
+                    assert!(i.alias.is_none());
+                    i.name.clone()
+                })
+                .collect(),
+            other => panic!("expected CALL, got {other:?}"),
+        }
+    }
+
+    /// `YIELD *` parses to the registry's declared columns in declared
+    /// order, for plain, namespaced and `kglite.`-prefixed spellings.
+    #[test]
+    fn test_yield_star_expands_to_declared_columns() {
+        assert_eq!(yield_names("CALL db.labels() YIELD *"), ["label"]);
+        assert_eq!(yield_names("CALL pagerank() YIELD *"), ["node", "score"]);
+        assert_eq!(
+            yield_names("CALL kglite.pagerank() YIELD *"),
+            ["node", "score"]
+        );
+        let decl = yield_names("CALL db.temporal.declarations() YIELD *");
+        assert_eq!(decl[0], "kind");
+        assert!(decl.len() > 5, "{decl:?}");
+    }
+
+    /// `YIELD *` is legal mid-statement (it is an explicit list), and
+    /// accepts a following WHERE / RETURN *.
+    #[test]
+    fn test_yield_star_in_pipeline() {
+        parse_cypher("CALL db.labels() YIELD * RETURN *").unwrap();
+        parse_cypher("CALL pagerank() YIELD * WHERE score > 0 RETURN node").unwrap();
+    }
+
+    #[test]
+    fn test_yield_star_mixing_and_unknown_procedure() {
+        for q in [
+            "CALL pagerank() YIELD *, score",
+            "CALL pagerank() YIELD node, *",
+            "CALL pagerank() YIELD * AS x",
+        ] {
+            let err = parse_cypher(q).unwrap_err().to_string();
+            assert!(err.contains("YIELD * cannot be combined"), "{q}: {err}");
+        }
+        let err = parse_cypher("CALL no.such.proc() YIELD *")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Unknown procedure 'no.such.proc'"), "{err}");
+    }
+
     // ========================================================================
     // CALL { } subqueries
     // ========================================================================

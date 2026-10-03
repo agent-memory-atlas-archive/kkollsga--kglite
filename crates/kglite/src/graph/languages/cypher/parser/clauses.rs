@@ -1074,7 +1074,11 @@ impl CypherParser {
         // make the variables introduced into the surrounding scope explicit.
         let yield_items = if self.check(&CypherToken::Yield) {
             self.advance(); // consume YIELD
-            let items = self.parse_yield_items()?;
+            let items = if self.check(&CypherToken::Star) {
+                self.parse_yield_star(&procedure_name)?
+            } else {
+                self.parse_yield_items()?
+            };
             if items.is_empty() {
                 return Err("YIELD requires at least one column name".to_string());
             }
@@ -1225,6 +1229,28 @@ impl CypherParser {
         Ok(CallSubqueryImport::Named(names))
     }
 
+    /// `YIELD *`: every column the procedure's registry entry declares, in
+    /// declared order, as explicit items — so scope validation and the
+    /// executor see an ordinary YIELD list. An unknown procedure keeps the
+    /// registry's own error.
+    fn parse_yield_star(&mut self, procedure_name: &str) -> Result<Vec<YieldItem>, String> {
+        self.advance(); // consume `*`
+        if self.check(&CypherToken::Comma) || self.check(&CypherToken::As) {
+            return Err(
+                "YIELD * cannot be combined with named columns or an alias; \
+                 write YIELD * alone, or list the columns you want"
+                    .to_string(),
+            );
+        }
+        let lowered = procedure_name.to_lowercase();
+        let canonical = lowered.strip_prefix("kglite.").unwrap_or(lowered.as_str());
+        crate::graph::languages::cypher::executor::call_clause::resolve_yield_items(
+            canonical,
+            procedure_name,
+            &[],
+        )
+    }
+
     /// Parse comma-separated YIELD items: name [AS alias], ...
     pub(super) fn parse_yield_items(&mut self) -> Result<Vec<YieldItem>, String> {
         let mut items = Vec::new();
@@ -1234,6 +1260,13 @@ impl CypherParser {
                 Some(CypherToken::Identifier(n)) => {
                     self.advance();
                     n
+                }
+                Some(CypherToken::Star) => {
+                    return Err(
+                        "YIELD * cannot be combined with named columns or an alias; \
+                         write YIELD * alone, or list the columns you want"
+                            .to_string(),
+                    );
                 }
                 other => {
                     return Err(format!(

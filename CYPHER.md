@@ -2730,6 +2730,12 @@ other clause, `YIELD` is required. Result columns always follow YIELD
 order (alias-or-name), and a call that yields zero rows still reports its
 declared columns.
 
+**`YIELD *`.** `CALL db.temporal.declarations() YIELD * RETURN *` yields every
+declared column of the procedure, in declared order, and is legal anywhere a
+`YIELD` list is (followed by `WHERE`, `WITH`, `RETURN *`). It stands alone: mixing
+it with named columns (`YIELD *, kind`) or aliasing it is an error, and an
+unknown procedure keeps its usual error.
+
 **`SHOW PROCEDURES [YIELD …]`** lists every procedure (Neo4j's default
 columns: `name`, `description`, `mode`, `worksOnSystem`; `signature`
 yieldable) from the same registry `CALL list_procedures()` reads.

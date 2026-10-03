@@ -1842,7 +1842,7 @@ pub(super) fn names_to_rows(names: &[String], yield_items: &[YieldItem]) -> Vec<
 /// procedure yield that column, and what does a bare call return?" is one
 /// question with one answer — the registry's. Answering it twice is how the
 /// two hand-maintained lists this module replaced drifted apart.
-pub(super) fn resolve_yield_items(
+pub(crate) fn resolve_yield_items(
     proc_name: &str,
     display_name: &str,
     requested: &[YieldItem],

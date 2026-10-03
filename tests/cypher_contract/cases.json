@@ -1124,6 +1124,20 @@
       ]
     },
     {
+      "id": "call.yield_star",
+      "category": "clause",
+      "requirement": "CALL YIELD * yields every declared column of the procedure, so it can be followed by RETURN *.",
+      "setup": [
+        "CREATE (:Alpha {x: 1})"
+      ],
+      "query": "CALL db.labels() YIELD * RETURN *",
+      "expected": [
+        {
+          "label": "Alpha"
+        }
+      ]
+    },
+    {
       "id": "function.element_id_string",
       "category": "function",
       "requirement": "elementId(n) returns an opaque string identity for a bound node.",
