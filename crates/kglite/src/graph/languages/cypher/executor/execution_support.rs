@@ -473,7 +473,7 @@ fn fused_count_display_name(clause: &Clause) -> String {
             }
         }
         Clause::FusedCountAnchoredEdges {
-            anchor_idx,
+            anchor_val,
             anchor_direction,
             edge_types,
             ..
@@ -485,7 +485,7 @@ fn fused_count_display_name(clause: &Clause) -> String {
             let t = edge_types
                 .as_ref()
                 .map_or_else(|| "*".to_string(), |types| types.join("|"));
-            format!("FusedCountAnchoredEdges (anchor#{anchor_idx} {arrow} :{t})")
+            format!("FusedCountAnchoredEdges (anchor id {anchor_val:?} {arrow} :{t})")
         }
         _ => unreachable!("only the fused-count arm of clause_display_name calls this"),
     }

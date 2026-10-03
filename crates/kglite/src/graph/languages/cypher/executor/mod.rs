@@ -706,40 +706,62 @@ impl<'a> CypherExecutor<'a> {
         Ok(single_count_result(alias, count))
     }
 
+    /// Every node an untyped `{id: V}` anchor names: one per node type
+    /// carrying the id, as the matcher's cross-type id seed resolves it.
+    /// Under a valid-time filter each type contributes the version visible at
+    /// the instant, and none when no version is.
+    pub(super) fn anchor_nodes_for_id(
+        &self,
+        id: &Value,
+    ) -> Result<Vec<petgraph::graph::NodeIndex>, String> {
+        let filter = self.graph_filter();
+        let mut hits = Vec::new();
+        for (i, node_type) in self.graph.type_indices.keys().enumerate() {
+            self.check_interrupt_periodic(i)?;
+            let hit = self.graph.lookup_by_id_readonly(node_type, id);
+            let visible = match filter {
+                None => hit,
+                Some(filter) => filter.lookup_id(self.graph, node_type, id, hit),
+            };
+            hits.extend(visible);
+        }
+        Ok(hits)
+    }
+
     /// `Clause::FusedCountAnchoredEdges` — O(log D) count from CSR offsets
-    /// (with binary search when a connection type is specified). The anchor
-    /// has already been resolved at plan time; an invalid index falls
-    /// through `count_edges_filtered` to a clean `Ok(0)`. An alternation
-    /// sums one such read per accepted type — exact, because every edge
-    /// carries exactly one type and the planner deduplicated the list.
+    /// (with binary search when a connection type is specified), summed over
+    /// every node the anchor id names. An alternation sums one such read per
+    /// accepted type — exact, because every edge carries exactly one type and
+    /// the planner deduplicated the list.
     fn execute_fused_count_anchored_edges(
         &self,
-        anchor_idx: u32,
+        anchor_val: &Value,
         anchor_direction: petgraph::Direction,
         edge_types: Option<&[String]>,
         alias: &str,
     ) -> Result<ResultSet, String> {
-        let idx = petgraph::graph::NodeIndex::new(anchor_idx as usize);
         let mut count: i64 = 0;
-        match edge_types {
-            None => {
-                count = self.graph.graph.count_edges_filtered(
-                    idx,
-                    anchor_direction,
-                    None,
-                    None,
-                    self.deadline,
-                )? as i64;
-            }
-            Some(types) => {
-                for edge_type in types {
+        for idx in self.anchor_nodes_for_id(anchor_val)? {
+            match edge_types {
+                None => {
                     count += self.graph.graph.count_edges_filtered(
                         idx,
                         anchor_direction,
-                        Some(InternedKey::from_str(edge_type)),
+                        None,
                         None,
                         self.deadline,
                     )? as i64;
+                }
+                Some(types) => {
+                    for edge_type in types {
+                        count += self.graph.graph.count_edges_filtered(
+                            idx,
+                            anchor_direction,
+                            Some(InternedKey::from_str(edge_type)),
+                            None,
+                            self.deadline,
+                        )? as i64;
+                    }
                 }
             }
         }
@@ -790,12 +812,12 @@ impl<'a> CypherExecutor<'a> {
                 undirected,
             } => self.execute_fused_count_typed_edge(edge_type, alias, *undirected),
             Clause::FusedCountAnchoredEdges {
-                anchor_idx,
+                anchor_val,
                 anchor_direction,
                 edge_types,
                 alias,
             } => self.execute_fused_count_anchored_edges(
-                *anchor_idx,
+                anchor_val,
                 *anchor_direction,
                 edge_types.as_deref(),
                 alias,

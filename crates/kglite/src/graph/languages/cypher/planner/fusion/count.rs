@@ -9,7 +9,7 @@ use crate::graph::core::pattern_matching::PatternElement;
 use crate::graph::languages::cypher::ast::*;
 use crate::graph::schema::DirGraph;
 
-pub(crate) fn fuse_anchored_edge_count(query: &mut CypherQuery, graph: &DirGraph) {
+pub(crate) fn fuse_anchored_edge_count(query: &mut CypherQuery) {
     use crate::graph::core::pattern_matching::{EdgeDirection, PropertyMatcher};
 
     if query.clauses.len() < 2 {
@@ -121,21 +121,6 @@ pub(crate) fn fuse_anchored_edge_count(query: &mut CypherQuery, graph: &DirGraph
         return;
     }
 
-    // Resolve the anchor across node types. O(types) HashMap lookups; at
-    // typical schema sizes this is negligible, and on Wikidata-scale (~88 k
-    // types) we still only do one `HashMap::get` per type.
-    let mut resolved: Option<petgraph::graph::NodeIndex> = None;
-    for node_type in graph.type_indices.keys() {
-        if let Some(idx) = graph.lookup_by_id_readonly(node_type, &anchor_val) {
-            resolved = Some(idx);
-            break;
-        }
-    }
-    let anchor_idx = match resolved {
-        Some(idx) => idx.index() as u32,
-        None => return, // anchor not found — leave unfused, normal path returns 0
-    };
-
     let alias = return_item_column_name(&return_clause.items[0]);
     // `[:A|B]` — the singular `connection_type` holds only the first branch,
     // so fusing on it counted that branch alone. Carry every branch; the
@@ -158,7 +143,7 @@ pub(crate) fn fuse_anchored_edge_count(query: &mut CypherQuery, graph: &DirGraph
     query.clauses.insert(
         0,
         Clause::FusedCountAnchoredEdges {
-            anchor_idx,
+            anchor_val,
             anchor_direction: anchor_dir,
             edge_types,
             alias,

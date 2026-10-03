@@ -286,6 +286,22 @@ def cross_type_key_graph():
 
 
 @pytest.fixture
+def shared_id_graph():
+    """Id 7 on three node types with different incident counts, so an
+    anchor that settles on one type answers differently from the matcher's
+    sum over all three."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (a:Aa {id: 7}), (b:Bb {id: 7}), (c:Cc {id: 7}), "
+        "(a)-[:LINK]->(:Leaf {id: 1}), "
+        "(b)-[:LINK]->(:Leaf {id: 2}), (b)-[:LINK]->(:Leaf {id: 3}), "
+        "(c)-[:LINK]->(:Leaf {id: 4}), (c)-[:LINK]->(:Leaf {id: 5}), (c)-[:LINK]->(:Leaf {id: 6}), "
+        "(:Src {id: 11})-[:LINK]->(a), (:Src {id: 12})-[:LINK]->(c), (:Src {id: 13})-[:LINK]->(c)"
+    ).to_list()
+    return graph
+
+
+@pytest.fixture
 def date_text_graph():
     """Stored dates and datetimes compared against their ISO text, with an
     equality index on the date so the pushed and the indexed routes both run."""
@@ -1610,6 +1626,30 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "trigger_anchored_edge_count_reverse",
         "social_graph",
         "MATCH (p)<-[:KNOWS]-({id: 1}) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "anchored_edge_count_id_on_several_types",
+        "shared_id_graph",
+        "MATCH ({id: 7})-[:LINK]->(c) RETURN count(c) AS n",
+        None,
+    ),
+    (
+        "anchored_edge_count_id_on_several_types_reverse",
+        "shared_id_graph",
+        "MATCH (s)-[:LINK]->({id: 7}) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "anchored_aggregate_far_end_id_on_several_types",
+        "shared_id_graph",
+        "MATCH (s:Src)-[:LINK]->({id: 7}) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "anchored_grouped_aggregate_id_on_several_types",
+        "shared_id_graph",
+        "MATCH (s)-[:LINK]->(a {id: 7}) RETURN a AS a, count(s) AS n",
         None,
     ),
     ("trigger_count_short_circuit", "social_graph", "MATCH (p:Person) RETURN count(*) AS n", None),

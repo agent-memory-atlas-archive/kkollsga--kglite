@@ -36,10 +36,10 @@ impl DirGraph {
     /// `graph_id` used to be cloned along with everything else, which made the
     /// Cypher plan cache's key — `(graph_id, version, …)` — ambiguous the
     /// moment two forks of one base each took a bump: identical key, different
-    /// graphs. That is not merely a stale-statistics risk, because
-    /// `fuse_anchored_edge_count` bakes a resolved physical `NodeIndex` into
-    /// `Clause::FusedCountAnchoredEdges`; a sibling served that plan counts a
-    /// different node's edges and returns a **wrong number** with no error (see
+    /// graphs. That is not merely a stale-statistics risk: a plan that carried a
+    /// resolved physical `NodeIndex` (`fuse_anchored_edge_count` did, before it
+    /// resolved its anchor at execution) counted a different node's edges in a
+    /// sibling and returned a **wrong number** with no error (see
     /// `plan_cache_cost_tests::a_sibling_fork_is_never_served_another_forks_plan`).
     ///
     /// Minting here costs no cache reuse worth having. `working_mut` only

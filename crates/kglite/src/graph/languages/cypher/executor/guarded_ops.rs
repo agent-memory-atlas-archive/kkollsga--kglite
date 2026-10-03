@@ -112,8 +112,60 @@ impl CypherExecutor<'_> {
                     lazy_return_items: None,
                 })
             }
+            Clause::FusedCountAnchoredEdges {
+                anchor_val,
+                anchor_direction,
+                edge_types,
+                alias,
+            } => self.execute_fused_anchored_count_guarded(
+                filter,
+                anchor_val,
+                *anchor_direction,
+                edge_types.as_deref(),
+                alias,
+            ),
             _ => self.execute_fused_edge_count_guarded(filter, clause),
         }
+    }
+
+    /// The anchored count under a filter: the anchors are the versions
+    /// visible at the instant, and each relationship is counted when it and
+    /// its far endpoint are admitted. A self-loop on the anchor is its own
+    /// far endpoint and counts once, as it does in the matcher.
+    fn execute_fused_anchored_count_guarded(
+        &self,
+        filter: &ElementFilter,
+        anchor_val: &Value,
+        direction: Direction,
+        edge_types: Option<&[String]>,
+        alias: &str,
+    ) -> Result<ResultSet, String> {
+        let graph = self.graph;
+        let keys: Option<Vec<InternedKey>> =
+            edge_types.map(|types| types.iter().map(|ty| InternedKey::from_str(ty)).collect());
+        let mut count: i64 = 0;
+        let mut iter: usize = 0;
+        for anchor in self.anchor_nodes_for_id(anchor_val)? {
+            for edge in graph.graph.edges_directed(anchor, direction) {
+                self.check_interrupt_periodic(iter)?;
+                iter += 1;
+                let conn = edge.connection_type();
+                if keys.as_ref().is_some_and(|keys| !keys.contains(&conn)) {
+                    continue;
+                }
+                let far = if direction == Direction::Outgoing {
+                    edge.target()
+                } else {
+                    edge.source()
+                };
+                if filter.admits_hop(graph, edge.id(), conn, edge.source(), far) {
+                    count += 1;
+                }
+            }
+        }
+        self.budget
+            .check_work(count as usize, "fused anchored edge count")?;
+        Ok(single_count_result(alias, count))
     }
 
     /// Nodes carrying `label`, primary or secondary, that the filter admits.

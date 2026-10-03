@@ -576,10 +576,12 @@ fn pass_push_distinct_into_match(query: &mut CypherQuery, _ctx: &PassCtx) {
 }
 
 /// **Pass:** `fuse_anchored_edge_count` — Specialize
-/// `MATCH (id:VAL)-[r:T]->(v) RETURN count(*)` into an O(1) anchored
-/// edge lookup using the connection type's edge count metadata.
-fn pass_fuse_anchored_edge_count(query: &mut CypherQuery, ctx: &PassCtx) {
-    fuse_anchored_edge_count(query, ctx.graph)
+/// `MATCH ({id: VAL})-[:T]->(v) RETURN count(v)` (either direction, one
+/// untyped literal-id anchor, an untyped unfiltered far node) into an
+/// adjacency-offset count, summed at execution over every node carrying the id.
+/// Nothing graph- or instant-dependent is read here, so the plan caches soundly.
+fn pass_fuse_anchored_edge_count(query: &mut CypherQuery, _ctx: &PassCtx) {
+    fuse_anchored_edge_count(query)
 }
 
 /// **Pass:** `fuse_count_short_circuits` — Answer a `MATCH` + `RETURN`

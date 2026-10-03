@@ -16,8 +16,9 @@
 //!   one's entry. That sharing has since been removed outright as a
 //!   *correctness* fix — `fork_transaction` now mints a fresh `graph_id`
 //!   (`session/transaction.rs`), because a shared key also served sibling
-//!   forks each other's **read** plans, and one plan shape bakes a physical
-//!   `NodeIndex` (see `a_sibling_fork_is_never_served_another_forks_plan`);
+//!   forks each other's **read** plans, and a plan that carried a resolved
+//!   physical `NodeIndex` answered from the wrong lineage (see
+//!   `a_sibling_fork_is_never_served_another_forks_plan`);
 //! - a mutation that fails *after* `prepare()` (name collision, constraint,
 //!   write scope) never reaches `bump_version`, so a retry used to hit.
 //!
@@ -363,16 +364,17 @@ fn a_write_burst_evicts_no_other_graphs_read_plan() {
 ///
 /// For almost every plan that is invisible: the passes make cost and ordering
 /// decisions, so a plan computed against a sibling's data is at worst
-/// mis-ordered. `fuse_anchored_edge_count` is the exception, and it is why this
-/// test asserts a **row value** rather than a cache counter: it resolves the
-/// literal `{id: VAL}` anchor to a physical `NodeIndex` and bakes that u32 into
-/// `Clause::FusedCountAnchoredEdges` (`ast.rs`), which is an identity, not an
-/// estimate. Reused across lineages it counts a *different node's* edges.
+/// mis-ordered. Anything a plan carries as an identity rather than an estimate
+/// is the exception, and it is why this test asserts a **row value** rather
+/// than a cache counter: `fuse_anchored_edge_count` once resolved the literal
+/// `{id: VAL}` anchor to a physical `NodeIndex` at plan time, which counted a
+/// *different node's* edges when reused across lineages. It now resolves the
+/// anchor at execution, and this test holds that no plan shape brings the
+/// identity back.
 ///
-/// The case below is the minimal reproduction, measured before the fix:
-/// `tx2` holds no node with `id: 5` at all, so the only correct answer is 0 —
-/// and it returned **1**, the outgoing `:E` degree of whatever sat at the index
-/// `tx1` had baked.
+/// The case below: `tx2` holds no node with `id: 5` at all, so the only
+/// correct answer is 0; the old plan returned **1**, the outgoing `:E` degree
+/// of whatever sat at the index `tx1` had baked.
 #[test]
 fn a_sibling_fork_is_never_served_another_forks_plan() {
     let _guard = plan_cache::TEST_LOCK
@@ -421,7 +423,7 @@ fn a_sibling_fork_is_never_served_another_forks_plan() {
         tx2.result.rows,
         vec![vec![crate::datatypes::Value::Int64(0)]],
         "tx2 holds no node with id 5, so its only correct answer is 0; a 1 here \
-         means it was served tx1's plan with tx1's anchor NodeIndex baked in"
+         means it was served tx1's plan with tx1's anchor resolved into it"
     );
 }
 

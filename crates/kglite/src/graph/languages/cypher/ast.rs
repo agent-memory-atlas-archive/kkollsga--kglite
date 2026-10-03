@@ -339,12 +339,15 @@ pub enum Clause {
     },
     /// Optimizer-generated: MATCH (var)-[r:TYPE?]->({id: VAL}) RETURN count(var)
     /// (or the symmetric incoming form) → O(log D) CSR offset subtraction on
-    /// the anchored node. Anchor node index is resolved at plan time via
-    /// `graph.id_indices`. Connection type is None when the query didn't
-    /// specify one.
+    /// each anchored node. The anchor is the literal `{id: VAL}` and is resolved
+    /// at execution, across every node type (and, under a valid-time filter,
+    /// to the version visible at the instant): the plan carries no node index
+    /// and no instant, so a cached plan stays correct after a write or a
+    /// change of date. Connection type is None when the query didn't specify
+    /// one.
     FusedCountAnchoredEdges {
-        /// Resolved NodeIndex of the anchor (`{id: VAL}` side).
-        anchor_idx: u32,
+        /// The `{id: VAL}` literal naming the anchor on every type carrying it.
+        anchor_val: crate::datatypes::values::Value,
         /// Direction relative to the anchor. Outgoing = edges that leave the
         /// anchor; Incoming = edges that enter it.
         anchor_direction: petgraph::Direction,

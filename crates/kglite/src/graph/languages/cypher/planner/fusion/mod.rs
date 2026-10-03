@@ -97,3 +97,55 @@ pub(super) fn multi_label_fuse_unsafe(
             .contains_key(&crate::graph::schema::InternedKey::from_str(node_type))
     })
 }
+
+/// Whether `pat` has an untyped `{id: V}` / `{id: $p}` node that is not a
+/// grouping key of the projection (`group_vars`: the variables its
+/// non-aggregate items read).
+///
+/// The aggregate operators scan the *group* endpoint — every node when it is
+/// untyped — and test the other end per candidate, so an id anchor on the far
+/// end costs a whole-graph scan (65-71 ms where the matcher's id seed answers
+/// in 0.1 ms) and counts every same-id node of a type, where the matcher
+/// resolves one node per type (the duplicate-id contract). Such a pattern is
+/// left to the matcher. An anchor that is itself the group key stays fused:
+/// its group set comes from the matcher's own id seed.
+pub(super) fn has_ungrouped_id_anchor(
+    pat: &crate::graph::core::pattern_matching::Pattern,
+    group_vars: &[&str],
+) -> bool {
+    use crate::graph::core::pattern_matching::{PatternElement, PropertyMatcher};
+    pat.elements.iter().any(|element| {
+        let PatternElement::Node(np) = element else {
+            return false;
+        };
+        let anchored = np.node_type.is_none()
+            && np.properties.as_ref().is_some_and(|props| {
+                matches!(
+                    props.get("id"),
+                    Some(PropertyMatcher::Equals(_) | PropertyMatcher::EqualsParam(_))
+                )
+            });
+        anchored
+            && !np
+                .variable
+                .as_deref()
+                .is_some_and(|variable| group_vars.contains(&variable))
+    })
+}
+
+/// The variables the non-aggregate items of a projection read.
+pub(super) fn grouping_variables(
+    items: &[crate::graph::languages::cypher::ast::ReturnItem],
+) -> Vec<&str> {
+    use crate::graph::languages::cypher::ast::{is_aggregate_expression, Expression};
+    items
+        .iter()
+        .filter(|item| !is_aggregate_expression(&item.expression))
+        .filter_map(|item| match &item.expression {
+            Expression::Variable(variable) | Expression::PropertyAccess { variable, .. } => {
+                Some(variable.as_str())
+            }
+            _ => None,
+        })
+        .collect()
+}

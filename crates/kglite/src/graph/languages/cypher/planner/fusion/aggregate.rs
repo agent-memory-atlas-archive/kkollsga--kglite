@@ -514,6 +514,20 @@ fn pattern_multi_label_unsafe(
     })
 }
 
+/// [`super::has_ungrouped_id_anchor`] for a `MATCH` + `RETURN`/`WITH` pair.
+fn ungrouped_id_anchor(match_clause: &Clause, projection: &Clause) -> bool {
+    let (
+        Clause::Match(m),
+        Clause::Return(ReturnClause { items, .. }) | Clause::With(WithClause { items, .. }),
+    ) = (match_clause, projection)
+    else {
+        return false;
+    };
+    m.patterns
+        .first()
+        .is_some_and(|pat| super::has_ungrouped_id_anchor(pat, &super::grouping_variables(items)))
+}
+
 /// The last node's variable of a 5-element pattern whose second hop carries
 /// no property map and no variable length, with no map on either node of it.
 fn plain_second_hop(pat: &crate::graph::core::pattern_matching::Pattern) -> Option<Option<String>> {
@@ -841,7 +855,7 @@ pub(crate) fn fuse_match_return_aggregate(
             (false, false)
         };
 
-        if !fusable {
+        if !fusable || ungrouped_id_anchor(&query.clauses[i], &query.clauses[i + 1]) {
             i += 1;
             continue;
         }
@@ -1656,7 +1670,7 @@ pub(crate) fn fuse_match_with_aggregate(query: &mut CypherQuery, graph: &DirGrap
             (false, false)
         };
 
-        if !fusable {
+        if !fusable || ungrouped_id_anchor(&query.clauses[i], &query.clauses[i + 1]) {
             i += 1;
             continue;
         }

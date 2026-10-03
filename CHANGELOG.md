@@ -149,6 +149,14 @@ before upgrading.
 
 ### Fixed
 
+- An anchored relationship count on an id shared by several node types counted
+  only one of them. `MATCH ({id: 7})-[:T]->(c) RETURN count(c)` (and the
+  incoming and `count(*)` spellings) settled on whichever type the engine met
+  first, so the same query could answer 0 in one process and 299 in another;
+  it now sums the matches of every node carrying the id, as the same pattern
+  with other aggregates already did. An aggregate whose far endpoint is an
+  untyped `{id: ...}` anchor is answered from the id lookup as well, where it
+  scanned every node and counted every same-id node of a type.
 - `ts_sum` over a window that holds no finite value (an all-missing channel, or
   a range outside the series) returns `0.0` instead of `-0.0`. The empty sum is
   `0.0`, matching `ts_count`; `ts_avg`, `ts_min` and `ts_max` stay `null`.
