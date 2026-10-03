@@ -478,6 +478,7 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::TemporalS
 pub fn kglite::api::blueprint::TemporalSpec::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::blueprint::TimeseriesSpec
 pub kglite::api::blueprint::TimeseriesSpec::channels: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
+pub kglite::api::blueprint::TimeseriesSpec::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::TimeseriesSpec::resolution: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::TimeseriesSpec::time_key: kglite::api::blueprint::TimeKey
 pub kglite::api::blueprint::TimeseriesSpec::units: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
