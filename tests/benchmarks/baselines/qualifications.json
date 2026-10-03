@@ -150,16 +150,22 @@
       "sha256": "3650adcc1116baba9cd61d50dda14e7868bf15215fc450a914c938b95f975487",
       "status": "rejected"
     },
-    "current.json": {
-      "evidence": "0_19_0_ts_cells.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and the exact-set CI legs need every harness cell in the reference. 2026-09-30 on Mac16,10 (M4, 16 GiB), two agreeing release runs of the fixed build (min 0.663/0.649 ms) against 0.13.2 at 35.4/34.9 ms and 0.19.0 at 4.87/5.06 ms on the same interpreter, machine load 2.7-5.3 from external processes; every other row is byte-identical to 0_19_0_ts_cells.json.",
+    "0_19_1_va4_cell.json": {
+      "evidence": "0_19_0_del_cell.json plus one cell: the harness gained test_bench_valid_at_four_arg_two_sites (operator-feedback P5) and the exact-set CI legs need every harness cell in the reference. 2026-10-03 on Mac16,10 (M4, 16 GiB), two agreeing release runs of 9476481c (min 5.291/5.395 ms) against 0.13.2 at 4.850/5.192 ms on the same interpreter, machine load 3.7-4.1; every other row is byte-identical to 0_19_0_del_cell.json.",
       "platform": "Darwin/arm64",
-      "sha256": "0129c1f20543ec7719d4e267405cd92d756c054d72ed8ef348420b8aced4a4ae",
+      "sha256": "a3348999669a74d1b44a849c127b08299c5f7b7062cf160e4c7f93a14e5147ed",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "0_19_0_del_cell.json plus one cell: the harness gained test_bench_valid_at_four_arg_two_sites (operator-feedback P5) and the exact-set CI legs need every harness cell in the reference. 2026-10-03 on Mac16,10 (M4, 16 GiB), two agreeing release runs of 9476481c (min 5.291/5.395 ms) against 0.13.2 at 4.850/5.192 ms on the same interpreter, machine load 3.7-4.1; every other row is byte-identical to 0_19_0_del_cell.json.",
+      "platform": "Darwin/arm64",
+      "sha256": "a3348999669a74d1b44a849c127b08299c5f7b7062cf160e4c7f93a14e5147ed",
       "status": "accepted"
     },
     "current.linux.json": {
-      "evidence": "reference_0_19_0_ts_cells_measured_7763.linux.json plus one cell: the harness gained test_bench_delete_after_create (register-scale T1 P8b) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement: kglite 0.13.2 macOS slower-of-two min 35.36 ms x 3.9 = 137.9 ms, which only ever loosens the leg-2 gate for this one cell; it is replaced by a Linux measurement once a CI artifact carries the cell.",
+      "evidence": "reference_0_19_0_del_cell.linux.json plus one cell: the harness gained test_bench_valid_at_four_arg_two_sites (operator-feedback P5) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement: kglite 0.13.2 macOS slower-of-two min 5.192 ms x 3.9 = 20.25 ms, which only ever loosens the leg-2 gate for this one cell; it is replaced by a Linux measurement once a CI artifact carries the cell.",
       "platform": "Linux/x86_64",
-      "sha256": "5876a30901735a438b59050497b176fa41e96e589f966a7ae251f2c096092f01",
+      "sha256": "f6deafa548dc9572ffd1529c724d3a24e3b04b70aa3177e0e5c18129c819f0d0",
       "status": "accepted"
     },
     "reference_0_16_23.linux.json": {
@@ -197,11 +203,17 @@
       "platform": "Linux/x86_64",
       "sha256": "fd0307b39bfbb4283285bcf6c89147a6bfbd9cbbf0b5e09c4820b7f6fafe3276",
       "status": "accepted"
+    },
+    "reference_0_19_1_va4_cell.linux.json": {
+      "evidence": "reference_0_19_0_del_cell.linux.json plus one cell: the harness gained test_bench_valid_at_four_arg_two_sites (operator-feedback P5) and CI leg 2 requires an exact cell-set match. The new row is a PROVISIONAL scaled estimate, not a Linux measurement: kglite 0.13.2 macOS slower-of-two min 5.192 ms x 3.9 = 20.25 ms, which only ever loosens the leg-2 gate for this one cell; it is replaced by a Linux measurement once a CI artifact carries the cell.",
+      "platform": "Linux/x86_64",
+      "sha256": "f6deafa548dc9572ffd1529c724d3a24e3b04b70aa3177e0e5c18129c819f0d0",
+      "status": "accepted"
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_0_del_cell.json",
-    "Linux/x86_64": "reference_0_19_0_del_cell.linux.json"
+    "Darwin/arm64": "0_19_1_va4_cell.json",
+    "Linux/x86_64": "reference_0_19_1_va4_cell.linux.json"
   },
   "schema_version": 1
 }
