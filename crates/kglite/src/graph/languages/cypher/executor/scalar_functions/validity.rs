@@ -77,7 +77,7 @@ impl ValidityCaches {
     }
 
     /// Park `entry` in the first free slot, or hand it back when none is free.
-    fn park(&self, entry: ValidityCache) -> Result<&ValidityCache, ValidityCache> {
+    fn park(&self, entry: ValidityCache) -> Result<&ValidityCache, Box<ValidityCache>> {
         let mut entry = entry;
         for slot in &self.slots {
             match slot.set(entry) {
@@ -85,7 +85,7 @@ impl ValidityCaches {
                 Err(returned) => entry = returned,
             }
         }
-        Err(entry)
+        Err(Box::new(entry))
     }
 }
 
