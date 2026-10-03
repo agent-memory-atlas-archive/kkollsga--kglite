@@ -301,6 +301,19 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<ResultSet, String> {
         // The MATCH must have exactly 1 pattern with 3 or 5 elements (validated by planner)
         let pattern = &match_clause.patterns[0];
+        // Under a valid-time filter every route below must test the node and
+        // relationship masks. The per-node counters, the matcher scans and
+        // `admits_node` do; the type-wide peer histograms and the two-hop
+        // counters do not, so those are skipped here and the planner fuses
+        // only 3-element patterns on a guarded scope.
+        let filter = self.graph_filter().map(|f| &**f);
+        if filter.is_some() && pattern.elements.len() != 3 {
+            return Err(
+                "internal: a 5-element fused aggregate has no guarded form, so it cannot run \
+                 under FOR VALID_TIME AS OF"
+                    .into(),
+            );
+        }
 
         if return_clause
             .items
@@ -422,7 +435,7 @@ impl<'a> CypherExecutor<'a> {
                 pattern,
                 group_elem_idx,
                 distinct_count,
-                peer_counts_worthwhile,
+                peer_counts_worthwhile && filter.is_none(),
             )?;
 
             // A plain typed endpoint already has an exact node list. Reading
@@ -436,7 +449,13 @@ impl<'a> CypherExecutor<'a> {
                     node.node_type
                         .as_deref()
                         .and_then(|node_type| self.graph.type_indices.get(node_type))
-                        .map(|nodes| nodes.to_vec())
+                        .map(|nodes| match filter {
+                            Some(filter) => nodes
+                                .iter()
+                                .filter(|&idx| filter.admits_node(self.graph, idx))
+                                .collect(),
+                            None => nodes.to_vec(),
+                        })
                 }
                 _ => None,
             };
@@ -650,11 +669,13 @@ impl<'a> CypherExecutor<'a> {
                         && !np.multi_label_constrained()
                         && np.properties.as_ref().is_none_or(|props| props.is_empty())
             );
-            let edge_histogram_safe = matches!(
-                &pattern.elements[1],
-                PatternElement::Edge(ep)
-                    if ep.connection_types.is_none() && ep.edge_filter.is_none()
-            );
+            // The histogram counts every edge of the type, masked or not.
+            let edge_histogram_safe = filter.is_none()
+                && matches!(
+                    &pattern.elements[1],
+                    PatternElement::Edge(ep)
+                        if ep.connection_types.is_none() && ep.edge_filter.is_none()
+                );
             if let (false, 3, Some(ct_str), None, true, true) = (
                 distinct_count,
                 pattern.elements.len(),
@@ -857,7 +878,7 @@ impl<'a> CypherExecutor<'a> {
                 PatternElement::Node(np) => &np.properties,
                 _ => &None,
             };
-            let group_indices: Vec<petgraph::graph::NodeIndex> = if let Some(nt) = group_node_type {
+            let mut group_indices: Vec<petgraph::graph::NodeIndex> = if let Some(nt) = group_node_type {
                 self.graph
                     .type_indices
                     .get(nt)
@@ -867,6 +888,9 @@ impl<'a> CypherExecutor<'a> {
                 let g = &self.graph.graph;
                 g.node_indices().collect()
             };
+            if let Some(filter) = filter {
+                group_indices.retain(|&idx| filter.admits_node(self.graph, idx));
+            }
 
             let prop_executor = group_node_props.as_ref().map(|_| {
                 self.pattern_executor(None, None)
@@ -976,11 +1000,12 @@ impl<'a> CypherExecutor<'a> {
                         && !np.multi_label_constrained()
                         && np.properties.as_ref().is_none_or(|props| props.is_empty())
             );
-            let edge_histogram_safe_nontopk = matches!(
-                &pattern.elements[1],
-                PatternElement::Edge(ep)
-                    if ep.connection_types.is_none() && ep.edge_filter.is_none()
-            );
+            let edge_histogram_safe_nontopk = filter.is_none()
+                && matches!(
+                    &pattern.elements[1],
+                    PatternElement::Edge(ep)
+                        if ep.connection_types.is_none() && ep.edge_filter.is_none()
+                );
             // Same direction-aware "group is target" predicate as the top-K
             // branch (see comment there for the post-reversal case). Pre-fix
             // this read `, 2` against group_elem_idx, which silently bailed

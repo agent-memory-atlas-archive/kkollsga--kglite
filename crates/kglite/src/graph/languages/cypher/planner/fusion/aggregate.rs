@@ -526,7 +526,16 @@ fn pattern_multi_label_unsafe(
 /// 5. `count(DISTINCT v)` is allowed when `v` is the OTHER node variable or the
 ///    edge variable, AND the group node is type/property constrained (see
 ///    `distinct_fusable_3elem_with_constrained_group`).
-pub(crate) fn fuse_match_return_aggregate(query: &mut CypherQuery, graph: &DirGraph) {
+///
+/// On a guarded scope (`guarded`, a `FOR VALID_TIME AS OF` statement) the
+/// executor tests the node and relationship masks per counted element, so
+/// the fusion applies to 3-element patterns only: the 5-element two-hop
+/// counters read adjacency without a guarded form and stay unfused there.
+pub(crate) fn fuse_match_return_aggregate(
+    query: &mut CypherQuery,
+    graph: &DirGraph,
+    guarded: bool,
+) {
     use crate::graph::languages::cypher::ast::is_aggregate_expression;
 
     // This fusion's executor filters typed peer/group nodes via `binary_search`
@@ -560,7 +569,7 @@ pub(crate) fn fuse_match_return_aggregate(query: &mut CypherQuery, graph: &DirGr
             } else {
                 0
             };
-            if n_elems != 3 && n_elems != 5 {
+            if n_elems != 3 && (n_elems != 5 || guarded) {
                 i += 1;
                 continue;
             }

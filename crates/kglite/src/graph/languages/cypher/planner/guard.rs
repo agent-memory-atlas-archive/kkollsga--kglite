@@ -47,7 +47,7 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
     ("narrow_unwind_source", "clause structure only"),
     (
         "desugar_multi_match_return_aggregate",
-        "shape rewrite; the fusions it feeds are denied",
+        "shape rewrite; it only feeds the fusion passes, each with its own verdict",
     ),
     (
         "reorder_match_clauses",
@@ -100,6 +100,11 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "a bounded heap over rows the matcher already admitted",
     ),
     (
+        "fuse_match_return_aggregate",
+        "3-element patterns only: its group scan, per-node counters and node lists \
+         all test the filter (guarded_ops.rs, fused_match.rs); the two-hop shape stays unfused",
+    ),
+    (
         "fuse_vector_score_order_limit",
         "its entry ranks only the nodes the filter admits and its per-clause route \
          ranks rows the matcher admitted (retrieval_mask.rs)",
@@ -134,7 +139,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
         "fuse_optional_match_aggregate",
         "a fused per-row count outside the matcher",
     ),
-    ("fuse_match_return_aggregate", "a fused aggregate operator"),
     ("fuse_match_with_aggregate", "a fused aggregate operator"),
     (
         "fuse_match_with_aggregate_top_k",

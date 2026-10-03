@@ -110,9 +110,10 @@ def test_readmitted_fusions_answer_under_the_guard(sodir):
     assert rows == [{"id": 2}]
     explained = [r["operation"] for r in sodir.cypher(f"EXPLAIN {at(date, 'MATCH (w:Well) RETURN count(w) AS c')}")]
     assert "OptimizerPass fuse_count_short_circuits" in explained
-    # The fused aggregate that reads the store beside the matcher stays out.
+    # The fused aggregate masks its group nodes and counts through the guarded
+    # per-node counters.
     rows, plan = profile(sodir, at(date, "MATCH (w:Well)-[:IN]->(f) RETURN f.id AS f, count(w) AS c"))
-    assert rows == [{"f": 10, "c": 1}] and "FusedMatchReturnAggregate" not in plan
+    assert rows == [{"f": 10, "c": 1}] and "FusedMatchReturnAggregate" in plan
 
 
 def test_profile_rows_match_the_plain_context_rows(sodir):
@@ -641,17 +642,17 @@ def current_only():
 
 
 def test_as_of_today_on_a_current_state_graph_runs_the_plain_plan(current_only):
-    body = "MATCH (w:Well)-[:IN]->(f) RETURN f.id AS f, count(w) AS c"
+    body = "MATCH (w:Well)-[:IN]->(f) WITH f, count(w) AS c RETURN f.id AS f, c"
     plain_rows, plain_plan = profile(current_only, body)
-    assert plain_plan == ["FusedMatchReturnAggregate"]
+    assert plain_plan[0] == "FusedMatchWithAggregate"
     for prefix in ("FOR VALID_TIME AS OF date() ", "FOR VALID_TIME AS OF $t "):
         rows, plan = profile(current_only, prefix + body, params={"t": dt.date.today()})
         assert rows == plain_rows == [{"f": 10, "c": 2}]
         assert plan == plain_plan, prefix
     # Before either well started the filter removes rows, so the guard runs.
     rows, plan = profile(current_only, at("2003-01-01", body))
-    assert rows == [{"f": 10, "c": 1}] and "FusedMatchReturnAggregate" not in plan
+    assert rows == [{"f": 10, "c": 1}] and "FusedMatchWithAggregate" not in plan
     # EXPLAIN keeps the guarded plan: the instant is not in the plan.
     explained = [r["operation"] for r in current_only.cypher(f"EXPLAIN FOR VALID_TIME AS OF date() {body}")]
     assert explained[0].startswith("ValidTimeContext")
-    assert not any(op.startswith("FusedMatchReturnAggregate") for op in explained)
+    assert not any(op.startswith("FusedMatchWithAggregate") for op in explained)

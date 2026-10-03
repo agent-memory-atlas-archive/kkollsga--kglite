@@ -225,10 +225,7 @@ fn has_fused(clauses: &[Clause]) -> bool {
 #[test]
 fn a_guarded_scope_runs_only_allow_listed_passes() {
     let graph = graph();
-    for body in [
-        "MATCH (w:Well)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
-        "MATCH (w:Well)-[:LICENSED]->(f) WITH w, count(f) AS c RETURN w.id, c",
-    ] {
+    for body in ["MATCH (w:Well)-[:LICENSED]->(f) WITH w, count(f) AS c RETURN w.id, c"] {
         let plain = lowered(&graph, &format!("EXPLAIN {body}"), &[]);
         assert!(has_fused(&plain.clauses), "{body} should fuse unguarded");
         let guarded = lowered(&graph, &format!("EXPLAIN {AS_OF}{body}"), &[]);
@@ -239,6 +236,10 @@ fn a_guarded_scope_runs_only_allow_listed_passes() {
         );
     }
     for (body, pass) in [
+        (
+            "MATCH (w:Well)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c",
+            "fuse_match_return_aggregate",
+        ),
         (
             "MATCH (w:Well) RETURN count(w) AS c",
             "fuse_count_short_circuits",

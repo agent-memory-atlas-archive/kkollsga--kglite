@@ -615,7 +615,7 @@ fn pass_fuse_optional_match_aggregate(query: &mut CypherQuery, _ctx: &PassCtx) {
 /// `FusedMatchReturnAggregate`, building the GROUP-BY hash map inline
 /// during pattern expansion.
 fn pass_fuse_match_return_aggregate(query: &mut CypherQuery, ctx: &PassCtx) {
-    fuse_match_return_aggregate(query, ctx.graph)
+    fuse_match_return_aggregate(query, ctx.graph, ctx.guarded)
 }
 
 /// **Pass:** `fuse_match_with_aggregate` — Like
