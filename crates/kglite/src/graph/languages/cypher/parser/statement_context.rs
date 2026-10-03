@@ -1,4 +1,4 @@
-//! The statement prefix `FOR <axis> AS OF <instant>`, and the refusals for
+//! The statement prefix `FOR <axis> AS OF <instant>` or `FOR <axis> ALL`, and the refusals for
 //! prefixes written where only a statement may carry them.
 //!
 //! `FOR`, `OF` and the axis names are not reserved words: they arrive as
@@ -6,7 +6,7 @@
 //! axis; lowering refuses every axis but `VALID_TIME`, so a client can probe
 //! for support and a later axis adds semantics, not syntax.
 
-use super::super::ast::{Expression, StatementContext};
+use super::super::ast::{ContextInstant, ContextOrigin, Expression, StatementContext};
 use super::super::tokenizer::{describe_token, describe_token_opt, CypherToken};
 use super::CypherParser;
 use crate::datatypes::values::Value;
@@ -18,7 +18,8 @@ const INSTANT_FORMS: &str = "a quoted ISO date or datetime, $param, date('…'),
                              datetime('…'), datetime($param), or date() for today (UTC)";
 
 impl CypherParser {
-    /// Parse `FOR <axis> AS OF <instant>`; the caller has seen `FOR`.
+    /// Parse `FOR <axis> AS OF <instant>` or `FOR <axis> ALL`; the caller has
+    /// seen `FOR`.
     pub(super) fn parse_statement_context(&mut self) -> Result<StatementContext, String> {
         self.advance();
         let axis = match self.peek() {
@@ -31,9 +32,19 @@ impl CypherParser {
             }
         };
         self.advance();
+        if self.check(&CypherToken::All) {
+            self.advance();
+            return Ok(StatementContext {
+                axis,
+                instant: ContextInstant::All,
+                origin: ContextOrigin::Explicit,
+                refusal: None,
+                body_start: 0,
+            });
+        }
         if !self.check(&CypherToken::As) {
             return Err(format!(
-                "Expected AS OF after FOR {axis}, got {}",
+                "Expected AS OF or ALL after FOR {axis}, got {}",
                 describe_token_opt(self.peek())
             ));
         }
@@ -50,7 +61,8 @@ impl CypherParser {
         }
         Ok(StatementContext {
             axis,
-            instant,
+            instant: ContextInstant::AsOf(instant),
+            origin: ContextOrigin::Explicit,
             refusal: None,
             body_start: 0,
         })

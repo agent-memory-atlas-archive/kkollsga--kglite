@@ -96,7 +96,7 @@ fn periods(graph: &DirGraph) -> Vec<Vec<Value>> {
     let params = HashMap::new();
     execute_read(
         graph,
-        "MATCH ()-[r:IN]->(:Doc) RETURN r.vf AS vf, r.vt AS vt ORDER BY vf, vt",
+        "FOR VALID_TIME ALL MATCH ()-[r:IN]->(:Doc) RETURN r.vf AS vf, r.vt AS vt ORDER BY vf, vt",
         &ExecuteOptions::eager(&params),
     )
     .unwrap()
@@ -258,7 +258,7 @@ fn one_call_and_several_calls_leave_the_same_versions() {
         let params = HashMap::new();
         execute_read(
             graph,
-            "MATCH ()-[r:IN]->() RETURN r.vf AS vf, r.vt AS vt, r.x AS x ORDER BY vf, vt, x",
+            "FOR VALID_TIME ALL MATCH ()-[r:IN]->() RETURN r.vf AS vf, r.vt AS vt, r.x AS x ORDER BY vf, vt, x",
             &ExecuteOptions::eager(&params),
         )
         .unwrap()
@@ -654,7 +654,7 @@ fn an_ambiguous_type_keys_each_row_on_the_declaration_it_carries() {
     let params = HashMap::new();
     let total = execute_read(
         &graph,
-        "MATCH ()-[r:IN]->() RETURN count(r) AS n",
+        "FOR VALID_TIME ALL MATCH ()-[r:IN]->() RETURN count(r) AS n",
         &ExecuteOptions::eager(&params),
     )
     .unwrap()

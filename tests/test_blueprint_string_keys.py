@@ -102,19 +102,19 @@ def test_zero_padded_codes_connect_without_stubs(blueprint_path, streamed, monke
     stub_warnings = [str(w.message) for w in caught if "stub" in str(w.message)]
     assert stub_warnings == []
 
-    assert graph.cypher("MATCH (m:Municipality) RETURN m.id AS id ORDER BY id").to_list() == [
+    assert graph.cypher("FOR VALID_TIME ALL MATCH (m:Municipality) RETURN m.id AS id ORDER BY id").to_list() == [
         {"id": "0001"},
         {"id": "0053"},
         {"id": "0990"},
     ]
     assert graph.cypher(
-        "MATCH (m:Municipality)-[:MERGED_INTO]->(s) RETURN m.id AS m, s.id AS s ORDER BY m"
+        "FOR VALID_TIME ALL MATCH (m:Municipality)-[:MERGED_INTO]->(s) RETURN m.id AS m, s.id AS s ORDER BY m"
     ).to_list() == [{"m": "0001", "s": "0053"}, {"m": "0990", "s": "0053"}]
     assert graph.cypher(
-        "MATCH (m:Municipality)-[:IN_PROVINCE]->(p) RETURN m.id AS m, p.id AS p ORDER BY m"
+        "FOR VALID_TIME ALL MATCH (m:Municipality)-[:IN_PROVINCE]->(p) RETURN m.id AS m, p.id AS p ORDER BY m"
     ).to_list() == [{"m": "0001", "p": "PV-GR"}, {"m": "0053", "p": "PV-GR"}]
-    assert graph.cypher("MATCH (w:Woonplaats)-[:IN_MUNICIPALITY]->(m) RETURN w.id AS w, m.id AS m").to_list() == [
-        {"w": "WP1", "m": "0001"}
-    ]
+    assert graph.cypher(
+        "FOR VALID_TIME ALL MATCH (w:Woonplaats)-[:IN_MUNICIPALITY]->(m) RETURN w.id AS w, m.id AS m"
+    ).to_list() == [{"w": "WP1", "m": "0001"}]
     # The as-of view sees the three real rows only — no open-interval stubs.
     assert graph.date("1995-06-01").select("Municipality").len() == 1

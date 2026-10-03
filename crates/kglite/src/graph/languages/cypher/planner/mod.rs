@@ -304,6 +304,9 @@ pub fn optimize_with_disabled(
     params: &HashMap<String, Value>,
     disabled: &HashSet<String>,
 ) {
+    // The statement's default context, before any scope plans: nested scopes
+    // re-enter below and take the top level's.
+    super::valid_time::apply_default(query, graph);
     let empty_scope = empty_disabled_set();
     optimize_with_disabled_scoped(
         query,
@@ -327,7 +330,7 @@ fn optimize_with_disabled_scoped(
     // A statement with a context (and each scope lowering gave a template)
     // keeps its inline-map expressions for the filtered executor; see
     // `guard::GUARD_DENIED_PREPASSES`.
-    if query.context.is_none() && query.guard.is_none() {
+    if !super::valid_time::has_instant_context(query) && query.guard.is_none() {
         super::executor::match_execution::fold_constant_inline_maps(query, graph, params);
     }
     // Mandatory, and outside PASSES so no `disabled_passes` entry can skip it.

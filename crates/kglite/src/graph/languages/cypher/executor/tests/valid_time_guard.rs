@@ -126,6 +126,11 @@ fn registry() -> DirGraph {
     graph
 }
 
+/// `body` over every version: the reference an as-of answer is compared with.
+fn all(body: &str) -> String {
+    format!("FOR VALID_TIME ALL {body}")
+}
+
 fn at(date: &str, body: &str) -> String {
     format!("FOR VALID_TIME AS OF date('{date}') {body}")
 }
@@ -279,7 +284,7 @@ fn strings(values: &[&str]) -> Vec<Value> {
 fn var_length_segments_cross_only_valid_relationships_and_nodes() {
     let graph = network();
     let count = "MATCH (:Stop {id: 1})-[:LINK*1..3]->(:Stop {id: 3}) RETURN count(*) AS c";
-    assert_eq!(rows(&graph, count), ints(&[4]));
+    assert_eq!(rows(&graph, &all(count)), ints(&[4]));
     assert_eq!(rows(&graph, &at("2008-01-01", count)), ints(&[1]));
     let list = "MATCH (:Stop {id: 1})-[r:LINK*1..3]->(:Stop {id: 3}) RETURN [x IN r | x.k]";
     assert_eq!(
@@ -292,7 +297,7 @@ fn var_length_segments_cross_only_valid_relationships_and_nodes() {
         "MATCH (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t)",
         "MATCH p = (:Stop {id: 1})-[:LINK*1..2]->(t) RETURN count(DISTINCT t)",
     ] {
-        assert_eq!(rows(&graph, reach), ints(&[4]), "{reach}");
+        assert_eq!(rows(&graph, &all(reach)), ints(&[4]), "{reach}");
         assert_eq!(
             rows(&graph, &at("2008-01-01", reach)),
             ints(&[2]),
@@ -306,7 +311,7 @@ fn var_length_segments_cross_only_valid_relationships_and_nodes() {
     assert_eq!(rows(&graph, &at("2008-01-01", frontier)), ints(&[3]));
     // The undirected closed trail 4–5–4 needs both parallel links.
     let closed = "MATCH (s:Stop {id: 4})-[:LINK*1..2]-(t:Stop) RETURN DISTINCT t.id";
-    assert_eq!(rows(&graph, closed), ints(&[1, 2, 3, 4, 5]));
+    assert_eq!(rows(&graph, &all(closed)), ints(&[1, 2, 3, 4, 5]));
     assert_eq!(rows(&graph, &at("2008-01-01", closed)), ints(&[1, 3, 5]));
     let exists = "MATCH (s:Stop) WHERE EXISTS { (s)-[:LINK*2..2]->(:Stop {id: 3}) } RETURN s.id";
     assert_eq!(rows(&graph, &at("2008-01-01", exists)), ints(&[4]));
@@ -318,7 +323,7 @@ fn shortest_paths_take_the_longer_valid_route() {
     let single = "MATCH p = shortestPath((:Stop {id: 1})-[:LINK*]->(:Stop {id: 3})) \
                   RETURN [r IN relationships(p) | r.k]";
     assert_eq!(
-        rows(&graph, single),
+        rows(&graph, &all(single)),
         vec![vec![Value::List(strings(&["ab"]))]]
     );
     assert_eq!(
@@ -375,7 +380,10 @@ fn inline_map_values_are_lowered_and_evaluated_under_the_filter() {
     // opens in 2012), so the count is 1 and the id 20.
     let counted = "MATCH (c:Company {id: COUNT { (:Well) } + 19}) RETURN c.id";
     assert_eq!(rows(&graph, &at("2011-01-01", counted)), ints(&[20]));
-    assert!(rows(&graph, counted).is_empty(), "three Wells unguarded");
+    assert!(
+        rows(&graph, &all(counted)).is_empty(),
+        "three Wells unguarded"
+    );
     // An unfolded constant reaches the node-scan aggregate and top-k shapes.
     for (query, want) in [
         ("MATCH (c:Company {id: 19 + 1}) RETURN count(c)", 1),
@@ -516,7 +524,7 @@ fn the_streaming_pipeline_answers_as_the_materialized_path_under_a_context() {
         }
         assert_ne!(
             materialized,
-            rows(&graph, query),
+            rows(&graph, &all(query)),
             "{query}: filters nothing"
         );
     }

@@ -362,14 +362,24 @@ pub struct QueryDiagnostics {
     pub temporal: Option<Box<TemporalDiagnostics>>,
 }
 
-/// The valid-time echo on [`QueryDiagnostics::temporal`]: the instant a
-/// context resolved to, what it filtered and by which route.
+/// The valid-time echo on [`QueryDiagnostics::temporal`]: where the context
+/// came from, the instant it resolved to, what it filtered and by which
+/// route.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct TemporalDiagnostics {
     /// The context's axis, `VALID_TIME`.
     pub axis: String,
+    /// Where the context came from: `default` (the graph declares validity
+    /// and the statement wrote no context, so it ran as of today in UTC),
+    /// `explicit` (`FOR VALID_TIME AS OF` or a binding's `valid_at=`), `all`
+    /// (`FOR VALID_TIME ALL`), or `skipped:<reason>` when the default did not
+    /// apply and the statement read every version: `write`, `procedure` (not
+    /// valid-time aware), or `valid_at` (the statement names its own
+    /// instants).
+    pub source: String,
     /// The instant this execution resolved, ISO 8601: `2009-06-30` for a
-    /// date, `2009-06-30T12:00:00` (naive UTC) for a datetime.
+    /// date, `2009-06-30T12:00:00` (naive UTC) for a datetime; `all` when the
+    /// statement reads every version.
     pub instant: String,
     /// The declared labels the filter judges for the statement's patterns,
     /// including labels widened in through secondary labels (a `(:A)`
@@ -391,8 +401,9 @@ pub struct TemporalDiagnostics {
     /// answered by property guards, so the nodes' validity cannot be counted.
     pub endpoint_invalid: Option<usize>,
     /// `guarded`: the statement ran under the filter (EXPLAIN renders that
-    /// plan). `plain`: every declared target was timeless at the instant, so
-    /// the filter removed nothing and the statement ran its plain plan.
+    /// plan). `plain`: nothing was filtered — every declared target was
+    /// timeless at the instant, the statement reaches none, or it reads every
+    /// version — so it ran its plain plan.
     /// `view`: it ran through a valid-time view (`freeze(valid_at=)`).
     pub route: String,
     /// `exact_mask` when a vector retrieval scored the valid vectors exactly

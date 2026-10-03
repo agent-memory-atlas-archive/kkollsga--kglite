@@ -252,8 +252,11 @@ CELLS: dict[str, Cell] = {
     ),
 }
 
-# The P1b spelling of the open-ended node scan: pushed into the node matchers.
-NODE_SCAN_PUSHED = "MATCH (a:E) WHERE a.vf <= $t AND (a.vt IS NULL OR a.vt >= $t) RETURN avg(a.score) AS s"
+# The P1b spelling of the open-ended node scan: pushed into the node matchers,
+# over every version (the written bounds are the only filter).
+NODE_SCAN_PUSHED = (
+    "FOR VALID_TIME ALL MATCH (a:E) WHERE a.vf <= $t AND (a.vt IS NULL OR a.vt >= $t) RETURN avg(a.score) AS s"
+)
 
 CONTROLS = {
     "unwind_sum": "UNWIND range(1, 300000) AS x RETURN sum(x % 7) AS s",
@@ -302,7 +305,7 @@ def _pair(scale: Scale) -> Pair:
     for name, cell in CELLS.items():
         guarded = _rows(full, cell.context, params)
         assert guarded == _rows(view, cell.plain, params), f"{name}: context answer differs from the view"
-        assert guarded != _rows(full, cell.plain, params), f"{name}: the guard filters nothing"
+        assert guarded != _rows(full, "FOR VALID_TIME ALL " + cell.plain, params), f"{name}: the guard filters nothing"
     frozen = full.freeze(valid_at=T)
     for name, cell in CELLS.items():
         assert _rows(frozen, cell.plain, params) == _rows(view, cell.plain, params), f"{name}: frozen"
@@ -565,7 +568,8 @@ def _disk_query(shape: str, guard: str) -> str:
     if guard == "context":
         # The statement prefix: on disk every guard reads the bounds.
         return AS_OF_T + template.format(g="true")
-    return template.format(g=DISK_GUARDS[guard].format(x=var))
+    # The hand-written spellings are the only filter: over every version.
+    return "FOR VALID_TIME ALL " + template.format(g=DISK_GUARDS[guard].format(x=var))
 
 
 def _disk_pair(path: str) -> tuple[KnowledgeGraph, dict[str, object]]:

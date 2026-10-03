@@ -56,32 +56,33 @@ def _assert_sorted_int64_entry(path: Path, live_versions: int) -> None:
 
 def _check(graph, frame: pd.DataFrame, deleted: list[int]) -> None:
     live = frame[~frame["id"].isin(deleted)]
-    assert graph.cypher(f"MATCH (p:{TYPE}) RETURN count(*) AS c").to_list() == [{"c": len(live)}]
-    assert graph.cypher(f"MATCH (:{TYPE})-[:{REL}]->(:{ANCHOR_TYPE}) RETURN count(*) AS c").to_list() == [
-        {"c": len(live)}
-    ]
+    assert graph.cypher(f"FOR VALID_TIME ALL MATCH (p:{TYPE}) RETURN count(*) AS c").to_list() == [{"c": len(live)}]
+    assert graph.cypher(
+        f"FOR VALID_TIME ALL MATCH (:{TYPE})-[:{REL}]->(:{ANCHOR_TYPE}) RETURN count(*) AS c"
+    ).to_list() == [{"c": len(live)}]
     for position in (0, CHUNK - 1, CHUNK, len(frame) // 2, len(frame) - 1):
         row = frame.iloc[position]
         got = graph.cypher(
-            f"MATCH (p:{TYPE} {{id: $i}}) RETURN p.title AS t, p.status AS s", params={"i": int(row.id)}
+            f"FOR VALID_TIME ALL MATCH (p:{TYPE} {{id: $i}}) RETURN p.title AS t, p.status AS s",
+            params={"i": int(row.id)},
         ).to_list()
         if int(row.id) in deleted:
             assert got == []
         else:
             assert got == [{"t": int(row.ident), "s": row.status}], (position, got)
     for gone in deleted:
-        assert graph.cypher(f"MATCH (p:{TYPE} {{id: $i}}) RETURN count(*) AS c", params={"i": gone}).to_list() == [
-            {"c": 0}
-        ]
+        assert graph.cypher(
+            f"FOR VALID_TIME ALL MATCH (p:{TYPE} {{id: $i}}) RETURN count(*) AS c", params={"i": gone}
+        ).to_list() == [{"c": 0}]
     # A float spelling of a stored integer id names the same version.
     row = live.iloc[len(live) // 3]
     assert graph.cypher(
-        f"MATCH (p:{TYPE}) WHERE p.id = $i RETURN p.title AS t", params={"i": float(row.id)}
+        f"FOR VALID_TIME ALL MATCH (p:{TYPE}) WHERE p.id = $i RETURN p.title AS t", params={"i": float(row.id)}
     ).to_list() == [{"t": int(row.ident)}]
     missing = int(frame["id"].max()) + 1
-    assert graph.cypher(f"MATCH (p:{TYPE} {{id: $i}}) RETURN count(*) AS c", params={"i": missing}).to_list() == [
-        {"c": 0}
-    ]
+    assert graph.cypher(
+        f"FOR VALID_TIME ALL MATCH (p:{TYPE} {{id: $i}}) RETURN count(*) AS c", params={"i": missing}
+    ).to_list() == [{"c": 0}]
     at = pd.Timestamp("2005-06-30T12:34:56.789012")
     expected = int(((live["valid_from"] <= at) & (live["valid_to"].isna() | (live["valid_to"] > at))).sum())
     assert 0 < expected < len(live)

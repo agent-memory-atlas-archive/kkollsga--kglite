@@ -22,6 +22,7 @@ mod register;
 mod runners;
 mod state;
 mod state_workspace;
+mod temporal_line;
 mod workspace_api;
 mod write_authz;
 mod write_refusals;

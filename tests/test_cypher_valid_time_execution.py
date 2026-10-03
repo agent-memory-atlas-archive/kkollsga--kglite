@@ -24,6 +24,10 @@ def at(date: str, body: str) -> str:
     return f"FOR VALID_TIME AS OF date('{date}') {body}"
 
 
+def every(body: str) -> str:
+    return f"FOR VALID_TIME ALL {body}"
+
+
 def ids(graph, query, column=None, **kwargs):
     rows = graph.cypher(query, **kwargs).to_list()
     return sorted(row[column] if column else next(iter(row.values())) for row in rows)
@@ -135,7 +139,7 @@ def test_count_subquery_and_exists_are_guarded(sodir):
 
 
 def test_an_element_id_anchor_on_an_invisible_node_matches_nothing(sodir):
-    element = sodir.cypher("MATCH (w:Well {id: 1}) RETURN elementId(w) AS e").to_list()[0]["e"]
+    element = sodir.cypher(every("MATCH (w:Well {id: 1}) RETURN elementId(w) AS e")).to_list()[0]["e"]
     body = "MATCH (w:Well) WHERE elementId(w) = $e RETURN w.id"
     assert ids(sodir, at("2003-01-01", body), params={"e": element}) == [1]
     assert ids(sodir, at("2011-01-01", body), params={"e": element}) == []
@@ -145,7 +149,7 @@ def test_a_transient_index_join_sees_only_valid_nodes(sodir):
     """80 driving rows probe the wells by a per-row key: the join the
     transient equality index serves unguarded runs through the matcher."""
     body = "UNWIND range(1, 80) AS i WITH 1 + i % 2 AS k MATCH (w:Well {id: k}) RETURN count(*) AS c"
-    assert ids(sodir, body) == [80]
+    assert ids(sodir, every(body)) == [80]
     assert ids(sodir, at("2006-01-01", body)) == [80]
     assert ids(sodir, at("2003-01-01", body)) == [40]
     assert ids(sodir, at("2011-01-01", body)) == [40]
@@ -463,8 +467,8 @@ def _explained(graph, query):
 def test_var_length_paths_run_only_through_valid_elements(network):
     count = "MATCH (:Stop {{id: 1}})-[:LINK*1..{n}]->(:Stop {{id: 3}}) RETURN count(*) AS c"
     # Unguarded: 1→3, 1→2→3, and 1→4→5→3 once per parallel 4→5 link.
-    assert ids(network, count.format(n=2)) == [2]
-    assert ids(network, count.format(n=3)) == [4]
+    assert ids(network, every(count.format(n=2))) == [2]
+    assert ids(network, every(count.format(n=3))) == [4]
     # The direct link is closed and stop 2 is gone: nothing within two hops.
     assert ids(network, at("2008-01-01", count.format(n=2))) == [0]
     assert ids(network, at("2008-01-01", count.format(n=3))) == [1]
@@ -488,7 +492,7 @@ def test_var_length_paths_run_only_through_valid_elements(network):
 def test_an_invisible_intermediate_node_or_relationship_breaks_the_path(network, body):
     """Within two hops of stop 1 at 2008: 4 and 5 only — 2 is invisible, 3
     is reached over the closed direct link or through 2."""
-    assert ids(network, body) == [4]
+    assert ids(network, every(body)) == [4]
     assert ids(network, at("2008-01-01", body)) == [2]
 
 
@@ -502,13 +506,13 @@ def test_an_undirected_closed_trail_needs_valid_relationships(network, path):
     """Stop 4 reaches itself over the two parallel 4–5 links; at 2008 one
     of them is closed, so 4 is no longer its own two-hop neighbour."""
     body = f"MATCH {path}(s:Stop {{id: 4}})-[:LINK*1..2]-(t:Stop) RETURN DISTINCT t.id AS t"
-    assert ids(network, body) == [1, 2, 3, 4, 5]
+    assert ids(network, every(body)) == [1, 2, 3, 4, 5]
     assert ids(network, at("2008-01-01", body)) == [1, 3, 5]
 
 
 def test_exists_with_a_var_length_pattern_is_guarded(network):
     body = "MATCH (s:Stop) WHERE EXISTS { (s)-[:LINK*2..2]->(:Stop {id: 3}) } RETURN s.id"
-    assert ids(network, body) == [1, 4]
+    assert ids(network, every(body)) == [1, 4]
     assert ids(network, at("2008-01-01", body)) == [4]
 
 
@@ -517,7 +521,7 @@ def test_shortest_path_takes_the_longer_valid_route(network):
         "MATCH p = shortestPath((a:Stop {id: 1})-[:LINK*]->(b:Stop {id: 3})) "
         "RETURN length(p) AS n, [r IN relationships(p) | r.k] AS ks"
     )
-    assert network.cypher(body).to_list() == [{"n": 1, "ks": ["ab"]}]
+    assert network.cypher(every(body)).to_list() == [{"n": 1, "ks": ["ab"]}]
     # Through the valid parallel link only.
     assert network.cypher(at("2008-01-01", body)).to_list() == [{"n": 3, "ks": ["ax", "xy2", "yb"]}]
     undirected = "MATCH p = shortestPath((a:Stop {id: 1})-[:LINK*]-(b:Stop {id: 3})) RETURN length(p) AS n"
@@ -534,7 +538,7 @@ def test_all_shortest_paths_skip_invisible_parallel_relationships(network):
         "MATCH p = allShortestPaths((a:Stop {id: 1})-[:LINK*]->(b:Stop {id: 3})) "
         "RETURN [r IN relationships(p) | r.k] AS ks"
     )
-    assert ids(network, body) == [["ab"]]
+    assert ids(network, every(body)) == [["ab"]]
     assert ids(network, at("2008-01-01", body)) == [["ax", "xy2", "yb"]]
     # At 2003 the direct link is valid again; one shortest path.
     assert ids(network, at("2003-01-01", body)) == [["ab"]]
@@ -543,7 +547,7 @@ def test_all_shortest_paths_skip_invisible_parallel_relationships(network):
         "MATCH p = allShortestPaths((a:Stop {id: 4})-[:LINK*]-(b:Stop {id: 5})) "
         "RETURN [r IN relationships(p) | r.k] AS ks"
     )
-    assert ids(network, four) == [["xy1"], ["xy2"]]
+    assert ids(network, every(four)) == [["xy1"], ["xy2"]]
     assert ids(network, at("2008-01-01", four)) == [["xy2"]]
     assert ids(network, at("2003-01-01", four)) == [["xy1"]]
 
@@ -575,14 +579,14 @@ def test_count_subquery_equals_the_guarded_match_count(storage):
     matched = "MATCH (f:Field)-[:HAS_LICENSEE]->() RETURN count(*) AS n"
     for date, want in [("2003-01-01", 1), ("2004-06-01", 2), ("2008-01-01", 2), ("1990-01-01", 0)]:
         assert ids(graph, at(date, counted)) == ids(graph, at(date, matched)) == [want], date
-    assert ids(graph, counted) == [3]
+    assert ids(graph, every(counted)) == [3]
 
 
 def test_pattern_comprehensions_collect_only_valid_matches(sodir):
     names = "MATCH (f:Field) RETURN [(f)<--(w) | w.id] AS ws"
     paths = "MATCH (f:Field) RETURN [p = (f)<-[:IN]-(w) | length(p)] AS ls"
     collected = "MATCH (f:Field)<--(w) RETURN collect(w.id) AS ws"
-    assert sorted(ids(sodir, names)[0]) == [1, 2, 3]
+    assert sorted(ids(sodir, every(names))[0]) == [1, 2, 3]
     for date, want in [("2006-01-01", [1, 2]), ("2011-01-01", [2]), ("2013-01-01", [2, 3])]:
         assert sorted(ids(sodir, at(date, names))[0]) == sorted(ids(sodir, at(date, collected))[0]) == want
         assert ids(sodir, at(date, paths))[0] == [1] * len(want)
@@ -618,7 +622,7 @@ def test_gullfaks_q4_by_var_length_equals_the_written_out_hops():
     for prefix in ("", bench.AS_OF_T):
         written = bench._rows(graph, prefix + hops, params)
         assert bench._rows(graph, prefix + segment, params) == written, prefix
-    assert bench._rows(graph, bench.AS_OF_T + segment, params) != bench._rows(graph, segment, params)
+    assert bench._rows(graph, bench.AS_OF_T + segment, params) != bench._rows(graph, every(segment), params)
 
 
 # ── The timeless exit ────────────────────────────────────────────────────────

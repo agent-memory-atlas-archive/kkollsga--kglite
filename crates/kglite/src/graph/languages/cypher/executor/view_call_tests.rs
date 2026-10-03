@@ -98,9 +98,9 @@ fn a_routed_algorithm_sees_only_the_valid_elements_and_yields_base_nodes() {
     ]
     .into();
     assert_eq!(components(&g, AS_OF), expected);
-    // Unprefixed, every element counts.
+    // Under ALL, every element counts.
     let whole: BTreeSet<BTreeSet<i64>> = [BTreeSet::from([1, 2, 3]), BTreeSet::from([4, 5])].into();
-    assert_eq!(components(&g, ""), whole);
+    assert_eq!(components(&g, "FOR VALID_TIME ALL "), whole);
 
     // The yielded node is the graph's own: its element id and a hop from it
     // read the base graph.

@@ -88,10 +88,15 @@ fn run_recipe_query_answers_as_of_valid_at_and_echoes_the_instant() {
     let temp = tempfile::tempdir().expect("tempdir");
     let state = wells_state(temp.path());
 
-    let all = run(&state, args("list", None));
-    assert_eq!(all["result"]["rows"], json!([[1], [2]]));
-    assert_eq!(all["cypher"], WELLS);
-    assert!(all["result"]["diagnostics"].get("temporal").is_none());
+    // Without `valid_at` the graph's declarations default the statement to
+    // today: well 1 closed in 2005.
+    let current = run(&state, args("list", None));
+    assert_eq!(current["result"]["rows"], json!([[2]]));
+    assert_eq!(current["cypher"], WELLS);
+    assert_eq!(
+        current["result"]["diagnostics"]["temporal"]["source"],
+        "default"
+    );
 
     let as_of = run(&state, args("list", Some("2003-06-30")));
     assert_eq!(as_of["result"]["rows"], json!([[1]]));
@@ -157,8 +162,8 @@ async fn a_named_recipe_tool_takes_valid_at_beside_its_variables() {
         CallToolRequestParams::new("list_wells")
             .with_arguments(arguments.as_object().unwrap().clone())
     };
-    let all = client.call_tool(call(json!({}))).await.unwrap();
-    assert_eq!(structured(&all)["result"]["rows"], json!([[1], [2]]));
+    let current = client.call_tool(call(json!({}))).await.unwrap();
+    assert_eq!(structured(&current)["result"]["rows"], json!([[2]]));
     let as_of = client
         .call_tool(call(json!({"valid_at": "2003-06-30"})))
         .await

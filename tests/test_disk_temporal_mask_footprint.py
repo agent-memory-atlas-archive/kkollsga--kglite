@@ -61,7 +61,7 @@ MEASURE = textwrap.dedent(
         return int(buf[9])  # ri_phys_footprint
 
     g = kglite.load(sys.argv[1])
-    edges = g.cypher("MATCH ()-[r:L]->() RETURN count(r) AS c").to_list()[0]["c"]
+    edges = g.cypher("FOR VALID_TIME ALL MATCH ()-[r:L]->() RETURN count(r) AS c").to_list()[0]["c"]
     gc.collect()
     kglite.trim_memory()
     base = footprint()

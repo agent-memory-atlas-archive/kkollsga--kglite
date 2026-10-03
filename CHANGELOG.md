@@ -27,6 +27,38 @@ before upgrading.
 
 ### Changed
 
+- **Breaking: on a graph that declares validity, a statement with no context
+  now runs as of today (UTC).** A graph with a validity declaration answers
+  every read statement that writes no `FOR VALID_TIME` prefix as
+  `FOR VALID_TIME AS OF date()` — the engine adds the context when it lowers
+  the statement, so Python, MCP, Bolt, the C ABI and the CLI behave alike, and
+  the day is resolved per execution (a cached plan never freezes it). Before,
+  such a statement read every version of every element. A graph with no
+  declaration is untouched, and costs nothing. To read history, prefix the
+  statement with the new `FOR VALID_TIME ALL` (no filter, no write refusal; a
+  no-op on a graph with no declaration, so a generic recipe can always send
+  it; refused inside a `freeze(valid_at=…)` view like any other context).
+  The default does not apply to a statement that writes (its reads see every
+  version, as before), to a procedure that is not valid-time aware
+  (`refresh_stats`, `duplicate_id`, the `*_violation` audits, ...; an explicit
+  prefix still refuses these), or to a statement that calls `valid_at()` /
+  `valid_during()` itself, so the two-instant and lineage patterns keep their
+  answers. `degree()`, `indegree()`, `outdegree()` and
+  `shortest_path_length()` read relationships outside the pattern matcher and
+  are refused under the default with a hint naming `COUNT { (n)--() }` (which
+  respects the context) and `FOR VALID_TIME ALL`; they run under `ALL`.
+  `diagnostics["temporal"]` now carries `source` (`default`, `explicit`,
+  `all`, or `skipped:write` / `skipped:procedure` / `skipped:valid_at` when
+  the default did not apply); under `ALL` the `instant` is `all`, and a
+  statement that reaches no declared target reports route `plain`, never
+  `guarded`. The MCP `temporal:` line is now a one-line summary (source,
+  instant, route, total hidden with the three heaviest targets and `+N more`,
+  `endpoint_invalid`); the per-target map stays in the structured diagnostics.
+  Migration: add `FOR VALID_TIME ALL` where a query means history, and expect
+  today's state where it means current state. Rust API: `TemporalDiagnostics`
+  gains the public field `source`, so a struct literal of it no longer
+  compiles.
+
 - A blueprint sub-node that declares `parent_fk` now gets an implicit
   `OF_<PARENT>` edge (parent type upper-cased, e.g. `OF_EMPLOYEE`) to its
   enclosing node, as the blueprint guide always described; before, only a spec

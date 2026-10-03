@@ -50,7 +50,7 @@ def _graph(storage, tmp_path) -> kglite.KnowledgeGraph:
 
 
 def _status(g) -> list:
-    return sorted(r["id"] for r in g.cypher("MATCH (s:Status) RETURN s.id AS id").to_list())
+    return sorted(r["id"] for r in g.cypher("FOR VALID_TIME ALL MATCH (s:Status) RETURN s.id AS id").to_list())
 
 
 def _clean(g) -> None:
@@ -84,7 +84,7 @@ def test_add_nodes_with_a_declared_label_judges_its_rows(storage, tmp_path) -> N
     inverted = _frame([(60, "2001-01-01", None), (61, "2010-01-01", "2001-01-01")])
     with pytest.raises(kglite.ArgumentError, match=r"row 1 \(0-based\) of the load, .*is after the to bound"):
         g.add_nodes(inverted, "Other", "id", labels=["Status"])
-    assert g.cypher("MATCH (o:Other) RETURN count(o) AS c").to_list() == [{"c": 2}]
+    assert g.cypher("FOR VALID_TIME ALL MATCH (o:Other) RETURN count(o) AS c").to_list() == [{"c": 2}]
     # An existing node that gains the label answers with its stored bounds.
     with pytest.raises(kglite.ArgumentError, match=r"row 0 \(0-based\) of the load, .*is after the to bound"):
         g.add_nodes(pd.DataFrame({"id": [50], "name": ["x"]}), "Other", "id", labels=["Status"])
@@ -194,7 +194,7 @@ def test_extend_judges_a_label_it_unions_onto_a_declared_label() -> None:
     source.cypher("CREATE (:Other:Status {id: 80, vf: date('2010-01-01'), vt: date('2000-01-01')})").to_list()
     with pytest.raises(Exception, match=r"extend: node '80', the from bound .*is after the to bound"):
         target.extend(source)
-    assert target.cypher("MATCH (o:Other) RETURN count(o) AS c").to_list() == [{"c": 2}]
+    assert target.cypher("FOR VALID_TIME ALL MATCH (o:Other) RETURN count(o) AS c").to_list() == [{"c": 2}]
     assert _status(target) == [1]
     source = kglite.KnowledgeGraph()
     source.cypher("CREATE (:Other:Status {id: 81, vf: date('2010-01-01'), vt: date('2010-01-01')})").to_list()

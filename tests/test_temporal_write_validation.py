@@ -55,11 +55,13 @@ def _graph(storage, tmp_path, convention="half_open") -> kglite.KnowledgeGraph:
 
 
 def _statuses(g) -> list:
-    return g.cypher("MATCH (s:Status) RETURN s.id AS id, s.vf AS vf, s.vt AS vt ORDER BY id").to_list()
+    return g.cypher(
+        "FOR VALID_TIME ALL MATCH (s:Status) RETURN s.id AS id, s.vf AS vf, s.vt AS vt ORDER BY id"
+    ).to_list()
 
 
 def _ops(g) -> int:
-    return g.cypher("MATCH ()-[r:OP]->() RETURN count(r) AS n").to_list()[0]["n"]
+    return g.cypher("FOR VALID_TIME ALL MATCH ()-[r:OP]->() RETURN count(r) AS n").to_list()[0]["n"]
 
 
 def _clean(g) -> None:
@@ -159,7 +161,7 @@ def test_the_reproducer_second_load_is_kept_with_a_warning() -> None:
     caught = _load_warnings(lambda: g.add_nodes(row, "P", "id", "ident", column_types=types, convention="half_open"))
     assert len(caught) == 1, caught
     assert "the first is row 0 (0-based) of the load" in caught[0], caught
-    assert g.cypher("MATCH (p:P) RETURN count(p) AS n").to_list() == [{"n": 3}]
+    assert g.cypher("FOR VALID_TIME ALL MATCH (p:P) RETURN count(p) AS n").to_list() == [{"n": 3}]
     # A first load that declares keeps its empty row with one warning too.
     fresh = kglite.KnowledgeGraph()
     both = pd.concat([df, row], ignore_index=True)
@@ -331,7 +333,7 @@ def test_gaining_a_declared_label_answers_to_it(storage, tmp_path) -> None:
     g.cypher("CREATE (:Draft {id: 7, vf: date('2011-01-01'), vt: date('2010-01-01')})")
     with pytest.raises(kglite.CypherExecutionError, match="node '7'"):
         g.cypher("MATCH (d:Draft {id: 7}) SET d:Status")
-    assert g.cypher("MATCH (s:Status) RETURN count(s) AS n").to_list() == [{"n": 2}]
+    assert g.cypher("FOR VALID_TIME ALL MATCH (s:Status) RETURN count(s) AS n").to_list() == [{"n": 2}]
 
 
 # ── Stub vivification advisory ──────────────────────────────────────────

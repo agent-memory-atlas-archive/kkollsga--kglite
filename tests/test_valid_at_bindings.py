@@ -56,7 +56,8 @@ def _ids(result):
 @pytest.mark.parametrize("name", list(_entry_points(kglite.KnowledgeGraph())))
 def test_valid_at_answers_as_the_typed_prefix(wells, name):
     run = _entry_points(wells)[name]
-    assert _ids(run(WELLS)) == [1, 2]
+    assert _ids(run(f"FOR VALID_TIME ALL {WELLS}")) == [1, 2]
+    assert _ids(run(WELLS)) == [2], "without valid_at the declarations default to today"
     typed = _ids(run(f"FOR VALID_TIME AS OF date('{T}') {WELLS}"))
     for instant in (T, dt.date(2003, 6, 30), dt.datetime(2003, 6, 30, 12, 0)):
         assert _ids(run(WELLS, valid_at=instant)) == typed == [1], (name, instant)
@@ -85,6 +86,7 @@ def test_the_echo_names_the_instant_the_targets_and_the_route(wells, name):
     run = _entry_points(wells)[name]
     echo = run(WELLS, valid_at=T).diagnostics["temporal"]
     assert echo["axis"] == "VALID_TIME"
+    assert echo["source"] == "explicit"
     assert echo["instant"] == T
     assert echo["targets"] == ["(:Well)"]
     assert echo["hidden"] == {"(:Well)": 1}
@@ -98,7 +100,11 @@ def test_the_echo_names_the_instant_the_targets_and_the_route(wells, name):
     hop = run("MATCH (a:Well)-[:PIPE]->(b) RETURN a.id AS id", valid_at="2006-01-01T08:30:00")
     assert hop.diagnostics["temporal"]["instant"] == "2006-01-01T08:30:00"
     assert hop.diagnostics["temporal"]["targets"] == ["(:Well)", "[:PIPE]"]
-    assert run(WELLS).diagnostics["temporal"] is None
+    default = run(WELLS).diagnostics["temporal"]
+    assert default["source"] == "default"
+    assert default["instant"] == dt.datetime.now(dt.timezone.utc).date().isoformat()
+    every = run(f"FOR VALID_TIME ALL {WELLS}").diagnostics["temporal"]
+    assert (every["source"], every["instant"], every["route"]) == ("all", "all", "plain")
 
 
 def test_a_routed_algorithm_echoes_the_slice(wells):
@@ -133,7 +139,7 @@ def test_a_write_under_valid_at_is_refused_on_the_write_paths(wells):
     with pytest.raises(kglite.KgError, match="cannot write"):
         tx.cypher("CREATE (:Well {id: 3})", valid_at=T)
     tx.rollback()
-    assert _ids(wells.cypher(WELLS)) == [1, 2]
+    assert _ids(wells.cypher(f"FOR VALID_TIME ALL {WELLS}")) == [1, 2]
 
 
 def test_a_transaction_reads_its_own_writes_as_of_the_instant(wells):

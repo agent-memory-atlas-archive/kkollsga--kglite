@@ -79,6 +79,7 @@ fn the_diagnostics_json_carries_the_valid_time_echo() {
     assert_eq!(rows, serde_json::json!([{"id": 1}]));
     let echo = &diagnostics["temporal"];
     assert_eq!(echo["axis"], "VALID_TIME");
+    assert_eq!(echo["source"], "explicit");
     assert_eq!(echo["instant"], "2003-06-30");
     assert_eq!(echo["targets"], serde_json::json!(["(:Well)"]));
     // Well 2 has not started at the instant.
@@ -96,9 +97,18 @@ fn the_diagnostics_json_carries_the_valid_time_echo() {
     );
     assert_eq!(timeless["temporal"]["route"], "plain");
 
-    // No context, no key: the JSON of every other statement is unchanged.
-    let (_, plain) = read(session, "MATCH (w:Well) RETURN w.id AS id");
-    assert!(plain.get("temporal").is_none(), "{plain}");
+    // No prefix: the declaration defaults the statement to today, and
+    // `FOR VALID_TIME ALL` reads every version.
+    let (rows, current) = read(session, "MATCH (w:Well) RETURN w.id AS id");
+    assert_eq!(rows, serde_json::json!([{"id": 2}]));
+    assert_eq!(current["temporal"]["source"], "default");
+    let (rows, every) = read(
+        session,
+        "FOR VALID_TIME ALL MATCH (w:Well) RETURN w.id AS id ORDER BY id",
+    );
+    assert_eq!(rows, serde_json::json!([{"id": 1}, {"id": 2}]));
+    assert_eq!(every["temporal"]["source"], "all");
+    assert_eq!(every["temporal"]["instant"], "all");
 
     // A batch reads one snapshot, each entry with its own echo.
     let batch = CString::new(

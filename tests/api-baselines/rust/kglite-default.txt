@@ -1067,6 +1067,7 @@ pub kglite::api::cypher::TemporalDiagnostics::retrieval: core::option::Option<al
 pub kglite::api::cypher::TemporalDiagnostics::route: alloc::string::String
 pub kglite::api::cypher::TemporalDiagnostics::session_version: u64
 pub kglite::api::cypher::TemporalDiagnostics::slice: bool
+pub kglite::api::cypher::TemporalDiagnostics::source: alloc::string::String
 pub kglite::api::cypher::TemporalDiagnostics::targets: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::cypher::TemporalDiagnostics
 pub fn kglite::api::cypher::TemporalDiagnostics::clone(&self) -> kglite::api::cypher::TemporalDiagnostics

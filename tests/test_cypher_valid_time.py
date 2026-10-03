@@ -66,9 +66,11 @@ def test_explain_renders_the_context_in_either_order(wells):
         "ValidTimeContext axis=VALID_TIME targets=(:Well [vf, vt] closed), "
         "[:LICENSED [vf, vt] half_open] instant: per execution"
     )
-    # The rest of the plan is the plan of the same query without a context.
-    plain = _plan(wells, f"EXPLAIN {body}")
-    assert not any(op.startswith("ValidTimeContext") for op in plain)
+    # The rest of the plan is the plan of the same query under ALL, which
+    # lowers to nothing.
+    every = _plan(wells, f"EXPLAIN FOR VALID_TIME ALL {body}")
+    assert every[0] == "ValidTimeContext axis=VALID_TIME targets=none instant: all"
+    plain = every[1:]
     assert [op for op in before[1:] if not op.startswith("OptimizerPass")] == [
         op for op in plain if not op.startswith("OptimizerPass")
     ]
@@ -214,11 +216,11 @@ def test_valid_at_on_a_query_with_a_prefix_names_both(wells):
         wells.cypher("MATCH (w:Well) RETURN w", valid_at="next tuesday")
 
 
-def test_valid_at_none_changes_nothing(wells):
-    assert wells.cypher("MATCH (w:Well) RETURN w.id AS id ORDER BY id", valid_at=None).to_list() == [
-        {"id": 1},
-        {"id": 2},
-    ]
+def test_valid_at_none_is_the_default(wells):
+    query = "MATCH (w:Well) RETURN w.id AS id ORDER BY id"
+    assert wells.cypher(query, valid_at=None).to_list() == wells.cypher(query).to_list()
+    every = wells.cypher(f"FOR VALID_TIME ALL {query}").to_list()
+    assert every == [{"id": 1}, {"id": 2}]
 
 
 _DIFFERENTIAL_TRIGGERS = [
@@ -281,7 +283,7 @@ def test_a_guarded_plan_runs_only_allow_listed_passes(pass_name, case_id, reques
     graph = request.getfixturevalue(fixture)
     _seed_declaration(graph)
     kwargs = {"params": params} if params else {}
-    assert f"OptimizerPass {pass_name}" in _plan(graph, f"EXPLAIN {query}", **kwargs)
+    assert f"OptimizerPass {pass_name}" in _plan(graph, f"EXPLAIN FOR VALID_TIME ALL {query}", **kwargs)
     guarded = _plan(graph, f"EXPLAIN {AS_OF}{query}", **kwargs)
     assert guarded[0].startswith("ValidTimeContext")
     fired = {op.removeprefix("OptimizerPass ") for op in guarded if op.startswith("OptimizerPass ")}
@@ -296,24 +298,43 @@ _PREFIXLESS = [entry for entry in DIFFERENTIAL_QUERIES if not entry[2].startswit
 
 
 @pytest.mark.parametrize("name,fixture,query,params", _PREFIXLESS, ids=[e[0] for e in _PREFIXLESS])
-def test_a_declaration_alone_changes_no_plan_and_no_answer(name, fixture, query, params, request):
-    """The twin: the same seeded graph before and after a declaration gives a
-    byte-identical EXPLAIN and equal rows for every prefix-less corpus query."""
+def test_a_declaration_changes_no_plan_and_no_answer_under_all(name, fixture, query, params, request):
+    """The twin: ``FOR VALID_TIME ALL`` on the seeded graph before and after one
+    more declaration gives a byte-identical EXPLAIN and equal rows for every
+    prefix-less corpus query. ALL lowers to nothing, whatever is declared (some
+    fixtures already declare their own labels; an unprefixed statement would
+    default to today there)."""
     graph = request.getfixturevalue(fixture)
     graph.cypher("CREATE (:ZzValidity {vf: date('2000-01-01'), vt: date('2001-01-01')})").to_list()
     kwargs = {"params": params} if params else {}
     order = "ordered" if name in ORDERED_CASES else "bag"
 
     def observe():
-        plan = graph.cypher(f"EXPLAIN {query}", **kwargs).to_list()
-        rows = _normalize(graph.cypher(query, **kwargs).to_list(), order=order)
+        plan = graph.cypher(f"EXPLAIN FOR VALID_TIME ALL {query}", **kwargs).to_list()
+        rows = _normalize(graph.cypher(f"FOR VALID_TIME ALL {query}", **kwargs).to_list(), order=order)
         return plan, rows
 
-    undeclared = observe()
+    before = observe()
     graph.cypher("CALL db.temporal.declare({node: 'ZzValidity', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
-    declared = observe()
-    assert declared[0] == undeclared[0]
-    assert declared[1] == undeclared[1]
+    after = observe()
+    assert after[0] == before[0]
+    assert after[1] == before[1]
+
+
+@pytest.mark.parametrize("name,fixture,query,params", _PREFIXLESS, ids=[e[0] for e in _PREFIXLESS])
+def test_all_equals_the_unprefixed_statement_on_an_undeclared_graph(name, fixture, query, params, request):
+    """On a graph with no declaration the unprefixed statement gets no context
+    and ``FOR VALID_TIME ALL`` is a no-op: identical rows and no echo."""
+    graph = request.getfixturevalue(fixture)
+    if graph.cypher("CALL db.temporal.declarations()").to_list():
+        pytest.skip("the fixture declares validity; the default would apply")
+    kwargs = {"params": params} if params else {}
+    order = "ordered" if name in ORDERED_CASES else "bag"
+    plain = graph.cypher(query, **kwargs)
+    every = graph.cypher(f"FOR VALID_TIME ALL {query}", **kwargs)
+    assert _normalize(every.to_list(), order=order) == _normalize(plain.to_list(), order=order)
+    assert plain.diagnostics["temporal"] is None
+    assert every.diagnostics["temporal"] is None
 
 
 # The corpus's variable-length and shortestPath entries, prefix-less.

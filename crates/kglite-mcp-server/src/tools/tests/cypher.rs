@@ -883,8 +883,9 @@ fn valid_at_prepends_the_context_prefix() {
     let rows_of = |text: &str| text.split("\n\n").next().unwrap().to_string();
     assert_eq!(rows_of(&during.text), rows_of(&plain.text));
     assert!(
-        during.text.contains("\"route\":\"plain\"")
-            && during.text.contains("\"hidden\":{\"(:Vessel)\":0}"),
+        during
+            .text
+            .contains("temporal: explicit as of 2020-06-30, route plain; hidden 0"),
         "{}",
         during.text
     );
@@ -899,15 +900,18 @@ fn valid_at_prepends_the_context_prefix() {
     .expect("a context query runs");
     assert_ne!(output.text, plain.text, "no vessel is valid in 1990");
     assert!(
-        output.text.contains("temporal: {")
-            && output.text.contains("\"instant\":\"1990-06-30\"")
-            && output.text.contains("\"hidden\":{\"(:Vessel)\":1}")
-            && output.text.contains("\"endpoint_invalid\":0")
-            && output.text.contains("\"route\":\"guarded\""),
+        output.text.contains(
+            "temporal: explicit as of 1990-06-30, route guarded; hidden 1: (:Vessel) 1; \
+             endpoint_invalid 0"
+        ),
         "{}",
         output.text
     );
-    assert!(!plain.text.contains("temporal:"), "{}", plain.text);
+    assert!(
+        plain.text.contains("temporal: default as of "),
+        "the default echoes: {}",
+        plain.text
+    );
 }
 
 /// The trailing-aggregate shapes the streaming pipeline folds, on a declared

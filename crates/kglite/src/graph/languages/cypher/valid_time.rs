@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use chrono::Datelike;
 
-use super::ast::{CallClause, Clause, CypherQuery, Expression, StatementContext};
+use super::ast::{
+    CallClause, Clause, ContextInstant, ContextOrigin, CypherQuery, Expression, StatementContext,
+};
 use super::executor::{
     is_context_free_procedure, is_mask_routed_procedure, is_mutation_query,
     is_view_routed_procedure, CypherExecutor,
@@ -42,6 +44,100 @@ const VALID_TIME: &str = "VALID_TIME";
 /// What a refused template names a statement's context as.
 const CONTEXT_SURFACE: &str = "FOR VALID_TIME AS OF";
 
+/// The same, for the context lowering adds: the user wrote none, so the
+/// refusal also names the way to read every version.
+const DEFAULT_SURFACE: &str =
+    "the default valid-time context (or prefix the statement with FOR VALID_TIME ALL)";
+
+/// The one context-free statement the default leaves alone, as the reason the
+/// echo gives: it writes, calls a procedure that is not valid-time aware, or
+/// names a valid-time function itself.
+const SKIP_WRITE: &str = "write";
+const SKIP_PROCEDURE: &str = "procedure";
+const SKIP_VALID_AT: &str = "valid_at";
+
+/// Give a statement that spells no context the one the graph's declarations
+/// imply: as of today (UTC), resolved per execution so a cached plan never
+/// freezes the date. A graph with no declaration is left alone (one field
+/// test). Statements the default must not govern get an `ALL` context whose
+/// origin records why, so the echo can say so:
+/// - statements that write (their reads see every version),
+/// - procedures that are neither metadata nor routed (`refresh_stats`,
+///   `duplicate_id`, the `*_violation` audits, ...), which an explicit prefix
+///   refuses,
+/// - statements calling `valid_at()` / `valid_during()`, which set their own
+///   instants.
+///
+/// Top level only: UNION arms and `CALL { }` bodies are lowered under the
+/// statement's context.
+pub(crate) fn apply_default(query: &mut CypherQuery, graph: &DirGraph) {
+    if query.context.is_some() || query.suppress_default || graph.temporal.is_empty() {
+        return;
+    }
+    let (instant, origin) = match default_skip_reason(query) {
+        Some(reason) => (ContextInstant::All, ContextOrigin::Skipped(reason)),
+        None => (
+            ContextInstant::AsOf(Expression::FunctionCall {
+                name: "date".to_string(),
+                args: Vec::new(),
+                distinct: false,
+            }),
+            ContextOrigin::Default,
+        ),
+    };
+    query.context = Some(StatementContext {
+        axis: VALID_TIME.to_string(),
+        instant,
+        origin,
+        refusal: None,
+        body_start: 0,
+    });
+}
+
+#[cold]
+#[inline(never)]
+fn default_skip_reason(query: &CypherQuery) -> Option<&'static str> {
+    if is_mutation_query(query) {
+        return Some(SKIP_WRITE);
+    }
+    let mut finds = SkipScan::default();
+    walk_query(query, &mut finds);
+    if finds.valid_at_function {
+        Some(SKIP_VALID_AT)
+    } else if finds.unaware_procedure {
+        Some(SKIP_PROCEDURE)
+    } else {
+        None
+    }
+}
+
+#[derive(Default)]
+struct SkipScan {
+    valid_at_function: bool,
+    unaware_procedure: bool,
+}
+
+impl AstSink for SkipScan {
+    fn parameter(&mut self, _name: &str) {}
+
+    fn function(&mut self, name: &str) {
+        if name.eq_ignore_ascii_case("valid_at") || name.eq_ignore_ascii_case("valid_during") {
+            self.valid_at_function = true;
+        }
+    }
+
+    fn procedure(&mut self, call: &CallClause) {
+        let lowered = call.procedure_name.to_ascii_lowercase();
+        let name = lowered.strip_prefix("kglite.").unwrap_or(&lowered);
+        if !(is_context_free_procedure(name)
+            || is_view_routed_procedure(name)
+            || is_mask_routed_procedure(name))
+        {
+            self.unaware_procedure = true;
+        }
+    }
+}
+
 /// Compile `query`'s context into a guard template per scope, or record why
 /// the statement is refused. Without a context this returns on its first
 /// line; nested scopes re-enter with none, so a context lowers once.
@@ -52,12 +148,30 @@ pub(crate) fn lower(query: &mut CypherQuery, graph: &DirGraph) {
     lower_context(query, graph);
 }
 
+/// Whether `context` asks for every version (`FOR VALID_TIME ALL`, or a
+/// statement the default skipped): no templates, no filter.
+fn is_all(context: &StatementContext) -> bool {
+    matches!(context.instant, ContextInstant::All)
+}
+
+/// Whether `query` runs under a filter at some instant — a context that is
+/// not `ALL`. The planner keeps the statement's inline-map expressions for it.
+pub(crate) fn has_instant_context(query: &CypherQuery) -> bool {
+    query.context.as_ref().is_some_and(|c| !is_all(c))
+}
+
 #[cold]
 #[inline(never)]
 fn lower_context(query: &mut CypherQuery, graph: &DirGraph) {
     let declarations = temporal::declared(graph);
-    let refusal = statement_refusal(query, declarations.is_empty())
-        .or_else(|| attach_templates(query, graph, &declarations).err());
+    let refusal = statement_refusal(query, declarations.is_empty()).or_else(|| {
+        let context = query.context.as_ref()?;
+        let origin = context.origin.clone();
+        if is_all(context) {
+            return None;
+        }
+        attach_templates(query, graph, &declarations, &origin).err()
+    });
     if refusal.is_some() {
         clear_templates(query);
     }
@@ -68,11 +182,15 @@ fn lower_context(query: &mut CypherQuery, graph: &DirGraph) {
 
 /// Refusals that hold for the whole statement, whatever its scopes reach.
 fn statement_refusal(query: &CypherQuery, no_declarations: bool) -> Option<String> {
-    let axis = &query.context.as_ref()?.axis;
+    let context = query.context.as_ref()?;
+    let axis = &context.axis;
     if !axis.eq_ignore_ascii_case(VALID_TIME) {
         return Some(format!(
             "axis {axis} is not supported on this graph; the supported axis is {VALID_TIME}"
         ));
+    }
+    if is_all(query.context.as_ref()?) {
+        return None;
     }
     if no_declarations {
         return Some(NO_DECLARATION.to_string());
@@ -93,15 +211,12 @@ fn attach_templates(
     query: &mut CypherQuery,
     graph: &DirGraph,
     declarations: &[temporal::DeclarationInfo],
+    origin: &ContextOrigin,
 ) -> Result<(), String> {
     let mut reach = Reach::default();
     walk_query(query, &mut reach);
     if let Some(name) = reach.refused_function {
-        return Err(format!(
-            "{name}() counts or walks a node's relationships outside the pattern matcher, \
-             so it is not available under a valid-time context; count relationships with \
-             COUNT {{ (n)--() }}, or bind MATCH p = shortestPath(...) and read length(p)"
-        ));
+        return Err(refused_function_message(&name, origin));
     }
     if let Some(name) = reach.refused_procedure {
         return Err(format!(
@@ -111,16 +226,41 @@ fn attach_templates(
              louvain, connected_components, …) and the embedding queries"
         ));
     }
-    let template = GuardTemplate::for_scope(graph, declarations, &reach.scope, CONTEXT_SURFACE)?;
+    let surface = match origin {
+        ContextOrigin::Default => DEFAULT_SURFACE,
+        _ => CONTEXT_SURFACE,
+    };
+    let template = GuardTemplate::for_scope(graph, declarations, &reach.scope, surface)?;
     query.guard = Some(Arc::new(template));
     for clause in &mut query.clauses {
         match clause {
-            Clause::Union(arm) => attach_templates(&mut arm.query, graph, declarations)?,
-            Clause::CallSubquery { body, .. } => attach_templates(body, graph, declarations)?,
+            Clause::Union(arm) => attach_templates(&mut arm.query, graph, declarations, origin)?,
+            Clause::CallSubquery { body, .. } => {
+                attach_templates(body, graph, declarations, origin)?
+            }
             _ => {}
         }
     }
     Ok(())
+}
+
+/// The refusal for a scalar function that reads relationships outside the
+/// matcher. Under the default the user never wrote a context, so the message
+/// names both ways out.
+fn refused_function_message(name: &str, origin: &ContextOrigin) -> String {
+    match origin {
+        ContextOrigin::Default => format!(
+            "{name}() counts or walks a node's relationships outside the pattern matcher, \
+             so it cannot run under the default valid-time context (valid today); count \
+             relationships with COUNT {{ (n)--() }}, which respects the context, or prefix \
+             the statement with FOR VALID_TIME ALL to count every version"
+        ),
+        _ => format!(
+            "{name}() counts or walks a node's relationships outside the pattern matcher, \
+             so it is not available under a valid-time context; count relationships with \
+             COUNT {{ (n)--() }}, or bind MATCH p = shortestPath(...) and read length(p)"
+        ),
+    }
 }
 
 fn clear_templates(query: &mut CypherQuery) {
@@ -244,6 +384,9 @@ pub(crate) fn execution_filter(
     let Some(context) = &query.context else {
         return Ok(None);
     };
+    if is_all(context) {
+        return Ok(None);
+    }
     resolve_execution_filter(query, context, graph, params)
 }
 
@@ -292,15 +435,29 @@ fn merge_scope_templates(query: &CypherQuery, into: &mut GuardTemplate) {
     }
 }
 
-/// The context's instant, evaluated once per execution.
+/// The context's instant, evaluated once per execution. Only an
+/// `AS OF` context has one.
 fn resolve_instant(
     context: &StatementContext,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
 ) -> Result<eval::Instant, String> {
+    let ContextInstant::AsOf(expression) = &context.instant else {
+        return Err("FOR VALID_TIME ALL has no instant".to_string());
+    };
     let value = CypherExecutor::with_params(graph, params, None)
-        .evaluate_expression(&context.instant, &ResultRow::new())?;
+        .evaluate_expression(expression, &ResultRow::new())?;
     eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))
+}
+
+/// How the echo names where the statement's context came from.
+fn echo_source(context: &StatementContext) -> String {
+    match (&context.origin, &context.instant) {
+        (ContextOrigin::Default, _) => "default".to_string(),
+        (ContextOrigin::Skipped(reason), _) => format!("skipped:{reason}"),
+        (ContextOrigin::Explicit, ContextInstant::All) => "all".to_string(),
+        (ContextOrigin::Explicit, ContextInstant::AsOf(_)) => "explicit".to_string(),
+    }
 }
 
 /// A relationship target as the echo names it: `[:LICENSEE]` or
@@ -314,7 +471,8 @@ fn target_name(rel_type: &str, source_type: Option<&str>) -> String {
 
 /// The valid-time echo for `query` on this execution — the instant it
 /// resolves to and the declared targets its scopes reach — answered by
-/// `route`. `None` without a context, and when the instant does not resolve
+/// `route`. `None` without a context, for `FOR VALID_TIME ALL` on a graph with
+/// no declaration (a no-op there), and when the instant does not resolve
 /// (execution reports that itself).
 pub(crate) fn temporal_echo(
     query: &CypherQuery,
@@ -323,6 +481,9 @@ pub(crate) fn temporal_echo(
     route: &str,
 ) -> Option<TemporalDiagnostics> {
     let context = query.context.as_ref()?;
+    if is_all(context) {
+        return all_echo(context, graph);
+    }
     let instant = resolve_instant(context, graph, params).ok()?;
     let mut template = GuardTemplate::default();
     merge_scope_templates(query, &mut template);
@@ -346,19 +507,40 @@ pub(crate) fn temporal_echo(
             (name, count)
         })
         .collect();
+    let targets: Vec<String> = nodes.chain(edges).collect();
+    // A statement that reaches no declared target is filtered by nothing.
+    let route = if targets.is_empty() { "plain" } else { route };
     Some(TemporalDiagnostics {
         axis: context.axis.to_ascii_uppercase(),
+        source: echo_source(context),
         instant: match instant {
             eval::Instant::Date(date) => date.format("%Y-%m-%d").to_string(),
             eval::Instant::Timestamp(ts) => ts.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
         },
-        targets: nodes.chain(edges).collect(),
+        targets,
         hidden,
         endpoint_invalid: counts.endpoint_invalid,
         route: route.to_string(),
         retrieval: None,
         slice: false,
         session_version: graph.version(),
+    })
+}
+
+/// The echo of a statement that reads every version: `instant` is `all`, and
+/// nothing is filtered or counted. A graph with no declaration has no valid
+/// time to report.
+fn all_echo(context: &StatementContext, graph: &DirGraph) -> Option<TemporalDiagnostics> {
+    if graph.temporal.is_empty() {
+        return None;
+    }
+    Some(TemporalDiagnostics {
+        axis: context.axis.to_ascii_uppercase(),
+        source: echo_source(context),
+        instant: "all".to_string(),
+        route: "plain".to_string(),
+        session_version: graph.version(),
+        ..TemporalDiagnostics::default()
     })
 }
 
@@ -376,7 +558,7 @@ pub(crate) fn timeless_plain_text(
     params: &HashMap<String, Value>,
 ) -> Option<String> {
     let context = query.context.as_ref()?;
-    if query.explain || context.refusal.is_some() {
+    if query.explain || context.refusal.is_some() || is_all(context) {
         return None;
     }
     plain_text_if_timeless(text, query, context, graph, params)
@@ -395,6 +577,11 @@ fn plain_text_if_timeless(
     let template = declared_template(graph).ok()?;
     if !temporal::endpoint_index::template_timeless_at(graph, &template, instant) {
         return None;
+    }
+    // A default context has no prefix to strip, and the text keeps its own
+    // `PROFILE`.
+    if context.origin == ContextOrigin::Default {
+        return Some(text.to_string());
     }
     let body_start = text
         .char_indices()
@@ -448,7 +635,10 @@ pub(crate) const NO_DECLARATION: &str = "FOR VALID_TIME AS OF needs a validity d
 /// the plan keeps each label's full count.
 pub(crate) fn plan_instant(query: &CypherQuery, graph: &DirGraph) -> Option<eval::Instant> {
     let context = query.context.as_ref()?;
-    let constant = match &context.instant {
+    let ContextInstant::AsOf(instant) = &context.instant else {
+        return None;
+    };
+    let constant = match instant {
         Expression::Literal(_) => true,
         Expression::FunctionCall { name, args, .. } => {
             matches!(args.as_slice(), [Expression::Literal(_)])
@@ -460,7 +650,7 @@ pub(crate) fn plan_instant(query: &CypherQuery, graph: &DirGraph) -> Option<eval
         return None;
     }
     let value = CypherExecutor::with_params(graph, &HashMap::new(), None)
-        .evaluate_expression(&context.instant, &ResultRow::new())
+        .evaluate_expression(instant, &ResultRow::new())
         .ok()?;
     eval::parse_instant(&value).ok()
 }

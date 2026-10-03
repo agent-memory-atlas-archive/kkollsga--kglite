@@ -16,6 +16,17 @@ fn run(graph: &mut DirGraph, query: &str) {
         .unwrap_or_else(|e| panic!("{query}: {e}"));
 }
 
+fn echo_mut(graph: &mut DirGraph, query: &str) -> Option<TemporalDiagnostics> {
+    let params = HashMap::new();
+    execute_mut(graph, query, &ExecuteOptions::eager(&params))
+        .unwrap_or_else(|e| panic!("{query}: {e}"))
+        .result
+        .diagnostics
+        .expect("every execution attaches diagnostics")
+        .temporal
+        .map(|echo| *echo)
+}
+
 fn echo(graph: &DirGraph, query: &str) -> Option<TemporalDiagnostics> {
     let params = HashMap::new();
     execute_read(graph, query, &ExecuteOptions::eager(&params))
@@ -57,6 +68,7 @@ fn a_filtering_context_echoes_its_instant_targets_and_the_guarded_route() {
         echo,
         TemporalDiagnostics {
             axis: "VALID_TIME".into(),
+            source: "explicit".into(),
             instant: "2003-06-30".into(),
             targets: vec!["(:Well)".into()],
             hidden: [("(:Well)".to_string(), 1)].into(),
@@ -110,9 +122,15 @@ fn explain_echoes_the_guarded_plan_it_renders() {
 }
 
 #[test]
-fn a_statement_without_a_context_has_no_echo_and_serializes_without_the_key() {
-    let graph = wells();
-    assert_eq!(echo(&graph, "MATCH (w:Well) RETURN w.id"), None);
+fn a_graph_without_declarations_has_no_echo_and_serializes_without_the_key() {
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:Well {id: 1})");
+    for query in [
+        "MATCH (w:Well) RETURN w.id",
+        "FOR VALID_TIME ALL MATCH (w:Well) RETURN w.id",
+    ] {
+        assert_eq!(echo(&graph, query), None, "{query}");
+    }
     let params = HashMap::new();
     let diagnostics = execute_read(
         &graph,
@@ -125,6 +143,56 @@ fn a_statement_without_a_context_has_no_echo_and_serializes_without_the_key() {
     .unwrap();
     let json = serde_json::to_value(&diagnostics).unwrap();
     assert!(json.get("temporal").is_none(), "{json}");
+}
+
+#[test]
+fn the_echo_names_where_the_context_came_from() {
+    let mut graph = wells();
+    let today = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let default = echo(&graph, "MATCH (w:Well) RETURN w.id").expect("the default echoes");
+    assert_eq!(
+        (default.source.as_str(), default.instant.as_str()),
+        ("default", today.as_str())
+    );
+    assert_eq!(default.targets, ["(:Well)"]);
+    let all = echo(&graph, "FOR VALID_TIME ALL MATCH (w:Well) RETURN w.id").unwrap();
+    assert_eq!(
+        (
+            all.source.as_str(),
+            all.instant.as_str(),
+            all.route.as_str()
+        ),
+        ("all", "all", "plain")
+    );
+    assert!(all.targets.is_empty() && all.hidden.is_empty() && all.endpoint_invalid.is_none());
+    let explicit = echo(
+        &graph,
+        "FOR VALID_TIME AS OF date('2003-06-30') MATCH (w:Well) RETURN w.id",
+    )
+    .unwrap();
+    assert_eq!(explicit.source, "explicit");
+    let valid_at = echo(
+        &graph,
+        "MATCH (w:Well) WHERE valid_at(w, date('2003-06-30')) RETURN w.id",
+    )
+    .unwrap();
+    assert_eq!(
+        (valid_at.source.as_str(), valid_at.instant.as_str()),
+        ("skipped:valid_at", "all")
+    );
+    let procedure = echo(&graph, "CALL refresh_stats()").map(|e| e.source);
+    assert_eq!(procedure.as_deref(), Some("skipped:procedure"));
+    let write = echo_mut(&mut graph, "CREATE (:Well {id: 9})").unwrap();
+    assert_eq!(write.source, "skipped:write");
+    // A context that reaches no declared target is not filtering anything.
+    let none = echo(&graph, "RETURN 1 AS x").unwrap();
+    assert_eq!(
+        (none.source.as_str(), none.route.as_str()),
+        ("default", "plain")
+    );
 }
 
 #[test]
@@ -165,6 +233,7 @@ fn a_view_echoes_the_view_route_and_serializes_the_echo() {
         json["temporal"],
         serde_json::json!({
             "axis": "VALID_TIME",
+            "source": "explicit",
             "instant": "2003-06-30",
             "targets": ["(:Well)"],
             "hidden": {"(:Well)": 1},

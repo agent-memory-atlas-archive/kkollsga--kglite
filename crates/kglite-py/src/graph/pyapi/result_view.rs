@@ -943,6 +943,7 @@ fn temporal_dict(
     };
     let dict = PyDict::new(py);
     dict.set_item("axis", &echo.axis)?;
+    dict.set_item("source", &echo.source)?;
     dict.set_item("instant", &echo.instant)?;
     dict.set_item("targets", echo.targets.clone())?;
     dict.set_item("hidden", echo.hidden.clone())?;

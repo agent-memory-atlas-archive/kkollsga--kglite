@@ -49,8 +49,8 @@ pub(crate) fn walk_query(query: &CypherQuery, sink: &mut impl AstSink) {
 }
 
 fn visit_query(query: &CypherQuery, names: &mut impl AstSink) {
-    if let Some(context) = &query.context {
-        visit_expression(&context.instant, names);
+    if let Some(ContextInstant::AsOf(instant)) = query.context.as_ref().map(|c| &c.instant) {
+        visit_expression(instant, names);
     }
     for clause in &query.clauses {
         visit_clause(clause, names);

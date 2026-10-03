@@ -616,7 +616,10 @@ pub(crate) fn cypher_diagnostics_block(result: &cypher::CypherResult) -> String 
             ));
         }
         if let Some(temporal) = &d.temporal {
-            out.push_str(&format!("\ntemporal: {}\n", serde_json::json!(temporal)));
+            out.push_str(&format!(
+                "\ntemporal: {}\n",
+                super::temporal_line::temporal_line(temporal)
+            ));
         }
     }
     out

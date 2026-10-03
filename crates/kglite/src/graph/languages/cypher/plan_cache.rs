@@ -80,13 +80,40 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// generations age out via FIFO as the working set re-populates post-mutation.)
 pub(crate) const CACHE_CAPACITY: usize = 512;
 
-/// `(graph_id, version, lazy_eligible, query_hash)`. `lazy_eligible` is part of
-/// the key because the cached plan is stored **post lazy-marking** (so a hit is
+/// `(graph_id, version, schema_locked, lazy_eligible, suppress_default,
+/// query_hash)`. `suppress_default` separates the plan of a text prepared
+/// with the default valid-time context from the plain plan the session
+/// re-prepares of the same text when that context would filter nothing.
+/// `lazy_eligible` is part of the key because the cached plan is stored **post lazy-marking** (so a hit is
 /// a pure `Arc` clone with no per-call mutation); the wheel runs
 /// `lazy_eligible=true`, the bolt/mcp servers `false`, so each gets its own
 /// variant. `schema_locked` partitions the two validation dispositions. See the
 /// module docs for the complete key contract.
-type PlanKey = (u64, u64, bool, bool, u64);
+type PlanKey = (u64, u64, bool, bool, bool, u64);
+
+/// Everything but the query text that selects a plan-cache entry. Field
+/// meanings are in [`PlanKey`].
+#[derive(Clone, Copy)]
+pub struct PlanScope {
+    pub graph_id: u64,
+    pub version: u64,
+    pub schema_locked: bool,
+    pub lazy: bool,
+    pub suppress_default: bool,
+}
+
+impl PlanScope {
+    fn key(self, query: &str) -> PlanKey {
+        (
+            self.graph_id,
+            self.version,
+            self.schema_locked,
+            self.lazy,
+            self.suppress_default,
+            hash_query(query),
+        )
+    }
+}
 
 /// What a lookup hands back: the ready-to-execute plan plus the schema
 /// warnings computed for it (see the module docs). Both are behind `Arc`, so a
@@ -131,14 +158,8 @@ fn hash_query(query: &str) -> u64 {
 /// identified by `(graph_id, version, schema_locked)` at the given
 /// `lazy_eligible` mode.
 /// Returns an `Arc` clone on hit (no AST copy), `None` on miss.
-pub fn get(
-    graph_id: u64,
-    version: u64,
-    schema_locked: bool,
-    lazy: bool,
-    query: &str,
-) -> Option<CachedPlan> {
-    let key = (graph_id, version, schema_locked, lazy, hash_query(query));
+pub fn get(scope: PlanScope, query: &str) -> Option<CachedPlan> {
+    let key = scope.key(query);
     let guard = cache().read().expect("plan_cache RwLock poisoned");
     let hit = guard.map.get(&key).cloned();
     #[cfg(test)]
@@ -149,16 +170,8 @@ pub fn get(
 /// Cache `plan` (the optimized AST, already lazy-marked for `lazy`) plus the
 /// schema `warnings` computed for it, for `query` against `(graph_id,
 /// version)`. FIFO-evicts the oldest entry at capacity.
-pub fn insert(
-    graph_id: u64,
-    version: u64,
-    schema_locked: bool,
-    lazy: bool,
-    query: &str,
-    plan: Arc<CypherQuery>,
-    warnings: Arc<[String]>,
-) {
-    let key = (graph_id, version, schema_locked, lazy, hash_query(query));
+pub fn insert(scope: PlanScope, query: &str, plan: Arc<CypherQuery>, warnings: Arc<[String]>) {
+    let key = scope.key(query);
     let mut guard = cache().write().expect("plan_cache RwLock poisoned");
     if guard.map.contains_key(&key) {
         return; // benign race: another thread inserted the same key.
@@ -351,6 +364,22 @@ mod tests {
         Arc::new(parse_cypher(q).expect("parse"))
     }
 
+    fn scope(
+        graph_id: u64,
+        version: u64,
+        schema_locked: bool,
+        lazy: bool,
+        suppress_default: bool,
+    ) -> PlanScope {
+        PlanScope {
+            graph_id,
+            version,
+            schema_locked,
+            lazy,
+            suppress_default,
+        }
+    }
+
     fn no_warnings() -> Arc<[String]> {
         Vec::new().into()
     }
@@ -360,17 +389,17 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_for_tests();
         let q = "MATCH (n:T) RETURN n";
-        assert!(get(1, 0, false, false, q).is_none(), "cold miss");
+        assert!(
+            get(scope(1, 0, false, false, false), q).is_none(),
+            "cold miss"
+        );
         insert(
-            1,
-            0,
-            false,
-            false,
+            scope(1, 0, false, false, false),
             q,
             plan(q),
             vec!["typo'd label".to_string()].into(),
         );
-        let hit = get(1, 0, false, false, q).expect("warm hit");
+        let hit = get(scope(1, 0, false, false, false), q).expect("warm hit");
         assert_eq!(
             &*hit.warnings,
             ["typo'd label".to_string()],
@@ -383,25 +412,32 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_for_tests();
         let q = "MATCH (n:T) RETURN n";
-        insert(7, 3, false, false, q, plan(q), no_warnings());
+        insert(scope(7, 3, false, false, false), q, plan(q), no_warnings());
         // Same query, different version / graph / lock / lazy-mode → must miss.
         assert!(
-            get(7, 4, false, false, q).is_none(),
+            get(scope(7, 4, false, false, false), q).is_none(),
             "version change invalidates"
         );
         assert!(
-            get(8, 3, false, false, q).is_none(),
+            get(scope(8, 3, false, false, false), q).is_none(),
             "different graph never collides"
         );
         assert!(
-            get(7, 3, true, false, q).is_none(),
+            get(scope(7, 3, true, false, false), q).is_none(),
             "lock is part of the key"
         );
         assert!(
-            get(7, 3, false, true, q).is_none(),
+            get(scope(7, 3, false, true, false), q).is_none(),
             "lazy mode is part of the key"
         );
-        assert!(get(7, 3, false, false, q).is_some(), "exact key hits");
+        assert!(
+            get(scope(7, 3, false, false, true), q).is_none(),
+            "the default-suppressed plan of a text is a different plan"
+        );
+        assert!(
+            get(scope(7, 3, false, false, false), q).is_some(),
+            "exact key hits"
+        );
     }
 
     #[test]
@@ -410,10 +446,7 @@ mod tests {
         clear_for_tests();
         for i in 0..(CACHE_CAPACITY as u64 + 5) {
             insert(
-                1,
-                i,
-                false,
-                false,
+                scope(1, i, false, false, false),
                 "MATCH (n:T) RETURN n",
                 plan("MATCH (n:T) RETURN n"),
                 no_warnings(),

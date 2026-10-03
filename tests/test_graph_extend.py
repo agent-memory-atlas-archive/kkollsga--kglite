@@ -412,7 +412,7 @@ def _licensed(periods):
 
 
 def _periods(g):
-    rows = g.cypher("MATCH ()-[r:HOLDS]->() RETURN r.vf AS vf ORDER BY vf").to_list()
+    rows = g.cypher("FOR VALID_TIME ALL MATCH ()-[r:HOLDS]->() RETURN r.vf AS vf ORDER BY vf").to_list()
     return [str(r["vf"])[:10] for r in rows]
 
 

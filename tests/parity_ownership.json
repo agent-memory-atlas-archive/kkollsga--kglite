@@ -533,16 +533,16 @@
   "tests/test_temporal_empty_intervals.py::test_the_fluent_filters_never_return_an_empty_row[memory_guards]": {
     "owner": "storage-parity"
   },
-  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[memory]": {
+  "tests/test_temporal_empty_intervals.py::test_a_statement_under_all_still_reads_an_empty_row[memory]": {
     "owner": "storage-parity"
   },
-  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[mapped]": {
+  "tests/test_temporal_empty_intervals.py::test_a_statement_under_all_still_reads_an_empty_row[mapped]": {
     "owner": "storage-parity"
   },
-  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[disk]": {
+  "tests/test_temporal_empty_intervals.py::test_a_statement_under_all_still_reads_an_empty_row[disk]": {
     "owner": "storage-parity"
   },
-  "tests/test_temporal_empty_intervals.py::test_a_statement_without_the_context_still_reads_an_empty_row[memory_guards]": {
+  "tests/test_temporal_empty_intervals.py::test_a_statement_under_all_still_reads_an_empty_row[memory_guards]": {
     "owner": "storage-parity"
   },
   "tests/test_temporal_empty_intervals.py::test_a_load_keeps_an_empty_row_with_one_warning[memory]": {

@@ -191,17 +191,17 @@ def test_manifest_restores_declarations_and_valid_at(kg_graph):
 
 
 def test_manifest_restores_ids_labels_and_does_not_become_a_node(kg_graph):
-    assert kg_graph.cypher("MATCH (n) RETURN count(n) AS n").to_list()[0]["n"] == 3
-    rows = kg_graph.cypher("MATCH (p:Person) RETURN p.id AS id ORDER BY id").to_list()
+    assert kg_graph.cypher("FOR VALID_TIME ALL MATCH (n) RETURN count(n) AS n").to_list()[0]["n"] == 3
+    rows = kg_graph.cypher("FOR VALID_TIME ALL MATCH (p:Person) RETURN p.id AS id ORDER BY id").to_list()
     assert [r["id"] for r in rows] == [7, 8]
-    assert kg_graph.cypher("MATCH (p:Employee) RETURN count(p) AS n").to_list()[0]["n"] == 2
-    since = kg_graph.cypher("MATCH ()-[r:WORKS_IN]->() RETURN r.since AS s").to_list()
+    assert kg_graph.cypher("FOR VALID_TIME ALL MATCH (p:Employee) RETURN count(p) AS n").to_list()[0]["n"] == 2
+    since = kg_graph.cypher("FOR VALID_TIME ALL MATCH ()-[r:WORKS_IN]->() RETURN r.since AS s").to_list()
     assert since == [{"s": datetime.date(2019, 3, 1)}]
 
 
 def test_typed_literals_map_back_per_kind(kg_graph):
     row = kg_graph.cypher(
-        "MATCH (p:Person {id: 7}) RETURN p.skills AS skills, p.profile AS profile, "
+        "FOR VALID_TIME ALL MATCH (p:Person {id: 7}) RETURN p.skills AS skills, p.profile AS profile, "
         "p.office AS office, p.tenure AS tenure, p.seen AS seen, p.hired AS hired"
     ).to_list()[0]
     assert row["skills"] == ["sql", "rust"]

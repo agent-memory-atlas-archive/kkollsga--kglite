@@ -515,7 +515,9 @@ def _link(g, rows, mode=None, column_types=PERIOD_TYPES, **kwargs):
 
 
 def _periods(g):
-    rows = g.cypher("MATCH (:Doc)-[r:IN]->(:Doc) RETURN r.vf AS vf, r.vt AS vt ORDER BY vf, vt").to_list()
+    rows = g.cypher(
+        "FOR VALID_TIME ALL MATCH (:Doc)-[r:IN]->(:Doc) RETURN r.vf AS vf, r.vt AS vt ORDER BY vf, vt"
+    ).to_list()
     return [(str(r["vf"])[:10], None if r["vt"] is None else str(r["vt"])[:10]) for r in rows]
 
 
@@ -715,7 +717,7 @@ class TestDeclaredMergeKey:
             ("W1", "0003", "19900101", "20210201", "2020-07-15"),
             ("W1", "0003", "19900101", None, "2020-06-30"),
         ]
-        query = "MATCH ()-[e:IN_GEMEENTE]->() RETURN e.recorded_from AS rf, e.vt AS vt ORDER BY rf"
+        query = "FOR VALID_TIME ALL MATCH ()-[e:IN_GEMEENTE]->() RETURN e.recorded_from AS rf, e.vt AS vt ORDER BY rf"
 
         def graph():
             g = kglite.KnowledgeGraph()
@@ -877,7 +879,7 @@ class TestCreateRelationshipsKeysBySource:
             .traverse("BC")
             .create_relationships("R", properties={"C": ["vf"]}, source_type=source_type)
         )
-        rows = g.cypher("MATCH (:A)-[r:R]->(:C) RETURN r.vf AS vf ORDER BY vf").to_list()
+        rows = g.cypher("FOR VALID_TIME ALL MATCH (:A)-[r:R]->(:C) RETURN r.vf AS vf ORDER BY vf").to_list()
         assert [str(r["vf"])[:10] for r in rows] == ["2000-01-01", "2010-01-01"]
 
     def test_mixed_sources_each_key_on_their_own_declaration(self):
@@ -932,7 +934,9 @@ class TestAnAmbiguousTypeKeysOnTheDeclarationARowCarries:
         assert _counts(other("2015-01-01")) == (1, 0)
         assert _counts(other("2020-01-01")) == (1, 0)
         assert _counts(other("2020-01-01")) == (0, 0)
-        rows = g.cypher("MATCH (:Field {id: 1})-[r:HAS_LICENSEE]->(:Company {id: 10}) RETURN count(r) AS n").to_list()
+        rows = g.cypher(
+            "FOR VALID_TIME ALL MATCH (:Field {id: 1})-[r:HAS_LICENSEE]->(:Company {id: 10}) RETURN count(r) AS n"
+        ).to_list()
         assert rows == [{"n": 3}]
 
 

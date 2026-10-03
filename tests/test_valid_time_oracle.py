@@ -333,7 +333,7 @@ def _index_texts(*graphs):
     matched as `:A` may be a C node carrying A as its second label."""
     for graph in graphs:
         for label in "ABC":
-            present = f"MATCH (n:{label}) WHERE labels(n)[0] = '{label}' RETURN count(n) AS c"
+            present = f"FOR VALID_TIME ALL MATCH (n:{label}) WHERE labels(n)[0] = '{label}' RETURN count(n) AS c"
             if graph.cypher(present).to_list()[0]["c"]:
                 graph.build_text_index(label, "body")
 
@@ -432,7 +432,9 @@ def _check_fluent(full, reference, instant, where):
     """The fluent chain under `date(t)` selects and reaches what the
     reference slice's unguarded patterns do: one filter, two spellings."""
     context = full.date(instant)
-    rel_types = {row["t"] for row in full.cypher("MATCH ()-[r]->() RETURN DISTINCT type(r) AS t").to_list()}
+    rel_types = {
+        row["t"] for row in full.cypher("FOR VALID_TIME ALL MATCH ()-[r]->() RETURN DISTINCT type(r) AS t").to_list()
+    }
     for label in "ABC":
         selected = context.select(label, include_secondary=True)
         expected = reference.cypher(f"MATCH (n:{label}) RETURN n.uid AS uid").to_list()
@@ -516,7 +518,7 @@ def test_valid_time_golden_counts_anchor_the_oracle(mode):
         # The three sentinel relationships are valid and join valid nodes;
         # the drawn R, S and T each touch the invisible node 2.
         assert full.cypher(rels, params={"t": instant}).to_list() == [{"c": 3}]
-        unguarded = "MATCH ()-[r]->() RETURN count(r) AS c"
+        unguarded = "FOR VALID_TIME ALL MATCH ()-[r]->() RETURN count(r) AS c"
         assert full.cypher(unguarded).to_list() == [{"c": 6}]
 
 
@@ -564,7 +566,9 @@ def test_valid_time_bench_cells_answer_like_their_views(mode):
         for name, cell in bench.CELLS.items():
             guarded = bench._rows(full, cell.context, params)
             assert guarded == bench._rows(view, cell.plain, params), f"{mode}: {name}"
-            assert guarded != bench._rows(full, cell.plain, params), f"{mode}: {name} filters nothing"
+            assert guarded != bench._rows(full, "FOR VALID_TIME ALL " + cell.plain, params), (
+                f"{mode}: {name} filters nothing"
+            )
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -605,5 +609,5 @@ def test_valid_time_retrieval_and_algorithms_anchor_the_oracle(mode):
             full.build_text_index("A", "body")
             top = full.cypher(f"FOR VALID_TIME AS OF $t {TEXT_QUERIES[1]}", params=params).to_list()
             assert [row["u"] for row in top] == [0]
-            everywhere = full.cypher(TEXT_QUERIES[1]).to_list()
+            everywhere = full.cypher(f"FOR VALID_TIME ALL {TEXT_QUERIES[1]}").to_list()
             assert [row["u"] for row in everywhere] == [0, 2]

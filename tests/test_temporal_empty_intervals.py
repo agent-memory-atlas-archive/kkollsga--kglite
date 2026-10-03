@@ -157,10 +157,10 @@ def test_the_fluent_filters_never_return_an_empty_row(mode) -> None:
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_a_statement_without_the_context_still_reads_an_empty_row(mode) -> None:
+def test_a_statement_under_all_still_reads_an_empty_row(mode) -> None:
     with _graph(mode) as (g, declared):
-        assert _ids(g, STATUS) == [1, 2, 3, 4]
-        assert _ids(g, EDGES) == [1, 2, 3]
+        assert _ids(g, f"FOR VALID_TIME ALL {STATUS}") == [1, 2, 3, 4]
+        assert _ids(g, f"FOR VALID_TIME ALL {EDGES}") == [1, 2, 3]
         assert sorted(n["id"] for n in g.select("Status", temporal=False).collect()) == [1, 2, 3, 4]
 
 
@@ -181,7 +181,7 @@ def test_a_load_keeps_an_empty_row_with_one_warning(mode) -> None:
         assert len(empty) == 1, [str(w.message) for w in caught]
         assert empty[0].startswith("2 of 3 rows written have an empty interval under convention 'half_open'")
         assert "the first is row 0 (0-based) of the load" in empty[0]
-        assert _ids(g, STATUS) == [1, 2, 3, 4, 6, 7, 8]
+        assert _ids(g, f"FOR VALID_TIME ALL {STATUS}") == [1, 2, 3, 4, 6, 7, 8]
         assert _ids(g, STATUS, valid_at="2012-01-01") == [3, 7]
         counts = g.cypher("CALL db.temporal.declarations() YIELD name, empty_rows RETURN name, empty_rows").to_list()
         assert ("Status", 4) in [(r["name"], r["empty_rows"]) for r in counts]

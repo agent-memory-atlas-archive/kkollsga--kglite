@@ -402,7 +402,7 @@ fn read_statement(
             warnings,
         },
         echo,
-    ) = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
+    ) = timeless_route(graph, query, prepare(graph, query, opts, false)?, opts)?;
     let is_mutation = cypher::is_mutation_query(&parsed);
     // Attribute the plan-cache events `prepare` just caused, now that the
     // statement kind is known. Test-only; see `plan_cache::instrumentation`.
@@ -607,7 +607,7 @@ fn mut_statement(
             warnings,
         },
         echo,
-    ) = timeless_route(graph, query, prepare(graph, query, opts)?, opts)?;
+    ) = timeless_route(graph, query, prepare(graph, query, opts, false)?, opts)?;
     let is_mutation = cypher::is_mutation_query(&parsed);
     // See the identical call in `execute_read`. Test-only.
     #[cfg(test)]
@@ -842,6 +842,20 @@ struct PreparedQuery {
     warnings: Arc<[String]>,
 }
 
+fn plan_scope(
+    graph: &DirGraph,
+    opts: &ExecuteOptions<'_>,
+    suppress_default: bool,
+) -> cypher::plan_cache::PlanScope {
+    cypher::plan_cache::PlanScope {
+        graph_id: graph.graph_id(),
+        version: graph.version(),
+        schema_locked: graph.schema_locked,
+        lazy: opts.lazy_eligible,
+        suppress_default,
+    }
+}
+
 /// The plan-cache hit path: a hit skips everything below the lookup in
 /// [`prepare`] — parse, validate, the schema pass, optimize. Entries are
 /// stored post lazy-marking for this `lazy_eligible`, so a hit is a pure `Arc`
@@ -858,14 +872,13 @@ struct PreparedQuery {
 /// return exists to avoid. Their validity is the cache's own soundness argument
 /// — they are a pure function of `(query, graph schema)` and the key pins the
 /// graph state. Stderr repeats them per call, as it did when every call parsed.
-fn cached_plan(graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>) -> Option<PreparedQuery> {
-    let cached = cypher::plan_cache::get(
-        graph.graph_id(),
-        graph.version(),
-        graph.schema_locked,
-        opts.lazy_eligible,
-        query,
-    )?;
+fn cached_plan(
+    graph: &DirGraph,
+    query: &str,
+    opts: &ExecuteOptions<'_>,
+    suppress_default: bool,
+) -> Option<PreparedQuery> {
+    let cached = cypher::plan_cache::get(plan_scope(graph, opts, suppress_default), query)?;
     cypher::emit_query_warnings(&cached.warnings);
     Some(PreparedQuery {
         plan: cached.plan,
@@ -886,12 +899,17 @@ fn cached_plan(graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>) -> Opti
 /// GIL before calling `execute_read`/`execute_mut` (Python's `py.detach`).
 /// The embed call below re-acquires it briefly to invoke Python; failing to
 /// release first deadlocks.
+///
+/// `suppress_default` keeps lowering from adding the default valid-time
+/// context — the session's plain-plan re-prepare of a text whose default
+/// context would filter nothing. It is part of the plan cache key.
 // KgError carries query context; boxing it would only burden an error path.
 #[allow(clippy::result_large_err)]
 fn prepare(
     graph: &DirGraph,
     query: &str,
     opts: &ExecuteOptions<'_>,
+    suppress_default: bool,
 ) -> Result<PreparedQuery, KgError> {
     // Open a plan-cache attribution window for this statement. Test-only; the
     // caller closes it with `classify_pending` once it knows `is_mutation`.
@@ -907,12 +925,13 @@ fn prepare(
         && opts.disabled_passes.is_none_or(|s| s.is_empty())
         && opts.value_codecs.is_none_or(|c| c.is_empty());
     if cacheable {
-        if let Some(prepared) = cached_plan(graph, query, opts) {
+        if let Some(prepared) = cached_plan(graph, query, opts, suppress_default) {
             return Ok(prepared);
         }
     }
 
     let mut parsed = cypher::parse_cypher(query)?;
+    parsed.suppress_default = suppress_default;
 
     // Dynamic labels / relationship types (`MATCH (n:$label)`): bind them from
     // the caller's parameters FIRST, so validation, optimization and execution
@@ -1068,10 +1087,7 @@ fn prepare(
         && !cypher::is_mutation_query(&plan)
     {
         cypher::plan_cache::insert(
-            graph.graph_id(),
-            graph.version(),
-            graph.schema_locked,
-            opts.lazy_eligible,
+            plan_scope(graph, opts, suppress_default),
             query,
             plan.clone(),
             Arc::clone(&warnings),
@@ -1086,10 +1102,11 @@ fn prepare(
     })
 }
 
-/// A statement under `FOR VALID_TIME AS OF` whose filter would remove
-/// nothing — every declared target of the graph timeless at this execution's
-/// instant — runs the plan of its text without the prefix: the normal planner,
-/// plan cache and fused routes, and the same rows. Re-decided on every
+/// A statement under `FOR VALID_TIME AS OF` (written, or the graph's default
+/// of today) whose filter would remove nothing — every declared target of the
+/// graph timeless at this execution's instant — runs the plan of its text
+/// without the prefix and without the default: the normal planner, plan cache
+/// and fused routes, and the same rows. Re-decided on every
 /// execution (see `valid_time::timeless_plain_text`); EXPLAIN keeps the
 /// guarded plan. Also returns the statement's valid-time echo, taken from the
 /// plan with the context, and `None` without one.
@@ -1107,7 +1124,7 @@ fn timeless_route(
     match cypher::valid_time::timeless_plain_text(query, plan, graph, &prepared.params) {
         Some(plain) => {
             let echo = cypher::valid_time::temporal_echo(plan, graph, &prepared.params, "plain");
-            Ok((prepare(graph, &plain, opts)?, echo))
+            Ok((prepare(graph, &plain, opts, true)?, echo))
         }
         None => {
             let echo = cypher::valid_time::temporal_echo(plan, graph, &prepared.params, "guarded");

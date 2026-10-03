@@ -22,13 +22,17 @@ pub struct CypherQuery {
     /// Passes that changed the plan. Populated only for EXPLAIN so normal
     /// execution pays no plan-diff allocation cost.
     pub optimizer_tags: Vec<String>,
-    /// The statement's `FOR <axis> AS OF <instant>` prefix. Set by the parser
-    /// on the top-level query only; nested scopes read [`Self::guard`].
+    /// The statement's `FOR <axis> ...` prefix, or the context lowering adds
+    /// when it has none (see [`ContextOrigin`]). Set on the top-level query
+    /// only; nested scopes read [`Self::guard`].
     pub(crate) context: Option<StatementContext>,
     /// The guard template lowering compiled for this scope — the top level,
     /// each `CALL { }` body and each UNION arm carry their own. `None`
     /// whenever the statement has no context.
     pub(crate) guard: Option<Arc<GuardTemplate>>,
+    /// Set by the session's plain-plan re-prepare: lowering must not add the
+    /// default context to this text again.
+    pub(crate) suppress_default: bool,
 }
 
 impl CypherQuery {
@@ -42,19 +46,44 @@ impl CypherQuery {
             optimizer_tags: Vec::new(),
             context: None,
             guard: None,
+            suppress_default: false,
         }
     }
 }
 
-/// A statement prefix `FOR <axis> AS OF <instant>`.
+/// What a statement context asks of its axis.
+#[derive(Debug, Clone)]
+pub(crate) enum ContextInstant {
+    /// `AS OF <instant>`: a literal, `$param`, `date()` / `datetime()` of
+    /// either, or `date()` (today in UTC). Evaluated once per execution; a
+    /// constant one is also read at plan time for the start-node estimate
+    /// (`plan_instant`).
+    AsOf(Expression),
+    /// `ALL`: every version, no filter and no write refusal.
+    All,
+}
+
+/// Where a statement's context came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContextOrigin {
+    /// Written in the statement's text.
+    Explicit,
+    /// Added at lowering because the graph declares validity and the
+    /// statement wrote none: as of today (UTC).
+    Default,
+    /// The default did not apply, for the reason given (`write`,
+    /// `procedure`, `valid_at`); the statement reads every version.
+    Skipped(&'static str),
+}
+
+/// A statement prefix `FOR <axis> AS OF <instant>` or `FOR <axis> ALL`, or the
+/// context lowering supplies when the statement has none.
 #[derive(Debug, Clone)]
 pub(crate) struct StatementContext {
     /// As written; only `VALID_TIME` lowers.
     pub(crate) axis: String,
-    /// A literal, `$param`, `date()` / `datetime()` of either, or `date()`
-    /// (today in UTC). Evaluated once per execution; a constant one is also
-    /// read at plan time for the start-node estimate (`plan_instant`).
-    pub(crate) instant: Expression,
+    pub(crate) instant: ContextInstant,
+    pub(crate) origin: ContextOrigin,
     /// Why lowering refused the statement, raised before any execution and
     /// before EXPLAIN renders a plan.
     pub(crate) refusal: Option<String>,

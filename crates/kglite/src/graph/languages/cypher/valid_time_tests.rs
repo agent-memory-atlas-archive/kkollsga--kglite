@@ -57,8 +57,8 @@ fn refusal(query: &CypherQuery) -> Option<String> {
 const AS_OF: &str = "FOR VALID_TIME AS OF date('2006-01-01') ";
 
 #[test]
-fn without_a_prefix_nothing_is_lowered() {
-    let graph = graph();
+fn on_a_graph_without_declarations_nothing_is_lowered() {
+    let graph = DirGraph::new();
     let query = lowered(
         &graph,
         "MATCH (w:Well) CALL { MATCH (m) RETURN m } RETURN w, m",
@@ -228,7 +228,7 @@ fn a_guarded_scope_runs_only_allow_listed_passes() {
     let graph = graph();
     let body =
         "MATCH (w:Well) OPTIONAL MATCH (w)-[:LICENSED]->(f) RETURN w.id AS id, count(f) AS c";
-    let plain = lowered(&graph, &format!("EXPLAIN {body}"), &[]);
+    let plain = lowered(&graph, &format!("EXPLAIN FOR VALID_TIME ALL {body}"), &[]);
     assert!(has_fused(&plain.clauses), "{body} should fuse unguarded");
     let guarded = lowered(&graph, &format!("EXPLAIN {AS_OF}{body}"), &[]);
     assert!(
@@ -367,9 +367,25 @@ fn execution_runs_under_the_filter_and_explain_renders_the_template() {
     )
     .unwrap_err();
     assert!(err.contains("axis SYSTEM_TIME"), "{err}");
-    // Without a prefix EXPLAIN has no context row.
-    let plain = read(&graph, "EXPLAIN MATCH (w:Well) RETURN w.id", &none).unwrap();
-    assert!(!format!("{:?}", plain.rows).contains("ValidTimeContext"));
+    // Without a prefix the graph's declarations supply today as the context.
+    let default = read(&graph, "EXPLAIN MATCH (w:Well) RETURN w.id", &none).unwrap();
+    assert!(format!("{:?}", default.rows).contains("instant: per execution (default: today)"));
+    // ALL reads every version and says so.
+    let all = read(
+        &graph,
+        "EXPLAIN FOR VALID_TIME ALL MATCH (w:Well) RETURN w.id",
+        &none,
+    )
+    .unwrap();
+    assert!(format!("{:?}", all.rows).contains("targets=none instant: all"));
+    // An undeclared graph plans without any context row.
+    let bare = read(
+        &DirGraph::new(),
+        "EXPLAIN MATCH (w:Well) RETURN w.id",
+        &none,
+    )
+    .unwrap();
+    assert!(!format!("{:?}", bare.rows).contains("ValidTimeContext"));
 }
 
 #[test]
@@ -552,8 +568,19 @@ fn topology_scalar_functions_are_refused_under_a_context() {
             );
             assert!(err.contains("COUNT { (n)--() }"), "{text}: {err}");
         }
-        // Without the context the function runs.
-        read(&graph, &format!("MATCH (w:Well) RETURN {call} AS x"), &none).unwrap();
+        // The default refuses it too, naming both ways out.
+        let default =
+            read(&graph, &format!("MATCH (w:Well) RETURN {call} AS x"), &none).unwrap_err();
+        assert!(default.contains("default valid-time context"), "{default}");
+        assert!(default.contains("FOR VALID_TIME ALL"), "{default}");
+        assert!(default.contains("COUNT { (n)--() }"), "{default}");
+        // Under ALL the function runs.
+        read(
+            &graph,
+            &format!("FOR VALID_TIME ALL MATCH (w:Well) RETURN {call} AS x"),
+            &none,
+        )
+        .unwrap();
     }
     let nested = lowered(
         &graph,
@@ -573,7 +600,8 @@ fn the_transient_equality_index_declines_under_a_graph_filter() {
     let none = HashMap::new();
     let text = "UNWIND range(1, 80) AS i MATCH (f:Field) MATCH (w:Well {vf: f.vf}) \
                 RETURN i, w.id";
-    assert_eq!(read(&graph, text, &none).unwrap().rows.len(), 80);
+    let every = format!("FOR VALID_TIME ALL {text}");
+    assert_eq!(read(&graph, &every, &none).unwrap().rows.len(), 80);
     assert_eq!(
         read(&graph, &format!("{AS_OF}{text}"), &none)
             .unwrap()
@@ -600,7 +628,10 @@ fn prepend_round_trips_or_refuses_every_instant() {
             match prepend_valid_time("RETURN 1", &value) {
                 Ok(text) => {
                     let parsed = parse_cypher(&text).unwrap();
-                    let instant = &parsed.context.as_ref().unwrap().instant;
+                    let ContextInstant::AsOf(instant) = &parsed.context.as_ref().unwrap().instant
+                    else {
+                        panic!("{text}: not an AS OF context");
+                    };
                     let back = CypherExecutor::with_params(&graph, &none, None)
                         .evaluate_expression(instant, &ResultRow::new())
                         .unwrap();

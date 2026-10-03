@@ -143,7 +143,7 @@ def test_a_five_element_pattern_stays_unfused_under_a_context(org):
         "MATCH (a:Emp)-[:IN_DEPT]->(d:Dept)<-[:IN_DEPT]-(b:Emp) RETURN a AS a, count(b) AS n",
     )
     assert f"OptimizerPass {PASS}" not in _tags(org, query)
-    undated = "MATCH (a:Emp)-[:IN_DEPT]->(d:Dept)<-[:IN_DEPT]-(b:Emp) RETURN a AS a, count(b) AS n"
+    undated = "FOR VALID_TIME ALL MATCH (a:Emp)-[:IN_DEPT]->(d:Dept)<-[:IN_DEPT]-(b:Emp) RETURN a AS a, count(b) AS n"
     assert f"OptimizerPass {PASS}" in _tags(org, undated)
 
 

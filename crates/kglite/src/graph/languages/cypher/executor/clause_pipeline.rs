@@ -82,6 +82,7 @@ impl CypherExecutor<'_> {
             context: None,
             // The batches run the scope's clauses, so they keep its guard.
             guard: query.guard.clone(),
+            suppress_default: query.suppress_default,
         };
         let mut suffix_declared = initial_declared.clone();
         suffix_declared.insert(load.variable.clone());

@@ -156,9 +156,13 @@ def test_reload_delta_is_bounded(built):
 
 def test_reopened_graph_has_every_row(built):
     graph, frame = built["graph"], built["frame"]
-    assert graph.cypher(f"MATCH (p:{TYPE}) RETURN count(*) AS c").to_list() == [{"c": TOTAL}]
-    assert graph.cypher(f"MATCH (o:{ANCHOR_TYPE}) RETURN count(*) AS c").to_list() == [{"c": frame["ident"].nunique()}]
-    assert graph.cypher(f"MATCH (:{TYPE})-[:{REL}]->(:{ANCHOR_TYPE}) RETURN count(*) AS c").to_list() == [{"c": TOTAL}]
+    assert graph.cypher(f"FOR VALID_TIME ALL MATCH (p:{TYPE}) RETURN count(*) AS c").to_list() == [{"c": TOTAL}]
+    assert graph.cypher(f"FOR VALID_TIME ALL MATCH (o:{ANCHOR_TYPE}) RETURN count(*) AS c").to_list() == [
+        {"c": frame["ident"].nunique()}
+    ]
+    assert graph.cypher(
+        f"FOR VALID_TIME ALL MATCH (:{TYPE})-[:{REL}]->(:{ANCHOR_TYPE}) RETURN count(*) AS c"
+    ).to_list() == [{"c": TOTAL}]
 
 
 @pytest.mark.parametrize("instant", AS_OF)
@@ -181,7 +185,7 @@ def test_lookup_by_id_and_by_title(built):
     for position in (0, CHUNK_VERSIONS - 1, CHUNK_VERSIONS, 123_457, TOTAL - 1):
         row = frame.iloc[position]
         got = graph.cypher(
-            f"MATCH (p:{TYPE} {{id: $i}}) RETURN p.title AS t, p.status AS s, p.hire_year AS b",
+            f"FOR VALID_TIME ALL MATCH (p:{TYPE} {{id: $i}}) RETURN p.title AS t, p.status AS s, p.hire_year AS b",
             params={"i": int(row.id)},
         ).to_list()
         assert got == [{"t": int(row.ident), "s": row.status, "b": int(row.hire_year)}]
@@ -189,13 +193,13 @@ def test_lookup_by_id_and_by_title(built):
     several = versions[versions.map(len) >= 3]
     ident = several.index[len(several) // 2]
     got = graph.cypher(
-        f"MATCH (p:{TYPE} {{title: $t}}) RETURN p.id AS id ORDER BY id", params={"t": int(ident)}
+        f"FOR VALID_TIME ALL MATCH (p:{TYPE} {{title: $t}}) RETURN p.id AS id ORDER BY id", params={"t": int(ident)}
     ).to_list()
     assert [r["id"] for r in got] == versions[ident]
     missing = int(frame["id"].max()) + 1
-    assert graph.cypher(f"MATCH (p:{TYPE} {{id: $i}}) RETURN count(*) AS c", params={"i": missing}).to_list() == [
-        {"c": 0}
-    ]
+    assert graph.cypher(
+        f"FOR VALID_TIME ALL MATCH (p:{TYPE} {{id: $i}}) RETURN count(*) AS c", params={"i": missing}
+    ).to_list() == [{"c": 0}]
 
 
 def test_generator_is_deterministic_and_pand_shaped():

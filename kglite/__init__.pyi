@@ -577,11 +577,18 @@ class ResultView:
           programmatic / agent callers. Shortcut: :attr:`warnings`, which is
           ``[]`` rather than an error on a view with no diagnostics.
 
-        - ``temporal`` (Optional[dict]): the valid-time echo of a query run
-          under ``FOR VALID_TIME AS OF`` (or ``valid_at=``), ``None`` for
-          any other. Keys: ``axis`` (``'VALID_TIME'``); ``instant`` (the
+        - ``temporal`` (Optional[dict]): the valid-time echo of a statement
+          run under a valid-time context — written (``FOR VALID_TIME AS OF``,
+          ``FOR VALID_TIME ALL``, ``valid_at=``) or the default of today that
+          a graph with validity declarations gives a statement with none;
+          ``None`` on a graph with no declaration. Keys: ``axis``
+          (``'VALID_TIME'``); ``source`` (``'default'``, ``'explicit'``,
+          ``'all'``, or ``'skipped:write'`` / ``'skipped:procedure'`` /
+          ``'skipped:valid_at'`` when the default did not apply and the
+          statement read every version); ``instant`` (the
           resolved instant, ISO — ``'2009-06-30'``, or
-          ``'2009-06-30T12:00:00'`` naive UTC); ``targets`` (the declared
+          ``'2009-06-30T12:00:00'`` naive UTC; ``'all'`` when every version
+          was read); ``targets`` (the declared
           labels the filter judges for the statement's patterns across every
           scope, including labels widened in through secondary labels — a
           ``(:A)`` pattern lists ``(:B)`` too when the nodes it may reach can
@@ -597,8 +604,8 @@ class ResultView:
           licence is granted; ``None`` when a target is answered by property
           guards); ``route``
           (``'guarded'`` — filtered, the plan ``EXPLAIN`` shows; ``'plain'``
-          — every declared target was valid in full at the instant, so the
-          unfiltered plan ran; ``'view'`` — through a
+          — nothing was filtered: every declared target was valid in full at
+          the instant, the statement reaches none, or it reads every version; ``'view'`` — through a
           ``freeze(valid_at=…)`` handle); ``retrieval`` (``'exact_mask'`` or
           ``'hnsw_mask'`` for a ``vector_score`` top-k over the valid
           vectors, else ``None``; the embedding ``query`` procedures report

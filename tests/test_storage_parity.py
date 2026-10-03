@@ -1133,7 +1133,10 @@ def test_declared_temporal_relationship_merge_parity(tmp_path):
         (1, 100, "2010-01-01", "2012-01-01", 4),
         (1, 100, "2010-01-01", "2012-01-01", 4),
     ]
-    query = "MATCH (:A)-[r:IN]->(:C) RETURN toString(r.vf) AS vf, toString(r.vt) AS vt, r.w AS w ORDER BY w"
+    query = (
+        "FOR VALID_TIME ALL MATCH (:A)-[r:IN]->(:C) "
+        "RETURN toString(r.vf) AS vf, toString(r.vt) AS vt, r.w AS w ORDER BY w"
+    )
     expected = [
         {"vf": "2000-01-01", "vt": None, "w": 1},
         {"vf": "2000-01-01", "vt": "2005-01-01", "w": 2},

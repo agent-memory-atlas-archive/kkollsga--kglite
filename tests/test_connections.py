@@ -599,7 +599,9 @@ class TestSharedRelationshipTypeOwnership:
 
     @staticmethod
     def _periods(g, source_type):
-        rows = g.cypher(f"MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) RETURN r.vf AS vf, r.vt AS vt").to_list()
+        rows = g.cypher(
+            f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) RETURN r.vf AS vf, r.vt AS vt"
+        ).to_list()
         return sorted(((r["vf"], r["vt"]) for r in rows), key=lambda p: (p[0], p[1] or ""))
 
     FIELD = [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]

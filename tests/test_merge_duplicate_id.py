@@ -114,7 +114,7 @@ def test_a_declared_type_keys_a_version_on_its_own_id(mode, tmp_path) -> None:
     ):
         g.cypher("MERGE (s:Status {id: 1, entity: 'e', vf: date('2010-01-01')})")
     g.cypher("MERGE (s:Status {id: 2, entity: 'e', vf: date('2010-01-01')})").to_list()
-    assert g.cypher("MATCH (s:Status) RETURN count(s) AS c").to_list() == [{"c": 2}]
+    assert g.cypher("FOR VALID_TIME ALL MATCH (s:Status) RETURN count(s) AS c").to_list() == [{"c": 2}]
 
 
 @MODES

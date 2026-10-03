@@ -17,10 +17,18 @@ def expected_answers(fixtures: Path, name: str) -> dict:
 
 def generator_queries(generator: Path, name: str) -> dict:
     """The queries an expectation was captured with, read from the fixture generator
-    so the two files cannot drift into asserting different things."""
+    so the two files cannot drift into asserting different things.
+
+    The 0.19.0 wheel answered them over every version; an undated statement on a
+    graph that declares validity now means "valid today", so each without a context of its own
+    is sent under ``FOR VALID_TIME ALL`` (a no-op on a graph with no declaration)."""
     for node in ast.parse(generator.read_text(encoding="utf-8")).body:
         if isinstance(node, ast.Assign) and node.targets[0].id == name:  # type: ignore[attr-defined]
-            return ast.literal_eval(node.value)
+            queries = ast.literal_eval(node.value)
+            return {
+                key: query if query.startswith("FOR VALID_TIME") else f"FOR VALID_TIME ALL {query}"
+                for key, query in queries.items()
+            }
     raise AssertionError(f"{name} is gone from the fixture generator")
 
 

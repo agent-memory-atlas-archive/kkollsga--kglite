@@ -561,7 +561,7 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare:fn prepare( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare:fn prepare( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, suppress_default: bool, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {

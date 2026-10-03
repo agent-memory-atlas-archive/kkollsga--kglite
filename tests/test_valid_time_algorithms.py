@@ -170,10 +170,10 @@ def test_partitions_answer_as_on_the_reference_slice(full, reference, proc):
         assert partition(rows) == expected, proc
     if proc == "connected_components":
         # Clique 0's link out ended in 2006: the ring is a chain, still one
-        # component; without the prefix the three periods are three rings
+        # component; under ALL the three periods are three rings
         # (and the Old node a fourth component).
         assert len(expected) == 1
-        assert len(partition(full.cypher(query).to_list())) == 4
+        assert len(partition(full.cypher("FOR VALID_TIME ALL " + query).to_list())) == 4
 
 
 @pytest.mark.parametrize("proc", ["triangle_count", "diameter"])

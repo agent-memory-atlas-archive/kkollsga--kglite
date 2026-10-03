@@ -1336,6 +1336,7 @@ fn temporal_metadata(echo: &kglite::api::cypher::TemporalDiagnostics) -> BoltVal
     let text = |value: &str| BoltValue::String(value.to_string());
     BoltValue::Dict(BoltDict::from([
         ("axis".into(), text(&echo.axis)),
+        ("source".into(), text(&echo.source)),
         ("instant".into(), text(&echo.instant)),
         (
             "targets".into(),

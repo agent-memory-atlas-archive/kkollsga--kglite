@@ -195,10 +195,18 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
             .guard
             .as_deref()
             .map_or_else(|| "none".to_string(), ToString::to_string);
+        let instant = match (&context.instant, &context.origin) {
+            (ContextInstant::All, ContextOrigin::Skipped(reason)) => {
+                format!("all (default skipped: {reason})")
+            }
+            (ContextInstant::All, _) => "all".to_string(),
+            (_, ContextOrigin::Default) => "per execution (default: today)".to_string(),
+            _ => "per execution".to_string(),
+        };
         rows.push(vec![
             Value::Int64(1),
             Value::String(format!(
-                "ValidTimeContext axis={} targets={targets} instant: per execution",
+                "ValidTimeContext axis={} targets={targets} instant: {instant}",
                 context.axis.to_uppercase()
             )),
             Value::Null,

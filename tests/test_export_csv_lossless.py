@@ -109,7 +109,9 @@ def dump(g):
                 norm(r["p"]),
             )
         )
-        for r in g.cypher("MATCH (n) RETURN labels(n) AS l, n.id AS id, n.title AS t, properties(n) AS p").to_list()
+        for r in g.cypher(
+            "FOR VALID_TIME ALL MATCH (n) RETURN labels(n) AS l, n.id AS id, n.title AS t, properties(n) AS p"
+        ).to_list()
     )
     edges = sorted(
         repr(
@@ -123,7 +125,7 @@ def dump(g):
             )
         )
         for r in g.cypher(
-            "MATCH (a)-[r]->(b) RETURN labels(a)[0] AS st, a.id AS sid, type(r) AS rt, "
+            "FOR VALID_TIME ALL MATCH (a)-[r]->(b) RETURN labels(a)[0] AS st, a.id AS sid, type(r) AS rt, "
             "labels(b)[0] AS tt, b.id AS tid, properties(r) AS p"
         ).to_list()
     )
@@ -187,10 +189,10 @@ def test_null_and_empty_string_stay_distinct(tmp_path):
     source = build_source("memory", tmp_path)
     _, back, _, _ = reimport(tmp_path, source)
     rows = back.cypher(
-        "MATCH (p:Person) WHERE p.name STARTS WITH 'multi' RETURN p.nick AS nick, p.back AS back"
+        "FOR VALID_TIME ALL MATCH (p:Person) WHERE p.name STARTS WITH 'multi' RETURN p.nick AS nick, p.back AS back"
     ).to_list()
     assert rows == [{"nick": "", "back": "\\e"}]
-    row = back.cypher("MATCH (p:Person {id: 2}) RETURN p.nick AS nick").to_list()
+    row = back.cypher("FOR VALID_TIME ALL MATCH (p:Person {id: 2}) RETURN p.nick AS nick").to_list()
     assert row == [{"nick": None}]
 
 

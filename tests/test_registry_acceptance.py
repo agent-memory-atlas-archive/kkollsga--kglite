@@ -200,12 +200,12 @@ def test_the_boundary_day_under_each_convention(registry, tmp_path):
     assert codes(closed, "2021-01-01") == ["0003", "1979"]
 
 
-def test_lineage_runs_without_a_context(registry):
+def test_lineage_runs_under_all(registry):
     """A successor chain joins versions that need not coexist: Adorp (0001)
     merged into Winsum (0053) in 1990, and Winsum into Het Hogeland (1966) in
     2019. Only the unfiltered graph holds the whole chain; a context keeps the
     hops whose two ends are both valid at its instant."""
-    chain = "MATCH (:Municipality {id: '0001'})-[:SUCCEEDED_BY*1..]->(x) RETURN x.id AS code ORDER BY code"
-    assert [r["code"] for r in registry.cypher(chain).to_list()] == ["0053", "1966"]
-    assert [r["code"] for r in registry.cypher(chain, valid_at="1989-06-30").to_list()] == ["0053"]
-    assert registry.cypher(chain, valid_at="2020-01-01").to_list() == []
+    plain = "MATCH (:Municipality {id: '0001'})-[:SUCCEEDED_BY*1..]->(x) RETURN x.id AS code ORDER BY code"
+    assert [r["code"] for r in registry.cypher("FOR VALID_TIME ALL " + plain).to_list()] == ["0053", "1966"]
+    assert [r["code"] for r in registry.cypher(plain, valid_at="1989-06-30").to_list()] == ["0053"]
+    assert registry.cypher(plain, valid_at="2020-01-01").to_list() == []

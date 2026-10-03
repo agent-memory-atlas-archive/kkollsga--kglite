@@ -64,6 +64,8 @@ pub use self::transaction::{CommitOutcome, Session, Transaction};
 mod append_capacity_tests;
 #[cfg(test)]
 mod compaction_tests;
+#[cfg(test)]
+mod default_context_tests;
 pub(crate) mod durable;
 #[cfg(test)]
 mod endpoint_contract_tests;

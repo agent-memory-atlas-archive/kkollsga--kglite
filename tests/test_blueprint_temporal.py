@@ -267,7 +267,8 @@ class TestTwoSourceRelationship:
 
         def periods(source_type, lo, hi):
             rows = g.cypher(
-                f"MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) RETURN r.{lo} AS vf, r.{hi} AS vt"
+                f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) "
+                f"RETURN r.{lo} AS vf, r.{hi} AS vt"
             ).to_list()
             found = [(str(r["vf"]), None if r["vt"] is None else str(r["vt"])) for r in rows]
             return sorted(found, key=lambda p: (p[0], p[1] or ""))

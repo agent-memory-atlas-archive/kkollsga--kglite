@@ -21,6 +21,7 @@ import kglite
 
 T = dt.date(2007, 6, 30)
 AS_OF = "FOR VALID_TIME AS OF $t "
+ALL = "FOR VALID_TIME ALL "
 PERIODS = [
     (dt.date(2000, 1, 1), dt.date(2004, 12, 31)),
     (dt.date(2005, 1, 1), dt.date(2009, 12, 31)),
@@ -171,14 +172,16 @@ def test_bm25_ranks_every_tier_as_the_reference_slice(text_full, reference, rows
 def test_an_invisible_top_hit_gives_way_to_the_next_visible_one_under_as_of_statistics(text_full, reference):
     full = text_full
     params = {"t": T, "q": "zeta"}
-    unguarded = _pairs(full.cypher(BM25_TOP, params=params))
+    unguarded = _pairs(full.cypher(ALL + BM25_TOP, params=params))
     assert unguarded[0][0] == 0, "the period-0 version repeating zeta leads the whole corpus"
     guarded = _pairs(full.cypher(AS_OF + BM25_TOP, params=params))
     assert 0 not in [vid for vid, _ in guarded]
     top_vid, top_score = guarded[0]
     assert top_vid % 3 == VALID
     # The same document scores differently under the corpus-wide statistics.
-    whole = full.cypher("MATCH (d:Doc {vid: $v}) RETURN text_bm25(d, 'body', $q) AS s", params={**params, "v": top_vid})
+    whole = full.cypher(
+        ALL + "MATCH (d:Doc {vid: $v}) RETURN text_bm25(d, 'body', $q) AS s", params={**params, "v": top_vid}
+    )
     assert whole.to_list()[0]["s"] != pytest.approx(top_score, abs=1e-9)
     _close(guarded, _pairs(reference.cypher(BM25_TOP, params=params)))
 
@@ -218,12 +221,12 @@ def test_vector_top_k_is_exact_over_the_mask(full, reference, rows):
 def test_the_invisible_nearest_vector_is_not_returned(full, rows):
     invisible = 3  # entity 1, period 0
     params = {"t": T, "v": _query_vector(rows, invisible)}
-    assert _pairs(full.cypher(VECTOR_TOP, params=params))[0][1] is None
+    assert _pairs(full.cypher(ALL + VECTOR_TOP, params=params))[0][1] is None
     nearest = (
         "MATCH (d:Doc) WHERE vector_score(d, 'body_emb', $v) IS NOT NULL "
         "RETURN d.vid AS vid ORDER BY vector_score(d, 'body_emb', $v) DESC LIMIT 1"
     )
-    assert full.cypher(nearest, params=params).to_list()[0]["vid"] == invisible
+    assert full.cypher(ALL + nearest, params=params).to_list()[0]["vid"] == invisible
     guarded = [vid for vid, _ in _pairs(full.cypher(AS_OF + VECTOR_TOP, params=params))]
     assert invisible not in guarded
     assert all(vid % 3 == VALID for vid in guarded)
@@ -372,7 +375,7 @@ def test_an_invisible_nearest_vector_never_comes_back_from_a_covering_store(
     invisible = [r for r in covered_rows if not r["valid"]][:5]
     for row in invisible:
         params = {"t": T, "v": row["vec"]}
-        assert _pairs(full.cypher(COVERED_TOP, params=params))[0][0] == row["vid"], "the query is its own nearest"
+        assert _pairs(full.cypher(ALL + COVERED_TOP, params=params))[0][0] == row["vid"], "the query is its own nearest"
         guarded = _pairs(full.cypher(AS_OF + COVERED_TOP, params=params))
         assert len(guarded) == 10
         assert row["vid"] not in [vid for vid, _ in guarded]

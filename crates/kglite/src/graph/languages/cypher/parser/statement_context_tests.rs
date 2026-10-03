@@ -2,7 +2,7 @@
 
 use super::super::parse_cypher;
 use crate::datatypes::values::Value;
-use crate::graph::languages::cypher::ast::{CypherQuery, Expression};
+use crate::graph::languages::cypher::ast::{ContextInstant, CypherQuery, Expression};
 
 fn parse(query: &str) -> CypherQuery {
     parse_cypher(query).unwrap_or_else(|e| panic!("{query}: {e}"))
@@ -65,12 +65,12 @@ fn prefix_admits_each_constant_instant_form() {
     let query = parse("FOR VALID_TIME AS OF $t RETURN 1 AS x");
     assert!(matches!(
         query.context.unwrap().instant,
-        Expression::Parameter(ref p) if p == "t"
+        ContextInstant::AsOf(Expression::Parameter(ref p)) if p == "t"
     ));
     let query = parse("FOR VALID_TIME AS OF '2020-01-01' RETURN 1 AS x");
     assert!(matches!(
         query.context.unwrap().instant,
-        Expression::Literal(Value::String(ref s)) if s == "2020-01-01"
+        ContextInstant::AsOf(Expression::Literal(Value::String(ref s))) if s == "2020-01-01"
     ));
 }
 
@@ -104,7 +104,10 @@ fn any_axis_parses_so_lowering_can_refuse_it() {
 #[test]
 fn malformed_prefixes_name_what_they_expected() {
     let err = parse_err("FOR VALID_TIME OF date('2020-01-01') RETURN 1");
-    assert!(err.contains("Expected AS OF after FOR VALID_TIME"), "{err}");
+    assert!(
+        err.contains("Expected AS OF or ALL after FOR VALID_TIME"),
+        "{err}"
+    );
     let err = parse_err("FOR VALID_TIME AS date('2020-01-01') RETURN 1");
     assert!(err.contains("Expected OF"), "{err}");
     let err = parse_err("FOR MATCH AS OF date('2020-01-01') RETURN 1");
@@ -172,4 +175,23 @@ fn for_after_a_clause_names_the_prefix_rule() {
 fn a_statement_without_a_prefix_has_no_context() {
     let query = parse("MATCH (n) RETURN n");
     assert!(query.context.is_none() && query.guard.is_none());
+}
+
+#[test]
+fn all_is_a_context_in_either_prefix_order_and_takes_no_instant() {
+    use crate::graph::languages::cypher::ast::ContextOrigin;
+    for text in [
+        "FOR VALID_TIME ALL MATCH (n) RETURN n",
+        "for valid_time all MATCH (n) RETURN n",
+        "EXPLAIN FOR VALID_TIME ALL MATCH (n) RETURN n",
+        "FOR VALID_TIME ALL EXPLAIN MATCH (n) RETURN n",
+    ] {
+        let context = parse(text).context.expect(text);
+        assert!(matches!(context.instant, ContextInstant::All), "{text}");
+        assert_eq!(context.origin, ContextOrigin::Explicit);
+    }
+    let err = parse_err("FOR VALID_TIME ALL FOR VALID_TIME AS OF date() RETURN 1");
+    assert!(err.contains("one FOR"), "{err}");
+    let err = parse_err("FOR VALID_TIME ALL date('2020-01-01') RETURN 1");
+    assert!(!err.is_empty());
 }

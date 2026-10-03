@@ -46,12 +46,14 @@ def dump(g):
                 norm(own(r["p"])),
             )
         )
-        for r in g.cypher("MATCH (n) RETURN labels(n) AS l, n.id AS id, n.title AS t, properties(n) AS p").to_list()
+        for r in g.cypher(
+            "FOR VALID_TIME ALL MATCH (n) RETURN labels(n) AS l, n.id AS id, n.title AS t, properties(n) AS p"
+        ).to_list()
     )
     edges = sorted(
         repr((r["st"], norm(r["sid"]), r["rt"], r["tt"], norm(r["tid"]), norm(r["p"])))
         for r in g.cypher(
-            "MATCH (a)-[r]->(b) RETURN labels(a)[0] AS st, a.id AS sid, type(r) AS rt, "
+            "FOR VALID_TIME ALL MATCH (a)-[r]->(b) RETURN labels(a)[0] AS st, a.id AS sid, type(r) AS rt, "
             "labels(b)[0] AS tt, b.id AS tid, properties(r) AS p"
         ).to_list()
     )
@@ -87,7 +89,7 @@ def test_round_trip_loses_nothing(storage, fmt, tmp_path):
 def test_duplicate_id_versions_stay_two_nodes(tmp_path):
     source = build_source("memory", tmp_path)
     _, back, _ = export_and_load(source, tmp_path)
-    query = "MATCH (p:Person) RETURN p.id AS id, p.title AS t"
+    query = "FOR VALID_TIME ALL MATCH (p:Person) RETURN p.id AS id, p.title AS t"
     rows = sorted(map(repr, back.cypher(query).to_list()))
     assert len(rows) == 3
     assert rows == sorted(map(repr, source.cypher(query).to_list()))
@@ -155,7 +157,10 @@ def test_schema_org_alias_is_opt_in(tmp_path):
     # The manifest still carries the declarations; the aliases are extra properties.
     back = kglite.load_rdf(str(aliased))
     assert declarations(back) == declarations(source)
-    assert back.cypher("MATCH (p:Person {id: 2}) RETURN p.schema__validFrom AS f").to_list()[0]["f"] is not None
+    assert (
+        back.cypher("FOR VALID_TIME ALL MATCH (p:Person {id: 2}) RETURN p.schema__validFrom AS f").to_list()[0]["f"]
+        is not None
+    )
 
 
 def test_mixed_id_kinds_do_not_merge(tmp_path):

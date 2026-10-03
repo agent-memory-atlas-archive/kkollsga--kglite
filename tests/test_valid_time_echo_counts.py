@@ -12,6 +12,8 @@ endpoint.
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
 import kglite
@@ -117,3 +119,25 @@ def test_the_counts_follow_a_write():
     echo = _echo(graph, "2012-06-15")
     assert echo["hidden"]["(:Department)"] == 1
     assert echo["endpoint_invalid"] == 2
+
+
+def test_the_echo_names_where_the_context_came_from():
+    graph = _org_chart("closed")
+    graph.cypher("CREATE (:Office {id: 'o1'})").to_list()
+    default = graph.cypher(QUERY).diagnostics["temporal"]
+    assert default["source"] == "default"
+    assert default["instant"] == dt.datetime.now(dt.timezone.utc).date().isoformat()
+    explicit = graph.cypher(QUERY, valid_at="2012-06-15").diagnostics["temporal"]
+    assert explicit["source"] == "explicit"
+    every = graph.cypher(f"FOR VALID_TIME ALL {QUERY}").diagnostics["temporal"]
+    assert (every["source"], every["instant"], every["route"]) == ("all", "all", "plain")
+    assert every["targets"] == [] and every["hidden"] == {} and every["endpoint_invalid"] is None
+    own_instant = graph.cypher(
+        "MATCH (e:Employee) WHERE valid_at(e, date('2012-06-15')) RETURN e.id AS id"
+    ).diagnostics["temporal"]
+    assert (own_instant["source"], own_instant["instant"]) == ("skipped:valid_at", "all")
+    write = graph.cypher("MATCH (o:Office) SET o.seen = true").diagnostics["temporal"]
+    assert write["source"] == "skipped:write"
+    # A statement that reaches no declared label filters nothing: plain, not guarded.
+    unrelated = graph.cypher("MATCH (o:Office) RETURN o.id AS id").diagnostics["temporal"]
+    assert (unrelated["source"], unrelated["route"], unrelated["targets"]) == ("default", "plain", [])
