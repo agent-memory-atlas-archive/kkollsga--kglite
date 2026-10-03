@@ -29,6 +29,21 @@ before upgrading.
   Unknown keys inside a `timeseries` block (e.g. `aggregates`)
   now warn like unknown keys elsewhere in a blueprint.
 
+- Performance: a grouped `count` over one relationship hop
+  (`MATCH (w:T)-[:R]->(f:U) RETURN f.p, count(w) ... ORDER BY ... LIMIT k`)
+  now keeps its fused plan under `FOR VALID_TIME AS OF` (and `valid_at=`). The
+  fused operator filters its group nodes through the node mask and counts
+  through the per-relationship and per-endpoint masks, so it returns exactly
+  what the unfused guarded plan returns. On a 856k-relationship Sodir graph
+  (release build, Python 3.14, min of 25, two runs, load average 3.4-5.3) the
+  top-10 wellbores-per-field count under a context went from 18-29 ms to
+  0.14 ms (0.11 ms undated), and the licences-per-company top-10 stays at
+  1.3 ms. On the temporal benchmark's agent cells the cost of the context
+  relative to a graph holding only the as-of slice fell from 7.1x to 2.3x
+  (`count(*)` per field) and from 6.1x to 1.9x (`count(r)` per company).
+  Two-hop (5-element) patterns, the `WITH` form, optional matches and the
+  anchored edge count still run unfused under a context.
+
 ### Fixed
 
 - Performance: the four-argument `valid_at(x, d, 'from', 'to')` and
