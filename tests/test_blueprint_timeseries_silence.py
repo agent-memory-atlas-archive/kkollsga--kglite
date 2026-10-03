@@ -79,14 +79,20 @@ def test_float_formatted_time_components_land_on_the_right_dates(tmp_path):
     assert any("dropped 1 aggregate row(s)" in m for m in msgs), msgs
 
 
-def test_a_fractional_time_component_is_refused(tmp_path):
-    csv = "pid,yr,mo,val,stock\n1,2020.5,1,1.0,1.0\n"
-    try:
-        g, _ = _build(tmp_path, _series(), {"r.csv": csv})
-    except Exception:
-        return
-    # Refused as before: the row must not be filed under a fabricated year 2020.
-    assert _scalar(g, "MATCH (p:Plant) RETURN ts_sum(p.out, '2020') AS v") in (0.0, None, -0.0)
+def test_a_non_whole_time_component_drops_the_row_and_says_so_once(tmp_path):
+    rows = ["1,2020.5,1,5.0,1.0", "1,abc,2,6.0,1.0", "1,2020,3,7.0,1.0", "1,2021,1.5,8.0,1.0", "1,,4,9.0,1.0"]
+    csv = "pid,yr,mo,val,stock\n" + "\n".join(rows) + "\n"
+    g, msgs = _build(tmp_path, _series(), {"r.csv": csv})
+    # Only the well-formed row is in the series; nothing is filed under year 0 or a coerced year.
+    assert _scalar(g, "MATCH (p:Plant) RETURN ts_count(p.out) AS v") == 1
+    assert _scalar(g, "MATCH (p:Plant) RETURN ts_sum(p.out, '2020') AS v") == 7.0
+    assert _scalar(g, "MATCH (p:Plant) RETURN ts_sum(p.out, '0') AS v") in (0.0, None)
+    hits = [m for m in msgs if "not a whole number" in m]
+    assert len(hits) == 1, msgs
+    m = hits[0]
+    assert "[Plant] dropped 4 row(s)" in m
+    assert "yr" in m and "mo" in m
+    assert "'2020.5'" in m and "'abc'" in m and "'1.5'" in m
 
 
 def test_an_unknown_key_in_a_timeseries_block_warns(tmp_path):

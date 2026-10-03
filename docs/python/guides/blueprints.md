@@ -541,6 +541,7 @@ Key points:
 - **`units`** — optional per-channel units.
 
 Rows where a time component below `year` is zero (e.g., `month=0` for annual totals) are aggregate rows and are dropped. The build warns once per node type with the count, and names any channel whose only values sat on those rows (it loads empty). Time components may be written as floats (`2020.0`, `1.0` — pandas does this when a column holds a NaN); whole values are read as integers.
+A row whose time component is not a whole number (`2020.5`, `abc`, an empty year) is dropped from the series, with one warning giving the count, the columns and example values.
 
 To keep the aggregates, load them as a yearly series with a sibling sub-node that selects them and uses a year-only `time_key`:
 

@@ -130,11 +130,40 @@ pub struct AggregateDrop {
     /// Declared channels with a value on a dropped row and none on a kept one:
     /// they load empty.
     pub emptied_channels: Vec<String>,
+    /// Rows dropped because a time component was not a whole number (or the
+    /// year was empty).
+    pub invalid_rows: usize,
+    /// Columns that held such a cell, in header order.
+    pub invalid_columns: Vec<String>,
+    /// Up to three of the offending cell values.
+    pub invalid_examples: Vec<String>,
 }
 
 impl AggregateDrop {
-    /// The build-report warning for a drop, or `None` when no row was dropped.
-    pub fn warning(&self, node_type: &str, spec: &TimeseriesSpec) -> Option<String> {
+    /// The build-report warnings for what was dropped: none when nothing was.
+    pub fn warnings(&self, node_type: &str, spec: &TimeseriesSpec) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .aggregate_warning(node_type, spec)
+            .into_iter()
+            .collect();
+        if self.invalid_rows > 0 {
+            let cols = self.invalid_columns.join(", ");
+            let ex = self
+                .invalid_examples
+                .iter()
+                .map(|e| format!("'{e}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(format!(
+                "[{node_type}] dropped {} row(s) whose time component in column(s) {cols} is not \
+                 a whole number (e.g. {ex}); they are not loaded into the series",
+                self.invalid_rows
+            ));
+        }
+        out
+    }
+
+    fn aggregate_warning(&self, node_type: &str, spec: &TimeseriesSpec) -> Option<String> {
         if self.dropped == 0 {
             return None;
         }
@@ -196,17 +225,24 @@ pub fn drop_zero_time_components(raw: &mut RawCsv, spec: &TimeseriesSpec) -> Agg
         return AggregateDrop::default();
     };
     let mut zero_cols: Vec<usize> = Vec::new();
+    // (column index, may be empty): every component must be a whole number,
+    // and only the year must also be present.
+    let mut time_cols: Vec<(usize, bool)> = Vec::new();
     for (label, col) in map {
-        if label == "year" {
+        let Some(idx) = raw.col_index(col) else {
             continue;
-        }
-        if let Some(idx) = raw.col_index(col) {
+        };
+        time_cols.push((idx, label != "year"));
+        if label != "year" {
             zero_cols.push(idx);
         }
     }
-    if zero_cols.is_empty() {
+    if time_cols.is_empty() {
         return AggregateDrop::default();
     }
+    let mut invalid_hit = vec![false; raw.headers.len()];
+    let mut invalid_rows = 0;
+    let mut invalid_examples: Vec<String> = Vec::new();
 
     let is_zero = |raw: &RawCsv, r: usize, idx: usize| {
         !raw.nulls[r][idx] && time_component(&raw.rows[r][idx]) == Some(0)
@@ -233,6 +269,25 @@ pub fn drop_zero_time_components(raw: &mut RawCsv, spec: &TimeseriesSpec) -> Agg
     let mut new_row_ids = Vec::with_capacity(raw.row_count());
     let mut dropped = 0;
     for r in 0..raw.row_count() {
+        let mut invalid = false;
+        for &(idx, may_be_empty) in &time_cols {
+            let bad = if raw.nulls[r][idx] || raw.rows[r][idx].trim().is_empty() {
+                !may_be_empty
+            } else {
+                time_component(&raw.rows[r][idx]).is_none()
+            };
+            if bad {
+                invalid = true;
+                invalid_hit[idx] = true;
+                if invalid_examples.len() < 3 {
+                    invalid_examples.push(raw.rows[r][idx].trim().to_string());
+                }
+            }
+        }
+        if invalid {
+            invalid_rows += 1;
+            continue;
+        }
         let mut drop = false;
         for (k, &idx) in zero_cols.iter().enumerate() {
             if is_zero(raw, r, idx) {
@@ -258,6 +313,15 @@ pub fn drop_zero_time_components(raw: &mut RawCsv, spec: &TimeseriesSpec) -> Agg
         }
     }
     let report = AggregateDrop {
+        invalid_rows,
+        invalid_columns: raw
+            .headers
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| invalid_hit[*i])
+            .map(|(_, h)| h.clone())
+            .collect(),
+        invalid_examples,
         dropped,
         zero_columns: zero_cols
             .iter()

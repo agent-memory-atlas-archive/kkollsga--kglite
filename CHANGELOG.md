@@ -16,7 +16,10 @@ before upgrading.
   with the count, the zero columns and any channel whose only values were on
   those rows (it loaded empty), and names the sibling sub-node
   (`"filter": {"<col>": 0}` plus a year-only `time_key`) that loads them as a
-  yearly series. Unknown keys inside a `timeseries` block (e.g. `aggregates`)
+  yearly series. A row whose time component is not a whole number (`2020.5`,
+  `abc`, an empty year) is dropped from the series with one warning giving the
+  count, columns and example values, instead of being filed under year 0.
+  Unknown keys inside a `timeseries` block (e.g. `aggregates`)
   now warn like unknown keys elsewhere in a blueprint.
 
 ### Fixed

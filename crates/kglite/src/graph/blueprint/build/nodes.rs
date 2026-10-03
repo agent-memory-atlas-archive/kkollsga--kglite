@@ -60,7 +60,7 @@ fn prep_node_spec(
     let mut ts_warnings = Vec::new();
     if let Some(tspec) = &spec.spec.timeseries {
         let drop = ts::drop_zero_time_components(&mut raw, tspec);
-        ts_warnings.extend(drop.warning(&spec.node_type, tspec));
+        ts_warnings.extend(drop.warnings(&spec.node_type, tspec));
     }
 
     let pk = spec.spec.pk.clone().unwrap_or_else(|| "id".to_string());
