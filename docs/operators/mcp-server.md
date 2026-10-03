@@ -538,6 +538,17 @@ own, or drop the source tools from `extensions.tools_allow` (above), which is
 the closed-by-default surface. `--source-root`/`--watch`/`--vault` mode has no auto-bind
 question: the directory is the argument.
 
+### Valid time: the default instant
+
+On a graph that declares validity intervals, a `cypher_query` or recipe call
+with no `valid_at` and no `FOR VALID_TIME` prefix reads **as of today** (UTC),
+and the `temporal:` line says so (`default`). An agent that needs history sends
+`valid_at: "all"` or starts the query with `FOR VALID_TIME ALL`; a recipe that
+means history starts with the prefix, which does nothing on a graph with no
+declaration. The operator moves the default with `--valid-time-default
+{today|all|YYYY-MM-DD}` or `extensions.valid_time.default`; the flag wins. See
+{doc}`/python/guides/valid-time`.
+
 ### Pinning the write scope
 
 `cypher_query`'s `write_scope` argument is set by the agent, so by itself it is

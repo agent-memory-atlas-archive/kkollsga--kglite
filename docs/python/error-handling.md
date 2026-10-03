@@ -134,7 +134,11 @@ have.
 **Valid time** follows the same split. A statement under
 `FOR VALID_TIME AS OF` that writes, calls a procedure with no valid-time route,
 names an axis other than `VALID_TIME`, or runs on a graph with no validity
-declaration raises `CypherExecutionError`; a second context in one statement is
+declaration raises `CypherExecutionError` (`FOR VALID_TIME ALL` is exempt: it
+writes, and on a graph with no declaration it does nothing). With no prefix on
+a graph that declares validity, `degree()`, `indegree()`, `outdegree()` and
+`shortest_path_length()` raise `CypherExecutionError` too, with a hint to use
+`COUNT { (n)--() }` or `FOR VALID_TIME ALL`; a second context in one statement is
 a `CypherSyntaxError`. Python's `valid_at=` raises `ValueError` before the
 query runs for an instant that is not a date or datetime, and for a query that
 already carries a context. The fluent node filters (`select()`, `valid_at()`,

@@ -347,7 +347,11 @@ graph.select('Estimate', temporal=False).where({'valid_from': {'>=': '2020-06-01
 graph.date('2020-06-15').select('Estimate')           # valid on that day
 graph.select('Estimate', temporal=False).valid_during('2020-01-01', '2020-06-30')
 graph.cypher("MATCH (e:Estimate) RETURN e.title", valid_at='2020-06-15')
+graph.cypher("FOR VALID_TIME ALL MATCH (e:Estimate) RETURN e.title")   # every version
 ```
+
+A Cypher statement with no prefix reads as of today on a graph that declares
+validity, the same default as `select()`.
 
 `validFrom` / `validTo` load the columns as dates and declare them as the
 type's validity interval; `convention` says whether the `to` day is still

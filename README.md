@@ -122,7 +122,8 @@ RETURN c.title
 Move the date and the answer moves with it: the operator of record in 1999. No
 hop can be left undated (paths, graph algorithms and vector and BM25 ranking
 see only what was valid then); `cypher(valid_at=…)`, the MCP tools and Java's
-`ValidAt` write the same prefix.
+`ValidAt` write the same prefix. A statement with no prefix reads as of today,
+and `FOR VALID_TIME ALL` reads every version.
 **→ [Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html).**
 
 **A declared ontology that gates the build.** `define_ontology()` records what
@@ -413,8 +414,9 @@ MATCH (e:Employee)-[m:MEMBER_OF]->(t:Team) WHERE valid_during(m, date('2024-01-0
 ```
 
 `graph.cypher(q, valid_at="2023-06-30")`, the fluent `graph.date("2023-06-30")`
-context, the MCP tools and Java's `ValidAt` write the same prefix, and every
-write onto a declared type is checked against its declaration. Recording time
+context, the MCP tools and Java's `ValidAt` write the same prefix, a statement
+with no prefix reads as of today, `FOR VALID_TIME ALL` reads every version, and
+every write onto a declared type is checked against its declaration. Recording time
 (*"as known when?"*) is a second pair of bounds, such as `recorded_from` /
 `recorded_to`, that you load beside the first and test in the query; the
 bitemporal guide shows the full pattern on an HR change feed with a runnable

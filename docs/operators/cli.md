@@ -61,6 +61,13 @@ column order — `RETURN 1 AS zz, 2 AS aa` yields `{"zz": 1, "aa": 2}`, the
 same order `--format csv` writes its header in. The top-level shape is a
 plain array, so `jq '.[0].name'` addresses the first row's column.
 
+### Valid time
+
+On a graph that declares validity intervals, a statement with no
+`FOR VALID_TIME` prefix reads **as of today** (UTC); prefix it with
+`FOR VALID_TIME ALL` to read every version. `--valid-time-default
+{today|all|YYYY-MM-DD}` on `query`, `write` and `session` changes what an
+unprefixed statement reads for that run; a statement's own prefix still wins.
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared

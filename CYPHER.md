@@ -1535,7 +1535,8 @@ CALL db.temporal.declarations()
   naming the first row by its 0-based position. Such a row is valid at no
   instant: no `FOR VALID_TIME AS OF` statement, `valid_at` / `valid_during`
   call, frozen view or fluent temporal filter returns it, while a statement
-  without the context (a lineage or as-known-at query) still reads it.
+  that reads every version (`FOR VALID_TIME ALL`: a lineage or as-known-at
+  query) still reads it.
 - **What the counts report.** `db.temporal.declarations()` counts, at the
   graph's current state, `empty_rows` (rows valid at no instant: `from ==
   to` under `half_open`, kept with a warning, or an inverted interval) and
@@ -1584,7 +1585,10 @@ CALL db.temporal.declarations()
 ### Statement context: `FOR VALID_TIME AS OF`
 
 A statement prefixed `FOR VALID_TIME AS OF <instant>` asks the whole query as
-of that instant on the declared types. The prefix stands before or after
+of that instant on the declared types. **A statement with no prefix on a graph
+that declares validity runs as `FOR VALID_TIME AS OF date()`** (today, UTC), and
+`FOR VALID_TIME ALL` reads every version (see *The default and `ALL`* below).
+The prefix stands before or after
 `EXPLAIN` / `PROFILE`; the instant is a quoted ISO date or datetime, `$param`,
 `date(…)` / `datetime(…)` of a literal or parameter, or `date()` for today in
 UTC. `datetime()` with no argument is refused there: the statement resolves its
@@ -1619,9 +1623,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   `date()` is read when the statement runs, so a cached plan never carries
   one). Counts (`count(*)` over a label, a type or the whole graph), node
   scans with an aggregate or `ORDER BY … LIMIT`, top-k over matched rows,
-  retrieval top-k and `elementId` anchors keep their fast routes under a
-  context; the fused
-  per-group aggregates that read the store beside the pattern matcher do not.
+  retrieval top-k, `elementId` anchors and the fused per-group aggregates over
+  a one-hop pattern keep their fast routes under a context (the fused operators
+  filter through the context's masks); a longer pattern runs unfused.
   `PROFILE` runs the same way. `EXPLAIN` leads the plan with a
   `ValidTimeContext` row naming the axis and the declared intervals the query
   can reach; the instant is resolved per execution, not planned.
@@ -1687,7 +1691,9 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
 - **The echo.** The result's diagnostics carry a `temporal` object (Python
   `diagnostics["temporal"]`, the C / Java diagnostics JSON, the MCP
   `temporal:` line, Bolt's `kglite.temporal` summary key): `axis`, the
-  `instant` resolved (ISO; a datetime in naive UTC), the `targets` — the
+  `source` (`explicit`, `default`, `all`, or `skipped:write` / `skipped:procedure` /
+  `skipped:valid_at`, see below), the `instant` resolved (ISO; a datetime in
+  naive UTC; `all` under `FOR VALID_TIME ALL`), the `targets` — the
   declared labels the filter judges for the statement's patterns across every
   scope, including labels widened in through secondary labels (a node must
   be valid under every declared label it carries, so a `(:A)` pattern lists
@@ -1697,25 +1703,46 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   handle), `retrieval` (`exact_mask` / `hnsw_mask` for a `vector_score`
   top-k, else null), `slice` (a graph algorithm ran on the valid slice) and
   `session_version`, the graph version answered — comparable within one
-  process only, as it restarts on load. A statement without a context has no
-  `temporal` object in the serialized forms (`None` under the Python key).
-- **No context, no filter.** A statement without the prefix sees every
-  version — Cypher never defaults to today, while the fluent API's date context
-  does. A client that wants "current" sends the prefix (or `valid_at`) with
-  today's date. Questions that join versions that never coexist — lineage over
-  a successor relationship, a comparison of two instants — run without a
-  context, with `valid_at(x, d)` on the elements that need it: under a context
-  a hop is visible only when both its ends are valid at the one instant.
+  process only, as it restarts on load. A statement on a graph with no validity
+  declaration has no `temporal` object in the serialized forms (`None` under the
+  Python key), and a statement that reaches no declared target reports route
+  `plain`.
+- **The default and `ALL`.** On a graph with a validity declaration, a
+  statement with no prefix runs as `FOR VALID_TIME AS OF date()` in every
+  binding (the engine adds the context when it lowers the statement, and the
+  day is resolved per execution). `FOR VALID_TIME ALL` reads every version: no
+  filter, no write refusal, a no-op on a graph with no declaration, and
+  refused inside a `freeze(valid_at=…)` view like any other context.
+  `valid_at='all'` on the bindings writes it, and `valid_at=None` means the
+  default. A graph with no declaration is untouched. The runtime setting
+  `set_valid_time_default('today' | 'all' | date)` (MCP `--valid-time-default`,
+  manifest `extensions.valid_time.default`, Bolt and CLI flags) changes the
+  instant the default reads.
+- **Skip rules.** The default does not apply, and the statement reads every
+  version, in three cases, each reported as `source: skipped:<reason>`: a
+  statement that writes (`skipped:write`; an explicit prefix on a write is
+  still refused); a procedure that is not valid-time aware — `refresh_stats`,
+  `duplicate_id`, the `*_violation` audits and the like (`skipped:procedure`;
+  an explicit prefix still refuses it); and a statement that calls
+  `valid_at()` / `valid_during()` itself (`skipped:valid_at`), so a query that
+  chooses its own instants keeps its answer. Questions that join versions that
+  never coexist — lineage over a successor relationship, a comparison of two
+  instants — therefore run with `valid_at(x, d)` on the elements that need it,
+  or under `FOR VALID_TIME ALL`: under a context, the default one included, a
+  hop is visible only when both its ends are valid at the one instant.
 - **One context per statement.** A second prefix, or one inside a UNION arm or
   a `CALL { }` body, is a syntax error.
-- **Refused:** an axis other than `VALID_TIME` (it parses, so a client can
-  probe for support), a graph with no validity declaration, a writing
-  statement, any other procedure that enumerates graph elements — the
+- **Refused:** (under an explicit `AS OF`; `ALL` accepts the writing statement
+  and the graph with no declaration) an axis other than `VALID_TIME` (it
+  parses, so a client can probe for support), a graph with no validity
+  declaration, a writing statement, any other procedure that enumerates graph elements — the
   validation rules (`orphan_node`, …), `cluster`, `kg_knn` — (metadata
   procedures such as `db.labels()` and `db.temporal.declarations()` are fine),
   `degree()` / `inDegree()` / `outDegree()` / `shortest_path_length()` (they
   read a node's relationships outside the pattern matcher; `COUNT { (n)--() }`
-  and `MATCH p = shortestPath(…) RETURN length(p)` answer under a context), and
+  and `MATCH p = shortestPath(…) RETURN length(p)` answer under a context; under
+  the default the message names both that and `FOR VALID_TIME ALL`, and the
+  functions run under `ALL`), and
   a relationship type whose
   declarations are `ambiguous` — when the statement can reach it; the
   embedding query procedures and the algorithms reach every type, so any

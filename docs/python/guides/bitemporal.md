@@ -23,7 +23,9 @@ covered in depth in {doc}`valid-time`, which this page builds on.
 properties that bound its validity interval. A statement asked
 `FOR VALID_TIME AS OF` an instant (or with `valid_at=`) then answers as if the
 graph held only the elements valid then, on every hop, path, subquery and
-algorithm, and every binding writes the same prefix. **Recording time is
+algorithm, and every binding writes the same prefix. A statement with no
+prefix is asked as of today; `FOR VALID_TIME ALL` reads every version.
+**Recording time is
 modelled.** KGLite keeps no recording time of its own: when your source (or
 your ingest) knew a fact is a second pair of bounds, such as `recorded_from` /
 `recorded_to`, that you store on records you never overwrite and test by hand
@@ -42,7 +44,7 @@ is about doing that well.
 | Valid-time echo | native | `diagnostics["temporal"]`, MCP `temporal:`, Bolt `kglite.temporal` |
 | Recording ("as known at") time | modelled | a second pair of properties, tested half-open by hand on every hop |
 | Superseded images | modelled | one record per image, each with its own id |
-| Zero-length versions | native | kept with a warning and counted in `empty_rows`; valid at no instant, so only queries without the valid-time context (lineage, audit) see them |
+| Zero-length versions | native | kept with a warning and counted in `empty_rows`; valid at no instant, so only queries that read every version (`FOR VALID_TIME ALL`: lineage, audit) see them |
 | Changed since, delivery replay | modelled | queries on the recording pair |
 | Reproducing an earlier answer | modelled | the recording pair, or keeping each published `.kgl` |
 | Engine transaction time / audit trail | not there | `SET` overwrites and `DELETE` leaves no trace; CDC is process-local |
@@ -207,6 +209,7 @@ def apply_delivery(graph, t, supersedes, new_links, new_assignments):
         # The "was" check: every image the delivery supersedes is current,
         # or was superseded by this same delivery (a redelivery).
         found = tx.cypher("""
+            FOR VALID_TIME ALL
             MATCH (a:Assignment) WHERE a.id IN $ids
               AND (a.recorded_to IS NULL OR a.recorded_to = date($t))
             RETURN count(a) AS n
@@ -254,7 +257,7 @@ delivery = dict(
     ],
 )
 apply_delivery(graph, **delivery)
-COUNTS = "MATCH (n) RETURN count(n) AS nodes, COUNT { ()-[]->() } AS relationships"
+COUNTS = "FOR VALID_TIME ALL MATCH (n) RETURN count(n) AS nodes, COUNT { ()-[]->() } AS relationships"
 graph.cypher(COUNTS).to_list()
 # [{'nodes': 12, 'relationships': 13}]
 ```
@@ -278,7 +281,7 @@ apply_delivery(graph, "2024-06-20", ["ben.2:r"], [], [
 # CypherExecutionError: Cypher execution error: node 'ben.2:e', the from bound
 # 2022-01-01 ('valid_from') is after the to bound 2021-12-31 ('valid_to'), an
 # inverted interval under convention 'half_open'
-graph.cypher("MATCH (a:Assignment {id: 'ben.2:r'}) RETURN a.recorded_to AS recorded_to").to_list()
+graph.cypher("FOR VALID_TIME ALL MATCH (a:Assignment {id: 'ben.2:r'}) RETURN a.recorded_to AS recorded_to").to_list()
 # [{'recorded_to': None}]
 ```
 
@@ -325,8 +328,10 @@ sorted(current.ids())
 # ['ada.2:r', 'ben.2:r']
 ```
 
-A statement without a prefix sees every version, and so does a client that
-sends none. The fluent API defaults to today (UTC).
+A statement without a prefix runs as of today (UTC), as the fluent API does
+({doc}`valid-time`, section 2.1). A question about the images themselves, such
+as the audits and lineage below, reads every version: begin it with
+`FOR VALID_TIME ALL`.
 
 ### As known at an instant
 
@@ -414,11 +419,12 @@ axis, back again for the modelled one.
 ### Lineage
 
 An employee's assignment history joins records that never coexist, so ask it
-**without** the context, with only the recording test. Without the context the
-zero-length assignment is there too:
+under `FOR VALID_TIME ALL`, with only the recording test. With every version in
+view the zero-length assignment is there too:
 
 ```python
 LINEAGE = f"""
+    FOR VALID_TIME ALL
     MATCH (a:Assignment {{employee: $employee}})
     WHERE {KNOWN.format(x='a')}
     RETURN a.team AS team, toString(a.valid_from) AS valid_from, toString(a.valid_to) AS valid_to
@@ -435,8 +441,9 @@ graph.cypher(LINEAGE, params={"employee": "ben", "tt": "2024-06-15"}).to_list()
 ```
 
 A successor relationship between anchors (a team replaced by another) is
-walked the same way: under a context a hop is visible only when both its ends
-are valid at the one instant, so the context truncates the chain. The pattern
+walked the same way: under a context, the default one included, a hop is
+visible only when both its ends are valid at the one instant, so the context
+truncates the chain. The pattern
 is in {doc}`valid-time`, section 6.
 
 ### Changed since, a day's delivery, and late recordings
@@ -449,6 +456,7 @@ two axes finds changes recorded more than a week after they took effect:
 
 ```python
 graph.cypher("""
+    FOR VALID_TIME ALL
     MATCH (a:Assignment)
     WHERE a.recorded_from > date($since) OR a.recorded_to > date($since)
     RETURN DISTINCT a.employee AS employee
@@ -456,6 +464,7 @@ graph.cypher("""
 # [{'employee': 'ada'}]
 
 graph.cypher("""
+    FOR VALID_TIME ALL
     MATCH (a:Assignment)
     WHERE a.recorded_from = date($day) OR a.recorded_to = date($day)
     RETURN a.id AS record,
@@ -466,6 +475,7 @@ graph.cypher("""
 #  {'record': 'ada.2:r', 'change': 'added'}]
 
 graph.cypher("""
+    FOR VALID_TIME ALL
     MATCH (a:Assignment)
     WHERE a.recorded_from > coalesce(a.valid_to, a.valid_from) + duration({days: 7})
     RETURN a.id AS record, toString(coalesce(a.valid_to, a.valid_from)) AS effective,
@@ -482,12 +492,13 @@ a substitute.
 
 ### Audit containment and overlap
 
-Two queries audit the current images. An assignment should lie inside the
+Two queries audit the current images, each across every valid-time version. An assignment should lie inside the
 period its team belongs to a department, and one employee's assignments
 should not overlap. Both come back empty on this history:
 
 ```python
 graph.cypher("""
+    FOR VALID_TIME ALL
     MATCH (a:Assignment)-[:TO]->(:Team)-[p:PART_OF]->(:Department)
     WHERE a.recorded_to IS NULL AND p.recorded_to IS NULL
       AND ((p.valid_from IS NOT NULL AND (a.valid_from IS NULL OR a.valid_from < p.valid_from))
@@ -497,6 +508,7 @@ graph.cypher("""
 # []
 
 graph.cypher("""
+    FOR VALID_TIME ALL
     MATCH (e:Employee)<-[:OF]-(a:Assignment), (e)<-[:OF]-(b:Assignment)
     WHERE a.id < b.id AND a.recorded_to IS NULL AND b.recorded_to IS NULL
       AND coalesce(a.valid_from, date('0001-01-01')) < coalesce(b.valid_to, date('9999-12-31'))
@@ -517,14 +529,15 @@ recording test is ordinary `WHERE` text and does not appear there:
 
 ```python
 graph.cypher(AS_KNOWN, params={"tt": "2024-06-15"}, valid_at="2024-07-01").diagnostics["temporal"]
-# {'axis': 'VALID_TIME', 'instant': '2024-07-01', 'targets': ['(:Assignment)'], 'hidden': {'(:Assignment)': 2},
-#  'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 24}
+# {'axis': 'VALID_TIME', 'source': 'explicit', 'instant': '2024-07-01', 'targets': ['(:Assignment)'],
+#  'hidden': {'(:Assignment)': 2}, 'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None,
+#  'slice': False, 'session_version': 24}
 ```
 
 The other bindings follow the same rule. Java passes a `ValidAt` to `query`,
 `queryResult` or `queryBatch`, and the batch reads one snapshot for a
 multi-query report. The MCP `cypher_query`, `run_recipe_query` and named
-recipe tools take `valid_at`, and a recipe takes the recording instant as an
+recipe tools take `valid_at` (`"all"` reads every version), and a recipe takes the recording instant as an
 ordinary parameter of its own. The C ABI, the `kglite` CLI and Bolt clients
 take query text, so write the `FOR VALID_TIME AS OF` prefix into it. On every
 route the recording instant is a query parameter.

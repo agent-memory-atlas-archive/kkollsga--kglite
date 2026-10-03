@@ -75,7 +75,13 @@ The server speaks MCP over stdio and exposes three tools out of the box:
 - `cypher_query(query)` — runs any Cypher query; inline result up to
   15 rows, append `FORMAT CSV` for a localhost-served file export. An
   optional `valid_at` (an ISO date or datetime) runs it as of that instant
-  behind the `FOR VALID_TIME AS OF` prefix; the `temporal:` line echoes it, with the rows each declared target hid (`hidden`) and the relationships hidden only through an invalid endpoint (`endpoint_invalid`).
+  behind the `FOR VALID_TIME AS OF` prefix, and `"all"` reads every version
+  (`FOR VALID_TIME ALL`). With neither, a statement on a graph that declares
+  validity reads as of today (UTC); the `temporal:` line echoes the source
+  (`default`, `explicit`, `all` or `skipped:<reason>`), the instant, the
+  route, the total rows the context hid with the heaviest targets, and the
+  relationships hidden only through an invalid endpoint (`endpoint_invalid`).
+  An agent that needs history sends `FOR VALID_TIME ALL` or `valid_at: "all"`.
 - `ping(message?)` — liveness probe; echoes the message or returns `pong`.
 
 Want semantic search (`text_score()` inside Cypher) or source-file
@@ -463,8 +469,11 @@ stable tools instead of registering one top-level tool per query:
   — run one exact operation with strictly validated variables. `variables` is
   always required; parameter-free queries receive `{}`. `valid_at` (an ISO
   date or datetime) runs the stored query as of that instant, behind the
-  `FOR VALID_TIME AS OF` prefix `cypher_query`'s `valid_at` writes; the
-  result's `diagnostics.temporal` echoes it.
+  `FOR VALID_TIME AS OF` prefix `cypher_query`'s `valid_at` writes, and
+  `"all"` reads every version; without it the stored query reads as of today
+  on a graph that declares validity (a recipe that means history starts with
+  `FOR VALID_TIME ALL`, which does nothing on a graph with no declaration).
+  The result's `diagnostics.temporal` echoes it.
 
 `run_recipe_query`'s own description carries the catalogue, so the routing is
 in `tools/list` and an agent does not have to discover it: the static sentence

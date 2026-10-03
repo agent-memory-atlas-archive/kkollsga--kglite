@@ -74,7 +74,8 @@ files rather than reading rows: the 24.7-million-version register reopened with
 the process footprint growing by about 3 MB (the open itself took about 15 s,
 which goes to validating the index and column files). Queries then page in what
 they touch. `FOR VALID_TIME AS OF` and the rest of the Cypher surface work as
-on a graph in memory.
+on a graph in memory, and a statement with no prefix reads as of today, so a
+whole-register count takes `FOR VALID_TIME ALL`.
 
 ## 3. Apply a delivery
 

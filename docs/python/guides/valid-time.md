@@ -9,7 +9,9 @@ A *valid-time* graph holds history: each version of a node or relationship
 carries the period during which it was true, such as a team membership from one
 transfer to the next, a licensee's share from one sale to the next, or a price
 from one list to the next. KGLite asks such a graph **as of an instant** and
-answers as if the graph held only the elements valid then. The reference detail
+answers as if the graph held only the elements valid then. **A statement that
+names no instant is asked as of today (UTC)**; `FOR VALID_TIME ALL` is the way
+to read every version (section 2). The reference detail
 lives in the
 [Cypher reference](../../reference/cypher-reference.md#statement-context-for-valid_time-as-of)
 and the [fluent API reference](../../reference/fluent-api.md#temporal-filtering).
@@ -71,7 +73,7 @@ graph.add_relationships(pd.DataFrame({"team": ["ops", "infra"], "successor": ["i
 A type is *temporal* once two of its properties are declared as the bounds of
 its validity interval; a NULL bound is open. Undeclared types (here
 `Employee`, `Department` and `SUCCEEDED_BY`) are timeless: every query sees
-them in full. Four routes record the same declaration:
+them in full, whatever the instant. Four routes record the same declaration:
 
 - the loaders' `validFrom` / `validTo` column types, as above (`add_nodes`,
   `add_relationships`, `replace_relationships`);
@@ -119,7 +121,8 @@ Section 9 lists what a declaration accepts and refuses.
 ## 2. Ask as of an instant
 
 Prefix a statement with `FOR VALID_TIME AS OF <instant>`, or pass `valid_at=`,
-which writes the same prefix. Who was on the Platform team on 30 June 2023, and
+which writes the same prefix. A statement with neither runs as
+`FOR VALID_TIME AS OF date()` (section 2.1). Who was on the Platform team on 30 June 2023, and
 on the day Ada joined it:
 
 ```python
@@ -151,7 +154,8 @@ graph.cypher(DEPARTMENT, valid_at="2023-06-30").to_list()
 ```
 
 A manager chain is a variable-length path, judged hop by hop at the one
-instant. Without a context it mixes Ada's managers from different years:
+instant. Read across every version (`FOR VALID_TIME ALL`) it mixes Ada's
+managers from different years:
 
 ```python
 CHAIN = "MATCH (:Employee {id: 'ada'})-[:REPORTS_TO*1..]->(m:Employee) RETURN m.title AS manager"
@@ -159,26 +163,27 @@ graph.cypher(CHAIN, valid_at="2023-06-30").to_list()
 # [{'manager': 'Dan'}, {'manager': 'Eva'}]
 graph.cypher(CHAIN, valid_at="2025-01-01").to_list()
 # [{'manager': 'Chloe'}, {'manager': 'Eva'}]
-graph.cypher(CHAIN).to_list()
+graph.cypher("FOR VALID_TIME ALL " + CHAIN).to_list()
 # [{'manager': 'Chloe'}, {'manager': 'Dan'}, {'manager': 'Eva'}, {'manager': 'Eva'}]
 ```
 
-A statement takes one instant; a write under a context is refused.
+A statement takes one instant; a write under an explicit instant is refused.
 `valid_at=` exists on `cypher()` on `KnowledgeGraph`, `Session` (`cypher` and
 `execute`), `Transaction` and `FrozenGraph`; on the MCP `cypher_query`,
 `run_recipe_query` and named recipe tools; and as Java's `ValidAt` on `query`,
 `queryResult` and `queryBatch`. The C ABI, the `kglite` CLI and Bolt clients
 take query text: write the `FOR VALID_TIME AS OF` prefix into it. For many
 queries at one instant, freeze a view once. Each result echoes the context in
-`diagnostics["temporal"]` (`None` without one):
+`diagnostics["temporal"]` (`None` on a graph with no validity declaration):
 
 ```python
 as_of_2016 = graph.freeze(valid_at="2016-06-30")
 as_of_2016.cypher("MATCH (t:Team) RETURN t.title AS team").to_list()
 # [{'team': 'Ops'}]
 graph.cypher("MATCH (t:Team) RETURN count(*) AS n", valid_at="2016-06-30").diagnostics["temporal"]
-# {'axis': 'VALID_TIME', 'instant': '2016-06-30', 'targets': ['(:Team)'], 'hidden': {'(:Team)': 3},
-#  'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 22}
+# {'axis': 'VALID_TIME', 'source': 'explicit', 'instant': '2016-06-30', 'targets': ['(:Team)'],
+#  'hidden': {'(:Team)': 3}, 'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None,
+#  'slice': False, 'session_version': 22}
 ```
 
 `hidden` says how much the context removed: per target, the rows it governs
@@ -192,15 +197,78 @@ on a Disk graph, has no `hidden` entry and `endpoint_invalid` is `None`. Both
 are read from the endpoint indexes and cached per instant, so they are always
 on.
 
-**No context means every version.** A statement without the prefix sees the
-whole history, as the undated manager chain shows, and so does a Neo4j-style
-or GraphQL client that sends none: for "current" it must send `valid_at` =
-today. `FOR VALID_TIME AS OF date()` reads today in UTC.
+### 2.1 No prefix means today
+
+On a graph that declares validity, a read statement with no `FOR VALID_TIME`
+prefix runs as `FOR VALID_TIME AS OF date()`, in every binding: Python, MCP,
+Bolt, the C ABI and the CLI, and so a Neo4j-style or GraphQL client that sends
+no prefix reads the current state. The day is resolved at each execution, so a
+cached plan never freezes it. A graph with no declaration is untouched.
+
+```python
+graph.cypher("MATCH (t:Team) RETURN t.title AS team ORDER BY team").to_list()   # as of today
+# [{'team': 'Data'}, {'team': 'Platform'}]
+graph.cypher("FOR VALID_TIME ALL MATCH (t:Team) RETURN t.title AS team ORDER BY team").to_list()
+# [{'team': 'Data'}, {'team': 'Infrastructure'}, {'team': 'Ops'}, {'team': 'Platform'}]
+graph.cypher("MATCH (t:Team) RETURN count(*) AS n").diagnostics["temporal"]["source"]
+# 'default'
+```
+
+`FOR VALID_TIME ALL` (or `valid_at="all"` on the methods above, `"valid_at":
+"all"` on the MCP tools, `ValidAt.all()` in Java) reads every version: no
+filter, no write refusal. On a graph with no declaration it does nothing, so a
+generic recipe can always send it. A frozen `valid_at=` view refuses it like
+any other prefix. `valid_at=None` means "the default".
+
+The echo's `source` says which rule produced the context: `explicit` (a prefix
+or `valid_at=`), `default`, `all`, or `skipped:<reason>` when the default did
+not apply and the statement read every version:
+
+- `skipped:write`: a statement that writes (`CREATE`, `MERGE`, `SET`,
+  `DELETE`, ...) runs without the default, so its reads see every version, as
+  before. An explicit prefix on a write is still refused.
+- `skipped:procedure`: a procedure that is not valid-time aware
+  (`refresh_stats`, `duplicate_id`, the `*_violation` audits, ...) runs without
+  the default; an explicit prefix still refuses it.
+- `skipped:valid_at`: a statement that calls `valid_at()` or `valid_during()`
+  itself already chose its instants (section 4), so the default is not added.
+
+`degree()`, `indegree()`, `outdegree()` and `shortest_path_length()` read
+relationships outside the pattern matcher, so under the default they are
+refused with a hint: count with `COUNT { (n)--() }`, which respects the
+context, or prefix the statement with `FOR VALID_TIME ALL` to count every
+version.
+
+**Changing the default.** `graph.set_valid_time_default('today' | 'all' |
+date)` sets the instant an unprefixed statement reads on that graph (and the
+fluent default, section 3); `get_valid_time_default()` reads it. The MCP server
+takes `--valid-time-default {today|all|YYYY-MM-DD}` or the manifest key
+`extensions.valid_time.default` (the flag wins), `kglite-bolt-server` the same
+flag, and `kglite query` / `write` / `session` take it too. The setting is
+runtime state, never written into a `.kgl` file; a loaded graph starts at
+`today`.
+
+### 2.2 What changed: the default as of today
+
+Before this change a statement with no prefix read **every version** of every
+element, and only the fluent API defaulted to today. Now both default to today.
+To keep an old query's answer:
+
+| The query meant | Do |
+|---|---|
+| the current state | nothing: it now answers as of today |
+| the whole history (counts of versions, audits, lineage, exports) | prefix `FOR VALID_TIME ALL`, or pass `valid_at="all"` |
+| two instants in one query | keep calling `valid_at(x, d)`: such a statement keeps its answer (`skipped:valid_at`) |
+| history through a whole server or graph | `set_valid_time_default('all')` / `--valid-time-default all` |
+
+A statement that writes keeps reading every version. A Rust caller that builds
+a `TemporalDiagnostics` literal gains the `source` field.
 
 ## 3. The fluent API: the date context
 
 The fluent cursor carries a date context, and **it defaults to today** (UTC),
-the opposite of Cypher, which never filters without a prefix:
+the same default as an unprefixed Cypher statement (section 2.1; both follow
+`set_valid_time_default`):
 
 ```python
 graph.select("Team").titles()                       # valid today
@@ -252,8 +320,9 @@ context already filtered.
 
 ## 4. The `valid_at` / `valid_during` functions
 
-Without a context, `valid_at(x, date)` and `valid_during(x, start, end)` test
-one element against its declaration. The four- and five-argument forms name
+A statement that calls `valid_at(x, date)` or `valid_during(x, start, end)`
+runs without the default context (`source: skipped:valid_at`), so each call
+tests one element against its declaration and nothing else is filtered. The four- and five-argument forms name
 the bound properties (closed, unless a declaration names the same pair), for a
 type with no declaration or a second pair of properties:
 
@@ -277,7 +346,8 @@ those functions read it (`'2009'` is 2009-01-01); anything else (an integer,
 nothing, and so does a stored bound that is not a date.
 
 Use the functions where one query needs **two instants**, or bounds no
-declaration names. They differ from the context in four ways:
+declaration names. A query that mixes a call with a hop it leaves undated reads
+that hop in full, as it always has. They differ from the context in four ways:
 
 - `valid_at(n, d)` reads **one** declaration: the node's primary type's, else
   a secondary label's. The context requires the node to be valid under
@@ -333,7 +403,7 @@ on 1 January of each year) is a set of periods `[date, next date)`: set each
 row's `valid_to` to the next row's date and declare `half_open`. A point fact
 with `valid_from == valid_to` is empty under `half_open`: it is stored and
 counted, but no as-of question returns it (section 9), while a statement
-without the context (a lineage query) still reads it. To have a point fact
+that reads every version (`FOR VALID_TIME ALL`, a lineage query) still reads it. To have a point fact
 answer as of its own day, give it the next day as `valid_to`, or declare the
 type `closed`, where `valid_from == valid_to` is a one-day interval.
 
@@ -370,27 +440,30 @@ with titles.begin() as tx:
 To audit a history for periods that fall outside their owner's lifetime or
 overlap each other, see the two queries in {doc}`bitemporal`, section 5.
 
-## 6. Lineage and two-instant questions run without a context
+## 6. Lineage and two-instant questions read every version
 
 A successor relationship joins versions that need not coexist. The
 Infrastructure team was formed in 2017 and took over from Ops in 2019, and
-Platform replaced Infrastructure in 2022. Under a context a hop is visible only
-when both its ends are valid at the instant, so the context truncates the
-chain:
+Platform replaced Infrastructure in 2022. Under a context, the default one
+included, a hop is visible only when both its ends are valid at the instant,
+so the context truncates the chain:
 
 ```python
 LINEAGE = "MATCH (:Team {id: 'ops'})-[:SUCCEEDED_BY*1..]->(x:Team) RETURN x.title AS team"
-graph.cypher(LINEAGE).to_list()
+graph.cypher("FOR VALID_TIME ALL " + LINEAGE).to_list()
 # [{'team': 'Infrastructure'}, {'team': 'Platform'}]
+graph.cypher(LINEAGE).to_list()                          # today: Ops no longer exists
+# []
 graph.cypher(LINEAGE, valid_at="2018-06-30").to_list()
 # [{'team': 'Infrastructure'}]
 graph.cypher(LINEAGE, valid_at="2023-06-30").to_list()   # Ops no longer exists
 # []
 ```
 
-Ask lineage, and any question comparing two instants, without a context, and
-filter only the parts that need it with `valid_at(x, d)`: the unfiltered graph
-for lookup, a filtered one for visibility.
+Ask lineage with `FOR VALID_TIME ALL`. A question comparing two instants needs
+no prefix: a statement that calls `valid_at(x, d)` skips the default context
+(section 2.1), so the unfiltered graph does the lookup and the call filters
+only the part that needs it.
 
 ```python
 graph.cypher("""

@@ -94,6 +94,7 @@ def apply_delivery(graph, t, supersedes, new_links, new_assignments):
         # or was superseded by this same delivery (a redelivery).
         found = tx.cypher(
             """
+            FOR VALID_TIME ALL
             MATCH (a:Assignment) WHERE a.id IN $ids
               AND (a.recorded_to IS NULL OR a.recorded_to = date($t))
             RETURN count(a) AS n
@@ -148,7 +149,7 @@ delivery = dict(
         {"id": "ada.2:r", "employee": "ada", "team": "ml", "valid_from": "2024-06-01", "valid_to": None},
     ],
 )
-COUNTS = "MATCH (n) RETURN count(n) AS nodes, COUNT { ()-[]->() } AS relationships"
+COUNTS = "FOR VALID_TIME ALL MATCH (n) RETURN count(n) AS nodes, COUNT { ()-[]->() } AS relationships"
 apply_delivery(graph, **delivery)
 print("after the delivery:", graph.cypher(COUNTS).to_list())
 apply_delivery(graph, **delivery)  # the same day, delivered again
@@ -177,7 +178,9 @@ except kglite.CypherExecutionError as error:
     print("rolled back:", error)
 print(
     "ben.2:r after the rollback:",
-    graph.cypher("MATCH (a:Assignment {id: 'ben.2:r'}) RETURN a.recorded_to AS recorded_to").to_list(),
+    graph.cypher(
+        "FOR VALID_TIME ALL MATCH (a:Assignment {id: 'ben.2:r'}) RETURN a.recorded_to AS recorded_to"
+    ).to_list(),
 )
 
 # -- 3. Questions --------------------------------------------------------------
@@ -220,6 +223,7 @@ for tt in ["2024-06-14", "2024-06-15"]:
     print(f"both axes, known on {tt}:", graph.cypher(BOTH_HOPS, params={"tt": tt}, valid_at="2024-07-01").to_list())
 
 LINEAGE = f"""
+    FOR VALID_TIME ALL
     MATCH (a:Assignment {{employee: $employee}})
     WHERE {KNOWN.format(x="a")}
     RETURN a.team AS team, toString(a.valid_from) AS valid_from, toString(a.valid_to) AS valid_to
@@ -235,6 +239,7 @@ print(
     "changed since 2024-06-01:",
     graph.cypher(
         """
+        FOR VALID_TIME ALL
         MATCH (a:Assignment)
         WHERE a.recorded_from > date($since) OR a.recorded_to > date($since)
         RETURN DISTINCT a.employee AS employee
@@ -246,6 +251,7 @@ print(
     "delivery of 2024-06-15:",
     graph.cypher(
         """
+        FOR VALID_TIME ALL
         MATCH (a:Assignment)
         WHERE a.recorded_from = date($day) OR a.recorded_to = date($day)
         RETURN a.id AS record,
@@ -258,6 +264,7 @@ print(
 print(
     "recorded late:",
     graph.cypher("""
+        FOR VALID_TIME ALL
         MATCH (a:Assignment)
         WHERE a.recorded_from > coalesce(a.valid_to, a.valid_from) + duration({days: 7})
         RETURN a.id AS record, toString(coalesce(a.valid_to, a.valid_from)) AS effective,
@@ -293,6 +300,7 @@ print("one hop tested:", graph.cypher(ONE_HOP, params={"tt": "2024-06-15"}, vali
 print(
     "outside the team's department period:",
     graph.cypher("""
+        FOR VALID_TIME ALL
         MATCH (a:Assignment)-[:TO]->(:Team)-[p:PART_OF]->(:Department)
         WHERE a.recorded_to IS NULL AND p.recorded_to IS NULL
           AND ((p.valid_from IS NOT NULL AND (a.valid_from IS NULL OR a.valid_from < p.valid_from))
@@ -303,6 +311,7 @@ print(
 print(
     "overlapping assignments:",
     graph.cypher("""
+        FOR VALID_TIME ALL
         MATCH (e:Employee)<-[:OF]-(a:Assignment), (e)<-[:OF]-(b:Assignment)
         WHERE a.id < b.id AND a.recorded_to IS NULL AND b.recorded_to IS NULL
           AND coalesce(a.valid_from, date('0001-01-01')) < coalesce(b.valid_to, date('9999-12-31'))

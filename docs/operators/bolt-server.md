@@ -90,6 +90,16 @@ With basic auth, pass the configured `(user, password)`. Use `neo4j://` only
 when routing behavior is wanted; set `--advertise-addr` to an address reachable
 by the client, especially behind a proxy or when binding `0.0.0.0`.
 
+## Valid time
+
+On a graph that declares validity intervals, a statement with no
+`FOR VALID_TIME` prefix reads as of today (UTC), and `FOR VALID_TIME ALL` reads
+every version. `--valid-time-default {today|all|YYYY-MM-DD}` sets the instant an
+unprefixed statement reads; a statement's own prefix wins, and the setting is
+never written into the `.kgl` file. Each result's `kglite.temporal` summary key
+reports the `source` (`default`, `explicit`, `all` or `skipped:<reason>`), the
+instant and the rows the context hid.
+
 ## Transactions and errors
 
 The backend uses native KGLite sessions/transactions, not Python or the GIL.

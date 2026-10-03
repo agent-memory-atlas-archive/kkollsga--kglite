@@ -295,7 +295,9 @@ graph.select('Team', temporal=False)             # opt out for one call
 g2010.select('Person').traverse('EMPLOYED_AT', temporal=False)  # ...or one hop
 ```
 
-The default context is today, the UTC date — the day Cypher's `date()` reads.
+The default context is today, the UTC date — the day Cypher's `date()` reads,
+and the one an unprefixed Cypher statement runs under (`set_valid_time_default()`
+changes both).
 The context is the filter a `FOR VALID_TIME AS OF` statement at that date runs
 under, so a fluent chain and the Cypher pattern it spells return the same
 nodes:
@@ -334,11 +336,14 @@ for relationship vectors, or `graph.freeze(valid_at='2010-06-30')` for many
 queries. A node `vector_search()` on a selection ranks the selection, which
 the context has already filtered.
 
-Cypher has no default: a statement without `FOR VALID_TIME AS OF` (or
-`valid_at=`) sees every version. See the
+A Cypher statement has the same default: with no `FOR VALID_TIME` prefix (and
+no `valid_at=`) it reads as of today on a graph that declares validity, and
+`FOR VALID_TIME ALL` (`valid_at='all'`) reads every version, as `date('all')`
+does here. `graph.set_valid_time_default('today' | 'all' | date)` moves both
+defaults together. See the
 [valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)
-for modelling history and for the questions — lineage, two instants — that run
-without a context.
+for modelling history and for the questions — lineage, two instants — that read
+every version.
 
 ---
 
@@ -1559,7 +1564,7 @@ graph.report_history()    # all reports
 | **Spatial — point filters** | `within_bounds`, `near_point`, `near_point_m`, `contains_point` | `distance()`, `contains()` in WHERE |
 | **Spatial — geometry** | `intersects_geometry`, `set_spatial`, `spatial` | `intersects()`, `centroid()`, `area()`, `perimeter()` |
 | **Spatial — bounds/centroid** | `bounds()`, `centroid()`, `wkt_centroid()` | Manual via `latitude()`, `longitude()` |
-| **Temporal — as-of context** | `date()` on the graph or `select(..., temporal=True)` (the default for a declared type) | `FOR VALID_TIME AS OF …` prefix, or `valid_at=` on the binding |
+| **Temporal — as-of context** | `date()` on the graph or `select(..., temporal=True)` (the default for a declared type) | `FOR VALID_TIME AS OF …` prefix (today when absent; `FOR VALID_TIME ALL` for every version), or `valid_at=` on the binding |
 | **Temporal — point-in-time** | `valid_at()` | `valid_at(e, date)` under the declaration; `valid_at(e, date, 'from', 'to')` reads closed unless the declaration names the same pair |
 | **Temporal — range overlap** | `valid_during()` | `valid_during(e, start, end, 'from', 'to')` |
 | **Timeseries — load** | `add_timeseries`, `add_ts_channel`, `set_time_index` | N/A (load via fluent) |

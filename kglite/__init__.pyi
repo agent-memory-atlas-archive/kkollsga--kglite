@@ -5160,7 +5160,11 @@ class KnowledgeGraph:
                 copy: the handle runs each query behind the same
                 ``FOR VALID_TIME AS OF`` prefix on the shared data, and keeps
                 the validity masks it resolved at freeze time alive for its
-                lifetime, so its queries do not rebuild them.
+                lifetime, so its queries do not rebuild them. Without it the
+                handle answers as the graph does: an unprefixed query reads
+                as of today on a graph with validity declarations, and
+                ``cypher(query, valid_at='all')`` reads every version. The
+                string ``'all'`` is not an instant to freeze at.
 
         Raises:
             ValueError: ``valid_at`` is not a date, datetime or ISO
@@ -7872,6 +7876,20 @@ class KnowledgeGraph:
                 answered. ``Session.cypher`` / ``Session.execute``,
                 ``Transaction.cypher`` and ``FrozenGraph.cypher`` take the
                 same ``valid_at``.
+
+                With no ``valid_at`` and no prefix, a graph that declares
+                validity runs a read as ``FOR VALID_TIME AS OF date()``
+                (today, UTC; the echo's ``source`` is ``'default'``); a graph
+                with no declaration is untouched. The default is skipped,
+                and the statement reads every version, when it writes
+                (``'skipped:write'``), calls a procedure that is not
+                valid-time aware (``'skipped:procedure'``) or calls
+                ``valid_at()`` / ``valid_during()`` itself
+                (``'skipped:valid_at'``). ``degree()``, ``indegree()``,
+                ``outdegree()`` and ``shortest_path_length()`` are refused
+                under the default with a hint to use ``COUNT { (n)--() }`` or
+                ``FOR VALID_TIME ALL``. A query that means history passes
+                ``valid_at='all'`` or begins ``FOR VALID_TIME ALL``.
 
         Returns:
             ResultView by default, DataFrame when ``to_df=True``,
@@ -10635,8 +10653,11 @@ class Session:
         ``FOR VALID_TIME AS OF date('…')`` written before ``query`` (``EXPLAIN``
         / ``PROFILE`` may follow it), and ``ValueError`` when ``query`` already
         carries a ``FOR … AS OF`` prefix or the instant is not one a literal
-        can spell. :attr:`ResultView.diagnostics` ``["temporal"]`` echoes the
-        instant and how the query was answered.
+        can spell. The string ``'all'`` is ``FOR VALID_TIME ALL`` (every
+        version); ``None`` leaves the graph's default (today, unless
+        :meth:`KnowledgeGraph.set_valid_time_default` says otherwise).
+        :attr:`ResultView.diagnostics` ``["temporal"]`` echoes the
+        instant, its ``source`` and how the query was answered.
         """
         ...
 
@@ -10702,9 +10723,10 @@ class Session:
         source ends persistence ownership.
 
         ``valid_at`` prefixes ``query`` with ``FOR VALID_TIME AS OF`` exactly as
-        :meth:`cypher` does. A statement under that context cannot write, so a
-        write with ``valid_at`` raises the engine's refusal; a read runs as of
-        the instant.
+        :meth:`cypher` does, including ``'all'`` for every version. A statement
+        under an instant cannot write, so a write with ``valid_at`` raises the
+        engine's refusal; a read runs as of the instant. With no ``valid_at`` a
+        read on a graph with validity declarations runs as of today.
         """
         ...
 
@@ -10833,7 +10855,9 @@ class FrozenGraph:
         fixes the instant, so take a fresh ``freeze(valid_at=…)`` for
         another one. ``valid_at`` here raises the same ``ValueError`` on such a
         handle; on a plain handle it prefixes ``query`` as
-        :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does. A query on a
+        :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does (``'all'`` reads every
+        version; with none, a read runs as of today on a graph with validity
+        declarations). A query on a
         ``valid_at`` handle echoes ``route`` ``"view"`` in
         :attr:`ResultView.diagnostics` ``["temporal"]``.
         """
@@ -10927,9 +10951,12 @@ class Transaction:
             valid_at: Run the query as of an instant, exactly as
                 :meth:`KnowledgeGraph.cypher`'s ``valid_at`` does — the
                 statement prefix ``FOR VALID_TIME AS OF`` on the transaction's
-                own state, uncommitted writes included. Raises ``ValueError``
-                when ``query`` already carries a ``FOR … AS OF`` prefix. A
-                statement under the context cannot write.
+                own state, uncommitted writes included; ``'all'`` reads every
+                version. Raises ``ValueError`` when ``query`` already carries
+                a ``FOR … AS OF`` prefix. A statement under an instant cannot
+                write; with no ``valid_at`` a read runs as of today on a graph
+                with validity declarations, and a statement that writes reads
+                every version.
 
         Omitted/None query options inherit the defaults captured at begin. An
         explicit per-query timeout is bounded by any transaction lifetime deadline;
