@@ -54,25 +54,10 @@ impl<'a> CypherExecutor<'a> {
             _ => return Ok(ResultSet::new()),
         };
 
-        // Build the R-tree entries. Skip containers without parsed geometry
-        // or without a computable bbox.
-        let mut entries: Vec<IndexedContainer> = Vec::with_capacity(container_indices.len());
-        for idx in container_indices.iter() {
-            self.ensure_node_spatial_cached(idx);
-            let cache = self.spatial_shard(idx.index()).read().unwrap();
-            if let Some(Some(data)) = cache.get(&idx.index()) {
-                if let Some((geom, Some(bbox))) = &data.geometry {
-                    entries.push(IndexedContainer {
-                        node_idx: idx,
-                        geom: Arc::clone(geom),
-                        min_x: bbox.min().x,
-                        min_y: bbox.min().y,
-                        max_x: bbox.max().x,
-                        max_y: bbox.max().y,
-                    });
-                }
-            }
-        }
+        let filter = self.graph_filter().map(|f| f.as_ref());
+        let admitted = |idx: NodeIndex| filter.is_none_or(|f| f.admits_node(self.graph, idx));
+
+        let entries = self.container_entries(container_indices.iter(), &admitted);
         if entries.is_empty() {
             return Ok(ResultSet::new());
         }
@@ -82,25 +67,13 @@ impl<'a> CypherExecutor<'a> {
         let mut rows: Vec<ResultRow> = Vec::new();
 
         for (probe_i, probe_idx) in probe_indices.iter().enumerate() {
-            self.ensure_node_spatial_cached(probe_idx);
-            let probe_point: Option<(f64, f64)> = {
-                let cache = self.spatial_shard(probe_idx.index()).read().unwrap();
-                match cache.get(&probe_idx.index()) {
-                    Some(Some(data)) => match probe_kind {
-                        SpatialProbeKind::Location => data.location,
-                        // Probe via the geometry centroid. Drops probes
-                        // whose geometry is missing or whose centroid
-                        // computation fails (degenerate WKT).
-                        SpatialProbeKind::Centroid => {
-                            data.geometry.as_ref().and_then(|(geom, _bbox)| {
-                                crate::graph::features::spatial::geometry_centroid(geom).ok()
-                            })
-                        }
-                    },
-                    _ => None,
-                }
-            };
-            let (lat, lon) = match probe_point {
+            if probe_i & 2047 == 0 {
+                self.check_deadline()?;
+            }
+            if !admitted(probe_idx) {
+                continue;
+            }
+            let (lat, lon) = match self.probe_point(probe_idx, probe_kind) {
                 Some(pt) => pt,
                 None => continue,
             };
@@ -117,10 +90,6 @@ impl<'a> CypherExecutor<'a> {
                     row.node_bindings.insert(probe_var.to_string(), probe_idx);
                     rows.push(row);
                 }
-            }
-
-            if probe_i & 2047 == 0 {
-                self.check_deadline()?;
             }
         }
 
@@ -143,5 +112,58 @@ impl<'a> CypherExecutor<'a> {
             columns: Vec::new(),
             lazy_return_items: None,
         })
+    }
+
+    /// R-tree entries for the admitted containers that have a parsed geometry
+    /// and a computable bbox.
+    fn container_entries(
+        &self,
+        container_indices: impl ExactSizeIterator<Item = NodeIndex>,
+        admitted: &impl Fn(NodeIndex) -> bool,
+    ) -> Vec<IndexedContainer> {
+        let mut entries: Vec<IndexedContainer> = Vec::with_capacity(container_indices.len());
+        for idx in container_indices {
+            if !admitted(idx) {
+                continue;
+            }
+            self.ensure_node_spatial_cached(idx);
+            let cache = self.spatial_shard(idx.index()).read().unwrap();
+            if let Some(Some(data)) = cache.get(&idx.index()) {
+                if let Some((geom, Some(bbox))) = &data.geometry {
+                    entries.push(IndexedContainer {
+                        node_idx: idx,
+                        geom: Arc::clone(geom),
+                        min_x: bbox.min().x,
+                        min_y: bbox.min().y,
+                        max_x: bbox.max().x,
+                        max_y: bbox.max().y,
+                    });
+                }
+            }
+        }
+        entries
+    }
+
+    /// The `(lat, lon)` a probe node is tested at, or `None` when it has no
+    /// location (or its geometry is missing or degenerate).
+    fn probe_point(
+        &self,
+        probe_idx: NodeIndex,
+        probe_kind: SpatialProbeKind,
+    ) -> Option<(f64, f64)> {
+        self.ensure_node_spatial_cached(probe_idx);
+        let cache = self.spatial_shard(probe_idx.index()).read().unwrap();
+        match cache.get(&probe_idx.index()) {
+            Some(Some(data)) => match probe_kind {
+                SpatialProbeKind::Location => data.location,
+                // Probe via the geometry centroid. Drops probes whose
+                // geometry is missing or whose centroid computation fails
+                // (degenerate WKT).
+                SpatialProbeKind::Centroid => data.geometry.as_ref().and_then(|(geom, _bbox)| {
+                    crate::graph::features::spatial::geometry_centroid(geom).ok()
+                }),
+            },
+            _ => None,
+        }
     }
 }

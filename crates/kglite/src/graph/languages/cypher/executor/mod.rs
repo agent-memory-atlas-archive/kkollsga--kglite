@@ -1175,8 +1175,9 @@ impl CypherExecutor<'_> {
 /// retrieval top-k also through its masked entry, `retrieval_mask.rs`), the
 /// counts (the anchored one among them) take `execute_fused_count_guarded`,
 /// the fused MATCH/RETURN and MATCH/WITH aggregates scan masked group nodes
-/// with the guarded per-node counters, and the OPTIONAL MATCH aggregate counts
-/// each driving row through them (or through the filtered matcher).
+/// with the guarded per-node counters, the OPTIONAL MATCH aggregate counts
+/// each driving row through them (or through the filtered matcher), and the
+/// spatial join builds its R-tree from, and probes with, admitted nodes only.
 fn runs_under_graph_filter(clause: &Clause) -> bool {
     matches!(
         clause,
@@ -1196,6 +1197,7 @@ fn runs_under_graph_filter(clause: &Clause) -> bool {
             | Clause::FusedCountTypedEdge { .. }
             | Clause::FusedCountAnchoredEdges { .. }
             | Clause::FusedOptionalMatchAggregate { .. }
+            | Clause::SpatialJoin { .. }
     )
 }
 

@@ -139,6 +139,12 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
          (fused_match.rs, guarded_ops.rs)",
     ),
     (
+        "fuse_spatial_join",
+        "the container list the R-tree is built from and the probe loop both keep only \
+         nodes the filter admits, and the residual predicate runs through the filtered \
+         executor (spatial_join.rs)",
+    ),
+    (
         "fuse_anchored_edge_count",
         "the plan holds the id literal, not a node or an instant; the executor resolves \
          the anchors visible at the statement's instant and counts only relationships \
@@ -155,16 +161,10 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
 /// planner reads only the allow-list; this list is the verdict record the
 /// walk test holds every registered pass against.
 #[cfg(test)]
-const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
-    (
-        "fuse_spatial_join",
-        "an R-tree join over the type index, outside the matcher",
-    ),
-    (
-        "mark_skip_target_type_check",
-        "skips the node-type check that label guards rely on",
-    ),
-];
+const GUARD_DENIED_PASSES: &[(&str, &str)] = &[(
+    "mark_skip_target_type_check",
+    "skips the node-type check that label guards rely on",
+)];
 
 /// Planner work outside `PASSES` that a guarded scope also skips, each with
 /// what it would bypass. The planner tests `CypherQuery::context` /

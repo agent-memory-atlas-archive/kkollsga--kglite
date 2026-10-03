@@ -151,13 +151,26 @@ before upgrading.
   Every site that counts toward the cap already counts only rows the context
   admits (candidates, index seeds and relationships are tested before they are
   counted, and a capped seed pass that comes back short re-runs uncapped), so
-  the early stop returns the same rows the full scan would.
+  the early stop returns the same rows the full scan would. On a Sodir-scale
+  graph (release build, Python 3.14, min of 25, two runs, load average 4-4.5)
+  `LIMIT 10` over a relationship pattern went from 1.3-28 ms to 0.03-0.04 ms
+  as of today (0.005-0.008 ms undated).
 - Performance: `OPTIONAL MATCH ... count()` keeps its fused plan under a
   valid-time context, including the as-of-today default. Each driving row is
   counted through the per-node counter that tests the bound node, every
   relationship and the peer, so rows with no visible match still yield 0 and a
   hidden peer behind a visible relationship is not counted; a pattern that
-  counter cannot take runs the filtered matcher.
+  counter cannot take runs the filtered matcher. On the same graph the
+  wellbores-per-field count went from 32 ms to 0.18 ms as of today (0.11-0.13
+  ms undated), and the licences-per-company count from about 4 ms to 1.7 ms.
+- Performance: the spatial `contains` join (`MATCH (a:Area), (p:Point) WHERE
+  contains(a, p)` and the two-`MATCH` `contains(a, centroid(p))` form) keeps its
+  R-tree join under a valid-time context, including the as-of-today default.
+  The tree is built from the containers the context admits and probed only
+  with the probes it admits, so a hidden container or probe at the same
+  location as a visible one never pairs. On the same graph the wellbore join
+  went from 380 ms to 6.5 ms as of today (6.6 ms undated) and the centroid
+  join from 830 ms to 17.5 ms (17 ms undated).
 
 ### Fixed
 
