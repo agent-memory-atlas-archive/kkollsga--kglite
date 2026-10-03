@@ -514,6 +514,22 @@ fn pattern_multi_label_unsafe(
     })
 }
 
+/// The last node's variable of a 5-element pattern whose second hop carries
+/// no property map and no variable length, with no map on either node of it.
+fn plain_second_hop(pat: &crate::graph::core::pattern_matching::Pattern) -> Option<Option<String>> {
+    match (&pat.elements[2], &pat.elements[3], &pat.elements[4]) {
+        (PatternElement::Node(mid), PatternElement::Edge(edge), PatternElement::Node(last))
+            if mid.properties.is_none()
+                && edge.properties.is_none()
+                && edge.var_length.is_none()
+                && last.properties.is_none() =>
+        {
+            Some(last.variable.clone())
+        }
+        _ => None,
+    }
+}
+
 /// Fuse MATCH (node-edge-node) + RETURN (optional group-by + count) into a
 /// single pass that counts edges directly instead of materializing all rows.
 ///
@@ -561,84 +577,62 @@ pub(crate) fn fuse_match_return_aggregate(
             continue;
         }
 
-        let (first_var, second_var, edge_has_props, edge_var) = if let Clause::Match(m) =
-            &query.clauses[i]
-        {
-            let n_elems = if m.patterns.len() == 1 {
-                m.patterns[0].elements.len()
-            } else {
-                0
-            };
-            if n_elems != 3 && (n_elems != 5 || guarded) {
-                i += 1;
-                continue;
-            }
-            let pat = &m.patterns[0];
-            if pattern_multi_label_unsafe(graph, pat) {
-                i += 1;
-                continue;
-            }
-            let first_var = match &pat.elements[0] {
-                PatternElement::Node(np) => np.variable.clone(),
-                _ => {
+        let (first_var, second_var, edge_has_props, edge_var) =
+            if let Clause::Match(m) = &query.clauses[i] {
+                let n_elems = if m.patterns.len() == 1 {
+                    m.patterns[0].elements.len()
+                } else {
+                    0
+                };
+                if n_elems != 3 && (n_elems != 5 || guarded) {
                     i += 1;
                     continue;
                 }
-            };
-            let (edge_has_props, edge_var) = match &pat.elements[1] {
-                PatternElement::Edge(ep) => (
-                    ep.properties.is_some() || ep.var_length.is_some(),
-                    ep.variable.clone(),
-                ),
-                _ => {
+                let pat = &m.patterns[0];
+                if pattern_multi_label_unsafe(graph, pat) {
                     i += 1;
                     continue;
                 }
-            };
-
-            if n_elems == 5 {
-                // 5-element: (a)-[e1]->(b)<-[e2]-(c)
-                let mid_has_props = match &pat.elements[2] {
-                    PatternElement::Node(np) => np.properties.is_some(),
-                    _ => {
-                        i += 1;
-                        continue;
-                    }
-                };
-                let edge2_has_props = match &pat.elements[3] {
-                    PatternElement::Edge(ep) => ep.properties.is_some() || ep.var_length.is_some(),
-                    _ => {
-                        i += 1;
-                        continue;
-                    }
-                };
-                let (last_var, last_has_props) = match &pat.elements[4] {
-                    PatternElement::Node(np) => (np.variable.clone(), np.properties.is_some()),
-                    _ => {
-                        i += 1;
-                        continue;
-                    }
-                };
-                if mid_has_props || edge2_has_props || last_has_props {
-                    i += 1;
-                    continue;
-                }
-                (first_var, last_var, edge_has_props, edge_var)
-            } else {
-                // 3-element: (a)-[e]->(b)
-                let second_var = match &pat.elements[2] {
+                let first_var = match &pat.elements[0] {
                     PatternElement::Node(np) => np.variable.clone(),
                     _ => {
                         i += 1;
                         continue;
                     }
                 };
-                (first_var, second_var, edge_has_props, edge_var)
-            }
-        } else {
-            i += 1;
-            continue;
-        };
+                let (edge_has_props, edge_var) = match &pat.elements[1] {
+                    PatternElement::Edge(ep) => (
+                        ep.properties.is_some() || ep.var_length.is_some(),
+                        ep.variable.clone(),
+                    ),
+                    _ => {
+                        i += 1;
+                        continue;
+                    }
+                };
+
+                if n_elems == 5 {
+                    // 5-element: (a)-[e1]->(b)<-[e2]-(c)
+                    let Some(last_var) = plain_second_hop(pat) else {
+                        i += 1;
+                        continue;
+                    };
+                    (first_var, last_var, edge_has_props, edge_var)
+                } else {
+                    // 3-element: (a)-[e]->(b)
+                    let second_var = match &pat.elements[2] {
+                        PatternElement::Node(np) => np.variable.clone(),
+                        _ => {
+                            i += 1;
+                            continue;
+                        }
+                    };
+                    (first_var, second_var, edge_has_props, edge_var)
+                }
+            } else {
+                i += 1;
+                continue;
+            };
 
         // Edge property filters and variable-length edges require the full executor.
         // Node property filters on the 3-element pattern's second (unbound) node

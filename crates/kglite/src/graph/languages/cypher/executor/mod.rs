@@ -888,6 +888,7 @@ impl<'a> CypherExecutor<'a> {
                     self.graph.graph.node_count(),
                     "fused MATCH/RETURN aggregate",
                 )?;
+                self.reject_unguarded_fused_shape(&match_clause.patterns[0])?;
                 self.execute_fused_match_return_aggregate(
                     match_clause,
                     return_clause,

@@ -301,20 +301,6 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<ResultSet, String> {
         // The MATCH must have exactly 1 pattern with 3 or 5 elements (validated by planner)
         let pattern = &match_clause.patterns[0];
-        // Under a valid-time filter every route below must test the node and
-        // relationship masks. The per-node counters, the matcher scans and
-        // `admits_node` do; the type-wide peer histograms and the two-hop
-        // counters do not, so those are skipped here and the planner fuses
-        // only 3-element patterns on a guarded scope.
-        let filter = self.graph_filter().map(|f| &**f);
-        if filter.is_some() && pattern.elements.len() != 3 {
-            return Err(
-                "internal: a 5-element fused aggregate has no guarded form, so it cannot run \
-                 under FOR VALID_TIME AS OF"
-                    .into(),
-            );
-        }
-
         if return_clause
             .items
             .iter()
@@ -435,7 +421,7 @@ impl<'a> CypherExecutor<'a> {
                 pattern,
                 group_elem_idx,
                 distinct_count,
-                peer_counts_worthwhile && filter.is_none(),
+                peer_counts_worthwhile,
             )?;
 
             // A plain typed endpoint already has an exact node list. Reading
@@ -449,13 +435,7 @@ impl<'a> CypherExecutor<'a> {
                     node.node_type
                         .as_deref()
                         .and_then(|node_type| self.graph.type_indices.get(node_type))
-                        .map(|nodes| match filter {
-                            Some(filter) => nodes
-                                .iter()
-                                .filter(|&idx| filter.admits_node(self.graph, idx))
-                                .collect(),
-                            None => nodes.to_vec(),
-                        })
+                        .map(|nodes| self.filtered_nodes(nodes.iter()))
                 }
                 _ => None,
             };
@@ -669,13 +649,7 @@ impl<'a> CypherExecutor<'a> {
                         && !np.multi_label_constrained()
                         && np.properties.as_ref().is_none_or(|props| props.is_empty())
             );
-            // The histogram counts every edge of the type, masked or not.
-            let edge_histogram_safe = filter.is_none()
-                && matches!(
-                    &pattern.elements[1],
-                    PatternElement::Edge(ep)
-                        if ep.connection_types.is_none() && ep.edge_filter.is_none()
-                );
+            let edge_histogram_safe = self.edge_histogram_safe(&pattern.elements[1]);
             if let (false, 3, Some(ct_str), None, true, true) = (
                 distinct_count,
                 pattern.elements.len(),
@@ -878,19 +852,15 @@ impl<'a> CypherExecutor<'a> {
                 PatternElement::Node(np) => &np.properties,
                 _ => &None,
             };
-            let mut group_indices: Vec<petgraph::graph::NodeIndex> = if let Some(nt) = group_node_type {
+            let group_indices: Vec<petgraph::graph::NodeIndex> = if let Some(nt) = group_node_type {
                 self.graph
                     .type_indices
                     .get(nt)
-                    .map(|v| v.to_vec())
+                    .map(|v| self.filtered_nodes(v.iter()))
                     .unwrap_or_default()
             } else {
-                let g = &self.graph.graph;
-                g.node_indices().collect()
+                self.filtered_nodes(self.graph.graph.node_indices())
             };
-            if let Some(filter) = filter {
-                group_indices.retain(|&idx| filter.admits_node(self.graph, idx));
-            }
 
             let prop_executor = group_node_props.as_ref().map(|_| {
                 self.pattern_executor(None, None)
@@ -1000,12 +970,7 @@ impl<'a> CypherExecutor<'a> {
                         && !np.multi_label_constrained()
                         && np.properties.as_ref().is_none_or(|props| props.is_empty())
             );
-            let edge_histogram_safe_nontopk = filter.is_none()
-                && matches!(
-                    &pattern.elements[1],
-                    PatternElement::Edge(ep)
-                        if ep.connection_types.is_none() && ep.edge_filter.is_none()
-                );
+            let edge_histogram_safe_nontopk = self.edge_histogram_safe(&pattern.elements[1]);
             // Same direction-aware "group is target" predicate as the top-K
             // branch (see comment there for the post-reversal case). Pre-fix
             // this read `, 2` against group_elem_idx, which silently bailed
@@ -1185,6 +1150,40 @@ impl<'a> CypherExecutor<'a> {
     /// This preserves multi-label semantics while reusing id, equality, IN,
     /// range, prefix, global, and backend-specific indexes. The fused operator
     /// still owns expression evaluation and aggregation/top-K maintenance.
+    /// Under a valid-time filter every route of the fused MATCH/RETURN
+    /// aggregate must test the node and relationship masks. The per-node
+    /// counters, the matcher scans and `filtered_nodes` do; the type-wide
+    /// peer histograms and the two-hop counters do not, so the planner fuses
+    /// only 3-element patterns on a guarded scope and this refuses the rest.
+    pub(in crate::graph::languages::cypher::executor) fn reject_unguarded_fused_shape(&self, pattern: &Pattern) -> Result<(), String> {
+        if self.graph_filter().is_some() && pattern.elements.len() != 3 {
+            return Err("internal: a 5-element fused aggregate has no guarded form, so it \
+                        cannot run under FOR VALID_TIME AS OF"
+                .into());
+        }
+        Ok(())
+    }
+
+    /// `nodes` as a list, only those the statement's valid-time filter admits.
+    fn filtered_nodes(&self, nodes: impl Iterator<Item = NodeIndex>) -> Vec<NodeIndex> {
+        match self.graph_filter() {
+            Some(filter) => nodes.filter(|&idx| filter.admits_node(self.graph, idx)).collect(),
+            None => nodes.collect(),
+        }
+    }
+
+    /// Whether a per-edge-type peer histogram may answer for `edge`: the
+    /// histogram counts every edge of the type, masked or not, so a
+    /// valid-time filter rules it out.
+    fn edge_histogram_safe(&self, edge: &PatternElement) -> bool {
+        self.graph_filter().is_none()
+            && matches!(
+                edge,
+                PatternElement::Edge(ep)
+                    if ep.connection_types.is_none() && ep.edge_filter.is_none()
+            )
+    }
+
     fn fused_scan_candidates(&self, node_pattern: &NodePattern) -> Result<Vec<NodeIndex>, String> {
         self.pattern_executor(None, None)
             .find_matching_nodes_pub(node_pattern)
@@ -2247,6 +2246,7 @@ impl<'a> CypherExecutor<'a> {
         Ok(if !distinct_count
             && pattern.elements.len() == 3
             && peer_counts_worthwhile
+            && self.graph_filter().is_none()
             && (self.graph.graph.is_memory() || self.graph.graph.is_mapped())
         {
             let edge = match &pattern.elements[1] {
