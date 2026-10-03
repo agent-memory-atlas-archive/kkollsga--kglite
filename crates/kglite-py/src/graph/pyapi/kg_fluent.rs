@@ -77,6 +77,41 @@ impl KnowledgeGraph {
         crate::graph::warn_declaration(py, &report)
     }
 
+    /// Set the instant unprefixed statements and fluent cursors read on a graph with validity declarations.
+    fn set_valid_time_default(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        use crate::datatypes::py_in::query_date;
+        use kglite_core::api::temporal::ValidTimeDefault;
+        let text = value.extract::<String>().ok();
+        let default = match text.as_deref().map(str::trim) {
+            Some(word)
+                if word.eq_ignore_ascii_case("today") || word.eq_ignore_ascii_case("all") =>
+            {
+                ValidTimeDefault::parse(word).map_err(fluent_arg_err)?
+            }
+            _ => {
+                let (day, _) = query_date(value, "value").map_err(|err| {
+                    if text.is_some() {
+                        fluent_arg_err(format!(
+                            "valid-time default {:?} is not 'today', 'all' or a date ({err})",
+                            text.as_deref().unwrap_or_default()
+                        ))
+                    } else {
+                        err
+                    }
+                })?;
+                ValidTimeDefault::Date(day)
+            }
+        };
+        kglite_core::api::make_dir_graph_mut_preserving_lineage(&mut self.inner)
+            .valid_time_default = default;
+        Ok(())
+    }
+
+    /// The graph's valid-time default: 'today', 'all' or a YYYY-MM-DD date.
+    fn get_valid_time_default(&self) -> String {
+        self.inner.valid_time_default.to_string()
+    }
+
     /// Set the temporal context for auto-filtering.
     ///
     /// Returns a new KnowledgeGraph. All subsequent `select()` and `traverse()`

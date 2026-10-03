@@ -1429,6 +1429,7 @@ repo:
 - [`embedder.json`][schema-embedder]
 - [`recipe_catalog.json`][schema-recipe-catalog]
 - [`recipe_tools.json`][schema-recipe-tools]
+- [`valid_time.json`][schema-valid-time]
 - [`value_codecs.json`][schema-value-codecs]
 
 The schemas are anchored to the Python parsers by the regression
@@ -1442,6 +1443,7 @@ as a test failure on the next CI run.
 [schema-embedder]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embedder.json
 [schema-recipe-catalog]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_catalog.json
 [schema-recipe-tools]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_tools.json
+[schema-valid-time]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/valid_time.json
 [schema-value-codecs]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/value_codecs.json
 
 #### `extensions.cypher_recipes`
@@ -1660,6 +1662,22 @@ open is worse than none.
 It exists for the wrapper that owns the manifest but not the argv of the server
 it spawns. `builtins.save_graph: true` is not an alternative spelling — that key
 registers `save_graph` alone and leaves `cypher_query` read-only.
+
+#### `extensions.valid_time`
+
+```yaml
+extensions:
+  valid_time:
+    default: today   # 'today' (built in), 'all', or a fixed YYYY-MM-DD day
+```
+
+The instant a statement, recipe tool or fluent step reads when it names none,
+on a graph with validity declarations. `--valid-time-default
+{today|all|YYYY-MM-DD}` overrides the manifest. The setting is runtime only:
+it is never written into a `.kgl` file, and every graph the server installs
+(boot, reload, activation) takes it. A per-call `valid_at` (a date, or `"all"`
+for every version) and a `FOR VALID_TIME` prefix still win over it. A
+malformed value fails the boot.
 
 #### `extensions.<other>` (passthrough)
 

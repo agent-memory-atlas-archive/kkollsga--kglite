@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/valid_time.json",
+  "title": "extensions.valid_time",
+  "description": "Valid-time settings for a graph with validity declarations. 'default' is the instant a statement or fluent step reads when it names none: 'today' (UTC, the built-in default), 'all' (every version, no filtering) or a fixed YYYY-MM-DD day. The --valid-time-default flag overrides it. The setting is runtime only and never written into a .kgl file.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "default": {
+      "type": "string",
+      "pattern": "^(today|all|\\d{4}-\\d{2}-\\d{2})$",
+      "description": "'today', 'all' or a YYYY-MM-DD date."
+    }
+  }
+}

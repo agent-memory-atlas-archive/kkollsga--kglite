@@ -427,7 +427,7 @@ fn the_executor_resolves_a_context_directly() {
 fn prepend_writes_a_literal_and_refuses_a_second_context() {
     let date = Value::DateTime(chrono::NaiveDate::from_ymd_opt(2020, 1, 2).unwrap());
     assert_eq!(
-        prepend_valid_time("MATCH (n) RETURN n", &date).unwrap(),
+        prepend_valid_time("MATCH (n) RETURN n", ValidAt::At(&date)).unwrap(),
         "FOR VALID_TIME AS OF date('2020-01-02') MATCH (n) RETURN n"
     );
     let ts = Value::Timestamp(
@@ -437,15 +437,15 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
             .unwrap(),
     );
     assert_eq!(
-        prepend_valid_time("RETURN 1", &ts).unwrap(),
+        prepend_valid_time("RETURN 1", ValidAt::At(&ts)).unwrap(),
         "FOR VALID_TIME AS OF datetime('2020-01-02T10:30:00') RETURN 1"
     );
     let text = Value::String("2020-01-02".into());
-    assert!(prepend_valid_time("EXPLAIN RETURN 1", &text)
+    assert!(prepend_valid_time("EXPLAIN RETURN 1", ValidAt::At(&text))
         .unwrap()
         .starts_with("FOR VALID_TIME AS OF date('2020-01-02') EXPLAIN"));
     let text_ts = Value::String("2020-01-02T10:30:00".into());
-    assert!(prepend_valid_time("RETURN 1", &text_ts)
+    assert!(prepend_valid_time("RETURN 1", ValidAt::At(&text_ts))
         .unwrap()
         .contains("datetime('2020-01-02T10:30:00')"));
     for bad in [
@@ -453,7 +453,7 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
         Value::Int64(3),
         Value::Null,
     ] {
-        let err = prepend_valid_time("RETURN 1", &bad).unwrap_err();
+        let err = prepend_valid_time("RETURN 1", ValidAt::At(&bad)).unwrap_err();
         assert!(matches!(err, PrependError::BadInstant(_)), "{err}");
         assert!(err.to_string().starts_with("valid_at:"), "{err}");
     }
@@ -461,7 +461,7 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
         "FOR VALID_TIME AS OF $t RETURN 1",
         "EXPLAIN for valid_time AS OF $t RETURN 1",
     ] {
-        let err = prepend_valid_time(doubled, &text).unwrap_err();
+        let err = prepend_valid_time(doubled, ValidAt::At(&text)).unwrap_err();
         assert_eq!(
             err,
             PrependError::DoubledContext {
@@ -474,12 +474,12 @@ fn prepend_writes_a_literal_and_refuses_a_second_context() {
         assert!(err.contains("date('2020-01-02')"), "{err}");
     }
     // A comment or string mentioning FOR is not a context.
-    prepend_valid_time("// FOR later\nRETURN 'FOR' AS x", &text).unwrap();
+    prepend_valid_time("// FOR later\nRETURN 'FOR' AS x", ValidAt::At(&text)).unwrap();
     assert!(!carries_valid_time_context(
         "// FOR later\nRETURN 'FOR' AS x"
     ));
     // The prepended text parses to the same statement as the hand-written one.
-    let prefixed = prepend_valid_time("EXPLAIN MATCH (n) RETURN n", &text).unwrap();
+    let prefixed = prepend_valid_time("EXPLAIN MATCH (n) RETURN n", ValidAt::At(&text)).unwrap();
     assert!(parse_cypher(&prefixed).unwrap().context.is_some());
 }
 
@@ -625,7 +625,7 @@ fn prepend_round_trips_or_refuses_every_instant() {
             Value::DateTime(date(year)),
             Value::Timestamp(date(year).and_hms_opt(10, 30, 0).unwrap()),
         ] {
-            match prepend_valid_time("RETURN 1", &value) {
+            match prepend_valid_time("RETURN 1", ValidAt::At(&value)) {
                 Ok(text) => {
                     let parsed = parse_cypher(&text).unwrap();
                     let ContextInstant::AsOf(instant) = &parsed.context.as_ref().unwrap().instant
@@ -645,4 +645,25 @@ fn prepend_round_trips_or_refuses_every_instant() {
             }
         }
     }
+}
+
+#[test]
+fn all_prefixes_for_valid_time_all_and_refuses_a_doubled_context() {
+    let all = Value::String("ALL".to_string());
+    assert_eq!(ValidAt::from_value(&all), ValidAt::All);
+    assert_eq!(
+        prepend_valid_time("MATCH (n) RETURN n", ValidAt::from_value(&all)).unwrap(),
+        "FOR VALID_TIME ALL MATCH (n) RETURN n"
+    );
+    let day = Value::String("2020-01-02".to_string());
+    assert_eq!(ValidAt::from_value(&day), ValidAt::At(&day));
+    let err = prepend_valid_time("FOR VALID_TIME ALL RETURN 1", ValidAt::All)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("already has a FOR") && err.contains("FOR VALID_TIME ALL"),
+        "{err}"
+    );
+    let parsed = parse_cypher(&prepend_valid_time("EXPLAIN RETURN 1", ValidAt::All).unwrap());
+    assert!(parsed.unwrap().context.is_some());
 }

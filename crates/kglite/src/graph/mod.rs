@@ -72,7 +72,9 @@ pub use dir_graph::DirGraph;
 /// `FOR VALID_TIME AS OF` statement runs under (`api::fluent::FluentFilter`).
 #[derive(Clone, Debug, Default)]
 pub enum TemporalContext {
-    /// Today's UTC date (the default), resolved at each step.
+    /// The graph's valid-time default (the cursor's default), resolved at
+    /// each step: today's UTC date unless `DirGraph::valid_time_default`
+    /// says every version or a fixed day.
     #[default]
     Today,
     /// Valid at one day, under each declaration's convention.

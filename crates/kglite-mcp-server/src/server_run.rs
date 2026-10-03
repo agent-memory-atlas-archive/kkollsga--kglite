@@ -32,6 +32,7 @@ const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "embedder",
     "writable",
     "fetch_images",
+    "valid_time",
 ];
 
 /// Manifest `extensions:` keys this build does not read, for the boot warning.
@@ -186,6 +187,40 @@ fn boot_manifest_parallel(manifest: Option<&mcp_methods::server::Manifest>) -> R
 /// sequential.
 fn boot_parallel(manifest: Option<&mcp_methods::server::Manifest>, cli: &Cli) -> Result<bool> {
     Ok(boot_manifest_parallel(manifest)? || cli.parallel)
+}
+
+/// The graph's valid-time default for this server: `--valid-time-default`
+/// when given, else `extensions.valid_time.default`, else `None` (graphs keep
+/// the engine's `today`). The flag wins outright rather than combining: a
+/// wrapper that owns argv overrides the manifest it ships with. A malformed
+/// manifest value, or a key other than `default`, fails the boot rather than
+/// being silently ignored.
+fn boot_valid_time_default(
+    manifest: Option<&mcp_methods::server::Manifest>,
+    cli: &Cli,
+) -> Result<Option<kglite::api::temporal::ValidTimeDefault>> {
+    let Some(raw) = manifest.and_then(|m| m.extensions.get("valid_time")) else {
+        return Ok(cli.valid_time_default);
+    };
+    let map = raw
+        .as_object()
+        .context("extensions.valid_time must be a map with an optional 'default' key")?;
+    if let Some(key) = map.keys().find(|key| key.as_str() != "default") {
+        anyhow::bail!("extensions.valid_time: unknown key '{key}'; the only key is 'default'");
+    }
+    let configured = match map.get("default") {
+        None => None,
+        Some(value) => {
+            let text = value.as_str().context(
+                "extensions.valid_time.default must be 'today', 'all' or a YYYY-MM-DD date",
+            )?;
+            Some(
+                kglite::api::temporal::ValidTimeDefault::parse(text)
+                    .map_err(|e| anyhow::anyhow!("extensions.valid_time.default: {e}"))?,
+            )
+        }
+    };
+    Ok(cli.valid_time_default.or(configured))
 }
 
 /// `extensions.writable: true` — the manifest half of the write opt-in.
@@ -925,6 +960,7 @@ fn boot_graph(
     let graph_state = GraphState::new(workspace_graph_mode(&mode))
         .with_value_codecs(boot_value_codecs(manifest.as_ref())?)
         .with_parallel(parallel)
+        .with_valid_time_default(boot_valid_time_default(manifest.as_ref(), cli)?)
         // Declared here rather than from `builtins` (built below, after the
         // csv_http boot it needs) because `bind_mode` performs the boot open
         // a few lines down — a policy set later would arrive after the lease
@@ -1560,7 +1596,7 @@ mod boot_manifest_tests {
             "name: all\nextensions:\n  cypher_recipes: {}\n  recipe_catalog: {}\n  \
              recipe_tools: true\n  value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
              write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
-             fetch_images: {}\n",
+             fetch_images: {}\n  valid_time: {}\n",
         );
         assert!(
             unknown_extension_keys(Some(&all_keys)).is_empty(),
@@ -1850,6 +1886,63 @@ mod boot_manifest_tests {
             "an explicit manifest `false` does not veto the flag; the pair is an OR, and a \
              flag the operator typed on this launch is the more specific statement"
         );
+    }
+
+    #[test]
+    fn valid_time_default_reads_the_manifest_and_the_flag_wins() {
+        use kglite::api::temporal::ValidTimeDefault as D;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bare = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        let flag = Cli::parse_from([
+            "kglite-mcp-server",
+            "--graph",
+            "g.kgl",
+            "--valid-time-default",
+            "2015-06-15",
+        ]);
+        assert_eq!(boot_valid_time_default(None, &bare).unwrap(), None);
+        assert_eq!(
+            boot_valid_time_default(None, &flag)
+                .unwrap()
+                .map(|d| d.to_string()),
+            Some("2015-06-15".to_string())
+        );
+        let all = manifest_with(
+            tmp.path(),
+            "name: a\nextensions:\n  valid_time:\n    default: all\n",
+        );
+        assert_eq!(
+            boot_valid_time_default(Some(&all), &bare).unwrap(),
+            Some(D::All)
+        );
+        assert_eq!(
+            boot_valid_time_default(Some(&all), &flag)
+                .unwrap()
+                .map(|d| d.to_string()),
+            Some("2015-06-15".to_string()),
+            "the flag overrides the manifest"
+        );
+        let empty = manifest_with(tmp.path(), "name: e\nextensions:\n  valid_time: {}\n");
+        assert_eq!(boot_valid_time_default(Some(&empty), &bare).unwrap(), None);
+        assert!(KNOWN_EXTENSION_KEYS.contains(&"valid_time"));
+    }
+
+    #[test]
+    fn a_malformed_valid_time_block_fails_boot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        for body in ["default: yesterday", "default: 7", "dfault: all"] {
+            let manifest = manifest_with(
+                tmp.path(),
+                &format!("name: m\nextensions:\n  valid_time:\n    {body}\n"),
+            );
+            assert!(
+                boot_valid_time_default(Some(&manifest), &cli).is_err(),
+                "{body}"
+            );
+        }
+        let scalar = manifest_with(tmp.path(), "name: s\nextensions:\n  valid_time: all\n");
+        assert!(boot_valid_time_default(Some(&scalar), &cli).is_err());
     }
 
     #[test]

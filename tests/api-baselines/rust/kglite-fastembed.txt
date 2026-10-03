@@ -915,6 +915,19 @@ impl core::fmt::Debug for kglite::api::cypher::StoredType
 pub fn kglite::api::cypher::StoredType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for kglite::api::cypher::StoredType
 impl core::marker::StructuralPartialEq for kglite::api::cypher::StoredType
+pub enum kglite::api::cypher::ValidAt<'a>
+pub kglite::api::cypher::ValidAt::All
+pub kglite::api::cypher::ValidAt::At(&'a kglite::datatypes::values::Value)
+impl<'a> kglite::api::cypher::ValidAt<'a>
+pub fn kglite::api::cypher::ValidAt<'a>::from_value(value: &'a kglite::datatypes::values::Value) -> Self
+impl<'a> core::clone::Clone for kglite::api::cypher::ValidAt<'a>
+pub fn kglite::api::cypher::ValidAt<'a>::clone(&self) -> kglite::api::cypher::ValidAt<'a>
+impl<'a> core::cmp::PartialEq for kglite::api::cypher::ValidAt<'a>
+pub fn kglite::api::cypher::ValidAt<'a>::eq(&self, other: &kglite::api::cypher::ValidAt<'a>) -> bool
+impl<'a> core::fmt::Debug for kglite::api::cypher::ValidAt<'a>
+pub fn kglite::api::cypher::ValidAt<'a>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for kglite::api::cypher::ValidAt<'a>
+impl<'a> core::marker::StructuralPartialEq for kglite::api::cypher::ValidAt<'a>
 pub struct kglite::api::cypher::ClauseStats
 pub kglite::api::cypher::ClauseStats::clause_name: alloc::string::String
 pub kglite::api::cypher::ClauseStats::elapsed_us: u64
@@ -1105,7 +1118,7 @@ pub fn kglite::api::cypher::optimize(query: &mut kglite::api::cypher::CypherQuer
 pub fn kglite::api::cypher::parameter_names(query: &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_cypher(query: &str) -> core::result::Result<kglite::api::cypher::CypherQuery, kglite::error::KgError>
 pub fn kglite::api::cypher::parse_with_mutation_check(query: &str) -> core::result::Result<(kglite::api::cypher::CypherQuery, bool), kglite::error::KgError>
-pub fn kglite::api::cypher::prepend_valid_time(query: &str, instant: &kglite::datatypes::values::Value) -> core::result::Result<alloc::string::String, kglite::api::cypher::PrependError>
+pub fn kglite::api::cypher::prepend_valid_time(query: &str, valid_at: kglite::api::cypher::ValidAt<'_>) -> core::result::Result<alloc::string::String, kglite::api::cypher::PrependError>
 pub fn kglite::api::cypher::query_features(query: &str) -> core::result::Result<kglite::api::cypher::QueryFeatures, kglite::error::KgError>
 pub fn kglite::api::cypher::query_warning_sink() -> kglite::api::cypher::QueryWarningSink
 pub fn kglite::api::cypher::resolve_edge_property(graph: &kglite::api::DirGraph, edge: &kglite::api::cypher::EdgeBinding, property: &str) -> kglite::datatypes::values::Value
@@ -3348,6 +3361,25 @@ pub fn kglite::api::temporal::TemporalTarget::fmt(&self, f: &mut core::fmt::Form
 impl core::hash::Hash for kglite::api::temporal::TemporalTarget
 pub fn kglite::api::temporal::TemporalTarget::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
 impl core::marker::StructuralPartialEq for kglite::api::temporal::TemporalTarget
+pub enum kglite::api::temporal::ValidTimeDefault
+pub kglite::api::temporal::ValidTimeDefault::All
+pub kglite::api::temporal::ValidTimeDefault::Date(chrono::naive::date::NaiveDate)
+pub kglite::api::temporal::ValidTimeDefault::Today
+impl kglite::api::temporal::ValidTimeDefault
+pub fn kglite::api::temporal::ValidTimeDefault::parse(text: &str) -> core::result::Result<Self, alloc::string::String>
+impl core::clone::Clone for kglite::api::temporal::ValidTimeDefault
+pub fn kglite::api::temporal::ValidTimeDefault::clone(&self) -> kglite::api::temporal::ValidTimeDefault
+impl core::cmp::Eq for kglite::api::temporal::ValidTimeDefault
+impl core::cmp::PartialEq for kglite::api::temporal::ValidTimeDefault
+pub fn kglite::api::temporal::ValidTimeDefault::eq(&self, other: &kglite::api::temporal::ValidTimeDefault) -> bool
+impl core::default::Default for kglite::api::temporal::ValidTimeDefault
+pub fn kglite::api::temporal::ValidTimeDefault::default() -> kglite::api::temporal::ValidTimeDefault
+impl core::fmt::Debug for kglite::api::temporal::ValidTimeDefault
+pub fn kglite::api::temporal::ValidTimeDefault::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::temporal::ValidTimeDefault
+pub fn kglite::api::temporal::ValidTimeDefault::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::temporal::ValidTimeDefault
+impl core::marker::StructuralPartialEq for kglite::api::temporal::ValidTimeDefault
 pub struct kglite::api::temporal::DeclarationInfo
 pub kglite::api::temporal::DeclarationInfo::abutting_rows: core::option::Option<usize>
 pub kglite::api::temporal::DeclarationInfo::ambiguous: bool
@@ -4036,6 +4068,7 @@ pub kglite::api::DirGraph::type_connectivity_cache: kglite::graph::dir_graph::ca
 pub kglite::api::DirGraph::type_indices: kglite::graph::storage::disk::type_index::TypeIndexStore
 pub kglite::api::DirGraph::type_schemas: alloc::sync::Arc<std::collections::hash::map::HashMap<alloc::string::String, alloc::sync::Arc<kglite::graph::schema::TypeSchema>>>
 pub kglite::api::DirGraph::user_schema_version: u32
+pub kglite::api::DirGraph::valid_time_default: kglite::api::temporal::ValidTimeDefault
 pub kglite::api::DirGraph::version: u64
 pub kglite::api::DirGraph::wkt_cache: alloc::sync::Arc<std::sync::poison::rwlock::RwLock<std::collections::hash::map::HashMap<alloc::string::String, alloc::sync::Arc<geo_types::geometry::Geometry<f64>>>>>
 impl kglite::api::DirGraph

@@ -128,6 +128,15 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) parallel: bool,
 
+    /// The valid-time instant a statement, recipe tool or fluent step reads
+    /// when it names none, on a graph with validity declarations: `today`
+    /// (the built-in default, UTC), `all` (every version) or a fixed
+    /// `YYYY-MM-DD` day. Overrides `extensions.valid_time.default` in the
+    /// manifest. Runtime only — never written into a `.kgl` file.
+    #[arg(long = "valid-time-default", value_name = "today|all|YYYY-MM-DD",
+          value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
+    pub(crate) valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
+
     /// Run a configuration self-test instead of serving: re-spawn this binary
     /// with the same flags, drive a live MCP handshake (initialize →
     /// tools/list → activate → cypher_query), and print green/red per
@@ -418,6 +427,38 @@ mod cli_contract_tests {
             !off.parallel,
             "a server's cores belong to its clients — the runtime is never opted in by omission"
         );
+    }
+
+    #[test]
+    fn valid_time_default_flag_parses_three_spellings_and_refuses_the_rest() {
+        use kglite::api::temporal::ValidTimeDefault;
+        let parse = |value: &str| {
+            Cli::try_parse_from([
+                "kglite-mcp-server",
+                "--graph",
+                "g.kgl",
+                "--valid-time-default",
+                value,
+            ])
+        };
+        assert_eq!(
+            parse("all").unwrap().valid_time_default,
+            Some(ValidTimeDefault::All)
+        );
+        assert_eq!(
+            parse("today").unwrap().valid_time_default,
+            Some(ValidTimeDefault::Today)
+        );
+        assert_eq!(
+            parse("2015-06-15")
+                .unwrap()
+                .valid_time_default
+                .map(|d| d.to_string()),
+            Some("2015-06-15".to_string())
+        );
+        assert!(parse("yesterday").is_err());
+        let bare = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        assert_eq!(bare.valid_time_default, None);
     }
 
     #[test]

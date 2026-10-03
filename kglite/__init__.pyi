@@ -7844,7 +7844,11 @@ class KnowledgeGraph:
                 may stand before or after ``EXPLAIN`` / ``PROFILE``, and a
                 ``query`` that already carries a ``FOR … AS OF`` prefix
                 raises ``ValueError`` naming both, since a statement takes
-                one context. The graph needs a validity declaration
+                one context. The string ``'all'`` is ``FOR VALID_TIME ALL``:
+                every version, whatever the graph's default says (the echo's
+                ``source`` is ``'all'``), and it needs no declaration;
+                ``None`` leaves the graph's default
+                (:meth:`set_valid_time_default`). An instant needs a validity declaration
                 (``db.temporal.declare``); axes other than ``VALID_TIME``,
                 writing statements, and the element-enumerating procedures
                 that are not routed (the validation rules such as
@@ -8056,6 +8060,41 @@ class KnowledgeGraph:
         """
         ...
 
+    def set_valid_time_default(self, value: Union[str, _dt.date, _dt.datetime]) -> None:
+        """Set the instant unprefixed statements and fluent cursors read.
+
+        On a graph with validity declarations, a statement that names no
+        ``FOR VALID_TIME`` context (and no ``valid_at=``) and a fluent cursor
+        that never called :meth:`date` read this instant. The built-in default
+        is ``'today'`` (the UTC date, resolved per execution). A statement's
+        own prefix, ``valid_at=`` and :meth:`date` still win. The setting
+        lowers the default context, so the echo's ``source`` stays
+        ``'default'`` and its ``instant`` shows the configured instant
+        (``'all'`` or the date); under ``'all'`` nothing is filtered and no
+        statement is reported as having skipped the default. A graph with no
+        declaration is unaffected.
+
+        Runtime state only: it is never written into a ``.kgl`` file, so a
+        saved graph loads with ``'today'``. Frozen views, sessions and
+        transactions taken from the graph afterwards carry the value current
+        when they were taken.
+
+        Args:
+            value: ``'today'``, ``'all'`` (every version), or a fixed day: a
+                ``YYYY-MM-DD`` string (any form :meth:`date` reads), a
+                ``datetime.date`` or a ``datetime.datetime`` (taken at its
+                UTC date).
+
+        Raises:
+            ArgumentError: *value* is a string that is none of those.
+            TypeError: *value* is neither a string nor a date.
+        """
+        ...
+
+    def get_valid_time_default(self) -> str:
+        """The graph's valid-time default: ``'today'``, ``'all'`` or ``'YYYY-MM-DD'``."""
+        ...
+
     def date(
         self,
         date_str: Optional[Union[str, _dt.date]] = None,
@@ -8088,7 +8127,9 @@ class KnowledgeGraph:
             - ``date('2010', '2015')`` — range: include everything valid at
               any point during 2010-01-01 to 2015-12-31 (overlap check).
             - ``date('all')`` — disable temporal filtering entirely.
-            - ``date()`` — reset to today, the UTC date (default).
+            - ``date()`` — reset to the graph's valid-time default: today,
+              the UTC date, unless :meth:`set_valid_time_default` says
+              otherwise.
 
         Args:
             date_str: A date string (``'2013'``, ``'2013-06'``,

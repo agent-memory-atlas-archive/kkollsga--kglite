@@ -853,6 +853,7 @@ fn plan_scope(
         schema_locked: graph.schema_locked,
         lazy: opts.lazy_eligible,
         suppress_default,
+        valid_time_default: graph.valid_time_default.cache_code(),
     }
 }
 

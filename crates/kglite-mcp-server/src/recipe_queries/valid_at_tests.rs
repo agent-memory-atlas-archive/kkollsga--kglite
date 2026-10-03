@@ -19,7 +19,15 @@ const OWN_CONTEXT: &str =
 
 /// Well 1 (2000–2010, closed) and well 2 (from 2005), declared on `vf`/`vt`.
 fn wells_state(dir: &std::path::Path) -> GraphState {
-    let state = GraphState::new(None);
+    wells_state_with(dir, None)
+}
+
+/// [`wells_state`] on a server configured with a valid-time default.
+fn wells_state_with(
+    dir: &std::path::Path,
+    default: Option<kglite::api::temporal::ValidTimeDefault>,
+) -> GraphState {
+    let state = GraphState::new(None).with_valid_time_default(default);
     state
         .create_in_mode(&dir.join("wells.kgl"), StorageMode::Memory)
         .expect("activate graph");
@@ -109,6 +117,54 @@ fn run_recipe_query_answers_as_of_valid_at_and_echoes_the_instant() {
     assert_eq!(echo["instant"], "2003-06-30");
     assert_eq!(echo["route"], "guarded");
     assert_eq!(echo["targets"], json!(["(:Well)"]));
+}
+
+#[test]
+fn valid_at_all_reads_every_version_and_echoes_the_source_all() {
+    use kglite::api::temporal::ValidTimeDefault;
+    for default in [None, Some(ValidTimeDefault::parse("2003-06-30").unwrap())] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = wells_state_with(temp.path(), default);
+        let all = run(&state, args("list", Some("all")));
+        assert_eq!(all["result"]["rows"], json!([[1], [2]]), "{default:?}");
+        assert_eq!(
+            all["cypher"],
+            format!("FOR VALID_TIME ALL {WELLS}"),
+            "include_cypher reports the text that ran"
+        );
+        let echo = &all["result"]["diagnostics"]["temporal"];
+        assert_eq!(echo["source"], "all");
+        assert_eq!(echo["instant"], "all");
+    }
+}
+
+#[test]
+fn the_configured_default_governs_unprefixed_recipe_runs() {
+    use kglite::api::temporal::ValidTimeDefault;
+    let (temp, other) = (
+        tempfile::tempdir().expect("tempdir"),
+        tempfile::tempdir().expect("tempdir"),
+    );
+    let all = wells_state_with(temp.path(), Some(ValidTimeDefault::All));
+    let rows = run(&all, args("list", None));
+    assert_eq!(rows["result"]["rows"], json!([[1], [2]]));
+    let echo = &rows["result"]["diagnostics"]["temporal"];
+    assert_eq!(
+        (&echo["source"], &echo["instant"]),
+        (&json!("default"), &json!("all"))
+    );
+
+    let pinned = wells_state_with(other.path(), ValidTimeDefault::parse("2003-06-30").ok());
+    let rows = run(&pinned, args("list", None));
+    assert_eq!(rows["result"]["rows"], json!([[1]]));
+    let echo = &rows["result"]["diagnostics"]["temporal"];
+    assert_eq!(
+        (&echo["source"], &echo["instant"]),
+        (&json!("default"), &json!("2003-06-30"))
+    );
+    // A call's own valid_at still wins over the server's default.
+    let own = run(&pinned, args("list", Some("2008-01-01")));
+    assert_eq!(own["result"]["rows"], json!([[1], [2]]));
 }
 
 #[test]

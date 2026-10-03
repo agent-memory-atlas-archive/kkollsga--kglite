@@ -156,7 +156,7 @@ impl FluentFilter {
             (None, Some((start, end))) => {
                 ValidTimeSelector::Overlap(Instant::Date(start), Instant::Date(end))
             }
-            (None, None) => match ValidTimeSelector::try_from(context) {
+            (None, None) => match ValidTimeSelector::for_context(context, graph) {
                 Ok(selector) => selector,
                 Err(()) => return Ok(Self::default()),
             },
@@ -191,7 +191,7 @@ impl FluentFilter {
     ) -> Result<Self, String> {
         let selector = match date {
             Some(day) => ValidTimeSelector::AsOf(Instant::Date(day)),
-            None => ValidTimeSelector::try_from(context)
+            None => ValidTimeSelector::for_context(context, graph)
                 .unwrap_or(ValidTimeSelector::AsOf(Instant::Date(today_utc()))),
         };
         Self::request(graph, selection, "valid_at", selector, from, to)
@@ -281,7 +281,7 @@ impl FluentFilter {
         scope: &TemplateScope,
         function: &str,
     ) -> Result<Self, String> {
-        let Ok(selector) = ValidTimeSelector::try_from(context) else {
+        let Ok(selector) = ValidTimeSelector::for_context(context, graph) else {
             return Ok(Self::default());
         };
         let template =

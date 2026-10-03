@@ -263,9 +263,12 @@ fn named_tool_schema(parameters: &Map<String, Value>) -> (Map<String, Value>, bo
         serde_json::json!({
             "type": "string",
             "description": "Run the query as of this date — an ISO date (\"2020-06-30\") or \
-                datetime (\"2020-06-30T12:00:00\"). Same as writing the prefix \
-                FOR VALID_TIME AS OF date('2020-06-30') before the stored query; the graph \
-                needs a validity declaration (db.temporal.declarations()).",
+                datetime (\"2020-06-30T12:00:00\") — or pass \"all\" to read every version. \
+                Same as writing the prefix FOR VALID_TIME AS OF date('2020-06-30') or \
+                FOR VALID_TIME ALL before the stored query. Without it a graph with validity \
+                declarations answers as of the server's default (today unless \
+                --valid-time-default says otherwise); a date needs a validity declaration \
+                (db.temporal.declarations()), \"all\" does not.",
         }),
     );
     (schema, true)

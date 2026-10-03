@@ -216,6 +216,7 @@ fn the_default_plan_and_the_plain_plan_of_one_text_do_not_collide() {
                 schema_locked: graph.schema_locked,
                 lazy: false,
                 suppress_default: suppress,
+                valid_time_default: graph.valid_time_default.cache_code(),
             },
             LIST,
         )
@@ -243,4 +244,56 @@ fn a_profiled_default_statement_on_a_timeless_graph_runs_its_plain_plan() {
     let profiled = read(&graph, &format!("PROFILE {LIST}")).expect("PROFILE under the default");
     assert_eq!(profiled.result.rows, vec![vec![Value::Int64(1)]]);
     assert!(profiled.result.profile.is_some());
+}
+
+#[test]
+fn the_configured_default_governs_unprefixed_statements_and_the_echo() {
+    use crate::graph::features::temporal::ValidTimeDefault;
+    let mut graph = staff();
+    assert_eq!(ids(&graph, LIST), [2]);
+
+    graph.valid_time_default = ValidTimeDefault::All;
+    assert_eq!(ids(&graph, LIST), [1, 2, 3], "the same text, a new setting");
+    let all = echo(&graph, LIST).expect("a declared graph echoes");
+    assert_eq!(
+        (all.instant.as_str(), all.source.as_str()),
+        ("all", "default")
+    );
+
+    graph.valid_time_default = ValidTimeDefault::parse("2008-01-01").unwrap();
+    assert_eq!(ids(&graph, LIST), [1, 2], "a fixed day pins the default");
+    let pinned = echo(&graph, LIST).expect("a declared graph echoes");
+    assert_eq!(
+        (pinned.instant.as_str(), pinned.source.as_str()),
+        ("2008-01-01", "default")
+    );
+    let plan = format!(
+        "{:?}",
+        read(&graph, &format!("EXPLAIN {LIST}"))
+            .unwrap()
+            .result
+            .rows
+    );
+    assert!(plan.contains("default: 2008-01-01"), "{plan}");
+
+    // An explicit prefix still wins over the setting.
+    let explicit = format!("FOR VALID_TIME AS OF date('2020-01-01') {LIST}");
+    assert_eq!(ids(&graph, &explicit), [2]);
+    let skipped = format!("FOR VALID_TIME ALL {LIST}");
+    assert_eq!(ids(&graph, &skipped), [1, 2, 3]);
+
+    graph.valid_time_default = ValidTimeDefault::Today;
+    assert_eq!(ids(&graph, LIST), [2], "back to today, plan cache included");
+}
+
+#[test]
+fn a_write_under_an_all_default_is_not_reported_as_skipped() {
+    use crate::graph::features::temporal::ValidTimeDefault;
+    let mut graph = staff();
+    graph.valid_time_default = ValidTimeDefault::All;
+    let rows = run(
+        &mut graph,
+        "MATCH (e:Employee) SET e.seen = true RETURN count(e) AS n",
+    );
+    assert_eq!(rows, vec![vec![Value::Int64(3)]]);
 }

@@ -590,6 +590,11 @@ pub struct DirGraph {
     /// read and written through `kglite::api::temporal`.
     #[serde(default)]
     pub(crate) temporal: crate::graph::features::temporal::declarations::TemporalDeclarations,
+    /// The instant a statement or fluent step reads when it names none, on a
+    /// graph with validity declarations. Runtime and manifest state: never
+    /// serialized, so a loaded graph starts at `Today`.
+    #[serde(skip)]
+    pub valid_time_default: crate::graph::features::temporal::ValidTimeDefault,
     /// Memory limit for columnar heap storage. If Some(n), `enable_columnar()`
     /// will spill columns to temp files when total heap_bytes exceeds n.
     #[serde(skip)]
@@ -913,81 +918,9 @@ impl DirGraph {
     }
 
     pub fn new() -> Self {
-        DirGraph {
-            graph_id: next_graph_id(),
-            cdc: None,
-            next_auto_id: 0,
-            graph: GraphBackend::new(),
-            type_indices: TypeIndexStore::new(),
-            schema_definition: None,
-            property_indices: HashMap::new(),
-            composite_indices: HashMap::new(),
-            property_index_keys: Vec::new(),
-            composite_index_keys: Vec::new(),
-            range_indices: HashMap::new(),
-            range_index_keys: Vec::new(),
-            indexes_deferred: false,
-            unique_indices: HashMap::new(),
-            ddl_unique_constraints: std::collections::BTreeSet::new(),
-            unique_constraint_keys: Vec::new(),
-            constraint_names: HashMap::new(),
-            ddl_not_null_constraints: std::collections::BTreeSet::new(),
-            ddl_property_type_constraints: std::collections::BTreeMap::new(),
-            rel_ddl_not_null_constraints: std::collections::BTreeSet::new(),
-            rel_ddl_property_type_constraints: std::collections::BTreeMap::new(),
-            id_indices: IdIndexStore::new(),
-            connection_types: std::collections::HashSet::new(),
-            node_type_metadata: Arc::new(HashMap::new()),
-            connection_type_metadata: Arc::new(HashMap::new()),
-            save_metadata: SaveMetadata::current(),
-            id_field_aliases: Arc::default(),
-            title_field_aliases: Arc::default(),
-            parent_types: Arc::new(HashMap::new()),
-            ontology: Arc::default(),
-            table_property_meta: std::collections::BTreeMap::new(),
-            property_shapes: std::collections::BTreeMap::new(),
-            managed_labels: std::collections::BTreeMap::new(),
-            ontology_closures: HashMap::new(),
-            suppress_ontology_stamp: false,
-            graph_instructions: HashMap::new(),
-            source_root: None,
-            source_fingerprint: None,
-            source_dialect: None,
-            source_build_version: None,
-            source_options: None,
-            user_schema_version: 0,
-            checkpoint_lsn: 0,
-            checkpoint_permit: Default::default(),
-            cdc_handoff: None,
-            auto_vacuum_threshold: default_auto_vacuum_threshold(),
-            auto_vacuums_run: 0,
-            spatial_configs: HashMap::new(),
-            wkt_cache: Arc::new(RwLock::new(HashMap::new())),
-            edge_type_counts_cache: Default::default(),
-            type_connectivity_cache: Default::default(),
-            property_ndv_cache: Arc::new(RwLock::new((0, HashMap::new()))),
-            embeddings: HashMap::new(),
-            edge_embeddings: HashMap::new(),
-            text_indexes: HashMap::new(),
-            edge_text_indexes: HashMap::new(),
-            timeseries_configs: HashMap::new(),
-            timeseries_store: HashMap::new(),
-            temporal: Default::default(),
-            memory_limit: None,
-            spill_dir: None,
-            temp_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),
-            read_only: false,
-            schema_locked: false,
-            active_write_scope: None,
-            active_git_sha: None,
-            active_modified_by: None,
-            pending_constraint_violation: None,
-            version: 0,
-            interner: StringInterner::new(),
-            type_schemas: Arc::new(HashMap::new()),
-            has_secondary_labels: false,
-            secondary_label_index: HashMap::new(),
-        }
+        let mut graph = Self::from_graph(GraphBackend::new());
+        graph.save_metadata = SaveMetadata::current();
+        graph
     }
 
     /// Create a DirGraph from a pre-existing graph (used by v3 loader).
@@ -1053,6 +986,7 @@ impl DirGraph {
             timeseries_configs: HashMap::new(),
             timeseries_store: HashMap::new(),
             temporal: Default::default(),
+            valid_time_default: Default::default(),
             memory_limit: None,
             spill_dir: None,
             temp_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),

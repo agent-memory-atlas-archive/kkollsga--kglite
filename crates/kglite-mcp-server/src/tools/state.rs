@@ -99,6 +99,12 @@ pub struct GraphState {
     /// [`with_parallel`](Self::with_parallel) and carried by every clone;
     /// reaches the engine through [`ExecPolicy`] on the read seam only.
     pub(crate) parallel: bool,
+    /// The operator's valid-time default (`--valid-time-default` /
+    /// `extensions.valid_time.default`), `None` when neither was given.
+    /// Runtime only: [`apply_bound_embedder`](Self::apply_bound_embedder)
+    /// sets it on every graph this state installs, and a `.kgl` file never
+    /// carries it.
+    pub(crate) valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
     /// External workspace-graph lifecycle extension. Set once at boot and
     /// carried by every clone so lazy watch rebuilds use the same producer.
     pub(crate) workspace_graph_hooks: Option<Arc<WorkspaceGraphHooks>>,
@@ -177,6 +183,16 @@ impl GraphState {
     /// form, set once at boot like [`Self::with_value_codecs`].
     pub fn with_parallel(mut self, parallel: bool) -> Self {
         self.parallel = parallel;
+        self
+    }
+
+    /// The valid-time default every installed graph takes. Builder form, set
+    /// once at boot like [`Self::with_value_codecs`].
+    pub fn with_valid_time_default(
+        mut self,
+        default: Option<kglite::api::temporal::ValidTimeDefault>,
+    ) -> Self {
+        self.valid_time_default = default;
         self
     }
 
@@ -637,6 +653,12 @@ impl GraphState {
         let bound = read_lock(&self.embedder).as_ref().map(Arc::clone);
         if let Some(embedder) = bound {
             kg.set_embedder_native(embedder);
+        }
+        if let Some(default) = self.valid_time_default {
+            if kg.dir().valid_time_default != default {
+                kglite::api::make_dir_graph_mut_preserving_lineage(kg.dir_mut())
+                    .valid_time_default = default;
+            }
         }
         // The manifest ontology rides the same seam: every install path
         // already routes through here before publication.

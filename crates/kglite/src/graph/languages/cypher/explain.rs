@@ -199,8 +199,11 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
             (ContextInstant::All, ContextOrigin::Skipped(reason)) => {
                 format!("all (default skipped: {reason})")
             }
+            (ContextInstant::All, ContextOrigin::Default) => "all (default)".to_string(),
             (ContextInstant::All, _) => "all".to_string(),
-            (_, ContextOrigin::Default) => "per execution (default: today)".to_string(),
+            (_, ContextOrigin::Default) => {
+                format!("per execution (default: {})", graph.valid_time_default)
+            }
             _ => "per execution".to_string(),
         };
         rows.push(vec![

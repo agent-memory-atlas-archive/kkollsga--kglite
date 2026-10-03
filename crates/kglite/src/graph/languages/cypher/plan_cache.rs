@@ -81,7 +81,9 @@ use std::sync::{Arc, OnceLock, RwLock};
 pub(crate) const CACHE_CAPACITY: usize = 512;
 
 /// `(graph_id, version, schema_locked, lazy_eligible, suppress_default,
-/// query_hash)`. `suppress_default` separates the plan of a text prepared
+/// valid_time_default, query_hash)`. `valid_time_default` is the graph's
+/// default-instant setting (`ValidTimeDefault::cache_code`): the same text
+/// lowers to a different plan under each. `suppress_default` separates the plan of a text prepared
 /// with the default valid-time context from the plain plan the session
 /// re-prepares of the same text when that context would filter nothing.
 /// `lazy_eligible` is part of the key because the cached plan is stored **post lazy-marking** (so a hit is
@@ -89,7 +91,7 @@ pub(crate) const CACHE_CAPACITY: usize = 512;
 /// `lazy_eligible=true`, the bolt/mcp servers `false`, so each gets its own
 /// variant. `schema_locked` partitions the two validation dispositions. See the
 /// module docs for the complete key contract.
-type PlanKey = (u64, u64, bool, bool, bool, u64);
+type PlanKey = (u64, u64, bool, bool, bool, i64, u64);
 
 /// Everything but the query text that selects a plan-cache entry. Field
 /// meanings are in [`PlanKey`].
@@ -100,6 +102,7 @@ pub struct PlanScope {
     pub schema_locked: bool,
     pub lazy: bool,
     pub suppress_default: bool,
+    pub valid_time_default: i64,
 }
 
 impl PlanScope {
@@ -110,6 +113,7 @@ impl PlanScope {
             self.schema_locked,
             self.lazy,
             self.suppress_default,
+            self.valid_time_default,
             hash_query(query),
         )
     }
@@ -377,6 +381,7 @@ mod tests {
             schema_locked,
             lazy,
             suppress_default,
+            valid_time_default: 0,
         }
     }
 

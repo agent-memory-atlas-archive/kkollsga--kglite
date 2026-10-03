@@ -22,6 +22,7 @@ use crate::graph::features::temporal::duplicate_ids;
 pub(crate) use crate::graph::features::temporal::endpoint_index::ResolvedFilter;
 use crate::graph::features::temporal::endpoint_index::{self, ElementMasks};
 use crate::graph::features::temporal::eval::{self, Instant, MicrosProbe, TemporalError};
+use crate::graph::features::temporal::ValidTimeDefault;
 use crate::graph::features::temporal::{self, DeclarationInfo, IntervalConvention, TemporalTarget};
 use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::{GraphRead, NodeView};
@@ -192,14 +193,18 @@ pub(crate) enum ValidTimeSelector {
     Overlap(Instant, Instant),
 }
 
-impl TryFrom<&TemporalContext> for ValidTimeSelector {
-    type Error = ();
-
-    /// The fluent temporal context as a selector; `All` filters nothing and
-    /// has none.
-    fn try_from(context: &TemporalContext) -> Result<Self, ()> {
+impl ValidTimeSelector {
+    /// The fluent temporal context as a selector on `graph`; `All` filters
+    /// nothing and has none. `Today` — a cursor that never called `date()` —
+    /// reads the graph's valid-time default: today, every version (`Err`), or
+    /// a fixed day.
+    pub(crate) fn for_context(context: &TemporalContext, graph: &DirGraph) -> Result<Self, ()> {
         match context {
-            TemporalContext::Today => Ok(ValidTimeSelector::AsOf(Instant::Date(today_utc()))),
+            TemporalContext::Today => match graph.valid_time_default {
+                ValidTimeDefault::Today => Ok(ValidTimeSelector::AsOf(Instant::Date(today_utc()))),
+                ValidTimeDefault::Date(day) => Ok(ValidTimeSelector::AsOf(Instant::Date(day))),
+                ValidTimeDefault::All => Err(()),
+            },
             TemporalContext::At(d) => Ok(ValidTimeSelector::AsOf(Instant::Date(*d))),
             TemporalContext::During(a, b) => Ok(ValidTimeSelector::Overlap(
                 Instant::Date(*a),

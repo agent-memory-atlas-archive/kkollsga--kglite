@@ -852,6 +852,10 @@
           "kind": "method",
           "signature": "(self, /, node_type, node_id, property)"
         },
+        "get_valid_time_default": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
         "graph_info": {
           "kind": "method",
           "signature": "(self, /)"
@@ -1267,6 +1271,10 @@
         "set_timeseries": {
           "kind": "method",
           "signature": "(self, /, node_type, *, resolution, channels=None, units=None, bin_type=None)"
+        },
+        "set_valid_time_default": {
+          "kind": "method",
+          "signature": "(self, /, value)"
         },
         "shape": {
           "kind": "attribute",

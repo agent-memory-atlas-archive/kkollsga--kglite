@@ -481,7 +481,7 @@ pub mod api {
             check_label_stamp, check_labelled_load, declare, declare_defaulted,
             declare_from_column_types, declare_loaded, edge_configs, list, node_config,
             node_request_config, relationship_request_configs, undeclare, DeclarationInfo,
-            DeclareReport, IntervalConvention, LoadDeclaration, TemporalTarget,
+            DeclareReport, IntervalConvention, LoadDeclaration, TemporalTarget, ValidTimeDefault,
             DISK_NODE_ABUTMENT_CAP,
         };
     }
@@ -907,13 +907,15 @@ pub mod api {
             LazyResultDescriptor,
         };
         /// `query` under a `FOR VALID_TIME AS OF` context — the text a
-        /// binding's `valid_at=` argument sends. The instant (a date, a
-        /// datetime, or an ISO date/datetime string) is written as a literal;
-        /// a query that already carries a context is refused naming both.
+        /// binding's `valid_at=` argument sends — or under `FOR VALID_TIME
+        /// ALL` for [`ValidAt::All`] (what the string `'all'` means). The
+        /// instant (a date, a datetime, or an ISO date/datetime string) is
+        /// written as a literal; a query that already carries a context is
+        /// refused naming both.
         /// `carries_valid_time_context` asks the same tokenizer test alone,
         /// and `PrependError` says which refusal applied.
         pub use crate::graph::languages::cypher::valid_time::{
-            carries_valid_time_context, prepend_valid_time, PrependError,
+            carries_valid_time_context, prepend_valid_time, PrependError, ValidAt,
         };
         /// Operator-declared value codecs — position-scoped, bidirectional
         /// literal conversions (`'Q42'` ↔ `42`) bound to a property. Bindings

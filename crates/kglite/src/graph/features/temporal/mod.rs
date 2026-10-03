@@ -9,6 +9,7 @@
 pub(crate) mod declarations;
 #[cfg(test)]
 mod declarations_tests;
+mod default_instant;
 pub(crate) mod duplicate_ids;
 pub(crate) mod endpoint_index;
 pub(crate) mod eval;
@@ -37,6 +38,7 @@ pub use declarations::{
     declare, declare_loaded, edge_configs, list, node_config, undeclare, DeclarationInfo,
     DeclareReport, TemporalTarget, DISK_NODE_ABUTMENT_CAP,
 };
+pub use default_instant::ValidTimeDefault;
 pub use eval::IntervalConvention;
 pub(crate) use loader::{adopt_declarations, settle_adopted, withdraw_adopted};
 pub use loader::{declare_defaulted, declare_from_column_types, LoadDeclaration};

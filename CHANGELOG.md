@@ -11,6 +11,26 @@ before upgrading.
 
 ### Added
 
+- `valid_at='all'` opts one call out of the valid-time default: it is the entry
+  point spelling of `FOR VALID_TIME ALL` on `cypher()`, `Session`,
+  `Transaction`, `FrozenGraph`, the MCP `cypher_query` / `run_recipe_query` /
+  named recipe tools (`"valid_at": "all"`) and Java (`ValidAt.all()`). `None`
+  still means "the default"; the C ABI, CLI and Bolt send the prefix as text.
+  Rust API: `prepend_valid_time` takes a `ValidAt` (`At(&Value)` or `All`;
+  `ValidAt::from_value` reads the string `'all'`).
+- The valid-time default is configurable at runtime. `KnowledgeGraph.
+  set_valid_time_default('today' | 'all' | date)` and `get_valid_time_default()`
+  set the instant an unprefixed statement reads on a graph with validity
+  declarations; the fluent API's default follows (`date()` resets a cursor to
+  it), so `'all'` shows history in both and a date pins both. The MCP server
+  takes `--valid-time-default {today|all|YYYY-MM-DD}` or the manifest key
+  `extensions.valid_time.default` (the flag wins; schema in
+  `docs/schemas/extensions/valid_time.json`), `kglite-bolt-server` takes the
+  same flag, and `kglite query` / `write` / `session` take it too. The echo's
+  `source` stays `default` and its `instant` shows the configured instant. The
+  setting is runtime state: it is never written into a `.kgl` file, and a
+  loaded graph starts at `today`. Rust API: `DirGraph.valid_time_default`
+  (`kglite::api::temporal::ValidTimeDefault`).
 - The valid-time echo (`diagnostics["temporal"]`, the MCP `temporal:` line,
   Bolt's `kglite.temporal` key, the C / Java diagnostics JSON) now says how
   much the context removed. `hidden` maps each target to the rows it governs

@@ -47,7 +47,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the query. Without\nit a graph with validity declarations answers as of the server's\ndefault (today unless `--valid-time-default` says otherwise); a date\nneeds a validity declaration (`db.temporal.declarations()`), `\"all\"`\ndoes not.",
             "type": [
               "string",
               "null"
@@ -632,7 +632,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the query. Without\nit a graph with validity declarations answers as of the server's\ndefault (today unless `--valid-time-default` says otherwise); a date\nneeds a validity declaration (`db.temporal.declarations()`), `\"all\"`\ndoes not.",
             "type": [
               "string",
               "null"
@@ -1477,7 +1477,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the query. Without\nit a graph with validity declarations answers as of the server's\ndefault (today unless `--valid-time-default` says otherwise); a date\nneeds a validity declaration (`db.temporal.declarations()`), `\"all\"`\ndoes not.",
             "type": [
               "string",
               "null"
@@ -2250,7 +2250,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the query. Without\nit a graph with validity declarations answers as of the server's\ndefault (today unless `--valid-time-default` says otherwise); a date\nneeds a validity declaration (`db.temporal.declarations()`), `\"all\"`\ndoes not.",
             "type": [
               "string",
               "null"
@@ -2935,7 +2935,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the query. Without\nit a graph with validity declarations answers as of the server's\ndefault (today unless `--valid-time-default` says otherwise); a date\nneeds a validity declaration (`db.temporal.declarations()`), `\"all\"`\ndoes not.",
             "type": [
               "string",
               "null"
@@ -3480,7 +3480,7 @@
             ]
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the query; the graph\nneeds a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the query. Without\nit a graph with validity declarations answers as of the server's\ndefault (today unless `--valid-time-default` says otherwise); a date\nneeds a validity declaration (`db.temporal.declarations()`), `\"all\"`\ndoes not.",
             "type": [
               "string",
               "null"
@@ -3844,7 +3844,7 @@
             "type": "string"
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (\"2020-06-30\") or datetime (\"2020-06-30T12:00:00\"). Same as writing the prefix FOR VALID_TIME AS OF date('2020-06-30') before the stored query; the graph needs a validity declaration (db.temporal.declarations()).",
+            "description": "Run the query as of this date \u2014 an ISO date (\"2020-06-30\") or datetime (\"2020-06-30T12:00:00\") \u2014 or pass \"all\" to read every version. Same as writing the prefix FOR VALID_TIME AS OF date('2020-06-30') or FOR VALID_TIME ALL before the stored query. Without it a graph with validity declarations answers as of the server's default (today unless --valid-time-default says otherwise); a date needs a validity declaration (db.temporal.declarations()), \"all\" does not.",
             "type": "string"
           }
         },
@@ -4064,7 +4064,7 @@
             "type": "string"
           },
           "valid_at": {
-            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`). Same as writing the prefix\n`FOR VALID_TIME AS OF date('2020-06-30')` before the stored query; the\ngraph needs a validity declaration (`db.temporal.declarations()`).",
+            "description": "Run the query as of this date \u2014 an ISO date (`\"2020-06-30\"`) or\ndatetime (`\"2020-06-30T12:00:00\"`) \u2014 or pass `\"all\"` to read every\nversion. Same as writing the prefix `FOR VALID_TIME AS OF\ndate('2020-06-30')` or `FOR VALID_TIME ALL` before the stored query.\nWithout it a graph with validity declarations answers as of the\nserver's default (today unless `--valid-time-default` says otherwise);\na date needs a validity declaration (`db.temporal.declarations()`),\n`\"all\"` does not.",
             "type": [
               "string",
               "null"

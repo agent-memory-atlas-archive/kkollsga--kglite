@@ -472,14 +472,19 @@ pub(crate) fn params_from_json(
 }
 
 /// The query text a `cypher_query` call runs: its `query` under
-/// `valid_at`'s `FOR VALID_TIME AS OF` context when one is given — the same
-/// text rewrite the Python `valid_at=` makes, through the one core helper.
+/// `valid_at`'s `FOR VALID_TIME AS OF` context when one is given (`"all"`
+/// means `FOR VALID_TIME ALL`) — the same text rewrite the Python
+/// `valid_at=` makes, through the one core helper.
 pub(crate) fn query_with_valid_at(query: &str, valid_at: Option<&str>) -> Result<String, String> {
     match valid_at {
         None => Ok(query.to_string()),
         Some(instant) => {
-            kglite::api::cypher::prepend_valid_time(query, &Value::String(instant.to_string()))
-                .map_err(|err| err.to_string())
+            let instant = Value::String(instant.to_string());
+            kglite::api::cypher::prepend_valid_time(
+                query,
+                kglite::api::cypher::ValidAt::from_value(&instant),
+            )
+            .map_err(|err| err.to_string())
         }
     }
 }

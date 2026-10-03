@@ -35,7 +35,7 @@ use crate::graph::core::graph_filter::{
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
 use crate::graph::features::temporal::declarations::TemporalTarget;
-use crate::graph::features::temporal::{self, eval};
+use crate::graph::features::temporal::{self, eval, ValidTimeDefault};
 use crate::graph::schema::DirGraph;
 
 /// The one axis that lowers.
@@ -57,10 +57,12 @@ const SKIP_PROCEDURE: &str = "procedure";
 const SKIP_VALID_AT: &str = "valid_at";
 
 /// Give a statement that spells no context the one the graph's declarations
-/// imply: as of today (UTC), resolved per execution so a cached plan never
-/// freezes the date. A graph with no declaration is left alone (one field
-/// test). Statements the default must not govern get an `ALL` context whose
-/// origin records why, so the echo can say so:
+/// imply: the graph's [`ValidTimeDefault`] — as of today (UTC) unless a
+/// runtime or manifest setting says `all` or a fixed day — resolved per
+/// execution so a cached plan never freezes the date. A graph with no
+/// declaration is left alone (one field test). Under `today` or a fixed day,
+/// statements the default must not govern get an `ALL` context whose origin
+/// records why, so the echo can say so:
 /// - statements that write (their reads see every version),
 /// - procedures that are neither metadata nor routed (`refresh_stats`,
 ///   `duplicate_id`, the `*_violation` audits, ...), which an explicit prefix
@@ -68,22 +70,24 @@ const SKIP_VALID_AT: &str = "valid_at";
 /// - statements calling `valid_at()` / `valid_during()`, which set their own
 ///   instants.
 ///
+/// Under `all` nothing is skipped: every statement already reads every
+/// version.
+///
 /// Top level only: UNION arms and `CALL { }` bodies are lowered under the
 /// statement's context.
 pub(crate) fn apply_default(query: &mut CypherQuery, graph: &DirGraph) {
     if query.context.is_some() || query.suppress_default || graph.temporal.is_empty() {
         return;
     }
-    let (instant, origin) = match default_skip_reason(query) {
-        Some(reason) => (ContextInstant::All, ContextOrigin::Skipped(reason)),
-        None => (
-            ContextInstant::AsOf(Expression::FunctionCall {
-                name: "date".to_string(),
-                args: Vec::new(),
-                distinct: false,
-            }),
-            ContextOrigin::Default,
-        ),
+    let (instant, origin) = match graph.valid_time_default {
+        ValidTimeDefault::All => (ContextInstant::All, ContextOrigin::Default),
+        configured => match default_skip_reason(query) {
+            Some(reason) => (ContextInstant::All, ContextOrigin::Skipped(reason)),
+            None => (
+                ContextInstant::AsOf(default_instant_expression(configured)),
+                ContextOrigin::Default,
+            ),
+        },
     };
     query.context = Some(StatementContext {
         axis: VALID_TIME.to_string(),
@@ -92,6 +96,21 @@ pub(crate) fn apply_default(query: &mut CypherQuery, graph: &DirGraph) {
         refusal: None,
         body_start: 0,
     });
+}
+
+/// `date()` for `today`, `date('YYYY-MM-DD')` for a fixed day.
+fn default_instant_expression(default: ValidTimeDefault) -> Expression {
+    let args = match default {
+        ValidTimeDefault::Date(day) => vec![Expression::Literal(Value::String(
+            day.format("%Y-%m-%d").to_string(),
+        ))],
+        _ => Vec::new(),
+    };
+    Expression::FunctionCall {
+        name: "date".to_string(),
+        args,
+        distinct: false,
+    }
 }
 
 #[cold]
@@ -694,12 +713,18 @@ impl std::fmt::Display for PrependError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PrependError::BadInstant(message) => f.write_str(message),
-            PrependError::DoubledContext { literal } => write!(
-                f,
-                "the query already has a FOR … AS OF context and valid_at= adds another \
-                 (FOR {VALID_TIME} AS OF {literal}); a statement takes one context, so drop \
-                 one of them"
-            ),
+            PrependError::DoubledContext { literal } => {
+                let added = if literal == ALL_LITERAL {
+                    format!("FOR {VALID_TIME} ALL")
+                } else {
+                    format!("FOR {VALID_TIME} AS OF {literal}")
+                };
+                write!(
+                    f,
+                    "the query already has a FOR … context and valid_at= adds another \
+                     ({added}); a statement takes one context, so drop one of them"
+                )
+            }
             PrependError::ViewAlreadyAsOf { literal } => write!(
                 f,
                 "this view is already as of {literal}, and the query asks for another \
@@ -740,21 +765,54 @@ pub(crate) fn instant_literal(instant: &Value) -> Result<String, PrependError> {
     }
 }
 
-/// `query` under a `FOR VALID_TIME AS OF` context at `instant` — what a
-/// binding's `valid_at=` sends. The instant is written as a literal
-/// (`date('…')` for a date, `datetime('…')` for a datetime or an ISO string
-/// with a time) so the statement text, not a parameter, carries it. A query
-/// that already has a context is refused naming both
-/// ([`PrependError::DoubledContext`]), since a statement takes one;
-/// `EXPLAIN` / `PROFILE` may follow the prefix, so they need no special
+/// What a binding's `valid_at=` asks for: one instant, or every version.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ValidAt<'a> {
+    /// `FOR VALID_TIME AS OF <instant>`.
+    At(&'a Value),
+    /// `FOR VALID_TIME ALL`: no valid-time filtering, whatever the graph's
+    /// default says.
+    All,
+}
+
+impl<'a> ValidAt<'a> {
+    /// A `valid_at=` argument as decoded from the binding: the string `all`
+    /// (any case) asks for every version — no instant spells that way — and
+    /// anything else is an instant.
+    pub fn from_value(value: &'a Value) -> Self {
+        match value {
+            Value::String(text) if text.trim().eq_ignore_ascii_case("all") => ValidAt::All,
+            other => ValidAt::At(other),
+        }
+    }
+}
+
+/// `query` under a `FOR VALID_TIME AS OF` context at `valid_at`'s instant,
+/// or under `FOR VALID_TIME ALL` — what a binding's `valid_at=` sends. The
+/// instant is written as a literal (`date('…')` for a date, `datetime('…')`
+/// for a datetime or an ISO string with a time) so the statement text, not a
+/// parameter, carries it. A query that already has a context is refused
+/// naming both ([`PrependError::DoubledContext`]), since a statement takes
+/// one; `EXPLAIN` / `PROFILE` may follow the prefix, so they need no special
 /// handling.
-pub fn prepend_valid_time(query: &str, instant: &Value) -> Result<String, PrependError> {
+pub fn prepend_valid_time(query: &str, valid_at: ValidAt<'_>) -> Result<String, PrependError> {
+    let ValidAt::At(instant) = valid_at else {
+        if carries_valid_time_context(query) {
+            return Err(PrependError::DoubledContext {
+                literal: ALL_LITERAL.to_string(),
+            });
+        }
+        return Ok(format!("FOR {VALID_TIME} ALL {query}"));
+    };
     let literal = instant_literal(instant)?;
     if carries_valid_time_context(query) {
         return Err(PrependError::DoubledContext { literal });
     }
     Ok(prefixed(&literal, query))
 }
+
+/// What a doubled `ALL` prefix names in [`PrependError::DoubledContext`].
+const ALL_LITERAL: &str = "ALL";
 
 /// `query` behind the prefix for an already-rendered `literal`.
 pub(crate) fn prefixed(literal: &str, query: &str) -> String {

@@ -826,6 +826,12 @@ fn valid_at_prepends_the_context_prefix() {
         query_with_valid_at("RETURN 1", Some("2020-06-30")).unwrap(),
         "FOR VALID_TIME AS OF date('2020-06-30') RETURN 1"
     );
+    assert_eq!(
+        query_with_valid_at("RETURN 1", Some("all")).unwrap(),
+        "FOR VALID_TIME ALL RETURN 1",
+        "'all' opts out of the server's default instant"
+    );
+    assert!(query_with_valid_at("FOR VALID_TIME ALL RETURN 1", Some("all")).is_err());
     let doubled =
         query_with_valid_at("FOR VALID_TIME AS OF $t RETURN 1", Some("2020-06-30")).unwrap_err();
     assert!(
