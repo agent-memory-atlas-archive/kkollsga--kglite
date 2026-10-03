@@ -495,7 +495,7 @@ fn the_streaming_pipeline_answers_as_the_materialized_path_under_a_context() {
         "MATCH (:Stop {id: 1})-[:LINK*1..3]->(t) RETURN count(DISTINCT t)",
         "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id, count(t), max(t.id)",
         "MATCH (s:Stop)-[r:LINK]->(t) RETURN count(DISTINCT t.id), count(*), count(r)",
-        "MATCH (s:Stop)-[:LINK]->(t) WITH s, count(t) AS c WHERE c > 0 RETURN s.id, c",
+        "MATCH (s:Stop)-[:LINK]->(t) WITH s, count(t) AS c, max(t.id) AS m WHERE c > 0 RETURN s.id, c, m",
         "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id AS s, count(*) AS c, max(t.id) AS m ORDER BY s DESC LIMIT 2",
         "MATCH (s:Stop)-[:LINK]->(t) RETURN min(t.id), max(t.id), sum(t.id), avg(t.id)",
         "MATCH (s:Stop)-[:LINK]->(t) RETURN s.id, sum(COUNT { (t)-[:LINK]->() }) AS n",

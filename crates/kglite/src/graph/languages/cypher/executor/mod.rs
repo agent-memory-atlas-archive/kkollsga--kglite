@@ -1151,8 +1151,9 @@ impl CypherExecutor<'_> {
 /// The fused operators that run under a graph filter: the node scans and
 /// the top-k heaps read their candidates through the guarded matcher (the
 /// retrieval top-k also through its masked entry, `retrieval_mask.rs`), the
-/// counts take `execute_fused_count_guarded`, and the fused MATCH/RETURN
-/// aggregate scans masked group nodes with the guarded per-node counters.
+/// counts take `execute_fused_count_guarded`, and the fused MATCH/RETURN and
+/// MATCH/WITH aggregates scan masked group nodes with the guarded per-node
+/// counters.
 fn runs_under_graph_filter(clause: &Clause) -> bool {
     matches!(
         clause,
@@ -1162,6 +1163,7 @@ fn runs_under_graph_filter(clause: &Clause) -> bool {
             | Clause::FusedNodeScanAggregate { .. }
             | Clause::FusedNodeScanTopK { .. }
             | Clause::FusedMatchReturnAggregate { .. }
+            | Clause::FusedMatchWithAggregate { .. }
             | Clause::FusedCountAll { .. }
             | Clause::FusedCountAllEdges { .. }
             | Clause::FusedCountByType { .. }

@@ -105,6 +105,16 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
          all test the filter (guarded_ops.rs, fused_match.rs); the two-hop shape stays unfused",
     ),
     (
+        "fuse_match_with_aggregate",
+        "3-element patterns only: the group scan is the matcher's, the counts are the \
+         guarded per-node counters, and the peer histograms decline under a filter \
+         (fused_match.rs, guarded_ops.rs)",
+    ),
+    (
+        "fuse_match_with_aggregate_top_k",
+        "a bounded trim of counts the guarded operator already produced",
+    ),
+    (
         "fuse_vector_score_order_limit",
         "its entry ranks only the nodes the filter admits and its per-clause route \
          ranks rows the matcher admitted (retrieval_mask.rs)",
@@ -138,11 +148,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
     (
         "fuse_optional_match_aggregate",
         "a fused per-row count outside the matcher",
-    ),
-    ("fuse_match_with_aggregate", "a fused aggregate operator"),
-    (
-        "fuse_match_with_aggregate_top_k",
-        "a fused aggregate operator",
     ),
     (
         "mark_skip_target_type_check",

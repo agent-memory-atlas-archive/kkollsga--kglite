@@ -1164,6 +1164,19 @@ impl<'a> CypherExecutor<'a> {
         Ok(())
     }
 
+    /// The MATCH/WITH form's backstop: both its patterns are 3-element by
+    /// construction, and a guarded scope refuses any other shape.
+    fn reject_unguarded_with_shapes(
+        &self,
+        primary: &MatchClause,
+        secondary: Option<&MatchClause>,
+    ) -> Result<(), String> {
+        for clause in std::iter::once(primary).chain(secondary) {
+            self.reject_unguarded_fused_shape(&clause.patterns[0])?;
+        }
+        Ok(())
+    }
+
     /// `nodes` as a list, only those the statement's valid-time filter admits.
     fn filtered_nodes(&self, nodes: impl Iterator<Item = NodeIndex>) -> Vec<NodeIndex> {
         match self.graph_filter() {
@@ -1564,6 +1577,7 @@ impl<'a> CypherExecutor<'a> {
         distinct_count: bool,
         _existing: ResultSet,
     ) -> Result<ResultSet, String> {
+        self.reject_unguarded_with_shapes(match_clause, secondary_match)?;
         let pattern = &match_clause.patterns[0];
 
         let first_var = match &pattern.elements[0] {
@@ -1575,29 +1589,7 @@ impl<'a> CypherExecutor<'a> {
             _ => return Err("FusedMatchWithAggregate: expected node pattern".into()),
         };
 
-        // Determine which variable is the group key. The non-aggregate
-        // items in the WITH project either the group variable directly
-        // (`w`) or one of its properties (`w.name`); both shapes resolve
-        // to the same group key for our purposes.
-        let group_var: &str = {
-            let mut gv = None;
-            for item in &with_clause.items {
-                if !is_aggregate_expression(&item.expression) {
-                    match &item.expression {
-                        Expression::Variable(v) => {
-                            gv = Some(v.as_str());
-                            break;
-                        }
-                        Expression::PropertyAccess { variable, .. } => {
-                            gv = Some(variable.as_str());
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            gv.ok_or("FusedMatchWithAggregate: no group-by variable found")?
-        };
+        let group_var = fused_with_group_var(with_clause)?;
 
         let group_elem_idx = if first_var.is_some_and(|v| v == group_var) {
             0
@@ -2395,6 +2387,22 @@ fn fused_aggregate_shape<'q>(
         group_key_indices,
         count_indices,
     })
+}
+
+/// The WITH's group-by variable: the first non-aggregate item that projects
+/// a variable directly (`w`) or one of its properties (`w.name`); both shapes
+/// resolve to the same group key.
+fn fused_with_group_var(with_clause: &WithClause) -> Result<&str, String> {
+    with_clause
+        .items
+        .iter()
+        .filter(|item| !is_aggregate_expression(&item.expression))
+        .find_map(|item| match &item.expression {
+            Expression::Variable(v) => Some(v.as_str()),
+            Expression::PropertyAccess { variable, .. } => Some(variable.as_str()),
+            _ => None,
+        })
+        .ok_or_else(|| "FusedMatchWithAggregate: no group-by variable found".to_string())
 }
 
 /// Trim a fused aggregate's per-group counts to the planner's absorbed

@@ -196,3 +196,111 @@ def test_the_global_count_is_masked(org):
     total = "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) RETURN count(*) AS n"
     assert org.cypher(at("2006-01-01", total)).to_list() == [{"n": 5}]
     assert org.cypher(at("2010-01-01", total)).to_list() == [{"n": 1}]
+
+
+# ---------------------------------------------------------------------------
+# The WITH forms: fuse_match_with_aggregate and its top-k absorption.
+# ---------------------------------------------------------------------------
+
+WITH_PASS = "fuse_match_with_aggregate"
+WITH_TOP_K_PASS = "fuse_match_with_aggregate_top_k"
+
+WITH_SHAPES = [
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.title AS t, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n WHERE n > 1 RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(*) AS n RETURN d.id AS d, n",
+    "MATCH (d:Dept)<-[:IN_DEPT]-(e:Emp) WITH d, count(DISTINCT e) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH e, count(DISTINCT d) AS n RETURN e.id AS e, n",
+    "MATCH (e:Emp)-[r:IN_DEPT]->(d:Dept) WITH e, count(r) AS n RETURN e.id AS e, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d) WITH e, count(d) AS n RETURN e.id AS e, n",
+    "MATCH (x)-[:IN_DEPT]->(d:Dept) WITH d, count(x) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:IN_DEPT]-(d:Dept) WITH e, count(d) AS n RETURN e.id AS e, n",
+    "MATCH (e:Emp {team: 'a'})-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept {title: 'Ops'}) WITH e, count(d) AS n RETURN e.id AS e, n",
+    "MATCH (d:Dept)-[:LINKED]->(e:Emp) WITH d, count(e) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:LINKED]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:LINKED]->(d:Dept) WITH e, count(d) AS n RETURN e.id AS e, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) MATCH (d)-[r:LINKED]->(x:Emp) WITH d, count(r) AS n RETURN d.id AS d, n",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) MATCH (e)-[r:LINKED]->(x) WITH e, count(r) AS n RETURN e.id AS e, n",
+]
+
+# The absorption takes one ORDER BY key, the count alias. Ties at the limit
+# may break either way, so the cut shapes are compared on their counts; the
+# uncut twin (LIMIT 100) is compared on full rows.
+WITH_TOP_K_SHAPES = [
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n ORDER BY n DESC LIMIT 3",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n ORDER BY n LIMIT 2",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH e, count(DISTINCT d) AS n RETURN e.id AS e, n ORDER BY n DESC LIMIT 2",
+    "MATCH (e:Emp)-[:LINKED]->(d:Dept) WITH e, count(d) AS n RETURN e.id AS e, n ORDER BY n DESC LIMIT 2",
+    "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n ORDER BY n DESC LIMIT 100",
+]
+
+# A property group key is outside the pass; the matcher answers it, and the
+# differential still holds it to that answer.
+WITH_UNFUSED = "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d.title AS t, count(e) AS n RETURN t, n"
+
+WITH_ALL = WITH_SHAPES + WITH_TOP_K_SHAPES
+
+
+@pytest.mark.parametrize("shape", [*WITH_SHAPES, WITH_UNFUSED, WITH_TOP_K_SHAPES[-1]])
+def test_with_form_answers_as_the_guarded_matcher(org, shape):
+    for date in INSTANTS:
+        query = at(date, shape)
+        fused = org.cypher(query).to_list()
+        plain = org.cypher(query, disabled_passes=[WITH_PASS, WITH_TOP_K_PASS]).to_list()
+        assert _norm(fused) == _norm(plain), (date, shape)
+
+
+@pytest.mark.parametrize("shape", WITH_TOP_K_SHAPES)
+def test_with_top_k_keeps_the_matcher_counts(org, shape):
+    for date in INSTANTS:
+        query = at(date, shape)
+        fused = [row["n"] for row in org.cypher(query).to_list()]
+        plain = [row["n"] for row in org.cypher(query, disabled_passes=[WITH_PASS, WITH_TOP_K_PASS]).to_list()]
+        assert fused == plain, (date, shape)
+
+
+@pytest.mark.parametrize("shape", WITH_ALL)
+def test_with_form_fuses_under_a_context(org, shape):
+    ops = _tags(org, at("2006-01-01", shape))
+    assert f"OptimizerPass {WITH_PASS}" in ops, (shape, ops)
+    # The fused clause is what ran: nothing falls back to the plain matcher.
+    assert any(op.startswith("FusedMatchWithAggregate") for op in ops), (shape, ops)
+
+
+@pytest.mark.parametrize("shape", WITH_TOP_K_SHAPES)
+def test_with_top_k_is_absorbed_under_a_context(org, shape):
+    assert f"OptimizerPass {WITH_TOP_K_PASS}" in _tags(org, at("2006-01-01", shape)), shape
+
+
+def test_with_form_goldens_per_department(org):
+    shape = "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n"
+    # The hand counts of test_goldens_per_department, through the WITH form.
+    assert counts(org, "2006-01-01", shape, "d") == {10: 3, 11: 2}
+    assert counts(org, "2005-01-01", shape, "d") == {10: 3, 11: 3}
+    assert counts(org, "2004-12-31", shape, "d") == {10: 3, 11: 3, 13: 1}
+    assert counts(org, "2010-01-01", shape, "d") == {11: 1}
+    assert counts(org, "2015-06-15", shape, "d") == {11: 1, 12: 1}
+
+
+def test_with_form_goldens_top_k_and_two_match(org):
+    top = "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH d, count(e) AS n RETURN d.id AS d, n ORDER BY n DESC LIMIT 1"
+    # 2004-12-31: d1 and d2 tie on 3; 2010-01-01 leaves one department.
+    assert [r["n"] for r in org.cypher(at("2004-12-31", top)).to_list()] == [3]
+    assert org.cypher(at("2010-01-01", top)).to_list() == [{"d": 11, "n": 1}]
+    # Two-MATCH shape: each M1 row times the valid Dept->Emp LINKED edges of
+    # the department. 2006-01-01: d1's link ended, d2 has 2 rows x 1 link.
+    two = "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) MATCH (d)-[r:LINKED]->(x:Emp) WITH d, count(r) AS n RETURN d.id AS d, n"
+    assert counts(org, "2006-01-01", two, "d") == {11: 2 * 1}
+    assert counts(org, "2005-01-01", two, "d") == {10: 3, 11: 3}
+    # 2010-01-01: d1 has ended; d2 keeps e7 (one M1 row) and its link to e5.
+    assert counts(org, "2010-01-01", two, "d") == {11: 1}
+    # 2000-06-01: d1's link to e1 has not begun; d2 has 3 rows x 1 link.
+    assert counts(org, "2000-06-01", two, "d") == {11: 3}
+
+
+def test_with_form_secondary_label_goldens(org):
+    lead = "MATCH (l:Lead)-[:IN_DEPT]->(d:Dept) WITH d, count(l) AS n RETURN d.title AS t, n"
+    assert counts(org, "2006-01-01", lead) == {}
+    assert counts(org, "2015-06-15", lead) == {"Ops": 1}

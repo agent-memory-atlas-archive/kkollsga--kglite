@@ -649,10 +649,11 @@ def test_as_of_today_on_a_current_state_graph_runs_the_plain_plan(current_only):
         rows, plan = profile(current_only, prefix + body, params={"t": dt.date.today()})
         assert rows == plain_rows == [{"f": 10, "c": 2}]
         assert plan == plain_plan, prefix
-    # Before either well started the filter removes rows, so the guard runs.
+    # Before the second well started the filter removes a row, so the guard
+    # runs; the fused operator answers under it with the masked counts.
     rows, plan = profile(current_only, at("2003-01-01", body))
-    assert rows == [{"f": 10, "c": 1}] and "FusedMatchWithAggregate" not in plan
+    assert rows == [{"f": 10, "c": 1}] and "FusedMatchWithAggregate" in plan
     # EXPLAIN keeps the guarded plan: the instant is not in the plan.
     explained = [r["operation"] for r in current_only.cypher(f"EXPLAIN FOR VALID_TIME AS OF date() {body}")]
     assert explained[0].startswith("ValidTimeContext")
-    assert not any(op.startswith("FusedMatchWithAggregate") for op in explained)
+    assert any(op.startswith("FusedMatchWithAggregate") for op in explained)

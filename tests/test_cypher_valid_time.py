@@ -253,6 +253,8 @@ GUARD_SAFE_PASSES = {
     "fuse_node_scan_aggregate",
     "fuse_node_scan_top_k",
     "fuse_match_return_aggregate",
+    "fuse_match_with_aggregate",
+    "fuse_match_with_aggregate_top_k",
     "fuse_order_by_top_k",
     "fuse_vector_score_order_limit",
     "fuse_text_bm25_order_limit",
