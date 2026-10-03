@@ -157,6 +157,12 @@ before upgrading.
   with other aggregates already did. An aggregate whose far endpoint is an
   untyped `{id: ...}` anchor is answered from the id lookup as well, where it
   scanned every node and counted every same-id node of a type.
+- Performance: the anchored relationship count stays a fused count under a
+  valid-time context, including the as-of-today default, where it had fallen
+  back to the general route (61-79 ms on a Sodir-scale graph, now about 0.03 ms
+  for the same statements). An aggregate with an untyped `{id: ...}` anchor off
+  its grouping key takes the matcher's id lookup instead of a scan (65-80 ms
+  down to about 0.3 ms; a typed far end 12.5 ms down to 0.06 ms).
 - `ts_sum` over a window that holds no finite value (an all-missing channel, or
   a range outside the series) returns `0.0` instead of `-0.0`. The empty sum is
   `0.0`, matching `ts_count`; `ts_avg`, `ts_min` and `ts_max` stay `null`.

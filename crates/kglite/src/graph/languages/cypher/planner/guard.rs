@@ -125,6 +125,12 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
          admitted corpus's statistics (retrieval_mask.rs)",
     ),
     (
+        "fuse_anchored_edge_count",
+        "the plan holds the id literal, not a node or an instant; the executor resolves \
+         the anchors visible at the statement's instant and counts only relationships \
+         the filter admits with their far endpoint (guarded_ops.rs)",
+    ),
+    (
         "mark_fast_var_length_paths",
         "the distance frontier has a guarded form that tests every relationship and \
          node it crosses before marking it (matcher_var_length_guarded.rs)",
@@ -144,7 +150,6 @@ const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
         "push_limit_into_match",
         "an early stop that may count rows before the guard rejects them",
     ),
-    ("fuse_anchored_edge_count", "counts adjacency offsets"),
     (
         "fuse_optional_match_aggregate",
         "a fused per-row count outside the matcher",

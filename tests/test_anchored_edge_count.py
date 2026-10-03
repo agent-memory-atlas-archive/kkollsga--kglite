@@ -182,6 +182,12 @@ def test_an_id_anchor_off_the_group_is_left_to_the_matcher(shared, shape):
     )
 
 
+@pytest.mark.parametrize("shape", SHAPES)
+def test_the_count_fuses_under_a_context(shared, shape):
+    plan = _plan(shared, at("2006-01-01", shape))
+    assert f"OptimizerPass {PASS}" in plan, (shape, plan)
+
+
 def test_the_expected_counts_at_a_few_instants(shared):
     """Hand-derived goldens: the answer follows the instant, one cached plan."""
     query = "MATCH ({id: 7})-[:WORKS]->(c) RETURN count(c) AS n"
