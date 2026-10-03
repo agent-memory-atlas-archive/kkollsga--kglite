@@ -143,6 +143,14 @@ enum Command {
         /// engine's runtime size gate, still run sequentially.
         #[arg(long)]
         parallel: bool,
+        /// The valid-time instant a statement reads when it names none, on a
+        /// graph with validity declarations: `today` (the built-in default,
+        /// UTC), `all` (every version) or a fixed `YYYY-MM-DD` day. A
+        /// `FOR VALID_TIME` prefix on the statement wins. Runtime only: never
+        /// written into the `.kgl` file.
+        #[arg(long, value_name = "today|all|YYYY-MM-DD",
+              value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
+        valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
         /// Deadline for this statement, in milliseconds. Omitted means no
         /// deadline, which is this CLI's declared default: Ctrl-C is the
         /// interactive cancel, and a batch query over a very large graph may
@@ -179,6 +187,14 @@ enum Command {
         /// Actor id to stamp on auto_timestamp types.
         #[arg(long)]
         modified_by: Option<String>,
+        /// The valid-time instant a statement reads when it names none, on a
+        /// graph with validity declarations: `today` (the built-in default,
+        /// UTC), `all` (every version) or a fixed `YYYY-MM-DD` day. A
+        /// `FOR VALID_TIME` prefix on the statement wins. Runtime only: never
+        /// written into the `.kgl` file.
+        #[arg(long, value_name = "today|all|YYYY-MM-DD",
+              value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
+        valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
         /// Deadline for this statement, in milliseconds. Omitted means no
         /// deadline, which is this CLI's declared default: Ctrl-C is the
         /// interactive cancel, and a batch query over a very large graph may
@@ -280,6 +296,14 @@ enum Command {
         /// Actor id to stamp on auto_timestamp types for write requests.
         #[arg(long)]
         modified_by: Option<String>,
+        /// The valid-time instant a statement reads when it names none, on a
+        /// graph with validity declarations: `today` (the built-in default,
+        /// UTC), `all` (every version) or a fixed `YYYY-MM-DD` day. A
+        /// `FOR VALID_TIME` prefix on the statement wins. Runtime only: never
+        /// written into the `.kgl` file.
+        #[arg(long, value_name = "today|all|YYYY-MM-DD",
+              value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
+        valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
     },
     /// Print a deterministic, human-readable text projection of a `.kgl` to
     /// stdout — the canonical form for a git `textconv` diff filter. Set up:
@@ -488,6 +512,7 @@ fn dispatch(command: &Command) -> Result<()> {
             query,
             format,
             parallel,
+            valid_time_default,
             timeout_ms,
             response_max_bytes,
             response_full,
@@ -495,7 +520,12 @@ fn dispatch(command: &Command) -> Result<()> {
             graph,
             query,
             *format,
-            (*parallel, *timeout_ms),
+            QueryOptions {
+                parallel: *parallel,
+                timeout_ms: *timeout_ms,
+                valid_time_default: *valid_time_default,
+                ..QueryOptions::default()
+            },
             agent_response::AgentOptions {
                 max_bytes: *response_max_bytes,
                 full: *response_full,
@@ -509,6 +539,7 @@ fn dispatch(command: &Command) -> Result<()> {
             write_scope,
             git_sha,
             modified_by,
+            valid_time_default,
             timeout_ms,
             response_max_bytes,
             response_full,
@@ -522,6 +553,7 @@ fn dispatch(command: &Command) -> Result<()> {
                 git_sha: git_sha.clone(),
                 modified_by: modified_by.clone(),
                 timeout_ms: *timeout_ms,
+                valid_time_default: *valid_time_default,
                 ..exec::QueryOptions::default()
             },
             agent_response::AgentOptions {
@@ -578,6 +610,7 @@ fn dispatch(command: &Command) -> Result<()> {
             write_scope,
             git_sha,
             modified_by,
+            valid_time_default,
         } => run_session(
             graph,
             *format,
@@ -585,6 +618,7 @@ fn dispatch(command: &Command) -> Result<()> {
             write_scope.as_deref(),
             git_sha.clone(),
             modified_by.clone(),
+            *valid_time_default,
         ),
         Command::ExportText { file } => {
             print!("{}", open_text(file)?);
@@ -619,14 +653,13 @@ fn run_query_command(
     graph: &Path,
     query: &str,
     format: OutputFormat,
-    execution: (bool, Option<u64>),
+    options: QueryOptions,
     response: agent_response::AgentOptions,
 ) -> Result<()> {
-    let (parallel, timeout_ms) = execution;
     if format == OutputFormat::Agent {
-        run_agent_query(graph, query, parallel, timeout_ms, response)
+        run_agent_query(graph, query, options, response)
     } else {
-        run_query(graph, query, format.into(), parallel, timeout_ms)
+        run_query(graph, query, format.into(), options)
     }
 }
 
@@ -723,25 +756,14 @@ fn run_export_sqlite(graph_path: &Path, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn run_query(
-    path: &Path,
-    query: &str,
-    mode: Mode,
-    parallel: bool,
-    timeout_ms: Option<u64>,
-) -> Result<()> {
-    let graph = load_graph(path)?;
+fn run_query(path: &Path, query: &str, mode: Mode, options: QueryOptions) -> Result<()> {
+    let graph = exec::with_valid_time_default(load_graph(path)?, options.valid_time_default);
     let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
         .map_err(|e| anyhow::anyhow!("Cypher parse error: {e}"))?;
     if is_mutation {
         anyhow::bail!("query is read-only; use `kglite write` for mutations");
     }
     let params: HashMap<String, Value> = HashMap::new();
-    let options = QueryOptions {
-        parallel,
-        timeout_ms,
-        ..QueryOptions::default()
-    };
     let outcome = exec::execute_readonly(&graph, query, &params, &options)
         .with_context(|| "Cypher execution failed")?;
     exec::write_stdout(&exec::render_outcome(
@@ -755,31 +777,22 @@ fn run_query(
 fn run_agent_query(
     path: &Path,
     query: &str,
-    parallel: bool,
-    timeout_ms: Option<u64>,
+    options: QueryOptions,
     response: agent_response::AgentOptions,
 ) -> Result<()> {
     let operation = kglite::api::cypher::with_query_warning_sink(
         kglite::api::cypher::QueryWarningSink::Silent,
         || {
-            let graph = load_graph(path)?;
+            let graph =
+                exec::with_valid_time_default(load_graph(path)?, options.valid_time_default);
             let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
                 .map_err(|error| anyhow::anyhow!("Cypher parse error: {error}"))?;
             if is_mutation {
                 anyhow::bail!("query is read-only; use `kglite write` for mutations");
             }
             let params = HashMap::new();
-            exec::execute_readonly(
-                &graph,
-                query,
-                &params,
-                &QueryOptions {
-                    parallel,
-                    timeout_ms,
-                    ..QueryOptions::default()
-                },
-            )
-            .context("Cypher execution failed")
+            exec::execute_readonly(&graph, query, &params, &options)
+                .context("Cypher execution failed")
         },
     );
     emit_agent_operation(path, query, operation, response)
@@ -948,8 +961,7 @@ fn list_skills(path: &Path, mode: Mode) -> Result<()> {
                 "MATCH (s:KgliteSkill) \
                  RETURN s.name AS name, s.description AS description ORDER BY name",
                 mode,
-                false,
-                None,
+                QueryOptions::default(),
             )
         },
     )
@@ -991,7 +1003,7 @@ fn run_ready_set(
          ORDER BY dependency_count, id",
         config.join(", ")
     );
-    run_query(path, &query, mode, false, None)
+    run_query(path, &query, mode, QueryOptions::default())
 }
 
 struct DescribeOptions {
@@ -1035,6 +1047,7 @@ fn run_session(
     write_scope: Option<&str>,
     git_sha: Option<String>,
     modified_by: Option<String>,
+    valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
 ) -> Result<()> {
     let (mut graph, mut ownership) = if save_on_exit {
         open_owned(path, Some(StorageMode::Memory))?
@@ -1056,6 +1069,9 @@ fn run_session(
         modified_by,
         ..QueryOptions::default()
     };
+    // Applied once to the loaded graph: the session's read and write paths
+    // both run on it.
+    graph = exec::with_valid_time_default(graph, valid_time_default);
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = line?;

@@ -45,8 +45,9 @@ def test_the_summary_carries_the_valid_time_echo(served):
     assert echo["slice"] is False
     assert isinstance(echo["session_version"], int)
 
+    # An unprefixed statement on a declaring graph runs as of today and says so.
     plain = served.run("MATCH (s:Stop) RETURN s.id AS id").consume()
-    assert "kglite.temporal" not in plain.metadata
+    assert plain.metadata["kglite.temporal"]["source"] == "default"
 
     # The hop judges the relationship target: the two 2000-2005 links are hidden
     # by their own bounds, and the two links touching the closed stop 2 by it.
@@ -80,3 +81,62 @@ def test_explain_under_a_context_answers_as_a_plan_not_as_records(served, statem
     assert summary.plan is not None
     assert summary.plan["args"]["runtime"] == "kglite"
     assert summary.metadata["kglite.temporal"]["route"] == "guarded"
+
+
+def test_a_graph_without_declarations_carries_no_echo(bolt_server):
+    """No declaration, no valid time to report: neither the default nor an
+    ALL prefix puts a ``kglite.temporal`` key on the summary."""
+    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
+        with driver.session() as session:
+            with session.begin_transaction() as tx:
+                tx.run("CREATE (:Stop {id: 1})").consume()
+                tx.commit()
+            for query in ("MATCH (s:Stop) RETURN s.id AS id", "FOR VALID_TIME ALL MATCH (s:Stop) RETURN s.id AS id"):
+                result = session.run(query)
+                assert [r["id"] for r in result] == [1]
+                assert "kglite.temporal" not in result.consume().metadata
+
+
+def test_the_all_prefix_reads_every_version_over_bolt(served):
+    """`FOR VALID_TIME ALL` is text the Bolt server forwards as it stands: no
+    new Bolt surface, and the echo names the source."""
+    default = served.run("MATCH (s:Stop) RETURN s.id AS id ORDER BY id")
+    assert [r["id"] for r in default] == [1, 3, 4, 5]
+    assert default.consume().metadata["kglite.temporal"]["source"] == "default"
+    result = served.run("FOR VALID_TIME ALL MATCH (s:Stop) RETURN s.id AS id ORDER BY id")
+    assert [r["id"] for r in result] == [1, 2, 3, 4, 5]
+    echo = result.consume().metadata["kglite.temporal"]
+    assert (echo["source"], echo["instant"]) == ("all", "all")
+
+
+def test_the_valid_time_default_flag_governs_unprefixed_statements(tmp_path):
+    from tests.conftest import (
+        _bolt_binary_available,
+        _build_bolt_fixture_graph,
+        _spawn_bolt_server,
+        _teardown_bolt_server,
+    )
+
+    if not _bolt_binary_available():
+        pytest.skip("kglite-bolt-server binary is not built")
+    for flag, expected, instant in [
+        ("all", [1, 2, 3, 4, 5], "all"),
+        ("2003-01-01", [1, 2, 3, 4, 5], "2003-01-01"),
+        ("2008-01-01", [1, 3, 4, 5], "2008-01-01"),
+    ]:
+        path = tmp_path / f"fixture-{flag}.kgl"
+        _build_bolt_fixture_graph(path)
+        proc, url = _spawn_bolt_server(path, extra_args=["--valid-time-default", flag])
+        try:
+            with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+                with driver.session() as session:
+                    with session.begin_transaction() as tx:
+                        for statement in NETWORK:
+                            tx.run(statement).consume()
+                        tx.commit()
+                    result = session.run("MATCH (s:Stop) RETURN s.id AS id ORDER BY id")
+                    assert [r["id"] for r in result] == expected, flag
+                    echo = result.consume().metadata["kglite.temporal"]
+                    assert (echo["source"], echo["instant"]) == ("default", instant), flag
+        finally:
+            _teardown_bolt_server(proc)

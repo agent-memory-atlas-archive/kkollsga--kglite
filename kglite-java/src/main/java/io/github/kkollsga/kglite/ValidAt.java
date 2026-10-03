@@ -45,10 +45,27 @@ public final class ValidAt {
     private static final DateTimeFormatter DATE_TIME =
             DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss");
 
+    /** What {@link #literal()} names for {@link #all()}. */
+    private static final String ALL_LITERAL = "ALL";
+
+    private static final ValidAt ALL = new ValidAt(ALL_LITERAL);
+
     private final String literal;
 
     private ValidAt(String literal) {
         this.literal = literal;
+    }
+
+    /**
+     * Every version: the statement prefix {@code FOR VALID_TIME ALL}, which
+     * opts one read out of the graph's valid-time default (as of today unless
+     * configured otherwise) and filters nothing. A graph with no validity
+     * declaration answers the same with or without it.
+     *
+     * @return the all-versions instant
+     */
+    public static ValidAt all() {
+        return ALL;
     }
 
     /**
@@ -165,7 +182,8 @@ public final class ValidAt {
     }
 
     /**
-     * The literal the prefix names: {@code date('…')} or {@code datetime('…')}.
+     * The literal the prefix names: {@code date('…')}, {@code datetime('…')},
+     * or {@code ALL} for {@link #all()}.
      *
      * @return the literal
      */
@@ -174,13 +192,17 @@ public final class ValidAt {
     }
 
     /**
-     * {@code query} behind this instant's {@code FOR VALID_TIME AS OF} prefix.
-     * {@code EXPLAIN} and {@code PROFILE} may lead {@code query}.
+     * {@code query} behind this instant's {@code FOR VALID_TIME AS OF} prefix,
+     * or behind {@code FOR VALID_TIME ALL} for {@link #all()}. {@code EXPLAIN}
+     * and {@code PROFILE} may lead {@code query}.
      *
      * @param query the Cypher text
      * @return the prefixed text
      */
     public String prefix(String query) {
+        if (this == ALL) {
+            return "FOR VALID_TIME ALL " + query;
+        }
         return "FOR VALID_TIME AS OF " + literal + " " + query;
     }
 

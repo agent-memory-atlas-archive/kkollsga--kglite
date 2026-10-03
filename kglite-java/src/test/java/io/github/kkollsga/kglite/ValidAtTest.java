@@ -38,6 +38,15 @@ class ValidAtTest {
     }
 
     @Test
+    void allIsTheStatementPrefixForEveryVersion() {
+        assertEquals("ALL", ValidAt.all().literal());
+        assertEquals("FOR VALID_TIME ALL MATCH (n) RETURN n",
+                ValidAt.all().prefix("MATCH (n) RETURN n"));
+        assertEquals(ValidAt.all(), ValidAt.all());
+        assertFalse(ValidAt.all().equals(ValidAt.parse("2009-06-30")));
+    }
+
+    @Test
     void refusesWhatALiteralCannotSpell() {
         assertThrows(IllegalArgumentException.class, () -> ValidAt.of(LocalDate.of(10000, 1, 1)));
         assertThrows(IllegalArgumentException.class, () -> ValidAt.of(LocalDate.of(-5, 1, 1)));
@@ -65,7 +74,12 @@ class ValidAtTest {
         try (KnowledgeGraph graph = wells()) {
             String query = "MATCH (w:Well) RETURN w.id AS id ORDER BY id";
             ValidAt at2003 = ValidAt.of(LocalDate.of(2003, 6, 30));
-            assertEquals(List.of(1L, 2L), ids(graph.query(query)));
+            // No prefix: the declaration defaults the statement to today, when
+            // well 1 has closed; ValidAt.all() reads every version.
+            assertEquals(List.of(2L), ids(graph.query(query)));
+            assertEquals(List.of(1L, 2L), ids(graph.query(query, Map.of(), ValidAt.all())));
+            assertEquals(ids(graph.query(ValidAt.all().prefix(query))),
+                    ids(graph.query(query, Map.of(), ValidAt.all())));
             assertEquals(List.of(1L), ids(graph.query(query, Map.of(), at2003)),
                     "the same rows as the typed prefix");
             assertEquals(ids(graph.query(at2003.prefix(query))),
@@ -78,7 +92,13 @@ class ValidAtTest {
             assertEquals(List.of("(:Well)"), echo.get("targets"));
             assertEquals("guarded", echo.get("route"));
             assertEquals(Boolean.FALSE, echo.get("slice"));
-            assertFalse(graph.queryResult(query, Map.of()).diagnostics().containsKey("temporal"));
+            Map<String, Object> byDefault = (Map<String, Object>)
+                    graph.queryResult(query, Map.of()).diagnostics().get("temporal");
+            assertEquals("default", byDefault.get("source"));
+            Map<String, Object> everything = (Map<String, Object>) graph
+                    .queryResult(query, Map.of(), ValidAt.all()).diagnostics().get("temporal");
+            assertEquals("all", everything.get("source"));
+            assertEquals("all", everything.get("instant"));
 
             // EXPLAIN may follow the prefix.
             List<Map<String, Object>> plan = graph.query("EXPLAIN " + query, Map.of(), at2003);
@@ -89,6 +109,8 @@ class ValidAtTest {
             KgliteException doubled = assertThrows(KgliteException.class, () -> graph.query(
                     "FOR VALID_TIME AS OF date('2001-01-01') " + query, Map.of(), at2003));
             assertTrue(doubled.getMessage().contains("this one has two"), doubled.getMessage());
+            assertThrows(KgliteException.class, () -> graph.query(
+                    "FOR VALID_TIME ALL " + query, Map.of(), ValidAt.all()));
         }
     }
 
@@ -98,9 +120,14 @@ class ValidAtTest {
             List<BatchQuery> report = List.of(
                     BatchQuery.of("MATCH (w:Well) RETURN count(w) AS n"),
                     new BatchQuery("MATCH (w:Well {id: $id}) RETURN w.id AS id", Map.of("id", 2)));
+            // Unprefixed, the batch reads as of today: well 1 has closed.
             List<QueryResult> now = graph.queryBatch(report);
-            assertEquals(2L, now.get(0).rows().get(0).get("n"));
+            assertEquals(1L, now.get(0).rows().get(0).get("n"));
             assertEquals(List.of(2L), ids(now.get(1).rows()));
+
+            List<QueryResult> everything = graph.queryBatch(report, ValidAt.all());
+            assertEquals(2L, everything.get(0).rows().get(0).get("n"));
+            assertEquals(List.of(2L), ids(everything.get(1).rows()));
 
             List<QueryResult> then = graph.queryBatch(report, ValidAt.parse("2003-06-30"));
             assertEquals(1L, then.get(0).rows().get(0).get("n"));

@@ -164,6 +164,9 @@ statement reached and the route (`guarded`, or `plain` when nothing was
 filtered). A text that already carries a `FOR … AS OF` prefix is the engine's
 syntax error.
 
+A statement that names no instant reads as of today on such a graph. Pass
+`ValidAt.all()` (the prefix `FOR VALID_TIME ALL`) to read every version.
+
 ```java
 ValidAt mid2009 = ValidAt.of(LocalDate.of(2009, 6, 30));
 graph.query("MATCH (f:Field)-[:OPERATED_BY]->(c) RETURN f.name, c.name", Map.of(), mid2009);

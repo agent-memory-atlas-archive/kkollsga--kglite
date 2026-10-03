@@ -9,6 +9,7 @@ use anyhow::Result;
 use kglite::api::session::{
     execute_mut, execute_read, CsvImportPolicy, ExecuteOptions, ExecuteOutcome,
 };
+use kglite::api::temporal::ValidTimeDefault;
 use kglite::api::{make_dir_graph_mut, DirGraph, Value};
 
 use crate::format::{render, CellCap, Mode};
@@ -33,6 +34,22 @@ pub struct QueryOptions {
     /// three-minute kill would be a regression. `Some(0)` is the same as
     /// `None`.
     pub timeout_ms: Option<u64>,
+    /// The valid-time instant a statement reads when it names none
+    /// (`--valid-time-default`); `None` leaves the graph's own `today`.
+    /// Runtime only — never written into the `.kgl` file.
+    pub valid_time_default: Option<ValidTimeDefault>,
+}
+
+/// `graph` with the operator's valid-time default set. The graph is the
+/// caller's only reference (just loaded), so this never forks it.
+pub fn with_valid_time_default(
+    mut graph: Arc<DirGraph>,
+    default: Option<ValidTimeDefault>,
+) -> Arc<DirGraph> {
+    if let Some(default) = default.filter(|d| *d != graph.valid_time_default) {
+        kglite::api::make_dir_graph_mut_preserving_lineage(&mut graph).valid_time_default = default;
+    }
+    graph
 }
 
 /// Execute one Cypher statement through the mutable session path.
@@ -55,6 +72,9 @@ pub fn execute(
     opts.streaming = true;
 
     let g = make_dir_graph_mut(graph);
+    if let Some(default) = options.valid_time_default {
+        g.valid_time_default = default;
+    }
     let outcome = execute_mut(g, query, &opts)?;
     // The CLI's commit boundary is the statement, so this is where a change
     // stream learns about it — a no-op unless `CALL db.cdc.enable()` has been

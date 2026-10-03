@@ -12,6 +12,7 @@
 //! lease this module already takes.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -20,6 +21,7 @@ use kglite::api::durable::DurabilityLevel;
 use kglite::api::io::{open_or_create_graph_in_mode, GraphWriterLease, OpenDisposition};
 use kglite::api::session::Session;
 use kglite::api::storage::{live_storage_mode, StorageMode};
+use kglite::api::temporal::ValidTimeDefault;
 
 /// How long startup waits for another writer to release the graph.
 ///
@@ -106,6 +108,7 @@ pub(crate) fn start_graph(
     requested_mode: Option<StorageMode>,
     readonly: bool,
     durability: DurabilityRequest,
+    valid_time_default: Option<ValidTimeDefault>,
     record: &mut dyn FnMut(StartupStep),
 ) -> Result<StartedGraph> {
     let writer_lease = if readonly {
@@ -142,6 +145,14 @@ pub(crate) fn start_graph(
     } else {
         durability.level
     };
+    let mut opened = opened;
+    if let Some(default) = valid_time_default {
+        // Runtime only (`--valid-time-default`): set before the session wraps
+        // the graph, which is still the only reference to it.
+        if let Some(graph) = Arc::get_mut(&mut opened.graph) {
+            graph.valid_time_default = default;
+        }
+    }
     // `opened.graph` is the only reference to this graph, which is what
     // `open_durable` requires: a shared Arc would be deep-cloned here and the
     // other holder would keep mutating an unlogged copy.
@@ -217,6 +228,53 @@ mod tests {
         }
     }
 
+    /// `--valid-time-default` reaches the served graph before the session
+    /// wraps it: an unprefixed read answers per the flag, and an absent flag
+    /// leaves the engine's `today`.
+    #[test]
+    fn the_valid_time_default_governs_unprefixed_reads() {
+        let params = std::collections::HashMap::new();
+        let options = kglite::api::session::ExecuteOptions::eager(&params);
+        let rows = |default: Option<ValidTimeDefault>, tag: &str| {
+            let scratch = ScratchDir::new(tag);
+            let started = start_graph(
+                &scratch.graph_path(),
+                Some(StorageMode::Memory),
+                false,
+                explicit(DurabilityLevel::Off),
+                default,
+                &mut |_| {},
+            )
+            .expect("start");
+            {
+                let mut graph = started.session.write();
+                for statement in [
+                    "CREATE (:Well {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')}), \
+                     (:Well {id: 2, vf: date('2005-01-01')})",
+                    "CALL db.temporal.declare({node: 'Well', from: 'vf', to: 'vt', \
+                     convention: 'closed'}) YIELD declared RETURN declared",
+                ] {
+                    kglite::api::session::execute_mut(&mut graph, statement, &options)
+                        .unwrap_or_else(|e| panic!("{statement}: {e}"));
+                }
+            }
+            let snapshot = started.session.snapshot();
+            let outcome = kglite::api::session::execute_read(
+                &snapshot,
+                "MATCH (w:Well) RETURN w.id AS id ORDER BY id",
+                &options,
+            )
+            .expect("read");
+            outcome.result.rows.len()
+        };
+        assert_eq!(rows(None, "vt-none"), 1, "today: well 1 closed in 2010");
+        assert_eq!(rows(Some(ValidTimeDefault::All), "vt-all"), 2);
+        let day = ValidTimeDefault::parse("2008-01-01").unwrap();
+        assert_eq!(rows(Some(day), "vt-day"), 2, "both wells are valid in 2008");
+        let early = ValidTimeDefault::parse("2003-01-01").unwrap();
+        assert_eq!(rows(Some(early), "vt-early"), 1, "only well 1 in 2003");
+    }
+
     /// The ordering contract. Mutation evidence: moving the acquisition below
     /// the open records `[GraphOpened, LeaseAcquired]` and fails here.
     #[test]
@@ -228,6 +286,7 @@ mod tests {
             Some(StorageMode::Memory),
             false,
             explicit(DurabilityLevel::Off),
+            None,
             &mut |step| steps.push(step),
         )
         .expect("writable startup on a free path");
@@ -262,6 +321,7 @@ mod tests {
             Some(StorageMode::Memory),
             false,
             explicit(DurabilityLevel::Off),
+            None,
             &mut |step| steps.push(step),
         ) {
             Ok(_) => panic!("a second writable server must not open a leased graph"),
@@ -306,6 +366,7 @@ mod tests {
             requested,
             false,
             explicit(DurabilityLevel::Off),
+            None,
             &mut |_| {},
         )
     }
@@ -354,6 +415,7 @@ mod tests {
                 Some(requested),
                 false,
                 explicit(DurabilityLevel::Off),
+                None,
                 &mut |step| steps.push(step),
             )
             .expect("portable conversion at startup");
@@ -412,6 +474,7 @@ mod tests {
             Some(StorageMode::Memory),
             true,
             explicit(DurabilityLevel::Off),
+            None,
             &mut |step| steps.push(step),
         )
         .expect("readonly startup beside a live writer");
@@ -479,7 +542,7 @@ mod tests {
             let path = scratch.graph_path();
             seed_graph(&path, StorageMode::Memory);
 
-            let first = start_graph(&path, None, false, explicit(level), &mut |_| {})
+            let first = start_graph(&path, None, false, explicit(level), None, &mut |_| {})
                 .expect("durable startup on a saved graph");
             commit_write(&first.session, "CREATE (:Person {id: 1, title: 'Zed'})");
             assert_eq!(person_count(&first.session), 1);
@@ -487,7 +550,7 @@ mod tests {
             // killed process would, leaving the commit only in the sidecar.
             drop(first);
 
-            let reopened = start_graph(&path, None, false, explicit(level), &mut |_| {})
+            let reopened = start_graph(&path, None, false, explicit(level), None, &mut |_| {})
                 .unwrap_or_else(|e| panic!("durable restart at {}: {e:#}", level.name()));
             assert_eq!(
                 person_count(&reopened.session),
@@ -514,6 +577,7 @@ mod tests {
             None,
             false,
             explicit(DurabilityLevel::Full),
+            None,
             &mut |_| {},
         )
         .expect("durable startup on a saved graph");
@@ -525,6 +589,7 @@ mod tests {
             None,
             false,
             explicit(DurabilityLevel::Off),
+            None,
             &mut |_| {},
         ) {
             Ok(_) => panic!("serving at off would silently drop the logged commit"),
@@ -541,6 +606,7 @@ mod tests {
             None,
             false,
             explicit(DurabilityLevel::Full),
+            None,
             &mut |_| {},
         )
         .expect("the refusal is about the level, not the path");
@@ -563,6 +629,7 @@ mod tests {
             Some(StorageMode::Disk),
             false,
             defaulted(DurabilityLevel::Normal),
+            None,
             &mut |_| {},
         )
         .expect("a disk graph must still be servable once the default logs");
@@ -592,6 +659,7 @@ mod tests {
             Some(StorageMode::Disk),
             false,
             explicit(DurabilityLevel::Normal),
+            None,
             &mut |_| {},
         ) {
             Ok(_) => panic!("an operator who asked for a log must not be given none"),

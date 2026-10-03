@@ -129,6 +129,15 @@ struct Cli {
     )]
     checkpoint_interval: Option<Duration>,
 
+    /// The valid-time instant a statement reads when it names none, on a graph
+    /// with validity declarations: `today` (the built-in default, UTC), `all`
+    /// (every version) or a fixed `YYYY-MM-DD` day. A statement's own
+    /// `FOR VALID_TIME` prefix wins. Runtime only — never written into the
+    /// `.kgl` file.
+    #[arg(long, value_name = "today|all|YYYY-MM-DD",
+          value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
+    valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
+
     /// What a committed write survives: `full`, `normal`, or `off`
     /// [default: normal].
     ///
@@ -696,6 +705,7 @@ async fn serve() -> Result<()> {
             level: durability.level,
             explicit: durability.level_requested,
         },
+        cli.valid_time_default,
         &mut |_| {},
     )?;
     // Adopt whatever startup could actually serve: a disk graph degrades a
