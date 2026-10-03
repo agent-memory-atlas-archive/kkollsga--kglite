@@ -245,13 +245,35 @@ fn absent_property_findings<'q>(
 /// metadata (and the type *has* declared metadata — empty ⇒ skip, as
 /// [`validate_property`] does, to avoid false positives on under-declared graphs).
 pub(super) fn property_absent(graph: &DirGraph, node_type: &str, prop: &str) -> bool {
-    if BUILTIN_FIELDS.contains(&prop) {
+    if BUILTIN_FIELDS.contains(&prop) || is_spatial_virtual(graph, node_type, prop) {
         return false;
     }
     match graph.node_type_metadata.get(node_type) {
         Some(tp) => !tp.is_empty() && !tp.contains_key(prop),
         None => false,
     }
+}
+
+/// True when `prop` is a spatial property the executor derives from the
+/// type's [`SpatialConfig`](crate::graph::schema::SpatialConfig) rather than
+/// stores: the primary `location` / `geometry` (only when configured) and the
+/// named points and shapes. `resolve_property` returns their real value, so a
+/// node-metadata miss is not an absence.
+fn is_spatial_virtual(graph: &DirGraph, node_type: &str, prop: &str) -> bool {
+    let Some(config) = graph.get_spatial_config(node_type) else {
+        return false;
+    };
+    match prop {
+        "location" if config.location.is_some() => true,
+        "geometry" if config.geometry.is_some() => true,
+        _ => config.points.contains_key(prop) || config.shapes.contains_key(prop),
+    }
+}
+
+/// True for the `ts_*` functions, whose first argument names a timeseries
+/// channel of the bound node rather than reading a stored property.
+fn is_timeseries_function(name: &str) -> bool {
+    name.len() > 3 && name[..3].eq_ignore_ascii_case("ts_")
 }
 
 /// Properties this query writes before anything reads them back.
@@ -455,6 +477,19 @@ impl LeafPath {
 }
 
 impl<'q> AbsentPropertyScan<'_, 'q> {
+    /// `var.prop` where `prop` is a timeseries channel of `var`'s label. A
+    /// channel exists only inside `ts_*()`: a plain `RETURN n.channel` is null,
+    /// so the caller invokes this only for a `ts_*` function's first argument.
+    fn is_channel_access(&self, expr: &Expression) -> bool {
+        let Expression::PropertyAccess { variable, property } = expr else {
+            return false;
+        };
+        self.var_label
+            .get(variable.as_str())
+            .and_then(|label| self.graph.timeseries_configs.get(*label))
+            .is_some_and(|c| c.channels.iter().any(|ch| ch == property))
+    }
+
     fn report(&mut self, variable: &'q str, property: &'q str, site: AbsentSite) {
         let Some(&label) = self.var_label.get(variable) else {
             return;
@@ -577,8 +612,11 @@ impl<'q> AbsentPropertyScan<'_, 'q> {
             Expression::Negate(e) => self.expression(e, site),
             // A function need not propagate null (`coalesce`), and a list of
             // nulls is not null, so neither keeps a row-count claim.
-            Expression::FunctionCall { args, .. } => {
-                for a in args {
+            Expression::FunctionCall { name, args, .. } => {
+                for (i, a) in args.iter().enumerate() {
+                    if i == 0 && is_timeseries_function(name) && self.is_channel_access(a) {
+                        continue;
+                    }
                     self.expression(a, site.part());
                 }
             }
@@ -1248,6 +1286,71 @@ mod tests {
         // Built-in field → no warning.
         let q2 = parse_cypher("MATCH (p:Person) WHERE p.id = 1 RETURN p").unwrap();
         assert!(collect_unknown_pattern_warnings(&q2, &g).is_empty());
+    }
+
+    fn graph_with_pseudo_properties() -> DirGraph {
+        use crate::graph::features::timeseries::TimeseriesConfig;
+        use crate::graph::schema::SpatialConfig;
+        let mut g = graph_with_schema();
+        g.timeseries_configs.insert(
+            "Person".to_string(),
+            TimeseriesConfig {
+                resolution: "month".to_string(),
+                channels: vec!["oil".to_string()],
+                ..Default::default()
+            },
+        );
+        g.spatial_configs.insert(
+            "Person".to_string(),
+            SpatialConfig {
+                location: Some(("lat".to_string(), "lon".to_string())),
+                geometry: Some("wkt".to_string()),
+                points: HashMap::from([("home".to_string(), ("hl".to_string(), "hn".to_string()))]),
+                shapes: HashMap::from([("area".to_string(), "aw".to_string())]),
+            },
+        );
+        g
+    }
+
+    /// A timeseries channel is readable as the first argument of a `ts_*`
+    /// function and a configured spatial property is readable anywhere; both
+    /// returned real values while the lint called them all-null (and a locked
+    /// schema refused them). A plain `p.oil` really is null, so it still warns.
+    #[test]
+    fn pseudo_properties_are_not_reported_as_absent() {
+        let g = graph_with_pseudo_properties();
+        for ok in [
+            "RETURN ts_series(p.oil, '2000', '2001')",
+            "RETURN ts_at(p.oil, '2000-1')",
+            "RETURN ts_sum(p.oil, '2000')",
+            "RETURN ts_last(p.oil)",
+            "WHERE ts_sum(p.oil, '2000') > 1 RETURN p",
+            "RETURN p.location",
+            "RETURN p.geometry",
+            "RETURN p.home",
+            "RETURN p.area",
+            "WHERE p.location IS NULL RETURN p",
+        ] {
+            let q = parse_cypher(&format!("MATCH (p:Person) {ok}")).unwrap();
+            let w = collect_unknown_pattern_warnings(&q, &g);
+            assert!(w.is_empty(), "{ok}: {w:?}");
+            let found = collect_query_warnings(&q, &g, &HashMap::new()).absent_property;
+            assert!(strict_read_error(&found, &g).is_none(), "{ok}: locked");
+        }
+        for bad in [
+            "RETURN p.oil",
+            "RETURN ts_sum(p.oill, '2000')",
+            "RETURN ts_sum(p.nonexistent, '2000')",
+            "RETURN coalesce(p.oil, 0)",
+            "RETURN p.nonexistent",
+            "RETURN p.locaton",
+        ] {
+            let q = parse_cypher(&format!("MATCH (p:Person) {bad}")).unwrap();
+            let w = collect_unknown_pattern_warnings(&q, &g);
+            assert_eq!(w.len(), 1, "{bad}: {w:?}");
+            let found = collect_query_warnings(&q, &g, &HashMap::new()).absent_property;
+            assert!(strict_read_error(&found, &g).is_some(), "{bad}: locked");
+        }
     }
 
     #[test]

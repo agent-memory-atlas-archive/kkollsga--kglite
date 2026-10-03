@@ -512,3 +512,64 @@ def test_an_optional_match_where_claims_no_row_count():
         assert result.to_list() == [{"c": 2}], where
         assert not any("filters out" in w for w in warnings), (where, warnings)
         assert any("'x'" in w and f"no {label} node has" in w for w in warnings), (where, warnings)
+
+
+def _pseudo_graph() -> kglite.KnowledgeGraph:
+    """A type with a timeseries channel and configured spatial properties."""
+    g = kglite.KnowledgeGraph()
+    nodes = pd.DataFrame({"id": [1], "title": ["F1"], "lat": [60.0], "lon": [5.0], "wkt": ["POINT(5 60)"]})
+    g.add_nodes(
+        nodes,
+        "Profile",
+        "id",
+        "title",
+        column_types={"lat": "location.lat", "lon": "location.lon", "wkt": "geometry"},
+    )
+    g.add_timeseries(
+        "Profile",
+        data=pd.DataFrame({"id": [1, 1, 1], "year": [2000, 2000, 2001], "month": [1, 2, 1], "oil": [1.0, 2.0, 3.0]}),
+        fk="id",
+        time_key=["year", "month"],
+        channels=["oil"],
+        resolution="month",
+    )
+    return g
+
+
+def test_timeseries_channel_and_spatial_properties_are_not_reported_absent():
+    """`ts_*(n.channel)` and configured `n.location` / `n.geometry` return real
+    values; the lint called them all-null and a locked schema refused them."""
+    for locked in (False, True):
+        g = _pseudo_graph()
+        if locked:
+            g.lock_schema()
+        for ret, expected in (
+            ("ts_sum(p.oil, '2000')", 3.0),
+            ("ts_at(p.oil, '2000-1')", 1.0),
+            ("ts_last(p.oil)", 3.0),
+            ("p.location", {"latitude": 60.0, "longitude": 5.0}),
+            ("p.geometry", "POINT(5 60)"),
+        ):
+            result = g.cypher(f"MATCH (p:Profile) RETURN {ret} AS v")
+            assert result.to_dicts() == [{"v": expected}], (locked, ret)
+            assert result.warnings == [], (locked, ret, result.warnings)
+        series = g.cypher("MATCH (p:Profile) RETURN ts_series(p.oil, '2000', '2001') AS v")
+        assert len(series.to_dicts()[0]["v"]) == 3
+        assert series.warnings == [], (locked, series.warnings)
+
+
+def test_typos_and_a_plain_channel_read_still_warn_and_lock_refuses_them():
+    """A bare `p.oil` is null (a channel exists only inside `ts_*`), so its
+    warning is true; a typo beside a real channel is still a typo."""
+    for expr, name in (("p.oil", "oil"), ("p.nonexistent", "nonexistent")):
+        g = _pseudo_graph()
+        result = g.cypher(f"MATCH (p:Profile) RETURN {expr} AS v")
+        assert any(f"'{name}' which no Profile node has" in w for w in result.warnings), (expr, result.warnings)
+        g.lock_schema()
+        try:
+            g.cypher(f"MATCH (p:Profile) RETURN {expr} AS v")
+        except Exception as exc:
+            assert f"Unknown property '{name}'" in str(exc), expr
+        else:
+            raise AssertionError(f"locked schema accepted {expr}")
+    assert _pseudo_graph().cypher("MATCH (p:Profile) RETURN p.oil AS v").to_dicts() == [{"v": None}]

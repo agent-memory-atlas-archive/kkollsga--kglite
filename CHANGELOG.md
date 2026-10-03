@@ -31,6 +31,15 @@ before upgrading.
 
 ### Fixed
 
+- The static schema lint no longer reports a timeseries channel passed to a
+  `ts_*()` function (`ts_series(p.oil, ...)`, `ts_at`, `ts_sum`, ...) or a
+  configured spatial property (`p.location`, `p.geometry`, named points and
+  shapes) as "which no <Type> node has" — those queries returned real values
+  while the warning said every value would be null, and on a `lock_schema`d
+  graph the same false finding was a hard "Unknown property" error. A plain
+  `p.oil` outside `ts_*()` is null and still warns (and still errors when
+  locked), as does a real typo.
+
 - Blueprint timeseries time components written as whole floats (`2020.0`,
   `1.0`..`12.0`, `0.0`, as pandas writes them for a column holding a NaN) were
   read as year 0 / January, and `0.0` aggregate rows were folded into January
