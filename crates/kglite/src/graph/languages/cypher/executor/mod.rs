@@ -976,6 +976,7 @@ impl<'a> CypherExecutor<'a> {
                     *limit,
                 )
             }
+            Clause::FusedChainPathCount { .. } => self.execute_fused_chain_path_count(clause),
             Clause::SpatialJoin {
                 container_var,
                 probe_var,
@@ -1035,6 +1036,7 @@ pub mod call_clause;
 pub mod call_subquery;
 mod cdc_procedures;
 mod centrality_procedures;
+mod chain_count;
 mod clause_pipeline;
 mod columnar_write;
 #[cfg(test)]
@@ -1196,6 +1198,7 @@ fn runs_under_graph_filter(clause: &Clause) -> bool {
             | Clause::FusedCountLabelUnion { .. }
             | Clause::FusedCountTypedEdge { .. }
             | Clause::FusedCountAnchoredEdges { .. }
+            | Clause::FusedChainPathCount { .. }
             | Clause::FusedOptionalMatchAggregate { .. }
             | Clause::SpatialJoin { .. }
     )
@@ -1221,6 +1224,7 @@ fn is_fused_clause(clause: &Clause) -> bool {
             | Clause::FusedCountLabelUnion { .. }
             | Clause::FusedCountTypedEdge { .. }
             | Clause::FusedCountAnchoredEdges { .. }
+            | Clause::FusedChainPathCount { .. }
             | Clause::FusedNodeScanAggregate { .. }
             | Clause::FusedNodeScanTopK { .. }
             | Clause::SpatialJoin { .. }

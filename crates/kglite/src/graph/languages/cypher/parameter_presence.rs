@@ -197,6 +197,7 @@ fn visit_clause(clause: &Clause, names: &mut impl AstSink) {
                 visit_sort_keys(sort_keys, names);
             }
         }
+        Clause::FusedChainPathCount { pattern, .. } => visit_pattern(pattern, names),
         Clause::SpatialJoin { remainder, .. } => {
             if let Some(predicate) = remainder {
                 visit_predicate(predicate, names);

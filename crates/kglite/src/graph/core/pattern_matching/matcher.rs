@@ -1993,7 +1993,7 @@ impl<'a> PatternExecutor<'a> {
     /// pattern's own edge properties. The edge is materialised (lazily on
     /// disk) only when one of them exists.
     #[inline]
-    fn edge_passes_inline_filters(
+    pub(crate) fn edge_passes_inline_filters(
         &self,
         edge_pattern: &EdgePattern,
         edge: &GraphEdgeRef<'_>,

@@ -11,11 +11,13 @@
 //! helpers for the details.
 
 mod aggregate;
+mod chain_count;
 mod count;
 mod spatial;
 mod topk;
 
 pub(super) use aggregate::*;
+pub(super) use chain_count::*;
 pub(super) use count::*;
 pub(super) use spatial::*;
 pub(super) use topk::*;

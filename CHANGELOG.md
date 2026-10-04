@@ -172,6 +172,24 @@ before upgrading.
   went from 380 ms to 6.5 ms as of today (6.6 ms undated) and the centroid
   join from 830 ms to 17.5 ms (17 ms undated).
 
+- Faster: `MATCH` of one linear chain of relationships `RETURN count(*)` is counted
+  hop by hop over the nodes the chain reaches instead of enumerating every
+  path (planner pass `fuse_chain_path_count`, plan operator
+  `FusedChainPathCount`). It applies to chains of three or more relationships
+  of pairwise-distinct types, with labels, node and relationship property
+  matchers, `{id: ...}` anchors and undirected hops (a self-loop counts once,
+  as in the matcher), and under `FOR VALID_TIME` (each relationship and both
+  endpoints are tested against the filter). Under a valid-time context it also
+  takes a two-hop chain, including a directed one whose types repeat (the
+  matcher's rule that a relationship serves one hop is applied exactly). A count past
+  the 64-bit integer range is an error. On a register of 856k relationships,
+  a four-node chain of distinct types over the full history (`FOR VALID_TIME
+  ALL`, 8,693,836 paths) took 10.5 s and now takes 1.4-1.5 ms; under the
+  default (today, 414,404 paths) 106 ms -> 0.53-0.57 ms; as of one date
+  (246,021 paths) 52 ms -> 0.48-0.52 ms. The counts equal the matcher's.
+  `DISTINCT`, grouped counts, cycles, variable-length hops and a repeated
+  type beyond two hops still run on the matcher.
+
 ### Fixed
 
 - An anchored relationship count on an id shared by several node types counted

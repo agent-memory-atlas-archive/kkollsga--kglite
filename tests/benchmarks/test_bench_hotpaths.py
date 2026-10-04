@@ -571,3 +571,42 @@ def test_bench_named_rel_match_count(benchmark, prop_edge_graph):
     """
     result = benchmark(prop_edge_graph.cypher, "MATCH (a:PN)-[r:PR]->(b:PN) RETURN count(r) AS c")
     assert result[0]["c"] == 100_000
+
+
+@pytest.fixture
+def chain_count_graph():
+    """Four layers joined by distinct relationship types: 2 000 Team -> 100
+    Dept <- 1 000 Project <- 20 000 Task, 3 funding links per project.
+
+    The chain has 20 000 x 3 x 20 = 1.2M paths over 25k relationships, so the
+    frontier DP touches the relationships and the matcher the paths.
+    """
+    graph = KnowledgeGraph()
+    for label, n in (("Team", 2_000), ("Dept", 100), ("Project", 1_000), ("Task", 20_000)):
+        frame = pd.DataFrame({"nid": list(range(n)), "name": [f"{label}_{i}" for i in range(n)]})
+        graph.add_nodes(frame, label, "nid", "name")
+    led_by = pd.DataFrame({"f": list(range(2_000)), "c": [i % 100 for i in range(2_000)]})
+    graph.add_connections(led_by, "LED_BY", "Team", "f", "Dept", "c")
+    funded_by = pd.DataFrame(
+        {"l": [i % 1_000 for i in range(3_000)], "c": [(i * 7 + i // 1_000) % 100 for i in range(3_000)]}
+    )
+    graph.add_connections(funded_by, "FUNDED_BY", "Project", "l", "Dept", "c")
+    tasks = pd.DataFrame({"w": list(range(20_000)), "l": [i % 1_000 for i in range(20_000)]})
+    graph.add_connections(tasks, "IN_PROJECT", "Task", "w", "Project", "l")
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_hop3_chain_count(benchmark, chain_count_graph):
+    """Linear three-hop chain `count(*)` over millions of paths.
+
+    Planned as `FusedChainPathCount` (`fuse_chain_path_count`), a degree-product
+    DP; the matcher route materialises every path. The plan assertion keeps the
+    cell from silently timing the matcher.
+    """
+    query = "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task) RETURN count(*) AS n"
+    plan = [row["operation"] for row in chain_count_graph.cypher("EXPLAIN " + query)]
+    assert "OptimizerPass fuse_chain_path_count" in plan
+    result = benchmark(chain_count_graph.cypher, query)
+    expected = chain_count_graph.cypher(query, disabled_passes=["fuse_chain_path_count"]).to_list()
+    assert result.to_list() == expected

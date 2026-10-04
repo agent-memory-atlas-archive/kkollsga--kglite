@@ -31,10 +31,11 @@ use annotations::{
 };
 use cost_model::reorder_predicates_by_cost;
 use fusion::{
-    fuse_anchored_edge_count, fuse_count_short_circuits, fuse_match_return_aggregate,
-    fuse_match_with_aggregate, fuse_match_with_aggregate_top_k, fuse_node_scan_aggregate,
-    fuse_node_scan_top_k, fuse_optional_match_aggregate, fuse_order_by_top_k, fuse_spatial_join,
-    fuse_text_bm25_order_limit, fuse_vector_score_order_limit, mark_return_lazy_eligible,
+    fuse_anchored_edge_count, fuse_chain_path_count, fuse_count_short_circuits,
+    fuse_match_return_aggregate, fuse_match_with_aggregate, fuse_match_with_aggregate_top_k,
+    fuse_node_scan_aggregate, fuse_node_scan_top_k, fuse_optional_match_aggregate,
+    fuse_order_by_top_k, fuse_spatial_join, fuse_text_bm25_order_limit,
+    fuse_vector_score_order_limit, mark_return_lazy_eligible,
 };
 use index_selection::push_where_into_match;
 use join_order::{
@@ -192,6 +193,7 @@ pub const PASSES: &[(&str, PassFn)] = &[
         "fuse_optional_match_aggregate",
         pass_fuse_optional_match_aggregate,
     ),
+    ("fuse_chain_path_count", pass_fuse_chain_path_count),
     (
         "fuse_match_return_aggregate",
         pass_fuse_match_return_aggregate,
@@ -613,6 +615,26 @@ fn pass_fuse_count_short_circuits(query: &mut CypherQuery, ctx: &PassCtx) {
 /// result to.
 fn pass_fuse_optional_match_aggregate(query: &mut CypherQuery, _ctx: &PassCtx) {
     fuse_optional_match_aggregate(query)
+}
+
+/// **Pass:** `fuse_chain_path_count` — `MATCH` of one linear chain of
+/// relationships `RETURN count(*)` becomes a forward degree-product DP over
+/// the chain's frontier, O(edges reached) where the matcher is O(paths).
+///
+/// **Precondition:** exactly a `MATCH` and a `RETURN`. **Pattern matched:**
+/// one fixed-length linear pattern of 3+ relationships (2+ under a
+/// valid-time guard, where the aggregate fusions decline the two-hop shape),
+/// `count(*)` / `count(v)` of a bound variable, no DISTINCT or HAVING.
+/// **Rewrite:** one `FusedChainPathCount` holding the pattern; the executor
+/// tests each hop's relationship and peer exactly as the matcher does, and
+/// under a guard also through the filter. **Why-bail:** a repeated variable,
+/// var-length or parameterised hop, comma pattern, residual predicate or
+/// hint, a row-dependent property matcher, and an untyped hop or a hop type
+/// shared with another hop, except in a two-hop directed chain: the matcher
+/// enforces relationship uniqueness there, and only that case has a
+/// closed-form correction (the paths that cross one relationship twice).
+fn pass_fuse_chain_path_count(query: &mut CypherQuery, ctx: &PassCtx) {
+    fuse_chain_path_count(query, ctx.guarded)
 }
 
 /// **Pass:** `fuse_match_return_aggregate` — Fuse

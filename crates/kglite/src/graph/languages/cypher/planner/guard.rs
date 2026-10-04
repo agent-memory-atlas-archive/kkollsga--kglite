@@ -100,6 +100,12 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "a bounded heap over rows the matcher already admitted",
     ),
     (
+        "fuse_chain_path_count",
+        "each hop's relationships and peers are put to the filter (admits_hop) and the \
+         start nodes come from the guarded matcher scan, so the DP counts exactly the \
+         paths the matcher would admit (chain_count.rs)",
+    ),
+    (
         "fuse_match_return_aggregate",
         "3-element patterns only: its group scan, per-node counters and node lists \
          all test the filter (guarded_ops.rs, fused_match.rs); the two-hop shape stays unfused",

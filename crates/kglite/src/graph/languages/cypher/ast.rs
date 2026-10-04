@@ -358,6 +358,19 @@ pub enum Clause {
         edge_types: Option<Vec<String>>,
         alias: String,
     },
+    /// Optimizer-generated: `MATCH <linear chain of k relationships> RETURN
+    /// count(*)` → a forward degree-product DP over a sparse frontier, in
+    /// O(edges the chain touches) instead of O(paths). `pattern` is the one
+    /// linear pattern as the planner left it (element 0 is the start end).
+    /// The hop types are pairwise disjoint, so the matcher's relationship
+    /// uniqueness rule cannot reject a path, except for a two-hop chain whose
+    /// types overlap (`overlapping_types`): the executor then subtracts the
+    /// paths that use one relationship for both hops.
+    FusedChainPathCount {
+        pattern: crate::graph::core::pattern_matching::Pattern,
+        overlapping_types: bool,
+        alias: String,
+    },
     /// Optimizer-generated: MATCH (n:Type) [WHERE ...] RETURN group_keys, agg_funcs(...)
     /// → single-pass node scan with inline aggregation. Avoids materializing intermediate
     /// ResultRows — evaluates group keys and aggregates directly from node properties.

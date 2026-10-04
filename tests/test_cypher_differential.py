@@ -406,7 +406,136 @@ def _network_context_pair(name: str, query: str) -> list[tuple[str, str, str, di
     ]
 
 
+@pytest.fixture
+def chain_graph():
+    """Four layers joined by distinct relationship types, for the chain path count.
+
+    Parallel relationships (f1 -> c1 twice), a self-loop pair on the middle
+    layer (`PARTNER`), a relationship property (`share`), a secondary label
+    (`Sponsor` on c2) and a back-reference that closes a cycle (`COVERS`).
+    """
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (f1:Team {id: 1, region: 'n'}), (f2:Team {id: 2, region: 's'}), (f3:Team {id: 3, region: 'n'}),"
+        " (c1:Dept {id: 1, kind: 'big'}), (c2:Dept {id: 2, kind: 'small'}), (c3:Dept {id: 3, kind: 'big'}),"
+        " (l1:Project {id: 1}), (l2:Project {id: 2}), (l3:Project {id: 3}), (l4:Project {id: 4}),"
+        " (w1:Task {id: 1}), (w2:Task {id: 2}), (w3:Task {id: 3}),"
+        " (w4:Task {id: 4}), (w5:Task {id: 5}), (w6:Task {id: 6}),"
+        " (f1)-[:LED_BY]->(c1), (f1)-[:LED_BY]->(c1), (f2)-[:LED_BY]->(c1),"
+        " (f2)-[:LED_BY]->(c2), (f3)-[:LED_BY]->(c3),"
+        " (l1)-[:FUNDED_BY {share: 50}]->(c1), (l2)-[:FUNDED_BY {share: 100}]->(c1),"
+        " (l2)-[:FUNDED_BY {share: 50}]->(c2), (l3)-[:FUNDED_BY {share: 25}]->(c2),"
+        " (l4)-[:FUNDED_BY {share: 50}]->(c3),"
+        " (w1)-[:IN_PROJECT]->(l1), (w2)-[:IN_PROJECT]->(l1), (w2)-[:IN_PROJECT]->(l2),"
+        " (w3)-[:IN_PROJECT]->(l2), (w4)-[:IN_PROJECT]->(l3), (w5)-[:IN_PROJECT]->(l4),"
+        " (w6)-[:IN_PROJECT]->(l4),"
+        " (c1)-[:PARTNER]->(c1), (c1)-[:PARTNER]->(c2), (c2)-[:PARTNER]->(c3), (c3)-[:PARTNER]->(c3),"
+        " (l1)-[:COVERS]->(f1), (l2)-[:COVERS]->(f1), (l3)-[:COVERS]->(f2)"
+    ).to_list()
+    graph.cypher("MATCH (c:Dept {id: 2}) SET c:Sponsor").to_list()
+    return graph
+
+
+_CHAIN = "(f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
+
+CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    ("chain_count_three_hop", "chain_graph", f"MATCH {_CHAIN} RETURN count(*) AS n", None),
+    ("chain_count_of_end_variable", "chain_graph", f"MATCH {_CHAIN} RETURN count(w) AS n", None),
+    (
+        "chain_count_untyped_nodes",
+        "chain_graph",
+        "MATCH (f)-[:LED_BY]->(c)<-[:FUNDED_BY]-(l)<-[:IN_PROJECT]-(w) RETURN count(*)",
+        None,
+    ),
+    (
+        "chain_count_middle_property",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept {kind: 'big'})<-[:FUNDED_BY]-(l:Project)"
+        "<-[:IN_PROJECT]-(w:Task) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_edge_property",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY {share: 50}]-(l:Project)"
+        "<-[:IN_PROJECT]-(w:Task) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_undirected_hop_with_self_loop",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)-[:PARTNER]-(p:Dept)<-[:FUNDED_BY]-(l:Project) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_secondary_label",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Sponsor)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_label_alternation",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task|Team)"
+        " RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_anchored_start",
+        "chain_graph",
+        "MATCH (f:Team {id: 2})-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
+        " RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_anchored_end",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task {id: 2})"
+        " RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_anchored_parameter",
+        "chain_graph",
+        "MATCH (f:Team {id: $fid})-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)"
+        "<-[:IN_PROJECT]-(w:Task) RETURN count(*) AS n",
+        {"fid": 1},
+    ),
+    (
+        "chain_count_empty_start",
+        "chain_graph",
+        f"MATCH {_CHAIN.replace('Team', 'Nothing')} RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_same_type_bails",
+        "chain_graph",
+        "MATCH (a:Dept)-[:PARTNER]->(b:Dept)-[:PARTNER]->(c:Dept)-[:PARTNER]->(d:Dept) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_cycle_bails",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)-[:COVERS]->(f) RETURN count(*) AS n",
+        None,
+    ),
+    (
+        "chain_count_distinct_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_count_grouped_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN f.id AS f, count(*) AS n",
+        None,
+    ),
+]
+
+
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
+    *CHAIN_COUNT_QUERIES,
     # The query-local equality index (past 64 driving rows) against the
     # per-row matcher's cross-kind equality: int probes on float keys, ISO
     # text on date keys, plain text on one-element JSON list keys.
@@ -7392,6 +7521,7 @@ PASS_TRIGGER_CASES: dict[str, tuple[str, str]] = {
     "fuse_anchored_edge_count": ("differential", "trigger_anchored_edge_count"),
     "fuse_count_short_circuits": ("differential", "trigger_count_short_circuit"),
     "fuse_optional_match_aggregate": ("differential", "count_optional_edge_var"),
+    "fuse_chain_path_count": ("differential", "chain_count_three_hop"),
     "fuse_match_return_aggregate": ("differential", "trigger_match_return_aggregate"),
     "fuse_match_with_aggregate": ("differential", "trigger_match_with_aggregate"),
     "fuse_match_with_aggregate_top_k": ("differential", "trigger_match_with_top_k"),
