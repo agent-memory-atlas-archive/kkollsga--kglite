@@ -410,6 +410,45 @@ pub enum Clause {
         probe_kind: SpatialProbeKind,
         remainder: Option<Predicate>,
     },
+    /// Optimizer-generated: `UNWIND … MATCH (x:T …) WHERE valid_at(x, e) [AND …]`
+    /// → the pattern scanned once, then filtered per driving row by the
+    /// endpoint index's mask at `e`'s instant. See [`ValidAtJoin`].
+    FusedValidAtJoin(Box<ValidAtJoin>),
+}
+
+/// The state of `Clause::FusedValidAtJoin`, replacing an adjacent
+/// `MATCH` + `WHERE` that follows an `UNWIND`.
+///
+/// The pattern shares no variable with the driving rows, so the unfiltered
+/// scan is the same for every row; only `valid_at(x, e)` depends on the row,
+/// through `e`. The executor runs the scan once and keeps, per row, the
+/// matches whose `x` is valid at that row's instant. Every condition it
+/// cannot decide that way (no usable index, an `e` that is not an instant, a
+/// graph with secondary labels) sends the whole clause through
+/// `match_clause` and `where_clause` instead, which are the clauses the
+/// rewrite replaced.
+#[derive(Debug, Clone)]
+pub struct ValidAtJoin {
+    /// The replaced `MATCH`, with no hint or path assignment.
+    pub match_clause: MatchClause,
+    /// The replaced `WHERE`, whole — the fallback runs it as written.
+    pub where_clause: WhereClause,
+    /// The matched node variable `valid_at()` is called on.
+    pub var: String,
+    /// Its single label.
+    pub label: String,
+    /// The instant argument; reads only variables bound before the `MATCH`.
+    pub instant: Expression,
+    /// `valid_at(x, e, 'from', 'to')`'s two names; the fused path applies
+    /// only while they are the declared pair.
+    pub named_bounds: Option<(String, String)>,
+    /// The `WHERE` without the `valid_at()` conjunct.
+    pub residual: Option<Predicate>,
+    /// Set by the count rewrite: the variable the fused clause binds per
+    /// driving row to the number of rows it would have produced, and emits
+    /// instead of those rows (none for a zero count). The `RETURN` after it
+    /// sums that variable where it counted rows.
+    pub count_alias: Option<String>,
 }
 
 /// How the spatial-join executor should source the probe-side point.

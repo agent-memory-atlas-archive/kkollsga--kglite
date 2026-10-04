@@ -273,10 +273,15 @@ impl CypherExecutor<'_> {
             // WHERE-into-MATCH fusion: when MATCH is followed by WHERE, pass the
             // WHERE predicate to execute_match for inline filtering during expansion.
             // This prevents materializing millions of rows that WHERE would discard.
-            // Safety requires the first, single-pattern MATCH: later/multi-pattern
-            // matches can refer to variables that are not bound during expansion.
+            // A single-pattern MATCH folds in both positions: the opening one,
+            // and one that joins incoming rows (`UNWIND … MATCH … WHERE`), where
+            // the predicate then runs on each driving row's matches before they
+            // are collected instead of after all of them are. A multi-pattern
+            // MATCH can refer to variables that are not bound during expansion.
             let folded_inline_where = if let Clause::Match(mc) = clause {
-                if result_set.rows.is_empty() && mc.patterns.len() == 1 {
+                if mc.patterns.len() == 1
+                    && (result_set.rows.is_empty() || joined_match_folds_where(mc, preserved))
+                {
                     if let Some(Clause::Where(w)) = query.clauses.get(i + 1) {
                         skip_clause[i + 1] = true;
                         Some(self.fold_constants_pred(&w.predicate))
@@ -497,6 +502,20 @@ impl CypherExecutor<'_> {
             self.execute_single_clause(clause, result_set)
         }
     }
+}
+
+/// Whether a MATCH that joins incoming rows may take its following `WHERE`
+/// inline. Left out: a row cap (counted after the filter, which the join's
+/// matcher cap is not), a distinct-by-node hint (its cross-row dedup is
+/// licensed only without a predicate), path variables (bound after the
+/// join, so a predicate reading one would see none), and a `CALL { }` body
+/// running with imports restored around each clause.
+fn joined_match_folds_where(mc: &MatchClause, preserved: Option<(&ResultRow, &[String])>) -> bool {
+    preserved.is_none()
+        && mc.limit_hint.is_none()
+        && mc.distinct_node_hint.is_none()
+        && mc.path_assignments.is_empty()
+        && mc.where_clause.is_none()
 }
 
 /// The variable names an `ORDER BY` immediately following `clauses[i]` reads.

@@ -198,6 +198,10 @@ fn visit_clause(clause: &Clause, names: &mut impl AstSink) {
             }
         }
         Clause::FusedChainPathCount { pattern, .. } => visit_pattern(pattern, names),
+        Clause::FusedValidAtJoin(join) => {
+            visit_match(&join.match_clause, names);
+            visit_predicate(&join.where_clause.predicate, names);
+        }
         Clause::SpatialJoin { remainder, .. } => {
             if let Some(predicate) = remainder {
                 visit_predicate(predicate, names);

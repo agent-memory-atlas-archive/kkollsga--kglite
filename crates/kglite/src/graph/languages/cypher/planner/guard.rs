@@ -167,10 +167,17 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
 /// planner reads only the allow-list; this list is the verdict record the
 /// walk test holds every registered pass against.
 #[cfg(test)]
-const GUARD_DENIED_PASSES: &[(&str, &str)] = &[(
-    "mark_skip_target_type_check",
-    "skips the node-type check that label guards rely on",
-)];
+const GUARD_DENIED_PASSES: &[(&str, &str)] = &[
+    (
+        "mark_skip_target_type_check",
+        "skips the node-type check that label guards rely on",
+    ),
+    (
+        "fuse_unwind_valid_at",
+        "scans the pattern once without the statement's filter and keeps matches by \
+         a mask of its own, so it would ignore the filter on every other element",
+    ),
+];
 
 /// Planner work outside `PASSES` that a guarded scope also skips, each with
 /// what it would bypass. The planner tests `CypherQuery::context` /

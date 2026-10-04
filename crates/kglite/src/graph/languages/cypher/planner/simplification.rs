@@ -1540,6 +1540,9 @@ pub(crate) fn collect_introduced_variables(clause: &Clause, out: &mut HashSet<St
         Clause::Merge(merge) => {
             collect_create_pattern_variables(&merge.pattern, out);
         }
+        Clause::FusedValidAtJoin(join) if join.count_alias.is_none() => {
+            collect_introduced_variables(&Clause::Match(join.match_clause.clone()), out);
+        }
         _ => {}
     }
 }
@@ -1662,6 +1665,10 @@ pub(super) fn collect_clause_variables(clause: &Clause, out: &mut HashSet<String
         Clause::Skip(s) => collect_expression_refs(&s.count, out),
         Clause::Limit(l) => collect_expression_refs(&l.count, out),
         Clause::Unwind(u) => collect_expression_refs(&u.expression, out),
+        Clause::FusedValidAtJoin(join) => {
+            collect_pattern_refs(&join.match_clause.patterns, out);
+            collect_predicate_refs(&join.where_clause.predicate, out);
+        }
         Clause::Call(call) => {
             for (_, expression) in &call.parameters {
                 collect_expression_refs(expression, out);

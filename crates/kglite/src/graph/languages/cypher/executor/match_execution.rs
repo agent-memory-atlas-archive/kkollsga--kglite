@@ -661,6 +661,11 @@ impl<'a> CypherExecutor<'a> {
             for r in produced {
                 self.check_interrupt_periodic(work)?;
                 work = work.saturating_add(1);
+                if let Some(predicate) = inline_where {
+                    if !self.evaluate_predicate(predicate, &r)? {
+                        continue;
+                    }
+                }
                 self.budget.reserve_rows(new_rows.len(), 1, "MATCH join")?;
                 new_rows.push(r);
                 if limit_hint.is_some_and(|l| new_rows.len() >= l) {

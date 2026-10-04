@@ -800,6 +800,65 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
             "RETURN [r IN relationships(p) | r.k] AS ks"
         ),
     ),
+    # `UNWIND <instants> AS d MATCH (x:T) WHERE valid_at(x, e)`: the fused join
+    # scans once and keeps matches per instant by the endpoint index's mask.
+    # The instants sit on the fixture's boundary days (half-open ends, abutting
+    # periods), repeat one, and run the count, row, residual-predicate,
+    # named-bounds and parameter-list shapes.
+    (
+        "unwind_valid_at_count_per_instant",
+        "declared_interval_graph",
+        "UNWIND ['1899-12-31', '1900-01-01', '1989-12-31', '1990-01-01', '2009-12-31', '2010-01-01', "
+        "'2010-01-01', '2011-06-01'] AS d MATCH (m:M) WHERE valid_at(m, date(d)) "
+        "RETURN d, count(*) AS c ORDER BY d",
+        None,
+    ),
+    (
+        "unwind_valid_at_rows_per_instant",
+        "declared_interval_graph",
+        "UNWIND ['1900-01-01', '1990-01-01', '2010-01-01'] AS d MATCH (m:M) WHERE valid_at(m, d) "
+        "RETURN d, m.code AS code ORDER BY d, code",
+        None,
+    ),
+    (
+        "unwind_valid_at_residual_predicate",
+        "declared_interval_graph",
+        "UNWIND ['1900-01-01', '1995-01-01', '2010-01-01'] AS d MATCH (m:M) "
+        "WHERE valid_at(m, d) AND m.code <> m.kind RETURN d, count(m) AS c ORDER BY d",
+        None,
+    ),
+    (
+        "unwind_valid_at_pushed_matcher",
+        "declared_interval_graph",
+        "UNWIND ['1900-01-01', '1995-01-01', '2010-01-01'] AS d MATCH (m:M) "
+        "WHERE valid_at(m, d) AND m.kind = 'a' RETURN d, count(*) AS n ORDER BY d",
+        None,
+    ),
+    (
+        "unwind_valid_at_named_declared_pair",
+        "declared_interval_graph",
+        "UNWIND ['2000-01-01', '2000-01-01', '2010-01-01'] AS d MATCH (m:M) "
+        "WHERE valid_at(m, d, 'vf', 'vt') RETURN d AS day, count(m) AS n ORDER BY day",
+        None,
+    ),
+    (
+        "unwind_valid_at_named_other_pair",
+        "declared_interval_graph",
+        "UNWIND ['2010-01-01'] AS d MATCH (m:M) WHERE valid_at(m, d, 'vt', 'vf') RETURN d, count(*) AS n",
+        None,
+    ),
+    (
+        "unwind_valid_at_param_list",
+        "declared_interval_graph",
+        "UNWIND $ds AS d MATCH (m:M) WHERE valid_at(m, d) RETURN d, count(*) AS n ORDER BY d",
+        {"ds": ["1899-12-31", "1950-06-01", "1990-01-01", "2010-01-01"]},
+    ),
+    (
+        "unwind_valid_at_empty_list",
+        "declared_interval_graph",
+        "UNWIND $ds AS d MATCH (m:M) WHERE valid_at(m, d) RETURN d, count(*) AS n",
+        {"ds": []},
+    ),
     # The declared forms on list items read the item's own declaration, and
     # a null element is null, through every plan.
     (
@@ -7509,6 +7568,7 @@ PASS_TRIGGER_CASES: dict[str, tuple[str, str]] = {
     "fold_aliasing_with": ("differential", "aliasing_with_top_k"),
     "hoist_terminal_return_over_with_top_k": ("differential", "with_order_limit_then_return"),
     "narrow_unwind_source": ("differential", "narrow_unwind_source_dead"),
+    "fuse_unwind_valid_at": ("differential", "unwind_valid_at_count_per_instant"),
     "desugar_multi_match_return_aggregate": ("differential", "multi_match_group_agg"),
     "fuse_spatial_join": ("specialized", "spatial_join"),
     "reorder_match_clauses": ("specialized", "reorder_match_clauses"),
@@ -7561,6 +7621,7 @@ PASS_SECONDARY_TRIGGER_CASES: dict[str, str] = {
     "fuse_count_short_circuits": "trigger_count_short_circuit_typed_hop",
     "fuse_match_with_aggregate_top_k": "trigger_match_with_top_k_ascending",
     "fold_aliasing_with": "aliasing_with_top_k_ascending",
+    "fuse_unwind_valid_at": "unwind_valid_at_rows_per_instant",
     "reorder_predicates_by_cost": "trigger_predicate_reorder_or",
 }
 

@@ -441,6 +441,10 @@ pub fn clause_display_name(clause: &Clause) -> String {
             probe_type,
             ..
         } => format!("SpatialJoin :{container_type} ⊇ :{probe_type}"),
+        Clause::FusedValidAtJoin(join) if join.count_alias.is_some() => {
+            format!("FusedValidAtJoin :{} (counted)", join.label)
+        }
+        Clause::FusedValidAtJoin(join) => format!("FusedValidAtJoin :{}", join.label),
     }
 }
 

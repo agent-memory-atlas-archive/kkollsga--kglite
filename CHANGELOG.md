@@ -211,6 +211,30 @@ before upgrading.
   by a property shared by several nodes could differ from the materialized
   route in the last digit.
 
+- Faster: `UNWIND <instants> AS d MATCH (x:T …) WHERE valid_at(x, <expression of d>) …`
+  scans the pattern once and keeps, for each instant, the matches the
+  endpoint index says are valid then, instead of joining every instant to
+  every version and filtering the product (planner pass
+  `fuse_unwind_valid_at`, plan operator `FusedValidAtJoin`). When the
+  statement is `RETURN d, count(*)` over a bare `(x:T)` it is two binary
+  searches per instant. On 149,934 versions of 50,000 employees, 24 instants
+  (release, min of 5, load 10-15): the count took 1.26 s and 421 MB, now
+  0.03 ms and 96 MB (24 separate `FOR VALID_TIME AS OF` statements: 2 ms);
+  with a pushed predicate 324 ms -> 7 ms; the row form 1.33 s -> 203 ms; the
+  one-hop form 1.91 s -> 195 ms (peak memory 807 MB, the scan's rows held
+  once). The pass applies to a node with one label whose type has an
+  endpoint index, in a statement without writes or a `FOR VALID_TIME AS OF`
+  prefix, when the instant expression reads only variables bound before the
+  `MATCH`. A graph with secondary labels, Disk mode, an unreadable bound,
+  the index byte cap, a `valid_at()` with bound names other than the declared
+  pair, or an instant that is not a date, datetime or ISO string (including
+  null) runs the `MATCH` and `WHERE` as written, with the same rows and errors.
+- A `WHERE` after a `MATCH` that joins incoming rows (`UNWIND … MATCH … WHERE`)
+  filters each row's matches as they are produced, so the join no longer holds
+  every unfiltered match first (the same statement peaked at 421 MB instead of
+  1.54 GB). Row caps, `DISTINCT` hints, path variables and `CALL { }` bodies
+  keep the old order.
+
 ### Fixed
 
 - An anchored relationship count on an id shared by several node types counted

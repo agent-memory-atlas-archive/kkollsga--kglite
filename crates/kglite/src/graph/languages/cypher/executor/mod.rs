@@ -992,6 +992,7 @@ impl<'a> CypherExecutor<'a> {
                 *probe_kind,
                 remainder.as_ref(),
             ),
+            Clause::FusedValidAtJoin(join) => self.execute_valid_at_join(join, result_set),
             Clause::Call(c) => self.execute_call(c, result_set),
             Clause::CallSubquery { import, body } => {
                 // Index-aware dispatch (`execute_clauses_profiled` /
@@ -1104,6 +1105,7 @@ mod temporal_procedures;
 #[cfg(test)]
 pub mod tests;
 pub mod transient_index;
+mod valid_at_join;
 mod vector_options;
 mod view_call;
 pub mod where_clause;
@@ -1229,5 +1231,6 @@ fn is_fused_clause(clause: &Clause) -> bool {
             | Clause::FusedNodeScanAggregate { .. }
             | Clause::FusedNodeScanTopK { .. }
             | Clause::SpatialJoin { .. }
+            | Clause::FusedValidAtJoin(_)
     )
 }

@@ -636,3 +636,58 @@ def test_bench_stream_match_aggregate(benchmark, chain_count_graph, name, tail):
     result = benchmark(chain_count_graph.cypher, query)
     expected = chain_count_graph.cypher(query, streaming=False).to_list()
     assert result.to_list() == expected
+
+
+@pytest.fixture
+def versioned_staff_graph():
+    """30 000 people, 90 000 half-open versions (three abutting periods each).
+
+    Built with the same loader calls a versioned register uses; `set_temporal`
+    declares the interval, so `valid_at(e, d)` reads it.
+    """
+    people, versions = 30_000, 3
+    rows = []
+    for person in range(people):
+        start = 10_957 + (person * 7) % 4_000  # days since 1970, from 2000-01-01
+        for v in range(versions):
+            end = start + 300 + (person + v * 13) % 700
+            rows.append((person * versions + v, f"Person {person} v{v}", start, end if v < versions - 1 else None))
+            start = end
+    frame = pd.DataFrame(rows, columns=["vid", "title", "start", "end"])
+    for column in ("start", "end"):
+        frame[column] = pd.to_datetime(frame[column], unit="D")
+    graph = KnowledgeGraph()
+    graph.add_nodes(frame, "Staff", "vid", "title")
+    graph.set_temporal("Staff", "start", "end", "half_open")
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_unwind_valid_at_count(benchmark, versioned_staff_graph):
+    """`UNWIND <24 instants> MATCH (x:T) WHERE valid_at(x, d) RETURN d, count(*)`.
+
+    Planned as `FusedValidAtJoin` in count mode (`fuse_unwind_valid_at`): two
+    binary searches per instant. The unfused route joins every instant to every
+    version (24 x 90 000 rows) before filtering.
+    """
+    instants = [f"{2000 + i % 12}-{1 + i // 12 * 5:02d}-15" for i in range(24)]
+    query = "UNWIND $ds AS d MATCH (e:Staff) WHERE valid_at(e, date(d)) RETURN d, count(*) AS n"
+    params = {"ds": instants}
+    plan = [row["operation"] for row in versioned_staff_graph.cypher("EXPLAIN " + query, params=params)]
+    assert "OptimizerPass fuse_unwind_valid_at" in plan
+    result = benchmark(versioned_staff_graph.cypher, query, params=params)
+    expected = versioned_staff_graph.cypher(query, params=params, disabled_passes=["fuse_unwind_valid_at"])
+    assert sorted(map(repr, result.to_list())) == sorted(map(repr, expected.to_list()))
+
+
+@pytest.mark.benchmark
+def test_bench_unwind_valid_at_rows(benchmark, versioned_staff_graph):
+    """The row form of the same join: one scan, a bit test per version and instant."""
+    instants = [f"{2000 + i % 12}-{1 + i // 12 * 5:02d}-15" for i in range(24)]
+    query = "UNWIND $ds AS d MATCH (e:Staff) WHERE valid_at(e, date(d)) RETURN d, e.title AS t"
+    params = {"ds": instants}
+    plan = [row["operation"] for row in versioned_staff_graph.cypher("EXPLAIN " + query, params=params)]
+    assert "OptimizerPass fuse_unwind_valid_at" in plan
+    result = benchmark(versioned_staff_graph.cypher, query, params=params)
+    expected = versioned_staff_graph.cypher(query, params=params, disabled_passes=["fuse_unwind_valid_at"])
+    assert sorted(map(repr, result.to_list())) == sorted(map(repr, expected.to_list()))

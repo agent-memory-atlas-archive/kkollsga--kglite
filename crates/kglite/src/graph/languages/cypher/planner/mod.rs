@@ -35,7 +35,7 @@ use fusion::{
     fuse_match_return_aggregate, fuse_match_with_aggregate, fuse_match_with_aggregate_top_k,
     fuse_node_scan_aggregate, fuse_node_scan_top_k, fuse_optional_match_aggregate,
     fuse_order_by_top_k, fuse_spatial_join, fuse_text_bm25_order_limit,
-    fuse_vector_score_order_limit, mark_return_lazy_eligible,
+    fuse_vector_score_order_limit, mark_return_lazy_eligible, pass_fuse_unwind_valid_at,
 };
 use index_selection::push_where_into_match;
 use join_order::{
@@ -162,6 +162,10 @@ pub const PASSES: &[(&str, PassFn)] = &[
     // to read that downstream set. Running it first would decide against a
     // stale clause list.
     ("narrow_unwind_source", pass_narrow_unwind_source),
+    // After narrow_unwind_source, which declines a fused clause downstream of
+    // its UNWIND; before the passes that match a MATCH's neighbours, none of
+    // which can take the join this pass hides inside one clause.
+    ("fuse_unwind_valid_at", pass_fuse_unwind_valid_at),
     // rewrites Match-Match-Return(group, agg) so the aggregate-fusion +
     // top-K pipeline can pick it up.
     (

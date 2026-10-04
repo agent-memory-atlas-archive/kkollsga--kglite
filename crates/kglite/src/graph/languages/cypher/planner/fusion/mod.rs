@@ -15,12 +15,14 @@ mod chain_count;
 mod count;
 mod spatial;
 mod topk;
+mod valid_at_scan;
 
 pub(super) use aggregate::*;
 pub(super) use chain_count::*;
 pub(super) use count::*;
 pub(super) use spatial::*;
 pub(super) use topk::*;
+pub(super) use valid_at_scan::*;
 
 /// True when a projection carries a `*`, which no fused operator can project.
 ///
