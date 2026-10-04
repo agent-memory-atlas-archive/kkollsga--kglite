@@ -99,9 +99,9 @@ def test_graph_copy_cow_correctness_mapped():
 #: current host).
 BINARY_SIZE_BASELINES = {
     "darwin": 27_793_568,  # 0.19.1 darwin baseline
-    # Published 0.17.12 manylinux2014 x86_64 wheel member
+    # Published 0.19.1 manylinux2014 x86_64 wheel member
     # `kglite/kglite.abi3.so`; artifact identity is recorded in the history below.
-    "linux": 31_188_600,
+    "linux": 34_169_144,
 }
 
 
@@ -595,6 +595,14 @@ def test_binary_size_regression():
         store, disk cells journal, hard-linked incremental publish, carried
         title/id bundles, stale-save refusal), the export manifest, lossless
         CSV export, and the RDF 1.2 importer and N-Quads/TriG exporter.
+        Linux: the release refresh writes only the host platform's entry,
+        so the Linux baseline had stayed at the published 0.17.12 member
+        through 0.18.0-0.19.1 while the published members grew to
+        32,370,552 (0.18.0), 32,383,416 (0.18.1), 33,352,888 (0.19.0) and
+        34,169,144 (0.19.1) — 0.19.1 already sat at +9.6% of the old gate.
+        The Linux baseline is now the published 0.19.1 manylinux2014 x86_64
+        member `kglite/kglite.abi3.so`, 34,169,144 bytes (wheel SHA-256
+        `26c75d0f53fc3a753a3201ffeda7aa06f677c41611c0ad47cd44a1dd79f7e2ed`).
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
