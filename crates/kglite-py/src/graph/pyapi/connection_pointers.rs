@@ -10,7 +10,7 @@ use crate::graph::KnowledgeGraph;
 #[pymethods]
 impl KnowledgeGraph {
     /// Pointer to add_relationships(), the primary spelling; a connection is a relationship.
-    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
+    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None, distinct=false))]
     // The loader arguments of add_relationships, passed through unchanged.
     #[allow(clippy::too_many_arguments)]
     fn add_connections(
@@ -35,6 +35,7 @@ impl KnowledgeGraph {
         on_invalid: &str,
         convention: Option<&str>,
         empty_when: Option<&str>,
+        distinct: bool,
     ) -> PyResult<Py<PyAny>> {
         self.add_relationships(
             py,
@@ -57,6 +58,7 @@ impl KnowledgeGraph {
             on_invalid,
             convention,
             empty_when,
+            distinct,
         )
     }
 

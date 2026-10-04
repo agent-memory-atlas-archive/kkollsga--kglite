@@ -11,6 +11,17 @@ before upgrading.
 
 ### Added
 
+- `distinct` collapses identical relationship rows. A load that owns its edges
+  writes one relationship per row, so repeated rows (same source, same target,
+  equal property values, or no property columns at all) become identical
+  parallel relationships. `add_relationships(..., distinct=True)` (and
+  `add_connections`), a `"distinct": True` key on an
+  `add_relationships_bulk` / `add_relationships_from_source` spec, and
+  `"distinct": true` on a blueprint `junction_edges` entry keep the first row
+  of each group with its properties; rows that differ in a property are never
+  collapsed. Rust API: `IdenticalRows`, `add_connections_with_identical_rows`,
+  and `JunctionEdge.distinct` (a new field on a constructible struct).
+
 - `empty_when: 'to_before_from'` keeps a version superseded the day it was
   registered under the `closed` convention. A date `to` exactly one day before
   a date `from` is accepted as an empty interval (valid on no day, counted in
@@ -68,6 +79,15 @@ before upgrading.
   no longer compiles.
 
 ### Changed
+
+- A load that stores identical relationships now warns once per relationship
+  type: `add_relationships`, `add_relationships_bulk`,
+  `add_relationships_from_source` (a `UserWarning` and the report's
+  `warnings`) and a blueprint junction (the build warnings) name the type, the
+  relationship count, the number of distinct combinations and the largest copy
+  count, and point at `distinct`. Data and counts are unchanged. The check
+  holds up to 4 million distinct rows; later rows go unchecked and the warning
+  says so.
 
 - The default valid-time context costs what the statement reaches, not what the
   graph declares. A statement's template now holds the declared targets its

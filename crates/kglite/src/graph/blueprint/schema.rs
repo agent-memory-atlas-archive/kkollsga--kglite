@@ -161,6 +161,7 @@ pub const ACCEPTED_JUNCTION_EDGE_KEYS: &[&str] = &[
     "property_types",
     "rename",
     "temporal",
+    "distinct",
 ];
 
 /// `"Disease"` or `["Disease", "Phenotype"]` — both land as a list, so the
@@ -323,6 +324,11 @@ pub struct JunctionEdge {
     pub rename: IndexMap<String, String>,
     #[serde(default)]
     pub temporal: Option<TemporalSpec>,
+    /// Keep one relationship per distinct row — same source, same target,
+    /// equal `properties` values — instead of one per CSV row. Off by default:
+    /// identical rows are kept and the build warns once per relationship type.
+    #[serde(default)]
+    pub distinct: bool,
     /// Keys on this junction_edge that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
@@ -378,6 +384,7 @@ impl JunctionEdge {
             property_types: IndexMap::new(),
             rename: IndexMap::new(),
             temporal: None,
+            distinct: false,
             extra: IndexMap::new(),
         }
     }

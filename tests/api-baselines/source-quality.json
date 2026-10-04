@@ -275,9 +275,9 @@
     },
     {
       "path": "crates/kglite/src/graph/mutation/maintain.rs",
-      "qualified_name": "crate::add_connections_with_initial_load",
-      "lines": 219,
-      "branches": 20,
+      "qualified_name": "crate::add_connections_tracked",
+      "lines": 216,
+      "branches": 19,
       "nesting": 3
     },
     {

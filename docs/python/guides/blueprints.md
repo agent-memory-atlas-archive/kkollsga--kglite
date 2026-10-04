@@ -367,6 +367,45 @@ For many-to-many relationships, use a separate lookup CSV. Suppose `project_assi
 
 Junction edges can carry properties — list them in `properties` and use `property_types` for type hints. This creates `(Employee)-[:ASSIGNED_TO {role: "Lead", assigned_date: ...}]->(Project)` edges.
 
+### Repeated Junction Rows
+
+A junction writes one relationship per CSV row. A history file — one row per
+employee per week on a project — read with `"properties": []` therefore stores
+the same `ASSIGNED_TO` relationship once for every row, and each count over it
+multiplies. The build does not change this by default; it adds one warning per
+relationship type naming the number of relationships, the number of distinct
+`(source, target)` pairs and the largest copy count. Two ways out:
+
+- list the column that tells the rows apart (`"properties": ["week"]`) when each
+  row is a real fact, or
+- set `"distinct": true` on the junction to keep one relationship per distinct
+  row — same source, same target and equal `properties` values. The first row
+  of each group is kept with its properties; rows that differ in any listed
+  property are never collapsed, and the warning is not raised.
+
+```json
+{
+  "ASSIGNED_TO": {
+    "csv": "assignment_history.csv",
+    "source_fk": "employee_id",
+    "target": "Project",
+    "target_fk": "project_id",
+    "distinct": true
+  }
+}
+```
+
+The warning check keeps up to 4 million distinct rows in memory; past that the
+remaining rows go unchecked and the warning says so. `distinct: true` has no
+limit and holds one small key (a few tens of bytes) per distinct row of the
+junction; rows without property columns are matched exactly on their endpoint
+pair, rows with properties on the pair plus a 128-bit hash of their values. A junction whose
+relationship type already has relationships from the same source type merges
+rows on the endpoint pair instead, and a relationship type with a declared
+validity interval already drops a row identical to an earlier one, so neither
+needs the option. Only `junction_edges` take it; `fk_edges` write one
+relationship per node row.
+
 ### A Junction Over a Union of Target Types
 
 When a relationship's range is an abstract class — `ASSOCIATED_WITH` pointing

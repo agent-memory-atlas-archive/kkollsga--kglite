@@ -8,11 +8,13 @@
 pub mod add_properties;
 pub mod batch;
 mod batch_title_admission;
+mod connection_stubs;
 mod delete_state;
 mod edge_props;
 pub mod edge_specs;
 mod endpoints;
 pub mod extend;
+pub(crate) mod identical_rows;
 pub mod maintain;
 mod pending_edges;
 mod rel_constraint_gate;

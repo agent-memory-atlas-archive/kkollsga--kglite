@@ -196,6 +196,7 @@ pub(super) fn run_chain_allocated(
             },
             rename: Default::default(),
             temporal: None,
+            distinct: false,
             extra: Default::default(),
         },
     );

@@ -5,11 +5,12 @@ use super::super::input::InputRegistry;
 use super::super::table::{MisparseTally, RawCsv};
 use super::super::typing::{map_blueprint_type, overlay_known_types, typed_dataframe};
 use super::cache::CsvCache;
-use super::fk::connect;
+use super::fk::connect_tracked;
 use super::prepass;
 use super::specs::FlatSpec;
 use super::table_ops::subset_rows;
 use super::BuildReport;
+use crate::graph::mutation::identical_rows::{IdenticalRowTracker, IdenticalRows};
 use crate::graph::mutation::maintain;
 use crate::graph::schema::DirGraph;
 use std::collections::{BTreeMap, HashMap};
@@ -165,6 +166,9 @@ fn load_one_junction_edge(
     let mut misparses = MisparseTally::default();
     let mut unroutable: BTreeMap<String, usize> = BTreeMap::new();
     let mut reported_missing_type_column = false;
+    // One tracker per junction input: its rows may span many chunks and target
+    // groups, and identical rows are identical wherever they fall.
+    let mut identical = IdenticalRowTracker::new(IdenticalRows::from_distinct(junc.distinct));
 
     for chunk_result in chunks {
         let chunk = match chunk_result {
@@ -223,16 +227,14 @@ fn load_one_junction_edge(
                         continue;
                     }
                 };
-            let count = connect(
+            let count = connect_tracked(
                 graph,
                 df,
-                edge_type,
-                &spec.node_type,
-                &junc.source_fk,
-                target_type,
-                &junc.target_fk,
+                (edge_type, &spec.node_type, target_type),
+                (&junc.source_fk, &junc.target_fk),
                 report,
                 initial_load,
+                &mut identical,
             )?;
             *report
                 .edges_by_type
@@ -244,6 +246,11 @@ fn load_one_junction_edge(
         "junction '{edge_type}' (node '{}')",
         spec.node_type
     )));
+    report.warnings.extend(
+        identical
+            .warning(edge_type)
+            .map(|w| format!("junction (node '{}'): {w}", spec.node_type)),
+    );
     for (value, count) in unroutable {
         report.warnings.push(format!(
             "junction '{edge_type}' (node '{}'): {count} row(s) name target type '{value}', \

@@ -392,6 +392,7 @@ pub kglite::api::blueprint::FlatSpec::parent: core::option::Option<alloc::string
 pub kglite::api::blueprint::FlatSpec::spec: kglite::api::blueprint::NodeSpec
 pub struct kglite::api::blueprint::JunctionEdge
 pub kglite::api::blueprint::JunctionEdge::csv: core::option::Option<alloc::string::String>
+pub kglite::api::blueprint::JunctionEdge::distinct: bool
 pub kglite::api::blueprint::JunctionEdge::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::JunctionEdge::file: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::JunctionEdge::properties: alloc::vec::Vec<alloc::string::String>
@@ -2393,6 +2394,22 @@ pub fn kglite::datatypes::values::ColumnType::fmt(&self, f: &mut core::fmt::Form
 impl core::fmt::Display for kglite::datatypes::values::ColumnType
 pub fn kglite::datatypes::values::ColumnType::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::datatypes::values::ColumnType
+pub enum kglite::api::mutation::IdenticalRows
+pub kglite::api::mutation::IdenticalRows::Collapse
+pub kglite::api::mutation::IdenticalRows::Keep
+impl kglite::api::mutation::IdenticalRows
+pub fn kglite::api::mutation::IdenticalRows::from_distinct(distinct: bool) -> Self
+impl core::clone::Clone for kglite::api::mutation::IdenticalRows
+pub fn kglite::api::mutation::IdenticalRows::clone(&self) -> kglite::api::mutation::IdenticalRows
+impl core::cmp::Eq for kglite::api::mutation::IdenticalRows
+impl core::cmp::PartialEq for kglite::api::mutation::IdenticalRows
+pub fn kglite::api::mutation::IdenticalRows::eq(&self, other: &kglite::api::mutation::IdenticalRows) -> bool
+impl core::default::Default for kglite::api::mutation::IdenticalRows
+pub fn kglite::api::mutation::IdenticalRows::default() -> kglite::api::mutation::IdenticalRows
+impl core::fmt::Debug for kglite::api::mutation::IdenticalRows
+pub fn kglite::api::mutation::IdenticalRows::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::mutation::IdenticalRows
+impl core::marker::StructuralPartialEq for kglite::api::mutation::IdenticalRows
 pub enum kglite::api::mutation::OperationReport
 pub kglite::api::mutation::OperationReport::CalculationOperation(kglite::graph::introspection::reporting::CalculationOperationReport)
 pub kglite::api::mutation::OperationReport::ConnectionOperation(kglite::api::mutation::ConnectionOperationReport)
@@ -2513,6 +2530,7 @@ pub fn kglite::api::mutation::OperationReports::default() -> kglite::api::mutati
 impl core::fmt::Debug for kglite::api::mutation::OperationReports
 pub fn kglite::api::mutation::OperationReports::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn kglite::api::mutation::add_connections(graph: &mut kglite::api::DirGraph, df_data: kglite::datatypes::values::DataFrame, connection_type: alloc::string::String, source_type: alloc::string::String, source_id_field: alloc::string::String, target_type: alloc::string::String, target_id_field: alloc::string::String, source_title_field: core::option::Option<alloc::string::String>, target_title_field: core::option::Option<alloc::string::String>, conflict_handling: core::option::Option<alloc::string::String>) -> core::result::Result<kglite::api::mutation::ConnectionOperationReport, alloc::string::String>
+pub fn kglite::api::mutation::add_connections_with_identical_rows(graph: &mut kglite::api::DirGraph, df_data: kglite::datatypes::values::DataFrame, connection_type: alloc::string::String, source_type: alloc::string::String, source_id_field: alloc::string::String, target_type: alloc::string::String, target_id_field: alloc::string::String, source_title_field: core::option::Option<alloc::string::String>, target_title_field: core::option::Option<alloc::string::String>, conflict_handling: core::option::Option<alloc::string::String>, identical_rows: kglite::api::mutation::IdenticalRows) -> core::result::Result<kglite::api::mutation::ConnectionOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::add_edges_from_specs(graph: &mut kglite::api::DirGraph, specs: alloc::vec::Vec<kglite::api::mutation::EdgeSpec>) -> core::result::Result<kglite::api::mutation::EdgeSpecReport, alloc::string::String>
 pub fn kglite::api::mutation::add_nodes(graph: &mut kglite::api::DirGraph, df_data: kglite::datatypes::values::DataFrame, node_type: alloc::string::String, unique_id_field: alloc::string::String, node_title_field: core::option::Option<alloc::string::String>, conflict_handling: core::option::Option<alloc::string::String>) -> core::result::Result<kglite::api::mutation::NodeOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::add_properties(graph: &mut kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, property_spec: std::collections::hash::map::HashMap<alloc::string::String, kglite::api::mutation::PropertySpec>) -> core::result::Result<kglite::graph::mutation::maintain::AddPropertiesReport, alloc::string::String>

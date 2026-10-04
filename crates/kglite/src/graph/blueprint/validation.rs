@@ -1342,6 +1342,7 @@ mod accepted_key_tests {
                 ("property_types", json!({})),
                 ("rename", json!({})),
                 ("temporal", json!(null)),
+                ("distinct", json!(false)),
             ],
             other => panic!("no fixture for level {other}"),
         }

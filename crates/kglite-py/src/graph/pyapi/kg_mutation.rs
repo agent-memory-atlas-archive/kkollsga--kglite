@@ -13,7 +13,7 @@ use crate::graph::{
     parse_temporal_column_types, resolve_noderefs, EmbeddingColumnData, InlineTimeseriesConfig,
     KnowledgeGraph, TimeSpec,
 };
-use kglite_core::api::mutation::{NodeOperationReport, OperationReport};
+use kglite_core::api::mutation::{IdenticalRows, NodeOperationReport, OperationReport};
 use kglite_core::api::DirGraph;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -341,9 +341,11 @@ fn write_connections(
     on_invalid: &str,
     convention: Option<&str>,
     empty_when: Option<&str>,
+    distinct: bool,
 ) -> PyResult<Py<PyAny>> {
     kg.check_durable_owner()?;
     let on_invalid = OnInvalid::parse(on_invalid)?;
+    let identical_rows = IdenticalRows::from_distinct(distinct);
     let (convention, empty_when) = crate::graph::parse_interval_options(convention, empty_when)?;
     let has_data = data.as_ref().map(|d| !d.is_none()).unwrap_or(false);
     validate_connection_input_mode(
@@ -396,6 +398,7 @@ fn write_connections(
             source_title_field,
             target_title_field,
             conflict_handling,
+            identical_rows,
         };
         let result = detach_bulk_write(py, graph, |graph| {
             graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
@@ -468,6 +471,7 @@ fn write_connections(
         source_title_field,
         target_title_field,
         conflict_handling,
+        identical_rows,
     };
     let result = detach_bulk_write(py, graph, |graph| {
         graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
@@ -499,6 +503,7 @@ struct ConnectionBatch {
     source_title_field: Option<String>,
     target_title_field: Option<String>,
     conflict_handling: Option<String>,
+    identical_rows: IdenticalRows,
 }
 
 impl ConnectionBatch {
@@ -509,12 +514,22 @@ impl ConnectionBatch {
         replace: bool,
         frame: DataFrame,
     ) -> Result<kglite_core::api::mutation::ConnectionOperationReport, String> {
-        let write = if replace {
-            kglite_core::api::mutation::replace_connections
-        } else {
-            kglite_core::api::mutation::add_connections
-        };
-        write(
+        if !replace {
+            return kglite_core::api::mutation::add_connections_with_identical_rows(
+                graph,
+                frame,
+                self.connection_type,
+                self.source_type,
+                self.source_id_field,
+                self.target_type,
+                self.target_id_field,
+                self.source_title_field,
+                self.target_title_field,
+                self.conflict_handling,
+                self.identical_rows,
+            );
+        }
+        kglite_core::api::mutation::replace_connections(
             graph,
             frame,
             self.connection_type,
@@ -1468,7 +1483,7 @@ impl KnowledgeGraph {
     }
 
     /// Add relationships from a DataFrame or read-only Cypher query.
-    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
+    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None, distinct=false))]
     // The public Python loader supports DataFrame and query modes with optional controls.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn add_relationships(
@@ -1493,6 +1508,7 @@ impl KnowledgeGraph {
         on_invalid: &str,
         convention: Option<&str>,
         empty_when: Option<&str>,
+        distinct: bool,
     ) -> PyResult<Py<PyAny>> {
         write_connections(
             py,
@@ -1517,6 +1533,7 @@ impl KnowledgeGraph {
             on_invalid,
             convention,
             empty_when,
+            distinct,
         )
     }
 
@@ -1570,6 +1587,7 @@ impl KnowledgeGraph {
             on_invalid,
             convention,
             empty_when,
+            false,
         )
     }
 
@@ -1919,6 +1937,12 @@ impl KnowledgeGraph {
                 continue;
             }
 
+            let distinct = match spec.get_item("distinct")? {
+                Some(flag) => flag.extract::<bool>()?,
+                None => false,
+            };
+            let identical_rows = IdenticalRows::from_distinct(distinct);
+
             // Standardized column names for connector API
             let source_id_field = "source_id".to_string();
             let target_id_field = "target_id".to_string();
@@ -1957,7 +1981,7 @@ impl KnowledgeGraph {
             // Converted frame is pure Rust — apply off-GIL.
             let report = detach_mutation(py, || {
                 graph.with_write_provenance(git_sha, modified_by, |graph| {
-                    kglite_core::api::mutation::add_connections(
+                    kglite_core::api::mutation::add_connections_with_identical_rows(
                         graph,
                         df_result,
                         connection_name.clone(),
@@ -1968,6 +1992,7 @@ impl KnowledgeGraph {
                         None, // source_title_field
                         None, // target_title_field
                         None, // conflict_handling
+                        identical_rows,
                     )
                 })
             })?;

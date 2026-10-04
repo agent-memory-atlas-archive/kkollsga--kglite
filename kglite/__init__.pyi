@@ -2362,6 +2362,7 @@ class KnowledgeGraph:
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
+        distinct: bool = False,
     ) -> dict[str, Any]:
         """Add relationships (edges) between existing nodes.
 
@@ -2448,6 +2449,21 @@ class KnowledgeGraph:
                 interval ``column_types`` declares; see :meth:`add_nodes`.
             empty_when: ``'to_before_from'`` for a ``'closed'`` interval's
                 empty rows; see :meth:`add_nodes`.
+            distinct: Collapse identical rows. A first load of a relationship
+                type from a ``source_type`` writes one relationship per row, so
+                rows with the same source, the same target and equal property
+                values (or no property columns at all) become identical
+                parallel relationships and every count over them multiplies.
+                By default they are kept and one ``UserWarning`` per call names
+                the type, the relationship count, the number of distinct
+                combinations and the largest copy count (the check holds up to
+                4 million distinct rows; later rows go unchecked and the
+                warning says so). ``distinct=True`` keeps the first of each
+                identical group, with its properties, and warns about nothing.
+                Rows that differ in any property are never collapsed. It has no
+                effect where rows already merge (a later load from the same
+                ``source_type``, or a relationship type with a declared
+                validity interval).
 
         Returns:
             Operation report dict with ``connections_created``,
@@ -2502,6 +2518,7 @@ class KnowledgeGraph:
         on_invalid: Literal["warn", "error", "skip"] = "warn",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
+        distinct: bool = False,
     ) -> dict[str, Any]:
         """Pointer to :meth:`add_relationships`, the primary spelling; a connection is a relationship."""
         ...
@@ -2754,7 +2771,9 @@ class KnowledgeGraph:
         """Add multiple relationship types at once.
 
         Each dict must contain ``source_type``, ``target_type``,
-        ``connection_name``, and ``data`` (DataFrame with ``source_id``/``target_id`` columns).
+        ``connection_name``, and ``data`` (DataFrame with ``source_id``/``target_id`` columns),
+        and may carry ``distinct`` (default ``False``) with the meaning it has on
+        :meth:`add_relationships`.
         ``git_sha`` and ``modified_by`` apply to every opted-in edge type.
 
         Returns:

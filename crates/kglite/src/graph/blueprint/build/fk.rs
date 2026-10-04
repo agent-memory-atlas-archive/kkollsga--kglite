@@ -13,6 +13,7 @@ use super::specs::FlatSpec;
 use super::table_ops::subset_rows;
 use super::BuildReport;
 use crate::datatypes::values::DataFrame;
+use crate::graph::mutation::identical_rows::IdenticalRowTracker;
 use crate::graph::mutation::maintain;
 use crate::graph::schema::DirGraph;
 use indexmap::IndexMap;
@@ -939,7 +940,29 @@ pub(super) fn connect(
     report: &mut BuildReport,
     initial_load: maintain::InitialLoad,
 ) -> Result<usize, String> {
-    match maintain::add_connections_with_initial_load(
+    connect_tracked(
+        graph,
+        df,
+        (connection_type, source_type, target_type),
+        (source_id_field, target_id_field),
+        report,
+        initial_load,
+        &mut IdenticalRowTracker::off(),
+    )
+}
+
+/// [`connect`] with the identical-row state of a chunked load, which the
+/// caller reports once its last chunk has landed.
+pub(super) fn connect_tracked(
+    graph: &mut DirGraph,
+    df: DataFrame,
+    (connection_type, source_type, target_type): (&str, &str, &str),
+    (source_id_field, target_id_field): (&str, &str),
+    report: &mut BuildReport,
+    initial_load: maintain::InitialLoad,
+    tracker: &mut IdenticalRowTracker,
+) -> Result<usize, String> {
+    match maintain::add_connections_tracked(
         graph,
         df,
         connection_type.to_string(),
@@ -951,6 +974,7 @@ pub(super) fn connect(
         None,
         None,
         initial_load,
+        tracker,
     ) {
         Ok(r) => {
             if r.connections_skipped > 0 {

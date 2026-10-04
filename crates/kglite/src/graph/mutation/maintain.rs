@@ -10,12 +10,16 @@ use crate::graph::mutation::batch_title_admission::{
     node_property_columns, prepare_connection_admission, snapshot_node_titles,
     ConnectionAdmissionFields, ConnectionTitles,
 };
+use crate::graph::mutation::connection_stubs::vivify_endpoints;
 use crate::graph::mutation::delete_state::remove_doomed_nodes;
 use crate::graph::mutation::edge_props::{
     intern_edge_props, register_used_edge_property_names, resolve_edge_property_columns,
 };
 use crate::graph::mutation::endpoints::{
     report_null_id_skips, resolve_endpoints, resolve_pairs, ResolvedEndpoints,
+};
+use crate::graph::mutation::identical_rows::{
+    IdenticalRowTracker, IdenticalRows, RowColumns, RowIdentity,
 };
 use crate::graph::mutation::pending_edges::PendingEdges;
 use crate::graph::mutation::rel_constraint_gate::{ConnectionBatchGate, RowFolding};
@@ -1136,6 +1140,9 @@ pub(crate) fn source_owns_its_edges(
         })
 }
 
+/// Add relationships from a frame. Identical rows of a load that owns its
+/// edges are kept, with one warning in the report; see
+/// [`add_connections_with_identical_rows`] to collapse them.
 #[allow(clippy::too_many_arguments)]
 pub fn add_connections(
     graph: &mut DirGraph,
@@ -1149,7 +1156,42 @@ pub fn add_connections(
     target_title_field: Option<String>,
     conflict_handling: Option<String>,
 ) -> Result<ConnectionOperationReport, String> {
-    add_connections_with_initial_load(
+    add_connections_with_identical_rows(
+        graph,
+        df_data,
+        connection_type,
+        source_type,
+        source_id_field,
+        target_type,
+        target_id_field,
+        source_title_field,
+        target_title_field,
+        conflict_handling,
+        IdenticalRows::Keep,
+    )
+}
+
+/// [`add_connections`] with the handling of identical rows chosen:
+/// [`IdenticalRows::Keep`] warns once in the report's `warnings`,
+/// [`IdenticalRows::Collapse`] stores one relationship per distinct row.
+// Same argument list as add_connections plus its load options; a params struct would only re-spell it.
+#[allow(clippy::too_many_arguments)]
+pub fn add_connections_with_identical_rows(
+    graph: &mut DirGraph,
+    df_data: DataFrame,
+    connection_type: String,
+    source_type: String,
+    source_id_field: String,
+    target_type: String,
+    target_id_field: String,
+    source_title_field: Option<String>,
+    target_title_field: Option<String>,
+    conflict_handling: Option<String>,
+    identical_rows: IdenticalRows,
+) -> Result<ConnectionOperationReport, String> {
+    let mut tracker = IdenticalRowTracker::new(identical_rows);
+    let edge_type = connection_type.clone();
+    let mut report = add_connections_tracked(
         graph,
         df_data,
         connection_type,
@@ -1161,14 +1203,64 @@ pub fn add_connections(
         target_title_field,
         conflict_handling,
         InitialLoad::Detect,
-    )
+        &mut tracker,
+    )?;
+    report.warnings.extend(tracker.warning(&edge_type));
+    Ok(report)
 }
 
 /// [`add_connections`] with the initial-load decision supplied by the caller.
 /// Chunked loaders use it to keep one logical load on a single regime; see
-/// [`InitialLoad`].
+/// [`InitialLoad`]. Identical rows are neither tracked nor reported.
+// Same argument list as add_connections plus its load options; a params struct would only re-spell it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn add_connections_with_initial_load(
+    graph: &mut DirGraph,
+    df_data: DataFrame,
+    connection_type: String,
+    source_type: String,
+    source_id_field: String,
+    target_type: String,
+    target_id_field: String,
+    source_title_field: Option<String>,
+    target_title_field: Option<String>,
+    conflict_handling: Option<String>,
+    initial_load: InitialLoad,
+) -> Result<ConnectionOperationReport, String> {
+    add_connections_tracked(
+        graph,
+        df_data,
+        connection_type,
+        source_type,
+        source_id_field,
+        target_type,
+        target_id_field,
+        source_title_field,
+        target_title_field,
+        conflict_handling,
+        initial_load,
+        &mut IdenticalRowTracker::off(),
+    )
+}
+
+/// Both id columns of a connection frame must exist, or the load refuses.
+fn require_id_columns(frame: &DataFrame, source_id: &str, target_id: &str) -> Result<(), String> {
+    for (role, field) in [("Source", source_id), ("Target", target_id)] {
+        if !frame.verify_column(field) {
+            return Err(format!(
+                "{role} ID column '{field}' not found in DataFrame. Available columns: [{}]",
+                frame.get_column_names().join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The shared body: `tracker` carries the identical-row state across the calls
+/// of one chunked load, and the caller reports its warning once at the end.
+// Same argument list as add_connections plus its load options; a params struct would only re-spell it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add_connections_tracked(
     graph: &mut DirGraph,
     mut df_data: DataFrame,
     connection_type: String,
@@ -1180,6 +1272,7 @@ pub(crate) fn add_connections_with_initial_load(
     target_title_field: Option<String>,
     conflict_handling: Option<String>,
     initial_load: InitialLoad,
+    tracker: &mut IdenticalRowTracker,
 ) -> Result<ConnectionOperationReport, String> {
     let _arena_guard = graph.graph.begin_query(); // disk arena guard (owned; no-op on memory/mapped)
     let column_names = df_data.get_column_names();
@@ -1199,21 +1292,7 @@ pub(crate) fn add_connections_with_initial_load(
 
     let mut errors = Vec::new();
 
-    let available_cols: Vec<_> = df_data.get_column_names();
-    if !df_data.verify_column(&source_id_field) {
-        return Err(format!(
-            "Source ID column '{}' not found in DataFrame. Available columns: [{}]",
-            source_id_field,
-            available_cols.join(", ")
-        ));
-    }
-    if !df_data.verify_column(&target_id_field) {
-        return Err(format!(
-            "Target ID column '{}' not found in DataFrame. Available columns: [{}]",
-            target_id_field,
-            available_cols.join(", ")
-        ));
-    }
+    require_id_columns(&df_data, &source_id_field, &target_id_field)?;
 
     // Resolve and gate every row (its validity interval included) before the
     // mutating passes below; the helper also snapshots stored values while
@@ -1254,6 +1333,17 @@ pub(crate) fn add_connections_with_initial_load(
         source_title_field.as_deref(),
         target_title_field.as_deref(),
     );
+
+    let mut identity = RowIdentity::new(
+        tracker,
+        is_initial_load && start_key.is_none(),
+        RowColumns {
+            frame: &df_data,
+            titles: (source_title_field.as_deref(), target_title_field.as_deref()),
+            properties: &property_columns,
+        },
+    );
+    matched.retain(|&(row, source, target)| identity.admit(row, source, target));
 
     // Extract a row's edge properties — shared by the happy path and
     // the deferred-row replay (Pass C). Skip nulls: property access
@@ -1318,8 +1408,7 @@ pub(crate) fn add_connections_with_initial_load(
         // Same resolve-then-mutate split as Pass A, re-read after Pass B so
         // the freshly vivified stubs are visible.
         let replayed = resolve_pairs(graph, &source_type, &target_type, &deferred)?;
-        for ((row_idx, _, _), endpoints) in deferred.iter().zip(replayed) {
-            let row_idx = *row_idx;
+        for (row_idx, endpoints) in identity.new_among_replayed(&deferred, replayed) {
             let (source_idx, target_idx) = match endpoints {
                 Some(pair) => pair,
                 None => {
@@ -1437,79 +1526,6 @@ fn apply_titles_then_order_by_source(
         titles.apply(graph, node_types, (source_idx, target_idx), row_idx, frame);
     }
     sort_source_major(matched);
-}
-
-/// Pass B of a relationship load: vivify the missing source and target ids as
-/// stubs, returning how many were created and one advisory per stub type.
-fn vivify_endpoints(
-    graph: &mut DirGraph,
-    connection_type: &str,
-    sources: (&str, &[Value]),
-    targets: (&str, &[Value]),
-) -> Result<(usize, Vec<String>), String> {
-    let mut by_type: Vec<(&str, usize)> = Vec::new();
-    for (node_type, ids) in [sources, targets] {
-        if ids.is_empty() {
-            continue;
-        }
-        let created = vivify_stubs(graph, node_type, ids)?;
-        match by_type.iter_mut().find(|(seen, _)| *seen == node_type) {
-            Some((_, count)) => *count += created,
-            None => by_type.push((node_type, created)),
-        }
-    }
-    let advisories = by_type
-        .iter()
-        .filter(|(_, count)| *count > 0)
-        .map(|(node_type, count)| stub_advisory(graph, connection_type, node_type, *count))
-        .collect();
-    Ok((by_type.iter().map(|(_, count)| count).sum(), advisories))
-}
-
-/// The advisory for `count` stubs vivified on `node_type` — the one text every
-/// binding and the blueprint build report. A stub carries no validity bounds,
-/// so on a label with a valid-time declaration it is valid at every instant
-/// until a node row with bounds promotes it, and the advisory says so.
-fn stub_advisory(graph: &DirGraph, connection_type: &str, node_type: &str, count: usize) -> String {
-    if crate::graph::features::temporal::node_config(graph, node_type).is_some() {
-        format!(
-            "{count} stub node(s) vivified for missing '{connection_type}' endpoints on \
-             declared label '{node_type}' carry no bounds and are valid at every instant until \
-             promoted (call purge_provisional() to drop any left unpromoted)."
-        )
-    } else {
-        format!(
-            "{count} stub node(s) vivified for missing '{connection_type}' endpoints of type \
-             '{node_type}' — call purge_provisional() to drop any left unpromoted."
-        )
-    }
-}
-
-/// Auto-vivify missing edge endpoints as provisional stub nodes.
-///
-/// Each id in `ids` becomes a node of `node_type` carrying only its id
-/// (also used as the title) and a `_provisional = true` marker. Routed
-/// through `add_nodes` so a stub lands in the same storage (columnar,
-/// on the disk/mapped backends) as every other node; `preserve` mode
-/// makes a re-vivified id (same id missing as both a source and a
-/// target on a same-type edge) a no-op. Returns the count actually
-/// created.
-fn vivify_stubs(graph: &mut DirGraph, node_type: &str, ids: &[Value]) -> Result<usize, String> {
-    let rows: Vec<Vec<Value>> = ids
-        .iter()
-        .map(|id| vec![id.clone(), Value::Boolean(true)])
-        .collect();
-    let df =
-        DataFrame::from_cypher_rows(vec!["id".to_string(), PROVISIONAL_KEY.to_string()], rows)?;
-    let report = add_nodes(
-        graph,
-        df,
-        node_type.to_string(),
-        "id".to_string(),
-        None,
-        Some("preserve".to_string()),
-    )?;
-    Ok(report.nodes_created)
 }
 
 /// Above this share of a type's members, locating the doomed rows costs more
@@ -2444,6 +2460,10 @@ mod id_index_tests;
 #[cfg(test)]
 #[path = "maintain_merge_report_tests.rs"]
 mod merge_report_tests;
+
+#[cfg(test)]
+#[path = "maintain_identical_rows_tests.rs"]
+mod identical_rows_tests;
 
 #[cfg(test)]
 #[path = "maintain_replace_connections_tests.rs"]
