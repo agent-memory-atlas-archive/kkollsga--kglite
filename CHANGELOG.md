@@ -56,8 +56,8 @@ before upgrading.
 - The valid-time echo (`diagnostics["temporal"]`, the MCP `temporal:` line,
   Bolt's `kglite.temporal` key, the C / Java diagnostics JSON) now says how
   much the context removed. `hidden` maps each target to the rows it governs
-  that are not valid at the instant (`{"(:Licence)": 1212,
-  "[:HAS_LICENSEE from :Licence]": 30411}`), and `endpoint_invalid` counts the
+  that are not valid at the instant (`{"(:Project)": 1212,
+  "[:FUNDED_BY from :Project]": 30411}`), and `endpoint_invalid` counts the
   relationships that are valid by their own bounds but hidden because an
   endpoint node is not valid, the case where a membership starting before its
   entity silently disappears from an as-of answer. Both are read from the
@@ -133,17 +133,17 @@ before upgrading.
   now keeps its fused plan under `FOR VALID_TIME AS OF` (and `valid_at=`). The
   fused operator filters its group nodes through the node mask and counts
   through the per-relationship and per-endpoint masks, so it returns exactly
-  what the unfused guarded plan returns. On a 856k-relationship Sodir graph
+  what the unfused guarded plan returns. On a 856k-relationship production graph
   (release build, Python 3.14, min of 25, two runs, load average 3.4-5.3) the
-  top-10 wellbores-per-field count under a context went from 18-29 ms to
-  0.14 ms (0.11 ms undated), and the licences-per-company top-10 stays at
+  top-10 tasks-per-project count under a context went from 18-29 ms to
+  0.14 ms (0.11 ms undated), and the projects-per-department top-10 stays at
   1.3 ms. On the temporal benchmark's agent cells the cost of the context
   relative to a graph holding only the as-of slice fell from 7.1x to 2.3x
-  (`count(*)` per field) and from 6.1x to 1.9x (`count(r)` per company).
+  (`count(*)` per group) and from 6.1x to 1.9x (`count(r)` per group).
   The `WITH` form (`MATCH (w:T)-[:R]->(f:U) WITH f, count(w) AS n RETURN ...
   ORDER BY n DESC LIMIT k`, the two-`MATCH` variant and the top-k absorption)
   keeps its fused plan under a context as well: on the same graph the
-  wellbores-per-field `WITH` top-10 went from 45-68 ms to 0.15-0.16 ms
+  per-group `WITH` top-10 went from 45-68 ms to 0.15-0.16 ms
   (0.13 ms undated). Two-hop (5-element) patterns still run unfused under a
   context.
 - Performance: a single `MATCH ... RETURN ... LIMIT n` stops early under a
@@ -151,7 +151,7 @@ before upgrading.
   Every site that counts toward the cap already counts only rows the context
   admits (candidates, index seeds and relationships are tested before they are
   counted, and a capped seed pass that comes back short re-runs uncapped), so
-  the early stop returns the same rows the full scan would. On a Sodir-scale
+  the early stop returns the same rows the full scan would. On a production-scale
   graph (release build, Python 3.14, min of 25, two runs, load average 4-4.5)
   `LIMIT 10` over a relationship pattern went from 1.3-28 ms to 0.03-0.04 ms
   as of today (0.005-0.008 ms undated).
@@ -161,14 +161,14 @@ before upgrading.
   relationship and the peer, so rows with no visible match still yield 0 and a
   hidden peer behind a visible relationship is not counted; a pattern that
   counter cannot take runs the filtered matcher. On the same graph the
-  wellbores-per-field count went from 32 ms to 0.18 ms as of today (0.11-0.13
-  ms undated), and the licences-per-company count from about 4 ms to 1.7 ms.
+  tasks-per-project count went from 32 ms to 0.18 ms as of today (0.11-0.13
+  ms undated), and the projects-per-department count from about 4 ms to 1.7 ms.
 - Performance: the spatial `contains` join (`MATCH (a:Area), (p:Point) WHERE
   contains(a, p)` and the two-`MATCH` `contains(a, centroid(p))` form) keeps its
   R-tree join under a valid-time context, including the as-of-today default.
   The tree is built from the containers the context admits and probed only
   with the probes it admits, so a hidden container or probe at the same
-  location as a visible one never pairs. On the same graph the wellbore join
+  location as a visible one never pairs. On the same graph the point join
   went from 380 ms to 6.5 ms as of today (6.6 ms undated) and the centroid
   join from 830 ms to 17.5 ms (17 ms undated).
 
@@ -202,7 +202,7 @@ before upgrading.
   scanned every node and counted every same-id node of a type.
 - Performance: the anchored relationship count stays a fused count under a
   valid-time context, including the as-of-today default, where it had fallen
-  back to the general route (61-79 ms on a Sodir-scale graph, now about 0.03 ms
+  back to the general route (61-79 ms on a production-scale graph, now about 0.03 ms
   for the same statements). An aggregate with an untyped `{id: ...}` anchor off
   its grouping key takes the matcher's id lookup instead of a scan (65-80 ms
   down to about 0.3 ms; a typed far end 12.5 ms down to 0.06 ms).
