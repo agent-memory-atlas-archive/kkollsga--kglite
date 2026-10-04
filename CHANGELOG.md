@@ -278,6 +278,12 @@ before upgrading.
   every unfiltered match first (the same statement peaked at 421 MB instead of
   1.54 GB). Row caps, `DISTINCT` hints, path variables and `CALL { }` bodies
   keep the old order.
+- Counting a typed peer per relationship (`OPTIONAL MATCH (a)<-[:T]-(b:L) …
+  count(b)`, fused counts, chain counts) under a valid-time filter resolves
+  the peer's label constraint once per operator instead of hashing the label
+  and probing the secondary-label map for every relationship: the peer check
+  of a 230,000-relationship aggregate got about 10 ns per relationship
+  cheaper (12 ms to 9 ms for the statement). Results are unchanged.
 
 ### Fixed
 

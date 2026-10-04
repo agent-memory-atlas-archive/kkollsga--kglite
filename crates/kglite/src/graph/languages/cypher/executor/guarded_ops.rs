@@ -297,7 +297,11 @@ impl CypherExecutor<'_> {
             return Ok(Some(0));
         }
         let conn_filter = edge.conn_filter();
-        let pe = self.pattern_executor(None, None);
+        let pe = other
+            .properties
+            .is_some()
+            .then(|| self.pattern_executor(None, None));
+        let peer_labels = std::cell::OnceCell::new();
         let edge_filter = edge.edge_filter.as_ref();
         let mut count: i64 = 0;
         let mut peers: HashSet<NodeIndex> = HashSet::new();
@@ -324,7 +328,9 @@ impl CypherExecutor<'_> {
                     && dir == Direction::Incoming
                     && other_idx == bound_idx)
                     || (distinct_peers && peers.contains(&other_idx))
-                    || !self.node_satisfies_pattern_labels(other_idx, other)
+                    || !peer_labels
+                        .get_or_init(|| self.pattern_label_check(other))
+                        .matches(self.graph, other_idx)
                     || !filter.admits_hop(
                         self.graph,
                         edge_ref.id(),
@@ -348,7 +354,7 @@ impl CypherExecutor<'_> {
                         continue;
                     }
                 }
-                if let Some(props) = &other.properties {
+                if let (Some(props), Some(pe)) = (&other.properties, &pe) {
                     if !pe.node_matches_properties_pub(other_idx, props) {
                         continue;
                     }

@@ -151,6 +151,7 @@ struct ExistsHop<'a> {
     interned_conn: Option<InternedKey>,
     conn_filter: &'a crate::graph::core::pattern_matching::pattern::ConnTypeFilter,
     other_node: &'a NodePattern,
+    other_labels: std::cell::OnceCell<crate::graph::dir_graph::LabelCheck<'a>>,
     other_var: &'a Option<String>,
     where_clause: &'a Option<Box<Predicate>>,
 }
@@ -924,22 +925,15 @@ impl<'a> CypherExecutor<'a> {
                 }))
     }
 
-    pub(super) fn node_satisfies_pattern_labels(
+    /// A node pattern's label constraint (primary or secondary carriage,
+    /// alternation any-of, extras all-of) resolved once for loops that test
+    /// a peer per edge.
+    pub(super) fn pattern_label_check(
         &self,
-        idx: NodeIndex,
         np: &crate::graph::core::pattern_matching::NodePattern,
-    ) -> bool {
-        let alts = np.label_alternatives();
-        if !alts.is_empty()
-            && !alts
-                .iter()
-                .any(|l| self.graph.node_has_label(idx, InternedKey::from_str(l)))
-        {
-            return false;
-        }
-        np.extra_labels
-            .iter()
-            .all(|l| self.graph.node_has_label(idx, InternedKey::from_str(l)))
+    ) -> crate::graph::dir_graph::LabelCheck<'a> {
+        self.graph
+            .label_check(np.label_alternatives(), &np.extra_labels)
     }
 
     /// Incident scans consume node_bindings only and assume the anchor's
@@ -1029,6 +1023,7 @@ impl<'a> CypherExecutor<'a> {
             interned_conn: conn_filter.hint(),
             conn_filter: &conn_filter,
             other_node,
+            other_labels: std::cell::OnceCell::new(),
             other_var,
             where_clause,
         };
@@ -1055,7 +1050,7 @@ impl<'a> CypherExecutor<'a> {
     /// matcher the sweep cannot honor — caller falls back.
     fn exists_hit_in_direction(
         &self,
-        hop: &ExistsHop<'_>,
+        hop: &ExistsHop<'a>,
         direction: Direction,
         mut eval_row: Option<&mut ResultRow>,
     ) -> Option<Result<bool, String>> {
@@ -1072,7 +1067,11 @@ impl<'a> CypherExecutor<'a> {
             } else {
                 edge_ref.source()
             };
-            if !self.node_satisfies_pattern_labels(other_idx, hop.other_node) {
+            if !hop
+                .other_labels
+                .get_or_init(|| self.pattern_label_check(hop.other_node))
+                .matches(self.graph, other_idx)
+            {
                 continue;
             }
             match self.exists_peer_properties_match(other_idx, hop.other_node) {
@@ -1287,6 +1286,7 @@ impl<'a> CypherExecutor<'a> {
         // edges for hub nodes (Q5 has ~40 M incoming P31 edges), so check the
         // deadline every 1 M iterations.
         let pe = self.pattern_executor(None, None);
+        let other_labels = std::cell::OnceCell::new();
         let mut count: i64 = 0;
         let mut peers: HashSet<NodeIndex> = HashSet::new();
         let mut iter: usize = 0;
@@ -1335,7 +1335,10 @@ impl<'a> CypherExecutor<'a> {
                     continue;
                 }
 
-                if !self.node_satisfies_pattern_labels(other_idx, other_pattern) {
+                if !other_labels
+                    .get_or_init(|| self.pattern_label_check(other_pattern))
+                    .matches(self.graph, other_idx)
+                {
                     continue;
                 }
 
@@ -1472,9 +1475,8 @@ impl<'a> CypherExecutor<'a> {
         // Union-correct (primary OR secondary carriage, alternation-aware);
         // the primary-only compare this replaces shares the EXISTS fast
         // path's missed-secondary-carrier bug class.
-        let node_type_matches = |idx: NodeIndex,
-                                 np: &crate::graph::core::pattern_matching::NodePattern|
-         -> bool { self.node_satisfies_pattern_labels(idx, np) };
+        let mid_labels = std::cell::OnceCell::new();
+        let end_labels = std::cell::OnceCell::new();
 
         let mut total: i64 = 0;
         let mut work = 0usize;
@@ -1497,7 +1499,10 @@ impl<'a> CypherExecutor<'a> {
             } else {
                 e1_ref.source()
             };
-            if !node_type_matches(mid_idx, mid_node) {
+            if !mid_labels
+                .get_or_init(|| self.pattern_label_check(mid_node))
+                .matches(self.graph, mid_idx)
+            {
                 continue;
             }
 
@@ -1519,7 +1524,10 @@ impl<'a> CypherExecutor<'a> {
                 } else {
                     e2_ref.source()
                 };
-                if !node_type_matches(end_idx, end_node) {
+                if !end_labels
+                    .get_or_init(|| self.pattern_label_check(end_node))
+                    .matches(self.graph, end_idx)
+                {
                     continue;
                 }
                 total += 1;

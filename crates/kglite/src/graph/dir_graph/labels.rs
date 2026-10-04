@@ -586,4 +586,80 @@ impl DirGraph {
                 .get(&key)
                 .is_some_and(|bucket| bucket.binary_search(&idx).is_ok())
     }
+
+    /// Resolve a pattern's label constraint once, so a per-edge loop pays
+    /// no label hashing and no secondary-index probe: see [`LabelCheck`].
+    /// `alts` are the alternation branches (empty = unconstrained), `extras`
+    /// the AND-chain labels.
+    pub fn label_check<'a>(&'a self, alts: &[String], extras: &[String]) -> LabelCheck<'a> {
+        if extras.is_empty() {
+            match alts {
+                [] => return LabelCheck::Any,
+                [one] => return LabelCheck::One(self.label_probe(one)),
+                _ => {}
+            }
+        }
+        LabelCheck::Many {
+            alts: alts.iter().map(|l| self.label_probe(l)).collect(),
+            extras: extras.iter().map(|l| self.label_probe(l)).collect(),
+        }
+    }
+
+    fn label_probe(&self, label: &str) -> LabelProbe<'_> {
+        let key = InternedKey::from_str(label);
+        let bucket = if self.has_secondary_labels {
+            self.secondary_label_index.get(&key).map(Vec::as_slice)
+        } else {
+            None
+        };
+        LabelProbe { key, bucket }
+    }
+}
+
+/// One label with its secondary-carrier bucket looked up at build time
+/// (`None` when no node carries it as a secondary label).
+pub struct LabelProbe<'a> {
+    key: InternedKey,
+    bucket: Option<&'a [NodeIndex]>,
+}
+
+impl LabelProbe<'_> {
+    #[inline]
+    fn has(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        use crate::graph::storage::GraphRead;
+        GraphRead::node_type_of(&graph.graph, idx) == Some(self.key)
+            || self
+                .bucket
+                .is_some_and(|bucket| bucket.binary_search(&idx).is_ok())
+    }
+}
+
+/// A node pattern's label constraint with every key interned and every
+/// secondary bucket resolved, borrowing the graph it was built from. It
+/// answers exactly what `node_has_label` over each label would (primary
+/// type OR secondary carriage; alternation any-of, extras all-of).
+pub enum LabelCheck<'a> {
+    /// No label constraint.
+    Any,
+    /// The common plain `(x:Label)`.
+    One(LabelProbe<'a>),
+    Many {
+        alts: Vec<LabelProbe<'a>>,
+        extras: Vec<LabelProbe<'a>>,
+    },
+}
+
+impl LabelCheck<'_> {
+    /// `graph` must be the graph this check was built from.
+    #[inline]
+    pub fn matches(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
+        match self {
+            LabelCheck::Any => true,
+            LabelCheck::One(p) => p.has(graph, idx),
+            LabelCheck::Many { alts, extras } => {
+                (alts.is_empty() || alts.iter().any(|p| p.has(graph, idx)))
+                    && extras.iter().all(|p| p.has(graph, idx))
+            }
+        }
+    }
 }

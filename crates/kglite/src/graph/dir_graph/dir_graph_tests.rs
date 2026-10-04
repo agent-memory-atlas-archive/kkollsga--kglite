@@ -307,6 +307,37 @@ mod multi_label_tests {
     }
 
     #[test]
+    fn label_check_agrees_with_node_has_label() {
+        let mut g = DirGraph::new();
+        let a = add_node(&mut g, "a", "Person");
+        let b = add_node(&mut g, "b", "Person");
+        let c = add_node(&mut g, "c", "Robot");
+        let vip = g.interner.get_or_intern("VIP");
+        let ops = g.interner.get_or_intern("Ops");
+        g.add_node_label(a, vip);
+        g.add_node_label(c, vip);
+        g.add_node_label(c, ops);
+        let names = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let cases: [(Vec<String>, Vec<String>); 7] = [
+            (names(&[]), names(&[])),
+            (names(&["VIP"]), names(&[])),
+            (names(&["Person"]), names(&[])),
+            (names(&["Person", "Robot"]), names(&[])),
+            (names(&["Robot"]), names(&["VIP", "Ops"])),
+            (names(&["Person"]), names(&["VIP"])),
+            (names(&["Ghost"]), names(&[])),
+        ];
+        for (alts, extras) in &cases {
+            let check = g.label_check(alts, extras);
+            for n in [a, b, c] {
+                let has = |l: &String| g.node_has_label(n, InternedKey::from_str(l));
+                let want = (alts.is_empty() || alts.iter().any(has)) && extras.iter().all(has);
+                assert_eq!(check.matches(&g, n), want, "{alts:?} {extras:?} {n:?}");
+            }
+        }
+    }
+
+    #[test]
     fn detach_delete_evicts_secondary_label_index() {
         use std::collections::HashSet;
         let mut g = DirGraph::new();

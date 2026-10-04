@@ -554,8 +554,10 @@ pub(super) fn decode_secondary_label_index(
     }
     let n = u32::from_le_bytes(payload[12..16].try_into().unwrap()) as usize;
     let mut cursor = 16usize;
-    let mut index: HashMap<crate::graph::schema::InternedKey, Vec<petgraph::graph::NodeIndex>> =
-        HashMap::with_capacity(n);
+    let mut index: rustc_hash::FxHashMap<
+        crate::graph::schema::InternedKey,
+        Vec<petgraph::graph::NodeIndex>,
+    > = rustc_hash::FxHashMap::with_capacity_and_hasher(n, Default::default());
     for _ in 0..n {
         if payload.len() < cursor + 4 {
             return Err(io::Error::new(

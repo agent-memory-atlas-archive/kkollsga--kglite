@@ -76,6 +76,7 @@ struct HopTests<'a> {
     filter: Option<&'a ElementFilter>,
     hop: &'a ChainHop<'a>,
     conn_filter: ConnTypeFilter,
+    peer_labels: crate::graph::dir_graph::LabelCheck<'a>,
     /// Peers the hop's node tests refused, so a refused peer reached over many
     /// relationships is tested once.
     refused: std::cell::RefCell<FxHashSet<NodeIndex>>,
@@ -94,6 +95,7 @@ impl<'a> HopTests<'a> {
             filter,
             hop,
             conn_filter: hop.edge.conn_filter(),
+            peer_labels: exec.pattern_label_check(hop.peer),
             refused: Default::default(),
         }
     }
@@ -153,7 +155,7 @@ impl<'a> HopTests<'a> {
         if self.refused.borrow().contains(&peer) {
             return false;
         }
-        let accepted = self.exec.node_satisfies_pattern_labels(peer, pattern)
+        let accepted = self.peer_labels.matches(self.exec.graph, peer)
             && pattern
                 .properties
                 .as_ref()
