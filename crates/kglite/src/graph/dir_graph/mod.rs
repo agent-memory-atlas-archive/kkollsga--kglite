@@ -748,7 +748,7 @@ pub struct DirGraph {
     /// `MutationOp::SetNodeLabels` frames for post-checkpoint WAL replay.
     /// `rebuild_type_indices` deliberately leaves it alone.
     #[serde(skip)]
-    pub secondary_label_index: FxHashMap<InternedKey, Vec<NodeIndex>>,
+    pub secondary_label_index: HashMap<InternedKey, Vec<NodeIndex>>,
 }
 
 pub(crate) fn default_auto_vacuum_threshold() -> Option<f64> {
@@ -1006,7 +1006,7 @@ impl DirGraph {
             interner: StringInterner::new(),
             type_schemas: Arc::new(HashMap::new()),
             has_secondary_labels: false,
-            secondary_label_index: FxHashMap::default(),
+            secondary_label_index: HashMap::new(),
         }
     }
 

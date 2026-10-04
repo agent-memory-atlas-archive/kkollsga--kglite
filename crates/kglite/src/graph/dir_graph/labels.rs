@@ -591,7 +591,7 @@ impl DirGraph {
     /// no label hashing and no secondary-index probe: see [`LabelCheck`].
     /// `alts` are the alternation branches (empty = unconstrained), `extras`
     /// the AND-chain labels.
-    pub fn label_check<'a>(&'a self, alts: &[String], extras: &[String]) -> LabelCheck<'a> {
+    pub(crate) fn label_check<'a>(&'a self, alts: &[String], extras: &[String]) -> LabelCheck<'a> {
         if extras.is_empty() {
             match alts {
                 [] => return LabelCheck::Any,
@@ -638,7 +638,7 @@ impl LabelProbe<'_> {
 /// secondary bucket resolved, borrowing the graph it was built from. It
 /// answers exactly what `node_has_label` over each label would (primary
 /// type OR secondary carriage; alternation any-of, extras all-of).
-pub enum LabelCheck<'a> {
+pub(crate) enum LabelCheck<'a> {
     /// No label constraint.
     Any,
     /// The common plain `(x:Label)`.
