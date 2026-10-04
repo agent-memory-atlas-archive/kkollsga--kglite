@@ -1395,7 +1395,10 @@ way either way.
 declaration: the node's primary type's, else its first declared secondary label's
 (alphabetically). `valid_at(r, date)` tests the relationship's own interval and
 not its endpoints. A relationship type holding several unkeyed declarations is
-read per row, by the first declaration whose bounds the relationship carries. And
+read per row, by the first declaration whose bounds the relationship carries. A
+type declared only for other source types raises for a relationship out of any
+other source (the error names them; pass the bounds or declare that source),
+where the statement context treats it as timeless. And
 each call filters only the element it names. Under
 [`FOR VALID_TIME AS OF`](#statement-context-for-valid_time-as-of) — and in the
 fluent API's date context — a node must be valid under *every* declared label it
@@ -1491,7 +1494,7 @@ CALL db.temporal.declare({node: 'FieldStatus', from: 'date_from', to: 'date_to',
 CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field',
                           from: 'licensee_from', to: 'licensee_to', convention: 'half_open'})
   YIELD declared, rows, abutting_rows
-CALL db.temporal.declare({node: 'Licence', from: 'granted', to: 'ended', convention: 'closed',
+CALL db.temporal.declare({node: 'Assignment', from: 'granted', to: 'ended', convention: 'closed',
                           empty_when: 'to_before_from'})
 CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'}) YIELD undeclared
 CALL db.temporal.declarations()
@@ -1641,7 +1644,8 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   scans with an aggregate or `ORDER BY … LIMIT`, top-k over matched rows,
   retrieval top-k, `elementId` anchors and the fused per-group aggregates over
   a one-hop pattern keep their fast routes under a context (the fused operators
-  filter through the context's masks); a longer pattern runs unfused.
+  filter through the context's masks); a longer pattern runs unfused unless it
+  is a chain of distinct types that the chain count operators take.
   `PROFILE` runs the same way. `EXPLAIN` leads the plan with a
   `ValidTimeContext` row naming the axis and the declared intervals the query
   can reach; the instant is resolved per execution, not planned.
@@ -2517,6 +2521,10 @@ expands rather than after it has exhausted memory. The error names which
 expansion overflowed — the `MATCH` itself, a comma-pattern join, an
 `OPTIONAL MATCH`, an `EXISTS { … }` or a `COUNT { … }` subquery — and both
 ways to raise the ceiling.
+An aggregate that streams its first `MATCH` (`streaming=True`, the default) is
+the exception: the backstop bounds the matches one slice holds, not the rows it
+passes through, so a 12-million-path aggregate answers streamed and raises with
+`streaming=False`.
 
 ## WHERE EXISTS
 

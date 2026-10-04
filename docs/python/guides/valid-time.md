@@ -375,7 +375,7 @@ nothing, and so does a stored bound that is not a date.
 
 Use the functions where one query needs **two instants**, or bounds no
 declaration names. A query that mixes a call with a hop it leaves undated reads
-that hop in full, as it always has. They differ from the context in four ways:
+that hop in full, as it always has. They differ from the context in five ways:
 
 - `valid_at(n, d)` reads **one** declaration: the node's primary type's, else
   a secondary label's. The context requires the node to be valid under
@@ -386,6 +386,9 @@ that hop in full, as it always has. They differ from the context in four ways:
   (only a graph saved by an older version holds one), `valid_at(r, d)` reads
   each relationship by the first declaration whose bounds it carries; the
   context refuses the type.
+- On a relationship type declared only for some source types, `valid_at(r, d)`
+  raises for a relationship out of any other source (the error names the sources
+  that have a declaration); the context treats it as timeless.
 - Each call filters only the element it names; a hop without a call is not
   filtered at all. That is the forgotten-hop trap the context closes: date the
   membership and forget the team's department, and Ada's team belongs to both

@@ -332,6 +332,11 @@ rather than after it has exhausted memory. The message names which expansion
 overflowed — the `MATCH` itself, a comma-pattern join, an `OPTIONAL MATCH`, an
 `EXISTS { … }` or a `COUNT { … }` subquery — so a runaway inside a subquery is
 not reported as the outer clause's fault.
+
+An aggregate that streams its first `MATCH` (`streaming=True`, the default) is
+the exception: the backstop bounds the matches one slice holds, not the rows it
+passes through, so a 12-million-path aggregate answers streamed and raises with
+`streaming=False`.
 [How deep traversal behaves](#how-deep-traversal-behaves) is the shape this
 matters most for.
 

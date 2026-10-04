@@ -82,10 +82,11 @@ before upgrading.
 
 - A load that stores identical relationships now warns once per relationship
   type: `add_relationships`, `add_relationships_bulk`,
-  `add_relationships_from_source` (a `UserWarning` and the report's
-  `warnings`) and a blueprint junction (the build warnings) name the type, the
+  `add_relationships_from_source` and `replace_relationships` (a
+  `UserWarning`) and a blueprint junction (the build warnings) name the type, the
   relationship count, the number of distinct combinations and the largest copy
-  count, and point at `distinct`. Data and counts are unchanged. The check
+  count, and point at `distinct` (`replace_relationships` has no such option;
+  its warning says to drop the repeated rows). Data and counts are unchanged. The check
   holds up to 4 million distinct rows; later rows go unchecked and the warning
   says so.
 
@@ -98,7 +99,7 @@ before upgrading.
   passes, the lazy result route, no candidate scan). One undeclared secondary
   label anywhere used to widen every labelled statement to every declared type
   (undeclared-type `LIMIT` 87 us against 9 us under `FOR VALID_TIME ALL` on a
-  38-type register; now equal). The instant, the declared template, the
+  graph with 38 declared types; now equal). The instant, the declared template, the
   timeless answer and the per-instant filter and echo counts are resolved once
   and cached per graph version (shared by statements with equal templates, read
   under the read lock), and a start-node scan under a `LIMIT` stops at the
@@ -208,16 +209,16 @@ before upgrading.
   what the unfused guarded plan returns. On a 856k-relationship production graph
   (release build, Python 3.14, min of 25, two runs, load average 3.4-5.3) the
   top-10 tasks-per-project count under a context went from 18-29 ms to
-  0.14 ms (0.11 ms undated), and the projects-per-department top-10 stays at
-  1.3 ms. On the temporal benchmark's agent cells the cost of the context
+  0.14 ms (0.11 ms undated); the projects-per-department top-10 followed in a
+  later change (0.03 ms, see the cached per-node count above). On the temporal benchmark's agent cells the cost of the context
   relative to a graph holding only the as-of slice fell from 7.1x to 2.3x
   (`count(*)` per group) and from 6.1x to 1.9x (`count(r)` per group).
   The `WITH` form (`MATCH (w:T)-[:R]->(f:U) WITH f, count(w) AS n RETURN ...
   ORDER BY n DESC LIMIT k`, the two-`MATCH` variant and the top-k absorption)
   keeps its fused plan under a context as well: on the same graph the
   per-group `WITH` top-10 went from 45-68 ms to 0.15-0.16 ms
-  (0.13 ms undated). Two-hop (5-element) patterns still run unfused under a
-  context.
+  (0.13 ms undated). Two-hop (5-element) patterns run unfused under a
+  context unless the chain operators below take them.
 - Performance: a single `MATCH ... RETURN ... LIMIT n` stops early under a
   valid-time context as it does undated, including the as-of-today default.
   Every site that counts toward the cap already counts only rows the context
@@ -225,8 +226,8 @@ before upgrading.
   counted, and a capped seed pass that comes back short re-runs uncapped), so
   the early stop returns the same rows the full scan would. On a production-scale
   graph (release build, Python 3.14, min of 25, two runs, load average 4-4.5)
-  `LIMIT 10` over a relationship pattern went from 1.3-28 ms to 0.03-0.04 ms
-  as of today (0.005-0.008 ms undated).
+  `LIMIT 10` over a relationship pattern went from 1.3-28 ms to 5.5-9.2 us
+  as of today (5-8 us undated).
 - Performance: `OPTIONAL MATCH ... count()` keeps its fused plan under a
   valid-time context, including the as-of-today default. Each driving row is
   counted through the per-node counter that tests the bound node, every
@@ -234,7 +235,8 @@ before upgrading.
   hidden peer behind a visible relationship is not counted; a pattern that
   counter cannot take runs the filtered matcher. On the same graph the
   tasks-per-project count went from 32 ms to 0.18 ms as of today (0.11-0.13
-  ms undated), and the projects-per-department count from about 4 ms to 1.7 ms.
+  ms undated), and the projects-per-department count from about 4 ms to 0.34 ms
+  (through the cached per-node count above).
 - Performance: the spatial `contains` join (`MATCH (a:Area), (p:Point) WHERE
   contains(a, p)` and the two-`MATCH` `contains(a, centroid(p))` form) keeps its
   R-tree join under a valid-time context, including the as-of-today default.
@@ -254,13 +256,14 @@ before upgrading.
   endpoints are tested against the filter). Under a valid-time context it also
   takes a two-hop chain, including a directed one whose types repeat (the
   matcher's rule that a relationship serves one hop is applied exactly). A count past
-  the 64-bit integer range is an error. On a register of 856k relationships,
+  the 64-bit integer range is an error. On a graph of 856k relationships,
   a four-node chain of distinct types over the full history (`FOR VALID_TIME
   ALL`, 8,693,836 paths) took 10.5 s and now takes 1.4-1.5 ms; under the
   default (today, 414,404 paths) 106 ms -> 0.53-0.57 ms; as of one date
   (246,021 paths) 52 ms -> 0.48-0.52 ms. The counts equal the matcher's.
-  Grouped counts, cycles, variable-length hops and a repeated type beyond
-  two hops still run on the matcher.
+  Cycles, variable-length hops and a repeated type beyond two hops still run
+  on the matcher; counts grouped by a chain node are taken by the grouped
+  operators below.
 
 - Faster: `MATCH` of a linear chain of two or more relationships of
   pairwise-distinct types `RETURN count(DISTINCT x)`, for a node or a
@@ -272,7 +275,7 @@ before upgrading.
   matchers, anchors, undirected hops and `FOR VALID_TIME` apply as for the
   path count, and the counts equal the matcher's. A `WHERE`, `count(DISTINCT
   x.prop)`, `RETURN DISTINCT`, other aggregates beside it, repeated hop types
-  and the other shapes listed above still run on the matcher. On a register of
+  and the other shapes listed above still run on the matcher. On a graph of
   856k relationships, the far end of a four-node chain over the full history
   (`FOR VALID_TIME ALL`) went from 4.9 s to 1.3 ms, a middle node from 5.0 s to
   1.6-1.8 ms and a relationship variable from 3.0-3.6 s to 1.6-2.4 ms; under the
@@ -287,7 +290,7 @@ before upgrading.
   the union of their sets (plan operator `FusedChainDistinctCount`, shown as
   `grouped`). The counts equal the matcher's. `count(DISTINCT x.prop)`, other
   aggregates, a key over two variables or a relationship, and an `ORDER BY` past
-  the returned columns still run on the matcher. On a register of 856k
+  the returned columns still run on the matcher. On a graph of 856k
   relationships, a four-node chain grouped by a middle node's property went from
   1,796 ms to 3.8-4.0 ms over the full history (`FOR VALID_TIME ALL`) and from
   96 ms to 1.0-1.1 ms under the default context (today).
@@ -300,7 +303,7 @@ before upgrading.
   the far end, summed per key value (plan operator `FusedChainGroupedPathCount`).
   Chains of three or more relationships fuse, two under a valid-time context;
   hop types must be pairwise distinct, and the counts equal the matcher's.
-  On a register of 856k relationships a four-node chain grouped by a middle
+  On a graph of 856k relationships a four-node chain grouped by a middle
   node's property went from 1,740 ms to 1.5 ms over the full history (`FOR VALID_TIME ALL`) and
   from 92 ms to 1.3 ms under the default context (today).
 
@@ -341,7 +344,7 @@ before upgrading.
   `fuse_unwind_valid_at`, plan operator `FusedValidAtJoin`). When the
   statement is `RETURN d, count(*)` over a bare `(x:T)` it is two binary
   searches per instant. On 149,934 versions of 50,000 employees, 24 instants
-  (release, min of 5, load 10-15): the count took 1.26 s and 421 MB, now
+  (release, min of 5, load 10-15): the count took 1.4 s and 1.54 GB, now
   0.03 ms and 96 MB (24 separate `FOR VALID_TIME AS OF` statements: 2 ms);
   with a pushed predicate 324 ms -> 7 ms; the row form 1.33 s -> 203 ms; the
   one-hop form 1.91 s -> 195 ms (peak memory 807 MB, the scan's rows held
@@ -366,6 +369,11 @@ before upgrading.
 
 ### Fixed
 
+- `valid_at(r, date)` on a relationship whose type is declared only for other
+  source types still raises, but the error now names the source types that have
+  a declaration and the two ways out (pass the bounds, or declare the type for
+  that source) instead of claiming the type has none.
+
 - A `count(DISTINCT x)` or `RETURN DISTINCT x` over a pattern could under-count
   when `x` was bound before an unnamed node. `MATCH (a:A)-[:R]->(:M)-[:S]->(:B)
   RETURN count(DISTINCT a)` over three `:A` that reach one `:M` and one `:B`
@@ -386,7 +394,7 @@ before upgrading.
   scanned every node and counted every same-id node of a type.
 - Performance: the anchored relationship count stays a fused count under a
   valid-time context, including the as-of-today default, where it had fallen
-  back to the general route (61-79 ms on a production-scale graph, now about 0.03 ms
+  back to the general route (61-79 ms on a production-scale graph, now about 0.01 ms
   for the same statements). An aggregate with an untyped `{id: ...}` anchor off
   its grouping key takes the matcher's id lookup instead of a scan (65-80 ms
   down to about 0.3 ms; a typed far end 12.5 ms down to 0.06 ms).
@@ -400,7 +408,8 @@ before upgrading.
   the bounds, builds the type description or re-checks that the bound exists.
   On a two-call-site query over 10 000 joined rows (release builds, same
   interpreter, interleaved, min of 40, load average ~3.5) the cost relative to
-  0.18.1 falls from +26-31% to +1.6-2.5% (4.85 to 4.93-4.97 ms); an undated
+  0.18.1 falls from +26-31% to 3.25-3.42 ms, faster than 0.18.1's 4.85 ms
+  (a later change to the streaming aggregate removed the rest); an undated
   control and a property-compare control did not move. Error messages and
   null-bound handling are unchanged.
 - The static schema lint no longer reports a timeseries channel passed to a

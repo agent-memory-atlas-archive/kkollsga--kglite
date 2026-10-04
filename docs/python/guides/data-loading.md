@@ -176,6 +176,7 @@ target_id_field`), the keyword surface:
 | `conflict_handling='update'` | What to do when an edge with the same endpoints already exists. Same modes as `add_nodes`. |
 | `query=...` | Alternative to `data=df`: a Cypher query whose `RETURN` columns supply the source/target ids. Lets you stamp edges from results of a query. |
 | `extra_properties={...}` | Static properties to attach to every edge (handy with `query=`). |
+| `distinct=False` | `True` keeps one relationship per identical row (same endpoints and property values) of a load that owns its edges. By default identical rows are kept and one `UserWarning` per call names the type and the copy counts. `replace_relationships` has no such option. |
 
 `source_type` and `target_type` each refer to a single node type.
 To connect same-type nodes (org charts, taxonomies), set both to
@@ -191,7 +192,7 @@ prunes that source's existing edges *of `connection_type`*, then adds the
 supplied ones, in one call (validate-before-prune, so a malformed input leaves
 the graph intact). Edges from sources not in the input, and edges of other types
 from the same sources, are untouched. It takes the same arguments as
-`add_relationships` (including `query=` mode).
+`add_relationships` (including `query=` mode), except `distinct`.
 
 ```python
 # First sync: doc 1 → [A, B]

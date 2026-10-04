@@ -389,15 +389,15 @@ pub struct TemporalDiagnostics {
     /// `[:LICENSEE from :Field]`.
     pub targets: Vec<String>,
     /// Per target in `targets`, how many of the rows it governs the context
-    /// hides at the instant, judged by that target's own bounds: `(:Licence)`
-    /// counts the licences not valid then, `[:HAS_LICENSEE from :Licence]` the
+    /// hides at the instant, judged by that target's own bounds: `(:Project)`
+    /// counts the projects not valid then, `[:FUNDED_BY from :Project]` the
     /// relationships not valid then. A target answered by property guards
     /// (Disk mode, an unreadable bound, the index byte cap) has no entry.
     pub hidden: std::collections::BTreeMap<String, usize>,
     /// Relationships that are valid by their own bounds but hidden because
     /// an endpoint node is not valid at the instant. These are in no
-    /// `hidden` entry: a licensee period that starts before its licence is
-    /// granted shows up here. `None` when a target of the statement is
+    /// `hidden` entry: a funding period that starts before its project is
+    /// approved shows up here. `None` when a target of the statement is
     /// answered by property guards, so the nodes' validity cannot be counted.
     pub endpoint_invalid: Option<usize>,
     /// `guarded`: the statement ran under the filter (EXPLAIN renders that

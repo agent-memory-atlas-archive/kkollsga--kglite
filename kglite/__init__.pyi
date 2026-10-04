@@ -595,13 +595,13 @@ class ResultView:
           carry a declared ``B`` — without bounds: ``'(:Well)'``,
           ``'[:LICENSEE from :Field]'``); ``hidden`` (per target in ``targets``,
           how many of the rows it governs are not valid at the instant, by
-          that target's own bounds — ``{'(:Licence)': 1212,
-          '[:HAS_LICENSEE from :Licence]': 30411}``; a target answered by
+          that target's own bounds — ``{'(:Project)': 1212,
+          '[:FUNDED_BY from :Project]': 30411}``; a target answered by
           property guards, as on Disk graphs, has no entry);
           ``endpoint_invalid`` (relationships valid by their own bounds that
           the context hides because an endpoint node is not valid, counted
-          in no ``hidden`` entry — a licensee period that starts before its
-          licence is granted; ``None`` when a target is answered by property
+          in no ``hidden`` entry — a funding period that starts before its
+          project is approved; ``None`` when a target is answered by property
           guards); ``route``
           (``'guarded'`` — filtered, the plan ``EXPLAIN`` shows; ``'plain'``
           — nothing was filtered: every declared target was valid in full at
@@ -2564,8 +2564,8 @@ class KnowledgeGraph:
             graph.replace_relationships(df_bc, 'MENTIONS', 'Doc', 'doc', 'Entity', 'ent')
 
         Accepts every argument :meth:`add_relationships` does (including ``query``
-        mode and ``extra_properties``), with identical semantics; only the
-        prune-first behaviour differs.
+        mode and ``extra_properties``) except ``distinct``, with identical
+        semantics; only the prune-first behaviour differs.
 
         Args:
             data: DataFrame containing edge data, or ``None`` when using ``query``.
@@ -7810,10 +7810,13 @@ class KnowledgeGraph:
                 are produced a slice of start nodes at a time, so memory
                 is bounded by the slice rather than the path count (not
                 under ``max_work_units``, a pushed-down ``LIMIT``,
-                ``OPTIONAL MATCH``, comma patterns or a disk graph). Pass ``False``
-                to force the materialized executor — useful for
-                debugging parity issues; behaviour should otherwise be
-                identical.
+                ``OPTIONAL MATCH``, comma patterns, ``collect()``,
+                ``PROFILE`` or a disk graph). Pass ``False`` to force the
+                materialized executor — useful for debugging parity
+                issues. Answers are identical except that the 10,000,000-row
+                backstop does not bound the rows a streamed aggregate
+                passes through, so an aggregate over more than 10M paths
+                succeeds streamed and raises with ``streaming=False``.
             parallel: Opt this query in to the parallel runtime (default
                 ``False``). It is a **hint**, not an instruction: only
                 operators that can partition deterministically use it, and

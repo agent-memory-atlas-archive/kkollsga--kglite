@@ -50,7 +50,7 @@ is about doing that well.
 | Engine transaction time / audit trail | not there | `SET` overwrites and `DELETE` leaves no trace; CDC is process-local |
 | `ASSERT` in a transaction | not there | raise from Python, or an integer division by zero in the statement |
 | As-of on the graph-wide Python algorithm methods | not there | `pagerank()` and the other graph-wide methods ignore `date()`; run `CALL pagerank()` under `valid_at=` |
-| Many valid instants in one statement | costly | `UNWIND` of instants with `valid_at(x, d)` materialises instants × rows; run one statement per instant |
+| Many valid instants in one statement | native for a node label | `UNWIND` of instants with `valid_at(x, d)` over one labelled pattern scans it once; other shapes materialise instants × rows, so run one statement per instant |
 
 ## 3. Set-up
 
@@ -159,8 +159,8 @@ graph.cypher("MATCH (a:Assignment {employee: 'ben'}) RETURN a.id AS id",
 # [{'id': 'ben.2:r'}]
 ```
 
-Lineage and audit queries, which run without the context, still read it
-(section 5).
+Lineage and audit queries, which read every version under
+`FOR VALID_TIME ALL`, still read it (section 5).
 
 **On a declared relationship type, a load writes versions.** `add_relationships`
 (and `replace_relationships`, `create_relationships()`, `extend()` and
