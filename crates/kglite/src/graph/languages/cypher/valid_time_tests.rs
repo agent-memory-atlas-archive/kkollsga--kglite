@@ -651,3 +651,31 @@ fn all_prefixes_for_valid_time_all_and_refuses_a_doubled_context() {
     let parsed = parse_cypher(&prepend_valid_time("EXPLAIN RETURN 1", ValidAt::All).unwrap());
     assert!(parsed.unwrap().context.is_some());
 }
+
+/// A relationship count under a context walks the relationships once per
+/// mask: the next count over the same masks reads the stored per-type answer,
+/// and an endpoint the context hides still removes its relationships.
+#[test]
+fn a_repeat_relationship_count_reads_the_masks_stored_answer() {
+    use crate::graph::languages::cypher::executor::guarded_ops::edge_count_probe;
+    let graph = graph();
+    let none = HashMap::new();
+    let count = |instant: &str, body: &str| -> Value {
+        let query = format!("FOR VALID_TIME AS OF date('{instant}') {body}");
+        read(&graph, &query, &none).unwrap().rows[0][0].clone()
+    };
+    edge_count_probe::take();
+    for (body, whole, at_2015) in [
+        ("MATCH ()-[r:LICENSED]->() RETURN count(r)", 1, 0),
+        ("MATCH ()-[r:NEAR]->() RETURN count(r)", 1, 0),
+        ("MATCH ()-[r]->() RETURN count(r)", 2, 0),
+        ("MATCH ()-[r:NEAR]-() RETURN count(r)", 2, 0),
+    ] {
+        // 2001 hides a well no relationship touches; 2006 hides nothing and
+        // never reaches a guarded count; 2015 hides a relationship's endpoint.
+        assert_eq!(count("2001-01-01", body), Value::Int64(whole), "{body}");
+        assert_eq!(count("2006-01-01", body), Value::Int64(whole), "{body}");
+        assert_eq!(count("2015-01-01", body), Value::Int64(at_2015), "{body}");
+    }
+    assert_eq!(edge_count_probe::take(), 2, "one walk per hiding instant");
+}

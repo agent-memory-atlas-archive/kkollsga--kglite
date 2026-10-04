@@ -725,6 +725,30 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         None,
     ),
     (
+        "context_fused_count_typed_edge_undirected",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH ()-[r:R]-() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_typed_edge_undirected",
+        "declared_lineage_graph",
+        "MATCH ()-[r:R]-() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "context_fused_count_undeclared_edge_hidden_by_endpoint",
+        "declared_lineage_graph",
+        "FOR VALID_TIME AS OF date('2006-01-01') MATCH ()-[r:SUCC]->() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "context_twin_fused_count_undeclared_edge_hidden_by_endpoint",
+        "declared_lineage_graph",
+        "MATCH ()-[r:SUCC]->() RETURN count(r) AS c",
+        None,
+    ),
+    (
         "context_fused_count_all_edges",
         "declared_lineage_graph",
         "FOR VALID_TIME AS OF date('2006-01-01') MATCH ()-[r]->() RETURN count(r) AS c",

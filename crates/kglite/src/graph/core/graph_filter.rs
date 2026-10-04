@@ -440,6 +440,17 @@ impl ElementFilter {
         }
     }
 
+    /// The masks when they alone decide every admit test: no declared label
+    /// or relationship type is left to the evaluator. A count of what the
+    /// filter admits is then a function of the masks and may live on them.
+    pub(crate) fn decisive_masks(&self) -> Option<&Arc<ElementMasks>> {
+        if self.node_residual.is_empty() && self.edge_rules.is_empty() {
+            self.masks.as_ref()
+        } else {
+            None
+        }
+    }
+
     /// The instant the filter keeps elements valid at; `None` for a range.
     pub(crate) fn instant(&self) -> Option<Instant> {
         match self.selector {

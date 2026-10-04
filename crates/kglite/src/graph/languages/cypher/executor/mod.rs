@@ -1066,7 +1066,7 @@ mod procedure_registry;
 pub(crate) use procedure_registry::{
     is_context_free_procedure, is_mask_routed_procedure, is_view_routed_procedure,
 };
-mod guarded_ops;
+pub(crate) mod guarded_ops;
 pub(crate) mod procedure_router;
 mod projected_targets;
 pub mod refresh_stats;

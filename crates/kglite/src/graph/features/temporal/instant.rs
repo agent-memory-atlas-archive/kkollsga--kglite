@@ -172,7 +172,7 @@ fn disk_masks(
     if let Some(err) = evaluator.error() {
         return Err(err.to_string());
     }
-    let masks = Arc::new(ElementMasks { nodes, edges });
+    let masks = Arc::new(ElementMasks::new(nodes, edges));
     if store {
         endpoint_index::store_disk_masks(graph, t, &masks);
     }

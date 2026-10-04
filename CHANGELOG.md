@@ -147,6 +147,18 @@ before upgrading.
   Unknown keys inside a `timeseries` block (e.g. `aggregates`)
   now warn like unknown keys elsewhere in a blueprint.
 
+- Performance: a relationship count under `FOR VALID_TIME AS OF` (and under
+  the default context) -- `MATCH ()-[r:T]->() RETURN count(r)`, `count(*)`, the
+  untyped `()-[r]->()` form, the undirected form and the per-type grouping --
+  keeps the per-type answer on the context's masks, so only the first count
+  over a graph version and instant walks the relationships and every repeat
+  reads the stored counts. The answer is the same as before: a relationship
+  counts when its own declaration (per source type where declared) and both
+  endpoints are valid. On a 856k-relationship production graph (release build,
+  Python 3.14, min of 300, two runs, load average 3.5) the typed count under the
+  default context went from about 2.9 ms to 3.0-3.5 us (the same count under
+  `FOR VALID_TIME ALL` is 1.1-1.2 us).
+
 - Performance: a grouped `count` over one relationship hop
   (`MATCH (w:T)-[:R]->(f:U) RETURN f.p, count(w) ... ORDER BY ... LIMIT k`)
   now keeps its fused plan under `FOR VALID_TIME AS OF` (and `valid_at=`). The

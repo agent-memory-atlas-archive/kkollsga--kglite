@@ -68,11 +68,12 @@
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
-use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard, Weak};
+use std::sync::{Arc, OnceLock, PoisonError, RwLockReadGuard, RwLockWriteGuard, Weak};
 
 use chrono::{Datelike, NaiveDate};
 use fixedbitset::FixedBitSet;
 use petgraph::graph::EdgeIndex;
+use rustc_hash::FxHashMap;
 
 use super::declarations::TemporalTarget;
 use super::duplicate_ids::DuplicateIds;
@@ -505,9 +506,35 @@ fn scan(
 pub(crate) struct ElementMasks {
     pub(crate) nodes: FixedBitSet,
     pub(crate) edges: FixedBitSet,
+    /// The relationships these masks admit, per type, once a count asked
+    /// ([`EdgeTypeCounts`]). It belongs to the masks, so it dies with them
+    /// and never outlives the graph version that built them.
+    edge_counts: OnceLock<Arc<EdgeTypeCounts>>,
 }
 
+/// Per relationship type: the relationships admitted with both endpoints,
+/// and how many of those are self-loops.
+pub(crate) type EdgeTypeCounts = FxHashMap<InternedKey, (i64, i64)>;
+
 impl ElementMasks {
+    pub(crate) fn new(nodes: FixedBitSet, edges: FixedBitSet) -> Self {
+        ElementMasks {
+            nodes,
+            edges,
+            edge_counts: OnceLock::new(),
+        }
+    }
+
+    /// The counts a pass over the relationships already stored on these masks.
+    pub(crate) fn cached_edge_counts(&self) -> Option<Arc<EdgeTypeCounts>> {
+        self.edge_counts.get().cloned()
+    }
+
+    /// Keep `counts` for the next count over these masks; the first stored wins.
+    pub(crate) fn store_edge_counts(&self, counts: EdgeTypeCounts) -> Arc<EdgeTypeCounts> {
+        Arc::clone(self.edge_counts.get_or_init(|| Arc::new(counts)))
+    }
+
     fn bytes(&self) -> usize {
         Self::bytes_for(self.nodes.len(), self.edges.len())
     }
@@ -1163,10 +1190,10 @@ fn build_masks(graph: &DirGraph, parts: &[(Arc<EndpointIndex>, Segment, bool)]) 
         bits.insert_range(..);
         bits
     };
-    let mut masks = ElementMasks {
-        nodes: all_set(graph.graph.node_bound()),
-        edges: all_set(graph.graph.edge_bound()),
-    };
+    let mut masks = ElementMasks::new(
+        all_set(graph.graph.node_bound()),
+        all_set(graph.graph.edge_bound()),
+    );
     for (index, segment, edge) in parts {
         let bits = if *edge {
             &mut masks.edges

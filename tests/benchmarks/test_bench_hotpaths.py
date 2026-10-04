@@ -776,3 +776,60 @@ def test_bench_default_context_declared_hop_limit(benchmark, declared_types_with
     result = benchmark(graph.cypher, query)
     assert result.diagnostics["temporal"]["targets"] == ["(:T0)", "(:T1)"]
     assert len(result.to_list()) == 10
+
+
+@pytest.fixture
+def declared_edges_graph():
+    """20 000 declared nodes, 200 000 declared relationships of one type (a
+    tenth expired, a tenth with an expired endpoint) and 50 000 undeclared
+    ones: the shape of a register whose relationship counts the default
+    valid-time context must answer without testing every relationship."""
+    graph = KnowledgeGraph()
+    n = 20_000
+    nodes = pd.DataFrame(
+        {
+            "id": range(n),
+            "title": [f"n{i}" for i in range(n)],
+            "vf": pd.to_datetime(["2000-01-01"] * n),
+            "vt": pd.to_datetime(["2010-01-01" if i % 10 == 0 else "2099-01-01" for i in range(n)]),
+        }
+    )
+    graph.add_nodes(nodes, "Party", "id", "title")
+    m = 200_000
+    contracts = pd.DataFrame(
+        {
+            "a": [i % n for i in range(m)],
+            "b": [(i * 7 + 1) % n for i in range(m)],
+            "vf": pd.to_datetime(["2000-01-01"] * m),
+            "vt": pd.to_datetime(["2010-01-01" if i % 10 == 3 else "2099-01-01" for i in range(m)]),
+        }
+    )
+    graph.add_connections(contracts, "CONTRACTED", "Party", "a", "Party", "b", columns=["vf", "vt"])
+    knows = pd.DataFrame({"a": [i % n for i in range(50_000)], "b": [(i * 3 + 2) % n for i in range(50_000)]})
+    graph.add_connections(knows, "KNOWS", "Party", "a", "Party", "b")
+    graph.cypher("CALL db.temporal.declare({node: 'Party', from: 'vf', to: 'vt', convention: 'half_open'})")
+    graph.cypher(
+        "CALL db.temporal.declare({relationship: 'CONTRACTED', from: 'vf', to: 'vt', convention: 'half_open'})"
+    )
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_declared_edge_count(benchmark, declared_edges_graph):
+    """`MATCH ()-[r:CONTRACTED]->() RETURN count(r)` under the default context:
+    the masks' stored per-type answer, not a test of every relationship."""
+    graph = declared_edges_graph
+    query = "MATCH ()-[r:CONTRACTED]->() RETURN count(r) AS n"
+    expected = graph.cypher(query).to_list()[0]["n"]
+    assert 0 < expected < 200_000
+    result = benchmark(graph.cypher, query)
+    assert result.to_list()[0]["n"] == expected
+
+
+@pytest.mark.benchmark
+def test_bench_all_context_declared_edge_count(benchmark, declared_edges_graph):
+    """The control for the cell above: the same count reading every version."""
+    result = benchmark(
+        declared_edges_graph.cypher, "FOR VALID_TIME ALL MATCH ()-[r:CONTRACTED]->() RETURN count(r) AS n"
+    )
+    assert result.to_list()[0]["n"] == 200_000

@@ -9,12 +9,13 @@ use std::collections::HashSet;
 
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
-use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 use super::match_clause::{bound_hop, simple_node_edge_node, BoundHop};
 use super::*;
 use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::core::relationship_property::edge_ref_property;
+use crate::graph::features::temporal::endpoint_index::EdgeTypeCounts;
 use crate::graph::languages::cypher::valid_time;
 
 impl CypherExecutor<'_> {
@@ -196,17 +197,20 @@ impl CypherExecutor<'_> {
         (primary + secondary) as i64
     }
 
-    /// The relationship counts under a filter: one pass over the
-    /// relationships, each counted when it and both endpoints are admitted.
-    fn execute_fused_edge_count_guarded(
-        &self,
-        filter: &ElementFilter,
-        clause: &Clause,
-    ) -> Result<ResultSet, String> {
+    /// The admitted relationships per type, each counted when it and both
+    /// endpoints are admitted. A filter the masks alone decide keeps the
+    /// answer on its masks, so only the first count over them walks the
+    /// relationships; any other filter walks them every time.
+    fn admitted_edge_counts(&self, filter: &ElementFilter) -> Result<Arc<EdgeTypeCounts>, String> {
+        let masks = filter.decisive_masks();
+        if let Some(hit) = masks.and_then(|m| m.cached_edge_counts()) {
+            return Ok(hit);
+        }
         let graph = self.graph;
         self.budget
             .check_work(graph.graph.edge_count(), "fused relationship count")?;
-        let mut per_type: FxHashMap<InternedKey, (i64, i64)> = FxHashMap::default();
+        edge_count_probe::walked();
+        let mut per_type = EdgeTypeCounts::default();
         for (i, edge) in graph.graph.edge_references().enumerate() {
             self.check_interrupt_periodic(i)?;
             let conn = edge.connection_type();
@@ -219,6 +223,20 @@ impl CypherExecutor<'_> {
                 }
             }
         }
+        Ok(match masks {
+            Some(masks) => masks.store_edge_counts(per_type),
+            None => Arc::new(per_type),
+        })
+    }
+
+    /// The relationship counts under a filter.
+    fn execute_fused_edge_count_guarded(
+        &self,
+        filter: &ElementFilter,
+        clause: &Clause,
+    ) -> Result<ResultSet, String> {
+        let graph = self.graph;
+        let per_type = self.admitted_edge_counts(filter)?;
         let count_of = |name: &str| {
             per_type
                 .get(&InternedKey::from_str(name))
@@ -371,5 +389,27 @@ impl CypherExecutor<'_> {
         } else {
             count
         }))
+    }
+}
+
+/// Passes over every relationship that guarded fused counts made, per
+/// thread in tests, so a test can prove a repeat count reads the masks'
+/// stored answer. A no-op outside tests.
+pub(crate) mod edge_count_probe {
+    #[cfg(test)]
+    thread_local! {
+        static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[inline]
+    pub(super) fn walked() {
+        #[cfg(test)]
+        WALKS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// The passes counted since the last call.
+    #[cfg(test)]
+    pub(crate) fn take() -> usize {
+        WALKS.with(|c| c.replace(0))
     }
 }
