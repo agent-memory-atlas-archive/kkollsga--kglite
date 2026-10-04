@@ -232,6 +232,27 @@ pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<String>,
     Ok(warnings)
 }
 
+/// The node labels this blueprint will declare valid-time on at the end of the
+/// build: every spec whose `temporal` key names a convention. Known before any
+/// row loads, unlike the declarations themselves.
+pub(crate) fn declared_node_labels(blueprint: &Blueprint) -> Vec<String> {
+    fn walk(labels: &mut Vec<String>, node_type: &str, spec: &NodeSpec) {
+        if let Some(temporal) = &spec.temporal {
+            if matches!(convention_of(node_type, temporal), Ok(Some(_))) {
+                labels.push(node_type.to_string());
+            }
+        }
+        for (sub_type, sub) in &spec.sub_nodes {
+            walk(labels, sub_type, sub);
+        }
+    }
+    let mut labels = Vec::new();
+    for (node_type, spec) in &blueprint.nodes {
+        walk(&mut labels, node_type, spec);
+    }
+    labels
+}
+
 /// Declare every interval the specs name a convention for, over the rows the
 /// build wrote. A declaration the rows refuse — an unreadable bound, or an
 /// inverted interval — fails the build, naming the row; rows with an empty

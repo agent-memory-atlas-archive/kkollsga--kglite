@@ -71,6 +71,16 @@ enum MissingEndpointPolicy {
 /// Build (or extend) `graph` from an inline JSON records spec. See the module
 /// docs for the spec shape. Returns a per-build summary.
 pub fn from_records(graph: &mut DirGraph, spec: &Json) -> Result<RecordsReport, String> {
+    // Duplicate-id warnings join the report rather than going to stderr, where
+    // a process-wide rate limit would silence every build after the first few.
+    let (result, duplicate_ids) =
+        crate::graph::dir_graph::collect_id_warnings(|| from_records_inner(graph, spec));
+    let mut report = result?;
+    report.warnings.extend(duplicate_ids);
+    Ok(report)
+}
+
+fn from_records_inner(graph: &mut DirGraph, spec: &Json) -> Result<RecordsReport, String> {
     let obj = spec
         .as_object()
         .ok_or_else(|| "from_records: top-level JSON must be an object".to_string())?;

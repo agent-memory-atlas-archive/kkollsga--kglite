@@ -80,7 +80,14 @@ pub fn from_blueprint_rust(
         )
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-    print!("{}", report.render_text(verbose));
+    // Python's `print`, not Rust's: `contextlib.redirect_stdout` and a
+    // notebook's output capture replace `sys.stdout`, never file descriptor 1.
+    let text = report.render_text(verbose);
+    if !text.is_empty() {
+        py.import("builtins")?
+            .getattr("print")?
+            .call1((text.trim_end_matches('\n'),))?;
+    }
     // One `UserWarning` per report entry, whatever `verbose` is: that is the
     // contract the stub documents, and it is what makes `warnings.simplefilter`
     // / `logging.captureWarnings` able to route them. A summary line counting
@@ -91,7 +98,9 @@ pub fn from_blueprint_rust(
             py,
             py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
             message.as_c_str(),
-            1,
+            // The shim's `from_blueprint` is the frame calling this function;
+            // the warning belongs to whoever called that.
+            2,
         )?;
     }
     // Errors are not warnings and stay on stderr: a per-spec failure has
@@ -211,8 +220,8 @@ pub fn from_records_rust(
         );
     }
 
-    let kg = py
-        .detach(|| -> Result<KnowledgeGraph, String> {
+    let (kg, warnings) = py
+        .detach(|| -> Result<(KnowledgeGraph, Vec<String>), String> {
             let mode = match storage {
                 None | Some("") => kglite_core::api::storage::StorageMode::Memory,
                 Some(s) => kglite_core::api::storage::StorageMode::parse(s)?,
@@ -220,19 +229,33 @@ pub fn from_records_rust(
             let mut graph =
                 kglite_core::api::storage::new_dir_graph_in_mode(mode, path.map(Path::new))?;
 
-            blueprint::from_records(&mut graph, &spec)?;
+            let report = blueprint::from_records(&mut graph, &spec)?;
 
-            Ok(KnowledgeGraph {
-                inner: Arc::new(graph),
-                cursor: crate::graph::CursorState::new(),
-                embedder: None,
-                default_timeout_ms: None,
-                default_max_work_units: None,
-                default_row_limit: None,
-                lifecycle: crate::graph::GraphLifecycle::detached(),
-            })
+            Ok((
+                KnowledgeGraph {
+                    inner: Arc::new(graph),
+                    cursor: crate::graph::CursorState::new(),
+                    embedder: None,
+                    default_timeout_ms: None,
+                    default_max_work_units: None,
+                    default_row_limit: None,
+                    lifecycle: crate::graph::GraphLifecycle::detached(),
+                },
+                report.warnings,
+            ))
         })
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
+
+    // One `UserWarning` per entry, as `from_blueprint` raises them.
+    for w in &warnings {
+        let message = std::ffi::CString::new(w.as_str()).unwrap_or_default();
+        PyErr::warn(
+            py,
+            py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
+            message.as_c_str(),
+            2,
+        )?;
+    }
 
     Ok(kg)
 }

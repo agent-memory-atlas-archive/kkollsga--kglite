@@ -8,7 +8,7 @@
 pub mod add_properties;
 pub mod batch;
 mod batch_title_admission;
-mod connection_stubs;
+pub(crate) mod connection_stubs;
 mod delete_state;
 mod edge_props;
 pub mod edge_specs;

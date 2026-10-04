@@ -153,6 +153,33 @@ impl BuildReport {
 
 pub fn build(
     graph: &mut DirGraph,
+    blueprint: Blueprint,
+    blueprint_dir: &Path,
+    inputs: BuildInputs,
+) -> Result<BuildReport, String> {
+    let declared = temporal::declared_node_labels(&blueprint);
+    // The build's duplicate-id warnings ride its report instead of stderr,
+    // where a process-wide rate limit would silence every build after the
+    // first few. Versioned rows of a label the build declares share an id by
+    // design, so those are dropped; the stub advisory likewise needs the
+    // labels declared only once the rows are in.
+    let (result, duplicate_ids) = crate::graph::dir_graph::collect_id_warnings_by_type(|| {
+        crate::graph::mutation::connection_stubs::with_pending_declared_labels(
+            declared.clone(),
+            || build_phases(graph, blueprint, blueprint_dir, inputs),
+        )
+    });
+    let mut report = result?;
+    for (node_type, message) in duplicate_ids {
+        if !declared.contains(&node_type) && !report.warnings.contains(&message) {
+            report.warnings.push(message);
+        }
+    }
+    Ok(report)
+}
+
+fn build_phases(
+    graph: &mut DirGraph,
     mut blueprint: Blueprint,
     blueprint_dir: &Path,
     mut inputs: BuildInputs,

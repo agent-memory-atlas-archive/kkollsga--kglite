@@ -20,6 +20,16 @@ before upgrading.
 
 ### Fixed
 
+- The duplicate-id warning of a blueprint or `from_records` build is no longer
+  capped for the rest of the process: it joins the build's warnings, once per
+  build, and is not raised for the versioned rows of a type the blueprint
+  declares valid-time. `from_records` emits the warnings of its report, and
+  `from_blueprint` warnings point at the caller's line.
+- `from_blueprint(verbose=True)` prints through Python's `print`, so
+  `contextlib.redirect_stdout` and notebook capture see it, with one node
+  count rather than two.
+- The stub advisory of a blueprint build says a stub on a declared label is
+  valid at every instant.
 - A blueprint sub-node that already declares an `fk_edges` entry to its parent
   type no longer gets a second, implicit parent edge, and the implicit edge no
   longer creates stub parents. Built by 0.19.2, such a blueprint carried the

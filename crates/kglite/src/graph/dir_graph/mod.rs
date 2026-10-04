@@ -82,7 +82,9 @@ pub(crate) mod rollback;
 pub(crate) mod schema_cow;
 mod schema_ops;
 
-pub(crate) use duplicate_ids::{collect_id_warnings, warn_on_duplicate_ids};
+pub(crate) use duplicate_ids::{
+    collect_id_warnings, collect_id_warnings_by_type, warn_on_duplicate_ids,
+};
 pub use node_remap::NodeRemap;
 
 /// Version-keyed cache of per-`(type, property)` distinct-value counts (NDV)

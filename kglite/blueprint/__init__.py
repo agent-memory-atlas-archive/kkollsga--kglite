@@ -99,10 +99,6 @@ def from_blueprint(
         path=path,
         frames=frames,
     )
-    if verbose:
-        counts = graph.node_type_counts()
-        for node_type, n in sorted(counts.items()):
-            print(f"  {node_type}: {n} nodes")
     if save is not False:
         destination = _save_destination(output_path, storage, path)
         if destination is not None:

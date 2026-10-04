@@ -26,8 +26,8 @@ pub(crate) fn warn_on_duplicate_ids(node_type: &str, entry_count: usize, unique_
     );
     let collected = STATEMENT_ID_WARNINGS.with(|slot| match slot.borrow_mut().as_mut() {
         Some(warnings) => {
-            if !warnings.contains(&message) {
-                warnings.push(message.clone());
+            if !warnings.iter().any(|(_, seen)| *seen == message) {
+                warnings.push((node_type.to_string(), message.clone()));
             }
             true
         }
@@ -47,7 +47,7 @@ pub(crate) fn warn_on_duplicate_ids(node_type: &str, entry_count: usize, unique_
 thread_local! {
     /// The duplicate-id warnings of the statement running on this thread, or
     /// `None` outside [`collect_id_warnings`].
-    static STATEMENT_ID_WARNINGS: std::cell::RefCell<Option<Vec<String>>> =
+    static STATEMENT_ID_WARNINGS: std::cell::RefCell<Option<Vec<(String, String)>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -55,9 +55,17 @@ thread_local! {
 /// this thread while it ran (see [`warn_on_duplicate_ids`]). Nests: an inner
 /// statement's warnings are its own, and the outer collection resumes after it.
 pub(crate) fn collect_id_warnings<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+    let (result, warnings) = collect_id_warnings_by_type(f);
+    (result, warnings.into_iter().map(|(_, m)| m).collect())
+}
+
+/// [`collect_id_warnings`] with the node type each warning names, for a caller
+/// that drops the warnings of types it later learns are declared versioned (a
+/// blueprint build declares its temporal labels after the rows load).
+pub(crate) fn collect_id_warnings_by_type<R>(f: impl FnOnce() -> R) -> (R, Vec<(String, String)>) {
     /// Restores the outer collection even when `f` unwinds, so a panicking
     /// statement cannot leave this thread collecting into a dropped list.
-    struct Restore(Option<Vec<String>>);
+    struct Restore(Option<Vec<(String, String)>>);
     impl Drop for Restore {
         fn drop(&mut self) {
             let outer = self.0.take();
@@ -101,6 +109,22 @@ mod tests {
             "{outer:?}"
         );
         assert!(outside_any_statement());
+    }
+
+    /// The typed collection names the node type of each warning, once per
+    /// message, and is not capped by the stderr rate limit.
+    #[test]
+    fn typed_collection_names_each_warnings_type_without_a_cap() {
+        let ((), warnings) = collect_id_warnings_by_type(|| {
+            for _ in 0..10 {
+                warn_on_duplicate_ids("A", 2, 1);
+            }
+            warn_on_duplicate_ids("B", 3, 1);
+        });
+        let types: Vec<&str> = warnings.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(types, ["A", "B"], "{warnings:?}");
+        let ((), again) = collect_id_warnings_by_type(|| warn_on_duplicate_ids("A", 2, 1));
+        assert_eq!(again.len(), 1, "a later collection warns afresh");
     }
 
     /// A statement that unwinds does not leave the thread collecting into a

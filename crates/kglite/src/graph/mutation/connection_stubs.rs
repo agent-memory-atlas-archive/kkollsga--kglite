@@ -31,12 +31,38 @@ pub(super) fn vivify_endpoints(
     Ok((by_type.iter().map(|(_, count)| count).sum(), advisories))
 }
 
+thread_local! {
+    /// Labels a running build will declare valid-time on once its rows are in,
+    /// so a stub vivified before that point is already known to be on one.
+    static PENDING_DECLARED: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with `labels` counted as declared by [`stub_advisory`]. A blueprint
+/// build declares after its edges load, so the graph cannot yet say which
+/// labels are versioned; the build's specs can.
+pub(crate) fn with_pending_declared_labels<R>(labels: Vec<String>, f: impl FnOnce() -> R) -> R {
+    /// Restores the previous set even when `f` unwinds.
+    struct Restore(Vec<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let outer = std::mem::take(&mut self.0);
+            PENDING_DECLARED.with(|slot| *slot.borrow_mut() = outer);
+        }
+    }
+    let _restore = Restore(PENDING_DECLARED.with(|slot| slot.replace(labels)));
+    f()
+}
+
 /// The advisory for `count` stubs vivified on `node_type` — the one text every
 /// binding and the blueprint build report. A stub carries no validity bounds,
-/// so on a label with a valid-time declaration it is valid at every instant
-/// until a node row with bounds promotes it, and the advisory says so.
+/// so on a label with a valid-time declaration (already on the graph, or about
+/// to be declared by the running build) it is valid at every instant until a
+/// node row with bounds promotes it, and the advisory says so.
 fn stub_advisory(graph: &DirGraph, connection_type: &str, node_type: &str, count: usize) -> String {
-    if crate::graph::features::temporal::node_config(graph, node_type).is_some() {
+    let declared = crate::graph::features::temporal::node_config(graph, node_type).is_some()
+        || PENDING_DECLARED.with(|slot| slot.borrow().iter().any(|l| l == node_type));
+    if declared {
         format!(
             "{count} stub node(s) vivified for missing '{connection_type}' endpoints on \
              declared label '{node_type}' carry no bounds and are valid at every instant until \
