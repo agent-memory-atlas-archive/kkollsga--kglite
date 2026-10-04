@@ -1030,6 +1030,7 @@ pub mod call_subquery;
 mod cdc_procedures;
 mod centrality_procedures;
 mod chain_count;
+mod chain_group_count;
 mod clause_pipeline;
 mod columnar_write;
 #[cfg(test)]
@@ -1111,6 +1112,7 @@ pub(crate) mod write_scope;
 
 pub(super) use clause_pipeline::order_by_scope_after;
 pub use execution_support::clause_display_name;
+pub(crate) use helpers::expression_to_string;
 pub use helpers::return_item_column_name;
 // `execute_mutable` is re-exported by `api::cypher` directly from
 // `write`; nothing inside the engine calls it any more — the session layer

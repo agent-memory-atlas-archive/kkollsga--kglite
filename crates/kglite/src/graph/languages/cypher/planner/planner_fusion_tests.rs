@@ -40,6 +40,108 @@ fn relationship_vector_score_fuses_like_a_node_score() {
     ));
 }
 
+/// The grouped `count(DISTINCT x)` over a chain: the shapes that fuse, with
+/// the clauses that trail the RETURN kept, and the bail set.
+#[test]
+fn grouped_chain_distinct_count_fuses_only_its_shape() {
+    const CHAIN: &str = "(f:A)-[:R1]->(c:B)<-[:R2]-(l:C)<-[:R3]-(w:D)";
+    // `Some(grouped)` when the chain pass rewrote the statement; the clause
+    // list after the rewrite is returned for the trailing-clause checks.
+    let run = |source: &str| {
+        let mut query = parse_cypher(source).unwrap();
+        super::fusion::fuse_chain_path_count(&mut query, false);
+        query.clauses
+    };
+    let grouped = |source: &str| {
+        matches!(
+            run(source).first(),
+            Some(Clause::FusedChainDistinctCount { group: Some(_), .. })
+        )
+    };
+    let fused_with = |expect_trailing: usize, source: &str| {
+        let clauses = run(source);
+        matches!(
+            clauses.first(),
+            Some(Clause::FusedChainDistinctCount { group: Some(_), .. })
+        ) && clauses.len() == 1 + expect_trailing
+    };
+    assert!(grouped(&format!(
+        "MATCH {CHAIN} RETURN c.title AS k, count(DISTINCT w) AS n"
+    )));
+    // key second, key a bare node, key and target at one position, a
+    // relationship target, a two-hop chain
+    assert!(grouped(&format!(
+        "MATCH {CHAIN} RETURN count(DISTINCT w) AS n, c.title AS k"
+    )));
+    assert!(grouped(&format!(
+        "MATCH {CHAIN} RETURN c, count(DISTINCT w)"
+    )));
+    assert!(grouped(&format!(
+        "MATCH {CHAIN} RETURN c.title, count(DISTINCT c)"
+    )));
+    assert!(grouped(
+        "MATCH (f:A)-[:R1]->(c:B)<-[r:R2]-(l:C) RETURN f.title, count(DISTINCT r)"
+    ));
+    assert!(grouped(
+        "MATCH (f:A)-[:R1]->(c:B)<-[:R2]-(l:C) RETURN c.title, count(DISTINCT l)"
+    ));
+    // ORDER BY over returned columns, SKIP and LIMIT survive the rewrite
+    assert!(fused_with(
+        2,
+        &format!(
+            "MATCH {CHAIN} RETURN c.title AS k, count(DISTINCT w) AS n ORDER BY n DESC, k LIMIT 3"
+        )
+    ));
+    assert!(fused_with(
+        2,
+        &format!("MATCH {CHAIN} RETURN c.title, count(DISTINCT w) ORDER BY c.title SKIP 1")
+    ));
+    for bail in [
+        // a second aggregate, a property of the counted node, DISTINCT rows
+        "RETURN c.title AS k, count(DISTINCT w) AS n, count(*) AS m",
+        "RETURN c.title AS k, count(DISTINCT w.id) AS n",
+        "RETURN DISTINCT c.title AS k, count(DISTINCT w) AS n",
+        // a key that is not one chain node's property or the node itself
+        "RETURN c.title + f.title AS k, count(DISTINCT w) AS n",
+        "RETURN toUpper(c.title) AS k, count(DISTINCT w) AS n",
+        "RETURN k, count(DISTINCT w) AS n",
+        // ORDER BY past the returned columns, or over an expression
+        "RETURN c.title AS k, count(DISTINCT w) AS n ORDER BY c.id",
+        "RETURN c.title AS k, count(DISTINCT w) AS n ORDER BY n + 1",
+        "RETURN c.title AS k, count(DISTINCT w) AS n ORDER BY c.title",
+    ] {
+        assert!(!grouped(&format!("MATCH {CHAIN} {bail}")), "{bail}");
+    }
+    // the chain's own bail set applies to the grouped form too
+    for chain in [
+        "(f:A)-[:R1]->(c:B)<-[:R1]-(l:C)<-[:R3]-(w:D)",
+        "(f:A)-[:R1]->(c:B)<-[]-(l:C)<-[:R3]-(w:D)",
+        "(f:A)-[:R1*1..2]->(c:B)<-[:R2]-(l:C)<-[:R3]-(w:D)",
+        "(f:A)-[:R1]->(c:B)",
+        "(f:A)-[:R1]->(c:B)<-[:R2]-(l:C)<-[:R3]-(f)",
+    ] {
+        assert!(
+            !grouped(&format!(
+                "MATCH {chain} RETURN c.title AS k, count(DISTINCT c) AS n"
+            )),
+            "{chain}"
+        );
+    }
+    assert!(!grouped(&format!(
+        "MATCH {CHAIN} WHERE c.title <> 'x' RETURN c.title AS k, count(DISTINCT w) AS n"
+    )));
+    assert!(!grouped(&format!(
+        "MATCH p = {CHAIN} RETURN c.title AS k, count(DISTINCT w) AS n"
+    )));
+    assert!(!grouped(&format!(
+        "MATCH {CHAIN}, (c)-[:R9]->(z:Z) RETURN c.title AS k, count(DISTINCT w) AS n"
+    )));
+    assert!(!grouped(&format!(
+        "MATCH {CHAIN} RETURN c.title AS k, count(DISTINCT w) AS n UNION \
+         MATCH {CHAIN} RETURN c.title AS k, count(DISTINCT w) AS n"
+    )));
+}
+
 /// The lazy-eligibility contract, pinned as a corpus.
 ///
 /// `mark_lazy_eligibility` decides whether a result is returned deferred, and a

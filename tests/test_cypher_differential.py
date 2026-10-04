@@ -648,6 +648,110 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
         f"MATCH {_CHAIN} RETURN f.id AS f, count(*) AS n",
         None,
     ),
+    # `RETURN <key over one chain node>, count(DISTINCT x)` is the grouped form
+    # of the same clause: a key shared by several nodes (their target sets
+    # union), a key left of, at and right of the target, a relationship
+    # target, an undirected self-loop hop, and the shapes it must leave to the
+    # matcher.
+    (
+        "chain_grouped_shared_key_far_target",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_key_right_of_target",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN l.id AS k, count(DISTINCT f) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_key_is_the_target_position",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(DISTINCT c) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_missing_property_key",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN l.kind AS k, count(DISTINCT c) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_relationship_target",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[r:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
+        " RETURN f.region AS k, count(DISTINCT r) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_count_column_first",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN count(DISTINCT w) AS n, f.region AS k",
+        None,
+    ),
+    (
+        "chain_grouped_node_key",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c AS k, count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_undirected_self_loop",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)-[x:PARTNER]-(p:Dept)<-[:FUNDED_BY]-(l:Project)"
+        " RETURN p.kind AS k, count(DISTINCT x) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_order_by_limit",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN l.id AS k, count(DISTINCT w) AS n ORDER BY n DESC, k LIMIT 2",
+        None,
+    ),
+    (
+        "chain_grouped_secondary_label_peer",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Sponsor)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
+        " RETURN f.region AS k, count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_empty_frontier",
+        "chain_graph",
+        f"MATCH {_CHAIN.replace('Team', 'Nothing')} RETURN c.kind AS k, count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_property_target_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(DISTINCT w.id) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_second_aggregate_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(DISTINCT w) AS n, count(*) AS m",
+        None,
+    ),
+    (
+        "chain_grouped_where_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} WHERE c.kind <> 'small' RETURN c.kind AS k, count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_order_by_unreturned_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(DISTINCT w) AS n ORDER BY c.id, k",
+        None,
+    ),
+    (
+        "chain_grouped_two_variable_key_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN f.region + c.kind AS k, count(DISTINCT w) AS n",
+        None,
+    ),
 ]
 
 
@@ -7567,6 +7671,7 @@ MUTATION_QUERIES: list[tuple[str, str]] = [
 ORDERED_CASES = frozenset(
     {
         "trigger_generic_top_k",
+        "chain_grouped_order_by_limit",
         "skip_and_limit",
         "order_by_return_alias",
         "text_bm25_top_k",

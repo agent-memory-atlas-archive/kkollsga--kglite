@@ -27,7 +27,8 @@
 //! complete path iff it starts in `F_{i-1}` and ends in `B_i`; an undirected
 //! hop can meet one relationship from both ends, so its ids are deduplicated.
 //! Disjoint hop types make the matcher's relationship-uniqueness rule moot, as
-//! above.
+//! above. The grouped form (`RETURN <key>, count(DISTINCT x)`) is in
+//! `chain_group_count.rs`.
 
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
@@ -41,13 +42,13 @@ use crate::graph::core::pattern_matching::{EdgePattern, NodePattern, Pattern, Pa
 
 /// One hop of the chain: the relationship pattern, the node it reaches, and
 /// the directions to sweep from the node it leaves.
-struct ChainHop<'p> {
-    edge: &'p EdgePattern,
+pub(super) struct ChainHop<'p> {
+    pub(super) edge: &'p EdgePattern,
     peer: &'p NodePattern,
-    dirs: &'static [Direction],
+    pub(super) dirs: &'static [Direction],
 }
 
-fn chain_hops(pattern: &Pattern) -> Option<(&NodePattern, Vec<ChainHop<'_>>)> {
+pub(super) fn chain_hops(pattern: &Pattern) -> Option<(&NodePattern, Vec<ChainHop<'_>>)> {
     let PatternElement::Node(start) = pattern.elements.first()? else {
         return None;
     };
@@ -70,11 +71,11 @@ fn chain_hops(pattern: &Pattern) -> Option<(&NodePattern, Vec<ChainHop<'_>>)> {
 }
 
 /// One hop's per-relationship and per-peer tests, in the matcher's order.
-struct HopTests<'a> {
+pub(super) struct HopTests<'a> {
     exec: &'a CypherExecutor<'a>,
     pe: &'a PatternExecutor<'a>,
     filter: Option<&'a ElementFilter>,
-    hop: &'a ChainHop<'a>,
+    pub(super) hop: &'a ChainHop<'a>,
     conn_filter: ConnTypeFilter,
     peer_labels: crate::graph::dir_graph::LabelCheck<'a>,
     /// Peers the hop's node tests refused, so a refused peer reached over many
@@ -83,7 +84,7 @@ struct HopTests<'a> {
 }
 
 impl<'a> HopTests<'a> {
-    fn new(
+    pub(super) fn new(
         exec: &'a CypherExecutor<'a>,
         pe: &'a PatternExecutor<'a>,
         filter: Option<&'a ElementFilter>,
@@ -103,7 +104,7 @@ impl<'a> HopTests<'a> {
     /// The node `edge_ref` reaches from `from` along `dir`, when the hop
     /// admits that relationship (its type, the filter, its inline filters) —
     /// the peer's own labels and properties are [`Self::peer_accepted`].
-    fn admit_relationship(
+    pub(super) fn admit_relationship(
         &self,
         from: NodeIndex,
         dir: Direction,
@@ -177,7 +178,7 @@ impl<'a> HopTests<'a> {
             .filter(|&peer| self.peer_accepted(peer))
     }
 
-    fn edges(
+    pub(super) fn edges(
         &self,
         from: NodeIndex,
         dir: Direction,
@@ -306,6 +307,7 @@ impl CypherExecutor<'_> {
             pattern,
             target,
             alias,
+            group,
         } = clause
         else {
             return Err("internal: not a FusedChainDistinctCount clause".into());
@@ -317,6 +319,9 @@ impl CypherExecutor<'_> {
         };
         if *target >= pattern.elements.len() {
             return Err("internal: FusedChainDistinctCount target is outside the pattern".into());
+        }
+        if let Some(group) = group {
+            return self.execute_grouped_chain_distinct(pattern, *target, group, alias);
         }
         let pe = self.pattern_executor(None, None);
         let filter = self.graph_filter().map(|f| f.as_ref());
@@ -353,7 +358,7 @@ impl CypherExecutor<'_> {
     }
 
     /// The peers `hop` admits from any node of `frontier`.
-    fn advance_chain_reach(
+    pub(super) fn advance_chain_reach(
         &self,
         hop: &HopTests<'_>,
         frontier: &FxHashSet<NodeIndex>,
@@ -380,7 +385,7 @@ impl CypherExecutor<'_> {
     /// The members of `from` that `hop` admits a relationship from into
     /// `into`. `into` holds only nodes that already passed the hop's peer
     /// tests.
-    fn retain_reaching(
+    pub(super) fn retain_reaching(
         &self,
         hop: &HopTests<'_>,
         from: &FxHashSet<NodeIndex>,

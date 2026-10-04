@@ -286,8 +286,8 @@ BAILS = [
     "MATCH {head} RETURN count(DISTINCT w.id) AS n",
     # another aggregate beside it
     "MATCH {head} RETURN count(DISTINCT w) AS n, count(*) AS m",
-    # a grouping key
-    "MATCH {head} RETURN f.id AS f, count(DISTINCT w) AS n",
+    # a grouping key beside a second aggregate (a lone key fuses: see the grouped tests)
+    "MATCH {head} RETURN f.id AS f, count(DISTINCT w) AS n, count(*) AS m",
     # DISTINCT rows
     "MATCH {head} RETURN DISTINCT w.id AS i",
     # HAVING-shaped post-filter

@@ -383,10 +383,15 @@ pub enum Clause {
     /// however many paths pass through it. `target` is the index of `x` in
     /// `pattern.elements` (even: a node, odd: a relationship). The hop types
     /// are pairwise disjoint, so relationship uniqueness cannot reject a path.
+    /// With a `group` key the clause answers `RETURN <key>, count(DISTINCT x)`.
     FusedChainDistinctCount {
         pattern: crate::graph::core::pattern_matching::Pattern,
         target: usize,
         alias: String,
+        /// The grouping key of `RETURN <key over one chain node>,
+        /// count(DISTINCT x)`: the clause then yields one row per key value,
+        /// counting the distinct `x` over the paths through that key's nodes.
+        group: Option<ChainGroupKey>,
     },
     /// Optimizer-generated: MATCH (n:Type) [WHERE ...] RETURN group_keys, agg_funcs(...)
     /// → single-pass node scan with inline aggregation. Avoids materializing intermediate
@@ -484,6 +489,19 @@ pub struct AggregateTopK {
     pub limit: usize,
     /// `true` for DESC (keep k largest counts), `false` for ASC (smallest).
     pub descending: bool,
+}
+
+/// The grouping key of a grouped [`Clause::FusedChainDistinctCount`].
+#[derive(Debug, Clone)]
+pub struct ChainGroupKey {
+    /// Index in `pattern.elements` of the chain node the key reads (even).
+    pub position: usize,
+    /// `g` or `g.prop` for the chain node variable `g`.
+    pub key: Expression,
+    /// The key column's name.
+    pub key_alias: String,
+    /// Whether the key column precedes the count column in RETURN.
+    pub key_first: bool,
 }
 
 /// A planner hint that the MATCH's consumer collapses row multiplicity down to

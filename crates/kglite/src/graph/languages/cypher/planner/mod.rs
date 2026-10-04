@@ -643,7 +643,10 @@ fn pass_fuse_optional_match_aggregate(query: &mut CypherQuery, _ctx: &PassCtx) {
 /// rewrites it to one `FusedChainDistinctCount` (a forward and a backward
 /// reachability sweep). It admits the aggregate-only DISTINCT hint naming `x`
 /// and nothing else the path count bails on, plus `count(DISTINCT x.prop)`,
-/// other aggregates, grouping keys and overlapping hop types.
+/// other aggregates and overlapping hop types. The same clause takes
+/// `RETURN <g or g.prop>, count(DISTINCT x)` for a node variable `g` of the
+/// chain (one row per key value), with ORDER BY over the returned columns,
+/// SKIP and LIMIT left in place after it.
 fn pass_fuse_chain_path_count(query: &mut CypherQuery, ctx: &PassCtx) {
     fuse_chain_path_count(query, ctx.guarded)
 }

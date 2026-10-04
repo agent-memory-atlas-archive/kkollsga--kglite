@@ -278,6 +278,20 @@ before upgrading.
   1.6-1.8 ms and a relationship variable from 3.0-3.6 s to 1.6-2.4 ms; under the
   default context (today) the far end went from 63 ms to 0.55 ms.
 
+- Faster: a `count(DISTINCT x)` grouped by a key on one chain node,
+  `MATCH <chain> RETURN c.title, count(DISTINCT w)` (the key `g` or `g.prop` for
+  a node variable of the chain, the two items in either order, then optional
+  `ORDER BY` over the returned columns, `SKIP` and `LIMIT`), is answered from the
+  same two sweeps: each node of the key's position gets the set of `x` reachable
+  from it through nodes on complete paths, and nodes sharing a key value count
+  the union of their sets (plan operator `FusedChainDistinctCount`, shown as
+  `grouped`). The counts equal the matcher's. `count(DISTINCT x.prop)`, other
+  aggregates, a key over two variables or a relationship, and an `ORDER BY` past
+  the returned columns still run on the matcher. On a register of 856k
+  relationships, a four-node chain grouped by a middle node's property went from
+  1,796 ms to 3.8-4.0 ms over the full history (`FOR VALID_TIME ALL`) and from
+  96 ms to 1.0-1.1 ms under the default context (today).
+
 - Faster: when the matcher keeps one match per distinct target at its last
   hop (`count(DISTINCT x)`, `RETURN DISTINCT x.prop`, `min`/`max` over `x`)
   and the statement stays on the matcher (a `WHERE` on an earlier node, a
