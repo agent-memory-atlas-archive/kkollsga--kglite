@@ -37,6 +37,8 @@ SHAPES = [
     "MATCH (a:Emp {id: -5})-[:IN_DEPT]->(d:Dept)<-[:IN_DEPT]-(b:Emp) RETURN d.id AS d, count(*) AS n",
     "MATCH (e:Emp) RETURN e.team AS team, sum(e.id * 0.1) AS s, avg(e.id * 0.3) AS m",
     "MATCH (a:Emp)-[r:IN_DEPT]->(d:Dept) RETURN d.id AS d, count(r) AS n, sum(a.id * 0.1) AS s",
+    f"{CHAIN} RETURN d.id AS d, count(a) AS na, count(b) AS nb, count(*) AS n",
+    "MATCH p = (a:Emp)-[:IN_DEPT]->(d:Dept)<-[:IN_DEPT]-(b:Emp) RETURN d.id AS d, count(p) AS paths, count(b) AS nb",
 ]
 
 

@@ -455,6 +455,74 @@ impl<'a> CypherExecutor<'a> {
         Ok(None)
     }
 
+    /// A node binding's property: the body of `resolve_property`'s
+    /// node-binding arm, for callers that already hold the node index.
+    pub(super) fn resolve_bound_node_property(
+        &self,
+        idx: petgraph::graph::NodeIndex,
+        property: &str,
+    ) -> Result<Value, String> {
+        // Disk-graph fast path: resolve properties via direct column access
+        // without full NodeData materialization. Saves arena allocation +
+        // id/title reads per access. In-memory graphs use node_weight()
+        // which is a cheap pointer chase.
+        if self.graph.graph.is_disk() {
+            if let Some(type_key) = self.graph.graph.node_type_of(idx) {
+                let type_str = self.graph.interner.try_resolve(type_key).unwrap_or("?");
+                let resolved = self.graph.resolve_alias(type_str, property);
+                match resolved {
+                    "id" => return Ok(self.graph.graph.get_node_id(idx).unwrap_or(Value::Null)),
+                    "title" => {
+                        return Ok(self.graph.graph.get_node_title(idx).unwrap_or(Value::Null))
+                    }
+                    _ => {
+                        let key = crate::graph::schema::InternedKey::from_str(resolved);
+                        // Stored property wins (a user property named
+                        // `label`, `type`, `node_type`, `name`, … — KG-1).
+                        if let Some(val) = self.graph.graph.get_node_property(idx, key) {
+                            return Ok(val);
+                        }
+                        // No stored property — fall back to the structural
+                        // convenience for the soft aliases.
+                        if let Some(fb) = soft_alias_fallback(resolved) {
+                            return Ok(match fb {
+                                SoftAliasFallback::Title => {
+                                    self.graph.graph.get_node_title(idx).unwrap_or(Value::Null)
+                                }
+                                SoftAliasFallback::TypeString => {
+                                    Value::String(type_str.to_string())
+                                }
+                            });
+                        }
+                        // Fall through to full materialization for spatial
+                        // virtual properties (location, geometry, etc.)
+                        if self.graph.get_spatial_config(type_str).is_some() {
+                            if let Some(node) = self.graph.graph.node_view(idx) {
+                                return Ok(resolve_node_property(node, property, self.graph));
+                            }
+                        }
+                        return Ok(Value::Null);
+                    }
+                }
+            }
+            return Ok(Value::Null);
+        }
+
+        // In-memory path: node_weight() is a cheap pointer chase.
+        // Fast-reject alias resolution: when `property` can't be a
+        // registered id-/title-field alias for any type, the resolved
+        // name is `property` verbatim, so we skip `resolve_alias`'s two
+        // String-keyed HashMap lookups (the per-row hot cost) and read
+        // the property directly.
+        if let Some(node) = self.graph.graph.node_view(idx) {
+            if self.property_might_be_alias(property) {
+                return Ok(resolve_node_property(node, property, self.graph));
+            }
+            return Ok(resolve_node_property_unaliased(node, property, self.graph));
+        }
+        Ok(Value::Null)
+    }
+
     /// Resolve property access: variable.property
     /// Uses zero-copy get_field_ref when possible
     pub(super) fn resolve_property(
@@ -466,67 +534,7 @@ impl<'a> CypherExecutor<'a> {
         // Check node bindings first — these carry full property data
         // and must take priority over projected scalars (e.g. after WITH)
         if let Some(&idx) = row.node_bindings.get(variable) {
-            // Disk-graph fast path: resolve properties via direct column access
-            // without full NodeData materialization. Saves arena allocation +
-            // id/title reads per access. In-memory graphs use node_weight()
-            // which is a cheap pointer chase.
-            if self.graph.graph.is_disk() {
-                if let Some(type_key) = self.graph.graph.node_type_of(idx) {
-                    let type_str = self.graph.interner.try_resolve(type_key).unwrap_or("?");
-                    let resolved = self.graph.resolve_alias(type_str, property);
-                    match resolved {
-                        "id" => {
-                            return Ok(self.graph.graph.get_node_id(idx).unwrap_or(Value::Null))
-                        }
-                        "title" => {
-                            return Ok(self.graph.graph.get_node_title(idx).unwrap_or(Value::Null))
-                        }
-                        _ => {
-                            let key = crate::graph::schema::InternedKey::from_str(resolved);
-                            // Stored property wins (a user property named
-                            // `label`, `type`, `node_type`, `name`, … — KG-1).
-                            if let Some(val) = self.graph.graph.get_node_property(idx, key) {
-                                return Ok(val);
-                            }
-                            // No stored property — fall back to the structural
-                            // convenience for the soft aliases.
-                            if let Some(fb) = soft_alias_fallback(resolved) {
-                                return Ok(match fb {
-                                    SoftAliasFallback::Title => {
-                                        self.graph.graph.get_node_title(idx).unwrap_or(Value::Null)
-                                    }
-                                    SoftAliasFallback::TypeString => {
-                                        Value::String(type_str.to_string())
-                                    }
-                                });
-                            }
-                            // Fall through to full materialization for spatial
-                            // virtual properties (location, geometry, etc.)
-                            if self.graph.get_spatial_config(type_str).is_some() {
-                                if let Some(node) = self.graph.graph.node_view(idx) {
-                                    return Ok(resolve_node_property(node, property, self.graph));
-                                }
-                            }
-                            return Ok(Value::Null);
-                        }
-                    }
-                }
-                return Ok(Value::Null);
-            }
-
-            // In-memory path: node_weight() is a cheap pointer chase.
-            // Fast-reject alias resolution: when `property` can't be a
-            // registered id-/title-field alias for any type, the resolved
-            // name is `property` verbatim, so we skip `resolve_alias`'s two
-            // String-keyed HashMap lookups (the per-row hot cost) and read
-            // the property directly.
-            if let Some(node) = self.graph.graph.node_view(idx) {
-                if self.property_might_be_alias(property) {
-                    return Ok(resolve_node_property(node, property, self.graph));
-                }
-                return Ok(resolve_node_property_unaliased(node, property, self.graph));
-            }
-            return Ok(Value::Null);
+            return self.resolve_bound_node_property(idx, property);
         }
 
         // Edge variable

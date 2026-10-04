@@ -127,6 +127,9 @@ struct Element<'s> {
     /// The node label or relationship type a declaration would name.
     target: &'s str,
     kind: ElementKind,
+    /// Whether the variable is a matched node binding, whose properties the
+    /// row's bound reads can take straight from the node index.
+    bound: bool,
 }
 
 impl Element<'_> {
@@ -402,7 +405,7 @@ impl CypherExecutor<'_> {
     /// variable-length list carries its type as the bound variable does.
     fn validity_subject<'s>(&'s self, var_name: &str, row: &'s ResultRow) -> Subject<'s> {
         if let Some(&idx) = row.node_bindings.get(var_name) {
-            return self.node_subject(idx, None);
+            return self.node_subject(idx, None, true);
         }
         if let Some(edge) = row.edge_bindings.get(var_name) {
             let Some(weight) = self.graph.graph.edge_weight(edge.edge_index) else {
@@ -422,11 +425,12 @@ impl CypherExecutor<'_> {
         match row.projected.get(var_name) {
             None | Some(Value::Null) => Subject::Null,
             Some(Value::NodeRef(idx)) => {
-                self.node_subject(petgraph::graph::NodeIndex::new(*idx as usize), None)
+                self.node_subject(petgraph::graph::NodeIndex::new(*idx as usize), None, false)
             }
             Some(Value::Node(node)) => self.node_subject(
                 petgraph::graph::NodeIndex::new(node.id as usize),
                 node.labels.first().map(String::as_str),
+                false,
             ),
             Some(Value::Relationship(rel)) => self.edge_subject(
                 &rel.rel_type,
@@ -443,6 +447,7 @@ impl CypherExecutor<'_> {
         &'s self,
         idx: petgraph::graph::NodeIndex,
         label: Option<&'s str>,
+        bound: bool,
     ) -> Subject<'s> {
         let graph = self.graph;
         let node_type = match (graph.graph.node_type_of(idx), label) {
@@ -459,6 +464,7 @@ impl CypherExecutor<'_> {
             key: (node_type, None),
             target,
             kind: ElementKind::Node(idx),
+            bound,
         })
     }
 
@@ -475,6 +481,7 @@ impl CypherExecutor<'_> {
             ),
             target: rel_type,
             kind: ElementKind::Edge { source, target },
+            bound: false,
         })
     }
 
@@ -505,13 +512,21 @@ impl CypherExecutor<'_> {
         resolved: &'n Resolved<'_>,
         row: &ResultRow,
     ) -> Result<ValidityBounds<'n>, String> {
+        let read = |field: &str| match subject {
+            Subject::Element(Element {
+                kind: ElementKind::Node(idx),
+                bound: true,
+                ..
+            }) => self.resolve_bound_node_property(*idx, field),
+            _ => self.resolve_property(var_name, field, row),
+        };
         let bounds = ValidityBounds {
             function,
             var_name,
             from_field: &resolved.bounds.from,
-            from_val: self.resolve_property(var_name, &resolved.bounds.from, row)?,
+            from_val: read(&resolved.bounds.from)?,
             to_field: &resolved.bounds.to,
-            to_val: self.resolve_property(var_name, &resolved.bounds.to, row)?,
+            to_val: read(&resolved.bounds.to)?,
         };
         if let Subject::Element(element) = subject {
             self.require_known_bounds(&bounds, element, resolved.known)?;

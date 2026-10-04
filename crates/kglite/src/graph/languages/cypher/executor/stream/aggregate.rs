@@ -659,10 +659,30 @@ fn update_agg_state(
             .get_or_insert_with(DistinctValues::default);
         dv.insert(val);
     } else {
+        // `count(var)` over a matched node, relationship or path counts the
+        // row: a binding is never null, and evaluating the variable would
+        // materialise the whole element only to discard it.
+        if matches!(spec.kind, AggKind::Count) && is_matched_binding(expr, row) {
+            state.count += 1;
+            return Ok(());
+        }
         let val = executor.evaluate_expression(expr, row)?;
         state.record(Some(val), spec);
     }
     Ok(())
+}
+
+/// Whether `expr` is a variable that `row` binds to a node, relationship or
+/// path and does not shadow with a projected value (projections win in
+/// variable evaluation, and may be null).
+fn is_matched_binding(expr: &Expression, row: &ResultRow) -> bool {
+    let Expression::Variable(name) = expr else {
+        return false;
+    };
+    row.projected.get(name).is_none()
+        && (row.node_bindings.contains_key(name)
+            || row.edge_bindings.contains_key(name)
+            || row.path_bindings.contains_key(name))
 }
 
 // ---- Local helpers ---------------------------------------------------------
