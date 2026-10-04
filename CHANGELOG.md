@@ -200,7 +200,20 @@ before upgrading.
   matchers, anchors, undirected hops and `FOR VALID_TIME` apply as for the
   path count, and the counts equal the matcher's. A `WHERE`, `count(DISTINCT
   x.prop)`, `RETURN DISTINCT`, other aggregates beside it, repeated hop types
-  and the other shapes listed above still run on the matcher.
+  and the other shapes listed above still run on the matcher. On a register of
+  856k relationships, the far end of a four-node chain over the full history
+  (`FOR VALID_TIME ALL`) went from 4.9 s to 1.3 ms, a middle node from 5.0 s to
+  1.6-1.8 ms and a relationship variable from 3.0-3.6 s to 1.6-2.4 ms; under the
+  default context (today) the far end went from 63 ms to 0.55 ms.
+
+- Faster: when the matcher keeps one match per distinct target at its last
+  hop (`count(DISTINCT x)`, `RETURN DISTINCT x.prop`, `min`/`max` over `x`)
+  and the statement stays on the matcher (a `WHERE` on an earlier node, a
+  property read, another aggregate), the parallel last hop now drops repeated
+  targets block by block before building their matches instead of building
+  every match and filtering afterwards. The answer and its row order are
+  unchanged. The `WHERE`-on-an-intermediate shape above went from 5.2 s to
+  0.15 s over the full history and from 73 ms to 20 ms as of today.
 
 - An aggregate over a leading `MATCH` that the planner does not fuse
   (`RETURN k, count(*), sum(x), avg(x), min/max, count(DISTINCT x)`, with or

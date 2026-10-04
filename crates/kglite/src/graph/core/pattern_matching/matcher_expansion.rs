@@ -21,8 +21,15 @@ use crate::graph::parallel::{self, ParallelInterrupt};
 /// rayon splits this region finely (measured ~7 rows per `map_init` call on a
 /// 9 000-row hop), so a job only publishes when its rows are *wide*. That is
 /// the shape a memory ceiling is for; a narrow hop is bounded at the hop
-/// boundary instead — see [`PatternExecutor::expand_hop_parallel`].
+/// boundary instead — see [`PatternExecutor::expand_hop_parallel`]. A
+/// deduplicating last hop is the exception: it hands `map_init` blocks of
+/// [`DEDUP_BLOCK_MATCHES`] matches and publishes as a block fills.
 const CEILING_PUBLISH_STRIDE: usize = 256;
+
+/// Matches per block of a deduplicating parallel last hop. A block drops
+/// repeated targets before building their matches, so a bigger block removes
+/// more repeats; blocks stay numerous enough to spread across the pool.
+const DEDUP_BLOCK_MATCHES: usize = 8192;
 
 /// Start nodes the first chunk expands — small, because nothing yet says how
 /// wide one seed's expansion is.
@@ -653,10 +660,21 @@ impl<'a> PatternExecutor<'a> {
         // `results.len()` check after the region. Both are error paths, never
         // truncation, so neither can turn a too-large answer into a wrong one.
         let produced = std::sync::atomic::AtomicUsize::new(0);
+        let needs_dedup = hop.is_last_hop
+            && self
+                .distinct_target_var
+                .as_ref()
+                .is_some_and(|dtv| hop.node.variable.as_deref() == Some(dtv.as_str()));
+        // Rayon hands `map_init` a few rows at a time, too few for a target
+        // to repeat; a deduplicating hop splits into explicit contiguous
+        // blocks so the repeats inside a block are dropped before their
+        // matches are built. The global pass below then keeps the first
+        // occurrence in block order, exactly the rows the sequential path keeps.
+        let block = if needs_dedup { DEDUP_BLOCK_MATCHES } else { 1 };
         let results: Vec<(PatternMatch, NodeIndex)> = parallel::install(|| {
             matches
-                .par_iter()
-                .zip(current_indices.par_iter())
+                .par_chunks(block)
+                .zip(current_indices.par_chunks(block))
                 // `map_init` gives each worker its own reusable visited buffer,
                 // so a variable-length hop's marks cost a stamp bump per row
                 // here too — the sequential path's buffer cannot be shared
@@ -664,53 +682,59 @@ impl<'a> PatternExecutor<'a> {
                 // the same reason: both are per-worker state.
                 .map_init(
                     || (VisitedStamps::default(), 0usize),
-                    |(visited, unpublished), (current_match, &source_idx)| {
-                        // Short-circuit once any thread has detected a timeout/error,
-                        // and independently check the deadline from each thread.
-                        // One expansion dwarfs the probe, so poll on every match.
-                        if interrupt.check_each().is_err() {
-                            return Vec::new();
-                        }
-                        let Some(expansions) = interrupt.capture(self.expand_from_node(
-                            source_idx,
-                            hop.edge,
-                            hop.node,
-                            None,
-                            self.bound_target(hop.node, current_match),
-                            visited,
-                        )) else {
-                            return Vec::new();
-                        };
-                        let kept: Vec<_> = expansions
-                            .into_iter()
-                            .filter_map(|(target_idx, edge_binding)| {
-                                if reuses_bound_relationship(current_match, &edge_binding) {
-                                    return None;
-                                }
-                                if !self.target_satisfies_bindings(
-                                    hop.node,
-                                    current_match,
-                                    target_idx,
-                                ) {
-                                    return None;
-                                }
-                                Some((
-                                    self.extend_match(current_match, hop, edge_binding, target_idx),
-                                    target_idx,
-                                ))
-                            })
-                            .collect();
-                        *unpublished += kept.len();
-                        if *unpublished >= CEILING_PUBLISH_STRIDE {
-                            let held = produced
-                                .fetch_add(*unpublished, std::sync::atomic::Ordering::Relaxed)
-                                + *unpublished;
-                            *unpublished = 0;
-                            if interrupt.capture(self.check_match_ceiling(held)).is_none() {
+                    |(visited, unpublished), (block_matches, block_sources)| {
+                        let mut block_seen: Option<HashSet<NodeIndex>> =
+                            needs_dedup.then(HashSet::new);
+                        let mut block_kept = Vec::new();
+                        for (current_match, &source_idx) in block_matches.iter().zip(block_sources)
+                        {
+                            // Short-circuit once any thread has detected a timeout/error,
+                            // and independently check the deadline from each thread.
+                            // One expansion dwarfs the probe, so poll on every match.
+                            if interrupt.check_each().is_err() {
                                 return Vec::new();
                             }
+                            let Some(expansions) = interrupt.capture(self.expand_from_node(
+                                source_idx,
+                                hop.edge,
+                                hop.node,
+                                None,
+                                self.bound_target(hop.node, current_match),
+                                visited,
+                            )) else {
+                                return Vec::new();
+                            };
+                            let before = block_kept.len();
+                            for (target_idx, edge_binding) in expansions {
+                                if reuses_bound_relationship(current_match, &edge_binding)
+                                    || !self.target_satisfies_bindings(
+                                        hop.node,
+                                        current_match,
+                                        target_idx,
+                                    )
+                                    || block_seen
+                                        .as_mut()
+                                        .is_some_and(|seen| !seen.insert(target_idx))
+                                {
+                                    continue;
+                                }
+                                block_kept.push((
+                                    self.extend_match(current_match, hop, edge_binding, target_idx),
+                                    target_idx,
+                                ));
+                            }
+                            *unpublished += block_kept.len() - before;
+                            if *unpublished >= CEILING_PUBLISH_STRIDE {
+                                let held = produced
+                                    .fetch_add(*unpublished, std::sync::atomic::Ordering::Relaxed)
+                                    + *unpublished;
+                                *unpublished = 0;
+                                if interrupt.capture(self.check_match_ceiling(held)).is_none() {
+                                    return Vec::new();
+                                }
+                            }
                         }
-                        kept
+                        block_kept
                     },
                 )
                 .flatten()
@@ -720,13 +744,8 @@ impl<'a> PatternExecutor<'a> {
         // The workers' unpublished remainders never reached the counter, so
         // the authoritative total is the collected buffer itself.
         self.check_match_ceiling(results.len())?;
-        // The sequential path dedups distinct targets inline; the parallel path
-        // cannot, without synchronization.
-        let needs_dedup = hop.is_last_hop
-            && self
-                .distinct_target_var
-                .as_ref()
-                .is_some_and(|dtv| hop.node.variable.as_deref() == Some(dtv.as_str()));
+        // Blocks dedup among themselves only; one pass over the blocks in order
+        // drops the repeats across blocks.
         if needs_dedup {
             let mut seen_targets = HashSet::new();
             Ok(results

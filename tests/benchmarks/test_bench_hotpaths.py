@@ -612,6 +612,27 @@ def test_bench_hop3_chain_count(benchmark, chain_count_graph):
     assert result.to_list() == expected
 
 
+@pytest.mark.benchmark
+@pytest.mark.parametrize("target", ["w", "c"])
+def test_bench_hop3_chain_distinct(benchmark, chain_count_graph, target):
+    """Linear three-hop chain `count(DISTINCT x)` for the far end and a middle node.
+
+    Planned as `FusedChainDistinctCount` (`fuse_chain_path_count`): a forward
+    and a backward reachability sweep over the 25k relationships, where the
+    matcher route builds 1.2M paths. The plan assertion keeps the cell from
+    silently timing the matcher.
+    """
+    query = (
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task) "
+        f"RETURN count(DISTINCT {target}) AS n"
+    )
+    plan = [row["operation"] for row in chain_count_graph.cypher("EXPLAIN " + query)]
+    assert any(op.startswith("FusedChainDistinctCount") for op in plan), plan
+    result = benchmark(chain_count_graph.cypher, query)
+    expected = chain_count_graph.cypher(query, disabled_passes=["fuse_chain_path_count"]).to_list()
+    assert result.to_list() == expected
+
+
 STREAM_CHAIN = "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
 
 
