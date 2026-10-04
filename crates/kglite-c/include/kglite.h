@@ -947,8 +947,12 @@ KgliteStatusCode kglite_graphgen_to_dir(uint64_t persons,
  * On success `out_graph` is set to a `KgliteGraph*` (free via
  * [`kglite_graph_free`] or hand to [`kglite_session_new`](crate::kglite_session_new)),
  * and `out_report_json` to an owned
- * `{"nodes_by_type":{..},"edges_by_type":{..},"warnings":[..],"errors":[..],"provisional_purged":N}`
+ * `{"nodes_by_type":{..},"edges_by_type":{..},"warnings":[..],"errors":[..],"provisional_purged":N,
+ * "diagnostics":[{"group":..,"kind":..,"message":..}],"summary":{"<group>":N}}`
  * string — free via [`kglite_free_string`](crate::kglite_free_string).
+ * `diagnostics` classifies every `warnings` entry (same order); `group` is one of
+ * `declarations`, `stubs`, `data_shape`, `data_quality`, `cosmetic`, most severe first,
+ * and `summary` counts the non-empty groups.
  *
  * # Safety
  *

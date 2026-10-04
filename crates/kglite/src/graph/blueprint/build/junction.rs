@@ -10,6 +10,7 @@ use super::prepass;
 use super::specs::FlatSpec;
 use super::table_ops::subset_rows;
 use super::BuildReport;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::mutation::identical_rows::{IdenticalRowTracker, IdenticalRows};
 use crate::graph::mutation::maintain;
 use crate::graph::schema::DirGraph;
@@ -154,7 +155,7 @@ fn load_one_junction_edge(
         &format!("junction '{edge_type}' (node '{}')", spec.node_type),
         &prepared,
     ) {
-        report.warnings.push(w);
+        report.add(w);
     }
     let prepass::Prepared {
         resolved, chunks, ..
@@ -242,24 +243,45 @@ fn load_one_junction_edge(
                 .or_insert(0) += count;
         }
     }
-    report.warnings.extend(misparses.into_warnings(&format!(
-        "junction '{edge_type}' (node '{}')",
-        spec.node_type
-    )));
-    report.warnings.extend(
+    report_junction_findings(
+        report,
+        (edge_type, &spec.node_type, &junc.target),
+        (misparses, identical, unroutable),
+    );
+    Ok(())
+}
+
+/// The advisories a junction input accumulated across its chunks and target
+/// groups: unparsed cells, identical rows, and rows naming a target type the
+/// edge does not list.
+fn report_junction_findings(
+    report: &mut BuildReport,
+    (edge_type, node_type, targets): (&str, &str, &[String]),
+    (misparses, identical, unroutable): (
+        MisparseTally,
+        IdenticalRowTracker,
+        BTreeMap<String, usize>,
+    ),
+) {
+    report.add_all(
+        misparses.into_diagnostics(&format!("junction '{edge_type}' (node '{node_type}')")),
+    );
+    report.add_all(
         identical
-            .warning(edge_type)
-            .map(|w| format!("junction (node '{}'): {w}", spec.node_type)),
+            .diagnostic(edge_type)
+            .map(|d| d.prefixed(&format!("junction (node '{node_type}'): "))),
     );
     for (value, count) in unroutable {
-        report.warnings.push(format!(
-            "junction '{edge_type}' (node '{}'): {count} row(s) name target type '{value}', \
-             which is not in this edge's 'target' list ({}); they built no edge",
-            spec.node_type,
-            junc.target.join(", ")
+        report.add(Diagnostic::new(
+            DiagnosticGroup::DataQuality,
+            "junction_unroutable_rows",
+            format!(
+                "junction '{edge_type}' (node '{node_type}'): {count} row(s) name target type \
+                 '{value}', which is not in this edge's 'target' list ({}); they built no edge",
+                targets.join(", ")
+            ),
         ));
     }
-    Ok(())
 }
 
 /// An endpoint column referring to a string-keyed node type is read as text,

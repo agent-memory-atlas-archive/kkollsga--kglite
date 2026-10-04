@@ -41,6 +41,7 @@
 //! so there is no duplicated mutation logic.
 
 use crate::datatypes::values::{DataFrame, Value};
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::mutation::{edge_specs, maintain};
 use crate::graph::DirGraph;
 use serde_json::Value as Json;
@@ -59,6 +60,15 @@ pub struct RecordsReport {
     /// interval is empty under a `half_open` declaration of the graph being
     /// extended.
     pub warnings: Vec<String>,
+    /// `warnings` with each entry's classification, in the same order.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl RecordsReport {
+    fn add(&mut self, diagnostic: Diagnostic) {
+        self.warnings.push(diagnostic.message.clone());
+        self.diagnostics.push(diagnostic);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +86,13 @@ pub fn from_records(graph: &mut DirGraph, spec: &Json) -> Result<RecordsReport, 
     let (result, duplicate_ids) =
         crate::graph::dir_graph::collect_id_warnings(|| from_records_inner(graph, spec));
     let mut report = result?;
-    report.warnings.extend(duplicate_ids);
+    for message in duplicate_ids {
+        report.add(Diagnostic::new(
+            DiagnosticGroup::DataQuality,
+            "duplicate_id",
+            message,
+        ));
+    }
     Ok(report)
 }
 
@@ -134,7 +150,7 @@ fn load_records(
     // for an endpoint no record supplied, and a spec's labels cover every node
     // of the type it declares — otherwise `MATCH (:Place)` misses exactly the
     // nodes that arrived as an endpoint rather than as a record.
-    stamp_declared_labels(graph, &declared_labels, &mut report.warnings)?;
+    stamp_declared_labels(graph, &declared_labels, &mut report)?;
 
     Ok(report)
 }
@@ -149,7 +165,7 @@ fn load_records(
 fn stamp_declared_labels(
     graph: &mut DirGraph,
     declared: &[(String, Vec<String>)],
-    warnings: &mut Vec<String>,
+    report: &mut RecordsReport,
 ) -> Result<(), String> {
     for (node_type, labels) in declared {
         graph
@@ -164,8 +180,13 @@ fn stamp_declared_labels(
             let warning =
                 crate::graph::features::temporal::check_label_stamp(graph, &indices, label)
                     .map_err(|e| format!("from_records: node '{node_type}': labels: {e}"))?;
-            warnings
-                .extend(warning.map(|w| format!("from_records: node '{node_type}': labels: {w}")));
+            if let Some(w) = warning {
+                report.add(Diagnostic::new(
+                    DiagnosticGroup::DataQuality,
+                    "empty_interval_rows",
+                    format!("from_records: node '{node_type}': labels: {w}"),
+                ));
+            }
         }
         for label in labels {
             let key = graph.interner.get_or_intern(label);
@@ -223,7 +244,9 @@ fn load_node_spec(
 
     report.nodes_added += rep.nodes_created + rep.nodes_updated;
     report.node_types.push(node_type.clone());
-    report.warnings.extend(rep.warnings);
+    for d in rep.diagnostics {
+        report.add(d);
+    }
     Ok(labels.map(|labels| (node_type, labels)))
 }
 
@@ -310,7 +333,9 @@ fn load_connection_spec(
                 )
                 .map_err(|e| format!("{}: {}", ctx(), e))?;
                 report.edges_added += rep.connections_created;
-                report.warnings.extend(rep.warnings);
+                for d in rep.diagnostics {
+                    report.add(d);
+                }
             }
             MissingEndpointPolicy::Drop | MissingEndpointPolicy::Error => {
                 let edge_context = EdgeFrameContext {
@@ -327,7 +352,9 @@ fn load_connection_spec(
                     .map_err(|e| format!("{}: {}", ctx(), e))?;
                 report.edges_added += rep.connections_created;
                 report.edges_dropped_missing_endpoint += rep.skipped_missing_endpoint;
-                report.warnings.extend(rep.warnings);
+                for d in rep.diagnostics {
+                    report.add(d);
+                }
             }
         }
     }

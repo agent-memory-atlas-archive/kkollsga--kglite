@@ -7,6 +7,7 @@
 use super::schema::{TimeKey, TimeseriesSpec};
 use super::table::RawCsv;
 use super::typing::scalar::parse_integer;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::features::timeseries::{
     date_from_ymd, parse_date_query, validate_resolution, NodeTimeseries, TimeseriesConfig,
 };
@@ -140,11 +141,18 @@ pub struct AggregateDrop {
 }
 
 impl AggregateDrop {
-    /// The build-report warnings for what was dropped: none when nothing was.
-    pub fn warnings(&self, node_type: &str, spec: &TimeseriesSpec) -> Vec<String> {
-        let mut out: Vec<String> = self
+    /// The build-report advisories for what was dropped: none when nothing was.
+    pub fn diagnostics(&self, node_type: &str, spec: &TimeseriesSpec) -> Vec<Diagnostic> {
+        let mut out: Vec<Diagnostic> = self
             .aggregate_warning(node_type, spec)
             .into_iter()
+            .map(|m| {
+                Diagnostic::new(
+                    DiagnosticGroup::DataShape,
+                    "timeseries_aggregate_rows_dropped",
+                    m,
+                )
+            })
             .collect();
         if self.invalid_rows > 0 {
             let cols = self.invalid_columns.join(", ");
@@ -154,10 +162,14 @@ impl AggregateDrop {
                 .map(|e| format!("'{e}'"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            out.push(format!(
-                "[{node_type}] dropped {} row(s) whose time component in column(s) {cols} is not \
-                 a whole number (e.g. {ex}); they are not loaded into the series",
-                self.invalid_rows
+            out.push(Diagnostic::new(
+                DiagnosticGroup::DataQuality,
+                "timeseries_invalid_time_rows",
+                format!(
+                    "[{node_type}] dropped {} row(s) whose time component in column(s) {cols} is \
+                     not a whole number (e.g. {ex}); they are not loaded into the series",
+                    self.invalid_rows
+                ),
             ));
         }
         out

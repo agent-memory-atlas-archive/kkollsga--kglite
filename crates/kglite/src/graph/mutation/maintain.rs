@@ -1057,7 +1057,7 @@ pub fn add_nodes(
     if !errors.is_empty() {
         report = report.with_errors(errors);
     }
-    report.warnings.extend(empty_intervals.warning());
+    report.warn_all(empty_intervals.diagnostic());
 
     graph.bump_version();
     Ok(report)
@@ -1205,7 +1205,7 @@ pub fn add_connections_with_identical_rows(
         InitialLoad::Detect,
         &mut tracker,
     )?;
-    report.warnings.extend(tracker.warning(&edge_type));
+    report.warn_all(tracker.diagnostic(&edge_type));
     Ok(report)
 }
 
@@ -1467,8 +1467,8 @@ pub(crate) fn add_connections_tracked(
 
     let mut report = batch_report("add_connections", &stats, skipped_count, &metrics);
     report.stubs_vivified = stubs_vivified;
-    report.warnings.extend(stub_advisories);
-    report.warnings.extend(empty_intervals.warning());
+    report.warn_all(stub_advisories);
+    report.warn_all(empty_intervals.diagnostic());
 
     if !errors.is_empty() {
         report = report.with_errors(errors);
@@ -2056,7 +2056,10 @@ pub fn replace_connections(
     // The stubs vivified above are this call's, so they belong in its count —
     // `add_connections` found those endpoints already present and reported none.
     report.stubs_vivified += stubs_vivified;
-    report.warnings.splice(0..0, stub_advisories);
+    for d in stub_advisories.into_iter().rev() {
+        report.warnings.insert(0, d.message.clone());
+        report.diagnostics.insert(0, d);
+    }
     Ok(report)
 }
 
@@ -2273,7 +2276,7 @@ pub fn create_connections(
     if !written.errors.is_empty() {
         report = report.with_errors(written.errors);
     }
-    report.warnings.extend(written.empty_intervals.warning());
+    report.warn_all(written.empty_intervals.diagnostic());
 
     graph.bump_version();
     Ok(report)

@@ -1687,6 +1687,35 @@ mod ddl_provenance_roundtrip_tests {
             "a declared unique constraint must be written: {json}"
         );
     }
+
+    /// The build record is additive: absent for a graph that was not built from
+    /// a blueprint (golden digests hold), restored when present, and a file
+    /// written before it existed reads as "no record".
+    #[test]
+    fn the_build_record_is_additive_and_round_trips() {
+        let json = serde_json::to_string(&FileMetadata::from_graph(&person_graph())).unwrap();
+        assert!(!json.contains("build_info"), "{json}");
+        let old: FileMetadata = serde_json::from_str(&json).unwrap();
+        let mut restored = person_graph();
+        old.apply_to(&mut restored);
+        assert!(restored.build_info.is_none());
+
+        let mut built = person_graph();
+        built.build_info = Some(crate::graph::diagnostics::BuildInfo::record(&[
+            crate::graph::diagnostics::Diagnostic::new(
+                crate::graph::diagnostics::DiagnosticGroup::Declarations,
+                "typed_only_no_validity",
+                "no validity interval is declared",
+            ),
+        ]));
+        let json = serde_json::to_string(&FileMetadata::from_graph(&built)).unwrap();
+        assert!(json.contains("build_info"), "{json}");
+        let mut restored = person_graph();
+        serde_json::from_str::<FileMetadata>(&json)
+            .unwrap()
+            .apply_to(&mut restored);
+        assert_eq!(restored.build_info, built.build_info);
+    }
 }
 
 /// A declared property type has no second home — unlike a presence constraint,

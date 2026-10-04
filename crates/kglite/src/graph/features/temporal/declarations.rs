@@ -16,6 +16,7 @@ use super::endpoint_index::{self, IndexCache};
 use super::eval::{EmptyWhen, IntervalConvention};
 use super::merge_key::StartKey;
 use super::validate::{self, Walk};
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::dir_graph::caches::ForkPrivateCache;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::TemporalConfig;
@@ -81,6 +82,8 @@ pub struct DeclareReport {
     /// counted), a closed one with abutting rows, or one whose `to` property
     /// no row carries yet.
     pub warning: Option<String>,
+    /// `warning` with its classification, for a caller that reports by group.
+    pub diagnostic: Option<Diagnostic>,
 }
 
 /// One entry of [`list`].
@@ -575,6 +578,7 @@ pub(super) fn declare_walked(
             rows: 0,
             abutting_rows: None,
             warning: None,
+            diagnostic: None,
         });
     }
     let Walk {
@@ -589,21 +593,26 @@ pub(super) fn declare_walked(
     // with two bounds.
     let empty_warning = warn_empty
         .then(|| empty.declaration_warning(target))
-        .flatten();
+        .flatten()
+        .map(|m| Diagnostic::new(DiagnosticGroup::DataQuality, "empty_interval_rows", m));
     let abutment = match abutting {
         Some(same) if config.convention == IntervalConvention::Closed => {
             validate::abutment_warning(target, grouping, (same, abutting_other), rows)
         }
         _ => None,
-    };
-    let warning = abutment.or(empty_warning).or(open_ended);
+    }
+    .map(|m| Diagnostic::new(DiagnosticGroup::DataQuality, "abutting_intervals", m));
+    let open_ended =
+        open_ended.map(|m| Diagnostic::new(DiagnosticGroup::DataShape, "open_ended_interval", m));
+    let diagnostic = abutment.or(empty_warning).or(open_ended);
     record_insert(graph, target, config, abutting);
     graph.bump_version();
     Ok(DeclareReport {
         changed: true,
         rows,
         abutting_rows: abutting,
-        warning,
+        warning: diagnostic.as_ref().map(|d| d.message.clone()),
+        diagnostic,
     })
 }
 

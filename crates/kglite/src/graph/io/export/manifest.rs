@@ -51,6 +51,7 @@ use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
 
 use crate::datatypes::values::Value;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::features::temporal::{
     declare_loaded, declared, IntervalConvention, TemporalTarget,
@@ -502,7 +503,7 @@ impl ExportManifest {
     /// Identical declarations already in place are no-ops. A declaration whose
     /// target holds no rows is skipped and named in the returned warnings; a
     /// refusal (an unreadable bound, a conflicting declaration) is an error.
-    pub fn apply_declarations(&self, graph: &mut DirGraph) -> Result<Vec<String>, String> {
+    pub fn apply_declarations(&self, graph: &mut DirGraph) -> Result<Vec<Diagnostic>, String> {
         let mut warnings = Vec::new();
         for entry in &self.temporal {
             let target = entry.target();
@@ -526,9 +527,13 @@ impl ExportManifest {
                 }
             };
             if !present {
-                warnings.push(format!(
-                    "{}: no rows were loaded, so no validity interval is declared",
-                    target.describe()
+                warnings.push(Diagnostic::new(
+                    DiagnosticGroup::Declarations,
+                    "interval_not_declared",
+                    format!(
+                        "{}: no rows were loaded, so no validity interval is declared",
+                        target.describe()
+                    ),
                 ));
                 continue;
             }
@@ -541,7 +546,7 @@ impl ExportManifest {
                 &[entry.from.as_str(), entry.to.as_str()],
             )
             .map_err(|e| format!("{}: the declaration is refused: {e}", target.describe()))?;
-            warnings.extend(report.warning);
+            warnings.extend(report.diagnostic);
         }
         Ok(warnings)
     }

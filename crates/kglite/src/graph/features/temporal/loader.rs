@@ -135,6 +135,7 @@ pub fn declare_from_column_types(
             rows: 0,
             abutting_rows: None,
             warning: None,
+            diagnostic: None,
         });
         return Ok(load);
     }

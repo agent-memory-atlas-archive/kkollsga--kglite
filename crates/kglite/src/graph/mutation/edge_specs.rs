@@ -2,6 +2,7 @@
 //! type — the DataFrame-free edge-ingest path ([`add_edges_from_specs`]).
 
 use crate::datatypes::Value;
+use crate::graph::diagnostics::Diagnostic;
 use crate::graph::features::temporal::{merge_start_key, EmptyIntervals, StartKey};
 use crate::graph::mutation::batch::{ConflictHandling, ConnectionBatchProcessor};
 use crate::graph::mutation::maintain::{
@@ -45,6 +46,8 @@ pub struct EdgeSpecReport {
     /// interval is empty under a `half_open` declaration (stored and
     /// counted, valid at no instant).
     pub warnings: Vec<String>,
+    /// `warnings` with each entry's classification, in the same order.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Bulk-create edges from explicit specs, addressed by stable node id +
@@ -196,7 +199,10 @@ pub fn add_edges_from_specs(
         report.connections_created += stats.connections_created;
         report.connections_updated += stats.connections_updated;
     }
-    report.warnings.extend(empty_intervals.warning());
+    if let Some(d) = empty_intervals.diagnostic() {
+        report.warnings.push(d.message.clone());
+        report.diagnostics.push(d);
+    }
     graph.bump_version();
     Ok(report)
 }

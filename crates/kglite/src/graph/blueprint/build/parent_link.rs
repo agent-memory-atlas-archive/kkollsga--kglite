@@ -8,6 +8,7 @@
 use super::super::schema::FkEdge;
 use super::specs::FlatSpec;
 use crate::datatypes::values::{ColumnData, ColumnType, DataFrame, Value};
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::lookups::EndpointResolver;
 
@@ -106,19 +107,23 @@ pub(super) struct UnresolvedParents {
 
 impl UnresolvedParents {
     /// The one warning for a spec, `None` when every row resolved.
-    pub(super) fn warning(
+    pub(super) fn diagnostic(
         &self,
         node_type: &str,
         parent_type: &str,
         (edge_type, parent_fk): (&str, &str),
-    ) -> Option<String> {
+    ) -> Option<Diagnostic> {
         let example = self.example.as_ref()?;
-        Some(format!(
-            "[{node_type}] parent_fk '{parent_fk}' matched no '{parent_type}' pk for {} row(s) (e.g. \
-             {example}); those rows get no {edge_type} edge and no stub parent. parent_fk must \
-             hold the parent's pk — declare an fk_edges entry to '{parent_type}' to link by \
-             another column.",
-            self.count
+        Some(Diagnostic::new(
+            DiagnosticGroup::Stubs,
+            "parent_unresolved",
+            format!(
+                "[{node_type}] parent_fk '{parent_fk}' matched no '{parent_type}' pk for {} \
+                 row(s) (e.g. {example}); those rows get no {edge_type} edge and no stub \
+                 parent. parent_fk must hold the parent's pk — declare an fk_edges entry to \
+                 '{parent_type}' to link by another column.",
+                self.count
+            ),
         ))
     }
 }

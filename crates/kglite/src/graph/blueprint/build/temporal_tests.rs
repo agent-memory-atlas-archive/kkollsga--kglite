@@ -72,9 +72,12 @@ fn a_key_without_a_convention_warns() {
     let warnings = check_temporal_specs(&bp).unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(
-        warnings[0].contains("names no convention") && warnings[0].contains("\"half_open\""),
+        warnings[0].message.contains("names no convention")
+            && warnings[0].message.contains("\"half_open\""),
         "{warnings:?}"
     );
+    assert_eq!(warnings[0].kind, "missing_convention");
+    assert_eq!(warnings[0].group, DiagnosticGroup::Declarations);
 }
 
 #[test]
@@ -108,7 +111,14 @@ fn role_types_alone_warn_with_the_stored_names() {
         "csv": "s.csv", "pk": "id",
         "properties": {"sf": "validFrom", "st": "validTo"}
     });
-    let warnings = check_temporal_specs(&blueprint(nodes)).unwrap();
+    let diagnostics = check_temporal_specs(&blueprint(nodes)).unwrap();
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.group == DiagnosticGroup::Declarations && d.kind == "typed_only_no_validity"),
+        "{diagnostics:?}"
+    );
+    let warnings: Vec<String> = diagnostics.into_iter().map(|d| d.message).collect();
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(
         warnings.iter().any(|w| w.starts_with("junction 'WORKS_AT'")

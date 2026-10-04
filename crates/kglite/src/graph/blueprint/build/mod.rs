@@ -18,6 +18,8 @@
 //! (`stamp_declared_labels`, `apply_ontology_gate`).
 
 mod cache;
+#[cfg(test)]
+mod diagnostics_tests;
 mod fk;
 mod junction;
 mod manual;
@@ -48,6 +50,7 @@ use super::input::{
 };
 use super::schema::{Blueprint, FileSpec};
 use crate::datatypes::values::DataFrame;
+use crate::graph::diagnostics::{summarize, BuildInfo, Diagnostic, DiagnosticGroup};
 use crate::graph::mutation::maintain;
 use crate::graph::schema::{DirGraph, PROVISIONAL_KEY};
 use indexmap::IndexMap;
@@ -68,6 +71,7 @@ pub struct BuildInputs {
     pub frames: HashMap<String, DataFrame>,
 }
 
+#[derive(Default)]
 pub struct BuildReport {
     /// Edge writes the blueprint *attempted*, per type. With the default
     /// conflict handling a duplicate input row increments this and adds no
@@ -79,13 +83,48 @@ pub struct BuildReport {
     /// of the build, because the difference from `edges_by_type` is the
     /// dedupe count every caller's report wants to name.
     pub edges_actual: BTreeMap<String, usize>,
+    /// The message of every entry in `diagnostics`, in the same order.
     pub warnings: Vec<String>,
+    /// Every advisory the build raised, classified where it was raised.
+    pub diagnostics: Vec<Diagnostic>,
     pub errors: Vec<String>,
     /// Provisional stub nodes dropped by `settings.auto_purge`.
     pub provisional_purged: usize,
 }
 
 impl BuildReport {
+    /// Record an advisory in both `diagnostics` and `warnings`.
+    pub fn add(&mut self, diagnostic: Diagnostic) {
+        self.warnings.push(diagnostic.message.clone());
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// [`add`](Self::add) each of `diagnostics`.
+    pub fn add_all(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
+        for diagnostic in diagnostics {
+            self.add(diagnostic);
+        }
+    }
+
+    /// Record each of `messages` as an advisory of one `group` and `kind`.
+    pub(super) fn add_messages(
+        &mut self,
+        group: DiagnosticGroup,
+        kind: &'static str,
+        messages: impl IntoIterator<Item = String>,
+    ) {
+        self.add_all(
+            messages
+                .into_iter()
+                .map(|message| Diagnostic::new(group, kind, message)),
+        );
+    }
+
+    /// Advisory counts per group; groups with none are absent.
+    pub fn summary(&self) -> BTreeMap<DiagnosticGroup, usize> {
+        summarize(&self.diagnostics)
+    }
+
     /// The build summary as text, in the shape the wheel has printed since
     /// 0.9.1. Empty when `verbose` is false — a silent build prints nothing.
     ///
@@ -172,9 +211,14 @@ pub fn build(
     let mut report = result?;
     for (node_type, message) in duplicate_ids {
         if !declared.contains(&node_type) && !report.warnings.contains(&message) {
-            report.warnings.push(message);
+            report.add(Diagnostic::new(
+                DiagnosticGroup::DataQuality,
+                "duplicate_id",
+                message,
+            ));
         }
     }
+    graph.build_info = Some(BuildInfo::record(&report.diagnostics));
     Ok(report)
 }
 
@@ -222,17 +266,15 @@ fn build_phases(
         nodes_by_type: BTreeMap::new(),
         edges_by_type: BTreeMap::new(),
         edges_actual: BTreeMap::new(),
-        warnings: Vec::new(),
-        errors: Vec::new(),
-        provisional_purged: 0,
+        ..Default::default()
     };
-    report.warnings.extend(unknown_keys);
-    report.warnings.extend(temporal_warnings);
-    report
-        .warnings
-        .extend(super::validation::unknown_property_type_warnings(
-            &blueprint,
-        ));
+    report.add_messages(DiagnosticGroup::DataShape, "unknown_key", unknown_keys);
+    report.add_all(temporal_warnings);
+    report.add_messages(
+        DiagnosticGroup::DataShape,
+        "unknown_property_type",
+        super::validation::unknown_property_type_warnings(&blueprint),
+    );
 
     let profile = std::env::var("KGLITE_BLUEPRINT_PROFILE").is_ok();
     let t0 = std::time::Instant::now();
@@ -267,7 +309,11 @@ fn build_phases(
         &mut inputs,
         profile,
     )?;
-    report.warnings.extend(frame_warnings);
+    report.add_messages(
+        DiagnosticGroup::DataShape,
+        "frame_column_type",
+        frame_warnings,
+    );
     // Filled by the streamed node phase, read by the streamed FK phase — see
     // `IdTypeCache`.
     let id_types = IdTypeCache::default();
@@ -348,7 +394,11 @@ fn build_phases(
     // Every input has now been read as far as this build will read it, so a
     // reader that only learns of a problem by meeting it — a spreadsheet cell
     // the sheet itself could not compute — has its findings to hand over.
-    report.warnings.extend(registry.read_warnings());
+    report.add_messages(
+        DiagnosticGroup::DataQuality,
+        "spreadsheet_cell_error",
+        registry.read_warnings(),
+    );
 
     finish_build(
         graph,
@@ -416,7 +466,7 @@ fn finish_build(
         let warnings = parsed
             .apply_declarations(graph)
             .map_err(|e| format!("settings.manifest: {e}"))?;
-        report.warnings.extend(warnings);
+        report.add_all(warnings);
     }
 
     // Phase 7: ontology install + gate. Runs after every load phase and
@@ -601,9 +651,13 @@ fn stamp_declared_labels(
         maintain::preflight_interner_names(graph, spec.spec.labels.iter().map(String::as_str))
             .map_err(|e| format!("node '{}': labels: {}", spec.node_type, e))?;
         let Some(nodes) = graph.type_indices.get(&spec.node_type) else {
-            report.warnings.push(format!(
-                "node '{}': declares labels {:?} but the build produced no nodes of that type",
-                spec.node_type, spec.spec.labels
+            report.add(Diagnostic::new(
+                DiagnosticGroup::DataShape,
+                "labels_without_nodes",
+                format!(
+                    "node '{}': declares labels {:?} but the build produced no nodes of that type",
+                    spec.node_type, spec.spec.labels
+                ),
             ));
             continue;
         };
@@ -612,9 +666,11 @@ fn stamp_declared_labels(
             let warning =
                 crate::graph::features::temporal::check_label_stamp(graph, &indices, label)
                     .map_err(|e| format!("node '{}': labels: {e}", spec.node_type))?;
-            report
-                .warnings
-                .extend(warning.map(|w| format!("node '{}': labels: {w}", spec.node_type)));
+            report.add_messages(
+                DiagnosticGroup::DataQuality,
+                "empty_interval_rows",
+                warning.map(|w| format!("node '{}': labels: {w}", spec.node_type)),
+            );
         }
         for label in &spec.spec.labels {
             let key = graph.interner.get_or_intern(label);
@@ -645,7 +701,9 @@ fn apply_ontology_gate(
         .map_err(|e| format!("ontology: cannot read {}: {e}", resolved.display()))?;
     let store = crate::graph::ontology::ontology_from_json(&text)
         .map_err(|e| format!("ontology {}: {e}", resolved.display()))?;
-    report.warnings.extend(
+    report.add_messages(
+        DiagnosticGroup::DataShape,
+        "ontology_class_without_nodes",
         graph
             .define_ontology(store)?
             .into_iter()
@@ -673,9 +731,17 @@ fn apply_ontology_gate(
         );
         match line.severity {
             Enforcement::Advisory => {}
-            Enforcement::Warn => report.warnings.push(format!("ontology: {summary}")),
+            Enforcement::Warn => report.add_messages(
+                DiagnosticGroup::DataQuality,
+                "ontology_violation",
+                [format!("ontology: {summary}")],
+            ),
             Enforcement::Error if line.violations > 0 => errors.push(summary),
-            Enforcement::Error => report.warnings.push(format!("ontology: {summary}")),
+            Enforcement::Error => report.add_messages(
+                DiagnosticGroup::DataQuality,
+                "ontology_violation",
+                [format!("ontology: {summary}")],
+            ),
         }
     }
     if !errors.is_empty() {
@@ -837,6 +903,7 @@ mod render_text_tests {
                 .into_iter()
                 .collect(),
             warnings: vec!["ignored".to_string()],
+            diagnostics: Vec::new(),
             errors: vec!["ignored".to_string()],
             provisional_purged: 2,
         }

@@ -7,7 +7,7 @@
 
 use crate::datatypes::py_in;
 use crate::graph::KnowledgeGraph;
-use kglite_core::api::blueprint;
+use kglite_core::api::blueprint::{self, Diagnostic, DiagnosticGroup};
 use kglite_core::datatypes::values::{ColumnType, DataFrame};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -88,21 +88,12 @@ pub fn from_blueprint_rust(
             .getattr("print")?
             .call1((text.trim_end_matches('\n'),))?;
     }
-    // One `UserWarning` per report entry, whatever `verbose` is: that is the
-    // contract the stub documents, and it is what makes `warnings.simplefilter`
-    // / `logging.captureWarnings` able to route them. A summary line counting
-    // them would be a second, uncapturable channel saying less.
-    for w in &report.warnings {
-        let message = std::ffi::CString::new(w.as_str()).unwrap_or_default();
-        PyErr::warn(
-            py,
-            py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
-            message.as_c_str(),
-            // The shim's `from_blueprint` is the frame calling this function;
-            // the warning belongs to whoever called that.
-            2,
-        )?;
-    }
+    // One `UserWarning` per non-empty group, whatever `verbose` is: that is
+    // the contract the stub documents, and it is what makes
+    // `warnings.simplefilter` / `logging.captureWarnings` able to route them.
+    // A summary line counting them would be a second, uncapturable channel
+    // saying less.
+    warn_by_group(py, "from_blueprint", &report.diagnostics)?;
     // Errors are not warnings and stay on stderr: a per-spec failure has
     // already been survived by the build, and the graph is returned regardless.
     for e in &report.errors {
@@ -220,8 +211,8 @@ pub fn from_records_rust(
         );
     }
 
-    let (kg, warnings) = py
-        .detach(|| -> Result<(KnowledgeGraph, Vec<String>), String> {
+    let (kg, diagnostics) = py
+        .detach(|| -> Result<(KnowledgeGraph, Vec<Diagnostic>), String> {
             let mode = match storage {
                 None | Some("") => kglite_core::api::storage::StorageMode::Memory,
                 Some(s) => kglite_core::api::storage::StorageMode::parse(s)?,
@@ -241,14 +232,41 @@ pub fn from_records_rust(
                     default_row_limit: None,
                     lifecycle: crate::graph::GraphLifecycle::detached(),
                 },
-                report.warnings,
+                report.diagnostics,
             ))
         })
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-    // One `UserWarning` per entry, as `from_blueprint` raises them.
-    for w in &warnings {
-        let message = std::ffi::CString::new(w.as_str()).unwrap_or_default();
+    warn_by_group(py, "from_records", &diagnostics)?;
+
+    Ok(kg)
+}
+
+/// Items one group's warning lists before saying how many more there are.
+const WARNING_ITEMS_SHOWN: usize = 10;
+
+/// Raise one `UserWarning` per non-empty group, most severe group first.
+///
+/// `stacklevel` 2: the caller is the shim's `from_blueprint` (or the
+/// `from_records` wrapper), and the warning belongs to whoever called that.
+fn warn_by_group(py: Python<'_>, caller: &str, diagnostics: &[Diagnostic]) -> PyResult<()> {
+    for group in DiagnosticGroup::ALL {
+        let items: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.group == group).collect();
+        if items.is_empty() {
+            continue;
+        }
+        let mut text = format!("{caller} [{}] {} warning(s):", group.as_str(), items.len());
+        for d in items.iter().take(WARNING_ITEMS_SHOWN) {
+            text.push_str("\n  - ");
+            text.push_str(&d.message);
+        }
+        if items.len() > WARNING_ITEMS_SHOWN {
+            text.push_str(&format!(
+                "\n  … and {} more",
+                items.len() - WARNING_ITEMS_SHOWN
+            ));
+        }
+        let message = std::ffi::CString::new(text).unwrap_or_default();
         PyErr::warn(
             py,
             py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
@@ -256,6 +274,5 @@ pub fn from_records_rust(
             2,
         )?;
     }
-
-    Ok(kg)
+    Ok(())
 }

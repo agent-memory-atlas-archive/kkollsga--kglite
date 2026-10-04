@@ -1013,6 +1013,42 @@ Passing `save=True` on a blueprint with no `output` and no disk `path` is an
 error rather than a silent no-op, so a pipeline that believes it is persisting
 its output finds out at the first run.
 
+## Build Warnings
+
+A build reports what it noticed about the input as warnings, and sorts them by
+how much they matter. `from_blueprint` raises **one `UserWarning` per
+non-empty group**, most severe first:
+
+| Group | What it holds |
+|---|---|
+| `declarations` | A validity interval or default that changes what queries mean: columns typed `validFrom` / `validTo` with no `temporal` key, a `temporal` key with no convention, a declaration the build wrote no rows for. |
+| `stubs` | Placeholder nodes created for edge endpoints no row supplied, and rows whose `parent_fk` matched no parent (no edge, no stub). |
+| `data_shape` | Input that is not the layout the blueprint declared: unknown keys, a column type the blueprint cannot hold, list cells that were not JSON arrays, dropped aggregate rows. |
+| `data_quality` | Values that loaded but are probably wrong: duplicate ids, identical relationship rows, cells that are not the declared date, rows valid at no instant. |
+| `cosmetic` | Notes that change no query result, such as a column read twice for want of a declared type. |
+
+Each warning names its group and count, lists the first ten items and says how
+many more there are:
+
+```text
+from_blueprint [declarations] 1 warning(s):
+  - node 'Department': columns typed validFrom/validTo only type the column as a date; ...
+```
+
+Because they are ordinary `UserWarning` objects, `warnings.simplefilter`,
+`warnings.catch_warnings` and `logging.captureWarnings` route them, and a
+filter on the `from_blueprint [data_quality]` prefix silences one group.
+
+The full record stays on the graph: after a build,
+`graph.graph_info()['build']` holds `{"summary": {group: count}, "diagnostics":
+[{"group", "kind", "message"}, ...]}`. `kind` is a short stable code
+(`typed_only_no_validity`, `duplicate_id`, `stubs_vivified`, ...) to match on;
+messages may be reworded. `diagnostics` keeps the 100 most severe, `summary`
+counts all of them, and a clean build records an empty summary. The record is
+saved in the `.kgl` file and comes back on `load()`. The C ABI's
+`kglite_blueprint_build` report carries the same lists under `diagnostics` and
+`summary`.
+
 ## How Loading Works
 
 `from_blueprint()` first applies the ordered top-level `compute` pipeline, then
@@ -1181,7 +1217,7 @@ If your CSV has aggregate rows (e.g., `month=0` for annual totals), they are dro
 
 ### Repeated primary keys
 
-A repeated `pk` in a non-timeseries node or sub-node creates one node per row. The build writes a duplicate-id warning (`N duplicate id(s) on type 'T'`) to stderr; a timeseries spec repeats its pk by design and does not warn. Dedupe the input, or use a timeseries block if the repeats are time points.
+A repeated `pk` in a non-timeseries node or sub-node creates one node per row. The build adds a duplicate-id warning (`N duplicate id(s) on type 'T'`) to the `data_quality` group; a timeseries spec repeats its pk by design and does not warn. Dedupe the input, or use a timeseries block if the repeats are time points.
 
 ### Geometry inputs
 

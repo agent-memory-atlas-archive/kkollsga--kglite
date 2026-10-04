@@ -20,6 +20,7 @@ use super::super::input::Source;
 use super::super::table::RawCsv;
 use super::super::typing::{inferred_type_keyword, ColumnInference, IdInference};
 use crate::datatypes::values::ColumnType;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
@@ -235,16 +236,20 @@ fn keywords(inferences: IndexMap<String, ColumnInference>) -> IndexMap<String, S
 
 /// One line naming the columns whose types cost an extra read, so an author
 /// who cares about it knows exactly which declarations remove it.
-pub(super) fn prepass_warning(where_: &str, prepared: &Prepared<'_>) -> Option<String> {
+pub(super) fn prepass_warning(where_: &str, prepared: &Prepared<'_>) -> Option<Diagnostic> {
     if !prepared.extra_pass || prepared.resolved.is_empty() {
         return None;
     }
     let cols: Vec<&str> = prepared.resolved.keys().map(String::as_str).collect();
-    Some(format!(
-        "{where_}: {} column(s) have no declared type ({}), so the loader read the input twice \
-         — once to infer them over every row, once to load. Declaring them keeps the type \
-         stable and skips the extra pass.",
-        cols.len(),
-        cols.join(", ")
+    Some(Diagnostic::new(
+        DiagnosticGroup::Cosmetic,
+        "undeclared_types_extra_read",
+        format!(
+            "{where_}: {} column(s) have no declared type ({}), so the loader read the input \
+             twice — once to infer them over every row, once to load. Declaring them keeps the \
+             type stable and skips the extra pass.",
+            cols.len(),
+            cols.join(", ")
+        ),
     ))
 }

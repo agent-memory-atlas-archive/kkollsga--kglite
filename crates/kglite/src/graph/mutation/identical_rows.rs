@@ -10,6 +10,7 @@
 //! drops every row after the first ([`IdenticalRows::Collapse`]).
 
 use crate::datatypes::{DataFrame, Value};
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::storage::interner::InternedKey;
 use petgraph::graph::NodeIndex;
 use rustc_hash::{FxHashMap, FxHasher};
@@ -159,6 +160,12 @@ impl IdenticalRowTracker {
         *copies += 1;
         self.max_copies = self.max_copies.max(*copies);
         *copies == 1 || policy == IdenticalRows::Keep
+    }
+
+    /// [`warning`](Self::warning), classified.
+    pub(crate) fn diagnostic(&self, edge_type: &str) -> Option<Diagnostic> {
+        self.warning(edge_type)
+            .map(|m| Diagnostic::new(DiagnosticGroup::DataQuality, "identical_rows", m))
     }
 
     /// The one warning for this load of `edge_type`, when `Keep` mode saw

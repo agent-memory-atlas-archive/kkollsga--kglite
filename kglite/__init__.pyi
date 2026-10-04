@@ -1513,12 +1513,24 @@ def from_blueprint(
       never changes which edges a build produces.
 
     - **Warnings** (stray keys, missed list cells, ontology findings, an
-      input type the blueprint cannot hold, …) are emitted as Python
-      ``UserWarning`` objects, one per entry in the build report, whatever
-      ``verbose`` is — ``verbose`` governs the progress summary, not the
-      warnings. By default they reach **stderr**, and every standard
+      input type the blueprint cannot hold, …) are grouped by how much they
+      matter and emitted as Python ``UserWarning`` objects, **one per
+      non-empty group**, most severe first, whatever ``verbose`` is —
+      ``verbose`` governs the progress summary, not the warnings. The groups
+      are ``declarations`` (a validity interval or default that changes what
+      queries mean), ``stubs`` (placeholder nodes, or edges dropped for want of
+      an endpoint), ``data_shape`` (input that is not the declared layout),
+      ``data_quality`` (duplicate ids, identical rows, rows valid at no
+      instant) and ``cosmetic``. Each warning names its group and count, lists
+      the first ten items and says how many more there are. The full list is
+      in ``graph.graph_info()['build']`` — ``{"summary": {group: count},
+      "diagnostics": [{"group", "kind", "message"}, ...]}``, kept in the saved
+      ``.kgl`` file (up to 100 diagnostics, most severe first; ``summary``
+      counts every one). ``kind`` is a stable code to match on; messages may be
+      reworded. By default the warnings reach **stderr**, and every standard
       mechanism (``warnings.simplefilter``, ``warnings.catch_warnings``,
-      ``logging.captureWarnings``) routes them.
+      ``logging.captureWarnings``) routes them. ``from_records`` groups its
+      warnings the same way.
 
     - **Errors** — a spec the build survived but could not fully load (a
       bad ``rename``, a property column the input does not have) — are
@@ -3828,6 +3840,14 @@ class KnowledgeGraph:
                   this graph object. Counts fired vacuums, not reclaimed slots
                   — on the disk backend a vacuum reclaims nothing and still
                   counts. Not persisted; a reopened graph starts at 0
+                - ``build``: present only on a graph built by
+                  :func:`from_blueprint` — ``{"summary": {group: count},
+                  "diagnostics": [{"group", "kind", "message"}, ...]}``, the
+                  build's advisories by group (``declarations``, ``stubs``,
+                  ``data_shape``, ``data_quality``, ``cosmetic``). Empty for a
+                  clean build; ``diagnostics`` holds at most the 100 most
+                  severe while ``summary`` counts all. Saved with the graph and
+                  restored on load
 
         Example::
 

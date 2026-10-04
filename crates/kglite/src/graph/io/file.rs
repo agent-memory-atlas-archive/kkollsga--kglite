@@ -295,6 +295,12 @@ pub(crate) struct FileMetadata {
     /// describe()). Additive — old files default to empty.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     graph_instructions: HashMap<String, String>,
+    /// What the blueprint build that produced the graph reported
+    /// (`DirGraph::build_info`). Additive and skipped when absent, so a graph
+    /// that was not blueprint-built writes the bytes it wrote before this
+    /// existed and the golden digests hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    build_info: Option<crate::graph::diagnostics::BuildInfo>,
     /// Where this graph was built from, what that directory looked like, and
     /// which dialect it was read with — `DirGraph::{source_root,
     /// source_fingerprint, source_dialect}`, the vault-provenance set
@@ -502,6 +508,7 @@ impl FileMetadata {
             table_property_meta: graph.table_property_meta.clone(),
             property_shapes: graph.property_shapes.clone(),
             graph_instructions: graph.graph_instructions.clone(),
+            build_info: graph.build_info.clone(),
             source_root: graph.source_root.clone(),
             source_fingerprint: graph.source_fingerprint,
             source_dialect: graph.source_dialect.clone(),
@@ -599,6 +606,7 @@ impl FileMetadata {
         graph.table_property_meta = self.table_property_meta;
         graph.rebuild_ontology_closures();
         graph.graph_instructions = self.graph_instructions;
+        graph.build_info = self.build_info;
         graph.source_root = self.source_root;
         graph.source_fingerprint = self.source_fingerprint;
         graph.source_dialect = self.source_dialect;

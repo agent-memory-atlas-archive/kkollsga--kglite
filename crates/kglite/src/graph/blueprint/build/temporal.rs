@@ -19,6 +19,7 @@ use indexmap::IndexMap;
 use super::specs::FlatSpec;
 use super::BuildReport;
 use crate::graph::blueprint::schema::{Blueprint, NodeSpec, TemporalSpec};
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::features::temporal::{
     declare_loaded_grouped, EmptyWhen, EntityGrouping, IntervalConvention, TemporalTarget,
@@ -189,16 +190,24 @@ fn typed_only_warning(place: &str, from: Option<&str>, to: Option<&str>) -> Stri
 
 /// Check every spec's `temporal` key before the build loads anything, and
 /// return the warnings for specs that will declare nothing.
-pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<String>, String> {
-    fn walk(warnings: &mut Vec<String>, node_type: &str, spec: &NodeSpec) -> Result<(), String> {
+pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<Diagnostic>, String> {
+    fn walk(
+        warnings: &mut Vec<Diagnostic>,
+        node_type: &str,
+        spec: &NodeSpec,
+    ) -> Result<(), String> {
         for interval in spec_intervals(node_type, spec) {
             let place = &interval.place;
             let Some(temporal) = interval.temporal else {
                 if interval.typed_from.is_some() || interval.typed_to.is_some() {
-                    warnings.push(typed_only_warning(
-                        place,
-                        interval.typed_from.as_deref(),
-                        interval.typed_to.as_deref(),
+                    warnings.push(Diagnostic::new(
+                        DiagnosticGroup::Declarations,
+                        "typed_only_no_validity",
+                        typed_only_warning(
+                            place,
+                            interval.typed_from.as_deref(),
+                            interval.typed_to.as_deref(),
+                        ),
                     ));
                 }
                 continue;
@@ -217,7 +226,11 @@ pub(crate) fn check_temporal_specs(blueprint: &Blueprint) -> Result<Vec<String>,
             let convention = convention_of(place, temporal)?;
             empty_when_of(place, temporal, convention)?;
             if convention.is_none() {
-                warnings.push(missing_convention_warning(place, temporal));
+                warnings.push(Diagnostic::new(
+                    DiagnosticGroup::Declarations,
+                    "missing_convention",
+                    missing_convention_warning(place, temporal),
+                ));
             }
         }
         for (sub_type, sub) in &spec.sub_nodes {
@@ -350,9 +363,13 @@ fn declare_one(
         ),
     };
     if !present {
-        report.warnings.push(format!(
-            "{place}: the build wrote no rows of {}, so no validity interval is declared",
-            target.describe()
+        report.add(Diagnostic::new(
+            DiagnosticGroup::Declarations,
+            "interval_not_declared",
+            format!(
+                "{place}: the build wrote no rows of {}, so no validity interval is declared",
+                target.describe()
+            ),
         ));
         return Ok(());
     }
@@ -371,7 +388,7 @@ fn declare_one(
         grouping,
     )
     .map_err(|reason| format!("{place}: the temporal declaration is refused: {reason}"))?;
-    report.warnings.extend(declared.warning);
+    report.add_all(declared.diagnostic);
     Ok(())
 }
 

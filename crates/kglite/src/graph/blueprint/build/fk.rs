@@ -14,6 +14,7 @@ use super::specs::FlatSpec;
 use super::table_ops::subset_rows;
 use super::BuildReport;
 use crate::datatypes::values::DataFrame;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::mutation::identical_rows::IdenticalRowTracker;
 use crate::graph::mutation::maintain;
 use crate::graph::schema::DirGraph;
@@ -33,7 +34,7 @@ struct PreppedFkEdges {
     errors: Vec<String>,
     /// Spec-level warnings (list cells that were probably meant as several
     /// values), surfaced alongside the errors.
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
 }
 
 /// The spec's declared FK edges plus its generated parent edge, with that
@@ -84,18 +85,23 @@ fn missing_fk_column_error(
 
 /// One warning per spec that declares `parent_fk` under a parent with
 /// `pk: "auto"`, which no column value can reference.
-fn auto_parent_warnings(specs: &[&FlatSpec]) -> Vec<String> {
+fn auto_parent_warnings(specs: &[&FlatSpec]) -> Vec<Diagnostic> {
     specs
         .iter()
         .filter_map(|spec| match parent_link(spec)? {
             ParentLink::AutoPkParent {
                 parent_type,
                 parent_fk,
-            } => Some(format!(
-                "[{}] parent_fk '{parent_fk}' writes no edge: '{parent_type}' has pk \"auto\", so \
-                 its ids are row numbers no column value names. Declare an fk_edges entry to \
-                 '{parent_type}' on a column holding those row numbers, or drop parent_fk.",
-                spec.node_type
+            } => Some(Diagnostic::new(
+                DiagnosticGroup::DataShape,
+                "parent_fk_auto_pk",
+                format!(
+                    "[{}] parent_fk '{parent_fk}' writes no edge: '{parent_type}' has pk \
+                     \"auto\", so its ids are row numbers no column value names. Declare an \
+                     fk_edges entry to '{parent_type}' on a column holding those row numbers, \
+                     or drop parent_fk.",
+                    spec.node_type
+                ),
             )),
             _ => None,
         })
@@ -217,7 +223,7 @@ fn prep_fk_edges(
                 continue;
             }
         };
-        warnings.extend(misparses.into_warnings(&format!(
+        warnings.extend(misparses.into_diagnostics(&format!(
             "fk_edge '{edge_type}' (node '{}')",
             spec.node_type
         )));
@@ -498,7 +504,7 @@ pub(super) fn load_fk_edges(
 ) -> Result<(), String> {
     use rayon::prelude::*;
     let profile = std::env::var("KGLITE_BLUEPRINT_PROFILE").is_ok();
-    report.warnings.extend(auto_parent_warnings(specs));
+    report.add_all(auto_parent_warnings(specs));
 
     // Same predicate as node streaming, so a spec's nodes and FK edges
     // either both stream or both buffer. Mixing the two for one spec would
@@ -524,7 +530,7 @@ pub(super) fn load_fk_edges(
         for err in pfx.errors {
             report.errors.push(err);
         }
-        report.warnings.extend(pfx.warnings);
+        report.add_all(pfx.warnings);
         for edge in pfx.edges {
             let mut df = edge.df;
             if edge.implicit {
@@ -536,7 +542,7 @@ pub(super) fn load_fk_edges(
                     (&pfx.pk, &edge.target_col),
                     &mut tally,
                 )?;
-                report.warnings.extend(tally.warning(
+                report.add_all(tally.diagnostic(
                     &pfx.source_type,
                     &edge.target_type,
                     (&edge.edge_type, &edge.fk),
@@ -636,7 +642,7 @@ fn resolve_fk_property_types<'a>(
         &format!("fk_edge properties (node '{}')", spec.node_type),
         &prepared,
     ) {
-        report.warnings.push(w);
+        report.add(w);
     }
     for props in edge_props.values_mut() {
         for (col, keyword) in &prepared.resolved {
@@ -839,14 +845,14 @@ fn load_streamed_fk_edges(
         }
     }
     for (edge_type, tally) in misparses {
-        report.warnings.extend(tally.into_warnings(&format!(
+        report.add_all(tally.into_diagnostics(&format!(
             "fk_edge '{edge_type}' (node '{}')",
             spec.node_type
         )));
     }
     if let Some(edge_type) = &implicit {
         if let Some(edge) = fk_edges.get(edge_type) {
-            report.warnings.extend(unresolved.warning(
+            report.add_all(unresolved.diagnostic(
                 &spec.node_type,
                 &edge.target,
                 (edge_type, &edge.fk),
@@ -1051,16 +1057,19 @@ pub(super) fn connect_tracked(
         Ok(r) => {
             if r.connections_skipped > 0 {
                 let detail = r.errors.join("; ");
-                report.warnings.push(format!(
-                    "[{}] -[{}]-> {}: {} skipped ({})",
-                    source_type, connection_type, target_type, r.connections_skipped, detail
+                report.add(Diagnostic::new(
+                    DiagnosticGroup::DataQuality,
+                    "edge_rows_skipped",
+                    format!(
+                        "[{}] -[{}]-> {}: {} skipped ({})",
+                        source_type, connection_type, target_type, r.connections_skipped, detail
+                    ),
                 ));
             }
             // The loader's own advisories — stub vivification, empty
             // intervals — under this edge's heading.
-            report.warnings.extend(r.warnings.iter().map(|warning| {
-                format!("[{source_type}] -[{connection_type}]-> {target_type}: {warning}")
-            }));
+            let heading = format!("[{source_type}] -[{connection_type}]-> {target_type}: ");
+            report.add_all(r.diagnostics.into_iter().map(|d| d.prefixed(&heading)));
             // Rows that landed, merged ones included: the summary compares
             // this input count with the stored edges to report dedupes.
             Ok(r.connections_created + r.connections_updated)

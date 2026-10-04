@@ -1,3 +1,4 @@
+use crate::graph::diagnostics::Diagnostic;
 use std::collections::VecDeque;
 
 const MAX_REPORT_HISTORY: usize = 10;
@@ -67,6 +68,8 @@ pub struct NodeOperationReport {
     /// interval is empty under a `half_open` declaration. Not errors: the
     /// rows are stored.
     pub warnings: Vec<String>,
+    /// `warnings` with each entry's classification, in the same order.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl NodeOperationReport {
@@ -86,6 +89,20 @@ impl NodeOperationReport {
             timestamp: chrono::Utc::now(),
             errors: Vec::new(),
             warnings: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Record an advisory in both `warnings` and `diagnostics`.
+    pub fn warn(&mut self, diagnostic: Diagnostic) {
+        self.warnings.push(diagnostic.message.clone());
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// [`warn`](Self::warn) each of `diagnostics`.
+    pub fn warn_all(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
+        for diagnostic in diagnostics {
+            self.warn(diagnostic);
         }
     }
 
@@ -116,6 +133,8 @@ pub struct ConnectionOperationReport {
     /// interval is empty under a `half_open` declaration. Not errors: the
     /// rows are stored.
     pub warnings: Vec<String>,
+    /// `warnings` with each entry's classification, in the same order.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl ConnectionOperationReport {
@@ -137,6 +156,20 @@ impl ConnectionOperationReport {
             timestamp: chrono::Utc::now(),
             errors: Vec::new(),
             warnings: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Record an advisory in both `warnings` and `diagnostics`.
+    pub fn warn(&mut self, diagnostic: Diagnostic) {
+        self.warnings.push(diagnostic.message.clone());
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// [`warn`](Self::warn) each of `diagnostics`.
+    pub fn warn_all(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
+        for diagnostic in diagnostics {
+            self.warn(diagnostic);
         }
     }
 

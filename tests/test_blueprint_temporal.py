@@ -47,7 +47,16 @@ def _build(blueprint_path, **kwargs):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         graph = from_blueprint(blueprint_path, save=False, **kwargs)
-    return graph, [str(w.message) for w in caught]
+    return graph, _entries(caught)
+
+
+def _entries(caught):
+    """The individual advisories inside the per-group ``UserWarning`` objects."""
+    out = []
+    for w in caught:
+        head, *items = str(w.message).split("\n  - ")
+        out.extend(items if items else [head])
+    return out
 
 
 # ── The operator/status fixture (companies, one field, its statuses) ─────

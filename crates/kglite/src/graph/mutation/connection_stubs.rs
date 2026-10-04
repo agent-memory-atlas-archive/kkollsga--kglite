@@ -2,6 +2,7 @@
 
 use super::maintain::add_nodes;
 use crate::datatypes::{DataFrame, Value};
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::schema::{DirGraph, PROVISIONAL_KEY};
 
 /// Pass B of a relationship load: vivify the missing source and target ids as
@@ -11,7 +12,7 @@ pub(super) fn vivify_endpoints(
     connection_type: &str,
     sources: (&str, &[Value]),
     targets: (&str, &[Value]),
-) -> Result<(usize, Vec<String>), String> {
+) -> Result<(usize, Vec<Diagnostic>), String> {
     let mut by_type: Vec<(&str, usize)> = Vec::new();
     for (node_type, ids) in [sources, targets] {
         if ids.is_empty() {
@@ -59,19 +60,32 @@ pub(crate) fn with_pending_declared_labels<R>(labels: Vec<String>, f: impl FnOnc
 /// so on a label with a valid-time declaration (already on the graph, or about
 /// to be declared by the running build) it is valid at every instant until a
 /// node row with bounds promotes it, and the advisory says so.
-fn stub_advisory(graph: &DirGraph, connection_type: &str, node_type: &str, count: usize) -> String {
+fn stub_advisory(
+    graph: &DirGraph,
+    connection_type: &str,
+    node_type: &str,
+    count: usize,
+) -> Diagnostic {
     let declared = crate::graph::features::temporal::node_config(graph, node_type).is_some()
         || PENDING_DECLARED.with(|slot| slot.borrow().iter().any(|l| l == node_type));
     if declared {
-        format!(
-            "{count} stub node(s) vivified for missing '{connection_type}' endpoints on \
-             declared label '{node_type}' carry no bounds and are valid at every instant until \
-             promoted (call purge_provisional() to drop any left unpromoted)."
+        Diagnostic::new(
+            DiagnosticGroup::Stubs,
+            "stubs_on_declared_label",
+            format!(
+                "{count} stub node(s) vivified for missing '{connection_type}' endpoints on \
+                 declared label '{node_type}' carry no bounds and are valid at every instant \
+                 until promoted (call purge_provisional() to drop any left unpromoted)."
+            ),
         )
     } else {
-        format!(
-            "{count} stub node(s) vivified for missing '{connection_type}' endpoints of type \
-             '{node_type}' — call purge_provisional() to drop any left unpromoted."
+        Diagnostic::new(
+            DiagnosticGroup::Stubs,
+            "stubs_vivified",
+            format!(
+                "{count} stub node(s) vivified for missing '{connection_type}' endpoints of \
+                 type '{node_type}' — call purge_provisional() to drop any left unpromoted."
+            ),
         )
     }
 }

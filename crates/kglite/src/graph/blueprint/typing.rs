@@ -875,9 +875,10 @@ mod typing_tests {
             df.get_value(1, "l"),
             Some(Value::List(vec![Value::String("a|b".into())]))
         );
-        let warnings = tally.into_warnings("node 'T'");
+        let warnings = tally.into_diagnostics("node 'T'");
         assert_eq!(warnings.len(), 1, "one warning per column: {warnings:?}");
-        let w = &warnings[0];
+        assert_eq!(warnings[0].kind, "list_cell_unsplit");
+        let w = &warnings[0].message;
         assert!(
             w.starts_with("node 'T': column 'l' is declared list but 3 cell(s)"),
             "{w}"
@@ -905,7 +906,9 @@ mod typing_tests {
         )
         .unwrap();
         assert!(
-            tally.into_warnings("j")[0].contains("First at row 5001"),
+            tally.into_diagnostics("j")[0]
+                .message
+                .contains("First at row 5001"),
             "row provenance lost"
         );
     }
@@ -923,7 +926,7 @@ mod typing_tests {
             &mut tally,
         )
         .unwrap();
-        let w = tally.into_warnings("node 'T'").remove(0);
+        let w = tally.into_diagnostics("node 'T'").remove(0).message;
         assert!(w.contains(&format!("{}…", "z".repeat(80))), "{w}");
         assert!(!w.contains("tail"), "{w}");
     }

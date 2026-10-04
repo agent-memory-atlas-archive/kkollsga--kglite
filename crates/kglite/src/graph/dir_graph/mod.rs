@@ -402,6 +402,11 @@ pub struct DirGraph {
     /// a trivial v2 without changing the format. Additive — absent in old files.
     #[serde(default)]
     pub graph_instructions: HashMap<String, String>,
+    /// What the blueprint build that produced this graph reported; `None` for
+    /// a graph that was not blueprint-built. Rides the `.kgl` metadata, not
+    /// `DirGraph`'s own serde derive.
+    #[serde(skip)]
+    pub build_info: Option<crate::graph::diagnostics::BuildInfo>,
     /// The directory this graph was built from, when it was built from one —
     /// [`okf::build`](crate::okf::build) stamps the root it walked, and
     /// nothing else writes it.
@@ -970,6 +975,7 @@ impl DirGraph {
             ontology_closures: HashMap::new(),
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
+            build_info: None,
             source_root: None,
             source_fingerprint: None,
             source_dialect: None,

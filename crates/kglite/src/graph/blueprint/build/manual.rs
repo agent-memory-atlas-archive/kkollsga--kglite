@@ -232,14 +232,7 @@ mod manual_node_tests {
         ];
 
         let mut graph = DirGraph::new();
-        let mut report = BuildReport {
-            nodes_by_type: Default::default(),
-            edges_by_type: Default::default(),
-            edges_actual: Default::default(),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            provisional_purged: 0,
-        };
+        let mut report = BuildReport::default();
         let cache = CsvCache::default();
         load_manual_nodes(&mut graph, &core, &[], &registry, &cache, &mut report).unwrap();
 

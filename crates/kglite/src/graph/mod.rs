@@ -13,6 +13,7 @@ pub mod cdc;
 pub mod constraints;
 pub mod core;
 pub(crate) mod cow;
+pub mod diagnostics;
 pub mod dir_graph;
 pub mod durability;
 pub(crate) mod edge_embedding_generation;

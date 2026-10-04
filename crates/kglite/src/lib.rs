@@ -857,6 +857,9 @@ pub mod api {
             TimeseriesSpec,
         };
         pub use crate::graph::blueprint::typing::scalar;
+        pub use crate::graph::diagnostics::{
+            BuildInfo, Diagnostic, DiagnosticGroup, RecordedDiagnostic,
+        };
     }
 
     /// Cypher parser + planner + executor primitives. Downstream

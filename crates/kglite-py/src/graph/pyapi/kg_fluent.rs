@@ -581,6 +581,7 @@ impl KnowledgeGraph {
             processing_time_ms: 0.0,
             errors,
             warnings: Vec::new(),
+            diagnostics: Vec::new(),
         };
 
         let report_index = new_kg.add_report(OperationReport::NodeOperation(report));

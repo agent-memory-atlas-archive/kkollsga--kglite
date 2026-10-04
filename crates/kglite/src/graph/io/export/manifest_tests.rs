@@ -116,7 +116,7 @@ fn declarations_round_trip_for_both_conventions_and_source_keys() {
     assert!(list(&target).is_empty());
     let warnings = m.apply_declarations(&mut target).unwrap();
     assert!(
-        warnings.iter().all(|w| !w.contains("refused")),
+        warnings.iter().all(|w| !w.message.contains("refused")),
         "{warnings:?}"
     );
     let key = |g: &DirGraph| {

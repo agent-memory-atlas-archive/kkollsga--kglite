@@ -290,6 +290,34 @@ impl core::fmt::Debug for kglite::api::blueprint::ComputeOp
 pub fn kglite::api::blueprint::ComputeOp::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::ComputeOp
 pub fn kglite::api::blueprint::ComputeOp::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum kglite::api::blueprint::DiagnosticGroup
+pub kglite::api::blueprint::DiagnosticGroup::Cosmetic
+pub kglite::api::blueprint::DiagnosticGroup::DataQuality
+pub kglite::api::blueprint::DiagnosticGroup::DataShape
+pub kglite::api::blueprint::DiagnosticGroup::Declarations
+pub kglite::api::blueprint::DiagnosticGroup::Stubs
+impl kglite::api::blueprint::DiagnosticGroup
+pub const kglite::api::blueprint::DiagnosticGroup::ALL: [kglite::api::blueprint::DiagnosticGroup; 5]
+pub fn kglite::api::blueprint::DiagnosticGroup::as_str(self) -> &'static str
+impl core::clone::Clone for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::clone(&self) -> kglite::api::blueprint::DiagnosticGroup
+impl core::cmp::Eq for kglite::api::blueprint::DiagnosticGroup
+impl core::cmp::Ord for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::cmp(&self, other: &kglite::api::blueprint::DiagnosticGroup) -> core::cmp::Ordering
+impl core::cmp::PartialEq for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::eq(&self, other: &kglite::api::blueprint::DiagnosticGroup) -> bool
+impl core::cmp::PartialOrd for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::partial_cmp(&self, other: &kglite::api::blueprint::DiagnosticGroup) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for kglite::api::blueprint::DiagnosticGroup
+impl core::marker::StructuralPartialEq for kglite::api::blueprint::DiagnosticGroup
+impl serde_core::ser::Serialize for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum kglite::api::blueprint::TimeKey
 pub kglite::api::blueprint::TimeKey::Composite(indexmap::map::IndexMap<alloc::string::String, alloc::string::String>)
 pub kglite::api::blueprint::TimeKey::Single(alloc::string::String)
@@ -322,11 +350,31 @@ impl core::fmt::Debug for kglite::api::blueprint::Blueprint
 pub fn kglite::api::blueprint::Blueprint::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::Blueprint
 pub fn kglite::api::blueprint::Blueprint::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct kglite::api::blueprint::BuildInfo
+pub kglite::api::blueprint::BuildInfo::diagnostics: alloc::vec::Vec<kglite::api::blueprint::RecordedDiagnostic>
+pub kglite::api::blueprint::BuildInfo::summary: alloc::collections::btree::map::BTreeMap<kglite::api::blueprint::DiagnosticGroup, usize>
+impl kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::record(diagnostics: &[kglite::api::blueprint::Diagnostic]) -> Self
+impl core::clone::Clone for kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::clone(&self) -> kglite::api::blueprint::BuildInfo
+impl core::cmp::Eq for kglite::api::blueprint::BuildInfo
+impl core::cmp::PartialEq for kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::eq(&self, other: &kglite::api::blueprint::BuildInfo) -> bool
+impl core::default::Default for kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::default() -> kglite::api::blueprint::BuildInfo
+impl core::fmt::Debug for kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::blueprint::BuildInfo
+impl serde_core::ser::Serialize for kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::BuildInfo
+pub fn kglite::api::blueprint::BuildInfo::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::blueprint::BuildInputs
 pub kglite::api::blueprint::BuildInputs::frames: std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::DataFrame>
 impl core::default::Default for kglite::api::blueprint::BuildInputs
 pub fn kglite::api::blueprint::BuildInputs::default() -> kglite::api::blueprint::BuildInputs
 pub struct kglite::api::blueprint::BuildReport
+pub kglite::api::blueprint::BuildReport::diagnostics: alloc::vec::Vec<kglite::api::blueprint::Diagnostic>
 pub kglite::api::blueprint::BuildReport::edges_actual: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
 pub kglite::api::blueprint::BuildReport::edges_by_type: alloc::collections::btree::map::BTreeMap<alloc::string::String, usize>
 pub kglite::api::blueprint::BuildReport::errors: alloc::vec::Vec<alloc::string::String>
@@ -334,7 +382,12 @@ pub kglite::api::blueprint::BuildReport::nodes_by_type: alloc::collections::btre
 pub kglite::api::blueprint::BuildReport::provisional_purged: usize
 pub kglite::api::blueprint::BuildReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::api::blueprint::BuildReport
+pub fn kglite::api::blueprint::BuildReport::add(&mut self, diagnostic: kglite::api::blueprint::Diagnostic)
+pub fn kglite::api::blueprint::BuildReport::add_all(&mut self, diagnostics: impl core::iter::traits::collect::IntoIterator<Item = kglite::api::blueprint::Diagnostic>)
 pub fn kglite::api::blueprint::BuildReport::render_text(&self, verbose: bool) -> alloc::string::String
+pub fn kglite::api::blueprint::BuildReport::summary(&self) -> alloc::collections::btree::map::BTreeMap<kglite::api::blueprint::DiagnosticGroup, usize>
+impl core::default::Default for kglite::api::blueprint::BuildReport
+pub fn kglite::api::blueprint::BuildReport::default() -> kglite::api::blueprint::BuildReport
 pub struct kglite::api::blueprint::CalendarLink
 pub kglite::api::blueprint::CalendarLink::date_col: alloc::string::String
 pub kglite::api::blueprint::CalendarLink::edge: alloc::string::String
@@ -356,6 +409,24 @@ impl core::fmt::Debug for kglite::api::blueprint::Connections
 pub fn kglite::api::blueprint::Connections::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::Connections
 pub fn kglite::api::blueprint::Connections::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct kglite::api::blueprint::Diagnostic
+pub kglite::api::blueprint::Diagnostic::group: kglite::api::blueprint::DiagnosticGroup
+pub kglite::api::blueprint::Diagnostic::kind: &'static str
+pub kglite::api::blueprint::Diagnostic::message: alloc::string::String
+impl kglite::api::blueprint::Diagnostic
+pub fn kglite::api::blueprint::Diagnostic::new(group: kglite::api::blueprint::DiagnosticGroup, kind: &'static str, message: impl core::convert::Into<alloc::string::String>) -> Self
+impl kglite::api::blueprint::Diagnostic
+pub fn kglite::api::blueprint::Diagnostic::prefixed(self, prefix: &str) -> Self
+impl core::clone::Clone for kglite::api::blueprint::Diagnostic
+pub fn kglite::api::blueprint::Diagnostic::clone(&self) -> kglite::api::blueprint::Diagnostic
+impl core::cmp::Eq for kglite::api::blueprint::Diagnostic
+impl core::cmp::PartialEq for kglite::api::blueprint::Diagnostic
+pub fn kglite::api::blueprint::Diagnostic::eq(&self, other: &kglite::api::blueprint::Diagnostic) -> bool
+impl core::fmt::Debug for kglite::api::blueprint::Diagnostic
+pub fn kglite::api::blueprint::Diagnostic::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::blueprint::Diagnostic
+impl serde_core::ser::Serialize for kglite::api::blueprint::Diagnostic
+pub fn kglite::api::blueprint::Diagnostic::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 pub struct kglite::api::blueprint::FileSpec
 pub kglite::api::blueprint::FileSpec::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::FileSpec::format: alloc::string::String
@@ -439,8 +510,25 @@ impl core::fmt::Debug for kglite::api::blueprint::NodeSpec
 pub fn kglite::api::blueprint::NodeSpec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::NodeSpec
 pub fn kglite::api::blueprint::NodeSpec::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct kglite::api::blueprint::RecordedDiagnostic
+pub kglite::api::blueprint::RecordedDiagnostic::group: kglite::api::blueprint::DiagnosticGroup
+pub kglite::api::blueprint::RecordedDiagnostic::kind: alloc::string::String
+pub kglite::api::blueprint::RecordedDiagnostic::message: alloc::string::String
+impl core::clone::Clone for kglite::api::blueprint::RecordedDiagnostic
+pub fn kglite::api::blueprint::RecordedDiagnostic::clone(&self) -> kglite::api::blueprint::RecordedDiagnostic
+impl core::cmp::Eq for kglite::api::blueprint::RecordedDiagnostic
+impl core::cmp::PartialEq for kglite::api::blueprint::RecordedDiagnostic
+pub fn kglite::api::blueprint::RecordedDiagnostic::eq(&self, other: &kglite::api::blueprint::RecordedDiagnostic) -> bool
+impl core::fmt::Debug for kglite::api::blueprint::RecordedDiagnostic
+pub fn kglite::api::blueprint::RecordedDiagnostic::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::blueprint::RecordedDiagnostic
+impl serde_core::ser::Serialize for kglite::api::blueprint::RecordedDiagnostic
+pub fn kglite::api::blueprint::RecordedDiagnostic::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::RecordedDiagnostic
+pub fn kglite::api::blueprint::RecordedDiagnostic::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::blueprint::RecordsReport
 pub kglite::api::blueprint::RecordsReport::connection_types: alloc::vec::Vec<alloc::string::String>
+pub kglite::api::blueprint::RecordsReport::diagnostics: alloc::vec::Vec<kglite::api::blueprint::Diagnostic>
 pub kglite::api::blueprint::RecordsReport::edges_added: usize
 pub kglite::api::blueprint::RecordsReport::edges_dropped_missing_endpoint: usize
 pub kglite::api::blueprint::RecordsReport::node_types: alloc::vec::Vec<alloc::string::String>
@@ -2151,7 +2239,7 @@ pub kglite::api::io::ExportManifest::node_types: alloc::collections::btree::map:
 pub kglite::api::io::ExportManifest::relationship_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::graph::io::export::manifest::RelTypeManifest>
 pub kglite::api::io::ExportManifest::temporal: alloc::vec::Vec<kglite::graph::io::export::manifest::DeclarationEntry>
 impl kglite::api::io::ExportManifest
-pub fn kglite::api::io::ExportManifest::apply_declarations(&self, graph: &mut kglite::api::DirGraph) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
+pub fn kglite::api::io::ExportManifest::apply_declarations(&self, graph: &mut kglite::api::DirGraph) -> core::result::Result<alloc::vec::Vec<kglite::api::blueprint::Diagnostic>, alloc::string::String>
 pub fn kglite::api::io::ExportManifest::build(graph: &kglite::api::DirGraph, selection: core::option::Option<&kglite::api::CurrentSelection>, parent_types: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::result::Result<Self, alloc::string::String>
 pub fn kglite::api::io::ExportManifest::from_json(text: &str) -> core::result::Result<Self, alloc::string::String>
 pub fn kglite::api::io::ExportManifest::restore_mixed_titles(&self, graph: &mut kglite::api::DirGraph) -> usize
@@ -2428,6 +2516,7 @@ pub struct kglite::api::mutation::ConnectionOperationReport
 pub kglite::api::mutation::ConnectionOperationReport::connections_created: usize
 pub kglite::api::mutation::ConnectionOperationReport::connections_skipped: usize
 pub kglite::api::mutation::ConnectionOperationReport::connections_updated: usize
+pub kglite::api::mutation::ConnectionOperationReport::diagnostics: alloc::vec::Vec<kglite::api::blueprint::Diagnostic>
 pub kglite::api::mutation::ConnectionOperationReport::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::mutation::ConnectionOperationReport::operation_type: alloc::string::String
 pub kglite::api::mutation::ConnectionOperationReport::processing_time_ms: f64
@@ -2437,6 +2526,8 @@ pub kglite::api::mutation::ConnectionOperationReport::timestamp: chrono::datetim
 pub kglite::api::mutation::ConnectionOperationReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::api::mutation::ConnectionOperationReport
 pub fn kglite::api::mutation::ConnectionOperationReport::new(operation_type: alloc::string::String, connections_created: usize, connections_skipped: usize, property_fields_tracked: usize, processing_time_ms: f64) -> Self
+pub fn kglite::api::mutation::ConnectionOperationReport::warn(&mut self, diagnostic: kglite::api::blueprint::Diagnostic)
+pub fn kglite::api::mutation::ConnectionOperationReport::warn_all(&mut self, diagnostics: impl core::iter::traits::collect::IntoIterator<Item = kglite::api::blueprint::Diagnostic>)
 pub fn kglite::api::mutation::ConnectionOperationReport::with_errors(self, errors: alloc::vec::Vec<alloc::string::String>) -> Self
 impl core::clone::Clone for kglite::api::mutation::ConnectionOperationReport
 pub fn kglite::api::mutation::ConnectionOperationReport::clone(&self) -> kglite::api::mutation::ConnectionOperationReport
@@ -2475,6 +2566,7 @@ pub fn kglite::api::mutation::EdgeSpec::fmt(&self, f: &mut core::fmt::Formatter<
 pub struct kglite::api::mutation::EdgeSpecReport
 pub kglite::api::mutation::EdgeSpecReport::connections_created: usize
 pub kglite::api::mutation::EdgeSpecReport::connections_updated: usize
+pub kglite::api::mutation::EdgeSpecReport::diagnostics: alloc::vec::Vec<kglite::api::blueprint::Diagnostic>
 pub kglite::api::mutation::EdgeSpecReport::skipped_missing_endpoint: usize
 pub kglite::api::mutation::EdgeSpecReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::mutation::EdgeSpecReport
@@ -2501,6 +2593,7 @@ pub fn kglite::api::mutation::ExtendReport::clone(&self) -> kglite::api::mutatio
 impl core::fmt::Debug for kglite::api::mutation::ExtendReport
 pub fn kglite::api::mutation::ExtendReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::mutation::NodeOperationReport
+pub kglite::api::mutation::NodeOperationReport::diagnostics: alloc::vec::Vec<kglite::api::blueprint::Diagnostic>
 pub kglite::api::mutation::NodeOperationReport::errors: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::mutation::NodeOperationReport::nodes_created: usize
 pub kglite::api::mutation::NodeOperationReport::nodes_skipped: usize
@@ -2511,6 +2604,8 @@ pub kglite::api::mutation::NodeOperationReport::timestamp: chrono::datetime::Dat
 pub kglite::api::mutation::NodeOperationReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl kglite::api::mutation::NodeOperationReport
 pub fn kglite::api::mutation::NodeOperationReport::new(operation_type: alloc::string::String, nodes_created: usize, nodes_updated: usize, nodes_skipped: usize, processing_time_ms: f64) -> Self
+pub fn kglite::api::mutation::NodeOperationReport::warn(&mut self, diagnostic: kglite::api::blueprint::Diagnostic)
+pub fn kglite::api::mutation::NodeOperationReport::warn_all(&mut self, diagnostics: impl core::iter::traits::collect::IntoIterator<Item = kglite::api::blueprint::Diagnostic>)
 pub fn kglite::api::mutation::NodeOperationReport::with_errors(self, errors: alloc::vec::Vec<alloc::string::String>) -> Self
 impl core::clone::Clone for kglite::api::mutation::NodeOperationReport
 pub fn kglite::api::mutation::NodeOperationReport::clone(&self) -> kglite::api::mutation::NodeOperationReport
@@ -3436,6 +3531,7 @@ impl core::marker::StructuralPartialEq for kglite::api::temporal::DeclarationInf
 pub struct kglite::api::temporal::DeclareReport
 pub kglite::api::temporal::DeclareReport::abutting_rows: core::option::Option<usize>
 pub kglite::api::temporal::DeclareReport::changed: bool
+pub kglite::api::temporal::DeclareReport::diagnostic: core::option::Option<kglite::api::blueprint::Diagnostic>
 pub kglite::api::temporal::DeclareReport::rows: usize
 pub kglite::api::temporal::DeclareReport::warning: core::option::Option<alloc::string::String>
 impl core::clone::Clone for kglite::api::temporal::DeclareReport
@@ -4061,6 +4157,7 @@ pub fn kglite::api::CurrentSelection::default() -> kglite::api::CurrentSelection
 pub struct kglite::api::DirGraph
 pub kglite::api::DirGraph::auto_vacuum_threshold: core::option::Option<f64>
 pub kglite::api::DirGraph::auto_vacuums_run: u64
+pub kglite::api::DirGraph::build_info: core::option::Option<kglite::api::blueprint::BuildInfo>
 pub kglite::api::DirGraph::cdc_handoff: core::option::Option<kglite::api::cdc::CdcHandoff>
 pub kglite::api::DirGraph::checkpoint_lsn: u64
 pub kglite::api::DirGraph::composite_index_keys: alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<alloc::string::String>)>

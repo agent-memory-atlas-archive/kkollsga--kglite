@@ -399,6 +399,9 @@ impl KnowledgeGraph {
             dict.set_item("columnar_live_rows", info.columnar_live_rows)?;
             dict.set_item("auto_vacuum_threshold", self.inner.auto_vacuum_threshold)?;
             dict.set_item("auto_vacuums_run", self.inner.auto_vacuums_run)?;
+            if let Some(build) = &self.inner.build_info {
+                dict.set_item("build", build_info_dict(py, build)?)?;
+            }
             Ok(dict.into())
         })
     }
@@ -1779,4 +1782,28 @@ impl KnowledgeGraph {
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.copy()
     }
+}
+
+/// `graph_info()['build']`: the counts per group and the recorded advisories
+/// of the blueprint build that produced the graph.
+fn build_info_dict<'py>(
+    py: Python<'py>,
+    build: &kglite_core::api::blueprint::BuildInfo,
+) -> PyResult<Bound<'py, PyDict>> {
+    let summary = PyDict::new(py);
+    for (group, count) in &build.summary {
+        summary.set_item(group.as_str(), count)?;
+    }
+    let diagnostics = pyo3::types::PyList::empty(py);
+    for d in &build.diagnostics {
+        let entry = PyDict::new(py);
+        entry.set_item("group", d.group.as_str())?;
+        entry.set_item("kind", &d.kind)?;
+        entry.set_item("message", &d.message)?;
+        diagnostics.append(entry)?;
+    }
+    let out = PyDict::new(py);
+    out.set_item("summary", summary)?;
+    out.set_item("diagnostics", diagnostics)?;
+    Ok(out)
 }

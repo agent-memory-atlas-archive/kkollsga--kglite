@@ -9,8 +9,27 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- Blueprint build warnings are classified. Each carries a group
+  (`declarations`, `stubs`, `data_shape`, `data_quality`, `cosmetic`, most
+  severe first) and a stable `kind` code. `from_blueprint` and `from_records`
+  raise one `UserWarning` per non-empty group, and
+  `graph_info()['build']` holds `{"summary", "diagnostics"}` for a graph built
+  from a blueprint, saved in the `.kgl` file and restored on load. The
+  `kglite_blueprint_build` report JSON gains `diagnostics` and `summary`. Rust
+  API: `Diagnostic`, `DiagnosticGroup`, `BuildInfo`, `BuildReport::diagnostics`
+  and `summary()`; `BuildReport`, `RecordsReport`, `NodeOperationReport`,
+  `ConnectionOperationReport`, `EdgeSpecReport` and `DeclareReport` gain a
+  `diagnostics` field, which breaks struct literals of those types, and
+  `ExportManifest::apply_declarations` returns `Vec<Diagnostic>`.
+
 ### Changed
 
+- `from_blueprint` and `from_records` no longer raise one `UserWarning` per
+  advisory: the advisories of a group arrive in one warning that lists the
+  first ten and counts the rest. Match on the text inside it, or on
+  `graph_info()['build']['diagnostics']`.
 - The implicit parent edge of a blueprint spec with `parent_fk` is named `OF_`
   plus the parent type split into words, in upper snake case: `ProjectPhase`
   gives `OF_PROJECT_PHASE`, `TeamHQ` gives `OF_TEAM_HQ`, `TeamV2` gives

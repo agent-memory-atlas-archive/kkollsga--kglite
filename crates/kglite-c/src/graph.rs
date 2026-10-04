@@ -763,8 +763,12 @@ pub unsafe extern "C" fn kglite_graphgen_to_dir(
 /// On success `out_graph` is set to a `KgliteGraph*` (free via
 /// [`kglite_graph_free`] or hand to [`kglite_session_new`](crate::kglite_session_new)),
 /// and `out_report_json` to an owned
-/// `{"nodes_by_type":{..},"edges_by_type":{..},"warnings":[..],"errors":[..],"provisional_purged":N}`
+/// `{"nodes_by_type":{..},"edges_by_type":{..},"warnings":[..],"errors":[..],"provisional_purged":N,
+/// "diagnostics":[{"group":..,"kind":..,"message":..}],"summary":{"<group>":N}}`
 /// string — free via [`kglite_free_string`](crate::kglite_free_string).
+/// `diagnostics` classifies every `warnings` entry (same order); `group` is one of
+/// `declarations`, `stubs`, `data_shape`, `data_quality`, `cosmetic`, most severe first,
+/// and `summary` counts the non-empty groups.
 ///
 /// # Safety
 ///
@@ -855,6 +859,8 @@ pub unsafe extern "C" fn kglite_blueprint_build(
                 "warnings": report.warnings,
                 "errors": report.errors,
                 "provisional_purged": report.provisional_purged,
+                "diagnostics": report.diagnostics,
+                "summary": report.summary(),
             })
             .to_string();
             unsafe {
@@ -1347,6 +1353,78 @@ mod tests {
         assert!(parsed["nodes"].as_u64().unwrap() > 0);
         assert!(parsed["edges"].as_u64().unwrap() > 0);
         unsafe { crate::kglite_free_string(stats) };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blueprint_build_report_classifies_its_warnings() {
+        let dir = std::env::temp_dir().join(format!("kglite_c_bp_diag_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("p.csv"), "pid,name\n1,Ann\n1,Ann again\n2,Bo\n").unwrap();
+        std::fs::write(
+            dir.join("d.csv"),
+            "did,name,vf,vt\n1,Ops,2020-01-01,2021-01-01\n",
+        )
+        .unwrap();
+        let blueprint = serde_json::json!({
+            "settings": {"root": dir.to_str().unwrap()},
+            "nodes": {
+                "Person": {"csv": "p.csv", "pk": "pid", "title": "name", "properties": {}},
+                "Department": {
+                    "csv": "d.csv", "pk": "did", "title": "name",
+                    "properties": {"vf": "validFrom", "vt": "validTo"}
+                }
+            }
+        });
+        let bp_path = dir.join("bp.json");
+        std::fs::write(&bp_path, blueprint.to_string()).unwrap();
+        let bp = CString::new(bp_path.to_str().unwrap()).unwrap();
+        let csv_dir = CString::new(dir.to_str().unwrap()).unwrap();
+        let mut graph: *mut KgliteGraph = std::ptr::null_mut();
+        let mut report: *const c_char = std::ptr::null();
+        let mut err: *const c_char = std::ptr::null();
+        let rc = unsafe {
+            kglite_blueprint_build(
+                bp.as_ptr(),
+                csv_dir.as_ptr(),
+                &mut graph as *mut _,
+                &mut report as *mut _,
+                &mut err as *mut _,
+            )
+        };
+        let error = (!err.is_null()).then(|| unsafe { CStr::from_ptr(err).to_string_lossy() });
+        assert_eq!(rc, KgliteStatusCode::Ok, "{error:?}");
+        let text = unsafe { CStr::from_ptr(report).to_str().unwrap().to_string() };
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let diagnostics = parsed["diagnostics"].as_array().unwrap();
+        let kind_group = |kind: &str| {
+            diagnostics
+                .iter()
+                .find(|d| d["kind"] == kind)
+                .map(|d| d["group"].as_str().unwrap().to_string())
+        };
+        assert_eq!(
+            kind_group("typed_only_no_validity").as_deref(),
+            Some("declarations"),
+            "{text}"
+        );
+        assert_eq!(
+            kind_group("duplicate_id").as_deref(),
+            Some("data_quality"),
+            "{text}"
+        );
+        assert_eq!(parsed["summary"]["declarations"], 1, "{text}");
+        assert_eq!(parsed["summary"]["data_quality"], 1, "{text}");
+        assert_eq!(
+            parsed["warnings"].as_array().unwrap().len(),
+            diagnostics.len(),
+            "warnings stay the rendered form of diagnostics"
+        );
+        unsafe {
+            crate::kglite_free_string(report);
+            kglite_graph_free(graph);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

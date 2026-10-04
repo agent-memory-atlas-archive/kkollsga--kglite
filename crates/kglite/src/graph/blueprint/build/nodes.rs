@@ -13,6 +13,7 @@ use super::specs::FlatSpec;
 use super::table_ops::dedupe_by_pk;
 use super::BuildReport;
 use crate::datatypes::values::DataFrame;
+use crate::graph::diagnostics::Diagnostic;
 use crate::graph::mutation::maintain;
 use crate::graph::schema::{DirGraph, SpatialConfig};
 use std::collections::{HashMap, HashSet};
@@ -27,7 +28,7 @@ struct PreppedNode {
     spatial_config: Option<SpatialConfig>,
     /// Diagnostics raised while typing the columns. Prep runs under rayon and
     /// has no `&mut BuildReport`, so they ride back to the serial phase.
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
     /// Full raw (pre-dedup) CSV + resolved timeseries spec, if this type
     /// has `timeseries` declared. Kept because `apply_timeseries` needs
     /// every row, not just the dedup'd node DataFrame.
@@ -60,7 +61,7 @@ fn prep_node_spec(
     let mut ts_warnings = Vec::new();
     if let Some(tspec) = &spec.spec.timeseries {
         let drop = ts::drop_zero_time_components(&mut raw, tspec);
-        ts_warnings.extend(drop.warnings(&spec.node_type, tspec));
+        ts_warnings.extend(drop.diagnostics(&spec.node_type, tspec));
     }
 
     let pk = spec.spec.pk.clone().unwrap_or_else(|| "id".to_string());
@@ -152,7 +153,7 @@ fn prep_node_spec(
         &mut misparses,
     )?;
     let mut warnings = ts_warnings;
-    warnings.extend(misparses.into_warnings(&format!("node '{}'", spec.node_type)));
+    warnings.extend(misparses.into_diagnostics(&format!("node '{}'", spec.node_type)));
 
     let title_arg = if title_field != pk {
         Some(title_field.clone())
@@ -228,7 +229,7 @@ pub(super) fn load_node_specs(
             }
         };
 
-        report.warnings.extend(node.warnings);
+        report.add_all(node.warnings);
 
         let t_a = std::time::Instant::now();
         let rep = maintain::add_nodes(
@@ -429,7 +430,7 @@ fn load_streamed_node_spec(
     )
     .map_err(|e| format!("[{}] {}", spec.node_type, e))?;
     if let Some(w) = prepass::prepass_warning(&format!("node '{}'", spec.node_type), &prepared) {
-        report.warnings.push(w);
+        report.add(w);
     }
     let prepass::Prepared {
         resolved,
@@ -485,9 +486,7 @@ fn load_streamed_node_spec(
             .entry(spec.node_type.clone())
             .or_insert(0) += count;
     }
-    report
-        .warnings
-        .extend(misparses.into_warnings(&format!("node '{}'", spec.node_type)));
+    report.add_all(misparses.into_diagnostics(&format!("node '{}'", spec.node_type)));
     Ok(())
 }
 

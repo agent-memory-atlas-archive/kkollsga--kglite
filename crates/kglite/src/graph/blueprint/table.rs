@@ -5,6 +5,8 @@
 //! into a `DataFrame` in one later pass. The readers that produce one live
 //! behind the `Source` trait in `blueprint::input`.
 
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
+
 /// A raw CSV table: header + rows of strings. We keep the raw stage separate
 /// so filter / column renaming / synthesised columns can operate on strings
 /// before we type-coerce into a `DataFrame`.
@@ -149,7 +151,7 @@ impl MisparseTally {
 
     /// One line per affected column, naming the count, the first offending
     /// row and its cell verbatim so the author can grep for it.
-    pub fn into_warnings(self, where_: &str) -> Vec<String> {
+    pub fn into_diagnostics(self, where_: &str) -> Vec<Diagnostic> {
         self.hits
             .into_iter()
             .map(|hit| {
@@ -166,7 +168,14 @@ impl MisparseTally {
                 } else {
                     cell
                 };
-                match kind {
+                let (group, code) = match kind {
+                    MisparseKind::List => (DiagnosticGroup::DataShape, "list_cell_unsplit"),
+                    MisparseKind::Date => (DiagnosticGroup::DataQuality, "date_cell_unparsed"),
+                    MisparseKind::Timestamp => {
+                        (DiagnosticGroup::DataQuality, "timestamp_cell_unparsed")
+                    }
+                };
+                let message = match kind {
                     MisparseKind::List => format!(
                         "{where_}: column '{column}' is declared list but {count} cell(s) are not a \
                          JSON array and contain a separator ('|', ';' or ','); each was kept whole \
@@ -186,7 +195,8 @@ impl MisparseTally {
                          {row_id}: '{cell}'. A timestamp cell is 'YYYY-MM-DDTHH:MM:SS[.fraction]'; \
                          declare the column 'string' to keep the text as written."
                     ),
-                }
+                };
+                Diagnostic::new(group, code, message)
             })
             .collect()
     }

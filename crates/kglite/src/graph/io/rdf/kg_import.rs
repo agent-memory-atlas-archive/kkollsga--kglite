@@ -127,6 +127,11 @@ pub(super) fn apply(
             ));
         }
     }
-    warnings.extend(manifest.apply_declarations(graph)?);
+    warnings.extend(
+        manifest
+            .apply_declarations(graph)?
+            .into_iter()
+            .map(|d| d.message),
+    );
     Ok(warnings)
 }

@@ -23,6 +23,7 @@ use super::declarations::{EntityGrouping, TemporalTarget, DISK_NODE_ABUTMENT_CAP
 use super::eval::{self, BoundSide, EmptyWhen, Instant, TemporalError};
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::core::value_operations::format_value_compact;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::schema::{InternedKey, TemporalConfig};
 use crate::graph::storage::{GraphRead, NodeView};
@@ -125,6 +126,12 @@ impl EmptyIntervals {
     /// The warning for a write: `None` when no row was empty.
     pub(crate) fn warning(&self) -> Option<String> {
         self.worded("written")
+    }
+
+    /// [`warning`](Self::warning), classified.
+    pub(crate) fn diagnostic(&self) -> Option<Diagnostic> {
+        self.warning()
+            .map(|m| Diagnostic::new(DiagnosticGroup::DataQuality, "empty_interval_rows", m))
     }
 
     /// The warning for a declaration of `target`.

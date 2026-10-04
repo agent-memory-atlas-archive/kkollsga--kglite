@@ -343,7 +343,11 @@ def _stub_warnings(call) -> list[str]:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         call()
-    return [str(w.message) for w in caught if "stub node(s)" in str(w.message)]
+    entries = []
+    for w in caught:
+        head, *items = str(w.message).split("\n  - ")
+        entries.extend(items if items else [head])
+    return [m for m in entries if "stub node(s)" in m]
 
 
 def test_a_stub_on_a_declared_label_is_named_as_valid_at_every_instant() -> None:
