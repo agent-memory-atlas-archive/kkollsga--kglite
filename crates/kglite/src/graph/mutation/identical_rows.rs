@@ -180,8 +180,9 @@ impl IdenticalRowTracker {
         Some(format!(
             "relationship type '{edge_type}': {} relationships were created on {} distinct {combination}{scope}, \
              with up to {} identical copies of one; identical copies are kept by default. \
-             Pass distinct=True to the loader (blueprint junction edge: `distinct: true`) \
-             to keep one relationship per combination.",
+             Pass distinct=True to add_relationships (blueprint junction edge: `distinct: true`) \
+             to keep one relationship per combination; replace_relationships has no such \
+             option, so drop the repeated rows from its input.",
             self.rows,
             self.seen.len(),
             self.max_copies,

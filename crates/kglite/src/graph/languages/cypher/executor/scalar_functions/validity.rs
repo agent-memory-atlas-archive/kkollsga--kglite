@@ -283,7 +283,7 @@ impl CypherExecutor<'_> {
                     bounds: Cow::Borrowed(resolved),
                     known: Some(&cache.known),
                 })),
-                None => Err(undeclared_error(function, var_name, element)),
+                None => Err(self.undeclared_error(function, var_name, element)),
             };
         }
         let candidates = self.declared_configs(element);
@@ -323,11 +323,11 @@ impl CypherExecutor<'_> {
                     bounds: Cow::Borrowed(resolved),
                     known: Some(&cache.known),
                 })),
-                None => Err(undeclared_error(function, var_name, element)),
+                None => Err(self.undeclared_error(function, var_name, element)),
             },
             Err(entry) => match entry.resolved {
                 Some(resolved) => Ok(Some(Resolved::owned(resolved))),
-                None => Err(undeclared_error(function, var_name, element)),
+                None => Err(self.undeclared_error(function, var_name, element)),
             },
         }
     }
@@ -673,25 +673,56 @@ fn validity_variable<'e>(function: &str, arg: &'e Expression) -> Result<&'e str,
     }
 }
 
-/// The two-argument form on a type nothing declared.
-fn undeclared_error(function: &str, var_name: &str, element: &Element<'_>) -> String {
-    let key = match element.kind {
-        ElementKind::Node(_) => "node",
-        ElementKind::Edge { .. } => "relationship",
-    };
-    let rest = if function == "valid_during" {
-        "start, end"
-    } else {
-        "date"
-    };
-    format!(
-        "{function}({var_name}, {rest}): {} has no declared validity interval, so there are no \
-         bounds to read. Declare one — CALL db.temporal.declare({{{key}: '{}', from: \
-         'valid_from', to: 'valid_to', convention: 'half_open'}}) — or name the bounds: \
-         {function}({var_name}, {rest}, 'valid_from', 'valid_to')",
-        element.describe(),
-        element.target
-    )
+impl CypherExecutor<'_> {
+    /// The two-argument form on a type no declaration reaches. A relationship
+    /// type declared only for other source types names them, so the message
+    /// does not claim the type has no declaration at all.
+    fn undeclared_error(&self, function: &str, var_name: &str, element: &Element<'_>) -> String {
+        let key = match element.kind {
+            ElementKind::Node(_) => "node",
+            ElementKind::Edge { .. } => "relationship",
+        };
+        let rest = if function == "valid_during" {
+            "start, end"
+        } else {
+            "date"
+        };
+        let mut other_sources: Vec<&str> = match element.kind {
+            ElementKind::Edge { .. } => {
+                crate::graph::features::temporal::edge_configs(self.graph, element.target)
+                    .iter()
+                    .filter_map(|c| c.source_type.as_deref())
+                    .collect()
+            }
+            ElementKind::Node(_) => Vec::new(),
+        };
+        other_sources.sort_unstable();
+        other_sources.dedup();
+        if !other_sources.is_empty() {
+            let source = element
+                .key
+                .1
+                .map_or("this source", |key| self.graph.interner.resolve(key));
+            return format!(
+                "{function}({var_name}, {rest}): {} is declared only for source types [{}]; this \
+                 relationship's source type {source} has no declaration — name the bounds: \
+                 {function}({var_name}, {rest}, 'valid_from', 'valid_to'), or declare it for \
+                 {source} with CALL db.temporal.declare({{relationship: '{}', from: 'valid_from', \
+                 to: 'valid_to', source_type: '{source}', convention: 'half_open'}})",
+                element.describe(),
+                other_sources.join(", "),
+                element.target
+            );
+        }
+        format!(
+            "{function}({var_name}, {rest}): {} has no declared validity interval, so there are no \
+             bounds to read. Declare one — CALL db.temporal.declare({{{key}: '{}', from: \
+             'valid_from', to: 'valid_to', convention: 'half_open'}}) — or name the bounds: \
+             {function}({var_name}, {rest}, 'valid_from', 'valid_to')",
+            element.describe(),
+            element.target
+        )
+    }
 }
 
 /// One `valid_at` / `valid_during` call's element bounds, for its errors.

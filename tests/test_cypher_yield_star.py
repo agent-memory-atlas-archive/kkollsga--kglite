@@ -72,6 +72,17 @@ def test_yield_star_cannot_be_mixed(graph, query):
         graph.cypher(query)
 
 
-def test_unknown_procedure_keeps_its_error(graph):
-    with pytest.raises(Exception, match="Unknown procedure 'no.such.proc'"):
-        graph.cypher("CALL no.such.proc() YIELD *")
+@pytest.mark.parametrize(
+    "query",
+    [
+        "CALL no.such.proc()",
+        "CALL no.such.proc() YIELD x RETURN x",
+        "CALL no.such.proc() YIELD *",
+        "CALL no.such.proc() YIELD * RETURN *",
+    ],
+)
+def test_unknown_procedure_keeps_its_error(graph, query):
+    # Every spelling raises the one error class and message; `YIELD *` once
+    # raised a CypherSyntaxError at parse time instead.
+    with pytest.raises(kglite.CypherExecutionError, match="Unknown procedure 'no.such.proc'. Available: "):
+        graph.cypher(query)

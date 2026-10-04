@@ -1231,8 +1231,8 @@ impl CypherParser {
 
     /// `YIELD *`: every column the procedure's registry entry declares, in
     /// declared order, as explicit items — so scope validation and the
-    /// executor see an ordinary YIELD list. An unknown procedure keeps the
-    /// registry's own error.
+    /// executor see an ordinary YIELD list. An unknown procedure keeps a
+    /// placeholder column so the executor raises its usual error.
     fn parse_yield_star(&mut self, procedure_name: &str) -> Result<Vec<YieldItem>, String> {
         self.advance(); // consume `*`
         if self.check(&CypherToken::Comma) || self.check(&CypherToken::As) {
@@ -1244,10 +1244,11 @@ impl CypherParser {
         }
         let lowered = procedure_name.to_lowercase();
         let canonical = lowered.strip_prefix("kglite.").unwrap_or(lowered.as_str());
-        crate::graph::languages::cypher::executor::call_clause::resolve_yield_items(
-            canonical,
-            procedure_name,
-            &[],
+        Ok(
+            crate::graph::languages::cypher::executor::call_clause::yield_star_items(
+                canonical,
+                procedure_name,
+            ),
         )
     }
 

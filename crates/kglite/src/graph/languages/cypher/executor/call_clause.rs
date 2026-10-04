@@ -1870,6 +1870,21 @@ pub(crate) fn resolve_yield_items(
     Ok(requested.to_vec())
 }
 
+/// What `YIELD *` stands for: the procedure's declared columns. A name the
+/// registry does not know yields one placeholder column `*`, so the parser
+/// accepts the statement and the executor raises the same unknown-procedure
+/// error as `CALL name()` and `CALL name() YIELD x` — a refusal at parse time
+/// would be a different error class.
+pub(crate) fn yield_star_items(proc_name: &str, display_name: &str) -> Vec<YieldItem> {
+    if super::procedure_registry::find_procedure(proc_name).is_none() {
+        return vec![YieldItem {
+            name: "*".to_string(),
+            alias: None,
+        }];
+    }
+    resolve_yield_items(proc_name, display_name, &[]).unwrap_or_default()
+}
+
 /// The YIELD columns a procedure exposes, or an unknown-procedure error.
 ///
 /// A thin view over [`super::procedure_registry`] — the single table that also

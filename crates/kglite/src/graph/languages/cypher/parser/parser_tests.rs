@@ -884,10 +884,8 @@ mod tests {
             let err = parse_cypher(q).unwrap_err().to_string();
             assert!(err.contains("YIELD * cannot be combined"), "{q}: {err}");
         }
-        let err = parse_cypher("CALL no.such.proc() YIELD *")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Unknown procedure 'no.such.proc'"), "{err}");
+        // An unknown procedure parses like a bare CALL; the executor raises.
+        assert!(parse_cypher("CALL no.such.proc() YIELD *").is_ok());
     }
 
     // ========================================================================

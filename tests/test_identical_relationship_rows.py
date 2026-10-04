@@ -296,3 +296,16 @@ def test_rows_to_missing_endpoints_collapse_and_warn_like_any_other(tmp_path):
     _, msgs = _load(g, frame, distinct=True)
     assert _count(g) == 2
     assert msgs == []
+
+
+def test_replace_warning_names_a_remedy_replace_has(tmp_path):
+    # replace_relationships rejects `distinct`, so the warning it emits must
+    # not tell its caller to pass it there.
+    g = KnowledgeGraph()
+    _people_and_projects(g)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        g.replace_relationships(HISTORY, "WORKS_ON", "Employee", "eid", "Project", "pid")
+    (msg,) = [str(w.message) for w in caught if "identical" in str(w.message)]
+    assert "distinct=True to add_relationships" in msg
+    assert "replace_relationships has no such option" in msg

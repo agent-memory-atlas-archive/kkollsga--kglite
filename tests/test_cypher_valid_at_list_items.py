@@ -182,3 +182,27 @@ def test_the_appingedam_shape(tmp_path) -> None:
     )
     assert g.cypher(query.replace("{t}", "2015")).to_list() == [{"m": "Appingedam"}]
     assert g.cypher(query.replace("{t}", "2022")).to_list() == [{"m": "Eemsdelta"}]
+
+
+@pytest.mark.parametrize("naive", [False, True], ids=["optimized", "naive"])
+def test_a_source_without_a_declaration_names_the_sources_that_have_one(naive) -> None:
+    # `T` is declared only for source type A. valid_at(r, d) on a T edge out of
+    # C stays the strict form (it raises) but must say which sources have a
+    # declaration instead of claiming the type has none.
+    g = kglite.KnowledgeGraph()
+    g.cypher(
+        "CREATE (a:A {name: 'a'}), (c:C {name: 'c'}), (x:X {name: 'x'}),"
+        "       (a)-[:T {vf: date('2000-01-01')}]->(x), (c)-[:T {vf: date('2000-01-01')}]->(x)"
+    ).to_list()
+    g.cypher(
+        "CALL db.temporal.declare({relationship: 'T', source_type: 'A', from: 'vf', to: 'vt', convention: 'half_open'})"
+    ).to_list()
+    ok = g.cypher("MATCH (:A)-[r:T]->() RETURN valid_at(r, '2003') AS v", disable_optimizer=naive).to_list()
+    assert ok == [{"v": True}]
+    with pytest.raises(kglite.CypherExecutionError) as err:
+        g.cypher("MATCH (:C)-[r:T]->() RETURN valid_at(r, '2003') AS v", disable_optimizer=naive).to_list()
+    text = str(err.value)
+    assert "declared only for source types [A]" in text
+    assert "source type C has no declaration" in text
+    assert "valid_at(r, date, 'valid_from', 'valid_to')" in text
+    assert "has no declared validity interval" not in text
