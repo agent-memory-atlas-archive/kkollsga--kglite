@@ -1058,6 +1058,7 @@ mod keys_map_tests;
 pub mod load_csv;
 pub mod match_clause;
 pub mod match_execution;
+mod match_stream;
 mod merge_pattern;
 mod mutating_call;
 mod mutation_support;

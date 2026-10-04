@@ -610,3 +610,29 @@ def test_bench_hop3_chain_count(benchmark, chain_count_graph):
     result = benchmark(chain_count_graph.cypher, query)
     expected = chain_count_graph.cypher(query, disabled_passes=["fuse_chain_path_count"]).to_list()
     assert result.to_list() == expected
+
+
+STREAM_CHAIN = "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize(
+    ("name", "tail"),
+    [
+        ("mid", "WHERE c.id < 3 RETURN c.title AS c, sum(w.id * 0.5) AS s, count(*) AS n"),
+        ("full", "RETURN c.title AS c, sum(w.id * 0.5) AS s, avg(w.id) AS a"),
+    ],
+)
+def test_bench_stream_match_aggregate(benchmark, chain_count_graph, name, tail):
+    """Un-fused grouped aggregate over a three-hop chain, streamed.
+
+    The leading MATCH feeds the aggregate chunk by chunk instead of
+    materialising every path first (`mid` ~36k paths, `full` 1.2M); the answer
+    must equal the materialised route's bit for bit.
+    """
+    query = f"{STREAM_CHAIN} {tail}"
+    plan = [row["operation"] for row in chain_count_graph.cypher("EXPLAIN " + query)]
+    assert not any(op.startswith("Fused") for op in plan), plan
+    result = benchmark(chain_count_graph.cypher, query)
+    expected = chain_count_graph.cypher(query, streaming=False).to_list()
+    assert result.to_list() == expected

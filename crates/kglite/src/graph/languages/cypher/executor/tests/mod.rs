@@ -10,6 +10,8 @@
 //! - [`expressions`] — comparison, arithmetic, coercion, CASE, parameters
 //! - [`fused_aggregate_labels`] — the fused `MATCH … WITH …, count(…)` path
 //!   keeping the pattern's node labels and its first-MATCH row multiplicity
+//! - [`match_stream`] — a leading MATCH streamed into an aggregate: identical
+//!   answers, bounded chunks, the budget and interrupt behaviour kept
 //! - [`mutations`] — CREATE / SET / DELETE / REMOVE / MERGE and index upkeep
 //! - [`node_embedding_procedures`] — `db.node_embeddings.*`,
 //!   `db.node_text_index.*` and the `db.embeddings.*` / `db.text_index.*` routers
@@ -68,6 +70,7 @@ mod identifiers;
 mod inline_map_expressions;
 mod label_predicates;
 mod lists;
+mod match_stream;
 mod mutations;
 mod node_embedding_procedures;
 mod parallel;

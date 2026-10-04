@@ -91,9 +91,7 @@ pub(crate) struct AggSpec {
 /// aggregate at `finalize` time, and folding them in *first-seen* order is
 /// what makes a `sum(DISTINCT …)` over floats associate exactly as the
 /// materialized path's row-order fold does. A bare `FxHashSet` would fold in
-/// hash order, and — because the surrogate re-bucket below merges partial
-/// states — the order would additionally depend on how the grouping happened
-/// to split the rows.
+/// hash order.
 #[derive(Default)]
 struct DistinctValues {
     seen: FxHashSet<Value>,
@@ -108,12 +106,6 @@ impl DistinctValues {
             true
         } else {
             false
-        }
-    }
-
-    fn absorb(&mut self, other: DistinctValues) {
-        for value in other.order {
-            self.insert(value);
         }
     }
 
@@ -230,40 +222,12 @@ impl AggState {
         }
     }
 
-    /// Merge `other` into self when the post-scan re-bucket pass collapses
-    /// two NodeIndex surrogate groups into one resolved-value group.
-    fn merge(&mut self, other: AggState) {
-        self.count += other.count;
-        self.sum += other.sum;
-        self.integer_sum.merge(other.integer_sum);
-        if other.sum_seen_value {
-            self.sum_seen_value = true;
-            if !other.sum_was_int {
-                self.sum_was_int = false;
-            }
-        }
-        self.min = combine(self.min.take(), other.min, false);
-        self.max = combine(self.max.take(), other.max, true);
-        if let (Some(a), Some(b)) = (self.distinct_nodes.as_mut(), other.distinct_nodes) {
-            a.extend(b);
-        }
-        if let (Some(a), Some(b)) = (self.distinct_edges.as_mut(), other.distinct_edges) {
-            a.extend(b);
-        }
-        if let (Some(a), Some(b)) = (self.distinct_values.as_mut(), other.distinct_values) {
-            a.absorb(b);
-        }
-    }
-
     /// Produce the final `Value` for this state given its `spec`.
     ///
     /// A `DISTINCT` aggregate is computed *here*, from the deduplicated value
-    /// set, and never from a running total. It has to be: the re-bucket pass
-    /// below merges two partial states whenever a node-property group key
-    /// resolves two surrogate groups to the same value, and `merge` unions the
-    /// value sets while adding the sums — so folding each row as it arrived
-    /// made `sum(DISTINCT n.v)` grouped by `n.g` add every row again (`[1, 1,
-    /// 2]` summed to 4), while the same query without a group key answered 3.
+    /// set, and never from a running total: a total folded as each row arrived
+    /// would add a repeated value again (`[1, 1, 2]` summing to 4, where the
+    /// distinct sum is 3).
     fn finalize(&self, spec: &AggSpec) -> Result<Value, String> {
         match spec.kind {
             // `count(DISTINCT *)` is row-distinctness, not value-distinctness:
@@ -461,12 +425,17 @@ pub fn apply<'q>(
         .map(|s| s.arg.as_ref().map(|e| executor.fold_constants_expr(e)))
         .collect();
 
-    // Single-pass over the upstream iterator. Surrogate groups: keyed by
-    // `Vec<GroupKeyPart>` (NodeProp surrogates + resolved values).
-    // Equivalent to the materialized path's first pass at
-    // `return_clause::execute_return_with_aggregation` ~lines 242-273.
-    let mut surrogate_groups: Vec<(Vec<GroupKeyPart>, GroupAcc)> = Vec::new();
+    // Single pass over the upstream iterator. A grouping key that reads a
+    // node property is keyed by the node (`GroupKeyPart::NodeProp`) so the
+    // property is read once per distinct node, not once per row. The first row
+    // of a node resolves it to its value and joins the group for that value, so
+    // every row folds straight into its final group in row order: a float
+    // `sum`/`avg` associates exactly as the materialized path's row-order fold
+    // does, which merging per-node partial sums afterwards would not.
+    let mut groups: Vec<(Vec<Value>, GroupAcc)> = Vec::new();
+    let mut group_index_map: FxHashMap<Vec<Value>, usize> = FxHashMap::default();
     let mut surrogate_index: FxHashMap<Vec<GroupKeyPart>, usize> = FxHashMap::default();
+    let mut resolved_node_props: HashMap<(NodeIndex, usize), Value> = HashMap::new();
 
     // Variables the grouping keys read — copied forward from the first row of
     // each group so a trailing ORDER BY / downstream MATCH can still resolve
@@ -523,23 +492,44 @@ pub fn apply<'q>(
             Some(&idx) => idx,
             None => {
                 if let Some(cap) = surrogate_cap {
-                    if surrogate_groups.len() >= cap {
+                    if groups.len() >= cap {
                         continue;
                     }
                 }
-                let idx = surrogate_groups.len();
-                surrogate_index.insert(key_parts.clone(), idx);
-                let mut acc = GroupAcc::new(specs);
-                // Capture this first row's bindings for every variable the
-                // grouping keys read.
-                carry_group_bindings(&carried_vars, &row, &mut acc.carried);
-                surrogate_groups.push((key_parts, acc));
+                let resolved: Vec<Value> = key_parts
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, part)| match part {
+                        GroupKeyPart::NodeProp(idx) => resolved_node_props
+                            .entry((*idx, slot))
+                            .or_insert_with(|| {
+                                executor
+                                    .resolve_node_prop_for_group(*idx, &folded_group_exprs[slot])
+                            })
+                            .clone(),
+                        GroupKeyPart::Resolved(v) => v.clone(),
+                    })
+                    .collect();
+                let idx = match group_index_map.get(&resolved) {
+                    Some(&idx) => idx,
+                    None => {
+                        let idx = groups.len();
+                        let mut acc = GroupAcc::new(specs);
+                        // Capture this first row's bindings for every variable
+                        // the grouping keys read.
+                        carry_group_bindings(&carried_vars, &row, &mut acc.carried);
+                        group_index_map.insert(resolved.clone(), idx);
+                        groups.push((resolved, acc));
+                        idx
+                    }
+                };
+                surrogate_index.insert(key_parts, idx);
                 idx
             }
         };
 
         // Update each aggregate's state for this row.
-        let acc = &mut surrogate_groups[group_idx].1;
+        let acc = &mut groups[group_idx].1;
         for (ai, spec) in specs.iter().enumerate() {
             update_agg_state(
                 &mut acc.states[ai],
@@ -550,9 +540,6 @@ pub fn apply<'q>(
             )?;
         }
     }
-
-    let groups =
-        resolve_and_rebucket_groups(executor, surrogate_groups, &folded_group_exprs, specs)?;
 
     // Build output rows.
     let columns: Vec<String> = return_clause
@@ -607,63 +594,6 @@ pub fn apply<'q>(
     }
 
     Ok(RowStream::from_vec(output_rows, columns))
-}
-
-/// Resolve `NodeProp` surrogates to property values and re-bucket the
-/// surrogate groups by the resolved key, merging the accumulators of any two
-/// surrogates that resolve to the same key. Mirrors the second half of
-/// `execute_return_with_aggregation`; one disk read per (NodeIndex, slot)
-/// pair, deduplicated.
-fn resolve_and_rebucket_groups(
-    executor: &CypherExecutor<'_>,
-    surrogate_groups: Vec<(Vec<GroupKeyPart>, GroupAcc)>,
-    folded_group_exprs: &[Expression],
-    specs: &[AggSpec],
-) -> Result<Vec<(Vec<Value>, GroupAcc)>, String> {
-    let mut resolved_node_props: HashMap<(NodeIndex, usize), Value> = HashMap::new();
-    for (group_idx, (key_parts, _)) in surrogate_groups.iter().enumerate() {
-        executor.check_interrupt_periodic(group_idx)?;
-        for (slot, part) in key_parts.iter().enumerate() {
-            if let GroupKeyPart::NodeProp(idx) = part {
-                resolved_node_props.entry((*idx, slot)).or_insert_with(|| {
-                    executor.resolve_node_prop_for_group(*idx, &folded_group_exprs[slot])
-                });
-            }
-        }
-    }
-
-    let mut groups: Vec<(Vec<Value>, GroupAcc)> = Vec::new();
-    let mut group_index_map: FxHashMap<Vec<Value>, usize> = FxHashMap::default();
-
-    for (group_idx, (key_parts, acc)) in surrogate_groups.into_iter().enumerate() {
-        executor.check_interrupt_periodic(group_idx)?;
-        let resolved: Vec<Value> = key_parts
-            .iter()
-            .enumerate()
-            .map(|(slot, part)| match part {
-                GroupKeyPart::NodeProp(idx) => resolved_node_props
-                    .get(&(*idx, slot))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-                GroupKeyPart::Resolved(v) => v.clone(),
-            })
-            .collect();
-
-        match group_index_map.get(&resolved) {
-            Some(&idx) => {
-                // Merge accumulators (count two NodeIndexes-with-same-name into one group).
-                let existing = std::mem::replace(&mut groups[idx].1, GroupAcc::new(specs));
-                let merged = merge_group_accs(existing, acc);
-                groups[idx].1 = merged;
-            }
-            None => {
-                let idx = groups.len();
-                group_index_map.insert(resolved.clone(), idx);
-                groups.push((resolved, acc));
-            }
-        }
-    }
-    Ok(groups)
 }
 
 /// Fold one row into an aggregate's running state. Argument-evaluation
@@ -723,7 +653,7 @@ fn update_agg_state(
             return Ok(());
         }
         // Dedup only — `finalize` folds the set. See its doc comment for why
-        // recording here is wrong under the surrogate re-bucket's merge.
+        // recording here is wrong.
         let dv = state
             .distinct_values
             .get_or_insert_with(DistinctValues::default);
@@ -733,23 +663,6 @@ fn update_agg_state(
         state.record(Some(val), spec);
     }
     Ok(())
-}
-
-fn merge_group_accs(mut a: GroupAcc, b: GroupAcc) -> GroupAcc {
-    debug_assert_eq!(a.states.len(), b.states.len());
-    let mut merged_states = Vec::with_capacity(a.states.len());
-    for (sa, sb) in a.states.drain(..).zip(b.states) {
-        let mut sa = sa;
-        sa.merge(sb);
-        merged_states.push(sa);
-    }
-    a.states = merged_states;
-    // Keep the first-seen bindings — matches materialized behavior
-    // (execute_return_with_aggregation uses the first row of the group).
-    GroupAcc {
-        states: a.states,
-        carried: a.carried,
-    }
 }
 
 // ---- Local helpers ---------------------------------------------------------
@@ -779,16 +692,4 @@ fn cmp_lt(a: &Value, b: &Value) -> bool {
 
 fn cmp_gt(a: &Value, b: &Value) -> bool {
     crate::graph::core::filtering::total_order(a, b) == std::cmp::Ordering::Greater
-}
-
-fn combine(a: Option<Value>, b: Option<Value>, want_max: bool) -> Option<Value> {
-    match (a, b) {
-        (None, x) | (x, None) => x,
-        (Some(a), Some(b)) => Some(match (want_max, cmp_lt(&a, &b)) {
-            (true, true) => b,
-            (true, false) => a,
-            (false, true) => a,
-            (false, false) => b,
-        }),
-    }
 }

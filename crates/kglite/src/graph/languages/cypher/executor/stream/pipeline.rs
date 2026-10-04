@@ -21,7 +21,7 @@
 
 use super::super::super::ast::{
     is_aggregate_expression, Clause, Expression, LimitClause, OrderByClause, OrderItem,
-    ReturnClause,
+    ReturnClause, WhereClause,
 };
 use super::super::super::result::ResultSet;
 use super::super::CypherExecutor;
@@ -45,26 +45,25 @@ pub(crate) enum StreamingOutcome {
     Bailed(ResultSet),
 }
 
-/// Try to recognize and run a streaming clause run. `clauses` is the
-/// remaining clause slice starting from the next clause to execute;
-/// `result_set` is the materialized prefix the streaming path consumes
-/// as its source stream.
-///
-/// Returns `StreamingOutcome::Bailed(result_set)` when no shape
-/// matches, so the caller never loses ownership of the input. Returns
-/// `Err(_)` only when a recognized pipeline fails mid-execution.
-pub(crate) fn try_run_streaming<'q>(
-    executor: &'q CypherExecutor<'q>,
-    clauses: &[Clause],
-    result_set: ResultSet,
-) -> Result<StreamingOutcome, String> {
+/// A recognised streaming clause run: the aggregate clause compiled for
+/// [`aggregate::apply`] and the optional heap top-K tail.
+pub(crate) struct StreamingPlan {
+    return_clause: ReturnClause,
+    is_with: bool,
+    with_where: Option<WhereClause>,
+    group_indices: Vec<usize>,
+    agg_indices: Vec<usize>,
+    specs: Vec<aggregate::AggSpec>,
+    top_k: Option<(Vec<OrderItem>, usize, usize)>,
+}
+
+/// Recognize a streaming clause run at the head of `clauses` (the clauses
+/// still to execute, starting at the WITH/RETURN). `None` when no shape
+/// matches; nothing is consumed, so the caller keeps its source.
+pub(crate) fn plan_streaming(clauses: &[Clause]) -> Option<StreamingPlan> {
     // The first absorbed clause must be either a WITH(group, agg) or
     // a RETURN(group, agg). Anything else: bail.
-    if clauses.is_empty() {
-        return Ok(StreamingOutcome::Bailed(result_set));
-    }
-
-    let (return_clause_owned, is_with, with_where) = match &clauses[0] {
+    let (return_clause, is_with, with_where) = match clauses.first()? {
         Clause::With(w) => {
             // WITH delegates to the same agg machinery as RETURN.
             let rc = ReturnClause {
@@ -77,78 +76,82 @@ pub(crate) fn try_run_streaming<'q>(
             (rc, true, w.where_clause.clone())
         }
         Clause::Return(rc) => (rc.clone(), false, None),
-        _ => return Ok(StreamingOutcome::Bailed(result_set)),
+        _ => return None,
     };
 
     // Must contain at least one aggregate item — otherwise the
     // materialized projection path is fine.
-    let has_agg = return_clause_owned
+    let has_agg = return_clause
         .items
         .iter()
         .any(|item| is_aggregate_expression(&item.expression));
     if !has_agg {
-        return Ok(StreamingOutcome::Bailed(result_set));
+        return None;
     }
 
-    // RETURN-side guards: streaming path bails on DISTINCT-on-RETURN,
-    // HAVING, and lazy-eligible (lazy_eligible is set only when there
-    // are no aggregates anyway, so this is belt-and-suspenders).
-    if return_clause_owned.having.is_some() {
-        return Ok(StreamingOutcome::Bailed(result_set));
+    // RETURN-side guards: streaming path bails on HAVING.
+    if return_clause.having.is_some() {
+        return None;
     }
 
     // Try to compile the aggregate specs. If anything is unsupported
     // (collect/std/etc., arithmetic on aggregates, complex group keys),
     // bail.
-    let (group_indices, agg_indices, specs) =
-        match aggregate::try_compile_specs(&return_clause_owned) {
-            Ok(t) => t,
-            Err(_) => return Ok(StreamingOutcome::Bailed(result_set)),
-        };
+    let (group_indices, agg_indices, specs) = aggregate::try_compile_specs(&return_clause).ok()?;
 
     // Look for an optional follow-up `ORDER BY → LIMIT` we can fuse via
     // heap top-K. Only fire when *both* clauses are present; an ORDER
     // BY without LIMIT still materializes everything, so the
     // materialized sort path is fine.
-    let (order_items, limit, top_k_clauses) = match find_top_k(&clauses[1..]) {
-        Some((items, n, count)) => (Some(items), Some(n), count),
-        None => (None, None, 0),
-    };
+    let top_k = find_top_k(&clauses[1..]);
 
-    // Build the streaming pipeline from the materialized upstream.
-    //
-    // **This pipeline stays sequential**, and not because its input resists
-    // partitioning — `RowStream` only ever wraps an already-materialized
-    // `Vec<ResultRow>` (every construction site in the crate does), so the
-    // rows could be split right here at no cost. Two reasons it is not:
-    //
-    // 1. *It would not pay.* Partitioning a grouped aggregation's row
-    //    consumption is the same shape as the materialized path's grouping
-    //    pass, which was implemented, measured at **0.93-0.98x** across four
-    //    cardinalities, and removed — see the comment in
-    //    `aggregation/materialized.rs`. Per-partition accumulator maps cost
-    //    more to allocate and merge than the per-row work they parallelise.
-    // 2. *It would change answers.* `AggState::merge` adds partial sums, so
-    //    partitioning reassociates `sum` and `avg` over `Float64` and moves
-    //    the last ULP. The `parallel` flag is documented as never changing a
-    //    result, and a float sum that depends on thread count is exactly the
-    //    kind of "identical except sometimes" that doctrine exists to prevent.
-    //
-    // The win for grouped aggregation is across *groups*, not across rows, and
-    // that is where `aggregation/materialized.rs` takes it.
-    let upstream = RowStream::from_result_set(result_set);
+    Some(StreamingPlan {
+        return_clause,
+        is_with,
+        with_where,
+        group_indices,
+        agg_indices,
+        specs,
+        top_k,
+    })
+}
+
+/// Run a recognised plan over `upstream`.
+///
+/// **This pipeline stays sequential**, and not because its input resists
+/// partitioning: two reasons it is not partitioned.
+///
+/// 1. *It would not pay.* Partitioning a grouped aggregation's row
+///    consumption is the same shape as the materialized path's grouping
+///    pass, which was implemented, measured at **0.93-0.98x** across four
+///    cardinalities, and removed — see the comment in
+///    `aggregation/materialized.rs`. Per-partition accumulator maps cost
+///    more to allocate and merge than the per-row work they parallelise.
+/// 2. *It would change answers.* `AggState::merge` adds partial sums, so
+///    partitioning reassociates `sum` and `avg` over `Float64` and moves
+///    the last ULP. The `parallel` flag is documented as never changing a
+///    result, and a float sum that depends on thread count is exactly the
+///    kind of "identical except sometimes" that doctrine exists to prevent.
+///
+/// The win for grouped aggregation is across *groups*, not across rows, and
+/// that is where `aggregation/materialized.rs` takes it.
+pub(crate) fn run_streaming_plan<'q>(
+    executor: &'q CypherExecutor<'q>,
+    plan: StreamingPlan,
+    upstream: RowStream<'q>,
+) -> Result<StreamingRun, String> {
     let mut current = aggregate::apply(
         executor,
         upstream,
-        &return_clause_owned,
-        &group_indices,
-        &agg_indices,
-        &specs,
+        &plan.return_clause,
+        &plan.group_indices,
+        &plan.agg_indices,
+        &plan.specs,
     )?;
 
     let mut absorbed = 1usize; // the WITH/RETURN clause
 
-    if let (Some(items), Some(n)) = (order_items, limit) {
+    if let Some((items, n, top_k_clauses)) = plan.top_k {
         current = heap_top_k::apply(executor, current, &items, n)?;
         absorbed += top_k_clauses;
     }
@@ -157,17 +160,29 @@ pub(crate) fn try_run_streaming<'q>(
 
     // WITH ... WHERE: apply the post-projection WHERE on the
     // materialized result, mirroring `execute_with`.
-    if is_with {
-        if let Some(wc) = with_where {
+    if plan.is_with {
+        if let Some(wc) = plan.with_where {
             result = executor.execute_where(&wc, result)?;
         }
     }
 
     absorbed_probe::note();
-    Ok(StreamingOutcome::Absorbed(StreamingRun {
-        absorbed,
-        result,
-    }))
+    Ok(StreamingRun { absorbed, result })
+}
+
+/// Try to recognize and run a streaming clause run over an already-materialized
+/// prefix. `Bailed` hands `result_set` back unchanged; `Err(_)` only when a
+/// recognized pipeline fails mid-execution.
+pub(crate) fn try_run_streaming<'q>(
+    executor: &'q CypherExecutor<'q>,
+    clauses: &[Clause],
+    result_set: ResultSet,
+) -> Result<StreamingOutcome, String> {
+    let Some(plan) = plan_streaming(clauses) else {
+        return Ok(StreamingOutcome::Bailed(result_set));
+    };
+    let upstream = RowStream::from_result_set(result_set);
+    run_streaming_plan(executor, plan, upstream).map(StreamingOutcome::Absorbed)
 }
 
 /// Pattern-match an `OrderBy → Limit` tail. Returns the order items, the

@@ -24,6 +24,34 @@ use crate::graph::parallel::{self, ParallelInterrupt};
 /// boundary instead — see [`PatternExecutor::expand_hop_parallel`].
 const CEILING_PUBLISH_STRIDE: usize = 256;
 
+/// Start nodes the first chunk expands — small, because nothing yet says how
+/// wide one seed's expansion is.
+const CHUNK_FIRST_SEEDS: usize = 1;
+
+/// How many matches the widest hop of one chunk should hold. A chunk is sized
+/// from the width the previous one measured, so this bounds the in-flight
+/// buffer of a streamed aggregate while keeping the frontier above
+/// [`EXPANSION_RAYON_THRESHOLD`] for the hops that fan out.
+const CHUNK_TARGET_MATCHES: usize = 1 << 16;
+
+/// Largest factor a chunk may grow over the one before it.
+const CHUNK_GROWTH: usize = 4;
+
+/// Largest chunk, in start nodes, however narrow the expansion measured.
+const CHUNK_MAX_SEEDS: usize = 1 << 17;
+
+/// Cursor over the start nodes of one chunked pattern execution; see
+/// [`PatternExecutor::begin_chunks`].
+pub(crate) struct PatternChunker {
+    seeds: Vec<NodeIndex>,
+    next: usize,
+    size: usize,
+    target: usize,
+    /// Widest hop per start node the recent chunks measured.
+    per_seed: usize,
+    visited: VisitedStamps,
+}
+
 /// Whether one node variable is written more than once in `pattern`
 /// (`(a)-[]->(b)-[]->(a)`). Such a pattern constrains a later hop against an
 /// earlier binding, so partial matches on the same node are not
@@ -345,7 +373,34 @@ impl<'a> PatternExecutor<'a> {
             self.max_matches
         };
         let initial_nodes = self.seed_start_nodes(pattern, first_node, has_edges, source_cap)?;
+        // One reusable visited buffer for the whole pass: a variable-length hop
+        // marks it per source row instead of allocating and zeroing a
+        // graph-sized `Vec<bool>` for each one.
+        let mut visited = VisitedStamps::default();
+        let mut peak = 0usize;
+        self.expand_pattern(
+            pattern,
+            first_node,
+            initial_nodes,
+            pass,
+            &mut visited,
+            &mut peak,
+        )
+    }
 
+    /// Expand `initial_nodes` through every hop of `pattern`. `peak` receives
+    /// the widest match buffer any hop held — what a chunked caller sizes its
+    /// next slice from.
+    fn expand_pattern(
+        &self,
+        pattern: &Pattern,
+        first_node: &NodePattern,
+        initial_nodes: Vec<NodeIndex>,
+        pass: CapPass,
+        visited: &mut VisitedStamps,
+        peak: &mut usize,
+    ) -> Result<Vec<PatternMatch>, String> {
+        let has_edges = pattern.elements.len() > 1;
         // Under a cap the first hop stops as soon as `max_matches` rows exist,
         // so the start nodes past that point are never read — and `source_cap`
         // is deliberately 100x the cap, to survive a sparse pattern. Seeding
@@ -366,12 +421,8 @@ impl<'a> PatternExecutor<'a> {
                 .collect()
         };
 
+        *peak = (*peak).max(matches.len());
         let mut current_indices: Vec<NodeIndex> = initial_nodes;
-
-        // One reusable visited buffer for the whole pass: a variable-length hop
-        // marks it per source row instead of allocating and zeroing a
-        // graph-sized `Vec<bool>` for each one.
-        let mut visited = VisitedStamps::default();
 
         let mut distinct_seen: HashSet<NodeIndex> = if self.distinct_target_var.is_some() {
             HashSet::with_capacity(current_indices.len())
@@ -441,9 +492,10 @@ impl<'a> PatternExecutor<'a> {
                     &hop,
                     seeds_pending.then_some(first_node),
                     &mut distinct_seen,
-                    &mut visited,
+                    visited,
                 )?
             };
+            *peak = (*peak).max(new_matches.len());
 
             if let Some(msg) = self.interrupt_reason() {
                 return Err(msg);
@@ -475,6 +527,80 @@ impl<'a> PatternExecutor<'a> {
         }
 
         Ok(matches)
+    }
+
+    /// Begin a chunked execution of `pattern`: seed the start nodes once and
+    /// return a cursor [`Self::next_chunk`] advances over them. `None` when the
+    /// pattern must run whole — any `max_matches` (its retry passes and lazy
+    /// seeding are whole-pattern), a distinct-target dedup (shared across
+    /// seeds), or a pattern with no node start.
+    pub(crate) fn begin_chunks(&self, pattern: &Pattern) -> Result<Option<PatternChunker>, String> {
+        self.begin_chunks_sized(pattern, CHUNK_TARGET_MATCHES)
+    }
+
+    /// [`Self::begin_chunks`] with the per-chunk match target given, so a test
+    /// can exercise the sizing on a graph smaller than the production target.
+    pub(crate) fn begin_chunks_sized(
+        &self,
+        pattern: &Pattern,
+        target: usize,
+    ) -> Result<Option<PatternChunker>, String> {
+        if self.max_matches.is_some() || self.distinct_target_var.is_some() {
+            return Ok(None);
+        }
+        let Some(PatternElement::Node(first_node)) = pattern.elements.first() else {
+            return Ok(None);
+        };
+        let has_edges = pattern.elements.len() > 1;
+        let seeds = self.seed_start_nodes(pattern, first_node, has_edges, None)?;
+        Ok(Some(PatternChunker {
+            seeds,
+            next: 0,
+            size: CHUNK_FIRST_SEEDS,
+            target,
+            per_seed: 0,
+            visited: VisitedStamps::default(),
+        }))
+    }
+
+    /// The matches of the next slice of start nodes, in the order a whole-pattern
+    /// [`Self::execute`] would have produced them (each seed's expansion is
+    /// independent and hops preserve source order), or `None` once every seed
+    /// has been expanded. The slice after this one is sized so its widest hop
+    /// holds about [`CHUNK_TARGET_MATCHES`], from the width this one measured.
+    pub(crate) fn next_chunk(
+        &self,
+        pattern: &Pattern,
+        chunker: &mut PatternChunker,
+    ) -> Result<Option<Vec<PatternMatch>>, String> {
+        if chunker.next >= chunker.seeds.len() {
+            return Ok(None);
+        }
+        let Some(PatternElement::Node(first_node)) = pattern.elements.first() else {
+            return Ok(None);
+        };
+        let end = chunker.seeds.len().min(chunker.next + chunker.size);
+        let slice = chunker.seeds[chunker.next..end].to_vec();
+        let taken = slice.len();
+        chunker.next = end;
+        let mut peak = 0usize;
+        let matches = self.expand_pattern(
+            pattern,
+            first_node,
+            slice,
+            CapPass::Capped,
+            &mut chunker.visited,
+            &mut peak,
+        )?;
+        // Remember a wide slice for a while: the next seeds are as likely to be
+        // wide as narrow, so the estimate halves per chunk instead of dropping
+        // to the last (possibly narrow) one.
+        let per_seed = peak.div_ceil(taken).max(chunker.per_seed / 2).max(1);
+        chunker.per_seed = per_seed;
+        chunker.size = (chunker.target / per_seed)
+            .clamp(1, taken.saturating_mul(CHUNK_GROWTH))
+            .min(CHUNK_MAX_SEEDS);
+        Ok(Some(matches))
     }
 
     /// Expand one hop across every current match in parallel — each match's

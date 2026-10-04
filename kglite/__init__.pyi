@@ -7786,7 +7786,12 @@ class KnowledgeGraph:
                 ``WITH/RETURN(group, agg) [ORDER BY ... LIMIT k]``) into
                 a streaming pipeline that builds aggregate state inline
                 and replaces full sort + truncate with a heap-pruned
-                top-K (O(n log k) instead of O(n log n)). Pass ``False``
+                top-K (O(n log k) instead of O(n log n)). When the run
+                follows a leading single-pattern ``MATCH`` the matches
+                are produced a slice of start nodes at a time, so memory
+                is bounded by the slice rather than the path count (not
+                under ``max_work_units``, a pushed-down ``LIMIT``,
+                ``OPTIONAL MATCH``, comma patterns or a disk graph). Pass ``False``
                 to force the materialized executor — useful for
                 debugging parity issues; behaviour should otherwise be
                 identical.

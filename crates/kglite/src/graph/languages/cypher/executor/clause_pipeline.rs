@@ -291,12 +291,26 @@ impl CypherExecutor<'_> {
             };
             let inline_where = folded_inline_where.as_ref();
 
+            if self.streaming
+                && !profiling
+                && i == 0
+                && preserved.is_none()
+                && result_set.rows.is_empty()
+            {
+                if let Some(streamed) =
+                    self.stream_leading_match(query, clause, inline_where, &mut skip_clause)?
+                {
+                    result_set = streamed;
+                    continue;
+                }
+            }
+
             // Streaming-pipeline path: absorb a contiguous run of clauses.
             // A bail returns the input unchanged for materialized dispatch.
-            // It also runs under a valid-time guard: it never starts at a
-            // MATCH, so it reads only rows an earlier clause matched, and it
-            // evaluates their expressions through this (filtered) executor,
-            // as the materialized projection does.
+            // It also runs under a valid-time guard: it starts at a clause
+            // other than a MATCH, so it reads only rows an earlier clause
+            // matched, and it evaluates their expressions through this
+            // (filtered) executor, as the materialized projection does.
             if self.streaming
                 && !profiling
                 && inline_where.is_none()
@@ -364,6 +378,36 @@ impl CypherExecutor<'_> {
         }
 
         Ok(result_set)
+    }
+
+    /// A leading MATCH feeds a streamable aggregate row by row, so its matches
+    /// are never all held at once. The source is this executor's own matcher
+    /// (guarded under a valid-time context) and the aggregate evaluates
+    /// through this executor, so a context filters the streamed rows exactly
+    /// as the materialized route does. `None` leaves every clause to the
+    /// materialized dispatch; on a run, the clauses it absorbed are marked in
+    /// `skip_clause` and the aggregate's result is returned.
+    fn stream_leading_match(
+        &self,
+        query: &CypherQuery,
+        clause: &Clause,
+        inline_where: Option<&Predicate>,
+        skip_clause: &mut [bool],
+    ) -> Result<Option<ResultSet>, String> {
+        let Clause::Match(mc) = clause else {
+            return Ok(None);
+        };
+        let agg_at = 1 + usize::from(inline_where.is_some());
+        let tail = query.clauses.get(agg_at..).unwrap_or(&[]);
+        let Some(run) = match_stream::try_stream_first_match(self, mc, inline_where, tail)? else {
+            return Ok(None);
+        };
+        for flag in skip_clause.iter_mut().skip(agg_at).take(run.absorbed) {
+            *flag = true;
+        }
+        self.budget
+            .check_rows(run.result.rows.len(), "streaming pipeline")?;
+        Ok(Some(run.result))
     }
 
     fn execute_pipeline_clause(

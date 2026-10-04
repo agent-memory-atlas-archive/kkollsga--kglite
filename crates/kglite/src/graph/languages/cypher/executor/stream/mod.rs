@@ -8,8 +8,9 @@
 //! without materializing intermediate `Vec<ResultRow>` between clauses.
 //!
 //! # Current scope
-//! - The source wraps an already-materialized [`ResultSet`]; pattern matching
-//!   itself is not streamed yet.
+//! - The source is either an already-materialized [`ResultSet`] or, for a
+//!   leading single-pattern `MATCH`, the matcher itself driven a slice of start
+//!   nodes at a time (see `executor/match_stream.rs`).
 //! - Streaming aggregate: hash aggregate that builds per-group state while
 //!   iterating, replacing the materialize-then-bucket path in
 //!   `return_clause::execute_return_with_aggregation`.

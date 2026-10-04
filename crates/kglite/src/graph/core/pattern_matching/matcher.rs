@@ -2240,6 +2240,12 @@ mod var_length_guarded;
 
 use var_length::{VarLengthSegment, VisitedStamps};
 
+pub(crate) use expansion::PatternChunker;
+
+#[cfg(test)]
+#[path = "matcher_chunk_tests.rs"]
+mod chunk_tests;
+
 #[cfg(test)]
 #[path = "matcher_id_lookup_tests.rs"]
 mod id_lookup_tests;

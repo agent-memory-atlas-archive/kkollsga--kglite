@@ -190,6 +190,27 @@ before upgrading.
   `DISTINCT`, grouped counts, cycles, variable-length hops and a repeated
   type beyond two hops still run on the matcher.
 
+- An aggregate over a leading `MATCH` that the planner does not fuse
+  (`RETURN k, count(*), sum(x), avg(x), min/max, count(DISTINCT x)`, with or
+  without a `WHERE`, a path variable, a trailing `ORDER BY … LIMIT`) now reads
+  the matcher's rows a slice of start nodes at a time instead of collecting
+  every match into rows first. Memory is bounded by the widest hop of one slice
+  rather than by the path count, answers (including float `sum`/`avg`) and
+  group order are bit-for-bit those of the materialized route, and nothing is
+  streamed under an explicit `max_work_units`, a `LIMIT` pushed into the match,
+  comma patterns, `OPTIONAL MATCH`, `collect()`, `PROFILE`, or on a disk graph.
+  A grouped three-hop aggregate over 8.7M paths went from 6.1–7.6 s and a
+  +6.5 GB peak to 1.7 s and a +0.15 GB peak (minor page faults 2.3M → 30k);
+  a 1.2M-path aggregate with no memory pressure is ~8% slower. The 10M-row
+  safety ceiling still bounds the matches one slice holds, but no longer the
+  rows a streamed aggregate passes through, and one start node's expansion is
+  still held whole.
+- The streaming aggregate resolves a node-property group key when it first
+  meets the node and folds every row straight into its final group. It used to
+  keep a partial state per node and merge them, so a float `sum`/`avg` grouped
+  by a property shared by several nodes could differ from the materialized
+  route in the last digit.
+
 ### Fixed
 
 - An anchored relationship count on an id shared by several node types counted
