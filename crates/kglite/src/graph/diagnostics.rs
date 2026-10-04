@@ -57,6 +57,89 @@ impl DiagnosticGroup {
     }
 }
 
+impl DiagnosticGroup {
+    /// The group a name from [`as_str`](Self::as_str) denotes.
+    pub fn parse(name: &str) -> Option<DiagnosticGroup> {
+        Self::ALL.into_iter().find(|g| g.as_str() == name)
+    }
+}
+
+/// Groups `strict: true` fails a build on.
+pub const STRICT_DEFAULT_GROUPS: [DiagnosticGroup; 2] =
+    [DiagnosticGroup::Declarations, DiagnosticGroup::Stubs];
+
+/// Items per failing group a strict-mode error message lists.
+const STRICT_ITEMS_SHOWN: usize = 5;
+
+/// A blueprint's `strict` setting: `true` (the groups in
+/// [`STRICT_DEFAULT_GROUPS`]), `false`, or an explicit list of group names.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum StrictSetting {
+    Flag(bool),
+    Groups(Vec<String>),
+}
+
+impl StrictSetting {
+    /// The groups this setting fails a build on; empty when it is off.
+    /// An unknown group name is an error naming the valid ones.
+    pub fn groups(&self) -> Result<Vec<DiagnosticGroup>, String> {
+        match self {
+            StrictSetting::Flag(false) => Ok(Vec::new()),
+            StrictSetting::Flag(true) => Ok(STRICT_DEFAULT_GROUPS.to_vec()),
+            StrictSetting::Groups(names) => names
+                .iter()
+                .map(|name| {
+                    DiagnosticGroup::parse(name).ok_or_else(|| {
+                        let valid: Vec<&str> =
+                            DiagnosticGroup::ALL.iter().map(|g| g.as_str()).collect();
+                        format!(
+                            "strict: unknown diagnostic group '{name}' — the groups are {}",
+                            valid.join(", ")
+                        )
+                    })
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The error a strict build fails with, or `None` when no advisory falls in
+/// `groups`. It carries every failing group's count and its first items, so
+/// the failure is readable without the report the build never returned.
+pub fn strict_failure(groups: &[DiagnosticGroup], diagnostics: &[Diagnostic]) -> Option<String> {
+    use std::fmt::Write;
+    let mut text = String::new();
+    for group in DiagnosticGroup::ALL {
+        if !groups.contains(&group) {
+            continue;
+        }
+        let items: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.group == group).collect();
+        if items.is_empty() {
+            continue;
+        }
+        let _ = write!(
+            text,
+            "\n[{}] {} advisory(ies):",
+            group.as_str(),
+            items.len()
+        );
+        for d in items.iter().take(STRICT_ITEMS_SHOWN) {
+            let _ = write!(text, "\n  - {}", d.message);
+        }
+        if items.len() > STRICT_ITEMS_SHOWN {
+            let _ = write!(text, "\n  … and {} more", items.len() - STRICT_ITEMS_SHOWN);
+        }
+    }
+    if text.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "strict build failed — the build raised advisories in a strict group; nothing was \
+         saved. Fix the input, or narrow `strict`:{text}"
+    ))
+}
+
 /// One classified advisory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Diagnostic {
@@ -159,6 +242,39 @@ mod tests {
         ];
         shuffled.sort();
         assert_eq!(shuffled, DiagnosticGroup::ALL);
+    }
+
+    #[test]
+    fn strict_settings_resolve_to_groups() {
+        assert!(StrictSetting::Flag(false).groups().unwrap().is_empty());
+        assert_eq!(
+            StrictSetting::Flag(true).groups().unwrap(),
+            STRICT_DEFAULT_GROUPS
+        );
+        let named = StrictSetting::Groups(vec!["data_quality".into()]);
+        assert_eq!(named.groups().unwrap(), [DiagnosticGroup::DataQuality]);
+        let err = StrictSetting::Groups(vec!["stub".into()])
+            .groups()
+            .unwrap_err();
+        assert!(
+            err.contains("'stub'") && err.contains("data_shape"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn strict_failure_names_only_the_failing_groups() {
+        let all = [
+            d(DiagnosticGroup::Stubs, "s"),
+            d(DiagnosticGroup::DataQuality, "q"),
+        ];
+        assert!(strict_failure(&[DiagnosticGroup::Declarations], &all).is_none());
+        let text = strict_failure(&STRICT_DEFAULT_GROUPS, &all).unwrap();
+        assert!(
+            text.contains("[stubs] 1") && text.contains("s message"),
+            "{text}"
+        );
+        assert!(!text.contains("data_quality"), "{text}");
     }
 
     #[test]

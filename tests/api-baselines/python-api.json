@@ -1793,7 +1793,7 @@
     },
     "from_blueprint": {
       "kind": "function",
-      "signature": "(blueprint_path: 'Union[str, Path]', *, verbose: 'bool' = False, save: 'Optional[bool]' = None, lock_schema: 'bool' = False, storage: 'str' = 'default', path: 'Optional[str]' = None, frames: 'Optional[Mapping[str, Any]]' = None) -> 'KnowledgeGraph'"
+      "signature": "(blueprint_path: 'Union[str, Path]', *, verbose: 'bool' = False, save: 'Optional[bool]' = None, lock_schema: 'bool' = False, storage: 'str' = 'default', path: 'Optional[str]' = None, frames: 'Optional[Mapping[str, Any]]' = None, strict: 'Union[None, bool, Sequence[str]]' = None) -> 'KnowledgeGraph'"
     },
     "from_bytes": {
       "kind": "function",

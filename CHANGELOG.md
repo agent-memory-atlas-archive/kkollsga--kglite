@@ -24,6 +24,13 @@ before upgrading.
   `diagnostics` field, which breaks struct literals of those types, and
   `ExportManifest::apply_declarations` returns `Vec<Diagnostic>`.
 
+- Strict builds: `from_blueprint(..., strict=True)` or `settings.strict` fails
+  the build when it raises an advisory in the `declarations` or `stubs` group;
+  `strict=["data_quality"]` names groups, `strict=False` overrides the
+  setting. The build finishes and assembles its report first, so the error
+  carries each failing group's count and first items and nothing is saved.
+  Rust API: `Settings::strict`, `StrictSetting`.
+
 ### Changed
 
 - `from_blueprint` and `from_records` no longer raise one `UserWarning` per

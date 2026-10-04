@@ -858,7 +858,7 @@ pub mod api {
         };
         pub use crate::graph::blueprint::typing::scalar;
         pub use crate::graph::diagnostics::{
-            BuildInfo, Diagnostic, DiagnosticGroup, RecordedDiagnostic,
+            BuildInfo, Diagnostic, DiagnosticGroup, RecordedDiagnostic, StrictSetting,
         };
     }
 

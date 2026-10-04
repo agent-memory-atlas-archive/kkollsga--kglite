@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// `lock_schema` on top. Exposed as `kglite.kglite.from_blueprint_rust` to
 /// avoid colliding with the user-facing `kglite.from_blueprint` wrapper.
 #[pyfunction]
-#[pyo3(signature = (blueprint_path, *, verbose=false, storage=None, path=None, frames=None))]
+#[pyo3(signature = (blueprint_path, *, verbose=false, storage=None, path=None, frames=None, strict=None))]
 pub fn from_blueprint_rust(
     py: Python<'_>,
     blueprint_path: String,
@@ -28,6 +28,7 @@ pub fn from_blueprint_rust(
     storage: Option<&str>,
     path: Option<&str>,
     frames: Option<&Bound<'_, PyDict>>,
+    strict: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<(KnowledgeGraph, Option<String>)> {
     let bp_path = Path::new(&blueprint_path).to_path_buf();
     if !bp_path.exists() {
@@ -41,8 +42,12 @@ pub fn from_blueprint_rust(
     // frame needs both the GIL and the blueprint's declared types, and the
     // core decides which frames are missing or unexpected — this side only
     // marshals what it was handed.
-    let parsed = blueprint::load_blueprint_file(&bp_path)
+    let mut parsed = blueprint::load_blueprint_file(&bp_path)
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    // The argument overrides `settings.strict`; `None` leaves the setting.
+    if let Some(strict) = strict.filter(|s| !s.is_none()) {
+        parsed.settings.strict = Some(strict_setting(strict)?);
+    }
     let inputs = convert_frames(&parsed, frames)?;
 
     let bp_dir = bp_path
@@ -101,6 +106,21 @@ pub fn from_blueprint_rust(
     }
 
     Ok((kg, output_path.map(|p| p.to_string_lossy().into_owned())))
+}
+
+/// `strict=` as the core's setting: a bool, or a list of group names.
+fn strict_setting(value: &Bound<'_, PyAny>) -> PyResult<blueprint::StrictSetting> {
+    if let Ok(flag) = value.cast::<pyo3::types::PyBool>() {
+        return Ok(blueprint::StrictSetting::Flag(flag.is_true()));
+    }
+    value
+        .extract::<Vec<String>>()
+        .map(blueprint::StrictSetting::Groups)
+        .map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "strict= must be None, a bool, or a list of diagnostic group names",
+            )
+        })
 }
 
 /// Convert every frame the caller passed into a core `DataFrame`, typed by

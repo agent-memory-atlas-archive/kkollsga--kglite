@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime as _datetime
 import json
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Mapping, Optional, Sequence, Union
 
 from kglite.kglite import KnowledgeGraph
 from kglite.kglite import from_blueprint_rust as _from_blueprint_rs
@@ -57,6 +57,7 @@ def from_blueprint(
     storage: str = "default",
     path: Optional[str] = None,
     frames: Optional[Mapping[str, Any]] = None,
+    strict: Union[None, bool, Sequence[str]] = None,
 ) -> KnowledgeGraph:
     """Build a KnowledgeGraph from a JSON blueprint + its declared inputs.
 
@@ -81,6 +82,11 @@ def from_blueprint(
             strings use CSV parsing, including whitespace and exact signed
             integer decimal/scientific forms. Invalid declared cells become
             NULL; undeclared columns retain dtype-based inference.
+        strict: Fail the build when it raises an advisory in a strict group.
+            ``None`` (default) defers to the blueprint's ``settings.strict``;
+            ``True`` is ``["declarations", "stubs"]``; ``False`` turns it
+            off; a list names the groups (``declarations``, ``stubs``,
+            ``data_shape``, ``data_quality``, ``cosmetic``).
 
     Raises:
         ValueError: If ``save=True`` was passed explicitly and neither
@@ -98,6 +104,7 @@ def from_blueprint(
         storage=storage if storage else "default",
         path=path,
         frames=frames,
+        strict=list(strict) if isinstance(strict, (list, tuple, set, frozenset)) else strict,
     )
     if save is not False:
         destination = _save_destination(output_path, storage, path)

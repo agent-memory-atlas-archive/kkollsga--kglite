@@ -299,6 +299,8 @@ pub kglite::api::blueprint::DiagnosticGroup::Stubs
 impl kglite::api::blueprint::DiagnosticGroup
 pub const kglite::api::blueprint::DiagnosticGroup::ALL: [kglite::api::blueprint::DiagnosticGroup; 5]
 pub fn kglite::api::blueprint::DiagnosticGroup::as_str(self) -> &'static str
+impl kglite::api::blueprint::DiagnosticGroup
+pub fn kglite::api::blueprint::DiagnosticGroup::parse(name: &str) -> core::option::Option<kglite::api::blueprint::DiagnosticGroup>
 impl core::clone::Clone for kglite::api::blueprint::DiagnosticGroup
 pub fn kglite::api::blueprint::DiagnosticGroup::clone(&self) -> kglite::api::blueprint::DiagnosticGroup
 impl core::cmp::Eq for kglite::api::blueprint::DiagnosticGroup
@@ -318,6 +320,21 @@ impl serde_core::ser::Serialize for kglite::api::blueprint::DiagnosticGroup
 pub fn kglite::api::blueprint::DiagnosticGroup::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::DiagnosticGroup
 pub fn kglite::api::blueprint::DiagnosticGroup::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum kglite::api::blueprint::StrictSetting
+pub kglite::api::blueprint::StrictSetting::Flag(bool)
+pub kglite::api::blueprint::StrictSetting::Groups(alloc::vec::Vec<alloc::string::String>)
+impl kglite::api::blueprint::StrictSetting
+pub fn kglite::api::blueprint::StrictSetting::groups(&self) -> core::result::Result<alloc::vec::Vec<kglite::api::blueprint::DiagnosticGroup>, alloc::string::String>
+impl core::clone::Clone for kglite::api::blueprint::StrictSetting
+pub fn kglite::api::blueprint::StrictSetting::clone(&self) -> kglite::api::blueprint::StrictSetting
+impl core::cmp::Eq for kglite::api::blueprint::StrictSetting
+impl core::cmp::PartialEq for kglite::api::blueprint::StrictSetting
+pub fn kglite::api::blueprint::StrictSetting::eq(&self, other: &kglite::api::blueprint::StrictSetting) -> bool
+impl core::fmt::Debug for kglite::api::blueprint::StrictSetting
+pub fn kglite::api::blueprint::StrictSetting::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::blueprint::StrictSetting
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::StrictSetting
+pub fn kglite::api::blueprint::StrictSetting::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum kglite::api::blueprint::TimeKey
 pub kglite::api::blueprint::TimeKey::Composite(indexmap::map::IndexMap<alloc::string::String, alloc::string::String>)
 pub kglite::api::blueprint::TimeKey::Single(alloc::string::String)
@@ -547,6 +564,7 @@ pub kglite::api::blueprint::Settings::input_root: core::option::Option<alloc::st
 pub kglite::api::blueprint::Settings::manifest: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::output_file: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::output_path: core::option::Option<alloc::string::String>
+pub kglite::api::blueprint::Settings::strict: core::option::Option<kglite::api::blueprint::StrictSetting>
 impl kglite::api::blueprint::Settings
 pub fn kglite::api::blueprint::Settings::resolved_output(&self, input_root: &std::path::Path) -> core::option::Option<std::path::PathBuf>
 impl core::default::Default for kglite::api::blueprint::Settings

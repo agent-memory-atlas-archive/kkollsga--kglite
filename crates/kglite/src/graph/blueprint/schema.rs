@@ -73,6 +73,12 @@ pub struct Settings {
     /// an unkeyed relationship's).
     #[serde(default)]
     pub manifest: Option<String>,
+    /// Fail the build when it raises an advisory in a strict group: `true`
+    /// (declarations + stubs), `false`, or a list of group names. The check
+    /// runs after the full report is assembled, so nothing is saved. The
+    /// `strict=` argument of `from_blueprint` overrides it.
+    #[serde(default)]
+    pub strict: Option<crate::graph::diagnostics::StrictSetting>,
     /// Keys under `settings` that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
@@ -116,6 +122,7 @@ pub const ACCEPTED_SETTINGS_KEYS: &[&str] = &[
     "output",
     "auto_purge",
     "manifest",
+    "strict",
 ];
 
 /// Keys a node spec (and a `sub_nodes` entry) reads.

@@ -1049,6 +1049,24 @@ saved in the `.kgl` file and comes back on `load()`. The C ABI's
 `kglite_blueprint_build` report carries the same lists under `diagnostics` and
 `summary`.
 
+### Strict Mode
+
+`from_blueprint(..., strict=True)`, or `"strict": true` under the blueprint's
+`settings`, makes the `declarations` and `stubs` groups fail the build. The
+build runs to the end first, so the error carries every failing group's count
+and its first five items, and nothing is saved:
+
+```python
+kglite.from_blueprint("bp.json", strict=True)            # declarations + stubs
+kglite.from_blueprint("bp.json", strict=["data_quality"]) # named groups only
+kglite.from_blueprint("bp.json", strict=False)           # override the setting
+```
+
+`strict=None` (the default) defers to `settings.strict`; any other value
+overrides it. `settings.strict` takes the same values (`true`, `false` or a
+list of group names), and an unknown group name is an error listing the valid
+ones.
+
 ## How Loading Works
 
 `from_blueprint()` first applies the ordered top-level `compute` pipeline, then

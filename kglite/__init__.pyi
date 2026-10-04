@@ -1473,6 +1473,7 @@ def from_blueprint(
     storage: str = "default",
     path: Optional[str] = None,
     frames: Optional[Mapping[str, Any]] = None,
+    strict: Union[None, bool, Sequence[str]] = None,
 ) -> KnowledgeGraph:
     """Build a KnowledgeGraph from a JSON blueprint and its declared inputs.
 
@@ -1535,6 +1536,15 @@ def from_blueprint(
     - **Errors** — a spec the build survived but could not fully load (a
       bad ``rename``, a property column the input does not have) — are
       printed to **stderr** directly. The graph is still returned.
+
+    **Strict mode.** ``strict=True`` (or ``settings.strict`` in the blueprint)
+    turns the ``declarations`` and ``stubs`` groups into a build failure: the
+    build runs to the end, assembles the full report, then raises
+    ``ValueError`` carrying each failing group's count and first items — and
+    nothing is saved. ``strict=["data_quality"]`` names the groups instead
+    (``declarations``, ``stubs``, ``data_shape``, ``data_quality``,
+    ``cosmetic``; an unknown name is an error); ``strict=False`` turns a
+    blueprint's setting off. ``None`` defers to the setting.
 
     To capture warnings to a file, use the standard Python pattern::
 
@@ -1610,6 +1620,9 @@ def from_blueprint(
         path: Directory for disk storage (only with ``storage="disk"``).
         frames: In-memory tables keyed by the name of a ``files`` entry
             declaring ``{"format": "frame"}``. See **Frames** above.
+        strict: ``None`` (default) defers to ``settings.strict``; ``True``,
+            ``False`` or a list of group names overrides it. See **Strict
+            mode** above.
 
     Returns:
         A new KnowledgeGraph populated from the blueprint.
@@ -1618,7 +1631,8 @@ def from_blueprint(
         FileNotFoundError: If the blueprint file is missing.
         ValueError: If the blueprint JSON is malformed, ``save=True``
             was passed with no destination to write to, or a declared frame
-            was not supplied (or a supplied one was not declared).
+            was not supplied (or a supplied one was not declared), or strict
+            mode found an advisory in a strict group.
 
     Example::
 

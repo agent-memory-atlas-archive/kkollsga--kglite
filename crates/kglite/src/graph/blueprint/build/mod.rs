@@ -50,7 +50,9 @@ use super::input::{
 };
 use super::schema::{Blueprint, FileSpec};
 use crate::datatypes::values::DataFrame;
-use crate::graph::diagnostics::{summarize, BuildInfo, Diagnostic, DiagnosticGroup};
+use crate::graph::diagnostics::{
+    strict_failure, summarize, BuildInfo, Diagnostic, DiagnosticGroup,
+};
 use crate::graph::mutation::maintain;
 use crate::graph::schema::{DirGraph, PROVISIONAL_KEY};
 use indexmap::IndexMap;
@@ -196,6 +198,10 @@ pub fn build(
     blueprint_dir: &Path,
     inputs: BuildInputs,
 ) -> Result<BuildReport, String> {
+    let strict = match &blueprint.settings.strict {
+        Some(setting) => setting.groups()?,
+        None => Vec::new(),
+    };
     let declared = temporal::declared_node_labels(&blueprint);
     // The build's duplicate-id warnings ride its report instead of stderr,
     // where a process-wide rate limit would silence every build after the
@@ -219,6 +225,11 @@ pub fn build(
         }
     }
     graph.build_info = Some(BuildInfo::record(&report.diagnostics));
+    // After the whole report exists, so the error names everything strict
+    // mode objects to; callers save only after `build` returns.
+    if let Some(failure) = strict_failure(&strict, &report.diagnostics) {
+        return Err(failure);
+    }
     Ok(report)
 }
 
