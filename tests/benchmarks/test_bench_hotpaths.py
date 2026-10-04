@@ -712,3 +712,67 @@ def test_bench_unwind_valid_at_rows(benchmark, versioned_staff_graph):
     result = benchmark(versioned_staff_graph.cypher, query, params=params)
     expected = versioned_staff_graph.cypher(query, params=params, disabled_passes=["fuse_unwind_valid_at"])
     assert sorted(map(repr, result.to_list())) == sorted(map(repr, expected.to_list()))
+
+
+@pytest.fixture
+def declared_types_with_secondary_graph():
+    """40 declared types of 50 nodes each, one undeclared 20 000-node type, and
+    an undeclared secondary label on one declared node.
+
+    The shape of a register with many versioned types: the default valid-time
+    context compiles a filter for the declared targets a statement reaches,
+    and statements that name only the undeclared type reach none.
+    """
+    graph = KnowledgeGraph()
+    for i in range(40):
+        frame = pd.DataFrame(
+            {
+                "id": range(i * 50, (i + 1) * 50),
+                "title": [f"t{j}" for j in range(50)],
+                "vf": pd.to_datetime(["2000-01-01"] * 50),
+                "vt": pd.to_datetime(["2010-01-01" if j % 2 else "2099-01-01" for j in range(50)]),
+            }
+        )
+        graph.add_nodes(frame, f"T{i}", "id", "title")
+    slides = pd.DataFrame({"id": range(10**6, 10**6 + 20_000), "title": [f"s{j}" for j in range(20_000)]})
+    graph.add_nodes(slides, "Slide", "id", "title")
+    for i in range(40):
+        graph.cypher(f"CALL db.temporal.declare({{node: 'T{i}', from: 'vf', to: 'vt', convention: 'half_open'}})")
+    graph.cypher("MATCH (n:T0) WHERE n.id < 5 SET n:Extra")
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_undeclared_limit(benchmark, declared_types_with_secondary_graph):
+    """`MATCH (s:Slide) RETURN s.title LIMIT 10` under the default context.
+
+    Reaches no declared target, so it plans and runs as the `FOR VALID_TIME ALL`
+    cell below does; the two cells differ only by the context's fixed cost.
+    """
+    graph = declared_types_with_secondary_graph
+    query = "MATCH (s:Slide) RETURN s.title LIMIT 10"
+    result = benchmark(graph.cypher, query)
+    assert result.diagnostics["temporal"]["targets"] == []
+    assert len(result.to_list()) == 10
+
+
+@pytest.mark.benchmark
+def test_bench_all_context_undeclared_limit(benchmark, declared_types_with_secondary_graph):
+    """The control for the cell above: the same statement reading every version."""
+    graph = declared_types_with_secondary_graph
+    result = benchmark(graph.cypher, "FOR VALID_TIME ALL MATCH (s:Slide) RETURN s.title LIMIT 10")
+    assert len(result.to_list()) == 10
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_declared_hop_limit(benchmark, declared_types_with_secondary_graph):
+    """A two-type hop under the default context: the template names only the
+    two types it reaches, not the other 38 declared ones."""
+    graph = declared_types_with_secondary_graph
+    graph.cypher(
+        "MATCH (a:T0), (b:T1) WHERE a.id = b.id - 50 CREATE (a)-[:R]->(b)",
+    ).to_list()
+    query = "MATCH (a:T0)-[:R]->(b:T1) RETURN a.title, b.title LIMIT 10"
+    result = benchmark(graph.cypher, query)
+    assert result.diagnostics["temporal"]["targets"] == ["(:T0)", "(:T1)"]
+    assert len(result.to_list()) == 10

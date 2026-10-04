@@ -779,3 +779,71 @@ fn a_write_drops_the_pins_with_the_masks() {
     assert!(pinned.nodes.contains(well_slot(&g, 5)));
     assert!(!after.masks.unwrap().nodes.contains(well_slot(&g, 5)));
 }
+
+#[test]
+fn equal_templates_share_one_resolution_until_the_graph_changes() {
+    let g = declared_wells();
+    let (first, second) = (Arc::new(template(&g)), Arc::new(template(&g)));
+    let t = date("2012-06-01");
+    let a = resolve_shared(&g, &first, t);
+    // A re-parsed statement's template is another `Arc` of an equal value.
+    let b = resolve_shared(&g, &second, t);
+    assert!(Arc::ptr_eq(&a, &b));
+    assert!(!Arc::ptr_eq(
+        &a,
+        &resolve_shared(&g, &first, date("2016-06-01"))
+    ));
+    assert_eq!(
+        a.counts.hidden,
+        [(TemporalTarget::Node("Well".into()), 2), (licensed(), 0)]
+    );
+    assert_eq!(read_cache(&g).as_ref().unwrap().resolutions.len(), 2);
+    // A different template at the same instant is its own entry.
+    let wells = Arc::new(wells_only(&g));
+    assert!(!Arc::ptr_eq(&a, &resolve_shared(&g, &wells, t)));
+    // A write moves the version: the cached resolution is not served.
+    let mut g = g;
+    g.bump_version();
+    let after = resolve_shared(&g, &first, t);
+    assert!(!Arc::ptr_eq(&a, &after));
+    assert_eq!(read_cache(&g).as_ref().unwrap().resolutions.len(), 1);
+}
+
+#[test]
+fn evicting_a_mask_drops_the_resolutions_that_hold_it() {
+    let g = declared_wells();
+    let template = Arc::new(template(&g));
+    let held = resolve_shared(&g, &template, date("2005-06-01"));
+    let held_masks = Arc::clone(held.resolved.masks.as_ref().unwrap());
+    let arrays = read_cache(&g).as_ref().unwrap().array_bytes();
+    set_byte_cap(&g, arrays + held_masks.bytes());
+    assert_eq!(read_cache(&g).as_ref().unwrap().resolutions.len(), 1);
+    // A second segment needs the room the first mask holds: it is evicted, and
+    // the resolution that holds it goes with it.
+    let later = resolve_shared(&g, &template, date("2016-06-01"));
+    let cache = read_cache(&g);
+    let cache = cache.as_ref().unwrap();
+    assert_eq!(cache.masks.len(), 1);
+    assert_eq!(cache.resolutions.len(), 1);
+    assert!(Arc::ptr_eq(&cache.resolutions[0].resolution, &later));
+}
+
+#[test]
+fn the_declared_template_and_the_timeless_answer_follow_the_declarations() {
+    let mut g = declared_wells();
+    let build = |g: &DirGraph| crate::graph::languages::cypher::valid_time::declared_template(g);
+    let t = date("2012-06-01");
+    let first = declared_template_memo(&g, || build(&g)).unwrap();
+    assert!(Arc::ptr_eq(
+        &first,
+        &declared_template_memo(&g, || build(&g)).unwrap()
+    ));
+    assert!(!declared_timeless_at(&g, t, || build(&g)));
+    // A declaration removed without moving the version rebuilds the template.
+    let version = g.version();
+    assert!(crate::graph::features::temporal::declarations::record_remove(&mut g, &licensed()));
+    assert_eq!(g.version(), version);
+    let second = declared_template_memo(&g, || build(&g)).unwrap();
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(second.edges.is_empty());
+}

@@ -175,6 +175,11 @@ impl TemporalDeclarations {
         self.nodes.get(label)
     }
 
+    /// Every declared node label.
+    pub(crate) fn node_labels(&self) -> impl Iterator<Item = &str> {
+        self.nodes.keys().map(String::as_str)
+    }
+
     /// Whether `label`'s declaration names `property` as its `from` or `to`
     /// bound. The unknown-property guards count such a name as known: a `to`
     /// no row carries yet is absent from the observed schema, and the
@@ -336,6 +341,20 @@ impl TemporalDeclarations {
             Some(count) => self.abutting.insert(target.clone(), count),
             None => self.abutting.remove(target),
         };
+        self.forget_templates();
+    }
+
+    /// The cached templates and resolutions are built from the declarations,
+    /// which just changed.
+    fn forget_templates(&self) {
+        if let Some(cache) = self
+            .index
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            cache.forget_declared();
+        }
     }
 
     /// Drop every cached endpoint index. For a version set directly rather
@@ -349,6 +368,7 @@ impl TemporalDeclarations {
 
     pub(super) fn remove(&mut self, target: &TemporalTarget) -> bool {
         self.abutting.remove(target);
+        self.forget_templates();
         match target {
             TemporalTarget::Node(label) => self.nodes.remove(label).is_some(),
             TemporalTarget::Relationship {

@@ -69,6 +69,25 @@ before upgrading.
 
 ### Changed
 
+- The default valid-time context costs what the statement reaches, not what the
+  graph declares. A statement's template now holds the declared targets its
+  patterns can reach: a label no node carries as a secondary label reaches its
+  own declaration and the declared labels some node carries as secondary ones;
+  a label some node carries as secondary reaches every declared label. A scope
+  that reaches no declared target plans and runs without the filter (all
+  passes, the lazy result route, no candidate scan). One undeclared secondary
+  label anywhere used to widen every labelled statement to every declared type
+  (undeclared-type `LIMIT` 87 us against 9 us under `FOR VALID_TIME ALL` on a
+  38-type register; now equal). The instant, the declared template, the
+  timeless answer and the per-instant filter and echo counts are resolved once
+  and cached per graph version (shared by statements with equal templates, read
+  under the read lock), and a start-node scan under a `LIMIT` stops at the
+  first admitted nodes it needs. The alias-spelling hashes the in-memory
+  property access tests are cached per alias-map state, which also trims every
+  statement that runs without the lazy route (Bolt, MCP). Echo: `targets` and
+  the `hidden` counts list the reachable targets only, so a statement over an
+  undeclared type reports no targets and the `plain` route.
+
 - The validity declaration's abutment count and warning compare versions of one
   entity. A node label counts rows that share an `id`, so two projects whose
   phases share a boundary date are no longer counted or warned about as one

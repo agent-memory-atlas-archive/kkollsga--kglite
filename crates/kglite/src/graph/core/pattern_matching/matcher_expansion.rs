@@ -283,15 +283,15 @@ impl<'a> PatternExecutor<'a> {
                     // treats each start node once.
                     union.sort_unstable();
                     union.dedup();
-                    self.guard_seeds(union)
+                    self.guard_seeds(union, source_cap)
                 } else {
-                    self.find_matching_nodes(first_node)?
+                    self.find_matching_nodes_up_to(first_node, source_cap)?
                 }
             } else {
-                self.find_matching_nodes(first_node)?
+                self.find_matching_nodes_up_to(first_node, source_cap)?
             }
         } else {
-            self.find_matching_nodes(first_node)?
+            self.find_matching_nodes_up_to(first_node, source_cap)?
         };
         if let Some(cap) = source_cap {
             if initial_nodes.len() > cap {

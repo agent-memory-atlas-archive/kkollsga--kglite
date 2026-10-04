@@ -74,11 +74,13 @@ impl DirGraph {
 
     /// Writable `id_field_aliases`; see [`Self::node_type_metadata_mut`].
     pub fn id_field_aliases_mut(&mut self) -> &mut FxHashMap<String, String> {
+        self.forget_alias_hashes();
         cow_mut(&mut self.id_field_aliases)
     }
 
     /// Writable `title_field_aliases`; see [`Self::node_type_metadata_mut`].
     pub fn title_field_aliases_mut(&mut self) -> &mut FxHashMap<String, String> {
+        self.forget_alias_hashes();
         cow_mut(&mut self.title_field_aliases)
     }
 

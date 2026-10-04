@@ -372,6 +372,49 @@ def declared_network_graph():
     return graph
 
 
+def _reach_graph(*, contractor_carries_employee: bool) -> kglite.KnowledgeGraph:
+    """A declared `Employee` type, an undeclared `Contractor` (one node expired in 2010,
+    carrying `Employee` as a secondary label when `contractor_carries_employee`), an
+    undeclared `Tag` secondary on a employee, and an undeclared `Dept` the employees
+    sit in: scopes that reach nothing declared plan unguarded beside scopes
+    that do."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (w1:Employee {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')}),"
+        " (w2:Employee {id: 2, vf: date('2005-01-01')}),"
+        " (r5:Contractor {id: 5, vf: date('2000-01-01'), vt: date('2010-01-01')}), (r6:Contractor {id: 6}),"
+        " (f:Dept {id: 10, vf: date('2001-01-01'), vt: date('2003-01-01')}),"
+        " (w1)-[:IN]->(f), (w2)-[:IN]->(f), (r5)-[:AT]->(f), (r6)-[:AT]->(f)"
+    ).to_list()
+    graph.cypher("CALL db.temporal.declare({node: 'Employee', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    if contractor_carries_employee:
+        graph.cypher("MATCH (r:Contractor {id: 5}) SET r:Employee").to_list()
+    graph.cypher("MATCH (w:Employee {id: 1}) SET w:Tag").to_list()
+    return graph
+
+
+@pytest.fixture
+def declared_reach_graph():
+    return _reach_graph(contractor_carries_employee=True)
+
+
+@pytest.fixture
+def declared_reach_tag_graph():
+    """`declared_reach_graph` where no declared label is carried as a
+    secondary one, so `Dept` and `Contractor` reach nothing declared."""
+    return _reach_graph(contractor_carries_employee=False)
+
+
+def _reach_pair(
+    name: str, query: str, fixture: str = "declared_reach_graph"
+) -> list[tuple[str, str, str, dict | None]]:
+    """`query` on a reach fixture as of 2015 and under the default."""
+    return [
+        (f"context_{name}", fixture, "FOR VALID_TIME AS OF date('2015-01-01') " + query, None),
+        (f"context_twin_{name}", fixture, query, None),
+    ]
+
+
 @pytest.fixture
 def declared_text_graph():
     """Declared `Doc` versions with a BM25 index: at 2008 the `old` versions
@@ -776,6 +819,40 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "declared_lineage_graph",
         "MATCH (a:A) RETURN COUNT { (a)-[:R]->() } AS c",
         None,
+    ),
+    # Scopes that reach no declared target beside scopes that do, and
+    # secondary-label reach, each with its default-context twin.
+    *_reach_pair(
+        "reach_unguarded_union_arm", "MATCH (f:Dept) RETURN f.id AS id UNION MATCH (w:Employee) RETURN w.id AS id"
+    ),
+    *_reach_pair(
+        "reach_call_body",
+        "MATCH (f:Dept) CALL { MATCH (w:Employee) RETURN count(w) AS c } RETURN f.id AS id, c",
+    ),
+    *_reach_pair(
+        "reach_optional_declared",
+        "MATCH (f:Dept) OPTIONAL MATCH (f)<-[:IN]-(w:Employee) RETURN f.id AS id, count(w) AS c",
+    ),
+    *_reach_pair("reach_secondary_declared", "MATCH (r:Contractor) RETURN r.id AS id"),
+    *_reach_pair("reach_secondary_declared_count", "MATCH (r:Contractor) RETURN count(r) AS c"),
+    *_reach_pair("reach_secondary_undeclared", "MATCH (t:Tag) RETURN t.id AS id"),
+    *_reach_pair("reach_alternation", "MATCH (n:Contractor|Dept) RETURN n.id AS id"),
+    *_reach_pair("reach_conjunction", "MATCH (n:Contractor:Employee) RETURN n.id AS id"),
+    *_reach_pair("reach_count_subquery", "MATCH (f:Dept) RETURN COUNT { (f)<-[:IN]-(:Employee) } AS c"),
+    *_reach_pair(
+        "reach_exists_subquery",
+        "MATCH (f:Dept) RETURN EXISTS { MATCH (f)<-[:IN]-(w:Employee) WHERE w.id = 1 } AS e",
+    ),
+    *_reach_pair("reach_pattern_comprehension", "MATCH (f:Dept) RETURN size([(f)<-[:IN]-(w:Employee) | w.id]) AS n"),
+    *_reach_pair("reach_undeclared_hop", "MATCH (r:Contractor)-[:AT]->(f:Dept) RETURN r.id AS r, f.id AS f"),
+    *_reach_pair("reach_undeclared_hop_count", "MATCH (r:Contractor)-[:AT]->(f:Dept) RETURN count(*) AS c"),
+    *_reach_pair("reach_no_pattern", "RETURN 1 AS one"),
+    # An unguarded scope may take the fusion a guarded one is denied.
+    *_reach_pair(
+        "reach_valid_at_call_body",
+        "MATCH (w:Employee) CALL { UNWIND [date('2002-06-01'), date('2020-01-01')] AS d "
+        "MATCH (f:Dept) WHERE valid_at(f, d, 'vf', 'vt') RETURN f.id AS fid } RETURN w.id AS wid, fid",
+        "declared_reach_tag_graph",
     ),
     # Variable-length segments, OPTIONAL MATCH, subquery patterns and path
     # searches under a context, each with its prefix-less twin.

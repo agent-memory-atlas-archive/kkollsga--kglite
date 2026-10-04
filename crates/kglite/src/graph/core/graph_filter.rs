@@ -121,23 +121,27 @@ pub(crate) struct TemplateScope {
 impl GuardTemplate {
     /// The declared targets `scope` reaches, in lookup order. A node
     /// declaration on label L governs every node carrying L, primary or
-    /// secondary, so once the graph has secondary labels a labelled scope
-    /// can reach any declared label. A reached relationship type holding
-    /// several unkeyed declarations is refused — which one applies would
-    /// depend on declaration order — with the fix, naming `surface` as what
-    /// it was reached under.
+    /// secondary, so which declared node labels a labelled scope reaches
+    /// follows from where its labels sit: a label no node carries as a
+    /// secondary one reaches itself and the declared labels some node
+    /// carries as secondary ones (`D`, on a node of that label's type); a
+    /// label some node does carry as a secondary one can sit on a node of any
+    /// primary type, so it reaches every declared node label. A reached
+    /// relationship type holding several unkeyed declarations is refused —
+    /// which one applies would depend on declaration order — with the fix,
+    /// naming `surface` as what it was reached under.
     pub(crate) fn for_scope(
         graph: &DirGraph,
         declarations: &[DeclarationInfo],
         scope: &TemplateScope,
         surface: &str,
     ) -> Result<Self, String> {
-        let all_nodes = scope.any_node || (graph.has_secondary_labels && !scope.labels.is_empty());
+        let reaches_node = NodeReach::of(graph, scope);
         let mut template = GuardTemplate::default();
         for info in declarations {
             match &info.target {
                 TemporalTarget::Node(label) => {
-                    if all_nodes || scope.labels.contains(label) {
+                    if reaches_node.label(graph, label) {
                         template.nodes.push(NodeGuard {
                             label: label.clone(),
                             bounds: GuardBounds::of(&info.config),
@@ -177,6 +181,86 @@ impl GuardTemplate {
     pub(crate) fn is_empty(&self) -> bool {
         self.nodes.is_empty() && self.edges.is_empty()
     }
+
+    /// The targets as the echo names them: `(:Well)`, then `[:LICENSEE]` or
+    /// `[:LICENSEE from :Field]`, in template order.
+    pub(crate) fn target_names(&self) -> Vec<String> {
+        let nodes = self.nodes.iter().map(|n| node_target_name(&n.label));
+        let edges = self
+            .edges
+            .iter()
+            .map(|e| relationship_target_name(&e.rel_type, e.source_type.as_deref()));
+        nodes.chain(edges).collect()
+    }
+}
+
+/// A node target as the echo names it: `(:Well)`.
+pub(crate) fn node_target_name(label: &str) -> String {
+    format!("(:{label})")
+}
+
+/// A relationship target as the echo names it: `[:LICENSEE]` or
+/// `[:LICENSEE from :Field]`.
+pub(crate) fn relationship_target_name(rel_type: &str, source_type: Option<&str>) -> String {
+    match source_type {
+        Some(source) => format!("[:{rel_type} from :{source}]"),
+        None => format!("[:{rel_type}]"),
+    }
+}
+
+/// Every scope's template of one statement in one, with the echo's names for
+/// its targets: the executor resolves one filter per statement, and a UNION
+/// arm or `CALL { }` body may reach targets the top scope does not. Compiled
+/// with the plan, so an execution neither merges nor formats anything.
+#[derive(Debug)]
+pub(crate) struct MergedGuard {
+    pub(crate) template: Arc<GuardTemplate>,
+    pub(crate) target_names: Vec<String>,
+}
+
+impl MergedGuard {
+    pub(crate) fn new(template: GuardTemplate) -> Self {
+        MergedGuard {
+            target_names: template.target_names(),
+            template: Arc::new(template),
+        }
+    }
+}
+
+/// Which declared node labels one scope reaches; see
+/// [`GuardTemplate::for_scope`].
+struct NodeReach<'s> {
+    scope: &'s TemplateScope,
+    /// Every declared node label: `any_node`, or a scope label some node
+    /// carries as a secondary label.
+    every_label: bool,
+}
+
+impl<'s> NodeReach<'s> {
+    fn of(graph: &DirGraph, scope: &'s TemplateScope) -> Self {
+        let every_label = scope.any_node
+            || scope
+                .labels
+                .iter()
+                .any(|label| carried_as_secondary(graph, label));
+        NodeReach { scope, every_label }
+    }
+
+    /// Whether declared label `declared` is reached.
+    fn label(&self, graph: &DirGraph, declared: &str) -> bool {
+        self.every_label
+            || self.scope.labels.contains(declared)
+            || (!self.scope.labels.is_empty() && carried_as_secondary(graph, declared))
+    }
+}
+
+/// Whether some node carries `label` as a secondary label.
+pub(crate) fn carried_as_secondary(graph: &DirGraph, label: &str) -> bool {
+    graph.has_secondary_labels
+        && graph
+            .secondary_label_index
+            .get(&InternedKey::from_str(label))
+            .is_some_and(|bucket| !bucket.is_empty())
 }
 
 /// Today's date in UTC — the instant Cypher's `date()` and the fluent
@@ -255,9 +339,11 @@ pub(crate) struct ElementFilter {
     /// The first bound the evaluator could not read. The element is rejected
     /// and the execution raises this once it finishes.
     error: OnceLock<String>,
+    /// Whether some declared label is carried as a secondary one, once asked.
+    secondary_declared: OnceLock<bool>,
     /// What that error names the filter by: the statement's context, or the
     /// fluent step that asked.
-    prefix: Box<str>,
+    prefix: Cow<'static, str>,
 }
 
 /// The error prefix a statement's context filter reports under.
@@ -275,10 +361,19 @@ impl ElementFilter {
     /// `None` when the resolved filter removes nothing: every target is
     /// timeless at the instant, or the template has no target.
     pub(crate) fn new(filter: &GraphFilter, resolved: ResolvedFilter) -> Option<Self> {
+        Self::from_resolved(&filter.template, filter.selector, &resolved)
+    }
+
+    /// [`Self::new`] over a resolution another execution may share: the masks
+    /// are `Arc`s, and the residual targets are cloned out of it.
+    pub(crate) fn from_resolved(
+        template: &GuardTemplate,
+        selector: ValidTimeSelector,
+        resolved: &ResolvedFilter,
+    ) -> Option<Self> {
         if resolved.timeless || (resolved.masks.is_none() && resolved.guarded.is_empty()) {
             return None;
         }
-        let template = &filter.template;
         let residual_node = |label: &str| {
             resolved
                 .guarded
@@ -315,18 +410,19 @@ impl ElementFilter {
             edge_rules.push((guard.rel_key, rules));
         }
         Some(ElementFilter {
-            selector: filter.selector,
-            masks: resolved.masks,
+            selector,
+            masks: resolved.masks.clone(),
             node_residual,
             edge_rules: edge_rules.into_boxed_slice(),
             error: OnceLock::new(),
-            prefix: CONTEXT_PREFIX.into(),
+            secondary_declared: OnceLock::new(),
+            prefix: Cow::Borrowed(CONTEXT_PREFIX),
         })
     }
 
     /// This filter reporting an unreadable bound as `<prefix>: <element>, …`.
     pub(crate) fn with_error_prefix(mut self, prefix: &str) -> Self {
-        self.prefix = prefix.into();
+        self.prefix = Cow::Owned(prefix.to_string());
         self
     }
 
@@ -339,7 +435,8 @@ impl ElementFilter {
             node_residual: Box::default(),
             edge_rules: Box::default(),
             error: OnceLock::new(),
-            prefix: CONTEXT_PREFIX.into(),
+            secondary_declared: OnceLock::new(),
+            prefix: Cow::Borrowed(CONTEXT_PREFIX),
         }
     }
 
@@ -352,11 +449,35 @@ impl ElementFilter {
     }
 
     /// Whether the filter can hide a node whose primary type is
-    /// `node_type`: the type is declared, or nodes carry secondary labels (one
-    /// of which may be declared). `false` means every node of the type is
-    /// visible, so a caller may take its unfiltered route.
+    /// `node_type`: the type is declared, or it is carried as a secondary
+    /// label, or a declared label is (a node of the type may then carry it).
+    /// `false` means every node of the type is visible, so a caller may take
+    /// its unfiltered route.
     pub(crate) fn may_hide_type(&self, graph: &DirGraph, node_type: &str) -> bool {
-        graph.has_secondary_labels || graph.temporal.node(node_type).is_some()
+        self.may_hide_labels(graph, [node_type])
+    }
+
+    /// [`Self::may_hide_type`] for the nodes that carry any of `labels`; an
+    /// empty set is every node.
+    pub(crate) fn may_hide_labels<'a>(
+        &self,
+        graph: &DirGraph,
+        labels: impl IntoIterator<Item = &'a str>,
+    ) -> bool {
+        let mut any = false;
+        for label in labels {
+            any = true;
+            if graph.temporal.node(label).is_some() || carried_as_secondary(graph, label) {
+                return true;
+            }
+        }
+        !any || *self.secondary_declared.get_or_init(|| {
+            graph.has_secondary_labels
+                && graph
+                    .temporal
+                    .node_labels()
+                    .any(|label| carried_as_secondary(graph, label))
+        })
     }
 
     /// Whether the filter can hide a relationship of type `rel_type`: the

@@ -270,10 +270,13 @@ GUARD_SAFE_PASSES = {
 
 
 def _seed_declaration(graph):
-    """A declared label nothing in the corpus names, so a context lowers
-    (a graph with no declaration refuses one) without touching the query."""
+    """A declared label nothing in the corpus names, carried as a secondary
+    label by one node so every labelled scope reaches it: a context lowers
+    (a graph with no declaration refuses one) and guards the plan without
+    touching the query."""
     graph.cypher("CREATE (:ZzValidity {vf: date('2000-01-01'), vt: date('2001-01-01')})").to_list()
     graph.cypher("CALL db.temporal.declare({node: 'ZzValidity', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+    graph.cypher("MATCH (n) WHERE NOT n:ZzValidity WITH n LIMIT 1 SET n:ZzValidity").to_list()
 
 
 def test_guard_allow_list_matches_the_engine():

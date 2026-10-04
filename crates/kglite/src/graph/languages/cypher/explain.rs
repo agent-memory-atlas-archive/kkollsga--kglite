@@ -15,6 +15,7 @@
 use super::ast::*;
 use super::{executor, result};
 use crate::datatypes::values::Value;
+use crate::graph::core::graph_filter::GuardTemplate;
 use crate::graph::core::pattern_matching::{
     closure_probe, EdgeDirection, EdgePattern, NodePattern, Pattern, PatternElement,
     PropertyMatcher,
@@ -191,10 +192,14 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
     // top scope's guard covers, and that the instant is resolved per
     // execution rather than planned.
     if let Some(context) = &query.context {
-        let targets = query
-            .guard
-            .as_deref()
-            .map_or_else(|| "none".to_string(), ToString::to_string);
+        let targets = match (query.guard.as_deref(), &context.instant) {
+            (Some(guard), _) => guard.to_string(),
+            // Lowered, and nothing the scope reaches is declared.
+            (None, ContextInstant::AsOf(_)) if context.refusal.is_none() => {
+                GuardTemplate::default().to_string()
+            }
+            _ => "none".to_string(),
+        };
         let instant = match (&context.instant, &context.origin) {
             (ContextInstant::All, ContextOrigin::Skipped(reason)) => {
                 format!("all (default skipped: {reason})")

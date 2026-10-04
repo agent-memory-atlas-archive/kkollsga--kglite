@@ -24,20 +24,35 @@ impl PatternExecutor<'_> {
         &self,
         pattern: &NodePattern,
     ) -> Result<Vec<NodeIndex>, String> {
+        self.find_matching_nodes_up_to(pattern, None)
+    }
+
+    /// [`Self::find_matching_nodes`] for a caller that keeps at most `cap`
+    /// of them and learns only whether more exist: the guard stops at the
+    /// first `cap + 1` admitted nodes, which is the prefix the caller would
+    /// have kept, and a pattern the filter cannot hide a node of is not put to
+    /// it at all.
+    pub(super) fn find_matching_nodes_up_to(
+        &self,
+        pattern: &NodePattern,
+        cap: Option<usize>,
+    ) -> Result<Vec<NodeIndex>, String> {
         let candidates = self.find_matching_nodes_unguarded(pattern)?;
         Ok(match &self.graph_filter {
-            None => candidates,
-            Some(filter) => guard_candidates(filter, self.graph, candidates),
+            Some(filter) if pattern_may_hide(filter, self.graph, pattern) => {
+                guard_candidates(filter, self.graph, candidates, cap)
+            }
+            _ => candidates,
         })
     }
 
     /// Start nodes that came from somewhere other than
     /// [`Self::find_matching_nodes`] (the relationship-type inverted index).
     #[inline]
-    pub(super) fn guard_seeds(&self, seeds: Vec<NodeIndex>) -> Vec<NodeIndex> {
+    pub(super) fn guard_seeds(&self, seeds: Vec<NodeIndex>, cap: Option<usize>) -> Vec<NodeIndex> {
         match &self.graph_filter {
             None => seeds,
-            Some(filter) => guard_candidates(filter, self.graph, seeds),
+            Some(filter) => guard_candidates(filter, self.graph, seeds, cap),
         }
     }
 
@@ -68,15 +83,43 @@ impl PatternExecutor<'_> {
     }
 }
 
+/// Whether the filter can hide a node `pattern` binds: it names no label, or
+/// a label the filter may hide nodes of.
+#[cold]
+#[inline(never)]
+fn pattern_may_hide(filter: &ElementFilter, graph: &DirGraph, pattern: &NodePattern) -> bool {
+    let labels = pattern
+        .label_alternatives()
+        .iter()
+        .chain(&pattern.extra_labels)
+        .map(String::as_str);
+    filter.may_hide_labels(graph, labels)
+}
+
+/// The candidates the filter admits, in order; with a `cap`, only the first
+/// `cap + 1` of them.
 #[cold]
 #[inline(never)]
 fn guard_candidates(
     filter: &ElementFilter,
     graph: &DirGraph,
     mut candidates: Vec<NodeIndex>,
+    cap: Option<usize>,
 ) -> Vec<NodeIndex> {
-    candidates.retain(|&idx| filter.admits_node(graph, idx));
-    candidates
+    let Some(keep) = cap.map(|cap| cap.saturating_add(1)) else {
+        candidates.retain(|&idx| filter.admits_node(graph, idx));
+        return candidates;
+    };
+    let mut admitted = Vec::with_capacity(keep.min(candidates.len()));
+    for idx in candidates {
+        if filter.admits_node(graph, idx) {
+            admitted.push(idx);
+            if admitted.len() >= keep {
+                break;
+            }
+        }
+    }
+    admitted
 }
 
 #[cold]

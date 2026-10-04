@@ -1,6 +1,6 @@
 use crate::datatypes::values::Value;
 use crate::graph::constraints::EntityKind;
-use crate::graph::core::graph_filter::GuardTemplate;
+use crate::graph::core::graph_filter::{GuardTemplate, MergedGuard};
 use crate::graph::core::membership::MembershipSet;
 use crate::graph::core::pattern_matching::{ParamLabel, Pattern};
 use std::sync::Arc;
@@ -28,7 +28,9 @@ pub struct CypherQuery {
     pub(crate) context: Option<StatementContext>,
     /// The guard template lowering compiled for this scope — the top level,
     /// each `CALL { }` body and each UNION arm carry their own. `None`
-    /// whenever the statement has no context.
+    /// whenever the statement has no context, and for a scope that reaches no
+    /// declared target: nothing in it can be hidden, so it plans and runs
+    /// as it would without the context.
     pub(crate) guard: Option<Arc<GuardTemplate>>,
     /// Set by the session's plain-plan re-prepare: lowering must not add the
     /// default context to this text again.
@@ -87,6 +89,9 @@ pub(crate) struct StatementContext {
     /// Why lowering refused the statement, raised before any execution and
     /// before EXPLAIN renders a plan.
     pub(crate) refusal: Option<String>,
+    /// Every scope's template in one, set by lowering for an `AS OF` context
+    /// it did not refuse.
+    pub(crate) merged: Option<Arc<MergedGuard>>,
     /// Where the statement's body starts in its text, in chars: the parser
     /// records the token index and `parse_cypher` turns it into the offset.
     /// The session's timeless exit re-plans the text from here without the

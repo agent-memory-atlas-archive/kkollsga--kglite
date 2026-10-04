@@ -540,6 +540,10 @@ pub struct DirGraph {
     /// Fork-private, for the same reason as `edge_type_counts_cache`.
     #[serde(skip)]
     pub type_connectivity_cache: caches::ForkPrivateCache<Vec<ConnectivityTriple>>,
+    /// The hashes of every registered id/title alias spelling; see
+    /// [`caches::AliasHashes`].
+    #[serde(skip)]
+    pub(crate) alias_hash_cache: caches::ForkPrivateCache<caches::AliasHashes>,
     /// Lazy per-`(type, property)` distinct-value count (NDV), used by the
     /// planner to estimate non-indexed equality selectivity
     /// (`type_count / ndv`) instead of a flat heuristic. The tuple's `u64` is
@@ -977,6 +981,7 @@ impl DirGraph {
             spatial_configs: HashMap::new(),
             wkt_cache: Arc::new(RwLock::new(HashMap::new())),
             edge_type_counts_cache: Default::default(),
+            alias_hash_cache: Default::default(),
             type_connectivity_cache: Default::default(),
             property_ndv_cache: Arc::new(RwLock::new((0, HashMap::new()))),
             embeddings: HashMap::new(),

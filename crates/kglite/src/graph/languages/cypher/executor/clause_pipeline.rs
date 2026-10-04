@@ -429,6 +429,7 @@ impl CypherExecutor<'_> {
             initial_declared,
             set_seed,
         } = scope;
+        self.debug_assert_matcher_route(clause, query);
         if let Clause::Match(m) = clause {
             self.execute_match(m, result_set, inline_where)
         } else if let (Clause::With(w), Some((source, names))) = (clause, preserved) {

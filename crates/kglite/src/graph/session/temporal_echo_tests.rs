@@ -384,6 +384,40 @@ fn a_statement_naming_no_declared_label_has_no_counts() {
     assert_eq!(echo.endpoint_invalid, Some(0));
 }
 
+/// The echo lists what a statement can reach: an undeclared secondary label
+/// does not widen a statement that names a type nothing declared can sit on,
+/// and a declared label carried as a secondary one is reached through every
+/// type.
+#[test]
+fn the_echo_lists_the_targets_reachable_through_secondary_labels() {
+    let mut graph = wells();
+    run(&mut graph, "MATCH (f:Field) SET f:Tag");
+    let at = "FOR VALID_TIME AS OF date('2003-06-30') ";
+    let field = echo(&graph, &format!("{at}MATCH (f:Field) RETURN f.id")).unwrap();
+    assert_eq!(
+        field,
+        TemporalDiagnostics {
+            axis: "VALID_TIME".into(),
+            source: "explicit".into(),
+            instant: "2003-06-30".into(),
+            targets: vec![],
+            hidden: Default::default(),
+            endpoint_invalid: Some(0),
+            route: "plain".into(),
+            retrieval: None,
+            slice: false,
+            session_version: graph.version(),
+        }
+    );
+    let tag = echo(&graph, &format!("{at}MATCH (t:Tag) RETURN t.id")).unwrap();
+    assert_eq!(tag.targets, ["(:Well)"]);
+    assert_eq!(tag.hidden, [("(:Well)".to_string(), 1)].into());
+    run(&mut graph, "MATCH (f:Field) SET f:Well");
+    let field = echo(&graph, &format!("{at}MATCH (f:Field) RETURN f.id")).unwrap();
+    assert_eq!(field.targets, ["(:Well)"]);
+    assert_eq!(field.route, "guarded");
+}
+
 #[test]
 fn the_counts_refresh_when_the_graph_changes() {
     let mut graph = org_chart("closed");

@@ -1713,7 +1713,7 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   declared labels the filter judges for the statement's patterns across every
   scope, including labels widened in through secondary labels (a node must
   be valid under every declared label it carries, so a `(:A)` pattern lists
-  `(:B)` too when nodes it reaches can carry a declared `B`), without their bounds (`(:Well)`,
+  `(:B)` too when nodes it reaches can carry a declared `B`, and a statement over types nothing declared can sit on lists none and runs unfiltered), without their bounds (`(:Well)`,
   `[:LICENSEE]`, `[:LICENSEE from :Field]`), `hidden` (per target, how many rows it governs that are not valid at the instant, by that target's own bounds; a target answered by property guards has no entry), `endpoint_invalid` (relationships valid by their own bounds but hidden because an endpoint node is not valid at the instant, in no `hidden` entry; null when a target is answered by property guards), the `route` (`guarded`;
   `plain` when the timeless exit ran; `view` through a `freeze(valid_at=…)`
   handle), `retrieval` (`exact_mask` / `hnsw_mask` for a `vector_score`

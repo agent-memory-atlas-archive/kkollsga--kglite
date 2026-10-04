@@ -847,5 +847,95 @@
   },
   "tests/test_disk_differential_reopen.py::test_disk_graph_tracks_memory_across_save_and_reopen[12]": {
     "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_secondary_label_reach_goldens[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_secondary_label_reach_goldens[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_secondary_label_reach_goldens[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_the_echo_names_only_the_targets_a_statement_reaches[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_the_echo_names_only_the_targets_a_statement_reaches[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_the_echo_names_only_the_targets_a_statement_reaches[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_guarded_arm_under_an_unguarded_top_level[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_guarded_arm_under_an_unguarded_top_level[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_guarded_arm_under_an_unguarded_top_level[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_an_optional_match_joining_an_undeclared_to_a_declared_type[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_an_optional_match_joining_an_undeclared_to_a_declared_type[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_an_optional_match_joining_an_undeclared_to_a_declared_type[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_patterns_inside_expressions_reach_their_labels[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_patterns_inside_expressions_reach_their_labels[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_patterns_inside_expressions_reach_their_labels[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_cached_plan_follows_label_writes[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_cached_plan_follows_label_writes[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_cached_plan_follows_label_writes[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_transaction_reads_its_own_label_writes_before_commit[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_transaction_reads_its_own_label_writes_before_commit[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_transaction_reads_its_own_label_writes_before_commit[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_declaration_made_after_a_plan_was_cached_applies[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_declaration_made_after_a_plan_was_cached_applies[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_declaration_made_after_a_plan_was_cached_applies[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_an_unguarded_body_takes_the_fusion_a_guarded_scope_is_denied[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_an_unguarded_body_takes_the_fusion_a_guarded_scope_is_denied[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_an_unguarded_body_takes_the_fusion_a_guarded_scope_is_denied[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_capped_start_scan_still_finds_a_late_match[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_capped_start_scan_still_finds_a_late_match[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_reach.py::test_a_capped_start_scan_still_finds_a_late_match[disk]": {
+    "owner": "storage-parity"
   }
 }

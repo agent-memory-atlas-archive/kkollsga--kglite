@@ -42,12 +42,13 @@ fn lowered(graph: &DirGraph, query: &str, disabled: &[&str]) -> CypherQuery {
     parsed
 }
 
+/// The scope's template as EXPLAIN renders it; a scope that reaches no
+/// declared target has none (it plans and runs unguarded).
 fn template(query: &CypherQuery) -> String {
     query
         .guard
         .as_deref()
-        .expect("a guard template")
-        .to_string()
+        .map_or_else(|| GuardTemplate::default().to_string(), ToString::to_string)
 }
 
 fn refusal(query: &CypherQuery) -> Option<String> {
@@ -115,8 +116,12 @@ fn unconstrained_patterns_reach_every_declared_target() {
         &[],
     );
     assert_eq!(template(&q), all);
+    // `Tagged` is carried as a secondary label, so a node matched by it can
+    // have any primary type; `Field` is still only ever a primary type.
     write(&mut graph, "MATCH (f:Field) SET f:Tagged");
     let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Field) RETURN f"), &[]);
+    assert_eq!(template(&q), "no declared targets");
+    let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Tagged) RETURN f"), &[]);
     assert_eq!(template(&q), "(:Well [vf, vt] closed)");
 }
 

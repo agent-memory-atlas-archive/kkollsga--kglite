@@ -72,7 +72,58 @@ impl<T> std::ops::Deref for ForkPrivateCache<T> {
     }
 }
 
+/// The FNV hashes of every registered id and title alias spelling, as the
+/// executor's property access tests a name against them, with the two alias
+/// maps it was built from. Fork-private. The maps are `Arc`s, so a replaced
+/// map is a different pointer; an in-place edit goes through
+/// [`DirGraph::id_field_aliases_mut`] / [`DirGraph::title_field_aliases_mut`],
+/// which drop the entry. The lengths guard a map swapped for another that
+/// reuses the freed address.
+#[derive(Debug, Default)]
+pub(crate) struct AliasHashes {
+    id_map: usize,
+    title_map: usize,
+    lens: (usize, usize),
+    hashes: Arc<rustc_hash::FxHashSet<u64>>,
+}
+
 impl DirGraph {
+    /// The alias spellings' hashes, built once per alias-map state.
+    pub(crate) fn alias_name_hashes(&self) -> Arc<rustc_hash::FxHashSet<u64>> {
+        let id_map = Arc::as_ptr(&self.id_field_aliases) as usize;
+        let title_map = Arc::as_ptr(&self.title_field_aliases) as usize;
+        let lens = (self.id_field_aliases.len(), self.title_field_aliases.len());
+        let current = |cached: &AliasHashes| {
+            cached.id_map == id_map && cached.title_map == title_map && cached.lens == lens
+        };
+        if let Some(cached) = self.alias_hash_cache.read().unwrap().as_ref() {
+            if current(cached) {
+                return Arc::clone(&cached.hashes);
+            }
+        }
+        let mut hashes = rustc_hash::FxHashSet::default();
+        for alias in self
+            .id_field_aliases
+            .values()
+            .chain(self.title_field_aliases.values())
+        {
+            hashes.insert(InternedKey::from_str(alias).as_u64());
+        }
+        let hashes = Arc::new(hashes);
+        *self.alias_hash_cache.write().unwrap() = Some(AliasHashes {
+            id_map,
+            title_map,
+            lens,
+            hashes: Arc::clone(&hashes),
+        });
+        hashes
+    }
+
+    /// Drop the alias hashes: an alias map is about to change in place.
+    pub(crate) fn forget_alias_hashes(&mut self) {
+        *self.alias_hash_cache.write().unwrap() = None;
+    }
+
     /// Compute edge counts grouped by connection type. Lazily cached.
     ///
     /// Shared by `Arc`, not copied: the map is keyed by type *name*, so a

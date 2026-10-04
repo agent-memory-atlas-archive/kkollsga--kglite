@@ -6,15 +6,17 @@
 //! written. It walks every scope itself — the top level, each UNION arm and
 //! each `CALL { }` body — because the recursion inside `PASSES`
 //! (`optimize_nested_queries`) can be disabled. Each scope gets its own
-//! [`GuardTemplate`]: the declared targets its patterns can reach. The
-//! instant is not in the plan; it is evaluated once per execution.
+//! [`GuardTemplate`]: the declared targets its patterns can reach. A scope
+//! that reaches none keeps no template and plans as it would without the
+//! context. The instant is not in the plan; it is evaluated once per
+//! execution.
 //!
 //! A statement lowering refuses keeps its context with the refusal on it,
 //! raised before execution and before EXPLAIN renders a plan (see
 //! [`check_executable`]). One that lowers executes under the filter
 //! [`execution_filter`] resolves.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use chrono::Datelike;
@@ -31,7 +33,8 @@ use super::result::{ResultRow, TemporalDiagnostics};
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{
-    EdgeGuard, ElementFilter, GraphFilter, GuardTemplate, TemplateScope, ValidTimeSelector,
+    node_target_name, relationship_target_name, today_utc, EdgeGuard, ElementFilter, GuardTemplate,
+    MergedGuard, TemplateScope, ValidTimeSelector,
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
 use crate::graph::features::temporal::declarations::TemporalTarget;
@@ -94,6 +97,7 @@ pub(crate) fn apply_default(query: &mut CypherQuery, graph: &DirGraph) {
         instant,
         origin,
         refusal: None,
+        merged: None,
         body_start: 0,
     });
 }
@@ -194,8 +198,11 @@ fn lower_context(query: &mut CypherQuery, graph: &DirGraph) {
     if refusal.is_some() {
         clear_templates(query);
     }
+    let merged = (refusal.is_none() && !query.context.as_ref().is_some_and(is_all))
+        .then(|| build_merged(query));
     if let Some(context) = query.context.as_mut() {
         context.refusal = refusal;
+        context.merged = merged;
     }
 }
 
@@ -250,7 +257,7 @@ fn attach_templates(
         _ => CONTEXT_SURFACE,
     };
     let template = GuardTemplate::for_scope(graph, declarations, &reach.scope, surface)?;
-    query.guard = Some(Arc::new(template));
+    query.guard = (!template.is_empty()).then(|| Arc::new(template));
     for clause in &mut query.clauses {
         match clause {
             Clause::Union(arm) => attach_templates(&mut arm.query, graph, declarations, origin)?,
@@ -417,14 +424,37 @@ fn resolve_execution_filter(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
 ) -> Result<Option<Arc<ElementFilter>>, String> {
+    // Resolved before the template is looked at, so an instant that does not
+    // resolve is raised whatever the statement reaches.
+    let instant = resolve_instant(context, graph, params)?;
+    let merged = merged_of(query, context);
+    if merged.template.is_empty() {
+        return Ok(None);
+    }
+    let resolution = temporal::endpoint_index::resolve_shared(graph, &merged.template, instant);
+    Ok(ElementFilter::from_resolved(
+        &merged.template,
+        ValidTimeSelector::AsOf(instant),
+        &resolution.resolved,
+    )
+    .map(Arc::new))
+}
+
+/// [`merge_scope_templates`] over `query`, named for the echo.
+fn build_merged(query: &CypherQuery) -> Arc<MergedGuard> {
     let mut template = GuardTemplate::default();
     merge_scope_templates(query, &mut template);
-    let filter = GraphFilter {
-        template: Arc::new(template),
-        selector: ValidTimeSelector::AsOf(resolve_instant(context, graph, params)?),
-    };
-    let resolved = filter.resolve(graph);
-    Ok(ElementFilter::new(&filter, resolved).map(Arc::new))
+    Arc::new(MergedGuard::new(template))
+}
+
+/// The statement's merged template: the one lowering compiled, or — for a
+/// plan that reached execution without it — built here, so the filter never
+/// silently drops.
+fn merged_of(query: &CypherQuery, context: &StatementContext) -> Arc<MergedGuard> {
+    context
+        .merged
+        .clone()
+        .unwrap_or_else(|| build_merged(query))
 }
 
 /// Every scope's template in one: the executor resolves one filter per
@@ -464,6 +494,26 @@ fn resolve_instant(
     let ContextInstant::AsOf(expression) = &context.instant else {
         return Err("FOR VALID_TIME ALL has no instant".to_string());
     };
+    // The default context's `date()` is today in UTC, and a written instant is
+    // often a literal or a parameter: none needs an executor.
+    match expression {
+        Expression::FunctionCall { name, args, .. }
+            if args.is_empty() && name.eq_ignore_ascii_case("date") =>
+        {
+            return Ok(eval::Instant::Date(today_utc()));
+        }
+        Expression::Literal(value) => {
+            return eval::parse_instant(value)
+                .map_err(|err| format!("FOR VALID_TIME AS OF: {err}"));
+        }
+        Expression::Parameter(name) => {
+            if let Some(value) = params.get(name) {
+                return eval::parse_instant(value)
+                    .map_err(|err| format!("FOR VALID_TIME AS OF: {err}"));
+            }
+        }
+        _ => {}
+    }
     let value = CypherExecutor::with_params(graph, params, None)
         .evaluate_expression(expression, &ResultRow::new())?;
     eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))
@@ -476,15 +526,6 @@ fn echo_source(context: &StatementContext) -> String {
         (ContextOrigin::Skipped(reason), _) => format!("skipped:{reason}"),
         (ContextOrigin::Explicit, ContextInstant::All) => "all".to_string(),
         (ContextOrigin::Explicit, ContextInstant::AsOf(_)) => "explicit".to_string(),
-    }
-}
-
-/// A relationship target as the echo names it: `[:LICENSEE]` or
-/// `[:LICENSEE from :Field]`.
-fn target_name(rel_type: &str, source_type: Option<&str>) -> String {
-    match source_type {
-        Some(source) => format!("[:{rel_type} from :{source}]"),
-        None => format!("[:{rel_type}]"),
     }
 }
 
@@ -504,31 +545,29 @@ pub(crate) fn temporal_echo(
         return all_echo(context, graph);
     }
     let instant = resolve_instant(context, graph, params).ok()?;
-    let mut template = GuardTemplate::default();
-    merge_scope_templates(query, &mut template);
-    let nodes = template.nodes.iter().map(|n| format!("(:{})", n.label));
-    let edges = template
-        .edges
-        .iter()
-        .map(|e| target_name(&e.rel_type, e.source_type.as_deref()));
-    let counts = temporal::endpoint_index::filtered_counts(graph, &template, instant);
-    let hidden = counts
-        .hidden
-        .into_iter()
-        .map(|(target, count)| {
-            let name = match target {
-                TemporalTarget::Node(label) => format!("(:{label})"),
-                TemporalTarget::Relationship {
-                    rel_type,
-                    source_type,
-                } => target_name(&rel_type, source_type.as_deref()),
-            };
-            (name, count)
-        })
-        .collect();
-    let targets: Vec<String> = nodes.chain(edges).collect();
+    let merged = merged_of(query, context);
     // A statement that reaches no declared target is filtered by nothing.
-    let route = if targets.is_empty() { "plain" } else { route };
+    let (hidden, endpoint_invalid, route) = if merged.template.is_empty() {
+        (BTreeMap::new(), Some(0), "plain")
+    } else {
+        let resolution = temporal::endpoint_index::resolve_shared(graph, &merged.template, instant);
+        let hidden = resolution
+            .counts
+            .hidden
+            .iter()
+            .map(|(target, count)| {
+                let name = match target {
+                    TemporalTarget::Node(label) => node_target_name(label),
+                    TemporalTarget::Relationship {
+                        rel_type,
+                        source_type,
+                    } => relationship_target_name(rel_type, source_type.as_deref()),
+                };
+                (name, *count)
+            })
+            .collect();
+        (hidden, resolution.counts.endpoint_invalid, route)
+    };
     Some(TemporalDiagnostics {
         axis: context.axis.to_ascii_uppercase(),
         source: echo_source(context),
@@ -536,9 +575,9 @@ pub(crate) fn temporal_echo(
             eval::Instant::Date(date) => date.format("%Y-%m-%d").to_string(),
             eval::Instant::Timestamp(ts) => ts.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
         },
-        targets,
+        targets: merged.target_names.clone(),
         hidden,
-        endpoint_invalid: counts.endpoint_invalid,
+        endpoint_invalid,
         route: route.to_string(),
         retrieval: None,
         slice: false,
@@ -580,6 +619,11 @@ pub(crate) fn timeless_plain_text(
     if query.explain || context.refusal.is_some() || is_all(context) {
         return None;
     }
+    // No scope reaches a declared target, so lowering gave none a guard and
+    // the plan already is the one the text plans to without its context.
+    if merged_of(query, context).template.is_empty() {
+        return None;
+    }
     plain_text_if_timeless(text, query, context, graph, params)
 }
 
@@ -593,8 +637,8 @@ fn plain_text_if_timeless(
     params: &HashMap<String, Value>,
 ) -> Option<String> {
     let instant = resolve_instant(context, graph, params).ok()?;
-    let template = declared_template(graph).ok()?;
-    if !temporal::endpoint_index::template_timeless_at(graph, &template, instant) {
+    if !temporal::endpoint_index::declared_timeless_at(graph, instant, || declared_template(graph))
+    {
         return None;
     }
     // A default context has no prefix to strip, and the text keeps its own

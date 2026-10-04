@@ -196,7 +196,7 @@ pub struct CypherExecutor<'a> {
     /// to share across the rayon-parallel projection loop with no
     /// per-row lock contention. The graph is immutable during a read
     /// query, so the set never goes stale within an executor's lifetime.
-    alias_name_hashes: OnceLock<rustc_hash::FxHashSet<u64>>,
+    alias_name_hashes: OnceLock<std::sync::Arc<rustc_hash::FxHashSet<u64>>>,
     /// When `true`, the executor tries to absorb compatible clause runs
     /// into the streaming pipeline ([`stream::pipeline::try_run_streaming`]).
     /// Default `true`; disabled per-query via `kg.cypher(streaming=False)`.
@@ -323,16 +323,9 @@ impl<'a> CypherExecutor<'a> {
     /// FNV-hash set on first call; subsequent calls are a lock-free read.
     #[inline]
     pub(super) fn property_might_be_alias(&self, property: &str) -> bool {
-        let set = self.alias_name_hashes.get_or_init(|| {
-            let mut s = rustc_hash::FxHashSet::default();
-            for alias in self.graph.id_field_aliases.values() {
-                s.insert(InternedKey::from_str(alias).as_u64());
-            }
-            for alias in self.graph.title_field_aliases.values() {
-                s.insert(InternedKey::from_str(alias).as_u64());
-            }
-            s
-        });
+        let set = self
+            .alias_name_hashes
+            .get_or_init(|| self.graph.alias_name_hashes());
         // Empty set (the common no-alias graph) → never an alias, and the
         // early return skips hashing the property string at all.
         if set.is_empty() {
@@ -832,7 +825,6 @@ impl<'a> CypherExecutor<'a> {
         clause: &Clause,
         result_set: ResultSet,
     ) -> Result<ResultSet, String> {
-        self.debug_assert_matcher_route(clause);
         match clause {
             Clause::Match(m) => self.execute_match(m, result_set, None),
             Clause::OptionalMatch(m) => self.execute_optional_match(m, result_set),
@@ -1161,12 +1153,16 @@ fn declared_from_rows(result_set: &ResultSet) -> std::collections::HashSet<Strin
 
 impl CypherExecutor<'_> {
     /// Under a graph filter only the fused operators with a guarded route
-    /// may run: the planner's guard allow-list keeps the others out of the
-    /// plan, and this is where a leak would surface.
+    /// may run in a scope that carries a guard template: the planner's guard
+    /// allow-list keeps the others out of its plan, and this is where a leak
+    /// would surface. A scope lowering gave no template reaches nothing the
+    /// filter can hide and plans with every pass, so it is not held to it —
+    /// whatever other scope of the statement set the filter.
     #[inline]
-    fn debug_assert_matcher_route(&self, clause: &Clause) {
+    pub(super) fn debug_assert_matcher_route(&self, clause: &Clause, scope: &CypherQuery) {
         debug_assert!(
             self.graph_filter.get().is_none()
+                || scope.guard.is_none()
                 || !is_fused_clause(clause)
                 || runs_under_graph_filter(clause),
             "fused clause {} reached execution under a graph filter",

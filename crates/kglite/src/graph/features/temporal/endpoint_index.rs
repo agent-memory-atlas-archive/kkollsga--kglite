@@ -556,9 +556,24 @@ pub(crate) struct IndexCache {
     /// A text index's corpus statistics over the documents visible at an
     /// instant, oldest first (see [`super::instant::masked_text_stats`]).
     text_stats: VecDeque<(TextStatsKey, MaskedStats)>,
+    /// The template of every declared target, as the session's plain-plan
+    /// exit builds it; `Err` when a relationship type holds several unkeyed
+    /// declarations. `None` until first asked.
+    declared: Option<Result<Arc<GuardTemplate>, String>>,
+    /// Whether every declared target is timeless at an instant, oldest
+    /// first; a bool per instant, so outside the byte cap.
+    timeless_all: VecDeque<(Instant, bool)>,
+    /// Template resolutions per instant, oldest first, shared by every
+    /// statement whose merged template is equal. A resolution holds its
+    /// masks, so the cache is emptied whenever a mask is evicted: no entry
+    /// keeps alive what the byte cap has let go.
+    resolutions: VecDeque<CachedResolution>,
     /// Replaces the byte cap for this graph (tests).
     cap: Option<usize>,
 }
+
+/// The most template resolutions and timeless answers cached at once.
+const MAX_CACHED_RESOLUTIONS: usize = 8;
 
 type Lookup = (TargetCounts, Result<Arc<EndpointIndex>, Unindexed>);
 
@@ -580,6 +595,30 @@ impl IndexCache {
         self.duplicates.clear();
         self.disk_masks.clear();
         self.text_stats.clear();
+        self.forget_declared();
+    }
+
+    /// Drop what derives from the declaration store alone: a declaration
+    /// that changes moves no row, so the indexes stay, but the templates
+    /// built from it do not.
+    pub(super) fn forget_declared(&mut self) {
+        self.declared = None;
+        self.timeless_all.clear();
+        self.resolutions.clear();
+    }
+
+    fn find_resolution(
+        &self,
+        template: &Arc<GuardTemplate>,
+        instant: Instant,
+    ) -> Option<Arc<Resolution>> {
+        self.resolutions
+            .iter()
+            .find(|c| {
+                c.instant == instant
+                    && (Arc::ptr_eq(&c.template, template) || *c.template == **template)
+            })
+            .map(|c| Arc::clone(&c.resolution))
     }
 
     fn find(&self, target: &TemporalTarget, config: &TemporalConfig) -> Option<Lookup> {
@@ -655,6 +694,7 @@ impl IndexCache {
             if self.masks.pop_front().is_none() {
                 return false;
             }
+            self.resolutions.clear();
         }
         true
     }
@@ -748,6 +788,13 @@ pub(crate) fn node_count_at(graph: &DirGraph, label: &str, t: Instant) -> Option
         .count_at(t)
 }
 
+/// Whether `config` still declares `bounds`.
+fn bounds_match(config: &TemporalConfig, bounds: &GuardBounds) -> bool {
+    config.valid_from == bounds.from
+        && config.valid_to == bounds.to
+        && config.convention == bounds.convention
+}
+
 /// The declaration a template entry was compiled from, when it is still the
 /// one in force.
 fn template_targets<'g>(
@@ -758,7 +805,7 @@ fn template_targets<'g>(
         let config = graph
             .temporal
             .node(&guard.label)
-            .filter(|c| GuardBounds::of(c) == guard.bounds);
+            .filter(|c| bounds_match(c, &guard.bounds));
         (TemporalTarget::Node(guard.label.clone()), config)
     });
     let edges = template.edges.iter().map(|guard| {
@@ -766,7 +813,7 @@ fn template_targets<'g>(
             .temporal
             .edges(&guard.rel_type)
             .iter()
-            .find(|c| c.source_type == guard.source_type && GuardBounds::of(c) == guard.bounds);
+            .find(|c| c.source_type == guard.source_type && bounds_match(c, &guard.bounds));
         let target = TemporalTarget::Relationship {
             rel_type: guard.rel_type.clone(),
             source_type: guard.source_type.clone(),
@@ -790,6 +837,114 @@ pub(crate) fn template_timeless_at(graph: &DirGraph, template: &GuardTemplate, t
                     == Some(true)
             })
         })
+}
+
+/// The template of every declared target of `graph`, built by `build` on
+/// the first ask at a graph version and shared after it.
+pub(crate) fn declared_template_memo(
+    graph: &DirGraph,
+    build: impl FnOnce() -> Result<GuardTemplate, String>,
+) -> Result<Arc<GuardTemplate>, String> {
+    let version = graph.version();
+    if let Some(hit) = read_cache(graph)
+        .as_ref()
+        .filter(|c| c.version == version)
+        .and_then(|c| c.declared.clone())
+    {
+        return hit;
+    }
+    let built = build().map(Arc::new);
+    write_cache(graph)
+        .get_or_insert_with(IndexCache::default)
+        .at(version)
+        .declared = Some(built.clone());
+    built
+}
+
+/// Whether every declared target is indexed and timeless at `t` (see
+/// [`template_timeless_at`]), `false` when the declarations cannot form a
+/// template. Answered from the cache once asked at a graph version; a hit
+/// takes the read lock only.
+pub(crate) fn declared_timeless_at(
+    graph: &DirGraph,
+    t: Instant,
+    build: impl FnOnce() -> Result<GuardTemplate, String>,
+) -> bool {
+    let version = graph.version();
+    if let Some(answer) = read_cache(graph)
+        .as_ref()
+        .filter(|c| c.version == version)
+        .and_then(|c| {
+            c.timeless_all
+                .iter()
+                .find(|(i, _)| *i == t)
+                .map(|(_, a)| *a)
+        })
+    {
+        return answer;
+    }
+    let answer = declared_template_memo(graph, build)
+        .is_ok_and(|template| template_timeless_at(graph, &template, t));
+    let mut write = write_cache(graph);
+    let cache = write.get_or_insert_with(IndexCache::default).at(version);
+    if cache.timeless_all.len() >= MAX_CACHED_RESOLUTIONS {
+        cache.timeless_all.pop_front();
+    }
+    cache.timeless_all.push_back((t, answer));
+    answer
+}
+
+/// A template resolved at one instant, with the counts the echo reports:
+/// what every statement reaching those targets at that instant shares.
+#[derive(Debug)]
+pub(crate) struct Resolution {
+    pub(crate) resolved: ResolvedFilter,
+    pub(crate) counts: FilteredCounts,
+}
+
+#[derive(Debug)]
+struct CachedResolution {
+    template: Arc<GuardTemplate>,
+    instant: Instant,
+    resolution: Arc<Resolution>,
+}
+
+/// [`resolve`] at `t` together with [`filtered_counts`], cached per graph
+/// version by template and instant: the statement's echo and its executor ask
+/// for the same pass, and so does the next statement that reaches the same
+/// targets. A hit takes the read lock only. Equal templates share an entry,
+/// so a re-parsed statement hits too.
+pub(crate) fn resolve_shared(
+    graph: &DirGraph,
+    template: &Arc<GuardTemplate>,
+    t: Instant,
+) -> Arc<Resolution> {
+    let version = graph.version();
+    if let Some(hit) = read_cache(graph)
+        .as_ref()
+        .filter(|c| c.version == version)
+        .and_then(|c| c.find_resolution(template, t))
+    {
+        return hit;
+    }
+    let resolution = Arc::new(Resolution {
+        resolved: resolve(graph, template, ValidTimeSelector::AsOf(t)),
+        counts: filtered_counts(graph, template, t),
+    });
+    let mut write = write_cache(graph);
+    let cache = write.get_or_insert_with(IndexCache::default).at(version);
+    if let Some(hit) = cache.find_resolution(template, t) {
+        return hit;
+    }
+    if cache.resolutions.len() >= MAX_CACHED_RESOLUTIONS {
+        cache.resolutions.pop_front();
+    }
+    cache.resolutions.push_back(CachedResolution {
+        template: Arc::clone(template),
+        instant: t,
+        resolution: Arc::clone(&resolution),
+    });
+    resolution
 }
 
 /// A [`GuardTemplate`] resolved against one instant. See
@@ -995,6 +1150,7 @@ fn cached_masks(
     }
     if cache.masks.len() >= MAX_CACHED_MASKS {
         cache.masks.pop_front();
+        cache.resolutions.clear();
     }
     let masks = Arc::new(build_masks(graph, parts));
     cache.masks.push_back((key.clone(), Arc::clone(&masks)));
@@ -1034,9 +1190,11 @@ pub(crate) fn invalidate(graph: &DirGraph) {
 /// Whether masks built for `cover` may serve a query keyed `key`: every
 /// `(target, segment)` of `key` is in `cover`. The extra targets of `cover`
 /// only clear elements of targets the query's template does not reach —
-/// its scopes cannot bind them (the template already holds every declared
-/// label a pattern can reach, secondary labels included), and a
-/// relationship type outside it is never traversed. A retrieval filter's
+/// its scopes cannot bind them (the template holds every declared label a
+/// pattern can reach: its own labels and the declared labels some node
+/// carries as secondary ones, or all of them when a pattern label is carried
+/// as a secondary one), and a relationship type outside it is never
+/// traversed. A retrieval filter's
 /// template holds every declared node label and its index's relationship
 /// type, whose documents are all a retrieval pass walks.
 fn is_covered_by(key: &SegmentKey, cover: &SegmentKey) -> bool {

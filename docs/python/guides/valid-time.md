@@ -205,6 +205,15 @@ graph.cypher("MATCH (t:Team) RETURN count(*) AS n", valid_at="2016-06-30").diagn
 #  'slice': False, 'session_version': 22}
 ```
 
+`targets` lists the declared targets the statement can reach, and `hidden` has
+one entry per target, so both name only what the statement could have seen
+removed: a statement over a type with no declaration lists none and runs
+unfiltered (`'route': 'plain'`). A node declaration governs every node
+carrying the label, primary or secondary, so a statement naming a label that
+nodes of any type carry as a secondary label reaches every declared node
+label, and one naming any other label reaches its own declaration plus the
+declared labels some node carries as a secondary label.
+
 `hidden` says how much the context removed: per target, the rows it governs
 that are not valid at the instant (`'(:Team)': 3`; a relationship target reads
 `'[:MEMBER_OF]'`, or `'[:MEMBER_OF from :Employee]'` when declared per

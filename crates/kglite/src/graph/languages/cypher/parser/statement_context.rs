@@ -39,6 +39,7 @@ impl CypherParser {
                 instant: ContextInstant::All,
                 origin: ContextOrigin::Explicit,
                 refusal: None,
+                merged: None,
                 body_start: 0,
             });
         }
@@ -64,6 +65,7 @@ impl CypherParser {
             instant: ContextInstant::AsOf(instant),
             origin: ContextOrigin::Explicit,
             refusal: None,
+            merged: None,
             body_start: 0,
         })
     }
