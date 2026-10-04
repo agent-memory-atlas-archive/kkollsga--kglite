@@ -9,6 +9,32 @@ before upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- The implicit parent edge of a blueprint spec with `parent_fk` is named `OF_`
+  plus the parent type split into words, in upper snake case: `ProjectPhase`
+  gives `OF_PROJECT_PHASE`, `TeamHQ` gives `OF_TEAM_HQ`, `TeamV2` gives
+  `OF_TEAM_V2` (it was `OF_PROJECTPHASE`). A single-word parent is unchanged.
+  Graphs rebuilt from a blueprint with a multi-word parent carry the new name,
+  for top-level `parent` specs too.
+
+### Fixed
+
+- A blueprint sub-node that already declares an `fk_edges` entry to its parent
+  type no longer gets a second, implicit parent edge, and the implicit edge no
+  longer creates stub parents. Built by 0.19.2, such a blueprint carried the
+  edge twice (the implicit name did not match a snake-case declared one) and
+  gained a stub parent node per unmatched `parent_fk` value, which on a
+  declared valid-time type is valid at every instant. Now any `fk_edges` entry
+  to the parent type replaces the implicit edge, a `parent_fk` value that
+  matches no parent pk writes no edge and no stub (one warning per spec with
+  the count and an example), and a parent with `pk: "auto"` gets no implicit
+  edge (one warning). The valid-time grouping of the sub-node's versions
+  follows the edge actually written. Graphs built by 0.19.2 from such
+  blueprints should be rebuilt; `purge_provisional()` removes the stubs from
+  an existing graph. A missing `parent_fk` column is reported as a `parent_fk`
+  column, not as an undeclared edge.
+
 ## [0.19.2] - 2026-10-04
 
 ### Added

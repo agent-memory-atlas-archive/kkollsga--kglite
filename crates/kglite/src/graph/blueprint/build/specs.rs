@@ -9,6 +9,8 @@ pub struct FlatSpec {
     pub node_type: String,
     pub spec: NodeSpec,
     pub parent: Option<String>,
+    /// The parent type's `pk` is `"auto"`; set by [`mark_auto_pk_parents`].
+    pub(crate) parent_pk_auto: bool,
     pub is_manual: bool,
     /// Name of the input this spec's rows come from, as looked up in the
     /// build's `InputRegistry`: the `files` entry the spec names, or the `csv`
@@ -31,6 +33,7 @@ pub(super) fn collect_specs(nodes: &IndexMap<String, NodeSpec>) -> (Vec<FlatSpec
             node_type: name.clone(),
             spec: clone_without_subs(spec),
             parent: None,
+            parent_pk_auto: false,
             is_manual,
             input,
         });
@@ -38,18 +41,34 @@ pub(super) fn collect_specs(nodes: &IndexMap<String, NodeSpec>) -> (Vec<FlatSpec
             // Sub-nodes keep their raw `parent` field untouched; the
             // enclosing type name is recorded on `FlatSpec.parent`, which
             // `set_parent_type` and the implicit `OF_<PARENT>` edge for a
-            // `parent_fk` (see `fk::implicit_parent_edge`) both read.
+            // `parent_fk` (see `parent_link::parent_link`) both read.
             let sub_clone = clone_without_subs(sub_spec);
             subs.push(FlatSpec {
                 node_type: sub_name.clone(),
                 spec: sub_clone,
                 parent: Some(name.clone()),
+                parent_pk_auto: false,
                 is_manual: false,
                 input: sub_spec.input_name().map(str::to_string),
             });
         }
     }
     (core, subs)
+}
+
+/// Records on each spec whether its parent type declares `pk: "auto"`.
+/// Separate from [`collect_specs`] because a `parent` key can name any type.
+pub(super) fn mark_auto_pk_parents(core: &mut [FlatSpec], subs: &mut [FlatSpec]) {
+    let auto: std::collections::HashSet<String> = core
+        .iter()
+        .chain(subs.iter())
+        .filter(|s| s.spec.pk.as_deref() == Some("auto"))
+        .map(|s| s.node_type.clone())
+        .collect();
+    for spec in core.iter_mut().chain(subs.iter_mut()) {
+        let parent = spec.spec.parent.as_ref().or(spec.parent.as_ref());
+        spec.parent_pk_auto = parent.is_some_and(|p| auto.contains(p));
+    }
 }
 
 /// The flattening pass's per-type copy: everything the spec declares except

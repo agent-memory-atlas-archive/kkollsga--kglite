@@ -258,7 +258,8 @@ pub(super) fn declare_blueprint_temporal(
             );
         // A sub-node's parent column is not a stored property, so its
         // versions are grouped by the parent edge the build wrote from it.
-        let parent_edge = super::fk::implicit_parent_edge(flat).map(|(edge_type, _)| edge_type);
+        let parent_edge = super::parent_link::parent_link(flat)
+            .and_then(|link| link.written_edge().map(str::to_string));
         let mut requests: Vec<(String, TemporalTarget, &TemporalSpec)> = Vec::new();
         if let Some(temporal) = &spec.temporal {
             requests.push((

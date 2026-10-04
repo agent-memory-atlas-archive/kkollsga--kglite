@@ -65,12 +65,13 @@ def test_versions_of_one_id_abut_and_warn_only_when_closed():
     assert not any("end on the day" in w for w in warns), warns
 
 
-def _blueprint(tmp_path, convention):
+def _blueprint(tmp_path, convention, explicit_edge=None):
     pd.DataFrame({"project_id": [1, 2], "name": ["Alpha", "Beta"]}).to_csv(tmp_path / "projects.csv", index=False)
     pd.DataFrame(
         {
             "phase_id": [10, 11, 12],
             "project_id": [1, 1, 2],
+            "project_name": ["Alpha", "Alpha", "Beta"],
             "label": ["design", "build", "survey"],
             # Alpha's design ends the day its build begins. Beta's survey ends
             # the day Alpha's design begins, which is another project's row.
@@ -87,6 +88,12 @@ def _blueprint(tmp_path, convention):
         "properties": {"sf": "validFrom", "st": "validTo"},
         "temporal": {"from": "sf", "to": "st", "convention": convention},
     }
+    if explicit_edge:
+        # `parent_fk` names a column the parent's pk cannot match, so only the
+        # declared edge links a phase to its project.
+        phase["parent_fk"] = "project_name"
+        phase["skipped"] = ["project_id", "project_name"]
+        phase["connections"] = {"fk_edges": {explicit_edge: {"target": "Project", "fk": "project_id"}}}
     bp = {
         "settings": {"root": str(tmp_path)},
         "nodes": {
@@ -119,3 +126,13 @@ def test_blueprint_sub_node_versions_group_by_parent_edge_half_open(tmp_path):
     g, caught = _blueprint(tmp_path, "half_open")
     assert _phase_abutting(g) == [1]
     assert not any("end on the day" in w for w in caught), caught
+
+
+def test_blueprint_sub_node_versions_group_by_the_explicit_parent_edge(tmp_path):
+    g, caught = _blueprint(tmp_path, "closed", explicit_edge="BELONGS_TO_PROJECT")
+    assert g.cypher("FOR VALID_TIME ALL MATCH ()-[x]->() RETURN DISTINCT type(x) AS t").to_list() == [
+        {"t": "BELONGS_TO_PROJECT"}
+    ]
+    assert g.cypher("MATCH (p:Project) RETURN count(p) AS c").to_list() == [{"c": 2}]
+    assert _phase_abutting(g) == [1]
+    assert any("end on the day another row of the same parent node begins" in w for w in caught), caught

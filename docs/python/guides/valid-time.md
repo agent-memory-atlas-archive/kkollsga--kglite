@@ -123,7 +123,8 @@ type compares the relationships of one source node. A node label compares rows
 that share an `id`: two `Team` nodes with different ids that share a date are
 different teams and are not counted, however many dates they share. A
 blueprint sub-node with `parent_fk` compares the sub-nodes of one parent, which
-is the entity its versions hang from. `abutting_rows`, the warning and the
+is the entity its versions hang from, through its parent edge (declared or
+generated). `abutting_rows`, the warning and the
 `describe()` annotation all use this count; a node label whose versions carry
 distinct ids and no parent edge reports 0, because the engine has no way to
 tell which rows belong together.

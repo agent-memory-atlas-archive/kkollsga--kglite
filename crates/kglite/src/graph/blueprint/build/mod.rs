@@ -22,6 +22,7 @@ mod fk;
 mod junction;
 mod manual;
 mod nodes;
+mod parent_link;
 mod points;
 mod prepass;
 mod specs;
@@ -209,7 +210,8 @@ pub fn build(
     let profile = std::env::var("KGLITE_BLUEPRINT_PROFILE").is_ok();
     let t0 = std::time::Instant::now();
 
-    let (core_specs, sub_specs) = collect_specs(&blueprint.nodes);
+    let (mut core_specs, mut sub_specs) = collect_specs(&blueprint.nodes);
+    specs::mark_auto_pk_parents(&mut core_specs, &mut sub_specs);
     // `_provisional` is the reserved auto-vivification marker — a node
     // spec must not declare a property of that name.
     for spec in core_specs.iter().chain(sub_specs.iter()) {

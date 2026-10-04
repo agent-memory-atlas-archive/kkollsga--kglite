@@ -201,6 +201,7 @@ mod manual_node_tests {
                 node_type: "Owner".to_string(),
                 spec: spec_from(serde_json::json!({"pk": "name"})),
                 parent: None,
+                parent_pk_auto: false,
                 is_manual: true,
                 input: None,
             },
@@ -208,6 +209,7 @@ mod manual_node_tests {
                 node_type: "Tag".to_string(),
                 spec: spec_from(serde_json::json!({"pk": "name"})),
                 parent: None,
+                parent_pk_auto: false,
                 is_manual: true,
                 input: None,
             },
@@ -223,6 +225,7 @@ mod manual_node_tests {
                     }}
                 })),
                 parent: None,
+                parent_pk_auto: false,
                 is_manual: false,
                 input: Some("items.csv".to_string()),
             },

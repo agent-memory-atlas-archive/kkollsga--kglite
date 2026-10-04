@@ -1572,7 +1572,7 @@ CALL db.temporal.declarations()
 - **`abutting_rows`** counts rows whose `to` equals another row's `from`
   within one entity at declare time: among the relationships of one source
   node, or among the node rows of a label that share an `id` (a blueprint
-  sub-node with `parent_fk` counts within one parent). Rows of different
+  sub-node with `parent_fk` groups by its parent edge, declared or generated). Rows of different
   entities that share a date are not counted; under `closed` the warning
   mentions them separately as possibly unrelated. Under `closed` both such rows are valid on that day, so a non-zero
   count adds a query warning suggesting `half_open`. On a disk-mode graph the

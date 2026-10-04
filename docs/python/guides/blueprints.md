@@ -532,9 +532,9 @@ Suppose each employee has performance reviews in `reviews.csv`:
 }
 ```
 
-This creates `Review` nodes linked to their parent `Employee` via an `OF_EMPLOYEE` edge (auto-generated from the parent type name). The `parent_fk` column must match the parent's `pk` values.
+This creates `Review` nodes linked to their parent `Employee` via an `OF_EMPLOYEE` edge, named `OF_` plus the parent type split into words in upper snake case (`ProjectPhase` gives `OF_PROJECT_PHASE`, `TeamHQ` gives `OF_TEAM_HQ`). The `parent_fk` column must hold the parent's `pk` values: a row whose value matches no parent gets no edge and no stub parent, and the build warns once per spec with the row count and an example value.
 
-A `fk_edges` entry on the sub-node with the same name (`OF_EMPLOYEE` here) replaces the generated edge instead of adding a second one. There is no switch to turn the generated edge off: leave `parent_fk` out of the spec (and list the column under `skipped`) to load the sub-node with only the edges you declare.
+A `fk_edges` entry on the sub-node that targets the parent type, whatever its name, replaces the generated edge: only your declared edge is written (a `junction_edges` entry does not count). With several, the one on the `parent_fk` column is the parent link, else the first declared. Validity grouping of the sub-node's versions follows that edge. When the parent declares `pk: "auto"`, its ids are row numbers no column can name, so no edge is generated and the build warns; declare an `fk_edges` entry on a column holding those numbers, or drop `parent_fk`. There is no switch to turn the generated edge off: leave `parent_fk` out of the spec (and list the column under `skipped`) to load the sub-node with only the edges you declare.
 
 > Use `"pk": "auto"` if your sub-node CSV doesn't have a natural primary key — the loader generates sequential IDs (1, 2, 3, ...).
 

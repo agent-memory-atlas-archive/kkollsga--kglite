@@ -8,6 +8,7 @@ use super::super::timeseries as ts;
 use super::super::typing::map_blueprint_type;
 use super::cache::{CsvCache, IdTypeCache};
 use super::nodes::{fk_id_columns, node_chunk_size, should_stream_spec};
+use super::parent_link::{drop_unresolved_parents, parent_link, ParentLink, UnresolvedParents};
 use super::prepass;
 use super::specs::FlatSpec;
 use super::table_ops::subset_rows;
@@ -35,18 +36,70 @@ struct PreppedFkEdges {
     warnings: Vec<String>,
 }
 
-/// The implicit `OF_<PARENT>` edge a spec with `parent_fk` gets. The parent is
-/// the spec's own `parent` key, else the enclosing type of a sub-node. A
-/// same-named `fk_edges` entry wins (callers use `entry().or_insert`).
-pub(super) fn implicit_parent_edge(
+/// The spec's declared FK edges plus its generated parent edge, with that
+/// edge's type when one is generated (see [`parent_link`]).
+fn spec_fk_edges(
     spec: &FlatSpec,
-) -> Option<(String, super::super::schema::FkEdge)> {
-    let parent_fk = spec.spec.parent_fk.as_ref()?;
-    let parent_type = spec.spec.parent.as_ref().or(spec.parent.as_ref())?;
-    Some((
-        format!("OF_{}", parent_type.to_uppercase()),
-        super::super::schema::FkEdge::plain(parent_type.clone(), parent_fk.clone()),
-    ))
+) -> (
+    IndexMap<String, super::super::schema::FkEdge>,
+    Option<String>,
+) {
+    let mut edges: IndexMap<String, super::super::schema::FkEdge> = spec
+        .spec
+        .connections
+        .fk_edges
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let mut implicit = None;
+    if let Some(ParentLink::Implicit { edge_type, edge }) = parent_link(spec) {
+        if !edges.contains_key(&edge_type) {
+            implicit = Some(edge_type.clone());
+            edges.insert(edge_type, *edge);
+        }
+    }
+    (edges, implicit)
+}
+
+/// The error for an edge whose FK column the source lacks. A generated parent
+/// edge names `parent_fk`, the key the blueprint actually declares.
+fn missing_fk_column_error(
+    spec: &FlatSpec,
+    edge_type: &str,
+    fk: &str,
+    implicit: &Option<String>,
+) -> String {
+    if implicit.as_deref() == Some(edge_type) {
+        format!(
+            "[{}] parent_fk column '{fk}' not found in the source CSV",
+            spec.node_type
+        )
+    } else {
+        format!(
+            "[{}] FK column '{fk}' not found for edge {edge_type}",
+            spec.node_type
+        )
+    }
+}
+
+/// One warning per spec that declares `parent_fk` under a parent with
+/// `pk: "auto"`, which no column value can reference.
+fn auto_parent_warnings(specs: &[&FlatSpec]) -> Vec<String> {
+    specs
+        .iter()
+        .filter_map(|spec| match parent_link(spec)? {
+            ParentLink::AutoPkParent {
+                parent_type,
+                parent_fk,
+            } => Some(format!(
+                "[{}] parent_fk '{parent_fk}' writes no edge: '{parent_type}' has pk \"auto\", so \
+                 its ids are row numbers no column value names. Declare an fk_edges entry to \
+                 '{parent_type}' on a column holding those row numbers, or drop parent_fk.",
+                spec.node_type
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 struct PreppedFkEdge {
@@ -54,6 +107,9 @@ struct PreppedFkEdge {
     target_type: String,
     target_col: String,
     df: DataFrame,
+    /// The generated parent edge, whose unresolvable rows are dropped.
+    implicit: bool,
+    fk: String,
 }
 
 fn prep_fk_edges(
@@ -64,16 +120,7 @@ fn prep_fk_edges(
 ) -> Option<PreppedFkEdges> {
     let input = spec.input.as_deref()?;
 
-    let mut fk_edges: IndexMap<String, super::super::schema::FkEdge> = spec
-        .spec
-        .connections
-        .fk_edges
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if let Some((edge_type, edge)) = implicit_parent_edge(spec) {
-        fk_edges.entry(edge_type).or_insert(edge);
-    }
+    let (fk_edges, implicit) = spec_fk_edges(spec);
     if fk_edges.is_empty() {
         return None;
     }
@@ -112,9 +159,8 @@ fn prep_fk_edges(
 
     for (edge_type, edge) in &fk_edges {
         let Some(fk_idx) = raw.col_index(&edge.fk) else {
-            errors.push(format!(
-                "[{}] FK column '{}' not found for edge {}",
-                spec.node_type, edge.fk, edge_type
+            errors.push(missing_fk_column_error(
+                spec, edge_type, &edge.fk, &implicit,
             ));
             continue;
         };
@@ -183,6 +229,8 @@ fn prep_fk_edges(
             target_type: edge.target.clone(),
             target_col: frame.target_col,
             df: frame.df,
+            implicit: implicit.as_deref() == Some(edge_type.as_str()),
+            fk: edge.fk.clone(),
         });
     }
 
@@ -450,6 +498,7 @@ pub(super) fn load_fk_edges(
 ) -> Result<(), String> {
     use rayon::prelude::*;
     let profile = std::env::var("KGLITE_BLUEPRINT_PROFILE").is_ok();
+    report.warnings.extend(auto_parent_warnings(specs));
 
     // Same predicate as node streaming, so a spec's nodes and FK edges
     // either both stream or both buffer. Mixing the two for one spec would
@@ -477,10 +526,26 @@ pub(super) fn load_fk_edges(
         }
         report.warnings.extend(pfx.warnings);
         for edge in pfx.edges {
+            let mut df = edge.df;
+            if edge.implicit {
+                let mut tally = UnresolvedParents::default();
+                df = drop_unresolved_parents(
+                    graph,
+                    df,
+                    (&pfx.source_type, &edge.target_type),
+                    (&pfx.pk, &edge.target_col),
+                    &mut tally,
+                )?;
+                report.warnings.extend(tally.warning(
+                    &pfx.source_type,
+                    &edge.target_type,
+                    (&edge.edge_type, &edge.fk),
+                ));
+            }
             let t_c = std::time::Instant::now();
             let count = connect(
                 graph,
-                edge.df,
+                df,
                 &edge.edge_type,
                 &pfx.source_type,
                 &pfx.pk,
@@ -603,18 +668,7 @@ fn load_streamed_fk_edges(
         return Ok(());
     };
 
-    // Declared edges plus the implicit `OF_{PARENT}` edge for any spec
-    // that declares `parent_fk` (see `implicit_parent_edge`).
-    let mut fk_edges: IndexMap<String, super::super::schema::FkEdge> = spec
-        .spec
-        .connections
-        .fk_edges
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if let Some((edge_type, edge)) = implicit_parent_edge(spec) {
-        fk_edges.entry(edge_type).or_insert(edge);
-    }
+    let (fk_edges, implicit) = spec_fk_edges(spec);
     if fk_edges.is_empty() {
         return Ok(());
     }
@@ -687,6 +741,7 @@ fn load_streamed_fk_edges(
     // One tally per edge across every chunk of this CSV — the junction
     // loader's reason applies here too.
     let mut misparses: IndexMap<String, MisparseTally> = IndexMap::new();
+    let mut unresolved = UnresolvedParents::default();
 
     for chunk_result in chunks {
         let mut raw = chunk_result.map_err(|e| format!("[{}] {}", spec.node_type, e))?;
@@ -723,9 +778,8 @@ fn load_streamed_fk_edges(
             };
             let Some(fk_idx) = raw.col_index(&edge.fk) else {
                 if reported_missing_fk.insert(edge_type.clone()) {
-                    report.errors.push(format!(
-                        "[{}] FK column '{}' not found for edge {}",
-                        spec.node_type, edge.fk, edge_type
+                    report.errors.push(missing_fk_column_error(
+                        spec, edge_type, &edge.fk, &implicit,
                     ));
                 }
                 continue;
@@ -760,7 +814,16 @@ fn load_streamed_fk_edges(
                         .push(missing_fk_property_error(&spec.node_type, edge_type, col));
                 }
             }
-            let (target_col, df) = (frame.target_col, frame.df);
+            let (target_col, mut df) = (frame.target_col, frame.df);
+            if implicit.as_deref() == Some(edge_type.as_str()) {
+                df = drop_unresolved_parents(
+                    graph,
+                    df,
+                    (&spec.node_type, &edge.target),
+                    (&pk, &target_col),
+                    &mut unresolved,
+                )?;
+            }
             let count = connect(
                 graph,
                 df,
@@ -780,6 +843,15 @@ fn load_streamed_fk_edges(
             "fk_edge '{edge_type}' (node '{}')",
             spec.node_type
         )));
+    }
+    if let Some(edge_type) = &implicit {
+        if let Some(edge) = fk_edges.get(edge_type) {
+            report.warnings.extend(unresolved.warning(
+                &spec.node_type,
+                &edge.target,
+                (edge_type, &edge.fk),
+            ));
+        }
     }
     Ok(())
 }
