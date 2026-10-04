@@ -79,9 +79,31 @@ pub struct Settings {
     /// `strict=` argument of `from_blueprint` overrides it.
     #[serde(default)]
     pub strict: Option<crate::graph::diagnostics::StrictSetting>,
+    /// Default for every `fk_edges` / `junction_edges` entry that sets no
+    /// `on_missing_endpoint` of its own. Unset means `auto`.
+    #[serde(default)]
+    pub on_missing_endpoint: Option<OnMissingEndpoint>,
     /// Keys under `settings` that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
+}
+
+/// What an edge load does with a row whose endpoint no node row supplied.
+///
+/// `Auto`, the default, is per endpoint type: a type the build declares
+/// valid-time on drops the row, because a stub of it would be valid at every
+/// instant; any other type gets a provisional stub node, as it always has.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnMissingEndpoint {
+    #[default]
+    Auto,
+    /// Create a provisional stub node for the missing endpoint.
+    Vivify,
+    /// Skip the row and count it in the build report.
+    Drop,
+    /// Fail the build on the first such row.
+    Error,
 }
 
 /// One declared input: where its rows come from and how to read them.
@@ -123,6 +145,7 @@ pub const ACCEPTED_SETTINGS_KEYS: &[&str] = &[
     "auto_purge",
     "manifest",
     "strict",
+    "on_missing_endpoint",
 ];
 
 /// Keys a node spec (and a `sub_nodes` entry) reads.
@@ -154,6 +177,7 @@ pub const ACCEPTED_FK_EDGE_KEYS: &[&str] = &[
     "property_types",
     "rename",
     "temporal",
+    "on_missing_endpoint",
 ];
 
 /// Keys a `junction_edges` entry reads.
@@ -169,6 +193,7 @@ pub const ACCEPTED_JUNCTION_EDGE_KEYS: &[&str] = &[
     "rename",
     "temporal",
     "distinct",
+    "on_missing_endpoint",
 ];
 
 /// `"Disease"` or `["Disease", "Phenotype"]` — both land as a list, so the
@@ -286,6 +311,10 @@ pub struct FkEdge {
     pub rename: IndexMap<String, String>,
     #[serde(default)]
     pub temporal: Option<TemporalSpec>,
+    /// What to do with a row whose `fk` names no `target` node; overrides
+    /// `settings.on_missing_endpoint`.
+    #[serde(default)]
+    pub on_missing_endpoint: Option<OnMissingEndpoint>,
     /// Keys on this fk_edge that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
@@ -336,6 +365,10 @@ pub struct JunctionEdge {
     /// identical rows are kept and the build warns once per relationship type.
     #[serde(default)]
     pub distinct: bool,
+    /// What to do with a row naming a source or target node no row supplies;
+    /// overrides `settings.on_missing_endpoint`.
+    #[serde(default)]
+    pub on_missing_endpoint: Option<OnMissingEndpoint>,
     /// Keys on this junction_edge that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
@@ -372,6 +405,7 @@ impl FkEdge {
             property_types: IndexMap::new(),
             rename: IndexMap::new(),
             temporal: None,
+            on_missing_endpoint: None,
             extra: IndexMap::new(),
         }
     }
@@ -392,6 +426,7 @@ impl JunctionEdge {
             rename: IndexMap::new(),
             temporal: None,
             distinct: false,
+            on_missing_endpoint: None,
             extra: IndexMap::new(),
         }
     }

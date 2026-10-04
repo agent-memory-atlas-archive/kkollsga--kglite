@@ -459,6 +459,7 @@ pub fn kglite::api::blueprint::FileSpec::deserialize<__D>(__deserializer: __D) -
 pub struct kglite::api::blueprint::FkEdge
 pub kglite::api::blueprint::FkEdge::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::FkEdge::fk: alloc::string::String
+pub kglite::api::blueprint::FkEdge::on_missing_endpoint: core::option::Option<kglite::graph::blueprint::schema::OnMissingEndpoint>
 pub kglite::api::blueprint::FkEdge::properties: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::blueprint::FkEdge::property_types: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
 pub kglite::api::blueprint::FkEdge::rename: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
@@ -483,6 +484,7 @@ pub kglite::api::blueprint::JunctionEdge::csv: core::option::Option<alloc::strin
 pub kglite::api::blueprint::JunctionEdge::distinct: bool
 pub kglite::api::blueprint::JunctionEdge::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::JunctionEdge::file: core::option::Option<alloc::string::String>
+pub kglite::api::blueprint::JunctionEdge::on_missing_endpoint: core::option::Option<kglite::graph::blueprint::schema::OnMissingEndpoint>
 pub kglite::api::blueprint::JunctionEdge::properties: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::blueprint::JunctionEdge::property_types: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
 pub kglite::api::blueprint::JunctionEdge::rename: indexmap::map::IndexMap<alloc::string::String, alloc::string::String>
@@ -562,6 +564,7 @@ pub kglite::api::blueprint::Settings::auto_purge: bool
 pub kglite::api::blueprint::Settings::extra: indexmap::map::IndexMap<alloc::string::String, serde_json::value::Value>
 pub kglite::api::blueprint::Settings::input_root: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::manifest: core::option::Option<alloc::string::String>
+pub kglite::api::blueprint::Settings::on_missing_endpoint: core::option::Option<kglite::graph::blueprint::schema::OnMissingEndpoint>
 pub kglite::api::blueprint::Settings::output_file: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::output_path: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Settings::strict: core::option::Option<kglite::api::blueprint::StrictSetting>

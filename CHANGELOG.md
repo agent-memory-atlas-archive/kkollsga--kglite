@@ -33,6 +33,18 @@ before upgrading.
 
 ### Changed
 
+- A blueprint edge row whose endpoint no node row supplies is dropped, not
+  stubbed, when the endpoint's type is one the build declares valid-time on
+  (its specs' `temporal` keys, the manifest, the graph): a stub carries no
+  bounds and was valid at every instant, so it inflated every default-today
+  count. Undeclared types still get a stub. Each dropped endpoint is counted per
+  edge and type in the `stubs` group (`endpoints_dropped_declared`), so
+  `strict=["stubs"]` catches it. New `on_missing_endpoint` (`auto`, `vivify`,
+  `drop`, `error`) on `fk_edges` / `junction_edges` entries and under
+  `settings` overrides the default. `add_relationships` and `from_records` are
+  unchanged. Rust API: `OnMissingEndpoint`, `FkEdge::on_missing_endpoint`,
+  `JunctionEdge::on_missing_endpoint`, `Settings::on_missing_endpoint` (struct
+  literals of the three break).
 - `from_blueprint` and `from_records` no longer raise one `UserWarning` per
   advisory: the advisories of a group arrive in one warning that lists the
   first ten and counts the rest. Match on the text inside it, or on

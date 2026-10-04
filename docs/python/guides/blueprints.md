@@ -437,8 +437,8 @@ Each row picks its target type one of two ways:
   other column does, by being listed in `properties`.
 - **Without it**, the declared types are probed in order and the first that
   already has a node with the row's target id wins. An id no declared type has
-  takes the *first* declared type, where the usual missing-endpoint handling
-  vivifies its stub — the edge is never dropped.
+  takes the *first* declared type, where the edge's `on_missing_endpoint`
+  policy (below) decides between a stub and a dropped row.
 
 Declare the union in the ontology as one relationship whose `range` is the
 abstract class, and `ontology_audit()` reports it as one rule:
@@ -1013,6 +1013,39 @@ Passing `save=True` on a blueprint with no `output` and no disk `path` is an
 error rather than a silent no-op, so a pipeline that believes it is persisting
 its output finds out at the first run.
 
+### Missing Endpoints
+
+An edge row can name a node no row supplied: an `fk` value with no matching
+target `pk`, or a junction row whose id is in neither node input.
+`on_missing_endpoint` says what the load does with it, on a `fk_edges` or
+`junction_edges` entry or as a default under `settings` (the entry wins):
+
+| Value | Behaviour |
+|---|---|
+| `"auto"` (default) | Per endpoint type: **drop** the row when the build declares valid-time on that type, **vivify** a stub otherwise. |
+| `"vivify"` | Create a provisional stub node for the missing endpoint. |
+| `"drop"` | Skip the row, no edge and no stub. |
+| `"error"` | Fail the build on the first such row. |
+
+`auto` exists because a stub carries no validity bounds: a stub of a declared
+type is valid at every instant, so it appears in every default-today read and
+every `FOR VALID_TIME ALL` read. The declared set is computed before any row
+loads, from the specs' `temporal` keys, the manifest and the graph. A type the
+build does not declare keeps its stubs, as before. A dropped row vivifies
+nothing for its other endpoint, and every dropped endpoint is counted per edge
+and type as a `stubs` advisory (`endpoints_dropped_declared`, or
+`endpoints_dropped` when `drop` was asked for an undeclared type), so
+`strict=["stubs"]` fails a build that dropped any. Stubs that are vivified
+stay `stubs_vivified` / `stubs_on_declared_label`. `add_relationships` and
+`from_records` keep their own defaults.
+
+```json
+{"settings": {"on_missing_endpoint": "error"},
+ "nodes": {"Person": {"csv": "people.csv", "pk": "pid",
+   "connections": {"fk_edges": {"WORKS_IN": {"target": "Department", "fk": "dept",
+                                              "on_missing_endpoint": "drop"}}}}}}
+```
+
 ## Build Warnings
 
 A build reports what it noticed about the input as warnings, and sorts them by
@@ -1022,7 +1055,7 @@ non-empty group**, most severe first:
 | Group | What it holds |
 |---|---|
 | `declarations` | A validity interval or default that changes what queries mean: columns typed `validFrom` / `validTo` with no `temporal` key, a `temporal` key with no convention, a declaration the build wrote no rows for. |
-| `stubs` | Placeholder nodes created for edge endpoints no row supplied, and rows whose `parent_fk` matched no parent (no edge, no stub). |
+| `stubs` | Placeholder nodes created for edge endpoints no row supplied, rows dropped for a missing endpoint of a declared type, and rows whose `parent_fk` matched no parent (no edge, no stub). |
 | `data_shape` | Input that is not the layout the blueprint declared: unknown keys, a column type the blueprint cannot hold, list cells that were not JSON arrays, dropped aggregate rows. |
 | `data_quality` | Values that loaded but are probably wrong: duplicate ids, identical relationship rows, cells that are not the declared date, rows valid at no instant. |
 | `cosmetic` | Notes that change no query result, such as a column read twice for want of a declared type. |

@@ -23,6 +23,7 @@ mod diagnostics_tests;
 mod fk;
 mod junction;
 mod manual;
+mod missing_endpoints;
 mod nodes;
 mod parent_link;
 mod points;
@@ -290,6 +291,7 @@ fn build_phases(
     let profile = std::env::var("KGLITE_BLUEPRINT_PROFILE").is_ok();
     let t0 = std::time::Instant::now();
 
+    let endpoint_policy = missing_endpoints::EndpointPolicy::new(&blueprint, blueprint_dir);
     let (mut core_specs, mut sub_specs) = collect_specs(&blueprint.nodes);
     specs::mark_auto_pk_parents(&mut core_specs, &mut sub_specs);
     // `_provisional` is the reserved auto-vivification marker — a node
@@ -380,27 +382,15 @@ fn build_phases(
         }
     }
 
-    // Phase 4: FK edges
     let all_specs: Vec<&FlatSpec> = core_specs.iter().chain(sub_specs.iter()).collect();
-    let t = std::time::Instant::now();
-    load_fk_edges(
+    load_edge_phases(
         graph,
         &all_specs,
-        &registry,
-        &csv_cache,
-        &id_types,
+        (&registry, &csv_cache, &id_types),
+        &endpoint_policy,
         &mut report,
+        profile,
     )?;
-    if profile {
-        eprintln!("  load_fk_edges: {} ms", t.elapsed().as_millis());
-    }
-
-    // Phase 5: junction edges
-    let t = std::time::Instant::now();
-    load_junction_edges(graph, &all_specs, &registry, &csv_cache, &mut report)?;
-    if profile {
-        eprintln!("  load_junction_edges: {} ms", t.elapsed().as_millis());
-    }
 
     // Every input has now been read as far as this build will read it, so a
     // reader that only learns of a problem by meeting it — a spreadsheet cell
@@ -425,6 +415,30 @@ fn build_phases(
     }
 
     Ok(report)
+}
+
+/// Phase 4 (FK edges) and phase 5 (junction edges).
+fn load_edge_phases(
+    graph: &mut DirGraph,
+    all_specs: &[&FlatSpec],
+    (registry, csv_cache, id_types): (&InputRegistry, &CsvCache, &IdTypeCache),
+    policy: &missing_endpoints::EndpointPolicy,
+    report: &mut BuildReport,
+    profile: bool,
+) -> Result<(), String> {
+    let t = std::time::Instant::now();
+    load_fk_edges(
+        graph, all_specs, registry, csv_cache, id_types, policy, report,
+    )?;
+    if profile {
+        eprintln!("  load_fk_edges: {} ms", t.elapsed().as_millis());
+    }
+    let t = std::time::Instant::now();
+    load_junction_edges(graph, all_specs, registry, csv_cache, policy, report)?;
+    if profile {
+        eprintln!("  load_junction_edges: {} ms", t.elapsed().as_millis());
+    }
+    Ok(())
 }
 
 /// Phases 6-7 plus the report's read-back: everything that happens once the

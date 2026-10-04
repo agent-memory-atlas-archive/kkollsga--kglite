@@ -112,8 +112,12 @@ def test_verbose_output_reaches_real_stdout_only_through_python(tmp_path, capfd)
 
 
 def test_stub_advisory_of_a_declared_label_says_the_stub_is_valid_at_every_instant(tmp_path):
+    # A declared label's stubs only exist when the edge asks for them: the
+    # default (`auto`) drops the row instead.
     nodes = _versioned_nodes()
-    nodes["Person"]["connections"] = {"fk_edges": {"IN_DEPT": {"target": "Department", "fk": "did"}}}
+    nodes["Person"]["connections"] = {
+        "fk_edges": {"IN_DEPT": {"target": "Department", "fk": "did", "on_missing_endpoint": "vivify"}}
+    }
     csvs = {
         "d.csv": "did,name,vf,vt\n1,Sales,2010-01-01,\n",
         "p.csv": "pid,name,did\n1,Ann,1\n2,Bo,99\n",

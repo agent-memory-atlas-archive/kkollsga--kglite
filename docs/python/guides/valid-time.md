@@ -568,6 +568,12 @@ refused, and so is a `to` name that is a near miss of a property the type has
 first `CREATE` or `MERGE` that writes the `to` is not refused as an unknown
 property.
 
+**Stub nodes carry no bounds.** An edge load that names a node of a declared
+type no row supplied would create a stub valid at every instant, so it is
+counted in every default-today read; a blueprint build drops such rows by
+default instead (see `on_missing_endpoint` in the blueprint guide), while
+`add_relationships` still creates the stub and says so.
+
 **Writes answer to the declaration.** An `add_nodes` / `add_relationships` load
 onto the declared type refuses a row whose interval is inverted or whose bound
 is not a date, naming the row by its 0-based position and writing nothing; a

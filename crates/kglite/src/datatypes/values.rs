@@ -857,6 +857,34 @@ impl DataFrame {
         }
     }
 
+    /// A frame of the rows at `keep`, in that order, with every column and its
+    /// type unchanged.
+    pub(crate) fn select_rows(&self, keep: &[usize]) -> DataFrame {
+        fn pick<T: Clone>(cells: &[Option<T>], keep: &[usize]) -> Vec<Option<T>> {
+            keep.iter()
+                .map(|&row| cells.get(row).cloned().flatten())
+                .collect()
+        }
+        let mut out = DataFrame::new(Vec::new());
+        for column in &self.columns {
+            let data = match &column.data {
+                ColumnData::UniqueId(v) => ColumnData::UniqueId(pick(v, keep)),
+                ColumnData::Int64(v) => ColumnData::Int64(pick(v, keep)),
+                ColumnData::Float64(v) => ColumnData::Float64(pick(v, keep)),
+                ColumnData::String(v) => ColumnData::String(pick(v, keep)),
+                ColumnData::Boolean(v) => ColumnData::Boolean(pick(v, keep)),
+                ColumnData::DateTime(v) => ColumnData::DateTime(pick(v, keep)),
+                ColumnData::Timestamp(v) => ColumnData::Timestamp(pick(v, keep)),
+                ColumnData::List(v) => ColumnData::List(pick(v, keep)),
+                ColumnData::Map(v) => ColumnData::Map(pick(v, keep)),
+                ColumnData::Duration(v) => ColumnData::Duration(pick(v, keep)),
+            };
+            out.add_column(column.name.clone(), column.col_type.clone(), data)
+                .expect("a column of a valid frame re-adds to an empty one");
+        }
+        out
+    }
+
     pub fn get_value(&self, row: usize, column: &str) -> Option<Value> {
         self.column_indices
             .get(column)

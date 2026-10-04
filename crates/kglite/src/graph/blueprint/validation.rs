@@ -1266,6 +1266,7 @@ mod accepted_key_tests {
                 ("auto_purge", json!(false)),
                 ("manifest", json!("manifest.json")),
                 ("strict", json!(true)),
+                ("on_missing_endpoint", json!("auto")),
             ],
             "node" => vec![
                 ("csv", json!("p.csv")),
@@ -1296,6 +1297,7 @@ mod accepted_key_tests {
                 ("property_types", json!({})),
                 ("rename", json!({})),
                 ("temporal", json!(null)),
+                ("on_missing_endpoint", json!("drop")),
             ],
             // Keys a `files` entry with `"format": "csv"` reads. A second
             // format adds a level of its own here rather than widening this
@@ -1344,6 +1346,7 @@ mod accepted_key_tests {
                 ("rename", json!({})),
                 ("temporal", json!(null)),
                 ("distinct", json!(false)),
+                ("on_missing_endpoint", json!("vivify")),
             ],
             other => panic!("no fixture for level {other}"),
         }

@@ -6,6 +6,7 @@ use super::super::table::{MisparseTally, RawCsv};
 use super::super::typing::{map_blueprint_type, overlay_known_types, typed_dataframe};
 use super::cache::CsvCache;
 use super::fk::connect_tracked;
+use super::missing_endpoints::{apply_policy, DroppedEndpoints, EdgeEnds, EndpointPolicy};
 use super::prepass;
 use super::specs::FlatSpec;
 use super::table_ops::subset_rows;
@@ -36,6 +37,7 @@ pub(super) fn load_junction_edges(
     specs: &[&FlatSpec],
     registry: &InputRegistry,
     _cache: &CsvCache,
+    policy: &EndpointPolicy,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     let chunk_size = junction_chunk_size();
@@ -47,7 +49,15 @@ pub(super) fn load_junction_edges(
     // hence the unused `_cache` parameter.
     for spec in specs {
         for (edge_type, junc) in &spec.spec.connections.junction_edges {
-            load_one_junction_edge(graph, spec, edge_type, junc, registry, chunk_size, report)?;
+            load_one_junction_edge(
+                graph,
+                spec,
+                (edge_type, junc),
+                registry,
+                chunk_size,
+                policy,
+                report,
+            )?;
         }
     }
 
@@ -67,10 +77,10 @@ pub(super) fn load_junction_edges(
 fn load_one_junction_edge(
     graph: &mut DirGraph,
     spec: &FlatSpec,
-    edge_type: &str,
-    junc: &super::super::schema::JunctionEdge,
+    (edge_type, junc): (&str, &super::super::schema::JunctionEdge),
     registry: &InputRegistry,
     chunk_size: usize,
+    policy: &EndpointPolicy,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     let mut keep: Vec<String> = vec![junc.source_fk.clone(), junc.target_fk.clone()];
@@ -170,6 +180,8 @@ fn load_one_junction_edge(
     // One tracker per junction input: its rows may span many chunks and target
     // groups, and identical rows are identical wherever they fall.
     let mut identical = IdenticalRowTracker::new(IdenticalRows::from_distinct(junc.distinct));
+    let mut lost = DroppedEndpoints::default();
+    let on_missing = junc.on_missing_endpoint;
 
     for chunk_result in chunks {
         let chunk = match chunk_result {
@@ -228,6 +240,12 @@ fn load_one_junction_edge(
                         continue;
                     }
                 };
+            let ends = EdgeEnds {
+                edge_type,
+                source: (&spec.node_type, &junc.source_fk),
+                target: (target_type, &junc.target_fk),
+            };
+            let df = apply_policy(graph, policy, on_missing, df, &ends, &mut lost)?;
             let count = connect_tracked(
                 graph,
                 df,
@@ -246,23 +264,25 @@ fn load_one_junction_edge(
     report_junction_findings(
         report,
         (edge_type, &spec.node_type, &junc.target),
-        (misparses, identical, unroutable),
+        (misparses, identical, unroutable, lost),
     );
     Ok(())
 }
 
 /// The advisories a junction input accumulated across its chunks and target
-/// groups: unparsed cells, identical rows, and rows naming a target type the
-/// edge does not list.
+/// groups: unparsed cells, identical rows, rows dropped for a missing
+/// endpoint, and rows naming a target type the edge does not list.
 fn report_junction_findings(
     report: &mut BuildReport,
     (edge_type, node_type, targets): (&str, &str, &[String]),
-    (misparses, identical, unroutable): (
+    (misparses, identical, unroutable, dropped): (
         MisparseTally,
         IdenticalRowTracker,
         BTreeMap<String, usize>,
+        DroppedEndpoints,
     ),
 ) {
+    report.add_all(dropped.into_diagnostics(edge_type, node_type));
     report.add_all(
         misparses.into_diagnostics(&format!("junction '{edge_type}' (node '{node_type}')")),
     );

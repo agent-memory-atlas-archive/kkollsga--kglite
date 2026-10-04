@@ -3,10 +3,14 @@
 
 use super::super::filter::apply_filter;
 use super::super::input::InputRegistry;
+use super::super::schema::OnMissingEndpoint;
 use super::super::table::{MisparseTally, RawCsv};
 use super::super::timeseries as ts;
 use super::super::typing::map_blueprint_type;
 use super::cache::{CsvCache, IdTypeCache};
+use super::missing_endpoints::{
+    apply_policy, is_policy_error, DroppedEndpoints, EdgeEnds, EndpointPolicy,
+};
 use super::nodes::{fk_id_columns, node_chunk_size, should_stream_spec};
 use super::parent_link::{drop_unresolved_parents, parent_link, ParentLink, UnresolvedParents};
 use super::prepass;
@@ -116,6 +120,7 @@ struct PreppedFkEdge {
     /// The generated parent edge, whose unresolvable rows are dropped.
     implicit: bool,
     fk: String,
+    on_missing_endpoint: Option<OnMissingEndpoint>,
 }
 
 fn prep_fk_edges(
@@ -237,6 +242,7 @@ fn prep_fk_edges(
             df: frame.df,
             implicit: implicit.as_deref() == Some(edge_type.as_str()),
             fk: edge.fk.clone(),
+            on_missing_endpoint: edge.on_missing_endpoint,
         });
     }
 
@@ -500,6 +506,7 @@ pub(super) fn load_fk_edges(
     registry: &InputRegistry,
     cache: &CsvCache,
     id_types: &IdTypeCache,
+    policy: &EndpointPolicy,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     use rayon::prelude::*;
@@ -547,6 +554,22 @@ pub(super) fn load_fk_edges(
                     &edge.target_type,
                     (&edge.edge_type, &edge.fk),
                 ));
+            } else {
+                let mut dropped = DroppedEndpoints::default();
+                let ends = EdgeEnds {
+                    edge_type: &edge.edge_type,
+                    source: (&pfx.source_type, &pfx.pk),
+                    target: (&edge.target_type, &edge.target_col),
+                };
+                df = apply_policy(
+                    graph,
+                    policy,
+                    edge.on_missing_endpoint,
+                    df,
+                    &ends,
+                    &mut dropped,
+                )?;
+                report.add_all(dropped.into_diagnostics(&edge.edge_type, &pfx.source_type));
             }
             let t_c = std::time::Instant::now();
             let count = connect(
@@ -571,8 +594,10 @@ pub(super) fn load_fk_edges(
     // Streaming path: same chain, one chunk at a time.
     let t_stream = std::time::Instant::now();
     for spec in &streamable {
-        if let Err(e) = load_streamed_fk_edges(graph, spec, registry, id_types, report) {
-            report.errors.push(e);
+        match load_streamed_fk_edges(graph, spec, registry, id_types, policy, report) {
+            Err(e) if is_policy_error(&e) => return Err(e),
+            Err(e) => report.errors.push(e),
+            Ok(()) => {}
         }
     }
     let t_stream_ms = t_stream.elapsed().as_millis();
@@ -668,6 +693,7 @@ fn load_streamed_fk_edges(
     spec: &FlatSpec,
     registry: &InputRegistry,
     id_types: &IdTypeCache,
+    policy: &EndpointPolicy,
     report: &mut BuildReport,
 ) -> Result<(), String> {
     let Some(input) = spec.input.as_deref() else {
@@ -748,6 +774,7 @@ fn load_streamed_fk_edges(
     // loader's reason applies here too.
     let mut misparses: IndexMap<String, MisparseTally> = IndexMap::new();
     let mut unresolved = UnresolvedParents::default();
+    let mut dropped: IndexMap<String, DroppedEndpoints> = IndexMap::new();
 
     for chunk_result in chunks {
         let mut raw = chunk_result.map_err(|e| format!("[{}] {}", spec.node_type, e))?;
@@ -829,6 +856,14 @@ fn load_streamed_fk_edges(
                     (&pk, &target_col),
                     &mut unresolved,
                 )?;
+            } else {
+                let ends = EdgeEnds {
+                    edge_type,
+                    source: (&spec.node_type, &pk),
+                    target: (&edge.target, &target_col),
+                };
+                let tally = dropped.entry(edge_type.clone()).or_default();
+                df = apply_policy(graph, policy, edge.on_missing_endpoint, df, &ends, tally)?;
             }
             let count = connect(
                 graph,
@@ -844,13 +879,41 @@ fn load_streamed_fk_edges(
             *report.edges_by_type.entry(edge_type.clone()).or_insert(0) += count;
         }
     }
+    report_streamed_findings(
+        report,
+        spec,
+        (&fk_edges, &implicit),
+        (misparses, unresolved, dropped),
+    );
+    Ok(())
+}
+
+/// The advisories a streamed spec accumulated across its chunks, one per
+/// edge: unparsed cells, rows dropped for a missing endpoint, and rows whose
+/// `parent_fk` matched no parent.
+fn report_streamed_findings(
+    report: &mut BuildReport,
+    spec: &FlatSpec,
+    (fk_edges, implicit): (
+        &IndexMap<String, super::super::schema::FkEdge>,
+        &Option<String>,
+    ),
+    (misparses, unresolved, dropped): (
+        IndexMap<String, MisparseTally>,
+        UnresolvedParents,
+        IndexMap<String, DroppedEndpoints>,
+    ),
+) {
     for (edge_type, tally) in misparses {
         report.add_all(tally.into_diagnostics(&format!(
             "fk_edge '{edge_type}' (node '{}')",
             spec.node_type
         )));
     }
-    if let Some(edge_type) = &implicit {
+    for (edge_type, tally) in dropped {
+        report.add_all(tally.into_diagnostics(&edge_type, &spec.node_type));
+    }
+    if let Some(edge_type) = implicit {
         if let Some(edge) = fk_edges.get(edge_type) {
             report.add_all(unresolved.diagnostic(
                 &spec.node_type,
@@ -859,7 +922,6 @@ fn load_streamed_fk_edges(
             ));
         }
     }
-    Ok(())
 }
 
 /// The node types whose nodes the graph keys by string ids, read after the
