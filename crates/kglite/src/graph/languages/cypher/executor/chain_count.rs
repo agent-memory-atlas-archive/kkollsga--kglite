@@ -238,7 +238,7 @@ impl CypherExecutor<'_> {
 
     /// Move every frontier node's path count across `hop`'s admitted
     /// relationships to the peers they reach.
-    fn advance_chain_frontier(
+    pub(super) fn advance_chain_frontier(
         &self,
         hop: &HopTests<'_>,
         frontier: &FxHashMap<NodeIndex, i128>,
@@ -448,4 +448,4 @@ impl CypherExecutor<'_> {
     }
 }
 
-const RANGE_ERROR: &str = "path count exceeds Cypher integer range";
+pub(super) const RANGE_ERROR: &str = "path count exceeds Cypher integer range";

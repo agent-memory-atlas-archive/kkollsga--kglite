@@ -146,7 +146,7 @@ fn distinct_count_target(expr: &Expression, pattern: &Pattern) -> Option<usize> 
 /// so the rest stay on the matcher. The grouped distinct form is
 /// [`fuse_grouped_chain_distinct`], tried first.
 pub(crate) fn fuse_chain_path_count(query: &mut CypherQuery, guarded: bool) {
-    if fuse_grouped_chain_distinct(query) {
+    if fuse_grouped_chain_distinct(query, guarded) {
         return;
     }
     let [Clause::Match(m), Clause::Return(ret)] = query.clauses.as_slice() else {
@@ -236,21 +236,40 @@ fn trailing_clauses_read_columns(rest: &[Clause], columns: &[String]) -> bool {
     })
 }
 
-/// Rewrite `MATCH <chain> RETURN <key>, count(DISTINCT x)` (the two items in
-/// either order, optionally followed by ORDER BY / SKIP / LIMIT over the
-/// returned columns) into a grouped `Clause::FusedChainDistinctCount`; true
-/// when it did.
+/// The aggregate of a grouped chain RETURN.
+enum GroupedCount {
+    /// `count(DISTINCT x)`, `x` at this pattern position.
+    Distinct(usize),
+    /// `count(*)` or `count(v)` of a chain variable: the number of paths.
+    Paths,
+}
+
+fn grouped_count_kind(expr: &Expression, pattern: &Pattern) -> Option<GroupedCount> {
+    if let Some(target) = distinct_count_target(expr, pattern) {
+        Some(GroupedCount::Distinct(target))
+    } else {
+        is_chain_count(expr, pattern).then_some(GroupedCount::Paths)
+    }
+}
+
+/// Rewrite `MATCH <chain> RETURN <key>, <count>` (the two items in either
+/// order, optionally followed by ORDER BY / SKIP / LIMIT over the returned
+/// columns) into a grouped `Clause::FusedChainDistinctCount` for
+/// `count(DISTINCT x)` or a `Clause::FusedChainGroupedPathCount` for
+/// `count(*)` / `count(v)`; true when it did.
 ///
 /// **Precondition:** one `MATCH` of one linear pattern, then a `RETURN` of
 /// exactly two items. **Pattern matched:** the same chain as the ungrouped
-/// distinct form (two or more relationships, pairwise-disjoint types, no
-/// predicate, hint, path or DISTINCT/HAVING); `x` a node or relationship
-/// variable of the chain; the other item `g` or `g.prop` for a node variable
-/// `g` of the chain. **Rewrite:** the pair becomes one clause carrying the
-/// key; the trailing clauses stay and read its columns. **Why-bail:** a
-/// second aggregate, `count(DISTINCT x.prop)`, a key over a relationship or
-/// two variables, an ORDER BY over anything but a returned column.
-fn fuse_grouped_chain_distinct(query: &mut CypherQuery) -> bool {
+/// forms (pairwise-disjoint types; two or more relationships for the distinct
+/// count, [`MIN_HOPS`] outside a guard and [`MIN_HOPS_GUARDED`] under one for
+/// the path count, whose shorter shapes belong to the aggregate fusions; no
+/// predicate, hint, path or DISTINCT/HAVING); the other item `g` or `g.prop`
+/// for a node variable `g` of the chain. **Rewrite:** the pair becomes one
+/// clause carrying the key; the trailing clauses stay and read its columns.
+/// **Why-bail:** a second aggregate, `count(DISTINCT x.prop)`, a key over a
+/// relationship or two variables, an ORDER BY over anything but a returned
+/// column, overlapping hop types.
+fn fuse_grouped_chain_distinct(query: &mut CypherQuery, guarded: bool) -> bool {
     let [Clause::Match(m), Clause::Return(ret), rest @ ..] = query.clauses.as_slice() else {
         return false;
     };
@@ -267,11 +286,11 @@ fn fuse_grouped_chain_distinct(query: &mut CypherQuery) -> bool {
     {
         return false;
     }
-    let (key_first, key_item, count_item) =
-        if let Some(target) = distinct_count_target(&second.expression, pattern) {
-            (true, first, (second, target))
-        } else if let Some(target) = distinct_count_target(&first.expression, pattern) {
-            (false, second, (first, target))
+    let (key_first, key_item, count_item, kind) =
+        if let Some(kind) = grouped_count_kind(&second.expression, pattern) {
+            (true, first, second, kind)
+        } else if let Some(kind) = grouped_count_kind(&first.expression, pattern) {
+            (false, second, first, kind)
         } else {
             return false;
         };
@@ -280,24 +299,37 @@ fn fuse_grouped_chain_distinct(query: &mut CypherQuery) -> bool {
     };
     let columns = [
         return_item_column_name(key_item),
-        return_item_column_name(count_item.0),
+        return_item_column_name(count_item),
     ];
-    if !is_countable_chain(pattern, MIN_HOPS_GUARDED)
+    let min_hops = match kind {
+        GroupedCount::Distinct(_) => MIN_HOPS_GUARDED,
+        GroupedCount::Paths if guarded => MIN_HOPS_GUARDED,
+        GroupedCount::Paths => MIN_HOPS,
+    };
+    if !is_countable_chain(pattern, min_hops)
         || !fixed_edge_types_are_pairwise_disjoint(pattern)
         || !trailing_clauses_read_columns(rest, &columns)
     {
         return false;
     }
-    let fused = Clause::FusedChainDistinctCount {
-        pattern: pattern.clone(),
-        target: count_item.1,
-        alias: columns[1].clone(),
-        group: Some(ChainGroupKey {
-            position,
-            key: key_item.expression.clone(),
-            key_alias: columns[0].clone(),
-            key_first,
-        }),
+    let group = ChainGroupKey {
+        position,
+        key: key_item.expression.clone(),
+        key_alias: columns[0].clone(),
+        key_first,
+    };
+    let fused = match kind {
+        GroupedCount::Distinct(target) => Clause::FusedChainDistinctCount {
+            pattern: pattern.clone(),
+            target,
+            alias: columns[1].clone(),
+            group: Some(group),
+        },
+        GroupedCount::Paths => Clause::FusedChainGroupedPathCount {
+            pattern: pattern.clone(),
+            alias: columns[1].clone(),
+            group,
+        },
     };
     query.clauses.splice(0..2, [fused]);
     true

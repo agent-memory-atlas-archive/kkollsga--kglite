@@ -207,12 +207,13 @@ FUSED = [
 ]
 
 # Answered by the matcher either way: DISTINCT over a property (the bare
-# `count(DISTINCT v)` is `FusedChainDistinctCount`), a group key, a cycle, a repeated
+# `count(DISTINCT v)` is `FusedChainDistinctCount`), a group key beside a second aggregate, a cycle, a repeated
 # type, an untyped hop, a variable-length hop, a residual WHERE, OPTIONAL MATCH,
 # comma patterns.
 UNFUSED = [
     "MATCH (e:Emp)-[:WORKS_IN]->(d:Dept)-[:AT_SITE]->(s:Site)-[:IN_REGION]->(r:Region) RETURN count(DISTINCT r.id)",
-    "MATCH (e:Emp)-[:WORKS_IN]->(d:Dept)-[:AT_SITE]->(s:Site)-[:IN_REGION]->(r:Region) RETURN d.id AS d, count(*) AS n",
+    "MATCH (e:Emp)-[:WORKS_IN]->(d:Dept)-[:AT_SITE]->(s:Site)-[:IN_REGION]->(r:Region) "
+    "RETURN d.id AS d, count(*) AS n, min(e.id) AS m",
     "MATCH (e:Emp)-[:WORKS_IN]->(d:Dept)-[:AT_SITE]->(s:Site)<-[:AT_SITE]-(d2:Dept) RETURN count(*) AS n",
     "MATCH (e:Emp)-[:WORKS_IN]->(d:Dept)-[]->(s:Site)-[:IN_REGION]->(r:Region) RETURN count(*) AS n",
     "MATCH (e:Emp)-[:WORKS_IN]->(d:Dept)-[:AT_SITE*1..2]->(s:Site) RETURN count(*) AS n",

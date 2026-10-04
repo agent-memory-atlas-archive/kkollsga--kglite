@@ -723,6 +723,74 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
         None,
     ),
     (
+        "chain_grouped_paths_shared_key",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_key_at_start",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN f.region AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_key_at_end",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN w.id AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_missing_property_key",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN l.kind AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_count_of_variable_column_first",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN count(w) AS n, c.kind AS k",
+        None,
+    ),
+    (
+        "chain_grouped_paths_node_key",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_undirected_self_loop",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)-[:PARTNER]-(p:Dept)<-[:FUNDED_BY]-(l:Project)"
+        " RETURN p.kind AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_order_by_limit",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN l.id AS k, count(*) AS n ORDER BY n DESC, k LIMIT 2",
+        None,
+    ),
+    (
+        "chain_grouped_paths_empty_frontier",
+        "chain_graph",
+        f"MATCH {_CHAIN.replace('Team', 'Nothing')} RETURN c.kind AS k, count(*) AS n",
+        None,
+    ),
+    (
+        "chain_grouped_paths_two_aggregates_bail",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN c.kind AS k, count(*) AS n, count(DISTINCT w) AS m",
+        None,
+    ),
+    (
+        "chain_grouped_paths_overlapping_types_bail",
+        "chain_graph",
+        "MATCH (a:Dept)-[:PARTNER]->(b:Dept)-[:PARTNER]->(c:Dept)-[:PARTNER]->(d:Dept)"
+        " RETURN b.kind AS k, count(*) AS n",
+        None,
+    ),
+    (
         "chain_grouped_property_target_bails",
         "chain_graph",
         f"MATCH {_CHAIN} RETURN c.kind AS k, count(DISTINCT w.id) AS n",
@@ -7672,6 +7740,7 @@ ORDERED_CASES = frozenset(
     {
         "trigger_generic_top_k",
         "chain_grouped_order_by_limit",
+        "chain_grouped_paths_order_by_limit",
         "skip_and_limit",
         "order_by_return_alias",
         "text_bm25_top_k",

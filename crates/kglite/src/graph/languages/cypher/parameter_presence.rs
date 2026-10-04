@@ -198,7 +198,8 @@ fn visit_clause(clause: &Clause, names: &mut impl AstSink) {
             }
         }
         Clause::FusedChainPathCount { pattern, .. }
-        | Clause::FusedChainDistinctCount { pattern, .. } => visit_pattern(pattern, names),
+        | Clause::FusedChainDistinctCount { pattern, .. }
+        | Clause::FusedChainGroupedPathCount { pattern, .. } => visit_pattern(pattern, names),
         Clause::FusedValidAtJoin(join) => {
             visit_match(&join.match_clause, names);
             visit_predicate(&join.where_clause.predicate, names);

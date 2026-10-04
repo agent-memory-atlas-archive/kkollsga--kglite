@@ -393,6 +393,16 @@ pub enum Clause {
         /// counting the distinct `x` over the paths through that key's nodes.
         group: Option<ChainGroupKey>,
     },
+    /// Optimizer-generated: `MATCH <linear chain of k relationships> RETURN
+    /// <key over one chain node>, count(*)` → the path count per key value:
+    /// the paths through a node are the paths that reach it from the start
+    /// times the paths that reach it from the far end, each a degree-product
+    /// DP over a sparse frontier. The hop types are pairwise disjoint.
+    FusedChainGroupedPathCount {
+        pattern: crate::graph::core::pattern_matching::Pattern,
+        alias: String,
+        group: ChainGroupKey,
+    },
     /// Optimizer-generated: MATCH (n:Type) [WHERE ...] RETURN group_keys, agg_funcs(...)
     /// → single-pass node scan with inline aggregation. Avoids materializing intermediate
     /// ResultRows — evaluates group keys and aggregates directly from node properties.

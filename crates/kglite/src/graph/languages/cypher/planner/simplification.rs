@@ -1739,6 +1739,7 @@ pub(super) fn collect_clause_variables(clause: &Clause, out: &mut HashSet<String
         | Clause::FusedCountAnchoredEdges { .. }
         | Clause::FusedChainPathCount { .. }
         | Clause::FusedChainDistinctCount { .. }
+        | Clause::FusedChainGroupedPathCount { .. }
         | Clause::FusedNodeScanAggregate { .. }
         | Clause::FusedNodeScanTopK { .. }
         | Clause::SpatialJoin { .. } => {

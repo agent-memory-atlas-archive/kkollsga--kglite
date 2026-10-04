@@ -654,6 +654,27 @@ def test_bench_hop3_chain_grouped_distinct(benchmark, chain_count_graph, key, ta
     assert sorted(map(repr, result.to_list())) == sorted(map(repr, expected))
 
 
+@pytest.mark.benchmark
+@pytest.mark.parametrize("key", ["c.title", "l.title"])
+def test_bench_hop3_chain_grouped_count(benchmark, chain_count_graph, key):
+    """Linear three-hop chain `RETURN key, count(*)`, the key on one chain node.
+
+    Planned as `FusedChainGroupedPathCount` (`fuse_chain_path_count`): two
+    degree-product sweeps meeting at the key's node, where the matcher route
+    builds 1.2M paths. The plan assertion keeps the cell from silently timing
+    the matcher.
+    """
+    query = (
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task) "
+        f"RETURN {key} AS k, count(*) AS n"
+    )
+    plan = [row["operation"] for row in chain_count_graph.cypher("EXPLAIN " + query)]
+    assert any(op.startswith("FusedChainGroupedPathCount") for op in plan), plan
+    result = benchmark(chain_count_graph.cypher, query)
+    expected = chain_count_graph.cypher(query, disabled_passes=["fuse_chain_path_count"]).to_list()
+    assert sorted(map(repr, result.to_list())) == sorted(map(repr, expected))
+
+
 STREAM_CHAIN = "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
 
 

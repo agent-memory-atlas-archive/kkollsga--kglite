@@ -1,5 +1,7 @@
-//! The grouped form of `Clause::FusedChainDistinctCount`:
-//! `MATCH <chain> RETURN <key over chain node g>, count(DISTINCT x)`.
+//! The grouped forms of the chain counts:
+//! `MATCH <chain> RETURN <key over chain node g>, count(DISTINCT x)`
+//! (`Clause::FusedChainDistinctCount`) and `... count(*)`
+//! (`Clause::FusedChainGroupedPathCount`, at the end of this file).
 //!
 //! The chain's forward and backward sweeps (see `chain_count.rs`) leave `V_i`,
 //! the nodes at position `i` that lie on some complete path. A complete path
@@ -18,7 +20,7 @@
 use petgraph::graph::NodeIndex;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::chain_count::{chain_hops, ChainHop, HopTests};
+use super::chain_count::{chain_hops, ChainHop, HopTests, RANGE_ERROR};
 use super::*;
 use crate::graph::core::pattern_matching::{EdgeDirection, Pattern};
 
@@ -297,5 +299,109 @@ impl CypherExecutor<'_> {
             columns,
             lazy_return_items: None,
         })
+    }
+}
+
+impl CypherExecutor<'_> {
+    /// The paths of `RETURN <key over g>, count(*)` per key value. The paths
+    /// through a node `n` at `g` are the partial paths that reach it from the
+    /// start times those that reach it from the far end (hop types are
+    /// disjoint, so every combination is a path the matcher keeps); the
+    /// second factor is the same degree-product DP run over the reversed
+    /// pattern. Nodes outside either frontier lie on no path and emit no row.
+    pub(super) fn execute_chain_grouped_paths(&self, clause: &Clause) -> Result<ResultSet, String> {
+        let Clause::FusedChainGroupedPathCount {
+            pattern,
+            alias,
+            group,
+        } = clause
+        else {
+            return Err("internal: not a FusedChainGroupedPathCount clause".into());
+        };
+        let last = pattern.elements.len() - 1;
+        let Some(var) = key_variable(&group.key) else {
+            return Err("internal: grouped chain count key reads no variable".into());
+        };
+        if group.position > last || !group.position.is_multiple_of(2) {
+            return Err("internal: grouped chain count key is outside the pattern".into());
+        }
+        let gi = group.position / 2;
+        let hops = last / 2;
+        let before = self.chain_prefix_counts(pattern, gi)?;
+        let after = self.chain_prefix_counts(&reversed(pattern), hops - gi)?;
+        let mut nodes: Vec<NodeIndex> = before
+            .keys()
+            .filter(|node| after.contains_key(node))
+            .copied()
+            .collect();
+        nodes.sort_unstable();
+        let mut slots: FxHashMap<Value, usize> = FxHashMap::default();
+        let mut groups: Vec<(Value, i128, NodeIndex)> = Vec::new();
+        let mut row = ResultRow::new();
+        for (scanned, node) in nodes.into_iter().enumerate() {
+            if scanned.is_multiple_of(2048) {
+                self.check_deadline()?;
+            }
+            let paths = before[&node].checked_mul(after[&node]).ok_or(RANGE_ERROR)?;
+            row.node_bindings.insert(var.to_string(), node);
+            let key = self.evaluate_expression(&group.key, &row)?;
+            if let Some(&slot) = slots.get(&key) {
+                groups[slot].1 = groups[slot].1.checked_add(paths).ok_or(RANGE_ERROR)?;
+            } else {
+                slots.insert(key.clone(), groups.len());
+                groups.push((key, paths, node));
+            }
+        }
+        let columns = if group.key_first {
+            vec![group.key_alias.clone(), alias.clone()]
+        } else {
+            vec![alias.clone(), group.key_alias.clone()]
+        };
+        let mut rows = Vec::with_capacity(groups.len());
+        for (key, paths, node) in groups {
+            let count = i64::try_from(paths).map_err(|_| RANGE_ERROR)?;
+            let mut projected = Bindings::with_capacity(2);
+            projected.insert(group.key_alias.clone(), key);
+            projected.insert(alias.clone(), Value::Int64(count));
+            let mut row = ResultRow::from_projected(projected);
+            row.node_bindings.insert(var.to_string(), node);
+            rows.push(row);
+        }
+        Ok(ResultSet {
+            rows,
+            columns,
+            lazy_return_items: None,
+        })
+    }
+
+    /// The number of partial paths of `pattern` that end at each node
+    /// reached after its first `hops` relationships.
+    fn chain_prefix_counts(
+        &self,
+        pattern: &Pattern,
+        hops: usize,
+    ) -> Result<FxHashMap<NodeIndex, i128>, String> {
+        let Some((start, chain)) = chain_hops(pattern) else {
+            return Err("internal: grouped chain count holds a pattern that is not a chain".into());
+        };
+        let pe = self.pattern_executor(None, None);
+        let filter = self.graph_filter().map(|f| f.as_ref());
+        let seeds = pe.find_matching_nodes_pub(start)?;
+        let tests: Vec<HopTests<'_>> = chain
+            .iter()
+            .take(hops)
+            .map(|hop: &ChainHop<'_>| HopTests::new(self, &pe, filter, hop))
+            .collect();
+        let mut visited: usize = 0;
+        let mut frontier: FxHashMap<NodeIndex, i128> = seeds.iter().map(|&n| (n, 1)).collect();
+        for hop in &tests {
+            if frontier.is_empty() {
+                break;
+            }
+            frontier = self.advance_chain_frontier(hop, &frontier, &mut visited)?;
+            self.budget
+                .check_work(visited, "fused grouped chain path count")?;
+        }
+        Ok(frontier)
     }
 }

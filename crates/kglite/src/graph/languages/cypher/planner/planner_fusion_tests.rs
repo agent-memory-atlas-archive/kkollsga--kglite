@@ -142,6 +142,73 @@ fn grouped_chain_distinct_count_fuses_only_its_shape() {
     )));
 }
 
+/// The grouped path count (`count(*)` / `count(v)` beside a key on one chain
+/// node) fuses outside a guard from three relationships, under one from two,
+/// and keeps the grouped distinct count's bail set.
+#[test]
+fn grouped_chain_path_count_fuses_only_its_shape() {
+    const CHAIN: &str = "(f:A)-[:R1]->(c:B)<-[:R2]-(l:C)<-[:R3]-(w:D)";
+    const TWO: &str = "(f:A)-[:R1]->(c:B)<-[:R2]-(l:C)";
+    let run = |source: &str, guarded: bool| {
+        let mut query = parse_cypher(source).unwrap();
+        super::fusion::fuse_chain_path_count(&mut query, guarded);
+        query.clauses
+    };
+    let fused = |source: &str, guarded: bool| {
+        matches!(
+            run(source, guarded).first(),
+            Some(Clause::FusedChainGroupedPathCount { .. })
+        )
+    };
+    for ret in [
+        "RETURN c.title AS k, count(*) AS n",
+        "RETURN count(*) AS n, c.title AS k",
+        "RETURN c, count(w)",
+        "RETURN f.title, count(r)",
+    ] {
+        let source = format!("MATCH (f:A)-[:R1]->(c:B)<-[r:R2]-(l:C)<-[:R3]-(w:D) {ret}");
+        assert!(fused(&source, false), "{ret}");
+    }
+    assert!(!fused(
+        &format!("MATCH {TWO} RETURN c.title, count(*)"),
+        false
+    ));
+    assert!(fused(
+        &format!("MATCH {TWO} RETURN c.title, count(*)"),
+        true
+    ));
+    let clauses = run(
+        &format!("MATCH {CHAIN} RETURN c.title AS k, count(*) AS n ORDER BY n DESC LIMIT 2"),
+        false,
+    );
+    assert_eq!(clauses.len(), 3);
+    for bail in [
+        "RETURN c.title AS k, count(*) AS n, count(DISTINCT w) AS m",
+        "RETURN c.title AS k, sum(w.id) AS n",
+        "RETURN c.title + f.title AS k, count(*) AS n",
+        "RETURN c.title AS k, count(*) AS n ORDER BY c.id",
+        "RETURN DISTINCT c.title AS k, count(*) AS n",
+        "RETURN c.title AS k, count(x) AS n",
+    ] {
+        assert!(!fused(&format!("MATCH {CHAIN} {bail}"), false), "{bail}");
+    }
+    // overlapping hop types and the chain's other bails
+    for chain in [
+        "(f:A)-[:R1]->(c:B)<-[:R1]-(l:C)<-[:R3]-(w:D)",
+        "(f:A)-[:R1]->(c:B)<-[]-(l:C)<-[:R3]-(w:D)",
+        "(f:A)-[:R1*1..2]->(c:B)<-[:R2]-(l:C)<-[:R3]-(w:D)",
+    ] {
+        assert!(!fused(
+            &format!("MATCH {chain} RETURN c.title AS k, count(*) AS n"),
+            true
+        ));
+    }
+    assert!(!fused(
+        &format!("MATCH {CHAIN} WHERE c.title <> 'x' RETURN c.title AS k, count(*) AS n"),
+        false
+    ));
+}
+
 /// The lazy-eligibility contract, pinned as a corpus.
 ///
 /// `mark_lazy_eligibility` decides whether a result is returned deferred, and a

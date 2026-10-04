@@ -292,6 +292,18 @@ before upgrading.
   1,796 ms to 3.8-4.0 ms over the full history (`FOR VALID_TIME ALL`) and from
   96 ms to 1.0-1.1 ms under the default context (today).
 
+- Faster: the path count grouped by a key on one chain node,
+  `MATCH <chain> RETURN c.title, count(*)` (also `count(v)` of a chain
+  variable; the same key forms, item order and trailing `ORDER BY` / `SKIP` /
+  `LIMIT` as the grouped distinct count), is a degree-product count per key
+  node: the paths that reach it from the start times those that reach it from
+  the far end, summed per key value (plan operator `FusedChainGroupedPathCount`).
+  Chains of three or more relationships fuse, two under a valid-time context;
+  hop types must be pairwise distinct, and the counts equal the matcher's.
+  On a register of 856k relationships a four-node chain grouped by a middle
+  node's property went from 1,740 ms to 1.5 ms over the full history (`FOR VALID_TIME ALL`) and
+  from 92 ms to 1.3 ms under the default context (today).
+
 - Faster: when the matcher keeps one match per distinct target at its last
   hop (`count(DISTINCT x)`, `RETURN DISTINCT x.prop`, `min`/`max` over `x`)
   and the statement stays on the matcher (a `WHERE` on an earlier node, a

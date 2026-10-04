@@ -351,3 +351,179 @@ def test_a_budget_stops_the_grouped_sweeps():
     assert sum(row["n"] for row in _n(graph, q)) == 3000
     with pytest.raises(Exception, match="work"):
         graph.cypher(q, max_work_units=100).to_list()
+
+
+# ── the grouped path count: RETURN <key>, count(*) ───────────────────────
+
+PATHS = "FusedChainGroupedPathCount"
+
+
+def _paths_fused(graph, query):
+    return any(op.startswith(PATHS) for op in _ops(graph, query))
+
+
+def paths_per_key(paths, group_pos, key_fn):
+    counts: dict = {}
+    for nodes, _ids in paths:
+        key = key_fn(nodes[group_pos])
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def check_paths(graph, head, key_expr, group_pos, key_fn, aggregate, hops, starts, prefix=""):
+    golden = paths_per_key(enumerate_paths(starts, hops), group_pos, key_fn)
+    q = f"{prefix}MATCH {head} RETURN {key_expr} AS k, {aggregate} AS n"
+    assert _paths_fused(graph, q), q
+    got, rows = run_grouped(graph, q)
+    assert len(rows) == len(got), f"duplicate key rows in {q}"
+    assert got == golden, q
+    assert run_grouped(graph, q, disabled_passes=[PASS])[0] == golden, q
+    return golden
+
+
+@pytest.mark.parametrize("group_pos", range(4))
+@pytest.mark.parametrize("aggregate", ["count(*)", "count(w)", "count(r2)", "count(c)"])
+def test_grouped_path_count_matches_the_enumerator_at_every_key_position(plain, group_pos, aggregate):
+    key_expr, key_fn = KEYS[group_pos]
+    check_paths(plain, HEAD, key_expr, group_pos, key_fn, aggregate, _chain_hops(), TEAM_IDS)
+
+
+def test_the_path_goldens_separate_the_failure_modes():
+    paths = enumerate_paths(TEAM_IDS, _chain_hops())
+    golden = paths_per_key(paths, 1, KEYS[1][1])
+    per_node = paths_per_key(paths, 1, lambda d: d)
+    # the shared key sums two nodes' paths; a forward-only count (paths from
+    # the start to c, ignoring what follows) would differ for d4, which leads nowhere
+    assert golden["big"] == per_node["d1"] + per_node["d3"] and "d4" not in per_node
+    assert len(set(per_node.values())) > 1
+
+
+def test_reversed_spelling_gives_the_same_path_counts(plain):
+    head = "(w:Task)-[r3:IN_PROJECT]->(l:Project)-[r2:FUNDED_BY]->(c:Dept)<-[r1:LED_BY]-(f:Team)"
+    paths = enumerate_paths(TEAM_IDS, _chain_hops())
+    for group_pos, (key_expr, key_fn) in KEYS.items():
+        q = f"MATCH {head} RETURN {key_expr} AS k, count(*) AS n"
+        assert _paths_fused(plain, q), q
+        assert run_grouped(plain, q)[0] == paths_per_key(paths, group_pos, key_fn), q
+
+
+def test_path_count_filters_labels_and_edge_properties(plain):
+    head = (
+        "(f:Team)-[r1:LED_BY]->(c:Dept {kind: 'big'})<-[r2:FUNDED_BY {share: 50}]-(l:Project)<-[r3:IN_PROJECT]-(w:Task)"
+    )
+    hops = _chain_hops(dept_ok=lambda d: ALL_KINDS[d] == "big", share=50)
+    for group_pos, (key_expr, key_fn) in KEYS.items():
+        check_paths(plain, head, key_expr, group_pos, key_fn, "count(*)", hops, TEAM_IDS)
+    head = "(f:Team)-[r1:LED_BY]->(c:Dept)<-[r2:FUNDED_BY]-(l:Project)<-[r3:IN_PROJECT]-(w:Task:Priority)"
+    hops = _chain_hops(task_ok=lambda w: TASKS[w])
+    for group_pos, (key_expr, key_fn) in KEYS.items():
+        check_paths(plain, head, key_expr, group_pos, key_fn, "count(*)", hops, TEAM_IDS)
+
+
+def test_path_count_over_an_undirected_self_loop_hop(plain):
+    head = "(f:Team)-[a:LED_BY]->(c:Dept)-[x:PARTNER]-(p:Dept)<-[b:FUNDED_BY]-(l:Project)"
+    hops = [
+        (_edges(LED_BY), "out", lambda d: True),
+        (_edges(PARTNER), "both", lambda d: True),
+        (_funded(), "in", lambda p: p in PROJECTS),
+    ]
+    keys = [
+        ("f.region", lambda t: TEAMS[t]),
+        ("c.kind", lambda d: ALL_KINDS[d]),
+        ("p.kind", lambda d: ALL_KINDS[d]),
+        ("l.id", lambda p: p),
+    ]
+    for group_pos, (key_expr, key_fn) in enumerate(keys):
+        check_paths(plain, head, key_expr, group_pos, key_fn, "count(*)", hops, TEAM_IDS)
+
+
+def test_path_count_empty_groups_order_and_limit(plain):
+    q = f"MATCH {HEAD} RETURN c.id AS k, count(*) AS n"
+    got, rows = run_grouped(plain, q)
+    assert set(got) == {"d1", "d2", "d3"} and len(rows) == 3
+    q = f"MATCH {HEAD.replace('f:Team', 'f:Nothing')} RETURN c.kind AS k, count(*) AS n"
+    assert _paths_fused(plain, q) and _n(plain, q) == []
+    golden = paths_per_key(enumerate_paths(TEAM_IDS, _chain_hops()), 2, lambda p: p)
+    ranked = sorted(golden.items(), key=lambda kv: (-kv[1], kv[0]))
+    for tail, expect in (
+        ("ORDER BY n DESC, k", ranked),
+        ("ORDER BY n DESC, k SKIP 1 LIMIT 2", ranked[1:3]),
+        ("ORDER BY k DESC LIMIT 3", sorted(golden.items(), reverse=True)[:3]),
+    ):
+        q = f"MATCH {HEAD} RETURN l.id AS k, count(*) AS n {tail}"
+        assert _paths_fused(plain, q), q
+        want = [{"k": k, "n": n} for k, n in expect]
+        assert _n(plain, q) == want and _n(plain, q, disabled_passes=[PASS]) == want, q
+    q = f"MATCH {HEAD} RETURN count(*) AS n, c.kind AS k"
+    assert _paths_fused(plain, q)
+    assert list(plain.cypher(q).columns) == ["n", "k"]
+    q = f"MATCH {HEAD} RETURN c.kind, count(*) ORDER BY c.kind DESC LIMIT 1"
+    assert _paths_fused(plain, q)
+    assert _n(plain, q)[0]["c.kind"] == "small"
+
+
+def test_path_count_reads_the_graph_it_runs_on(plain):
+    q = f"MATCH {HEAD} RETURN c.kind AS k, count(*) AS n"
+    before = run_grouped(plain, q)[0]
+    plain.cypher("MATCH (w:Task {id: 'w6'}), (p:Project {id: 'p4'}) CREATE (w)-[:IN_PROJECT]->(p)").to_list()
+    after = run_grouped(plain, q)[0]
+    assert after["big"] == before["big"] + 1 and after["small"] == before["small"]
+
+
+PATH_BAILS = [
+    "MATCH {head} WHERE c.kind <> 'small' RETURN c.kind AS k, count(*) AS n",
+    "MATCH {head} RETURN c.kind AS k, count(*) AS n, count(DISTINCT w) AS m",
+    "MATCH {head} RETURN c.kind AS k, sum(w.id) AS n",
+    "MATCH {head} RETURN f.region + c.kind AS k, count(*) AS n",
+    "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[r2:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task) "
+    "RETURN r2.share AS k, count(*) AS n",
+    "MATCH {head} RETURN c.kind AS k, count(*) AS n ORDER BY c.id",
+    "MATCH (a:Dept)-[:PARTNER]->(b:Dept)-[:PARTNER]->(c:Dept)-[:PARTNER]->(d:Dept) RETURN b.kind AS k, count(*) AS n",
+    "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project) RETURN c.kind AS k, count(*) AS n",
+    "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[]-(l:Project)<-[:IN_PROJECT]-(w:Task) RETURN c.kind AS k, count(*) AS n",
+]
+
+
+@pytest.mark.parametrize("shape", PATH_BAILS)
+def test_unfusable_grouped_path_counts_stay_on_the_matcher(plain, shape):
+    q = shape.format(head=ANON_HEAD)
+    assert not _paths_fused(plain, q), q
+
+    def canon(rows):
+        return sorted(repr(sorted(row.items())) for row in rows)
+
+    assert canon(_n(plain, q)) == canon(_n(plain, q, disabled_passes=[PASS])), q
+
+
+@pytest.mark.parametrize("context", CONTEXTS)
+def test_grouped_path_count_matches_the_model_under_every_context(org, context):
+    t = INSTANTS[CONTEXTS.index(context)] if "AS OF" in context else None
+    for hops, head, keys in (
+        (3, ORG3, ORG_KEYS),
+        (2, "(e:Emp)-[r1:WORKS_IN]->(d:Dept)-[r2:AT_SITE]->(s:Site)", ORG_KEYS[:3]),
+    ):
+        paths = _model_paths(t, hops)
+        for group_pos, (key_expr, key_fn) in enumerate(keys):
+            golden = paths_per_key(paths, group_pos, key_fn)
+            q = f"{context}MATCH {head} RETURN {key_expr} AS k, count(*) AS n"
+            if hops == 3 or "AS OF" in context:
+                assert _paths_fused(org, q), q
+            assert run_grouped(org, q)[0] == golden, q
+
+
+def test_a_two_hop_path_count_without_a_context_stays_on_the_aggregate_fusions(plain):
+    q = "MATCH (f:Team)-[:LED_BY]->(c:Dept) RETURN c.kind AS k, count(*) AS n"
+    assert not _paths_fused(plain, q)
+
+
+def test_a_budget_stops_the_grouped_path_sweeps():
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "UNWIND range(1, 3000) AS i "
+        "CREATE (:A {id: i})-[:R]->(:B {id: i, k: i % 7})-[:S]->(:C {id: i})-[:T]->(:D {id: i})"
+    ).to_list()
+    q = "MATCH (a:A)-[:R]->(b:B)-[:S]->(c:C)-[:T]->(d:D) RETURN b.k AS k, count(*) AS n"
+    assert _paths_fused(graph, q)
+    assert sum(row["n"] for row in _n(graph, q)) == 3000
+    with pytest.raises(Exception, match="work"):
+        graph.cypher(q, max_work_units=100).to_list()
