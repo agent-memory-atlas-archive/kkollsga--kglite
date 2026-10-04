@@ -1032,6 +1032,13 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     *_reach_pair("reach_secondary_declared", "MATCH (r:Contractor) RETURN r.id AS id"),
     *_reach_pair("reach_secondary_declared_count", "MATCH (r:Contractor) RETURN count(r) AS c"),
     *_reach_pair("reach_secondary_undeclared", "MATCH (t:Tag) RETURN t.id AS id"),
+    # Node counts answered from the masks: untyped popcount, per-label
+    # (primary + secondary buckets), alternation, and the per-type grouping.
+    *_reach_pair("reach_count_all", "MATCH (n) RETURN count(n) AS c"),
+    *_reach_pair("reach_count_declared_label", "MATCH (n:Employee) RETURN count(n) AS c"),
+    *_reach_pair("reach_count_secondary_undeclared", "MATCH (n:Tag) RETURN count(n) AS c"),
+    *_reach_pair("reach_count_alternation", "MATCH (n:Contractor|Dept) RETURN count(n) AS c"),
+    *_reach_pair("reach_count_by_type", "MATCH (n) RETURN n.type AS t, count(*) AS c"),
     *_reach_pair("reach_alternation", "MATCH (n:Contractor|Dept) RETURN n.id AS id"),
     *_reach_pair("reach_conjunction", "MATCH (n:Contractor:Employee) RETURN n.id AS id"),
     *_reach_pair("reach_count_subquery", "MATCH (f:Dept) RETURN COUNT { (f)<-[:IN]-(:Employee) } AS c"),

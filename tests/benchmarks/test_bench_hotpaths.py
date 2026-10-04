@@ -913,3 +913,33 @@ def test_bench_default_context_optional_peer_count(benchmark, declared_edges_gra
     expected = sorted((r["t"], r["n"]) for r in graph.cypher(query).to_list())
     result = benchmark(graph.cypher, query)
     assert sorted((r["t"], r["n"]) for r in result.to_list()) == expected
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_node_count(benchmark, declared_types_with_secondary_graph):
+    """`MATCH (n) RETURN count(n)` under the default context on a graph with a
+    secondary label: one popcount of the node mask, not a test of every node."""
+    graph = declared_types_with_secondary_graph
+    expected = 40 * 25 + 20_000
+    result = benchmark(graph.cypher, "MATCH (n) RETURN count(n) AS n")
+    assert result.to_list()[0]["n"] == expected
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_secondary_label_count(benchmark, declared_types_with_secondary_graph):
+    """A secondary label's count under the default context: the masks' stored
+    per-label answer, which counts the carriers across declared primary types."""
+    graph = declared_types_with_secondary_graph
+    graph.cypher("MATCH (n:T5) WHERE n.id = 250 SET n:Extra")
+    query = "MATCH (n:Extra) RETURN count(n) AS n"
+    expected = len(graph.cypher("MATCH (n:Extra) RETURN n.id AS id").to_list())
+    assert 0 < expected
+    result = benchmark(graph.cypher, query)
+    assert result.to_list()[0]["n"] == expected
+
+
+@pytest.mark.benchmark
+def test_bench_all_context_node_count(benchmark, declared_types_with_secondary_graph):
+    """The control for the two cells above: the same untyped count reading every version."""
+    result = benchmark(declared_types_with_secondary_graph.cypher, "FOR VALID_TIME ALL MATCH (n) RETURN count(n) AS n")
+    assert result.to_list()[0]["n"] == 40 * 50 + 20_000

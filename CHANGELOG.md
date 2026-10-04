@@ -56,6 +56,14 @@ before upgrading.
   Graphs rebuilt from a blueprint with a multi-word parent carry the new name,
   for top-level `parent` specs too.
 
+- Performance: `MATCH (n) RETURN count(n)` under a valid-time context (the
+  default included) is one popcount of the context's node mask instead of a
+  validity test per node, and a typed count (`(n:T)`, `(n:A|B)`, the
+  per-type grouping) reads a per-label count the masks keep, so only the
+  first count over a mask set visits the nodes. On a 561 000-node register
+  with a secondary label the untyped count went from 2.5 ms to under 4 µs and
+  a typed count from 31 µs to 1.5-2.5 µs.
+
 ### Fixed
 
 - The duplicate-id warning of a blueprint or `from_records` build is no longer

@@ -15,7 +15,7 @@ use super::match_clause::{bound_hop, simple_node_edge_node, BoundHop};
 use super::*;
 use crate::graph::core::graph_filter::ElementFilter;
 use crate::graph::core::relationship_property::edge_ref_property;
-use crate::graph::features::temporal::endpoint_index::EdgeTypeCounts;
+use crate::graph::features::temporal::endpoint_index::{EdgeTypeCounts, NodeLabelCounts};
 use crate::graph::languages::cypher::valid_time;
 
 impl CypherExecutor<'_> {
@@ -60,11 +60,13 @@ impl CypherExecutor<'_> {
             Clause::FusedCountAll { alias } => {
                 self.budget
                     .check_work(graph.graph.node_count(), "fused node count")?;
-                let indexed: Option<usize> = graph
-                    .type_indices
-                    .keys()
-                    .map(|label| filter.label_count(graph, label))
-                    .sum();
+                let indexed: Option<usize> = self.masked_node_total(filter).or_else(|| {
+                    graph
+                        .type_indices
+                        .keys()
+                        .map(|label| filter.label_count(graph, label))
+                        .sum()
+                });
                 let count = match indexed {
                     Some(count) => count as i64,
                     None => admitted(&mut graph.graph.node_indices()),
@@ -72,14 +74,14 @@ impl CypherExecutor<'_> {
                 Ok(single_count_result(alias, count))
             }
             Clause::FusedCountTypedNode { node_type, alias } => {
-                let count = self.admitted_label_count(filter, node_type);
+                let count = self.admitted_label_count(filter, node_type)?;
                 Ok(single_count_result(alias, count))
             }
             Clause::FusedCountLabelUnion { labels, alias } => {
-                let count = labels
-                    .iter()
-                    .map(|label| self.admitted_label_count(filter, label))
-                    .sum();
+                let mut count = 0;
+                for label in labels {
+                    count += self.admitted_label_count(filter, label)?;
+                }
                 Ok(single_count_result(alias, count))
             }
             Clause::FusedCountByType {
@@ -88,10 +90,24 @@ impl CypherExecutor<'_> {
                 type_as_list,
             } => {
                 let mut rows = Vec::new();
+                // The indexed count answers without a pass; the stored
+                // per-label counts only when it cannot (secondary labels).
+                let mut stored: Option<Option<Arc<NodeLabelCounts>>> = None;
                 for (node_type, indices) in graph.type_indices.iter() {
                     let count = match filter.label_count(graph, node_type) {
                         Some(count) => count as i64,
-                        None => admitted(&mut indices.iter()),
+                        None => {
+                            if stored.is_none() {
+                                stored = Some(self.stored_label_counts(filter)?);
+                            }
+                            match stored.as_ref().and_then(Option::as_ref) {
+                                Some(per_label) => per_label
+                                    .get(&InternedKey::from_str(node_type))
+                                    .map_or(0, |(primary, _)| *primary)
+                                    as i64,
+                                None => admitted(&mut indices.iter()),
+                            }
+                        }
                     };
                     if count == 0 {
                         continue;
@@ -169,11 +185,74 @@ impl CypherExecutor<'_> {
         Ok(single_count_result(alias, count))
     }
 
+    /// The nodes the filter admits, from its masks alone — one popcount, no
+    /// visit — when they decide every admit test and span the graph's slots.
+    /// `None` sends the caller to the per-label counts or a walk.
+    fn masked_node_total(&self, filter: &ElementFilter) -> Option<usize> {
+        let graph = self.graph;
+        let (node_count, node_bound) = (graph.graph.node_count(), graph.graph.node_bound());
+        let total = filter
+            .decisive_masks()?
+            .admitted_node_count(node_count, node_bound)?;
+        #[cfg(debug_assertions)]
+        if node_count <= 200_000 {
+            let walked = graph
+                .graph
+                .node_indices()
+                .filter(|&idx| filter.admits_node(graph, idx))
+                .count();
+            debug_assert_eq!(total, walked, "the popcount disagrees with the node walk");
+        }
+        Some(total)
+    }
+
+    /// The admitted nodes per label, kept on a filter's decisive masks so only
+    /// the first count over them visits the nodes; `None` for a filter the
+    /// masks do not decide, whose counts walk the buckets every time.
+    fn stored_label_counts(
+        &self,
+        filter: &ElementFilter,
+    ) -> Result<Option<Arc<NodeLabelCounts>>, String> {
+        let Some(masks) = filter.decisive_masks() else {
+            return Ok(None);
+        };
+        if let Some(hit) = masks.cached_node_label_counts() {
+            return Ok(Some(hit));
+        }
+        let graph = self.graph;
+        self.budget
+            .check_work(graph.graph.node_count(), "fused node count")?;
+        node_count_probe::walked();
+        let mut per_label = NodeLabelCounts::default();
+        for (label, bucket) in graph.type_indices.iter() {
+            let admitted = bucket
+                .iter()
+                .filter(|&idx| filter.admits_node(graph, idx))
+                .count();
+            per_label.entry(InternedKey::from_str(label)).or_default().0 += admitted;
+        }
+        for (label, bucket) in &graph.secondary_label_index {
+            let admitted = bucket
+                .iter()
+                .filter(|&&idx| filter.admits_node(graph, idx))
+                .count();
+            per_label.entry(*label).or_default().1 += admitted;
+        }
+        Ok(Some(masks.store_node_label_counts(per_label)))
+    }
+
     /// Nodes carrying `label`, primary or secondary, that the filter admits.
-    fn admitted_label_count(&self, filter: &ElementFilter, label: &str) -> i64 {
+    fn admitted_label_count(&self, filter: &ElementFilter, label: &str) -> Result<i64, String> {
         let graph = self.graph;
         if let Some(count) = filter.label_count(graph, label) {
-            return count as i64;
+            return Ok(count as i64);
+        }
+        if let Some(per_label) = self.stored_label_counts(filter)? {
+            let (primary, secondary) = per_label
+                .get(&InternedKey::from_str(label))
+                .copied()
+                .unwrap_or_default();
+            return Ok((primary + secondary) as i64);
         }
         let primary = graph.type_indices.get(label).map_or(0, |bucket| {
             bucket
@@ -194,7 +273,7 @@ impl CypherExecutor<'_> {
         } else {
             0
         };
-        (primary + secondary) as i64
+        Ok((primary + secondary) as i64)
     }
 
     /// The admitted relationships per type, each counted when it and both
@@ -396,6 +475,28 @@ impl CypherExecutor<'_> {
 /// thread in tests, so a test can prove a repeat count reads the masks'
 /// stored answer. A no-op outside tests.
 pub(crate) mod edge_count_probe {
+    #[cfg(test)]
+    thread_local! {
+        static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[inline]
+    pub(super) fn walked() {
+        #[cfg(test)]
+        WALKS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// The passes counted since the last call.
+    #[cfg(test)]
+    pub(crate) fn take() -> usize {
+        WALKS.with(|c| c.replace(0))
+    }
+}
+
+/// Passes over every node that guarded label counts made, per thread in
+/// tests, so a test can prove a repeat count reads the masks' stored answer.
+/// A no-op outside tests.
+pub(crate) mod node_count_probe {
     #[cfg(test)]
     thread_local! {
         static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

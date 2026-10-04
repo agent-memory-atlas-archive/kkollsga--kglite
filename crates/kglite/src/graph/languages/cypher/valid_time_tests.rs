@@ -679,3 +679,85 @@ fn a_repeat_relationship_count_reads_the_masks_stored_answer() {
     }
     assert_eq!(edge_count_probe::take(), 2, "one walk per hiding instant");
 }
+
+/// A node count under a context equals the nodes a plain match returns —
+/// with a tombstoned slot, a declared label carried secondary by an
+/// undeclared primary, and per-label counts — and a repeat count over the
+/// same masks reads the stored per-label answer instead of visiting nodes.
+#[test]
+fn node_counts_under_a_context_match_the_matcher_and_repeat_without_a_walk() {
+    use crate::graph::languages::cypher::executor::guarded_ops::node_count_probe;
+    let mut graph = graph();
+    write(&mut graph, "MATCH (f:Field) SET f:Well");
+    write(
+        &mut graph,
+        "CREATE (:Well {id: 3, vf: '2012-01-01', vt: null}), (:Field {id: 11, vf: null, vt: null})",
+    );
+    write(&mut graph, "MATCH (w:Well {id: 2}) DETACH DELETE w");
+    let none = HashMap::new();
+    node_count_probe::take();
+    for instant in [
+        "2001-01-01",
+        "2006-01-01",
+        "2011-01-01",
+        "2013-01-01",
+        "2015-01-01",
+    ] {
+        let ctx = format!("FOR VALID_TIME AS OF date('{instant}') ");
+        let count = |body: &str| read(&graph, &format!("{ctx}{body}"), &none).unwrap().rows;
+        let one = |body: &str| count(body)[0][0].clone();
+        let rows = |body: &str| Value::Int64(count(body).len() as i64);
+        assert_eq!(
+            one("MATCH (n) RETURN count(n)"),
+            rows("MATCH (n) RETURN n"),
+            "{instant} untyped"
+        );
+        for label in ["Well", "Field"] {
+            assert_eq!(
+                one(&format!("MATCH (n:{label}) RETURN count(n)")),
+                rows(&format!("MATCH (n:{label}) RETURN n")),
+                "{instant} {label}"
+            );
+        }
+        let by_type: i64 = count("MATCH (n) RETURN n.type AS t, count(*) AS c")
+            .iter()
+            .map(|row| match row[1] {
+                Value::Int64(n) => n,
+                ref other => panic!("{other:?}"),
+            })
+            .sum();
+        assert_eq!(
+            Value::Int64(by_type),
+            rows("MATCH (n) RETURN n"),
+            "{instant} by type"
+        );
+    }
+    assert_eq!(
+        node_count_probe::take(),
+        3,
+        "one label pass per mask set (2001 and 2006, and 2013 and 2015, share one), \
+         however many typed counts follow"
+    );
+}
+
+/// Without secondary labels a typed count is answered from the endpoint
+/// index per label: no pass over the nodes, however many instants ask.
+#[test]
+fn typed_counts_without_secondary_labels_never_pass_over_the_nodes() {
+    use crate::graph::languages::cypher::executor::guarded_ops::node_count_probe;
+    let graph = graph();
+    let none = HashMap::new();
+    node_count_probe::take();
+    for instant in ["2001-01-01", "2011-01-01", "2013-01-01", "2015-01-01"] {
+        for body in [
+            "MATCH (n:Well) RETURN count(n)",
+            "MATCH (n:Well|Field) RETURN count(n)",
+            "MATCH (n) RETURN n.type AS t, count(*) AS c",
+            "MATCH (n) RETURN count(n)",
+        ] {
+            let query = format!("FOR VALID_TIME AS OF date('{instant}') {body}");
+            read(&graph, &query, &none).unwrap();
+        }
+    }
+    assert_eq!(node_count_probe::take(), 0);
+}

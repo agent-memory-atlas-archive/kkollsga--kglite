@@ -511,6 +511,11 @@ pub(crate) struct ElementMasks {
     /// ([`EdgeTypeCounts`]). It belongs to the masks, so it dies with them
     /// and never outlives the graph version that built them.
     edge_counts: OnceLock<Arc<EdgeTypeCounts>>,
+    /// The nodes these masks admit per label, once a count asked
+    /// ([`NodeLabelCounts`]); dies with the masks for the same reason.
+    node_label_counts: OnceLock<Arc<NodeLabelCounts>>,
+    /// The set bits of `nodes`, once a count asked.
+    nodes_set: OnceLock<usize>,
     /// The grouped-count histograms over what these masks admit
     /// ([`PeerHistSet`]); they die with the masks for the same reason.
     pub(crate) peer_hists: PeerHistSet,
@@ -520,12 +525,18 @@ pub(crate) struct ElementMasks {
 /// and how many of those are self-loops.
 pub(crate) type EdgeTypeCounts = FxHashMap<InternedKey, (i64, i64)>;
 
+/// Per label: the admitted nodes whose primary type it is, and the admitted
+/// nodes that carry it as a secondary label.
+pub(crate) type NodeLabelCounts = FxHashMap<InternedKey, (usize, usize)>;
+
 impl ElementMasks {
     pub(crate) fn new(nodes: FixedBitSet, edges: FixedBitSet) -> Self {
         ElementMasks {
             nodes,
             edges,
             edge_counts: OnceLock::new(),
+            node_label_counts: OnceLock::new(),
+            nodes_set: OnceLock::new(),
             peer_hists: PeerHistSet::default(),
         }
     }
@@ -540,8 +551,42 @@ impl ElementMasks {
         Arc::clone(self.edge_counts.get_or_init(|| Arc::new(counts)))
     }
 
+    /// The per-label counts a pass over the nodes already stored on these masks.
+    pub(crate) fn cached_node_label_counts(&self) -> Option<Arc<NodeLabelCounts>> {
+        self.node_label_counts.get().cloned()
+    }
+
+    /// Keep `counts` for the next count over these masks; the first stored wins.
+    pub(crate) fn store_node_label_counts(&self, counts: NodeLabelCounts) -> Arc<NodeLabelCounts> {
+        Arc::clone(self.node_label_counts.get_or_init(|| Arc::new(counts)))
+    }
+
+    /// The nodes these masks admit: every live node less the live nodes a
+    /// mask bit clears. Masks start all-set and clear only slots a declared
+    /// label's rows govern, so a vacant slot always keeps its bit and is not
+    /// subtracted. `None` when the masks do not span `node_bound` slots (a
+    /// slot past a mask passes), leaving the caller to test each node.
+    pub(crate) fn admitted_node_count(
+        &self,
+        node_count: usize,
+        node_bound: usize,
+    ) -> Option<usize> {
+        if self.nodes.len() != node_bound {
+            return None;
+        }
+        let cleared = node_bound - *self.nodes_set.get_or_init(|| self.nodes.count_ones(..));
+        debug_assert!(
+            cleared <= node_count,
+            "a mask cleared {cleared} slots of a graph holding {node_count} nodes: a vacant slot was cleared"
+        );
+        Some(node_count.saturating_sub(cleared))
+    }
+
     fn bytes(&self) -> usize {
-        Self::bytes_for(self.nodes.len(), self.edges.len()) + self.peer_hists.bytes()
+        let labels = self.node_label_counts.get().map_or(0, |counts| {
+            counts.capacity() * (size_of::<InternedKey>() + 2 * size_of::<usize>())
+        });
+        Self::bytes_for(self.nodes.len(), self.edges.len()) + self.peer_hists.bytes() + labels
     }
 
     pub(crate) fn bytes_for(nodes: usize, edges: usize) -> usize {
