@@ -836,8 +836,7 @@ impl<'a> CypherExecutor<'a> {
         match clause {
             Clause::Match(m) => self.execute_match(m, result_set, None),
             Clause::OptionalMatch(m) => self.execute_optional_match(m, result_set),
-            Clause::Where(w) => self.execute_where(w, result_set),
-            Clause::Filter(w) => self.execute_where(w, result_set),
+            Clause::Where(w) | Clause::Filter(w) => self.execute_where(w, result_set),
             Clause::Return(r) => self.execute_return(r, result_set),
             Clause::Finish => Ok(ResultSet::new()),
             Clause::With(w) => self.execute_with(w, result_set),
@@ -977,6 +976,7 @@ impl<'a> CypherExecutor<'a> {
                 )
             }
             Clause::FusedChainPathCount { .. } => self.execute_fused_chain_path_count(clause),
+            Clause::FusedChainDistinctCount { .. } => self.execute_chain_distinct(clause),
             Clause::SpatialJoin {
                 container_var,
                 probe_var,
@@ -1202,6 +1202,7 @@ fn runs_under_graph_filter(clause: &Clause) -> bool {
             | Clause::FusedCountTypedEdge { .. }
             | Clause::FusedCountAnchoredEdges { .. }
             | Clause::FusedChainPathCount { .. }
+            | Clause::FusedChainDistinctCount { .. }
             | Clause::FusedOptionalMatchAggregate { .. }
             | Clause::SpatialJoin { .. }
     )
@@ -1228,6 +1229,7 @@ fn is_fused_clause(clause: &Clause) -> bool {
             | Clause::FusedCountTypedEdge { .. }
             | Clause::FusedCountAnchoredEdges { .. }
             | Clause::FusedChainPathCount { .. }
+            | Clause::FusedChainDistinctCount { .. }
             | Clause::FusedNodeScanAggregate { .. }
             | Clause::FusedNodeScanTopK { .. }
             | Clause::SpatialJoin { .. }

@@ -637,6 +637,13 @@ fn pass_fuse_optional_match_aggregate(query: &mut CypherQuery, _ctx: &PassCtx) {
 /// shared with another hop, except in a two-hop directed chain: the matcher
 /// enforces relationship uniqueness there, and only that case has a
 /// closed-form correction (the paths that cross one relationship twice).
+///
+/// The same pass takes `RETURN count(DISTINCT x)` for a node or relationship
+/// variable `x` of a chain of 2+ relationships of pairwise-disjoint types and
+/// rewrites it to one `FusedChainDistinctCount` (a forward and a backward
+/// reachability sweep). It admits the aggregate-only DISTINCT hint naming `x`
+/// and nothing else the path count bails on, plus `count(DISTINCT x.prop)`,
+/// other aggregates, grouping keys and overlapping hop types.
 fn pass_fuse_chain_path_count(query: &mut CypherQuery, ctx: &PassCtx) {
     fuse_chain_path_count(query, ctx.guarded)
 }

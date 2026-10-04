@@ -187,8 +187,20 @@ before upgrading.
   ALL`, 8,693,836 paths) took 10.5 s and now takes 1.4-1.5 ms; under the
   default (today, 414,404 paths) 106 ms -> 0.53-0.57 ms; as of one date
   (246,021 paths) 52 ms -> 0.48-0.52 ms. The counts equal the matcher's.
-  `DISTINCT`, grouped counts, cycles, variable-length hops and a repeated
-  type beyond two hops still run on the matcher.
+  Grouped counts, cycles, variable-length hops and a repeated type beyond
+  two hops still run on the matcher.
+
+- Faster: `MATCH` of a linear chain of two or more relationships of
+  pairwise-distinct types `RETURN count(DISTINCT x)`, for a node or a
+  relationship variable `x` of the chain, is answered by a forward sweep from
+  the start nodes and a backward sweep from the far end that keeps only what
+  lies on a complete path, instead of building every path and deduplicating
+  afterwards (same pass `fuse_chain_path_count`, plan operator
+  `FusedChainDistinctCount`). Labels, node and relationship property
+  matchers, anchors, undirected hops and `FOR VALID_TIME` apply as for the
+  path count, and the counts equal the matcher's. A `WHERE`, `count(DISTINCT
+  x.prop)`, `RETURN DISTINCT`, other aggregates beside it, repeated hop types
+  and the other shapes listed above still run on the matcher.
 
 - An aggregate over a leading `MATCH` that the planner does not fuse
   (`RETURN k, count(*), sum(x), avg(x), min/max, count(DISTINCT x)`, with or

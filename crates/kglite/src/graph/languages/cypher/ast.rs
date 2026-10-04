@@ -371,6 +371,18 @@ pub enum Clause {
         overlapping_types: bool,
         alias: String,
     },
+    /// Optimizer-generated: `MATCH <linear chain of k relationships> RETURN
+    /// count(DISTINCT x)` for a node or relationship variable `x` of the chain
+    /// → a forward reachability sweep and a backward sweep that keeps only
+    /// what reaches the chain's far end, so each distinct `x` is counted once
+    /// however many paths pass through it. `target` is the index of `x` in
+    /// `pattern.elements` (even: a node, odd: a relationship). The hop types
+    /// are pairwise disjoint, so relationship uniqueness cannot reject a path.
+    FusedChainDistinctCount {
+        pattern: crate::graph::core::pattern_matching::Pattern,
+        target: usize,
+        alias: String,
+    },
     /// Optimizer-generated: MATCH (n:Type) [WHERE ...] RETURN group_keys, agg_funcs(...)
     /// → single-pass node scan with inline aggregation. Avoids materializing intermediate
     /// ResultRows — evaluates group keys and aggregates directly from node properties.

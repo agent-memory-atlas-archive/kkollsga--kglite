@@ -417,6 +417,9 @@ pub fn clause_display_name(clause: &Clause) -> String {
         Clause::FusedChainPathCount { pattern, .. } => {
             format!("FusedChainPathCount (k={})", pattern.elements.len() / 2)
         }
+        Clause::FusedChainDistinctCount { pattern, .. } => {
+            format!("FusedChainDistinctCount (k={})", pattern.elements.len() / 2)
+        }
         Clause::FusedCountAll { .. }
         | Clause::FusedCountAllEdges { .. }
         | Clause::FusedCountByType { .. }

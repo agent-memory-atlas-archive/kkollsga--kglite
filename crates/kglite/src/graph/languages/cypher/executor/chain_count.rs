@@ -17,6 +17,17 @@
 //! exactly those whose two hops traverse the same relationship: each is fixed
 //! by its first relationship, so they are counted by one pass over the first
 //! hop and subtracted ([`CypherExecutor::same_relationship_paths`]).
+//!
+//! `Clause::FusedChainDistinctCount` counts the distinct nodes or relationships
+//! one chain variable takes over those paths. A forward sweep gives `F_i`, the
+//! nodes at position `i` reached from the start nodes; a backward sweep keeps
+//! `B_i`, the members of `F_i` with an admitted relationship into `B_{i+1}`
+//! (`B_k = F_k`). `B_j` is exactly the node at position `j` of some complete
+//! path, so a node target counts `|B_j|`. A relationship at hop `i` lies on a
+//! complete path iff it starts in `F_{i-1}` and ends in `B_i`; an undirected
+//! hop can meet one relationship from both ends, so its ids are deduplicated.
+//! Disjoint hop types make the matcher's relationship-uniqueness rule moot, as
+//! above.
 
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
@@ -284,6 +295,149 @@ impl CypherExecutor<'_> {
             }
         }
         Ok(shared)
+    }
+}
+
+impl CypherExecutor<'_> {
+    pub(super) fn execute_chain_distinct(&self, clause: &Clause) -> Result<ResultSet, String> {
+        let Clause::FusedChainDistinctCount {
+            pattern,
+            target,
+            alias,
+        } = clause
+        else {
+            return Err("internal: not a FusedChainDistinctCount clause".into());
+        };
+        let Some((start, hops)) = chain_hops(pattern) else {
+            return Err(
+                "internal: FusedChainDistinctCount holds a pattern that is not a chain".into(),
+            );
+        };
+        if *target >= pattern.elements.len() {
+            return Err("internal: FusedChainDistinctCount target is outside the pattern".into());
+        }
+        let pe = self.pattern_executor(None, None);
+        let filter = self.graph_filter().map(|f| f.as_ref());
+        let seeds = pe.find_matching_nodes_pub(start)?;
+        let tests: Vec<HopTests<'_>> = hops
+            .iter()
+            .map(|hop| HopTests::new(self, &pe, filter, hop))
+            .collect();
+        let mut visited: usize = 0;
+        let mut reach: Vec<FxHashSet<NodeIndex>> = vec![seeds.into_iter().collect()];
+        for hop in &tests {
+            let next = self.advance_chain_reach(hop, &reach[reach.len() - 1], &mut visited)?;
+            self.budget
+                .check_work(visited, "fused chain distinct count")?;
+            reach.push(next);
+        }
+        // The position the answer is read at: the target node, or the node a
+        // targeted relationship reaches.
+        let lowest = target.div_ceil(2);
+        let mut back = std::mem::take(&mut reach[tests.len()]);
+        for i in (lowest..tests.len()).rev() {
+            back = self.retain_reaching(&tests[i], &reach[i], &back, &mut visited)?;
+            self.budget
+                .check_work(visited, "fused chain distinct count")?;
+        }
+        let count = if target.is_multiple_of(2) {
+            back.len()
+        } else {
+            let hop = &tests[lowest - 1];
+            self.count_reaching_relationships(hop, &reach[lowest - 1], &back, &mut visited)?
+        };
+        let count = i64::try_from(count).map_err(|_| RANGE_ERROR)?;
+        Ok(single_count_result(alias, count))
+    }
+
+    /// The peers `hop` admits from any node of `frontier`.
+    fn advance_chain_reach(
+        &self,
+        hop: &HopTests<'_>,
+        frontier: &FxHashSet<NodeIndex>,
+        visited: &mut usize,
+    ) -> Result<FxHashSet<NodeIndex>, String> {
+        let mut next: FxHashSet<NodeIndex> = FxHashSet::default();
+        for &from in frontier {
+            for &dir in hop.hop.dirs {
+                for edge_ref in hop.edges(from, dir) {
+                    self.check_interrupt_periodic(*visited)?;
+                    *visited += 1;
+                    let Some(peer) = hop.admit_relationship(from, dir, &edge_ref) else {
+                        continue;
+                    };
+                    if !next.contains(&peer) && hop.peer_accepted(peer) {
+                        next.insert(peer);
+                    }
+                }
+            }
+        }
+        Ok(next)
+    }
+
+    /// The members of `from` that `hop` admits a relationship from into
+    /// `into`. `into` holds only nodes that already passed the hop's peer
+    /// tests.
+    fn retain_reaching(
+        &self,
+        hop: &HopTests<'_>,
+        from: &FxHashSet<NodeIndex>,
+        into: &FxHashSet<NodeIndex>,
+        visited: &mut usize,
+    ) -> Result<FxHashSet<NodeIndex>, String> {
+        let mut kept: FxHashSet<NodeIndex> = FxHashSet::default();
+        'nodes: for &node in from {
+            for &dir in hop.hop.dirs {
+                for edge_ref in hop.edges(node, dir) {
+                    self.check_interrupt_periodic(*visited)?;
+                    *visited += 1;
+                    let reaches = hop
+                        .admit_relationship(node, dir, &edge_ref)
+                        .is_some_and(|peer| into.contains(&peer));
+                    if reaches {
+                        kept.insert(node);
+                        continue 'nodes;
+                    }
+                }
+            }
+        }
+        Ok(kept)
+    }
+
+    /// The distinct relationships `hop` admits from a node of `from` to a
+    /// node of `into`.
+    fn count_reaching_relationships(
+        &self,
+        hop: &HopTests<'_>,
+        from: &FxHashSet<NodeIndex>,
+        into: &FxHashSet<NodeIndex>,
+        visited: &mut usize,
+    ) -> Result<usize, String> {
+        // A directed hop meets each relationship from one end only; an
+        // undirected one can meet it from both.
+        let undirected = hop.hop.edge.direction == EdgeDirection::Both;
+        let mut ids: FxHashSet<petgraph::graph::EdgeIndex> = FxHashSet::default();
+        let mut directed: usize = 0;
+        for &node in from {
+            for &dir in hop.hop.dirs {
+                for edge_ref in hop.edges(node, dir) {
+                    self.check_interrupt_periodic(*visited)?;
+                    *visited += 1;
+                    let reaches = hop
+                        .admit_relationship(node, dir, &edge_ref)
+                        .is_some_and(|peer| into.contains(&peer));
+                    if !reaches {
+                        continue;
+                    }
+                    if undirected {
+                        ids.insert(edge_ref.id());
+                    } else {
+                        directed += 1;
+                    }
+                }
+            }
+        }
+        Ok(if undirected { ids.len() } else { directed })
     }
 }
 

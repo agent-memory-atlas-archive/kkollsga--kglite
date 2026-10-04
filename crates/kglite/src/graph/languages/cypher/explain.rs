@@ -238,6 +238,7 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
             | Clause::FusedOptionalMatchAggregate { .. }
             | Clause::FusedCountTypedEdge { .. }
             | Clause::FusedChainPathCount { .. }
+            | Clause::FusedChainDistinctCount { .. }
             | Clause::FusedCountAnchoredEdges { .. } => Value::Int64(1),
             Clause::FusedCountTypedNode { node_type, .. } => {
                 let n = graph

@@ -2,7 +2,9 @@
 //!
 //! The matcher materialises every path of the chain. A chain's path count is
 //! a degree product, computable hop by hop over the frontier of nodes it
-//! reaches — see `executor/chain_count.rs` for the executor.
+//! reaches — see `executor/chain_count.rs` for the executor. The same chain
+//! under `count(DISTINCT x)` is a reachability question, answered by the
+//! executor's forward and backward sweeps.
 
 use super::is_count_of_var_or_star;
 use crate::graph::core::pattern_matching::{
@@ -94,21 +96,53 @@ fn is_chain_count(expr: &Expression, pattern: &Pattern) -> bool {
         })
 }
 
-/// Rewrite `MATCH <chain> RETURN count(*)` into `Clause::FusedChainPathCount`.
+/// The position in `pattern.elements` of the chain variable `expr` counts
+/// distinctly: `count(DISTINCT x)` for a node or relationship `x` of the chain.
+fn distinct_count_target(expr: &Expression, pattern: &Pattern) -> Option<usize> {
+    let Expression::FunctionCall {
+        name,
+        args,
+        distinct: true,
+    } = expr
+    else {
+        return None;
+    };
+    let [Expression::Variable(var)] = args.as_slice() else {
+        return None;
+    };
+    if !name.eq_ignore_ascii_case("count") {
+        return None;
+    }
+    pattern.elements.iter().position(|element| {
+        let variable = match element {
+            PatternElement::Node(node) => node.variable.as_deref(),
+            PatternElement::Edge(edge) => edge.variable.as_deref(),
+        };
+        variable == Some(var.as_str())
+    })
+}
+
+/// Rewrite `MATCH <chain> RETURN count(*)` into `Clause::FusedChainPathCount`,
+/// or `... RETURN count(DISTINCT x)` into `Clause::FusedChainDistinctCount`.
 ///
 /// **Precondition:** the statement is exactly one `MATCH` and one `RETURN`.
 /// **Pattern matched:** one linear pattern of at least [`MIN_HOPS`]
 /// relationships ([`MIN_HOPS_GUARDED`] under a valid-time guard), no path
 /// assignment, no residual predicate or hint, `RETURN count(*)` (or `count(v)`
-/// of a variable the chain binds) without DISTINCT or HAVING. **Rewrite:** the
-/// pair becomes one clause holding the pattern and the column name.
+/// of a variable the chain binds) without DISTINCT or HAVING. The distinct
+/// form is the single item `count(DISTINCT x)` for a node or relationship
+/// variable `x` of a chain of two or more relationships, whose only hint may
+/// be the aggregate-only DISTINCT hint naming `x`. **Rewrite:** the pair
+/// becomes one clause holding the pattern and the column name (and `x`'s
+/// position for the distinct form).
 /// **Why-bail:** a repeated variable (identity constraint), a var-length or
 /// parameterised hop, a comma pattern, an `OPTIONAL MATCH`, a property
-/// matcher that reads a row, and hop types that are untyped or shared with
-/// another hop unless the chain is two directed hops. The matcher enforces
-/// relationship uniqueness for such chains; the executor corrects for it only
-/// in that two-hop case (see `executor/chain_count.rs`), so the rest stay on
-/// the matcher.
+/// matcher that reads a row, `count(DISTINCT x.prop)`, `RETURN DISTINCT`, and
+/// hop types that are untyped or shared with another hop unless the count is
+/// a two-directed-hop path count. The matcher enforces relationship
+/// uniqueness for such chains; the path count corrects for it only in that
+/// two-hop case (see `executor/chain_count.rs`), the distinct form not at all,
+/// so the rest stay on the matcher.
 pub(crate) fn fuse_chain_path_count(query: &mut CypherQuery, guarded: bool) {
     let [Clause::Match(m), Clause::Return(ret)] = query.clauses.as_slice() else {
         return;
@@ -119,14 +153,39 @@ pub(crate) fn fuse_chain_path_count(query: &mut CypherQuery, guarded: bool) {
     let [item] = ret.items.as_slice() else {
         return;
     };
-    let min_hops = if guarded { MIN_HOPS_GUARDED } else { MIN_HOPS };
     if !m.path_assignments.is_empty()
         || m.where_clause.is_some()
         || m.limit_hint.is_some()
-        || m.distinct_node_hint.is_some()
         || !m.node_anchors.is_empty()
         || ret.distinct
         || ret.having.is_some()
+    {
+        return;
+    }
+    let alias = return_item_column_name(item);
+    if let Some(target) = distinct_count_target(&item.expression, pattern) {
+        // Only the aggregate-only hint on the counted variable is harmless: it
+        // describes this very aggregate.
+        let hint_ok = m.distinct_node_hint.as_ref().is_none_or(|hint| {
+            hint.aggregate_only
+                && matches!(&pattern.elements[target],
+                    PatternElement::Node(node) if node.variable.as_deref() == Some(hint.var.as_str()))
+        });
+        if !hint_ok
+            || !is_countable_chain(pattern, MIN_HOPS_GUARDED)
+            || !fixed_edge_types_are_pairwise_disjoint(pattern)
+        {
+            return;
+        }
+        query.clauses = vec![Clause::FusedChainDistinctCount {
+            pattern: pattern.clone(),
+            target,
+            alias,
+        }];
+        return;
+    }
+    let min_hops = if guarded { MIN_HOPS_GUARDED } else { MIN_HOPS };
+    if m.distinct_node_hint.is_some()
         || !is_chain_count(&item.expression, pattern)
         || !is_countable_chain(pattern, min_hops)
     {
@@ -136,10 +195,9 @@ pub(crate) fn fuse_chain_path_count(query: &mut CypherQuery, guarded: bool) {
     if overlapping_types && !has_correctable_overlap(pattern) {
         return;
     }
-    let fused = Clause::FusedChainPathCount {
+    query.clauses = vec![Clause::FusedChainPathCount {
         pattern: pattern.clone(),
         overlapping_types,
-        alias: return_item_column_name(item),
-    };
-    query.clauses = vec![fused];
+        alias,
+    }];
 }

@@ -519,10 +519,84 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[:FUNDED_BY]-(l:Project)-[:COVERS]->(f) RETURN count(*) AS n",
         None,
     ),
+    # `count(DISTINCT x)` over the same chain is a reachability count
+    # (`FusedChainDistinctCount`): every node position, a relationship
+    # variable, an undirected self-loop hop, and the shapes it must leave to
+    # the matcher.
     (
-        "chain_count_distinct_bails",
+        "chain_distinct_end_node",
         "chain_graph",
         f"MATCH {_CHAIN} RETURN count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_intermediate_node",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN count(DISTINCT c) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_start_node_with_filters",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept {kind: 'big'})<-[:FUNDED_BY {share: 50}]-(l:Project)"
+        "<-[:IN_PROJECT]-(w:Task) RETURN count(DISTINCT f) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_relationship_variable",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)<-[r:FUNDED_BY]-(l:Project)<-[:IN_PROJECT]-(w:Task)"
+        " RETURN count(DISTINCT r) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_undirected_self_loop_relationship",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)-[x:PARTNER]-(p:Dept)<-[:FUNDED_BY]-(l:Project)"
+        " RETURN count(DISTINCT x) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_undirected_peer",
+        "chain_graph",
+        "MATCH (f:Team)-[:LED_BY]->(c:Dept)-[:PARTNER]-(p:Dept)<-[:FUNDED_BY]-(l:Project)"
+        " RETURN count(DISTINCT p) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_between_anonymous_nodes",
+        "fan_chain_graph",
+        "MATCH (:A)-[:R]->(:M)-[:S]->(b:B)-[:T]->(:C) RETURN count(DISTINCT b) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_empty_frontier",
+        "chain_graph",
+        f"MATCH {_CHAIN.replace('Team', 'Nothing')} RETURN count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_where_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} WHERE c.kind <> 'small' RETURN count(DISTINCT w) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_overlapping_types_bails",
+        "chain_graph",
+        "MATCH (a:Dept)-[:PARTNER]->(b:Dept)-[:PARTNER]->(c:Dept)-[:PARTNER]->(d:Dept) RETURN count(DISTINCT d) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_property_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN count(DISTINCT w.id) AS n",
+        None,
+    ),
+    (
+        "chain_distinct_beside_another_aggregate_bails",
+        "chain_graph",
+        f"MATCH {_CHAIN} RETURN count(DISTINCT w) AS n, count(*) AS m",
         None,
     ),
     (
