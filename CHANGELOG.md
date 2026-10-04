@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-10-04
+
 ### Added
 
 - `distinct` collapses identical relationship rows. A load that owns its edges
@@ -166,7 +168,8 @@ before upgrading.
   `abc`, an empty year) is dropped from the series with one warning giving the
   count, columns and example values, instead of being filed under year 0.
   Unknown keys inside a `timeseries` block (e.g. `aggregates`)
-  now warn like unknown keys elsewhere in a blueprint.
+  now warn like unknown keys elsewhere in a blueprint. Rust API:
+  `TimeseriesSpec` gains `extra` (a new field on a constructible struct).
 
 - Performance: a relationship count under `FOR VALID_TIME AS OF` (and under
   the default context) -- `MATCH ()-[r:T]->() RETURN count(r)`, `count(*)`, the

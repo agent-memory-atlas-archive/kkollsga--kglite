@@ -156,6 +156,12 @@
       "sha256": "a3348999669a74d1b44a849c127b08299c5f7b7062cf160e4c7f93a14e5147ed",
       "status": "accepted"
     },
+    "0_19_2.json": {
+      "evidence": "Inflated capture at load 8-28 (release build + concurrent agent sessions); 4 cells +22-36% incl. the return_id_10k control. Same-run wheel A/B from /tmp at load 12 (proc_rn.py): RETURN n 0.19.1 2.762 vs HEAD 2.826 ms (+2%), RETURN id(n) 1.125 vs 1.083 ms (-4%); text-filter cells flat P24->HEAD (0.52-0.53 ms) in earlier A/Bs. 2026-10-04 on Mac16,10 (M4, 16 GiB).",
+      "platform": "Darwin/arm64",
+      "sha256": "c0ed91ce3b6ac1961e0b748f5e73fbb5632cd6fdddc63118dfe3e7e4f453b829",
+      "status": "rejected"
+    },
     "current.json": {
       "evidence": "0_19_0_del_cell.json plus one cell: the harness gained test_bench_valid_at_four_arg_two_sites (operator-feedback P5) and the exact-set CI legs need every harness cell in the reference. 2026-10-03 on Mac16,10 (M4, 16 GiB), two agreeing release runs of 9476481c (min 5.291/5.395 ms) against 0.13.2 at 4.850/5.192 ms on the same interpreter, machine load 3.7-4.1; every other row is byte-identical to 0_19_0_del_cell.json.",
       "platform": "Darwin/arm64",
