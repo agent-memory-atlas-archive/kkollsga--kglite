@@ -159,6 +159,27 @@ before upgrading.
   default context went from about 2.9 ms to 3.0-3.5 us (the same count under
   `FOR VALID_TIME ALL` is 1.1-1.2 us).
 
+- Performance: a grouped count over one relationship type
+  (`MATCH (a:A)-[:T]->(b:B) RETURN b.p, count(a) ORDER BY ... LIMIT k`, the
+  `WITH b, count(a)` form and the `OPTIONAL MATCH` form) on an in-memory graph
+  reads a cached per-node count instead of walking every relationship incident
+  to each group node. One pass over the relationships of the type counts them
+  for every node at once; it is built once the walks it replaces have cost as
+  much as the pass, and kept per graph version and instant (per graph version
+  under `FOR VALID_TIME ALL` or on a graph without validity declarations). The
+  answer is the same as before: a relationship counts when it, its peer's label
+  and both endpoints are admitted. A count with `DISTINCT`, a relationship or
+  peer property filter, several relationship types, or a variable-length edge
+  keeps walking, as do mapped and disk graphs, which already index adjacency by
+  type. On a 856k-relationship production graph (release build, Python 3.14,
+  min of 60 after 10 warm-ups, two interleaved runs, load average about 3) a
+  top-10 grouped count over one hop went from 1.0-1.1 ms to 0.03 ms under the
+  default context (0.06 ms under `FOR VALID_TIME ALL`; 0.75-0.85 ms in 0.18.1),
+  the `WITH` form from 1.05 ms to 0.07 ms, and an `OPTIONAL MATCH` count over
+  9k group nodes from 1.3-1.5 ms to 0.34 ms. A statement walks as before until its repeats have
+  spent about as long walking as the build takes: 3 runs for a millisecond-long
+  statement, tens for a shorter one.
+
 - Performance: a grouped `count` over one relationship hop
   (`MATCH (w:T)-[:R]->(f:U) RETURN f.p, count(w) ... ORDER BY ... LIMIT k`)
   now keeps its fused plan under `FOR VALID_TIME AS OF` (and `valid_at=`). The

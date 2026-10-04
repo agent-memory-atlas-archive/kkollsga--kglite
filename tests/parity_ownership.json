@@ -937,5 +937,419 @@
   },
   "tests/test_valid_time_reach.py::test_a_capped_start_scan_still_finds_a_late_match[disk]": {
     "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_in-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_in-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_in-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_in-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_in-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_in-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_star-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_star-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_star-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_star-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_star-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[return_star-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_in-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_in-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_in-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_in-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_in-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_in-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_in-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_in-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_in-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_in-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_in-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_in-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[alternation_peer-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[alternation_peer-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[alternation_peer-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[alternation_peer-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[alternation_peer-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[alternation_peer-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_peer-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_peer-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_peer-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_peer-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_peer-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_peer-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_contractor_peer-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_contractor_peer-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_contractor_peer-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_contractor_peer-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_contractor_peer-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[with_contractor_peer-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[out_with_secondary_peer-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[out_with_secondary_peer-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[out_with_secondary_peer-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[out_with_secondary_peer-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[out_with_secondary_peer-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[out_with_secondary_peer-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undirected_self_loop-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undirected_self_loop-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undirected_self_loop-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undirected_self_loop-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undirected_self_loop-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undirected_self_loop-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type_undirected-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type_undirected-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type_undirected-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type_undirected-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type_undirected-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[undeclared_type_undirected-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_out-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_out-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_out-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_out-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_out-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[contractor_out-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[department_undirected-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[department_undirected-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[department_undirected-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[department_undirected-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[department_undirected-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[department_undirected-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[mixed_undirected_with-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[mixed_undirected_with-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[mixed_undirected_with-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[mixed_undirected_with-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[mixed_undirected_with-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[mixed_undirected_with-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_secondary_peer-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_secondary_peer-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_secondary_peer-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_secondary_peer-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_secondary_peer-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_secondary_peer-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_out_contractor-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_out_contractor-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_out_contractor-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_out_contractor-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_out_contractor-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_out_contractor-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_undirected_contractor-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_undirected_contractor-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_undirected_contractor-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_undirected_contractor-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_undirected_contractor-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[optional_undirected_contractor-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[any_peer-closed-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[any_peer-closed-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[any_peer-closed-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[any_peer-half_open-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[any_peer-half_open-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_grouped_counts_equal_the_hand_count_at_every_instant[any_peer-half_open-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[return_in-2-2012-06-15-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[return_in-2-2012-06-15-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[return_in-2-2012-06-15-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[return_in-2-all-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[return_in-2-all-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[return_in-2-all-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_in-2-2012-06-15-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_in-2-2012-06-15-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_in-2-2012-06-15-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_in-2-all-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_in-2-all-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_in-2-all-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[optional_in-2-2012-06-15-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[optional_in-2-2012-06-15-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[optional_in-2-2012-06-15-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[optional_in-2-all-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[optional_in-2-all-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[optional_in-2-all-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[contractor_peer-1-2012-06-15-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[contractor_peer-1-2012-06-15-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[contractor_peer-1-2012-06-15-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[contractor_peer-1-all-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[contractor_peer-1-all-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[contractor_peer-1-all-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_contractor_peer-1-2012-06-15-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_contractor_peer-1-2012-06-15-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_contractor_peer-1-2012-06-15-disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_contractor_peer-1-all-memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_contractor_peer-1-all-mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_peer_hist.py::test_a_write_between_two_counts_moves_the_answer[with_contractor_peer-1-all-disk]": {
+    "owner": "storage-parity"
   }
 }

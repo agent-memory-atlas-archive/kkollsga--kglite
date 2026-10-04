@@ -66,16 +66,21 @@ impl<'a> CypherExecutor<'a> {
         let mut group_index: FxHashMap<Vec<Value>, usize> = FxHashMap::default();
         let mut key_scratch: Vec<Value> = Vec::with_capacity(group_key_indices.len());
 
+        let counters: Vec<GroupCounter> = match_clause
+            .patterns
+            .iter()
+            .map(|_| GroupCounter::default())
+            .collect();
         for (scan_count, row) in existing.rows.iter().enumerate() {
             if scan_count.is_multiple_of(2048) {
                 self.check_deadline()?;
             }
             let mut match_count: i64 = 0;
 
-            for pattern in &match_clause.patterns {
+            for (pattern, counter) in match_clause.patterns.iter().zip(&counters) {
                 // Fast-path: direct edge traversal when one end is pre-bound
                 let fast_count = if self.incident_scan_respects_bindings(pattern, row) {
-                    self.try_count_simple_pattern(pattern, &row.node_bindings)?
+                    counter.count(self, pattern, &row.node_bindings)?
                 } else {
                     None
                 };
@@ -330,7 +335,7 @@ impl<'a> CypherExecutor<'a> {
                 }
             })
         };
-
+        let group_counter = GroupCounter::default();
         // Counts edges, or distinct peers when `distinct_count` is set.
         // Returns Result so a deadline surfaced by the inner counters
         // propagates through the surrounding heap/loop and ends the query.
@@ -352,8 +357,8 @@ impl<'a> CypherExecutor<'a> {
                         .try_count_distinct_peers(pattern, &bindings_for_count)?
                         .unwrap_or(0))
                 } else {
-                    Ok(self
-                        .try_count_simple_pattern(pattern, &bindings_for_count)?
+                    Ok(group_counter
+                        .count(self, pattern, &bindings_for_count)?
                         .unwrap_or(0))
                 }
             }
@@ -1565,9 +1570,10 @@ impl<'a> CypherExecutor<'a> {
     /// count(). The primary `match_clause` enumerates group keys (via the
     /// fully-executed pattern, so its filters apply); the secondary clause's
     /// pattern provides the count shape (edge type/direction/target filter).
-    /// Per group key the executor calls `try_count_simple_pattern` against
-    /// the secondary pattern, which uses the existing degree-fast-path
-    /// (count_edges_filtered) without materializing edge rows.
+    /// Per group key the executor counts the secondary pattern through a
+    /// `GroupCounter`: `try_count_simple_pattern`'s degree fast path
+    /// (count_edges_filtered) without materializing edge rows, or a cached
+    /// per-node histogram once repeated walks have paid for building one.
     pub(super) fn execute_fused_match_with_aggregate(
         &self,
         match_clause: &MatchClause,
@@ -1692,6 +1698,7 @@ impl<'a> CypherExecutor<'a> {
         // dominate.
         const PARALLEL_COUNT_THRESHOLD: usize = 4_096;
         let group_var_owned = group_var.to_string();
+        let group_counter = GroupCounter::default();
         let count_one = |idx: NodeIndex| -> Result<(NodeIndex, i64), String> {
             let mut bindings = Bindings::with_capacity(1);
             bindings.insert(group_var_owned.clone(), idx);
@@ -1699,7 +1706,8 @@ impl<'a> CypherExecutor<'a> {
                 self.try_count_distinct_peers(count_pattern, &bindings)?
                     .unwrap_or(0)
             } else {
-                self.try_count_simple_pattern(count_pattern, &bindings)?
+                group_counter
+                    .count(self, count_pattern, &bindings)?
                     .unwrap_or(0)
             };
             let c = c * m1_multiplicity.get(&idx).copied().unwrap_or(1);

@@ -833,3 +833,41 @@ def test_bench_all_context_declared_edge_count(benchmark, declared_edges_graph):
         declared_edges_graph.cypher, "FOR VALID_TIME ALL MATCH ()-[r:CONTRACTED]->() RETURN count(r) AS n"
     )
     assert result.to_list()[0]["n"] == 200_000
+
+
+GROUPED_PARTY_COUNT = (
+    "MATCH (a:Party)-[:CONTRACTED]->(b:Party) WITH b, count(a) AS n RETURN b.title AS t, n ORDER BY n DESC, t LIMIT 10"
+)
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_grouped_peer_count(benchmark, declared_edges_graph):
+    """A grouped count over one hop under the default context: after a few
+    repeats the per-node counts come from the cached histogram instead of a walk
+    of every incident relationship."""
+    graph = declared_edges_graph
+    expected = graph.cypher(GROUPED_PARTY_COUNT).to_list()
+    assert len(expected) == 10
+    result = benchmark(graph.cypher, GROUPED_PARTY_COUNT)
+    assert result.to_list() == expected
+
+
+@pytest.mark.benchmark
+def test_bench_all_context_grouped_peer_count(benchmark, declared_edges_graph):
+    """The same grouped count reading every version: the unfiltered histogram."""
+    graph = declared_edges_graph
+    query = "FOR VALID_TIME ALL " + GROUPED_PARTY_COUNT
+    expected = graph.cypher(query).to_list()
+    assert len(expected) == 10
+    result = benchmark(graph.cypher, query)
+    assert result.to_list() == expected
+
+
+@pytest.mark.benchmark
+def test_bench_default_context_optional_peer_count(benchmark, declared_edges_graph):
+    """An `OPTIONAL MATCH` grouped count under the default context."""
+    graph = declared_edges_graph
+    query = "MATCH (b:Party) OPTIONAL MATCH (b)<-[:CONTRACTED]-(a:Party) RETURN b.title AS t, count(a) AS n"
+    expected = sorted((r["t"], r["n"]) for r in graph.cypher(query).to_list())
+    result = benchmark(graph.cypher, query)
+    assert sorted((r["t"], r["n"]) for r in result.to_list()) == expected

@@ -1,3 +1,4 @@
+use super::group_count::GroupCounter;
 use super::helpers::*;
 use super::ordering::{SortSpec, TopKCollector};
 use super::scan_eval::{ScanCompiler, ScanExpr, ScanPred, ScanRuntime};

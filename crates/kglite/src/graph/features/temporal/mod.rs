@@ -22,6 +22,7 @@ mod loader_tests;
 mod merge_key;
 #[cfg(test)]
 mod merge_key_tests;
+pub(crate) mod peer_hist;
 pub(crate) mod persist;
 #[cfg(test)]
 mod persist_tests;

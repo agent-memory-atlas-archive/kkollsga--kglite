@@ -78,6 +78,7 @@ use rustc_hash::FxHashMap;
 use super::declarations::TemporalTarget;
 use super::duplicate_ids::DuplicateIds;
 use super::eval::{self, Instant, IntervalConvention};
+use super::peer_hist::PeerHistSet;
 use super::slice::{SliceKey, ValidSlice};
 use super::validate::{edge_bound, for_each_edge_row, for_each_node_row, node_bound, EdgeRow};
 use crate::datatypes::values::Value;
@@ -510,6 +511,9 @@ pub(crate) struct ElementMasks {
     /// ([`EdgeTypeCounts`]). It belongs to the masks, so it dies with them
     /// and never outlives the graph version that built them.
     edge_counts: OnceLock<Arc<EdgeTypeCounts>>,
+    /// The grouped-count histograms over what these masks admit
+    /// ([`PeerHistSet`]); they die with the masks for the same reason.
+    pub(crate) peer_hists: PeerHistSet,
 }
 
 /// Per relationship type: the relationships admitted with both endpoints,
@@ -522,6 +526,7 @@ impl ElementMasks {
             nodes,
             edges,
             edge_counts: OnceLock::new(),
+            peer_hists: PeerHistSet::default(),
         }
     }
 
@@ -536,7 +541,7 @@ impl ElementMasks {
     }
 
     fn bytes(&self) -> usize {
-        Self::bytes_for(self.nodes.len(), self.edges.len())
+        Self::bytes_for(self.nodes.len(), self.edges.len()) + self.peer_hists.bytes()
     }
 
     pub(crate) fn bytes_for(nodes: usize, edges: usize) -> usize {
@@ -595,6 +600,9 @@ pub(crate) struct IndexCache {
     /// masks, so the cache is emptied whenever a mask is evicted: no entry
     /// keeps alive what the byte cap has let go.
     resolutions: VecDeque<CachedResolution>,
+    /// The grouped-count histograms over the graph with no filter, for this
+    /// version; replaced whenever the cache is cleared.
+    unfiltered_hists: Arc<PeerHistSet>,
     /// Replaces the byte cap for this graph (tests).
     cap: Option<usize>,
 }
@@ -622,6 +630,7 @@ impl IndexCache {
         self.duplicates.clear();
         self.disk_masks.clear();
         self.text_stats.clear();
+        self.unfiltered_hists = Arc::default();
         self.forget_declared();
     }
 
@@ -670,7 +679,7 @@ impl IndexCache {
             .filter_map(|(_, map)| map.as_deref())
             .map(DuplicateIds::bytes)
             .sum();
-        arrays + duplicates
+        arrays + duplicates + self.unfiltered_hists.bytes()
     }
 
     fn find_duplicates(&self, node_type: &str) -> Option<Option<Arc<DuplicateIds>>> {
@@ -1203,6 +1212,18 @@ fn build_masks(graph: &DirGraph, parts: &[(Arc<EndpointIndex>, Segment, bool)]) 
         index.clear_invalid(*segment, bits);
     }
     masks
+}
+
+/// The grouped-count histograms of the graph with no filter at its current
+/// version: a fresh, empty set when the version has moved since the last ask.
+pub(crate) fn unfiltered_peer_hists(graph: &DirGraph) -> Arc<PeerHistSet> {
+    let version = graph.version();
+    if let Some(cache) = read_cache(graph).as_ref().filter(|c| c.version == version) {
+        return Arc::clone(&cache.unfiltered_hists);
+    }
+    let mut write = write_cache(graph);
+    let cache = write.get_or_insert_with(IndexCache::default).at(version);
+    Arc::clone(&cache.unfiltered_hists)
 }
 
 /// Drop every cached index and mask. The version moves only when a
