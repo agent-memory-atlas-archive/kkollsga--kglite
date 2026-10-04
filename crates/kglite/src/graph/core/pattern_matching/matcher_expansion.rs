@@ -73,6 +73,14 @@ fn repeats_a_node_variable(pattern: &Pattern) -> bool {
     false
 }
 
+/// Pattern index of the node element bound to `var`, the last one when the
+/// name repeats. `None` when no node carries it.
+fn node_position(pattern: &Pattern, var: &str) -> Option<usize> {
+    pattern.elements.iter().rposition(
+        |element| matches!(element, PatternElement::Node(node) if node.variable.as_deref() == Some(var)),
+    )
+}
+
 /// Collapse the partial matches of one intermediate hop to one per node, when
 /// `collapsible` says the caller proved they are interchangeable. Returns them
 /// unchanged otherwise.
@@ -81,7 +89,7 @@ fn repeats_a_node_variable(pattern: &Pattern) -> bool {
 /// `distinct_node_hint`) means only the last hop's target reaches the answer,
 /// so carrying N partials through an anonymous intermediate is wasted work.
 /// It is only legal while nothing downstream can tell two partials apart, and
-/// two things can:
+/// three things can:
 ///
 /// - **The relationships they already consumed.** Cypher paths are trails, so
 ///   a later hop consults them (`reuses_bound_relationship`) and two partials
@@ -96,6 +104,14 @@ fn repeats_a_node_variable(pattern: &Pattern) -> bool {
 ///   `target_satisfies_bindings` compares a later hop's target against the
 ///   earlier binding, which differs per partial — `(a:N)-[:A]->()-[:B]->(a)
 ///   RETURN DISTINCT a.id` returned 1 of 3 rows.
+/// - **A DISTINCT target bound at or before the hop.** Partials that meet at
+///   an anonymous node still carry different values for a target already
+///   bound (the start node, or an earlier named node), and the collapse keeps
+///   one of them: three `:A` reaching one `:M` and one `:B` answered
+///   `(a:A)-[:R]->(:M)-[:S]->(:B) RETURN count(DISTINCT a)` with 1. The
+///   caller therefore collapses a hop only while the target's pattern
+///   position is still ahead of it; the position is read from the executed
+///   pattern, so a reversal by the start-node pass is accounted for.
 fn dedup_interchangeable_partials(
     matches: Vec<PatternMatch>,
     indices: Vec<NodeIndex>,
@@ -433,6 +449,10 @@ impl<'a> PatternExecutor<'a> {
         // The two ways a later hop can tell two partial matches apart — see
         // `dedup_interchangeable_partials`, which refuses to collapse them.
         let repeats_a_node_variable = repeats_a_node_variable(pattern);
+        let distinct_target_position = self
+            .distinct_target_var
+            .as_deref()
+            .and_then(|var| node_position(pattern, var));
         let mut relationship_state_recorded = false;
 
         let mut i = 1;
@@ -514,7 +534,7 @@ impl<'a> PatternExecutor<'a> {
                 }
             }
 
-            let collapsible = self.distinct_target_var.is_some()
+            let collapsible = distinct_target_position.is_some_and(|target| target > i)
                 && !relationship_state_recorded
                 && !repeats_a_node_variable
                 && i + 1 < pattern.elements.len()
@@ -894,7 +914,7 @@ impl<'a> PatternExecutor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::repeats_a_node_variable;
+    use super::{node_position, repeats_a_node_variable};
     use crate::graph::core::pattern_matching::parse_pattern;
 
     #[test]
@@ -919,5 +939,13 @@ mod tests {
             let pattern = parse_pattern(text).unwrap_or_else(|e| panic!("{text}: {e}"));
             assert!(!repeats_a_node_variable(&pattern), "{text}");
         }
+    }
+
+    #[test]
+    fn a_node_variable_reports_its_pattern_index() {
+        let pattern = parse_pattern("(a)-[:A]->()-[:B]->(b)-[:C]->()").expect("pattern parses");
+        assert_eq!(node_position(&pattern, "a"), Some(0));
+        assert_eq!(node_position(&pattern, "b"), Some(4));
+        assert_eq!(node_position(&pattern, "c"), None);
     }
 }

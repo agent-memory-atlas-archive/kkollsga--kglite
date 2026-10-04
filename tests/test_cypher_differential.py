@@ -3637,6 +3637,34 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         None,
     ),
     # ── intermediate-dedup soundness (matcher, not a pass) ──
+    # The collapse is only sound while the DISTINCT target is bound after the
+    # anonymous hop. Three bad shapes: target at the start, target before an
+    # anonymous node, and a written-last target the start-node pass reverses
+    # into the first position.
+    (
+        "distinct_target_at_the_start_before_anonymous_nodes",
+        "fan_chain_graph",
+        "MATCH (a:A)-[:R]->(:M)-[:S]->(:B) RETURN count(DISTINCT a) AS n",
+        None,
+    ),
+    (
+        "distinct_rows_of_the_start_before_anonymous_nodes",
+        "fan_chain_graph",
+        "MATCH (a:A)-[:R]->(:M)-[:S]->(:B)-[:T]->(:C) RETURN DISTINCT a.id AS i",
+        None,
+    ),
+    (
+        "distinct_target_before_an_anonymous_node_with_one_after",
+        "fan_chain_graph",
+        "MATCH (:A)-[:R]->(m:M)-[:S]->(:B)-[:T]->(:C) RETURN count(DISTINCT m) AS n",
+        None,
+    ),
+    (
+        "distinct_target_written_last_and_reversed_to_the_start",
+        "fan_chain_graph",
+        "MATCH (:P)-[:U]->(:Q)-[:V]->(w:W) RETURN count(DISTINCT w) AS n",
+        None,
+    ),
     # `push_distinct_into_match` lets the matcher drop partial matches that
     # share an anonymous intermediate node. Two of them are not
     # interchangeable when a later hop can tell them apart, and both ways it
@@ -6405,6 +6433,24 @@ def square_cycle_graph() -> kglite.KnowledgeGraph:
     route that had consumed the relationship the last hop needed.
     """
     return _edge_graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4), (4, 1)])
+
+
+@pytest.fixture
+def fan_chain_graph() -> kglite.KnowledgeGraph:
+    """16 `:A` -R-> 2 `:M` -S-> 4 `:B` -T-> 4 `:C`, and 20 `:P` -U-> 1 `:Q` -V-> 3 `:W`.
+
+    Many start nodes converge on few anonymous intermediates, so collapsing a
+    hop to one partial per node loses target values bound earlier. The `:P`
+    chain's last node is over 5x more selective than its first, which is what
+    makes the start-node pass reverse it.
+    """
+    g = kglite.KnowledgeGraph()
+    counts = {"A": 16, "M": 2, "B": 4, "C": 4, "P": 20, "Q": 1, "W": 3}
+    for label, n in counts.items():
+        g.cypher(f"UNWIND range(1, {n}) AS i CREATE (:{label} {{id: i}})").to_list()
+    for src, rel, dst in (("A", "R", "M"), ("M", "S", "B"), ("B", "T", "C"), ("P", "U", "Q"), ("Q", "V", "W")):
+        g.cypher(f"MATCH (a:{src}), (b:{dst}) CREATE (a)-[:{rel}]->(b)").to_list()
+    return g
 
 
 @pytest.fixture

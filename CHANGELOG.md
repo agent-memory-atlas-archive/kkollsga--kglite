@@ -237,6 +237,16 @@ before upgrading.
 
 ### Fixed
 
+- A `count(DISTINCT x)` or `RETURN DISTINCT x` over a pattern could under-count
+  when `x` was bound before an unnamed node. `MATCH (a:A)-[:R]->(:M)-[:S]->(:B)
+  RETURN count(DISTINCT a)` over three `:A` that reach one `:M` and one `:B`
+  answered 1, and `RETURN DISTINCT a.id` returned one row. The matcher merged
+  the partial matches meeting at the unnamed node and kept one, discarding the
+  other values of `x`; naming the node, or a pattern the planner reversed so
+  `x` came last, gave the right answer. It merges there only while `x` is
+  bound later in the pattern as executed. This affected earlier releases; the
+  shapes that no longer merge enumerate their paths again.
+
 - An anchored relationship count on an id shared by several node types counted
   only one of them. `MATCH ({id: 7})-[:T]->(c) RETURN count(c)` (and the
   incoming and `count(*)` spellings) settled on whichever type the engine met
