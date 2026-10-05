@@ -7,9 +7,9 @@
 [![License: MIT](https://img.shields.io/pypi/l/kglite)](https://github.com/kkollsga/kglite/blob/main/LICENSE)
 [![Docs](https://img.shields.io/readthedocs/kglite)](https://kglite.readthedocs.io)
 
-KGLite is an embedded, Cypher-queryable knowledge graph for Python and Rust,
-built so the same graph can serve an application, an analyst, or an LLM agent.
-The Python wheel has no required Python runtime dependencies; the graph engine
+KGLite is an embedded, Cypher-queryable knowledge graph for Python and Rust.
+The same graph can serve an application, an analyst, or an LLM agent.
+The Python wheel has no required Python runtime dependencies. The graph engine
 runs in-process without an external database service. Every crate ships under
 MIT. If you are embedding a graph engine in something you distribute, see
 **[Licensing and embedded distribution](#licensing-and-embedded-distribution)**.
@@ -95,22 +95,28 @@ Everything else is linked where it comes up, and the
 Three things the graph does that you would otherwise build yourself.
 
 **`describe()`: progressive-disclosure schema for LLM context windows.** One
-call returns a schema sized for a prompt, not for a DBA: the inventory switches
-between four detail tiers as the graph's type count grows (full inline detail
-under 16 core types, a compact listing, a top-50 listing, then a statistical
-summary with a search hint), each type carrying size, complexity, and capability
-flags (`ts`, `geo`, `loc`, `vec` for timeseries, geometry, location, and
-embeddings). The declared ontology's `is_a` class forest comes with it, and on
-graphs small enough to sample, so do join-candidate hints: unconnected types
-sharing an identically-named, type-compatible property with overlapping values.
+call returns a schema sized for a prompt, not for a DBA. The inventory switches
+between four detail tiers as the graph's type count grows:
+
+- full inline detail under 16 core types
+- a compact listing
+- a top-50 listing
+- a statistical summary with a search hint
+
+Each type carries size, complexity, and capability flags (`ts`, `geo`, `loc`,
+`vec` for timeseries, geometry, location, and embeddings). The declared
+ontology's `is_a` class forest comes with it. On graphs small enough to sample,
+join-candidate hints come with it too: unconnected types sharing an
+identically-named, type-compatible property with overlapping values.
+
 Serve it over MCP with `skills: true` and the tool arrives with methodology
-attached, gated by `applies_when` predicates to what the graph actually contains
-(a non-code graph never sees code-tool guidance), so *the agent comes pre-loaded
+attached. `applies_when` predicates gate it to what the graph actually contains
+(a non-code graph never sees code-tool guidance). *The agent comes pre-loaded
 with how to use your graph rather than discovering it through trial-and-error.*
 **→ [AI Agents guide](https://kglite.readthedocs.io/en/latest/python/guides/ai-agents.html).**
 
 **As-of queries over history.** Declare the two bound properties of each dated
-type once, and one prefix answers *"how did the world look on ⟨date⟩?"* for
+type once. One prefix then answers *"how did the world look on ⟨date⟩?"* for
 every node and relationship a statement touches:
 
 ```cypher
@@ -120,18 +126,18 @@ RETURN c.title
 ```
 
 Move the date and the answer moves with it: the operator of record in 1999. No
-hop can be left undated (paths, graph algorithms and vector and BM25 ranking
-see only what was valid then); `cypher(valid_at=…)`, the MCP tools and Java's
-`ValidAt` write the same prefix. A statement with no prefix reads as of today,
-and `FOR VALID_TIME ALL` reads every version.
+hop can be left undated: paths, graph algorithms and vector and BM25 ranking
+see only what was valid then. `cypher(valid_at=…)`, the MCP tools and Java's
+`ValidAt` write the same prefix. A statement with no prefix reads as of today.
+`FOR VALID_TIME ALL` reads every version.
 **→ [Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html).**
 
 **A declared ontology that gates the build.** `define_ontology()` records what
 must hold: domain and range over an `is_a` class forest, required edge
 properties, property types, cardinality. Each check carries its own enforcement
-level, so a document referenced from a blueprint fails the build on an
+level. A document referenced from a blueprint fails the build on an
 `error`-level breach, with every violated rule counted and no output graph
-written, while `CALL ontology_audit()` scores the same declarations against a
+written. `CALL ontology_audit()` scores the same declarations against a
 live graph. *Observe → fix → enforce* is configuration, not code review.
 **→ [Ontology guide](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html).**
 
@@ -145,29 +151,30 @@ kglite-mcp-server --graph path/to/graph.kgl
 
 Reach for it when you want a graph kept warm across many calls. The server
 exposes `cypher_query`, `graph_overview`, schema introspection, and structural
-validators over MCP stdio, plus source-file read/search tools when a valid
+validators over MCP stdio. It adds source-file read/search tools when a valid
 `source_root` is configured. Drop it into Claude Desktop, Cursor, or another
 MCP-capable client and any KGLite graph is queryable. Code-graph construction,
 repository cloning, and code-watch workflows belong to **codingest-mcp**, which
 embeds this same graph-serving surface.
 
-A second MCP surface is visual: while **kglite-visual** serves a `.kgl` in a
-browser window, the same port speaks MCP, so an agent can put a Cypher result
+A second MCP surface is visual. While **kglite-visual** serves a `.kgl` in a
+browser window, the same port speaks MCP. An agent can put a Cypher result
 on screen, expand it, and re-lay it out: the agent drives the window you are watching.
 **→ [Agents and MCP](https://kglite-visual.readthedocs.io/en/latest/agents.html).**
 
 When you register it, point `command` at the **absolute path** to the binary
-(`/abs/path/to/venv/bin/kglite-mcp-server`), not a bare name: a bare command can
+(`/abs/path/to/venv/bin/kglite-mcp-server`), not a bare name. A bare command can
 silently launch an older PATH-shadowing install. Then confirm it with
-`kglite-mcp-server --selftest --graph path/to/graph.kgl`, which drives a real
+`kglite-mcp-server --selftest --graph path/to/graph.kgl`. It drives a real
 handshake and prints green/red per capability.
 
-Two ready-made code-intelligence recipes ship in [`examples/`](examples/); run
+Two ready-made code-intelligence recipes ship in [`examples/`](examples/). Run
 both under codingest-mcp:
-[`open_source_workspace_mcp.yaml`](examples/open_source_workspace_mcp.yaml)
-(`repo_management('org/repo')` clones and builds a code graph on demand) and
-[`local_code_review_mcp.yaml`](examples/local_code_review_mcp.yaml)
-(`set_root_dir(path)` swaps roots, watch-mode auto-rebuilds).
+
+- [`open_source_workspace_mcp.yaml`](examples/open_source_workspace_mcp.yaml):
+  `repo_management('org/repo')` clones and builds a code graph on demand.
+- [`local_code_review_mcp.yaml`](examples/local_code_review_mcp.yaml):
+  `set_root_dir(path)` swaps roots, watch-mode auto-rebuilds.
 
 **→ [MCP server operations](https://kglite.readthedocs.io/en/latest/operators/mcp-server.html).**
 
@@ -192,9 +199,9 @@ tools:                                               # inline parameterised Cyph
       RETURN i.label LIMIT 5
 ```
 
-`skills: true` composes four layers of per-tool methodology (kglite-bundled defaults,
+`skills: true` composes four layers of per-tool methodology: kglite-bundled defaults,
 skills the served `.kgl` carries about itself, operator-declared domain packs, and your
-project's `<basename>.skills/*.md` overrides), so a graph can ship its own guidance.
+project's `<basename>.skills/*.md` overrides. A graph can ship its own guidance.
 **→ [MCP server guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html).**
 
 ## Use cases
@@ -209,52 +216,56 @@ Wikidata slice, a SQL warehouse, a RAG corpus, or a parsed codebase.
   for a Norwegian-Supreme-Court walk-through.
 - 📊 **Business data → queryable graph.** Any tabular source (SQL, CSV, Parquet,
   REST API responses, pandas DataFrames) goes straight in via `add_nodes(df,
-  ...)` and `add_relationships(df, ...)`. Layer a graph on your warehouse and the
-  agent reasons over the relationships without you writing a server. **→
+  ...)` and `add_relationships(df, ...)`. Layer a graph on your warehouse.
+  The agent reasons over the relationships without you writing a server. **→
   [Data Loading guide](https://kglite.readthedocs.io/en/latest/python/guides/data-loading.html).**
 - 🌐 **Public datasets.** Loaders for **SEC EDGAR** filings, **Wikidata** (the
   full `latest-truthy` RDF dump), and **Sodir** petroleum data live in
   [kglite-datasets](https://kglite-datasets.readthedocs.io), each handling the
-  *fetch + build + cache* cycle; kglite's mapped and disk storage then query
+  *fetch + build + cache* cycle. kglite's mapped and disk storage then query
   graphs that don't fit in RAM, up to the 124M-node / 861M-edge Wikidata graph
   on a 16 GB laptop. The core engine itself needs no network access.
 - 📚 **RAG with structure.** Documents, chunks, entities, and the edges between
   them in one graph. Combine `text_score()` vector similarity with Cypher
   traversal (*"find court cases semantically similar to my fact pattern, then
   walk one hop to related precedents"*): hybrid retrieval in one query, no second
-  vector DB, scaling with an opt-in HNSW index (`build_vector_index()`).
+  vector DB. It scales with an opt-in HNSW index (`build_vector_index()`).
   **→ [Semantic Search guide](https://kglite.readthedocs.io/en/latest/python/guides/semantic-search.html).**
 - 🔎 **Keyword and meaning in one ranking.** An opt-in BM25 lexical index
   (`build_text_index()` + `text_bm25()`) finds the exact term an embedding blurs
-  away, and `score_fuse()` blends it with the vector lane in a single Cypher
+  away. `score_fuse()` blends it with the vector lane in a single Cypher
   query, with no second search service and no merge step in your code.
   **→ [Text Search guide](https://kglite.readthedocs.io/en/latest/python/guides/text-search.html).**
 - 📂 **Codebase analysis.** The
   [codingest](https://github.com/kkollsga/codingest) builder parses 14 languages
   into Function / Class / Module / Route nodes with web-framework route
-  detection (Flask, FastAPI, Django), from any git revision or several merged
-  into one multi-revision graph for structural diffs. kglite serves and queries
+  detection (Flask, FastAPI, Django). It builds from any git revision, or from
+  several merged into one multi-revision graph for structural diffs. kglite serves and queries
   those graphs; **the builder lives in the codingest project.**
 - 🤝 **A shared graph as an agent contract.** One `.kgl` as the two-way contract
-  between collaborating agents: **ownership layers** (`define_schema(layer=…)` +
-  `add_nodes(managed_reload=True)`) separate batch-rebuilt types from live
-  agent-mutated ones, **role-scoped writes** (`cypher(..., write_scope=[...])`)
-  fence what each agent may touch, a verbatim **instructions slot**
-  (`set_instructions`) leads `describe()`, and `CALL ready_set(...)` hands out
-  the next actionable work. These are opt-in guards, not an enforced perimeter;
-  the exact boundaries, and what each does *not* cover, are in the
+  between collaborating agents:
+  - **Ownership layers** (`define_schema(layer=…)` +
+    `add_nodes(managed_reload=True)`) separate batch-rebuilt types from live
+    agent-mutated ones.
+  - **Role-scoped writes** (`cypher(..., write_scope=[...])`) fence what each
+    agent may touch.
+  - A verbatim **instructions slot** (`set_instructions`) leads `describe()`.
+  - `CALL ready_set(...)` hands out the next actionable work.
+
+  These are opt-in guards, not an enforced perimeter. The exact boundaries, and
+  what each does *not* cover, are in the
   **[MCP servers guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html)**.
 - 🧠 **Markdown knowledge bases & agent memory.** `kglite.okf.build(dir)` ingests
   an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog)
   bundle (or a Claude memory dir, skills folder, or Obsidian vault) into a
   graph: frontmatter → node properties, markdown links → typed edges. Then
-  cluster it (`CALL leiden`), find stale notes, surface dangling references: the
-  query engine OKF itself doesn't ship. Vault spec: [VAULT.md](VAULT.md). **→
+  cluster it (`CALL leiden`), find stale notes, and surface dangling references:
+  the query engine OKF itself doesn't ship. Vault spec: [VAULT.md](VAULT.md). **→
   [OKF guide](https://kglite.readthedocs.io/en/latest/python/guides/okf.html).**
 
 **Why Cypher?** Questions over connected data (*which insiders sold this stock,
 who sits on two boards, what cites this case*) are pattern matches. In SQL they
-become multi-table joins; in Cypher the pattern *is* the query, and it pays off
+become multi-table joins. In Cypher the pattern *is* the query. It pays off
 most when the data has real structure and your questions traverse it:
 
 ```cypher
@@ -271,8 +282,8 @@ ORDER BY t.transaction_date DESC LIMIT 10
 ## One engine, seven doorways
 
 Every wrapper drives the same engine over the same `.kgl` files with the same
-Cypher. Pick the doorway that matches your stack; a graph built through any of
-them is readable through all of them.
+Cypher. A graph built through any of them is readable through all of them. Pick
+the doorway that matches your stack.
 
 | Doorway | Get it | Docs |
 |---|---|---|
@@ -286,10 +297,11 @@ them is readable through all of them.
 
 The engine itself is a pure-Rust crate
 ([`crates/kglite`](https://github.com/kkollsga/kglite/tree/main/crates/kglite))
-packaged for Python via `pip install kglite`; the shell, Bolt-server, and
+packaged for Python via `pip install kglite`. The shell, Bolt-server, and
 MCP-server binaries are sibling crates wrapping it. See
-**[Use from Rust](#use-from-rust)** to build against it without the wheel. The
-wheel also installs the `kglite` command, a `sqlite3`-style REPL: `kglite app.kgl`
+**[Use from Rust](#use-from-rust)** to build against it without the wheel.
+
+The wheel also installs the `kglite` command, a `sqlite3`-style REPL: `kglite app.kgl`
 opens a Cypher prompt with `.import`, `.dump`, `.schema`, multi-line input, and
 tab-completion. The
 [operators index](https://kglite.readthedocs.io/en/latest/operators/index.html)
@@ -307,12 +319,12 @@ versioned on its own cadence. Three build graphs it serves; one looks at them:
   fetch-build-cache loaders for public registries (SEC EDGAR, Wikidata, Sodir).
 - **[sonagram](https://sonagram.readthedocs.io)** turns a local music
   library into a kglite knowledge graph via sonara audio analysis (tempo,
-  energy, mood, key); AI agents curate playlists over it through a bundled
+  energy, mood, key). AI agents curate playlists over it through a bundled
   skill and CLI (`pip install sonagram`).
 - **[kglite-visual](https://kglite-visual.readthedocs.io)** opens a `.kgl` in a
   browser ([`pip install kglite-visual`](https://pypi.org/project/kglite-visual/),
-  then `kglite-visual graph.kgl`), landing on the type-level meta-graph so a
-  100M-node file still has an entry screen; `render` draws the same views
+  then `kglite-visual graph.kgl`). It lands on the type-level meta-graph, so a
+  100M-node file still has an entry screen. `render` draws the same views
   headlessly and `export` writes GraphML, GEXF, CSV, or JSON. No required
   runtime dependencies.
 
@@ -333,27 +345,36 @@ versioned on its own cadence. Three build graphs it serves; one looks at them:
 
 ("manual" = expressible in application code or a `WHERE` clause, but no engine
 primitive. The KGLite row refers specifically to its class-forest ontology,
-audit scorecard, and build gate; the other engines have their own schema and
+audit scorecard, and build gate. The other engines have their own schema and
 constraint capabilities.)
 
-**Pick KGLite** when you want one embedded package combining Python and
-pure-Rust Cypher APIs with a bundled MCP binary, prompt-shaped `describe()`,
-agent-contract primitives (role-scoped writes, ownership layers,
-`set_instructions`, `CALL ready_set(...)`), a **declared ontology** with
-build-time data-quality gates and audit scorecards, and **as-of temporal
-filtering** (`valid_at`) over dated edges and lifecycle windows, plus companion
-projects that build code and public-registry graphs it serves. **Pick
-LadybugDB** when columnar analytical scans and its broader language ecosystem
-are the priority; it also provides Rust bindings and a separately installed MCP
-server. **Pick NetworkX** when you need its enormous graph-algorithm library and
-your data fits in RAM. **Pick rustworkx** when you want a Rust-backed Python
-graph API with no query language. **Pick Neo4j Embedded** when you need a
-Java-embedded DBMS with the broader Neo4j platform.
+**Pick KGLite** when you want:
+
+- one embedded package combining Python and pure-Rust Cypher APIs with a bundled
+  MCP binary
+- prompt-shaped `describe()`
+- agent-contract primitives (role-scoped writes, ownership layers,
+  `set_instructions`, `CALL ready_set(...)`)
+- a **declared ontology** with build-time data-quality gates and audit scorecards
+- **as-of temporal filtering** (`valid_at`) over dated edges and lifecycle windows
+- companion projects that build code and public-registry graphs it serves
+
+Pick something else when it fits better:
+
+- **Pick LadybugDB** when columnar analytical scans and its broader language
+  ecosystem are the priority. It also provides Rust bindings and a separately
+  installed MCP server.
+- **Pick NetworkX** when you need its enormous graph-algorithm library and your
+  data fits in RAM.
+- **Pick rustworkx** when you want a Rust-backed Python graph API with no query
+  language.
+- **Pick Neo4j Embedded** when you need a Java-embedded DBMS with the broader
+  Neo4j platform.
 
 📊 **[Benchmarks →](BENCHMARKS.md)**: wall-to-wall time per topic (load,
 filter/aggregate, traversal, pathfinding, algorithms, mutations) against other
 embedded graph engines, NetworkX, rustworkx, igraph, and DuckDB on one shared
-synthetic graph. Reproduce with `python benchmarks/benchmark.py`; maintainer-only
+synthetic graph. Reproduce with `python benchmarks/benchmark.py`. Maintainer-only
 storage and release-regression probes live under `tests/benchmarks/`.
 
 ## Primary store, or derived index?
@@ -363,30 +384,30 @@ building saves a lot of argument later.
 
 - **Derived index**: the authoritative copy lives elsewhere (a warehouse, an
   API, a repo) and the graph is a rebuildable projection you query. Most kglite
-  deployments are this, and it is the cheapest correct answer. **→ [Derived
+  deployments are this. It is the cheapest correct answer. **→ [Derived
   index guide](https://kglite.readthedocs.io/en/latest/python/guides/derived-index.html).**
-- **Primary store**: the graph *is* the authoritative copy, with crash-safe
+- **Primary store**: the graph *is* the authoritative copy. It has crash-safe
   `open()` for the in-memory and `mapped` backends (`disk` checkpoints on `save()`),
   atomic statements, snapshot isolation for readers, and UNIQUE / NOT NULL /
   node-key constraints enforced on every write path including the bulk loaders.
-  One process owns the writes; the scope statement lists the limits rather than
+  One process owns the writes. The scope statement lists the limits rather than
   softening them. **→ [Primary store: scope and
   limits](https://kglite.readthedocs.io/en/latest/python/guides/primary-store.html).**
 
 ## Temporal data
 
 **Valid time is a declared property of the graph, not a filter you remember to
-write, so one instant governs every hop, path, algorithm and ranking in every
-binding, and recording time is modelled beside it in the same embedded engine.** Org charts, licence tables and price lists keep
-history: each fact is valid over a period, and the usual question is *"as of
-when?"*. Declare a type's interval
-properties once (closed or half-open); after that one prefix, or `valid_at=` on
+write. One instant governs every hop, path, algorithm and ranking in every
+binding, and recording time is modelled beside it in the same embedded engine.**
+Org charts, licence tables and price lists keep history: each fact is valid over
+a period, and the usual question is *"as of when?"*. Declare a type's interval
+properties once (closed or half-open). After that, one prefix, or `valid_at=` on
 any binding, answers as if the graph held only what was valid then, on every
 hop, path, algorithm and ranking.
 
-Loading is the declaration: name the two bound columns and the convention, and
-the type is temporal from then on (`set_temporal()`, `CALL db.temporal.declare`
-and a blueprint's `temporal` key do the same for data already loaded):
+`set_temporal()`, `CALL db.temporal.declare` and a blueprint's `temporal` key
+declare a type for data already loaded. Loading is also a declaration: name the
+two bound columns and the convention, and the type is temporal from then on:
 
 ```python
 memberships = pd.DataFrame({
@@ -414,13 +435,14 @@ MATCH (e:Employee)-[m:MEMBER_OF]->(t:Team) WHERE valid_during(m, date('2024-01-0
 ```
 
 `graph.cypher(q, valid_at="2023-06-30")`, the fluent `graph.date("2023-06-30")`
-context, the MCP tools and Java's `ValidAt` write the same prefix, a statement
-with no prefix reads as of today, `FOR VALID_TIME ALL` reads every version, and
-every write onto a declared type is checked against its declaration. Recording time
-(*"as known when?"*) is a second pair of bounds, such as `recorded_from` /
-`recorded_to`, that you load beside the first and test in the query; the
-bitemporal guide shows the full pattern on an HR change feed with a runnable
-example.
+context, the MCP tools and Java's `ValidAt` write the same prefix. A statement
+with no prefix reads as of today. `FOR VALID_TIME ALL` reads every version.
+Every write onto a declared type is checked against its declaration.
+
+Recording time (*"as known when?"*) is a second pair of bounds, such as
+`recorded_from` / `recorded_to`. You load them beside the first pair and test
+them in the query. The bitemporal guide shows the full pattern on an HR change
+feed with a runnable example.
 
 - **[Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)**: declarations, as-of queries, the fluent context, modelling history, scale.
 - **[Bitemporal data](https://kglite.readthedocs.io/en/latest/python/guides/bitemporal.html)**: late-recorded changes and daily deliveries, as-known-at, lineage, the feature checklist.
@@ -429,13 +451,13 @@ example.
 ## Licensing and embedded distribution
 
 **kglite is MIT-licensed throughout: every crate in the workspace ships under
-MIT.** No separate commercial tier, no development/production distinction, and no
-copyleft obligation attached to shipping it: if you can use kglite, you can
-distribute it inside your own product.
+MIT.** There is no separate commercial tier, no development/production
+distinction, and no copyleft obligation attached to shipping it. If you can use
+kglite, you can distribute it inside your own product.
 
 One honest qualification about the *default* build: the optional `fastembed`
-backend is off by default everywhere, so neither the published wheel nor the
-default MCP-server binary contains it, and a `--features fastembed` build pulls
+backend is off by default everywhere. Neither the published wheel nor the
+default MCP-server binary contains it. A `--features fastembed` build pulls
 one transitive MPL-2.0 crate (`option-ext`, four dependencies down). The reviewed
 policy is in [dependency licences](https://kglite.readthedocs.io/en/latest/explanation/dependency-licenses.html).
 
@@ -530,7 +552,7 @@ For **other non-Rust bindings** (Go via cgo, JavaScript via napi, .NET via
 P/Invoke),
 [`crates/kglite-c`](https://github.com/kkollsga/kglite/tree/main/crates/kglite-c)
 exposes the engine through a stable C ABI covering lifecycle, sessions, Cypher,
-results, persistence, and embedders, plus a cbindgen-generated `kglite.h`.
+results, persistence, and embedders. It includes a cbindgen-generated `kglite.h`.
 **→ [C ABI design](https://kglite.readthedocs.io/en/latest/rust/c-abi.html) ·
 [implementing a binding](https://kglite.readthedocs.io/en/latest/rust/implementing-a-binding.html)
 (cgo / napi / JNI worked examples).**

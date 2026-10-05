@@ -10,7 +10,7 @@ Full fluent (method-chaining) API supported by KGLite. For Cypher queries, see t
 [Introspection](#schema--introspection) ·
 [Python API](https://kglite.readthedocs.io/en/latest/autoapi/kglite/index.html)
 
-> **Selection model:** The fluent API is selection-based. Most methods return a new `KnowledgeGraph` with an updated selection — no data is materialised until you call a retrieval method (`collect()`, `to_df()`, etc.). This makes query chains fast even on large graphs.
+> **Selection model:** The fluent API is selection-based. Most methods return a new `KnowledgeGraph` with an updated selection. No data is materialised until you call a retrieval method (`collect()`, `to_df()`, etc.). This keeps query chains fast even on large graphs.
 
 ---
 
@@ -210,17 +210,19 @@ graph.select('Person').sort('name').offset(20).limit(10)  # page 3 of 10
 
 ## Temporal Filtering
 
-A node or relationship type with a validity interval — two properties holding
-its `from` and `to` bounds — can be filtered by date. NULL `from` = valid since
-the beginning, NULL `to` = still valid. Bounds may be dates, datetimes or ISO
-date strings.
+A node or relationship type with a validity interval can be filtered by date.
+The interval is two properties holding its `from` and `to` bounds. NULL `from`
+means valid since the beginning. NULL `to` means still valid. Bounds may be
+dates, datetimes or ISO date strings.
 
 ### Declaring the interval
 
 Declare the two properties once and every temporal filter reads them, with the
-end rule you choose: `'closed'` (the `to` day is still valid) or `'half_open'`
-(the `to` day is the first day no longer valid — what a registry whose periods
-end on their successor's start day means).
+end rule you choose:
+
+- `'closed'`: the `to` day is still valid.
+- `'half_open'`: the `to` day is the first day no longer valid. This is what a
+  registry whose periods end on their successor's start day means.
 
 ```python
 graph.set_temporal('Employee', 'start_date', 'end_date', convention='half_open')
@@ -235,19 +237,27 @@ graph.cypher("CALL db.temporal.declare({node: 'Employee', from: 'start_date', "
              "to: 'end_date', convention: 'half_open'})")
 ```
 
-The declaration validates the rows stored when it is made, and later writes
-answer to the same rule: a load (`add_nodes`, `add_relationships`, and a label
-stamped by `add_nodes(labels=…)` or `add_label`) refuses a row with an inverted
-interval or a bound that is not a date, with `ArgumentError` naming the row (or
-the node), before writing anything; a Cypher `CREATE` / `MERGE` / `SET` raises
-`CypherExecutionError` naming the element and rolls back. A row whose interval
-is empty under `half_open` (`from` equal to `to`) is written, with one warning
-per load (`UserWarning`) or statement (`result.warnings`) naming the first; it
-is valid at no instant, so no temporal filter returns it, and
-`db.temporal.declarations()` counts it in `empty_rows`. A fluent `update()` is
-not judged: a bound it leaves that is not a date raises from the next filter
-that reads it, naming the element. See
-`set_temporal()` and the
+The declaration validates the rows stored when it is made. Later writes answer
+to the same rule:
+
+- A load (`add_nodes`, `add_relationships`, and a label stamped by
+  `add_nodes(labels=…)` or `add_label`) refuses a row with an inverted interval
+  or a bound that is not a date. It raises `ArgumentError` naming the row (or
+  the node), before writing anything.
+- A Cypher `CREATE` / `MERGE` / `SET` raises `CypherExecutionError` naming the
+  element and rolls back.
+
+Two exceptions:
+
+- A row whose interval is empty under `half_open` (`from` equal to `to`) is
+  written, with one warning per load (`UserWarning`) or statement
+  (`result.warnings`) naming the first. It is valid at no instant, so no
+  temporal filter returns it, and `db.temporal.declarations()` counts it in
+  `empty_rows`.
+- A fluent `update()` is not judged. A bound it leaves that is not a date
+  raises from the next filter that reads it, naming the element.
+
+See `set_temporal()` and the
 [Cypher validity-interval declarations](https://kglite.readthedocs.io/en/latest/reference/cypher-reference.html#validity-interval-declarations).
 
 ### Explicit filters
@@ -278,9 +288,11 @@ A date argument is a string (`'2024'`, `'2024-06'`, `'2024-06-01'`,
 grain, so a datetime is taken at its date (an aware one in UTC).
 
 An explicit filter raises rather than keeping every row when it has nothing to
-read: a field name the type does not have, a type with no declaration and no
-`date_from`/`date_to` properties, or `traverse(at=…)` on an undeclared
-relationship type.
+read. That happens in three cases:
+
+- a field name the type does not have
+- a type with no declaration and no `date_from`/`date_to` properties
+- `traverse(at=…)` on an undeclared relationship type
 
 ### The date context
 
@@ -295,55 +307,63 @@ graph.select('Team', temporal=False)             # opt out for one call
 g2010.select('Person').traverse('EMPLOYED_AT', temporal=False)  # ...or one hop
 ```
 
-The default context is today, the UTC date — the day Cypher's `date()` reads,
-and the one an unprefixed Cypher statement runs under (`set_valid_time_default()`
-changes both).
-The context is the filter a `FOR VALID_TIME AS OF` statement at that date runs
-under, so a fluent chain and the Cypher pattern it spells return the same
-nodes:
+The default context is today, the UTC date. That is the day Cypher's `date()`
+reads, and the one an unprefixed Cypher statement runs under
+(`set_valid_time_default()` changes both).
 
-- a node is kept only when it is valid under **every declared label it
-  carries** — its primary type's declaration and any secondary label's;
-- a relationship is judged by the declaration keyed on its own source's type,
-  else the type's unkeyed one, and `traverse()` keeps the node it reaches only
-  when that node is valid too;
+The context is the filter a `FOR VALID_TIME AS OF` statement at that date runs
+under. A fluent chain and the Cypher pattern it spells return the same nodes:
+
+- A node is kept only when it is valid under **every declared label it
+  carries**: its primary type's declaration and any secondary label's.
+- A relationship is judged by the declaration keyed on its own source's type,
+  else the type's unkeyed one. `traverse()` keeps the node it reaches only when
+  that node is valid too.
 - `expand()`, `where_connected()`, `where_orphans()`, `degrees()`,
   `relationships()`, `compare()`, `to_subgraph()` and `save_subset()`
-  follow, count and copy only valid relationships and nodes;
+  follow, count and copy only valid relationships and nodes.
 - `valid_at()` / `valid_during()` apply the same label rule: the primary
   type under the named or declared bounds, every other declared label under
-  its declaration;
-- `select(limit=…)` counts the nodes that pass;
-- a relationship type holding several unkeyed declarations (a graph saved
-  before declarations were keyed by source type) is refused — remove them with
+  its declaration.
+- `select(limit=…)` counts the nodes that pass.
+- A relationship type holding several unkeyed declarations (a graph saved
+  before declarations were keyed by source type) is refused. Remove them with
   `CALL db.temporal.undeclare({relationship: …})` and declare one per
   `source_type`.
 
 Undeclared types pass unfiltered. `valid_at()` with no date reads the context:
-one day, or overlap with a `date(a, b)` range — and today (UTC) under the
-default context or `date('all')`.
+one day, or overlap with a `date(a, b)` range. Under the default context or
+`date('all')` it reads today (UTC).
 
-The context belongs to the selection chain. The graph-wide methods —
-`pagerank()`, `betweenness_centrality()`, `louvain_communities()`,
-`connected_components()`, `shortest_path()` and the other algorithm and path
-methods, `vector_search()` / `search_text()` without a selection, and the
-relationship search routes (`relationship_vector_search()`,
-`relationship_search_text()`, `entity="relationship"`, whatever the selection) —
-read the whole graph whatever `date()` says. Ask them as of a date through
-Cypher: `graph.cypher("CALL pagerank() YIELD node, score RETURN node.title,
-score", valid_at='2010-06-30')`, `CALL db.relationship_embeddings.query(…)`
-for relationship vectors, or `graph.freeze(valid_at='2010-06-30')` for many
-queries. A node `vector_search()` on a selection ranks the selection, which
-the context has already filtered.
+#### Graph-wide methods
 
-A Cypher statement has the same default: with no `FOR VALID_TIME` prefix (and
-no `valid_at=`) it reads as of today on a graph that declares validity, and
+The context belongs to the selection chain. These graph-wide methods read the
+whole graph whatever `date()` says:
+
+- `pagerank()`, `betweenness_centrality()`, `louvain_communities()`,
+  `connected_components()`, `shortest_path()` and the other algorithm and path
+  methods
+- `vector_search()` / `search_text()` without a selection
+- the relationship search routes: `relationship_vector_search()`,
+  `relationship_search_text()`, and `entity="relationship"`, whatever the
+  selection
+
+Ask them as of a date through Cypher: `graph.cypher("CALL pagerank() YIELD
+node, score RETURN node.title, score", valid_at='2010-06-30')`. Use
+`CALL db.relationship_embeddings.query(…)` for relationship vectors, or
+`graph.freeze(valid_at='2010-06-30')` for many queries. A node `vector_search()`
+on a selection ranks the selection, which the context has already filtered.
+
+#### Cypher default
+
+A Cypher statement has the same default. With no `FOR VALID_TIME` prefix (and
+no `valid_at=`) it reads as of today on a graph that declares validity.
 `FOR VALID_TIME ALL` (`valid_at='all'`) reads every version, as `date('all')`
 does here. `graph.set_valid_time_default('today' | 'all' | date)` moves both
 defaults together. See the
 [valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)
-for modelling history and for the questions — lineage, two instants — that read
-every version.
+for modelling history and for the questions that read every version: lineage,
+two instants.
 
 ---
 
@@ -581,9 +601,9 @@ results = (graph
 ### Index for scale (HNSW)
 
 By default search is an **exact** brute-force scan. For large corpora, build an
-opt-in HNSW approximate-nearest-neighbour index (like `create_index`); once built
-it's used automatically for whole-corpus queries, and `exact=True` forces the
-exact scan.
+opt-in HNSW approximate-nearest-neighbour index (like `create_index`). Once
+built, it is used automatically for whole-corpus queries. `exact=True` forces
+the exact scan.
 
 ```python
 graph.build_vector_index('Article', 'summary')           # opt in (persists in .kgl)
@@ -599,15 +619,18 @@ graph.has_vector_index('Article', 'summary')   # -> True
 graph.drop_vector_index('Article', 'summary')   # revert to exact
 ```
 
-- Auto-use applies to whole-corpus queries (≥256 candidates); a selective
+- Auto-use applies to whole-corpus queries (≥256 candidates). A selective
   `.where(...)` falls back to an exact scan automatically.
 - cosine / dot_product / euclidean are indexable; `poincare` always uses the
   exact path. Recall depends on data + `ef_search` (raise it for higher recall).
-- The index is **dropped automatically** when the store's vectors change
-  (`add_embeddings`, `embed_texts`), slots are remapped (`vacuum`), or an
-  embedded node is deleted (the delete prunes its vector) — rebuild after. It **persists in the `.kgl`** (and `to_bytes()`).
+- The index is **dropped automatically** when any of these happens; rebuild
+  after:
+  - the store's vectors change (`add_embeddings`, `embed_texts`)
+  - slots are remapped (`vacuum`)
+  - an embedded node is deleted (the delete prunes its vector)
+- The index **persists in the `.kgl`** (and `to_bytes()`).
 - The Cypher `text_score()` / `vector_score()` whole-corpus top-k
-  (`... ORDER BY score DESC LIMIT k`) also auto-uses the index; a heavily-
+  (`... ORDER BY score DESC LIMIT k`) also auto-uses the index. A heavily-
   filtered Cypher query stays exact.
 
 ### Semantic Search via Cypher
@@ -974,7 +997,7 @@ gdf = result.to_gdf(geometry_column='geometry', crs='EPSG:4326')
 
 ### Human-Readable String Export
 
-`to_str(limit=50)` formats the selection as a multi-line string — each node as a `[Type] title (id: x)` block with indented properties, one per line. Useful for quick inspection in a REPL or for logging.
+`to_str(limit=50)` formats the selection as a multi-line string. Each node becomes a `[Type] title (id: x)` block with indented properties, one per line. Use it for quick inspection in a REPL or for logging.
 
 ```python
 print(graph.select('Person').to_str(limit=5))
